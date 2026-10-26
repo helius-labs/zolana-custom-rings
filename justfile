@@ -104,6 +104,10 @@ build-localnet-archives dir="target/nextest-archives":
 
 # === Tests ===
 
+# Proving-time report only; writes BENCHMARK.md and target/proof-benchmark.json.
+bench-proofs *args:
+    python3 tools/bench_proofs.py {{args}}
+
 # Everything that needs nothing running.
 test-hermetic: test-program-fast test-sdk-libs test-ring-indexer
 

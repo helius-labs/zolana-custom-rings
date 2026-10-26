@@ -97,6 +97,50 @@ adds 733. Policy versioning with no withdrawals adds 584 to the general key.
 An independent auditor disclosure design remains future work; see
 [review-backlog.md](review-backlog.md).
 
+## Proving-time benchmarks
+
+Run from the repository root with the pinned release keys installed:
+
+```sh
+just bench-proofs
+```
+
+This regenerates [BENCHMARK.md](../BENCHMARK.md) and the raw samples in
+`target/proof-benchmark.json` after a complete successful run. It measures
+eleven endpoint shapes: minimum and maximum confidential audit outputs;
+minimum anonymous audit, maximum anonymous inputs and maximum anonymous
+outputs; and minimum outputs, maximum outputs without withdrawals, and maximum
+outputs with maximum withdrawal capacity for both own-registry and curator
+policy proofs. The shared shape list is
+`prover/ring/proving-benchmarks.json`.
+
+The default run takes five samples of three timed proofs each. Override with
+`just bench-proofs --samples 3 --iterations 2`. Set `ZOLANA_PROVER_KEYS_DIR` or
+pass `--keys-dir` to use another key directory. The default is
+`zolana/prover/server/proving-keys`. The runner requires keys, checks their
+sizes and SHA-256 digests against the release lock, and leaves the previous
+report in place if proving or result validation fails. It does not download
+or generate keys.
+
+Each measurement uses the CPU `ExtensionProof.Prove` path: assignment
+construction, witness encoding, constraint solving and Groth16 proving. Key
+loading, fixture construction, JSON decoding, one warm-up proof and proof
+verification are outside the timer. The warm-up and final proofs are verified.
+The generated report records the Go version, hardware, actual `GOMAXPROCS`,
+repository/submodule revisions and timing boundaries. Output and withdrawal
+columns are compiled capacities; fixtures may include padding, and a compiled
+shape does not guarantee that a transaction fits Solana's limits. The largest
+anonymous input class is filled with 32 live inputs. SPP proofs, network
+requests and transaction submission are excluded. No compute-unit profiling
+or transaction-size measurements run. Use the same CPU allocation and an
+otherwise idle machine for comparisons.
+
+For a single circuit without regenerating the report, run from `prover/`:
+
+```sh
+REQUIRE_RING_KEYS=1 go test ./ring -run '^$' -bench '^BenchmarkRingProve$/custom-ring-audit-packed-2$' -benchtime=3x -count=5 -benchmem
+```
+
 ## Key artifacts and release gate
 
 Keys were generated locally with the pinned gnark setup tooling and exported to
