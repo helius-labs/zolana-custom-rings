@@ -3,7 +3,11 @@ use custom_ring_interface::{
     CustomRingMergeIxDataRef, RingMode, RING_DEPOSIT_DEPOSITOR_INDEX,
     RING_DEPOSIT_RING_CONFIG_INDEX, RING_MERGE_PAYER_INDEX, RING_MERGE_RING_CONFIG_INDEX,
 };
-use pinocchio::{error::ProgramError, AccountView, Address, ProgramResult};
+use pinocchio::{
+    error::ProgramError,
+    sysvars::{clock::Clock, Sysvar},
+    AccountView, Address, ProgramResult,
+};
 use zolana_account_checks::AccountIterator;
 use zolana_interface::instruction::instruction_data::deposit::RingDepositIxDataRef;
 
@@ -34,7 +38,7 @@ pub fn process_merge_ix(
         }
         true => [0; 32],
         false => load_registry(program_id, iter.next_account("registry")?)?
-            .own_root(request.registry_root_index)?,
+            .own_root(request.registry_root_index, Clock::get()?.slot)?,
     };
     // 2. A merge is a transfer, a co-signer scoped to transfers signs it.
     let demand = CoSignDemand {
@@ -96,7 +100,7 @@ pub fn process_audited_deposit_ix(
     let registry_root = match mode {
         RingMode::ConfidentialEscrow => Some(
             load_registry(program_id, iter.next_account("registry")?)?
-                .own_root(audited.registry_root_index)?,
+                .own_root(audited.registry_root_index, Clock::get()?.slot)?,
         ),
         _ if audited.registry_root_index != 0 => {
             return Err(CustomRingError::UnexpectedMemberRegistryRoot.into())

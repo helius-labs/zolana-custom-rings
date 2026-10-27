@@ -2,8 +2,9 @@ use bytemuck::{Pod, Zeroable};
 use custom_ring_interface::{
     compute_unit_limit, tag, AppliedAt, ApplyRecordsIxData, AuthorityWriteRecordsIxData,
     CreateConfigIxData, CustomRingError, InstructionTag, MemberRegistry, MemberWriteIxData,
-    PolicyTableIxData, RecordWriteData, RegisterKeyIxData, RingKind, SetCoSignerIxData, SourceSpec,
-    WriteRecordsIxData, CONFIG_PDA_SEED, MEMBER_REGISTRY_PDA_SEED, RECORD_QUEUE_PDA_SEED,
+    PolicyTableIxData, PublishRootIxData, RecordWriteData, RegisterKeyIxData, RingKind,
+    SetCoSignerIxData, SourceSpec, WriteRecordsIxData, CONFIG_PDA_SEED, MEMBER_REGISTRY_PDA_SEED,
+    RECORD_QUEUE_PDA_SEED,
 };
 use litesvm::LiteSVM;
 use solana_account::Account;
@@ -330,11 +331,12 @@ pub fn within_budget(tag: InstructionTag, sent: Sent) -> u64 {
     units
 }
 
-/// History slot 1 applied at `applied` under `floor`.
+/// History slot 1 applied at `applied` under `floor`, no grace.
 pub fn floored(base: &MemberRegistry, applied: u64, floor: u64) -> MemberRegistry {
     let mut registry = *base;
     registry.push_root([0x0f; 32], AppliedAt { applied, slot: 10 });
     registry.floor = floor.to_le_bytes();
+    registry.prior_floor = floor.to_le_bytes();
     registry
 }
 
@@ -529,6 +531,20 @@ pub fn apply_records(apply: &ApplyRecordsIxData) -> Instruction {
             AccountMeta::new(queue_pda(), false),
         ],
         tagged(tag::APPLY_RECORDS, bytemuck::bytes_of(apply)),
+    )
+}
+
+pub fn publish_root(authority: &Address, root: [u8; 32]) -> Instruction {
+    instruction(
+        vec![
+            AccountMeta::new_readonly(*authority, true),
+            AccountMeta::new_readonly(config_pda(), false),
+            AccountMeta::new(registry_pda(), false),
+        ],
+        tagged(
+            tag::PUBLISH_ROOT,
+            bytemuck::bytes_of(&PublishRootIxData { root }),
+        ),
     )
 }
 

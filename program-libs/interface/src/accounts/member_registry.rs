@@ -25,6 +25,8 @@ pub const QUEUE_CAPACITY: usize = APPLY_BATCH;
 pub const APPLY_DELAY_SLOTS: u64 = 150;
 /// Slots a curator root below the floor stays admissible after the floor rose.
 pub const GRACE_SLOTS: u64 = 750;
+/// Slots an own root below the floor stays admissible after a publish, a proof in flight still lands.
+pub const OWN_GRACE_SLOTS: u64 = 240;
 
 /// `q - 1`, the sentinel's next, every member sorts strictly below it.
 pub const FIELD_MAX: [u8; 32] = {

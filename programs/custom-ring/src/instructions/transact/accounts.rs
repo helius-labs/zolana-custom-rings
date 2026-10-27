@@ -71,7 +71,7 @@ impl<'a> TransactCheck<'a> {
             let root = registry
                 .as_ref()
                 .ok_or(CustomRingError::InvalidMemberRegistry)?
-                .own_root(exemption.root_index)?;
+                .own_root(exemption.root_index, self.slot)?;
             crate::instructions::verifier::RingProof {
                 proof: &exemption.proof,
                 statement: custom_ring_interface::cosign::WithdrawalExemptionStatement::new(
@@ -86,11 +86,14 @@ impl<'a> TransactCheck<'a> {
             .verify()?;
         }
         let co_signer = demand.signer_with_exemption(config, data.withdrawal_exemption.is_some());
-        let binding = data.check_policy(if config.has_policy() {
-            registry.as_deref()
-        } else {
-            None
-        })?;
+        let binding = data.check_policy(
+            if config.has_policy() {
+                registry.as_deref()
+            } else {
+                None
+            },
+            self.slot,
+        )?;
         let prefix = self.prefix(
             binding.and_then(|binding| binding.curator),
             co_signer.as_ref().ok().copied().flatten(),

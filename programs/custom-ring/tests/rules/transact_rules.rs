@@ -211,7 +211,11 @@ fn payer_owner(ring: &Ring) -> Vec<AccountMeta> {
 }
 
 /// A confidential transfer from the payer, `prefix` after the config.
-fn confidential(ring: &mut Ring, prefix: Vec<AccountMeta>, data: &RingTransactData<'_>) -> Sent {
+pub fn confidential(
+    ring: &mut Ring,
+    prefix: Vec<AccountMeta>,
+    data: &RingTransactData<'_>,
+) -> Sent {
     let spp = spp_list(&ring.payer.pubkey(), data, &payer_owner(ring));
     send(
         ring,

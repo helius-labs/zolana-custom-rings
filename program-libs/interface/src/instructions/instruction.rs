@@ -91,6 +91,7 @@ instruction_tags! {
     AuthorityWriteRecords = AUTHORITY_WRITE_RECORDS: 40 => PROOF_UNITS,
     ApplyRecords = APPLY_RECORDS: 41 => PROOF_UNITS,
     SetInsertFee = SET_INSERT_FEE: 42 => ACCOUNT_UNITS,
+    PublishRoot = PUBLISH_ROOT: 45 => ACCOUNT_UNITS,
 }
 
 /// Fixed for the ring's life.
@@ -277,6 +278,13 @@ pub struct SetInsertFeeIxData {
     pub fee: [u8; 8],
 }
 
+/// Tag 45, the registry root the authority computed off chain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
+#[repr(C)]
+pub struct PublishRootIxData {
+    pub root: [u8; 32],
+}
+
 macro_rules! fixed_ix_data {
     ($($ty:ident),*) => {$(
         impl $ty {
@@ -298,7 +306,8 @@ fixed_ix_data!(
     MemberWriteIxData,
     ApplyRecordsIxData,
     RegisterKeyIxData,
-    SetInsertFeeIxData
+    SetInsertFeeIxData,
+    PublishRootIxData
 );
 
 impl MemberWriteIxData {

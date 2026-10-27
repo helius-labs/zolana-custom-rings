@@ -99,7 +99,7 @@ fn set_insert_fee(ring: &mut Ring, fee: u64) {
 fn create_member_registry_starts_from_the_sentinel_once() {
     let mut ring = Ring::new(Setup::AuditOnly);
     let registry: MemberRegistry = ring.read(&registry_pda());
-    assert_eq!(registry.own_root(0), Ok(MEMBER_REGISTRY_EMPTY_ROOT));
+    assert_eq!(registry.own_root(0, 0), Ok(MEMBER_REGISTRY_EMPTY_ROOT));
     assert_eq!(registry.next_index(), 1);
     assert_eq!(ring.read::<RecordQueue>(&queue_pda()).pending(), 0);
     let (payer, authority) = (ring.payer.pubkey(), ring.authority.insecure_clone());

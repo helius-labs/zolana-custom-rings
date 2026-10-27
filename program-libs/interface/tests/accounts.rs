@@ -4,7 +4,7 @@ use custom_ring_interface::{
     PendingApplication, QueueEntry, RecordQueue, RingAccount, RingProgramConfig, SourceSlot,
     WriteRecordsIxData, APPLY_DELAY_SLOTS, AUTHORITY_RESERVED_LEAVES, GRACE_SLOTS,
     MEMBER_QUEUE_LIMIT, MEMBER_REGISTRY_CAPACITY, MEMBER_REGISTRY_EMPTY_ROOT, N_SOURCE_SLOTS,
-    QUEUE_CAPACITY, RING_PROGRAM_CONFIG,
+    OWN_GRACE_SLOTS, QUEUE_CAPACITY, RING_PROGRAM_CONFIG,
 };
 use solana_address::Address;
 use zolana_hasher::primitives::right_align;
@@ -131,11 +131,17 @@ fn decode_refuses_values_no_setter_writes() {
 #[test]
 fn a_fresh_registry_binds_the_sentinel_root_at_slot_zero() {
     let registry = MemberRegistry::new(254, 77);
-    assert_eq!(registry.own_root(0), Ok(MEMBER_REGISTRY_EMPTY_ROOT));
+    assert_eq!(registry.own_root(0, 0), Ok(MEMBER_REGISTRY_EMPTY_ROOT));
     assert_eq!(registry.current_root(), MEMBER_REGISTRY_EMPTY_ROOT);
     assert_eq!(registry.next_index(), 1);
-    assert_eq!(registry.own_root(1), Err(CustomRingError::RootIndexEmpty));
-    assert_eq!(registry.own_root(32), Err(CustomRingError::RootIndexEmpty));
+    assert_eq!(
+        registry.own_root(1, 0),
+        Err(CustomRingError::RootIndexEmpty)
+    );
+    assert_eq!(
+        registry.own_root(32, 0),
+        Err(CustomRingError::RootIndexEmpty)
+    );
     assert_eq!(registry.policy_hash(), Err(CustomRingError::PolicyNotSet));
 }
 
@@ -147,9 +153,12 @@ fn an_own_root_one_write_below_the_floor_is_refused() {
         prior_floor: 0,
         floor_slot: 0,
     };
-    assert_eq!(at_floor(5).registry().own_root(1), Ok([9; 32]));
     assert_eq!(
-        at_floor(4).registry().own_root(1),
+        at_floor(5).registry().own_root(1, OWN_GRACE_SLOTS),
+        Ok([9; 32])
+    );
+    assert_eq!(
+        at_floor(4).registry().own_root(1, OWN_GRACE_SLOTS),
         Err(CustomRingError::RootBelowFloor)
     );
 }
@@ -327,7 +336,7 @@ fn an_application_moves_the_head_past_every_pending_write() {
         application.settle_permissionless(&data, 40);
         assert_eq!(queue.head(), 12 * (u64::from(round) + 1));
         assert_eq!((queue.pending(), queue.chain_head), (0, chain));
-        assert_eq!(registry.own_root(round + 1), Ok([round + 1; 32]));
+        assert_eq!(registry.own_root(round + 1, 0), Ok([round + 1; 32]));
         assert_eq!(registry.current_root(), [round + 1; 32]);
     }
 }

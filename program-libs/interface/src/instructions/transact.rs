@@ -908,6 +908,7 @@ impl<'a> RingTransactData<'a> {
     pub fn check_policy(
         &self,
         registry: Option<&MemberRegistry>,
+        now: u64,
     ) -> Result<Option<PolicyBinding<'a>>, CustomRingError> {
         let (proof, registry) = match (self.policy, registry) {
             (None, None) => return Ok(None),
@@ -929,7 +930,7 @@ impl<'a> RingTransactData<'a> {
         Ok(Some(PolicyBinding {
             proof,
             policy_hash: *registry.policy_hash()?,
-            own_root: registry.own_root(proof.own_root_index)?,
+            own_root: registry.own_root(proof.own_root_index, now)?,
             curator,
         }))
     }

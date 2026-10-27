@@ -11,7 +11,8 @@ use crate::{
     error::CustomRingError,
     member_registry::{
         queue_chain, QueueEntry, APPLY_DELAY_SLOTS, AUTHORITY_RESERVED_LEAVES, GRACE_SLOTS,
-        MEMBER_QUEUE_LIMIT, MEMBER_REGISTRY_CAPACITY, MEMBER_REGISTRY_EMPTY_ROOT, QUEUE_CAPACITY,
+        MEMBER_QUEUE_LIMIT, MEMBER_REGISTRY_CAPACITY, MEMBER_REGISTRY_EMPTY_ROOT, OWN_GRACE_SLOTS,
+        QUEUE_CAPACITY,
     },
     statement::ApplyRecordsStatement,
     ApplyRecordsIxData, ReaderKeyBytes, TAGGED_X25519_KEY_LEN,
@@ -358,24 +359,16 @@ impl MemberRegistry {
         registry
     }
 
-    /// The root an own-ring statement binds, `applied` must reach the floor.
-    pub fn own_root(&self, index: u8) -> Result<[u8; 32], CustomRingError> {
-        let entry = self.entry(index)?;
-        if entry.applied() < self.floor() {
-            return Err(CustomRingError::RootBelowFloor);
-        }
-        Ok(entry.root)
+    /// An own root at the floor, or within `OWN_GRACE_SLOTS` of the last raise at the prior floor.
+    pub fn own_root(&self, index: u8, now: u64) -> Result<[u8; 32], CustomRingError> {
+        self.root_within(index, now, OWN_GRACE_SLOTS)?
+            .ok_or(CustomRingError::RootBelowFloor)
     }
 
     /// A curator root at the floor, or within `GRACE_SLOTS` of the last raise at the prior floor.
     pub fn curator_root(&self, index: u8, now: u64) -> Result<[u8; 32], CustomRingError> {
-        let entry = self.entry(index)?;
-        let applied = entry.applied();
-        let in_grace = now < self.floor_slot().saturating_add(GRACE_SLOTS);
-        if applied >= self.floor() || (in_grace && applied >= self.prior_floor()) {
-            return Ok(entry.root);
-        }
-        Err(CustomRingError::CuratorRootStale)
+        self.root_within(index, now, GRACE_SLOTS)?
+            .ok_or(CustomRingError::CuratorRootStale)
     }
 
     /// The root the next application starts from.
@@ -394,12 +387,19 @@ impl MemberRegistry {
         self.history_cursor = cursor as u8;
     }
 
-    /// Every authority write floors the own ring, curators keep the prior floor for `GRACE_SLOTS`.
+    /// A raise keeps the prior floor for `OWN_GRACE_SLOTS`, curators for `GRACE_SLOTS`.
     pub fn raise_floor(&mut self) {
         let newest = self.history[usize::from(self.history_cursor)];
         self.prior_floor = self.floor;
         self.floor = newest.applied;
         self.floor_slot = newest.slot;
+    }
+
+    /// A root one application past the newest, the floor moves to it.
+    pub fn publish(&mut self, root: [u8; 32], slot: u64) {
+        let applied = self.history[usize::from(self.history_cursor)].applied() + 1;
+        self.push_root(root, AppliedAt { applied, slot });
+        self.raise_floor();
     }
 
     /// `PolicyNotSet` before the first policy write.
@@ -462,6 +462,20 @@ impl MemberRegistry {
             .get(usize::from(index))
             .filter(|entry| entry.root != [0; 32])
             .ok_or(CustomRingError::RootIndexEmpty)
+    }
+
+    /// `None` once a root below the floor outlived `grace` slots since the raise.
+    fn root_within(
+        &self,
+        index: u8,
+        now: u64,
+        grace: u64,
+    ) -> Result<Option<[u8; 32]>, CustomRingError> {
+        let entry = self.entry(index)?;
+        let applied = entry.applied();
+        let in_grace = now < self.floor_slot().saturating_add(grace);
+        let admitted = applied >= self.floor() || (in_grace && applied >= self.prior_floor());
+        Ok(admitted.then_some(entry.root))
     }
 }
 

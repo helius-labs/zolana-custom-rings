@@ -668,11 +668,11 @@ fn the_policy_proof_follows_the_registry() {
     let packed = fixture.confidential_packed();
     let mut registry = MemberRegistry::new(254, 0);
     assert_eq!(
-        packed.check_policy(None),
+        packed.check_policy(None, 0),
         Err(CustomRingError::UnexpectedPolicyProof)
     );
     assert_eq!(
-        packed.check_policy(Some(&registry)),
+        packed.check_policy(Some(&registry), 0),
         Err(CustomRingError::FlagNotAllowed)
     );
     let mut sources = [SourceSlot::zeroed(); N_SOURCE_SLOTS];
@@ -688,16 +688,16 @@ fn the_policy_proof_follows_the_registry() {
         ..policy
     });
     assert_eq!(
-        uncurated.check_policy(Some(&registry)),
+        uncurated.check_policy(Some(&registry), 0),
         Err(CustomRingError::FlagNotAllowed)
     );
     assert_eq!(
-        packed.check_policy(Some(&registry)),
+        packed.check_policy(Some(&registry), 0),
         Err(CustomRingError::PolicyNotSet)
     );
 
     assert_eq!(
-        packed.check_policy(Some(&registry)),
+        packed.check_policy(Some(&registry), 0),
         Err(CustomRingError::PolicyNotSet)
     );
     registry.policy_hash = [9; 32];
@@ -709,7 +709,7 @@ fn the_policy_proof_follows_the_registry() {
         registry.push_root([applied as u8; 32], at);
     }
     assert_eq!(
-        packed.check_policy(Some(&registry)),
+        packed.check_policy(Some(&registry), 0),
         Ok(Some(PolicyBinding {
             proof: packed.policy.unwrap(),
             policy_hash: [9; 32],
@@ -723,11 +723,11 @@ fn the_policy_proof_follows_the_registry() {
     assert_eq!(
         fixture
             .confidential_delivered()
-            .check_policy(Some(&registry)),
+            .check_policy(Some(&registry), 0),
         Err(CustomRingError::MissingPolicyProof)
     );
     assert_eq!(
-        fixture.confidential_delivered().check_policy(None),
+        fixture.confidential_delivered().check_policy(None, 0),
         Ok(None)
     );
 }

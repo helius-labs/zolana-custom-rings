@@ -26,6 +26,8 @@ mod merge_disclosure;
 mod policy_binding;
 #[path = "verification/public_legs.rs"]
 mod public_legs;
+#[path = "records/publish_root.rs"]
+mod publish_root;
 #[path = "configuration/access/read_access.rs"]
 mod read_access;
 #[path = "records/register_key.rs"]
@@ -57,6 +59,7 @@ pub(crate) use create_member_registry::process_create_member_registry_ix;
 pub(crate) use create_policy::process_create_policy_ix;
 pub(crate) use forward::{process_audited_deposit_ix, process_merge_ix};
 pub(crate) use init_spp_ring_config::process_init_spp_ring_config_ix;
+pub(crate) use publish_root::process_publish_root_ix;
 pub(crate) use read_access::{process_grant_read_access_ix, process_revoke_read_access_ix};
 pub(crate) use register_key::process_register_key_ix;
 pub(crate) use set_authority::process_set_authority_ix;

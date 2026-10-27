@@ -4,5 +4,6 @@ mod anonymous_rules;
 mod common;
 mod forward_rules;
 mod operator_rules;
+mod publish_root_rules;
 mod record_queue_rules;
 mod transact_rules;
