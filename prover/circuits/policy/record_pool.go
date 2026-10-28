@@ -16,11 +16,6 @@ type PoolSubject struct {
 	RecordIndex frontend.Variable
 }
 
-type subjectPool struct {
-	active frontend.Variable
-	table  *lookup.Table
-}
-
 type recordQuery struct {
 	active, member, index frontend.Variable
 }
@@ -31,22 +26,28 @@ type pooledRecord struct {
 	mintPolicy mintPolicyWires
 }
 
-type recordPool struct {
+const pooledColumns = 4 + NSources
+
+type pooledTable struct {
 	active frontend.Variable
 	table  *lookup.Table
 }
 
+type recordPool struct{ pooledTable }
+
+type subjectPool struct{ pooledTable }
+
 func openRecordPool(api frontend.API, active, root frontend.Variable, records []registry.Record, proof registry.SharedQuadProof) recordPool {
 	api.AssertIsBoolean(active)
-	pool := recordPool{active: active, table: lookup.New(api, 6+NSources)}
+	pool := recordPool{pooledTable{active: active, table: lookup.New(api, 2+pooledColumns)}}
 	leaves := make([]frontend.Variable, len(records))
 	for i, record := range records {
 		leaves[i] = record.Hash(api)
 		// No stored record fails these splits, ValueOutsideMask in program-libs/interface/src/instructions/instruction.rs keeps lists u64 and registry/apply_records.go keeps mint policy below 2^192.
 		bits := api.ToBinary(record.Lists, registry.ListBits)
-		policy := decodeMintPolicy(api, record.MintPolicy)
-		row := []frontend.Variable{record.Member, record.Next, record.EscrowKey, policy.threshold, policy.cap, policy.cosignAbove}
-		pool.table.Insert(append(row, bits[:NSources]...))
+		row := pooledRecord{escrowKey: record.EscrowKey, mintPolicy: decodeMintPolicy(api, record.MintPolicy)}
+		copy(row.onList[:], bits)
+		pool.table.Insert(row.columns(record.Member, record.Next))
 	}
 	proof.AssertLeavesWhen(api, active, root, leaves)
 	return pool
@@ -66,16 +67,30 @@ func decodeMintPolicy(api frontend.API, packed frontend.Variable) mintPolicyWire
 	return mintPolicyWires{threshold: limbs[2], cap: limbs[1], cosignAbove: limbs[0]}
 }
 
-func (p recordPool) resolve(api frontend.API, query recordQuery) pooledRecord {
+func (p pooledTable) lookup(api frontend.API, query recordQuery) []frontend.Variable {
 	api.AssertIsBoolean(query.active)
 	api.AssertIsEqual(api.Mul(query.active, api.Sub(1, p.active)), 0)
-	row := p.table.Lookup(query.index)
-	result := pooledRecord{escrowKey: row[2], mintPolicy: mintPolicyWires{threshold: row[3], cap: row[4], cosignAbove: row[5]}}
-	copy(result.onList[:], row[6:])
+	return p.table.Lookup(query.index)
+}
+
+func (p recordPool) resolve(api frontend.API, query recordQuery) pooledRecord {
+	row := p.lookup(api, query)
+	result := pooledRecordAt(row[2:])
 	present := api.IsZero(api.Sub(row[0], query.member))
 	ringgadget.AssertOrderedWhen(api, api.Mul(query.active, api.Sub(1, present)), row[0], query.member, row[1])
 	live := api.Mul(query.active, present)
 	return result.gated(api, live)
+}
+
+func (r pooledRecord) columns(prefix ...frontend.Variable) []frontend.Variable {
+	row := append(prefix, r.escrowKey, r.mintPolicy.threshold, r.mintPolicy.cap, r.mintPolicy.cosignAbove)
+	return append(row, r.onList[:]...)
+}
+
+func pooledRecordAt(columns []frontend.Variable) pooledRecord {
+	record := pooledRecord{escrowKey: columns[0], mintPolicy: mintPolicyWires{threshold: columns[1], cap: columns[2], cosignAbove: columns[3]}}
+	copy(record.onList[:], columns[4:])
+	return record
 }
 
 func (r pooledRecord) gated(api frontend.API, active frontend.Variable) pooledRecord {
@@ -90,21 +105,16 @@ func (r pooledRecord) gated(api frontend.API, active frontend.Variable) pooledRe
 }
 
 func openSubjectPool(api frontend.API, records recordPool, subjects []PoolSubject) subjectPool {
-	pool := subjectPool{active: records.active, table: lookup.New(api, 5+NSources)}
+	pool := subjectPool{pooledTable{active: records.active, table: lookup.New(api, 1+pooledColumns)}}
 	for _, subject := range subjects {
 		resolved := records.resolve(api, recordQuery{active: records.active, member: subject.Member, index: subject.RecordIndex})
-		row := []frontend.Variable{subject.Member, resolved.escrowKey, resolved.mintPolicy.threshold, resolved.mintPolicy.cap, resolved.mintPolicy.cosignAbove}
-		pool.table.Insert(append(row, resolved.onList[:]...))
+		pool.table.Insert(resolved.columns(subject.Member))
 	}
 	return pool
 }
 
 func (p subjectPool) resolve(api frontend.API, query recordQuery) pooledRecord {
-	api.AssertIsBoolean(query.active)
-	api.AssertIsEqual(api.Mul(query.active, api.Sub(1, p.active)), 0)
-	row := p.table.Lookup(query.index)
+	row := p.lookup(api, query)
 	api.AssertIsEqual(api.Mul(query.active, api.Sub(row[0], query.member)), 0)
-	result := pooledRecord{escrowKey: row[1], mintPolicy: mintPolicyWires{threshold: row[2], cap: row[3], cosignAbove: row[4]}}
-	copy(result.onList[:], row[5:])
-	return result.gated(api, query.active)
+	return pooledRecordAt(row[1:]).gated(api, query.active)
 }

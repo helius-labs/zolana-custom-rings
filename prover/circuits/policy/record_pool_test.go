@@ -46,9 +46,7 @@ func poolFixture(t testing.TB) *recordPoolCircuit {
 	r.Apply(t, ringregistry.Entry{Member: big.NewInt(17), Mask: big.NewInt(1), Value: big.NewInt(1), EscrowKey: big.NewInt(37)})
 	c := &recordPoolCircuit{Root: r.Root(), Active: 1}
 	for _, member := range []int64{11, 17} {
-		opening := r.Opening(big.NewInt(member))
-		w := opening.Wires()
-		c.Records = append(c.Records, registry.Record{Member: member, Next: w.Next, Lists: w.Lists, EscrowKey: w.EscrowKey, MintPolicy: w.MintPolicy, WithdrawalThreshold: w.WithdrawalThreshold})
+		c.Records = append(c.Records, r.Opening(big.NewInt(member)).Record.Wires())
 	}
 	var err error
 	c.Proof, err = r.SharedProof([]uint64{1, 2})
@@ -139,7 +137,7 @@ func TestRecordPoolBindsEveryLookupColumn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for column := range 6 + NSources {
+	for column := range 2 + pooledColumns {
 		calls := 0
 		err = cs.IsSolved(witness, solver.OverrideHint(solver.GetHintID(lookup.RowLookupHint), func(q *big.Int, in, out []*big.Int) error {
 			if err := lookup.RowLookupHint(q, in, out); err != nil {

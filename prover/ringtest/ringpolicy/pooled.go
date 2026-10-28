@@ -15,7 +15,7 @@ type recordCollector struct {
 	tree           *ringregistry.Registry
 	records        []circuitregistry.Record
 	leafIndices    []uint64
-	indices        map[string]int
+	indices        map[uint64]int
 	subjects       []policy.PoolSubject
 	subjectIndices map[string]int
 }
@@ -67,7 +67,7 @@ func (b Witness) pool(t testing.TB, ownTree, curatorTree *ringregistry.Registry)
 }
 
 func newCollector(tree *ringregistry.Registry) *recordCollector {
-	return &recordCollector{tree: tree, indices: map[string]int{}, subjectIndices: map[string]int{}}
+	return &recordCollector{tree: tree, indices: map[uint64]int{}, subjectIndices: map[string]int{}}
 }
 
 func (c *recordCollector) add(member frontend.Variable, active bool) int {
@@ -78,18 +78,14 @@ func (c *recordCollector) add(member frontend.Variable, active bool) int {
 	if index, ok := c.subjectIndices[subjectKey]; ok {
 		return index
 	}
-	opening := c.tree.Opening(ringtest.AsBigInt(member)).Wires()
-	key := ringtest.AsBigInt(opening.Path.Index).String()
+	opening := c.tree.Opening(ringtest.AsBigInt(member))
+	key := opening.Path.Index
 	recordIndex, ok := c.indices[key]
 	if !ok {
-		record := circuitregistry.Record{Member: member, Next: opening.Next, Lists: opening.Lists, EscrowKey: opening.EscrowKey, MintPolicy: opening.MintPolicy, WithdrawalThreshold: opening.WithdrawalThreshold}
-		if ringtest.AsBigInt(opening.Present).Sign() == 0 {
-			record = circuitregistry.Record{Member: opening.LowMember, Next: opening.LowNext, Lists: opening.LowLists, EscrowKey: opening.LowEscrow, MintPolicy: opening.LowMintPolicy, WithdrawalThreshold: opening.LowWithdrawalThreshold}
-		}
 		recordIndex = len(c.records)
 		c.indices[key] = recordIndex
-		c.records = append(c.records, record)
-		c.leafIndices = append(c.leafIndices, ringtest.AsBigInt(opening.Path.Index).Uint64())
+		c.records = append(c.records, opening.Record.Wires())
+		c.leafIndices = append(c.leafIndices, opening.Path.Index)
 	}
 	index := len(c.subjects)
 	c.subjectIndices[subjectKey] = index

@@ -37,13 +37,7 @@ func TestPooledPolicyConstraintMatrix(t *testing.T) {
 		for _, shape := range []policy.MemberShape{{Outputs: 2}, {Outputs: 16, Withdrawals: 32}} {
 			shape.OwnOnly = own
 			for _, compact := range []bool{true, false} {
-				capacity := policy.RecordPoolShape{}
-				if compact {
-					capacity.Own = 3
-					if !own {
-						capacity.Curator = 3
-					}
-				}
+				capacity := compactPools(compact, own)
 				shape.Records = capacity
 				c, err := policy.NewMemberPolicyCircuit(shape)
 				if err != nil {
@@ -59,13 +53,7 @@ func TestPooledPolicyConstraintMatrix(t *testing.T) {
 		}
 		for _, width := range []int{2, 4} {
 			for _, compact := range []bool{true, false} {
-				capacity := policy.RecordPoolShape{}
-				if compact {
-					capacity.Own = 3
-					if !own {
-						capacity.Curator = 3
-					}
-				}
+				capacity := compactPools(compact, own)
 				c, err := policy.NewDelegatePolicyCircuit(policy.DelegateShape{Shape: transaction.Shape{NInputs: width, NOutputs: width}, OwnOnly: own, Records: capacity})
 				if err != nil {
 					t.Fatal(err)
@@ -80,6 +68,16 @@ func TestPooledPolicyConstraintMatrix(t *testing.T) {
 			}
 		}
 	}
+}
+
+func compactPools(compact, own bool) policy.RecordPoolShape {
+	switch {
+	case !compact:
+		return policy.RecordPoolShape{}
+	case own:
+		return policy.RecordPoolShape{Own: 3}
+	}
+	return policy.RecordPoolShape{Own: 3, Curator: 3}
 }
 
 func requirePooledCompiledSolved(t *testing.T, cs constraint.ConstraintSystem, b ringpolicy.Witness) {

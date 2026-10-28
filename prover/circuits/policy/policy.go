@@ -3,6 +3,7 @@ package policy
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/consensys/gnark/frontend"
 
@@ -122,8 +123,7 @@ func (p *Policy) validate(publicAssets int) error {
 			return err
 		}
 	}
-	entries := append([]PoolEntry{p.SenderEntry}, p.OwnerEntries...)
-	for _, entry := range append(entries, p.AssetEntries...) {
+	for _, entry := range slices.Concat([]PoolEntry{p.SenderEntry}, p.OwnerEntries, p.AssetEntries) {
 		if err := entry.validate(p.OwnOnly); err != nil {
 			return err
 		}

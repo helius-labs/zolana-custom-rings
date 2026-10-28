@@ -20,13 +20,9 @@ func (r *Registry) SharedProof(indices []uint64) (registry.SharedQuadProof, erro
 		if index >= registry.Capacity {
 			return registry.SharedQuadProof{}, fmt.Errorf("registry leaf index outside capacity")
 		}
-		path := r.Path(index)
+		path := r.Path(index).Wires()
 		proof.Paths[i].Index = index
-		for level := range proof.Paths[i].Siblings {
-			for child, sibling := range path.Siblings[level] {
-				proof.Paths[i].Siblings[level][child] = new(big.Int).Set(sibling)
-			}
-		}
+		copy(proof.Paths[i].Siblings, path.Siblings[:])
 	}
 	return proof, nil
 }

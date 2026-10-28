@@ -4,6 +4,7 @@ package ring
 import (
 	_ "embed"
 	"fmt"
+	"slices"
 
 	"github.com/consensys/gnark/frontend"
 
@@ -129,15 +130,14 @@ func (p PolicyParams) validateIndices(pools policy.RecordPoolShape) error {
 	if err := validatePoolIndices(p.CuratorSubjects, p.CuratorProof, pools.Curator); err != nil {
 		return err
 	}
-	entries := append([]PooledEntry{p.SenderEntry}, p.OwnerEntries...)
-	for _, entry := range append(entries, p.AssetEntries...) {
+	for _, entry := range slices.Concat([]PooledEntry{p.SenderEntry}, p.OwnerEntries, p.AssetEntries) {
 		if err := entry.validateIndices(pools); err != nil {
 			return err
 		}
 	}
 	for _, index := range p.PublicAssetEntries {
-		if uint64(index) >= uint64(pools.OwnSubjects) {
-			return fmt.Errorf("policy public asset subject index is outside the pool")
+		if err := poolIndex("public asset subject", index, pools.OwnSubjects); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -145,8 +145,8 @@ func (p PolicyParams) validateIndices(pools policy.RecordPoolShape) error {
 
 func validatePoolIndices(subjects []PooledSubject, proof SharedRegistryProof, records int) error {
 	for _, subject := range subjects {
-		if uint64(subject.RecordIndex) >= uint64(records) {
-			return fmt.Errorf("policy record index is outside the pool")
+		if err := poolIndex("record", subject.RecordIndex, records); err != nil {
+			return err
 		}
 	}
 	for _, path := range proof.Paths {
@@ -158,13 +158,20 @@ func validatePoolIndices(subjects []PooledSubject, proof SharedRegistryProof, re
 }
 
 func (e PooledEntry) validateIndices(pools policy.RecordPoolShape) error {
-	if uint64(e.Own) >= uint64(pools.OwnSubjects) {
-		return fmt.Errorf("policy own subject index is outside the pool")
+	if err := poolIndex("own subject", e.Own, pools.OwnSubjects); err != nil {
+		return err
 	}
 	for _, index := range e.Curator {
-		if uint64(index) >= uint64(pools.CuratorSubjects) {
-			return fmt.Errorf("policy curator subject index is outside the pool")
+		if err := poolIndex("curator subject", index, pools.CuratorSubjects); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+func poolIndex(name string, index uint32, size int) error {
+	if uint64(index) >= uint64(size) {
+		return fmt.Errorf("policy %s index is outside the pool", name)
 	}
 	return nil
 }

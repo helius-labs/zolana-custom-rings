@@ -24,11 +24,7 @@ func NewSharedQuadProof(openings int) (SharedQuadProof, error) {
 	if openings < 1 || openings > Capacity {
 		return SharedQuadProof{}, fmt.Errorf("registry opening count outside capacity")
 	}
-	width, levels := 1, 0
-	for width < openings {
-		width *= Arity
-		levels++
-	}
+	width, levels := canopyShape(openings)
 	proof := SharedQuadProof{Canopy: make([]frontend.Variable, width), Paths: make([]SharedQuadPath, openings)}
 	for i := range proof.Paths {
 		proof.Paths[i].Siblings = make([][Arity - 1]frontend.Variable, Height-levels)
@@ -81,11 +77,7 @@ func (p SharedQuadProof) Validate(count int) error {
 	if len(p.Paths) == 0 || len(p.Paths) != count {
 		return fmt.Errorf("registry shared opening count mismatch")
 	}
-	levels, width := 0, 1
-	for width < len(p.Canopy) {
-		width *= Arity
-		levels++
-	}
+	width, levels := canopyShape(len(p.Canopy))
 	if len(p.Canopy) != width {
 		return fmt.Errorf("registry canopy width is not a supported power of four")
 	}
@@ -95,6 +87,15 @@ func (p SharedQuadProof) Validate(count int) error {
 		}
 	}
 	return nil
+}
+
+func canopyShape(openings int) (width, levels int) {
+	width = 1
+	for width < openings {
+		width *= Arity
+		levels++
+	}
+	return width, levels
 }
 
 func canopyRoot(api frontend.API, nodes []frontend.Variable) frontend.Variable {
