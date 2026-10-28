@@ -8,7 +8,7 @@ use std::{
 
 use custom_ring_interface::{
     check_member, queue_chain, tagged_x25519, RecordWriteData, RootEntry, WriteRecordsIxData,
-    MEMBER_REGISTRY_CAPACITY,
+    MEMBER_REGISTRY_CAPACITY, QUAD_ARITY,
 };
 use sea_orm::{DatabaseConnection, DatabaseTransaction};
 use solana_address::Address;
@@ -28,8 +28,8 @@ use zolana_ring_indexer::{
         RingRegistryRootView, RingRootEntryView, MAX_RING_MEMBER_PAGE_LIMIT,
     },
     tree::{
-        Canopy, MemberRecord, OpeningCheck, QuadPath, RecordOpening, RecordTree,
-        RecordWriteProofInput, SharedPath,
+        Canopy, MemberRecord, OpeningCheck, RecordOpening, RecordTree,
+        RecordWriteProofInput,
     },
 };
 
@@ -275,7 +275,7 @@ pub(crate) async fn registry_root(
         if path.root([0; 32]).map_err(internal)? != root.root {
             return Err(internal("the append path does not reach the newest root"));
         }
-        Some(path_view(&path))
+        Some(path_view(path.index, &path.siblings))
     } else {
         None
     };
@@ -592,7 +592,7 @@ impl RootRead {
                     .ok_or_else(|| internal("pooled record was not loaded"))?;
                 Ok(RingIndexedMemberRecordView {
                     record: record_view(stored),
-                    path: shared_path_view(path),
+                    path: path_view(path.index, &path.siblings),
                 })
             })
             .collect::<Result<Vec<_>, RingApiError>>()?;
@@ -658,7 +658,7 @@ impl LoadedRegistry {
         Ok(RingMemberOpening {
             present,
             record: record_view(stored),
-            path: path_view(&path),
+            path: path_view(path.index, &path.siblings),
         })
     }
 }
@@ -700,23 +700,16 @@ fn write_view(write: &RecordWriteProofInput) -> RingRecordWriteView {
         old_lists: write.old_lists,
         old_escrow: Hash(write.old_escrow),
         old_mint_policy: write.old_mint_policy,
-        slot: path_view(&write.slot),
+        slot: path_view(write.slot.index, &write.slot.siblings),
         low: member_view(&write.low),
-        low_path: path_view(&write.low_path),
+        low_path: path_view(write.low_path.index, &write.low_path.siblings),
     }
 }
 
-fn path_view(path: &QuadPath) -> RingRecordPathView {
+fn path_view(index: u64, siblings: &[[[u8; 32]; QUAD_ARITY - 1]]) -> RingRecordPathView {
     RingRecordPathView {
-        index: path.index,
-        siblings: path.siblings.iter().map(|level| level.map(Hash)).collect(),
-    }
-}
-
-fn shared_path_view(path: &SharedPath) -> RingRecordPathView {
-    RingRecordPathView {
-        index: path.index,
-        siblings: path.siblings.iter().map(|level| level.map(Hash)).collect(),
+        index,
+        siblings: siblings.iter().map(|level| level.map(Hash)).collect(),
     }
 }
 

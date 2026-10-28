@@ -123,5 +123,9 @@ pub fn listed_recipients(
         .verified
         .recipient_viewing_pks
         .iter()
-        .filter(|key| *key.as_bytes() != DUMMY_RECIPIENT_VIEWING_PK)
+        .filter(|key| !is_dummy_recipient(key))
+}
+
+pub fn is_dummy_recipient(key: &X25519Pubkey) -> bool {
+    *key.as_bytes() == DUMMY_RECIPIENT_VIEWING_PK
 }

@@ -9,21 +9,21 @@ use spr_keypair::{
     viewing_key::ViewTag, KeypairError, PublicKey, ShieldedAddress, ViewingKey, X25519Pubkey,
 };
 use spr_transaction::{
-    DecryptLabel, DecryptRequest, DecryptionResult, DepositPayload, DeriveRequest, Mint,
-    ShieldedKeys, ShieldedTransaction, TransactionError, TransactionKeyRequest, Utxo, WalletUtxo,
+    DecryptLabel, DecryptRequest, DecryptionResult, DepositPayload, Mint, ShieldedKeys,
+    ShieldedTransaction, TransactionError, TransactionKeyRequest, Utxo, WalletUtxo,
 };
 use zeroize::Zeroizing;
 use zolana_ring_keys::{
     RingKeys, SharedTagPair, SharedTagsRequest, SharedViewTags, ViewTagRequest, ViewTagStream,
 };
 use zolana_ring_transaction::{
-    is_contributory, listed_recipients, AnonymousOutput, AnonymousTransferRecipientPlaintext,
-    AnonymousTransferSenderPlaintext, RingAssets, DUMMY_RECIPIENT_VIEWING_PK,
+    is_contributory, is_dummy_recipient, listed_recipients, AnonymousOutput,
+    AnonymousTransferRecipientPlaintext, AnonymousTransferSenderPlaintext, RingAssets,
 };
 
 use crate::{
     confidential::RingMerges,
-    delivered::RingDeliveryContext,
+    delivered::{self, RingDeliveryContext},
     deposit::{DepositOpener, DepositSlot, OpenedDeposit},
     deposit_payload, exactly_one_each,
     tags::{IndexerReads, TagWindow},
@@ -664,7 +664,7 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
             return;
         };
         for (position, recipient) in (first..).zip(listed) {
-            if *recipient.as_bytes() == DUMMY_RECIPIENT_VIEWING_PK || !is_contributory(recipient) {
+            if is_dummy_recipient(recipient) || !is_contributory(recipient) {
                 continue;
             }
             if let Some(sent) = self.sent_payment(body, position, recipient, tx_viewing_key) {
@@ -751,11 +751,11 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
         utxo: Utxo,
     ) -> Result<(), AnonymousError> {
         let context = &body.tx.output_slots[position].output_context;
-        if self.found.iter().any(|held| held.utxo_hash == context.hash) {
+        if self.is_found(&context.hash) {
             return Ok(());
         }
         let viewing_pubkey = self.history.entries()[index].viewing_pubkey();
-        self.found.push(WalletUtxo {
+        let utxo = WalletUtxo {
             utxo,
             nullifier_pubkey: self.address.nullifier_pubkey,
             utxo_hash: context.hash,
@@ -769,13 +769,22 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
             slot: body.tx.slot,
             tx_signature: body.tx.tx_signature,
             slot_index: u32::try_from(position).map_err(|_| TransactionError::TooManyOutputs)?,
-        });
-        self.utxos.push(AnonymousRingUtxo {
-            utxo_hash: context.hash,
-            viewing_pubkey,
-            stream: body.found,
-        });
+        };
+        self.keep(utxo, viewing_pubkey, body.found);
         Ok(())
+    }
+
+    fn is_found(&self, utxo_hash: &[u8; 32]) -> bool {
+        self.found.iter().any(|held| held.utxo_hash == *utxo_hash)
+    }
+
+    fn keep(&mut self, utxo: WalletUtxo, viewing_pubkey: X25519Pubkey, stream: AnonymousStream) {
+        self.utxos.push(AnonymousRingUtxo {
+            utxo_hash: utxo.utxo_hash,
+            viewing_pubkey,
+            stream,
+        });
+        self.found.push(utxo);
     }
 
     fn open_deposit(
@@ -785,8 +794,7 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
         position: usize,
         found: AnonymousStream,
     ) -> Result<(), AnonymousError> {
-        let utxo_hash = deposit.output_slots[position].output_context.hash;
-        if self.found.iter().any(|held| held.utxo_hash == utxo_hash) {
+        if self.is_found(&deposit.output_slots[position].output_context.hash) {
             return Ok(());
         }
         let viewing_pubkey = self.history.entries()[index].viewing_pubkey();
@@ -802,14 +810,7 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
             viewing_pubkey,
         })?;
         match opened {
-            Some(OpenedDeposit::Note(utxo)) => {
-                self.found.push(*utxo);
-                self.utxos.push(AnonymousRingUtxo {
-                    utxo_hash,
-                    viewing_pubkey,
-                    stream: found,
-                });
-            }
+            Some(OpenedDeposit::Note(utxo)) => self.keep(*utxo, viewing_pubkey, found),
             Some(OpenedDeposit::UnknownMint(mint)) => {
                 self.decrypted.unknown_mints.insert(mint);
             }
@@ -867,12 +868,11 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + ?Sized> Scan<'_, '_, '_,
                     if known(&hash, &self.decrypted) {
                         continue;
                     }
-                    self.found.push(utxo.clone());
-                    self.utxos.push(AnonymousRingUtxo {
-                        utxo_hash: hash,
+                    self.keep(
+                        utxo.clone(),
                         viewing_pubkey,
-                        stream: AnonymousStream::Merge { first_nullifier },
-                    });
+                        AnonymousStream::Merge { first_nullifier },
+                    );
                 }
             }
             self.decrypted
@@ -918,24 +918,8 @@ fn assign_nullifiers<K: ShieldedKeys + ?Sized>(
     if found.is_empty() {
         return Ok(());
     }
-    let requests: Vec<DeriveRequest> = found
-        .iter()
-        .map(|utxo| DeriveRequest::Nullifier {
-            utxo_hash: utxo.utxo_hash,
-            blinding: utxo.utxo.blinding,
-        })
-        .collect();
-    let nullifiers = exactly_one_each(keys.derive(&requests)?, requests.len())?;
-    for (utxo, nullifier) in found.iter_mut().zip(nullifiers) {
-        utxo.nullifier = nullifier;
-    }
+    delivered::assign_nullifiers(keys, &mut found)?;
     decrypted.utxos.extend(found);
-    decrypted.utxos.sort_by_key(|utxo| {
-        (
-            utxo.slot,
-            utxo.tx_signature.as_ref().to_vec(),
-            utxo.slot_index,
-        )
-    });
+    delivered::sort_by_publication(&mut decrypted.utxos);
     Ok(())
 }

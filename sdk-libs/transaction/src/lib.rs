@@ -32,8 +32,8 @@ use spr_transaction::{
 };
 
 pub use anonymous_body::{
-    listed_recipients, AnonymousOutput, OutputBlindings, DUMMY_RECIPIENT_VIEWING_PK,
-    RECIPIENT_BODY_LEN,
+    is_dummy_recipient, listed_recipients, AnonymousOutput, OutputBlindings,
+    DUMMY_RECIPIENT_VIEWING_PK, RECIPIENT_BODY_LEN,
 };
 pub use anonymous_plaintext::{
     AnonymousTransferRecipientPlaintext, AnonymousTransferSenderPlaintext,
@@ -178,7 +178,7 @@ impl RingOutputRail {
 
     /// Replaces every published slot with its scheme 10, scheme 3 or dummy encoding.
     fn reencode_delivered(&self, inputs: &mut SppProofInputs) -> Result<(), RingRailError> {
-        let first_nullifier = first_nullifier(inputs)?;
+        let first_nullifier = inputs.first_nullifier()?;
         let mut published = inputs.external_data.outputs.iter_mut();
         let mut resolved = inputs.external_data.resolved_owner_tags.iter();
         for (index, output) in inputs.output_utxos.iter().enumerate() {
@@ -224,7 +224,7 @@ impl RingOutputRail {
             slots: &slots,
         };
         let tree_id = inputs.output_tree_id;
-        let blindings = OutputBlindings::new(&first_nullifier(inputs)?, &inputs.blinding_seed)?;
+        let blindings = OutputBlindings::new(&inputs.first_nullifier()?, &inputs.blinding_seed)?;
         let sender_bundle = seal.sender_bundle(&blindings)?;
         let mut outputs = Vec::with_capacity(slots.len());
         let mut resolved = Vec::with_capacity(slots.len());
@@ -441,14 +441,6 @@ fn check_plain(output: &SppProofOutputUtxo, slot_index: usize) -> Result<(), Rin
         true => Err(RingRailError::DeliveredOutputData { slot_index }),
         false => Ok(()),
     }
-}
-
-fn first_nullifier(inputs: &SppProofInputs) -> Result<[u8; 32], RingRailError> {
-    Ok(inputs
-        .input_utxos
-        .first()
-        .ok_or(TransactionError::NoInputs)?
-        .nullifier())
 }
 
 fn random_body() -> [u8; RING_DELIVERED_BODY_LEN] {

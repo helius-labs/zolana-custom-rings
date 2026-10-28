@@ -38,6 +38,7 @@ struct OutputOwner {
 
 pub(super) struct PolicyInputs {
     circuit: RingCircuit,
+    pools: custom_ring_interface::key_catalog::RecordPools,
     pub spl_withdrawal_owners: Vec<[u8; 32]>,
     withdrawals: Vec<custom_ring_interface::PolicyWithdrawal>,
     rules: EncodedRuleTable,
@@ -267,6 +268,7 @@ impl PolicyRead<'_> {
         };
         Ok(PolicyInputs {
             circuit,
+            pools,
             withdrawals,
             spl_withdrawal_owners,
             rules: registry.rules,
@@ -385,9 +387,7 @@ impl PolicyInputs {
     pub fn request(&self, proving: &PolicyProving<'_>) -> Result<PolicyRequest<'_>, RingError> {
         let inputs = proving.inputs;
         let circuit = self.circuit;
-        let pools = circuit
-            .record_pools()
-            .ok_or(RingError::UnpinnedProvingKey(circuit))?;
+        let pools = self.pools;
         let own_pool = self.own_pool.pool().clone().padded(pools.own)?;
         let curator_pool = self
             .curator_pool

@@ -19,7 +19,7 @@ use zolana_ring_client::{
     FirstContact, PaymentRecipient, TransferTagging, TransferTags, ViewingHistory,
 };
 use zolana_ring_keys::{RingAddress, RingPaymentRequest};
-use zolana_ring_transaction::{AnonymousPlan, RingDelivery, RingOutputRail};
+use zolana_ring_transaction::{RingDelivery, RingOutputRail};
 
 use super::{
     canonical_shape,
@@ -408,13 +408,10 @@ impl Anonymous<'_> {
         };
         let first_nullifier = *transaction.first_nullifier();
         let tx_viewing_key = transaction_key(keys, first_nullifier)?;
-        let plan = tags
-            .payments
-            .iter()
-            .fold(AnonymousPlan::new(tags.sender_tag), |plan, tag| {
-                plan.with_payment(tag.payment)
-            });
-        let rail = RingOutputRail::new(tx_viewing_key, RingDelivery::Anonymous(Box::new(plan)));
+        let rail = RingOutputRail::new(
+            tx_viewing_key,
+            RingDelivery::Anonymous(Box::new(tags.anonymous_plan())),
+        );
         let transaction = pad_under_rail(transaction, &rail, shape, &sender)?;
         let proof_inputs = rail.encrypt(transaction, &sender)?;
         check_anonymous_slots(&proof_inputs)?;

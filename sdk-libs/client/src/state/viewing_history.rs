@@ -7,10 +7,10 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use spr_keypair::{viewing_key::ViewTag, X25519Pubkey};
+use spr_keypair::{viewing_key::ViewTag, x25519::X25519_PUBKEY_LEN, X25519Pubkey};
 use spr_transaction::ShieldedKeys;
 use zolana_ring_keys::{RingKeys, SharedTagPair, SharedTagsRequest, ViewTagRequest, ViewTagStream};
-use zolana_ring_transaction::{is_contributory, TaggedPayment};
+use zolana_ring_transaction::{is_contributory, AnonymousPlan, TaggedPayment};
 
 use crate::{exactly_one, AnonymousError, REDACTED, TAGS_PER_REQUEST};
 
@@ -357,14 +357,11 @@ impl ViewingHistory {
         &self,
         keys: &K,
     ) -> Result<AdvancedTag<ViewTag>, AnonymousError> {
-        let mut history = self.clone();
-        let current = history.current_mut();
-        let tx_count = current.tx.take_next()?;
-        let tag = exactly_one(keys.view_tags(&[ViewTagRequest {
-            viewing_pubkey: current.viewing_pubkey,
-            stream: ViewTagStream::Sender { tx_count },
-        }])?)?;
-        Ok(AdvancedTag { tag, history })
+        self.own_tag(keys, |entry| {
+            Ok(ViewTagStream::Sender {
+                tx_count: entry.tx.take_next()?,
+            })
+        })
     }
 
     /// A deposit's tag, a first contact pairs nothing since a deposit names no sender.
@@ -385,12 +382,24 @@ impl ViewingHistory {
         &self,
         keys: &K,
     ) -> Result<AdvancedTag<ViewTag>, AnonymousError> {
+        self.own_tag(keys, |entry| {
+            Ok(ViewTagStream::Request {
+                request_count: entry.request.take_next()?,
+            })
+        })
+    }
+
+    fn own_tag<K: RingKeys + ?Sized>(
+        &self,
+        keys: &K,
+        advance: impl FnOnce(&mut ViewingKeyEntry) -> Result<ViewTagStream, AnonymousError>,
+    ) -> Result<AdvancedTag<ViewTag>, AnonymousError> {
         let mut history = self.clone();
         let current = history.current_mut();
-        let request_count = current.request.take_next()?;
+        let stream = advance(current)?;
         let tag = exactly_one(keys.view_tags(&[ViewTagRequest {
             viewing_pubkey: current.viewing_pubkey,
-            stream: ViewTagStream::Request { request_count },
+            stream,
         }])?)?;
         Ok(AdvancedTag { tag, history })
     }
@@ -406,6 +415,16 @@ impl fmt::Debug for ViewingHistory {
         f.debug_struct("ViewingHistory")
             .field("entries", &self.entries)
             .finish()
+    }
+}
+
+impl TransferTags {
+    pub fn anonymous_plan(&self) -> AnonymousPlan {
+        self.payments
+            .iter()
+            .fold(AnonymousPlan::new(self.sender_tag), |plan, tag| {
+                plan.with_payment(tag.payment)
+            })
     }
 }
 
@@ -618,7 +637,7 @@ fn counterparties(
 fn pubkey(name: &str, text: &str) -> Result<X25519Pubkey, AnonymousError> {
     hex::decode(text)
         .ok()
-        .and_then(|bytes| <[u8; 33]>::try_from(bytes).ok())
+        .and_then(|bytes| <[u8; X25519_PUBKEY_LEN]>::try_from(bytes).ok())
         .and_then(|bytes| X25519Pubkey::from_bytes(bytes).ok())
         .ok_or_else(|| {
             invalid(&format!(

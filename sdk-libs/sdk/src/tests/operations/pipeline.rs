@@ -25,7 +25,9 @@ use zolana_ring_transaction::{
 
 use super::*;
 use crate::client::RingClient;
-use crate::tests::support::{account, empty, ring, ring_utxo, Chain, RingSettings, TREE_ID};
+use crate::tests::support::{
+    account, empty, history, ring, ring_utxo, Chain, RingSettings, TREE_ID,
+};
 
 fn anonymous() -> RingSettings {
     RingSettings::new(RingMode::Anonymous)
@@ -56,10 +58,6 @@ fn ring_address(owner: &ShieldedKeypair) -> RingAddress {
         recipient: owner.shielded_address().unwrap(),
         ring_program_id: ring().program_id(),
     }
-}
-
-fn history(owner: &ShieldedKeypair) -> ViewingHistory {
-    ViewingHistory::new(owner.viewing_pubkey(), 0)
 }
 
 fn payment(to: &RingAddress, amount: u64) -> AnonymousPayment {

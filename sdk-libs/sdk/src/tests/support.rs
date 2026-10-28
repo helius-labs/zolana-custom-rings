@@ -32,7 +32,7 @@ use spr_interface::{
 use spr_keypair::{random_blinding, NullifierKey, ShieldedKeypair, SigningKey, X25519Keypair};
 use spr_transaction::{utxo::SppProofInputUtxo, Data, Mint, Utxo, WalletUtxo};
 use spr_tree::{TreeAccount, UTXO_TREE_HEIGHT};
-use zolana_ring_client::{AsyncRingIndexer, RingIndexerError};
+use zolana_ring_client::{AsyncRingIndexer, RingIndexerError, ViewingHistory};
 use zolana_ring_indexer::rpc::{
     GetRingMemberOpeningsRequest, GetRingMemberOpeningsResponse, GetRingRecordPoolRequest,
     GetRingRecordPoolResponse, RingIndexedMemberRecordView, RingMemberOpening,
@@ -71,6 +71,10 @@ pub(crate) fn auditor() -> X25519Keypair {
 
 pub(crate) fn keypair(seed: u8) -> ShieldedKeypair {
     ShieldedKeypair::from_keypair(SigningKey::from_ed25519_bytes(&[seed; 32])).unwrap()
+}
+
+pub(crate) fn history(owner: &ShieldedKeypair) -> ViewingHistory {
+    ViewingHistory::new(owner.viewing_pubkey(), 0)
 }
 
 pub(crate) fn owner_identity(owner: &ShieldedKeypair) -> Member {

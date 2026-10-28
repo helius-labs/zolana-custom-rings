@@ -5,6 +5,7 @@ use rand::{rngs::OsRng, RngCore};
 use solana_address::Address;
 use spr_interface::MAX_OUTPUTS;
 use spr_keypair::{
+    random_blinding,
     viewing_key::{Salt, ViewTag},
     ShieldedAddress, ViewingKey, X25519Pubkey,
 };
@@ -55,7 +56,8 @@ impl AnonymousPlan {
         Self {
             sender_tag,
             payments: Vec::new(),
-            dummy_tags: core::array::from_fn(|_| dummy_tag()),
+            // Distributed as every derived view tag.
+            dummy_tags: core::array::from_fn(|_| random_blinding()),
         }
     }
 
@@ -166,7 +168,7 @@ pub(crate) fn lead_change(
         .iter()
         .map(|index| inputs.output_utxos[*index].clone())
         .collect();
-    let first_nullifier = crate::first_nullifier(inputs)?;
+    let first_nullifier = inputs.first_nullifier()?;
     let blindings = OutputBlindings::new(&first_nullifier, &inputs.blinding_seed)?;
     inputs.output_utxos = outputs
         .into_iter()
@@ -296,11 +298,4 @@ fn leading_change(outputs: &[SppProofOutputUtxo], sender: &ShieldedAddress) -> u
 
 fn is_change(output: &SppProofOutputUtxo, sender: &ShieldedAddress) -> bool {
     output.owner_address == Some(*sender) && output.ring_program_id.is_some()
-}
-
-/// `0x00 ‖ 31 random bytes`, distributed as every derived view tag.
-fn dummy_tag() -> ViewTag {
-    let mut tag = ViewTag::default();
-    OsRng.fill_bytes(&mut tag[1..]);
-    tag
 }

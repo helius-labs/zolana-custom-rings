@@ -1,13 +1,13 @@
 use custom_ring_interface::{CoSignScope, CustomRingError, RingMode};
 use solana_address::Address;
 use spr_interface::pda;
-use zolana_ring_client::{
-    FirstContact, PaymentRecipient, StreamCounter, TransferTagging, ViewingHistory,
-};
+use zolana_ring_client::{FirstContact, PaymentRecipient, StreamCounter, TransferTagging};
 use zolana_ring_keys::RingAddress;
 
 use crate::{
-    tests::support::{keypair, owner_identity, ring, Chain, Registry, RingSettings, TREE_ID},
+    tests::support::{
+        history, keypair, owner_identity, ring, Chain, Registry, RingSettings, TREE_ID,
+    },
     DepositAsset, DepositRecipient, RingDeposit, RingError,
 };
 
@@ -33,7 +33,7 @@ async fn an_anonymous_ring_takes_deposits_only_for_the_depositors_hidden_owner()
     let anonymous = Chain::ring(RingSettings::new(RingMode::Anonymous));
     let confidential = Chain::ring(RingSettings::new(RingMode::Confidential));
     let address = member.shielded_address().unwrap();
-    let history = ViewingHistory::new(member.viewing_pubkey(), 0);
+    let history = history(&member);
     let hidden = DepositRecipient::Anonymous {
         keys: &member,
         history: &history,
@@ -156,7 +156,7 @@ async fn an_own_deposit_takes_the_sender_tag_at_tx_count_and_advances_it() {
     let member = keypair(1);
     let payer = keypair(9);
     let chain = Chain::ring(RingSettings::new(RingMode::Anonymous));
-    let history = ViewingHistory::new(member.viewing_pubkey(), 0);
+    let history = history(&member);
     let hidden = deposit(
         &payer,
         DepositRecipient::Anonymous {
@@ -179,7 +179,7 @@ async fn a_deposit_from_the_stored_history_takes_the_next_sender_tag() {
     let member = keypair(1);
     let payer = keypair(9);
     let chain = Chain::ring(RingSettings::new(RingMode::Anonymous));
-    let history = ViewingHistory::new(member.viewing_pubkey(), 0);
+    let history = history(&member);
     let own = |history| {
         deposit(
             &payer,
@@ -207,7 +207,7 @@ async fn a_deposit_to_another_member_takes_a_first_contact_tag_until_a_transfer_
         ring_program_id: ring().program_id(),
     };
     let request = recipient.get_recipient_request_view_tag(0).unwrap();
-    let history = ViewingHistory::new(member.viewing_pubkey(), 0);
+    let history = history(&member);
     let paid = |history, first_contact| {
         deposit(
             &payer,
@@ -282,7 +282,7 @@ async fn a_deposit_refuses_an_address_of_another_ring() {
         recipient: keypair(2).shielded_address().unwrap(),
         ring_program_id: other,
     };
-    let history = ViewingHistory::new(member.viewing_pubkey(), 0);
+    let history = history(&member);
     let paid = DepositRecipient::AnonymousPayment {
         keys: &member,
         history: &history,

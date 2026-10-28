@@ -20,9 +20,7 @@ pub fn load_registry<'a>(
     program_id: &Address,
     account: &'a AccountView,
 ) -> Result<Ref<'a, Registry>, ProgramError> {
-    if !account.owned_by(program_id) {
-        return Err(PolicyStoreError::InvalidRegistry.into());
-    }
+    check_owner(program_id, account)?;
     Ref::filter_map(account.try_borrow()?, Registry::from_data)
         .map_err(|_| PolicyStoreError::InvalidRegistry.into())
 }
@@ -32,9 +30,15 @@ pub fn load_registry_mut<'a>(
     program_id: &Address,
     account: &'a mut AccountView,
 ) -> Result<RefMut<'a, Registry>, ProgramError> {
-    if !account.owned_by(program_id) {
-        return Err(PolicyStoreError::InvalidRegistry.into());
-    }
+    check_owner(program_id, account)?;
     RefMut::filter_map(account.try_borrow_mut()?, Registry::from_data_mut)
         .map_err(|_| PolicyStoreError::InvalidRegistry.into())
+}
+
+#[inline(always)]
+fn check_owner(program_id: &Address, account: &AccountView) -> ProgramResult {
+    match account.owned_by(program_id) {
+        true => Ok(()),
+        false => Err(PolicyStoreError::InvalidRegistry.into()),
+    }
 }

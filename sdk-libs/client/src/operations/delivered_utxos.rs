@@ -311,7 +311,7 @@ fn wallet_utxo(note: &RingDeliveredNote, mint: Mint, publication: Publication) -
     }
 }
 
-fn assign_nullifiers<K: ShieldedKeys + ?Sized>(
+pub(crate) fn assign_nullifiers<K: ShieldedKeys + ?Sized>(
     shielded_keys: &K,
     utxos: &mut [WalletUtxo],
 ) -> Result<(), AnonymousError> {
@@ -333,7 +333,7 @@ fn assign_nullifiers<K: ShieldedKeys + ?Sized>(
 }
 
 /// Mirrors spr-transaction's private publication order.
-fn sort_by_publication(utxos: &mut [WalletUtxo]) {
+pub(crate) fn sort_by_publication(utxos: &mut [WalletUtxo]) {
     utxos.sort_by_key(|utxo| {
         (
             utxo.slot,

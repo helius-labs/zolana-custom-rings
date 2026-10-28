@@ -7,8 +7,8 @@ use custom_ring_interface::{cosign::CoSignDemand, AnonymousSpend, RingProgramCon
 use custom_ring_sdk::{
     select_spend_where, shape_keyed, AnonymousMove, AnonymousPayment, CoSignScope,
     CustomRingConfig, CustomRingTransfer, CustomRingTransferInput, DepositAsset, DepositRecipient,
-    EntrySpend, EscrowedRecipients, FirstContact, ListRegistry, RingDeposit, RingDepositReceipt,
-    RingMode, RingPayment,
+    EntrySpend, EscrowedRecipients, ListRegistry, RingDeposit, RingDepositReceipt, RingMode,
+    RingPayment,
 };
 use solana_address::Address;
 use solana_keypair::Keypair;
@@ -505,11 +505,11 @@ impl<'a> PaymentPlan<'a> {
                 let (mut ring_payees, mut default_ring) = (Vec::new(), Vec::new());
                 for recipient in self.recipients {
                     match recipient {
-                        Recipient::Ring(request) => ring_payees.push(RingPayment {
-                            to: in_ring(&request.address, ring)?,
-                            first_contact: FirstContact::Request(request.request_view_tag),
-                            amount: amount(request.amount)?,
-                        }),
+                        Recipient::Ring(request) => {
+                            in_ring(&request.address, ring)?;
+                            ring_payees
+                                .push(RingPayment::to_request(request, amount(request.amount)?));
+                        }
                         Recipient::Address(address) => ring_payees.push(RingPayment::bootstrap(
                             in_ring(address, ring)?,
                             amount(None)?,
@@ -1281,6 +1281,7 @@ fn read_back(ctx: &Context, reader: &Keypair, signature: Signature) -> Result<()
 #[cfg(test)]
 mod tests {
     use bytemuck::Zeroable;
+    use custom_ring_sdk::FirstContact;
     use spr_keypair::SigningKey;
 
     use super::*;

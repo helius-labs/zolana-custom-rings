@@ -41,8 +41,8 @@ use zolana_ring_client::{
     TAG_GAP, VIEWING_HISTORY_VERSION,
 };
 use zolana_ring_transaction::{
-    AnonymousPlan, AnonymousTransferRecipientPlaintext, AnonymousTransferSenderPlaintext,
-    RingAssets, RingDelivery, RingDepositPlaintext, RingOutputRail, UnverifiedRecipientPlaintext,
+    AnonymousTransferRecipientPlaintext, AnonymousTransferSenderPlaintext, RingAssets,
+    RingDelivery, RingDepositPlaintext, RingOutputRail, UnverifiedRecipientPlaintext,
     UnverifiedSenderPlaintext, VerifiedRecipientPlaintext, VerifiedSenderPlaintext,
     RECIPIENT_BODY_LEN,
 };
@@ -225,12 +225,7 @@ impl Wallet {
         .plan()
         .unwrap();
         self.history = tags.history.clone();
-        let plan = tags
-            .payments
-            .iter()
-            .fold(AnonymousPlan::new(tags.sender_tag), |plan, tag| {
-                plan.with_payment(tag.payment)
-            });
+        let plan = tags.anonymous_plan();
         let input = self.funding.remove(0);
         let first_nullifier = input.nullifier;
         let mut transaction = ConfidentialTransaction::new_with_ring(
