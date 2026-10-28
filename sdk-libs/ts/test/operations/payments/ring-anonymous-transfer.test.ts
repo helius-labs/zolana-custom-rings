@@ -49,7 +49,7 @@ import {
 import { ringProofCircuit } from "../../../src/rpc/prover/ring.js";
 import { ringMemberRegistryAddress } from "../../../src/protocol/pda/index.js";
 import { ringCircuitType } from "../../../src/protocol/proof/proving-keys.js";
-import { RingAddress } from "../../../src/crypto/keys/ring-address.js";
+import { RingAddress, RingPaymentRequest } from "../../../src/crypto/keys/ring-address.js";
 import { ringIdField, senderCommitment } from "../../../src/crypto/derivation/ring-stream.js";
 import {
   anonymousExitTokenOwner,
@@ -956,6 +956,40 @@ describe("anonymous ring transfer builder", () => {
     expect(second.viewingHistory?.current().txCount).toBe(2n);
     first.cancel();
     second.cancel();
+  });
+
+  it("pays a request under its tag and refuses one the payment contradicts before approval", async () => {
+    const { fixture, params, requests, build } = await anonymousSpend({ notes: 2, amount: 5n });
+    await build;
+    const bob = ShieldedKeypair.generate();
+    const bobViewing = bob.viewingKey();
+    const requestViewTag = bobViewing.recipientRequestViewTag(0n);
+    bobViewing.destroy();
+    const request = new RingPaymentRequest({
+      address: await addressOf(fixture, bob),
+      requestViewTag,
+      amount: 5n,
+      mint: SOL_MINT,
+    });
+    const { firstContact: _, ...anonymous } = params.anonymous;
+    const paid = await createRingTransferSubmission({ ...params, anonymous, recipient: request });
+    expect(publishedTags(fixture)[1]).toBe(hex(requestViewTag));
+    paid.cancel();
+    const approvals = requests.length;
+    const contradicted = [
+      [{ amount: 4n }, "amount"],
+      [{ asset: randomAddress() }, "asset"],
+      [{ anonymous: params.anonymous }, "firstContact"],
+    ] as const;
+    for (const [change, field] of contradicted)
+      await expect(
+        createRingTransferSubmission({ ...params, anonymous, recipient: request, ...change }),
+      ).rejects.toMatchObject({
+        code: "RING_BUILD_TRANSFER",
+        causeCode: "RING_INTENT_MISMATCH",
+        cause: { details: { field } },
+      });
+    expect(requests).toHaveLength(approvals);
   });
 
   it("spends the widest commitment class and refuses a payment past it before approval", async () => {

@@ -1,3 +1,4 @@
+import { address } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
 import vectors from "../../../../../test-vectors/wallet/anonymous-bodies.json" with { type: "json" };
@@ -168,6 +169,37 @@ describe("anonymous-bodies.json", () => {
       expect(rebuilds(outputOf(sender.address, published.utxo_hash), utxo)).toBe(true);
       expect(expected.rebuilt_hash).toBe(published.utxo_hash);
     });
+    blindings.destroy();
+  });
+
+  it("opens an SPL-only change as one note at blinding slot 0, like Rust `into_utxos`", () => {
+    const opened = decodeAnonymousSender(
+      sender.viewing.decryptUtxo(
+        bytes(vectors.sender_bundle.ciphertext),
+        txViewingKey.publicKey(),
+        salt,
+        vectors.sender_bundle.slot_index,
+      ),
+    );
+    const spl = vectors.mints.find((mint) => mint.asset !== "00".repeat(32));
+    if (spl === undefined) throw new Error("vector without an SPL mint");
+    const change = senderChange(
+      { assets, ring },
+      {
+        ...opened,
+        verified: {
+          ...opened.verified,
+          splMint: address(mintOf(spl.asset)),
+          splAmount: 6n,
+          solAmount: 0n,
+        },
+      },
+      firstNullifier,
+    );
+    const blindings = new OutputBlindings(firstNullifier, bytes<Bytes32>(vectors.blinding_seed));
+    expect(change.map((utxo) => [utxo.asset, utxo.amount, hex(utxo.blinding)])).toEqual([
+      [mintOf(spl.asset), 6n, hex(blindings.at(0))],
+    ]);
     blindings.destroy();
   });
 

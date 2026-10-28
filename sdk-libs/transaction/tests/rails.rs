@@ -378,6 +378,30 @@ fn the_bundle_carries_the_spl_and_the_sol_change_and_their_outputs_no_data() {
 }
 
 #[test]
+fn an_spl_only_change_opens_one_note_at_output_0() {
+    let sender = keypair(1);
+    let recipient = address(&keypair(2));
+    let (mut tx, tx_key) = ring_spend(&sender, vec![input(&sender, USDC, 10, 1)], false);
+    tx.transfer_with_ring(&recipient, USDC, 4, Some(RING))
+        .unwrap();
+    let rail = anonymous(
+        tx_key,
+        AnonymousPlan::new([0x0a; 32]).with_payment(payment(&recipient, 0x0b)),
+    );
+    let proof = rail.encrypt(tx, &address(&sender)).unwrap();
+    let assets = RingAssets::new([USDC]).unwrap();
+    let sent = bundle(&sender.viewing_key, &rail, &proof);
+    assert_eq!(sent.verified.sol_amount, 0);
+    // A zero SOL amount yields no note, else a phantom would take blinding slot 1.
+    let change = reader(&address(&sender), &assets, &proof, 0)
+        .sender_change(sent, &proof.input_utxos[0].nullifier())
+        .unwrap();
+    assert_eq!(change.len(), 1);
+    assert_eq!((change[0].asset, change[0].amount), (USDC, 6));
+    assert!(reader(&address(&sender), &assets, &proof, 0).rebuilds(&change[0]));
+}
+
+#[test]
 fn a_dummy_publishes_a_zero_led_tag_and_a_recipient_length_body() {
     let sender = keypair(1);
     let recipient = address(&keypair(2));

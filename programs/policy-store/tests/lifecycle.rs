@@ -281,3 +281,28 @@ fn unbounded_grace_keeps_both_update_modes() {
         .send(store.update_with(1, tag::UPDATE_IMMEDIATE))
         .unwrap();
 }
+
+#[test]
+fn a_graced_update_never_evicts_a_root_that_still_verifies() {
+    let mut store = Store::new();
+    store.initialize(GRACE);
+    let mut account = store.svm.get_account(&store.registry).unwrap();
+    let oldest = bytemuck::from_bytes_mut::<Registry>(&mut account.data)
+        .roots
+        .last_mut()
+        .unwrap();
+    oldest.expires_at = GRACE.to_le_bytes();
+    store.svm.set_account(store.registry, account).unwrap();
+    assert_eq!(
+        store.send(store.update(0)),
+        refusal(PolicyStoreError::HistoryFull as u32)
+    );
+    let full = store.svm.clone();
+    store
+        .send(store.update_with(0, tag::UPDATE_IMMEDIATE))
+        .unwrap();
+    store.svm = full;
+    // Evictable from the slot `RootExpired` starts refusing it.
+    store.svm.warp_to_slot(GRACE);
+    store.send(store.update(0)).unwrap();
+}
