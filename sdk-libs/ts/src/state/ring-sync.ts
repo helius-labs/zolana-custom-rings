@@ -21,6 +21,7 @@ import { registeredMint, spendingTransactions } from "../operations/workflow/rec
 import { outputTreeId } from "../protocol/membership/trees.js";
 import { isRingKeys, type RingKeys } from "./ring-keys.js";
 import { openRingDeposit, type RingDepositNote } from "./ring-deposit.js";
+import { unseen } from "./batch.js";
 import type { RingDeliveredNote } from "../crypto/derivation/blinding.js";
 
 export interface RingNotes {
@@ -108,12 +109,7 @@ export async function syncRingWallet(
   await wallet._withSyncLock(async () => {
     const state = wallet._state();
     const held = new Set(state.utxos.map((entry) => bytesKey(entry.outputContext.hash)));
-    const unheld = (entry: WalletUtxo): boolean => {
-      const key = bytesKey(entry.outputContext.hash);
-      if (held.has(key)) return false;
-      held.add(key);
-      return true;
-    };
+    const unheld = (entry: WalletUtxo): boolean => unseen(held, bytesKey(entry.outputContext.hash));
     const fresh = notes.utxos.filter(unheld);
     if (fresh.length === 0) return;
     const owner = keys.address();

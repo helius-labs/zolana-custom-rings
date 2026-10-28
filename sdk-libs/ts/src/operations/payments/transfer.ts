@@ -686,12 +686,10 @@ function firstContactOf(
     return chosen;
   }
   const asset = params.asset ?? SOL_MINT;
-  if (chosen !== undefined)
-    throw new RingError("RING_INTENT_MISMATCH", { details: { field: "firstContact" } });
+  if (chosen !== undefined) throw ringIntentMismatch("firstContact");
   if (recipient.amount !== undefined && recipient.amount !== params.amount)
-    throw new RingError("RING_INTENT_MISMATCH", { details: { field: "amount" } });
-  if (recipient.mint !== undefined && recipient.mint !== asset)
-    throw new RingError("RING_INTENT_MISMATCH", { details: { field: "asset" } });
+    throw ringIntentMismatch("amount");
+  if (recipient.mint !== undefined && recipient.mint !== asset) throw ringIntentMismatch("asset");
   return Object.freeze({ kind: "request", tag: recipient.requestViewTag });
 }
 

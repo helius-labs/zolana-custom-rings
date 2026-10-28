@@ -6,7 +6,12 @@ import {
 import { bytesToHex } from "@noble/hashes/utils.js";
 
 import { InterfaceError } from "@heliuslabs/zolana/interface";
-import { bigIntBytes, bytesField, type ExpectedProvingKey } from "@heliuslabs/zolana/internal";
+import {
+  bigIntBytes,
+  bytesField,
+  isZero,
+  type ExpectedProvingKey,
+} from "@heliuslabs/zolana/internal";
 import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
 import { type PresentRecordOpening } from "./types.js";
 import { ClientError } from "@heliuslabs/zolana/client";
@@ -299,7 +304,7 @@ export function ringProofCircuit(request: RingProofRequest): RingKeyCircuit {
 function policyCircuit(
   request: MemberPolicyProofRequest | DelegatePolicyProofRequest,
 ): PolicyKeyCircuit {
-  const ownOnly = request.sources.every((s) => s.registry.every((b) => b === 0));
+  const ownOnly = request.sources.every((s) => isZero(s.registry));
   return request.kind === "memberPolicy"
     ? {
         family: "memberPolicy",

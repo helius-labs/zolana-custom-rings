@@ -439,8 +439,7 @@ export class RingOutputRail {
 
   /** The change and the recipient list, sealed to the sender after every output, Rust `AnonymousSeal::sender_bundle`. */
   #senderBundle(seal: AnonymousSeal): Uint8Array {
-    const leading = seal.slots.findIndex((slot) => slot.kind !== "change");
-    const change = seal.outputs.slice(0, leading < 0 ? seal.outputs.length : leading);
+    const change = seal.outputs.slice(0, leadingChange(seal.outputs, seal.sender));
     // A zero amount reads back as absent and would shift the later change's position.
     if (change.length > 1 && change.some((output) => output.amount === 0n))
       throw new RingError("RING_ANONYMOUS_CHANGE_COUNT");
@@ -542,11 +541,8 @@ export class RingOutputRail {
     slotIndex: number,
   ): RingOutput {
     const { hash, ownerTag } = inline(published, slotIndex);
-    const body = (scheme: RingScheme): Uint8Array => {
-      const frame = readRingOutput(published.data ?? new Uint8Array());
-      if (frame.encoding !== "encrypted" || frame.scheme !== scheme) throw framingError(slotIndex);
-      return frame.body;
-    };
+    const body = (scheme: RingScheme): Uint8Array =>
+      schemeBody(published.data ?? new Uint8Array(), scheme, slotIndex);
     return deliveredSlot(output).kind === "exit"
       ? { kind: "exit", hash, ownerTag, payload: body(RingScheme.confidential) }
       : { kind: "delivered", hash, u: ownerTag, body: body(RingScheme.ringConfidentialDelivered) };
@@ -564,10 +560,12 @@ function anonymousWire(
   const tag = anonymousSlotTag(slot);
   if (tag === undefined) {
     if (data === undefined) throw framingError(slotIndex);
-    const frame = readRingOutput(data);
-    if (frame.encoding !== "encrypted" || frame.scheme !== RingScheme.confidential)
-      throw framingError(slotIndex);
-    return { kind: "exit", hash, ownerTag, payload: frame.body };
+    return {
+      kind: "exit",
+      hash,
+      ownerTag,
+      payload: schemeBody(data, RingScheme.confidential, slotIndex),
+    };
   }
   if (!equalBytes(tag, ownerTag)) throw framingError(slotIndex);
   if (slot.kind === "change") {
@@ -577,6 +575,12 @@ function anonymousWire(
   const body = data === undefined ? undefined : anonymousRecipientOutputBody(data);
   if (body === undefined) throw framingError(slotIndex);
   return { kind: "anonymous", hash, tag: ownerTag, body };
+}
+
+function schemeBody(data: Uint8Array, scheme: RingScheme, slotIndex: number): Uint8Array {
+  const frame = readRingOutput(data);
+  if (frame.encoding !== "encrypted" || frame.scheme !== scheme) throw framingError(slotIndex);
+  return frame.body;
 }
 
 /** The sender bundle's entry, a dummy key where no anonymous recipient reads the output. */

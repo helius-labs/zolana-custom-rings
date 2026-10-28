@@ -20,3 +20,10 @@ export function answered<R, V>(
     return [request, value] as const;
   });
 }
+
+/** `seen` takes `key`, `false` when it already held it. */
+export function unseen(seen: Set<string>, key: string): boolean {
+  if (seen.has(key)) return false;
+  seen.add(key);
+  return true;
+}

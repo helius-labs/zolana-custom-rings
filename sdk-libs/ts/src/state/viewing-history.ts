@@ -11,7 +11,7 @@ import { isSmallOrder } from "../crypto/keys/x25519.js";
 import type { TaggedPayment } from "../operations/payments/output-rail.js";
 import { RingError } from "../protocol/error.js";
 import { exactlyOne } from "./batch.js";
-import type { RingKeys, SharedTagPair } from "./ring-keys.js";
+import type { RingKeys, SharedTagPair, ViewTagStream } from "./ring-keys.js";
 
 export const VIEWING_HISTORY_VERSION = 7;
 
@@ -42,7 +42,7 @@ export class StreamCounter {
     const highest = [...observed].filter((index) => index >= from).reduce(max, -1n);
     const reached = highest < 0n ? from : saturatingIncrement(highest);
     const scanned = max(this.scanned, reached);
-    const floor = scanned > PENDING_RETENTION ? scanned - PENDING_RETENTION : 0n;
+    const floor = retentionFloor(scanned);
     const pending = new Set(this.pending);
     for (let index = max(from, floor); index < reached; index++) pending.add(index);
     return new StreamCounter(
@@ -65,7 +65,7 @@ export class StreamCounter {
   static restore(stored: Readonly<{ next: bigint; scanned: bigint; pending: readonly bigint[] }>) {
     const { next, scanned, pending } = stored;
     if (scanned > next) throw invalid("a scan watermark passes its next index");
-    const floor = scanned > PENDING_RETENTION ? scanned - PENDING_RETENTION : 0n;
+    const floor = retentionFloor(scanned);
     const ascendingOrder = pending.every(
       (index, at) => at === 0 || (pending[at - 1] ?? 0n) < index,
     );
@@ -365,20 +365,7 @@ export class ViewingHistory {
 
   /** The next sender tag of the current key, the tag of a deposit to the wallet's own note. */
   async senderTag(keys: RingKeys, context?: RequestContext): Promise<AdvancedTag<ViewTag>> {
-    const current = this.current();
-    const { index, counter } = current.tx.takeNext();
-    const tag = exactlyOne(
-      await keys.viewTags(
-        [
-          {
-            viewingPublicKey: current.viewingPublicKey,
-            stream: { kind: "sender", txCount: index },
-          },
-        ],
-        context,
-      ),
-    );
-    return Object.freeze({ tag, history: this.#withCurrent(current.withCounter("tx", counter)) });
+    return this.#ownTag(keys, "tx", context);
   }
 
   /** A deposit's tag, a first contact pairs nothing since a deposit names no sender. */
@@ -393,23 +380,7 @@ export class ViewingHistory {
 
   /** A fresh `recipientRequestViewTag` for a payment request. */
   async requestTag(keys: RingKeys, context?: RequestContext): Promise<AdvancedTag<ViewTag>> {
-    const current = this.current();
-    const { index, counter } = current.request.takeNext();
-    const tag = exactlyOne(
-      await keys.viewTags(
-        [
-          {
-            viewingPublicKey: current.viewingPublicKey,
-            stream: { kind: "request", requestCount: index },
-          },
-        ],
-        context,
-      ),
-    );
-    return Object.freeze({
-      tag,
-      history: this.#withCurrent(current.withCounter("request", counter)),
-    });
+    return this.#ownTag(keys, "request", context);
   }
 
   /** Its counterparties link the wallet's payments, store it as key material. */
@@ -458,6 +429,22 @@ export class ViewingHistory {
     }
     if (entries.length === 0) throw invalid("holds no viewing key");
     return new ViewingHistory(entries);
+  }
+
+  async #ownTag(
+    keys: RingKeys,
+    stream: "tx" | "request",
+    context?: RequestContext,
+  ): Promise<AdvancedTag<ViewTag>> {
+    const current = this.current();
+    const { index, counter } = current[stream].takeNext();
+    const tag = exactlyOne(
+      await keys.viewTags(
+        [{ viewingPublicKey: current.viewingPublicKey, stream: viewTagStream(stream, index) }],
+        context,
+      ),
+    );
+    return Object.freeze({ tag, history: this.#withCurrent(current.withCounter(stream, counter)) });
   }
 
   #withCurrent(entry: ViewingKeyEntry): ViewingHistory {
@@ -511,6 +498,12 @@ interface EntryFields {
   readonly request: StreamCounter;
   readonly knownSenders: ReadonlyMap<string, Counterparty>;
   readonly knownRecipients: ReadonlyMap<string, Counterparty>;
+}
+
+export function viewTagStream(stream: "tx" | "request", index: bigint): ViewTagStream {
+  return stream === "tx"
+    ? { kind: "sender", txCount: index }
+    : { kind: "request", requestCount: index };
 }
 
 const I64_MIN = -(1n << 63n);
@@ -633,6 +626,10 @@ function keyOf(key: X25519PublicKey): string {
 
 function invalid(reason: string): RingError {
   return new RingError("RING_VIEWING_HISTORY_INVALID", { details: { reason } });
+}
+
+function retentionFloor(scanned: bigint): bigint {
+  return scanned > PENDING_RETENTION ? scanned - PENDING_RETENTION : 0n;
 }
 
 function max(left: bigint, right: bigint): bigint {

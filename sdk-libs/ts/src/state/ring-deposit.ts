@@ -68,9 +68,7 @@ export async function openRingDeposit(
   );
   try {
     // A zero ring data hash is absent in the commitment.
-    const ringDataHash = output.ringDataHash.some((byte) => byte !== 0)
-      ? output.ringDataHash
-      : undefined;
+    const ringDataHash = !isZero(output.ringDataHash) ? output.ringDataHash : undefined;
     return decoded(() => {
       const opened = ringDepositUtxo(output, plaintext, input.owner.signingPublicKey);
       // Utxo data under a zero data hash is unbound.

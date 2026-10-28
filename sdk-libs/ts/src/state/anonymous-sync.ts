@@ -44,7 +44,7 @@ import {
   anonymousRecipientOutputBody,
   anonymousSenderOutputBody,
 } from "../protocol/transaction/output.js";
-import { answered } from "./batch.js";
+import { answered, unseen } from "./batch.js";
 import { decoded, openRingDeposit, type RingDepositNote } from "./ring-deposit.js";
 import { registeredMint } from "../operations/workflow/recover.js";
 import { openRingMerges } from "./ring-sync.js";
@@ -55,6 +55,7 @@ import {
   type EntryStream,
   type ViewingHistory,
   type ViewingKeyEntry,
+  viewTagStream,
 } from "./viewing-history.js";
 
 /** The indexer's cap on the tags or nullifiers one request names. */
@@ -187,9 +188,6 @@ export class AnonymousSync {
   }
 }
 
-/** A `toRecipient` stream holds the wallet's own payments, observed and never opened. */
-type Stream = "tx" | "request" | SharedTagPair;
-
 class TagWindow<T> {
   readonly #byTag = new Map<string, T>();
   readonly tags: readonly ViewTag[];
@@ -204,11 +202,11 @@ class TagWindow<T> {
   }
 }
 
-interface ActiveStream {
-  readonly stream: Stream;
-  readonly shared: SharedViewTags | undefined;
-  readonly scan: GapScan;
-}
+type StreamSource =
+  | Readonly<{ stream: "tx" | "request"; shared?: undefined }>
+  | Readonly<{ stream: SharedTagPair; shared: SharedViewTags }>;
+
+type ActiveStream = StreamSource & { readonly scan: GapScan };
 
 type RoundTag = Readonly<{ kind: "bootstrap" }> | Readonly<{ slot: number; index: bigint }>;
 
@@ -310,9 +308,9 @@ class Scan {
         const tagged: (readonly [RoundTag, ViewTag])[] =
           bootstrap === undefined ? [] : [[BOOTSTRAP_TAG, bootstrap]];
         bootstrap = undefined;
-        for (const [slot, { stream, shared, scan }] of active.entries()) {
-          const indices = scan.round();
-          const tags = await this.#tags(viewingPublicKey, stream, shared, indices);
+        for (const [slot, source] of active.entries()) {
+          const indices = source.scan.round();
+          const tags = await this.#tags(viewingPublicKey, source, indices);
           for (const [at, tag] of answered(indices, tags)) tagged.push([{ slot, index: at }, tag]);
         }
         const round = active;
@@ -351,12 +349,7 @@ class Scan {
           .filter(({ utxo }) => utxo.utxo.ringProgramId !== undefined)
           .map(({ utxo }) => utxo.nullifier),
         ...held,
-      ].filter((nullifier) => {
-        const key = bytesKey(nullifier);
-        if (queried.has(key)) return false;
-        queried.add(key);
-        return true;
-      });
+      ].filter((nullifier) => unseen(queried, bytesKey(nullifier)));
       if (frontier.length === 0) return;
       const spends = await this.#paged(frontier, (nullifiers, cursor) =>
         this.#client
@@ -379,17 +372,14 @@ class Scan {
           const hash = slot.outputContext.hash;
           const utxo = utxos.find((entry) => equalBytes(entry.outputContext.hash, hash));
           if (utxo === undefined || this.#held(hash)) continue;
-          this.#found.push({
-            utxo: utxo.utxo,
-            outputContext: utxo.outputContext,
-            order: publication(merge, position),
-          });
-          this.#streams.push(
-            Object.freeze({
-              utxoHash: hash,
-              viewingPublicKey: this.#address.viewingPublicKey,
-              stream: Object.freeze({ kind: "merge", firstNullifier }),
-            }),
+          this.#keep(
+            {
+              utxo: utxo.utxo,
+              outputContext: utxo.outputContext,
+              order: publication(merge, position),
+            },
+            this.#address.viewingPublicKey,
+            Object.freeze({ kind: "merge", firstNullifier }),
           );
         }
       }
@@ -416,12 +406,7 @@ class Scan {
   /** Every new pair's ECDH in one request. */
   async #startStreams(index: number, started: Set<string>): Promise<readonly ActiveStream[]> {
     const entry = this.#entry(index);
-    const fresh = (stream: Stream): boolean => {
-      const key = streamKey(stream);
-      if (started.has(key)) return false;
-      started.add(key);
-      return true;
-    };
+    const fresh = (stream: EntryStream): boolean => unseen(started, streamKey(stream));
     const pairs = [
       ...entry.knownSenders().map((known) => pairOf("fromSender", known.key)),
       ...entry.knownRecipients().map((known) => pairOf("toRecipient", known.key)),
@@ -440,31 +425,30 @@ class Scan {
       for (const tags of derived) tags.destroy();
       throw error;
     }
-    const streams: readonly (readonly [Stream, SharedViewTags | undefined])[] = [
-      ...(["tx", "request"] as const).filter(fresh).map((stream) => [stream, undefined] as const),
-      ...shared,
+    const sources: readonly StreamSource[] = [
+      ...(["tx", "request"] as const).filter(fresh).map((stream) => ({ stream })),
+      ...shared.map(([stream, tags]) => ({ stream, shared: tags })),
     ];
-    return streams.flatMap(([stream, tags]) => {
-      const counter = entry.counter(stream);
+    return sources.flatMap((source) => {
+      const counter = entry.counter(source.stream);
       if (counter === undefined) return [];
       const from = this.#sync.fullRescan ? 0n : counter.scanned;
-      return [{ stream, shared: tags, scan: new GapScan(from, counter) }];
+      return [{ ...source, scan: new GapScan(from, counter) }];
     });
   }
 
   async #tags(
     viewingPublicKey: X25519PublicKey,
-    stream: Stream,
-    shared: SharedViewTags | undefined,
+    source: StreamSource,
     counters: readonly bigint[],
   ): Promise<readonly ViewTag[]> {
-    if (shared !== undefined) return counters.map((at) => shared.tag(at));
+    if (source.shared !== undefined) {
+      const { shared } = source;
+      return counters.map((at) => shared.tag(at));
+    }
     const requests = counters.map((at) => ({
       viewingPublicKey,
-      stream:
-        stream === "tx"
-          ? ({ kind: "sender", txCount: at } as const)
-          : ({ kind: "request", requestCount: at } as const),
+      stream: viewTagStream(source.stream, at),
     }));
     return answered(requests, await this.#sync.keys.viewTags(requests, this.#context)).map(
       ([, tag]) => tag,
@@ -515,9 +499,7 @@ class Scan {
     const bodies: Body[] = [];
     for (const { tx, site, found } of hits) {
       if (found === undefined) continue;
-      const key = `${tx.txSignature}:${String(tx.eventIndex)}:${site.kind}:${siteIndex(site)}`;
-      if (this.#opened.has(key)) continue;
-      this.#opened.add(key);
+      if (!unseen(this.#opened, `${txKey(tx)}:${site.kind}:${siteIndex(site)}`)) continue;
       const context = slotContext(tx);
       const ciphertext = siteBody(tx, site);
       if (context === undefined || ciphertext === undefined) continue;
@@ -719,17 +701,10 @@ class Scan {
   #accept(index: number, body: Body, position: number, utxo: Utxo): void {
     const slot = body.tx.outputSlots[position];
     if (slot === undefined || this.#isFound(slot.outputContext.hash)) return;
-    this.#found.push({
-      utxo,
-      outputContext: walletContext(slot),
-      order: publication(body.tx, position),
-    });
-    this.#streams.push(
-      Object.freeze({
-        utxoHash: slot.outputContext.hash,
-        viewingPublicKey: this.#entry(index).viewingPublicKey,
-        stream: body.found,
-      }),
+    this.#keep(
+      { utxo, outputContext: walletContext(slot), order: publication(body.tx, position) },
+      this.#entry(index).viewingPublicKey,
+      body.found,
     );
   }
 
@@ -757,17 +732,21 @@ class Scan {
       this.#unknownMints.add(opened.utxo.asset);
       return;
     }
-    this.#found.push({
-      ...opened,
-      outputContext: walletContext(slot),
-      order: { slot: deposit.slot, signature: base58.encode(deposit.txSignature), position: 0 },
-    });
+    this.#keep(
+      {
+        ...opened,
+        outputContext: walletContext(slot),
+        order: { slot: deposit.slot, signature: base58.encode(deposit.txSignature), position: 0 },
+      },
+      entry.viewingPublicKey,
+      found,
+    );
+  }
+
+  #keep(note: Found, viewingPublicKey: X25519PublicKey, stream: AnonymousStream): void {
+    this.#found.push(note);
     this.#streams.push(
-      Object.freeze({
-        utxoHash: slot.outputContext.hash,
-        viewingPublicKey: entry.viewingPublicKey,
-        stream: found,
-      }),
+      Object.freeze({ utxoHash: note.outputContext.hash, viewingPublicKey, stream }),
     );
   }
 
@@ -794,9 +773,7 @@ class Scan {
 
   #noteSpends(transactions: readonly IndexedShieldedTransaction[]): void {
     for (const tx of transactions) {
-      const key = `${tx.txSignature}:${String(tx.eventIndex)}`;
-      if (this.#spends.has(key)) continue;
-      this.#spends.add(key);
+      if (!unseen(this.#spends, txKey(tx))) continue;
       for (const nullifier of tx.nullifiers) this.#spent.set(bytesKey(nullifier), nullifier);
     }
   }
@@ -823,12 +800,7 @@ class Scan {
         .then((page) => ({ ...page, items: page.transactions })),
     );
     const seen = new Set<string>();
-    return transactions.filter((tx) => {
-      const key = `${tx.txSignature}:${String(tx.eventIndex)}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+    return transactions.filter((tx) => unseen(seen, txKey(tx)));
   }
 
   /** The deposits published under one of `tags`, one per deposited output. */
@@ -897,6 +869,7 @@ function pairOf(kind: SharedTagPair["kind"], counterparty: X25519PublicKey): Sha
   return Object.freeze({ kind, counterparty });
 }
 
+/** A `toRecipient` stream holds the wallet's own payments, observed and never opened. */
 function foundIn(stream: EntryStream, index: bigint): AnonymousStream | undefined {
   if (stream === "tx") return Object.freeze({ kind: "sender", index });
   if (stream === "request") return Object.freeze({ kind: "request", index });
@@ -905,7 +878,11 @@ function foundIn(stream: EntryStream, index: bigint): AnonymousStream | undefine
     : undefined;
 }
 
-function streamKey(stream: Stream): string {
+function txKey(tx: IndexedShieldedTransaction): string {
+  return `${tx.txSignature}:${String(tx.eventIndex)}`;
+}
+
+function streamKey(stream: EntryStream): string {
   return typeof stream === "string"
     ? stream
     : `${stream.kind}:${bytesKey(stream.counterparty.toBytes())}`;
