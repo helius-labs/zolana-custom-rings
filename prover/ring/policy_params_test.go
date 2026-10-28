@@ -20,29 +20,29 @@ const ownMemberKey common.CircuitType = "custom-ring-policy-member-v3-2-w0-own"
 func TestPolicyRequestsDecodeAndSolve(t *testing.T) {
 	for _, own := range []bool{false, true} {
 		for _, anonymous := range []bool{false, true} {
-			w := ringpolicy.Confidential()
-			w.OwnOnly, w.Anonymous = own, anonymous
-			w.WithdrawalCapacity = 2
-			w.Withdrawals = []ringpolicy.Slot{{Owner: ringpolicy.Bob, Asset: ringpolicy.AssetA, Amount: 1}}
+			world := ringpolicy.Confidential()
+			world.OwnOnly, world.Anonymous = own, anonymous
+			world.WithdrawalCapacity = 2
+			world.Withdrawals = []ringpolicy.Slot{{Owner: ringpolicy.Bob, Asset: ringpolicy.AssetA, Amount: 1}}
 			if !own {
-				w.Table.Curator = map[uint64]bool{ringregistry.AllowBit: true}
-				w.Curator = w.Own
+				world.Table.Curator = map[uint64]bool{ringregistry.AllowBit: true}
+				world.Curator = world.Own
 			}
 			key := Key{Family: MemberPolicy, Outputs: 2, Withdrawals: 2, OwnOnly: own}.circuitType()
 			t.Run(fmt.Sprintf("%s-anonymous%v", key, anonymous), func(t *testing.T) {
-				requireRequestSolved(t, key, requestOf[MemberPolicyParams](t, key, w.Build(t).Assignment()))
+				requireRequestSolved(t, key, requestOf[MemberPolicyParams](t, key, world.Build(t).Assignment()))
 			})
 		}
 		for _, width := range []int{2, 4} {
 			key := Key{Family: DelegatePolicy, Inputs: width, Outputs: width, OwnOnly: own}.circuitType()
 			t.Run(string(key), func(t *testing.T) {
-				w := ringpolicy.Delegate(transaction.Shape{NInputs: width, NOutputs: width})
-				w.OwnOnly = own
+				world := ringpolicy.Delegate(transaction.Shape{NInputs: width, NOutputs: width})
+				world.OwnOnly = own
 				if !own {
-					w.Table.Curator = map[uint64]bool{ringregistry.AllowBit: true}
-					w.Curator = w.Own
+					world.Table.Curator = map[uint64]bool{ringregistry.AllowBit: true}
+					world.Curator = world.Own
 				}
-				requireRequestSolved(t, key, requestOf[DelegatePolicyParams](t, key, w.Build(t).Assignment()))
+				requireRequestSolved(t, key, requestOf[DelegatePolicyParams](t, key, world.Build(t).Assignment()))
 			})
 		}
 	}
@@ -57,10 +57,10 @@ func requireRequestSolved(t *testing.T, key common.CircuitType, params any) {
 
 func memberPayload(t testing.TB) []byte {
 	t.Helper()
-	w := ringpolicy.Confidential()
-	w.Table.Curator = map[uint64]bool{ringregistry.AllowBit: true}
-	w.Curator = w.Own
-	return mustMarshal(t, requestOf[MemberPolicyParams](t, memberKey, w.Build(t).Assignment()))
+	world := ringpolicy.Confidential()
+	world.Table.Curator = map[uint64]bool{ringregistry.AllowBit: true}
+	world.Curator = world.Own
+	return mustMarshal(t, requestOf[MemberPolicyParams](t, memberKey, world.Build(t).Assignment()))
 }
 
 func TestPolicyRequestsRejectMalformedPayloads(t *testing.T) {
@@ -117,9 +117,9 @@ func TestPolicyRequestsRejectMalformedPayloads(t *testing.T) {
 }
 
 func TestOwnPolicyRequestsRequireEmptyCuratorReferences(t *testing.T) {
-	w := ringpolicy.Confidential()
-	w.OwnOnly = true
-	params := requestOf[MemberPolicyParams](t, ownMemberKey, w.Build(t).Assignment())
+	world := ringpolicy.Confidential()
+	world.OwnOnly = true
+	params := requestOf[MemberPolicyParams](t, ownMemberKey, world.Build(t).Assignment())
 	params.SenderEntry.Curator = []uint32{0}
 	if _, err := decode(ownMemberKey, mustMarshal(t, params)); err == nil {
 		t.Fatal("own key accepted a curator reference")

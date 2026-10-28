@@ -30,37 +30,37 @@ type poolQueryWires struct {
 
 func (c *recordPoolCircuit) Define(api frontend.API) error {
 	pool := openRecordPool(api, c.Active, c.Root, c.Records, c.Proof)
-	for _, q := range c.Queries {
-		v := pool.resolve(api, recordQuery{active: q.Active, member: q.Member, index: q.Index})
-		api.AssertIsEqual(api.FromBinary(v.onList[:]...), q.Lists)
-		api.AssertIsEqual(v.escrowKey, q.EscrowKey)
-		api.AssertIsEqual(api.Add(api.Mul(v.mintPolicy.threshold, new(big.Int).Lsh(big.NewInt(1), 128)), api.Mul(v.mintPolicy.cap, new(big.Int).Lsh(big.NewInt(1), 64)), v.mintPolicy.cosignAbove), q.MintPolicy)
+	for _, query := range c.Queries {
+		resolved := pool.resolve(api, recordQuery{active: query.Active, member: query.Member, index: query.Index})
+		api.AssertIsEqual(api.FromBinary(resolved.onList[:]...), query.Lists)
+		api.AssertIsEqual(resolved.escrowKey, query.EscrowKey)
+		api.AssertIsEqual(api.Add(api.Mul(resolved.mintPolicy.threshold, new(big.Int).Lsh(big.NewInt(1), 128)), api.Mul(resolved.mintPolicy.cap, new(big.Int).Lsh(big.NewInt(1), 64)), resolved.mintPolicy.cosignAbove), query.MintPolicy)
 	}
 	return nil
 }
 
 func poolFixture(t testing.TB) *recordPoolCircuit {
 	t.Helper()
-	r := ringregistry.New(t)
-	r.Apply(t, ringregistry.Entry{Member: big.NewInt(11), Mask: big.NewInt(3), Value: big.NewInt(3), EscrowKey: big.NewInt(29), MintPolicy: new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), 192), big.NewInt(31))})
-	r.Apply(t, ringregistry.Entry{Member: big.NewInt(17), Mask: big.NewInt(1), Value: big.NewInt(1), EscrowKey: big.NewInt(37)})
-	c := &recordPoolCircuit{Root: r.Root(), Active: 1}
+	tree := ringregistry.New(t)
+	tree.Apply(t, ringregistry.Entry{Member: big.NewInt(11), Mask: big.NewInt(3), Value: big.NewInt(3), EscrowKey: big.NewInt(29), MintPolicy: new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), 192), big.NewInt(31))})
+	tree.Apply(t, ringregistry.Entry{Member: big.NewInt(17), Mask: big.NewInt(1), Value: big.NewInt(1), EscrowKey: big.NewInt(37)})
+	circuit := &recordPoolCircuit{Root: tree.Root(), Active: 1}
 	for _, member := range []int64{11, 17} {
-		c.Records = append(c.Records, r.Opening(big.NewInt(member)).Record.Wires())
+		circuit.Records = append(circuit.Records, tree.Opening(big.NewInt(member)).Record.Wires())
 	}
 	var err error
-	c.Proof, err = r.SharedProof([]uint64{1, 2})
+	circuit.Proof, err = tree.SharedProof([]uint64{1, 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.Queries = []poolQueryWires{
+	circuit.Queries = []poolQueryWires{
 		{Member: 11, Index: 0, Active: 1, Lists: 3, EscrowKey: 29, MintPolicy: 31},
 		{Member: 11, Index: 0, Active: 1, Lists: 3, EscrowKey: 29, MintPolicy: 31},
 		{Member: 17, Index: 1, Active: 1, Lists: 1, EscrowKey: 37, MintPolicy: 0},
 		{Member: 13, Index: 0, Active: 1, Lists: 0, EscrowKey: 0, MintPolicy: 0},
 		{Member: 41, Index: 0, Active: 0, Lists: 0, EscrowKey: 0, MintPolicy: 0},
 	}
-	return c
+	return circuit
 }
 
 func TestRecordPoolBindsEveryActiveQuery(t *testing.T) {
@@ -87,9 +87,9 @@ func TestRecordPoolBindsEveryActiveQuery(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c := poolFixture(t)
-			tc.mutate(c)
-			if test.IsSolved(c, c, ecc.BN254.ScalarField()) == nil {
+			circuit := poolFixture(t)
+			tc.mutate(circuit)
+			if test.IsSolved(circuit, circuit, ecc.BN254.ScalarField()) == nil {
 				t.Fatal("forged pool query solved")
 			}
 		})
@@ -97,12 +97,12 @@ func TestRecordPoolBindsEveryActiveQuery(t *testing.T) {
 }
 
 func TestRecordPoolRejectsLookupHintForgery(t *testing.T) {
-	c := poolFixture(t)
-	cs, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, poolCircuitShape(t, c))
+	circuit := poolFixture(t)
+	cs, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, poolCircuitShape(t, circuit))
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := frontend.NewWitness(c, ecc.BN254.ScalarField())
+	w, err := frontend.NewWitness(circuit, ecc.BN254.ScalarField())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,8 +113,8 @@ func TestRecordPoolRejectsLookupHintForgery(t *testing.T) {
 		calls := 0
 		err = cs.IsSolved(w, solver.OverrideHint(solver.GetHintID(hint), func(_ *big.Int, in, out []*big.Int) error {
 			calls++
-			for _, v := range out {
-				v.SetInt64(0)
+			for _, value := range out {
+				value.SetInt64(0)
 			}
 			return nil
 		}))
@@ -128,12 +128,12 @@ func TestRecordPoolRejectsLookupHintForgery(t *testing.T) {
 }
 
 func TestRecordPoolBindsEveryLookupColumn(t *testing.T) {
-	c := poolFixture(t)
-	cs, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, poolCircuitShape(t, c))
+	circuit := poolFixture(t)
+	cs, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, poolCircuitShape(t, circuit))
 	if err != nil {
 		t.Fatal(err)
 	}
-	witness, err := frontend.NewWitness(c, ecc.BN254.ScalarField())
+	witness, err := frontend.NewWitness(circuit, ecc.BN254.ScalarField())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,11 +158,11 @@ func TestRecordPoolBindsEveryLookupColumn(t *testing.T) {
 	}
 }
 
-func poolCircuitShape(t testing.TB, c *recordPoolCircuit) *recordPoolCircuit {
+func poolCircuitShape(t testing.TB, circuit *recordPoolCircuit) *recordPoolCircuit {
 	t.Helper()
-	proof, err := registry.NewSharedQuadProof(len(c.Records))
+	proof, err := registry.NewSharedQuadProof(len(circuit.Records))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &recordPoolCircuit{Records: make([]registry.Record, len(c.Records)), Queries: make([]poolQueryWires, len(c.Queries)), Proof: proof}
+	return &recordPoolCircuit{Records: make([]registry.Record, len(circuit.Records)), Queries: make([]poolQueryWires, len(circuit.Queries)), Proof: proof}
 }

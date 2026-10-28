@@ -13,7 +13,7 @@ type outputTotals struct {
 	byOwner, byAsset, byOwnerAndAsset frontend.Variable
 }
 
-func (p *PolicyInputs) assertRules(api frontend.API, cmp comparator, t tableView, s subjects, outputs []utxoView) {
+func (p *PolicyInputs) assertRules(api frontend.API, cmp comparator, table tableView, resolved subjects, outputs []utxoView) {
 	// 1. A zero owner carries no obligation, an asset needs no such gate since SPP refuses a UTXO of asset 0.
 	liveOwner := make([]frontend.Variable, len(outputs))
 	for o, out := range outputs {
@@ -23,20 +23,20 @@ func (p *PolicyInputs) assertRules(api frontend.API, cmp comparator, t tableView
 	totals := sumOutputs(api, outputs, liveOwner)
 	assetExempt := make([]frontend.Variable, len(outputs))
 	for o := range outputs {
-		assetExempt[o] = cmp.atMost(api, totals[o].byOwnerAndAsset, s.mintPolicies[o].threshold)
+		assetExempt[o] = cmp.atMost(api, totals[o].byOwnerAndAsset, resolved.mintPolicies[o].threshold)
 	}
 	// 3. A scalar guard sums one owner's outputs, under one every UTXO output carries one asset.
-	assertScalarAssets(api, outputs, t.scalarOwner)
+	assertScalarAssets(api, outputs, table.scalarOwner)
 	// 4. Every active rule holds for its subjects, the sender once and each live output owner or asset.
-	for r, rule := range t.rules {
+	for r, rule := range table.rules {
 		// The one sender meets every sender rule, with or without a spent input.
-		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Mul(t.ruleActive[r], rule.onSender), V: rule.refuses(api, s.sender.onList)})
-		onOutput := api.Mul(t.ruleActive[r], api.Add(rule.onOwner, rule.onAsset))
+		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Mul(table.ruleActive[r], rule.onSender), V: rule.refuses(api, resolved.sender.onList)})
+		onOutput := api.Mul(table.ruleActive[r], api.Add(rule.onOwner, rule.onAsset))
 		for o := range outputs {
 			enabled := api.Mul(onOutput, api.Select(rule.onAsset, outputs[o].utxo, liveOwner[o]))
-			refused := rule.refuses(api, subjectLists(api, rule.onAsset, s.assets[o], s.owners[o]))
+			refused := rule.refuses(api, subjectLists(api, rule.onAsset, resolved.assets[o], resolved.owners[o]))
 			// An asset guarded rule needs an inline limit for the output's asset.
-			transaction.AssertWhen(api, api.Mul(enabled, rule.assetGuard), ringgadget.IsNonZero(api, s.mintPolicies[o].threshold))
+			transaction.AssertWhen(api, api.Mul(enabled, rule.assetGuard), ringgadget.IsNonZero(api, resolved.mintPolicies[o].threshold))
 			total := api.Select(rule.onAsset, totals[o].byAsset, totals[o].byOwner)
 			scalar := api.Mul(rule.scalarGuard, cmp.atMost(api, total, rule.threshold))
 			exempt := api.Or(scalar, api.Mul(rule.assetGuard, assetExempt[o]))

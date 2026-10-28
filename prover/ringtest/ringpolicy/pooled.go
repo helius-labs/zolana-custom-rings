@@ -22,47 +22,47 @@ type recordCollector struct {
 
 // OwnRecord is the own pool record entry resolves to.
 func (b Witness) OwnRecord(entry policy.PoolEntry) *circuitregistry.Record {
-	p := b.Policy()
-	subject := p.OwnSubjects[ringtest.AsBigInt(entry.Own).Int64()]
-	return &p.OwnRecords[ringtest.AsBigInt(subject.RecordIndex).Int64()]
+	policyWitness := b.Policy()
+	subject := policyWitness.OwnSubjects[ringtest.AsBigInt(entry.Own).Int64()]
+	return &policyWitness.OwnRecords[ringtest.AsBigInt(subject.RecordIndex).Int64()]
 }
 
 // pool opens every live subject once, each record once, and fills the pools cyclically to capacity.
 func (b Witness) pool(t testing.TB, ownTree, curatorTree *ringregistry.Registry) {
 	t.Helper()
-	p := b.Policy()
+	policyWitness := b.Policy()
 	own, curator := newCollector(ownTree), newCollector(curatorTree)
 	foreign := false
-	for _, source := range p.Sources {
+	for _, source := range policyWitness.Sources {
 		foreign = foreign || ringtest.AsBigInt(source.Registry).Sign() != 0
 	}
 	entry := func(member frontend.Variable, active bool) policy.PoolEntry {
-		e := policy.PoolEntry{Own: own.add(member, active)}
-		if !p.OwnOnly {
-			e.Curator = []frontend.Variable{curator.add(member, active && foreign)}
+		poolEntry := policy.PoolEntry{Own: own.add(member, active)}
+		if !policyWitness.OwnOnly {
+			poolEntry.Curator = []frontend.Variable{curator.add(member, active && foreign)}
 		}
-		return e
+		return poolEntry
 	}
-	p.SenderEntry = entry(p.SenderPkHash, true)
-	for i, out := range p.Outputs {
+	policyWitness.SenderEntry = entry(policyWitness.SenderPkHash, true)
+	for i, out := range policyWitness.Outputs {
 		active := ringtest.AsBigInt(out.Domain).Int64() == transaction.UtxoDomain
-		p.OwnerEntries[i], p.AssetEntries[i] = entry(out.OwnerPkHash, active), entry(out.Asset, active)
+		policyWitness.OwnerEntries[i], policyWitness.AssetEntries[i] = entry(out.OwnerPkHash, active), entry(out.Asset, active)
 	}
-	for i, out := range p.Withdrawals {
-		active := int64(i) < ringtest.AsBigInt(p.WithdrawalCount).Int64()
-		index := len(p.Outputs) + i
-		p.OwnerEntries[index], p.AssetEntries[index] = entry(out.Owner, active), entry(out.Asset, active)
+	for i, out := range policyWitness.Withdrawals {
+		active := int64(i) < ringtest.AsBigInt(policyWitness.WithdrawalCount).Int64()
+		index := len(policyWitness.Outputs) + i
+		policyWitness.OwnerEntries[index], policyWitness.AssetEntries[index] = entry(out.Owner, active), entry(out.Asset, active)
 	}
-	for i := range p.PublicAssetEntries {
-		asset := p.PublicAssets[i]
-		p.PublicAssetEntries[i] = own.add(asset, ringtest.AsBigInt(asset).Sign() != 0)
+	for i := range policyWitness.PublicAssetEntries {
+		asset := policyWitness.PublicAssets[i]
+		policyWitness.PublicAssetEntries[i] = own.add(asset, ringtest.AsBigInt(asset).Sign() != 0)
 	}
-	if len(curator.records) == 0 && !p.OwnOnly {
-		curator.add(p.SenderPkHash, true)
+	if len(curator.records) == 0 && !policyWitness.OwnOnly {
+		curator.add(policyWitness.SenderPkHash, true)
 	}
-	p.OwnProof = own.fill(t, p.OwnRecords, p.OwnSubjects)
-	if !p.OwnOnly {
-		p.CuratorProof = curator.fill(t, p.CuratorRecords, p.CuratorSubjects)
+	policyWitness.OwnProof = own.fill(t, policyWitness.OwnRecords, policyWitness.OwnSubjects)
+	if !policyWitness.OwnOnly {
+		policyWitness.CuratorProof = curator.fill(t, policyWitness.CuratorRecords, policyWitness.CuratorSubjects)
 	}
 }
 

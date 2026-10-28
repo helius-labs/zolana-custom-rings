@@ -23,36 +23,36 @@ type subjects struct {
 	publicAssets   []publicAsset
 }
 
-func (p *Policy) resolveSubjects(api frontend.API, t tableView, sender frontend.Variable, payments []utxoView) subjects {
+func (p *Policy) resolveSubjects(api frontend.API, table tableView, sender frontend.Variable, payments []utxoView) subjects {
 	own := openSubjectPool(api, openRecordPool(api, 1, p.OwnRoot, p.OwnRecords, p.OwnProof), p.OwnSubjects)
 	var curator subjectPool
 	if !p.OwnOnly {
-		curator = openSubjectPool(api, openRecordPool(api, t.sources.anyForeign, p.CuratorRoot, p.CuratorRecords, p.CuratorProof), p.CuratorSubjects)
+		curator = openSubjectPool(api, openRecordPool(api, table.sources.anyForeign, p.CuratorRoot, p.CuratorRecords, p.CuratorProof), p.CuratorSubjects)
 	}
 	resolve := func(entry PoolEntry, active, member frontend.Variable) (subjectView, mintPolicyWires) {
 		record := own.resolve(api, recordQuery{active: active, member: member, index: entry.Own})
 		view := subjectView{onList: record.onList, escrowKey: record.escrowKey}
 		if !p.OwnOnly {
-			curated := curator.resolve(api, recordQuery{active: api.Mul(active, t.sources.anyForeign), member: member, index: entry.Curator[0]})
+			curated := curator.resolve(api, recordQuery{active: api.Mul(active, table.sources.anyForeign), member: member, index: entry.Curator[0]})
 			for i, on := range curated.onList {
-				view.onList[i] = api.Select(t.sources.foreign[i], on, record.onList[i])
+				view.onList[i] = api.Select(table.sources.foreign[i], on, record.onList[i])
 			}
 		}
 		return view, record.mintPolicy
 	}
-	s := subjects{owners: make([]subjectView, len(payments)), assets: make([]subjectView, len(payments)), mintPolicies: make([]mintPolicyWires, len(payments))}
-	s.sender, _ = resolve(p.SenderEntry, 1, sender)
+	resolved := subjects{owners: make([]subjectView, len(payments)), assets: make([]subjectView, len(payments)), mintPolicies: make([]mintPolicyWires, len(payments))}
+	resolved.sender, _ = resolve(p.SenderEntry, 1, sender)
 	for i, pay := range payments {
-		s.owners[i], _ = resolve(p.OwnerEntries[i], pay.utxo, pay.ownerPkHash)
-		s.assets[i], s.mintPolicies[i] = resolve(p.AssetEntries[i], pay.utxo, pay.asset)
+		resolved.owners[i], _ = resolve(p.OwnerEntries[i], pay.utxo, pay.ownerPkHash)
+		resolved.assets[i], resolved.mintPolicies[i] = resolve(p.AssetEntries[i], pay.utxo, pay.asset)
 	}
 	for k, index := range p.PublicAssetEntries {
 		asset := p.PublicAssets[k]
 		active := ringgadget.IsNonZero(api, asset)
 		record := own.resolve(api, recordQuery{active: active, member: asset, index: index})
-		s.publicAssets = append(s.publicAssets, publicAsset{asset: asset, active: active, policy: record.mintPolicy})
+		resolved.publicAssets = append(resolved.publicAssets, publicAsset{asset: asset, active: active, policy: record.mintPolicy})
 	}
-	return s
+	return resolved
 }
 
 func (p *PolicyInputs) assertEscrow(api frontend.API, keyEscrow frontend.Variable, owners []subjectView, outputs []utxoView) {

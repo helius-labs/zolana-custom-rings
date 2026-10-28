@@ -129,9 +129,9 @@ func TestSharedQuadProofRejectsInvalidShape(t *testing.T) {
 		"missing leaf":    func(c *sharedPathCircuit) { c.Leaves = nil },
 	} {
 		t.Run(name, func(t *testing.T) {
-			c := sharedCircuit(t, 5)
-			tamper(c)
-			if _, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, c); err == nil {
+			circuit := sharedCircuit(t, 5)
+			tamper(circuit)
+			if _, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, circuit); err == nil {
 				t.Fatal("invalid shared proof shape accepted")
 			}
 		})
@@ -192,8 +192,8 @@ func (c *sharedPoolsCircuit) Define(api frontend.API) error {
 }
 
 func TestSharedQuadProofPoolsShareCommitment(t *testing.T) {
-	c := &sharedPoolsCircuit{Own: *sharedCircuit(t, 100), Curator: *sharedCircuit(t, 97)}
-	compiled, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, c, frontend.WithCompressThreshold(300))
+	circuit := &sharedPoolsCircuit{Own: *sharedCircuit(t, 100), Curator: *sharedCircuit(t, 97)}
+	compiled, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, circuit, frontend.WithCompressThreshold(300))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,8 +208,8 @@ func TestSharedQuadProofCompiledSolver(t *testing.T) {
 	members := sharedRegistry(t)
 	for _, count := range []int{5, 100} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
-			c := sharedCircuit(t, count)
-			compiled, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, c, frontend.WithCompressThreshold(300))
+			circuit := sharedCircuit(t, count)
+			compiled, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, circuit, frontend.WithCompressThreshold(300))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -254,21 +254,21 @@ func TestSharedQuadProofConditionalRoot(t *testing.T) {
 		for i := range indices {
 			indices[i] = 1
 		}
-		c := &conditionalSharedCircuit{Active: 0, Path: *sharedAssignment(t, members, indices)}
-		c.Path.Root = 0
+		circuit := &conditionalSharedCircuit{Active: 0, Path: *sharedAssignment(t, members, indices)}
+		circuit.Path.Root = 0
 		shape := &conditionalSharedCircuit{Path: *sharedCircuit(t, count)}
-		if err := test.IsSolved(shape, c, ecc.BN254.ScalarField()); err != nil {
+		if err := test.IsSolved(shape, circuit, ecc.BN254.ScalarField()); err != nil {
 			t.Fatal(err)
 		}
 		for _, active := range []int{1, 2} {
-			c.Active = active
-			if err := test.IsSolved(shape, c, ecc.BN254.ScalarField()); err == nil {
+			circuit.Active = active
+			if err := test.IsSolved(shape, circuit, ecc.BN254.ScalarField()); err == nil {
 				t.Fatal("invalid active root accepted")
 			}
 		}
-		c.Active = 0
-		c.Path.Leaves[0] = 0
-		if err := test.IsSolved(shape, c, ecc.BN254.ScalarField()); err == nil {
+		circuit.Active = 0
+		circuit.Path.Leaves[0] = 0
+		if err := test.IsSolved(shape, circuit, ecc.BN254.ScalarField()); err == nil {
 			t.Fatal("invalid inactive path accepted")
 		}
 	}

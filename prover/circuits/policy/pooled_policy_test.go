@@ -23,8 +23,8 @@ func TestPooledPolicyModes(t *testing.T) {
 			}
 			world.OwnOnly = own
 			t.Run(fmt.Sprintf("%d-own%v", i, own), func(t *testing.T) {
-				b := world.Build(t)
-				if err := test.IsSolved(b.Assignment(), b.Assignment(), ecc.BN254.ScalarField()); err != nil {
+				witness := world.Build(t)
+				if err := test.IsSolved(witness.Assignment(), witness.Assignment(), ecc.BN254.ScalarField()); err != nil {
 					t.Fatal(err)
 				}
 			})
@@ -80,13 +80,13 @@ func compactPools(compact, own bool) policy.RecordPoolShape {
 	return policy.RecordPoolShape{Own: 3, Curator: 3}
 }
 
-func requirePooledCompiledSolved(t *testing.T, cs constraint.ConstraintSystem, b ringpolicy.Witness) {
+func requirePooledCompiledSolved(t *testing.T, cs constraint.ConstraintSystem, policyWitness ringpolicy.Witness) {
 	t.Helper()
 	commitments, ok := cs.GetCommitments().(constraint.Groth16Commitments)
 	if !ok || len(commitments) != 1 || commitments[0].NbPublicCommitted != 0 {
 		t.Fatal("pool must keep one private commitment")
 	}
-	witness, err := frontend.NewWitness(b.Assignment(), ecc.BN254.ScalarField())
+	witness, err := frontend.NewWitness(policyWitness.Assignment(), ecc.BN254.ScalarField())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,15 +96,15 @@ func requirePooledCompiledSolved(t *testing.T, cs constraint.ConstraintSystem, b
 }
 
 func poolWorld(shape policy.MemberShape, distinct, delegate bool) ringpolicy.World {
-	w := ringpolicy.Confidential()
-	w.Outputs, w.WithdrawalCapacity, w.OwnOnly, w.Records = shape.Outputs, shape.Withdrawals, shape.OwnOnly, shape.Records
-	w.Table.Limits = nil
-	w.Table.Rules = append(w.Table.Rules, ringpolicy.Require(policy.SubjectAsset, ringregistry.AllowBit))
-	w.Slots, w.Withdrawals = nil, nil
-	w.Own = map[int64]ringpolicy.Record{ringpolicy.Sender: ringpolicy.Escrowed(ringregistry.AllowBit)}
+	world := ringpolicy.Confidential()
+	world.Outputs, world.WithdrawalCapacity, world.OwnOnly, world.Records = shape.Outputs, shape.Withdrawals, shape.OwnOnly, shape.Records
+	world.Table.Limits = nil
+	world.Table.Rules = append(world.Table.Rules, ringpolicy.Require(policy.SubjectAsset, ringregistry.AllowBit))
+	world.Slots, world.Withdrawals = nil, nil
+	world.Own = map[int64]ringpolicy.Record{ringpolicy.Sender: ringpolicy.Escrowed(ringregistry.AllowBit)}
 	add := func(owner, asset int64) ringpolicy.Slot {
-		w.Own[owner] = ringpolicy.Escrowed(ringregistry.AllowBit)
-		w.Own[asset] = ringpolicy.Record{Lists: ringregistry.AllowBit}
+		world.Own[owner] = ringpolicy.Escrowed(ringregistry.AllowBit)
+		world.Own[asset] = ringpolicy.Record{Lists: ringregistry.AllowBit}
 		return ringpolicy.Slot{Owner: owner, Asset: asset, Amount: 1}
 	}
 	for i := range shape.Outputs + shape.Withdrawals {
@@ -119,9 +119,9 @@ func poolWorld(shape policy.MemberShape, distinct, delegate bool) ringpolicy.Wor
 		}
 		slot := add(owner, asset)
 		if i < shape.Outputs {
-			w.Slots = append(w.Slots, slot)
+			world.Slots = append(world.Slots, slot)
 		} else {
-			w.Withdrawals = append(w.Withdrawals, slot)
+			world.Withdrawals = append(world.Withdrawals, slot)
 		}
 	}
 	if !delegate {
@@ -130,23 +130,23 @@ func poolWorld(shape policy.MemberShape, distinct, delegate bool) ringpolicy.Wor
 			if distinct {
 				asset = int64(30000 + i)
 			}
-			w.Own[asset] = ringpolicy.Record{Lists: ringregistry.AllowBit}
-			w.Public = append(w.Public, ringpolicy.PublicSlot{Asset: asset, Amount: -1})
+			world.Own[asset] = ringpolicy.Record{Lists: ringregistry.AllowBit}
+			world.Public = append(world.Public, ringpolicy.PublicSlot{Asset: asset, Amount: -1})
 		}
 	} else {
-		w.Outputs = 0
-		w.Shape = transaction.Shape{NInputs: shape.Outputs, NOutputs: shape.Outputs}
+		world.Outputs = 0
+		world.Shape = transaction.Shape{NInputs: shape.Outputs, NOutputs: shape.Outputs}
 		for range shape.Outputs {
-			w.Inputs = append(w.Inputs, ringpolicy.Slot{Owner: ringpolicy.Sender, Asset: ringpolicy.AssetA, Amount: 1})
+			world.Inputs = append(world.Inputs, ringpolicy.Slot{Owner: ringpolicy.Sender, Asset: ringpolicy.AssetA, Amount: 1})
 		}
 	}
 	if !shape.OwnOnly {
-		w.Table.Curator = map[uint64]bool{ringregistry.AllowBit: true}
-		for member, record := range w.Own {
-			w.Curator[member] = record
+		world.Table.Curator = map[uint64]bool{ringregistry.AllowBit: true}
+		for member, record := range world.Own {
+			world.Curator[member] = record
 		}
 	}
-	return w
+	return world
 }
 
 func TestPooledPolicyBindsSubjectReferences(t *testing.T) {
@@ -167,15 +167,15 @@ func TestPooledPolicyBindsSubjectReferences(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			w := poolWorld(policy.MemberShape{Outputs: 2, Withdrawals: 1}, false, false)
-			w.KeyEscrow = false
-			w.Records = policy.RecordPoolShape{Own: 3, Curator: 3}
-			b := w.Build(t)
-			if err := test.IsSolved(b.Assignment(), b.Assignment(), ecc.BN254.ScalarField()); err != nil {
+			world := poolWorld(policy.MemberShape{Outputs: 2, Withdrawals: 1}, false, false)
+			world.KeyEscrow = false
+			world.Records = policy.RecordPoolShape{Own: 3, Curator: 3}
+			witness := world.Build(t)
+			if err := test.IsSolved(witness.Assignment(), witness.Assignment(), ecc.BN254.ScalarField()); err != nil {
 				t.Fatal(err)
 			}
-			tc.mutate(b.Policy())
-			if test.IsSolved(b.Assignment(), b.Assignment(), ecc.BN254.ScalarField()) == nil {
+			tc.mutate(witness.Policy())
+			if test.IsSolved(witness.Assignment(), witness.Assignment(), ecc.BN254.ScalarField()) == nil {
 				t.Fatal("forged subject reference solved")
 			}
 		})
@@ -191,24 +191,24 @@ func TestPooledPolicyRejectsCapacityOverflow(t *testing.T) {
 }
 
 func TestPooledPolicySharesAbsentPredecessor(t *testing.T) {
-	w := poolWorld(policy.MemberShape{Outputs: 2}, true, false)
-	w.KeyEscrow = false
-	w.Own, w.Curator = map[int64]ringpolicy.Record{}, map[int64]ringpolicy.Record{}
-	w.Table.Rules = []ringpolicy.Rule{ringpolicy.Forbid(policy.SubjectSender, ringregistry.FrozenBit), ringpolicy.Forbid(policy.SubjectOutputOwner, ringregistry.BlockBit), ringpolicy.Forbid(policy.SubjectAsset, ringregistry.BlockBit)}
-	w.Records = policy.RecordPoolShape{Own: 1, Curator: 1, OwnSubjects: 8, CuratorSubjects: 5}
-	b := w.Build(t)
-	c, err := policy.NewMemberPolicyCircuit(policy.MemberShape{Outputs: 2, Records: w.Records})
+	world := poolWorld(policy.MemberShape{Outputs: 2}, true, false)
+	world.KeyEscrow = false
+	world.Own, world.Curator = map[int64]ringpolicy.Record{}, map[int64]ringpolicy.Record{}
+	world.Table.Rules = []ringpolicy.Rule{ringpolicy.Forbid(policy.SubjectSender, ringregistry.FrozenBit), ringpolicy.Forbid(policy.SubjectOutputOwner, ringregistry.BlockBit), ringpolicy.Forbid(policy.SubjectAsset, ringregistry.BlockBit)}
+	world.Records = policy.RecordPoolShape{Own: 1, Curator: 1, OwnSubjects: 8, CuratorSubjects: 5}
+	witness := world.Build(t)
+	c, err := policy.NewMemberPolicyCircuit(policy.MemberShape{Outputs: 2, Records: world.Records})
 	if err != nil {
 		t.Fatal(err)
 	}
 	cs := ringkey.Compile(t, c)
-	requirePooledCompiledSolved(t, cs, b)
+	requirePooledCompiledSolved(t, cs, witness)
 }
 
 func TestPooledPolicyDistinctWithdrawalCapacity(t *testing.T) {
-	w := poolWorld(policy.MemberShape{Outputs: 2, Withdrawals: 2}, true, false)
-	b := w.Build(t)
-	if err := test.IsSolved(b.Assignment(), b.Assignment(), ecc.BN254.ScalarField()); err != nil {
+	world := poolWorld(policy.MemberShape{Outputs: 2, Withdrawals: 2}, true, false)
+	witness := world.Build(t)
+	if err := test.IsSolved(witness.Assignment(), witness.Assignment(), ecc.BN254.ScalarField()); err != nil {
 		t.Fatal(err)
 	}
 }

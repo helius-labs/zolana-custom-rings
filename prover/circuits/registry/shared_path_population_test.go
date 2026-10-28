@@ -64,36 +64,36 @@ func TestSharedQuadProofMillionMembers(t *testing.T) {
 	}
 	for _, topology := range []string{"distinct", "repeated"} {
 		t.Run(topology, func(t *testing.T) {
-			c := sharedCircuit(t, 197)
-			c.Root = levels[registry.Height][0]
-			depth := len(c.Proof.Paths[0].Siblings)
-			for i := range c.Proof.Canopy {
-				c.Proof.Canopy[i] = nodeAt(depth, i)
+			circuit := sharedCircuit(t, 197)
+			circuit.Root = levels[registry.Height][0]
+			depth := len(circuit.Proof.Paths[0].Siblings)
+			for i := range circuit.Proof.Canopy {
+				circuit.Proof.Canopy[i] = nodeAt(depth, i)
 			}
-			for i := range c.Leaves {
-				index := 1 + i*(population-1)/(len(c.Leaves)-1)
+			for i := range circuit.Leaves {
+				index := 1 + i*(population-1)/(len(circuit.Leaves)-1)
 				if topology == "repeated" {
 					index = population
 				}
-				c.Leaves[i] = levels[0][index]
-				c.Proof.Paths[i].Index = index
-				for level := range c.Proof.Paths[i].Siblings {
+				circuit.Leaves[i] = levels[0][index]
+				circuit.Proof.Paths[i].Index = index
+				for level := range circuit.Proof.Paths[i].Siblings {
 					node := index >> (2 * level)
 					first := node &^ (registry.Arity - 1)
 					sibling := 0
 					for child := first; child < first+registry.Arity; child++ {
 						if child != node {
-							c.Proof.Paths[i].Siblings[level][sibling] = nodeAt(level, child)
+							circuit.Proof.Paths[i].Siblings[level][sibling] = nodeAt(level, child)
 							sibling++
 						}
 					}
 				}
 			}
-			if err := test.IsSolved(sharedCircuit(t, len(c.Leaves)), c, ecc.BN254.ScalarField()); err != nil {
+			if err := test.IsSolved(sharedCircuit(t, len(circuit.Leaves)), circuit, ecc.BN254.ScalarField()); err != nil {
 				t.Fatal(err)
 			}
-			c.Leaves[0] = frontend.Variable(0)
-			if err := test.IsSolved(sharedCircuit(t, len(c.Leaves)), c, ecc.BN254.ScalarField()); err == nil {
+			circuit.Leaves[0] = frontend.Variable(0)
+			if err := test.IsSolved(sharedCircuit(t, len(circuit.Leaves)), circuit, ecc.BN254.ScalarField()); err == nil {
 				t.Fatal("missing populated record accepted")
 			}
 		})

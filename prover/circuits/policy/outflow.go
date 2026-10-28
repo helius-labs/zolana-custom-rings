@@ -15,7 +15,7 @@ type publicAsset struct {
 
 // Every output and public asset opens its own record, including absence. The
 // transaction, rather than a sender-supplied list of limits, determines coverage.
-func (p *PolicyInputs) constrainOutflow(api frontend.API, cmp comparator, sender frontend.Variable, outputs []utxoView, s subjects) frontend.Variable {
+func (p *PolicyInputs) constrainOutflow(api frontend.API, cmp comparator, sender frontend.Variable, outputs []utxoView, resolved subjects) frontend.Variable {
 	leaving := make([]frontend.Variable, len(outputs))
 	for o, out := range outputs {
 		change := api.Mul(api.IsZero(api.Sub(out.ownerPkHash, sender)), api.IsZero(api.Sub(out.ringProgramID, p.RingProgramID)))
@@ -40,9 +40,9 @@ func (p *PolicyInputs) constrainOutflow(api frontend.API, cmp comparator, sender
 		approval = api.Or(approval, api.Mul(cosigned, api.Sub(1, cmp.atMost(api, outflow, policy.cosignAbove))))
 	}
 	for o, out := range outputs {
-		check(out.asset, out.utxo, s.mintPolicies[o])
+		check(out.asset, out.utxo, resolved.mintPolicies[o])
 	}
-	for _, public := range s.publicAssets {
+	for _, public := range resolved.publicAssets {
 		check(public.asset, public.active, public.policy)
 	}
 	return approval

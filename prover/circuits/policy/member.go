@@ -60,7 +60,7 @@ func (c *MemberPolicyCircuit) Define(api frontend.API) error {
 	rc := rangecheck.New(api)
 	cmp := c.comparator(rc)
 	// 1. The rules read the table under policy_hash.
-	t := c.Table.decode(api, rc, c.PolicyHash)
+	table := c.Table.decode(api, rc, c.PolicyHash)
 	c.assertOwnOnly(api)
 	// 2. The outputs open private_tx_hash beside the input chain SPP proves.
 	outputs := c.openOutputs(api, c.InputChain)
@@ -68,13 +68,13 @@ func (c *MemberPolicyCircuit) Define(api frontend.API) error {
 	sender := c.sender(api)
 	// 4. The sender and every UTXO output's subjects open under own_root, and under curator_root when a list is foreign.
 	payments := append(append([]utxoView{}, outputs...), c.openWithdrawals(api, rc)...)
-	s := c.resolveSubjects(api, t, sender, payments)
+	resolved := c.resolveSubjects(api, table, sender, payments)
 	// 5. Every enabled rule holds for its subjects.
-	c.assertRules(api, cmp, t, s, payments)
+	c.assertRules(api, cmp, table, resolved, payments)
 	// 6. Every limit row bounds the outflow, approval_required says whether one passes its co-sign bound.
-	c.assertApproval(api, c.constrainOutflow(api, cmp, sender, outputs, s))
+	c.assertApproval(api, c.constrainOutflow(api, cmp, sender, outputs, resolved))
 	// 7. Under key escrow every output owner escrows the output's nullifier key.
-	c.assertEscrow(api, c.KeyEscrow, s.owners, outputs)
+	c.assertEscrow(api, c.KeyEscrow, resolved.owners, outputs)
 	// 8. The one public input is the statement the program rebuilds.
 	bindStatement(api, c.PublicInputHash, c.Statement())
 	return nil
