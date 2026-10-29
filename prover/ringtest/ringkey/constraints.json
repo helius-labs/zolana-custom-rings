@@ -17,10 +17,10 @@
   "custom_ring_audit_delivered_2": 103182,
   "custom_ring_audit_delivered_4": 162641,
   "custom_ring_audit_delivered_8": 281902,
-  "custom_ring_deposit_1": 68322,
-  "custom_ring_deposit_2": 90413,
-  "custom_ring_deposit_4": 134624,
-  "custom_ring_deposit_8": 223168,
+  "custom_ring_deposit_1": 68334,
+  "custom_ring_deposit_2": 90437,
+  "custom_ring_deposit_4": 134672,
+  "custom_ring_deposit_8": 223264,
   "custom_ring_merge_v3_24": 86674,
   "custom_ring_merge_v3_8": 61168,
   "custom_ring_policy_delegate_v3_2x2_curator": 48530,
@@ -84,5 +84,5 @@
   "custom_ring_policy_member_v3_8_w8_curator": 214424,
   "custom_ring_policy_member_v3_8_w8_own": 125519,
   "custom_ring_register_key": 36991,
-  "custom_ring_withdrawal_exemption": 12300
+  "custom_ring_withdrawal_exemption": 12318
 }
