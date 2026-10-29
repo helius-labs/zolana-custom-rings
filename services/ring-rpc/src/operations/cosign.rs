@@ -81,7 +81,7 @@ impl From<CoSignError> for ErrorObjectOwned {
 }
 
 #[async_trait]
-pub trait CoSigner: Send + Sync {
+pub trait CoSignPolicy: Send + Sync {
     async fn decide(&self, request: &CoSignRequest) -> Result<CoSignDecision, RingRpcError>;
 
     /// Keeps or frees the usage `decide` reserved for the transaction.
@@ -91,7 +91,7 @@ pub trait CoSigner: Send + Sync {
 pub struct RefusingCoSigner;
 
 #[async_trait]
-impl CoSigner for RefusingCoSigner {
+impl CoSignPolicy for RefusingCoSigner {
     async fn decide(&self, _request: &CoSignRequest) -> Result<CoSignDecision, RingRpcError> {
         Ok(CoSignDecision::Refused(CoSignRefusal::Disabled))
     }

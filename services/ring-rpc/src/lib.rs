@@ -66,7 +66,7 @@ pub use config::{
 };
 pub use cosign::{
     AssetFlow, CoSignDecision, CoSignError, CoSignRefusal, CoSignRequest, CoSignSettlement,
-    CoSigner, RefusingCoSigner,
+    CoSignPolicy, RefusingCoSigner,
 };
 pub use cosign_limits::{
     AssetCheck, AssetLimitSource, LimitDecision, LimitedCoSigner, LimitedCoSignerInit, WindowUsage,

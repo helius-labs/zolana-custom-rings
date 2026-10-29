@@ -10,7 +10,7 @@ use tokio::sync::Mutex;
 use zolana_ring_policy::{AssetLimits, Member};
 
 use crate::{
-    cosign::CoSigner as CoSignerTrait,
+    cosign::CoSignPolicy,
     cosign::{
         AssetFlow, CoSignDecision, CoSignError, CoSignRefusal, CoSignRequest, CoSignSettlement,
     },
@@ -97,7 +97,7 @@ impl<L> LimitedCoSignerInit<L> {
 }
 
 #[async_trait]
-impl<L: AssetLimitSource> CoSignerTrait for LimitedCoSigner<L> {
+impl<L: AssetLimitSource> CoSignPolicy for LimitedCoSigner<L> {
     async fn decide(&self, request: &CoSignRequest) -> Result<CoSignDecision, RingRpcError> {
         // 1. Each asset is named once and has its limits from the ring's registry.
         let assets: Vec<Address> = request.flows.iter().map(|flow| flow.asset).collect();

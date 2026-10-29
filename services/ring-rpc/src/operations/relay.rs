@@ -19,7 +19,7 @@ use zolana_ring_policy::Member;
 
 use crate::{
     cosign::{
-        AssetFlow, CoSignDecision, CoSignRefusal, CoSignRequest, CoSignSettlement, CoSigner,
+        AssetFlow, CoSignDecision, CoSignRefusal, CoSignRequest, CoSignSettlement, CoSignPolicy,
         RefusingCoSigner,
     },
     database::Store,
@@ -89,7 +89,7 @@ pub struct Relay {
     submit: Arc<dyn RelaySubmit>,
     chain: Arc<dyn RelayChain>,
     rings: ServedRings,
-    co_signer: Arc<dyn CoSigner>,
+    co_signer: Arc<dyn CoSignPolicy>,
     proofs: Semaphore,
     /// Every record write after the proofs, one relay state at a time.
     transitions: Mutex<()>,
@@ -163,7 +163,7 @@ impl Relay {
     }
 
     #[must_use = "use the updated relay"]
-    pub fn with_co_signer(mut self, co_signer: Arc<dyn CoSigner>) -> Self {
+    pub fn with_co_signer(mut self, co_signer: Arc<dyn CoSignPolicy>) -> Self {
         self.co_signer = co_signer;
         self
     }
@@ -429,7 +429,7 @@ struct CoSigned {
 }
 
 impl CoSignStep<'_> {
-    async fn decide(self, co_signer: &dyn CoSigner) -> Result<CoSigned, RingRpcError> {
+    async fn decide(self, co_signer: &dyn CoSignPolicy) -> Result<CoSigned, RingRpcError> {
         let Self {
             message,
             proof_inputs,
