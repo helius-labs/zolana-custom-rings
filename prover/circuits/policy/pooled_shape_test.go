@@ -50,7 +50,7 @@ func TestPooledPolicyRejectsMalformedShape(t *testing.T) {
 		}
 	})
 	t.Run("delegate without inputs", func(t *testing.T) {
-		c, err := NewDelegatePolicyCircuit(DelegateShape{Shape: transaction.NewShape(2, 2)})
+		c, err := NewDelegatePolicyCircuit(DelegateShape{Shape: transaction.Shape{NInputs: 2, NOutputs: 2}})
 		if err != nil {
 			t.Fatal(err)
 		}

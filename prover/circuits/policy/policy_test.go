@@ -330,7 +330,7 @@ func assetScalarGuarded() ringpolicy.World {
 }
 
 func delegate2() ringpolicy.World {
-	return ringpolicy.Delegate(transaction.NewShape(2, 2))
+	return ringpolicy.Delegate(transaction.Shape{NInputs: 2, NOutputs: 2})
 }
 
 // policyKeys lists every member key and the delegate key of each ring authority width, with the honest world it solves.
@@ -351,7 +351,7 @@ func policyKeys() []policyKey {
 		})
 	}
 	for _, width := range delegateWidths {
-		shape := transaction.NewShape(width, width)
+		shape := transaction.Shape{NInputs: width, NOutputs: width}
 		keys = append(keys, policyKey{
 			name:    fmt.Sprintf("custom_ring_policy_delegate_v3_%dx%d_curator", width, width),
 			budget:  budget(delegateBudget, width),
