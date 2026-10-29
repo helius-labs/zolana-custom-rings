@@ -42,7 +42,7 @@ const (
 )
 
 // PolicyStatementVersion binds the policy statement layout, mirrored by PolicyStatement::elements in program-libs/interface/src/proof/statement.rs.
-const PolicyStatementVersion = 3
+const PolicyStatementVersion = 4
 
 // Envelope and merge pad domains, mirrored by sdk-libs/client/src/crypto/encryption/mod.rs, its merge_disclosure module and sdk-libs/ts/src/crypto/audit/audit.ts.
 const (

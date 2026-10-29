@@ -188,6 +188,7 @@ type statementVector struct {
 	OwnRoot          ringtest.Hex   `json:"own_root"`
 	CuratorRoot      ringtest.Hex   `json:"curator_root"`
 	Sender           ringtest.Hex   `json:"sender"`
+	Recipients       []ringtest.Hex `json:"recipients"`
 	PublicAssets     []ringtest.Hex `json:"public_assets"`
 	PublicAmounts    []ringtest.Hex `json:"public_amounts"`
 	PublicInputHash  ringtest.Hex   `json:"public_input_hash"`
@@ -246,6 +247,12 @@ func (v statementVector) circuits(t *testing.T) (frontend.Circuit, frontend.Circ
 	p.OwnRoot, p.CuratorRoot = v.OwnRoot.Int, v.CuratorRoot.Int
 	for k := range p.PublicAssets {
 		p.PublicAssets[k], p.PublicAmounts[k] = v.PublicAssets[k].Int, v.PublicAmounts[k].Int
+	}
+	if len(v.Recipients) != len(p.Recipients) {
+		t.Fatalf("%d recipients for %d outputs", len(v.Recipients), len(p.Recipients))
+	}
+	for o, recipient := range v.Recipients {
+		p.Recipients[o] = recipient.Int
 	}
 	if member {
 		b.Member.Sender = v.Sender.Int

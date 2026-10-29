@@ -144,6 +144,7 @@ type PolicyInputsParams struct {
 	AddressChain      Field           `json:"addressChain"`
 	PrivateTxBlinding Field           `json:"privateTxBlinding"`
 	Outputs           []OutputOpening `json:"outputs"`
+	Recipients        []Field         `json:"recipients"`
 	SenderPkHash      Field           `json:"senderPkHash"`
 }
 

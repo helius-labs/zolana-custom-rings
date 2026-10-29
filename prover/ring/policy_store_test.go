@@ -88,9 +88,10 @@ func TestPolicyStoreFixtures(t *testing.T) {
 		t.Fatal("policy and update roots differ")
 	}
 	vectors["reader"] = map[string]any{
-		"proof":  prove(policyKey, requestOf[MemberPolicyParams](t, policyKey, witness.Member)),
-		"action": fb(ringtest.AsBigInt(witness.Member.PrivateTxHash)),
-		"rules":  fieldsOf(ringtest.ToBigInts(witness.Member.Table.Rules[:ringtest.AsBigInt(witness.Member.Table.PolicyLen).Int64()])),
+		"proof":      prove(policyKey, requestOf[MemberPolicyParams](t, policyKey, witness.Member)),
+		"action":     fb(ringtest.AsBigInt(witness.Member.PrivateTxHash)),
+		"recipients": fieldsOf(ringtest.ToBigInts(witness.Member.Recipients)),
+		"rules":      fieldsOf(ringtest.ToBigInts(witness.Member.Table.Rules[:ringtest.AsBigInt(witness.Member.Table.PolicyLen).Int64()])),
 	}
 	encoded, err := json.MarshalIndent(vectors, "", "  ")
 	if err != nil {
