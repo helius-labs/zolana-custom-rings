@@ -19,6 +19,7 @@ export const RingRpcMethod = Object.freeze({
   prepareAuthorityTransfer: "prepareAuthorityTransfer",
   getPendingEnrolments: "getPendingEnrolments",
   refuseEnrolment: "refuseEnrolment",
+  setReaderGrant: "setReaderGrant",
 } as const);
 export type RingRpcMethod = (typeof RingRpcMethod)[keyof typeof RingRpcMethod];
 
@@ -175,6 +176,21 @@ export interface PendingEnrolment {
   readonly member: Hash;
   readonly awaitedLists: bigint;
   readonly validUntilSlot: bigint;
+}
+
+/** Rust `ReaderGrantAction`. */
+export type ReaderGrantAction = "grant" | "revoke";
+
+/** Rust `SetReaderGrantRequest`, signed by `wallet` or, without one, by the ring config authority. */
+export interface SetReaderGrantRequest {
+  readonly ring: Address;
+  readonly wallet?: Address;
+  /** The 34-byte tagged reader key. */
+  readonly reader: Base64String;
+  readonly action: ReaderGrantAction;
+  readonly timestamp: bigint;
+  readonly nonce: Base64String;
+  readonly signature: Signature;
 }
 
 /** Rust `MergeSettings`. */

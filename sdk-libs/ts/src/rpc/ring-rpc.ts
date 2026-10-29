@@ -62,6 +62,7 @@ import {
   checkedReaderKey,
   readerKeyBytes,
   readerKeyFromBytes,
+  type ReaderKey,
 } from "../operations/management/reader-access.js";
 import { memberOfTag } from "../protocol/membership/policy.js";
 import { verifyRecordUpdate } from "../protocol/ring-rpc/record-update.js";
@@ -70,6 +71,7 @@ import {
   decodeRecordUpdateStatus,
   decodeRelayQuote,
   decodeRelayStatus,
+  decodeReaderGrantAction,
   decodeRelayStep,
   decodeSubmitRecordUpdate,
   encodeGetPendingEnrolmentsRequest,
@@ -79,6 +81,7 @@ import {
   encodeRefuseEnrolmentRequest,
   encodeRelayQuoteRequest,
   encodeRelayStatusRequest,
+  encodeSetReaderGrantRequest,
   encodeSubmitRecordUpdateRequest,
   encodeSubmitRelayRequest,
   shieldedAddressText,
@@ -91,15 +94,18 @@ import {
   type PendingEnrolmentsPage,
   type PrepareAuthorityTransferRequest,
   type PrepareRelayRequest,
+  type ReaderGrantAction,
   type RecordUpdateStatus,
   type RefuseEnrolmentRequest,
   type RelayQuote,
   type RelayQuoteRequest,
   type RelayStatus,
   type RelayStep,
+  type SetReaderGrantRequest,
   type SubmitRecordUpdateRequest,
   type SubmitRelayRequest,
 } from "../protocol/ring-rpc/ring-rpc-types.js";
+import { ringRpcRefusalName } from "../protocol/ring-rpc/ring-rpc-refusal.js";
 
 type Hash = indexerTypes.Hash;
 
@@ -130,6 +136,7 @@ const AUDITOR_KEY_REQUEST_DOMAIN = "zolana/ring-rpc-auditor-key-request/v1";
 const AUDITED_UTXOS_DOMAIN = "zolana/ring-rpc-audited-utxos/v1";
 const AUTHORITY_TRANSFER_DOMAIN = "zolana/ring-rpc-authority-transfer/v1";
 const ENROLMENT_DOMAIN = "zolana/ring-rpc-enrolment/v1";
+const READER_GRANT_DOMAIN = "zolana/ring-rpc-reader-grant/v1";
 /** Rust `AUDIT_PAGE_LIMIT`. */
 export const RING_READ_PAGE_LIMIT = 100n;
 /** Rust `AUDITED_UTXOS_LIMIT`, the UTXO hashes one read names. */
@@ -158,6 +165,11 @@ function targetLines(target: RingReadTarget): readonly string[] {
   ];
 }
 
+/** Rust `wallet_line`, no line for a ring-wide request. */
+function walletLines(wallet: Address | undefined): readonly string[] {
+  return wallet === undefined ? [] : [`wallet: ${wallet}`];
+}
+
 function checkedReadTarget(target: RingReadTarget): RingReadTarget {
   addressBytes(target.service, "service");
   addressBytes(target.ringProgramId, "ringProgramId");
@@ -177,6 +189,7 @@ export function ringReadAttestation(
     nonce: Bytes32;
     cursor?: Uint8Array;
     limit?: bigint;
+    wallet?: Address;
   }>,
 ): Uint8Array {
   const cursor = input.cursor === undefined ? "" : base64Decoder.decode(input.cursor);
@@ -189,6 +202,7 @@ export function ringReadAttestation(
       `nonce: ${base64Decoder.decode(input.nonce)}`,
       `limit: ${input.limit ?? 0n}`,
       `cursor: ${cursor}`,
+      ...walletLines(input.wallet),
     ].join("\n"),
   );
 }
@@ -200,6 +214,7 @@ export function auditedUtxosAttestation(
     timestamp: bigint;
     nonce: Bytes32;
     utxoHashes: readonly Bytes32[];
+    wallet?: Address;
   }>,
 ): Uint8Array {
   const joined = new Uint8Array(32 * input.utxoHashes.length);
@@ -211,6 +226,7 @@ export function auditedUtxosAttestation(
       `timestamp: ${input.timestamp}`,
       `nonce: ${base64Decoder.decode(input.nonce)}`,
       `utxos: ${base64Decoder.decode(sha256(joined))}`,
+      ...walletLines(input.wallet),
     ].join("\n"),
   );
 }
@@ -420,6 +436,73 @@ async function configAuthorityAuth(
   });
 }
 
+/** Rust `ReaderGrantAttestation` without its target, a ring-wide grant names no `wallet`. */
+export interface RingReaderGrant {
+  readonly wallet?: Address;
+  readonly reader: ReaderKey;
+  readonly action: ReaderGrantAction;
+}
+
+/** Mirrors Rust `ReaderGrantAttestation::message`. */
+export function readerGrantAttestation(
+  input: RingReaderGrant & Readonly<{ target: RingReadTarget; timestamp: bigint; nonce: Bytes32 }>,
+): Uint8Array {
+  return encoder.encode(
+    [
+      READER_GRANT_DOMAIN,
+      ...targetLines(input.target),
+      ...walletLines(input.wallet),
+      `reader: ${base64Decoder.decode(readerKeyBytes(checkedReaderKey(input.reader)))}`,
+      `action: ${input.action}`,
+      `timestamp: ${input.timestamp}`,
+      `nonce: ${base64Decoder.decode(input.nonce)}`,
+    ].join("\n"),
+  );
+}
+
+/** Mirrors Rust `ReaderGrantRequest`, the service takes a ring-wide grant only from the ring config authority. */
+export class RingReaderGrantRequest {
+  readonly #target: RingReadTarget;
+  readonly #grant: RingReaderGrant;
+  #timestamp?: bigint;
+
+  private constructor(target: RingReadTarget, grant: RingReaderGrant) {
+    this.#target = checkedReadTarget(target);
+    if (grant.wallet !== undefined) addressBytes(grant.wallet, "wallet");
+    this.#grant = Object.freeze({ ...grant, reader: checkedReaderKey(grant.reader) });
+  }
+
+  static forGrant(target: RingReadTarget, grant: RingReaderGrant): RingReaderGrantRequest {
+    return new RingReaderGrantRequest(target, grant);
+  }
+
+  /** Unix seconds, the RPC rejects a clock more than its skew away. */
+  at(timestamp: bigint): this {
+    this.#timestamp = checkedUnixTimestamp(timestamp, "timestamp");
+    return this;
+  }
+
+  async sign(signer: MessagePartialSigner): Promise<SetReaderGrantRequest> {
+    const { wallet, reader, action } = this.#grant;
+    if (wallet !== undefined && signer.address !== wallet) throw invalidRequest("signer");
+    const timestamp = timestampOrNow(this.#timestamp);
+    const nonce = freshNonce();
+    const signature = await signMessage(
+      signer,
+      readerGrantAttestation({ target: this.#target, ...this.#grant, timestamp, nonce }),
+    );
+    return Object.freeze({
+      ring: this.#target.ringProgramId,
+      ...(wallet === undefined ? {} : { wallet }),
+      reader: base64Decoder.decode(readerKeyBytes(reader)) as indexerTypes.Base64String,
+      action,
+      timestamp,
+      nonce: base64Decoder.decode(nonce) as indexerTypes.Base64String,
+      signature: base58Decoder.decode(signature) as Signature,
+    });
+  }
+}
+
 export function messageSignerReader(signer: MessagePartialSigner): RingReadSigner {
   return Object.freeze({
     reader: readerKeyBytes(checkedReaderKey(signer.address)),
@@ -433,6 +516,8 @@ export interface SignedRingRead {
   readonly ringProgramId: Address;
   readonly cursor?: Uint8Array;
   readonly limit?: bigint;
+  /** Narrows the read to the wallet's rows. */
+  readonly wallet?: Address;
   readonly reader: Uint8Array;
   readonly timestamp: bigint;
   readonly nonce: Bytes32;
@@ -445,6 +530,7 @@ export class RingReadRequest {
   readonly #target: RingReadTarget;
   #cursor?: Uint8Array;
   #limit?: bigint;
+  #wallet?: Address;
   #timestamp?: bigint;
 
   private constructor(method: RingPagedRead, target: RingReadTarget) {
@@ -470,6 +556,12 @@ export class RingReadRequest {
     return this;
   }
 
+  withWallet(wallet: Address): this {
+    addressBytes(wallet, "wallet");
+    this.#wallet = wallet;
+    return this;
+  }
+
   /** Unix seconds, the RPC rejects a clock more than its skew away. */
   at(timestamp: bigint): this {
     this.#timestamp = checkedUnixTimestamp(timestamp, "timestamp");
@@ -487,6 +579,7 @@ export class RingReadRequest {
         nonce,
         ...(this.#cursor === undefined ? {} : { cursor: this.#cursor }),
         ...(this.#limit === undefined ? {} : { limit: this.#limit }),
+        ...(this.#wallet === undefined ? {} : { wallet: this.#wallet }),
       }),
     );
     return Object.freeze({
@@ -494,6 +587,7 @@ export class RingReadRequest {
       ringProgramId: this.#target.ringProgramId,
       ...(this.#cursor === undefined ? {} : { cursor: this.#cursor }),
       ...(this.#limit === undefined ? {} : { limit: this.#limit }),
+      ...(this.#wallet === undefined ? {} : { wallet: this.#wallet }),
       reader: signer.reader,
       timestamp,
       nonce,
@@ -507,6 +601,8 @@ export interface SignedAuditedUtxosRead {
   readonly ringProgramId: Address;
   /** Answers come back in the same order. */
   readonly utxoHashes: readonly Bytes32[];
+  /** Narrows the read to the wallet's notes. */
+  readonly wallet?: Address;
   readonly reader: Uint8Array;
   readonly timestamp: bigint;
   readonly nonce: Bytes32;
@@ -517,6 +613,7 @@ export interface SignedAuditedUtxosRead {
 export class RingAuditedUtxosRequest {
   readonly #target: RingReadTarget;
   readonly #utxoHashes: readonly Bytes32[];
+  #wallet?: Address;
   #timestamp?: bigint;
 
   private constructor(target: RingReadTarget, utxoHashes: readonly Bytes32[]) {
@@ -526,6 +623,12 @@ export class RingAuditedUtxosRequest {
 
   static read(target: RingReadTarget, utxoHashes: readonly Bytes32[]): RingAuditedUtxosRequest {
     return new RingAuditedUtxosRequest(target, checkedUtxoHashes(utxoHashes));
+  }
+
+  withWallet(wallet: Address): this {
+    addressBytes(wallet, "wallet");
+    this.#wallet = wallet;
+    return this;
   }
 
   /** Unix seconds, the RPC rejects a clock more than its skew away. */
@@ -543,11 +646,13 @@ export class RingAuditedUtxosRequest {
         timestamp,
         nonce,
         utxoHashes: this.#utxoHashes,
+        ...(this.#wallet === undefined ? {} : { wallet: this.#wallet }),
       }),
     );
     return Object.freeze({
       ringProgramId: this.#target.ringProgramId,
       utxoHashes: this.#utxoHashes,
+      ...(this.#wallet === undefined ? {} : { wallet: this.#wallet }),
       reader: signer.reader,
       timestamp,
       nonce,
@@ -1047,6 +1152,7 @@ export class RingRpc {
       signer: RingReadSigner;
       cursor?: Uint8Array;
       limit?: bigint;
+      wallet?: Address;
       timestamp?: bigint;
     }>,
     context?: RequestContext,
@@ -1054,6 +1160,7 @@ export class RingRpc {
     let request = RingReadRequest.decryptedTransactions(input.target);
     if (input.cursor !== undefined) request = request.withCursor(input.cursor);
     if (input.limit !== undefined) request = request.withLimit(input.limit);
+    if (input.wallet !== undefined) request = request.withWallet(input.wallet);
     if (input.timestamp !== undefined) request = request.at(input.timestamp);
     return this.readSigned(await request.sign(input.signer), context);
   }
@@ -1064,11 +1171,13 @@ export class RingRpc {
       target: RingReadTarget;
       utxoHashes: readonly Bytes32[];
       signer: RingReadSigner;
+      wallet?: Address;
       timestamp?: bigint;
     }>,
     context?: RequestContext,
   ): Promise<RingAuditedUtxosPage> {
     let request = RingAuditedUtxosRequest.read(input.target, input.utxoHashes);
+    if (input.wallet !== undefined) request = request.withWallet(input.wallet);
     if (input.timestamp !== undefined) request = request.at(input.timestamp);
     return this.readSignedUtxos(await request.sign(input.signer), context);
   }
@@ -1082,7 +1191,7 @@ export class RingRpc {
     const { utxoHashes, ...auth } = exactRequestRecord(
       read,
       SIGNED_UTXOS_FIELDS,
-      SIGNED_UTXOS_FIELDS,
+      SIGNED_UTXOS_REQUIRED_FIELDS,
       "request",
     );
     const hashes = checkedUtxoHashes(utxoHashes);
@@ -1138,6 +1247,7 @@ export class RingRpc {
       signer: RingReadSigner;
       cursor?: Uint8Array;
       limit?: bigint;
+      wallet?: Address;
       timestamp?: bigint;
     }>,
     context?: RequestContext,
@@ -1145,6 +1255,7 @@ export class RingRpc {
     let request = RingReadRequest.auditedMerges(input.target);
     if (input.cursor !== undefined) request = request.withCursor(input.cursor);
     if (input.limit !== undefined) request = request.withLimit(input.limit);
+    if (input.wallet !== undefined) request = request.withWallet(input.wallet);
     if (input.timestamp !== undefined) request = request.at(input.timestamp);
     return this.readSignedMerges(await request.sign(input.signer), context);
   }
@@ -1291,6 +1402,16 @@ export class RingRpc {
     );
   }
 
+  /** A request from `RingReaderGrantRequest.sign`, answered with the action the service now holds. */
+  async setReaderGrant(
+    request: SetReaderGrantRequest,
+    context?: RequestContext,
+  ): Promise<ReaderGrantAction> {
+    return decodeReaderGrantAction(
+      await this.#call(RingRpcMethod.setReaderGrant, encodeSetReaderGrantRequest(request), context),
+    );
+  }
+
   // `params` is the request object, not a positional list.
   async #call(
     method: string,
@@ -1312,6 +1433,9 @@ export class RingRpc {
       );
     } catch (error) {
       if (!(error instanceof TransportFailure)) throw error;
+      const refusal = error.kind === "rpc" ? ringRpcRefusalName(error.facts["rpcCode"]) : undefined;
+      if (refusal !== undefined)
+        throw new RingError("RING_RPC_REFUSED", { details: { method, refusal, ...error.facts } });
       const status = error.kind === "http" ? error.facts["status"] : undefined;
       // Ring RPC answers -32250 to -32253 with 429 and -32254 with 401.
       if (status === 429)
@@ -1360,6 +1484,7 @@ function signedReadParams(
     ringProgramId: checked.ringProgramId,
     ...(checked.cursor === undefined ? {} : { cursor: base64Decoder.decode(checked.cursor) }),
     ...(checked.limit === undefined ? {} : { limit: Number(checked.limit) }),
+    ...(checked.wallet === undefined ? {} : { wallet: checked.wallet }),
     auth: {
       reader: base64Decoder.decode(checked.reader),
       ...authWire({
@@ -1837,6 +1962,7 @@ const SIGNED_READ_FIELDS = new Set([
   "ringProgramId",
   "cursor",
   "limit",
+  "wallet",
   "reader",
   "timestamp",
   "nonce",
@@ -1850,7 +1976,7 @@ const SIGNED_READ_REQUIRED_FIELDS = new Set([
   "nonce",
   "signature",
 ]);
-const SIGNED_UTXOS_FIELDS = new Set([
+const SIGNED_UTXOS_REQUIRED_FIELDS = new Set([
   "ringProgramId",
   "utxoHashes",
   "reader",
@@ -1858,6 +1984,7 @@ const SIGNED_UTXOS_FIELDS = new Set([
   "nonce",
   "signature",
 ]);
+const SIGNED_UTXOS_FIELDS = new Set([...SIGNED_UTXOS_REQUIRED_FIELDS, "wallet"]);
 const WEBAUTHN_FIELDS = new Set(["signature", "authenticatorData", "clientDataJSON"]);
 const SIGNED_AUDITOR_FIELDS = new Set([
   "ringProgramId",
@@ -1906,6 +2033,8 @@ type ReadAuth = Omit<SignedRingRead, "method" | "cursor" | "limit">;
 
 function checkedReadAuth(read: Readonly<Record<string, unknown>>): ReadAuth {
   const ringProgramId = requestAddress(read["ringProgramId"], "ringProgramId");
+  const wallet =
+    read["wallet"] === undefined ? {} : { wallet: requestAddress(read["wallet"], "wallet") };
   const reader = checkedReaderBytes(read["reader"]);
   const nonce = requestBytes(read["nonce"], 32, "nonce") as Bytes32;
   const timestamp = checkedUnixTimestamp(read["timestamp"], "timestamp");
@@ -1913,6 +2042,7 @@ function checkedReadAuth(read: Readonly<Record<string, unknown>>): ReadAuth {
   if (signature instanceof Uint8Array) {
     return Object.freeze({
       ringProgramId,
+      ...wallet,
       reader,
       nonce,
       timestamp,
@@ -1933,6 +2063,7 @@ function checkedReadAuth(read: Readonly<Record<string, unknown>>): ReadAuth {
   }
   return Object.freeze({
     ringProgramId,
+    ...wallet,
     reader,
     nonce,
     timestamp,

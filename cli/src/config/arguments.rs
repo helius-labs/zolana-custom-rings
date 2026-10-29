@@ -373,6 +373,9 @@ pub struct TransactArgs {
     pub amount: u64,
     #[command(flatten)]
     pub cosigner: CosignerArg,
+    /// `in-proof` signs the spend inside the proof and the authority pays, on a confidential ring.
+    #[arg(long, value_enum, default_value_t = OwnerRail::Signer)]
+    pub owner_rail: OwnerRail,
 }
 
 #[derive(Debug, Args)]
@@ -406,6 +409,9 @@ pub struct TransferArgs {
     pub default_ring: bool,
     #[command(flatten)]
     pub cosigner: CosignerArg,
+    /// `in-proof` signs the spend inside the proof and the authority pays, on a confidential ring.
+    #[arg(long, value_enum, default_value_t = OwnerRail::Signer)]
+    pub owner_rail: OwnerRail,
 }
 
 #[derive(Debug, Args)]

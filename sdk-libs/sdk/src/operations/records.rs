@@ -23,7 +23,7 @@ use zolana_ring_client::{
         RecordUpdateEntry, RecordUpdateId, RecordUpdateStatus, SubmitRecordUpdateRequest,
         WalletGrant, ENROLMENT_LISTS,
     },
-    AsyncRingIndexer,
+    AsyncRingIndexer, ReaderKey,
 };
 use zolana_ring_indexer::rpc::{
     GetRingApplyProofInputsRequest, GetStorageMemberOpeningsRequest, GetStorageRecordPoolRequest,
@@ -470,9 +470,10 @@ impl WalletRecordUpdate {
     /// Sets or clears the `Reader` list of the record [`Member::wallet_grant`] keys.
     pub fn with_wallet_grant(
         mut self,
-        reader: Member,
+        reader: ReaderKey,
         access: ReaderAccess,
     ) -> Result<Self, RingError> {
+        let reader = reader.member()?;
         Member::wallet_grant(&self.member, &reader)?;
         self.draft
             .entries

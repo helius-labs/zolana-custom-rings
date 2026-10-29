@@ -202,6 +202,11 @@ export {
   type RingDepositCapsule,
 } from "../protocol/codec/deposit-capsule.js";
 export {
+  decodeStorageWrites,
+  encodeStorageWrites,
+  type StorageWrite,
+} from "../protocol/codec/storage-writes.js";
+export {
   ringDepositSpp,
   type RingDepositSpp,
 } from "../protocol/transaction/deposit-instruction.js";

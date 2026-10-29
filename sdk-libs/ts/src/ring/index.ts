@@ -17,6 +17,8 @@ export {
   wrapRingError,
 } from "../protocol/error.js";
 export type { RingErrorCode, RingProgramErrorName } from "../protocol/error.js";
+export { RingRpcRefusal } from "../protocol/ring-rpc/ring-rpc-refusal.js";
+export type { RingRpcRefusalName } from "../protocol/ring-rpc/ring-rpc-refusal.js";
 
 export {
   ringAuthAddress,
@@ -305,11 +307,13 @@ export type {
   PrepareAuthorityTransferRequest,
   RefuseEnrolmentRequest,
   PrepareRelayRequest,
+  ReaderGrantAction,
   RelayIntent,
   RelayOperation,
   RelayQuote,
   RelayStatus,
   RelayStep,
+  SetReaderGrantRequest,
   TokenAccountSetup,
 } from "../protocol/ring-rpc/ring-rpc-types.js";
 export { ProvenRingTransfer, ringTransactInstruction } from "../operations/workflow/pipeline.js";
@@ -455,6 +459,7 @@ export {
   RingAuditorKeyRequest,
   RingAuthorityTransferRequest,
   RingReadRequest,
+  RingReaderGrantRequest,
   RingRpc,
   auditedUtxosAttestation,
   auditorKeyStatement,
@@ -462,11 +467,12 @@ export {
   auditorKeyRequestAttestation,
   enrolmentAttestation,
   messageSignerReader,
+  readerGrantAttestation,
   ringReadAttestation,
   signPendingEnrolmentsRequest,
   signRefuseEnrolmentRequest,
 } from "../rpc/ring-rpc.js";
-export type { RingEnrolmentAction } from "../rpc/ring-rpc.js";
+export type { RingEnrolmentAction, RingReaderGrant } from "../rpc/ring-rpc.js";
 export type {
   AuditedMergesPage,
   DecryptedOutputContext,
@@ -507,6 +513,7 @@ export {
   readerKeyBytes,
   readerKeyEquals,
   readerKeyFromBytes,
+  readerKeyMember,
   readerKeyToString,
   revokeReadAccessInstruction,
 } from "../operations/management/reader-access.js";

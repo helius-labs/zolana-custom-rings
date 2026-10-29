@@ -19,6 +19,7 @@ import {
   equalBytes,
   checkedBytes,
   copyBytes,
+  hashBytes,
   wrapKeypairError,
 } from "@heliuslabs/zolana/internal";
 import type { SignerAccount } from "@heliuslabs/zolana/instructions";
@@ -30,6 +31,7 @@ import {
 } from "@heliuslabs/zolana";
 
 import { ringConfigAddress } from "../../protocol/pda/index.js";
+import { memberOfIdentity, memberOfTag, type Member } from "../../protocol/membership/policy.js";
 import { RingError } from "../../protocol/error.js";
 
 const encoder = new TextEncoder();
@@ -122,6 +124,13 @@ export function readerKeyBytes(reader: ReaderKey): Uint8Array {
   const bytes = new Uint8Array(34);
   bytes.set(reader.toBytes(), 1);
   return bytes;
+}
+
+/** Mirrors Rust `ReaderKey::member`, the member whose record holds the reader's ring-wide grant. */
+export function readerKeyMember(reader: ReaderKey): Member {
+  return typeof reader === "string"
+    ? memberOfTag(addressBytes(reader, "reader"))
+    : memberOfIdentity(hashBytes(readerKeyBytes(reader)) as Bytes32);
 }
 
 /** Mirrors Rust `ReaderKey::from_bytes`. */

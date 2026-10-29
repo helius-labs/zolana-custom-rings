@@ -59,6 +59,8 @@ Breaking
 - `buildRingTransferTransaction`, `buildRingExitTransaction`, `buildRingEntryTransaction`, `buildRingWithdrawalTransaction`, their `createRing*Submission` builders, `buildRingDepositTransaction`, `buildRingMergeTransaction`, `createRingMergeSubmission` and `RingMergeTransactionParams` leave the package, and the four relay functions take a confidential ring's spend as `confidential`, a `RingRelaySpend` of the `RelayQuote`, the nullifier key and the sender's signer, returning a `PreparedSpendRelay` that holds a viewing history only for `anonymous`, and `prepareRingWithdrawalRelay` has Ring RPC create the recipient's associated token account of an SPL withdrawal → relay spends through `prepareRingTransferRelay`, `prepareRingExitRelay`, `prepareRingEntryRelay` and `prepareRingWithdrawalRelay`, deposits through `PreparedRingDeposit.prepareRelay` and merges through `prepareRingMergeRelay`.
 - `ROOT_HISTORY` replaces `MEMBER_REGISTRY_ROOT_HISTORY` as the root count of every registry and policy mirror, matching Rust `ROOT_HISTORY` → import `ROOT_HISTORY` from `@heliuslabs/zolana-custom-rings/advanced`.
 - `PolicyProof.recipients` is a `PolicyRecipients` of kind `hidden`, `framed` or `published`, the last naming the dummy slots of an in-proof owner frame whose recipients `RingTransactData.policyRecipients` derives from each slot's owner tag → wrap a hand-built recipient list as `{ kind: "framed", recipients }`.
+- `WalletRecordUpdate.withWalletGrant(reader, access)` takes the reader's `ReaderKey`, a passkey's `P256ReaderKey` included, and writes the grant on the record that `readerKeyMember(reader)` keys with the wallet → pass the reader key in place of its `Member`.
+- `RingRpc` reports a Ring RPC refusal as `RING_RPC_REFUSED`, its `RingRpcRefusal` name in `details.refusal` beside `details.rpcCode`, in place of `RING_RPC` → match refusals on the new code and its name.
 
 Added
 
@@ -89,6 +91,8 @@ Added
 - `syncRootsInstruction` copies a storage registry's roots into the ring's policy account at `ringPolicyAddress`, `fetchRingPolicy`, `decodeRingPolicy`, `mirrorRoot` and `mirrorCurrentRoot` read its mirrors, and `StorageProgramError` names the storage program's codes.
 - `RingInstructionTag.syncRoots` names the ring program's root sync tag, and `RingProgramError` names the co-signer record and ring policy account codes `invalidCoSignerRecord`, `coSignerRecordAlreadyExists`, `invalidRingPolicy` and `ringPolicyAlreadyExists`.
 - `MintPolicy.limits` holds the mint's `AssetLimits`, per-sender, ring-wide, public deposit and public withdrawal caps each over its own slot window, `EMPTY_ASSET_LIMITS` sets none, `AuthorityListWrite.withMintPolicy` refuses a cap or a window set without the other with `RING_MEMBER_REGISTRY_INVALID`, and `RingProgramError.invalidAssetLimits` names the program's refusal.
+- `RingRpc.setReaderGrant` stores a wallet's reader grant, or the config authority's ring-wide one, on a Ring RPC that keeps grants in its database, signed by `RingReaderGrantRequest.sign` over `readerGrantAttestation`, and `RingReadRequest.withWallet`, `RingAuditedUtxosRequest.withWallet` and the `wallet` input of the `RingRpc` reads narrow a signed read to one wallet's rows.
+- `encodeStorageWrites` and `decodeStorageWrites` in `@heliuslabs/zolana-custom-rings/advanced` write and read a storage update's record and escrow writes as `StorageWrite` values byte for byte as the Rust SDK does, and `decodeStorageWrites` refuses a malformed write with `RING_STORAGE_WRITE_INVALID`.
 
 Fixed
 

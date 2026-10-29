@@ -90,6 +90,25 @@ export function mintPolicyWrite(policy: MintPolicy | undefined): Uint8Array {
   return write;
 }
 
+/** Rust `MintPolicy::from_bytes`. */
+export function mintPolicyFromBytes(bytes: Uint8Array): MintPolicy {
+  if (bytes.length !== MINT_POLICY_LEN) throw new RingError("RING_MEMBER_REGISTRY_INVALID");
+  const [threshold = 0n, cap = 0n, cosignAbove = 0n, withdrawalThreshold = 0n, ...amounts] =
+    Array.from({ length: MINT_POLICY_LEN / 8 }, (_, index) =>
+      bytesToBigInt(bytes.subarray(8 * index, 8 * index + 8)),
+    );
+  const limits = Object.fromEntries(
+    ASSET_LIMIT_KEYS.map((key, index) => [key, amounts[index] ?? 0n]),
+  ) as unknown as AssetLimits;
+  return Object.freeze({
+    threshold,
+    cap,
+    cosignAbove,
+    withdrawalThreshold,
+    limits: Object.freeze(limits),
+  });
+}
+
 export function sameMintPolicy(left: MintPolicy, right: MintPolicy): boolean {
   return equalBytes(mintPolicyBytes(left), mintPolicyBytes(right));
 }
@@ -116,7 +135,7 @@ export function checkAssetLimits(limits: AssetLimits): AssetLimits {
 }
 
 /** Rust `MintPolicy::LEN`. */
-const MINT_POLICY_LEN = 96;
+export const MINT_POLICY_LEN = 96;
 
 /** Rust `MintPolicy::bytes`, big endian u64 amounts in field order. */
 function mintPolicyBytes(policy: MintPolicy): Uint8Array {
