@@ -181,6 +181,7 @@ pub struct RingConfiguration {
 }
 
 #[must_use]
+#[derive(Clone, Copy)]
 pub struct Upstreams<'a> {
     pub indexer_url: &'a str,
     pub rpc_url: &'a str,

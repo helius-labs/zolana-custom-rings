@@ -10,7 +10,7 @@ use zolana_ring_client::{
     AuditError, RingIndexerError, RingRpcError as RingRefusal,
 };
 
-use crate::authorize::Unauthorized;
+use crate::{authorize::Unauthorized, record_update::RecordUpdateRefusal};
 
 #[derive(Debug, Error)]
 pub enum RingRpcError {
@@ -44,6 +44,18 @@ pub enum RingRpcError {
     Busy,
     #[error("service store failed because {0}")]
     Store(#[from] sea_orm::DbErr),
+    #[error(transparent)]
+    RecordUpdate(#[from] RecordUpdateRefusal),
+    #[error("indexer records lag the storage registry")]
+    StaleRecords,
+    #[error("storage update failed because {0}")]
+    StorageUpdate(Box<custom_ring_sdk::RingError>),
+}
+
+impl From<custom_ring_sdk::RingError> for RingRpcError {
+    fn from(error: custom_ring_sdk::RingError) -> Self {
+        Self::StorageUpdate(Box::new(error))
+    }
 }
 
 impl From<RingIndexerError> for RingRpcError {
@@ -136,6 +148,13 @@ impl From<RingRpcError> for ErrorObjectOwned {
             Store(inner) => {
                 error!("service store failed {}", redacted(inner));
                 (ErrorCode::InternalError, "audit service is unavailable")
+            }
+            RecordUpdate(refusal) => {
+                return ErrorObjectOwned::owned(refusal.code(), refusal.to_string(), None::<()>);
+            }
+            StaleRecords | StorageUpdate(_) => {
+                error!("storage update failed {}", redacted(&failure));
+                (ErrorCode::InternalError, "record writer is unavailable")
             }
         };
         ErrorObjectOwned::owned(code.code(), message, None::<()>)

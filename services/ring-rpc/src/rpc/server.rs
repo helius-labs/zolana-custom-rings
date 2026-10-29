@@ -29,10 +29,11 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use zolana_ring_client::rpc::{
     CreateAuditorKeyRequest, CreateAuditorKeyResponse, GetAuditedUtxosRequest,
-    GetDecryptedTransactionsRequest, HealthResponse, PagedRead, RingDepositsRequest,
-    RingDepositsResponse, RingState, RingStatusRequest, RingStatusResponse, CREATE_AUDITOR_KEY,
-    GET_AUDITED_MERGES, GET_AUDITED_UTXOS, GET_DECRYPTED_TRANSACTIONS, HEALTH, RING_DEPOSITS,
-    RING_STATUS,
+    GetDecryptedTransactionsRequest, GetRecordUpdateStatusRequest, HealthResponse, PagedRead,
+    RingDepositsRequest, RingDepositsResponse, RingState, RingStatusRequest, RingStatusResponse,
+    SubmitRecordUpdateRequest, CREATE_AUDITOR_KEY, GET_AUDITED_MERGES, GET_AUDITED_UTXOS,
+    GET_DECRYPTED_TRANSACTIONS, GET_RECORD_UPDATE_STATUS, HEALTH, RING_DEPOSITS, RING_STATUS,
+    SUBMIT_RECORD_UPDATE,
 };
 
 use crate::{
@@ -249,6 +250,22 @@ pub fn rpc_module<S: TransactionSource + 'static>(
             let _authentication = hub.admit(Lane::Authentication)?;
             let service = hub.service(request.ring_program_id.map(|ring| ring.0))?;
             service.audited_utxos(&request).await
+        },
+    )?;
+    method(
+        &mut module,
+        SUBMIT_RECORD_UPDATE,
+        |hub, request: SubmitRecordUpdateRequest| async move {
+            let _slot = hub.admit(Lane::Authentication)?;
+            hub.record_writer()?.submit(request).await
+        },
+    )?;
+    method(
+        &mut module,
+        GET_RECORD_UPDATE_STATUS,
+        |hub, request: GetRecordUpdateStatusRequest| async move {
+            hub.admit(Lane::Public)?;
+            hub.record_writer()?.status(request).await
         },
     )?;
     Ok(module)
