@@ -66,14 +66,17 @@ import {
 import { memberOfTag } from "../protocol/membership/policy.js";
 import { verifyRecordUpdate } from "../protocol/ring-rpc/record-update.js";
 import {
+  decodePendingEnrolments,
   decodeRecordUpdateStatus,
   decodeRelayQuote,
   decodeRelayStatus,
   decodeRelayStep,
   decodeSubmitRecordUpdate,
+  encodeGetPendingEnrolmentsRequest,
   encodePrepareAuthorityTransferRequest,
   encodePrepareRelayRequest,
   encodeRecordUpdateStatusRequest,
+  encodeRefuseEnrolmentRequest,
   encodeRelayQuoteRequest,
   encodeRelayStatusRequest,
   encodeSubmitRecordUpdateRequest,
@@ -83,9 +86,13 @@ import {
 import {
   RingRpcMethod,
   type AuthorityTransfer,
+  type ConfigAuthorityAuth,
+  type GetPendingEnrolmentsRequest,
+  type PendingEnrolment,
   type PrepareAuthorityTransferRequest,
   type PrepareRelayRequest,
   type RecordUpdateStatus,
+  type RefuseEnrolmentRequest,
   type RelayQuote,
   type RelayQuoteRequest,
   type RelayStatus,
@@ -122,6 +129,7 @@ const AUDITOR_KEY_DOMAIN = "zolana/ring-auditor-key/v2";
 const AUDITOR_KEY_REQUEST_DOMAIN = "zolana/ring-rpc-auditor-key-request/v1";
 const AUDITED_UTXOS_DOMAIN = "zolana/ring-rpc-audited-utxos/v1";
 const AUTHORITY_TRANSFER_DOMAIN = "zolana/ring-rpc-authority-transfer/v1";
+const ENROLMENT_DOMAIN = "zolana/ring-rpc-enrolment/v1";
 /** Rust `AUDIT_PAGE_LIMIT`. */
 export const RING_READ_PAGE_LIMIT = 100n;
 /** Rust `AUDITED_UTXOS_LIMIT`, the UTXO hashes one read names. */
@@ -317,6 +325,93 @@ export class RingAuthorityTransferRequest {
       signature: base58Decoder.decode(signature) as Signature,
     });
   }
+}
+
+/** Rust `ListEnrolments` or `RefuseEnrolment`, the action the config authority signs. */
+export type RingEnrolmentAction =
+  | Readonly<{ kind: "list" }>
+  | Readonly<{ kind: "refuse"; updateId: Hash }>;
+
+/** Mirrors Rust `EnrolmentAttestation::message`. */
+export function enrolmentAttestation(
+  input: Readonly<{
+    target: RingReadTarget;
+    authority: Address;
+    action: RingEnrolmentAction;
+    timestamp: bigint;
+    nonce: Bytes32;
+  }>,
+): Uint8Array {
+  const action =
+    input.action.kind === "list"
+      ? "list"
+      : `refuse ${indexerScalars.checkedHash(input.action.updateId, "updateId")}`;
+  return encoder.encode(
+    [
+      ENROLMENT_DOMAIN,
+      ...targetLines(input.target),
+      `authority: ${input.authority}`,
+      `action: ${action}`,
+      `timestamp: ${input.timestamp}`,
+      `nonce: ${base64Decoder.decode(input.nonce)}`,
+    ].join("\n"),
+  );
+}
+
+/** Rust `GetPendingEnrolmentsRequest::read` signed by the config authority. */
+export async function signPendingEnrolmentsRequest(
+  target: RingReadTarget,
+  authority: MessagePartialSigner,
+  timestamp?: bigint,
+): Promise<GetPendingEnrolmentsRequest> {
+  const checked = checkedReadTarget(target);
+  return Object.freeze({
+    ring: checked.ringProgramId,
+    auth: await configAuthorityAuth(checked, authority, { kind: "list" }, timestamp),
+  });
+}
+
+/** Rust `RefuseEnrolmentRequest::refusal` signed by the config authority. */
+export async function signRefuseEnrolmentRequest(
+  target: RingReadTarget,
+  authority: MessagePartialSigner,
+  updateId: Hash,
+  timestamp?: bigint,
+): Promise<RefuseEnrolmentRequest> {
+  const checked = checkedReadTarget(target);
+  return Object.freeze({
+    ring: checked.ringProgramId,
+    updateId,
+    auth: await configAuthorityAuth(checked, authority, { kind: "refuse", updateId }, timestamp),
+  });
+}
+
+async function configAuthorityAuth(
+  target: RingReadTarget,
+  authority: MessagePartialSigner,
+  action: RingEnrolmentAction,
+  timestamp: bigint | undefined,
+): Promise<ConfigAuthorityAuth> {
+  const signedAt = timestampOrNow(
+    timestamp === undefined ? undefined : checkedUnixTimestamp(timestamp, "timestamp"),
+  );
+  const nonce = freshNonce();
+  const signature = await signMessage(
+    authority,
+    enrolmentAttestation({
+      target,
+      authority: authority.address,
+      action,
+      timestamp: signedAt,
+      nonce,
+    }),
+  );
+  return Object.freeze({
+    authority: authority.address,
+    timestamp: signedAt,
+    nonce: base64Decoder.decode(nonce) as indexerTypes.Base64String,
+    signature: base58Decoder.decode(signature) as Signature,
+  });
 }
 
 export function messageSignerReader(signer: MessagePartialSigner): RingReadSigner {
@@ -907,6 +1002,33 @@ export class RingRpc {
       await this.#call(
         RingRpcMethod.getRecordUpdateStatus,
         encodeRecordUpdateStatusRequest(updateId),
+        context,
+      ),
+    );
+  }
+
+  /** The config authority's read of the enrolments that await it, oldest first. */
+  async getPendingEnrolments(
+    request: GetPendingEnrolmentsRequest,
+    context?: RequestContext,
+  ): Promise<readonly PendingEnrolment[]> {
+    return decodePendingEnrolments(
+      await this.#call(
+        RingRpcMethod.getPendingEnrolments,
+        encodeGetPendingEnrolmentsRequest(request),
+        context,
+      ),
+    );
+  }
+
+  async refuseEnrolment(
+    request: RefuseEnrolmentRequest,
+    context?: RequestContext,
+  ): Promise<RecordUpdateStatus> {
+    return decodeRecordUpdateStatus(
+      await this.#call(
+        RingRpcMethod.refuseEnrolment,
+        encodeRefuseEnrolmentRequest(request),
         context,
       ),
     );

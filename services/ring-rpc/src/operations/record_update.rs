@@ -2,15 +2,18 @@ use custom_ring_interface::{
     key_catalog::RingCircuit,
     storage::{Revision, StorageRegistry},
     storage_instruction::{StorageWriteData, UpdateMode},
-    verifying_key, CustomRingProof, QueueEntry, RegisterKeyStatement, RingMode, RingPolicy,
-    RingProof, APPLY_BATCH, AUDIT_CIPHERTEXT_LEN, ROOT_HISTORY,
+    verifying_key, CustomRingProof, ListRegistry, QueueEntry, RegisterKeyStatement, RingMode,
+    RingPolicy, RingProof, APPLY_BATCH, AUDIT_CIPHERTEXT_LEN, ROOT_HISTORY,
 };
 use solana_address::Address;
 use spr_indexer_api::Hash;
 use spr_keypair::X25519Pubkey;
 use thiserror::Error;
 use zolana_ring_client::{
-    rpc::{EscrowRegistration, RecordUpdateEntry, RecordUpdateId, SubmitRecordUpdateRequest},
+    rpc::{
+        EscrowRegistration, RecordUpdateEntry, RecordUpdateId, SubmitRecordUpdateRequest,
+        ENROLMENT_LISTS,
+    },
     storage_apply_proof_inputs, MemberOpeningRead,
 };
 use zolana_ring_indexer::rpc::GetStorageApplyProofInputsResponse;
@@ -60,6 +63,16 @@ pub enum RecordUpdateRefusal {
     BatchFailed = -32193,
     #[error("service keeps reader grants in its database")]
     ReaderGrantsInDatabase = -32230,
+    #[error("only a wallet may await allow, reader or approval from the ring's own records")]
+    EnrolmentLists = -32240,
+    #[error("signer is not the ring config authority")]
+    NotConfigAuthority = -32241,
+    #[error("approved enrolments and the update exceed one batch")]
+    EnrolmentBatch = -32242,
+    #[error("config authority refused the enrolment")]
+    EnrolmentRefused = -32243,
+    #[error("no enrolment of the ring awaits the authority under the id")]
+    UnknownEnrolment = -32244,
 }
 
 pub(crate) struct UpdateContext<'a> {
@@ -83,6 +96,24 @@ pub(crate) struct CheckedUpdate {
     pub id: RecordUpdateId,
     pub writes: Vec<StorageWriteData>,
     pub urgent: bool,
+    /// `Some` holds the update until the config authority sets these lists on the signer's record.
+    pub awaited: Option<ListSet>,
+}
+
+pub(crate) struct AwaitingEnrolment {
+    pub id: [u8; 32],
+    pub wallet: Address,
+    pub member: [u8; 32],
+    pub lists: ListSet,
+    pub writes: usize,
+    pub valid_until_slot: u64,
+}
+
+#[must_use]
+pub(crate) struct EnrolmentApproval<'a> {
+    pub update: &'a CheckedUpdate,
+    /// The ring's enrolments, oldest first.
+    pub awaiting: &'a [AwaitingEnrolment],
 }
 
 pub(crate) struct QueuedUpdate {
@@ -164,7 +195,7 @@ impl RecordUpdateCheck<'_> {
         if request.update.genesis_hash.0 != *context.genesis_hash {
             return Err(RecordUpdateRefusal::WrongCluster);
         }
-        // 1. The signature binds the cluster, the ring, the registry and the ordered entries.
+        // 1. The signature binds the cluster, the ring, the registry, the ordered entries and the awaited lists.
         let hash = request
             .statement()
             .and_then(|statement| Ok(statement.hash()?))
@@ -199,6 +230,11 @@ impl RecordUpdateCheck<'_> {
                 .verify()?;
             }
         }
+        // 4. A wallet awaits only enrolment lists the policy reads from its own records.
+        let awaited = match request.update.awaited_lists {
+            0 => None,
+            bits => Some(awaited_lists(bits, context.policy, record_signer)?),
+        };
         let writes = entries
             .iter()
             .map(|entry| entry.write(&signer))
@@ -209,11 +245,12 @@ impl RecordUpdateCheck<'_> {
             .map(StorageWriteData::entry)
             .collect::<Result<Vec<_>, _>>()
             .map_err(invalid_entry)?;
-        // 4. No entry writes a tree reader list the service never reads.
+        // 5. No entry writes and no enrolment awaits a tree reader list the service never reads.
         if context.reader_grants == ReaderGrantStore::Database
-            && queued
-                .iter()
-                .any(|entry| entry.mask & ListId::Reader.record_bit() != 0)
+            && (awaited.is_some_and(|lists| lists.contains(ListId::Reader))
+                || queued
+                    .iter()
+                    .any(|entry| entry.mask & ListId::Reader.record_bit() != 0))
         {
             return Err(RecordUpdateRefusal::ReaderGrantsInDatabase);
         }
@@ -222,6 +259,7 @@ impl RecordUpdateCheck<'_> {
             id: RecordUpdateId(Hash(hash)),
             writes,
             urgent,
+            awaited,
         })
     }
 }
@@ -268,6 +306,43 @@ impl<'a> BatchPlan<'a> {
             }
         }
         Ok(within_batch(urgent))
+    }
+}
+
+impl EnrolmentApproval<'_> {
+    /// The enrolments whose every awaited list the update sets on their member.
+    pub fn decide(self) -> Result<Vec<[u8; 32]>, RecordUpdateRefusal> {
+        if self.update.awaited.is_some() {
+            return Ok(Vec::new());
+        }
+        let entries = self
+            .update
+            .writes
+            .iter()
+            .map(StorageWriteData::entry)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(invalid_entry)?;
+        let approved: Vec<&AwaitingEnrolment> = self
+            .awaiting
+            .iter()
+            .filter(|enrolment| {
+                let granted = entries
+                    .iter()
+                    .filter(|entry| entry.member == enrolment.member)
+                    .fold(0, |bits, entry| bits | (entry.mask & entry.value));
+                enrolment.lists.record_bits() & !granted == 0
+            })
+            .collect();
+        // The update and its enrolments land in one `Update` or not at all.
+        let writes = approved
+            .iter()
+            .fold(self.update.writes.len(), |writes, enrolment| {
+                writes + enrolment.writes
+            });
+        if !approved.is_empty() && writes > APPLY_BATCH {
+            return Err(RecordUpdateRefusal::EnrolmentBatch);
+        }
+        Ok(approved.iter().map(|enrolment| enrolment.id).collect())
     }
 }
 
@@ -406,6 +481,22 @@ fn within_batch<'a>(updates: impl IntoIterator<Item = &'a QueuedUpdate>) -> Vec<
             writes <= APPLY_BATCH
         })
         .collect()
+}
+
+fn awaited_lists(
+    bits: u64,
+    policy: &RingPolicy,
+    signer: RecordSigner,
+) -> Result<ListSet, RecordUpdateRefusal> {
+    ListSet::from_record_bits(bits)
+        .filter(|lists| {
+            matches!(signer, RecordSigner::Wallet(_))
+                && lists.is_subset(ENROLMENT_LISTS)
+                && lists
+                    .iter()
+                    .all(|list| policy.registry_for(list) == Some(ListRegistry::Own))
+        })
+        .ok_or(RecordUpdateRefusal::EnrolmentLists)
 }
 
 fn lists_within(mask: u64, lists: ListSet) -> bool {

@@ -1,4 +1,4 @@
-//! Record updates refuse a forged escrow proof and a second escrow key, and send only a block entry as an immediate update.
+//! Record updates refuse a forged escrow proof and a second escrow key, send only a block entry as an immediate update, and hold an enrolment for its allow entry.
 
 use std::sync::atomic::AtomicU64;
 
@@ -6,7 +6,7 @@ use bytemuck::Zeroable;
 use custom_ring_interface::{
     storage::StorageRegistry,
     storage_instruction::{tag, StorageUpdateIxData, StorageWriteData},
-    ApplyRecordsIxData, RingPolicy, QUAD_HEIGHT, RING_POLICY, STORAGE_PROGRAM_ID,
+    ApplyRecordsIxData, RingPolicy, SourceSlot, QUAD_HEIGHT, RING_POLICY, STORAGE_PROGRAM_ID,
 };
 use custom_ring_sdk::CustomRing;
 use jsonrpsee::MethodsError;
@@ -14,8 +14,10 @@ use solana_account::Account;
 use solana_transaction::versioned::VersionedTransaction;
 use spr_client::Proof;
 use zolana_ring_client::rpc::{
-    EscrowRegistration, ReaderAccess, RecordUpdate, RecordUpdateEntry, SubmitRecordUpdateRequest,
-    SubmitRecordUpdateResponse, WalletGrant, SUBMIT_RECORD_UPDATE,
+    EscrowRegistration, GetPendingEnrolmentsRequest, GetPendingEnrolmentsResponse,
+    GetRecordUpdateStatusRequest, ReadTarget, ReaderAccess, RecordUpdate, RecordUpdateEntry,
+    RecordUpdateStatus, SubmitRecordUpdateRequest, SubmitRecordUpdateResponse, WalletGrant,
+    GET_PENDING_ENROLMENTS, SUBMIT_RECORD_UPDATE,
 };
 use zolana_ring_indexer::rpc::{
     GetStorageApplyProofInputsRequest, GetStorageApplyProofInputsResponse,
@@ -267,6 +269,28 @@ impl Records {
         policy.own_roots.roots[0].hash = self.chain.records.root().root.0;
     }
 
+    /// The ring's own records serve `list_id` to its policy.
+    fn serves_own(&self, list_id: ListId) {
+        let mut accounts = self.chain.accounts.lock().unwrap();
+        let account = accounts
+            .get_mut(&CustomRing::new(RING).policy_pda())
+            .expect("policy");
+        let policy: &mut RingPolicy = bytemuck::from_bytes_mut(&mut account.data);
+        policy.sources[list_id.slot()] = SourceSlot {
+            list_id: list_id as u8,
+            registry: Address::default(),
+        };
+    }
+
+    async fn status(&self, update: &SubmitRecordUpdateResponse) -> RecordUpdateStatus {
+        self.writer
+            .status(GetRecordUpdateStatusRequest {
+                update_id: update.update_id.clone(),
+            })
+            .await
+            .expect("status")
+    }
+
     /// The one transaction the flush sent.
     async fn flushed(&self) -> Flushed {
         self.writer.flush().await.expect("flush");
@@ -355,14 +379,22 @@ fn signed_until(
     entries: Vec<RecordUpdateEntry>,
     valid_until_slot: u64,
 ) -> SubmitRecordUpdateRequest {
-    let mut request = SubmitRecordUpdateRequest {
-        registry: REGISTRY.into(),
-        update: RecordUpdate {
+    signed_update(
+        signer,
+        RecordUpdate {
             genesis_hash: Hash(GENESIS),
             ring: RING.into(),
             entries,
             valid_until_slot,
+            awaited_lists: 0,
         },
+    )
+}
+
+fn signed_update(signer: &Keypair, update: RecordUpdate) -> SubmitRecordUpdateRequest {
+    let mut request = SubmitRecordUpdateRequest {
+        registry: REGISTRY.into(),
+        update,
         signer: signer.pubkey().into(),
         signature: Signature::default().into(),
     };
@@ -530,4 +562,90 @@ async fn an_escrow_written_through_the_writer_opens_the_wallets_outputs() {
     let service = records.hub.service(None).expect("service");
     service.backfill_utxos().await.expect("backfill");
     assert!(escrow_errors(&read_at(&service, None).await).is_empty());
+}
+
+#[tokio::test]
+async fn a_wallet_enrolment_awaits_the_config_authority_then_lands_with_its_allow_entry() {
+    let records = Records::new().await;
+    records.serves_own(ListId::Allow);
+    let registration = escrow_registration();
+    let member = registration.member.clone();
+    let allowed = ListId::Allow.record_bit();
+    let enrolment = records
+        .submit(signed_update(
+            &wallet(),
+            RecordUpdate {
+                genesis_hash: Hash(GENESIS),
+                ring: RING.into(),
+                entries: vec![RecordUpdateEntry::Escrow(registration)],
+                valid_until_slot: NOW + 1_000,
+                awaited_lists: allowed,
+            },
+        ))
+        .await
+        .expect("awaiting");
+    records
+        .chain
+        .slot
+        .store(NOW + BATCH_WINDOW_SLOTS, Ordering::Relaxed);
+    records.writer.flush().await.expect("flush");
+    assert!(records.chain.sent.lock().unwrap().is_empty());
+    assert_eq!(
+        records.status(&enrolment).await,
+        RecordUpdateStatus::AwaitingAuthority
+    );
+
+    let target = ReadTarget {
+        cluster: GENESIS,
+        service: records.hub.service_pubkey(),
+        ring: RING,
+    };
+    let pending: GetPendingEnrolmentsResponse = records
+        .module
+        .call(
+            GET_PENDING_ENROLMENTS,
+            as_object(
+                GetPendingEnrolmentsRequest::read(target, authority().pubkey())
+                    .sign(&authority())
+                    .expect("signed list"),
+            ),
+        )
+        .await
+        .expect("pending");
+    let [listed] = pending.enrolments.as_slice() else {
+        panic!("one pending enrolment, {pending:?}");
+    };
+    assert_eq!(listed.update_id, enrolment.update_id);
+    assert_eq!(listed.member, member);
+
+    records
+        .submit(signed(
+            &authority(),
+            vec![RecordUpdateEntry::Write(RingListWriteView {
+                mint_policy: None,
+                member: member.clone(),
+                mask: allowed,
+                value: allowed,
+            })],
+        ))
+        .await
+        .expect("approval");
+    records
+        .chain
+        .slot
+        .store(NOW + 2 * BATCH_WINDOW_SLOTS, Ordering::Relaxed);
+    let flushed = records.flushed().await;
+    assert_eq!(flushed.mode, tag::UPDATE);
+    assert!(matches!(
+        flushed.writes.as_slice(),
+        [StorageWriteData::Escrow(_), StorageWriteData::Record(_)]
+    ));
+    assert_eq!(flushed.members, [member.0, member.0]);
+
+    *records.chain.outcome.lock().unwrap() = TransactionOutcome::Succeeded;
+    records.writer.flush().await.expect("settle");
+    assert!(matches!(
+        records.status(&enrolment).await,
+        RecordUpdateStatus::Applied { .. }
+    ));
 }

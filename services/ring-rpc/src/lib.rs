@@ -14,6 +14,8 @@ mod cosign_limits;
 mod cosign_usage;
 #[path = "storage/database.rs"]
 mod database;
+#[path = "operations/enrolment.rs"]
+mod enrolment;
 mod error;
 #[path = "operations/escrow_merge.rs"]
 mod escrow_merge;

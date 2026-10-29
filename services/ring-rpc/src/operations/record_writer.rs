@@ -20,8 +20,8 @@ use spr_client::{compile_message, sign_transaction, ComputeBudgetConfig};
 use spr_indexer_api::Hash;
 use zolana_ring_client::{
     rpc::{
-        GetRecordUpdateStatusRequest, RecordUpdateStatus, SubmitRecordUpdateRequest,
-        SubmitRecordUpdateResponse,
+        GetPendingEnrolmentsResponse, GetRecordUpdateStatusRequest, PendingEnrolment,
+        RecordUpdateId, RecordUpdateStatus, SubmitRecordUpdateRequest, SubmitRecordUpdateResponse,
     },
     StorageTip,
 };
@@ -32,8 +32,9 @@ use crate::{
     database::Store,
     error::{redacted, GrantRefusal, RingRpcError},
     record_update::{
-        escrowed_members, ApplyInputsCheck, BatchPlan, CheckedUpdate, EscrowUniqueness,
-        ModeDecision, QueuedUpdate, RecordUpdateCheck, RecordUpdateRefusal, UpdateContext,
+        escrowed_members, ApplyInputsCheck, BatchPlan, CheckedUpdate, EnrolmentApproval,
+        EscrowUniqueness, ModeDecision, QueuedUpdate, RecordUpdateCheck, RecordUpdateRefusal,
+        UpdateContext,
     },
     storage_chain::{StorageChain, TransactionOutcome},
     update_queue::{BatchOutcome, NewBatch, NewUpdate, OpenBatch, UpdateQueue},
@@ -131,11 +132,17 @@ impl RecordWriter {
         .check()?;
         let _queueing = self.submits.lock().await;
         self.check_escrows(&update, &policy).await?;
+        let approves = EnrolmentApproval {
+            update: &update,
+            awaiting: &queue.awaiting(ring).await?,
+        }
+        .decide()?;
         queue
             .insert(NewUpdate {
                 request: &request,
                 update: &update,
                 queued_slot: slot,
+                approves: &approves,
             })
             .await?;
         Ok(SubmitRecordUpdateResponse {
@@ -151,6 +158,45 @@ impl RecordWriter {
             .status(&request.update_id.0 .0)
             .await?
             .ok_or_else(|| RecordUpdateRefusal::UnknownUpdate.into())
+    }
+
+    /// The ring's enrolments that await its config authority, oldest first.
+    pub(crate) async fn pending_enrolments(
+        &self,
+        ring: Address,
+        signer: Address,
+    ) -> Result<GetPendingEnrolmentsResponse, RingRpcError> {
+        self.require_config_authority(ring, signer).await?;
+        let enrolments = self
+            .queue()
+            .awaiting(ring)
+            .await?
+            .into_iter()
+            .map(|enrolment| PendingEnrolment {
+                update_id: RecordUpdateId(Hash(enrolment.id)),
+                wallet: enrolment.wallet.into(),
+                member: Hash(enrolment.member),
+                awaited_lists: enrolment.lists.record_bits(),
+                valid_until_slot: enrolment.valid_until_slot,
+            })
+            .collect();
+        Ok(GetPendingEnrolmentsResponse { enrolments })
+    }
+
+    pub(crate) async fn refuse_enrolment(
+        &self,
+        ring: Address,
+        signer: Address,
+        update_id: &RecordUpdateId,
+    ) -> Result<RecordUpdateStatus, RingRpcError> {
+        self.require_config_authority(ring, signer).await?;
+        let _queueing = self.submits.lock().await;
+        if !self.queue().refuse_awaiting(ring, &update_id.0 .0).await? {
+            return Err(RecordUpdateRefusal::UnknownEnrolment.into());
+        }
+        Ok(RecordUpdateStatus::Refused {
+            reason: RecordUpdateRefusal::EnrolmentRefused.to_string(),
+        })
     }
 
     /// Every `interval`, the first at once.
@@ -195,8 +241,9 @@ impl RecordWriter {
         if let Some(batch) = queue.open_batch(registry).await? {
             return self.settle(batch).await;
         }
-        // 2. No update goes out past its valid until slot.
+        // 2. No update goes out past its valid until slot, an enrolment's own included.
         let slot = self.chain.slot().await?;
+        queue.expire_awaiting(registry, slot).await?;
         let mut live = Vec::new();
         for update in queue.queued(registry).await? {
             if slot > update.valid_until_slot {
@@ -387,6 +434,22 @@ impl RecordWriter {
             )?;
             let transaction = sign_transaction(message, &[&self.authority])?;
             self.chain.send(&transaction).await?;
+        }
+        Ok(())
+    }
+
+    async fn require_config_authority(
+        &self,
+        ring: Address,
+        signer: Address,
+    ) -> Result<(), RingRpcError> {
+        let config = self
+            .chain
+            .ring_config(ring)
+            .await?
+            .ok_or(RecordUpdateRefusal::UnknownRing)?;
+        if config.authority != signer {
+            return Err(RecordUpdateRefusal::NotConfigAuthority.into());
         }
         Ok(())
     }

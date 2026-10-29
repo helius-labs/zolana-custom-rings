@@ -33,6 +33,8 @@ pub mod controls;
 pub mod delegate;
 #[path = "commands/ring/deploy.rs"]
 pub mod deploy;
+#[path = "commands/membership/enrolment.rs"]
+pub mod enrolment;
 #[path = "runtime/file.rs"]
 pub mod file;
 #[path = "commands/wallet/notes/fund.rs"]
@@ -257,6 +259,7 @@ fn dispatch(ctx: &mut Context, command: Command) -> Result<()> {
         Command::InsertFee(command) => controls::insert_fee(ctx, command),
         Command::Delegate(command) => controls::delegate(ctx, command),
         Command::Key(command) => member::key(ctx, command),
+        Command::Enrolment(command) => enrolment::run(ctx, command),
         Command::List(command) => list::run(ctx, command),
         Command::Policy(command) => policy::run(ctx, command),
         Command::AuditorKey(args) => keys::run(&ctx.path(&args.key_file), args.create),

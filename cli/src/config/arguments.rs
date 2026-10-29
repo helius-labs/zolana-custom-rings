@@ -84,6 +84,9 @@ pub enum Command {
     /// Escrow the member's nullifier key in its record of the ring member registry.
     #[command(subcommand)]
     Key(KeyCommand),
+    /// List the wallet enrolments that await the config authority, or approve one.
+    #[command(subcommand)]
+    Enrolment(EnrolmentCommand),
     /// Read and write the list bits of member records and apply the record queue.
     #[command(subcommand)]
     List(ListCommand),
@@ -231,6 +234,14 @@ pub struct CosignerArg {
     /// The co-signer keypair when the ring's co-signer scope covers the operation.
     #[arg(long)]
     pub cosigner_keypair: Option<PathBuf>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum EnrolmentCommand {
+    /// Print each awaiting enrolment with the lists it awaits.
+    Pending,
+    /// Set every list the wallet's enrolments await in one update that lands them.
+    Approve { wallet: Address },
 }
 
 #[derive(Debug, Subcommand)]

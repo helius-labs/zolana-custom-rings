@@ -122,6 +122,8 @@ pub enum RingError {
     RecordUpdateSigner { expected: Address },
     #[error("the escrow registration names another member")]
     EscrowMemberMismatch,
+    #[error("an enrolment awaits no list or a list outside allow, reader and approval")]
+    EnrolmentLists,
     #[error("ring rpc answered another update id")]
     RecordUpdateIdMismatch,
     #[error("the {writer:?} writer may not write the list {list:?}")]

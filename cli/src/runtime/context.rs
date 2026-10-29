@@ -283,6 +283,22 @@ impl Context {
         })
     }
 
+    /// Under the service key the ring rpc reports, refused when ring.toml pins another.
+    pub fn ring_rpc_target(&self) -> Result<zolana_ring_client::rpc::ReadTarget> {
+        let service = self.ring_rpc().service_pubkey()?;
+        if let Trust::Pinned(pinned) = self.trust(Trust::Unpinned)? {
+            ensure!(
+                pinned == service,
+                "the ring rpc reports service key {service}, ring.toml pins {pinned}"
+            );
+        }
+        Ok(zolana_ring_client::rpc::ReadTarget {
+            cluster: self.rpc().genesis_hash()?,
+            service,
+            ring: self.ring.program_id(),
+        })
+    }
+
     /// `unpinned` applies only when ring.toml pins no service key.
     pub fn trust(&self, unpinned: Trust) -> Result<Trust> {
         match self.config.urls().ring_rpc_pubkey.as_deref() {

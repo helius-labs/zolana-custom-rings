@@ -6,8 +6,14 @@ import { addressBytes, copyBytes, indexerScalars } from "@heliuslabs/zolana/inte
 import { RingError } from "../../protocol/error.js";
 import { mintPolicyField, type MintPolicy } from "../../protocol/membership/mint-policy.js";
 import { checkMember } from "../../protocol/membership/member-opening.js";
-import { memberOfTag, walletGrantMember, type Member } from "../../protocol/membership/policy.js";
-import { signRecordUpdate } from "../../protocol/ring-rpc/record-update.js";
+import {
+  memberOfTag,
+  recordBit,
+  walletGrantMember,
+  type ListId,
+  type Member,
+} from "../../protocol/membership/policy.js";
+import { ENROLMENT_LISTS, signRecordUpdate } from "../../protocol/ring-rpc/record-update.js";
 import type {
   ReaderAccess,
   RecordUpdateEntry,
@@ -33,6 +39,7 @@ export class WalletRecordUpdate {
   readonly #wallet: Address;
   readonly #member: Member;
   #entries: readonly RecordUpdateEntry[] = Object.freeze([]);
+  #awaitedLists = 0n;
 
   constructor(input: RecordUpdateTarget & Readonly<{ wallet: Address }>) {
     this.#target = input;
@@ -69,18 +76,32 @@ export class WalletRecordUpdate {
     return this.#with(escrow);
   }
 
+  /** Rust `WalletRecordUpdate::awaiting_authority`, held until the config authority sets every list. */
+  awaitingAuthority(lists: readonly ListId[]): WalletRecordUpdate {
+    if (lists.length === 0 || lists.some((list) => !ENROLMENT_LISTS.includes(list)))
+      throw invalid("EnrolmentLists");
+    const next = this.#copy(this.#entries);
+    next.#awaitedLists = lists.reduce((bits, list) => bits | recordBit(list), 0n);
+    return next;
+  }
+
   entries(): readonly RecordUpdateEntry[] {
     return this.#entries;
   }
 
   async sign(wallet: MessagePartialSigner): Promise<SubmitRecordUpdateRequest> {
     if (wallet.address !== this.#wallet) throw invalid("Signer");
-    return signEntries(this.#target, this.#entries, wallet);
+    return signEntries(this.#target, this.#entries, wallet, this.#awaitedLists);
   }
 
   #with(entry: RecordUpdateEntry): WalletRecordUpdate {
+    return this.#copy([...this.#entries, Object.freeze(entry)]);
+  }
+
+  #copy(entries: readonly RecordUpdateEntry[]): WalletRecordUpdate {
     const next = new WalletRecordUpdate({ ...this.#target, wallet: this.#wallet });
-    next.#entries = Object.freeze([...this.#entries, Object.freeze(entry)]);
+    next.#entries = Object.freeze(entries);
+    next.#awaitedLists = this.#awaitedLists;
     return next;
   }
 }
@@ -142,6 +163,7 @@ function signEntries(
   target: RecordUpdateTarget,
   entries: readonly RecordUpdateEntry[],
   signer: MessagePartialSigner,
+  awaitedLists = 0n,
 ): Promise<SubmitRecordUpdateRequest> {
   if (entries.length === 0) throw invalid("Empty");
   return signRecordUpdate(
@@ -154,6 +176,7 @@ function signEntries(
         ring: target.ringProgramId,
         entries,
         validUntilSlot: target.validUntilSlot,
+        ...(awaitedLists === 0n ? {} : { awaitedLists }),
       }),
     },
     signer,

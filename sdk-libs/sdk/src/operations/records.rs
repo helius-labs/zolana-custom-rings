@@ -21,7 +21,7 @@ use zolana_ring_client::{
         method::{GetRecordUpdateStatus, SubmitRecordUpdate},
         EscrowRegistration, GetRecordUpdateStatusRequest, ReaderAccess, RecordUpdate,
         RecordUpdateEntry, RecordUpdateId, RecordUpdateStatus, SubmitRecordUpdateRequest,
-        WalletGrant,
+        WalletGrant, ENROLMENT_LISTS,
     },
     AsyncRingIndexer,
 };
@@ -30,7 +30,7 @@ use zolana_ring_indexer::rpc::{
     RingListWriteView, MAX_RING_MEMBER_PAGE_LIMIT,
 };
 use zolana_ring_member_registry::ApplyProofInputs;
-use zolana_ring_policy::{ListWrite, Member, MintPolicy, Writer};
+use zolana_ring_policy::{ListSet, ListWrite, Member, MintPolicy, Writer};
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
@@ -434,6 +434,7 @@ struct UpdateDraft {
     target: RecordUpdateTarget,
     signer: Address,
     entries: Vec<RecordUpdateEntry>,
+    awaited_lists: ListSet,
 }
 
 #[async_trait]
@@ -494,6 +495,15 @@ impl WalletRecordUpdate {
         Ok(self)
     }
 
+    /// The writer holds the update until a config authority update sets every list of `lists` on the member.
+    pub fn awaiting_authority(mut self, lists: ListSet) -> Result<Self, RingError> {
+        if lists.is_empty() || !lists.is_subset(ENROLMENT_LISTS) {
+            return Err(RingError::EnrolmentLists);
+        }
+        self.draft.awaited_lists = lists;
+        Ok(self)
+    }
+
     pub fn sign<S: Signer + ?Sized>(
         self,
         wallet: &S,
@@ -546,6 +556,7 @@ impl UpdateDraft {
             target,
             signer,
             entries: Vec::new(),
+            awaited_lists: ListSet::EMPTY,
         }
     }
 
@@ -563,6 +574,7 @@ impl UpdateDraft {
             ring: self.target.ring.program_id().into(),
             entries: self.entries,
             valid_until_slot: self.target.valid_until_slot,
+            awaited_lists: self.awaited_lists.record_bits(),
         }
         .sign(self.target.registry, signer)?)
     }
