@@ -62,6 +62,12 @@ export interface PolicyProof {
   readonly curatorRootIndex?: number;
   /** Set exactly on the anonymous rail. */
   readonly senderCommitment?: Bytes32;
+  /** One owner identity per output slot, empty on the anonymous rail. */
+  readonly recipients: readonly Bytes32[];
+}
+
+export function publishesRecipients(rail: RingRail): boolean {
+  return rail !== "anonymous";
 }
 
 /** The anonymous SPP rail's BSB22 commitment and its hidden owner's default-ring key. */
@@ -431,7 +437,11 @@ function readCompact(bytes: TransactReader, rail: RingRail, legacy = false): Rin
   const shape = auditShape(rail, header);
   const auditProof = bytes.bytes(CUSTOM_RING_PROOF_LENGTH, "auditProof");
   let policy = has(flags, Flag.policy)
-    ? readPolicy(bytes, has(flags, Flag.curator), rail === "anonymous")
+    ? readPolicy(bytes, {
+        curator: has(flags, Flag.curator),
+        anonymous: rail === "anonymous",
+        recipientCount: publishesRecipients(rail) && !legacy ? shape.outputs : 0,
+      })
     : undefined;
   const expiryUnixTs = bytes.u32("expiryUnixTs");
   const txViewingU = field32(bytes, "txViewingU");
@@ -514,15 +524,24 @@ function readCompact(bytes: TransactReader, rail: RingRail, legacy = false): Rin
   });
 }
 
-function readPolicy(bytes: Reader, curator: boolean, anonymous: boolean): PolicyProof {
+function readPolicy(
+  bytes: Reader,
+  section: Readonly<{ curator: boolean; anonymous: boolean; recipientCount: number }>,
+): PolicyProof {
   const proof = bytes.bytes(CUSTOM_RING_PROOF_LENGTH, "policy.proof");
   const ownRootIndex = bytes.u8("policy.ownRootIndex");
-  const curatorRootIndex = curator ? bytes.u8("policy.curatorRootIndex") : undefined;
-  const senderCommitment = anonymous ? field32(bytes, "policy.senderCommitment") : undefined;
+  const curatorRootIndex = section.curator ? bytes.u8("policy.curatorRootIndex") : undefined;
+  const senderCommitment = section.anonymous
+    ? field32(bytes, "policy.senderCommitment")
+    : undefined;
+  const recipients = Array.from({ length: section.recipientCount }, () =>
+    field32(bytes, "policy.recipient"),
+  );
   return Object.freeze({
     proof,
     ownRootIndex,
     splWithdrawalOwners: Object.freeze([]),
+    recipients: Object.freeze(recipients),
     ...(curatorRootIndex === undefined ? {} : { curatorRootIndex }),
     ...(senderCommitment === undefined ? {} : { senderCommitment }),
   });
@@ -602,10 +621,12 @@ function writeCompact(data: RingTransactData): Uint8Array {
   const shape = auditShape(data.rail, header);
   const layout = shape.layout(data.outputs.length, RingTransactData.auditLayout(data));
   const anonymousRail = data.rail === "anonymous";
-  const commitmentFits =
-    data.policy === undefined || (data.policy.senderCommitment !== undefined) === anonymousRail;
+  const policyFits =
+    data.policy === undefined ||
+    ((data.policy.senderCommitment !== undefined) === anonymousRail &&
+      data.policy.recipients.length === (publishesRecipients(data.rail) ? data.outputs.length : 0));
   if (
-    !commitmentFits ||
+    !policyFits ||
     (data.anonymous !== undefined) !== anonymousRail ||
     (data.sender !== undefined) !== anonymousRail ||
     data.disclosure.length !== disclosureFieldCount(layout) ||
@@ -627,6 +648,7 @@ function writeCompact(data: RingTransactData): Uint8Array {
       out.u8(data.policy.curatorRootIndex, "policy.curatorRootIndex");
     if (data.policy.senderCommitment !== undefined)
       out.bytes(data.policy.senderCommitment, 32, "policy.senderCommitment");
+    for (const recipient of data.policy.recipients) out.bytes(recipient, 32, "policy.recipient");
   }
   out
     .u32(data.expiryUnixTs, "expiryUnixTs")

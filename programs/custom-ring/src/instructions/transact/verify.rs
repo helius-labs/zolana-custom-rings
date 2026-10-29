@@ -73,6 +73,7 @@ impl RingStatements<'_> {
             own_root: &roots.own_root,
             curator_root: &roots.curator_root,
             sender: &self.accounts.sender,
+            recipients: data.policy_recipients()?,
             public_assets: &public_assets,
             public_amounts: &public_amounts,
         }

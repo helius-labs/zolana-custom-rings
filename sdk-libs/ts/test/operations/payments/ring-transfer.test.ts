@@ -471,6 +471,11 @@ describe("policy ring", () => {
         ownRoot: fixture.ownTree.root,
         curatorRoot: fixture.curatorTree.root,
         sender: sender.shieldedAddress().signingPublicKey.ownerProofInputHash(),
+        recipients: call.proofInputs.outputs.map(
+          (output) =>
+            output.ownerAddress?.signingPublicKey.ownerProofInputHash() ??
+            (new Uint8Array(32) as Bytes32),
+        ),
         publicAssets: slots.assets,
         publicAmounts: publicAmountFields(slots),
       }),
@@ -709,6 +714,9 @@ describe("delegate rail", () => {
         ownRoot: fixture.ownTree.root,
         curatorRoot: zero,
         sender: zero,
+        recipients: call.proofInputs.outputs.map(
+          (output) => output.ownerAddress?.signingPublicKey.ownerProofInputHash() ?? zero,
+        ),
         publicAssets: slots.assets,
         publicAmounts: publicAmountFields(slots),
       }),

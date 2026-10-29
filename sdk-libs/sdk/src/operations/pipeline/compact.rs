@@ -109,6 +109,7 @@ pub(crate) struct OwnedPolicyProof {
     pub own_revision: Revision,
     pub curator_revision: Option<Revision>,
     pub sender_commitment: Option<[u8; 32]>,
+    pub recipients: Vec<[u8; 32]>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -159,6 +160,7 @@ impl TransactParts {
                 own_revision: policy.own_revision,
                 curator_revision: policy.curator_revision,
                 sender_commitment: policy.sender_commitment.as_ref(),
+                recipients: &policy.recipients,
             }),
             withdrawal_exemption: self.withdrawal_exemption.as_ref(),
             approval_required: self.approval_required,

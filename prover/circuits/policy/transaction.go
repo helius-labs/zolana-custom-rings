@@ -46,6 +46,15 @@ func (p *PolicyInputs) openOutputs(api frontend.API, inputChain frontend.Variabl
 	return outputs
 }
 
+// The select in MemberPolicyCircuit.sender holds anonymous to 0 or 1.
+func (p *PolicyInputs) assertRecipients(api frontend.API, anonymous frontend.Variable, outputs []utxoView) {
+	published := api.Sub(1, anonymous)
+	for o, out := range outputs {
+		// The owner rules screen the same ownerPkHash.
+		api.AssertIsEqual(p.Recipients[o], api.Mul(out.utxo, published, out.ownerPkHash))
+	}
+}
+
 func open(api frontend.API, w shared.UtxoWires) utxoView {
 	opened := w.Open(api)
 	return utxoView{

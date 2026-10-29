@@ -11,8 +11,9 @@ checks are listed under [Transact](spec.md#20-transact).
 
 The one public input is `HashChain4` over the
 [policy statement](spec/crypto/public-inputs.md#policy). The program rebuilds
-every element from the frame, the registries and the settlement accounts. The
-statement version `3` follows the public slots, then `withdrawal_hash`. A proof
+every element from the frame, the registries and the settlement accounts. One
+recipient per output slot follows `sender`. The statement version `4` follows
+the public slots, then `withdrawal_hash`. A proof
 for another statement version does not verify against the program's statement.
 The rule table hash keeps its own version, `POLICY_TABLE_VERSION = 12`.
 

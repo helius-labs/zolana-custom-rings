@@ -133,6 +133,7 @@ export interface PolicyProofInputs extends PolicyTableProofInputs {
   readonly addressChain: Bytes32;
   readonly privateTxBlinding: Bytes32;
   readonly outputs: readonly PolicyOutputOpening[];
+  readonly recipients: readonly Bytes32[];
   readonly senderPkHash: Bytes32;
   readonly ownPool: RecordPool;
   /** Absent on the own-only key. */
@@ -587,6 +588,7 @@ function policyJson(policy: PolicyProofInputs, circuit: PolicyKeyCircuit): Json 
         ? {}
         : { ctHash: field(output.ctHash, `outputs[${i}].ctHash`) }),
     })),
+    recipients: fields(policy.recipients, policy.outputs.length, "recipients"),
     senderPkHash: field(policy.senderPkHash, "senderPkHash"),
     ownRecords: own.records,
     curatorRecords: curator.records,

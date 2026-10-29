@@ -432,6 +432,7 @@ describe("confirmedRingWithdrawals", () => {
         proof: new Uint8Array(192),
         ownRootIndex: 0,
         splWithdrawalOwners: [addressBytes(DEPOSITOR) as Bytes32],
+        recipients: [zeros(32) as Bytes32, zeros(32) as Bytes32],
       },
     };
     const source = poolInstruction(transfers, [

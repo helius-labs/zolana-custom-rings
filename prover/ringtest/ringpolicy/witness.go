@@ -90,6 +90,10 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 	for o := range p.Outputs {
 		s := pick(w.Slots, o)
 		p.Outputs[o] = policy.OutputWires{UtxoWires: s.wires(0xb100 + int64(o)), CtHash: 0}
+		p.Recipients[o] = 0
+		if !w.Anonymous {
+			p.Recipients[o] = s.Owner
+		}
 		if s.Owner != 0 {
 			p.Outputs[o].CtHash = ctHash(s.Owner)
 		}

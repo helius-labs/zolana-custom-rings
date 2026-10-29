@@ -446,6 +446,7 @@ describe("ring-statements.json", () => {
         ownRoot: field(vector.own_root),
         curatorRoot: field(vector.curator_root),
         sender: field(vector.sender),
+        recipients: vector.recipients.map(field),
         publicAssets: vector.public_assets.map(field),
         publicAmounts: vector.public_amounts.map(field),
       };

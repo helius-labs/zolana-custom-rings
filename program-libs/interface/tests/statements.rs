@@ -78,6 +78,7 @@ struct PolicyCase {
     own_root: String,
     curator_root: String,
     sender: String,
+    recipients: Vec<String>,
     public_assets: Vec<String>,
     public_amounts: Vec<String>,
     elements: Vec<String>,
@@ -284,6 +285,7 @@ fn policy_case(statement: &PolicyStatement<'_>) -> PolicyCase {
         own_root: hex::encode(statement.own_root),
         curator_root: hex::encode(statement.curator_root),
         sender: hex::encode(statement.sender),
+        recipients: hexes(statement.recipients),
         public_assets: hexes(statement.public_assets),
         public_amounts: hexes(statement.public_amounts),
         elements: hexes(&statement.elements()),
@@ -366,6 +368,7 @@ fn compute_vectors() -> StatementVectors {
     let amounts = [right_aligned(500), withdrawal, [0; 32]];
     let owner_signer = solana_owner_identity(&[0x42; 32]).unwrap();
     let zero = [0u8; 32];
+    let recipients = [values.fields[62], zero];
     let confidential = PolicyStatement {
         withdrawal_hash: &custom_ring_interface::policy_withdrawal_hash(&[]).unwrap(),
         key: PolicyKey::Member { anonymous: false },
@@ -377,6 +380,7 @@ fn compute_vectors() -> StatementVectors {
         own_root: &values.fields[7],
         curator_root: &values.fields[8],
         sender: &owner_signer,
+        recipients: &recipients,
         public_assets: &assets,
         public_amounts: &amounts,
     };
@@ -384,6 +388,7 @@ fn compute_vectors() -> StatementVectors {
         key: PolicyKey::Member { anonymous: true },
         approval_required: false,
         sender: &values.fields[5],
+        recipients: &[zero; 2],
         ..confidential
     };
     let delegate = PolicyStatement {
@@ -392,6 +397,7 @@ fn compute_vectors() -> StatementVectors {
         key_escrow: true,
         curator_root: &zero,
         sender: &zero,
+        recipients: &[values.fields[62], values.fields[63]],
         ..confidential
     };
     let apply = ApplyRecordsStatement {
@@ -512,7 +518,7 @@ fn ring_statements_vector() {
         .iter()
         .map(|case| case.elements.len())
         .collect();
-    assert_eq!(policy, [18, 18, 17]);
+    assert_eq!(policy, [20, 20, 19]);
     assert_eq!(
         committed.deposit.elements.len(),
         DEPOSIT_PUBLIC_INPUT_ELEMENTS

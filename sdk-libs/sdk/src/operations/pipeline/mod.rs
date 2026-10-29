@@ -456,6 +456,10 @@ impl<'a> Pipeline<'a> {
             own_revision: policy.own.revision,
             curator_revision: policy.curator.map(|curator| curator.revision),
             sender_commitment,
+            recipients: match ring_rail.publishes_recipients() {
+                true => policy.recipients.clone(),
+                false => Vec::new(),
+            },
         });
         if anonymous.is_some() {
             parts.anonymous = Some(compact::OwnedAnonymousProofData {

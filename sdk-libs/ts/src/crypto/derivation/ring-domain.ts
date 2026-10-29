@@ -24,7 +24,7 @@ export const RingDomain = Object.freeze({
 export type RingDomain = (typeof RingDomain)[keyof typeof RingDomain];
 
 /** Bound into every policy statement, a layout change raises it. */
-export const POLICY_STATEMENT_VERSION = 3n;
+export const POLICY_STATEMENT_VERSION = 4n;
 
 export function domainField(domain: RingDomain): Bytes32 {
   return rightAlign(u32be(domain));

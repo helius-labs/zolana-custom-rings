@@ -46,14 +46,16 @@ The delivered statement carries no `private_tx_hash`. They bind the transfer thr
   anonymous,                  // member key only, 1 on the anonymous rail
   approval_required, key_escrow,
   own_root, curator_root, sender,
+  recipient_0, …, recipient_{n_out - 1},
   asset_0, amount_0, asset_1, amount_1, asset_2, amount_2,
-  3,                          // POLICY_STATEMENT_VERSION
+  4,                          // POLICY_STATEMENT_VERSION
   withdrawal_hash ]
 ```
 
 - `policy_hash`, `own_root` and `curator_root` come from the registries by the frame's indexes. `curator_root` is `0` without a curator.
 - `key_escrow` is `mode == ConfidentialEscrow`. The delegate key binds `approval_required = 0` and `key_escrow = 1`.
 - `sender` is `solana_owner_identity` of the sole owner signer on the confidential rail, `sender_commitment` on the anonymous rail and `0` on the delegate rail.
+- `recipient_o` is output `o`'s owner identity from the frame on the confidential and delegate rails, `0` for a dummy slot. Every `recipient_o` is `0` on the anonymous rail.
 - The public slots are SPP's per-asset nets in first-seen order. A slot holds the asset field, then `right_align(net)` for a positive net or `q - |net|` for a negative net. Slots past the used ones are zeros.
 - `withdrawal_hash = HashChain4([CRPW, right_align(count), (owner, asset, right_align(amount)) per withdrawal leg])`, in settlement order. A SOL leg's owner is `solana_owner_identity(recipient)`, an SPL leg's owner is the identity of the token account's owner.
 

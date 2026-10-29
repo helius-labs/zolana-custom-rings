@@ -87,6 +87,10 @@ impl Fixture {
                 own_revision: Default::default(),
                 curator_revision: None,
                 sender_commitment: (rail == RingRail::Anonymous).then_some(&self.fields[3]),
+                recipients: match rail.publishes_recipients() {
+                    true => &self.fields[100..100 + usize::from(n_out)],
+                    false => &[],
+                },
             }),
             approval_required: false,
             expiry_unix_ts: 1_800_000_000,
