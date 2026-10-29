@@ -1,4 +1,4 @@
-//! Record updates refuse a forged escrow proof, a second escrow key and an enrolment past its window or the ring's pending cap, send only a block entry as an immediate update, and hold an enrolment for its allow entry.
+//! Record updates refuse a forged escrow proof, a second escrow key, an enrolment past its window or the ring's pending cap or awaiting the reader list in database mode, send only a block entry as an immediate update, and hold an enrolment for its allow entry.
 
 use std::sync::atomic::AtomicU64;
 
@@ -27,8 +27,9 @@ use zolana_ring_indexer::rpc::{
 use zolana_ring_member_registry::ApplyProofInputs;
 use zolana_ring_policy::{ListId, Member, MintPolicy};
 use zolana_ring_rpc::{
-    LatestBlockhash, RecordUpdateRefusal, RecordWriter, StorageChain, Store, Subscriber,
-    TransactionOutcome, BATCH_WINDOW_SLOTS, MAX_ENROLMENT_WINDOW_SLOTS, MAX_PENDING_ENROLMENTS,
+    LatestBlockhash, ReaderGrantStore, RecordUpdateRefusal, RecordWriter, StorageChain, Store,
+    Subscriber, TransactionOutcome, BATCH_WINDOW_SLOTS, MAX_ENROLMENT_WINDOW_SLOTS,
+    MAX_PENDING_ENROLMENTS,
 };
 
 use super::*;
@@ -181,15 +182,32 @@ struct Records {
     writer: Arc<RecordWriter>,
 }
 
+struct RecordsSetup<'a> {
+    fixture: &'a Fixture,
+    source: StaticSource,
+    reader_grants: ReaderGrantStore,
+}
+
 impl Records {
     async fn new() -> Self {
-        let fixture = Fixture::new();
-        let source = fixture.source();
-        Self::serving(&fixture, source).await
+        Self::with_reader_grants(ReaderGrantStore::Tree).await
     }
 
+    async fn with_reader_grants(reader_grants: ReaderGrantStore) -> Self {
+        let fixture = Fixture::new();
+        RecordsSetup {
+            fixture: &fixture,
+            source: fixture.source(),
+            reader_grants,
+        }
+        .serve()
+        .await
+    }
+}
+
+impl RecordsSetup<'_> {
     /// A ring whose records registry the writer's authority holds, its escrow auditor the fixture's.
-    async fn serving(fixture: &Fixture, source: StaticSource) -> Self {
+    async fn serve(self) -> Records {
         let escrow = escrow_fixture();
         let chain = Arc::new(StubChain {
             slot: AtomicU64::new(NOW),
@@ -210,11 +228,12 @@ impl Records {
             records: super::Records::listing(&[]),
         });
         let store = Store::open("sqlite::memory:", 1).await.expect("store");
-        let hub = Hub::builder(source, GENESIS)
+        let hub = Hub::builder(self.source, GENESIS)
             .with_origins(origins())
             .with_store(store)
             .with_storage_chain(chain.clone())
-            .local(RING, fixture.auditor.clone())
+            .with_reader_grants(self.reader_grants)
+            .local(RING, self.fixture.auditor.clone())
             .expect("hub");
         let writer = hub.record_writer().expect("writer").clone();
         let registry = StorageRegistry::new(writer.authority(), 0);
@@ -234,14 +253,16 @@ impl Records {
             ),
         ]);
         let hub = Arc::new(hub);
-        Self {
+        Records {
             chain,
             module: rpc_module(hub.clone()).expect("module"),
             hub,
             writer,
         }
     }
+}
 
+impl Records {
     async fn submit(
         &self,
         request: SubmitRecordUpdateRequest,
@@ -407,13 +428,6 @@ fn signed_update(signer: &Keypair, update: RecordUpdate) -> SubmitRecordUpdateRe
     request
 }
 
-fn refusal(result: Result<SubmitRecordUpdateResponse, MethodsError>) -> i32 {
-    match result {
-        Err(MethodsError::JsonRpc(error)) => error.code(),
-        other => panic!("expected a refusal, got {other:?}"),
-    }
-}
-
 #[tokio::test]
 async fn a_wallet_escrow_registration_is_batched_only_after_its_proof_checks() {
     let records = Records::new().await;
@@ -534,7 +548,13 @@ async fn an_escrow_written_through_the_writer_opens_the_wallets_outputs() {
     };
     let source = escrowed_source(&fixture, &[owner], &[]);
     let own_records = source.records.clone();
-    let records = Records::serving(&fixture, source).await;
+    let records = RecordsSetup {
+        fixture: &fixture,
+        source,
+        reader_grants: ReaderGrantStore::Tree,
+    }
+    .serve()
+    .await;
     records
         .submit(signed(
             &wallet(),
@@ -650,27 +670,39 @@ async fn a_wallet_enrolment_awaits_the_config_authority_then_lands_with_its_allo
     ));
 }
 
+/// An enrolment that sets ring-viewing on the wallet's own record.
+fn viewing_enrolment(wallet: &Keypair, awaited: ListId) -> SubmitRecordUpdateRequest {
+    let member = Member::owner_tag(wallet.pubkey().as_array()).expect("member");
+    let viewing = ListId::RingViewing.record_bit();
+    signed_update(
+        wallet,
+        RecordUpdate {
+            genesis_hash: Hash(GENESIS),
+            ring: RING.into(),
+            entries: vec![RecordUpdateEntry::Write(RingListWriteView {
+                mint_policy: None,
+                member: Hash(*member.as_bytes()),
+                mask: viewing,
+                value: viewing,
+            })],
+            valid_until_slot: NOW + 1_000,
+            awaited_lists: awaited.record_bit(),
+        },
+    )
+}
+
 #[tokio::test]
 async fn an_enrolment_past_its_window_or_the_rings_pending_cap_is_refused() {
     let records = Records::new().await;
     records.serves_own(ListId::Allow);
-    let viewing = ListId::RingViewing.record_bit();
     let enrol = |valid_until_slot: u64| {
         let wallet = Keypair::new();
-        let member = Member::owner_tag(wallet.pubkey().as_array()).expect("member");
+        let enrolment = viewing_enrolment(&wallet, ListId::Allow);
         signed_update(
             &wallet,
             RecordUpdate {
-                genesis_hash: Hash(GENESIS),
-                ring: RING.into(),
-                entries: vec![RecordUpdateEntry::Write(RingListWriteView {
-                    mint_policy: None,
-                    member: Hash(*member.as_bytes()),
-                    mask: viewing,
-                    value: viewing,
-                })],
                 valid_until_slot,
-                awaited_lists: ListId::Allow.record_bit(),
+                ..enrolment.update
             },
         )
     };
@@ -692,5 +724,20 @@ async fn an_enrolment_past_its_window_or_the_rings_pending_cap_is_refused() {
     assert_eq!(
         refusal(records.submit(enrol(NOW + 1_000)).await),
         RecordUpdateRefusal::EnrolmentsFull.code()
+    );
+}
+
+#[tokio::test]
+async fn database_mode_refuses_an_enrolment_awaiting_a_tree_reader_list() {
+    let records = Records::with_reader_grants(ReaderGrantStore::Database).await;
+    records.serves_own(ListId::Reader);
+
+    let awaiting = records
+        .submit(viewing_enrolment(&wallet(), ListId::Reader))
+        .await;
+
+    assert_eq!(
+        refusal(awaiting),
+        RecordUpdateRefusal::ReaderGrantsInDatabase.code()
     );
 }

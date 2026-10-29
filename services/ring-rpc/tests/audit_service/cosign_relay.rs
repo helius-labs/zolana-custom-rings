@@ -1,6 +1,6 @@
 //! The relay co-signs within its asset's sender window cap and refuses an outflow beyond it or a proof naming another co-signer.
 
-use jsonrpsee::{MethodsError, RpcModule};
+use jsonrpsee::RpcModule;
 use spr_keypair::{ShieldedKeypair, SigningKey};
 use zolana_ring_client::rpc::{
     GetRelayQuoteRequest, RelayProofInputs, RelayQuote, RelayRail, RelayStep, GET_RELAY_QUOTE,
@@ -109,12 +109,7 @@ impl CappedRelay {
         let [sent] = self.chain.sent().try_into().expect("one sent transaction");
         assert_eq!(sent.message.static_account_keys()[1], self.co_signer);
         assert!(signers_verify(&sent));
-        match beyond {
-            Err(MethodsError::JsonRpc(error)) => {
-                assert_eq!(error.code(), RelayError::CoSignRefused.code())
-            }
-            other => panic!("the second move passes the sender cap, got {other:?}"),
-        }
+        assert_eq!(refusal(beyond), RelayError::CoSignRefused.code());
     }
 }
 
@@ -156,11 +151,6 @@ async fn a_proof_naming_another_co_signer_is_refused_unsent() {
         )
         .await;
 
-    match refused {
-        Err(MethodsError::JsonRpc(error)) => {
-            assert_eq!(error.code(), RelayError::CoSignRefused.code())
-        }
-        other => panic!("the policy signs as another key, got {other:?}"),
-    }
+    assert_eq!(refusal(refused), RelayError::CoSignRefused.code());
     assert!(relay.chain.sent().is_empty());
 }

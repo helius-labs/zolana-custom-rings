@@ -223,6 +223,13 @@ impl ReadSigner for Passkey {
     }
 }
 
+fn refusal<T: std::fmt::Debug>(result: Result<T, jsonrpsee::MethodsError>) -> i32 {
+    match result {
+        Err(jsonrpsee::MethodsError::JsonRpc(error)) => error.code(),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
 fn origins() -> Origins {
     OriginPolicy::new(vec![ORIGIN.to_owned()])
         .with_relying_party_id("localhost".to_owned())
