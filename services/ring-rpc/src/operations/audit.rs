@@ -32,7 +32,7 @@ use crate::{
     authorize::{AuthorityCheck, AuthorityClaim, ReadCheck, ReadClaim, Unauthorized, WalletCheck},
     error::{redacted, GrantRefusal, RingRpcError},
     grant_rows::{GrantPair, GrantRow},
-    grants::{GrantQuery, ReadScope},
+    grants::{GrantQuery, Grants, ReadScope},
     hub::Shared,
     limits::ReaderPermit,
     replay::ReplayCheck,
@@ -327,21 +327,30 @@ impl<S: TransactionSource> AuditService<S> {
         })
     }
 
-    /// Returns the action the store holds for the pair after the write.
+    /// Returns the action the store holds for the grant after the write.
     pub async fn set_reader_grant(
         &self,
         request: &SetReaderGrantRequest,
     ) -> Result<ReaderGrantAction, RingRpcError> {
-        let rows = self
-            .shared
-            .grant_rows
-            .as_ref()
-            .ok_or(GrantRefusal::GrantStoreDisabled)?;
+        let Grants::Database(rows) = &self.shared.grants else {
+            return Err(GrantRefusal::GrantsInTree.into());
+        };
         let reader = <[u8; 34]>::try_from(request.reader.0.as_slice())
             .ok()
             .and_then(|tagged| ReaderKey::from_bytes(tagged).ok())
             .ok_or(Unauthorized::UnknownReaderKey)?;
-        let wallet = request.wallet.0;
+        let wallet = request.wallet.map(|wallet| wallet.0);
+        let signer = match wallet {
+            Some(wallet) => wallet,
+            None => {
+                self.shared
+                    .source
+                    .ring_config(self.ring)
+                    .await?
+                    .ok_or(Unauthorized::NoConfig)?
+                    .authority
+            }
+        };
         let attestation = ReaderGrantAttestation {
             target: self.read_target(),
             wallet,
@@ -349,7 +358,7 @@ impl<S: TransactionSource> AuditService<S> {
             action: request.action,
         };
         let nonce = WalletCheck {
-            wallet,
+            wallet: signer,
             timestamp: request.timestamp,
             nonce: &request.nonce,
             signature: &request.signature,

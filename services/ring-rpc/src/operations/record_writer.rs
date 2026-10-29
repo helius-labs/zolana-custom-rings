@@ -28,6 +28,7 @@ use zolana_ring_client::{
 use zolana_ring_indexer::rpc::{GetStorageApplyProofInputsRequest, StorageWriteView};
 
 use crate::{
+    config::ReaderGrantStore,
     database::Store,
     error::{redacted, GrantRefusal, RingRpcError},
     record_update::{
@@ -52,6 +53,7 @@ pub struct RecordWriter {
     authority: Keypair,
     genesis_hash: [u8; 32],
     watched: Vec<Address>,
+    reader_grants: ReaderGrantStore,
     /// Each registry's roots every subscriber mirrored at the last check.
     synced: Mutex<HashMap<Address, [Root; ROOT_HISTORY]>>,
     /// Holds the escrow check and the insert of one update together.
@@ -66,6 +68,7 @@ pub(crate) struct WriterParts {
     pub genesis_hash: [u8; 32],
     /// Curator registries whose subscribers the writer syncs.
     pub watched: Vec<Address>,
+    pub reader_grants: ReaderGrantStore,
 }
 
 impl WriterParts {
@@ -76,6 +79,7 @@ impl WriterParts {
             authority: self.authority,
             genesis_hash: self.genesis_hash,
             watched: self.watched,
+            reader_grants: self.reader_grants,
             synced: Mutex::default(),
             submits: tokio::sync::Mutex::default(),
         }
@@ -121,6 +125,7 @@ impl RecordWriter {
                 registry: &registry,
                 writer: self.authority(),
                 slot,
+                reader_grants: self.reader_grants,
             },
         }
         .check()?;

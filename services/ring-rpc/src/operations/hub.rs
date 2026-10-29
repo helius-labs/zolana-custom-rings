@@ -22,13 +22,13 @@ use zolana_ring_transaction::RingAssets;
 use crate::{
     audit::{AuditService, AuditServiceInit, ASSET_REFRESH_INTERVAL},
     authorize::Unauthorized,
-    config::RootSecret,
+    config::{ReaderGrantStore, RootSecret},
     cosign::{CoSignPolicy, RefusingCoSigner},
     cosign_limits::{LimitedCoSignerInit, MirroredLimits},
     database::Store,
     error::{redacted, RingRpcError},
     grant_rows::{GrantRowKey, GrantRows},
-    grants::{GrantQuery, GrantSource, ReadScope, TreeGrants},
+    grants::{GrantQuery, GrantSource, Grants, ReadScope, TreeGrants},
     keys::{
         co_signer_keypair, service_keypair, storage_authority_keypair, AuditorKeyDerivation,
         KeySource,
@@ -122,7 +122,7 @@ pub struct HubBuilder<S> {
     store: Option<Store>,
     storage_chain: Option<Arc<dyn StorageChain>>,
     watched_registries: Vec<Address>,
-    encrypted_grants: bool,
+    reader_grants: ReaderGrantStore,
     relay: Option<RelayParts>,
 }
 
@@ -140,7 +140,7 @@ pub(crate) struct Shared<S> {
     readiness: AsyncMutex<ReadinessCache>,
     /// One per ring an authorized read or the backfill opened.
     stores: Mutex<HashMap<Address, Arc<AuditStore>>>,
-    pub(crate) grant_rows: Option<GrantRows>,
+    pub(crate) grants: Grants,
     database: Option<Store>,
 }
 
@@ -183,14 +183,16 @@ impl<S> Shared<S> {
 
 impl<S: TransactionSource> Shared<S> {
     pub(crate) async fn read_scope(&self, query: GrantQuery) -> Result<ReadScope, RingRpcError> {
-        let tree = TreeGrants {
-            source: &self.source,
+        let granted = match &self.grants {
+            Grants::Tree => {
+                TreeGrants {
+                    source: &self.source,
+                }
+                .grants(query)
+                .await?
+            }
+            Grants::Database(rows) => rows.grants(query).await?,
         };
-        let granted = tree.grants(query).await?
-            || match &self.grant_rows {
-                Some(rows) => rows.grants(query).await?,
-                None => false,
-            };
         if !granted {
             return Err(Unauthorized::NotGranted.into());
         }
@@ -240,7 +242,7 @@ impl<S: TransactionSource> Hub<S> {
             store: None,
             storage_chain: None,
             watched_registries: Vec::new(),
-            encrypted_grants: false,
+            reader_grants: ReaderGrantStore::Tree,
             relay: None,
         }
     }
@@ -496,10 +498,10 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
         self
     }
 
-    /// Keeps wallet grants in the store, sealed under a key the service secret derives.
+    /// `Database` seals grant rows under a key the service secret derives, and needs a store.
     #[must_use = "use the updated builder"]
-    pub fn with_encrypted_grants(mut self) -> Self {
-        self.encrypted_grants = true;
+    pub fn with_reader_grants(mut self, store: ReaderGrantStore) -> Self {
+        self.reader_grants = store;
         self
     }
 
@@ -532,22 +534,19 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
                         authority: storage_authority_keypair(secret.as_slice())?,
                         genesis_hash: self.genesis_hash,
                         watched: self.watched_registries,
+                        reader_grants: self.reader_grants,
                     }
                     .writer(),
                 ))
             })
             .transpose()?;
-        let grant_rows = self
-            .store
-            .clone()
-            .filter(|_| self.encrypted_grants)
-            .map(|store| {
-                Ok::<_, RingRpcError>(GrantRows::new(
-                    store,
-                    GrantRowKey::derive(secret.as_slice())?,
-                ))
-            })
-            .transpose()?;
+        let grants = match self.reader_grants {
+            ReaderGrantStore::Tree => Grants::Tree,
+            ReaderGrantStore::Database => Grants::Database(Box::new(GrantRows::new(
+                self.store.clone().ok_or(RingRpcError::GrantStoreMissing)?,
+                GrantRowKey::derive(secret.as_slice())?,
+            ))),
+        };
         let assets = match self.assets {
             Some(assets) => assets,
             None => RingAssets::new([])?,
@@ -577,7 +576,7 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
                 in_flight: None,
             }),
             stores: Mutex::new(HashMap::new()),
-            grant_rows,
+            grants,
             database: self.store.clone(),
         };
         let shared = Arc::new(shared);

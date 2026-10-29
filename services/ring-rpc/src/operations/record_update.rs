@@ -17,7 +17,7 @@ use zolana_ring_indexer::rpc::GetStorageApplyProofInputsResponse;
 use zolana_ring_member_registry::{ApplyProofInputs, RecordWriteProofInput};
 use zolana_ring_policy::{ListId, ListSet, Member, MintPolicy};
 
-use crate::{error::RingRpcError, upstream::RingConfiguration};
+use crate::{config::ReaderGrantStore, error::RingRpcError, upstream::RingConfiguration};
 
 /// Slots a graced update waits for more writes before it goes out short.
 pub const BATCH_WINDOW_SLOTS: u64 = 40;
@@ -58,6 +58,8 @@ pub enum RecordUpdateRefusal {
     EscrowRegistered = -32192,
     #[error("record update batch failed on every attempt")]
     BatchFailed = -32193,
+    #[error("service keeps reader grants in its database")]
+    ReaderGrantsInDatabase = -32230,
 }
 
 pub(crate) struct UpdateContext<'a> {
@@ -67,6 +69,7 @@ pub(crate) struct UpdateContext<'a> {
     pub registry: &'a StorageRegistry,
     pub writer: Address,
     pub slot: u64,
+    pub reader_grants: ReaderGrantStore,
 }
 
 #[must_use]
@@ -201,13 +204,20 @@ impl RecordUpdateCheck<'_> {
             .map(|entry| entry.write(&signer))
             .collect::<Result<Vec<_>, _>>()
             .map_err(invalid_entry)?;
-        let urgent = writes
+        let queued = writes
             .iter()
             .map(StorageWriteData::entry)
             .collect::<Result<Vec<_>, _>>()
-            .map_err(invalid_entry)?
-            .iter()
-            .any(urgent);
+            .map_err(invalid_entry)?;
+        // 4. No entry writes a tree reader list the service never reads.
+        if context.reader_grants == ReaderGrantStore::Database
+            && queued
+                .iter()
+                .any(|entry| entry.mask & ListId::Reader.record_bit() != 0)
+        {
+            return Err(RecordUpdateRefusal::ReaderGrantsInDatabase);
+        }
+        let urgent = queued.iter().any(urgent);
         Ok(CheckedUpdate {
             id: RecordUpdateId(Hash(hash)),
             writes,

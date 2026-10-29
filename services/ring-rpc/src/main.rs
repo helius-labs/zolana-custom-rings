@@ -110,7 +110,9 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     if let Some(relying_party_id) = args.webauthn_rp_id {
         origin_policy = origin_policy.with_relying_party_id(relying_party_id);
     }
-    let mut builder = Hub::builder(source, genesis_hash).with_origins(origin_policy.build()?);
+    let mut builder = Hub::builder(source, genesis_hash)
+        .with_origins(origin_policy.build()?)
+        .with_reader_grants(args.reader_grants);
     if let Some(store) = store {
         builder = builder.with_store(store);
     }
@@ -119,9 +121,6 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         builder = builder
             .with_storage_chain(Arc::new(chain))
             .with_watched_registries(args.watch_registry.clone());
-    }
-    if args.encrypted_reader_grants {
-        builder = builder.with_encrypted_grants();
     }
     let mut merge_parts = None;
     if let Some(relayed) = relayed {

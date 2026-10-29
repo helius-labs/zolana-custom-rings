@@ -18,7 +18,7 @@ use crate::{
 };
 
 const NONCE_LEN: usize = 12;
-const BODY_LEN: usize = 32 + 32 + 1 + 8;
+const ACTION_AND_TIMESTAMP_LEN: usize = 1 + 8;
 
 pub(crate) struct GrantRows {
     store: Store,
@@ -33,7 +33,8 @@ pub(crate) struct GrantRowKey {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct GrantPair {
     pub ring: Address,
-    pub wallet: Address,
+    /// `None` for a ring-wide grant.
+    pub wallet: Option<Address>,
     pub reader: ReaderKey,
 }
 
@@ -68,7 +69,7 @@ impl GrantRowKey {
     }
 
     /// The lookup is the associated data, a row moved to another reader fails to open.
-    fn seal(&self, lookup: &[u8; 32], body: &[u8; BODY_LEN]) -> Result<Vec<u8>, RingRpcError> {
+    fn seal(&self, lookup: &[u8; 32], body: &[u8]) -> Result<Vec<u8>, RingRpcError> {
         let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
         let sealed = self
             .cipher
@@ -83,12 +84,11 @@ impl GrantRowKey {
         Ok([nonce.as_slice(), &sealed].concat())
     }
 
-    fn open(&self, lookup: &[u8; 32], sealed: &[u8]) -> Result<[u8; BODY_LEN], RingRpcError> {
+    fn open(&self, lookup: &[u8; 32], sealed: &[u8]) -> Result<Vec<u8>, RingRpcError> {
         let (nonce, ciphertext) = sealed
             .split_at_checked(NONCE_LEN)
             .ok_or(RingRpcError::InvalidGrantRow)?;
-        let body = self
-            .cipher
+        self.cipher
             .decrypt(
                 Nonce::from_slice(nonce),
                 Payload {
@@ -96,33 +96,43 @@ impl GrantRowKey {
                     aad: lookup,
                 },
             )
-            .map_err(|_| RingRpcError::InvalidGrantRow)?;
-        body.try_into().map_err(|_| RingRpcError::InvalidGrantRow)
+            .map_err(|_| RingRpcError::InvalidGrantRow)
     }
 }
 
 impl GrantRow {
-    fn body(&self) -> [u8; BODY_LEN] {
-        let mut body = [0u8; BODY_LEN];
-        body[..32].copy_from_slice(self.pair.ring.as_ref());
-        body[32..64].copy_from_slice(self.pair.wallet.as_ref());
-        body[64] = match self.action {
+    /// A ring-wide row leaves the wallet out.
+    fn body(&self) -> Vec<u8> {
+        let action = match self.action {
             ReaderGrantAction::Grant => 1,
             ReaderGrantAction::Revoke => 0,
         };
-        body[65..].copy_from_slice(&self.timestamp.to_le_bytes());
-        body
+        [
+            self.pair.ring.as_ref(),
+            self.pair.wallet.as_ref().map_or(&[][..], AsRef::as_ref),
+            &[action],
+            &self.timestamp.to_le_bytes(),
+        ]
+        .concat()
     }
 
-    fn from_body(reader: ReaderKey, body: &[u8; BODY_LEN]) -> Result<Self, RingRpcError> {
+    fn from_body(reader: ReaderKey, body: &[u8]) -> Result<Self, RingRpcError> {
         let invalid = || RingRpcError::InvalidGrantRow;
         let (ring, rest) = body.split_first_chunk::<32>().ok_or_else(invalid)?;
-        let (wallet, rest) = rest.split_first_chunk::<32>().ok_or_else(invalid)?;
-        let (action, timestamp) = rest.split_first().ok_or_else(invalid)?;
+        let (wallet, tail) = rest
+            .split_last_chunk::<ACTION_AND_TIMESTAMP_LEN>()
+            .ok_or_else(invalid)?;
+        let wallet = match wallet {
+            [] => None,
+            wallet => Some(Address::new_from_array(
+                wallet.try_into().map_err(|_| invalid())?,
+            )),
+        };
+        let (action, timestamp) = tail.split_first().ok_or_else(invalid)?;
         Ok(Self {
             pair: GrantPair {
                 ring: Address::new_from_array(*ring),
-                wallet: Address::new_from_array(*wallet),
+                wallet,
                 reader,
             },
             action: match action {
@@ -151,13 +161,13 @@ impl GrantRows {
             [bytes(&lookup), Value::from(sealed)],
         ))
         .await?;
-        let newest = self.newest(row.pair).await?;
-        Ok(newest.map_or(row.action, |newest| newest.action))
+        let rows = self.rows(row.pair.reader).await?;
+        Ok(newest(&rows, row.pair).map_or(row.action, |newest| newest.action))
     }
 
-    /// The pair's row with the latest timestamp, the later insert on a tie.
-    async fn newest(&self, pair: GrantPair) -> Result<Option<GrantRow>, RingRpcError> {
-        let lookup = self.key.lookup(&pair.reader)?;
+    /// In insert order.
+    async fn rows(&self, reader: ReaderKey) -> Result<Vec<GrantRow>, RingRpcError> {
+        let lookup = self.key.lookup(&reader)?;
         let db = self.store.connection();
         let rows = db
             .query_all(Statement::from_sql_and_values(
@@ -166,33 +176,36 @@ impl GrantRows {
                 [bytes(&lookup)],
             ))
             .await?;
-        let mut newest: Option<GrantRow> = None;
-        for row in rows {
-            let sealed: Vec<u8> = row.try_get("", "sealed")?;
-            let opened = GrantRow::from_body(pair.reader, &self.key.open(&lookup, &sealed)?)?;
-            if opened.pair == pair && newest.is_none_or(|kept| opened.timestamp >= kept.timestamp) {
-                newest = Some(opened);
-            }
-        }
-        Ok(newest)
+        rows.iter()
+            .map(|row| {
+                let sealed: Vec<u8> = row.try_get("", "sealed")?;
+                GrantRow::from_body(reader, &self.key.open(&lookup, &sealed)?)
+            })
+            .collect()
     }
 }
 
 impl GrantSource for GrantRows {
     async fn grants(&self, query: GrantQuery) -> Result<bool, RingRpcError> {
-        let Some(wallet) = query.wallet else {
-            return Ok(false);
+        let rows = self.rows(query.reader).await?;
+        let granted = |wallet| {
+            let pair = GrantPair {
+                ring: query.ring,
+                wallet,
+                reader: query.reader,
+            };
+            newest(&rows, pair).is_some_and(|row| row.action == ReaderGrantAction::Grant)
         };
-        let pair = GrantPair {
-            ring: query.ring,
-            wallet,
-            reader: query.reader,
-        };
-        Ok(self
-            .newest(pair)
-            .await?
-            .is_some_and(|row| row.action == ReaderGrantAction::Grant))
+        Ok(granted(None) || query.wallet.is_some_and(|wallet| granted(Some(wallet))))
     }
+}
+
+/// The pair's row with the latest timestamp, the later insert on a tie.
+fn newest(rows: &[GrantRow], pair: GrantPair) -> Option<GrantRow> {
+    rows.iter()
+        .filter(|row| row.pair == pair)
+        .max_by_key(|row| row.timestamp)
+        .copied()
 }
 
 fn bytes(value: &[u8; 32]) -> Value {
