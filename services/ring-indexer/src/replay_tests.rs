@@ -7,7 +7,7 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use bytemuck::Zeroable;
 use custom_ring_interface::{
     instruction::tag,
-    storage::{RegistryId, Revision},
+    storage::{chain_start, RegistryId, Revision},
     storage_instruction::{StorageUpdateIxData, StorageWriteData, UpdateMode},
     tagged_x25519, AppliedAt, ApplyRecordsIxData, AuthorityWriteRecordsIxData, EscrowKey,
     MemberWriteIxData, QueueEntry, RecordWriteData, RegisterKeyIxData, WriteRecordsIxData,
@@ -1626,7 +1626,7 @@ async fn a_storage_update_serves_openings_under_its_new_root() {
         },
         ..Zeroable::zeroed()
     };
-    let chain_start = storage_program::chain_start(&registry, Revision::default()).unwrap();
+    let chain_start = chain_start(&registry, Revision::default()).unwrap();
     let inputs = MemberRegistryTree::new()
         .unwrap()
         .apply(chain_start, &[write.entry().unwrap()])

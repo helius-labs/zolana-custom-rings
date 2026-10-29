@@ -22,7 +22,7 @@ holds both kinds, and an owner key and a mint with equal bytes stay distinct
 members.
 
 A record holds the member, the next member in sort order, a bitmap of lists
-an escrow key and four per-mint amounts. Eight lists exist, and each list has one writer:
+an escrow key and the mint settings. Eight lists exist, and each list has one writer:
 
 - The config authority writes `Allow`, `Block`, `Frozen`, `Reader` and
   `Approval`.
@@ -66,14 +66,16 @@ same transaction.
 
 ## Mint settings
 
-Each asset record stores `threshold`, `cap`, `cosign_above` and
-`withdrawal_threshold`, all unsigned 64-bit amounts. The first three pack into
-one 192-bit field; the withdrawal threshold occupies another field. The leaf
-is `Poseidon(member, next, lists, escrow_key, packed_mint_policy, withdrawal_threshold)`.
+Each asset record stores `threshold`, `cap`, `cosign_above`,
+`withdrawal_threshold` and the six `AssetLimits` values of the Ring RPC
+co-signer, all unsigned 64-bit integers. The first three pack into
+one 192-bit field; the withdrawal threshold occupies another field, and the
+limits pack three to a field into two more. The leaf
+is `Poseidon(member, next, lists, escrow_key, packed_mint_policy, withdrawal_threshold, limits_0, limits_1)`.
 The queue entry hash is
-`Poseidon(CRQW, member, mask, value, escrow_key, mint_policy_write, withdrawal_threshold)`.
+`Poseidon(CRQW, member, mask, value, escrow_key, mint_policy_write, withdrawal_threshold, limits_0, limits_1)`.
 Bit 192 of `mint_policy_write` distinguishes an explicit replacement from a
-list/key write that preserves all four settings. An explicit all-zero value
+list/key write that preserves every setting. An explicit all-zero value
 clears settings while preserving lists and the escrow key. Member writes and
 key registrations cannot change mint settings.
 
@@ -84,8 +86,8 @@ registry capacity and write batch sizes apply. Audit-only rings can create a
 registry to configure withdrawal exemptions without enabling list policy.
 
 The CLI keeps `limits` in policy TOML and writes the resulting records.
-`cosigner set` replaces withdrawal thresholds while preserving the other three
-settings. `cosigner clear` removes the signer but retains the records. A later
+`cosigner set` replaces withdrawal thresholds while preserving the other
+settings. `cosigner clear` closes the signer's record but retains the mint records. A later
 `cosigner set` replaces those retained withdrawal thresholds.
 
 ## Applying the queue
@@ -198,10 +200,10 @@ history.
 
 This layout is incompatible with earlier four-field leaves, five-field queue
 hashes and the inline mint arrays. The rule-table hash uses version 12. The
-config is 150 bytes and the registry account is 2,388 bytes. `SetCoSigner`
-carries only signer and scope; an authority record write adds a 33-byte optional
-mint-setting replacement. Transfers may append a 193-byte withdrawal exemption
-proof and root index.
+config is 120 bytes and the registry account is 2,388 bytes. `SetCoSigner`
+carries only signer and scope; an authority record write adds an 81-byte optional
+mint-setting replacement. Transfers may append a 200-byte withdrawal exemption
+proof with its own revision.
 
 Deploy the matching program, SDK, indexer and pinned keys together for fresh
 rings. Existing rings require an explicit account/tree migration before an

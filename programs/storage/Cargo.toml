@@ -17,10 +17,6 @@ bytemuck = { workspace = true }
 custom-ring-interface = { workspace = true }
 pinocchio = { workspace = true, features = ["cpi"] }
 pinocchio-system = { workspace = true }
-spr-account-checks = { workspace = true }
-spr-hasher = { workspace = true }
-spr-interface = { workspace = true }
-zolana-ring-policy = { workspace = true }
 
 [dev-dependencies]
 hex = { workspace = true }

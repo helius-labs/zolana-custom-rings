@@ -47,8 +47,8 @@ The auditor key lives in a Ring RPC. The Ring authority grants view access.
 Helius can host that RPC; the authority can host it itself. The forester is
 shared with the default Ring.
 
-Rings support confidential transactions only. Anonymous transfers that
-would use a relayer are not supported. A Ring is audit-only or carries a
+A Ring is confidential or anonymous, and an anonymous Ring spends
+through the Ring RPC relay. A Ring is audit-only or carries a
 policy, a rule table over lists of members whose addresses the Ring claims in
 its address tree. The tier is fixed when the Ring config is created.
 
@@ -69,8 +69,11 @@ Set a Ring up in this order.
 
 Build exact Ring entries, in-ring transfers, shielded exits, and public
 withdrawals with `buildRingEntryTransaction`, `buildRingTransferTransaction`,
-`buildRingExitTransaction`, and `buildRingWithdrawalTransaction`. `RingRpc`
-reads decrypted Ring transactions for a granted reader.
+`buildRingExitTransaction`, and `buildRingWithdrawalTransaction`. On an
+anonymous Ring they refuse with `RING_ANONYMOUS_RELAY_REQUIRED`, and
+`prepareRingEntryRelay`, `prepareRingTransferRelay`, `prepareRingExitRelay`
+and `prepareRingWithdrawalRelay` prepare the spend that `relay.send` hands to
+Ring RPC. `RingRpc` reads decrypted Ring transactions for a granted reader.
 
 Connect to a hosted Ring RPC with its service base URL and your API key:
 

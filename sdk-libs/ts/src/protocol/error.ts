@@ -275,6 +275,18 @@ export const StorageProgramError = Object.freeze({
   revisionChanged: 9002,
   rootExpired: 9003,
   historyFull: 9004,
+  invalidInstructionData: 9005,
+  batchTooLarge: 9006,
+  invalidWrite: 9007,
+  proofVerificationFailed: 9008,
+  hashingFailed: 9009,
+  missingAccounts: 9010,
+  missingSignature: 9011,
+  readOnlyRegistry: 9012,
+  invalidSystemProgram: 9013,
+  alreadyInitialized: 9014,
+  revisionOverflow: 9015,
+  unsupportedBatch: 9016,
 } as const);
 
 export class RingError extends Error {

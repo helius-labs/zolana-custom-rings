@@ -284,11 +284,11 @@ describe.each(["client", "prover"] as const)("controls %s", (proofDataSource) =>
           ringProgramId,
           wallet: sender.wallet,
           keys: sender.keys,
-          feePayer: sender.signer.address,
+          feePayer: authority.address,
           asset: SOL_MINT,
         }),
         client,
-        [sender.signer],
+        [authority],
       );
       await sync(client, sender);
       expect(

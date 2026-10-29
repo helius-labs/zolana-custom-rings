@@ -242,7 +242,7 @@ ring statements, the delegate rail under its own keys.
 
 **Actors.** The upgrade authority creates the config. The config authority sets
 the delegate, writes the policy and the authority lists and re-points
-sources. It grants and revokes readers, sets the co-signer and the insert fee
+sources. It grants and revokes readers, sets the co-signers and the insert fee
 and pauses the ring. A member writes its own `RingViewing` and `Recovery` bits
 and registers its key. The auditor holds the X25519 key fixed at `CreateConfig`
 and decrypts transfers, and that key cannot authorize an ownership transfer or
@@ -250,22 +250,21 @@ a withdrawal. SPP governance activates the ring and enables the authority rail
 through `set_ring_activation`, and nothing in the ring program can. No
 instruction changes the tier or the auditor, and the program stays upgradeable.
 
-**Co-signing** is a signer check. The ring stores one co-signer with a scope
-over transfers, deposits and withdrawals. Withdrawal thresholds live in mint
+**Co-signing** is a signer check. The ring stores one record per co-signer,
+each with a scope over transfers, deposits and withdrawals. Withdrawal thresholds live in mint
 records, including on audit-only rings. An optional withdrawal exemption proof
-opens the actual withdrawn mints under an own-registry root at or above the
-floor and bounds each gross total by its threshold. Missing or zero thresholds
+opens the actual withdrawn mints under a mirrored own root and bounds each gross total by its threshold. Missing or zero thresholds
 never exempt positive withdrawals; deposits cannot reduce these totals. This
 proof waives only withdrawal-scoped co-signing, never transfers, deposits or
 the approval bit. Every transact and merge
 is a transfer, and a public leg adds its class, so a shielded transfer cannot
-hide behind a small deposit. The proof-bound approval bit demands the same
-signer whatever the scope. A transfer refuses a co-signer that is one of its
+hide behind a small deposit. The proof-bound approval bit demands a co-signer
+whatever the scope. A transfer refuses a co-signer that is one of its
 owner signers or its delegate.
 
 **Delegation** exposes the SPP authority rail behind a delegate. The config
 authority and the delegate both sign `SetDelegate`, once, and no instruction
-replaces it. `SetDelegate` needs a policy ring with a member registry and
+replaces it. `SetDelegate` needs a policy ring with a ring policy and
 refuses an anonymous ring, which hides the owner a delegate would sign for. A
 delegate move carries an audit proof and a delegate policy proof, which applies
 the list rules and amount guards. The inputs' owner is the screened sender. The
@@ -283,15 +282,16 @@ nullifier secret to the auditor. Recovery needs the auditor secret, and
 authorization needs the delegate's signature. The CLI expects one operator to
 hold the keys. See the [README](../README.md#roles).
 A plain deposit is refused in every mode, and the audited deposit binds each
-owner's escrow record under a named root. A merge outside an anonymous ring
-opens the owner's escrowed key through SPP's merge proof.
+owner's escrow record under a named root. Every merge proves its disclosure
+to the auditor, and on a key escrow ring it also binds the owner's escrow
+record.
 
 **Outflow limits** bound a sender's outflow per mint in one transfer. The
 policy proof opens the settings of every real output asset and nonzero public
 asset, then bounds the total outflow by its authenticated
 [MintPolicy](../program-libs/policy/src/mint.rs). A zero cap or threshold leaves that bound
 off. The ring keeps no counter, so a sender may move up to the cap in every
-transfer. The program demands the configured co-signer when the transfer sets
+transfer. The program demands a co-signer when the transfer sets
 the approval bit.
 
 ## Rejected designs

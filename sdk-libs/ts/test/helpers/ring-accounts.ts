@@ -5,10 +5,7 @@ import { Writer, addressBytes } from "@heliuslabs/zolana/internal";
 import { SHIELDED_POOL_PROGRAM_ID, StateDiscriminator } from "@heliuslabs/zolana/interface";
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import { ringAuthAddress, ringCoSignerPda } from "../../src/protocol/pda/index.js";
-import {
-  APPLY_BATCH,
-  MEMBER_REGISTRY_ROOT_HISTORY,
-} from "../../src/protocol/membership/member-registry.js";
+import { APPLY_BATCH, ROOT_HISTORY } from "../../src/protocol/membership/member-registry.js";
 import type {
   RingCoSigner,
   RingMode,
@@ -132,7 +129,7 @@ export function memberRegistryData(
     .u64(input.floor ?? 0n, "floor")
     .u64(input.priorFloor ?? 0n, "priorFloor")
     .u64(input.floorSlot ?? 0n, "floorSlot");
-  for (let slot = 0; slot < MEMBER_REGISTRY_ROOT_HISTORY; slot += 1) {
+  for (let slot = 0; slot < ROOT_HISTORY; slot += 1) {
     const entry = input.history[slot];
     writer
       .bytes(entry?.root ?? new Uint8Array(32))
@@ -168,7 +165,7 @@ export function ringPolicyData(
   writePolicyFields(writer, input);
   for (const mirror of [input.ownRoots, input.curatorRoots]) {
     writer.bytes(addressBytes(mirror?.registry ?? ZERO_ADDRESS));
-    for (let slot = 0; slot < MEMBER_REGISTRY_ROOT_HISTORY; slot += 1) {
+    for (let slot = 0; slot < ROOT_HISTORY; slot += 1) {
       const root = mirror?.roots[slot];
       writer
         .bytes(root?.hash ?? new Uint8Array(32))

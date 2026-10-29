@@ -98,7 +98,7 @@ import { decompressG2 } from "../../../src/protocol/codec/codecs.js";
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 /** The policy mirrors the records' newest root at this revision. */
 const OWN_REVISION = 3n;
-/** Pays an anonymous ring's merge, the hidden owner signs nothing public. */
+/** Pays every merge, the merge circuit refuses the owner as payer. */
 const RELAYER = address("3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3");
 function field(value: number): Bytes32 {
   const bytes = new Uint8Array(32);
@@ -365,7 +365,7 @@ async function ringMergeParams({
     ringProgramId: RING,
     wallet,
     keys,
-    feePayer: anonymous ? RELAYER : owner.shieldedAddress().solanaAddress(),
+    feePayer: RELAYER,
   };
 }
 
@@ -834,25 +834,27 @@ describe("anonymous ring merge", () => {
     const local = LocalKeys.fromKeypair(owner, proofService());
     const hidden = owner.shieldedAddress().solanaAddress();
     try {
-      for (const coSigned of [false, true]) {
-        const params = await ringMergeParams({
-          proveMerge,
-          wallet,
-          keys: local,
-          proofDataSource: "client",
-          anonymous: true,
-          ...(coSigned ? { coSigner: { signer: hidden, scope: RING_COSIGN_TRANSFERS } } : {}),
-        });
-        await expect(
-          buildRingMergeTransaction({
-            ...params,
-            ...(coSigned ? { cosigner: hidden } : { feePayer: hidden }),
-          }),
-        ).rejects.toMatchObject({
-          code: "RING_BUILD_MERGE",
-          causeCode: "RING_ANONYMOUS_SIGNER_LINKS_OWNER",
-        });
-      }
+      // The merge circuit keeps the owner off the payer and co-signer on every ring.
+      for (const anonymous of [true, false])
+        for (const coSigned of [false, true]) {
+          const params = await ringMergeParams({
+            proveMerge,
+            wallet,
+            keys: local,
+            proofDataSource: "client",
+            anonymous,
+            ...(coSigned ? { coSigner: { signer: hidden, scope: RING_COSIGN_TRANSFERS } } : {}),
+          });
+          await expect(
+            buildRingMergeTransaction({
+              ...params,
+              ...(coSigned ? { cosigner: hidden } : { feePayer: hidden }),
+            }),
+          ).rejects.toMatchObject({
+            code: "RING_BUILD_MERGE",
+            causeCode: "RING_ANONYMOUS_SIGNER_LINKS_OWNER",
+          });
+        }
       expect(proveMerge).not.toHaveBeenCalled();
       expect(wallet._reservationEntries()).toHaveLength(0);
     } finally {

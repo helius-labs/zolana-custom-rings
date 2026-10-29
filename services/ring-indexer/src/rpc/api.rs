@@ -8,7 +8,7 @@ use std::{
 
 use custom_ring_interface::{
     check_member, mint_policy_write, queue_chain,
-    storage::{Revision, StorageRegistry},
+    storage::{chain_start, Revision, StorageRegistry},
     storage_instruction::StorageWriteData,
     tagged_x25519, RecordWriteData, RootEntry, WriteRecordsIxData, APPLY_BATCH,
     MEMBER_REGISTRY_CAPACITY, QUAD_ARITY, STORAGE_PROGRAM_ID,
@@ -545,8 +545,7 @@ pub(crate) async fn storage_apply_proof_inputs(
         .map_err(validation)?;
     let snapshot = Snapshot::storage(db, &request.registry).await?;
     let root = StorageRoot::current(&snapshot.state.account);
-    let chain_start = storage_program::chain_start(&request.registry.0, root.revision.into())
-        .map_err(internal)?;
+    let chain_start = chain_start(&request.registry.0, root.revision.into()).map_err(internal)?;
     let loaded = TreeRead::batch(root.tree(), &entries)
         .load(snapshot.store().tree())
         .await

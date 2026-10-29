@@ -24,8 +24,9 @@ impl RegistryInit<'_> {
         if account.address() != &address {
             return Err(StorageError::InvalidRegistry.into());
         }
+        check_writable(account)?;
         if account.data_len() != 0 {
-            return Err(ProgramError::AccountAlreadyInitialized);
+            return Err(StorageError::AlreadyInitialized.into());
         }
         let bump = [bump];
         let [seed, creator, registry_id] = seeds;
@@ -61,6 +62,7 @@ pub fn load_registry_mut<'a>(
     if !account.owned_by(program_id) {
         return Err(StorageError::InvalidRegistry.into());
     }
+    check_writable(account)?;
     RefMut::filter_map(account.try_borrow_mut()?, StorageRegistry::from_data_mut)
         .map_err(|_| StorageError::InvalidRegistry.into())
 }
@@ -71,4 +73,20 @@ pub fn check_authority(registry: &StorageRegistry, authority: &AccountView) -> P
         return Err(StorageError::Unauthorized.into());
     }
     Ok(())
+}
+
+#[inline(always)]
+pub fn check_signer(account: &AccountView) -> Result<(), StorageError> {
+    match account.is_signer() {
+        true => Ok(()),
+        false => Err(StorageError::MissingSignature),
+    }
+}
+
+#[inline(always)]
+fn check_writable(account: &AccountView) -> Result<(), StorageError> {
+    match account.is_writable() {
+        true => Ok(()),
+        false => Err(StorageError::ReadOnlyRegistry),
+    }
 }

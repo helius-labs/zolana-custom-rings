@@ -1,8 +1,10 @@
-use custom_ring_interface::storage_instruction::InitializeIxData;
-use pinocchio::{error::ProgramError, AccountView, Address, ProgramResult};
-use spr_account_checks::AccountIterator;
+use custom_ring_interface::{storage::StorageError, storage_instruction::InitializeIxData};
+use pinocchio::{AccountView, Address, ProgramResult};
 
-use crate::{loader::RegistryInit, parse};
+use crate::{
+    loader::{check_signer, RegistryInit},
+    parse,
+};
 
 pub fn process_initialize_ix(
     program_id: &Address,
@@ -10,13 +12,14 @@ pub fn process_initialize_ix(
     data: &[u8],
 ) -> ProgramResult {
     let ix: &InitializeIxData = parse(data)?;
-    let mut accounts = AccountIterator::new(accounts);
-    let payer_account = accounts.next_signer_mut("payer")?;
-    let creator_account = accounts.next_signer("creator")?;
-    let registry_account = accounts.next_mut("registry")?;
-    let system_program_account = accounts.next_account("system")?;
+    let [payer_account, creator_account, registry_account, system_program_account, ..] = accounts
+    else {
+        return Err(StorageError::MissingAccounts.into());
+    };
+    check_signer(payer_account)?;
+    check_signer(creator_account)?;
     if !pinocchio_system::check_id(system_program_account.address()) {
-        return Err(ProgramError::IncorrectProgramId);
+        return Err(StorageError::InvalidSystemProgram.into());
     }
     RegistryInit {
         program_id,

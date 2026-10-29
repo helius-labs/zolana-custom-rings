@@ -164,7 +164,7 @@ export interface RingMemberPage {
 /** The registry as Photon projects it, the account itself is the authority. */
 export interface RingRegistryState {
   readonly context: Readonly<{ slot: bigint; blockTime: bigint }>;
-  /** `MEMBER_REGISTRY_ROOT_HISTORY` slots, `undefined` where no root was pushed. */
+  /** `ROOT_HISTORY` slots, `undefined` where no root was pushed. */
   readonly history: readonly (
     | Readonly<{ root: Bytes32; applied: bigint; slot: bigint }>
     | undefined

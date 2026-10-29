@@ -62,7 +62,7 @@ pub struct AuditedMerge {
 pub enum MergeKeys {
     /// The registry escrow opened the nullifier key, the merged note's nullifier follows.
     Escrowed { nullifier: [u8; 32] },
-    /// An anonymous merge disclosed every spent commitment, padding zero, the nullifier key stays hidden.
+    /// The merge disclosed every spent commitment, padding zero, the nullifier key stays hidden.
     Disclosed { input_commitments: Vec<[u8; 32]> },
 }
 
@@ -139,7 +139,7 @@ struct KeySearch<'a> {
     limit: Option<NonZeroUsize>,
 }
 
-/// An anonymous ring merge and the settled leaf its disclosure must reproduce.
+/// A ring merge and the settled leaf its disclosure must reproduce.
 #[must_use]
 struct DisclosedMerge<'a> {
     auditor: &'a X25519Keypair,

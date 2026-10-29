@@ -36,7 +36,7 @@ import {
 } from "@heliuslabs/zolana/internal";
 import { MAX_MERGE_INPUTS } from "@heliuslabs/zolana/interface";
 import { X25519PublicKey, KeypairError } from "@heliuslabs/zolana/keypair";
-import { MEMBER_REGISTRY_ROOT_HISTORY } from "../protocol/membership/member-registry.js";
+import { ROOT_HISTORY } from "../protocol/membership/member-registry.js";
 import { ringIdField } from "../crypto/derivation/ring-stream.js";
 
 import {
@@ -1461,12 +1461,11 @@ function decodeActivation(value: unknown): RingActivation {
 function decodeRegistryStatus(value: unknown): RingRegistryStatus {
   const wire = record(value, "result.registry");
   const history = list(wire["history"], "result.registry.history");
-  if (history.length !== MEMBER_REGISTRY_ROOT_HISTORY) throw invalid("result.registry.history");
+  if (history.length !== ROOT_HISTORY) throw invalid("result.registry.history");
   const historyCursor = u32(wire["historyCursor"], "result.registry.historyCursor");
   const queueHead = u64(wire["queueHead"], "result.registry.queueHead");
   const queueTail = u64(wire["queueTail"], "result.registry.queueTail");
-  if (historyCursor >= MEMBER_REGISTRY_ROOT_HISTORY || queueHead > queueTail)
-    throw invalid("result.registry");
+  if (historyCursor >= ROOT_HISTORY || queueHead > queueTail) throw invalid("result.registry");
   return Object.freeze({
     history: Object.freeze(
       history.map((entry, index) => {

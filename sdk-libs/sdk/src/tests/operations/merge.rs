@@ -123,6 +123,23 @@ async fn an_anonymous_merge_its_owner_would_sign_in_public_is_refused_before_pro
         .is_ok());
 }
 
+/// The merge circuit keeps the owner off the payer and co-signer on every ring.
+#[tokio::test]
+async fn a_confidential_merge_its_owner_pays_is_refused_before_proving() {
+    let owner = keypair(1);
+    let merge = Merge {
+        owner: &owner,
+        settings: RingSettings::new(RingMode::Confidential),
+        payer: &owner,
+        signers: &[],
+    };
+    let refusal = merge.refusal().await;
+    assert!(
+        matches!(refusal, RingError::AnonymousPublicSignerLinksOwner),
+        "{refusal}"
+    );
+}
+
 #[tokio::test]
 async fn the_widest_merge_fits_a_transaction_beside_its_co_signer() {
     use custom_ring_interface::{compute_unit_limit, InstructionTag};

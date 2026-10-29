@@ -109,6 +109,7 @@ pub struct ProvenCustomRingMerge {
     input_tree: Address,
     output_tree: Address,
     ring: CustomRing,
+    mode: RingMode,
     co_signer: Option<Address>,
     /// `Some` on a key escrow ring, its merge proves the owner's escrow record under the root.
     bound: Option<BoundRoot>,
@@ -166,9 +167,9 @@ impl PreparedCustomRingMerge {
         }
         .resolve(client.zolana())
         .await?;
-        if config.mode == RingMode::Anonymous {
-            self.check_public_signers(core::iter::once(payer).chain(co_signer), &config)?;
-        }
+        // The merge circuit separates the owner from the payer and co-signer on every ring.
+        HiddenOwner::of(&self.inner.signing_pubkey)?
+            .check_signers(core::iter::once(payer).chain(co_signer))?;
         self.merge_width()?;
         // A key escrow merge reads the owner's escrow record under the newest root before any proof.
         let escrow = match config.mode {
@@ -242,6 +243,7 @@ impl PreparedCustomRingMerge {
             input_tree: input.input_tree,
             output_tree: input.output_tree,
             ring: self.ring,
+            mode: config.mode,
             co_signer,
             bound,
             data: CustomRingMergeIxData {
@@ -278,7 +280,7 @@ impl ProvenCustomRingMerge {
             output_tree: self.output_tree,
             payer,
             co_signer: self.co_signer,
-            key_escrow: self.bound.is_some(),
+            mode: self.mode,
             data: self.data.clone(),
         }
         .instruction()
@@ -322,7 +324,7 @@ impl RingMergeOperation {
             }
             .unchecked()?
             .map(|(_, signer)| signer),
-            key_escrow: config.mode == RingMode::ConfidentialEscrow,
+            mode: config.mode,
             data: CustomRingMergeIxData {
                 own_revision: Default::default(),
                 output_ring_data_hash: merge.inner.output_utxo.ring_data_hash.unwrap_or_default(),
@@ -361,8 +363,8 @@ pub struct CustomRingMergeInstruction {
     pub output_tree: Address,
     pub payer: Address,
     pub co_signer: Option<Address>,
-    /// Set on a key escrow ring, the merge then binds the policy's own root at `own_revision`.
-    pub key_escrow: bool,
+    /// A key escrow merge binds the policy's own root at `own_revision`.
+    pub mode: RingMode,
     pub data: CustomRingMergeIxData,
 }
 
@@ -386,7 +388,7 @@ impl CustomRingMergeInstruction {
         .instruction();
         instruction.data = data;
         let mut prefix = vec![AccountMeta::new_readonly(self.ring.config_pda(), false)];
-        if self.key_escrow {
+        if self.mode == RingMode::ConfidentialEscrow {
             prefix.push(AccountMeta::new_readonly(self.ring.policy_pda(), false));
         }
         prefix.extend(

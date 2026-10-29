@@ -19,7 +19,7 @@ const (
 	LimitFields = 2
 )
 
-// The empty leaf is 0, and the sentinel (0, q-1, 0, 0) at index 0 brackets every member in [1, q-2].
+// The empty leaf is 0, and the sentinel (0, q-1, 0, 0, 0, 0, 0, 0) at index 0 brackets every member in [1, q-2].
 type Record struct {
 	Member              frontend.Variable
 	Next                frontend.Variable

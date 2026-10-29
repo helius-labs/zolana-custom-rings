@@ -2,9 +2,9 @@
 
 use solana_signature::Signature;
 use spr_client::AsyncRpc;
-use spr_indexer_api::{Base64String, SerializablePubkey, SerializableSignature};
+use spr_indexer_api::{SerializablePubkey, SerializableSignature};
 use zolana_ring_client::rpc::{
-    PrepareRelayRequest, RelayIntent, RelayProofInputs, RelayQuote, RelayRail,
+    PrepareRelayRequest, ProofInputBytes, RelayIntent, RelayProofInputs, RelayQuote, RelayRail,
 };
 use zolana_ring_transaction::RingDelivery;
 
@@ -59,7 +59,7 @@ impl RingTransfer<Anonymous<'_>> {
             ring: SerializablePubkey(self.ring.program_id()),
             quote,
             intent: RelayIntent::Anonymous {
-                proof_inputs: Base64String(proof_inputs.to_vec()),
+                proof_inputs: ProofInputBytes::new(proof_inputs),
                 owner_signature: SerializableSignature(Signature::from(owner_signature)),
             },
         }))

@@ -24,9 +24,9 @@ use spr_transaction::{
     Utxo,
 };
 use zolana_ring_client::rpc::{
-    GetRelayQuoteRequest, GetRelayStatusRequest, PrepareRelayRequest, RelayIntent, RelayOperation,
-    RelayProofInputs, RelayQuote, RelayRail, RelayStatus, RelayStep, SubmitRelayRequest,
-    GET_RELAY_QUOTE, GET_RELAY_STATUS, PREPARE_RELAY, SUBMIT_RELAY,
+    GetRelayQuoteRequest, GetRelayStatusRequest, PrepareRelayRequest, ProofInputBytes, RelayIntent,
+    RelayOperation, RelayProofInputs, RelayQuote, RelayRail, RelayStatus, RelayStep,
+    SubmitRelayRequest, GET_RELAY_QUOTE, GET_RELAY_STATUS, PREPARE_RELAY, SUBMIT_RELAY,
 };
 use zolana_ring_rpc::{
     relay_module, ChainOutcome, FeePayerSubmit, ProvenRelay, Relay, RelayChain, RelayParts,
@@ -247,7 +247,7 @@ fn signed_request(quote: RelayQuote, proof_inputs: &RelayProofInputs) -> Prepare
             .expect("signature"),
     )
     .into();
-    let encoded = proof_inputs.encode().expect("encode").to_vec().into();
+    let encoded = ProofInputBytes::new(proof_inputs.encode().expect("encode"));
     PrepareRelayRequest {
         ring: RING.into(),
         quote,

@@ -215,8 +215,8 @@ async function buildRingMerge(
     );
     const cosigner = demanded === undefined ? undefined : params.cosigner;
     const owner = params.keys.address();
-    if (config.mode === "anonymous")
-      checkSignersHideOwner(owner.signingPublicKey.ed25519(), [params.feePayer, demanded]);
+    // The merge circuit keeps the owner off the payer and co-signer on every ring.
+    checkSignersHideOwner(owner.signingPublicKey.ed25519(), [params.feePayer, demanded]);
     const asset = params.asset ?? SOL_MINT;
     const reserved = reservedUtxoKeys(params.wallet);
     if (retry.entries !== undefined) checkRetainedEntries(params.wallet, retry.entries);

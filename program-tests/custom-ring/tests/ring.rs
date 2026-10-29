@@ -560,7 +560,7 @@ impl<'a> DefaultRingDeposit<'a> {
     }
 }
 
-/// `cosigner` must be the co-signer the config demands.
+/// `cosigner` must hold a record covering every class the transfer demands.
 struct OwnerTransfer<'a> {
     ring: CustomRing,
     sender: &'a ShieldedKeypair,
@@ -594,7 +594,7 @@ impl OwnerTransfer<'_> {
         assert_eq!(
             proven.co_signer,
             self.cosigner.map(|cosigner| cosigner.pubkey()),
-            "the config demands exactly this co-signer"
+            "the proven transfer carries the demanded co-signer"
         );
         let signers: Vec<&(dyn Signer + Sync)> = self
             .cosigner

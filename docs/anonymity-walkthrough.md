@@ -13,7 +13,7 @@ A **mode** fixes the rail of every transfer on a ring. `CreateConfig` sets `Anon
 
 ### Rail
 
-A **rail** is the signing form of a transfer. The instruction tag and the mode select it, never the frame, the transfer's compact instruction data (`RingRail::of`). The payer is SPP account `0` and pays rent and fees. A co-signer is an optional key in the ring config. The program demands its signature when its scope or an outflow limit names the operation.
+A **rail** is the signing form of a transfer. The instruction tag and the mode select it, never the frame, the transfer's compact instruction data (`RingRail::of`). The payer is SPP account `0` and pays rent and fees. A co-signer is an optional key with its own `CoSigner` record. The program demands its signature when its scope or an outflow limit names the operation.
 
 | Rail | Mode | Who signs | SPP circuit |
 | --- | --- | --- | --- |
@@ -44,7 +44,7 @@ A **first payment** is a payment to a recipient the sender's viewing history doe
 
 ### Party identities
 
-The **party identities** are `solana_owner_identity` of three public keys, `0` when absent: the payer, the configured co-signer, and the one withdrawal destination key. `solana_owner_identity(key)` is `hash_bytes(0x53 || key)`, the owner identity zolana stores in a note. The Solana fee payer of the outer transaction is no party identity, and the program does not check it.
+The **party identities** are `solana_owner_identity` of three public keys, `0` when absent: the payer, the signing co-signer, and the one withdrawal destination key. `solana_owner_identity(key)` is `hash_bytes(0x53 || key)`, the owner identity zolana stores in a note. The Solana fee payer of the outer transaction is no party identity, and the program does not check it.
 
 ### Entry spend
 
@@ -98,7 +98,7 @@ Each leg puts one more key on chain. No check finds a `K` or a `D` that belongs 
 
 The program rebuilds the anonymous audit statement, the public values the proof binds, from the frame and the accounts. The circuit binds three things:
 
-1. **The sender to the spent notes**: every spent note is the hidden owner's and reopens SPP's `private_tx_hash`, the blinded hash over the spent note hashes and the output hashes that SPP's proof binds. The hidden owner differs from the payer, the configured co-signer and the withdrawal destination.
+1. **The sender to the spent notes**: every spent note is the hidden owner's and reopens SPP's `private_tx_hash`, the blinded hash over the spent note hashes and the output hashes that SPP's proof binds. The hidden owner differs from the payer, the signing co-signer and the withdrawal destination.
 2. **Each output to the disclosure**: a ring output's owner is the identity of the owner key the disclosure opens, every live output's asset and amount are disclosed, every blinding derives from the sealed key, and no output carries data.
 3. **The auditor message to the transfer**: it seals `tx_viewing_sk` to the auditor, opens every output, and names every spent note by hash and 16-byte prefixes, or by full openings on an entry spend.
 
