@@ -62,6 +62,24 @@ import {
   readerKeyFromBytes,
 } from "../operations/management/reader-access.js";
 import { memberOfTag } from "../protocol/membership/policy.js";
+import {
+  decodeRelayQuote,
+  decodeRelayStatus,
+  decodeRelayStep,
+  encodePrepareRelayRequest,
+  encodeRelayQuoteRequest,
+  encodeRelayStatusRequest,
+  encodeSubmitRelayRequest,
+} from "../protocol/ring-rpc/ring-rpc-codec.js";
+import {
+  RingRpcMethod,
+  type PrepareRelayRequest,
+  type RelayQuote,
+  type RelayQuoteRequest,
+  type RelayStatus,
+  type RelayStep,
+  type SubmitRelayRequest,
+} from "../protocol/ring-rpc/ring-rpc-types.js";
 
 const base58Decoder = getBase58Decoder();
 const base64Decoder = getBase64Decoder();
@@ -981,6 +999,33 @@ export class RingRpc {
       ),
       ...(cursor === undefined ? {} : { cursor }),
     });
+  }
+
+  async getRelayQuote(request: RelayQuoteRequest, context?: RequestContext): Promise<RelayQuote> {
+    return decodeRelayQuote(
+      await this.#call(RingRpcMethod.getRelayQuote, encodeRelayQuoteRequest(request), context),
+    );
+  }
+
+  async prepareRelay(request: PrepareRelayRequest, context?: RequestContext): Promise<RelayStep> {
+    return decodeRelayStep(
+      await this.#call(RingRpcMethod.prepareRelay, encodePrepareRelayRequest(request), context),
+    );
+  }
+
+  async submitRelay(request: SubmitRelayRequest, context?: RequestContext): Promise<RelayStatus> {
+    return decodeRelayStatus(
+      await this.#call(RingRpcMethod.submitRelay, encodeSubmitRelayRequest(request), context),
+    );
+  }
+
+  async getRelayStatus(
+    relayId: RelayStep["relayId"],
+    context?: RequestContext,
+  ): Promise<RelayStatus> {
+    return decodeRelayStatus(
+      await this.#call(RingRpcMethod.getRelayStatus, encodeRelayStatusRequest(relayId), context),
+    );
   }
 
   // `params` is the request object, not a positional list.

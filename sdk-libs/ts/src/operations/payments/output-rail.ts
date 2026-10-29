@@ -105,6 +105,22 @@ export class AnonymousPlan {
     );
   }
 
+  /** Rust `AnonymousPlan::from_tags`, `dummyTags` exactly as a sealed plan drew them. */
+  static fromTags(
+    senderTag: ViewTag,
+    payments: readonly TaggedPayment[],
+    dummyTags: readonly ViewTag[],
+  ): AnonymousPlan {
+    if (dummyTags.length !== MAX_OUTPUTS)
+      throw new TransactionError("TRANSACTION_TOO_MANY_OUTPUTS");
+    return new AnonymousPlan(senderTag, payments, Object.freeze([...dummyTags]));
+  }
+
+  /** Rust `AnonymousPlan::dummy_tags`, one per output slot. */
+  dummyTags(): readonly ViewTag[] {
+    return this.#dummyTags;
+  }
+
   withPayment(payment: TaggedPayment): AnonymousPlan {
     return new AnonymousPlan(
       this.senderTag,

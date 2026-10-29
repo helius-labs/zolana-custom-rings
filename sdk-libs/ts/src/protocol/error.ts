@@ -137,6 +137,12 @@ export const RING_ERROR_CODES = [
   "RING_RECIPIENT_KEY_NOT_CONTRIBUTORY",
   "RING_FIRST_CONTACT_REQUIRED",
   "RING_ANONYMOUS_SUBMISSION_REQUIRED",
+  "RING_ANONYMOUS_RELAY_REQUIRED",
+  "RING_RELAY_ID_MISMATCH",
+  "RING_RELAY_MESSAGE_INVALID",
+  "RING_RELAY_OWNER_SIGNATURE",
+  "RING_RELAY_PAYER_MISMATCH",
+  "RING_RELAY_PROOF_INPUTS",
 ] as const;
 import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/zolana/internal";
 import type { ErrorEnvelope } from "@heliuslabs/zolana";

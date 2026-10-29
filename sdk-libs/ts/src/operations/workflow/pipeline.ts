@@ -7,7 +7,7 @@ import type { AccountMeta, Instruction } from "@solana/kit";
 import { compressG2, meta, treeAddress, bytesKey, equalBytes } from "@heliuslabs/zolana/internal";
 import { type RingProver, type RingRecordReader } from "../../rpc/ports.js";
 import type { ChainReader, ProvenRingTransact, TreeContext } from "@heliuslabs/zolana/client";
-import { ringTransactAccounts } from "@heliuslabs/zolana/interface";
+import { ringTransactAccounts, type Shape } from "@heliuslabs/zolana/interface";
 import type {
   Address,
   Bytes32,
@@ -211,13 +211,27 @@ export function proveStagedTransfer(
   });
 }
 
-/** Every chain value is read once, the audit secret lives until `use` settles. */
-async function assembleStagedTransfer<T>(
-  input: StagedTransferInput,
-  context: RequestContext | undefined,
-  use: (assembled: AssembledTransfer) => Promise<T>,
-): Promise<T> {
-  const { client, ringProgramId, config, staged } = input;
+/** A staged transfer whose external data is final, Rust `Sealed`, before any record read. */
+export interface SealedTransfer {
+  readonly sealed: SealedAudit;
+  readonly audit: AuditLayout;
+  readonly published: readonly PublishedSlot[];
+  readonly publishedInputs: number;
+  readonly senderBundle: SenderBundle | undefined;
+  readonly shape: Shape;
+  /** The owner signs its `messageHash`. */
+  readonly proofInputs: SppProofInputs;
+}
+
+/** Rust `Pipeline::seal`, the caller wipes `sealed.ephemeralSecret`. */
+export function sealStagedTransfer(
+  input: Readonly<{
+    ringProgramId: Address;
+    config: RingProgramConfig;
+    staged: Omit<StagedTransfer, "spend"> & Readonly<{ spend: Pick<RailSpend, "rail"> }>;
+  }>,
+): SealedTransfer {
+  const { ringProgramId, config, staged } = input;
   const { rail, sender, spend } = staged;
   const ringRail = spend.rail;
   checkDistinctInputs(staged.proofInputs);
@@ -252,7 +266,34 @@ async function assembleStagedTransfer<T>(
     auditor,
   });
   try {
-    const proofInputs = withAuditorMessage(staged.proofInputs, sealedAuditMessage(sealed, auditor));
+    return Object.freeze({
+      sealed,
+      audit,
+      published,
+      publishedInputs: publishedInputs.length,
+      senderBundle,
+      shape,
+      proofInputs: withAuditorMessage(staged.proofInputs, sealedAuditMessage(sealed, auditor)),
+    });
+  } catch (cause) {
+    sealed.ephemeralSecret.fill(0);
+    throw cause;
+  }
+}
+
+/** Every chain value is read once, the audit secret lives until `use` settles. */
+async function assembleStagedTransfer<T>(
+  input: StagedTransferInput,
+  context: RequestContext | undefined,
+  use: (assembled: AssembledTransfer) => Promise<T>,
+): Promise<T> {
+  const { client, ringProgramId, config, staged } = input;
+  const { rail, sender, spend } = staged;
+  const ringRail = spend.rail;
+  const { sealed, audit, published, publishedInputs, senderBundle, shape, proofInputs } =
+    sealStagedTransfer(input);
+  const auditor = config.auditorPublicKey;
+  try {
     const slots = publicSlots(proofInputs.externalData.interfaceTransfers);
     const senderPkHash = sender.signingPublicKey.ownerProofInputHash();
     const policy = config.hasPolicy
@@ -349,7 +390,7 @@ async function assembleStagedTransfer<T>(
       Object.freeze({
         sealed,
         published,
-        publishedInputs: publishedInputs.length,
+        publishedInputs,
         proofInputs,
         slots,
         senderPkHash,

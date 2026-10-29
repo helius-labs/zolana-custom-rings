@@ -1,14 +1,28 @@
 /** The three rails of a ring transfer, Rust `RingTransfer<Owner>`, `<Anonymous>` and `<Delegated>`. */
-import { ownerSignerAddresses, prepareRingAuthorityTransfer } from "@heliuslabs/zolana/internal";
+import { getBase58Decoder, getBase64Decoder, type Signature } from "@solana/kit";
+
+import {
+  equalBytes,
+  ownerSignerAddresses,
+  prepareRingAuthorityTransfer,
+} from "@heliuslabs/zolana/internal";
 import type { AnonymousRingTransactProver } from "../../rpc/ports.js";
 import type { ProofAuthority, Prover, WalletKeys } from "@heliuslabs/zolana/client";
 import { type Shape, InstructionTag } from "@heliuslabs/zolana/interface";
-import type { Address, RequestContext, TransactWithdrawal } from "@heliuslabs/zolana/interface";
-import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
+import type {
+  Address,
+  Bytes32,
+  RequestContext,
+  TransactWithdrawal,
+} from "@heliuslabs/zolana/interface";
+import type { NullifierKey, ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import { ViewingKey } from "@heliuslabs/zolana/keypair";
-import type { AssetRegistry, ProofInputUtxo } from "@heliuslabs/zolana/transaction";
+import type { AssetRegistry, ProofInputUtxo, WalletUtxo } from "@heliuslabs/zolana/transaction";
 import { type ConfidentialTransfer, type PreparedTransfer } from "@heliuslabs/zolana/transaction";
 import { DELIVERED_AUDIT_CAPACITIES } from "../../protocol/codec/ring-disclosure-layout.js";
+import { encodeRelayProofInputs } from "../../protocol/ring-rpc/relay-proof-inputs.js";
+import type { RelayIntent, RelayQuote } from "../../protocol/ring-rpc/ring-rpc-types.js";
+import { PreparedRelay } from "../../rpc/relay.js";
 
 import {
   anonymousExitTokenOwner,
@@ -24,6 +38,8 @@ import { RingError } from "../../protocol/error.js";
 import { anonymousPartyIdentities } from "../../protocol/membership/parties.js";
 import {
   proveStagedTransfer,
+  sealStagedTransfer,
+  type AnonymousSpendValues,
   type ProvenRingTransfer,
   type RingProvingClient,
   type RingTransactionFrame,
@@ -37,6 +53,9 @@ import {
   type TransferTags,
   type ViewingHistory,
 } from "../../state/viewing-history.js";
+
+const base58 = getBase58Decoder();
+const base64 = getBase64Decoder();
 
 /** @internal */
 export interface RingTransferApproval {
@@ -266,6 +285,142 @@ export class AnonymousTransfer {
     context: RequestContext | undefined,
   ): Promise<ProvenRingTransfer> {
     const { ringProgramId, keys } = this.#owner;
+    const { config, staged, prepared, owner, exitTokenOwner } = await this.#stage(client, context);
+    try {
+      const spend: StagedTransfer["spend"] = {
+        rail: "anonymous",
+        anonymous: staged.anonymous,
+        prove: async (inputs, _coSigner, proveContext) =>
+          client.proveAnonymousRingTransact(
+            {
+              proofInputs: inputs,
+              ringProgramId,
+              owner: {
+                publicKey: owner,
+                signature: await this.#signer.sign(inputs.messageHash(), proveContext),
+              },
+              ...(exitTokenOwner === undefined ? {} : { exitTokenOwner }),
+              keys,
+              config: { outputTree: client },
+            },
+            proveContext,
+          ),
+      };
+      return await proveStagedTransfer(
+        {
+          client,
+          ringProgramId,
+          config,
+          staged: { ...staged, spend },
+          ...approvedStage(approval, prepared),
+        },
+        context,
+      );
+    } finally {
+      staged.rail.txViewingKey.destroy();
+    }
+  }
+
+  /** Rust `prepare_relay`, the wallet reads no Merkle path and no record. */
+  async prepareRelay(
+    client: Pick<RingProvingClient, "getAccount">,
+    input: RingRelayInput,
+    context?: RequestContext,
+  ): Promise<PreparedRingRelay> {
+    return this.#prepareRelay(client, input, undefined, context);
+  }
+
+  /** @internal */
+  prepareRelayApproved(
+    client: Pick<RingProvingClient, "getAccount">,
+    input: RingRelayInput,
+    approval: RingTransferApproval,
+    context?: RequestContext,
+  ): Promise<PreparedRingRelay> {
+    return this.#prepareRelay(client, input, approval, context);
+  }
+
+  async #prepareRelay(
+    client: Pick<RingProvingClient, "getAccount">,
+    input: RingRelayInput,
+    approval: RingTransferApproval | undefined,
+    context: RequestContext | undefined,
+  ): Promise<PreparedRingRelay> {
+    const { ringProgramId, keys } = this.#owner;
+    const { quote } = input;
+    const { config, staged, prepared } = await this.#stage(client, context);
+    try {
+      if (prepared.payer !== quote.feePayer)
+        throw new RingError("RING_RELAY_PAYER_MISMATCH", {
+          details: { payer: prepared.payer, feePayer: quote.feePayer },
+        });
+      await approval?.approve({ prepared, coSigner: undefined });
+      const sealed = sealStagedTransfer({
+        ringProgramId,
+        config,
+        staged: { ...staged, spend: { rail: "anonymous" } },
+      });
+      let payload: Uint8Array | undefined;
+      try {
+        const { proofInputs } = sealed;
+        const ownerSignature = await this.#signer.sign(proofInputs.messageHash(), context);
+        const plan = staged.rail.delivery;
+        if (plan.kind !== "anonymous") throw new RingError("RING_NOT_ANONYMOUS");
+        payload = encodeRelayProofInputs({
+          rail: {
+            kind: "anonymous",
+            plan: plan.plan,
+            ...(this.#exitTokenOwner === undefined ? {} : { exitTokenOwner: this.#exitTokenOwner }),
+          },
+          ringProgramId,
+          sender: keys.address(),
+          nullifierKey: input.nullifierKey,
+          txViewingKey: staged.rail.txViewingKey,
+          auditEphemeralKey: sealed.sealed.ephemeralSecret,
+          inputs: proofInputs.inputUtxos,
+          leafIndexes: proofInputs.inputUtxos.map((spent) => leafIndexOf(spent, input.notes)),
+          outputs: proofInputs.outputs,
+          externalData: proofInputs.externalData,
+          ...(staged.withdrawal === undefined ? {} : { withdrawal: staged.withdrawal }),
+          blindingSeed: proofInputs.blindingSeed,
+          outputTreeId: proofInputs.outputTreeId,
+          assets: this.#owner.assets,
+        });
+        return Object.freeze({
+          relay: new PreparedRelay({
+            ring: ringProgramId,
+            quote,
+            intent: {
+              operation: "anonymous",
+              proofInputs: base64.decode(payload) as RelayIntent["proofInputs"],
+              ownerSignature: base58.decode(ownerSignature) as Signature,
+            },
+          }),
+          viewingHistory: staged.anonymous.viewingHistory,
+        });
+      } finally {
+        payload?.fill(0);
+        sealed.sealed.ephemeralSecret.fill(0);
+      }
+    } finally {
+      staged.rail.txViewingKey.destroy();
+    }
+  }
+
+  /** The caller destroys `staged.rail.txViewingKey`. */
+  async #stage(
+    client: Pick<RingProvingClient, "getAccount">,
+    context: RequestContext | undefined,
+  ): Promise<
+    Readonly<{
+      config: RingProgramConfig;
+      staged: Omit<StagedTransfer, "spend"> & Readonly<{ anonymous: AnonymousSpendValues }>;
+      prepared: PreparedTransfer;
+      owner: Bytes32;
+      exitTokenOwner: Address | undefined;
+    }>
+  > {
+    const { ringProgramId, keys } = this.#owner;
     const config = await activeConfig(client, ringProgramId, context);
     if (config.mode !== "anonymous")
       throw new RingError("RING_NOT_ANONYMOUS", { details: { ringProgramId } });
@@ -320,42 +475,22 @@ export class AnonymousTransfer {
       );
       if (foreign >= 0) throw new RingError("RING_MIXED_OWNERS", { details: { index: foreign } });
       checkEntryInputs(proofInputs);
-      const staged: StagedTransfer = {
+      const staged = {
         proofInputs,
         rail,
         sender,
         ownerSigners: [],
         ...(this.#withdrawal === undefined ? {} : { withdrawal: this.#withdrawal }),
-        spend: {
-          rail: "anonymous",
-          prove: async (inputs, _coSigner, proveContext) =>
-            client.proveAnonymousRingTransact(
-              {
-                proofInputs: inputs,
-                ringProgramId,
-                owner: {
-                  publicKey: owner,
-                  signature: await this.#signer.sign(inputs.messageHash(), proveContext),
-                },
-                ...(exitTokenOwner === undefined ? {} : { exitTokenOwner }),
-                keys,
-                config: { outputTree: client },
-              },
-              proveContext,
-            ),
-          anonymous: {
-            ...(exitTokenOwner === undefined ? {} : { tokenOwner: exitTokenOwner }),
-            partyIdentities,
-            viewingHistory: tags.history,
-          },
+        anonymous: {
+          ...(exitTokenOwner === undefined ? {} : { tokenOwner: exitTokenOwner }),
+          partyIdentities,
+          viewingHistory: tags.history,
         },
       };
-      return await proveStagedTransfer(
-        { client, ringProgramId, config, staged, ...approvedStage(approval, prepared) },
-        context,
-      );
-    } finally {
+      return Object.freeze({ config, staged, prepared, owner, exitTokenOwner });
+    } catch (cause) {
       rail.txViewingKey.destroy();
+      throw cause;
     }
   }
 
@@ -534,7 +669,7 @@ function approvedStage(
 
 /** The ring's config once SPP's registration admits it, Rust `require_config` and `require_active`. */
 async function activeConfig(
-  client: RingProvingClient,
+  client: Pick<RingProvingClient, "getAccount">,
   ringProgramId: Address,
   context: RequestContext | undefined,
 ): Promise<RingProgramConfig> {
@@ -586,4 +721,28 @@ function checkWithdrawalAccounts(
             withdrawal.mint === leg.mint &&
             withdrawal.recipientTokenAccount === leg.tokenAccount);
   if (!matches) throw new RingError("RING_SETTLEMENT_ACCOUNTS_INVALID");
+}
+
+export interface RingRelayInput {
+  /** Names the fee payer the transfer pays from. */
+  readonly quote: RelayQuote;
+  /** Ring RPC proves with it and so links every spend of the owner. */
+  readonly nullifierKey: NullifierKey;
+  /** The wallet notes the transfer spends, each names its leaf. */
+  readonly notes: readonly WalletUtxo[];
+}
+
+/** Store `viewingHistory` in place of the old one before `relay.send`. */
+export interface PreparedRingRelay {
+  readonly relay: PreparedRelay;
+  readonly viewingHistory: ViewingHistory;
+}
+
+/** A padding slot names no leaf. */
+function leafIndexOf(input: ProofInputUtxo, notes: readonly WalletUtxo[]): bigint {
+  if (input.isDummy()) return 0n;
+  const note = notes.find((entry) => equalBytes(entry.nullifier, input.nullifier()));
+  if (note === undefined)
+    throw new RingError("RING_RELAY_PROOF_INPUTS", { details: { reason: "leafIndex" } });
+  return note.outputContext.leafIndex;
 }
