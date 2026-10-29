@@ -2,15 +2,20 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use clap::Parser;
+use custom_ring_sdk::RingClient;
 use log::info;
+use solana_signer::Signer;
+use spr_client::{AsyncProverClient, AsyncSolanaRpc, AsyncZolanaClient, AsyncZolanaIndexer};
 use zolana_ring_client::{
     auditor_view_tag,
     rpc::{public_key_path, read_auditor_key, write_auditor_key, KeyMode},
 };
 use zolana_ring_rpc::{
-    read_root_secret, run_server, write_root_secret, ChainSource, Cli, Command, Hub, KeyKind,
-    KeygenArgs, LiveStorageChain, OriginPolicy, ServeArgs, ServerOptions, Store, TransactionSource,
-    Upstreams, RECORD_FLUSH_INTERVAL, UTXO_BACKFILL_INTERVAL,
+    read_fee_payer, read_root_secret, run_server, write_fee_payer, write_root_secret, ChainSource,
+    Cli, Command, FeePayerSubmit, Hub, KeyKind, KeygenArgs, LiveStorageChain, OriginPolicy, Relay,
+    RelayParts, SdkRelayProver, ServeArgs, ServedRings, ServerOptions, SolanaRelayChain, Store,
+    TransactionSource, Upstreams, RECORD_FLUSH_INTERVAL, RELAY_TRACK_INTERVAL,
+    UTXO_BACKFILL_INTERVAL,
 };
 
 /// One flush at a time, the rest serve submits and status reads.
@@ -48,6 +53,12 @@ fn keygen(args: KeygenArgs) -> anyhow::Result<()> {
                 .with_context(|| format!("writing {}", args.out.display()))?;
             println!("root secret {}", args.out.display());
         }
+        KeyKind::FeePayer => {
+            let fee_payer = write_fee_payer(&args.out)
+                .with_context(|| format!("writing {}", args.out.display()))?;
+            println!("secret      {}", args.out.display());
+            println!("fee payer   {}", fee_payer.pubkey());
+        }
     }
     Ok(())
 }
@@ -70,6 +81,18 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         max_connections: args.max_connections.get(),
         request_timeout: args.request_timeout(),
     };
+    let store = match &args.store_url {
+        Some(url) => Some(
+            Store::open(url, STORE_CONNECTIONS)
+                .await
+                .context("opening the service store")?,
+        ),
+        None => None,
+    };
+    let relay = match &args.fee_payer_key_file {
+        Some(path) => Some(relay(&args, path, store.clone())?),
+        None => None,
+    };
     let origin_transport = args.origin_transport();
     let access = args.key_access();
     let mut origin_policy = OriginPolicy::new(args.allow_origins).with_transport(origin_transport);
@@ -77,10 +100,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         origin_policy = origin_policy.with_relying_party_id(relying_party_id);
     }
     let mut builder = Hub::builder(source, genesis_hash).with_origins(origin_policy.build()?);
-    if let Some(store_url) = &args.store_url {
-        let store = Store::open(store_url, STORE_CONNECTIONS)
-            .await
-            .context("opening the service store")?;
+    if let Some(store) = store {
         builder = builder.with_store(store);
     }
     if let Some(prover_url) = &args.prover_url {
@@ -89,6 +109,10 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     }
     if args.encrypted_reader_grants {
         builder = builder.with_encrypted_grants();
+    }
+    if let Some(relay) = relay {
+        info!("relay fee payer {}", relay.fee_payer());
+        builder = builder.with_relay(Arc::new(relay));
     }
     let hub = match (&args.auditor_key_file, &args.root_secret_file) {
         (Some(path), None) => {
@@ -108,6 +132,13 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     };
     let hub = Arc::new(hub);
     info!("service pubkey {}", hub.service_pubkey());
+    if let Some(relay) = hub.relay() {
+        anyhow::ensure!(
+            relay.fee_payer() != hub.service_pubkey(),
+            "the fee payer key must differ from the service key"
+        );
+        tokio::spawn(relay.clone().run(RELAY_TRACK_INTERVAL));
+    }
     match (hub.mode(), hub.local_view_tag()) {
         (KeyMode::Local, Some(tag)) => info!(
             "ring-rpc listening on {}:{} for auditor tag {}",
@@ -131,4 +162,34 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     handle.stop()?;
     handle.stopped().await;
     Ok(())
+}
+
+/// One ring with a local auditor key, any ring with derived keys.
+fn relay(
+    args: &ServeArgs,
+    fee_payer_key_file: &std::path::Path,
+    store: Option<Store>,
+) -> anyhow::Result<Relay> {
+    let fee_payer = read_fee_payer(fee_payer_key_file, args.key_access())
+        .with_context(|| format!("loading {}", fee_payer_key_file.display()))?;
+    let (Some(store), Some(prover_url)) = (store, &args.prover_url) else {
+        anyhow::bail!("--fee-payer-key-file needs --store-url and --prover-url");
+    };
+    let zolana = AsyncZolanaClient::new(
+        AsyncSolanaRpc::new(&args.rpc_url),
+        AsyncZolanaIndexer::new(&args.indexer_url),
+        AsyncProverClient::new(prover_url.clone()),
+    );
+    let prover = RingClient::new(zolana, AsyncProverClient::new(prover_url.clone()));
+    let chain = Arc::new(SolanaRelayChain::new(AsyncSolanaRpc::new(&args.rpc_url)));
+    Ok(Relay::new(RelayParts {
+        store,
+        prover: Arc::new(SdkRelayProver::new(prover)),
+        submit: Arc::new(FeePayerSubmit::new(fee_payer, chain.clone())),
+        chain,
+        rings: match args.ring_program_id {
+            Some(ring) => ServedRings::One(ring),
+            None => ServedRings::Any,
+        },
+    }))
 }

@@ -2,6 +2,7 @@ use sea_orm_migration::prelude::*;
 
 mod records_000001_queue;
 mod grants;
+mod relay_000001_relays;
 
 pub struct Migrator;
 
@@ -11,6 +12,7 @@ impl MigratorTrait for Migrator {
         vec![
             Box::new(records_000001_queue::Migration),
             Box::new(grants::Migration),
+            Box::new(relay_000001_relays::Migration),
         ]
     }
 }

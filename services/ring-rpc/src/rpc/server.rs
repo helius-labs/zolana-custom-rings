@@ -29,11 +29,13 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use zolana_ring_client::rpc::{
     CreateAuditorKeyRequest, CreateAuditorKeyResponse, GetAuditedUtxosRequest,
-    GetDecryptedTransactionsRequest, GetRecordUpdateStatusRequest, HealthResponse, PagedRead,
-    RingDepositsRequest, RingDepositsResponse, RingState, RingStatusRequest, RingStatusResponse,
-    SetReaderGrantRequest, SubmitRecordUpdateRequest, CREATE_AUDITOR_KEY, GET_AUDITED_MERGES,
-    GET_AUDITED_UTXOS, GET_DECRYPTED_TRANSACTIONS, GET_RECORD_UPDATE_STATUS, HEALTH, RING_DEPOSITS,
-    RING_STATUS, SET_READER_GRANT, SUBMIT_RECORD_UPDATE,
+    GetDecryptedTransactionsRequest, GetRecordUpdateStatusRequest, GetRelayQuoteRequest,
+    GetRelayStatusRequest, HealthResponse, PagedRead, PrepareRelayRequest, RingDepositsRequest,
+    RingDepositsResponse, RingState, RingStatusRequest, RingStatusResponse, SetReaderGrantRequest,
+    SubmitRecordUpdateRequest, SubmitRelayRequest, CREATE_AUDITOR_KEY, GET_AUDITED_MERGES,
+    GET_AUDITED_UTXOS, GET_DECRYPTED_TRANSACTIONS, GET_RECORD_UPDATE_STATUS, GET_RELAY_QUOTE,
+    GET_RELAY_STATUS, HEALTH, PREPARE_RELAY, RING_DEPOSITS, RING_STATUS, SET_READER_GRANT,
+    SUBMIT_RECORD_UPDATE, SUBMIT_RELAY,
 };
 
 use crate::{
@@ -42,6 +44,7 @@ use crate::{
     hub::{Hub, Lane, ReadinessStatus},
     metering::{Metering, MeteringHeaderLayer},
     origins::{OriginError, Origins},
+    relay::Relay,
     upstream::{DepositPage, TransactionSource},
 };
 
@@ -136,6 +139,7 @@ fn cors(origins: &Origins) -> Result<CorsLayer, OriginError> {
 pub fn rpc_module<S: TransactionSource + 'static>(
     hub: Arc<Hub<S>>,
 ) -> Result<RpcModule<Arc<Hub<S>>>, RegisterMethodError> {
+    let relay = hub.relay().cloned();
     let mut module = RpcModule::new(hub);
     module.register_async_method(HEALTH, |_, hub, _| async move {
         Ok::<_, ErrorObjectOwned>(HealthResponse {
@@ -279,27 +283,55 @@ pub fn rpc_module<S: TransactionSource + 'static>(
             service.set_reader_grant(&request).await
         },
     )?;
+    if let Some(relay) = relay {
+        module.merge(relay_module(relay)?)?;
+    }
+    Ok(module)
+}
+
+pub fn relay_module(relay: Arc<Relay>) -> Result<RpcModule<Arc<Relay>>, RegisterMethodError> {
+    let mut module = RpcModule::new(relay);
+    method(
+        &mut module,
+        GET_RELAY_QUOTE,
+        |relay, request: GetRelayQuoteRequest| async move { relay.quote(&request).await },
+    )?;
+    method(
+        &mut module,
+        PREPARE_RELAY,
+        |relay, request: PrepareRelayRequest| async move { relay.prepare(&request).await },
+    )?;
+    method(
+        &mut module,
+        SUBMIT_RELAY,
+        |relay, request: SubmitRelayRequest| async move { relay.submit(&request).await },
+    )?;
+    method(
+        &mut module,
+        GET_RELAY_STATUS,
+        |relay, request: GetRelayStatusRequest| async move { relay.status(&request).await },
+    )?;
     Ok(module)
 }
 
 /// Every handler error becomes a JSON-RPC error through one conversion.
-fn method<S, P, T, F, Fut>(
-    module: &mut RpcModule<Arc<Hub<S>>>,
+fn method<C, P, T, F, Fut>(
+    module: &mut RpcModule<Arc<C>>,
     name: &'static str,
     handler: F,
 ) -> Result<(), RegisterMethodError>
 where
-    S: TransactionSource + 'static,
+    C: Send + Sync + 'static,
     P: DeserializeOwned + Send + 'static,
     T: Serialize + Clone + Send + 'static,
-    F: Fn(Arc<Hub<S>>, P) -> Fut + Clone + Send + Sync + 'static,
+    F: Fn(Arc<C>, P) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<T, RingRpcError>> + Send,
 {
-    module.register_async_method(name, move |params, hub, _| {
+    module.register_async_method(name, move |params, context, _| {
         let handler = handler.clone();
         async move {
             let request = params.parse::<P>()?;
-            handler(Arc::clone(&*hub), request)
+            handler(Arc::clone(&*context), request)
                 .await
                 .map_err(ErrorObjectOwned::from)
         }

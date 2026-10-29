@@ -35,6 +35,7 @@ use crate::{
     origins::Origins,
     record_update::RecordUpdateRefusal,
     record_writer::RecordWriter,
+    relay::Relay,
     replay::ReplayGuard,
     storage_chain::StorageChain,
     upstream::{DepositHistory, DepositPage, TransactionSource},
@@ -48,6 +49,7 @@ pub struct Hub<S> {
     shared: Arc<Shared<S>>,
     keys: KeySource,
     writer: Option<Arc<RecordWriter>>,
+    relay: Option<Arc<Relay>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,6 +115,7 @@ pub struct HubBuilder<S> {
     store: Option<Store>,
     storage_chain: Option<Arc<dyn StorageChain>>,
     encrypted_grants: bool,
+    relay: Option<Arc<Relay>>,
 }
 
 pub(crate) struct Shared<S> {
@@ -220,6 +223,7 @@ impl<S: TransactionSource> Hub<S> {
             store: None,
             storage_chain: None,
             encrypted_grants: false,
+            relay: None,
         }
     }
 
@@ -267,6 +271,10 @@ impl<S: TransactionSource> Hub<S> {
 
     pub fn origins(&self) -> &Origins {
         &self.shared.origins
+    }
+
+    pub fn relay(&self) -> Option<&Arc<Relay>> {
+        self.relay.as_ref()
     }
 
     pub fn local_view_tag(&self) -> Option<[u8; 32]> {
@@ -457,6 +465,12 @@ impl<S: TransactionSource> HubBuilder<S> {
         self
     }
 
+    #[must_use = "use the updated builder"]
+    pub fn with_relay(mut self, relay: Arc<Relay>) -> Self {
+        self.relay = Some(relay);
+        self
+    }
+
     pub fn local(self, ring: Address, auditor: X25519Keypair) -> Result<Hub<S>, RingRpcError> {
         self.build(KeySource::Local { ring, auditor })
     }
@@ -522,6 +536,7 @@ impl<S: TransactionSource> HubBuilder<S> {
             shared: Arc::new(shared),
             keys,
             writer,
+            relay: self.relay,
         })
     }
 }

@@ -244,6 +244,12 @@ pub enum RingError {
     UnpinnedProvingKey(RingCircuit),
     #[error("the auditor key encryption proof is missing its BSB22 commitment")]
     MissingCommitment,
+    #[error("the relayed viewing secret does not derive the external data's viewing key")]
+    RelayViewingKeyMismatch,
+    #[error("the relayed external data does not close with the ring auditor's message")]
+    RelayAuditorMessage,
+    #[error("a relayed deposit or merge is not proven here")]
+    RelayRailUnserved,
     #[error("{signature} failed with {error}")]
     Rejected {
         signature: Signature,

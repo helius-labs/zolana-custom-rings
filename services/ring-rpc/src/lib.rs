@@ -29,8 +29,16 @@ mod origins;
 mod record_update;
 #[path = "operations/record_writer.rs"]
 mod record_writer;
+#[path = "operations/relay.rs"]
+mod relay;
+#[path = "rpc/relay_chain.rs"]
+mod relay_chain;
+#[path = "operations/relay_prover.rs"]
+mod relay_prover;
 #[path = "rpc/relay_submit.rs"]
 mod relay_submit;
+#[path = "storage/relays.rs"]
+mod relays;
 #[path = "security/replay.rs"]
 mod replay;
 #[path = "rpc/server.rs"]
@@ -49,8 +57,8 @@ mod webauthn;
 pub use audit::{AuditRead, AuditService, Page};
 pub use authorize::{ReadCheck, ReadClaim, Unauthorized, AUTH_SKEW};
 pub use config::{
-    read_root_secret, write_root_secret, Cli, Command, KeyKind, KeygenArgs, RootSecret,
-    RootSecretError, ServeArgs,
+    read_fee_payer, read_root_secret, write_fee_payer, write_root_secret, Cli, Command, KeyKind,
+    KeygenArgs, RootSecret, RootSecretError, ServeArgs,
 };
 pub use cosign::{
     AssetFlow, CoSignDecision, CoSignRefusal, CoSignRequest, CoSignSettlement, CoSigner,
@@ -64,8 +72,11 @@ pub use migration::Migrator;
 pub use origins::{OriginError, OriginPolicy, OriginTransport, Origins};
 pub use record_update::{RecordUpdateRefusal, BATCH_WINDOW_SLOTS};
 pub use record_writer::{RecordWriter, RECORD_FLUSH_INTERVAL};
+pub use relay::{Relay, RelayError, RelayParts, ServedRings, QUOTE_SLOTS, RELAY_TRACK_INTERVAL};
+pub use relay_chain::{ChainOutcome, FeePayerSubmit, RelayChain, SolanaRelayChain};
+pub use relay_prover::{ProvenRelay, RelayProofRequest, RelayProver, SdkRelayProver};
 pub use relay_submit::{CollectedSignature, RelaySubmit, RelayTransaction};
-pub use server::{rpc_module, run_server, BindPolicy, ServerError, ServerOptions};
+pub use server::{relay_module, rpc_module, run_server, BindPolicy, ServerError, ServerOptions};
 pub use storage_chain::{LatestBlockhash, LiveStorageChain, StorageChain, TransactionOutcome};
 pub use upstream::{
     ChainSource, DepositHistory, DepositPage, MergeAuditRequest, RecordsRoot, RingConfiguration,

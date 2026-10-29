@@ -154,6 +154,7 @@ impl Owner<'_> {
             },
             interface_transfer_accounts: self.interface_transfer_accounts.clone(),
             spend: Spend::Owner,
+            presealed: None,
         })
     }
 }

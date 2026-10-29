@@ -28,11 +28,13 @@ mod merge_settings;
 mod reader_grant;
 mod record_update;
 mod relay;
+mod relay_proof;
 
 pub use merge_settings::*;
 pub use reader_grant::*;
 pub use record_update::*;
 pub use relay::*;
+pub use relay_proof::*;
 
 use crate::{
     AuditError, AuditedInput, AuditedOutput, AuditedTransaction, AuditedUtxo, InputOpening,

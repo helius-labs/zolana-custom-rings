@@ -68,7 +68,7 @@ A custom ring is a Solana program that governs its notes in the zolana shielded 
 | SPP governance | Key | The SPP ring creation authority. Activates rings and enables the authority rail. |
 | Ring indexer | Server | Projects every member registry from Solana blocks and serves record openings. Forwards every other call to Photon. |
 | Ring prover | Server | The zolana prover with the ring circuits registered as extensions. Proves from a full client witness. |
-| Ring RPC | Server | Holds the auditor key. Serves audited transfers, merges and notes to readers. |
+| Ring RPC | Server | Holds the auditor key. Serves audited transfers, merges and notes to readers. Proves, pays for and sends relayed transfers. |
 | Photon | Server | The zolana SPP indexer. Serves notes, tags, nullifiers and Merkle proofs. |
 | SPP | Solana program | The zolana shielded pool. Holds every note, verifies the SPP proof, and moves a ring note only under a `ring_auth` signature. |
 
@@ -153,7 +153,7 @@ In every mode:
 
 26. The auditor opens every output, every exit's asset and amount, every deposit and merge, and every escrowed nullifier secret. Ring RPC serves every opening, blindings included, to every ring-wide reader, and to a wallet reader the rows of its wallet, with no expiry. It serves no nullifier secret. A revoked reader keeps what it read.
 27. A recipient opens its body with its viewing key and finds the asset by trial. On the anonymous rail the body names the sender's viewing key, and no proof checks it.
-28. The co-signer and the relayer see chain data only. No ring code hands them plaintext.
+28. A co-signer outside Ring RPC and a third-party relayer see chain data only. Ring RPC as relayer receives the sealed transfer with every secret its proofs take, and its co-signer sees the sender and the amount each asset moves.
 29. The ring indexer sees the members a client opens. It learns a policy transfer's sender, recipients and assets before the transfer lands, and it sees authority writes before they land. Photon pairs each spent leaf with its nullifier and sees the tags of one stream of a viewing key grouped per request. The ring prover receives the full witness. [Services](#services) gives the details.
 
 ## Constants
@@ -1403,6 +1403,8 @@ Holds the auditor key and serves audited history to readers.
 - A read that names a wallet serves only the rows where that wallet is the sender, a signer or an output owner, the merges and notes it owns, and no skipped rows. A ring-wide grant covers every wallet, a wallet grant only its own.
 - With its optional database the service also stores wallet grants. `setReaderGrant` takes the wallet's Ed25519 signature over the ring, reader and action, with the timestamp and nonce rules of a read. A row is sealed with AES-256-GCM under a key HKDF-SHA256 derives from the service key source, and it keeps in plaintext only its insert order and a keyed hash of the reader key. The newest signed row for a wallet and reader holds.
 - `ringDeposits`, `ringStatus` and `health` need no signature.
+- With a fee payer key, a store and a ring prover it relays transfers. The wallet seals the transfer and sends its proof inputs with the nullifier secret, the transaction viewing secret and the audit ephemeral secret. The service reads the record openings and SPP Merkle paths, proves every statement and pays the fees. On the anonymous and confidential rails it verifies the owner's Ed25519 signature over `SppProofInputs::message_hash` before it proves. On the anonymous rail that signature is the prepared owner authorization of the SPP proof, and the service sends at once. On the confidential and delegate rails it returns the v1 message and sends once each owner or the delegate has signed it. It does not relay deposits or merges.
+- A relay is stored by its `relayId` with its message and signatures, never its proof inputs. A repeated request returns the stored relay. The co-signer signs before the send and settles when the relay confirms or fails. A relay that has not landed when its blockhash expires fails.
 - Every audited row is bound to the confirmed SPP event the service rebuilds from Solana `getTransaction`. Photon is trusted for completeness only. A row Photon omits, or labels with no ring, never reaches a reader, and no client detects the gap.
 
 A reader receives each output's owner key, nullifier key, asset, amount and blinding, the recipient `u` on the delivered rails, and on the anonymous rail the view tag, the hidden sender and every input's opening. It receives no nullifier secret. Pages carry no signature, so a faulty service can serve a false opening to a reader that does not rebuild the commitment. `getAuditedUtxos` answers are checked by both SDKs against their requested hashes. Nonces and rate windows live in memory, so one key runs in one process.

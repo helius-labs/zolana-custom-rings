@@ -8,11 +8,10 @@ use spr_client::{
         indexed::{IndexedTransferPreparation, IndexedTransferRail, PreparedIndexedTransfer},
         transact::{AnonymousEddsaTransferInputs, AnonymousRingEddsaProver},
     },
-    AsyncRpc, AsyncWitnessReader, ClientError, ProofAuthority, ProofCompressed,
+    AsyncRpc, AsyncWitnessReader, ClientError, OwnerAuthorization, ProofAuthority, ProofCompressed,
     RingAuthorityProver, RingTransferProver, TransferInputs,
 };
 use spr_interface::instruction::{CircuitId, TreeContext};
-use spr_keypair::SigningKey;
 use spr_transaction::instructions::transact::SppProofInputs;
 
 use super::compact::OwnedAnonymousProofData;
@@ -20,7 +19,7 @@ use crate::client::{RingClient, RingIndexerBackend};
 use crate::{trees::SpendTrees, RingError};
 
 pub(super) struct HiddenSpend<'a> {
-    pub owner: &'a SigningKey,
+    pub owner: OwnerAuthorization<'a>,
 }
 
 pub(super) struct ProvenSpp {
@@ -80,7 +79,7 @@ impl SppWitness<'_> {
             let rail = match (self.rail, self.hidden) {
                 (RingRail::Anonymous, Some(hidden)) => IndexedTransferRail::AnonymousRingEddsa {
                     ring: self.ring,
-                    owner: hidden.owner.into(),
+                    owner: hidden.owner,
                 },
                 (RingRail::Delegate, _) => IndexedTransferRail::RingAuthority(self.ring),
                 (RingRail::Confidential, _) => IndexedTransferRail::Ring(self.ring),
@@ -119,7 +118,7 @@ impl SppWitness<'_> {
                     // The hidden owner signs inside the proof, every public signer slot is zero.
                     signer_pk_hashes: vec![[0; 32]; shape.signer_width()],
                     allow_dummy_inputs,
-                    owner: hidden.owner.into(),
+                    owner: hidden.owner,
                     ring_program_id: Some(self.ring),
                     shape,
                 }
