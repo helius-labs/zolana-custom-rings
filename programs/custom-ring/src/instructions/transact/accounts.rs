@@ -121,6 +121,21 @@ impl<'a> TransactCheck<'a> {
                 }
                 *data.sender_commitment()
             }
+            SignerSlot::InProofOwner(owner) => {
+                // Every input belongs to the in-proof owner, the one the policy reads as sender.
+                if !self.owner_signers(spp, window.len())?.is_empty() {
+                    return Err(CustomRingError::OwnerSignerOnInProofRail.into());
+                }
+                if co_signer == Some(owner) {
+                    return Err(CustomRingError::CoSignerIsOwner.into());
+                }
+                match policy {
+                    Some(_) => {
+                        solana_owner_identity(owner.as_array()).map_err(CustomRingError::from)?
+                    }
+                    None => [0; 32],
+                }
+            }
             SignerSlot::Owners => {
                 let owners = self.owner_signers(spp, window.len())?;
                 if owners.iter().any(|owner| !owner.is_signer()) {
@@ -207,10 +222,13 @@ impl<'a> TransactCheck<'a> {
                 + usize::from(self.config.has_policy() || self.data.withdrawal_exemption.is_some()),
         );
         let co_signer = co_signer.map(|requirement| next.pair(requirement));
-        let signer = match self.signer {
-            RailSigner::Owners => SignerSlot::Owners,
-            RailSigner::Payer => SignerSlot::Payer,
-            RailSigner::Delegate(expected) => SignerSlot::Delegate(next.slot(expected)),
+        let signer = match (self.signer, self.data.in_proof_owner) {
+            (RailSigner::Owners, Some(owner)) => {
+                SignerSlot::InProofOwner(Address::new_from_array(*owner.owner))
+            }
+            (RailSigner::Owners, None) => SignerSlot::Owners,
+            (RailSigner::Payer, _) => SignerSlot::Payer,
+            (RailSigner::Delegate(expected), _) => SignerSlot::Delegate(next.slot(expected)),
         };
         Prefix {
             co_signer,
@@ -259,6 +277,7 @@ impl Slot<CoSignRequirement> {
 
 enum SignerSlot {
     Owners,
+    InProofOwner(Address),
     Payer,
     Delegate(Slot<Address>),
 }

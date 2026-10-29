@@ -158,6 +158,7 @@ ring_errors! {
     UnmirroredRegistry = 8304 => "the registry is neither the policy records nor its curator source",
     MirrorNotSynced = 8305 => "the root mirror holds no roots of the registry the policy names",
     MirrorRootExpired = 8306 => "the revision names no unexpired root of the mirror",
+    OwnerSignerOnInProofRail = 8350 => "the in-proof owner rail takes no owner signer",
     InvalidAssetLimits = 8390 => "a window cap and its window are not set together",
     DepositMintAccountMissing = 8410 => "an spl deposit group has no mint account",
     DepositAssetIndexUnknown = 8411 => "a deposit entry names no asset group",

@@ -349,7 +349,7 @@ fn anonymous_opening(slot: &PublishedSlot<'_>) -> Result<AnonymousOutputOpening,
 fn delivered_output(slot: &PublishedSlot<'_>, tree: u16) -> Result<DeliveredOutput, RingError> {
     let output = slot.output;
     let (recipient_key, body) = match slot.wire {
-        RingOutput::Delivered { u, body, .. } => (*u, *body),
+        RingOutput::Delivered { u, body, .. } | RingOutput::Owned { u, body, .. } => (*u, *body),
         RingOutput::Anonymous { .. } | RingOutput::Exit { .. } => {
             ([0; 32], [0; RING_DELIVERED_BODY_LEN])
         }

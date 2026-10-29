@@ -14,7 +14,7 @@ pub struct RelayProofRequest<'a> {
     pub ring: Address,
     pub fee_payer: Address,
     pub proof_inputs: &'a RelayProofInputs,
-    /// Verified over `SppProofInputs::message_hash`, the proof takes it on the anonymous rail.
+    /// Verified over `SppProofInputs::message_hash`, the anonymous and confidential proofs take it.
     pub owner_signature: Option<[u8; 64]>,
 }
 

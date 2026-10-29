@@ -521,6 +521,7 @@ impl Transfer {
                 commitment_pok: &zero,
                 default_owner_tag: None,
             }),
+            in_proof_owner: None,
             spp_proof: &groth16,
             nullifiers: &tx.nullifiers,
             input_trees: InputTrees::One(TreeContext {

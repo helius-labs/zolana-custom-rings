@@ -25,8 +25,8 @@ use spr_transaction::{
 };
 use zolana_ring_client::rpc::{
     GetRelayQuoteRequest, GetRelayStatusRequest, PrepareRelayRequest, RelayIntent, RelayOperation,
-    RelayProofInputs, RelayQuote, RelayRail, RelayStatus, RelayStep, SubmitRelayRequest,
-    GET_RELAY_QUOTE, GET_RELAY_STATUS, PREPARE_RELAY, SUBMIT_RELAY,
+    RelayProofInputs, RelayQuote, RelayRail, RelayStatus, RelayStep, GET_RELAY_QUOTE,
+    GET_RELAY_STATUS, PREPARE_RELAY,
 };
 use zolana_ring_rpc::{
     relay_module, ChainOutcome, FeePayerSubmit, ProvenRelay, Relay, RelayChain, RelayParts,
@@ -51,7 +51,7 @@ impl RelayProver for RecordingProver {
             .expect("requests")
             .push((request.fee_payer, request.owner_signature));
         let signers = match request.proof_inputs.rail {
-            RelayRail::Confidential => vec![request.proof_inputs.sender.solana_address()?],
+            RelayRail::Delegate { delegate } => vec![delegate],
             _ => Vec::new(),
         };
         let accounts = core::iter::once(AccountMeta::new(request.fee_payer, true))
@@ -323,40 +323,39 @@ async fn an_anonymous_transfer_relays_with_one_wallet_call() {
 }
 
 #[tokio::test]
-async fn a_confidential_transfer_relays_through_a_signed_message() {
+async fn a_confidential_transfer_relays_with_one_wallet_call() {
     let fixture = Fixture::new().await;
     let quote = fixture.quote(RelayOperation::Confidential).await;
     let request = signed_request(quote, &proof_inputs(RelayRail::Confidential));
+    let RelayIntent::Confidential {
+        owner_signature, ..
+    } = &request.intent
+    else {
+        unreachable!("confidential intent");
+    };
+    let owner_signature = <[u8; 64]>::from(owner_signature.0);
 
     let step: RelayStep = fixture.call(PREPARE_RELAY, &request).await;
 
-    let RelayStep::SignMessage { relay_id, message } = step else {
-        panic!("the owner signs the confidential transaction, got {step:?}");
+    let RelayStep::Submitted { relay_id } = step else {
+        panic!("the owner signs inside the proof, got {step:?}");
     };
-    assert!(fixture.sent().is_empty());
-    let wallet = Keypair::new_from_array(OWNER_SEED);
-    let status: RelayStatus = fixture
-        .call(
-            SUBMIT_RELAY,
-            SubmitRelayRequest {
-                relay_id,
-                signer: wallet.pubkey().into(),
-                signature: wallet.sign_message(&message.0).into(),
-            },
-        )
-        .await;
-
-    let [sent] = fixture.sent().try_into().expect("one sent transaction");
     assert_eq!(
-        sent.message.static_account_keys()[..2],
-        [fixture.fee_payer, wallet.pubkey()]
+        *fixture.prover.requests.lock().expect("requests"),
+        [(fixture.fee_payer, Some(owner_signature))]
     );
-    assert_eq!(sent.message.serialize(), message.0);
+    let [sent] = fixture.sent().try_into().expect("one sent transaction");
+    assert_eq!(sent.signatures.len(), 1);
+    assert_eq!(sent.message.static_account_keys()[0], fixture.fee_payer);
     assert!(signers_verify(&sent));
+    let status: RelayStatus = fixture
+        .call(GET_RELAY_STATUS, GetRelayStatusRequest { relay_id })
+        .await;
     assert_eq!(
         status,
-        RelayStatus::Sent {
+        RelayStatus::Confirmed {
             signature: sent.signatures[0].into(),
+            slot: SLOT + 1,
         }
     );
 }

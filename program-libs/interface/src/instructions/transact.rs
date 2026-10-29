@@ -3,18 +3,20 @@
 
 use solana_address::Address;
 use spr_hasher::{
-    primitives::{hash_bytes, pack_be},
+    primitives::{hash_bytes, pack_be, solana_owner_identity},
     HasherError,
 };
 use spr_interface::{
     instruction::{
-        instruction_data::transact::{AnonymousRingEddsaProofData, Bsb22Commitment},
+        instruction_data::transact::{
+            AnonymousRingEddsaProofData, Bsb22Commitment, EddsaProofData,
+        },
         tag::{RING_AUTHORITY_TRANSACT, RING_TRANSACT},
         CircuitId, ExternalDataPreimage, InputUtxo, InterfaceTransfer, MessageData, OwnerTag,
         TransactIxData, TransactIxDataRef, TransactOutput, TransactProof, TreeContext,
     },
     shape::{Shape, SPP_SUPPORTED_SHAPES},
-    MAX_OUTPUTS, N_PUBLIC_SLOTS,
+    N_PUBLIC_SLOTS,
 };
 use wincode::{containers, len::FixIntLen, Serialize};
 
@@ -28,7 +30,8 @@ use crate::{
     output::{
         encode_anonymous_recipient_output, encode_anonymous_sender_output,
         encode_confidential_output, encode_ring_confidential_delivered_output,
-        CONFIDENTIAL_DATA_FREE_BODY_LEN, RING_DELIVERED_BODY_LEN,
+        encode_ring_owner_delivered_output, CONFIDENTIAL_DATA_FREE_BODY_LEN,
+        RING_DELIVERED_BODY_LEN,
     },
     statement::{AnonymousAudit, AuditHead, AuditKind, AuditStatement, PolicyKey},
     storage::Revision,
@@ -37,7 +40,6 @@ use crate::{
 };
 
 const ZERO_FIELD: [u8; 32] = [0; 32];
-const HIDDEN_RECIPIENTS: [[u8; 32]; MAX_OUTPUTS] = [ZERO_FIELD; MAX_OUTPUTS];
 /// Key support reads the shape alone.
 const NO_PROOF_DATA: AnonymousRingEddsaProofData = AnonymousRingEddsaProofData {
     bsb22_commitment: Bsb22Commitment {
@@ -244,8 +246,17 @@ pub struct PolicyProof<'a> {
     pub curator_revision: Option<Revision>,
     /// Set exactly on the anonymous rail.
     pub sender_commitment: Option<&'a [u8; 32]>,
-    /// One owner identity per output slot, empty on the anonymous rail.
-    pub recipients: &'a [[u8; 32]],
+    pub recipients: PolicyRecipients<'a>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PolicyRecipients<'a> {
+    /// The anonymous rail, every recipient zero.
+    Hidden,
+    /// One owner identity per output slot.
+    Framed(&'a [[u8; 32]]),
+    /// The in-proof owner rail, a bit per dummy slot, the owner tag names every other slot's recipient.
+    Published { dummies: u64 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -254,6 +265,26 @@ pub struct PolicyBinding<'a> {
     pub policy_hash: [u8; 32],
     pub own_root: [u8; 32],
     pub curator_root: Option<[u8; 32]>,
+}
+
+/// The owner SPP verifies in its proof and publishes, no owner signs the transaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InProofOwner<'a> {
+    pub owner: &'a [u8; 32],
+    pub commitment: &'a [u8; 32],
+    pub commitment_pok: &'a [u8; 32],
+}
+
+impl InProofOwner<'_> {
+    fn proof_data(&self) -> EddsaProofData {
+        EddsaProofData {
+            bsb22_commitment: Bsb22Commitment {
+                commitment: *self.commitment,
+                commitment_pok: *self.commitment_pok,
+            },
+            owner_pk: *self.owner,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -301,6 +332,13 @@ pub enum RingOutput<'a> {
         u: &'a [u8; 32],
         body: &'a [u8; RING_DELIVERED_BODY_LEN],
     },
+    /// The in-proof owner rail's ring slot, scheme 11 under the owner's key.
+    Owned {
+        hash: &'a [u8; 32],
+        owner: &'a [u8; 32],
+        u: &'a [u8; 32],
+        body: &'a [u8; RING_DELIVERED_BODY_LEN],
+    },
     /// Under a view tag, its scheme 1 body unproven.
     Anonymous {
         hash: &'a [u8; 32],
@@ -320,8 +358,18 @@ impl<'a> RingOutput<'a> {
     pub const fn hash(&self) -> &'a [u8; 32] {
         match self {
             Self::Delivered { hash, .. }
+            | Self::Owned { hash, .. }
             | Self::Anonymous { hash, .. }
             | Self::Exit { hash, .. } => hash,
+        }
+    }
+
+    pub const fn owner_tag(&self) -> &'a [u8; 32] {
+        match self {
+            Self::Delivered { u: tag, .. }
+            | Self::Owned { owner: tag, .. }
+            | Self::Anonymous { tag, .. }
+            | Self::Exit { owner_tag: tag, .. } => tag,
         }
     }
 
@@ -332,7 +380,7 @@ impl<'a> RingOutput<'a> {
     /// `hash_bytes(body)` of a delivered slot, zero for any other.
     pub fn body_hash(&self) -> Result<[u8; 32], HasherError> {
         match self {
-            Self::Delivered { body, .. } => hash_bytes(body),
+            Self::Delivered { body, .. } | Self::Owned { body, .. } => hash_bytes(body),
             Self::Anonymous { .. } | Self::Exit { .. } => Ok(ZERO_FIELD),
         }
     }
@@ -340,7 +388,7 @@ impl<'a> RingOutput<'a> {
     /// `pack_be(u)` of a delivered slot, zeros for any other.
     pub fn recipient_key_fields(&self) -> [[u8; 32]; 2] {
         match self {
-            Self::Delivered { u, .. } => pack_be(u),
+            Self::Delivered { u, .. } | Self::Owned { u, .. } => pack_be(u),
             _ => [ZERO_FIELD; 2],
         }
     }
@@ -350,6 +398,9 @@ impl<'a> RingOutput<'a> {
         let (owner_tag, data) = match *self {
             Self::Delivered { u, body, .. } => {
                 (*u, Some(encode_ring_confidential_delivered_output(body)?))
+            }
+            Self::Owned { owner, u, body, .. } => {
+                (*owner, Some(encode_ring_owner_delivered_output(u, body)?))
             }
             Self::Anonymous { tag, body, .. } => (
                 *tag,
@@ -366,13 +417,22 @@ impl<'a> RingOutput<'a> {
         })
     }
 
-    /// Whether the slot uses the output encoding `layout` gives ring outputs.
-    fn fits(&self, layout: DisclosureLayout) -> bool {
+    /// Whether the slot uses the output encoding `frame` gives ring outputs.
+    fn fits(&self, frame: SlotFrame) -> bool {
         matches!(
-            (self, layout),
-            (Self::Exit { .. }, _)
-                | (Self::Delivered { .. }, DisclosureLayout::Delivered { .. })
-                | (Self::Anonymous { .. }, DisclosureLayout::Anonymous { .. })
+            (self, frame.layout, frame.owned),
+            (Self::Exit { .. }, _, _)
+                | (
+                    Self::Delivered { .. },
+                    DisclosureLayout::Delivered { .. },
+                    false
+                )
+                | (Self::Owned { .. }, DisclosureLayout::Delivered { .. }, true)
+                | (
+                    Self::Anonymous { .. },
+                    DisclosureLayout::Anonymous { .. },
+                    false
+                )
         )
     }
 }
@@ -381,6 +441,8 @@ impl<'a> RingOutput<'a> {
 #[derive(Clone, Copy)]
 struct SlotFrame {
     layout: DisclosureLayout,
+    /// The in-proof owner rail, each ring slot names its owner ahead of its key.
+    owned: bool,
 }
 
 impl SlotFrame {
@@ -395,6 +457,12 @@ impl SlotFrame {
     fn read_ring<'a>(self, bytes: &mut Bytes<'a>) -> Result<RingOutput<'a>, CustomRingError> {
         let hash = bytes.array()?;
         Ok(match self.layout {
+            DisclosureLayout::Delivered { .. } if self.owned => RingOutput::Owned {
+                hash,
+                owner: bytes.array()?,
+                u: bytes.array()?,
+                body: bytes.array()?,
+            },
             DisclosureLayout::Delivered { .. } => RingOutput::Delivered {
                 hash,
                 u: bytes.array()?,
@@ -416,6 +484,12 @@ impl SlotFrame {
         out.extend_from_slice(output.hash());
         match output {
             RingOutput::Delivered { u, body, .. } => {
+                out.extend_from_slice(*u);
+                out.extend_from_slice(*body);
+                Ok(())
+            }
+            RingOutput::Owned { owner, u, body, .. } => {
+                out.extend_from_slice(*owner);
                 out.extend_from_slice(*u);
                 out.extend_from_slice(*body);
                 Ok(())
@@ -561,6 +635,8 @@ pub struct RingTransactData<'a> {
     pub private_tx_hash: &'a [u8; 32],
     /// Present exactly on the anonymous rail.
     pub anonymous: Option<AnonymousProofData<'a>>,
+    /// Set exactly on the in-proof owner rail.
+    pub in_proof_owner: Option<InProofOwner<'a>>,
     pub spp_proof: &'a PlainGroth16Proof,
     /// One per spent input slot SPP publishes.
     pub nullifiers: &'a [[u8; 32]],
@@ -588,7 +664,8 @@ impl<'a> RingTransactData<'a> {
     ) -> Result<ParsedTransact<'a>, CustomRingError> {
         let mut bytes = Bytes::new(data, CustomRingError::RingTransactLength);
         let flags = TransactFlags(bytes.byte()?);
-        flags.check()?;
+        flags.check(rail, legacy)?;
+        let owned = flags.has(transact_flag::OWNER_IN_PROOF);
         let header = FrameHeader::read(&mut bytes, rail)?;
         let input_count = header.input_count;
         let shape = rail.audit_shape(&header)?;
@@ -606,9 +683,12 @@ impl<'a> RingTransactData<'a> {
                 sender_commitment: (rail == RingRail::Anonymous)
                     .then(|| bytes.array())
                     .transpose()?,
-                recipients: match rail.publishes_recipients() && !legacy {
-                    true => bytes.fields(shape.outputs())?,
-                    false => &[],
+                recipients: match (rail.publishes_recipients() && !legacy, owned) {
+                    (false, _) => PolicyRecipients::Hidden,
+                    (true, false) => PolicyRecipients::Framed(bytes.fields(shape.outputs())?),
+                    (true, true) => PolicyRecipients::Published {
+                        dummies: bytes.bitmap(shape.outputs())?,
+                    },
                 },
             }),
         };
@@ -628,7 +708,7 @@ impl<'a> RingTransactData<'a> {
             return Err(CustomRingError::FlagNotAllowed);
         }
         let layout = shape.layout(output_count, header.flags.audit_layout(exits != 0))?;
-        let frame = SlotFrame { layout };
+        let frame = SlotFrame { layout, owned };
         let outputs = (0..output_count)
             .map(|slot| match (exits >> slot) & 1 {
                 1 => frame.read_exit(&mut bytes),
@@ -659,6 +739,14 @@ impl<'a> RingTransactData<'a> {
                     .transpose()?,
             }),
             RingRail::Confidential | RingRail::Delegate => None,
+        };
+        let in_proof_owner = match owned {
+            false => None,
+            true => Some(InProofOwner {
+                owner: bytes.array()?,
+                commitment: bytes.array()?,
+                commitment_pok: bytes.array()?,
+            }),
         };
         let spp_proof = bytes.pod()?;
         let nullifiers = bytes.fields(usize::from(input_count))?;
@@ -703,6 +791,7 @@ impl<'a> RingTransactData<'a> {
             disclosure,
             private_tx_hash,
             anonymous,
+            in_proof_owner,
             spp_proof,
             nullifiers,
             input_trees,
@@ -713,25 +802,33 @@ impl<'a> RingTransactData<'a> {
     /// The bytes `parse` reads back, refusing what it refuses.
     pub fn encode(&self) -> Result<Vec<u8>, CustomRingError> {
         let flags = self.flags();
-        flags.check()?;
+        flags.check(self.rail, false)?;
         let header = FrameHeader::of(self)?;
         let output_count = self.outputs.len();
         let shape = self.rail.audit_shape(&header)?;
         let layout = shape.layout(output_count, self.audit_layout())?;
         let anonymous_rail = self.rail == RingRail::Anonymous;
-        let published_recipients = match self.rail.publishes_recipients() {
-            true => output_count,
-            false => 0,
+        let frame = SlotFrame {
+            layout,
+            owned: self.in_proof_owner.is_some(),
         };
         let policy_fits = self.policy.is_none_or(|policy| {
-            policy.sender_commitment.is_some() == anonymous_rail
-                && policy.recipients.len() == published_recipients
+            let recipients_fit = match policy.recipients {
+                PolicyRecipients::Hidden => anonymous_rail,
+                PolicyRecipients::Framed(recipients) => {
+                    !anonymous_rail && !frame.owned && recipients.len() == output_count
+                }
+                PolicyRecipients::Published { dummies } => {
+                    frame.owned && dummies >> output_count == 0
+                }
+            };
+            policy.sender_commitment.is_some() == anonymous_rail && recipients_fit
         });
         if !policy_fits
             || self.anonymous.is_some() != anonymous_rail
             || self.sender.is_some() != anonymous_rail
             || self.disclosure.len() != layout.field_count()
-            || !self.outputs.iter().all(|output| output.fits(layout))
+            || !self.outputs.iter().all(|output| output.fits(frame))
         {
             return Err(CustomRingError::RingTransactLength);
         }
@@ -750,7 +847,16 @@ impl<'a> RingTransactData<'a> {
             if let Some(commitment) = policy.sender_commitment {
                 out.extend_from_slice(commitment);
             }
-            out.extend_from_slice(policy.recipients.as_flattened());
+            match policy.recipients {
+                PolicyRecipients::Hidden => {}
+                PolicyRecipients::Framed(recipients) => {
+                    out.extend_from_slice(recipients.as_flattened());
+                }
+                PolicyRecipients::Published { dummies } => push_bitmap(
+                    &mut out,
+                    (0..output_count).map(|slot| (dummies >> slot) & 1 == 1),
+                ),
+            }
         }
         out.extend_from_slice(&self.expiry_unix_ts.to_le_bytes());
         out.extend_from_slice(self.tx_viewing_u);
@@ -772,7 +878,6 @@ impl<'a> RingTransactData<'a> {
             }
         }
         push_bitmap(&mut out, self.outputs.iter().map(RingOutput::is_exit));
-        let frame = SlotFrame { layout };
         for output in &self.outputs {
             frame.write(output, &mut out)?;
         }
@@ -790,6 +895,11 @@ impl<'a> RingTransactData<'a> {
             if let Some(tag) = anonymous.default_owner_tag {
                 out.extend_from_slice(tag);
             }
+        }
+        if let Some(owner) = &self.in_proof_owner {
+            out.extend_from_slice(owner.owner);
+            out.extend_from_slice(owner.commitment);
+            out.extend_from_slice(owner.commitment_pok);
         }
         out.extend_from_slice(bytemuck::bytes_of(self.spp_proof));
         out.extend_from_slice(self.nullifiers.as_flattened());
@@ -849,6 +959,14 @@ impl<'a> RingTransactData<'a> {
 
     /// The SPP selector of the data's shape and rail.
     pub fn circuit(&self) -> CircuitId {
+        if let Some(owner) = &self.in_proof_owner {
+            return CircuitId::ConfidentialRingInCircuitEddsa(
+                self.n_in,
+                self.n_out,
+                N_PUBLIC_SLOTS as u8,
+                owner.proof_data(),
+            );
+        }
         let proof_data =
             self.anonymous
                 .map_or(NO_PROOF_DATA, |anonymous| AnonymousRingEddsaProofData {
@@ -874,14 +992,21 @@ impl<'a> RingTransactData<'a> {
             .unwrap_or(&ZERO_FIELD)
     }
 
-    /// Zero per output slot on the anonymous rail.
-    pub fn policy_recipients(&self) -> Result<&'a [[u8; 32]], CustomRingError> {
+    /// One per output slot, on the in-proof owner rail from the owner tags SPP publishes.
+    pub fn policy_recipients(&self) -> Result<Vec<[u8; 32]>, CustomRingError> {
         let policy = self.policy.ok_or(CustomRingError::MissingPolicyProof)?;
-        match self.rail.publishes_recipients() {
-            true => Ok(policy.recipients),
-            false => HIDDEN_RECIPIENTS
-                .get(..self.outputs.len())
-                .ok_or(CustomRingError::RingTransactLength),
+        match policy.recipients {
+            PolicyRecipients::Hidden => Ok(vec![ZERO_FIELD; self.outputs.len()]),
+            PolicyRecipients::Framed(recipients) => Ok(recipients.to_vec()),
+            PolicyRecipients::Published { dummies } => self
+                .outputs
+                .iter()
+                .enumerate()
+                .map(|(slot, output)| match (dummies >> slot) & 1 {
+                    1 => Ok(ZERO_FIELD),
+                    _ => Ok(solana_owner_identity(output.owner_tag())?),
+                })
+                .collect(),
         }
     }
 
@@ -1002,6 +1127,7 @@ impl<'a> RingTransactData<'a> {
                 transact_flag::CURATOR,
             ),
             (self.approval_required, transact_flag::APPROVAL_REQUIRED),
+            (self.in_proof_owner.is_some(), transact_flag::OWNER_IN_PROOF),
             (
                 matches!(self.input_trees, InputTrees::Two { .. }),
                 transact_flag::SECOND_TREE,
@@ -1021,9 +1147,11 @@ pub mod transact_flag {
     pub const POLICY: u8 = 1 << 0;
     pub const CURATOR: u8 = 1 << 1;
     pub const APPROVAL_REQUIRED: u8 = 1 << 2;
+    /// The confidential rail's owner signs inside the SPP proof.
+    pub const OWNER_IN_PROOF: u8 = 1 << 3;
     pub const SECOND_TREE: u8 = 1 << 5;
-    /// Bits 3, 4, 6 and 7 are refused.
-    pub const KNOWN: u8 = POLICY | CURATOR | APPROVAL_REQUIRED | SECOND_TREE;
+    /// Bits 4, 6 and 7 are refused.
+    pub const KNOWN: u8 = POLICY | CURATOR | APPROVAL_REQUIRED | OWNER_IN_PROOF | SECOND_TREE;
 }
 
 /// Byte 1, the index into `SPP_SUPPORTED_SHAPES` below these flags.
@@ -1049,9 +1177,11 @@ impl TransactFlags {
         self.0 & bit != 0
     }
 
-    /// The curator and approval flags need a policy.
-    fn check(self) -> Result<(), CustomRingError> {
-        if self.0 & !transact_flag::KNOWN != 0 {
+    /// The curator and approval flags need a policy, the in-proof owner flag a non-legacy confidential frame.
+    fn check(self, rail: RingRail, legacy: bool) -> Result<(), CustomRingError> {
+        let foreign_owner =
+            self.has(transact_flag::OWNER_IN_PROOF) && (legacy || rail != RingRail::Confidential);
+        if self.0 & !transact_flag::KNOWN != 0 || foreign_owner {
             return Err(CustomRingError::FlagNotAllowed);
         }
         let needs_policy =

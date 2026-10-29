@@ -262,6 +262,7 @@ fn audit_case(statement: &AuditStatement<'_>) -> AuditCase {
 fn output_case(output: &RingOutput<'_>) -> OutputCase {
     let (kind, u, body) = match output {
         RingOutput::Delivered { u, body, .. } => ("delivered", Some(*u), Some(*body)),
+        RingOutput::Owned { u, body, .. } => ("owned", Some(*u), Some(*body)),
         RingOutput::Anonymous { .. } => ("anonymous", None, None),
         RingOutput::Exit { .. } => ("exit", None, None),
     };

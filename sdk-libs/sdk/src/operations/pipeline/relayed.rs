@@ -50,7 +50,7 @@ impl<'a> RingTransfer<Relayed<'a>> {
         }
     }
 
-    /// The anonymous rail's prepared owner signature over `SppProofInputs::message_hash`.
+    /// The prepared owner signature over `SppProofInputs::message_hash`, the owner signs no transaction.
     #[must_use = "use the updated transfer"]
     pub fn with_owner_signature(mut self, signature: [u8; 64]) -> Self {
         self.rail.owner_signature = Some(signature);
@@ -148,14 +148,17 @@ impl Relayed<'_> {
                         rail: RingRail::Confidential,
                     });
                 }
-                let owner_signers = proof_inputs.owner_signer_pubkeys()?;
-                if config.has_policy && owner_signers.len() != 1 {
-                    return Err(CustomRingError::OwnerSignerCount.into());
-                }
+                delivered(n_outputs, RingRail::Confidential)?;
+                let signature = self
+                    .owner_signature
+                    .ok_or(RingError::MissingInProofOwnerSignature)?;
                 (
-                    rail(delivered(n_outputs, RingRail::Confidential)?),
-                    owner_signers,
-                    Spend::Owner,
+                    rail(RingDelivery::Owned),
+                    Vec::new(),
+                    Spend::InProofOwner(OwnerAuthorization::Prepared {
+                        owner: sender.signing_pubkey,
+                        signature,
+                    }),
                 )
             }
             RelayRail::Delegate { delegate } => {

@@ -26,9 +26,8 @@ use super::{
     owner::{CustomRingTransferInput, Owner},
     pad_under_rail, sealed,
     selection::{payment_total, widest, Candidate, Funding},
-    spends_default_ring,
-    spp::HiddenSpend,
-    transaction_key, Rail, RailKind, RingSender, RingTransfer, Spend, Staged, TransferAuthority,
+    spends_default_ring, transaction_key, Rail, RailKind, RingSender, RingTransfer, Spend, Staged,
+    TransferAuthority,
 };
 use crate::{
     client::{RingClient, RingIndexerBackend},
@@ -316,10 +315,6 @@ pub(crate) struct AnonymousSpend<'a> {
 }
 
 impl AnonymousSpend<'_> {
-    pub(super) fn hidden(&self) -> HiddenSpend<'_> {
-        HiddenSpend { owner: self.signer }
-    }
-
     /// Binds the signing co-signer, zero when none signs.
     pub(super) fn party_identities(
         &self,

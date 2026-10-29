@@ -2,7 +2,7 @@
 
 use custom_ring_interface::{
     anonymous_recipient_output_body, anonymous_sender_output_body,
-    ring_confidential_delivered_output_body, RingOutput, SenderBundle,
+    ring_confidential_delivered_output_body, ring_owner_delivered_output, RingOutput, SenderBundle,
 };
 use spr_event::confidential_encrypted_output_body;
 use spr_interface::instruction::instruction_data::transact::{OwnerTag, TransactOutput};
@@ -35,7 +35,7 @@ impl RingOutputRail {
         }
         let anonymous = match &self.delivery {
             RingDelivery::Anonymous(plan) => Some(plan.slots(outputs, sender)?),
-            RingDelivery::Delivered => None,
+            RingDelivery::Delivered | RingDelivery::Owned => None,
         };
         outputs
             .iter()
@@ -96,6 +96,15 @@ impl RingOutputRail {
                 owner_tag,
                 payload: confidential_encrypted_output_body(data).ok_or_else(framing)?,
             },
+            Slot::Ring { .. } | Slot::Dummy if matches!(self.delivery, RingDelivery::Owned) => {
+                let (u, body) = ring_owner_delivered_output(data).ok_or_else(framing)?;
+                RingOutput::Owned {
+                    hash,
+                    owner: owner_tag,
+                    u,
+                    body,
+                }
+            }
             Slot::Ring { .. } | Slot::Dummy => RingOutput::Delivered {
                 hash,
                 u: owner_tag,
