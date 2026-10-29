@@ -162,7 +162,9 @@ zolana-ring cosigner set --signer <KEY> --scope transfers,withdrawals --threshol
 zolana-ring insert-fee set 0
 ```
 
+- `localnet` loads the storage program at `STORAGE_PROGRAM_ID` at genesis, from the release or from the workspace build.
 - `deploy` deploys the released program of the embedded release lock, or `--program-so`. It refuses a binary whose verifying key markers do not cover every pinned proving key, and an existing program under another upgrade authority.
+- `deploy` does not deploy the storage program. No keypair exists for `STORAGE_PROGRAM_ID`, and only a validator that loads it at genesis has it.
 - `init` skips every step the chain already agrees with. The upgrade authority signs `CreateConfig` and, when the two keys differ, hands the config to the config authority in the same transaction.
 - `init` takes the auditor key from Ring RPC when no config and no `keys/auditor.key.pub` exist, and checks the service signature. With a hosted Ring RPC, `--local-auditor` pins `keys/auditor.key.pub` instead.
 - `cosigner set` creates or rescopes the signer's co-signer record, then writes its withdrawal thresholds into the mints' records and clears the others. `cosigner clear` closes the signer's record and keeps the mint records.
