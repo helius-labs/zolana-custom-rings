@@ -276,6 +276,7 @@ impl Context {
             )?
             .context("the ring has no policy account, run `zolana-ring init` first")?;
         Ok(custom_ring_sdk::RecordUpdateTarget {
+            genesis_hash: self.rpc().genesis_hash()?,
             ring: self.ring,
             registry: policy.records,
             valid_until_slot: self.rpc().get_slot()?.saturating_add(RECORD_UPDATE_SLOTS),

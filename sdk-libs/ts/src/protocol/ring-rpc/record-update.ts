@@ -90,13 +90,14 @@ export function recordUpdateQueueEntry(entry: RecordUpdateEntry): QueueEntry {
 
 /**
  * Mirrored by `RecordUpdateStatement::hash` in `sdk-libs/client/src/rpc/record_update.rs`.
- *   `Poseidon(CRRU, hash_bytes(ring), hash_bytes(registry), entries_hash, valid_until_slot)`
+ *   `Poseidon(CRRU, hash_bytes(genesis_hash), hash_bytes(ring), hash_bytes(registry), entries_hash, valid_until_slot)`
  */
 export function recordUpdateStatementHash(input: UnsignedRecordUpdate): Bytes32 {
-  const { ring, entries, validUntilSlot } = input.update;
+  const { genesisHash, ring, entries, validUntilSlot } = input.update;
   if (validUntilSlot < 0n || validUntilSlot > U64_MAX) throw invalid("ValidUntilSlot");
   return poseidon([
     domainField(RingDomain.recordUpdate),
+    hashBytes(indexerScalars.hashBytes(genesisHash)) as Bytes32,
     ringIdField(ring),
     hashBytes(addressBytes(input.registry, "registry")) as Bytes32,
     entries.map(recordUpdateQueueEntry).reduce(queueChain, ZERO_32),

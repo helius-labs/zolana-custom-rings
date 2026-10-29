@@ -290,6 +290,7 @@ fn signed(signer: &Keypair, entries: Vec<RecordUpdateEntry>) -> SubmitRecordUpda
     let mut request = SubmitRecordUpdateRequest {
         registry: REGISTRY.into(),
         update: RecordUpdate {
+            genesis_hash: Hash(GENESIS),
             ring: RING.into(),
             entries,
             valid_until_slot: NOW + 1_000,

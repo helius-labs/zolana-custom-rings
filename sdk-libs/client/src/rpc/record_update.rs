@@ -5,7 +5,10 @@ use custom_ring_interface::{
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
 use solana_signer::{Signer, SignerError};
-use spr_hasher::{primitives::right_align, Hasher, Poseidon};
+use spr_hasher::{
+    primitives::{hash_bytes, right_align},
+    Hasher, Poseidon,
+};
 use spr_indexer_api::{Base64String, Hash, RpcMethod, SerializablePubkey, SerializableSignature};
 use thiserror::Error;
 use zolana_ring_indexer::rpc::RingListWriteView;
@@ -55,6 +58,8 @@ pub struct EscrowRegistration {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RecordUpdate {
+    /// The writer refuses another cluster's genesis hash.
+    pub genesis_hash: Hash,
     pub ring: SerializablePubkey,
     pub entries: Vec<RecordUpdateEntry>,
     pub valid_until_slot: u64,
@@ -112,6 +117,7 @@ pub enum RecordUpdateStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecordUpdateStatement {
+    pub genesis_hash: [u8; 32],
     pub ring: Address,
     pub registry: Address,
     /// The queue chain of the entries from zero.
@@ -216,6 +222,7 @@ impl RecordUpdate {
             )
         })?;
         Ok(RecordUpdateStatement {
+            genesis_hash: self.genesis_hash.0,
             ring: self.ring.0,
             registry,
             entries_hash,
@@ -258,10 +265,12 @@ impl SubmitRecordUpdateRequest {
 }
 
 impl RecordUpdateStatement {
-    /// `Poseidon(CRRU, hash_bytes(ring), hash_bytes(registry), entries_hash, valid_until_slot)`.
+    /// Mirrored by `recordUpdateStatementHash` in `sdk-libs/ts/src/protocol/ring-rpc/record-update.ts`.
+    ///   `Poseidon(CRRU, hash_bytes(genesis_hash), hash_bytes(ring), hash_bytes(registry), entries_hash, valid_until_slot)`
     pub fn hash(&self) -> Result<[u8; 32], CustomRingError> {
         Ok(Poseidon::hashv(&[
             &domain::field(domain::RECORD_UPDATE),
+            &hash_bytes(&self.genesis_hash)?,
             &ring_id_field(self.ring.as_array())?,
             &registry_field(self.registry.as_array())?,
             &self.entries_hash,

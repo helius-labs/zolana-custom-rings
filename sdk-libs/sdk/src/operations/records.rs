@@ -406,6 +406,8 @@ impl AuthorityListWrite {
 /// The writer refuses the update after `valid_until_slot`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecordUpdateTarget {
+    /// The cluster the writer serves.
+    pub genesis_hash: [u8; 32],
     pub ring: CustomRing,
     /// The ring's own `StorageRegistry`.
     pub registry: Address,
@@ -557,6 +559,7 @@ impl UpdateDraft {
             });
         }
         Ok(RecordUpdate {
+            genesis_hash: Hash(self.target.genesis_hash),
             ring: self.target.ring.program_id().into(),
             entries: self.entries,
             valid_until_slot: self.target.valid_until_slot,

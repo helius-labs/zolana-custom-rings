@@ -716,6 +716,7 @@ fn a_signed_wallet_update_verifies_from_the_shared_vector() {
     );
     let bit = zolana_ring_policy::ListId::RingViewing.record_bit();
     let signed = RecordUpdate {
+        genesis_hash: Hash([3; 32]),
         ring: Address::new_from_array([1; 32]).into(),
         entries: vec![
             RecordUpdateEntry::Write(zolana_ring_indexer::rpc::RingListWriteView {

@@ -1,6 +1,7 @@
 import type { Address, MessagePartialSigner } from "@solana/kit";
 
-import { addressBytes, indexerScalars } from "@heliuslabs/zolana/internal";
+import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import { addressBytes, copyBytes, indexerScalars } from "@heliuslabs/zolana/internal";
 
 import { RingError } from "../../protocol/error.js";
 import { mintPolicyField, type MintPolicy } from "../../protocol/membership/mint-policy.js";
@@ -16,6 +17,8 @@ import { checkWriter, listBits, listMask, listWrite, type ListWrite } from "./re
 
 /** The writer refuses the update after `validUntilSlot`. */
 export interface RecordUpdateTarget {
+  /** The cluster the writer serves. */
+  readonly genesisHash: Bytes32;
   readonly ringProgramId: Address;
   /** The ring's own `StorageRegistry`. */
   readonly registry: Address;
@@ -145,6 +148,9 @@ function signEntries(
     {
       registry: target.registry,
       update: Object.freeze({
+        genesisHash: indexerScalars.hash(
+          copyBytes(target.genesisHash, 32, "genesisHash") as Bytes32,
+        ),
         ring: target.ringProgramId,
         entries,
         validUntilSlot: target.validUntilSlot,
