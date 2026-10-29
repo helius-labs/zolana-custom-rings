@@ -657,7 +657,7 @@ async fn an_anonymous_move_past_the_transaction_size_is_refused_before_proving()
     );
     assert!(matches!(
         pay(2).select(&client).await,
-        Err(RingError::TransactionTooLarge { bytes, limit }) if bytes > limit
+        Err(RingError::TransferTooWide { bytes, limit, .. }) if bytes > limit
     ));
 }
 
@@ -1779,7 +1779,7 @@ impl FrameSize<'_> {
                 .unwrap()
                 .bytes
             }
-            Err(RingError::TransactionTooLarge { bytes, .. }) => bytes,
+            Err(RingError::TransferTooWide { bytes, .. }) => bytes,
             Err(error) => panic!("{:?} {:?}: {error}", self.rail, self.shape),
         }
     }
@@ -2046,6 +2046,54 @@ async fn a_confidential_ring_fits_its_widest_shapes_only_when_the_owner_pays() {
         })
         .await
     );
+}
+
+#[tokio::test]
+async fn a_confidential_policy_shape_past_one_transaction_is_refused_before_proving() {
+    use crate::tests::support::{keypair, payer, Registry};
+    let sender = keypair(1);
+    for shape in [spr_client::Shape::IN2_OUT16, spr_client::Shape::IN40_OUT2] {
+        let recipients: Vec<ShieldedKeypair> = (0..shape.n_outputs() - 1)
+            .map(|index| keypair(10 + index as u8))
+            .collect();
+        let owners: Vec<(&ShieldedKeypair, u64)> = core::iter::once(&sender)
+            .chain(&recipients)
+            .map(|owner| (owner, 1))
+            .collect();
+        let client = Chain::ring(RingSettings {
+            has_policy: true,
+            co_signer: Some(MEASURED_CO_SIGNER),
+            ..RingSettings::new(RingMode::ConfidentialEscrow)
+        })
+        .with_registry(Registry::new(&owners), &crate::tests::pipeline_rules())
+        .client();
+        let utxos = (0..shape.n_inputs() as u64)
+            .map(|leaf| ring_utxo(&sender, Mint::SOL, 100, leaf))
+            .collect();
+        let mut transaction = paid_ring_transaction(utxos, payer());
+        for recipient in &recipients {
+            transaction
+                .transfer_with_ring(
+                    &recipient.shielded_address().unwrap(),
+                    Mint::SOL,
+                    1,
+                    Some(ring().program_id()),
+                )
+                .unwrap();
+        }
+        let transfer = owner_transfer(&sender, transaction)
+            .with_in_proof_owner(&sender.signing_key)
+            .with_co_signer(MEASURED_CO_SIGNER.0);
+        let refused = transfer.measure(&client).await;
+        assert!(
+            matches!(
+                refused,
+                Err(RingError::TransferTooWide { inputs, outputs, bytes, limit })
+                    if (inputs, outputs) == (shape.n_inputs(), shape.n_outputs()) && bytes > limit
+            ),
+            "{refused:?}"
+        );
+    }
 }
 
 /// The transfers scope demands the co-signer on every move.

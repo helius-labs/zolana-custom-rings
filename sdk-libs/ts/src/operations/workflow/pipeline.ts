@@ -76,7 +76,7 @@ import {
   interfaceTransferOf,
   settlementAccounts,
 } from "../../protocol/transaction/spp.js";
-import { checkTransactionFits } from "./compile.js";
+import { checkTransferFits } from "./compile.js";
 import type { ViewingHistory } from "../../state/viewing-history.js";
 
 /** The client a ring transfer reads the ring and proves with, every rail adds its SPP prover. */
@@ -404,7 +404,7 @@ async function assembleStagedTransfer<T>(
       )
     )
       throw new RingError("RING_EXTERNAL_DATA_MISMATCH");
-    checkTransactionFits({
+    checkTransferFits(shape, {
       ...input.transaction,
       feePayer: proofInputs.payer,
       instructions: [await ringTransactInstruction(ringProgramId, accounts, preview)],

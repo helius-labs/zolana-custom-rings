@@ -754,7 +754,7 @@ export async function checkFrameCounted(
     { setupInstructions: [padding(filling)], priorityFeeLamports: 1n },
   ])
     await expect(input.prove(approval(transaction))).rejects.toMatchObject({
-      code: "INTERFACE_TRANSACTION_TOO_LARGE",
+      code: "RING_TRANSFER_TOO_WIDE",
     });
   expect(proofs()).toBe(before);
   await input.prove(approval({ setupInstructions: [padding(filling)] }));

@@ -58,12 +58,7 @@ import {
 } from "./transfer-rails.js";
 import type { RelayQuote, TokenAccountSetup } from "../../protocol/ring-rpc/ring-rpc-types.js";
 import type { PreparedRelay } from "../../rpc/relay.js";
-import {
-  provenWithinTransaction,
-  ringIntentMismatch,
-  ringProofInput,
-  ringSelectionErrors,
-} from "../workflow/selection.js";
+import { ringIntentMismatch, ringProofInput, ringSelectionErrors } from "../workflow/selection.js";
 import {
   RingTransactionSubmission,
   checkRetainedEntries,
@@ -550,7 +545,7 @@ async function buildRingSpend<R>(
       },
       context,
     );
-    const { plan, owner, selected } = staged;
+    const { plan, owner } = staged;
     const approval: RingTransferApproval = {
       transaction: {
         ...(params.priorityFeeLamports === undefined
@@ -564,9 +559,7 @@ async function buildRingSpend<R>(
         await approveSpend({ params, feePayer: params.feePayer, plan, owner, prepared });
       },
     };
-    const proven = await provenWithinTransaction(selected.length, () =>
-      staged.rail.proveApproved(params.client, approval, context),
-    );
+    const proven = await staged.rail.proveApproved(params.client, approval, context);
     const [instruction, lifetime] = await Promise.all([
       proven.instruction(),
       params.client.getLatestBlockhash(context),

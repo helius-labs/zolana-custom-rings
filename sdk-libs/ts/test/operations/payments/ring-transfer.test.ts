@@ -13,6 +13,7 @@ import {
 import {
   randomBlinding,
   ShieldedKeypair,
+  SigningKey,
   ViewingKey,
   X25519Keypair,
   X25519PublicKey,
@@ -56,6 +57,7 @@ import {
 } from "../../../src/protocol/membership/policy.js";
 import { buildRingDelegateTransferTransaction } from "../../../src/operations/management/delegate.js";
 import { buildRingTransferTransaction } from "../../../src/operations/payments/transfer.js";
+import { signingKeySpendSigner } from "../../../src/operations/payments/anonymous.js";
 import { RingOutputRail } from "../../../src/operations/payments/output-rail.js";
 import {
   CustomRingTransfer,
@@ -624,6 +626,46 @@ describe("policy ring", () => {
     await expanded(fixture, proven, "confidential");
   });
 
+  const unreachableProver = (): never => {
+    throw new Error("proved past the size check");
+  };
+
+  it("refuses an in-proof owner shape past one transaction on a co-signed policy ring before any proof", async () => {
+    for (const [inputs, outputs] of [
+      [2, 16],
+      [40, 2],
+    ] as const) {
+      const signing = SigningKey.generate();
+      const sender = ShieldedKeypair.fromKeypair(signing);
+      const paid = Array.from({ length: outputs - 1 }, () => ShieldedKeypair.generate());
+      const fixture = await ringFixture({
+        mode: "confidentialEscrow",
+        table: EMPTY_TABLE,
+        records: escrowed([sender, ...paid]),
+        coSigner: { signer: randomAddress(), scope: RING_COSIGN_TRANSFERS },
+      });
+      const transfer = new ConfidentialTransfer(
+        sender.shieldedAddress(),
+        Array.from({ length: inputs }, () => noteInput(sender, 100n, fixture.ringProgramId)),
+        fixture.authority,
+      );
+      for (const recipient of paid) transfer.send(recipient.shieldedAddress(), SOL_MINT, 1n);
+      await expect(
+        CustomRingTransfer.new({
+          ringProgramId: fixture.ringProgramId,
+          keys: walletKeys(sender),
+          transfer,
+          assets,
+          ...(fixture.coSigner === undefined ? {} : { coSigner: fixture.coSigner }),
+        })
+          .withInProofOwner(signingKeySpendSigner(signing))
+          .prove({ ...fixture.client, proveInProofOwnerRingTransact: unreachableProver }),
+      ).rejects.toThrow(ringError("RING_TRANSFER_TOO_WIDE", { inputs, outputs }));
+      expect(fixture.ringRequests).toHaveLength(0);
+      expect(fixture.sppCalls).toHaveLength(0);
+    }
+  });
+
   it("binds every output owner's escrowed key on a registry ring and refuses an owner without one", async () => {
     const sender = ShieldedKeypair.generate();
     const recipient = ShieldedKeypair.generate();
@@ -1096,12 +1138,12 @@ describe("ring transfer builder", () => {
     return { fixture, requests, build };
   }
 
-  it("refuses a payment past one transaction before approval and any proof as too many notes", async () => {
+  it("refuses a payment past one transaction before approval and any proof as too wide", async () => {
     const wide = await ringTransfer({ amount: 4_750n, notes: 48 });
     await expect(wide.build).rejects.toMatchObject({
       code: "RING_BUILD_TRANSFER",
-      causeCode: "RING_TOO_MANY_INPUTS",
-      cause: { details: { selected: 48, limit: TRANSACTION_SIZE_LIMIT } },
+      causeCode: "RING_TRANSFER_TOO_WIDE",
+      cause: { details: { inputs: 48, outputs: 2, limit: TRANSACTION_SIZE_LIMIT } },
     });
     expect(wide.requests).toEqual([]);
     expect(wide.fixture.ringRequests).toHaveLength(0);

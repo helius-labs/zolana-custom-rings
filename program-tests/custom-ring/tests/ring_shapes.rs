@@ -495,7 +495,7 @@ impl ShapeRing<'_> {
         };
         match proven {
             Ok(proven) => Ok(Proven::Transfer(Box::new(proven))),
-            Err(RingError::TransactionTooLarge { bytes, .. }) => Ok(Proven::TooLarge { bytes }),
+            Err(RingError::TransferTooWide { bytes, .. }) => Ok(Proven::TooLarge { bytes }),
             Err(error) => Err(error.into()),
         }
     }

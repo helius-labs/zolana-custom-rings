@@ -43,12 +43,7 @@ import {
   type DelegateTransferClient,
   type RingTransferApproval,
 } from "../payments/transfer-rails.js";
-import {
-  provenWithinTransaction,
-  ringIntentMismatch,
-  ringProofInput,
-  ringSelectionErrors,
-} from "../workflow/selection.js";
+import { ringIntentMismatch, ringProofInput, ringSelectionErrors } from "../workflow/selection.js";
 import {
   RingTransactionSubmission,
   checkRetainedEntries,
@@ -265,9 +260,7 @@ async function buildDelegateTransaction(
         checkPreparedTransfer(prepared, intent, ringIntentMismatch);
       },
     };
-    const proven = await provenWithinTransaction(selected.length, () =>
-      transfer.proveApproved(move.client, approval, context),
-    );
+    const proven = await transfer.proveApproved(move.client, approval, context);
     const [instruction, lifetime] = await Promise.all([
       proven.instruction(),
       move.client.getLatestBlockhash(context),

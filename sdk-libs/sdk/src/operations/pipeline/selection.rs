@@ -84,7 +84,7 @@ impl Funding<'_> {
                 Err(error) => error,
             };
             match refusal {
-                RingError::TransactionTooLarge { .. }
+                RingError::TransferTooWide { .. }
                 | RingError::TooManyAddresses { .. }
                 | RingError::ShapeUnkeyed { .. }
                 | RingError::DefaultRingSpendTooWide { .. } => {

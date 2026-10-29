@@ -656,19 +656,32 @@ impl<'a> Sealed<'a> {
             spend,
             trees,
         };
-        check_transaction_size(
-            &unwitnessed.frame.proof_inputs.payer,
-            &unwitnessed.instruction()?,
-            ComputeBudgetConfig::new(compute_unit_limit(match ring_rail {
-                RingRail::Delegate => InstructionTag::DelegateTransact,
-                RingRail::Confidential | RingRail::Anonymous => InstructionTag::Transact,
-            })),
-        )?;
+        unwitnessed.check_size()?;
         Ok(unwitnessed)
     }
 }
 
 impl Unwitnessed<'_> {
+    fn check_size(&self) -> Result<(), RingError> {
+        let proof_inputs = &self.frame.proof_inputs;
+        let budget = ComputeBudgetConfig::new(compute_unit_limit(match self.spend.rail() {
+            RingRail::Delegate => InstructionTag::DelegateTransact,
+            RingRail::Confidential | RingRail::Anonymous => InstructionTag::Transact,
+        }));
+        match check_transaction_size(&proof_inputs.payer, &self.instruction()?, budget) {
+            Err(RingError::TransactionTooLarge { bytes, limit }) => {
+                let shape = proof_inputs.check_shape()?;
+                Err(RingError::TransferTooWide {
+                    inputs: shape.n_inputs(),
+                    outputs: shape.n_outputs(),
+                    bytes,
+                    limit,
+                })
+            }
+            checked => checked,
+        }
+    }
+
     /// Sized as the proven instruction, the witness and the proofs fill fields of fixed width.
     fn instruction(&self) -> Result<Instruction, RingError> {
         let frame = &self.frame;
