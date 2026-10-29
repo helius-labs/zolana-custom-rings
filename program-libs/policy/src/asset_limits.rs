@@ -13,8 +13,13 @@ pub struct AssetLimits {
     pub volume_cap: u64,
     pub volume_window_slots: u64,
     pub deposit_cap: u64,
+    pub deposit_window_slots: u64,
     pub withdrawal_cap: u64,
+    pub withdrawal_window_slots: u64,
 }
+
+/// Three u64 amounts per field keep it below 2^192.
+const FIELD_AMOUNT_BYTES: usize = 24;
 
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum AssetLimitsError {
@@ -23,7 +28,8 @@ pub enum AssetLimitsError {
 }
 
 impl AssetLimits {
-    pub const LEN: usize = 48;
+    pub const LEN: usize = 64;
+    pub const FIELDS: usize = Self::LEN.div_ceil(FIELD_AMOUNT_BYTES);
 
     pub const EMPTY: Self = Self {
         sender_cap: 0,
@@ -31,19 +37,23 @@ impl AssetLimits {
         volume_cap: 0,
         volume_window_slots: 0,
         deposit_cap: 0,
+        deposit_window_slots: 0,
         withdrawal_cap: 0,
+        withdrawal_window_slots: 0,
     };
 
     pub fn from_bytes(bytes: [u8; Self::LEN]) -> Self {
-        let [sender_cap, sender_window_slots, volume_cap, volume_window_slots, deposit_cap, withdrawal_cap] =
-            bytemuck::cast::<_, [[u8; 8]; 6]>(bytes).map(u64::from_be_bytes);
+        let [sender_cap, sender_window_slots, volume_cap, volume_window_slots, deposit_cap, deposit_window_slots, withdrawal_cap, withdrawal_window_slots] =
+            bytemuck::cast::<_, [[u8; 8]; 8]>(bytes).map(u64::from_be_bytes);
         Self {
             sender_cap,
             sender_window_slots,
             volume_cap,
             volume_window_slots,
             deposit_cap,
+            deposit_window_slots,
             withdrawal_cap,
+            withdrawal_window_slots,
         }
     }
 
@@ -55,28 +65,38 @@ impl AssetLimits {
                 self.volume_cap,
                 self.volume_window_slots,
                 self.deposit_cap,
+                self.deposit_window_slots,
                 self.withdrawal_cap,
+                self.withdrawal_window_slots,
             ]
             .map(u64::to_be_bytes),
         )
     }
 
-    /// Zero disables a cap, a window cap and its window are both zero or both nonzero.
+    /// Zero disables a cap, each cap and its window are both zero or both nonzero.
     pub const fn check(self) -> Result<Self, AssetLimitsError> {
-        if (self.sender_cap == 0) != (self.sender_window_slots == 0)
-            || (self.volume_cap == 0) != (self.volume_window_slots == 0)
-        {
-            return Err(AssetLimitsError::UnpairedWindow);
+        const fn paired(cap: u64, window_slots: u64) -> bool {
+            (cap == 0) == (window_slots == 0)
         }
-        Ok(self)
+        if paired(self.sender_cap, self.sender_window_slots)
+            && paired(self.volume_cap, self.volume_window_slots)
+            && paired(self.deposit_cap, self.deposit_window_slots)
+            && paired(self.withdrawal_cap, self.withdrawal_window_slots)
+        {
+            Ok(self)
+        } else {
+            Err(AssetLimitsError::UnpairedWindow)
+        }
     }
 
-    /// Three amounts per field, each field below 2^192.
-    pub fn fields(self) -> [[u8; 32]; 2] {
-        bytemuck::cast::<_, [[u8; 24]; 2]>(self.bytes()).map(|amounts| {
-            let mut field = [0; 32];
-            field[8..].copy_from_slice(&amounts);
-            field
-        })
+    pub fn fields(self) -> [[u8; 32]; Self::FIELDS] {
+        let mut fields = [[0; 32]; Self::FIELDS];
+        for (field, amounts) in fields
+            .iter_mut()
+            .zip(self.bytes().chunks(FIELD_AMOUNT_BYTES))
+        {
+            field[32 - amounts.len()..].copy_from_slice(amounts);
+        }
+        fields
     }
 }

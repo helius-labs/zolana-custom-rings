@@ -25,7 +25,7 @@ func TestMintRecordsMatchRustAndPreserveSettings(t *testing.T) {
 		if !ok {
 			t.Fatal("amount")
 		}
-		entries[i] = ringregistry.Entry{Member: row.Member.Int, Mask: big.NewInt(0), Value: big.NewInt(0), EscrowKey: big.NewInt(0), MintPolicy: new(big.Int).Or(row.Field.Int, new(big.Int).Lsh(big.NewInt(1), 192)), WithdrawalThreshold: amount, AssetLimits: ringregistry.Limits{row.Limits[0].Int, row.Limits[1].Int}}
+		entries[i] = ringregistry.Entry{Member: row.Member.Int, Mask: big.NewInt(0), Value: big.NewInt(0), EscrowKey: big.NewInt(0), MintPolicy: new(big.Int).Or(row.Field.Int, new(big.Int).Lsh(big.NewInt(1), 192)), WithdrawalThreshold: amount, AssetLimits: ringregistry.VectorLimits(t, row.Limits)}
 		if entries[i].Hash(t).Cmp(row.EntryHash.Int) != 0 {
 			t.Fatal("queue hash differs from Rust")
 		}

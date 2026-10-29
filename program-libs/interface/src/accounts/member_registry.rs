@@ -35,8 +35,8 @@ pub const FIELD_MAX: [u8; 32] = {
 
 /// Root of the tree holding only the sentinel, the first history entry of a registry.
 pub const MEMBER_REGISTRY_EMPTY_ROOT: [u8; 32] = [
-    0x05, 0x3b, 0x21, 0x36, 0xce, 0x0e, 0x6c, 0xff, 0xb8, 0x9c, 0xb7, 0x6c, 0x7a, 0x81, 0xb6, 0xd7,
-    0xe1, 0xbd, 0x42, 0x41, 0x59, 0xff, 0x45, 0x79, 0xf2, 0x84, 0xa7, 0xe5, 0xf1, 0x98, 0x95, 0x6d,
+    0x00, 0xc0, 0xb0, 0x7d, 0x78, 0x02, 0x4d, 0x98, 0x5b, 0x99, 0x5b, 0xd9, 0xdb, 0x52, 0x5f, 0x32,
+    0x9d, 0x0b, 0xfb, 0x28, 0x5f, 0x75, 0xcc, 0x22, 0x2f, 0x90, 0x0d, 0x8f, 0x6f, 0xaf, 0x51, 0x30,
 ];
 
 const _: () = assert!(QUEUE_CAPACITY as u64 == 2 * MEMBER_QUEUE_LIMIT);
@@ -91,11 +91,11 @@ impl QueueEntry {
         })
     }
 
-    /// `Poseidon(CRQW, member, mask, value, escrow_key, mint_policy_write, withdrawal_threshold, limits_0, limits_1)`, mirror
+    /// `Poseidon(CRQW, member, mask, value, escrow_key, mint_policy_write, withdrawal_threshold, limits_0, limits_1, limits_2)`, mirror
     /// `prover/circuits/registry/apply_records.go`.
     pub fn hash(&self) -> Result<[u8; 32], HasherError> {
         let policy = self.mint_policy.unwrap_or_default();
-        let limits = policy.limits.fields();
+        let [limits_0, limits_1, limits_2] = policy.limits.fields();
         Poseidon::hashv(&[
             &domain::field(domain::QUEUE_WRITE),
             &self.member,
@@ -104,8 +104,9 @@ impl QueueEntry {
             &self.escrow_key,
             &self.mint_policy_field(),
             &right_align(&policy.withdrawal_threshold.to_be_bytes()),
-            &limits[0],
-            &limits[1],
+            &limits_0,
+            &limits_1,
+            &limits_2,
         ])
     }
 

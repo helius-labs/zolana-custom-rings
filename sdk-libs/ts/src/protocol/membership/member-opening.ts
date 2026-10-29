@@ -47,7 +47,7 @@ import type { ApplyRecordsStatement } from "../proof/statement.js";
 export const FIELD_MAX = bigIntBytes(BN254_SCALAR_ORDER - 1n) as Bytes32;
 /** Rust `MEMBER_REGISTRY_EMPTY_ROOT`, the tree holding only the sentinel, a registry's first root. */
 export const MEMBER_REGISTRY_EMPTY_ROOT = hexToBytes(
-  "053b2136ce0e6cffb89cb76c7a81b6d7e1bd424159ff4579f284a7e5f198956d",
+  "00c0b07d78024d985b995bd9db525f329d0bfb285f75cc222f900d8f6faf5130",
 ) as Bytes32;
 
 const U64_MAX = 0xffff_ffff_ffff_ffffn;
@@ -269,7 +269,7 @@ export function escrowEntry(member: Bytes32, key: EscrowKey): QueueEntry {
   });
 }
 
-/** `Poseidon(CRQW, member, mask, value, escrow_key, mint_policy_write, withdrawal_threshold, limits_0, limits_1)`. */
+/** `Poseidon(CRQW, member, mask, value, escrow_key, mint_policy_write, withdrawal_threshold, limits_0, limits_1, limits_2)`. */
 export function queueEntryHash(entry: QueueEntry): Bytes32 {
   return poseidon([
     domainField(RingDomain.queueWrite),

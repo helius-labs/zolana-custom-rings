@@ -29,7 +29,9 @@ const records = vector.rows.map((row) => ({
       volumeCap: BigInt(row.amount) - 3n,
       volumeWindowSlots: BigInt(row.amount) - 4n,
       depositCap: BigInt(row.amount) - 5n,
-      withdrawalCap: BigInt(row.amount) - 6n,
+      depositWindowSlots: BigInt(row.amount) - 6n,
+      withdrawalCap: BigInt(row.amount) - 7n,
+      withdrawalWindowSlots: BigInt(row.amount) - 8n,
     },
   },
 }));

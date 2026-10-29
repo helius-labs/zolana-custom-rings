@@ -12,7 +12,7 @@ use zolana_ring_client::{
 };
 use zolana_ring_rpc::{
     read_fee_payer, read_root_secret, run_server, write_fee_payer, write_root_secret, ChainSource,
-    Cli, Command, FeePayerSubmit, Hub, KeyKind, KeygenArgs, LiveStorageChain, OriginPolicy, Relay,
+    Cli, Command, FeePayerSubmit, Hub, KeyKind, KeygenArgs, LiveStorageChain, OriginPolicy,
     RelayParts, SdkRelayProver, ServeArgs, ServedRings, ServerOptions, SolanaRelayChain, Store,
     TransactionSource, Upstreams, RECORD_FLUSH_INTERVAL, RELAY_TRACK_INTERVAL,
     UTXO_BACKFILL_INTERVAL,
@@ -90,7 +90,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         None => None,
     };
     let relay = match &args.fee_payer_key_file {
-        Some(path) => Some(relay(&args, path, store.clone())?),
+        Some(path) => Some(relay_parts(&args, path, store.clone())?),
         None => None,
     };
     let origin_transport = args.origin_transport();
@@ -113,8 +113,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         builder = builder.with_encrypted_grants();
     }
     if let Some(relay) = relay {
-        info!("relay fee payer {}", relay.fee_payer());
-        builder = builder.with_relay(Arc::new(relay));
+        builder = builder.with_relay(relay);
     }
     let hub = match (&args.auditor_key_file, &args.root_secret_file) {
         (Some(path), None) => {
@@ -135,6 +134,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let hub = Arc::new(hub);
     info!("service pubkey {}", hub.service_pubkey());
     if let Some(relay) = hub.relay() {
+        info!("relay fee payer {}", relay.fee_payer());
         anyhow::ensure!(
             relay.fee_payer() != hub.service_pubkey(),
             "the fee payer key must differ from the service key"
@@ -168,11 +168,11 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
 }
 
 /// One ring with a local auditor key, any ring with derived keys.
-fn relay(
+fn relay_parts(
     args: &ServeArgs,
     fee_payer_key_file: &std::path::Path,
     store: Option<Store>,
-) -> anyhow::Result<Relay> {
+) -> anyhow::Result<RelayParts> {
     let fee_payer = read_fee_payer(fee_payer_key_file, args.key_access())
         .with_context(|| format!("loading {}", fee_payer_key_file.display()))?;
     let (Some(store), Some(prover_url)) = (store, &args.prover_url) else {
@@ -185,7 +185,7 @@ fn relay(
     );
     let prover = RingClient::new(zolana, AsyncProverClient::new(prover_url.clone()));
     let chain = Arc::new(SolanaRelayChain::new(AsyncSolanaRpc::new(&args.rpc_url)));
-    Ok(Relay::new(RelayParts {
+    Ok(RelayParts {
         store,
         prover: Arc::new(SdkRelayProver::new(prover)),
         submit: Arc::new(FeePayerSubmit::new(fee_payer, chain.clone())),
@@ -194,5 +194,5 @@ fn relay(
             Some(ring) => ServedRings::One(ring),
             None => ServedRings::Any,
         },
-    }))
+    })
 }

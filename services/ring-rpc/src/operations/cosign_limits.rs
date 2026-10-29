@@ -6,7 +6,10 @@ use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signature::Signature;
 use solana_signer::Signer;
+use spr_indexer_api::Hash;
 use tokio::sync::Mutex;
+use zolana_ring_client::{MemberOpeningRead, StorageTip};
+use zolana_ring_indexer::rpc::GetStorageMemberOpeningsRequest;
 use zolana_ring_policy::{AssetLimits, Member};
 
 use crate::{
@@ -17,6 +20,8 @@ use crate::{
     cosign_usage::{Reservation, Reserve, UsageLedger, UsageWindow},
     database::Store,
     error::RingRpcError,
+    hub::Shared,
+    upstream::TransactionSource,
 };
 
 pub trait AssetLimitSource: Send + Sync {
@@ -29,6 +34,9 @@ pub trait AssetLimitSource: Send + Sync {
         assets: &[Address],
     ) -> impl Future<Output = Result<Vec<AssetLimits>, RingRpcError>> + Send;
 }
+
+/// Reads each asset record under the ring policy's newest mirrored own root, one transfers can prove against.
+pub(crate) struct MirroredLimits<S>(pub(crate) Arc<Shared<S>>);
 
 pub struct LimitedCoSignerInit<L> {
     pub signer: Keypair,
@@ -172,6 +180,51 @@ impl<L: AssetLimitSource> CoSignPolicy for LimitedCoSigner<L> {
     }
 }
 
+impl<S: TransactionSource> AssetLimitSource for MirroredLimits<S> {
+    async fn current_slot(&self) -> Result<u64, RingRpcError> {
+        Ok(self.0.source.slot().await?)
+    }
+
+    /// Empty until the writer's first `SyncRoots`, sent with every storage update.
+    async fn asset_limits(
+        &self,
+        ring: Address,
+        assets: &[Address],
+    ) -> Result<Vec<AssetLimits>, RingRpcError> {
+        let source = &self.0.source;
+        let Some(StorageTip { registry, root, .. }) = source.records_root(ring).await? else {
+            return Ok(vec![AssetLimits::EMPTY; assets.len()]);
+        };
+        let members = assets
+            .iter()
+            .map(|asset| Member::asset(asset).map(|member| *member.as_bytes()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| CoSignError::LimitsUnavailable)?;
+        let response = source
+            .storage_member_openings(GetStorageMemberOpeningsRequest {
+                registry: registry.into(),
+                members: members.iter().copied().map(Hash).collect(),
+                expected_root: Hash(root),
+            })
+            .await?;
+        if response.openings.len() != members.len() {
+            return Err(RingRpcError::InvalidIndexerResponse);
+        }
+        response
+            .openings
+            .iter()
+            .zip(&members)
+            .map(|(view, member)| {
+                let opening = MemberOpeningRead::verify(view, &root, member)
+                    .map_err(|_| RingRpcError::InvalidIndexerResponse)?;
+                Ok(opening
+                    .record()
+                    .map_or(AssetLimits::EMPTY, |record| record.mint_policy.limits))
+            })
+            .collect()
+    }
+}
+
 impl LimitDecision<'_> {
     /// `signature` is the co-signature over the request message.
     pub fn decide(self, signature: Signature) -> CoSignDecision {
@@ -223,9 +276,9 @@ impl Measure {
 
 /// A zero window counts the checked transaction alone.
 fn window_caps(limits: &AssetLimits) -> [WindowCap; 4] {
-    let ring = |cap, measure| WindowCap {
+    let ring = |cap, window_slots, measure| WindowCap {
         cap,
-        window_slots: limits.volume_window_slots,
+        window_slots,
         measure,
         scope: Scope::Ring,
     };
@@ -236,21 +289,29 @@ fn window_caps(limits: &AssetLimits) -> [WindowCap; 4] {
             measure: Measure::Outflow,
             scope: Scope::Sender,
         },
-        ring(limits.volume_cap, Measure::Volume),
-        ring(limits.deposit_cap, Measure::Deposited),
-        ring(limits.withdrawal_cap, Measure::Withdrawn),
+        ring(
+            limits.volume_cap,
+            limits.volume_window_slots,
+            Measure::Volume,
+        ),
+        ring(
+            limits.deposit_cap,
+            limits.deposit_window_slots,
+            Measure::Deposited,
+        ),
+        ring(
+            limits.withdrawal_cap,
+            limits.withdrawal_window_slots,
+            Measure::Withdrawn,
+        ),
     ]
 }
 
 fn longest_window(checks: &[AssetCheck]) -> u64 {
     checks
         .iter()
-        .flat_map(|check| {
-            [
-                check.limits.sender_window_slots,
-                check.limits.volume_window_slots,
-            ]
-        })
+        .flat_map(|check| window_caps(&check.limits))
+        .map(|cap| cap.window_slots)
         .max()
         .unwrap_or_default()
 }
@@ -266,10 +327,7 @@ mod tests {
     const SENDER_LIMITS: AssetLimits = AssetLimits {
         sender_cap: 100,
         sender_window_slots: 50,
-        volume_cap: 0,
-        volume_window_slots: 0,
-        deposit_cap: 0,
-        withdrawal_cap: 0,
+        ..AssetLimits::EMPTY
     };
 
     fn member(byte: u8) -> Member {

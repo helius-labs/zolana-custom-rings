@@ -472,7 +472,7 @@ pub(crate) fn write_count(count: usize) -> Result<u8, CustomRingError> {
 const _: () = assert!(WriteRecordsIxData::SIZE == 16);
 const _: () = assert!(MemberWriteIxData::SIZE == 24);
 const _: () = assert!(core::mem::align_of::<RecordWriteData>() == 1);
-const _: () = assert!(RecordWriteData::SIZE == 129);
+const _: () = assert!(RecordWriteData::SIZE == 145);
 const _: () = assert!(ApplyRecordsIxData::SIZE == 228);
 const _: () = assert!(RegisterKeyIxData::SIZE == 296);
 const _: () = assert!(APPLY_BATCH <= u8::MAX as usize);

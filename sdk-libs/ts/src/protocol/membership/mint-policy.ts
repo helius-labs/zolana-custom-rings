@@ -9,7 +9,9 @@ export interface AssetLimits {
   readonly volumeCap: bigint;
   readonly volumeWindowSlots: bigint;
   readonly depositCap: bigint;
+  readonly depositWindowSlots: bigint;
   readonly withdrawalCap: bigint;
+  readonly withdrawalWindowSlots: bigint;
 }
 
 /** Per-mint settings stored in the ring's authenticated asset record. */
@@ -28,7 +30,9 @@ export const ASSET_LIMIT_KEYS = Object.freeze([
   "volumeCap",
   "volumeWindowSlots",
   "depositCap",
+  "depositWindowSlots",
   "withdrawalCap",
+  "withdrawalWindowSlots",
 ] as const satisfies readonly (keyof AssetLimits)[]);
 
 export const EMPTY_ASSET_LIMITS: AssetLimits = Object.freeze({
@@ -37,7 +41,9 @@ export const EMPTY_ASSET_LIMITS: AssetLimits = Object.freeze({
   volumeCap: 0n,
   volumeWindowSlots: 0n,
   depositCap: 0n,
+  depositWindowSlots: 0n,
   withdrawalCap: 0n,
+  withdrawalWindowSlots: 0n,
 });
 
 export const EMPTY_MINT_POLICY: MintPolicy = Object.freeze({
@@ -68,10 +74,10 @@ export function mintPolicyWriteField(policy: MintPolicy | undefined): Bytes32 {
   ) as Bytes32;
 }
 
-/** Rust `AssetLimits::fields`, the two leaf fields after the withdrawal threshold. */
-export function assetLimitsFields(limits: AssetLimits): readonly [Bytes32, Bytes32] {
+/** Rust `AssetLimits::fields`, the three leaf fields after the withdrawal threshold. */
+export function assetLimitsFields(limits: AssetLimits): readonly [Bytes32, Bytes32, Bytes32] {
   const amounts = ASSET_LIMIT_KEYS.map((key) => limits[key]);
-  return [packed(amounts.slice(0, 3)), packed(amounts.slice(3))];
+  return [packed(amounts.slice(0, 3)), packed(amounts.slice(3, 6)), packed(amounts.slice(6))];
 }
 
 /** Rust `mint_policy_write`, `1 || MintPolicy::bytes` replaces the settings, all zero keeps them. */
@@ -92,12 +98,16 @@ export function isEmptyMintPolicy(policy: MintPolicy): boolean {
   return sameMintPolicy(policy, EMPTY_MINT_POLICY);
 }
 
-/** Rust `AssetLimits::check`, a window cap and its window are both zero or both nonzero. */
+/** Rust `AssetLimits::check`, each cap and its window are both zero or both nonzero. */
 export function checkAssetLimits(limits: AssetLimits): AssetLimits {
   assetLimitsFields(limits);
+  const unpaired = (cap: bigint, windowSlots: bigint): boolean =>
+    (cap === 0n) !== (windowSlots === 0n);
   if (
-    (limits.senderCap === 0n) !== (limits.senderWindowSlots === 0n) ||
-    (limits.volumeCap === 0n) !== (limits.volumeWindowSlots === 0n)
+    unpaired(limits.senderCap, limits.senderWindowSlots) ||
+    unpaired(limits.volumeCap, limits.volumeWindowSlots) ||
+    unpaired(limits.depositCap, limits.depositWindowSlots) ||
+    unpaired(limits.withdrawalCap, limits.withdrawalWindowSlots)
   )
     throw new RingError("RING_MEMBER_REGISTRY_INVALID", {
       details: { reason: "UnpairedWindow" },
@@ -106,7 +116,7 @@ export function checkAssetLimits(limits: AssetLimits): AssetLimits {
 }
 
 /** Rust `MintPolicy::LEN`. */
-const MINT_POLICY_LEN = 80;
+const MINT_POLICY_LEN = 96;
 
 /** Rust `MintPolicy::bytes`, big endian u64 amounts in field order. */
 function mintPolicyBytes(policy: MintPolicy): Uint8Array {
@@ -114,7 +124,7 @@ function mintPolicyBytes(policy: MintPolicy): Uint8Array {
   bytes.set(mintPolicyField(policy).subarray(8));
   bytes.set(bigIntBytes(policy.withdrawalThreshold, 8), 24);
   assetLimitsFields(policy.limits).forEach((field, index) =>
-    bytes.set(field.subarray(8), 32 + 24 * index),
+    bytes.set(field.subarray(index === 2 ? 16 : 8), 32 + 24 * index),
   );
   return bytes;
 }

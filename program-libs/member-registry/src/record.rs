@@ -27,7 +27,7 @@ impl MemberRecord {
     };
 
     pub fn hash(&self) -> Result<[u8; 32], HasherError> {
-        let limits = self.mint_policy.limits.fields();
+        let [limits_0, limits_1, limits_2] = self.mint_policy.limits.fields();
         Poseidon::hashv(&[
             &self.member,
             &self.next,
@@ -35,8 +35,9 @@ impl MemberRecord {
             &self.escrow_key,
             &self.mint_policy.field(),
             &right_align(&self.mint_policy.withdrawal_threshold.to_be_bytes()),
-            &limits[0],
-            &limits[1],
+            &limits_0,
+            &limits_1,
+            &limits_2,
         ])
     }
 

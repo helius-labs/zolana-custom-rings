@@ -141,7 +141,11 @@ func (w RecordWrite) apply(api frontend.API, active frontend.Variable, s registr
 	lowRoot, relinkedRoot := w.Low.Update(api, low.Hash(api), relinked.Hash(api))
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: absent, A: lowRoot, B: s.root})
 	// 4. Only a nonempty new record is inserted, an empty one leaves the member absent.
-	insert := api.Mul(absent, ringgadget.IsAny(api, ringgadget.IsNonZero(api, lists), ringgadget.IsNonZero(api, escrow), ringgadget.IsNonZero(api, mintPolicy), ringgadget.IsNonZero(api, withdrawalThreshold), ringgadget.IsNonZero(api, limits[0]), ringgadget.IsNonZero(api, limits[1])))
+	nonzero := []frontend.Variable{ringgadget.IsNonZero(api, lists), ringgadget.IsNonZero(api, escrow), ringgadget.IsNonZero(api, mintPolicy), ringgadget.IsNonZero(api, withdrawalThreshold)}
+	for _, limit := range limits {
+		nonzero = append(nonzero, ringgadget.IsNonZero(api, limit))
+	}
+	insert := api.Mul(absent, ringgadget.IsAny(api, nonzero...))
 	update := api.Mul(active, w.Exists)
 	// 5. An insert relinks the low record to the member and takes the empty leaf at the next index, linking on to the low record's old next.
 	linked := api.Select(insert, relinkedRoot, s.root)

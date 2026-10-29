@@ -420,6 +420,10 @@ mod tests {
             unused()
         }
 
+        async fn slot(&self) -> Result<u64, ClientError> {
+            unused()
+        }
+
         async fn records_root(&self, _ring: Address) -> Result<Option<StorageTip>, ClientError> {
             unused()
         }

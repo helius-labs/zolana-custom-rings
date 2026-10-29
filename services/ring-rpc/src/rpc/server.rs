@@ -497,6 +497,10 @@ mod tests {
             Ok(RingChainStatus::default())
         }
 
+        async fn slot(&self) -> Result<u64, ClientError> {
+            Err(ClientError::Rpc("unused source".to_owned()))
+        }
+
         async fn records_root(
             &self,
             _ring: Address,

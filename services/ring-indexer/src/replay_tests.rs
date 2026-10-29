@@ -1537,7 +1537,9 @@ async fn mint_records_survive_replay_storage_and_rpc_beyond_eight_mints() {
             volume_cap: u64::MAX,
             volume_window_slots: 216_000,
             deposit_cap: 300,
+            deposit_window_slots: 7_200,
             withdrawal_cap: 400,
+            withdrawal_window_slots: 3_600,
         },
     };
     let members: Vec<_> = (1..=12)

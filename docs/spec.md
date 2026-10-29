@@ -28,8 +28,8 @@ A custom ring is a Solana program that governs its notes in the zolana shielded 
 | Shape | `n_in × n_out` | The input and output slot counts of an SPP transfer, one of `SPP_SUPPORTED_SHAPES`. |
 | Member | Field element | A value in `[1, q - 2]` that names an owner, `solana_owner_identity(key)`, or an asset, `hash_bytes(mint)`. |
 | List | Record bit | One of 8 named bits of a record. A list has no effect beyond the rules that read it. |
-| Record | Tree leaf | `Poseidon(member, next, lists, escrow_key, mint_policy, withdrawal_threshold, limits_0, limits_1)`. One per member, sorted by member through `next`. |
-| Mint settings | Record fields | `threshold`, `cap`, `cosign_above`, `withdrawal_threshold` and the six asset limits, each a u64, in the record of an asset member. Only the config authority writes them. [Mint settings](#mint-settings) gives the effect of each value, zero included. |
+| Record | Tree leaf | `Poseidon(member, next, lists, escrow_key, mint_policy, withdrawal_threshold, limits_0, limits_1, limits_2)`. One per member, sorted by member through `next`. |
+| Mint settings | Record fields | `threshold`, `cap`, `cosign_above`, `withdrawal_threshold` and the eight asset limits, each a u64, in the record of an asset member. Only the config authority writes them. [Mint settings](#mint-settings) gives the effect of each value, zero included. |
 | Member registry | Account and tree | The `MemberRegistry` account holds the last 32 roots the record queue instructions apply. No transfer, deposit or merge reads them. |
 | Storage registry | Account | A Storage Program `StorageRegistry`, the root history of one record tree under one authority. Each root carries a revision, and a retired root an expiry. Record contents live in instruction data and the ring indexer. |
 | Records | Storage registry | The ring's own storage registry, bound by `CreatePolicy` for the ring's life. |
@@ -462,21 +462,22 @@ An asset member's record holds the ring's settings for that mint, each a u64:
 | `withdrawal_threshold` | Withdrawal exemption proof | A gross withdrawal at or below it needs no withdrawal-scoped co-signer. Zero exempts nothing. |
 | `sender_cap`, `sender_window_slots` | Ring RPC co-signer | The amount of the mint one sender may move in a window of that many slots. Zero is no cap. |
 | `volume_cap`, `volume_window_slots` | Ring RPC co-signer | The amount of the mint all senders together may move in a window of that many slots. Zero is no cap. |
-| `deposit_cap` | Ring RPC co-signer | The largest public deposit of the mint in one co-signed transaction. Zero is no cap. |
-| `withdrawal_cap` | Ring RPC co-signer | The largest public withdrawal of the mint in one co-signed transaction. Zero is no cap. |
+| `deposit_cap`, `deposit_window_slots` | Ring RPC co-signer | The amount of the mint the ring may take in public deposits in a window of that many slots. Zero is no cap. |
+| `withdrawal_cap`, `withdrawal_window_slots` | Ring RPC co-signer | The amount of the mint the ring may pay out in public withdrawals in a window of that many slots. Zero is no cap. |
 
-No proof bounds an amount by the six asset limits. They enter the leaf, so the indexer serves them under a root the program holds, and Ring RPC enforces them before it co-signs. A window cap and its window are both zero or both nonzero, and a write that sets only one of them fails with `InvalidAssetLimits`.
+No proof bounds an amount by the eight asset limits. They enter the leaf, so the indexer serves them under a root the program holds, and Ring RPC enforces them before it co-signs. Each cap and its window are both zero or both nonzero, and a write that sets only one of them fails with `InvalidAssetLimits`.
 
 ```rust
 /// Below 2^192, with threshold at bits 128..192, cap at 64..128 and cosign_above at 0..64.
 fn pack(p: MintPolicy) -> Field {
     (p.threshold << 128) + (p.cap << 64) + p.cosign_above
 }
-/// Two fields below 2^192, each three limits in table order with the first at bits 128..192.
-fn limits(p: MintPolicy) -> [Field; 2] {
+/// Three fields below 2^192, the limits in table order packed big endian, at most three to a field.
+fn limits(p: MintPolicy) -> [Field; 3] {
     let l = p.limits;
     [(l.sender_cap << 128) + (l.sender_window_slots << 64) + l.volume_cap,
-        (l.volume_window_slots << 128) + (l.deposit_cap << 64) + l.withdrawal_cap]
+        (l.volume_window_slots << 128) + (l.deposit_cap << 64) + l.deposit_window_slots,
+        (l.withdrawal_cap << 64) + l.withdrawal_window_slots]
 }
 ```
 
@@ -972,9 +973,9 @@ struct RecordWriteData {
     member: [u8; 32],
     /// u64 little endian each. All zero when the write changes no list.
     lists: { mask: [u8; 8], value: [u8; 8] },
-    /// `0` then 80 zero bytes keeps the mint settings. `1` then threshold, cap, cosign_above,
-    /// withdrawal_threshold and the six asset limits in table order as u64 big endian replaces them.
-    mint_policy: [u8; 81],
+    /// `0` then 96 zero bytes keeps the mint settings. `1` then threshold, cap, cosign_above,
+    /// withdrawal_threshold and the eight asset limits in table order as u64 big endian replaces them.
+    mint_policy: [u8; 97],
 }
 ```
 
@@ -1413,7 +1414,7 @@ Holds the auditor key and serves audited history to readers.
 - `ringDeposits`, `ringStatus` and `health` need no signature.
 - With a fee payer key, a store and a ring prover it relays transfers. The wallet seals the transfer and sends its proof inputs with the nullifier secret, the transaction viewing secret and the audit ephemeral secret. The service reads the record openings and SPP Merkle paths, proves every statement and pays the fees. On the anonymous and confidential rails it verifies the owner's Ed25519 signature over `SppProofInputs::message_hash` before it proves. On the anonymous rail that signature is the prepared owner authorization of the SPP proof, and the service sends at once. On the confidential and delegate rails it returns the v1 message and sends once each owner or the delegate has signed it. It does not relay deposits or merges.
 - A relay is stored by its `relayId` with its message and signatures, never its proof inputs. A repeated request returns the stored relay. The co-signer signs before the send and settles when the relay confirms or fails. A relay that has not landed when its blockhash expires fails.
-- A `LimitedCoSigner` signs a transaction only under the [co-signer limits](#co-signer-limits).
+- The relay co-signs through a `LimitedCoSigner`, only under the [co-signer limits](#co-signer-limits).
 - `setMergeSettings` stores a wallet's target note count and minimum average amount for one mint. The wallet signs them under `zolana/ring-rpc-merge-settings/v1` with the cluster, service key, ring, timestamp and nonce, and the service verifies the signature under the named owner. A later signed request replaces them, and a zero target revokes them.
 - On a `ConfidentialEscrow` ring the backfill reads every escrowed key from the ring's own storage records under the root its policy mirrors. It reads them again once that root moves, and checks every record against the root and each owner against its record's member.
 - On a `ConfidentialEscrow` ring a host that runs the service with a relay merges a wallet's notes toward its settings. It opens the wallet's escrowed nullifier secret with the auditor key, proves one merge of the smallest notes and sends it through the relay. The merge carries no owner signature.
@@ -1423,14 +1424,14 @@ A reader receives each output's owner key, nullifier key, asset, amount and blin
 
 #### Co-signer limits
 
-Each asset's record in the ring's own storage registry holds `AssetLimits`, six u64 values. Ring RPC reads them under the registry's newest root before it co-signs, and checks every opening against that root. A ring without a `RingPolicy` account has no limits. A zero cap is no cap.
+Each asset's record in the ring's own storage registry holds `AssetLimits`, eight u64 values. Ring RPC reads them under the newest own root the ring policy mirrors, one a transfer can prove against, and checks every opening against that root. A ring without a `RingPolicy` account, or before its first `SyncRoots`, has no limits. A zero cap is no cap.
 
 | Limit | Bounds, per asset |
 |---|---|
 | `sender_cap` over `sender_window_slots` | What one sender transfers and withdraws |
 | `volume_cap` over `volume_window_slots` | What the ring transfers, deposits and withdraws |
-| `deposit_cap` over `volume_window_slots` | What the ring deposits |
-| `withdrawal_cap` over `volume_window_slots` | What the ring withdraws |
+| `deposit_cap` over `deposit_window_slots` | What the ring deposits |
+| `withdrawal_cap` over `withdrawal_window_slots` | What the ring withdraws |
 
 A window counts every reservation less than its length in slots before the current slot. A zero window counts the checked transaction alone. A co-signature reserves the transaction's flows under its own signature, in the database transaction that read the window. `settle` with a confirmation keeps the reservation, and a failure, an expiry included, deletes it unless it was confirmed. A transaction never settled counts until its window passes. The same message signed again returns the same signature and reserves nothing more. The co-signer key derives from the auditor key or the root secret with HKDF-SHA256 under `zolana/ring-rpc-co-signer/v1`.
 
@@ -1558,7 +1559,7 @@ An outflow limit applies per transfer, per mint and per signing key. It keeps no
 | Dual control above an amount per transfer | Yes, the co-signer signs when `outflow > cosign_above`, and the transfer publishes the approval bit. |
 | Cap per customer per day | Only on co-signed transactions, by `sender_cap` over `sender_window_slots`. A transfer that demands no co-signer passes alone. |
 | Cap per person across keys | No. Each signing key is its own sender. |
-| Deposit and withdrawal volume per window | Only on co-signed transactions, by `deposit_cap` and `withdrawal_cap` over `volume_window_slots`. Ring RPC counts them, no proof does. |
+| Deposit and withdrawal volume per window | Only on co-signed transactions, by `deposit_cap` over `deposit_window_slots` and `withdrawal_cap` over `withdrawal_window_slots`. Ring RPC counts them, no proof does. |
 
 A deposit leg in the same transfer lowers the outflow of its mint, and its funder is not screened. A deposit leg above what the transfer pays away in a limited mint fails the proof, so a sender deposits to itself with `AuditedDeposit`. An exit counts as outflow, also to the sender. A mint whose record holds a zero `cap` and a zero `cosign_above` is unbounded. The delegate rail runs no outflow check.
 
