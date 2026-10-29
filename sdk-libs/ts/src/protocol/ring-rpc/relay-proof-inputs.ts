@@ -51,9 +51,7 @@ const SHIELDED_ADDRESS_LENGTH = SHIELDED_PUBLIC_KEY_LENGTH + 32 + X25519_PUBLIC_
 export type RelayRail =
   | Readonly<{ kind: "anonymous"; plan: AnonymousPlan; exitTokenOwner?: Address }>
   | Readonly<{ kind: "confidential" }>
-  | Readonly<{ kind: "delegate"; delegate: Address }>
-  | Readonly<{ kind: "deposit" }>
-  | Readonly<{ kind: "merge" }>;
+  | Readonly<{ kind: "delegate"; delegate: Address }>;
 
 /** Rust `RelayProofInputs`. */
 export interface RelayProofInputs {
@@ -105,6 +103,45 @@ export function encodeRelayProofInputs(value: RelayProofInputs): Uint8Array {
     .bytes(value.blindingSeed, 32, "blindingSeed")
     .u16(value.outputTreeId, "outputTreeId")
     .finish();
+}
+
+/** Rust `RelayMergeInputs`, Ring RPC derives the merged note from the nullifier key. */
+export interface RelayMergeInputs {
+  readonly ringProgramId: Address;
+  /** Owns every input. */
+  readonly sender: ShieldedAddress;
+  readonly nullifierKey: NullifierKey;
+  readonly inputs: readonly ProofInputUtxo[];
+  /** One per input. */
+  readonly leafIndexes: readonly bigint[];
+  readonly assets: AssetRegistry;
+}
+
+/** The caller wipes the returned bytes, they hold the nullifier secret. */
+export function encodeRelayMergeInputs(value: RelayMergeInputs): Uint8Array {
+  const writer = new Writer();
+  const nullifierSecret = value.nullifierKey.secretBytes();
+  try {
+    if (!equalBytes(value.nullifierKey.publicKey(), value.sender.nullifierPublicKey))
+      throw refused("nullifierKey");
+    writer
+      .bytes(addressBytes(value.ringProgramId), 32, "ringProgramId")
+      .bytes(value.sender.toBytes(), undefined, "sender")
+      .bytes(nullifierSecret, BLINDING_LENGTH, "nullifierSecret");
+  } finally {
+    nullifierSecret.fill(0);
+  }
+  writer.u8(value.inputs.length, "inputs.length");
+  value.inputs.forEach((input, index) =>
+    writeSpend(writer, {
+      input,
+      index,
+      leafIndex: value.leafIndexes[index],
+      sender: value.sender,
+      assets: value.assets,
+    }),
+  );
+  return writer.finish();
 }
 
 /** Rust `RelayProofInputs::decode`, every input hash and nullifier derived again from its opening. */
@@ -180,12 +217,6 @@ function writeRail(writer: Writer, rail: RelayRail): void {
     case "delegate":
       writer.u8(2, "rail").bytes(addressBytes(rail.delegate), 32, "delegate");
       return;
-    case "deposit":
-      writer.u8(3, "rail");
-      return;
-    case "merge":
-      writer.u8(4, "rail");
-      return;
   }
 }
 
@@ -205,14 +236,41 @@ function writeInput(
     writer.u16(input.treeId, "input.treeId");
     return;
   }
-  const leafIndex = value.leafIndexes[index];
-  if (!input.utxo.owner.equals(value.sender.signingPublicKey) || leafIndex === undefined)
+  writer.u8(0, "input");
+  writeSpend(writer, {
+    input,
+    index,
+    leafIndex: value.leafIndexes[index],
+    sender: value.sender,
+    assets: value.assets,
+  });
+}
+
+/** Rust `SpendWire`, refused unless it is a spend of the sender with a named leaf. */
+function writeSpend(
+  writer: Writer,
+  spend: Readonly<{
+    input: ProofInputUtxo;
+    index: number;
+    leafIndex: bigint | undefined;
+    sender: ShieldedAddress;
+    assets: AssetRegistry;
+  }>,
+): void {
+  const { input, index, leafIndex, sender, assets } = spend;
+  if (
+    input.isAddress() ||
+    input.cacheSlot !== undefined ||
+    input.isCompact() ||
+    input.isDummy() ||
+    !input.utxo.owner.equals(sender.signingPublicKey) ||
+    leafIndex === undefined
+  )
     throw refused("input", index);
   const { utxo } = input;
   writer
-    .u8(0, "input")
     .bytes(addressBytes(utxo.asset), 32, "input.asset")
-    .u64(value.assets.assetId(utxo.asset), "input.assetId")
+    .u64(assets.assetId(utxo.asset), "input.assetId")
     .u64(utxo.amount, "input.amount")
     .bytes(utxo.blinding, 32, "input.blinding");
   optionalAddress(writer, utxo.ringProgramId, "input.ringProgramId");
@@ -404,10 +462,6 @@ function readRail(reader: WireReader): RelayRail {
       return Object.freeze({ kind: "confidential" });
     case 2:
       return Object.freeze({ kind: "delegate", delegate: reader.address("delegate") });
-    case 3:
-      return Object.freeze({ kind: "deposit" });
-    case 4:
-      return Object.freeze({ kind: "merge" });
     default:
       throw refused("rail", tag);
   }

@@ -257,8 +257,10 @@ pub enum RingError {
     RelayViewingKeyMismatch,
     #[error("the relayed external data does not close with the ring auditor's message")]
     RelayAuditorMessage,
-    #[error("a relayed deposit or merge is not proven here")]
-    RelayRailUnserved,
+    #[error("the relayed deposit ciphertext opens with no auditor capsule")]
+    RelayDepositCapsule,
+    #[error("the relayed audit secret does not derive the capsule's ephemeral key")]
+    RelayAuditKeyMismatch,
     #[error("the transfer pays from {payer}, the relay quote names {fee_payer}")]
     RelayPayerMismatch { payer: Address, fee_payer: Address },
     #[error("ring rpc names another relay than the request hashes to")]

@@ -9,6 +9,7 @@ use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
 use spr_client::{AsyncRpc, AsyncWitnessReader, ClientError, MergeProver, ProofCompressed};
 use spr_hasher::primitives::{pack_be, right_align};
+use spr_indexer_api::SerializablePubkey;
 use spr_interface::{
     instruction::instruction_data::merge_transact::{
         MergeOutputEncryption, MergeProof, MergeTransactIxData,
@@ -16,7 +17,7 @@ use spr_interface::{
     instruction::tag::RING_MERGE_TRANSACT,
     tree_slot::tree_id_field,
 };
-use spr_keypair::{NullifierKey, X25519Pubkey};
+use spr_keypair::{NullifierKey, ShieldedAddress, X25519Pubkey};
 use spr_program::instruction::MergeRing;
 use spr_transaction::{
     error::TransactionError,
@@ -25,7 +26,10 @@ use spr_transaction::{
     ShieldedKeys, SppProofOutputUtxo, WalletUtxo,
 };
 use zeroize::Zeroizing;
-use zolana_ring_client::{MergeDisclosureEncryption, MergeOpening};
+use zolana_ring_client::{
+    rpc::{PrepareRelayRequest, ProofInputBytes, RelayIntent, RelayMergeInputs, RelayQuote},
+    MergeDisclosureEncryption, MergeOpening,
+};
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
@@ -36,7 +40,7 @@ use crate::{
     records::{EscrowOpening, EscrowRead},
     request::{MergeRequest, MergeSlot},
     submission::BoundRoot,
-    tree_id, CustomRing, CustomRingConfig, RingError,
+    tree_id, CustomRing, CustomRingConfig, PreparedRelay, RingError,
 };
 
 pub use spr_transaction::instructions::merge::MERGE_DEFAULT_INPUT_COUNT;
@@ -398,6 +402,36 @@ impl CustomRingMergeInstruction {
         );
         instruction.accounts.splice(0..0, prefix);
         Ok(instruction)
+    }
+}
+
+#[must_use]
+pub struct MergeRelay {
+    pub ring: CustomRing,
+    /// Owns every input.
+    pub sender: ShieldedAddress,
+    pub nullifier_key: NullifierKey,
+    pub inputs: Vec<WalletUtxo>,
+}
+
+impl MergeRelay {
+    /// Ring RPC derives the merged note from the nullifier key, no wallet signature follows.
+    pub fn prepare(self, quote: RelayQuote) -> Result<PreparedRelay, RingError> {
+        let ring = self.ring.program_id();
+        let proof_inputs = RelayMergeInputs {
+            ring_program_id: ring,
+            sender: self.sender,
+            nullifier_key: self.nullifier_key,
+            inputs: self.inputs,
+        }
+        .encode()?;
+        Ok(PreparedRelay::new(PrepareRelayRequest {
+            ring: SerializablePubkey(ring),
+            quote,
+            intent: RelayIntent::Merge {
+                proof_inputs: ProofInputBytes::new(proof_inputs),
+            },
+        }))
     }
 }
 

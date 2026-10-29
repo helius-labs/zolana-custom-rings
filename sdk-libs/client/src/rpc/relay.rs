@@ -13,6 +13,7 @@ pub enum RelayOperation {
     Confidential,
     Delegate,
     Deposit,
+    Merge,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,17 +51,32 @@ pub enum RelayIntent {
     Anonymous {
         proof_inputs: ProofInputBytes,
         owner_signature: SerializableSignature,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        token_account_setup: Vec<TokenAccountSetup>,
     },
     Confidential {
         proof_inputs: ProofInputBytes,
         owner_signature: SerializableSignature,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        token_account_setup: Vec<TokenAccountSetup>,
     },
     Delegate {
         proof_inputs: ProofInputBytes,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        token_account_setup: Vec<TokenAccountSetup>,
     },
-    Deposit {
-        proof_inputs: ProofInputBytes,
-    },
+    /// `proof_inputs` is a `RelayDepositInputs`.
+    Deposit { proof_inputs: ProofInputBytes },
+    /// `proof_inputs` is a `RelayMergeInputs`.
+    Merge { proof_inputs: ProofInputBytes },
+}
+
+/// The fee payer creates the associated token account a withdrawal of `mint` pays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TokenAccountSetup {
+    pub owner: SerializablePubkey,
+    pub mint: SerializablePubkey,
 }
 
 /// Base64 on the wire, zeroized on drop and never printed.
@@ -131,6 +147,25 @@ impl RelayIntent {
             Self::Confidential { .. } => RelayOperation::Confidential,
             Self::Delegate { .. } => RelayOperation::Delegate,
             Self::Deposit { .. } => RelayOperation::Deposit,
+            Self::Merge { .. } => RelayOperation::Merge,
+        }
+    }
+
+    pub fn token_account_setup(&self) -> &[TokenAccountSetup] {
+        match self {
+            Self::Anonymous {
+                token_account_setup,
+                ..
+            }
+            | Self::Confidential {
+                token_account_setup,
+                ..
+            }
+            | Self::Delegate {
+                token_account_setup,
+                ..
+            } => token_account_setup,
+            Self::Deposit { .. } | Self::Merge { .. } => &[],
         }
     }
 
@@ -138,8 +173,9 @@ impl RelayIntent {
         match self {
             Self::Anonymous { proof_inputs, .. }
             | Self::Confidential { proof_inputs, .. }
-            | Self::Delegate { proof_inputs }
-            | Self::Deposit { proof_inputs } => proof_inputs,
+            | Self::Delegate { proof_inputs, .. }
+            | Self::Deposit { proof_inputs }
+            | Self::Merge { proof_inputs } => proof_inputs,
         }
     }
 }

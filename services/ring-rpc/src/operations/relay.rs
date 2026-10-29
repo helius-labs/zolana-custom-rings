@@ -4,16 +4,18 @@ use custom_ring_sdk::RingError;
 use jsonrpsee::types::ErrorObjectOwned;
 use log::warn;
 use solana_address::Address;
+use solana_instruction::Instruction;
 use solana_message::VersionedMessage;
 use solana_signature::Signature;
 use spr_client::compile_message;
+use spr_keypair::PublicKey;
 use spr_transaction::{instructions::transact::SettlementTransfer, SOL_MINT};
 use thiserror::Error;
 use tokio::sync::{Mutex, Semaphore};
 use zolana_ring_client::rpc::{
-    GetRelayQuoteRequest, GetRelayStatusRequest, PrepareRelayRequest, RelayId, RelayIntent,
-    RelayProofInputs, RelayProofInputsError, RelayQuote, RelayStatus, RelayStep,
-    SubmitRelayRequest,
+    GetRelayQuoteRequest, GetRelayStatusRequest, PrepareRelayRequest, RelayDepositInputs, RelayId,
+    RelayIntent, RelayMergeInputs, RelayProofInputs, RelayProofInputsError, RelayQuote,
+    RelayStatus, RelayStep, SubmitRelayRequest, TokenAccountSetupError,
 };
 use zolana_ring_policy::Member;
 
@@ -66,6 +68,16 @@ pub enum RelayError {
     SignerSignature,
     #[error("the cluster refused the transaction because {reason}")]
     SendRefused { reason: String },
+    #[error(transparent)]
+    TokenAccountSetup(#[from] TokenAccountSetupError),
+    #[error("the depositor is the relay fee payer")]
+    DepositorIsFeePayer,
+}
+
+pub enum RelayPayload {
+    Transfer(RelayProofInputs),
+    Deposit(RelayDepositInputs),
+    Merge(RelayMergeInputs),
 }
 
 pub enum ServedRings {
@@ -98,9 +110,14 @@ pub struct Relay {
 #[must_use]
 struct PrepareCheck<'a> {
     request: &'a PrepareRelayRequest,
-    proof_inputs: &'a RelayProofInputs,
+    payload: &'a RelayPayload,
     fee_payer: Address,
     slot: u64,
+}
+
+struct Checked {
+    owner_signature: Option<[u8; 64]>,
+    setup: Vec<Instruction>,
 }
 
 impl RelayError {
@@ -120,6 +137,8 @@ impl RelayError {
             Self::UnexpectedSigner => -32111,
             Self::SignerSignature => -32112,
             Self::SendRefused { .. } => -32113,
+            Self::TokenAccountSetup(_) => -32200,
+            Self::DepositorIsFeePayer => -32201,
         }
     }
 
@@ -190,12 +209,14 @@ impl Relay {
         }
         let ring = request.ring.0;
         self.rings.check(ring)?;
-        let proof_inputs = RelayProofInputs::decode(request.intent.proof_inputs().as_bytes())
-            .map_err(RelayError::from)?;
+        let payload = RelayPayload::decode(&request.intent).map_err(RelayError::from)?;
         let fee_payer = self.fee_payer();
-        let owner_signature = PrepareCheck {
+        let Checked {
+            owner_signature,
+            mut setup,
+        } = PrepareCheck {
             request,
-            proof_inputs: &proof_inputs,
+            payload: &payload,
             fee_payer,
             slot: self.chain.slot().await?,
         }
@@ -206,27 +227,23 @@ impl Relay {
                 .prove(RelayProofRequest {
                     ring,
                     fee_payer,
-                    proof_inputs: &proof_inputs,
+                    payload: &payload,
                     owner_signature,
                 })
                 .await?
         };
         let (blockhash, last_valid_block_height) = self.chain.latest_blockhash().await?;
-        let message = compile_message(
-            &fee_payer,
-            core::slice::from_ref(&proven.instruction),
-            blockhash,
-            proven.budget,
-        )?;
+        setup.push(proven.instruction.clone());
+        let message = compile_message(&fee_payer, &setup, blockhash, proven.budget)?;
         let co_signed = CoSignStep {
             message: &message,
-            proof_inputs: &proof_inputs,
+            payload: &payload,
             proven,
         }
         .decide(self.co_signer.as_ref())
         .await?;
         // The decoded secrets zeroize before the store and send awaits.
-        drop(proof_inputs);
+        drop(payload);
         let mut record = RelayRecord {
             message,
             signatures: co_signed.signature.into_iter().collect(),
@@ -421,7 +438,7 @@ impl Relay {
 
 struct CoSignStep<'a> {
     message: &'a VersionedMessage,
-    proof_inputs: &'a RelayProofInputs,
+    payload: &'a RelayPayload,
     proven: ProvenRelay,
 }
 
@@ -434,7 +451,7 @@ impl CoSignStep<'_> {
     async fn decide(self, co_signer: &dyn CoSignPolicy) -> Result<CoSigned, RingRpcError> {
         let Self {
             message,
-            proof_inputs,
+            payload,
             proven,
         } = self;
         let Some(co_signer_address) = proven.co_signer else {
@@ -443,19 +460,12 @@ impl CoSignStep<'_> {
                 signers: proven.signers,
             });
         };
-        let sender = proof_inputs
-            .sender
-            .signing_pubkey
-            .owner_proof_input_hash()
-            .map_err(RelayProofInputsError::from)
-            .map_err(RelayError::from)?;
         let request = CoSignRequest {
-            ring: proof_inputs.ring_program_id,
+            ring: payload.ring_program_id(),
             message: message.clone(),
-            sender: Member::from_bytes(sender)
-                .map_err(|error| RelayError::Proof(error.to_string()))?,
+            sender: payload.sender()?,
             demand: proven.co_sign_demand,
-            flows: asset_flows(proof_inputs),
+            flows: payload.flows(),
         };
         match co_signer.decide(&request).await? {
             CoSignDecision::Signed(signature) => Ok(CoSigned {
@@ -473,10 +483,10 @@ impl CoSignStep<'_> {
 }
 
 impl PrepareCheck<'_> {
-    fn check(self) -> Result<Option<[u8; 64]>, RingRpcError> {
+    fn check(self) -> Result<Checked, RingRpcError> {
         let Self {
             request,
-            proof_inputs,
+            payload,
             fee_payer,
             slot,
         } = self;
@@ -490,12 +500,29 @@ impl PrepareCheck<'_> {
         if quote.valid_until_slot > slot.saturating_add(QUOTE_SLOTS) {
             return Err(RelayError::QuoteWindow.into());
         }
-        if proof_inputs.ring_program_id != request.ring.0 {
+        if payload.ring_program_id() != request.ring.0 {
             return Err(RelayError::RingMismatch.into());
         }
-        if proof_inputs.rail.operation() != Some(request.intent.operation()) {
+        let unsigned = Checked {
+            owner_signature: None,
+            setup: Vec::new(),
+        };
+        let proof_inputs = match payload {
+            RelayPayload::Transfer(proof_inputs) => proof_inputs,
+            RelayPayload::Deposit(deposit) if deposit.depositor == fee_payer => {
+                return Err(RelayError::DepositorIsFeePayer.into())
+            }
+            RelayPayload::Deposit(_) | RelayPayload::Merge(_) => return Ok(unsigned),
+        };
+        if proof_inputs.rail.operation() != request.intent.operation() {
             return Err(RelayError::RailMismatch.into());
         }
+        let setup = proof_inputs
+            .token_account_setup(fee_payer, request.intent.token_account_setup())
+            .map_err(RelayError::from)?
+            .iter()
+            .map(|create| create.instruction())
+            .collect();
         let signature = match &request.intent {
             RelayIntent::Anonymous {
                 owner_signature, ..
@@ -503,7 +530,9 @@ impl PrepareCheck<'_> {
             | RelayIntent::Confidential {
                 owner_signature, ..
             } => <[u8; 64]>::from(owner_signature.0),
-            RelayIntent::Delegate { .. } | RelayIntent::Deposit { .. } => return Ok(None),
+            RelayIntent::Delegate { .. }
+            | RelayIntent::Deposit { .. }
+            | RelayIntent::Merge { .. } => return Ok(Checked { setup, ..unsigned }),
         };
         let digest = proof_inputs
             .spp_proof_inputs(fee_payer)
@@ -515,8 +544,58 @@ impl PrepareCheck<'_> {
             .signing_pubkey
             .verify_message(&digest, &signature)
         {
-            true => Ok(Some(signature)),
+            true => Ok(Checked {
+                owner_signature: Some(signature),
+                setup,
+            }),
             false => Err(RelayError::OwnerSignature.into()),
+        }
+    }
+}
+
+impl RelayPayload {
+    fn decode(intent: &RelayIntent) -> Result<Self, RelayProofInputsError> {
+        let bytes = intent.proof_inputs().as_bytes();
+        Ok(match intent {
+            RelayIntent::Deposit { .. } => Self::Deposit(RelayDepositInputs::decode(bytes)?),
+            RelayIntent::Merge { .. } => Self::Merge(RelayMergeInputs::decode(bytes)?),
+            RelayIntent::Anonymous { .. }
+            | RelayIntent::Confidential { .. }
+            | RelayIntent::Delegate { .. } => Self::Transfer(RelayProofInputs::decode(bytes)?),
+        })
+    }
+
+    pub fn ring_program_id(&self) -> Address {
+        match self {
+            Self::Transfer(inputs) => inputs.ring_program_id,
+            Self::Deposit(inputs) => inputs.ring_program_id,
+            Self::Merge(inputs) => inputs.ring_program_id,
+        }
+    }
+
+    /// The deposit's recipient, the spender otherwise.
+    fn sender(&self) -> Result<Member, RelayError> {
+        let owner: &PublicKey = match self {
+            Self::Transfer(inputs) => &inputs.sender.signing_pubkey,
+            Self::Deposit(inputs) => &inputs.recipient.signing_pubkey,
+            Self::Merge(inputs) => &inputs.sender.signing_pubkey,
+        };
+        let owner_hash = owner
+            .owner_proof_input_hash()
+            .map_err(RelayProofInputsError::from)?;
+        Member::from_bytes(owner_hash).map_err(|error| RelayError::Proof(error.to_string()))
+    }
+
+    fn flows(&self) -> Vec<AssetFlow> {
+        match self {
+            Self::Transfer(proof_inputs) => asset_flows(proof_inputs),
+            Self::Deposit(inputs) => vec![AssetFlow {
+                asset: inputs.asset.mint(),
+                transferred: 0,
+                deposited: inputs.amount,
+                withdrawn: 0,
+            }],
+            Self::Merge(_) => Vec::new(),
         }
     }
 }

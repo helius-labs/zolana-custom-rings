@@ -683,6 +683,7 @@ fn a_relay_request_serializes_to_the_shared_vector() {
         intent: RelayIntent::Anonymous {
             proof_inputs: ProofInputBytes::new(zeroize::Zeroizing::new(vec![3, 4, 5])),
             owner_signature: Signature::from([7; 64]).into(),
+            token_account_setup: Vec::new(),
         },
     };
     assert_eq!(serde_json::to_string(&request).expect("json"), vector.wire);
@@ -870,5 +871,5 @@ fn relay_proof_inputs_encode_to_the_shared_vector() {
     assert_eq!(read.inputs, inputs.inputs);
     assert_eq!(read.outputs, inputs.outputs);
     assert_eq!(read.external_data, inputs.external_data);
-    assert_eq!(read.rail.operation(), Some(RelayOperation::Anonymous));
+    assert_eq!(read.rail.operation(), RelayOperation::Anonymous);
 }

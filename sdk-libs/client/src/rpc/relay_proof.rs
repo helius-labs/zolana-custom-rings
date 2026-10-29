@@ -1,7 +1,8 @@
 use solana_address::Address;
 use spr_event::MessageData;
 use spr_instruction::instruction::{
-    TransactInterfaceTransferAccounts, TransactSolTransferAccounts, TransactSplWithdrawalAccounts,
+    CreateAssociatedTokenAccount, TransactInterfaceTransferAccounts, TransactSolTransferAccounts,
+    TransactSplWithdrawalAccounts,
 };
 use spr_interface::{instruction::instruction_data::transact::TransactOutput, pda, MAX_OUTPUTS};
 use spr_keypair::{
@@ -11,14 +12,14 @@ use spr_keypair::{
 use spr_transaction::{
     instructions::transact::{CacheAccounts, ExternalData, SettlementTransfer, SppProofInputs},
     utxo::SppProofInputUtxo,
-    Data, Mint, SppProofOutputUtxo, TransactionError, Utxo,
+    Data, Mint, SppProofOutputUtxo, TransactionError, Utxo, WalletUtxo,
 };
 use thiserror::Error;
 use wincode::{containers, len::FixIntLen, SchemaRead, SchemaWrite};
 use zeroize::{Zeroize, Zeroizing};
 use zolana_ring_transaction::{AnonymousPlan, TaggedPayment};
 
-use super::RelayOperation;
+use super::{RelayOperation, TokenAccountSetup};
 
 pub struct RelayProofInputs {
     pub rail: RelayRail,
@@ -47,8 +48,15 @@ pub enum RelayRail {
     Delegate {
         delegate: Address,
     },
-    Deposit,
-    Merge,
+}
+
+/// Ring RPC derives the merged note from the nullifier key.
+pub struct RelayMergeInputs {
+    pub ring_program_id: Address,
+    /// Owns every input.
+    pub sender: ShieldedAddress,
+    pub nullifier_key: NullifierKey,
+    pub inputs: Vec<WalletUtxo>,
 }
 
 #[derive(Debug, Error)]
@@ -65,21 +73,28 @@ pub enum RelayProofInputsError {
     Settlement { index: usize },
     #[error("nullifier key does not match the sender")]
     NullifierKey,
+    #[error("merge input {index} is not a spend of the sender")]
+    MergeInput { index: usize },
     #[error(transparent)]
     Keypair(#[from] KeypairError),
     #[error(transparent)]
     Transaction(#[from] TransactionError),
 }
 
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
+pub enum TokenAccountSetupError {
+    #[error("token account setup {index} names no withdrawal into its associated account")]
+    NoWithdrawal { index: usize },
+    #[error("token account setup {index} repeats an earlier account")]
+    Repeated { index: usize },
+}
+
 impl RelayRail {
-    /// `None` for a merge, no relay intent names one.
-    pub const fn operation(&self) -> Option<RelayOperation> {
+    pub const fn operation(&self) -> RelayOperation {
         match self {
-            Self::Anonymous { .. } => Some(RelayOperation::Anonymous),
-            Self::Confidential => Some(RelayOperation::Confidential),
-            Self::Delegate { .. } => Some(RelayOperation::Delegate),
-            Self::Deposit => Some(RelayOperation::Deposit),
-            Self::Merge => None,
+            Self::Anonymous { .. } => RelayOperation::Anonymous,
+            Self::Confidential => RelayOperation::Confidential,
+            Self::Delegate { .. } => RelayOperation::Delegate,
         }
     }
 }
@@ -107,6 +122,116 @@ impl RelayProofInputs {
             payer,
             cache_accounts: CacheAccounts::default(),
         }
+    }
+
+    /// Idempotent creates funded by `payer`, each for an account a withdrawal of its mint pays.
+    pub fn token_account_setup(
+        &self,
+        payer: Address,
+        setup: &[TokenAccountSetup],
+    ) -> Result<Vec<CreateAssociatedTokenAccount>, TokenAccountSetupError> {
+        let mut created: Vec<Address> = Vec::with_capacity(setup.len());
+        setup
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                let create = self
+                    .interface_transfer_accounts
+                    .iter()
+                    .find_map(|accounts| match accounts {
+                        TransactInterfaceTransferAccounts::SplWithdrawal(withdrawal)
+                            if withdrawal.mint == entry.mint.0 =>
+                        {
+                            let create = CreateAssociatedTokenAccount {
+                                payer,
+                                owner: entry.owner.0,
+                                mint: withdrawal.mint,
+                                token_program: withdrawal.token_program,
+                            };
+                            (create.address() == withdrawal.user_token_account).then_some(create)
+                        }
+                        _ => None,
+                    })
+                    .ok_or(TokenAccountSetupError::NoWithdrawal { index })?;
+                if created.contains(&create.address()) {
+                    return Err(TokenAccountSetupError::Repeated { index });
+                }
+                created.push(create.address());
+                Ok(create)
+            })
+            .collect()
+    }
+}
+
+impl RelayMergeInputs {
+    pub fn encode(&self) -> Result<Zeroizing<Vec<u8>>, RelayProofInputsError> {
+        check_nullifier_key(&self.sender, &self.nullifier_key)?;
+        let wire = MergeWire {
+            ring_program_id: self.ring_program_id,
+            sender: self.sender.to_bytes(),
+            nullifier_secret: *self.nullifier_key.secret(),
+            inputs: self
+                .inputs
+                .iter()
+                .enumerate()
+                .map(|(index, input)| {
+                    SpendWire::of(&SppProofInputUtxo::from(input), &self.sender)
+                        .ok_or(RelayProofInputsError::MergeInput { index })
+                })
+                .collect::<Result<_, _>>()?,
+        };
+        Ok(Zeroizing::new(wincode::serialize(&wire)?))
+    }
+
+    /// Derives each input hash and nullifier again from its opening and the nullifier key.
+    pub fn decode(bytes: &[u8]) -> Result<Self, RelayProofInputsError> {
+        let wire: MergeWire = wincode::deserialize_exact(bytes)?;
+        let sender = ShieldedAddress::from_bytes(&wire.sender)?;
+        let nullifier_key = NullifierKey::from_secret(wire.nullifier_secret);
+        check_nullifier_key(&sender, &nullifier_key)?;
+        let inputs = wire
+            .inputs
+            .iter()
+            .map(|spend| {
+                let input = spend.input(&sender, &nullifier_key)?;
+                Ok(WalletUtxo {
+                    utxo: input.utxo,
+                    nullifier_pubkey: input.nullifier_pubkey,
+                    utxo_hash: input.utxo_hash,
+                    nullifier: input.nullifier,
+                    tx_viewing_key: None,
+                    data_hash: input.data_hash,
+                    ring_data_hash: input.ring_data_hash,
+                    tree_id: input.tree_id,
+                    leaf_index: input.leaf_index,
+                    latest_tree_id: None,
+                    slot: 0,
+                    tx_signature: Default::default(),
+                    slot_index: 0,
+                })
+            })
+            .collect::<Result<_, RelayProofInputsError>>()?;
+        Ok(Self {
+            ring_program_id: wire.ring_program_id,
+            sender,
+            nullifier_key,
+            inputs,
+        })
+    }
+}
+
+#[derive(SchemaWrite, SchemaRead)]
+struct MergeWire {
+    ring_program_id: Address,
+    sender: [u8; SHIELDED_ADDRESS_LEN],
+    nullifier_secret: [u8; BLINDING_LEN],
+    #[wincode(with = "containers::Vec<SpendWire, FixIntLen<u8>>")]
+    inputs: Vec<SpendWire>,
+}
+
+impl Drop for MergeWire {
+    fn drop(&mut self) {
+        self.nullifier_secret.zeroize();
     }
 }
 
@@ -146,8 +271,6 @@ enum RailWire {
     Delegate {
         delegate: Address,
     },
-    Deposit,
-    Merge,
 }
 
 #[derive(SchemaWrite, SchemaRead)]
@@ -167,25 +290,23 @@ struct PaymentWire {
 #[derive(SchemaWrite, SchemaRead)]
 #[wincode(tag_encoding = "u8")]
 enum InputWire {
-    Spend {
-        asset: Address,
-        asset_id: u64,
-        amount: u64,
-        blinding: [u8; 32],
-        ring_program_id: Option<Address>,
-        data: Data,
-        data_hash: Option<[u8; 32]>,
-        ring_data_hash: Option<[u8; 32]>,
-        tree_id: u16,
-        leaf_index: u64,
-    },
-    Dummy {
-        blinding: [u8; 32],
-        tree_id: u16,
-    },
-    Compact {
-        tree_id: u16,
-    },
+    Spend(SpendWire),
+    Dummy { blinding: [u8; 32], tree_id: u16 },
+    Compact { tree_id: u16 },
+}
+
+#[derive(SchemaWrite, SchemaRead)]
+struct SpendWire {
+    asset: Address,
+    asset_id: u64,
+    amount: u64,
+    blinding: [u8; 32],
+    ring_program_id: Option<Address>,
+    data: Data,
+    data_hash: Option<[u8; 32]>,
+    ring_data_hash: Option<[u8; 32]>,
+    tree_id: u16,
+    leaf_index: u64,
 }
 
 #[derive(SchemaWrite, SchemaRead)]
@@ -355,8 +476,6 @@ impl RailWire {
             RelayRail::Delegate { delegate } => Self::Delegate {
                 delegate: *delegate,
             },
-            RelayRail::Deposit => Self::Deposit,
-            RelayRail::Merge => Self::Merge,
         }
     }
 
@@ -385,8 +504,6 @@ impl RailWire {
             Self::Delegate { delegate } => RelayRail::Delegate {
                 delegate: *delegate,
             },
-            Self::Deposit => RelayRail::Deposit,
-            Self::Merge => RelayRail::Merge,
         })
     }
 }
@@ -406,24 +523,7 @@ impl InputWire {
                 tree_id,
             });
         }
-        if input.utxo.owner != sender.signing_pubkey
-            || input.nullifier_pubkey != sender.nullifier_pubkey
-        {
-            return None;
-        }
-        let utxo = &input.utxo;
-        Some(Self::Spend {
-            asset: utxo.asset.asset,
-            asset_id: utxo.asset.asset_id,
-            amount: utxo.amount,
-            blinding: utxo.blinding,
-            ring_program_id: utxo.ring_program_id,
-            data: utxo.data.clone(),
-            data_hash: input.data_hash,
-            ring_data_hash: input.ring_data_hash,
-            tree_id,
-            leaf_index: input.leaf_index,
-        })
+        SpendWire::of(input, sender).map(Self::Spend)
     }
 
     fn input(
@@ -436,46 +536,68 @@ impl InputWire {
             Self::Dummy { blinding, tree_id } => {
                 SppProofInputUtxo::dummy_with_blinding(*blinding, *tree_id)?
             }
-            Self::Spend {
-                asset,
-                asset_id,
-                amount,
-                blinding,
-                ring_program_id,
-                data,
-                data_hash,
-                ring_data_hash,
-                tree_id,
-                leaf_index,
-            } => {
-                let utxo = Utxo {
-                    owner: sender.signing_pubkey,
-                    asset: Mint::new(*asset, *asset_id),
-                    amount: *amount,
-                    blinding: *blinding,
-                    ring_program_id: *ring_program_id,
-                    data: data.clone(),
-                };
-                let utxo_hash = utxo.hash(
-                    &sender.nullifier_pubkey,
-                    &data_hash.unwrap_or_default(),
-                    &ring_data_hash.unwrap_or_default(),
-                    *tree_id,
-                )?;
-                SppProofInputUtxo {
-                    address: false,
-                    nullifier: nullifier_key.nullifier(&utxo_hash, blinding)?,
-                    utxo,
-                    nullifier_pubkey: sender.nullifier_pubkey,
-                    utxo_hash,
-                    data_hash: *data_hash,
-                    ring_data_hash: *ring_data_hash,
-                    tree_id: *tree_id,
-                    leaf_index: *leaf_index,
-                    cache_slot: None,
-                    compact: false,
-                }
-            }
+            Self::Spend(spend) => spend.input(sender, nullifier_key)?,
+        })
+    }
+}
+
+impl SpendWire {
+    fn of(input: &SppProofInputUtxo, sender: &ShieldedAddress) -> Option<Self> {
+        if input.is_address()
+            || input.cache_slot.is_some()
+            || input.is_compact()
+            || input.is_dummy()
+            || input.utxo.owner != sender.signing_pubkey
+            || input.nullifier_pubkey != sender.nullifier_pubkey
+        {
+            return None;
+        }
+        let utxo = &input.utxo;
+        Some(Self {
+            asset: utxo.asset.asset,
+            asset_id: utxo.asset.asset_id,
+            amount: utxo.amount,
+            blinding: utxo.blinding,
+            ring_program_id: utxo.ring_program_id,
+            data: utxo.data.clone(),
+            data_hash: input.data_hash,
+            ring_data_hash: input.ring_data_hash,
+            tree_id: input.tree_id,
+            leaf_index: input.leaf_index,
+        })
+    }
+
+    fn input(
+        &self,
+        sender: &ShieldedAddress,
+        nullifier_key: &NullifierKey,
+    ) -> Result<SppProofInputUtxo, RelayProofInputsError> {
+        let utxo = Utxo {
+            owner: sender.signing_pubkey,
+            asset: Mint::new(self.asset, self.asset_id),
+            amount: self.amount,
+            blinding: self.blinding,
+            ring_program_id: self.ring_program_id,
+            data: self.data.clone(),
+        };
+        let utxo_hash = utxo.hash(
+            &sender.nullifier_pubkey,
+            &self.data_hash.unwrap_or_default(),
+            &self.ring_data_hash.unwrap_or_default(),
+            self.tree_id,
+        )?;
+        Ok(SppProofInputUtxo {
+            address: false,
+            nullifier: nullifier_key.nullifier(&utxo_hash, &self.blinding)?,
+            utxo,
+            nullifier_pubkey: sender.nullifier_pubkey,
+            utxo_hash,
+            data_hash: self.data_hash,
+            ring_data_hash: self.ring_data_hash,
+            tree_id: self.tree_id,
+            leaf_index: self.leaf_index,
+            cache_slot: None,
+            compact: false,
         })
     }
 }

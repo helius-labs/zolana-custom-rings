@@ -1,8 +1,8 @@
 //! Deposits whose proof binds the SPP data and the record of any escrowed owner or screened asset.
 
 use custom_ring_interface::{
-    domain::deposit_blinding, key_catalog::RingCircuit, ring_deposit_assets, tag,
-    AuditedDepositPrefix, CoSignScope, CustomRingError, CustomRingProof, DepositContext,
+    cosign::CoSignDemand, domain::deposit_blinding, key_catalog::RingCircuit, ring_deposit_assets,
+    tag, AuditedDepositPrefix, CoSignScope, CustomRingError, CustomRingProof, DepositContext,
     DepositPublicInput, DepositRegistry, DepositedAsset, RingDepositAuditCapsule, RingMode,
     RingPolicy,
 };
@@ -12,15 +12,17 @@ use solana_signature::Signature;
 use solana_signer::Signer;
 use spr_client::{AsyncRpc, ClientError};
 use spr_hasher::primitives::right_align;
+use spr_indexer_api::SerializablePubkey;
 use spr_interface::{
     instruction::instruction_data::deposit::RingDepositIxDataRef, pda, state::SplAssetRegistry,
     PROGRAM_ID_PUBKEY,
 };
-use spr_keypair::{random_blinding, Curve, ShieldedAddress, X25519Pubkey};
+use spr_keypair::{random_blinding, Curve, ShieldedAddress, X25519Keypair, X25519Pubkey};
 use spr_program::instruction::{DepositAsset, RingAssetDeposit};
 use spr_transaction::{owner_utxo_hash, Data, Mint, Utxo, SOL_ASSET_ID, SOL_MINT};
 use zeroize::Zeroizing;
 use zolana_ring_client::{
+    rpc::{PrepareRelayRequest, ProofInputBytes, RelayDepositInputs, RelayIntent, RelayQuote},
     seal_deposits, AdvancedTag, AsyncRingIndexer, DepositEncryption, DepositOpening, FirstContact,
     PaymentRecipient, ViewingHistory,
 };
@@ -37,7 +39,8 @@ use crate::{
     records::{EscrowOpening, EscrowRead, MemberRead},
     request::{DepositRequest, MemberOpening, PolicyTable, RecordOpeningRequest},
     submission::{BoundPolicy, BoundRoot},
-    CustomRing, PinnedPolicy, RingError, RingSubmission, SettledSubmission,
+    CustomRing, CustomRingConfig, PinnedPolicy, PreparedRelay, RingError, RingSubmission,
+    SettledSubmission,
 };
 
 #[cfg(test)]
@@ -136,6 +139,7 @@ pub struct RingDepositReceipt {
 pub struct PreparedRingDeposit {
     ring: CustomRing,
     spp: Instruction,
+    depositor: Address,
     cosigner: Option<Address>,
     utxo: Utxo,
     disclosure: DepositDisclosure,
@@ -196,8 +200,59 @@ impl RingDeposit<'_> {
         &self,
         rpc: &(impl AsyncRpc + ?Sized),
     ) -> Result<PreparedRingDeposit, RingError> {
-        let mint = self.asset.mint();
-        let mint = Mint::new(mint, fetch_asset_id_async(rpc, mint).await?);
+        let SealedDeposit {
+            config,
+            note,
+            viewing_history,
+        } = self.seal(rpc).await?;
+        DepositAssembly {
+            ring: self.ring,
+            config: &config,
+            tree: self.tree,
+            depositor: self.payer.pubkey(),
+            public_signers: core::iter::once(self.payer.pubkey())
+                .chain(self.cosigner.map(|signer| signer.pubkey()))
+                .collect(),
+            co_signer: self.cosigner.map(|signer| signer.pubkey()),
+            note,
+            viewing_history,
+        }
+        .assemble(rpc)
+        .await
+    }
+
+    /// The depositor signs the message Ring RPC answers with.
+    pub async fn prepare_relay(
+        &self,
+        rpc: &(impl AsyncRpc + ?Sized),
+        quote: RelayQuote,
+    ) -> Result<PreparedRelay, RingError> {
+        let SealedDeposit { note, .. } = self.seal(rpc).await?;
+        let depositor = self.payer.pubkey();
+        note.check_signers([depositor, quote.fee_payer.0])?;
+        let proof_inputs = RelayDepositInputs {
+            ring_program_id: self.ring.program_id(),
+            tree: self.tree,
+            depositor,
+            recipient: note.address,
+            asset: note.deposit.asset,
+            amount: note.deposit.amount,
+            view_tag: note.deposit.view_tag,
+            encrypted: note.deposit.encrypted.clone(),
+            blinding_secret: note.blinding_secret.clone(),
+            audit_ephemeral_key: note.encryption.ephemeral_sk.clone(),
+        }
+        .encode()?;
+        Ok(PreparedRelay::new(PrepareRelayRequest {
+            ring: SerializablePubkey(self.ring.program_id()),
+            quote,
+            intent: RelayIntent::Deposit {
+                proof_inputs: ProofInputBytes::new(proof_inputs),
+            },
+        }))
+    }
+
+    async fn seal(&self, rpc: &(impl AsyncRpc + ?Sized)) -> Result<SealedDeposit, RingError> {
         let config = self.ring.require_config(rpc).await?;
         self.ring.require_active(rpc).await?;
         let anonymous = config.mode == RingMode::Anonymous;
@@ -210,22 +265,9 @@ impl RingDeposit<'_> {
         let TaggedRecipient {
             address,
             view_tag,
-            history: viewing_history,
+            history,
         } = self.recipient.tagged(self.ring)?;
-        let owner_key = match anonymous {
-            // An anonymous ring spends only through the hidden Ed25519 proof.
-            true if address.signing_pubkey.curve()? != Curve::Ed25519 => {
-                return Err(RingError::AnonymousRecipient)
-            }
-            true => Some(address.signing_pubkey.as_ed25519()?),
-            false => None,
-        };
-        if let Some(owner) = owner_key {
-            HiddenOwner(Address::new_from_array(owner)).check_signers(
-                core::iter::once(self.payer.pubkey())
-                    .chain(self.cosigner.map(|signer| signer.pubkey())),
-            )?;
-        }
+        let owner_key = owner_key(config.mode, &address)?;
         let blinding_secret = Zeroizing::new(random_blinding());
         let blinding = deposit_blinding(&blinding_secret)?;
         let owner_hash = address.owner_hash()?;
@@ -258,64 +300,18 @@ impl RingDeposit<'_> {
             recipient_ciphertext: &deposit.encrypted.ciphertext,
         }
         .encode();
-        // The proof binds the ring, the tree and the exact forwarded SPP bytes.
-        let spp = spr_program::instruction::RingDeposit {
-            tree: self.tree,
-            depositor: self.payer.pubkey(),
-            ring_program_id: self.ring.program_id(),
-            deposits: vec![deposit.clone()],
-        }
-        .instruction()?;
-        let deposit_data = RingDepositIxDataRef::from_bytes(spp.data.get(1..).unwrap_or_default())
-            .map_err(|_| CustomRingError::InvalidDepositData)?;
-        let [asset] = ring_deposit_assets(&deposit_data, |index| {
-            spp.accounts.get(index).map(|meta| meta.pubkey.to_bytes())
-        })?[..] else {
-            return Err(CustomRingError::InvalidDepositData.into());
+        let note = SealedNote {
+            address,
+            owner_key,
+            blinding_secret,
+            blinding,
+            deposit,
+            encryption,
         };
-        let cosigner = CoSignerChoice {
-            ring: self.ring,
-            config: &config,
-            demand: &custom_ring_interface::cosign::CoSignDemand {
-                approval_required: false,
-                classes: CoSignScope::DEPOSITS,
-                withdrawals: Vec::new(),
-            },
-            supplied: self.cosigner.map(|signer| signer.pubkey()),
-        }
-        .resolve(rpc)
-        .await?;
-        Ok(PreparedRingDeposit {
-            ring: self.ring,
-            cosigner,
-            utxo: Utxo {
-                owner: address.signing_pubkey,
-                asset: mint,
-                amount: self.amount,
-                blinding,
-                ring_program_id: Some(self.ring.program_id()),
-                data: Data::default(),
-            },
-            disclosure: DepositDisclosure {
-                owner_key,
-                context_hash: DepositContext {
-                    program_id: self.ring.program_id().as_array(),
-                    tree: self.tree.as_array(),
-                    spp_data: &spp.data,
-                }
-                .hash()?,
-                owner_utxo_hash: deposit.owner_utxo_hash,
-                owner_pk_hash: address.signing_pubkey.owner_proof_input_hash()?,
-                nullifier_pk: address.nullifier_pubkey,
-                blinding_secret,
-                encryption,
-                auditor: config.auditor_pubkey,
-                key_escrow: config.mode == RingMode::ConfidentialEscrow,
-                has_policy: config.account().has_policy(),
-                asset,
-            },
-            spp,
-            viewing_history,
+        Ok(SealedDeposit {
+            config,
+            note,
+            viewing_history: history,
         })
     }
 
@@ -369,6 +365,20 @@ impl PreparedRingDeposit {
 
     pub fn utxo(&self) -> &Utxo {
         &self.utxo
+    }
+
+    /// Signs the funding transfer.
+    pub fn depositor(&self) -> Address {
+        self.depositor
+    }
+
+    /// `Some` when a record covers deposits.
+    pub fn co_signer(&self) -> Option<Address> {
+        self.cosigner
+    }
+
+    pub fn co_sign_demand(&self) -> CoSignDemand {
+        deposit_demand()
     }
 
     pub fn viewing_history(&self) -> Option<&ViewingHistory> {
@@ -467,6 +477,211 @@ impl DepositRecords {
         self.policy
             .as_ref()
             .and_then(|policy| policy.curator.as_ref())
+    }
+}
+
+#[must_use]
+pub struct RelayedDeposit<'a> {
+    pub ring: CustomRing,
+    pub inputs: &'a RelayDepositInputs,
+    pub fee_payer: Address,
+    /// Read only when a record covers deposits.
+    pub co_signer: Option<Address>,
+}
+
+struct SealedDeposit {
+    config: CustomRingConfig,
+    note: SealedNote,
+    viewing_history: Option<ViewingHistory>,
+}
+
+struct SealedNote {
+    address: ShieldedAddress,
+    /// The Ed25519 owner key an anonymous ring discloses.
+    owner_key: Option<[u8; 32]>,
+    blinding_secret: Zeroizing<[u8; 32]>,
+    blinding: [u8; 32],
+    deposit: RingAssetDeposit,
+    encryption: DepositEncryption,
+}
+
+#[must_use]
+struct DepositAssembly<'a> {
+    ring: CustomRing,
+    config: &'a CustomRingConfig,
+    tree: Address,
+    depositor: Address,
+    /// Every transaction signer, none may name an anonymous owner.
+    public_signers: Vec<Address>,
+    co_signer: Option<Address>,
+    note: SealedNote,
+    viewing_history: Option<ViewingHistory>,
+}
+
+impl RelayedDeposit<'_> {
+    /// The proof binds every ciphertext the wallet sealed.
+    pub async fn prepare(
+        self,
+        rpc: &(impl AsyncRpc + ?Sized),
+    ) -> Result<PreparedRingDeposit, RingError> {
+        let inputs = self.inputs;
+        if inputs.ring_program_id != self.ring.program_id() {
+            return Err(RingError::ForeignRing(inputs.ring_program_id));
+        }
+        let config = self.ring.require_config(rpc).await?;
+        self.ring.require_active(rpc).await?;
+        let address = inputs.recipient;
+        let owner_key = owner_key(config.mode, &address)?;
+        let blinding = deposit_blinding(&inputs.blinding_secret)?;
+        let capsule = RingDepositAuditCapsule::parse(&inputs.encrypted.ciphertext)
+            .map_err(|_| RingError::RelayDepositCapsule)?
+            .filter(|capsule| capsule.slot_index == 0)
+            .ok_or(RingError::RelayDepositCapsule)?;
+        let ephemeral_pk = X25519Keypair::from_bytes(&inputs.audit_ephemeral_key).pubkey();
+        if ephemeral_pk.as_bytes() != capsule.eph_pk {
+            return Err(RingError::RelayAuditKeyMismatch);
+        }
+        let encryption = DepositEncryption {
+            ephemeral_sk: inputs.audit_ephemeral_key.clone(),
+            ephemeral_pk,
+            ciphertexts: vec![*capsule.ciphertext],
+        };
+        let note = SealedNote {
+            address,
+            owner_key,
+            blinding_secret: inputs.blinding_secret.clone(),
+            blinding,
+            deposit: RingAssetDeposit {
+                asset: inputs.asset,
+                view_tag: inputs.view_tag,
+                owner_utxo_hash: owner_utxo_hash(&address.owner_hash()?, &blinding)?,
+                amount: inputs.amount,
+                ring_data_hash: [0; 32],
+                encrypted: inputs.encrypted.clone(),
+            },
+            encryption,
+        };
+        DepositAssembly {
+            ring: self.ring,
+            config: &config,
+            tree: inputs.tree,
+            depositor: inputs.depositor,
+            public_signers: [self.fee_payer, inputs.depositor]
+                .into_iter()
+                .chain(self.co_signer)
+                .collect(),
+            co_signer: self.co_signer,
+            note,
+            viewing_history: None,
+        }
+        .assemble(rpc)
+        .await
+    }
+}
+
+impl SealedNote {
+    fn check_signers(&self, signers: impl IntoIterator<Item = Address>) -> Result<(), RingError> {
+        match self.owner_key {
+            Some(owner) => HiddenOwner(Address::new_from_array(owner)).check_signers(signers),
+            None => Ok(()),
+        }
+    }
+}
+
+impl DepositAssembly<'_> {
+    /// The proof binds the ring, the tree and the exact forwarded SPP bytes.
+    async fn assemble(
+        self,
+        rpc: &(impl AsyncRpc + ?Sized),
+    ) -> Result<PreparedRingDeposit, RingError> {
+        let Self {
+            ring,
+            config,
+            tree,
+            depositor,
+            public_signers,
+            co_signer,
+            note,
+            viewing_history,
+        } = self;
+        note.check_signers(public_signers)?;
+        let mint = note.deposit.asset.mint();
+        let mint = Mint::new(mint, fetch_asset_id_async(rpc, mint).await?);
+        let spp = spr_program::instruction::RingDeposit {
+            tree,
+            depositor,
+            ring_program_id: ring.program_id(),
+            deposits: vec![note.deposit.clone()],
+        }
+        .instruction()?;
+        let deposit_data = RingDepositIxDataRef::from_bytes(spp.data.get(1..).unwrap_or_default())
+            .map_err(|_| CustomRingError::InvalidDepositData)?;
+        let [asset] = ring_deposit_assets(&deposit_data, |index| {
+            spp.accounts.get(index).map(|meta| meta.pubkey.to_bytes())
+        })?[..] else {
+            return Err(CustomRingError::InvalidDepositData.into());
+        };
+        let cosigner = CoSignerChoice {
+            ring,
+            config,
+            demand: &deposit_demand(),
+            supplied: co_signer,
+        }
+        .resolve(rpc)
+        .await?;
+        let address = note.address;
+        Ok(PreparedRingDeposit {
+            ring,
+            cosigner,
+            utxo: Utxo {
+                owner: address.signing_pubkey,
+                asset: mint,
+                amount: note.deposit.amount,
+                blinding: note.blinding,
+                ring_program_id: Some(ring.program_id()),
+                data: Data::default(),
+            },
+            disclosure: DepositDisclosure {
+                owner_key: note.owner_key,
+                context_hash: DepositContext {
+                    program_id: ring.program_id().as_array(),
+                    tree: tree.as_array(),
+                    spp_data: &spp.data,
+                }
+                .hash()?,
+                owner_utxo_hash: note.deposit.owner_utxo_hash,
+                owner_pk_hash: address.signing_pubkey.owner_proof_input_hash()?,
+                nullifier_pk: address.nullifier_pubkey,
+                blinding_secret: note.blinding_secret,
+                encryption: note.encryption,
+                auditor: config.auditor_pubkey,
+                key_escrow: config.mode == RingMode::ConfidentialEscrow,
+                has_policy: config.account().has_policy(),
+                asset,
+            },
+            depositor,
+            spp,
+            viewing_history,
+        })
+    }
+}
+
+fn deposit_demand() -> CoSignDemand {
+    CoSignDemand {
+        approval_required: false,
+        classes: CoSignScope::DEPOSITS,
+        withdrawals: Vec::new(),
+    }
+}
+
+/// An anonymous ring spends only through the hidden Ed25519 proof.
+fn owner_key(mode: RingMode, address: &ShieldedAddress) -> Result<Option<[u8; 32]>, RingError> {
+    match mode == RingMode::Anonymous {
+        true if address.signing_pubkey.curve()? != Curve::Ed25519 => {
+            Err(RingError::AnonymousRecipient)
+        }
+        true => Ok(Some(address.signing_pubkey.as_ed25519()?)),
+        false => Ok(None),
     }
 }
 

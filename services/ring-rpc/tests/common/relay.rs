@@ -25,7 +25,8 @@ use zolana_ring_client::rpc::{
     PrepareRelayRequest, ProofInputBytes, RelayIntent, RelayProofInputs, RelayQuote, RelayRail,
 };
 use zolana_ring_rpc::{
-    ChainOutcome, ProvenRelay, RelayChain, RelayProofRequest, RelayProver, RingRpcError,
+    ChainOutcome, ProvenRelay, RelayChain, RelayPayload, RelayProofRequest, RelayProver,
+    RingRpcError,
 };
 use zolana_ring_transaction::{AnonymousPlan, TaggedPayment};
 
@@ -46,9 +47,16 @@ impl RelayProver for RecordingProver {
             .lock()
             .expect("requests")
             .push((request.fee_payer, request.owner_signature));
-        let signers = match request.proof_inputs.rail {
-            RelayRail::Confidential => vec![request.proof_inputs.sender.solana_address()?],
-            _ => Vec::new(),
+        let (signers, data) = match request.payload {
+            RelayPayload::Transfer(proof_inputs) => (
+                match proof_inputs.rail {
+                    RelayRail::Confidential => vec![proof_inputs.sender.solana_address()?],
+                    _ => Vec::new(),
+                },
+                proof_inputs.blinding_seed.to_vec(),
+            ),
+            RelayPayload::Deposit(deposit) => (vec![deposit.depositor], vec![1, 2, 3]),
+            RelayPayload::Merge(_) => (Vec::new(), vec![1, 2, 3]),
         };
         let accounts = core::iter::once(AccountMeta::new(request.fee_payer, true))
             .chain(
@@ -62,7 +70,7 @@ impl RelayProver for RecordingProver {
             instruction: Instruction {
                 program_id: request.ring,
                 accounts,
-                data: request.proof_inputs.blinding_seed.to_vec(),
+                data,
             },
             budget: ComputeBudgetConfig::new(400_000),
             co_signer: self.co_signer,
@@ -216,10 +224,12 @@ pub fn signed_request(quote: RelayQuote, proof_inputs: &RelayProofInputs) -> Pre
             RelayRail::Anonymous { .. } => RelayIntent::Anonymous {
                 proof_inputs: encoded,
                 owner_signature,
+                token_account_setup: Vec::new(),
             },
             _ => RelayIntent::Confidential {
                 proof_inputs: encoded,
                 owner_signature,
+                token_account_setup: Vec::new(),
             },
         },
     }

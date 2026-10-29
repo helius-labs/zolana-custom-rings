@@ -200,10 +200,12 @@ export {
   buildRingDepositTransaction,
 } from "../operations/payments/deposit.js";
 export type {
+  PreparedRingDepositRelay,
   ProvenRingDeposit,
   RingDepositClient,
   RingDepositParams,
   RingDepositRecipient,
+  RingDepositRelayParams,
 } from "../operations/payments/deposit.js";
 export { ringDepositInstruction } from "../protocol/transaction/deposit-instruction.js";
 export {
@@ -295,6 +297,7 @@ export type {
   RelayQuote,
   RelayStatus,
   RelayStep,
+  TokenAccountSetup,
 } from "../protocol/ring-rpc/ring-rpc-types.js";
 export { ProvenRingTransfer, ringTransactInstruction } from "../operations/workflow/pipeline.js";
 export type {
@@ -345,9 +348,13 @@ export {
   RING_MERGE_COMPUTE_UNIT_LIMIT,
   buildRingMergeTransaction,
   createRingMergeSubmission,
+  prepareRingMergeRelay,
   ringMergeInstruction,
 } from "../operations/payments/merge.js";
-export type { RingMergeTransactionParams } from "../operations/payments/merge.js";
+export type {
+  RingMergeRelayParams,
+  RingMergeTransactionParams,
+} from "../operations/payments/merge.js";
 export type { RingMergeClient } from "../rpc/ports.js";
 export {
   RingTransactionSubmission,

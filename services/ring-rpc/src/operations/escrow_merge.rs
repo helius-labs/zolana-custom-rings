@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 use custom_ring_interface::{compute_unit_limit, InstructionTag};
 use custom_ring_sdk::{
-    CustomRing, CustomRingMerge, MergeProofInput, RingClient, RingError, RingIndexerBackend,
+    CustomRing, CustomRingMerge, MergeProofInput, ProvenCustomRingMerge, RingClient, RingError,
+    RingIndexerBackend,
 };
 use solana_address::Address;
 use spr_client::{compile_message, AsyncRpc, ComputeBudgetConfig};
@@ -37,6 +38,37 @@ where
 
 impl<R: AsyncRpc, I: RingIndexerBackend> RingSdkMergeBuilder<R, I> {
     async fn prove(&self, merge: OwnerMerge<'_>) -> Result<BuiltMerge, RingError> {
+        let proven = OwnerMergeProof {
+            client: &self.client,
+            payer: self.payer,
+            co_signer: self.co_signer,
+        }
+        .prove(merge)
+        .await?;
+        let (blockhash, _) = self.client.zolana().get_latest_blockhash().await?;
+        let message = compile_message(
+            &self.payer,
+            &[proven.instruction(self.payer)?],
+            blockhash,
+            ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Merge)),
+        )?;
+        Ok(BuiltMerge {
+            message,
+            co_signer: proven.co_signer(),
+        })
+    }
+}
+
+/// The merged note lands in the input tree.
+#[must_use]
+pub(crate) struct OwnerMergeProof<'a, R, I> {
+    pub client: &'a RingClient<R, I>,
+    pub payer: Address,
+    pub co_signer: Option<Address>,
+}
+
+impl<R: AsyncRpc, I: RingIndexerBackend> OwnerMergeProof<'_, R, I> {
+    pub async fn prove(self, merge: OwnerMerge<'_>) -> Result<ProvenCustomRingMerge, RingError> {
         let tree_id = merge
             .inputs
             .first()
@@ -54,7 +86,7 @@ impl<R: AsyncRpc, I: RingIndexerBackend> RingSdkMergeBuilder<R, I> {
             merge.nullifier_key.clone(),
         )?;
         let tree = pda::tree(tree_id);
-        let proven = CustomRingMerge::new(CustomRing::new(merge.ring), merge.inputs, None)?
+        CustomRingMerge::new(CustomRing::new(merge.ring), merge.inputs, None)?
             .with_output_tree_id(tree_id)
             .encrypt(&keys)?
             .prove(
@@ -65,19 +97,8 @@ impl<R: AsyncRpc, I: RingIndexerBackend> RingSdkMergeBuilder<R, I> {
                     co_signer: self.co_signer,
                 },
                 self.payer,
-                &self.client,
+                self.client,
             )
-            .await?;
-        let (blockhash, _) = self.client.zolana().get_latest_blockhash().await?;
-        let message = compile_message(
-            &self.payer,
-            &[proven.instruction(self.payer)?],
-            blockhash,
-            ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Merge)),
-        )?;
-        Ok(BuiltMerge {
-            message,
-            co_signer: proven.co_signer(),
-        })
+            .await
     }
 }

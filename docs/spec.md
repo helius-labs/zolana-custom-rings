@@ -1414,7 +1414,7 @@ Holds the auditor key and serves audited history to readers.
 - A read that names a wallet serves only the rows where that wallet is the sender, a signer or an output owner, the merges and notes it owns, and no skipped rows. A ring-wide grant covers every wallet, a wallet grant only its own.
 - With its optional database the service also stores wallet grants. `setReaderGrant` takes the wallet's Ed25519 signature over the ring, reader and action, with the timestamp and nonce rules of a read. A row is sealed with AES-256-GCM under a key HKDF-SHA256 derives from the service key source, and it keeps in plaintext only its insert order and a keyed hash of the reader key. The newest signed row for a wallet and reader holds.
 - `ringDeposits`, `ringStatus` and `health` need no signature.
-- With a fee payer key, a store and a ring prover it relays transfers. The wallet seals the transfer and sends its proof inputs with the nullifier secret, the transaction viewing secret and the audit ephemeral secret. The service reads the record openings and SPP Merkle paths, proves every statement and pays the fees. On the anonymous and confidential rails it verifies the owner's Ed25519 signature over `SppProofInputs::message_hash` before it proves. On the anonymous rail that signature is the prepared owner authorization of the SPP proof, and the service sends at once. On the confidential and delegate rails it returns the v1 message and sends once each owner or the delegate has signed it. It does not relay deposits or merges.
+- With a fee payer key, a store and a ring prover it relays transfers. The wallet seals the transfer and sends its proof inputs with the nullifier secret, the transaction viewing secret and the audit ephemeral secret. The service reads the record openings and SPP Merkle paths, proves every statement and pays the fees. On the anonymous and confidential rails it verifies the owner's Ed25519 signature over `SppProofInputs::message_hash` before it proves. On the anonymous rail that signature is the prepared owner authorization of the SPP proof, and the service sends at once. On the confidential and delegate rails it returns the v1 message and sends once each owner or the delegate has signed it. It also relays [deposits and user merges](#relayed-deposits-and-merges).
 - A relay is stored by its `relayId` with its message and signatures, never its proof inputs. A repeated request returns the stored relay. The co-signer signs before the send and settles when the relay confirms or fails. A relay that has not landed when its blockhash expires fails.
 - The relay co-signs through a `LimitedCoSigner`, only under the [co-signer limits](#co-signer-limits).
 - `setMergeSettings` stores a wallet's target note count and minimum average amount for one mint. The wallet signs them under `zolana/ring-rpc-merge-settings/v1` with the cluster, service key, ring, timestamp and nonce, and the service verifies the signature under the named owner. A later signed request replaces them, and a zero target revokes them.
@@ -1474,6 +1474,20 @@ A wallet sends an anonymous transfer through the Ring RPC relay and reads no Mer
 5. `getRelayStatus` follows the relay to `confirmed` or `failed`.
 
 `proofInputs` hands Ring RPC the nullifier secret, the transaction viewing secret and the auditor ephemeral secret. Ring RPC can link every spend of the owner and open every output of the transfer, so a relayed transfer stays anonymous only toward a Ring RPC trusted as the indexer of [condition 5](#anonymity-breaks-when-its-conditions-fail) and the prover of condition 6.
+
+A withdrawal into an associated token account that does not exist yet names the account's owner and mint in `tokenAccountSetup`. Ring RPC puts an idempotent create, funded by its fee payer, ahead of the transfer in the same transaction. It refuses an entry whose associated account no withdrawal of that mint pays, and an entry that repeats one.
+
+### Relayed deposits and merges
+
+A deposit relays through `prepareRelay` and `submitRelay`, a user merge through `prepareRelay` alone. The wallet reads no Merkle path and no record for either.
+
+1. A deposit: the wallet seals the note, its recipient ciphertext and the auditor capsule as a direct deposit does. `proofInputs` carries them with the depositor, the recipient's shielded address, the blinding secret and the capsule's ephemeral secret.
+2. Ring RPC derives the owner commitment from the blinding secret and checks the ephemeral secret against the capsule. It checks the ring is active, reads the recipient's escrow record on a key escrow ring and the asset's record on a policy ring under the own root, and proves the deposit. It refuses a depositor that is the relay fee payer.
+3. `prepareRelay` answers `signMessage`. The depositor signs the message to authorize its SOL or SPL transfer, and the service co-signs when a record covers deposits, pays and sends.
+4. A merge: `proofInputs` carries the owner's shielded address, the nullifier secret and the notes with their leaf indexes. Ring RPC derives each note hash and nullifier from the secret, so every note is the owner's. It refuses notes of another mint, ring or tree, and the indexer serves a nullifier non-inclusion proof only for an unspent note.
+5. Ring RPC derives the merged note from the nullifier secret, proves the merge and its disclosure, co-signs when a record covers transfers and answers `submitted`.
+
+The deposit hands Ring RPC the note's blinding secret, the merge hands it the nullifier secret, so Ring RPC can open the deposited note and link every spend of the merging owner.
 
 ### Ring prover
 

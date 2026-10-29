@@ -1,9 +1,10 @@
 import { anonymousPartyIdentities } from "../../protocol/membership/parties.js";
-import type { Instruction } from "@solana/kit";
+import { getBase64Decoder, type Instruction } from "@solana/kit";
 
 import type {
   PreparedMergeInputs,
   ProofDataSourceContext,
+  TreeContext,
   WalletKeys,
 } from "@heliuslabs/zolana/client";
 import type { LatestBlockhash } from "@heliuslabs/zolana/internal";
@@ -47,7 +48,7 @@ import type {
   RequestContext,
   Transaction,
 } from "@heliuslabs/zolana/interface";
-import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import type { NullifierKey, ShieldedAddress, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import {
   SOL_MINT,
   approveUnattended,
@@ -56,7 +57,15 @@ import {
   type TransactionIntent,
   checkKeysIdentity,
 } from "@heliuslabs/zolana/transaction";
-import type { PreparedMerge, Wallet } from "@heliuslabs/zolana/transaction";
+import type {
+  AssetRegistry,
+  PreparedMerge,
+  Wallet,
+  WalletUtxo,
+} from "@heliuslabs/zolana/transaction";
+import { encodeRelayMergeInputs } from "../../protocol/ring-rpc/relay-proof-inputs.js";
+import type { RelayIntent, RelayQuote } from "../../protocol/ring-rpc/ring-rpc-types.js";
+import { PreparedRelay } from "../../rpc/relay.js";
 import type { RingMergeClient, RingSecretProver } from "../../rpc/ports.js";
 import {
   ringAuthAddress,
@@ -89,6 +98,8 @@ import { ringIntentMismatch, ringProofInput, ringSelectionErrors } from "../work
 import { resolveRingOutputTree } from "../../protocol/membership/trees.js";
 import { SIZE_PROBE_LIFETIME } from "../workflow/compile.js";
 
+const base64 = getBase64Decoder();
+
 /** Rust `MAX_RING_MERGE_INPUTS`, the widest merge whose disclosure fits one v1 transaction. */
 export const MAX_RING_MERGE_INPUTS = Math.max(...MERGE_WIDTHS);
 /** Rust `compute_unit_limit(Merge)`. */
@@ -110,6 +121,43 @@ export interface RingMergeTransactionParams {
   /** Signs when a record covers transfers, the record must be its own. */
   readonly cosigner?: SignerAccount;
   readonly approve?: ApprovalHandler;
+}
+
+export interface RingMergeRelayParams {
+  readonly client: TreeContext;
+  readonly ringProgramId: Address;
+  /** Owns every note. */
+  readonly sender: ShieldedAddress;
+  /** Ring RPC proves with it and so links every spend of the owner. */
+  readonly nullifierKey: NullifierKey;
+  readonly notes: readonly WalletUtxo[];
+  readonly assets: AssetRegistry;
+  readonly quote: RelayQuote;
+}
+
+/** Rust `MergeRelay::prepare`, Ring RPC derives the merged note and no wallet signature follows. */
+export function prepareRingMergeRelay(params: RingMergeRelayParams): PreparedRelay {
+  let payload: Uint8Array | undefined;
+  try {
+    payload = encodeRelayMergeInputs({
+      ringProgramId: params.ringProgramId,
+      sender: params.sender,
+      nullifierKey: params.nullifierKey,
+      inputs: params.notes.map((note) => ringProofInput(note, params.sender, params.client)),
+      leafIndexes: params.notes.map((note) => note.outputContext.leafIndex),
+      assets: params.assets,
+    });
+    return new PreparedRelay({
+      ring: params.ringProgramId,
+      quote: params.quote,
+      intent: {
+        operation: "merge",
+        proofInputs: base64.decode(payload) as RelayIntent["proofInputs"],
+      },
+    });
+  } finally {
+    payload?.fill(0);
+  }
 }
 
 export async function buildRingMergeTransaction(
