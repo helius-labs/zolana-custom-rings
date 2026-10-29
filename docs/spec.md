@@ -1167,6 +1167,18 @@ Holds the auditor key and serves audited history to readers.
 
 A reader receives each output's owner key, nullifier key, asset, amount and blinding, the recipient `u` on the delivered rails, and on the anonymous rail the view tag, the hidden sender and every input's opening. It receives no nullifier secret. Pages carry no signature, so a faulty service can serve a false opening to a reader that does not rebuild the commitment. `getAuditedUtxos` answers are checked by both SDKs against their requested hashes. Nonces and rate windows live in memory, so one key runs in one process.
 
+### Relayed transfers
+
+A wallet sends an anonymous transfer through the Ring RPC relay and reads no Merkle path and no record. The operator CLI and the tests keep the direct path, which proves and sends from the caller.
+
+1. `getRelayQuote` names the fee payer, and the wallet builds the transfer with it as the payer.
+2. The wallet stages the transfer from its own notes and keys, seals the auditor message into the external data and signs `SppProofInputs::message_hash` with the hidden owner's Ed25519 key. It reads the ring config, the SPP ring registration, the tree accounts and the exit accounts only.
+3. `prepareRelay` carries the sealed transfer as `proofInputs` and the signature as `ownerSignature`. The wallet hashes the request to its own `relayId` and refuses an answer that names another one.
+4. On the anonymous rail the wallet accepts only `submitted`. It refuses `signMessage`, a public signature would name the hidden owner. On another rail it signs a `signMessage` step only when the message is a canonical v1 message that lists the signer among its signers.
+5. `getRelayStatus` follows the relay to `confirmed` or `failed`.
+
+`proofInputs` hands Ring RPC the nullifier secret, the transaction viewing secret and the auditor ephemeral secret. Ring RPC can link every spend of the owner and open every output of the transfer, so a relayed transfer stays anonymous only toward a Ring RPC trusted as the indexer of [condition 5](#anonymity-breaks-when-its-conditions-fail) and the prover of condition 6.
+
 ### Ring prover
 
 The zolana prover with the 86 ring circuits registered as extensions. It proves every ring statement from a complete client witness and fetches no record itself. It sees every secret of the witness: the transaction viewing secret, every opening, owner keys, recipient keys and the hidden owner's key. The zolana client attests a remote prover's TEE by default.
