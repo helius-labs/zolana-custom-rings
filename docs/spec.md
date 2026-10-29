@@ -88,7 +88,7 @@ A custom ring is a Solana program that governs its notes in the zolana shielded 
 
 1. A ring note moves only in a transaction the ring program signs. SPP requires the `ring_auth` signer of the ring's `RingConfig` and binds `ring_program_id` in its proof. No other program or key spends a ring note.
 2. The program builds the SPP instruction data and both ring statements from the one frame. The SPP proof and the audit proof therefore bind the same first nullifier, outputs, transaction viewing key, salt and auditor message. The policy proof binds the same `private_tx_hash` and public legs as the SPP proof.
-3. The program reads every statement value it can from chain state, so the prover chooses none of them beyond the root indexes:
+3. The program reads every statement value it can from chain state, so the prover chooses none of them beyond the root indexes and the recipients the policy proof binds to the outputs:
    - the ring id from the executing program id and the auditor key from the config
    - the roots from the member registries and the SPP trees
    - the party identities from the accounts
@@ -127,7 +127,7 @@ On every transfer, chain observers see:
 
 On a `Confidential` or `ConfidentialEscrow` ring (confidential rail):
 
-14. Public: the owner signer, the co-signer when it signs, each ring output's owner tag `u` (the recipient's viewing key), each exit owner, and each SPL withdrawal owner.
+14. Public: the owner signer, the co-signer when it signs, each ring output's owner tag `u` (the recipient's viewing key), on a policy ring each live output's owner identity, each exit owner, and each SPL withdrawal owner.
 15. Private from chain observers: the amount, asset, blinding and nullifier key of each output, the exit asset and amount, and which notes the nullifiers spend.
 16. Every payment to one recipient carries the same `u`. The zolana user registry maps a registered `u` to its owner's Solana key, and no proof shows the owner holds `u`. Payments to one recipient therefore link to each other and name it. Change carries the sender's own `u`.
 17. The disclosure opens outputs only, and a nullifier needs the owner's nullifier secret. The auditor therefore learns no spent note of an owner without a registered key. A registered owner's secret is sealed to the auditor on any confidential ring, so the auditor computes that owner's nullifiers and links its spends. A `ConfidentialEscrow` ring requires a registered key of every output owner.
@@ -144,7 +144,7 @@ On deposits, merges and delegate moves:
 
 23. An `AuditedDeposit` publishes the funder, the mint, each note's amount, owner commitment and view tag. On a confidential ring the SDK sets the view tag to the recipient's `u`, which links funder and recipient. No layer on chain checks that the funder differs from the owner.
 24. An anonymous `Merge` publishes the payer and every input nullifier, and SPP requires one owner and one asset across the inputs. It links up to 24 notes to one owner. The auditor opens the owner, the amount and every input hash.
-25. A delegate move publishes the delegate and the recipients' `u` as the confidential rail does. The source member stays private from chain observers. The delegate holds the source member's nullifier secret, so it computes that member's nullifiers.
+25. A delegate move publishes the delegate, the recipients' `u` and their owner identities as the confidential rail does. The source member stays private from chain observers. The delegate holds the source member's nullifier secret, so it computes that member's nullifiers.
 
 In every mode:
 
@@ -174,7 +174,7 @@ In every mode:
 | `MAX_RULES`, `MAX_SOURCES` | `16`, `8` | Rule table widths. |
 | `N_FOREIGN` | `1` | Curators per policy. |
 | `POLICY_TABLE_VERSION` | `12` | Second field of the `policy_hash` preimage. |
-| `POLICY_STATEMENT_VERSION` | `3` | Policy statement element after the public slots. |
+| `POLICY_STATEMENT_VERSION` | `4` | Policy statement element after the public slots. |
 | `POLICY_TABLE_FIELDS` | `44` | Fields of the `policy_hash` preimage, 35 values and 9 zeros, absorbed 11 per Poseidon call. |
 | `N_PUBLIC_SLOTS` | `3` | Distinct assets of public legs per transfer, from SPP. |
 | `ACCOUNT_UNITS`, `POLICY_UNITS`, `PROOF_UNITS` | `50_000`, `150_000`, `1_400_000` | Compute unit limits clients set per instruction tag. The program does not check them. |
@@ -956,6 +956,7 @@ audit_proof      CustomRingProof
 [POLICY]         policy_proof CustomRingProof, own_root_index u8
 [CURATOR]        curator_root_index u8
 [POLICY, anonymous] sender_commitment [32]
+[POLICY, confidential or delegate] recipients [32] per output slot
 expiry_unix_ts   u32 LE
 tx_viewing_u     [32]
 salt             [16]
@@ -1022,12 +1023,13 @@ The policy proof checks, on a policy ring:
 1. The rule table hashes to `policy_hash`. Each active row splits into its parts and recomposes to the stored row.
 2. The outputs reopen `private_tx_hash`. The member key takes the spent note chain and the address nullifier chain as opaque values. The delegate key takes only the address nullifier chain as opaque and reopens the spent notes.
 3. The sender is the statement's `sender` on the confidential rail. On the anonymous rail `sender` is the commitment and opens to `sender_pk_hash` with the blinding the `private_tx_hash` preimage fixes.
-4. The withdrawal legs hash to `withdrawal_hash`. Each active leg has a nonzero asset and a nonzero 64-bit amount.
-5. The own record pool folds to `own_root` through one shared canopy, and the curator pool to `curator_root` when some list is foreign. Each subject resolves to its own leaf in the pool, or to the low record that brackets it. A bracketed subject reads every list and mint setting as `0`. A list bit reads from the curator record when the list's source is foreign. The asset record of every live payment and of every nonzero public asset resolves in the own pool, whatever the rules. It gives that asset's mint settings.
-6. Each active rule holds as [Properties](#properties) 6 states. A scalar `AboveAmount(t)` guard exempts an asset subject when the live payments of that asset sum to at most `t`. It exempts an owner subject when that owner's live payments sum to at most `t`, and then every payment is in one asset. `AboveAmountByAsset` exempts when the owner's payments in that asset sum to at most the asset's `threshold`. A live payment in an asset with a zero `threshold` fails the proof under such a rule, admitted or not. Comparisons are inclusive.
-7. Outflow and `approval_required` follow [Properties](#properties) 8.
-8. In `ConfidentialEscrow` mode every UTXO output's owner record holds the output's escrow key.
-9. The own-only key requires `curator_root = 0` and no foreign source.
+4. Each statement recipient is its slot's owner identity, the owner subject the rules screen, and `0` on a dummy slot and on the anonymous rail.
+5. The withdrawal legs hash to `withdrawal_hash`. Each active leg has a nonzero asset and a nonzero 64-bit amount.
+6. The own record pool folds to `own_root` through one shared canopy, and the curator pool to `curator_root` when some list is foreign. Each subject resolves to its own leaf in the pool, or to the low record that brackets it. A bracketed subject reads every list and mint setting as `0`. A list bit reads from the curator record when the list's source is foreign. The asset record of every live payment and of every nonzero public asset resolves in the own pool, whatever the rules. It gives that asset's mint settings.
+7. Each active rule holds as [Properties](#properties) 6 states. A scalar `AboveAmount(t)` guard exempts an asset subject when the live payments of that asset sum to at most `t`. It exempts an owner subject when that owner's live payments sum to at most `t`, and then every payment is in one asset. `AboveAmountByAsset` exempts when the owner's payments in that asset sum to at most the asset's `threshold`. A live payment in an asset with a zero `threshold` fails the proof under such a rule, admitted or not. Comparisons are inclusive.
+8. Outflow and `approval_required` follow [Properties](#properties) 8.
+9. In `ConfidentialEscrow` mode every UTXO output's owner record holds the output's escrow key.
+10. The own-only key requires `curator_root = 0` and no foreign source.
 
 The policy key is `MemberPolicy { outputs: n_out, withdrawals, own_only }`, with `withdrawals` the smallest of `{0, 1, 2, 4, 8, 16, 32}` at or above the withdrawal count and `own_only` when the policy has no curator. Its record pools hold, with `o = n_out`, `w = withdrawals` and `p = N_PUBLIC_SLOTS`:
 
@@ -1064,7 +1066,7 @@ The program checks, in order:
 12. The co-signer demand of [Properties](#properties) 9, with the withdrawal class waived when check 3 verified an exemption proof: a demanded co-signer is configured (`ApprovalWithoutCoSigner`), signs (`MissingCoSigner`) and equals the stored one (`UnauthorizedCoSigner`).
 13. The SPP `proof_b` decompresses (`InvalidSppProofPoint`).
 14. The key escrow layout bit equals `mode == ConfidentialEscrow` (`FlagNotAllowed`).
-15. It builds the audit statement and the policy statement and resolves both keys (`UnsupportedCircuit`). It verifies the audit proof, then the policy proof, each point decompressed (`InvalidRingProofPoint`) and the pairing checked (`ProofVerificationFailed`).
+15. It builds the audit statement and the policy statement, with the frame's recipients on the confidential and delegate rails and zeros on the anonymous rail, and resolves both keys (`UnsupportedCircuit`). It verifies the audit proof, then the policy proof, each point decompressed (`InvalidRingProofPoint`) and the pairing checked (`ProofVerificationFailed`).
 16. It checks the SPP program (`InvalidShieldedPoolProgram`), the forwarded list size (`TooManyAccounts`), and invokes SPP.
 
 The ring proofs do not check ownership, inclusion, conservation, nullifier uniqueness or expiry. SPP checks them in the same instruction. Exit payloads are not proven, as on any default-ring output, so a sender can publish a payload that does not open, and the recipient misses the exit. The auditor still opens the exit from the disclosure. No proof relates a published `u` to the output's owner, and no proof checks an anonymous tag or body, see [the limitation](#a-sender-can-make-a-note-unreadable-for-its-owner). The program does not check the Solana fee payer of the outer transaction against the hidden owner. The Rust SDK refuses a fee payer or signer equal to the hidden owner, and the TS SDK checks the payer and the co-signer.
@@ -1212,7 +1214,7 @@ A pause, or an SPP ring that governance has not activated, stops every SPP rail 
 
 ### Confidential rings name their parties
 
-On a confidential ring the sender signs the transaction, and each ring output publishes the recipient's viewing key `u`. The zolana user registry maps a registered `u` to its owner's Solana key, so every payment names its sender and recipient. Amounts, assets, blindings, nullifier keys and the spent notes stay private.
+On a confidential ring the sender signs the transaction, and each ring output publishes the recipient's viewing key `u`. The zolana user registry maps a registered `u` to its owner's Solana key, so every payment names its sender and recipient. On a policy ring each live output also publishes its owner identity, which anyone can test against a candidate key. Amounts, assets, blindings, nullifier keys and the spent notes stay private.
 
 ### Anonymity breaks when its conditions fail
 
