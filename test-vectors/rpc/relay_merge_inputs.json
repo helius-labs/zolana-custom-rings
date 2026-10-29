@@ -1,0 +1,4 @@
+{
+  "description": "One merge payload as prepareRelay carries it in proofInputs, wincode with a u8 input count. The owner is the shielded keypair of Ed25519 seed 0x05 repeated, the ring 0x06 repeated. It merges one SOL ring UTXO of 900 lamports, blinding 0x0b, tree 4, leaf 17. Pinned by the sdk-libs/client rpc tests and the TypeScript encodeRelayMergeInputs test. Decode derives each input hash and nullifier again from its opening.",
+  "proofInputs": "BgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYBbnoc3Smwt4/ROvTFWY/v9O8qlxZuPKby5Pv8zYBQW/EAHkmEfz6ZqUoydQ/4sgszN2pONU9WDqBwkB1aM84Dx24E+SHqM3T0WPSd++OjIEmlGaGxgee/zfdqbDyG9jviZkHD/VArY7/IYvcn9iAGmgM1qtqn8SB7VgL3vA/OwHBKAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAACEAwAAAAAAAAsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLAQYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGAAAABAARAAAAAAAAAA=="
+}

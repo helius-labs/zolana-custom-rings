@@ -1,5 +1,5 @@
 use solana_keypair::Keypair;
-use spr_keypair::ViewingKey;
+use spr_keypair::{ShieldedAddress, ShieldedKeypair, SigningKey, ViewingKey};
 use spr_transaction::OutputContext;
 
 use super::*;
@@ -856,12 +856,7 @@ fn relay_proof_inputs() -> RelayProofInputs {
 
 #[test]
 fn relay_proof_inputs_encode_to_the_shared_vector() {
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Vector {
-        proof_inputs: Base64String,
-    }
-    let vector: Vector = serde_json::from_str(include_str!(
+    let vector: PayloadVector = serde_json::from_str(include_str!(
         "../../../../test-vectors/rpc/relay_proof_inputs.json"
     ))
     .expect("vector");
@@ -872,4 +867,124 @@ fn relay_proof_inputs_encode_to_the_shared_vector() {
     assert_eq!(read.outputs, inputs.outputs);
     assert_eq!(read.external_data, inputs.external_data);
     assert_eq!(read.rail.operation(), RelayOperation::Anonymous);
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PayloadVector {
+    proof_inputs: Base64String,
+}
+
+fn shielded_address(seed: u8) -> ShieldedAddress {
+    ShieldedKeypair::from_keypair(SigningKey::from_ed25519_bytes(&[seed; 32]))
+        .expect("keypair")
+        .shielded_address()
+        .expect("address")
+}
+
+/// The TypeScript encoder writes the same deposit payload.
+#[test]
+fn relay_deposit_inputs_encode_to_the_shared_vector() {
+    use spr_event::EncryptedRingDepositData;
+    use spr_instruction::instruction::{DepositAsset, DepositSplAccounts};
+    let vector: PayloadVector = serde_json::from_str(include_str!(
+        "../../../../test-vectors/rpc/relay_deposit_inputs.json"
+    ))
+    .expect("vector");
+    let recipient = shielded_address(5);
+    let inputs = RelayDepositInputs {
+        ring_program_id: Address::new_from_array([6; 32]),
+        tree: Address::new_from_array([42; 32]),
+        depositor: Address::new_from_array([41; 32]),
+        recipient,
+        asset: DepositAsset::Spl(DepositSplAccounts {
+            mint: Address::new_from_array([48; 32]),
+            user_token: Address::new_from_array([49; 32]),
+            token_program: Address::new_from_array([50; 32]),
+        }),
+        amount: 700,
+        view_tag: [43; 32],
+        encrypted: EncryptedRingDepositData {
+            tx_viewing_pk: [44; 33],
+            salt: [45; 16],
+            ciphertext: vec![46; 8],
+        },
+        blinding_secret: zeroize::Zeroizing::new([47; 32]),
+        audit_ephemeral_key: zeroize::Zeroizing::new([51; 32]),
+    };
+    assert_eq!(*inputs.encode().expect("encode"), vector.proof_inputs.0);
+    let read = RelayDepositInputs::decode(&vector.proof_inputs.0).expect("decode");
+    assert_eq!(read.recipient, recipient);
+    assert_eq!(*read.encode().expect("encode"), vector.proof_inputs.0);
+}
+
+/// The TypeScript encoder writes the same merge payload.
+#[test]
+fn relay_merge_inputs_encode_to_the_shared_vector() {
+    let vector: PayloadVector = serde_json::from_str(include_str!(
+        "../../../../test-vectors/rpc/relay_merge_inputs.json"
+    ))
+    .expect("vector");
+    let spends = relay_proof_inputs();
+    let spend = &spends.inputs[0];
+    let inputs = RelayMergeInputs {
+        ring_program_id: spends.ring_program_id,
+        sender: spends.sender,
+        nullifier_key: spends.nullifier_key.clone(),
+        inputs: vec![spr_transaction::WalletUtxo {
+            utxo: spend.utxo.clone(),
+            nullifier_pubkey: spend.nullifier_pubkey,
+            utxo_hash: spend.utxo_hash,
+            nullifier: spend.nullifier,
+            tx_viewing_key: None,
+            data_hash: None,
+            ring_data_hash: None,
+            tree_id: spend.tree_id,
+            leaf_index: spend.leaf_index,
+            latest_tree_id: None,
+            slot: 0,
+            tx_signature: Signature::default(),
+            slot_index: 0,
+        }],
+    };
+    assert_eq!(*inputs.encode().expect("encode"), vector.proof_inputs.0);
+    let read = RelayMergeInputs::decode(&vector.proof_inputs.0).expect("decode");
+    assert_eq!(read.inputs[0].nullifier, spend.nullifier);
+}
+
+/// The TypeScript signer writes the same message and wire bytes.
+#[test]
+fn a_signed_authority_transfer_matches_the_shared_vector() {
+    #[derive(Deserialize)]
+    struct Vector {
+        message: String,
+        wire: String,
+    }
+    let vector: Vector = serde_json::from_str(include_str!(
+        "../../../../test-vectors/rpc/authority_transfer.json"
+    ))
+    .expect("vector");
+    let delegate = Keypair::new_from_array([8; 32]);
+    let attestation = AuthorityTransferAttestation {
+        target: target(),
+        delegate: delegate.pubkey(),
+        transfer: AuthorityTransfer {
+            source: shielded_address(5).into(),
+            mint: Address::new_from_array([3; 32]).into(),
+            payments: vec![AuthorityPayment {
+                recipient: shielded_address(9).into(),
+                amount: 250,
+            }],
+        },
+    };
+    let message = attestation.message(1_700_000_000, &[4; 32]);
+    assert_eq!(String::from_utf8(message).expect("utf8"), vector.message);
+    let signed = SignedRequest {
+        attestation,
+        timestamp: Some(1_700_000_000),
+        nonce: [4; 32],
+    }
+    .sign(&delegate)
+    .expect("sign");
+    assert_eq!(serde_json::to_string(&signed).expect("json"), vector.wire);
 }
