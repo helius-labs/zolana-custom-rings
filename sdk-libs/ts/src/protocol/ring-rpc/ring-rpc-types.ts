@@ -85,7 +85,16 @@ export type RecordUpdateEntry =
       ephPk: Base64String;
       ciphertext: Base64String;
       proof: Base64String;
+    }>
+  | Readonly<{
+      kind: "walletGrant";
+      wallet: Hash;
+      reader: Hash;
+      access: ReaderAccess;
     }>;
+
+/** Rust `ReaderAccess`, the `reader` bit a wallet grant sets or clears. */
+export type ReaderAccess = "granted" | "revoked";
 
 /** Rust `RecordUpdate`, the signed content. */
 export interface RecordUpdate {

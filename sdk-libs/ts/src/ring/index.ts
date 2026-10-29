@@ -137,12 +137,25 @@ export type {
   RingRecordApplicationClient,
   RingRecordWriteClient,
 } from "../operations/management/record-writes.js";
+export {
+  AuthorityRecordUpdate,
+  WalletRecordUpdate,
+} from "../operations/management/record-updates.js";
+export type { EscrowEntry, RecordUpdateTarget } from "../operations/management/record-updates.js";
+export type {
+  ReaderAccess,
+  RecordUpdate,
+  RecordUpdateEntry,
+  RecordUpdateStatus,
+  SubmitRecordUpdateRequest,
+} from "../protocol/ring-rpc/ring-rpc-types.js";
 export { MemberOpeningRead } from "../protocol/membership/member-opening.js";
 export type { EscrowedRecord } from "../protocol/membership/member-opening.js";
 export { checkEscrowedRecipients, readMemberRecords } from "../rpc/registered-record.js";
 export type { RingRecordReadClient } from "../rpc/registered-record.js";
 export {
   NF_KEY_ENC_INFO,
+  KeyRegistration,
   NullifierKeyEscrow,
   RegisterKey,
   fetchRingSealedKey,

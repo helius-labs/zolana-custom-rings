@@ -453,16 +453,16 @@ function writeLists(writer: Writer, write: ListWrite): Writer {
   return writer.u64(listMask(write), "mask").u64(listBits(write.set), "value");
 }
 
-function listMask(write: ListWrite): bigint {
+export function listMask(write: ListWrite): bigint {
   return listBits([...write.set, ...write.clear]);
 }
 
-function listBits(ids: readonly ListId[]): bigint {
+export function listBits(ids: readonly ListId[]): bigint {
   return ids.reduce((bits, id) => bits | recordBit(id), 0n);
 }
 
 /** Rust `check_writer`, every masked list is the writer's. */
-function checkWriter(write: ListWrite, writer: "member" | "authority"): void {
+export function checkWriter(write: ListWrite, writer: "member" | "authority"): void {
   const writable = writer === "member" ? MEMBER_WRITABLE_LISTS : AUTHORITY_WRITABLE_LISTS;
   const refused = [...write.set, ...write.clear].find((id) => !writable.includes(id));
   if (refused !== undefined)

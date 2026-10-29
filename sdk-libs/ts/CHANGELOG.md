@@ -18,6 +18,7 @@ Breaking
 - Anonymous transfer, entry and merge proofs bind the actual fee payer, configured co-signer and public withdrawal owner. Proof requests and proving-key pins change; deploy the program, prover and SDKs together after publishing the pinned key artifacts.
 - Policy proofs read every subject from one record pool per registry, `PolicyProofInputs` carries `ownPool` and `curatorPool` as `RecordPool` values, `PolicySubjectEntry` and `publicAssetEntries` hold subject indices into them, and `RingRecordReader` requires `getRingRecordPool` → serve `getRingRecordPool` from a custom indexer adapter and deploy the `custom-ring-policy-*-v3-*` keys with this SDK.
 - Policy keys specialize by registry sources and withdrawal capacity. Deposits use capacities 1, 2, 4 and 8; registry updates use 1, 2, 4, 8 and 16. Clients select the smallest matching key.
+- `ProvenEscrow` carries the tagged ephemeral key `ephPk` → return it from a custom `KeyEscrowAuthority.proveEscrow`.
 - `@heliuslabs/zolana/ring` and the custom ring, auditor and key registry
   exports of the `@heliuslabs/zolana` entry points move here → import them from
   `@heliuslabs/zolana-custom-rings` or its `client` and `keypair` entry points.
@@ -65,6 +66,8 @@ Added
   notes from given transactions.
 - `CustomRingClient.getRingRecordPool` reads members' records under one root as a `RingRecordPool` of distinct leaves, each path cut at a shared canopy.
 - `encodeAnonymousRecipient`, `decodeAnonymousRecipient`, `encodeAnonymousSender` and `decodeAnonymousSender` in `@heliuslabs/zolana-custom-rings/advanced` write and read the recipient and sender bundle plaintexts that `openRecipient` and `senderChange` take.
+- `WalletRecordUpdate` signs a wallet's own lists, its reader grants and the escrow entry `KeyRegistration` proves, `AuthorityRecordUpdate` signs the config authority's lists and mint settings, `RingRpc.submitRecordUpdate` sends a signed update to Ring RPC and fails with `RING_RECORD_UPDATE_INVALID` before sending when its signature does not verify, and `RingRpc.getRecordUpdateStatus` follows it.
+- `signRecordUpdate`, `verifyRecordUpdate`, `recordUpdateStatementHash`, `recordUpdateQueueEntry` and `walletGrantMember` in `@heliuslabs/zolana-custom-rings/advanced` sign, check and hash record updates byte for byte as the Rust SDK does.
 - `RingInstructionTag.syncRoots` names the ring program's root sync tag, and `RingProgramError` names the co-signer record and ring policy account codes `invalidCoSignerRecord`, `coSignerRecordAlreadyExists`, `invalidRingPolicy` and `ringPolicyAlreadyExists`.
 
 Fixed

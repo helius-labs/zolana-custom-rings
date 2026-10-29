@@ -137,6 +137,7 @@ export const RING_ERROR_CODES = [
   "RING_RECIPIENT_KEY_NOT_CONTRIBUTORY",
   "RING_FIRST_CONTACT_REQUIRED",
   "RING_ANONYMOUS_SUBMISSION_REQUIRED",
+  "RING_RECORD_UPDATE_INVALID",
 ] as const;
 import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/zolana/internal";
 import type { ErrorEnvelope } from "@heliuslabs/zolana";
