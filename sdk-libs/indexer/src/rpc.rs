@@ -48,6 +48,7 @@ pub mod method {
     pub struct GetRingRecordQueue;
     pub struct GetRingApplyProofInputs;
     pub struct GetStorageMemberOpenings;
+    pub struct GetStorageMemberRecords;
     pub struct GetStorageRecordPool;
     pub struct GetStorageApplyProofInputs;
 
@@ -99,6 +100,12 @@ pub mod method {
         type Response = GetStorageMemberOpeningsResponse;
     }
 
+    impl RpcMethod for GetStorageMemberRecords {
+        const NAME: &'static str = "getStorageMemberRecords";
+        type Request = GetStorageMemberRecordsRequest;
+        type Response = GetStorageMemberRecordsResponse;
+    }
+
     impl RpcMethod for GetStorageRecordPool {
         const NAME: &'static str = "getStorageRecordPool";
         type Request = GetStorageRecordPoolRequest;
@@ -130,6 +137,17 @@ pub struct GetRingMemberOpeningsRequest {
     pub ring_program_id: SerializablePubkey,
     pub members: Vec<Hash>,
     pub expected_root: Hash,
+}
+
+/// Leaves from `start_index` under one root the registry history holds, leaf 0 the sentinel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct GetStorageMemberRecordsRequest {
+    pub registry: SerializablePubkey,
+    pub expected_root: Hash,
+    pub start_index: u64,
+    /// Between 1 and [`MAX_RING_MEMBER_PAGE_LIMIT`].
+    pub limit: u64,
 }
 
 /// Each member's record or low record under one root, a shared record opened once.
@@ -407,7 +425,7 @@ pub struct GetStorageApplyProofInputsRequest {
     pub writes: Vec<StorageWriteView>,
 }
 
-/// `StorageWriteData` on the wire, `escrow_key` zero except on an escrow write.
+/// The leaf write of a `StorageWriteData`, `escrow_key` zero except on an escrow write.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct StorageWriteView {
@@ -434,6 +452,16 @@ pub struct GetStorageMemberOpeningsResponse {
     pub root: StorageRootView,
     /// In request order.
     pub openings: Vec<RingMemberOpening>,
+}
+
+/// A complete leaf range, an indexer gap fails the call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct GetStorageMemberRecordsResponse {
+    pub context: Context,
+    pub root: StorageRootView,
+    pub records: Vec<RingIndexedMemberRecordView>,
+    pub next_leaf_index: Option<u64>,
 }
 
 /// Each path stops below the canopy.

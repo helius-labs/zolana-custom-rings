@@ -1,11 +1,11 @@
-//! Opens every confirmed ring merge with keys the member registry authenticates.
+//! Opens every confirmed ring merge with keys the ring's storage records authenticate.
 
 use std::{
     collections::HashSet,
     num::{NonZeroU32, NonZeroUsize},
 };
 
-use custom_ring_interface::{EscrowKey, MemberRegistry, RingAccount, MEMBER_REGISTRY_CAPACITY};
+use custom_ring_interface::{EscrowKey, RingAccount, RingPolicy, MEMBER_REGISTRY_CAPACITY};
 use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::{
@@ -24,7 +24,7 @@ use spr_transaction::{
     instructions::merge::{merge_output_blinding, merge_output_key, MergeOutputPlaintext},
     utxo::program_id_proof_input_hash,
 };
-use zolana_ring_indexer::rpc::{GetRingMemberRecordsRequest, MAX_RING_MEMBER_PAGE_LIMIT};
+use zolana_ring_indexer::rpc::{GetStorageMemberRecordsRequest, MAX_RING_MEMBER_PAGE_LIMIT};
 use zolana_ring_member_registry::{OpeningCheck, RecordOpening};
 use zolana_ring_policy::Member;
 
@@ -32,7 +32,7 @@ use crate::{
     encryption::{open_merge_disclosure, MergeOpening},
     indexer::AsyncRingIndexer,
     origin::{ConfirmedEventKind, ConfirmedMergeDisclosure, TransactionOrigin},
-    records::{member_record, quad_path, sealed_key, RegistryTip},
+    records::{member_record, quad_path, sealed_key, StorageTip},
     scan::{PageEnd, RING_HISTORY_MAX_PAGES, RING_HISTORY_PAGE_SIZE},
     AuditError,
 };
@@ -47,7 +47,7 @@ pub struct AuditedMerge {
     pub event_index: u16,
     pub output_commitment: [u8; 32],
     pub owner_member: [u8; 32],
-    /// The confirmed `RegisterKey` signer, absent in older indexer projections.
+    /// The owner the escrow write published, absent in older indexer projections.
     pub owner_pubkey: Option<Address>,
     pub mint: Address,
     pub amount: u64,
@@ -224,14 +224,14 @@ impl<'a> MergeAudit<'a> {
         indexer: &I,
         origin: &O,
     ) -> Result<MergeAuditResult, AuditError> {
-        let registry = self.registry_tip(indexer).await?;
+        let records = self.records_tip(indexer).await?;
         let mut cursor = self.cursor.clone();
         let mut result = MergeAuditResult::default();
         let mut seen = HashSet::new();
         for _ in 0..self.max_pages.get() {
             let (response, next_cursor) = self.read_history_page(indexer, &cursor).await?;
             let page = self
-                .open_transactions(response.transactions, registry, indexer, origin, &mut seen)
+                .open_transactions(response.transactions, records, indexer, origin, &mut seen)
                 .await?;
             result.opened.extend(page.opened);
             result.unresolved.extend(page.unresolved);
@@ -249,11 +249,11 @@ impl<'a> MergeAudit<'a> {
         indexer: &I,
         origin: &O,
     ) -> Result<MergeAuditPage, AuditError> {
-        let registry = self.registry_tip(indexer).await?;
+        let records = self.records_tip(indexer).await?;
         let (response, next_cursor) = self.read_history_page(indexer, &self.cursor).await?;
         let mut seen = HashSet::new();
         let result = self
-            .open_transactions(response.transactions, registry, indexer, origin, &mut seen)
+            .open_transactions(response.transactions, records, indexer, origin, &mut seen)
             .await?;
         Ok(MergeAuditPage {
             context: Context {
@@ -294,7 +294,7 @@ impl<'a> MergeAudit<'a> {
     async fn open_transactions<I: AsyncRpc + AsyncRingIndexer, O: TransactionOrigin>(
         &self,
         transactions: Vec<ShieldedTransaction>,
-        registry: RegistryTip,
+        records: StorageTip,
         indexer: &I,
         origin: &O,
         seen: &mut HashSet<(Signature, u16)>,
@@ -353,7 +353,7 @@ impl<'a> MergeAudit<'a> {
             attempts: 0,
             limit: self.max_candidate_attempts,
         };
-        self.scan_registry(indexer, registry, |registered| search.try_key(registered))
+        self.scan_records(indexer, records, |registered| search.try_key(registered))
             .await?;
         let mut result = MergeAuditResult {
             opened: disclosed,
@@ -373,47 +373,41 @@ impl<'a> MergeAudit<'a> {
         Ok(result)
     }
 
-    async fn registry_tip<I: AsyncRpc>(&self, indexer: &I) -> Result<RegistryTip, AuditError> {
-        let (pda, bump) = Address::find_program_address(&[MemberRegistry::SEED], &self.ring);
+    async fn records_tip<I: AsyncRpc>(&self, indexer: &I) -> Result<StorageTip, AuditError> {
+        let (pda, bump) = Address::find_program_address(&[RingPolicy::SEED], &self.ring);
         let account = indexer
             .get_account(pda)
             .await?
             .ok_or(AuditError::InvalidMemberRegistry)?;
-        let registry = MemberRegistry::decode(&account.owner, &self.ring, &account.data)
-            .filter(|registry| registry.bump == bump)
-            .ok_or(AuditError::InvalidMemberRegistry)?;
-        Ok(RegistryTip {
-            root: registry.current_root(),
-            root_index: registry.history_cursor,
-            next_index: u64::from(registry.next_index()),
-        })
+        RingPolicy::decode(&account.owner, &self.ring, &account.data)
+            .filter(|policy| policy.bump() == bump)
+            .as_ref()
+            .and_then(StorageTip::mirrored)
+            .ok_or(AuditError::InvalidMemberRegistry)
     }
 
-    /// Records read at one chain-pinned root, `visit` ends the scan once every merge opened.
-    async fn scan_registry<I: AsyncRpc + AsyncRingIndexer>(
+    /// Records read at the mirrored root, `visit` ends the scan once every merge opened.
+    async fn scan_records<I: AsyncRpc + AsyncRingIndexer>(
         &self,
         indexer: &I,
-        tip: RegistryTip,
+        tip: StorageTip,
         mut visit: impl FnMut(&RegisteredKey) -> Result<bool, AuditError>,
     ) -> Result<(), AuditError> {
-        let mut start_index = 1;
+        let mut start_index = Some(1);
         let mut pages_read = 0;
-        while start_index < tip.next_index {
+        while let Some(start) = start_index {
             if pages_read == self.max_member_pages.get() {
                 return Err(AuditError::MergeAuditWorkBudget);
             }
             let response = indexer
-                .get_ring_member_records(GetRingMemberRecordsRequest {
-                    ring_program_id: SerializablePubkey(self.ring),
+                .get_storage_member_records(GetStorageMemberRecordsRequest {
+                    registry: SerializablePubkey(tip.registry),
                     expected_root: Hash(tip.root),
-                    expected_next_index: tip.next_index,
-                    start_index,
+                    start_index: start,
                     limit: MAX_RING_MEMBER_PAGE_LIMIT,
                 })
                 .await?;
-            if !tip.covers(&response, start_index) {
-                return Err(AuditError::InvalidMemberRegistry);
-            }
+            start_index = tip.next_page(&response, start)?;
             for row in &response.records {
                 let record = member_record(&row.record);
                 let member = record.member;
@@ -456,7 +450,6 @@ impl<'a> MergeAudit<'a> {
                         return Ok(());
                     }
                 }
-                start_index += 1;
             }
             pages_read += 1;
         }
@@ -635,8 +628,8 @@ mod tests {
     use spr_indexer_api::Base64String;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use zolana_ring_indexer::rpc::{
-        GetRingMemberRecordsResponse, RingIndexedMemberRecordView, RingMemberRecordView,
-        RingRecordPathView, RingRegistryRootView,
+        GetStorageMemberRecordsResponse, RingIndexedMemberRecordView, RingMemberRecordView,
+        RingRecordPathView, StorageRootView,
     };
     use zolana_ring_member_registry::{
         MemberRecord, MemberRegistryTree, QuadPath, RecordStore, RecordTree,
@@ -648,7 +641,7 @@ mod tests {
     use crate::RingIndexerError;
 
     struct RegistryPages {
-        first: GetRingMemberRecordsResponse,
+        first: GetStorageMemberRecordsResponse,
         requests: AtomicUsize,
     }
 
@@ -657,10 +650,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl AsyncRingIndexer for RegistryPages {
-        async fn get_ring_member_records(
+        async fn get_storage_member_records(
             &self,
-            request: GetRingMemberRecordsRequest,
-        ) -> Result<GetRingMemberRecordsResponse, RingIndexerError> {
+            request: GetStorageMemberRecordsRequest,
+        ) -> Result<GetStorageMemberRecordsResponse, RingIndexerError> {
             self.requests.fetch_add(1, Ordering::Relaxed);
             if request.start_index != 1 {
                 return Err(spr_client::ClientError::Indexer(
@@ -720,10 +713,10 @@ mod tests {
             .unwrap();
         let mut tree = MemberRegistryTree::new().unwrap();
         tree.apply([0; 32], &entries).unwrap();
-        let tip = RegistryTip {
+        let tip = StorageTip {
+            registry: Address::new_from_array([8; 32]),
             root: tree.root().unwrap(),
-            root_index: 0,
-            next_index: tree.next_index().unwrap(),
+            revision: 3,
         };
         let records = (1..=100u64)
             .map(|index| {
@@ -741,13 +734,12 @@ mod tests {
             })
             .collect();
         let pages = RegistryPages {
-            first: GetRingMemberRecordsResponse {
+            first: GetStorageMemberRecordsResponse {
                 context: Context::default(),
-                root: RingRegistryRootView {
+                root: StorageRootView {
                     root: Hash(tip.root),
-                    root_index: tip.root_index,
-                    applied: 0,
-                    next_index: tip.next_index,
+                    revision: tip.revision,
+                    next_index: tree.next_index().unwrap(),
                 },
                 records,
                 next_leaf_index: Some(101),
@@ -755,7 +747,7 @@ mod tests {
             requests: AtomicUsize::new(0),
         };
         MergeAudit::new(ring, &auditor)
-            .scan_registry(&pages, tip, |registered| {
+            .scan_records(&pages, tip, |registered| {
                 assert_eq!(registered.key.secret(), key.secret());
                 Ok(true)
             })
@@ -766,10 +758,10 @@ mod tests {
 
     #[test]
     fn member_page_must_be_complete_and_contiguous() {
-        let tip = RegistryTip {
+        let tip = StorageTip {
+            registry: Address::new_from_array([3; 32]),
             root: [4; 32],
-            root_index: 7,
-            next_index: 8,
+            revision: 7,
         };
         let record = RingMemberRecordView {
             mint_policy: Default::default(),
@@ -789,32 +781,34 @@ mod tests {
                 siblings: Vec::new(),
             },
         };
-        let mut response = GetRingMemberRecordsResponse {
+        let mut response = GetStorageMemberRecordsResponse {
             context: Context {
                 slot: 1,
                 block_time: 0,
             },
-            root: RingRegistryRootView {
+            root: StorageRootView {
                 root: Hash(tip.root),
-                root_index: 7,
-                applied: 0,
+                revision: 7,
                 next_index: 8,
             },
             records: (5..8).map(row).collect(),
             next_leaf_index: None,
         };
-        assert!(tip.covers(&response, 5));
+        assert_eq!(tip.next_page(&response, 5).unwrap(), None);
         response.records[1].path.index = 8;
-        assert!(!tip.covers(&response, 5));
+        assert!(tip.next_page(&response, 5).is_err());
         response.records[1].path.index = 6;
         response.records.pop();
-        assert!(!tip.covers(&response, 5));
+        assert!(tip.next_page(&response, 5).is_err());
         response.records.push(row(7));
         response.next_leaf_index = Some(8);
-        assert!(!tip.covers(&response, 5));
+        assert!(tip.next_page(&response, 5).is_err());
         response.next_leaf_index = None;
+        response.root.revision = 6;
+        assert!(tip.next_page(&response, 5).is_err());
+        response.root.revision = 7;
         response.root.root = Hash([9; 32]);
-        assert!(!tip.covers(&response, 5));
+        assert!(tip.next_page(&response, 5).is_err());
     }
 
     struct TerminalHistory {
@@ -963,10 +957,10 @@ mod tests {
         }
         .transaction(ring);
         outsider.ring_program_id = None;
-        let tip = RegistryTip {
+        let tip = StorageTip {
+            registry: Address::new_from_array([8; 32]),
             root: [0; 32],
-            root_index: 0,
-            next_index: 1,
+            revision: 0,
         };
         let indexer = TerminalHistory {
             scanned_through: None,

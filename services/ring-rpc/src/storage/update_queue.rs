@@ -74,9 +74,7 @@ impl<'a> UpdateQueue<'a> {
                 bytes(new.request.registry.0.as_array()),
                 bytes(new.request.update.ring.0.as_array()),
                 request.into(),
-                bytemuck::cast_slice::<_, u8>(&new.update.writes)
-                    .to_vec()
-                    .into(),
+                StorageWriteData::encode_all(&new.update.writes).into(),
                 new.update.urgent.into(),
                 integer(new.queued_slot)?,
                 integer(new.request.update.valid_until_slot)?,
@@ -150,9 +148,7 @@ impl<'a> UpdateQueue<'a> {
                 Ok(QueuedUpdate {
                     id: column_bytes(row, "id")?,
                     ring: address(row, "ring")?,
-                    writes: bytemuck::try_cast_slice::<_, StorageWriteData>(&writes)
-                        .map_err(|_| corrupt("writes"))?
-                        .to_vec(),
+                    writes: StorageWriteData::parse_all(&writes).map_err(|_| corrupt("writes"))?,
                     urgent: row.try_get("", "urgent")?,
                     queued_slot: unsigned(row, "queued_slot")?,
                     valid_until_slot: unsigned(row, "valid_until_slot")?,

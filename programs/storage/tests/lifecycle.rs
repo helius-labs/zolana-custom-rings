@@ -1,9 +1,10 @@
 use custom_ring_interface::{
     storage::{RegistryId, Revision, StorageError, StorageRegistry},
     storage_instruction::{
-        tag, InitializeIxData, StorageUpdateIxData, StorageWriteData, UpdateMode,
+        tag, EscrowWriteData, InitializeIxData, StorageUpdateIxData, StorageWriteData, UpdateMode,
     },
-    ApplyRecordsIxData, CustomRingError, CustomRingProof, PlainGroth16Proof, WriteRecordsIxData,
+    ApplyRecordsIxData, CustomRingError, CustomRingProof, PlainGroth16Proof, RecordWriteData,
+    WriteRecordsIxData,
 };
 use litesvm::LiteSVM;
 use serde_json::Value;
@@ -83,7 +84,7 @@ impl Store {
             .as_array()
             .unwrap()
             .iter()
-            .map(write)
+            .map(|entry| write(vector, entry))
             .collect::<Vec<_>>();
         let apply = ApplyRecordsIxData {
             proof: proof(vector),
@@ -94,7 +95,7 @@ impl Store {
         };
         let data = StorageUpdateIxData {
             revision: revision.into(),
-            writes: &writes,
+            writes,
             apply: &apply,
         };
         Instruction {
@@ -168,22 +169,24 @@ fn refusal(code: u32) -> Result<(), TransactionError> {
     ))
 }
 
-fn write(entry: &Value) -> StorageWriteData {
-    let escrow_key = field(&entry["escrowKey"]);
-    let lists = if escrow_key == [0; 32] {
-        WriteRecordsIxData {
+fn write(vector: &Value, entry: &Value) -> StorageWriteData {
+    if field(&entry["escrowKey"]) != [0; 32] {
+        let escrow = &vector["escrow"];
+        return StorageWriteData::Escrow(EscrowWriteData {
+            owner: Address::new_from_array(field(&escrow["owner"])),
+            nullifier_pk: field(&escrow["nullifierPk"]),
+            eph_u: field(&escrow["ephU"]),
+            ciphertext: field(&escrow["ciphertext"]),
+        });
+    }
+    StorageWriteData::Record(RecordWriteData {
+        member: field(&entry["member"]),
+        lists: WriteRecordsIxData {
             mask: entry["mask"].as_u64().unwrap().to_le_bytes(),
             value: entry["value"].as_u64().unwrap().to_le_bytes(),
-        }
-    } else {
-        WriteRecordsIxData::default()
-    };
-    StorageWriteData {
-        member: field(&entry["member"]),
-        lists,
+        },
         mint_policy: custom_ring_interface::mint_policy_write(None),
-        escrow_key,
-    }
+    })
 }
 
 fn field(value: &Value) -> [u8; 32] {

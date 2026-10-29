@@ -9,11 +9,12 @@ use custom_ring_interface::{
 use sea_orm::ConnectionTrait;
 use solana_address::Address;
 use spr_indexer_api::Hash;
+use zolana_ring_indexer::records::{QueuedWrite, SealedKey};
 
 use crate::{
     block::Instruction,
     indexer::{fault, from_storage, ApplyError},
-    member_registry::{plant_tree, TreeRead},
+    member_registry::{plant_tree, Sealing, TreeRead},
     storage::{StorageRoot, StorageState, StorageStore, StoredRecord},
 };
 
@@ -162,12 +163,13 @@ impl<C: ConnectionTrait> StorageProjection<'_, '_, C> {
             .checked_add(1)
             .ok_or_else(|| fault("revision overflow"))?;
         // 2. The writes reach the root the program recorded.
-        let entries = data
+        let writes = data
             .writes
             .iter()
-            .map(StorageWriteData::entry)
+            .map(queued_write)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| fault(format!("storage write refused ({error})")))?;
+        let entries: Vec<_> = writes.iter().map(|write| write.entry).collect();
         let registry = Address::new_from_array(self.state.registry);
         let chain_start = storage_program::chain_start(&registry, data.revision)
             .map_err(|error| fault(format!("chain start failed ({error})")))?;
@@ -190,16 +192,22 @@ impl<C: ConnectionTrait> StorageProjection<'_, '_, C> {
                 recorded_next_index
             )));
         }
-        // 3. Rows at the new revision hold the new tree.
+        // 3. Rows at the new revision hold the new tree and every published envelope.
+        let sealing = Sealing {
+            base: &loaded.stored,
+            pending: &writes,
+        };
         let records = batch
             .rows
             .records
             .values()
-            .map(|record| StoredRecord {
-                record: *record,
-                seal: None,
+            .map(|record| {
+                Ok(StoredRecord {
+                    record: *record,
+                    seal: sealing.seal(&record.record)?,
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, ApplyError>>()?;
         self.store.tree().save_records(&records, revision).await?;
         self.store
             .tree()
@@ -234,4 +242,20 @@ impl<C: ConnectionTrait> StorageProjection<'_, '_, C> {
             Err(fault("signer is not the registry authority"))
         }
     }
+}
+
+fn queued_write(write: &StorageWriteData) -> Result<QueuedWrite, CustomRingError> {
+    let seal = match write {
+        StorageWriteData::Record(_) => None,
+        StorageWriteData::Escrow(escrow) => Some(SealedKey {
+            owner_pubkey: escrow.owner.to_bytes(),
+            nullifier_pk: escrow.nullifier_pk,
+            eph_u: escrow.eph_u,
+            ciphertext: escrow.ciphertext,
+        }),
+    };
+    Ok(QueuedWrite {
+        entry: write.entry()?,
+        seal,
+    })
 }

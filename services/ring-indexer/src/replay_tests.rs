@@ -22,14 +22,19 @@ use solana_address::Address;
 use solana_transaction::Instruction;
 use spr_indexer_api::{Hash, SerializablePubkey};
 use spr_interface::state::{discriminator::RING_CONFIG, RingConfig};
+use spr_keypair::{NullifierKey, X25519Keypair};
+use zolana_ring_client::{
+    rpc::{EscrowRegistration, RecordUpdateEntry},
+    MemberOpeningRead, NullifierKeyEnvelope,
+};
 use zolana_ring_indexer::{
     records::CanonicalAccounts,
     rpc::{
         GetRingApplyProofInputsRequest, GetRingMemberOpeningsRequest, GetRingMemberRecordRequest,
         GetRingMemberRecordsRequest, GetRingMemberRegistryRootRequest, GetRingRecordQueueRequest,
-        GetStorageMemberOpeningsRequest, RingListWriteView, RingMemberOpening,
-        RingMemberRecordView, RingQueueEntryView, RingRecordPathView, RingRecordWriteView,
-        StorageRootView,
+        GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse,
+        GetStorageMemberRecordsRequest, RingListWriteView, RingMemberOpening, RingMemberRecordView,
+        RingQueueEntryView, RingRecordPathView, RingRecordWriteView, StorageRootView,
     },
     tree::{MemberRecord, OpeningCheck, QuadPath, RecordOpening, RecordTree},
 };
@@ -1607,79 +1612,111 @@ fn sent(instruction: &Instruction) -> Value {
     transaction(instruction.program_id, &accounts, &instruction.data)
 }
 
+/// One registry the indexer projected through `Initialize` and one graced `Update`.
+struct StorageReplay {
+    indexer: Indexer,
+    handle: ServerHandle,
+    registry: Address,
+    root: [u8; 32],
+    next_index: u64,
+}
+
+impl StorageReplay {
+    async fn updated(writes: Vec<StorageWriteData>) -> Self {
+        let creator = Address::new_from_array([41; 32]);
+        let initialize = InitializeStorage {
+            payer: Address::new_from_array([1; 32]),
+            creator,
+            registry_id: RegistryId([42; 32]),
+            grace_slots: 100,
+        };
+        let registry = initialize.registry();
+        let chain_start = storage_program::chain_start(&registry, Revision::default()).unwrap();
+        let entries: Vec<_> = writes.iter().map(|write| write.entry().unwrap()).collect();
+        let inputs = MemberRegistryTree::new()
+            .unwrap()
+            .apply(chain_start, &entries)
+            .unwrap();
+        let update = UpdateStorage {
+            authority: creator,
+            registry,
+            mode: UpdateMode::Graced,
+            data: StorageUpdateIxData {
+                revision: Revision::default(),
+                writes,
+                apply: &apply_data(inputs.new_root, inputs.new_next_index),
+            },
+        }
+        .instruction()
+        .unwrap();
+        let chain = Arc::new(Mutex::new(Chain {
+            blocks: BTreeMap::from([
+                (1, block(1, vec![sent(&initialize.instruction())])),
+                (2, block(2, vec![sent(&update)])),
+            ]),
+            ..Default::default()
+        }));
+        let (rpc, handle) = rpc(chain.clone()).await;
+        let indexer = replay_indexer(Arc::new(database().await), rpc);
+        while indexer.synchronize().await.unwrap() == Progress::Behind {}
+        // The chain takes the projected account, as an honest program writes it.
+        let projected = StorageStore::new(indexer.db.as_ref(), registry.to_bytes())
+            .state()
+            .await
+            .unwrap()
+            .unwrap();
+        let image = account(STORAGE_PROGRAM_ID, bytemuck::bytes_of(&*projected.account));
+        chain
+            .lock()
+            .unwrap()
+            .accounts
+            .insert(registry.to_string(), image);
+        Self {
+            indexer,
+            handle,
+            registry,
+            root: inputs.new_root,
+            next_index: inputs.new_next_index,
+        }
+    }
+
+    async fn openings(&self, members: &[[u8; 32]]) -> GetStorageMemberOpeningsResponse {
+        api::storage_member_openings(
+            self.indexer.db.as_ref(),
+            self.indexer.rpc.as_ref(),
+            GetStorageMemberOpeningsRequest {
+                registry: self.registry.into(),
+                members: members.iter().copied().map(Hash).collect(),
+                expected_root: Hash(self.root),
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn stop(self) {
+        self.handle.stop().unwrap();
+        self.handle.stopped().await;
+    }
+}
+
 #[tokio::test]
 async fn a_storage_update_serves_openings_under_its_new_root() {
-    let creator = Address::new_from_array([41; 32]);
-    let initialize = InitializeStorage {
-        payer: Address::new_from_array([1; 32]),
-        creator,
-        registry_id: RegistryId([42; 32]),
-        grace_slots: 100,
-    };
-    let registry = initialize.registry();
     let member = *Member::owner_tag(&[43; 32]).unwrap().as_bytes();
-    let write = StorageWriteData {
+    let write = StorageWriteData::Record(RecordWriteData {
         member,
         lists: WriteRecordsIxData {
             mask: 1u64.to_le_bytes(),
             value: 1u64.to_le_bytes(),
         },
         ..Zeroable::zeroed()
-    };
-    let chain_start = storage_program::chain_start(&registry, Revision::default()).unwrap();
-    let inputs = MemberRegistryTree::new()
-        .unwrap()
-        .apply(chain_start, &[write.entry().unwrap()])
-        .unwrap();
-    let update = UpdateStorage {
-        authority: creator,
-        registry,
-        mode: UpdateMode::Graced,
-        data: StorageUpdateIxData {
-            revision: Revision::default(),
-            writes: &[write],
-            apply: &apply_data(inputs.new_root, inputs.new_next_index),
-        },
-    }
-    .instruction()
-    .unwrap();
-    let chain = Arc::new(Mutex::new(Chain {
-        blocks: BTreeMap::from([
-            (1, block(1, vec![sent(&initialize.instruction())])),
-            (2, block(2, vec![sent(&update)])),
-        ]),
-        ..Default::default()
-    }));
-    let (rpc, handle) = rpc(chain.clone()).await;
-    let indexer = replay_indexer(Arc::new(database().await), rpc);
-    while indexer.synchronize().await.unwrap() == Progress::Behind {}
-    // The chain takes the projected account, as an honest program writes it.
-    let projected = StorageStore::new(indexer.db.as_ref(), registry.to_bytes())
-        .state()
-        .await
-        .unwrap()
-        .unwrap();
-    let image = account(STORAGE_PROGRAM_ID, bytemuck::bytes_of(&*projected.account));
-    chain
-        .lock()
-        .unwrap()
-        .accounts
-        .insert(registry.to_string(), image);
-    let response = api::storage_member_openings(
-        indexer.db.as_ref(),
-        indexer.rpc.as_ref(),
-        GetStorageMemberOpeningsRequest {
-            registry: registry.into(),
-            members: vec![Hash(member)],
-            expected_root: Hash(inputs.new_root),
-        },
-    )
-    .await
-    .unwrap();
+    });
+    let replay = StorageReplay::updated(vec![write]).await;
+    let response = replay.openings(&[member]).await;
     let served = StorageRootView {
-        root: Hash(inputs.new_root),
+        root: Hash(replay.root),
         revision: 1,
-        next_index: inputs.new_next_index,
+        next_index: replay.next_index,
     };
     assert_eq!(response.root, served);
     let [opening] = response.openings.as_slice() else {
@@ -1687,12 +1724,59 @@ async fn a_storage_update_serves_openings_under_its_new_root() {
     };
     let opened = OpeningCheck {
         opening: &record_opening(opening),
-        root: &inputs.new_root,
+        root: &replay.root,
         member: &member,
     }
     .verify()
     .unwrap();
     assert_eq!(opened.map(|record| record.lists), Some(1));
-    handle.stop().unwrap();
-    handle.stopped().await;
+    replay.stop().await;
+}
+
+#[tokio::test]
+async fn a_storage_escrow_write_serves_an_envelope_the_auditor_opens() {
+    let auditor = X25519Keypair::new();
+    let owner = Address::new_from_array([43; 32]);
+    let member = *Member::owner_tag(owner.as_array()).unwrap().as_bytes();
+    let envelope =
+        NullifierKeyEnvelope::new(&NullifierKey::from_secret([7; 31]), &auditor.pubkey()).unwrap();
+    let registration = EscrowRegistration {
+        member: Hash(member),
+        nullifier_pk: Hash(envelope.nullifier_pk),
+        eph_pk: envelope.sealed.eph_pk.as_bytes().to_vec().into(),
+        ciphertext: envelope.sealed.ciphertext.to_vec().into(),
+        proof: Vec::new().into(),
+    };
+    let write = RecordUpdateEntry::Escrow(registration)
+        .write(&owner)
+        .unwrap();
+    let replay = StorageReplay::updated(vec![write]).await;
+    let page = api::storage_member_records(
+        replay.indexer.db.as_ref(),
+        replay.indexer.rpc.as_ref(),
+        GetStorageMemberRecordsRequest {
+            registry: replay.registry.into(),
+            expected_root: Hash(replay.root),
+            start_index: 1,
+            limit: 16,
+        },
+    )
+    .await
+    .unwrap();
+    let [row] = page.records.as_slice() else {
+        panic!("one record past the sentinel, {:?}", page.records);
+    };
+    let [opening] = replay
+        .openings(&[member])
+        .await
+        .openings
+        .try_into()
+        .unwrap();
+    assert_eq!(opening.record, row.record);
+    let read = MemberOpeningRead::verify(&opening, &replay.root, &member).unwrap();
+    assert_eq!(read.owner_pubkey, Some(owner));
+    let escrowed = read.escrowed(&envelope.nullifier_pk).unwrap().unwrap();
+    let opened = escrowed.sealed.open(&auditor).unwrap();
+    assert_eq!(opened.pubkey().unwrap(), envelope.nullifier_pk);
+    replay.stop().await;
 }

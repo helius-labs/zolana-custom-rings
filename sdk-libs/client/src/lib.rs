@@ -92,7 +92,7 @@ pub use crate::{
     },
     records::{
         apply_proof_inputs, member_record, quad_path, storage_apply_proof_inputs,
-        MemberOpeningRead, RecordPoolCheck, RecordPoolRead, RegistryTip,
+        MemberOpeningRead, RecordPoolCheck, RecordPoolRead, RegistryTip, StorageTip,
     },
     recover::{MemberRecovery, RecoveredNotes, RingRecovery, SourceMember},
     scan::{AuditedPage, RingScan, RingScanPage, ScanPage},

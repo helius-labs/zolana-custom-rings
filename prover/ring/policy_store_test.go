@@ -11,6 +11,7 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringpolicy"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
+	"github.com/helius-labs/zolana/prover/server/prover-test/spp/protocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 	"github.com/helius-labs/zolana/prover/server/prover/common"
 )
@@ -46,6 +47,7 @@ func TestPolicyStoreFixtures(t *testing.T) {
 	for revision := range 3 {
 		bob := big.NewInt(ringpolicy.Bob)
 		var entries []ringregistry.Entry
+		var escrowWrite map[string]any
 		switch revision {
 		case 0:
 			for _, member := range []int64{ringpolicy.Sender, ringpolicy.Alice, ringpolicy.Bob} {
@@ -54,8 +56,19 @@ func TestPolicyStoreFixtures(t *testing.T) {
 		case 1:
 			entries = []ringregistry.Entry{{Member: bob, Mask: big.NewInt(3), Value: big.NewInt(3), EscrowKey: big.NewInt(0)}}
 		case 2:
+			// The program rebuilds the leaf from the published envelope.
+			owner, ephU, ciphertext := ringtest.Repeat(0x5c), ringtest.Repeat(0x5e), ringtest.Repeat(0x5d)
+			nullifierPk := big.NewInt(0x0e11)
+			member, err := protocol.SolanaPkField(owner)
+			if err != nil {
+				t.Fatal(err)
+			}
 			escrow := big.NewInt(ringregistry.EscrowBit)
-			entries = []ringregistry.Entry{{Member: bob, Mask: escrow, Value: escrow, EscrowKey: big.NewInt(0xe5c0)}}
+			key := ringregistry.EscrowKey(t, nullifierPk, ringtest.HashBytes(t, ciphertext[:]))
+			entries = []ringregistry.Entry{{Member: member, Mask: escrow, Value: escrow, EscrowKey: key}}
+			escrowWrite = map[string]any{
+				"owner": Bytes(owner[:]), "nullifierPk": fb(nullifierPk), "ephU": Bytes(ephU[:]), "ciphertext": Bytes(ciphertext[:]),
+			}
 		}
 		capacity, circuit := 1, applyKey
 		if revision == 0 {
@@ -69,9 +82,13 @@ func TestPolicyStoreFixtures(t *testing.T) {
 		for i, write := range request.Writes[:len(entries)] {
 			writes[i] = write.Entry
 		}
-		vectors["update"+big.NewInt(int64(revision)).String()] = map[string]any{
+		update := map[string]any{
 			"proof": prove(circuit, request), "root": request.NewRoot, "nextIndex": request.NewNextIndex, "writes": writes,
 		}
+		if escrowWrite != nil {
+			update["escrow"] = escrowWrite
+		}
+		vectors["update"+big.NewInt(int64(revision)).String()] = update
 	}
 	encoded, err := json.MarshalIndent(vectors, "", "  ")
 	if err != nil {

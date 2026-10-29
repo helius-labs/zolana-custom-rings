@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeSet, HashMap},
     fmt::Display,
     future::Future,
+    ops::Range,
     sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant},
 };
@@ -10,10 +11,10 @@ use custom_ring_interface::{
     check_member, mint_policy_write, queue_chain,
     storage::{Revision, StorageRegistry},
     storage_instruction::StorageWriteData,
-    tagged_x25519, RecordWriteData, RootEntry, WriteRecordsIxData, APPLY_BATCH,
-    MEMBER_REGISTRY_CAPACITY, QUAD_ARITY, STORAGE_PROGRAM_ID,
+    tagged_x25519, CustomRingError, QueueEntry, RecordWriteData, RootEntry, WriteRecordsIxData,
+    APPLY_BATCH, MEMBER_REGISTRY_CAPACITY, QUAD_ARITY, STORAGE_PROGRAM_ID,
 };
-use sea_orm::{DatabaseConnection, DatabaseTransaction};
+use sea_orm::{ConnectionTrait, DatabaseConnection, DatabaseTransaction};
 use solana_address::Address;
 use solana_clock::DEFAULT_MS_PER_SLOT;
 use solana_transaction_status_client_types::TransactionDetails;
@@ -28,11 +29,11 @@ use zolana_ring_indexer::{
         GetRingRecordPoolRequest, GetRingRecordPoolResponse, GetRingRecordQueueRequest,
         GetRingRecordQueueResponse, GetStorageApplyProofInputsRequest,
         GetStorageApplyProofInputsResponse, GetStorageMemberOpeningsRequest,
-        GetStorageMemberOpeningsResponse, GetStorageRecordPoolRequest,
-        GetStorageRecordPoolResponse, RingIndexedMemberRecordView, RingMemberOpening,
-        RingMemberRecordView, RingQueueEntryView, RingRecordPathView, RingRecordWriteView,
-        RingRegistryRootView, RingRootEntryView, StorageRootView, StorageWriteView,
-        MAX_RING_MEMBER_PAGE_LIMIT,
+        GetStorageMemberOpeningsResponse, GetStorageMemberRecordsRequest,
+        GetStorageMemberRecordsResponse, GetStorageRecordPoolRequest, GetStorageRecordPoolResponse,
+        RingIndexedMemberRecordView, RingMemberOpening, RingMemberRecordView, RingQueueEntryView,
+        RingRecordPathView, RingRecordWriteView, RingRegistryRootView, RingRootEntryView,
+        StorageRootView, StorageWriteView, MAX_RING_MEMBER_PAGE_LIMIT,
     },
     tree::{Canopy, MemberRecord, OpeningCheck, RecordOpening, RecordTree, RecordWriteProofInput},
 };
@@ -45,7 +46,7 @@ use crate::{
     rpc::SolanaRpc,
     storage::{
         self, HistoryRoot, RegistryState, RegistryStore, RingCursor, StorageRoot, StorageState,
-        StorageStore, StoredEntry, StoredRecord,
+        StorageStore, StoredEntry, StoredRecord, TreeVersion,
     },
 };
 
@@ -292,36 +293,14 @@ pub(crate) async fn member_records(
         .start_index
         .saturating_add(request.limit)
         .min(root.next_index);
-    let leaves = request.start_index..end;
-    let store = snapshot.store();
-    let rows = store
-        .records_by_index(leaves.clone(), root.applied)
-        .await
-        .map_err(internal)?;
-    if !rows.iter().map(|row| row.record.index).eq(leaves) {
-        return Err(RingApiError::PageGap);
-    }
-    let members = rows
-        .iter()
-        .map(|row| row.record.record.member)
-        .collect::<Vec<_>>();
-    let read = TreeRead {
+    let records = LeafPage {
+        store: &snapshot.store(),
+        root: &root.root,
         at: root.tree(),
-        records: RecordRead::Leaves(rows),
-        inserts: 0,
-        canopy: None,
-    };
-    let loaded = read.load(&store).await.map_err(internal)?;
-    let records = members
-        .iter()
-        .map(|member| {
-            let opening = loaded.opening(&root.root, member)?;
-            Ok(RingIndexedMemberRecordView {
-                record: opening.record,
-                path: opening.path,
-            })
-        })
-        .collect::<Result<Vec<_>, RingApiError>>()?;
+        leaves: request.start_index..end,
+    }
+    .read()
+    .await?;
     let context = snapshot.confirm(chain, Served::Root(&root)).await?.context;
     Ok(GetRingMemberRecordsResponse {
         context,
@@ -494,6 +473,47 @@ pub(crate) async fn storage_member_openings(
     })
 }
 
+/// Contiguous, authenticated leaves under a root the registry history holds.
+pub(crate) async fn storage_member_records(
+    db: &DatabaseConnection,
+    chain: &impl ChainSource,
+    request: GetStorageMemberRecordsRequest,
+) -> Result<GetStorageMemberRecordsResponse, RingApiError> {
+    if request.limit == 0 || request.limit > MAX_RING_MEMBER_PAGE_LIMIT {
+        return Err(validation("invalid storage page limit"));
+    }
+    let read = Snapshot::storage(db, &request.registry)
+        .await?
+        .at_root(&request.expected_root.0)
+        .await?;
+    let root = read.root;
+    if request.start_index == 0 || request.start_index > root.next_index {
+        return Err(validation("invalid storage page start"));
+    }
+    let end = request
+        .start_index
+        .saturating_add(request.limit)
+        .min(root.next_index);
+    let records = LeafPage {
+        store: read.snapshot.store().tree(),
+        root: &root.root,
+        at: root.tree(),
+        leaves: request.start_index..end,
+    }
+    .read()
+    .await?;
+    let context = read
+        .snapshot
+        .confirm(chain, StorageServed::Root(&root))
+        .await?;
+    Ok(GetStorageMemberRecordsResponse {
+        context,
+        root: storage_root_view(&root),
+        records,
+        next_leaf_index: (end < root.next_index).then_some(end),
+    })
+}
+
 pub(crate) async fn storage_record_pool(
     db: &DatabaseConnection,
     chain: &impl ChainSource,
@@ -540,7 +560,7 @@ pub(crate) async fn storage_apply_proof_inputs(
     let entries = request
         .writes
         .iter()
-        .map(|write| storage_write(write).entry())
+        .map(storage_entry)
         .collect::<Result<Vec<_>, _>>()
         .map_err(validation)?;
     let snapshot = Snapshot::storage(db, &request.registry).await?;
@@ -791,6 +811,48 @@ impl RootRead {
             canopy: pool.canopy,
             subjects: pool.subjects,
         })
+    }
+}
+
+/// `leaves` lie below the tree's next index at `at`.
+struct LeafPage<'a, C> {
+    store: &'a RegistryStore<'a, C>,
+    root: &'a [u8; 32],
+    at: TreeVersion,
+    leaves: Range<u64>,
+}
+
+impl<C: ConnectionTrait> LeafPage<'_, C> {
+    async fn read(self) -> Result<Vec<RingIndexedMemberRecordView>, RingApiError> {
+        let rows = self
+            .store
+            .records_by_index(self.leaves.clone(), self.at.version)
+            .await
+            .map_err(internal)?;
+        if !rows.iter().map(|row| row.record.index).eq(self.leaves) {
+            return Err(RingApiError::PageGap);
+        }
+        let members = rows
+            .iter()
+            .map(|row| row.record.record.member)
+            .collect::<Vec<_>>();
+        let read = TreeRead {
+            at: self.at,
+            records: RecordRead::Leaves(rows),
+            inserts: 0,
+            canopy: None,
+        };
+        let loaded = read.load(self.store).await.map_err(internal)?;
+        members
+            .iter()
+            .map(|member| {
+                let opening = loaded.opening(self.root, member)?;
+                Ok(RingIndexedMemberRecordView {
+                    record: opening.record,
+                    path: opening.path,
+                })
+            })
+            .collect()
     }
 }
 
@@ -1045,16 +1107,24 @@ fn storage_root_view(root: &StorageRoot) -> StorageRootView {
     }
 }
 
-fn storage_write(write: &StorageWriteView) -> StorageWriteData {
-    StorageWriteData {
-        member: write.member.0,
-        lists: WriteRecordsIxData {
-            mask: write.mask.to_le_bytes(),
-            value: write.value.to_le_bytes(),
-        },
-        mint_policy: mint_policy_write(write.mint_policy),
-        escrow_key: write.escrow_key.0,
+/// An escrow write names its leaf by the key hash, never by its envelope.
+fn storage_entry(write: &StorageWriteView) -> Result<QueueEntry, CustomRingError> {
+    if write.escrow_key.0 == [0; 32] {
+        return StorageWriteData::Record(RecordWriteData {
+            member: write.member.0,
+            lists: WriteRecordsIxData {
+                mask: write.mask.to_le_bytes(),
+                value: write.value.to_le_bytes(),
+            },
+            mint_policy: mint_policy_write(write.mint_policy),
+        })
+        .entry();
     }
+    let entry = QueueEntry::escrow_hash(write.member.0, write.escrow_key.0)?;
+    if (write.mask, write.value, write.mint_policy) != (entry.mask, entry.value, None) {
+        return Err(CustomRingError::InvalidInstructionData);
+    }
+    Ok(entry)
 }
 
 fn root_view(root: &HistoryRoot) -> RingRegistryRootView {

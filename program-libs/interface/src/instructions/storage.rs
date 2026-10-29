@@ -1,12 +1,14 @@
 use bytemuck::{Pod, Zeroable};
+use solana_address::Address;
+use spr_hasher::primitives::solana_owner_identity;
 use zolana_ring_policy::ListSet;
 
 use crate::{
     error::CustomRingError,
-    instruction::{list_and_mint_entry, mint_policy_write, write_count, MintPolicyWrite},
-    member_registry::QueueEntry,
+    instruction::{list_and_mint_entry, write_count},
+    member_registry::{EscrowKey, QueueEntry},
     storage::{RegistryId, Revision},
-    ApplyRecordsIxData, WriteRecordsIxData,
+    ApplyRecordsIxData, RecordWriteData, AUDIT_CIPHERTEXT_LEN,
 };
 
 pub mod tag {
@@ -16,6 +18,12 @@ pub mod tag {
     // 3 retired.
     /// No data, the authority and the new authority both sign.
     pub const UPDATE_AUTHORITY: u8 = 4;
+}
+
+/// The first byte of each write in an update.
+pub mod write_kind {
+    pub const RECORD: u8 = 0;
+    pub const ESCROW: u8 = 1;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,22 +43,29 @@ pub struct InitializeIxData {
     pub grace_slots: [u8; 8],
 }
 
+/// Encoded as its `write_kind` byte and body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StorageWriteData {
+    Record(RecordWriteData),
+    Escrow(EscrowWriteData),
+}
+
+/// The leaf binds every field except `eph_u`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
-pub struct StorageWriteData {
-    pub member: [u8; 32],
-    pub lists: WriteRecordsIxData,
-    /// [`mint_policy_write`](crate::mint_policy_write) of the replacement settings.
-    pub mint_policy: MintPolicyWrite,
-    /// Nonzero only on an escrow write, the [`EscrowKey::hash`](crate::EscrowKey::hash).
-    pub escrow_key: [u8; 32],
+pub struct EscrowWriteData {
+    /// Its owner identity is the leaf member.
+    pub owner: Address,
+    pub nullifier_pk: [u8; 32],
+    pub eph_u: [u8; 32],
+    pub ciphertext: [u8; AUDIT_CIPHERTEXT_LEN],
 }
 
 /// Tags 1 and 2, `revision || count u8 || count writes || ApplyRecordsIxData`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StorageUpdateIxData<'a> {
     pub revision: Revision,
-    pub writes: &'a [StorageWriteData],
+    pub writes: Vec<StorageWriteData>,
     pub apply: &'a ApplyRecordsIxData,
 }
 
@@ -72,24 +87,71 @@ impl InitializeIxData {
 }
 
 impl StorageWriteData {
+    /// The leaf write the apply proof hashes.
+    pub fn entry(&self) -> Result<QueueEntry, CustomRingError> {
+        match self {
+            Self::Record(write) => list_and_mint_entry(
+                write.member,
+                &write.lists,
+                &write.mint_policy,
+                ListSet::STORAGE_WRITES,
+            ),
+            // The leaf binds the published envelope and no other key.
+            Self::Escrow(write) => QueueEntry::escrow(write.member()?, &write.key()),
+        }
+    }
+
+    pub fn encode_all(writes: &[Self]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for write in writes {
+            write.encode_into(&mut out);
+        }
+        out
+    }
+
+    pub fn parse_all(mut data: &[u8]) -> Result<Vec<Self>, CustomRingError> {
+        let mut writes = Vec::new();
+        while !data.is_empty() {
+            let (write, rest) = Self::split(data)?;
+            writes.push(write);
+            data = rest;
+        }
+        Ok(writes)
+    }
+
+    fn split(data: &[u8]) -> Result<(Self, &[u8]), CustomRingError> {
+        let (kind, rest) = data
+            .split_first()
+            .ok_or(CustomRingError::InvalidInstructionData)?;
+        match *kind {
+            write_kind::RECORD => leading(rest).map(|(write, rest)| (Self::Record(write), rest)),
+            write_kind::ESCROW => leading(rest).map(|(write, rest)| (Self::Escrow(write), rest)),
+            _ => Err(CustomRingError::InvalidInstructionData),
+        }
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        let (kind, body) = match self {
+            Self::Record(write) => (write_kind::RECORD, bytemuck::bytes_of(write)),
+            Self::Escrow(write) => (write_kind::ESCROW, bytemuck::bytes_of(write)),
+        };
+        out.push(kind);
+        out.extend_from_slice(body);
+    }
+}
+
+impl EscrowWriteData {
     pub const SIZE: usize = core::mem::size_of::<Self>();
 
-    /// The leaf write the apply proof hashes, an escrow write carries nothing else.
-    pub fn entry(&self) -> Result<QueueEntry, CustomRingError> {
-        if self.escrow_key == [0; 32] {
-            return list_and_mint_entry(
-                self.member,
-                &self.lists,
-                &self.mint_policy,
-                ListSet::STORAGE_WRITES,
-            );
+    pub fn member(&self) -> Result<[u8; 32], CustomRingError> {
+        Ok(solana_owner_identity(self.owner.as_array())?)
+    }
+
+    pub fn key(&self) -> EscrowKey<'_> {
+        EscrowKey {
+            nullifier_pk: &self.nullifier_pk,
+            ciphertext: &self.ciphertext,
         }
-        if self.lists != WriteRecordsIxData::default()
-            || self.mint_policy != mint_policy_write(None)
-        {
-            return Err(CustomRingError::InvalidInstructionData);
-        }
-        QueueEntry::escrow_hash(self.member, self.escrow_key)
     }
 }
 
@@ -98,18 +160,20 @@ impl<'a> StorageUpdateIxData<'a> {
         let (revision, data) = data
             .split_first_chunk::<8>()
             .ok_or(CustomRingError::InvalidInstructionData)?;
-        let (count, rest) = data
+        let (count, mut rest) = data
             .split_first()
             .ok_or(CustomRingError::InvalidInstructionData)?;
         let count = write_count(usize::from(*count))?;
-        let (writes, apply) = rest
-            .split_at_checked(usize::from(count) * StorageWriteData::SIZE)
-            .ok_or(CustomRingError::InvalidInstructionData)?;
+        let mut writes = Vec::with_capacity(usize::from(count));
+        for _ in 0..count {
+            let (write, tail) = StorageWriteData::split(rest)?;
+            writes.push(write);
+            rest = tail;
+        }
         Ok(Self {
             revision: Revision(*revision),
-            writes: bytemuck::try_cast_slice(writes)
-                .map_err(|_| CustomRingError::InvalidInstructionData)?,
-            apply: ApplyRecordsIxData::parse(apply)?,
+            writes,
+            apply: ApplyRecordsIxData::parse(rest)?,
         })
     }
 
@@ -118,14 +182,23 @@ impl<'a> StorageUpdateIxData<'a> {
         Ok([
             &self.revision.0[..],
             &[count],
-            bytemuck::cast_slice(self.writes),
+            &StorageWriteData::encode_all(&self.writes),
             bytemuck::bytes_of(self.apply),
         ]
         .concat())
     }
 }
 
+fn leading<T: Pod>(data: &[u8]) -> Result<(T, &[u8]), CustomRingError> {
+    let (body, rest) = data
+        .split_at_checked(core::mem::size_of::<T>())
+        .ok_or(CustomRingError::InvalidInstructionData)?;
+    let value = bytemuck::try_pod_read_unaligned(body)
+        .map_err(|_| CustomRingError::InvalidInstructionData)?;
+    Ok((value, rest))
+}
+
 const _: () = assert!(core::mem::align_of::<InitializeIxData>() == 1);
 const _: () = assert!(InitializeIxData::SIZE == 40);
-const _: () = assert!(core::mem::align_of::<StorageWriteData>() == 1);
-const _: () = assert!(StorageWriteData::SIZE == 161);
+const _: () = assert!(core::mem::align_of::<EscrowWriteData>() == 1);
+const _: () = assert!(EscrowWriteData::SIZE == 128);

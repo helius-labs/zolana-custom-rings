@@ -52,4 +52,6 @@ base64 = { workspace = true }
 custom-ring-sdk = { workspace = true }
 hex = { workspace = true }
 hyper-util = { workspace = true }
+spr-keypair = { workspace = true }
+zolana-ring-client = { workspace = true, features = ["rpc"] }
 zolana-ring-member-registry = { workspace = true }

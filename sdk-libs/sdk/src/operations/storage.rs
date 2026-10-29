@@ -28,7 +28,7 @@ pub struct InitializeStorage {
 }
 
 #[must_use]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UpdateStorage<'a> {
     pub authority: Address,
     pub registry: Address,

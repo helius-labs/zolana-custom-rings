@@ -5,7 +5,7 @@ use std::sync::atomic::AtomicU64;
 use bytemuck::Zeroable;
 use custom_ring_interface::{
     storage::StorageRegistry,
-    storage_instruction::{tag, StorageUpdateIxData},
+    storage_instruction::{tag, StorageUpdateIxData, StorageWriteData},
     ApplyRecordsIxData, RingPolicy, QUAD_HEIGHT, RING_POLICY, STORAGE_PROGRAM_ID,
 };
 use custom_ring_sdk::CustomRing;
@@ -147,14 +147,20 @@ impl StorageChain for StubChain {
 
 struct Records {
     chain: Arc<StubChain>,
+    hub: Arc<Hub<StaticSource>>,
     module: jsonrpsee::RpcModule<Arc<Hub<StaticSource>>>,
     writer: Arc<RecordWriter>,
 }
 
 impl Records {
-    /// A ring whose records registry the writer's authority holds, its auditor the fixture's.
     async fn new() -> Self {
         let fixture = Fixture::new();
+        let source = fixture.source();
+        Self::serving(&fixture, source).await
+    }
+
+    /// A ring whose records registry the writer's authority holds, its escrow auditor the fixture's.
+    async fn serving(fixture: &Fixture, source: StaticSource) -> Self {
         let escrow = escrow_fixture();
         let chain = Arc::new(StubChain {
             slot: AtomicU64::new(NOW),
@@ -172,7 +178,7 @@ impl Records {
             sent: Mutex::default(),
         });
         let store = Store::open("sqlite::memory:", 1).await.expect("store");
-        let hub = Hub::builder(fixture.source(), GENESIS)
+        let hub = Hub::builder(source, GENESIS)
             .with_origins(origins())
             .with_store(store)
             .with_storage_chain(chain.clone())
@@ -193,9 +199,11 @@ impl Records {
                 owned(STORAGE_PROGRAM_ID, bytemuck::bytes_of(&registry)),
             ),
         ]);
+        let hub = Arc::new(hub);
         Self {
             chain,
-            module: rpc_module(Arc::new(hub)).expect("module"),
+            module: rpc_module(hub.clone()).expect("module"),
+            hub,
             writer,
         }
     }
@@ -223,15 +231,16 @@ impl Records {
             .map(|instruction| instruction.data.clone())
             .collect();
         let (mode, update) = data[0].split_first().expect("update tag");
-        let members = StorageUpdateIxData::parse(update)
+        let writes = StorageUpdateIxData::parse(update)
             .expect("update data")
-            .writes
-            .iter()
-            .map(|write| write.member)
-            .collect();
+            .writes;
         Flushed {
             mode: *mode,
-            members,
+            members: writes
+                .iter()
+                .map(|write| write.entry().expect("leaf write").member)
+                .collect(),
+            writes,
             data,
         }
     }
@@ -241,6 +250,7 @@ struct Flushed {
     mode: u8,
     /// The members the `Update` writes, in order.
     members: Vec<[u8; 32]>,
+    writes: Vec<StorageWriteData>,
     data: Vec<Vec<u8>>,
 }
 
@@ -365,4 +375,45 @@ async fn a_block_entry_goes_out_as_an_immediate_update() {
     assert_eq!(flushed.mode, tag::UPDATE_IMMEDIATE);
     assert_eq!(flushed.members, [member.0]);
     assert_eq!(flushed.data[1], [custom_ring_interface::tag::SYNC_ROOTS]);
+}
+
+#[tokio::test]
+async fn an_escrow_written_through_the_writer_opens_the_wallets_outputs() {
+    let fixture = Fixture::new();
+    let registration = escrow_registration();
+    let owner = UtxoFields {
+        owner_key: wallet().pubkey().to_bytes(),
+        nullifier_pk: registration.nullifier_pk.0,
+        ..sol(0xc0, 30)
+    };
+    let source = escrowed_source(&fixture, &[owner], &[]);
+    let own_records = source.records.clone();
+    let records = Records::serving(&fixture, source).await;
+    records
+        .submit(signed(
+            &wallet(),
+            vec![RecordUpdateEntry::Escrow(registration.clone())],
+        ))
+        .await
+        .expect("queued");
+    records
+        .chain
+        .slot
+        .store(NOW + BATCH_WINDOW_SLOTS, Ordering::Relaxed);
+    let flushed = records.flushed().await;
+    let [StorageWriteData::Escrow(published)] = flushed.writes.as_slice() else {
+        panic!("one escrow write, {:?}", flushed.writes);
+    };
+    assert_eq!(published.owner, wallet().pubkey());
+    assert_eq!(published.nullifier_pk, registration.nullifier_pk.0);
+    assert_eq!(
+        tagged_x25519(&published.eph_u).as_slice(),
+        registration.eph_pk.0
+    );
+    assert_eq!(published.ciphertext.as_slice(), registration.ciphertext.0);
+
+    own_records.escrow(&[*published]);
+    let service = records.hub.service(None).expect("service");
+    service.backfill_utxos().await.expect("backfill");
+    assert!(escrow_errors(&read_at(&service, None).await).is_empty());
 }

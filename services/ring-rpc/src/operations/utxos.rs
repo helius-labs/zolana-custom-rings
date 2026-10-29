@@ -2,8 +2,7 @@
 
 use std::{
     borrow::Borrow,
-    collections::{BTreeMap, HashMap, HashSet},
-    ops::Range,
+    collections::{HashMap, HashSet},
     sync::{PoisonError, RwLock, RwLockReadGuard},
     time::Duration,
 };
@@ -18,7 +17,6 @@ use zolana_ring_client::{
     rpc::AuditedUtxoView, CreatedUtxo, EscrowedKeys, KnownUtxo, KnownUtxoIndex, SealedNullifierKey,
     UtxoOwner,
 };
-use zolana_ring_indexer::rpc::RingQueueEntryView;
 
 use crate::error::RingRpcError;
 
@@ -51,8 +49,7 @@ pub(crate) struct CreatedIn {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct EscrowRoot {
     pub root: [u8; 32],
-    /// The queue head right after the application that pushed `root`.
-    pub applied: u64,
+    pub revision: u64,
 }
 
 /// Verified under the registry root.
@@ -82,9 +79,6 @@ pub(crate) struct StoredUtxo {
 struct EscrowMap {
     root: Option<EscrowRoot>,
     keys: HashMap<[u8; 32], EscrowedOwner>,
-    /// A rewritten member drops the key it escrowed before.
-    owners: HashMap<[u8; 32], [u8; 32]>,
-    pending: BTreeMap<u64, [u8; 32]>,
 }
 
 impl AuditStore {
@@ -179,31 +173,6 @@ impl AuditStore {
             .root
     }
 
-    /// Only positions the chain holds pending, `window`, enter the map.
-    pub(crate) fn remember_pending(&self, window: Range<u64>, entries: &[RingQueueEntryView]) {
-        let mut escrow = self.escrow.write().unwrap_or_else(PoisonError::into_inner);
-        for entry in entries
-            .iter()
-            .filter(|entry| window.contains(&entry.position))
-        {
-            escrow.pending.insert(entry.position, entry.member.0);
-        }
-    }
-
-    /// `None` unless every position of `applied` was seen pending.
-    pub(crate) fn applied_members(&self, applied: Range<u64>) -> Option<Vec<[u8; 32]>> {
-        if applied.start > applied.end {
-            return None;
-        }
-        let escrow = self.escrow.read().unwrap_or_else(PoisonError::into_inner);
-        let members: Vec<[u8; 32]> = escrow
-            .pending
-            .range(applied.clone())
-            .map(|(_, member)| *member)
-            .collect();
-        (members.len() as u64 == applied.end.saturating_sub(applied.start)).then_some(members)
-    }
-
     /// Every key the registry escrows under `root`, the map read under an older root goes.
     pub(crate) fn replace_escrow(
         &self,
@@ -212,33 +181,10 @@ impl AuditStore {
     ) {
         let mut escrow = self.escrow.write().unwrap_or_else(PoisonError::into_inner);
         escrow.keys = owners
-            .values()
-            .map(|owner| (owner.owner_key, *owner))
+            .into_values()
+            .map(|owner| (owner.owner_key, owner))
             .collect();
-        escrow.owners = owners
-            .into_iter()
-            .map(|(member, owner)| (member, owner.owner_key))
-            .collect();
-        escrow.advance(root);
-    }
-
-    /// The members an application named, each `None` once it escrows no key.
-    pub(crate) fn update_escrow(
-        &self,
-        root: EscrowRoot,
-        members: impl IntoIterator<Item = ([u8; 32], Option<EscrowedOwner>)>,
-    ) {
-        let mut escrow = self.escrow.write().unwrap_or_else(PoisonError::into_inner);
-        for (member, owner) in members {
-            if let Some(previous) = escrow.owners.remove(&member) {
-                escrow.keys.remove(&previous);
-            }
-            if let Some(owner) = owner {
-                escrow.keys.insert(owner.owner_key, owner);
-                escrow.owners.insert(member, owner.owner_key);
-            }
-        }
-        escrow.advance(root);
+        escrow.root = Some(root);
     }
 
     /// An audit holds the guard for its full run, no UTXO enters between two of its lookups.
@@ -248,13 +194,6 @@ impl AuditStore {
 
     fn stored(&self, utxo_hash: &[u8; 32]) -> Option<StoredUtxo> {
         self.known().get(utxo_hash).copied()
-    }
-}
-
-impl EscrowMap {
-    fn advance(&mut self, root: EscrowRoot) {
-        self.pending = self.pending.split_off(&root.applied);
-        self.root = Some(root);
     }
 }
 
@@ -350,24 +289,5 @@ mod tests {
         assert_eq!(stored_mint(), Some(mint));
         store.record(created_in, [created(None)]);
         assert_eq!(stored_mint(), Some(mint));
-    }
-
-    #[test]
-    fn applied_members_need_every_position_seen_pending() {
-        let store = AuditStore::default();
-        let entry = |position: u64| RingQueueEntryView {
-            mint_policy: Default::default(),
-            position,
-            member: Hash([position as u8; 32]),
-            mask: 0,
-            value: 0,
-            escrow_key: Hash([0; 32]),
-            slot: 0,
-        };
-        store.remember_pending(0..3, &[entry(0), entry(2), entry(5)]);
-        assert_eq!(store.applied_members(0..1), Some(vec![[0; 32]]));
-        assert_eq!(store.applied_members(0..3), None);
-        assert_eq!(store.applied_members(5..6), None);
-        assert_eq!(store.applied_members(Range { start: 2, end: 1 }), None);
     }
 }

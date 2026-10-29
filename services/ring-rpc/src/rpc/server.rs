@@ -428,8 +428,7 @@ mod tests {
         },
         origins::OriginPolicy,
         upstream::{
-            DepositHistory, MergeAuditRequest, RecordsRoot, RingConfiguration, RingHistoryPage,
-            TransactionPage,
+            DepositHistory, MergeAuditRequest, RingConfiguration, RingHistoryPage, TransactionPage,
         },
     };
 
@@ -498,31 +497,10 @@ mod tests {
             Ok(RingChainStatus::default())
         }
 
-        async fn ring_member_records(
-            &self,
-            _request: zolana_ring_indexer::rpc::GetRingMemberRecordsRequest,
-        ) -> Result<zolana_ring_indexer::rpc::GetRingMemberRecordsResponse, RingIndexerError>
-        {
-            Err(ClientError::Rpc("unused source".to_owned()).into())
-        }
-
-        async fn ring_member_openings(
-            &self,
-            _request: zolana_ring_indexer::rpc::GetRingMemberOpeningsRequest,
-        ) -> Result<zolana_ring_indexer::rpc::GetRingMemberOpeningsResponse, RingIndexerError>
-        {
-            Err(ClientError::Rpc("unused source".to_owned()).into())
-        }
-
-        async fn ring_record_queue(
+        async fn records_root(
             &self,
             _ring: Address,
-        ) -> Result<zolana_ring_indexer::rpc::GetRingRecordQueueResponse, RingIndexerError>
-        {
-            Err(ClientError::Rpc("unused source".to_owned()).into())
-        }
-
-        async fn records_root(&self, _ring: Address) -> Result<Option<RecordsRoot>, ClientError> {
+        ) -> Result<Option<zolana_ring_client::StorageTip>, ClientError> {
             Ok(None)
         }
 
@@ -530,6 +508,14 @@ mod tests {
             &self,
             _request: zolana_ring_indexer::rpc::GetStorageMemberOpeningsRequest,
         ) -> Result<zolana_ring_indexer::rpc::GetStorageMemberOpeningsResponse, RingIndexerError>
+        {
+            Err(ClientError::Rpc("unused source".to_owned()).into())
+        }
+
+        async fn storage_member_records(
+            &self,
+            _request: zolana_ring_indexer::rpc::GetStorageMemberRecordsRequest,
+        ) -> Result<zolana_ring_indexer::rpc::GetStorageMemberRecordsResponse, RingIndexerError>
         {
             Err(ClientError::Rpc("unused source".to_owned()).into())
         }

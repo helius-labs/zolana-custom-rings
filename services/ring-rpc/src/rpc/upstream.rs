@@ -31,12 +31,12 @@ use spr_transaction::{AssetRegistry, Mint, SOL_MINT};
 use std::num::NonZeroUsize;
 use zolana_ring_client::{
     program_data, ring_deposits_in, AsyncRingIndexer, AuditError, ConfirmedEventKind,
-    MemberOpeningRead, MergeAudit, MergeAuditPage, RingIndexerError, RingOrigin, TransactionOrigin,
+    MemberOpeningRead, MergeAudit, MergeAuditPage, RingIndexerError, RingOrigin, StorageTip,
+    TransactionOrigin,
 };
 use zolana_ring_indexer::rpc::{
-    GetRingMemberOpeningsRequest, GetRingMemberOpeningsResponse, GetRingMemberRecordsRequest,
-    GetRingMemberRecordsResponse, GetRingRecordQueueRequest, GetRingRecordQueueResponse,
     GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse,
+    GetStorageMemberRecordsRequest, GetStorageMemberRecordsResponse,
 };
 use zolana_ring_policy::{AssetLimits, Member};
 use zolana_ring_transaction::RingAssets;
@@ -89,32 +89,21 @@ pub trait TransactionSource: Send + Sync {
         ring: Address,
     ) -> impl Future<Output = Result<RingChainStatus, ClientError>> + Send;
 
-    fn ring_member_records(
-        &self,
-        request: GetRingMemberRecordsRequest,
-    ) -> impl Future<Output = Result<GetRingMemberRecordsResponse, RingIndexerError>> + Send;
-
-    fn ring_member_openings(
-        &self,
-        request: GetRingMemberOpeningsRequest,
-    ) -> impl Future<Output = Result<GetRingMemberOpeningsResponse, RingIndexerError>> + Send;
-
-    /// The pending writes, positions `head..tail`.
-    fn ring_record_queue(
-        &self,
-        ring: Address,
-    ) -> impl Future<Output = Result<GetRingRecordQueueResponse, RingIndexerError>> + Send;
-
     /// `None` without a ring policy or before its own mirror is synced.
     fn records_root(
         &self,
         ring: Address,
-    ) -> impl Future<Output = Result<Option<RecordsRoot>, ClientError>> + Send;
+    ) -> impl Future<Output = Result<Option<StorageTip>, ClientError>> + Send;
 
     fn storage_member_openings(
         &self,
         request: GetStorageMemberOpeningsRequest,
     ) -> impl Future<Output = Result<GetStorageMemberOpeningsResponse, RingIndexerError>> + Send;
+
+    fn storage_member_records(
+        &self,
+        request: GetStorageMemberRecordsRequest,
+    ) -> impl Future<Output = Result<GetStorageMemberRecordsResponse, RingIndexerError>> + Send;
 
     /// `None` for a program that is immutable or not deployed.
     fn upgrade_authority(
@@ -180,13 +169,6 @@ impl From<DepositHistory> for RingDepositsResponse {
     }
 }
 
-/// The newest root of the ring's own `StorageRegistry` as its policy mirrors it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RecordsRoot {
-    pub registry: Address,
-    pub root: [u8; 32],
-}
-
 #[derive(Clone, Copy)]
 pub struct RingConfiguration {
     pub auditor_pubkey: X25519Pubkey,
@@ -244,11 +226,11 @@ impl AsyncRpc for HistorySource<'_> {
 
 #[async_trait]
 impl AsyncRingIndexer for HistorySource<'_> {
-    async fn get_ring_member_records(
+    async fn get_storage_member_records(
         &self,
-        request: GetRingMemberRecordsRequest,
-    ) -> Result<GetRingMemberRecordsResponse, RingIndexerError> {
-        self.indexer.get_ring_member_records(request).await
+        request: GetStorageMemberRecordsRequest,
+    ) -> Result<GetStorageMemberRecordsResponse, RingIndexerError> {
+        self.indexer.get_storage_member_records(request).await
     }
 }
 
@@ -534,31 +516,6 @@ impl TransactionSource for ChainSource {
         RingChainStatus::read(&self.rpc, ring).await
     }
 
-    async fn ring_member_records(
-        &self,
-        request: GetRingMemberRecordsRequest,
-    ) -> Result<GetRingMemberRecordsResponse, RingIndexerError> {
-        self.indexer.get_ring_member_records(request).await
-    }
-
-    async fn ring_member_openings(
-        &self,
-        request: GetRingMemberOpeningsRequest,
-    ) -> Result<GetRingMemberOpeningsResponse, RingIndexerError> {
-        self.indexer.get_ring_member_openings(request).await
-    }
-
-    async fn ring_record_queue(
-        &self,
-        ring: Address,
-    ) -> Result<GetRingRecordQueueResponse, RingIndexerError> {
-        self.indexer
-            .get_ring_record_queue(GetRingRecordQueueRequest {
-                ring_program_id: ring.into(),
-            })
-            .await
-    }
-
     async fn upgrade_authority(&self, program: Address) -> Result<Option<Address>, ClientError> {
         let loader = Address::new_from_array(BPF_LOADER_UPGRADEABLE_ID);
         let address = get_program_data_address(&program);
@@ -572,7 +529,7 @@ impl TransactionSource for ChainSource {
             .filter(|key| *key != Address::default()))
     }
 
-    async fn records_root(&self, ring: Address) -> Result<Option<RecordsRoot>, ClientError> {
+    async fn records_root(&self, ring: Address) -> Result<Option<StorageTip>, ClientError> {
         let (address, bump) = Address::find_program_address(&[RingPolicy::SEED], &ring);
         let Some(account) = self.owned_account(address, ring).await? else {
             return Ok(None);
@@ -590,6 +547,13 @@ impl TransactionSource for ChainSource {
         request: GetStorageMemberOpeningsRequest,
     ) -> Result<GetStorageMemberOpeningsResponse, RingIndexerError> {
         self.indexer.get_storage_member_openings(request).await
+    }
+
+    async fn storage_member_records(
+        &self,
+        request: GetStorageMemberRecordsRequest,
+    ) -> Result<GetStorageMemberRecordsResponse, RingIndexerError> {
+        self.indexer.get_storage_member_records(request).await
     }
 
     async fn health(&self) -> Result<(), ClientError> {
@@ -722,22 +686,11 @@ impl CanonicalAccount<'_> {
         })
     }
 
-    fn records_root(self) -> Result<Option<RecordsRoot>, ClientError> {
+    fn records_root(self) -> Result<Option<StorageTip>, ClientError> {
         let policy: RingPolicy = self
             .decode()
             .ok_or_else(|| ClientError::Rpc(INVALID_POLICY.to_owned()))?;
-        let mirror = &policy.own_roots;
-        if mirror.registry != policy.records {
-            return Ok(None);
-        }
-        // The newest revision holds at every slot.
-        Ok(mirror
-            .root(mirror.roots[0].revision, 0)
-            .ok()
-            .map(|root| RecordsRoot {
-                registry: policy.records,
-                root,
-            }))
+        Ok(StorageTip::mirrored(&policy))
     }
 }
 
