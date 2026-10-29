@@ -9,7 +9,7 @@ use thiserror::Error;
 use zolana_ring_indexer::rpc::{
     method::{
         GetRingApplyProofInputs, GetRingMemberOpenings, GetRingMemberRecord, GetRingMemberRecords,
-        GetRingMemberRegistryRoot, GetRingRecordPool, GetRingRecordQueue,
+        GetRingMemberRegistryRoot, GetRingRecordPool, GetRingRecordQueue, GetStorageMemberOpenings,
     },
     RingRpcError,
 };
@@ -112,6 +112,7 @@ ring_indexer! {
     get_ring_member_registry_root => GetRingMemberRegistryRoot,
     get_ring_record_queue => GetRingRecordQueue,
     get_ring_apply_proof_inputs => GetRingApplyProofInputs,
+    get_storage_member_openings => GetStorageMemberOpenings,
 }
 
 async fn call<M: RpcMethod>(
