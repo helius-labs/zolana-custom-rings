@@ -12,7 +12,7 @@ use zeroize::Zeroizing;
 use zolana_ring_member_registry::{
     MemberRecord, QuadPath, RecordOpening, RecordPool, RecordWriteProofInput,
 };
-use zolana_ring_policy::{EncodedRuleTable, SourceMap, MAX_SOURCES};
+use zolana_ring_policy::{AssetLimits, EncodedRuleTable, SourceMap, MAX_SOURCES};
 
 use crate::{prover::fe, RingError, REDACTED};
 
@@ -211,7 +211,7 @@ pub(crate) struct MemberOpening {
     #[serde(with = "fe")]
     pub withdrawal_threshold: [u8; 32],
     #[serde(serialize_with = "fe::seq")]
-    pub asset_limits: [[u8; 32]; 2],
+    pub asset_limits: [[u8; 32]; AssetLimits::FIELDS],
     pub index: u64,
     #[serde(serialize_with = "path")]
     pub path: QuadPath,
@@ -227,7 +227,7 @@ pub(crate) struct MemberOpening {
     #[serde(with = "fe")]
     pub low_withdrawal_threshold: [u8; 32],
     #[serde(serialize_with = "fe::seq")]
-    pub low_asset_limits: [[u8; 32]; 2],
+    pub low_asset_limits: [[u8; 32]; AssetLimits::FIELDS],
 }
 
 impl From<&RecordOpening> for MemberOpening {
@@ -251,7 +251,7 @@ impl From<&RecordOpening> for MemberOpening {
                 low_escrow: [0; 32],
                 low_mint_policy: [0; 32],
                 low_withdrawal_threshold: [0; 32],
-                low_asset_limits: [[0; 32]; 2],
+                low_asset_limits: [[0; 32]; AssetLimits::FIELDS],
             },
             RecordOpening::Absent { low, path } => Self {
                 present: false,
@@ -260,7 +260,7 @@ impl From<&RecordOpening> for MemberOpening {
                 escrow_key: [0; 32],
                 mint_policy: [0; 32],
                 withdrawal_threshold: [0; 32],
-                asset_limits: [[0; 32]; 2],
+                asset_limits: [[0; 32]; AssetLimits::FIELDS],
                 index: path.index,
                 path: *path,
                 low_member: low.member,
@@ -307,7 +307,7 @@ impl Serialize for RecordPools {
             #[serde(with = "fe")]
             withdrawal_threshold: [u8; 32],
             #[serde(serialize_with = "fe::seq")]
-            asset_limits: [[u8; 32]; 2],
+            asset_limits: [[u8; 32]; AssetLimits::FIELDS],
         }
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
@@ -521,7 +521,7 @@ pub(crate) struct RecordWrite {
     #[serde(with = "fe")]
     pub old_withdrawal_threshold: [u8; 32],
     #[serde(serialize_with = "fe::seq")]
-    pub old_asset_limits: [[u8; 32]; 2],
+    pub old_asset_limits: [[u8; 32]; AssetLimits::FIELDS],
     pub index: u64,
     #[serde(serialize_with = "path")]
     pub path: QuadPath,
@@ -537,7 +537,7 @@ pub(crate) struct RecordWrite {
     #[serde(with = "fe")]
     pub low_withdrawal_threshold: [u8; 32],
     #[serde(serialize_with = "fe::seq")]
-    pub low_asset_limits: [[u8; 32]; 2],
+    pub low_asset_limits: [[u8; 32]; AssetLimits::FIELDS],
     pub low_index: u64,
     #[serde(serialize_with = "path")]
     pub low_path: QuadPath,
@@ -557,7 +557,7 @@ pub(crate) struct QueueEntryRequest {
     #[serde(with = "fe")]
     pub withdrawal_threshold: [u8; 32],
     #[serde(serialize_with = "fe::seq")]
-    pub asset_limits: [[u8; 32]; 2],
+    pub asset_limits: [[u8; 32]; AssetLimits::FIELDS],
 }
 
 impl From<&QueueEntry> for QueueEntryRequest {
@@ -739,7 +739,7 @@ pub(crate) struct RecordOpeningRequest {
     #[serde(with = "fe")]
     pub withdrawal_threshold: [u8; 32],
     #[serde(serialize_with = "fe::seq")]
-    pub asset_limits: [[u8; 32]; 2],
+    pub asset_limits: [[u8; 32]; AssetLimits::FIELDS],
     pub index: u64,
     #[serde(serialize_with = "path")]
     pub path: QuadPath,

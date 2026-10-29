@@ -25,7 +25,9 @@ fn vector() -> serde_json::Value {
                 volume_cap: amount - 3,
                 volume_window_slots: amount - 4,
                 deposit_cap: amount - 5,
-                withdrawal_cap: amount - 6,
+                deposit_window_slots: amount - 6,
+                withdrawal_cap: amount - 7,
+                withdrawal_window_slots: amount - 8,
             },
         };
         assert_eq!(MintPolicy::from_bytes(policy.bytes()), policy);

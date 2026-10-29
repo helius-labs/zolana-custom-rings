@@ -128,4 +128,4 @@ impl<'a> StorageUpdateIxData<'a> {
 const _: () = assert!(core::mem::align_of::<InitializeIxData>() == 1);
 const _: () = assert!(InitializeIxData::SIZE == 40);
 const _: () = assert!(core::mem::align_of::<StorageWriteData>() == 1);
-const _: () = assert!(StorageWriteData::SIZE == 161);
+const _: () = assert!(StorageWriteData::SIZE == 177);

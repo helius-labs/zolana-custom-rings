@@ -223,9 +223,9 @@ impl Measure {
 
 /// A zero window counts the checked transaction alone.
 fn window_caps(limits: &AssetLimits) -> [WindowCap; 4] {
-    let ring = |cap, measure| WindowCap {
+    let ring = |cap, window_slots, measure| WindowCap {
         cap,
-        window_slots: limits.volume_window_slots,
+        window_slots,
         measure,
         scope: Scope::Ring,
     };
@@ -236,21 +236,29 @@ fn window_caps(limits: &AssetLimits) -> [WindowCap; 4] {
             measure: Measure::Outflow,
             scope: Scope::Sender,
         },
-        ring(limits.volume_cap, Measure::Volume),
-        ring(limits.deposit_cap, Measure::Deposited),
-        ring(limits.withdrawal_cap, Measure::Withdrawn),
+        ring(
+            limits.volume_cap,
+            limits.volume_window_slots,
+            Measure::Volume,
+        ),
+        ring(
+            limits.deposit_cap,
+            limits.deposit_window_slots,
+            Measure::Deposited,
+        ),
+        ring(
+            limits.withdrawal_cap,
+            limits.withdrawal_window_slots,
+            Measure::Withdrawn,
+        ),
     ]
 }
 
 fn longest_window(checks: &[AssetCheck]) -> u64 {
     checks
         .iter()
-        .flat_map(|check| {
-            [
-                check.limits.sender_window_slots,
-                check.limits.volume_window_slots,
-            ]
-        })
+        .flat_map(|check| window_caps(&check.limits))
+        .map(|cap| cap.window_slots)
         .max()
         .unwrap_or_default()
 }
@@ -266,10 +274,7 @@ mod tests {
     const SENDER_LIMITS: AssetLimits = AssetLimits {
         sender_cap: 100,
         sender_window_slots: 50,
-        volume_cap: 0,
-        volume_window_slots: 0,
-        deposit_cap: 0,
-        withdrawal_cap: 0,
+        ..AssetLimits::EMPTY
     };
 
     fn member(byte: u8) -> Member {
