@@ -472,7 +472,7 @@ export function confirmedRingWithdrawals(
       if (withdrawals.length === 0) return withdrawals;
       const tag = parent.data[0];
       if (tag === undefined) return withdrawals;
-      if (tag !== RingInstructionTag.transact && tag !== RingInstructionTag.delegateTransact)
+      if (tag !== RingInstructionTag.transfer && tag !== RingInstructionTag.authorityTransfer)
         return withdrawals;
       const source = settlementDataOf(instruction);
       if (source === undefined) return withdrawals;
@@ -821,7 +821,7 @@ function bindConfirmedTransaction(
   }
 }
 
-/** The disclosure layout of the ring's own `Transact` or `DelegateTransact`, the frame the program verified. */
+/** The disclosure layout of the ring's own `Transfer` or `AuthorityTransfer`, the frame the program verified. */
 function boundLayout(
   found: TrustedEvent,
   published: Readonly<{ anonymous: boolean; outputs: number; inputs: number }>,

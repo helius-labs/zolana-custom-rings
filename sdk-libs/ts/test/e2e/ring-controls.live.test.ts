@@ -466,7 +466,7 @@ describe.each(["client", "prover"] as const)("controls %s", (proofDataSource) =>
           const instruction = decompileTransactionMessage(compiled, {
             lastValidBlockHeight: 1n,
           }).instructions.find((instruction) => instruction.programAddress === ringProgramId);
-          expect(instruction?.data?.[0]).toBe(RingInstructionTag.delegateTransact);
+          expect(instruction?.data?.[0]).toBe(RingInstructionTag.authorityTransfer);
           return moveTransport.sign(transaction, context);
         },
       });

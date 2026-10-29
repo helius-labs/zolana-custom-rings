@@ -467,7 +467,7 @@ export const ZERO_ADDRESS = encodeBase58(new Uint8Array(32));
 export async function expanded(fixture: Fixture, proven: ProvenRingTransfer, rail: RingRail) {
   const instruction = await proven.instruction();
   expect(instruction.data?.[0]).toBe(
-    rail === "delegate" ? RingInstructionTag.delegateTransact : RingInstructionTag.transact,
+    rail === "delegate" ? RingInstructionTag.authorityTransfer : RingInstructionTag.transfer,
   );
   const bytes = instruction.data?.subarray(1) ?? new Uint8Array();
   const data = RingTransactData.parse(bytes, rail);
@@ -735,7 +735,7 @@ export async function checkFrameCounted(
         feePayer: input.payer,
         setupInstructions: [padding(length)],
         instructions: [instruction],
-        computeUnitLimit: ringComputeUnitLimit(RingInstructionTag.transact),
+        computeUnitLimit: ringComputeUnitLimit(RingInstructionTag.transfer),
       });
       return true;
     } catch {

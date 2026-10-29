@@ -192,7 +192,6 @@ export const RingProgramError = Object.freeze({
   approvalWithoutCoSigner: 8157,
   invalidMemberRegistry: 8160,
   memberRegistryAlreadyExists: 8163,
-  depositAuditRequired: 8165,
   invalidDepositDisclosure: 8166,
   delegateRequiresPolicy: 8170,
   missingFundingSigner: 8173,

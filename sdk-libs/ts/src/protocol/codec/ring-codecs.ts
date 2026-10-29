@@ -29,7 +29,7 @@ export interface RingProgramConfig {
   /** `RING_COSIGN_*` bits some `CoSigner` record covers, absent without a record. */
   readonly coSignerClasses?: number;
   readonly delegate?: Address;
-  /** The slot `CreateConfig` ran in. */
+  /** The slot `Initialize` ran in. */
   readonly createdSlot: bigint;
 }
 
@@ -147,7 +147,7 @@ export const AUTHORITY_RESERVED_LEAVES = 1n << 16n;
 export const APPLY_DELAY_SLOTS = 150n;
 /** Rust `GRACE_SLOTS`, the slots a curator root stays usable at the prior floor after a raise. */
 export const GRACE_SLOTS = 750n;
-/** Rust `DEFAULT_INSERT_FEE`, the lamports `CreateConfig` charges a member's record write. */
+/** Rust `DEFAULT_INSERT_FEE`, the lamports `Initialize` charges a member's record write. */
 export const DEFAULT_INSERT_FEE = 1_000_000n;
 
 const RING_MODES: readonly RingMode[] = ["confidential", "confidentialEscrow", "anonymous"];

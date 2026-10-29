@@ -123,7 +123,7 @@ export interface SenderBundle {
   readonly body: Uint8Array;
 }
 
-/** The data of `Transact` and `DelegateTransact`, Rust `RingTransactData`. */
+/** The data of `Transfer` and `AuthorityTransfer`, Rust `RingTransactData`. */
 export interface RingTransactData {
   readonly rail: RingRail;
   /** SPP shape inputs. */
@@ -172,10 +172,10 @@ export interface RingTransactConfig {
 
 /** The rail of the ring instruction `tag` under `mode`, Rust `RingRail::of`. */
 export function ringRailOf(tag: number, mode: RingMode): RingRail {
-  if (tag === RingInstructionTag.transact || tag === RingInstructionTag.legacyTransact)
+  if (tag === RingInstructionTag.transfer || tag === RingInstructionTag.legacyTransact)
     return mode === "anonymous" ? "anonymous" : "confidential";
   if (
-    tag !== RingInstructionTag.delegateTransact &&
+    tag !== RingInstructionTag.authorityTransfer &&
     tag !== RingInstructionTag.legacyDelegateTransact
   )
     throw invalid("InvalidInstructionData");

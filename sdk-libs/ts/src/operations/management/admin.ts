@@ -26,10 +26,7 @@ import {
 } from "../../protocol/pda/index.js";
 import { isSmallOrder } from "../../crypto/keys/x25519.js";
 
-import {
-  RING_COSIGN_SCOPE_MASK,
-  type RingProgramConfig,
-} from "../../protocol/codec/ring-codecs.js";
+import { RING_COSIGN_SCOPE_MASK } from "../../protocol/codec/ring-codecs.js";
 import { ringProgramDataAddress } from "../../protocol/membership/config.js";
 import { RingInstructionTag } from "../../protocol/transaction/instruction-tag.js";
 import { RingError } from "../../protocol/error.js";
@@ -54,22 +51,20 @@ const PROOF_UNITS = 1_400_000;
 /** Rust `compute_unit_limit`, the budget one instruction of `tag` declares. */
 export function ringComputeUnitLimit(tag: RingInstructionTag): number {
   switch (tag) {
-    case RingInstructionTag.createPolicy:
-    case RingInstructionTag.setPolicySource:
-    case RingInstructionTag.setPolicyRules:
+    case RingInstructionTag.initialize:
+      return 2 * ACCOUNT_UNITS + POLICY_UNITS;
+    case RingInstructionTag.updatePolicy:
       return POLICY_UNITS;
     case RingInstructionTag.legacyTransact:
     case RingInstructionTag.legacyDelegateTransact:
-    case RingInstructionTag.transact:
+    case RingInstructionTag.transfer:
     case RingInstructionTag.merge:
-    case RingInstructionTag.delegateTransact:
+    case RingInstructionTag.authorityTransfer:
     case RingInstructionTag.registerKey:
-    case RingInstructionTag.auditedDeposit:
+    case RingInstructionTag.deposit:
     case RingInstructionTag.authorityWriteRecords:
     case RingInstructionTag.applyRecords:
       return PROOF_UNITS;
-    case RingInstructionTag.deposit:
-      return 200_000;
     default:
       return ACCOUNT_UNITS;
   }
@@ -91,62 +86,58 @@ function ringKindByte(kind: RingKind): number {
   return RING_KIND_BYTES[kind];
 }
 
-/** Rust `CustomRing::create_config`, the upgrade authority signs and becomes the ring authority. */
-export async function createRingConfigInstruction(
+/** Rust `Initialize`, the upgrade authority signs and becomes the ring authority, the pool registers the ring in the same instruction. */
+export async function initializeRingInstruction(
   input: Readonly<{
     ringProgramId: Address;
     payer: SignerAccount;
     authority: SignerAccount;
     auditorPublicKey: X25519PublicKey;
     kind: RingKind;
+    /** Required on a policy ring, an audit-only ring takes it for its withdrawal exemptions. */
+    policy?: RingInitialPolicy;
   }>,
 ): Promise<Instruction> {
   if (isSmallOrder(input.auditorPublicKey))
     throw new RingError("RING_CONFIG_INVALID", { details: { reason: "InvalidAuditorPubkey" } });
-  const [config, programData] = await Promise.all([
+  const [config, programData, protocolConfig, ringAuth] = await Promise.all([
     ringConfigAddress(input.ringProgramId),
     ringProgramDataAddress(input.ringProgramId),
+    protocolConfigAddress(),
+    ringAuthAddress(input.ringProgramId),
   ]);
-  const data = new Writer()
-    .u8(RingInstructionTag.createConfig, "tag")
+  const writer = new Writer()
+    .u8(RingInstructionTag.initialize, "tag")
     .bytes(input.auditorPublicKey.toBytes(), 33, "auditorPubkey")
-    .u8(ringKindByte(input.kind), "kind")
-    .finish();
-  return ringInstruction(input.ringProgramId, data, [
+    .u8(ringKindByte(input.kind), "kind");
+  const accounts: AccountMeta[] = [
     meta(input.payer, true, true),
     meta(input.authority, true, false),
     meta(config, false, true),
     meta(SYSTEM_PROGRAM, false, false),
     meta(input.ringProgramId, false, false),
     meta(programData, false, false),
-  ]);
-}
-
-/** Rust `CustomRing::init_spp_ring_config`, a policy ring registers after its policy is set. */
-export async function initSppRingConfigInstruction(
-  input: Readonly<{
-    ringProgramId: Address;
-    payer: SignerAccount;
-    authority: SignerAccount;
-    config: RingProgramConfig;
-  }>,
-): Promise<Instruction> {
-  const [config, protocolConfig, ringAuth, registry] = await Promise.all([
-    ringConfigAddress(input.ringProgramId),
-    protocolConfigAddress(),
-    ringAuthAddress(input.ringProgramId),
-    ringMemberRegistryAddress(input.ringProgramId),
-  ]);
-  return ringInstruction(input.ringProgramId, Uint8Array.of(RingInstructionTag.initSppRingConfig), [
-    meta(input.payer, true, true),
-    meta(input.authority, true, false),
-    meta(config, false, false),
     meta(protocolConfig, false, false),
     meta(ringAuth, false, true),
-    meta(SYSTEM_PROGRAM, false, false),
     meta(SHIELDED_POOL_PROGRAM_ID, false, false),
-    ...(input.config.hasPolicy ? [meta(registry, false, false)] : []),
-  ]);
+  ];
+  const { policy } = input;
+  writer.bool(policy !== undefined, "policy");
+  if (policy !== undefined) {
+    writer.bytes(addressBytes(policy.storageAuthority, "storageAuthority"), 32, "storageAuthority");
+    const [policyAddress, curators] = await Promise.all([
+      ringPolicyAddress(input.ringProgramId),
+      writePolicyTable(writer, input.ringProgramId, policy),
+    ]);
+    accounts.push(
+      meta(policyAddress, false, true),
+      meta(policy.records, false, false),
+      ...curators.map((registry) => meta(registry, false, false)),
+    );
+  }
+  const instruction = ringInstruction(input.ringProgramId, writer.finish(), accounts);
+  checkFits(input.payer, instruction, ringComputeUnitLimit(RingInstructionTag.initialize));
+  return instruction;
 }
 
 /** Rust `CustomRing::create_member_registry`, the registry with its sentinel and the record queue. */
@@ -187,8 +178,8 @@ export async function syncRootsInstruction(
   ]);
 }
 
-/** Rust `CustomRing::set_authority`, both keys sign so a mistyped address cannot strand the config. */
-export async function setRingAuthorityInstruction(
+/** Rust `UpdateAuthority`, both keys sign so a mistyped address cannot strand the config. */
+export async function updateRingAuthorityInstruction(
   input: Readonly<{
     ringProgramId: Address;
     authority: SignerAccount;
@@ -196,7 +187,7 @@ export async function setRingAuthorityInstruction(
   }>,
 ): Promise<Instruction> {
   const config = await ringConfigAddress(input.ringProgramId);
-  return ringInstruction(input.ringProgramId, Uint8Array.of(RingInstructionTag.setAuthority), [
+  return ringInstruction(input.ringProgramId, Uint8Array.of(RingInstructionTag.updateAuthority), [
     meta(input.authority, true, false),
     meta(input.newAuthority, true, false),
     meta(config, false, true),
@@ -342,46 +333,67 @@ export interface RingPolicyTableInput {
   readonly sharedSources?: readonly RingSharedSource[];
 }
 
-/** Rust `CustomRing::set_source_owner`, re-points one referenced list, the rows stay. */
-export async function setRingPolicySourceInstruction(
+/** `records` answers to the config authority or to `storageAuthority`. */
+export interface RingInitialPolicy extends RingPolicyTableInput {
+  readonly records: Address;
+  readonly storageAuthority: Address;
+}
+
+export type RingPolicyUpdate =
+  | (Readonly<{ kind: "rules" }> & RingPolicyTableInput)
+  | Readonly<{ kind: "source"; listId: ListId; source: RingPolicySourceOwner }>
+  | Readonly<{ kind: "records"; records: Address; storageAuthority: Address }>;
+
+const POLICY_UPDATE_VARIANT = Object.freeze({ rules: 0, source: 1, records: 2 } as const);
+
+/** Rust `UpdatePolicy`, own lists read rebound records once `syncRootsInstruction` mirrors them. */
+export async function updateRingPolicyInstruction(
   input: Readonly<{
     ringProgramId: Address;
     authority: SignerAccount;
-    listId: ListId;
-    source: RingPolicySourceOwner;
+    update: RingPolicyUpdate;
   }>,
 ): Promise<Instruction> {
-  const curator =
-    input.source.kind === "curator"
-      ? curatorRegistry(input.ringProgramId, input.source.ringProgramId)
-      : undefined;
-  const [accounts, curatorAccount] = await Promise.all([
-    policyWriteMetas(input.ringProgramId, input.authority),
-    curator,
+  const { update } = input;
+  const writer = new Writer()
+    .u8(RingInstructionTag.updatePolicy, "tag")
+    .u8(POLICY_UPDATE_VARIANT[update.kind], "variant");
+  const trailing = await policyUpdateBody(writer, input.ringProgramId, update);
+  const accounts = await policyWriteMetas(input.ringProgramId, input.authority);
+  const instruction = ringInstruction(input.ringProgramId, writer.finish(), [
+    ...accounts,
+    ...trailing.map((account) => meta(account, false, false)),
   ]);
-  return ringInstruction(
-    input.ringProgramId,
-    Uint8Array.of(
-      RingInstructionTag.setPolicySource,
-      checkedListId(input.listId),
-      curatorAccount === undefined ? 0 : 1,
-    ),
-    curatorAccount === undefined ? accounts : [...accounts, meta(curatorAccount, false, false)],
-  );
+  checkFits(input.authority, instruction, ringComputeUnitLimit(RingInstructionTag.updatePolicy));
+  return instruction;
 }
 
-/** Rust `CustomRing::create_policy`, pins the table and its source map. */
-export function createRingPolicyInstruction(
-  input: RingPolicyTableInput & Readonly<{ ringProgramId: Address; authority: SignerAccount }>,
-): Promise<Instruction> {
-  return policyTableInstruction(RingInstructionTag.createPolicy, input);
-}
-
-/** Rust `CustomRing::set_policy_rules`, replaces the pinned table and the complete source map. */
-export function setRingPolicyRulesInstruction(
-  input: RingPolicyTableInput & Readonly<{ ringProgramId: Address; authority: SignerAccount }>,
-): Promise<Instruction> {
-  return policyTableInstruction(RingInstructionTag.setPolicyRules, input);
+/** Writes the variant body and returns the trailing accounts it names. */
+async function policyUpdateBody(
+  writer: Writer,
+  ringProgramId: Address,
+  update: RingPolicyUpdate,
+): Promise<readonly Address[]> {
+  switch (update.kind) {
+    case "rules":
+      return writePolicyTable(writer, ringProgramId, update);
+    case "source": {
+      writer.u8(checkedListId(update.listId), "listId");
+      if (update.source.kind === "own") {
+        writer.u8(0, "source");
+        return [];
+      }
+      writer.u8(1, "source");
+      return [await curatorRegistry(ringProgramId, update.source.ringProgramId)];
+    }
+    case "records":
+      writer.bytes(
+        addressBytes(update.storageAuthority, "storageAuthority"),
+        32,
+        "storageAuthority",
+      );
+      return [update.records];
+  }
 }
 
 /** `[authority, config]`, the config takes the write. */
@@ -396,23 +408,24 @@ async function configWriteInstruction(
   ]);
 }
 
-/** `CreatePolicy`, `SetPolicyRules` and `SetPolicySource` write the registry. */
+/** `UpdatePolicy` writes the policy under a read-only config. */
 async function policyWriteMetas(
   ringProgramId: Address,
   authority: SignerAccount,
 ): Promise<readonly AccountMeta[]> {
-  const [config, registry] = await Promise.all([
+  const [config, policy] = await Promise.all([
     ringConfigAddress(ringProgramId),
-    ringMemberRegistryAddress(ringProgramId),
+    ringPolicyAddress(ringProgramId),
   ]);
-  return [meta(authority, true, false), meta(config, false, false), meta(registry, false, true)];
+  return [meta(authority, true, false), meta(config, false, false), meta(policy, false, true)];
 }
 
-/** Rust `CustomRing::policy_table`, curator registries follow in first-use order and the transaction fits v1. */
-async function policyTableInstruction(
-  tag: typeof RingInstructionTag.createPolicy | typeof RingInstructionTag.setPolicyRules,
-  input: RingPolicyTableInput & Readonly<{ ringProgramId: Address; authority: SignerAccount }>,
-): Promise<Instruction> {
+/** Rust `PolicyTable::payload`, returns the curator registries in first-use order. */
+async function writePolicyTable(
+  writer: Writer,
+  ringProgramId: Address,
+  input: RingPolicyTableInput,
+): Promise<readonly Address[]> {
   const table = buildRuleTable(input.table);
   const referenced = policySourceLists(table.rules);
   const shared = input.sharedSources ?? [];
@@ -423,7 +436,7 @@ async function policyTableInstruction(
     seen.add(source.listId);
   }
   const curators: Address[] = [];
-  const writer = new Writer().u8(tag, "tag").u8(referenced.length, "sources.length");
+  writer.u8(referenced.length, "sources.length");
   for (const listId of referenced) {
     const curator = shared.find((source) => source.listId === listId)?.curatorRingProgramId;
     if (curator !== undefined && !curators.includes(curator)) curators.push(curator);
@@ -435,16 +448,7 @@ async function policyTableInstruction(
   const { rules } = table;
   writer.u8(rules.length, "rules.length");
   for (const rule of rules) writer.bytes(encodeRule(rule), 32, "rule");
-  const [accounts, curatorAccounts] = await Promise.all([
-    policyWriteMetas(input.ringProgramId, input.authority),
-    Promise.all(curators.map((curator) => curatorRegistry(input.ringProgramId, curator))),
-  ]);
-  const instruction = ringInstruction(input.ringProgramId, writer.finish(), [
-    ...accounts,
-    ...curatorAccounts.map((registry) => meta(registry, false, false)),
-  ]);
-  checkFits(input.authority, instruction, ringComputeUnitLimit(tag));
-  return instruction;
+  return Promise.all(curators.map((curator) => curatorRegistry(ringProgramId, curator)));
 }
 
 /** A curator source names another ring's registry, the own registry keeps its hard floor. */
