@@ -211,7 +211,7 @@ fn the_delegate_signs_its_appointment_and_no_data_names_it() {
 }
 
 #[test]
-fn only_the_upgrade_authority_appoints_the_delegate() {
+fn only_the_config_authority_appoints_the_delegate() {
     let mut ring = Ring::new(Setup::Policy);
     let successor = Keypair::new();
     let authority = ring.authority.insecure_clone();
@@ -228,13 +228,16 @@ fn only_the_upgrade_authority_appoints_the_delegate() {
         .expect("hand the config to a successor");
     let delegate = Keypair::new();
     refused(
-        ring.send(
-            set_delegate(&successor.pubkey(), &delegate.pubkey()),
-            &[&successor, &delegate],
-        ),
-        CustomRingError::UnauthorizedInitializer,
+        appoint(&mut ring, &delegate),
+        CustomRingError::UnauthorizedAuthority,
     );
-    appoint(&mut ring, &delegate).expect("the upgrade authority appoints the delegate");
+    ring.send(
+        set_delegate(&successor.pubkey(), &delegate.pubkey()),
+        &[&successor, &delegate],
+    )
+    .expect("the config authority appoints the delegate");
+    let config: RingProgramConfig = ring.read(&config_pda());
+    assert_eq!(config.delegate(), Some(&delegate.pubkey()));
 }
 
 #[test]

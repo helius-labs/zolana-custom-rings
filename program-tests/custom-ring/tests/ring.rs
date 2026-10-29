@@ -330,7 +330,7 @@ impl EscrowedDelegate<'_> {
     }
 }
 
-/// The delegate signs its appointment beside the upgrade authority.
+/// The delegate signs its appointment beside the config authority.
 struct DelegateAppointment<'a> {
     ring: CustomRing,
     delegate: &'a Keypair,

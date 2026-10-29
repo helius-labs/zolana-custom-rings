@@ -45,8 +45,8 @@ The operator runs the `zolana-ring` CLI from a `ring.toml`. Members pay through 
 | 10 | Rule | A list condition on the sender, every output owner or every output asset. |
 | 11 | Outflow limit | A per-transfer cap and a co-signer threshold for one mint, stored in the mint's record. |
 | 12 | Curator | Another ring whose member registry a policy reads for one or more lists. |
-| 13 | Upgrade authority | The program's Loader v3 upgrade authority. Creates the config and sets the delegate. |
-| 14 | Config authority | Holds the config after `init`. Sets the policy, lists, readers, co-signer, insert fee and pause. |
+| 13 | Upgrade authority | The program's Loader v3 upgrade authority. Creates the config. |
+| 14 | Config authority | Holds the config after `init`. Sets the policy, lists, readers, co-signer, insert fee, pause and delegate. |
 | 15 | Co-signer | One key that must sign the operations its scope names and every transfer that needs approval. A withdrawal below the mint's withdrawal threshold can skip it with an exemption proof. |
 | 16 | Delegate | Moves escrowed members' notes inside a key-escrow ring without their signature. |
 | 17 | Auditor key | The X25519 key every transfer's audit proof seals to. Ring RPC or a local file holds it. |

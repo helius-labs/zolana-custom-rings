@@ -183,7 +183,7 @@ pub enum InsertFeeCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum DelegateCommand {
-    /// Set the delegate once, signed by the delegate and by the upgrade authority holding the ring
+    /// Set the delegate once, signed by the delegate and by the config authority holding the ring
     /// auditor key.
     Set {
         /// The delegate's keypair, it signs the set and every later move.

@@ -536,7 +536,6 @@ pub fn transact(tag: u8, accounts: Vec<AccountMeta>, data: Vec<u8>) -> Instructi
     instruction(accounts, tagged(tag, &data))
 }
 
-/// `SetDelegate` signed by `authority` and `delegate`, accepted only from the upgrade authority.
 pub fn set_delegate(authority: &Address, delegate: &Address) -> Instruction {
     config_write(
         tag::SET_DELEGATE,
@@ -544,8 +543,6 @@ pub fn set_delegate(authority: &Address, delegate: &Address) -> Instruction {
         &[
             AccountMeta::new_readonly(*delegate, true),
             AccountMeta::new_readonly(registry_pda(), false),
-            AccountMeta::new_readonly(PROGRAM, false),
-            AccountMeta::new_readonly(program_data(), false),
         ],
         &[],
     )

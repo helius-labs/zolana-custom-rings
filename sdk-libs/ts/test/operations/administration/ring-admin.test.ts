@@ -331,7 +331,7 @@ describe("config writes", () => {
     ).rejects.toMatchObject({ code: "RING_CO_SIGNER_INVALID", details: { reason } });
   });
 
-  it("appoints the delegate under the upgrade authority with the delegate signing", async () => {
+  it("appoints the delegate under the config authority with the delegate signing", async () => {
     const instruction = await setRingDelegateInstruction({
       ringProgramId: RING,
       authority: AUTHORITY,
@@ -343,8 +343,6 @@ describe("config writes", () => {
       [await ringConfigAddress(RING), WRITE],
       [NEXT, SIGN],
       [await ringMemberRegistryAddress(RING), READ],
-      [RING, READ],
-      [await ringProgramDataAddress(RING), READ],
     ]);
   });
 

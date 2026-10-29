@@ -381,7 +381,7 @@ fn set_insert_fee_writes_the_fee_into_the_config() {
 }
 
 #[test]
-fn set_delegate_runs_under_the_upgrade_authority_and_the_delegate_beside_the_registry() {
+fn set_delegate_runs_under_the_config_authority_and_the_delegate_beside_the_registry() {
     let delegate = Address::new_from_array([34; 32]);
     let instruction = SetDelegate {
         ring: ring(),
@@ -396,8 +396,6 @@ fn set_delegate_runs_under_the_upgrade_authority_and_the_delegate_beside_the_reg
             AccountMeta::new(ring().config_pda(), false),
             AccountMeta::new_readonly(delegate, true),
             AccountMeta::new_readonly(ring().registry_pda(), false),
-            AccountMeta::new_readonly(program(), false),
-            AccountMeta::new_readonly(program_data(), false),
         ]
     );
     assert_eq!(instruction.data, [tag::SET_DELEGATE]);

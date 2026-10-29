@@ -266,7 +266,7 @@ export async function setRingInsertFeeInstruction(
   return configWriteInstruction(input, data);
 }
 
-/** Rust `CustomRing::set_delegate`, the upgrade authority and the delegate sign, permanent and it turns key escrow on. */
+/** Rust `CustomRing::set_delegate`, the config authority and the delegate sign, permanent and it turns key escrow on. */
 export async function setRingDelegateInstruction(
   input: Readonly<{
     ringProgramId: Address;
@@ -274,18 +274,15 @@ export async function setRingDelegateInstruction(
     delegate: SignerAccount;
   }>,
 ): Promise<Instruction> {
-  const [config, registry, programData] = await Promise.all([
+  const [config, registry] = await Promise.all([
     ringConfigAddress(input.ringProgramId),
     ringMemberRegistryAddress(input.ringProgramId),
-    ringProgramDataAddress(input.ringProgramId),
   ]);
   return ringInstruction(input.ringProgramId, Uint8Array.of(RingInstructionTag.setDelegate), [
     meta(input.authority, true, false),
     meta(config, false, true),
     meta(input.delegate, true, false),
     meta(registry, false, false),
-    meta(input.ringProgramId, false, false),
-    meta(programData, false, false),
   ]);
 }
 
