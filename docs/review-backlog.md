@@ -14,7 +14,7 @@ Public SPL withdrawal screening concerns the token account's recorded owner. Inc
 
 ## Intentionally excluded
 
-Deliberate burns, unusable recipient keys and voluntary loss of funds are outside scope. Velocity accounting is removed from the roadmap. Direct deposits and same-owner merges do not acquire list screening. Per-transfer amount guards, outflow caps and co-sign thresholds remain.
+Deliberate burns, unusable recipient keys and voluntary loss of funds are outside scope. Velocity accounting is removed from the roadmap. Same-owner merges do not acquire list screening. Per-transfer amount guards, outflow caps and co-sign thresholds remain.
 
 ## Other work for future planning
 

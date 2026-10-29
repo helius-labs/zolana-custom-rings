@@ -438,7 +438,7 @@ ring-rpc serve --port 8785 --indexer-url <ring indexer> --rpc-url <solana> \
 1. **Confidential rings name their parties:** the sender signs and each ring output publishes the recipient's viewing key, which the zolana user registry maps to its Solana key. Use an anonymous ring to hide them.
 2. **Anonymity needs a relayer and request tags:** the payer and fee payer must not link to the owner, and a first payment under the bootstrap tag publishes the recipient's viewing key. A default-ring spend, an exit or a withdrawal to a linked key ends the anonymity of that transfer.
 3. **Outflow limits bound one transfer:** no limit counts across transfers, keys or time. A per-day cap per customer is not expressible.
-4. **Deposits and merges are not screened:** rules screen the sender and the outputs of each transfer. A key-escrow ring refuses a deposit to an owner without an escrowed key.
+4. **Deposits screen assets only and merges screen nothing:** rules screen the sender and the outputs of each transfer, a deposit only its assets. A key-escrow ring refuses a deposit to an owner without an escrowed key.
 5. **Confidential rings cannot merge:** join notes with a transfer to yourself.
 6. **Key escrow and the delegate are permanent:** a registered key cannot change, and nothing removes a delegate.
 7. **Records are public:** every list write names its member. On an anonymous ring a member's own list write publishes its Solana key.
