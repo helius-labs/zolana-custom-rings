@@ -142,7 +142,7 @@ test-custom-ring-shared: (_custom-ring-suite "shared_sources")
 # Policy rule lifecycle over the rule table pinned from ring.toml.
 test-custom-ring-rules: (_custom-ring-suite "policy_rules")
 
-# set_policy_rules rewrites the rule table of a live ring.
+# UpdatePolicy rewrites the rule table of a live ring.
 test-custom-ring-repin: (_custom-ring-suite "policy_repin")
 
 _custom-ring-suite test: fetch-custom-ring-keys build-prover-server build-programs zolana::build-cli zolana::ensure-smart-account zolana::ensure-surfpool

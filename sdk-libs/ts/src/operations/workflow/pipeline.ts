@@ -856,7 +856,7 @@ function boundRoots(policy: PolicyInputs): readonly BoundRoot[] {
 }
 
 function transactTag(rail: RingRail): RingInstructionTag {
-  return rail === "delegate" ? RingInstructionTag.delegateTransact : RingInstructionTag.transact;
+  return rail === "delegate" ? RingInstructionTag.authorityTransfer : RingInstructionTag.transfer;
 }
 
 function wipeAuditRequest(request: Readonly<{ txViewingSk: Bytes32; ephSk: Bytes32 }>): void {

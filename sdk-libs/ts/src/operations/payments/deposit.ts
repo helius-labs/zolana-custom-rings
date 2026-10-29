@@ -80,7 +80,7 @@ import { assetLabel } from "./transfer.js";
 
 const base64 = getBase64Decoder();
 
-/** Rust `compute_unit_limit(AuditedDeposit)`. */
+/** Rust `compute_unit_limit(Deposit)`. */
 export const RING_DEPOSIT_COMPUTE_UNIT_LIMIT = 1_400_000;
 
 /** Who a deposit pays, Rust `DepositRecipient`. */

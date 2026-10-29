@@ -66,34 +66,27 @@ export { ringTreeIdResolver } from "../protocol/membership/trees.js";
 export {
   RingInstructionTag,
   clearRingCoSignerInstruction,
-  createRingConfigInstruction,
-  createRingPolicyInstruction,
-  initSppRingConfigInstruction,
+  initializeRingInstruction,
   ringComputeUnitLimit,
-  setRingAuthorityInstruction,
   setRingCoSignerInstruction,
   setRingDelegateInstruction,
   setRingPausedInstruction,
-  setRingPolicyRulesInstruction,
-  setRingPolicySourceInstruction,
   syncRootsInstruction,
+  updateRingAuthorityInstruction,
+  updateRingPolicyInstruction,
 } from "../operations/management/admin.js";
 export type {
+  RingInitialPolicy,
   RingKind,
   RingPolicySourceOwner,
   RingPolicyTableInput,
+  RingPolicyUpdate,
   RingSharedSource,
 } from "../operations/management/admin.js";
-export {
-  buildRingCreatePolicyTransaction,
-  buildRingSetPolicyRulesTransaction,
-  buildRingSetPolicySourceTransaction,
-} from "../operations/management/policy-admin.js";
+export { buildRingUpdatePolicyTransaction } from "../operations/management/policy-admin.js";
 export type {
-  RingCreatePolicyTransactionParams,
   RingPolicyAdminClient,
-  RingSetPolicyRulesTransactionParams,
-  RingSetPolicySourceTransactionParams,
+  RingUpdatePolicyTransactionParams,
 } from "../operations/management/policy-admin.js";
 export {
   CLOCK_SYSVAR,

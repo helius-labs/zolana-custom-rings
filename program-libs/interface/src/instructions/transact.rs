@@ -1,4 +1,4 @@
-//! The compact `Transact` and `DelegateTransact` data, read in place and expanded into
+//! The compact `Transfer` and `AuthorityTransfer` data, read in place and expanded into
 //! the SPP `TransactIxData` the SPP proof's external data hash covers.
 
 use solana_address::Address;
@@ -54,7 +54,7 @@ const NO_PROOF_DATA: AnonymousRingEddsaProofData = AnonymousRingEddsaProofData {
 pub enum RingRail {
     Confidential,
     Anonymous,
-    /// `DelegateTransact`, the SPP authority rail of a policy ring in `ConfidentialEscrow` mode.
+    /// `AuthorityTransfer`, the SPP authority rail of a policy ring in `ConfidentialEscrow` mode.
     Delegate,
 }
 
@@ -97,19 +97,19 @@ impl RingRail {
 
     pub fn of(tag: InstructionTag, mode: RingMode) -> Result<Self, CustomRingError> {
         match (tag, mode) {
-            (InstructionTag::Transact | InstructionTag::LegacyTransact, RingMode::Anonymous) => {
+            (InstructionTag::Transfer | InstructionTag::LegacyTransact, RingMode::Anonymous) => {
                 Ok(Self::Anonymous)
             }
             (
-                InstructionTag::Transact | InstructionTag::LegacyTransact,
+                InstructionTag::Transfer | InstructionTag::LegacyTransact,
                 RingMode::Confidential | RingMode::ConfidentialEscrow,
             ) => Ok(Self::Confidential),
             (
-                InstructionTag::DelegateTransact | InstructionTag::LegacyDelegateTransact,
+                InstructionTag::AuthorityTransfer | InstructionTag::LegacyDelegateTransact,
                 RingMode::Anonymous,
             ) => Err(CustomRingError::AnonymousRingRefused),
             (
-                InstructionTag::DelegateTransact | InstructionTag::LegacyDelegateTransact,
+                InstructionTag::AuthorityTransfer | InstructionTag::LegacyDelegateTransact,
                 RingMode::Confidential | RingMode::ConfidentialEscrow,
             ) => Ok(Self::Delegate),
             _ => Err(CustomRingError::InvalidInstructionData),
@@ -602,7 +602,7 @@ pub struct AuditBinding<'a> {
     pub key_escrow: bool,
 }
 
-/// The data of `Transact` and `DelegateTransact`, every count ahead of the sections it sizes.
+/// The data of `Transfer` and `AuthorityTransfer`, every count ahead of the sections it sizes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RingTransactData<'a> {
     pub rail: RingRail,

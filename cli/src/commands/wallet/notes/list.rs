@@ -4,7 +4,7 @@ use anyhow::{bail, Context as _, Result};
 use clap::{builder::PossibleValue, Args, ValueEnum};
 use custom_ring_interface::ListRegistry;
 use custom_ring_sdk::{
-    AuthorityRecordUpdate, MemberRecords, SetSourceOwner, SourceOwner, SyncRoots,
+    AuthorityRecordUpdate, MemberRecords, PolicyUpdate, SourceOwner, SyncRoots, UpdatePolicy,
     WalletRecordUpdate,
 };
 use solana_address::Address;
@@ -284,11 +284,10 @@ fn set_source(ctx: &Context, list_id: ListId, source: SourceOwner) -> Result<()>
     let outcome = if account.registry_for(list_id) == Some(expected_registry(source)) {
         "already present"
     } else {
-        let point = SetSourceOwner {
+        let point = UpdatePolicy {
             ring: ctx.ring,
             authority: authority.pubkey(),
-            list_id,
-            source,
+            update: PolicyUpdate::Source { list_id, source },
         }
         .instruction()?;
         let mut instructions = vec![point];

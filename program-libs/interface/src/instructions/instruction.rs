@@ -48,21 +48,16 @@ const POLICY_UNITS: u32 = 150_000;
 const PROOF_UNITS: u32 = 1_400_000;
 
 instruction_tags! {
-    CreateConfig = CREATE_CONFIG: 1 => ACCOUNT_UNITS,
-    InitSppRingConfig = INIT_SPP_RING_CONFIG: 2 => ACCOUNT_UNITS,
+    // Tags 1 and 2 are retired, never reuse them.
     /// Historical v1 frame, decoding only after the v2 upgrade.
     LegacyTransact = LEGACY_TRANSACT: 3 => PROOF_UNITS,
-    Transact = TRANSACT: 43 => PROOF_UNITS,
-    /// Always refused, deposits go through `AuditedDeposit`.
-    Deposit = DEPOSIT: spr_interface::instruction::tag::RING_DEPOSIT => 200_000,
+    Transfer = TRANSFER: 43 => PROOF_UNITS,
+    // Tag 18 is retired, never reuse it.
     Merge = MERGE: spr_interface::instruction::tag::RING_MERGE_TRANSACT => PROOF_UNITS,
     // Tags 4 and 5 are retired, never reuse them.
-    SetAuthority = SET_AUTHORITY: 6 => ACCOUNT_UNITS,
-    CreatePolicy = CREATE_POLICY: 7 => POLICY_UNITS,
-    // Tags 8 and 9 are retired, never reuse them.
-    SetPolicySource = SET_POLICY_SOURCE: 10 => POLICY_UNITS,
+    UpdateAuthority = UPDATE_AUTHORITY: 6 => ACCOUNT_UNITS,
+    // Tags 7 to 10 and 12 are retired, never reuse them.
     SetPaused = SET_PAUSED: 11 => ACCOUNT_UNITS,
-    SetPolicyRules = SET_POLICY_RULES: 12 => POLICY_UNITS,
     /// Ring-local tags must not collide with the forwarded SPP deposit and merge tags.
     SetCoSigner = SET_CO_SIGNER: 27 => ACCOUNT_UNITS,
     ClearCoSigner = CLEAR_CO_SIGNER: 21 => ACCOUNT_UNITS,
@@ -70,12 +65,15 @@ instruction_tags! {
     SetDelegate = SET_DELEGATE: 24 => ACCOUNT_UNITS,
     /// Tag 3 data over the SPP authority rail, signed by the delegate.
     LegacyDelegateTransact = LEGACY_DELEGATE_TRANSACT: 25 => PROOF_UNITS,
-    DelegateTransact = DELEGATE_TRANSACT: 44 => PROOF_UNITS,
+    AuthorityTransfer = AUTHORITY_TRANSFER: 44 => PROOF_UNITS,
     // Tags 28 to 30 are retired, never reuse them.
-    AuditedDeposit = AUDITED_DEPOSIT: 31 => PROOF_UNITS,
+    Deposit = DEPOSIT: 31 => PROOF_UNITS,
     // Tags 32 to 42 are retired, never reuse them.
     /// Permissionless and without data, the registry account picks the mirror.
     SyncRoots = SYNC_ROOTS: 48 => ACCOUNT_UNITS,
+    /// Signed by the upgrade authority, one budget for the config, the policy and the SPP CPI.
+    Initialize = INITIALIZE: 53 => 2 * ACCOUNT_UNITS + POLICY_UNITS,
+    UpdatePolicy = UPDATE_POLICY: 54 => POLICY_UNITS,
 }
 
 /// Fixed for the ring's life.
@@ -102,11 +100,13 @@ impl RingKind {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
-pub struct CreateConfigIxData {
+#[derive(Clone, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
+pub struct InitializeIxData {
     /// Auditor X25519 public key as `0x04 || canonical little-endian u`.
     pub auditor_pubkey: [u8; TAGGED_X25519_KEY_LEN],
     pub kind: RingKind,
+    /// Required on a policy ring.
+    pub policy: Option<PolicyBindingIxData>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
@@ -151,7 +151,7 @@ const _: () = assert!(CustomRingProof::SIZE == 192);
 /// `tag || proof || own_revision || curator_revision`, then the SPP deposit instruction unchanged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
-pub struct AuditedDepositPrefix {
+pub struct DepositPrefix {
     pub tag: u8,
     pub proof: CustomRingProof,
     /// Zero off an escrow or policy ring.
@@ -186,7 +186,7 @@ pub struct PolicyTableIxData {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
-pub struct CreatePolicyIxData {
+pub struct PolicyBindingIxData {
     /// The records registry may answer to it beside the config authority.
     pub storage_authority: Address,
     pub table: PolicyTableIxData,
@@ -194,9 +194,21 @@ pub struct CreatePolicyIxData {
 
 /// `source` 0 is the ring's own records, 1 the single trailing curator `StorageRegistry`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
-pub struct SetPolicySourceIxData {
+pub struct PolicySourceIxData {
     pub list_id: u8,
     pub source: u8,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
+#[wincode(tag_encoding = "u8")]
+pub enum UpdatePolicyIxData {
+    #[wincode(tag = 0)]
+    Rules(PolicyTableIxData),
+    #[wincode(tag = 1)]
+    Source(PolicySourceIxData),
+    /// One trailing records registry, answering to the config authority or to `storage_authority`.
+    #[wincode(tag = 2)]
+    Records { storage_authority: Address },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
@@ -246,7 +258,7 @@ macro_rules! fixed_ix_data {
     )*};
 }
 
-fixed_ix_data!(AuditedDepositPrefix, WriteRecordsIxData, ApplyRecordsIxData);
+fixed_ix_data!(DepositPrefix, WriteRecordsIxData, ApplyRecordsIxData);
 
 impl WriteRecordsIxData {
     pub const fn new(write: ListWrite) -> Self {

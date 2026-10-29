@@ -1,10 +1,10 @@
 //! `init`, every step skipped when the chain already holds it, so a rerun resumes.
 
-use anyhow::{anyhow, ensure, Context as _, Result};
+use anyhow::{anyhow, bail, ensure, Context as _, Result};
 use custom_ring_sdk::{
-    CreateConfig, CustomRingConfig, InitSppRingConfig, InitializeStorage, ListRegistry,
-    PolicyRecords, PolicyRules, RingError, RingKind, SetAuthority, SetSourceOwner, SourceOwner,
-    SyncRoots,
+    CustomRingConfig, InitialPolicy, Initialize, InitializeStorage, ListRegistry, PolicyRecords,
+    PolicyTable, PolicyUpdate, RingError, RingKind, SourceOwner, SyncRoots, UpdateAuthority,
+    UpdatePolicy,
 };
 use solana_address::Address;
 use solana_keypair::Keypair;
@@ -29,6 +29,8 @@ const NEEDS_UPGRADE_AUTHORITY: &str =
     "the upgrade authority keypair is needed until the config authority holds the config";
 const POLICY_DRIFT: &str =
     "the pinned policy differs from ring.toml, `zolana-ring policy set` replaces the table";
+const PARTIAL_INIT: &str =
+    "the ring config exists without the policy or SPP registration `Initialize` creates";
 
 #[must_use]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,16 +54,25 @@ enum KeyChoice {
 #[error("a local auditor key file against a hosted ring rpc")]
 struct StrayLocalKey;
 
-/// `create_config` accepts only the upgrade authority, so a distinct config
-/// authority takes the config over in the same transaction.
+/// `Initialize` takes only the upgrade authority, a distinct config authority takes the config over next.
 #[must_use]
 struct ConfigCreation<'a> {
     deployer: Option<&'a Keypair>,
     config_authority: &'a Keypair,
     auditor_pk: X25519Pubkey,
-    has_policy: bool,
+    policy: Option<&'a CompiledPolicy>,
     mode: ModeName,
     existing: Option<&'a CustomRingConfig>,
+}
+
+/// `Initialize` over the config authority's records, then the `SyncRoots` of the records and of every pinned curator.
+#[must_use]
+struct RingInitialization<'a> {
+    deployer: &'a Keypair,
+    config_authority: &'a Keypair,
+    auditor_pk: X25519Pubkey,
+    kind: RingKind,
+    policy: Option<&'a CompiledPolicy>,
 }
 
 struct ConfigOutcome {
@@ -92,37 +103,7 @@ struct ForeignConfigAuthority(Address);
 struct PolicyPin<'a> {
     authority: &'a Keypair,
     policy: &'a CompiledPolicy,
-}
-
-/// `CreatePolicy` with the `SyncRoots` of its records and of every named curator.
-fn create_policy(
-    ctx: &Context,
-    authority: Address,
-    rules: &RuleTable,
-    shared_sources: &[(ListId, Address)],
-) -> Result<Vec<solana_instruction::Instruction>, RingError> {
-    let records = InitializeStorage::records(ctx.ring, authority).registry();
-    let create = PolicyRules {
-        ring: ctx.ring,
-        authority,
-        rules,
-        shared_sources,
-    }
-    .create(PolicyRecords {
-        payer: authority,
-        records,
-        storage_authority: authority,
-    })?;
-    let mut instructions = vec![
-        create,
-        SyncRoots {
-            ring: ctx.ring,
-            registry: records,
-        }
-        .instruction(),
-    ];
-    instructions.extend(policy::curator_syncs(ctx.ring, shared_sources));
-    Ok(instructions)
+    outcome: &'static str,
 }
 
 pub fn run(ctx: &Context, args: InitArgs) -> Result<()> {
@@ -195,56 +176,43 @@ pub fn run(ctx: &Context, args: InitArgs) -> Result<()> {
                 .require(trust)?
         }
     };
-    let has_policy = policy.is_some();
-    let created = ConfigCreation {
-        deployer: upgrade_authority.as_ref(),
-        config_authority,
-        auditor_pk,
-        has_policy,
-        mode: ctx.config.mode,
-        existing: existing.as_ref(),
-    }
-    .send(ctx)?;
     let (ring, payer) = (ctx.ring, config_authority.pubkey());
     let send = |instruction| {
         ctx.send(&[config_authority], &[instruction])
             .map(|_| CREATED)
     };
+    // `Initialize` binds the records, so they exist first.
     let storage = InitializeStorage::records(ctx.ring, payer);
     let records = match ctx.rpc().get_account(storage.registry())? {
         Some(_) => PRESENT,
         None => send(storage.instruction())?,
     };
+    let created = ConfigCreation {
+        deployer: upgrade_authority.as_ref(),
+        config_authority,
+        auditor_pk,
+        policy: policy.as_ref(),
+        mode: ctx.config.mode,
+        existing: existing.as_ref(),
+    }
+    .send(ctx)?;
     let policy = match &policy {
         None => match ctx.block(ring.policy(ctx.chain()))? {
+            Some(_) if created.config == CREATED => "records only, created",
             Some(_) => "records only",
-            None => {
-                ctx.send(
-                    &[config_authority],
-                    &create_policy(ctx, payer, &RuleTable::empty(), &[])?,
-                )?;
-                "records only, created"
-            }
+            None => bail!(PARTIAL_INIT),
         },
         Some(policy) => PolicyPin {
             authority: config_authority,
             policy,
+            outcome: created.config,
         }
         .send(ctx)?,
     };
-    // The program registers a policy ring only after its policy is pinned.
     let spp_ring = match ctx.block(ring.registration(ctx.chain()))? {
+        Some(_) if created.config == CREATED => "registered",
         Some(_) => PRESENT,
-        None => {
-            let config = ctx.ring_config()?;
-            let register = InitSppRingConfig {
-                ring,
-                payer,
-                authority: payer,
-                config: &config,
-            };
-            send(register.instruction()).map(|_| "registered")?
-        }
+        None => bail!(PARTIAL_INIT),
     };
     // Written after the chain agrees, so a failed init leaves no file a rerun takes for a local key.
     if choice == KeyChoice::RingRpc {
@@ -292,9 +260,9 @@ impl ConfigCreation<'_> {
             if config.auditor_pubkey != self.auditor_pk {
                 return Err(mismatch(config.authority, &config.auditor_pubkey));
             }
-            // The tier is immutable, transact dispatches on it.
+            // The tier is immutable, transfer dispatches on it.
             ensure!(
-                config.has_policy == self.has_policy,
+                config.has_policy == self.policy.is_some(),
                 "the ring is deployed as {}, ring.toml now selects the other tier, redeploy is not a tier change",
                 if config.has_policy { "a policy ring" } else { "audit-only" }
             );
@@ -319,7 +287,7 @@ impl ConfigCreation<'_> {
             });
         }
         let deployer = self.deployer.context(NEEDS_UPGRADE_AUTHORITY)?;
-        let hand_over = SetAuthority {
+        let hand_over = UpdateAuthority {
             ring: ctx.ring,
             authority: deployer.pubkey(),
             new_authority: target,
@@ -332,25 +300,24 @@ impl ConfigCreation<'_> {
                 authority: TRANSFERRED,
             });
         }
-        let kind = match (self.mode, self.has_policy) {
+        let kind = match (self.mode, self.policy.is_some()) {
             (ModeName::Confidential, false) => RingKind::AuditOnly,
             (ModeName::Confidential, true) => RingKind::Policy,
             (ModeName::Anonymous, false) => RingKind::Anonymous,
             (ModeName::Anonymous, true) => RingKind::AnonymousPolicy,
         };
-        let create = CreateConfig {
-            ring: ctx.ring,
-            payer: target,
-            authority: deployer.pubkey(),
-            auditor_pubkey: self.auditor_pk,
+        RingInitialization {
+            deployer,
+            config_authority: self.config_authority,
+            auditor_pk: self.auditor_pk,
             kind,
-        };
-        let mut instructions = vec![create.instruction()?];
+            policy: self.policy,
+        }
+        .send(ctx)?;
         let transfer = deployer.pubkey() != target;
         if transfer {
-            instructions.push(hand_over);
+            ctx.send(&[self.config_authority, deployer], &[hand_over])?;
         }
-        ctx.send(&[self.config_authority, deployer], &instructions)?;
         Ok(ConfigOutcome {
             config: CREATED,
             authority: if transfer { TRANSFERRED } else { PRESENT },
@@ -373,32 +340,75 @@ impl ConfigOwnership {
     }
 }
 
+impl RingInitialization<'_> {
+    fn send(self, ctx: &Context) -> Result<()> {
+        let target = self.config_authority.pubkey();
+        let records = InitializeStorage::records(ctx.ring, target).registry();
+        let empty = RuleTable::empty();
+        let (rules, shared_sources) = match self.policy {
+            Some(policy) => {
+                for (list, curator) in &policy.shared_sources {
+                    catalogue::check_curator(ctx, *curator, *list)?;
+                }
+                (
+                    &policy.rules,
+                    policy::curator_sources(ctx, &policy.shared_sources)?,
+                )
+            }
+            None => (&empty, Vec::new()),
+        };
+        let instruction = |shared_sources: &[(ListId, Address)]| {
+            Initialize {
+                ring: ctx.ring,
+                payer: target,
+                authority: self.deployer.pubkey(),
+                auditor_pubkey: self.auditor_pk,
+                kind: self.kind,
+                policy: Some(InitialPolicy {
+                    records: PolicyRecords {
+                        records,
+                        storage_authority: target,
+                    },
+                    table: PolicyTable {
+                        rules,
+                        shared_sources,
+                    },
+                }),
+            }
+            .instruction()
+        };
+        // Curators past the transaction size are pointed one by one by the policy pin.
+        let (initialize, pinned_sources) = match instruction(&shared_sources) {
+            Err(RingError::TransactionTooLarge { .. }) if !shared_sources.is_empty() => {
+                (instruction(&[])?, &[][..])
+            }
+            result => (result?, shared_sources.as_slice()),
+        };
+        ctx.send(&[self.config_authority, self.deployer], &[initialize])?;
+        let mut syncs = vec![SyncRoots {
+            ring: ctx.ring,
+            registry: records,
+        }
+        .instruction()];
+        syncs.extend(policy::curator_syncs(ctx.ring, pinned_sources));
+        ctx.send(&[self.config_authority], &syncs)?;
+        Ok(())
+    }
+}
+
 impl PolicyPin<'_> {
     /// Sources are pointed only over rows that agree, a drifted table stays untouched.
     fn send(self, ctx: &Context) -> Result<&'static str> {
-        let Self { authority, policy } = self;
+        let Self {
+            authority,
+            policy,
+            outcome,
+        } = self;
         for (list, curator) in &policy.shared_sources {
             catalogue::check_curator(ctx, *curator, *list)?;
         }
         let shared_sources = policy::curator_sources(ctx, &policy.shared_sources)?;
-        let outcome = match policy::pinned_if_any(ctx)? {
-            Some(_) => PRESENT,
-            None => {
-                let create = |shared_sources: &[(ListId, Address)]| {
-                    create_policy(ctx, authority.pubkey(), &policy.rules, shared_sources)
-                };
-                // Curators past the transaction size are pointed one by one below.
-                let instructions = match create(&shared_sources) {
-                    Err(RingError::TransactionTooLarge { .. }) if !shared_sources.is_empty() => {
-                        create(&[])?
-                    }
-                    result => result?,
-                };
-                ctx.send(&[authority], &instructions)?;
-                CREATED
-            }
-        };
-        let pinned = policy::pinned(ctx)?;
+        let pinned = policy::pinned_if_any(ctx)?.context(PARTIAL_INIT)?;
         policy::verify_rows(policy, &pinned).context(POLICY_DRIFT)?;
         crate::records::write_mint_policies(ctx, &policy::mint_changes(ctx, policy)?)?;
         let mut pointed = false;
@@ -407,11 +417,13 @@ impl PolicyPin<'_> {
                 if pinned.account.registry_for(*list) == Some(ListRegistry::Curator(*registry)) {
                     PRESENT
                 } else {
-                    let point = SetSourceOwner {
+                    let point = UpdatePolicy {
                         ring: ctx.ring,
                         authority: authority.pubkey(),
-                        list_id: *list,
-                        source: SourceOwner::Curator(*registry),
+                        update: PolicyUpdate::Source {
+                            list_id: *list,
+                            source: SourceOwner::Curator(*registry),
+                        },
                     }
                     .instruction()?;
                     let sync = SyncRoots {

@@ -86,7 +86,7 @@ pub enum RingError {
     MissingRingPolicy,
     #[error("the ring policy holds no synced roots of registry {registry}")]
     UnsyncedRoots { registry: Address },
-    #[error("the ring is not registered with the shielded pool, run InitSppRingConfig")]
+    #[error("the ring is not registered with the shielded pool, run Initialize")]
     RingNotRegistered,
     #[error("the shielded pool has not activated the ring, governance runs set_ring_activation")]
     RingNotActivated,

@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 
 import { ed25519 } from "@noble/curves/ed25519.js";
 import {
+  address,
   createKeyPairSignerFromBytes,
   createSolanaRpc,
   generateKeyPairSigner,
@@ -24,11 +25,8 @@ import { type RuleTable } from "../../src/ring/advanced.js";
 import {
   RingProgramBinary,
   RingRpc,
-  buildRingCreatePolicyTransaction,
-  createRingConfigInstruction,
   deployRingProgram,
-  fetchRingProgramConfig,
-  initSppRingConfigInstruction,
+  initializeRingInstruction,
   LocalRingKeys,
   messageSignerReader,
   ringAuthAddress,
@@ -136,35 +134,24 @@ export async function createRing(client: CustomRingClient, ring: FreshRing): Pro
           })
         ).auditorPublicKey
       : auditor;
+  // A policy binds a records registry the storage program created beforehand.
   await sendInstruction(
     client,
-    await createRingConfigInstruction({
+    await initializeRingInstruction({
       ringProgramId,
       payer: authority,
       authority,
       auditorPublicKey,
       kind: ring.kind,
-    }),
-    authority,
-  );
-  if (table !== undefined)
-    await signSendAndConfirm(
-      client,
-      await buildRingCreatePolicyTransaction({
-        client,
-        ringProgramId,
-        authority: authority.address,
-        table,
-      }),
-      [authority],
-    );
-  await sendInstruction(
-    client,
-    await initSppRingConfigInstruction({
-      ringProgramId,
-      payer: authority,
-      authority,
-      config: await fetchRingProgramConfig(client, ringProgramId),
+      ...(table === undefined
+        ? {}
+        : {
+            policy: {
+              records: address(requiredEnv("RING_RECORDS_REGISTRY")),
+              storageAuthority: authority.address,
+              table,
+            },
+          }),
     }),
     authority,
   );

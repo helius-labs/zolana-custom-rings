@@ -140,13 +140,15 @@ fn the_config_authority_re_pins_the_table_of_a_live_ring() -> Result<()> {
     let stranger = env.funded_keypair()?;
     let rejection = ExpectRejection {
         payer: &stranger,
-        instructions: &[custom_ring_sdk::PolicyRules {
+        instructions: &[custom_ring_sdk::UpdatePolicy {
             ring,
             authority: stranger.pubkey(),
-            rules: &BLOCK_ONLY,
-            shared_sources: &[],
+            update: custom_ring_sdk::PolicyUpdate::Rules(custom_ring_sdk::PolicyTable {
+                rules: &BLOCK_ONLY,
+                shared_sources: &[],
+            }),
         }
-        .replace()?],
+        .instruction()?],
     }
     .send(rpc)?;
     Rejection::custom(CustomRingError::UnauthorizedAuthority as u32)

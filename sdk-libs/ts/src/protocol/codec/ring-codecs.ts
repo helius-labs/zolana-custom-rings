@@ -23,7 +23,7 @@ export interface RingProgramConfig {
   /** `RING_COSIGN_*` bits some `CoSigner` record covers, absent without a record. */
   readonly coSignerClasses?: number;
   readonly delegate?: Address;
-  /** The slot `CreateConfig` ran in. */
+  /** The slot `Initialize` ran in. */
   readonly createdSlot: bigint;
 }
 

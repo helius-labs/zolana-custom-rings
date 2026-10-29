@@ -57,14 +57,13 @@ Set a Ring up in this order.
 1. `deployRingProgram` deploys or upgrades the Ring program from a
    `RingProgramBinary` and returns once the program is usable,
    `verifyRingProgram` checks the deployed bytes.
-2. `createRingConfigInstruction` stores the auditor key and the tier.
-3. A policy Ring pins its rule table with `buildRingCreatePolicyTransaction`
-   over its address tree.
-4. `initSppRingConfigInstruction` registers the Ring with the pool, a policy
-   Ring only after its policy exists.
-5. On a permissioned pool the governance authority activates the Ring with
+2. The records `StorageRegistry` exists in the storage program.
+3. `initializeRingInstruction`, signed by the upgrade authority, stores the
+   auditor key and the tier, binds the records, pins a policy Ring's rule table
+   and registers the Ring with the pool.
+4. On a permissioned pool the governance authority activates the Ring with
    `getSetRingActivationInstructionAsync` from `@heliuslabs/zolana/instructions`.
-6. `AuthorityRecordUpdate` fills the lists through `RingRpc.submitRecordUpdate`.
+5. `AuthorityRecordUpdate` fills the lists through `RingRpc.submitRecordUpdate`.
 
 A wallet spends through Ring RPC and reads no Merkle path and no record.
 `prepareRingEntryRelay`, `prepareRingTransferRelay`, `prepareRingExitRelay`

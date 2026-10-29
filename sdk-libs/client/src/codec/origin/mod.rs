@@ -319,8 +319,8 @@ fn confirmed_transact(
         && matches!(
             caller.data.first(),
             Some(
-                &(ring_tag::TRANSACT
-                    | ring_tag::DELEGATE_TRANSACT
+                &(ring_tag::TRANSFER
+                    | ring_tag::AUTHORITY_TRANSFER
                     | ring_tag::LEGACY_TRANSACT
                     | ring_tag::LEGACY_DELEGATE_TRANSACT)
             )
@@ -402,10 +402,10 @@ fn confirmed_deposits(
     let caller = direct_caller(groups, source);
     if !caller.is_some_and(|caller| {
         caller.program_id == ring
-            && caller.data.first() == Some(&custom_ring_interface::tag::AUDITED_DEPOSIT)
+            && caller.data.first() == Some(&custom_ring_interface::tag::DEPOSIT)
             && caller
                 .data
-                .get(core::mem::size_of::<custom_ring_interface::AuditedDepositPrefix>()..)
+                .get(core::mem::size_of::<custom_ring_interface::DepositPrefix>()..)
                 == Some(source.data.as_slice())
     }) {
         return Ok(Vec::new());

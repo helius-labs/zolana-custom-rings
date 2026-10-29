@@ -424,7 +424,7 @@ impl RingOperation<'_> {
                 let proven = boxed(|| transfer.prove(client)).await?;
                 proved(
                     proven.instruction()?,
-                    InstructionTag::Transact,
+                    InstructionTag::Transfer,
                     proven.bound(),
                 )
             }
@@ -432,7 +432,7 @@ impl RingOperation<'_> {
                 let proven = boxed(|| transfer.prove(client)).await?;
                 proved(
                     proven.instruction()?,
-                    InstructionTag::Transact,
+                    InstructionTag::Transfer,
                     proven.bound(),
                 )
             }
@@ -440,7 +440,7 @@ impl RingOperation<'_> {
                 let proven = boxed(|| transfer.prove(client)).await?;
                 proved(
                     proven.instruction()?,
-                    InstructionTag::DelegateTransact,
+                    InstructionTag::AuthorityTransfer,
                     proven.bound(),
                 )
             }
@@ -476,7 +476,7 @@ impl RingOperation<'_> {
                 let proven = boxed(|| deposit.prove_bound(client)).await?;
                 proved(
                     proven.instruction,
-                    InstructionTag::AuditedDeposit,
+                    InstructionTag::Deposit,
                     BoundState {
                         roots: proven.roots,
                         policy: proven.policy,

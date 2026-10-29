@@ -5,7 +5,7 @@ The envelope seals a secret to the ring's X25519 auditor key. A ring uses it for
 ## Key encoding
 
 - A tagged X25519 key is `0x04 || u`, 33 bytes, with `u` the canonical 32-byte little-endian coordinate below `2^255 - 19`.
-- `CreateConfig` refuses an auditor key whose `u` is one of the 5 low-order values. The program supplies the auditor key from the config, so a prover cannot pick the recipient.
+- `Initialize` refuses an auditor key whose `u` is one of the 5 low-order values. The program supplies the auditor key from the config, so a prover cannot pick the recipient.
 - The auditor view tag is `u` without the tag byte.
 - Secret scalars are clamped as RFC 7748. The audit circuit asserts that `tx_viewing_sk` is clamped.
 

@@ -103,11 +103,13 @@ fn a_curator_sourced_blocklist_governs_the_subscriber_ring() -> Result<()> {
     send(
         rpc,
         &env.payer,
-        &[custom_ring_sdk::SetSourceOwner {
+        &[custom_ring_sdk::UpdatePolicy {
             ring: subscriber,
             authority,
-            list_id: ListId::Block,
-            source: SourceOwner::Own,
+            update: custom_ring_sdk::PolicyUpdate::Source {
+                list_id: ListId::Block,
+                source: SourceOwner::Own,
+            },
         }
         .instruction()?],
     )?;

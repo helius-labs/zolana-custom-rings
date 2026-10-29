@@ -222,7 +222,7 @@ fn the_key_escrow_lifecycle_ends_in_a_delegate_move() -> Result<()> {
         rpc,
         &signature,
         "audited ring deposit",
-        u64::from(compute_unit_limit(InstructionTag::AuditedDeposit)),
+        u64::from(compute_unit_limit(InstructionTag::Deposit)),
     )?;
     let recovery = RingRecovery::new(ring_program, &auditor).for_member(SourceMember {
         address: &member_address,
@@ -383,7 +383,7 @@ fn the_key_escrow_lifecycle_ends_in_a_delegate_move() -> Result<()> {
         rpc,
         &signature,
         "escrowed audited deposit",
-        u64::from(compute_unit_limit(InstructionTag::AuditedDeposit)),
+        u64::from(compute_unit_limit(InstructionTag::Deposit)),
     )?;
 
     // 5. The delegate moves the enrolled member's note back to the member.

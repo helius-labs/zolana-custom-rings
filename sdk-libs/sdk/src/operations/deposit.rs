@@ -2,7 +2,7 @@
 
 use custom_ring_interface::{
     cosign::CoSignDemand, domain::deposit_blinding, key_catalog::RingCircuit, ring_deposit_assets,
-    tag, AuditedDepositPrefix, CoSignScope, CustomRingError, CustomRingProof, DepositContext,
+    tag, CoSignScope, CustomRingError, CustomRingProof, DepositContext, DepositPrefix,
     DepositPublicInput, DepositRegistry, DepositedAsset, RingDepositAuditCapsule, RingMode,
     RingPolicy,
 };
@@ -430,8 +430,8 @@ impl PreparedRingDeposit {
         roots: Option<DepositRoots>,
     ) -> Result<Instruction, RingError> {
         let mut instruction = self.spp.clone();
-        let prefix = AuditedDepositPrefix {
-            tag: tag::AUDITED_DEPOSIT,
+        let prefix = DepositPrefix {
+            tag: tag::DEPOSIT,
             proof,
             own_revision: roots.map_or_else(Default::default, |roots| roots.own.revision),
             curator_revision: roots

@@ -119,14 +119,13 @@ from its own registry.
 
 ## Writing the policy
 
-A policy ring pins its first table with `CreatePolicy`, and `SetPolicyRules`
-replaces the table and the source map together. `CreatePolicy` refuses an
-audit-only ring. `SetPolicySource` re-points one list. The config authority
-signs every policy write. The program validates the table, rehashes it and
-counts the write in the policy's generation. A transfer proven against the
-old table fails after that write, and its notes stay unspent.
-`InitSppRingConfig` registers a policy ring with SPP only after
-`CreatePolicy`.
+A policy ring pins its first table in `Initialize`, which also registers the
+ring with SPP, so a policy ring never registers without a table. `Initialize`
+refuses a table on an audit-only ring. `UpdatePolicy` replaces the table and
+the source map together, re-points one list, or rebinds the records. The config
+authority signs every `UpdatePolicy`. The program validates the table, rehashes
+it and counts the write in the ring policy's generation. A transfer proven
+against the old table fails after that write, and its notes stay unspent.
 
 An auditor reconstructs the table history from the transaction history of the
 ring policy account. Every policy write is a signed instruction on that

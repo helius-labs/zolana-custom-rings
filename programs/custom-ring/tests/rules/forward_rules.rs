@@ -2,8 +2,8 @@
 
 use bytemuck::Zeroable;
 use custom_ring_interface::{
-    merge_disclosure_field_count, tag, AuditedDepositPrefix, CoSignScope, CustomRingError,
-    CustomRingMergeIxData, MergeDisclosure, RingDepositAuditCapsule, AUDIT_CIPHERTEXT_LEN,
+    merge_disclosure_field_count, tag, CoSignScope, CustomRingError, CustomRingMergeIxData,
+    DepositPrefix, MergeDisclosure, RingDepositAuditCapsule, AUDIT_CIPHERTEXT_LEN,
     MAX_RING_DEPOSIT_AUDIT_SLOTS, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN, RING_DEPOSIT_DEPOSITOR_INDEX,
     RING_DEPOSIT_RING_CONFIG_INDEX, RING_MERGE_PAYER_INDEX, RING_MERGE_RING_CONFIG_INDEX,
 };
@@ -183,15 +183,15 @@ pub fn deposit_instruction(
     registry: Option<u64>,
     deposit: &RingDepositIxData,
 ) -> Instruction {
-    let prefix = AuditedDepositPrefix {
-        tag: tag::AUDITED_DEPOSIT,
+    let prefix = DepositPrefix {
+        tag: tag::DEPOSIT,
         proof: Zeroable::zeroed(),
         own_revision: registry.unwrap_or_default().into(),
         curator_revision: Default::default(),
     };
     let data = [
         bytemuck::bytes_of(&prefix),
-        &[tag::DEPOSIT],
+        &[spr_interface::instruction::tag::RING_DEPOSIT],
         &deposit.serialize().unwrap(),
     ]
     .concat();
@@ -316,7 +316,8 @@ fn a_forward_past_the_cpi_account_cap_is_refused() {
 fn an_audited_deposit_forwards_deposit_data_its_capsules_open() {
     let mut ring = Ring::new(Setup::AuditOnly);
     let mut untagged = deposit_instruction(&ring, None, &ring_deposit());
-    untagged.data[core::mem::size_of::<AuditedDepositPrefix>()] = tag::DEPOSIT.wrapping_add(1);
+    untagged.data[core::mem::size_of::<DepositPrefix>()] =
+        spr_interface::instruction::tag::RING_DEPOSIT.wrapping_add(1);
     refused(
         ring.send(untagged, &[]),
         CustomRingError::InvalidAuditedDeposit,

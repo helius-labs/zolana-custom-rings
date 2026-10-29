@@ -18,7 +18,7 @@ fn transfer(ring: &mut Ring, prefix: Vec<AccountMeta>, data: &RingTransactData<'
     let prefix = [vec![policy_meta()], prefix].concat();
     send(
         ring,
-        tag::TRANSACT,
+        tag::TRANSFER,
         prefix,
         data.encode().unwrap(),
         spp,
@@ -51,7 +51,7 @@ fn an_anonymous_policy_transfer_takes_no_signer_but_the_payer() {
     refused(
         send(
             &mut ring,
-            tag::TRANSACT,
+            tag::TRANSFER,
             vec![policy_meta()],
             data.encode().unwrap(),
             spp,
@@ -91,7 +91,7 @@ fn an_anonymous_transfer_reaches_its_keys_under_any_tags_and_bodies() {
         let spp = spp_list(&ring.payer.pubkey(), &data, &[]);
         reaches_verification(send(
             &mut ring,
-            tag::TRANSACT,
+            tag::TRANSFER,
             prefix,
             data.encode().unwrap(),
             spp,
@@ -117,7 +117,7 @@ fn an_empty_sender_bundle_is_refused() {
     compact.drain(len + 2..len + 2 + sender.body.len());
     let spp = spp_list(&ring.payer.pubkey(), &data, &[]);
     refused(
-        send(&mut ring, tag::TRANSACT, Vec::new(), compact, spp, &[]),
+        send(&mut ring, tag::TRANSFER, Vec::new(), compact, spp, &[]),
         CustomRingError::AnonymousBodyLength,
     );
 }
@@ -145,7 +145,7 @@ fn an_anonymous_policy_ring_refuses_the_delegate_rail() {
     refused(
         send(
             &mut ring,
-            tag::DELEGATE_TRANSACT,
+            tag::AUTHORITY_TRANSFER,
             vec![
                 policy_meta(),
                 AccountMeta::new_readonly(delegate.pubkey(), true),

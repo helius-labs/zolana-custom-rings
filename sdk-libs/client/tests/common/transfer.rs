@@ -529,7 +529,7 @@ impl Transfer {
                 nullifier_tree_root_index: 0,
             }),
         };
-        [vec![ring_tag::TRANSACT], data.encode().unwrap()].concat()
+        [vec![ring_tag::TRANSFER], data.encode().unwrap()].concat()
     }
 }
 

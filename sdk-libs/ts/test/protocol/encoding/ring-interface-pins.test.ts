@@ -49,7 +49,17 @@ describe("ring interface pins", () => {
     );
     const tags = new Map(Object.entries(RingInstructionTag));
     const spp = new Map<string, number>(Object.entries(InstructionTag));
-    const rows = [...source.matchAll(/^ {4}([A-Za-z]+) = [A-Z_]+: ([\w:]+) => ([\w]+),$/gmu)];
+    const rows = [...source.matchAll(/^ {4}([A-Za-z]+) = [A-Z_]+: ([\w:]+) => ([\w *+]+),$/gmu)];
+    const budgetOf = (expression: string) =>
+      expression
+        .split("+")
+        .map((term) =>
+          term
+            .split("*")
+            .map((factor) => units.get(factor.trim()) ?? integer(factor.trim()))
+            .reduce((product, factor) => product * factor, 1n),
+        )
+        .reduce((sum, term) => sum + term, 0n);
     expect(rows.map(([, variant = ""]) => lowerFirst(variant)).sort()).toEqual(
       [...tags.keys()].sort(),
     );
@@ -60,7 +70,7 @@ describe("ring interface pins", () => {
       const actual = tags.get(name);
       expect(actual, name).toBe(expected);
       if (actual === undefined) continue;
-      expect(BigInt(ringComputeUnitLimit(actual)), name).toBe(units.get(budget) ?? integer(budget));
+      expect(BigInt(ringComputeUnitLimit(actual)), name).toBe(budgetOf(budget));
     }
   });
 

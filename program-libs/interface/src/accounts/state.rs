@@ -143,7 +143,7 @@ pub struct RingProgramConfig {
     pub co_signers: CoSignerCounts,
     /// Zero without a delegate.
     pub delegate: Address,
-    /// Little endian, the slot `CreateConfig` ran in.
+    /// Little endian, the slot `Initialize` ran in.
     pub created_slot: [u8; 8],
 }
 
@@ -301,14 +301,14 @@ pub enum ListRegistry {
 pub struct RingPolicy {
     pub discriminator: u8,
     pub bump: u8,
-    /// The ring's own `StorageRegistry`, fixed at creation.
+    /// The ring's own `StorageRegistry`.
     pub records: Address,
     /// Zero without a policy.
     pub policy_hash: [u8; 32],
     /// Non-empty exactly for the lists `rules` references.
     pub sources: [SourceSlot; N_SOURCE_SLOTS],
     pub rules: EncodedRuleTable,
-    /// Little endian, one more at every table or source write.
+    /// Little endian, one more at every table, source or records write.
     pub generation: [u8; 4],
     /// Little endian, the slot of the write `generation` counts.
     pub generation_slot: [u8; 8],
@@ -386,15 +386,32 @@ impl RingPolicy {
         rules: EncodedRuleTable,
         slot: u64,
     ) -> Result<(), CustomRingError> {
+        let source_map = source_map(&sources)?;
+        rules.validate(&source_map)?;
+        let policy_hash = rules.hash(&source_map)?;
+        self.count_generation(slot)?;
+        self.policy_hash = policy_hash;
+        self.sources = sources;
+        self.rules = rules;
+        Ok(())
+    }
+
+    /// `InvalidSource` for the curator, the own mirror stays empty until the next sync.
+    pub fn rebind_records(&mut self, records: Address, slot: u64) -> Result<(), CustomRingError> {
+        if self.curator() == Some(records) {
+            return Err(CustomRingError::InvalidSource);
+        }
+        self.count_generation(slot)?;
+        self.records = records;
+        self.own_roots = RootMirror::zeroed();
+        Ok(())
+    }
+
+    fn count_generation(&mut self, slot: u64) -> Result<(), CustomRingError> {
         let generation = self
             .generation()
             .checked_add(1)
             .ok_or(CustomRingError::PolicyGenerationOverflow)?;
-        let source_map = source_map(&sources)?;
-        rules.validate(&source_map)?;
-        self.policy_hash = rules.hash(&source_map)?;
-        self.sources = sources;
-        self.rules = rules;
         self.generation = generation.to_le_bytes();
         self.generation_slot = slot.to_le_bytes();
         Ok(())

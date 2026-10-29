@@ -138,8 +138,8 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
             .await
             .map_err(RelayError::proof)?;
         let (tag, delegate) = match proof_inputs.rail {
-            RelayRail::Delegate { delegate } => (InstructionTag::DelegateTransact, Some(delegate)),
-            _ => (InstructionTag::Transact, None),
+            RelayRail::Delegate { delegate } => (InstructionTag::AuthorityTransfer, Some(delegate)),
+            _ => (InstructionTag::Transfer, None),
         };
         Ok(ProvenRelay {
             instruction: proven.instruction().map_err(RelayError::proof)?,
@@ -174,7 +174,7 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
                 .prove(&self.client)
                 .await
                 .map_err(RelayError::proof)?,
-            budget: ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::AuditedDeposit)),
+            budget: ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Deposit)),
             co_signer: prepared.co_signer(),
             co_sign_demand: prepared.co_sign_demand(),
             signers: vec![prepared.depositor()],

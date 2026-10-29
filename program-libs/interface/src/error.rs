@@ -61,11 +61,7 @@ ring_errors! {
     // 8154 to 8156 retired.
     ApprovalWithoutCoSigner = 8157 => "dual control needs a configured co-signer",
     // 8158 and 8159 retired.
-    // 8160 retired.
-    // 8161 and 8162 retired.
-    // 8163 retired.
-    // 8164 retired.
-    DepositAuditRequired = 8165 => "verified deposit disclosure required",
+    // 8160 to 8165 retired.
     InvalidDepositDisclosure = 8166 => "invalid deposit disclosure",
     // 8167 retired.
     // 8168 and 8169 retired.

@@ -1,7 +1,8 @@
 //! Policy transfers read every root from the policy's mirrors, refused until `SyncRoots` copies it.
 
 use custom_ring_interface::{
-    storage::Revision, tag, CustomRingError, PolicyTableIxData, RingRail, SourceSpec,
+    storage::Revision, CustomRingError, PolicyTableIxData, RingPolicy, RingRail, SourceSpec,
+    UpdatePolicyIxData,
 };
 use solana_address::Address;
 use solana_keypair::{Keypair, Signer};
@@ -9,8 +10,8 @@ use zolana_ring_policy::ListId;
 
 use crate::{
     common::{
-        allow_list_table, policy_write, reaches_verification, refused, retired, root, sync_roots,
-        Ring, Setup, RECORDS,
+        allow_list_table, policy_pda, reaches_verification, refused, retired, root, sync_roots,
+        Ring, Setup, UpdatePolicyIx, RECORDS,
     },
     transact_rules::{confidential, policy_meta, Fixture},
 };
@@ -62,12 +63,12 @@ fn a_curator_registry_of_another_authority_serves_a_list_after_sync_roots() {
         ..allow_list_table(Vec::new())
     };
     ring.send(
-        policy_write(
-            tag::SET_POLICY_RULES,
-            &authority.pubkey(),
-            curated,
-            &[CURATOR],
-        ),
+        UpdatePolicyIx {
+            authority: authority.pubkey(),
+            update: UpdatePolicyIxData::Rules(curated),
+            trailing: &[CURATOR],
+        }
+        .instruction(),
         &[&authority],
     )
     .unwrap();
@@ -85,5 +86,49 @@ fn a_curator_registry_of_another_authority_serves_a_list_after_sync_roots() {
         CustomRingError::UnmirroredRegistry,
     );
     ring.send(sync_roots(&CURATOR), &[]).unwrap();
+    reaches_verification(confidential(&mut ring, vec![policy_meta()], &data));
+}
+
+#[test]
+fn update_policy_rebinds_the_records_to_another_registry_of_the_same_authority() {
+    let fixture = Fixture::new();
+    let mut ring = Ring::new(Setup::Policy);
+    let authority = ring.authority.insecure_clone();
+    let rebind = |records: Address| {
+        UpdatePolicyIx {
+            authority: authority.pubkey(),
+            update: UpdatePolicyIxData::Records {
+                storage_authority: Address::default(),
+            },
+            trailing: &[records],
+        }
+        .instruction()
+    };
+    let foreign = Address::new_from_array([0x5e; 32]);
+    ring.store_registry(foreign, &Keypair::new().pubkey(), &[root(3, [0x0f; 32])]);
+    refused(
+        ring.send(rebind(foreign), &[&authority]),
+        CustomRingError::StorageAuthorityMismatch,
+    );
+    let records = Address::new_from_array([0x5b; 32]);
+    ring.store_registry(records, &authority.pubkey(), &[root(3, [0x0f; 32])]);
+    let before: RingPolicy = ring.read(&policy_pda());
+    ring.send(rebind(records), &[&authority]).unwrap();
+    let after: RingPolicy = ring.read(&policy_pda());
+    assert_eq!(after.records, records);
+    assert_eq!(after.policy_hash, before.policy_hash);
+    assert_eq!(after.generation(), before.generation() + 1);
+    // The old registry's mirror no longer serves a proof over an own list.
+    let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
+    data.policy.as_mut().unwrap().own_revision = Revision::from(3);
+    refused(
+        confidential(&mut ring, vec![policy_meta()], &data),
+        CustomRingError::MirrorNotSynced,
+    );
+    refused(
+        ring.send(sync_roots(&RECORDS), &[]),
+        CustomRingError::UnmirroredRegistry,
+    );
+    ring.send(sync_roots(&records), &[]).unwrap();
     reaches_verification(confidential(&mut ring, vec![policy_meta()], &data));
 }

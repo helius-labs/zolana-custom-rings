@@ -12,7 +12,7 @@ use super::{
 use crate::instructions::loader::{load_config, validate_spp_program};
 
 #[inline(never)]
-pub fn process_transact_ix(
+pub fn process_transfer_ix(
     program_id: &Address,
     accounts: &mut [AccountView],
     data: &[u8],

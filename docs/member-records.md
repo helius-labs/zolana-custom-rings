@@ -2,7 +2,7 @@
 
 A ring keeps its lists in member records, and a registered owner's record binds
 its escrowed nullifier key. The records form a 4-ary indexed Merkle tree in the
-ring's own `StorageRegistry`, the records `CreatePolicy` binds. The storage
+ring's own `StorageRegistry`, the records `Initialize` binds. The storage
 program keeps the tree's recent roots on chain, and the ring indexer stores the
 records. Owners and the config authority sign record updates, and the Ring RPC
 writer applies them in a storage update with its apply proof. The same

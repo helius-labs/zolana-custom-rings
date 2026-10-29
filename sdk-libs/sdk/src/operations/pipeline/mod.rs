@@ -665,8 +665,8 @@ impl Unwitnessed<'_> {
     fn check_size(&self) -> Result<(), RingError> {
         let proof_inputs = &self.frame.proof_inputs;
         let budget = ComputeBudgetConfig::new(compute_unit_limit(match self.spend.rail() {
-            RingRail::Delegate => InstructionTag::DelegateTransact,
-            RingRail::Confidential | RingRail::Anonymous => InstructionTag::Transact,
+            RingRail::Delegate => InstructionTag::AuthorityTransfer,
+            RingRail::Confidential | RingRail::Anonymous => InstructionTag::Transfer,
         }));
         match check_transaction_size(&proof_inputs.payer, &self.instruction()?, budget) {
             Err(RingError::TransactionTooLarge { bytes, limit }) => {

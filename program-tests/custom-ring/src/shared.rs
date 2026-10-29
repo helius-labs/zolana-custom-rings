@@ -17,8 +17,8 @@ use std::{
 use anyhow::{anyhow, ensure, Context, Result};
 use custom_ring_cli::{localnet::GENESIS_PROGRAMS, Zolana, ZolanaServices};
 use custom_ring_sdk::{
-    compute_unit_limit, CreateConfig, CustomRing, InitSppRingConfig, InitializeStorage,
-    InstructionTag, MemberRecords, PolicyRecords, PolicyRules, RingError, RingKind, SyncRoots,
+    compute_unit_limit, CustomRing, InitialPolicy, Initialize, InitializeStorage, InstructionTag,
+    MemberRecords, PolicyRecords, PolicyTable, RingError, RingKind, SyncRoots,
 };
 use solana_address::Address;
 use solana_instruction::Instruction;
@@ -292,9 +292,18 @@ impl Tier {
             Self::AnonymousPolicy { .. } => RingKind::AnonymousPolicy,
         }
     }
+
+    fn shared_sources(&self) -> &[(ListId, CustomRing)] {
+        match self {
+            Self::Policy { shared_sources, .. } | Self::AnonymousPolicy { shared_sources, .. } => {
+                shared_sources
+            }
+            Self::AuditOnly | Self::AnonymousAuditOnly => &[],
+        }
+    }
 }
 
-/// The payer doubles as the config authority.
+/// The payer doubles as the upgrade authority and the config authority.
 pub struct RegisterRing<'a> {
     pub ring: CustomRing,
     pub payer: &'a Keypair,
@@ -302,128 +311,84 @@ pub struct RegisterRing<'a> {
     pub tier: Tier,
 }
 
-#[must_use]
-pub struct ConfiguredRing<'a> {
-    ring: CustomRing,
-    payer: &'a Keypair,
-    tier: Tier,
-}
-
-#[must_use]
-pub struct PinnedRing<'a> {
-    payer: &'a Keypair,
-    registration: Instruction,
-}
-
-impl<'a> RegisterRing<'a> {
+impl RegisterRing<'_> {
     pub fn send(self, client: &Zolana) -> Result<()> {
-        self.pin(client)?.register(client.rpc())
+        self.create_records(client.rpc())?;
+        let initialize = self.initialize(client)?;
+        send(client.rpc(), self.payer, &[initialize])?;
+        self.complete(client)
     }
 
-    pub fn pin(self, client: &Zolana) -> Result<PinnedRing<'a>> {
-        self.configure(client.rpc())?.pin(client)
+    /// The records registry `Initialize` binds.
+    pub fn create_records(&self, rpc: &SolanaRpc) -> Result<()> {
+        send(rpc, self.payer, &[self.storage().instruction()])?;
+        Ok(())
     }
 
-    /// Every ring gets its records, the payer their storage authority.
-    pub fn configure(self, rpc: &SolanaRpc) -> Result<ConfiguredRing<'a>> {
+    /// Every ring binds its records, an audit-only ring with an empty table.
+    pub fn initialize(&self, client: &Zolana) -> Result<Instruction> {
         let authority = self.payer.pubkey();
-        let instructions = [
-            CreateConfig {
-                ring: self.ring,
-                payer: authority,
-                authority,
-                auditor_pubkey: self.auditor_pubkey,
-                kind: self.tier.kind(),
-            }
-            .instruction()?,
-            InitializeStorage::records(self.ring, authority).instruction(),
-        ];
-        send(rpc, self.payer, &instructions)?;
-        Ok(ConfiguredRing {
-            ring: self.ring,
-            payer: self.payer,
-            tier: self.tier,
-        })
-    }
-}
-
-impl<'a> ConfiguredRing<'a> {
-    /// The program refuses it for a policy ring until the policy is pinned.
-    pub fn registration(&self, client: &Zolana) -> Result<Instruction> {
-        let config = client.block_on(self.ring.require_config(client.as_async()))?;
-        let authority = self.payer.pubkey();
-        Ok(InitSppRingConfig {
+        let empty = RuleTable::empty();
+        let rules = match &self.tier {
+            Tier::Policy { rules, .. } | Tier::AnonymousPolicy { rules, .. } => *rules,
+            Tier::AuditOnly | Tier::AnonymousAuditOnly => &empty,
+        };
+        let shared_sources = self.curator_records(client)?;
+        Ok(Initialize {
             ring: self.ring,
             payer: authority,
             authority,
-            config: &config,
+            auditor_pubkey: self.auditor_pubkey,
+            kind: self.tier.kind(),
+            policy: Some(InitialPolicy {
+                records: PolicyRecords {
+                    records: self.storage().registry(),
+                    storage_authority: authority,
+                },
+                table: PolicyTable {
+                    rules,
+                    shared_sources: &shared_sources,
+                },
+            }),
         }
-        .instruction())
+        .instruction()?)
     }
 
-    pub fn pin(self, client: &Zolana) -> Result<PinnedRing<'a>> {
-        let registration = self.registration(client)?;
-        let empty = RuleTable::empty();
-        let (rules, curators) = match self.tier {
-            Tier::Policy {
-                rules,
-                shared_sources,
-            }
-            | Tier::AnonymousPolicy {
-                rules,
-                shared_sources,
-            } => (rules, shared_sources),
-            Tier::AuditOnly | Tier::AnonymousAuditOnly => (&empty, Vec::new()),
-        };
-        let shared_sources = curators
+    /// After `Initialize`, the `SyncRoots` of every bound registry.
+    pub fn complete(&self, client: &Zolana) -> Result<()> {
+        let curators = self.curator_records(client)?;
+        let mut registries: Vec<Address> = core::iter::once(self.storage().registry())
+            .chain(curators.iter().map(|(_, registry)| *registry))
+            .collect();
+        registries.sort();
+        registries.dedup();
+        let instructions: Vec<Instruction> = registries
+            .into_iter()
+            .map(|registry| {
+                SyncRoots {
+                    ring: self.ring,
+                    registry,
+                }
+                .instruction()
+            })
+            .collect();
+        send(client.rpc(), self.payer, &instructions)?;
+        Ok(())
+    }
+
+    fn storage(&self) -> InitializeStorage {
+        InitializeStorage::records(self.ring, self.payer.pubkey())
+    }
+
+    fn curator_records(&self, client: &Zolana) -> Result<Vec<(ListId, Address)>> {
+        self.tier
+            .shared_sources()
             .iter()
             .map(|&(list_id, curator)| {
                 let policy = client.block_on(curator.require_policy(client.as_async()))?;
                 Ok((list_id, policy.records))
             })
-            .collect::<Result<Vec<_>>>()?;
-        let authority = self.payer.pubkey();
-        let records = InitializeStorage::records(self.ring, authority).registry();
-        let pin = PolicyRules {
-            ring: self.ring,
-            authority,
-            rules,
-            shared_sources: &shared_sources,
-        }
-        .create(PolicyRecords {
-            payer: authority,
-            records,
-            storage_authority: authority,
-        })?;
-        let mut instructions = vec![pin];
-        let mut registries: Vec<Address> = core::iter::once(records)
-            .chain(shared_sources.iter().map(|(_, registry)| *registry))
-            .collect();
-        registries.sort();
-        registries.dedup();
-        instructions.extend(registries.into_iter().map(|registry| {
-            SyncRoots {
-                ring: self.ring,
-                registry,
-            }
-            .instruction()
-        }));
-        send(client.rpc(), self.payer, &instructions)?;
-        Ok(PinnedRing {
-            payer: self.payer,
-            registration,
-        })
-    }
-}
-
-impl PinnedRing<'_> {
-    pub fn registration(&self) -> Instruction {
-        self.registration.clone()
-    }
-
-    pub fn register(self, rpc: &SolanaRpc) -> Result<()> {
-        send(rpc, self.payer, &[self.registration])?;
-        Ok(())
+            .collect()
     }
 }
 
@@ -747,7 +712,7 @@ pub fn send(rpc: &SolanaRpc, payer: &dyn Signer, ixs: &[Instruction]) -> Result<
         ixs,
         payer.pubkey(),
         &[payer],
-        ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Transact)),
+        ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Transfer)),
     )?)
 }
 
@@ -777,7 +742,7 @@ pub struct RejectedTransact<'a> {
 impl RejectedTransact<'_> {
     pub fn send(self, rpc: &SolanaRpc) -> Result<ClientError> {
         let (blockhash, _) = rpc.get_latest_blockhash()?;
-        let budget = ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Transact));
+        let budget = ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Transfer));
         let message =
             compile_message(&self.payer.pubkey(), &[self.instruction], blockhash, budget)?;
         let signers: Vec<&dyn Signer> = std::iter::once(self.payer)

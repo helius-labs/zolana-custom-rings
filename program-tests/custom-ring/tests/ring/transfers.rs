@@ -18,18 +18,26 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
     let auditor_pk = auditor.pubkey();
     let auditor_pubkey = *auditor_pk.as_bytes();
 
-    // 2. The SPP registration waits for the policy pin.
+    // 2. A policy ring initializes only with its policy, SPP registers it in the same instruction.
     let authority = env.payer.pubkey();
-    let configured = RegisterRing {
+    let register = RegisterRing {
         ring,
         payer: &env.payer,
         auditor_pubkey: auditor_pk,
         tier: Tier::policy(&EMPTY),
-    }
-    .configure(rpc)?;
+    };
+    register.create_records(rpc)?;
     let rejection = ExpectRejection {
         payer: &env.payer,
-        instructions: &[configured.registration(&env.client)?],
+        instructions: &[custom_ring_sdk::Initialize {
+            ring,
+            payer: authority,
+            authority,
+            auditor_pubkey: auditor_pk,
+            kind: custom_ring_sdk::RingKind::Policy,
+            policy: None,
+        }
+        .instruction()?],
     }
     .send(rpc)?;
     Rejection::custom(CustomRingError::PolicyNotSet as u32)
@@ -37,12 +45,11 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
         .assert_client(&rejection);
     assert!(
         env.run(ring.registration(env.client.as_async()))?.is_none(),
-        "no SPP ring config before the policy is pinned"
+        "no SPP ring config without the policy"
     );
-    let pinned = configured.pin(&env.client)?;
     // The ring forwards the protocol config unchecked.
-    let mut substituted = pinned.registration();
-    substituted.accounts[3].pubkey = Address::new_unique();
+    let mut substituted = register.initialize(&env.client)?;
+    substituted.accounts[6].pubkey = Address::new_unique();
     let rejection = ExpectRejection {
         payer: &env.payer,
         instructions: &[substituted],
@@ -51,7 +58,8 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
     Rejection::pool(ShieldedPoolError::InvalidProtocolConfig)
         .at(0)
         .assert_client(&rejection);
-    pinned.register(rpc)?;
+    send(rpc, &env.payer, &[register.initialize(&env.client)?])?;
+    register.complete(&env.client)?;
 
     let (config_address, config_bump) =
         Address::find_program_address(&[CONFIG_PDA_SEED], &ring_program);
@@ -211,7 +219,7 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
         &env.sender.keypair.pubkey(),
         &[instruction],
         blockhash,
-        ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Transact)),
+        ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Transfer)),
     )?;
     let transaction = sign_transaction(message, &[&env.sender.keypair])?;
     let transaction_size =
@@ -325,7 +333,7 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
     // 11. The config authority hands over, only the new key pauses the ring.
     let successor = env.funded_keypair()?;
     rpc.create_and_send_transaction(
-        &[custom_ring_sdk::SetAuthority {
+        &[custom_ring_sdk::UpdateAuthority {
             ring,
             authority,
             new_authority: successor.pubkey(),

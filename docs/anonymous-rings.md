@@ -16,7 +16,7 @@ encode the plaintexts with their own codecs. The byte layouts are in
 [Ring Address](../sdk-libs/keys/src/ring_address.rs),
 [anonymous plaintexts](../sdk-libs/transaction/src/anonymous_plaintext.rs),
 [ring deposits](../sdk-libs/transaction/src/ring_deposit.rs) and
-[Transact](spec.md#20-transact).
+[Transfer](spec.md#9-transfer).
 
 ## Roles
 

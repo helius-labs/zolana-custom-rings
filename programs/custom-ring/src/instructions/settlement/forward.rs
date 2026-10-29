@@ -92,7 +92,7 @@ pub fn process_merge_ix(
 }
 
 #[inline(never)]
-pub fn process_audited_deposit_ix(
+pub fn process_deposit_ix(
     program_id: &Address,
     accounts: &mut [AccountView],
     data: &[u8],

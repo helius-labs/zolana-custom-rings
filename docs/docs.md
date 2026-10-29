@@ -160,7 +160,7 @@ zolana-ring cosigner set --signer <KEY> --scope transfers,withdrawals --threshol
 ```
 
 - `deploy` deploys the released program of the embedded release lock, or `--program-so`. It refuses a binary whose verifying key markers do not cover every pinned proving key, and an existing program under another upgrade authority.
-- `init` skips every step the chain already agrees with. The upgrade authority signs `CreateConfig` and, when the two keys differ, hands the config to the config authority in the same transaction.
+- `init` skips every step the chain already agrees with. The upgrade authority signs `Initialize` and, when the two keys differ, hands the config to the config authority with `UpdateAuthority` in the next transaction.
 - `init` takes the auditor key from Ring RPC when no config and no `keys/auditor.key.pub` exist, and checks the service signature. With a hosted Ring RPC, `--local-auditor` pins `keys/auditor.key.pub` instead.
 - `cosigner set` creates or rescopes the signer's co-signer record, then writes its withdrawal thresholds into the mints' records and clears the others. `cosigner clear` closes the signer's record and keeps the mint records.
 - `list add` and `list clear` write authority lists, and `list join` and `list leave` write the member's own lists, each through a record update Ring RPC applies.
@@ -261,7 +261,7 @@ await syncRingWallet({
 });
 ```
 
-Read audited history from Ring RPC after `grantReadAccessInstruction` names the reader:
+Read audited history from Ring RPC after an `AuthorityRecordUpdate` puts the reader on the `reader` list:
 
 ```ts
 const target = await ringReadTarget(ringRpc, ringProgramId);

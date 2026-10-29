@@ -270,7 +270,7 @@ async function buildDelegateTransaction(
       feePayer: move.feePayer,
       lifetime,
       instructions: [instruction],
-      computeUnitLimit: ringComputeUnitLimit(RingInstructionTag.delegateTransact),
+      computeUnitLimit: ringComputeUnitLimit(RingInstructionTag.authorityTransfer),
     });
     return Object.freeze({
       transaction,

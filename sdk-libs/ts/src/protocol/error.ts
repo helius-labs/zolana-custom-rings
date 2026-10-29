@@ -181,8 +181,7 @@ export const RingProgramError = Object.freeze({
   delegatePublicLeg: 8152,
   delegateAlreadySet: 8153,
   approvalWithoutCoSigner: 8157,
-  // 8160 and 8163 retired.
-  depositAuditRequired: 8165,
+  // 8160, 8163 and 8165 retired.
   invalidDepositDisclosure: 8166,
   delegateRequiresPolicy: 8170,
   missingFundingSigner: 8173,

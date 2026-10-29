@@ -5,7 +5,7 @@ use crate::instructions::{instruction_runtime::no_data, loader::load_authorized_
 
 /// The new authority signs too, a mistyped address cannot strand the config.
 #[inline(never)]
-pub fn process_set_authority_ix(
+pub fn process_update_authority_ix(
     program_id: &Address,
     accounts: &mut [AccountView],
     data: &[u8],

@@ -12,11 +12,8 @@ import {
   buildRuleTable,
   type Rule,
 } from "../../../src/protocol/membership/policy.js";
-import {
-  buildRingCreatePolicyTransaction,
-  buildRingSetPolicyRulesTransaction,
-  buildRingSetPolicySourceTransaction,
-} from "../../../src/operations/management/policy-admin.js";
+import { buildRingUpdatePolicyTransaction } from "../../../src/operations/management/policy-admin.js";
+import type { RingPolicySourceOwner } from "../../../src/operations/management/admin.js";
 import {
   ZERO_ADDRESS,
   ownedAccount,
@@ -81,14 +78,17 @@ async function chain(input: Readonly<{ hasPolicy?: boolean }> = {}) {
 }
 
 describe("policy transactions", () => {
-  it("compiles create policy under the authority after reading the curator registry", async () => {
+  it("compiles a table write under the authority after reading the curator registry", async () => {
     const client = await chain();
-    const transaction = await buildRingCreatePolicyTransaction({
+    const transaction = await buildRingUpdatePolicyTransaction({
       client,
       ringProgramId: RING,
       authority: AUTHORITY,
-      table: buildRuleTable({ rules: RULES }),
-      sharedSources: [{ listId: ListId.block, curatorRegistry: CURATOR_A }],
+      update: {
+        kind: "rules",
+        table: buildRuleTable({ rules: RULES }),
+        sharedSources: [{ listId: ListId.block, curatorRegistry: CURATOR_A }],
+      },
     });
     expect(Object.keys(transaction.signatures)).toEqual([AUTHORITY]);
     expect(client.getAccount).toHaveBeenCalledWith(CURATOR_A, undefined);
@@ -97,12 +97,15 @@ describe("policy transactions", () => {
   it("refuses a curator without a registry before the blockhash", async () => {
     const client = await chain();
     await expect(
-      buildRingCreatePolicyTransaction({
+      buildRingUpdatePolicyTransaction({
         client,
         ringProgramId: RING,
         authority: AUTHORITY,
-        table: buildRuleTable({ rules: RULES }),
-        sharedSources: [{ listId: ListId.block, curatorRegistry: CURATOR_B }],
+        update: {
+          kind: "rules",
+          table: buildRuleTable({ rules: RULES }),
+          sharedSources: [{ listId: ListId.block, curatorRegistry: CURATOR_B }],
+        },
       }),
     ).rejects.toMatchObject({
       code: "RING_BUILD_POLICY",
@@ -115,29 +118,29 @@ describe("policy transactions", () => {
     const client = await chain({ hasPolicy: false });
     const shared = [{ listId: ListId.block, curatorRegistry: CURATOR_A }];
     const table = buildRuleTable({ rules: RULES });
-    for (const build of [buildRingCreatePolicyTransaction, buildRingSetPolicyRulesTransaction])
-      await expect(
-        build({ client, ringProgramId: RING, authority: AUTHORITY, table, sharedSources: shared }),
-      ).rejects.toMatchObject({
-        code: "RING_BUILD_POLICY",
-        causeCode: "RING_POLICY_TIER_MISMATCH",
-      });
+    await expect(
+      buildRingUpdatePolicyTransaction({
+        client,
+        ringProgramId: RING,
+        authority: AUTHORITY,
+        update: { kind: "rules", table, sharedSources: shared },
+      }),
+    ).rejects.toMatchObject({
+      code: "RING_BUILD_POLICY",
+      causeCode: "RING_POLICY_TIER_MISMATCH",
+    });
     expect(client.getAccount).not.toHaveBeenCalledWith(CURATOR_A, undefined);
     expect(client.getLatestBlockhash).not.toHaveBeenCalled();
   });
 
   it("re-points a referenced list and keeps the sources to one curator", async () => {
     const client = await chain();
-    const build = (
-      listId: ListId,
-      source: Parameters<typeof buildRingSetPolicySourceTransaction>[0]["source"],
-    ) =>
-      buildRingSetPolicySourceTransaction({
+    const build = (listId: ListId, source: RingPolicySourceOwner) =>
+      buildRingUpdatePolicyTransaction({
         client,
         ringProgramId: RING,
         authority: AUTHORITY,
-        listId,
-        source,
+        update: { kind: "source", listId, source },
       });
     await expect(build(ListId.block, { kind: "own" })).resolves.toBeDefined();
     await expect(

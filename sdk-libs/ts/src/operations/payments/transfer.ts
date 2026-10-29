@@ -568,7 +568,7 @@ async function buildRingSpend<R>(
       ...approval.transaction,
       feePayer: params.feePayer,
       lifetime,
-      computeUnitLimit: ringComputeUnitLimit(RingInstructionTag.transact),
+      computeUnitLimit: ringComputeUnitLimit(RingInstructionTag.transfer),
       instructions: [instruction],
     });
     return Object.freeze({

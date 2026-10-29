@@ -5,7 +5,7 @@ and outflow limits. It reads the member records under the registry roots the
 program binds. The `MemberPolicy` keys serve the confidential and anonymous
 rails, and the `DelegatePolicy` keys serve the delegate rail. The rules and
 their evaluation are in the [policy walkthrough](policy-walkthrough.md). The
-checks are listed under [Transact](spec.md#20-transact).
+checks are listed under [Transfer](spec.md#9-transfer).
 
 ## Statement
 

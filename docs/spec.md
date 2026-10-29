@@ -16,11 +16,11 @@ A custom ring is a Solana program that governs its notes in the zolana shielded 
 | Live output | Output | A transfer output that is a UTXO, not a dummy. A ring output has the ring id, an exit has ring id `0`. |
 | Exit | Output | A live output to the default ring. Its owner is public. |
 | Public leg | SPP interface transfer | A deposit or withdrawal of SOL or an SPL token inside a transfer. Its account, mint and amount are public. Its settlement accounts follow the SPP account list. |
-| Frame | Instruction data | The compact byte string of `Transact` and `DelegateTransact`. The program expands it to the SPP transfer. |
+| Frame | Instruction data | The compact byte string of `Transfer` and `AuthorityTransfer`. The program expands it to the SPP transfer. |
 | Salt | 16 bytes | Drawn by the sender per transfer attempt and published in the SPP data. It enters every output blinding and the disclosure pad. |
 | First nullifier `n0` | Field element | The nullifier of input `0`. SPP accepts it once, so every value derived from it is unique to one spend. |
 | Private transaction hash | Hash | `private_tx_hash`, the SPP Poseidon hash over the spent note chain, the output note chain, the address nullifier chain and a secret blinding. The SPP proof, the policy proof and the anonymous audit proof bind it. |
-| Ring kind | Config value | `AuditOnly`, `Policy`, `Anonymous` or `AnonymousPolicy`, fixed by `CreateConfig`. Sets the tier and the first mode. |
+| Ring kind | Config value | `AuditOnly`, `Policy`, `Anonymous` or `AnonymousPolicy`, fixed by `Initialize`. Sets the tier and the first mode. |
 | Tier | Config value | Audit-only or policy (`has_policy`). A policy ring verifies a policy proof on every transfer. |
 | Mode | Config value | `Confidential`, `ConfidentialEscrow` or `Anonymous`. Selects the transfer rail. `ConfidentialEscrow` is `Confidential` with key escrow and a delegate. |
 | Rail | Transfer form | Confidential (each owner signs the transaction), anonymous (a hidden owner signs inside the SPP proof) or delegate (the delegate signs). |
@@ -31,7 +31,7 @@ A custom ring is a Solana program that governs its notes in the zolana shielded 
 | Record | Tree leaf | `Poseidon(member, next, lists, escrow_key, mint_policy, withdrawal_threshold, limits_0, limits_1, limits_2)`. One per member, sorted by member through `next`. |
 | Mint settings | Record fields | `threshold`, `cap`, `cosign_above`, `withdrawal_threshold` and the eight asset limits, each a u64, in the record of an asset member. Only the config authority writes them. [Mint settings](#mint-settings) gives the effect of each value, zero included. |
 | Storage registry | Account | A Storage Program `StorageRegistry`, the root history of one record tree under one authority. Each root carries a revision, and a retired root an expiry. Record contents live in instruction data and the ring indexer. |
-| Records | Storage registry | The ring's own storage registry, bound by `CreatePolicy` for the ring's life. |
+| Records | Storage registry | The ring's own storage registry, bound by `Initialize` and rebound by `UpdatePolicy`. |
 | Ring policy | Account | The `RingPolicy` account holds the policy, the records address and a mirror of the root history of the records and of the curator. |
 | Own root, curator root | Root | A root of the records or of the curator, named by its revision and read from the ring policy's mirror. |
 | Policy | Rule table, source map and hash | Stored in the ring policy. The policy proof binds `policy_hash`. |
@@ -51,11 +51,11 @@ A custom ring is a Solana program that governs its notes in the zolana shielded 
 | Ring address | Payment address | The recipient's shielded address and the ring program id, shared off chain. A `zolana:` payment request adds a request view tag. |
 | View tag | 32 bytes | The owner tag of an anonymous ring output, a zolana [view tag](../zolana/docs/spec.md#view-tags) or a random tag on a dummy. No proof derives it. |
 | First payment | Ring output | A payment to a recipient the sender holds no shared tags with. It takes the recipient's request tag or bootstrap tag, as the caller chooses. |
-| Upgrade authority | Key | The Loader v3 upgrade authority of the ring program. Signs `CreateConfig`. |
+| Upgrade authority | Key | The Loader v3 upgrade authority of the ring program. Signs `Initialize`. |
 | Config authority | Key | `RingProgramConfig.authority`. Sets the policy, authority lists, mint settings, readers, co-signers, pause and delegate. |
 | Owner | Wallet (client) | Holds ring notes and their spending keys. Writes its member lists and registers its nullifier key. The sender of a transfer is its owner. |
 | Payer | Key | SPP account `0`. Pays rent and fees. On the anonymous rail it is the only SPP signer. A relayer can be the payer. |
-| Funder | Key | Signs a deposit leg or an `AuditedDeposit` and pays its tokens. |
+| Funder | Key | Signs a deposit leg or a `Deposit` and pays its tokens. |
 | Co-signer | Key | A key with its own `CoSigner` record and scope. A ring has up to 255 per class. One co-signer whose scope covers every demanded class signs a demanded operation. An approval with no demanded class takes any co-signer. Its withdrawal thresholds are the `withdrawal_threshold` mint settings. |
 | Party identities | Field elements | `solana_owner_identity` of the payer, the signing co-signer and the withdrawal destination, each `0` when absent. The anonymous audit proof shows each nonzero one differs from the hidden owner. |
 | Delegate | Key | Set once on a policy ring, which turns the ring to `ConfidentialEscrow`. Moves escrowed members' notes inside the ring. |
@@ -71,15 +71,15 @@ A custom ring is a Solana program that governs its notes in the zolana shielded 
 ## Ring lifecycle
 
 1. **Deploy.** The upgrade authority deploys the ring program with Loader v3. The binary carries the verifying keys of its [proving key lock](#keys-and-releases). No ring account exists.
-2. **Create.** The upgrade authority signs `CreateConfig` with the auditor key and the ring kind. The config authority creates the records in the Storage Program, then signs `CreatePolicy`, which binds the records on every ring and pins the table on a policy ring. Anyone then sends `SyncRoots` for the records and for a curator. The config authority signs `InitSppRingConfig`, which creates the SPP `RingConfig` at `ring_auth`. SPP activates the ring at creation when its protocol config allows it. Else SPP governance activates it later. No note moves until the ring is activated.
+2. **Create.** The records exist in the Storage Program under the config authority or the storage authority the policy binding names. The upgrade authority signs `Initialize` with the auditor key, the ring kind and an optional policy binding over the records, required on a policy ring. One instruction creates the config, the ring policy with the records bound and the table pinned, and the SPP `RingConfig` at `ring_auth`. The upgrade authority becomes the config authority and hands the config on with `UpdateAuthority` when the keys differ. Anyone then sends `SyncRoots` for the records and for a curator. SPP activates the ring at creation when its protocol config allows it. Else SPP governance activates it later. No note moves until the ring is activated.
 3. **Enrol.** An owner signs a [record update](#record-updates) for its own member lists. On a confidential ring the update can also carry an escrow entry, which seals the owner's nullifier secret to the auditor under a register key proof. An anonymous ring refuses the escrow entry. On a ring whose policy reads `allow`, `reader` or `approval` from its own records, the owner's update can await those lists, and Ring RPC holds it until the config authority's update sets those lists on the owner's record. The config authority signs record updates for authority lists and mint settings. Each signer sends its update to Ring RPC, and the writer applies it to the ring's `StorageRegistry`. The CLI writes records only through record updates.
-4. **Deposit.** A funder signs `AuditedDeposit` for up to 8 new ring notes. The deposit proof seals each note's opening to the auditor. On a `ConfidentialEscrow` ring it also proves each owner's escrow record. On a policy ring it proves each deposited asset against the asset rules under the own root and, for a list a curator serves, under the curator root.
-5. **Transfer.** The sender proves the SPP proof, the audit proof and on a policy ring the policy proof, and submits `Transact`. The program rebuilds both ring statements, verifies the proofs and invokes SPP as `ring_auth`. On a confidential ring the owner signs the transaction. On an anonymous ring the hidden owner signs inside the SPP proof and only the payer signs the transaction.
+4. **Deposit.** A funder signs `Deposit` for up to 8 new ring notes. The deposit proof seals each note's opening to the auditor. On a `ConfidentialEscrow` ring it also proves each owner's escrow record. On a policy ring it proves each deposited asset against the asset rules under the own root and, for a list a curator serves, under the curator root.
+5. **Transfer.** The sender proves the SPP proof, the audit proof and on a policy ring the policy proof, and submits `Transfer`. The program rebuilds both ring statements, verifies the proofs and invokes SPP as `ring_auth`. On a confidential ring the owner signs the transaction. On an anonymous ring the hidden owner signs inside the SPP proof and only the payer signs the transaction.
 6. **Leave.** A transfer pays an exit or withdraws a public leg. The rules screen exit owners and withdrawal owners as output owners. A delegate move can do neither.
 7. **Merge.** An owner merges up to 24 notes of one asset into one note with `Merge`, with a disclosure proof to the auditor. The merge proves the owner's nullifier secret and carries no owner signature. On a `ConfidentialEscrow` ring the proof also opens the owner's escrow record.
-8. **Delegate.** The config authority and the delegate sign `SetDelegate` on a confidential policy ring, which sets the mode to `ConfidentialEscrow`. SPP governance enables the ring's authority rail. The auditor opens an escrowed member's nullifier secret for the delegate, and the delegate moves that member's notes to escrowed members with `DelegateTransact`.
+8. **Delegate.** The config authority and the delegate sign `SetDelegate` on a confidential policy ring, which sets the mode to `ConfidentialEscrow`. SPP governance enables the ring's authority rail. The auditor opens an escrowed member's nullifier secret for the delegate, and the delegate moves that member's notes to escrowed members with `AuthorityTransfer`.
 9. **Audit.** The auditor opens every transfer, deposit and merge from its auditor message. The authority of the ring's storage tree writes ring-wide and wallet grants to its `reader` list. A Ring RPC deployment can keep both grants in its database instead, signed by the config authority or the wallet. Ring RPC serves every granted reader the openings. A revoked reader keeps what it already read.
-10. **Govern.** The config authority repins the policy, writes mint settings, sets the co-signers and the pause, and hands the config to a new authority. A repin refuses every proof over the old table. A records update reaches transfers at the next `SyncRoots`, and a sender whose root left the mirror proves again. A repin and a mint-setting write are separate instructions, so a transfer between them proves under the new table and the old settings.
+10. **Govern.** The config authority repins the policy or rebinds its records with `UpdatePolicy`, writes mint settings, sets the co-signers and the pause, and hands the config to a new authority. A repin refuses every proof over the old table. A records update reaches transfers at the next `SyncRoots`, and a sender whose root left the mirror proves again. A repin and a mint-setting write are separate instructions, so a transfer between them proves under the new table and the old settings.
 
 ### Properties
 
@@ -141,7 +141,7 @@ On an `Anonymous` ring (anonymous rail):
 
 On deposits, merges and delegate moves:
 
-23. An `AuditedDeposit` publishes the funder, the mint, each note's amount, owner commitment and view tag. On a confidential ring the SDK sets the view tag to the recipient's `u`, which links funder and recipient. No layer on chain checks that the funder differs from the owner.
+23. A `Deposit` publishes the funder, the mint, each note's amount, owner commitment and view tag. On a confidential ring the SDK sets the view tag to the recipient's `u`, which links funder and recipient. No layer on chain checks that the funder differs from the owner.
 24. A `Merge` publishes the payer and every input nullifier, and SPP requires one owner and one asset across the inputs. It links up to 24 notes to one owner. The auditor opens the owner, the amount and every input hash.
 25. A delegate move publishes the delegate, the recipients' `u` and their owner identities as the confidential rail does. The source member stays private from chain observers. The delegate holds the source member's nullifier secret, so it computes that member's nullifiers.
 
@@ -188,12 +188,12 @@ pub struct SourceSlot { pub list_id: u8, pub registry: Address }                
 
 ### RingProgramConfig
 
-One per ring at `[b"config"]`. `CreateConfig` creates it and nothing closes it. It fixes the auditor key and the tier for the ring's life. `valid()` requires `mode <= 2` and `has_policy <= 1`.
+One per ring at `[b"config"]`. `Initialize` creates it and nothing closes it. It fixes the auditor key and the tier for the ring's life. `valid()` requires `mode <= 2` and `has_policy <= 1`.
 
 ```rust
 pub struct RingProgramConfig {
     pub discriminator: u8,
-    /// Config authority. Written by `CreateConfig` and `SetAuthority`.
+    /// Config authority. Written by `Initialize` and `UpdateAuthority`.
     pub authority: Address,
     /// `0x04 || u`, canonical and not of low order.
     pub auditor_pubkey: [u8; 33],
@@ -209,7 +209,7 @@ pub struct RingProgramConfig {
 }
 ```
 
-The mode changes once at most. `CreateConfig` sets `Anonymous` for the anonymous kinds and `Confidential` for the others. `SetDelegate` sets `Confidential -> ConfidentialEscrow`. No instruction leaves `ConfidentialEscrow` or `Anonymous`.
+The mode changes once at most. `Initialize` sets `Anonymous` for the anonymous kinds and `Confidential` for the others. `SetDelegate` sets `Confidential -> ConfidentialEscrow`. No instruction leaves `ConfidentialEscrow` or `Anonymous`.
 
 `SetCoSigner` and `ClearCoSigner` keep each count equal to the records whose scope holds the class. A change that takes a count out of `0..=255` fails with `CoSignerCountOutOfRange`.
 
@@ -229,7 +229,7 @@ pub struct CoSigner {
 
 ### RingPolicy
 
-One per ring at `[b"policy"]`, created by `CreatePolicy` for any kind and never closed. It holds the policy, the records address and one mirror each of the records and the curator root history.
+One per ring at `[b"policy"]`, created by `Initialize` with a policy binding for any kind and never closed. It holds the policy, the records address and one mirror each of the records and the curator root history.
 
 ```rust
 pub struct Root {
@@ -249,14 +249,14 @@ pub struct RootMirror {
 pub struct RingPolicy {
     pub discriminator: u8,
     pub bump: u8,
-    /// The records `StorageRegistry`, fixed by `CreatePolicy`.
+    /// The records `StorageRegistry`, bound by `Initialize` and rebound by `UpdatePolicy`.
     pub records: Address,
     /// Zero without a policy.
     pub policy_hash: [u8; 32],
     /// `SourceSlot { list_id, registry }`. A zero registry reads the records.
     pub sources: [SourceSlot; 8],
     pub rules: EncodedRuleTable,
-    /// Plus one per policy write. Not hashed.
+    /// Plus one per `UpdatePolicy` and per table pinned by `Initialize`. Not hashed.
     pub generation: [u8; 4],
     pub generation_slot: [u8; 8],
     pub own_roots: RootMirror,
@@ -264,7 +264,7 @@ pub struct RingPolicy {
 }
 ```
 
-`CreatePolicy` starts it with both mirrors zero. `SyncRoots` of `records` replaces `own_roots`, and `SyncRoots` of the curator replaces `curator_roots`, with the registry's `roots`. A statement names a root by its revision, and the program reads it from a mirror:
+`Initialize` starts it with both mirrors zero, and a records rebind zeroes `own_roots`. `SyncRoots` of `records` replaces `own_roots`, and `SyncRoots` of the curator replaces `curator_roots`, with the registry's `roots`. A statement names a root by its revision, and the program reads it from a mirror:
 
 1. The mirror's `registry` equals `records` for an own root, or the one curator the sources name for a curator root (`MirrorNotSynced`).
 2. The mirror holds a nonzero root at the revision, and that root is the newest one or its `expires_at` lies above the current slot (`MirrorRootExpired`).
@@ -335,7 +335,7 @@ fn chain(p: u64) -> Field { Poseidon(chain(p - 1), entry_hash(entry(p))) }
 
 ### SPP ring config
 
-SPP owns the `RingConfig` at `ring_auth`, 69 bytes: authority, program id, the authority rail flag, `paused`, `activated` and the bump. `InitSppRingConfig` creates it with `authority = ring_auth`, and SPP sets `activated` from its protocol config. Afterwards SPP governance alone sets `activated` and the authority rail flag. The ring writes only `paused`, through `SetPaused`. SPP refuses every ring rail while the ring is not activated or is paused.
+SPP owns the `RingConfig` at `ring_auth`, 69 bytes: authority, program id, the authority rail flag, `paused`, `activated` and the bump. `Initialize` creates it with `authority = ring_auth`, and SPP sets `activated` from its protocol config. Afterwards SPP governance alone sets `activated` and the authority rail flag. The ring writes only `paused`, through `SetPaused`. SPP refuses every ring rail while the ring is not activated or is paused.
 
 ## Member records
 
@@ -409,39 +409,36 @@ Only a record write of an `Update` or `UpdateImmediate` writes mint settings, an
 | # | Instruction | Tag | Description | Access |
 | --- | --- | --- | --- | --- |
 | | **Setup** | | | |
-| 1 | `CreateConfig` | `1` | Creates the ring config with the auditor key and the ring kind. | Upgrade authority signs |
-| 3 | `InitSppRingConfig` | `2` | Creates the SPP `RingConfig` at `ring_auth`. | Config authority signs |
+| 1 | `Initialize` | `53` | Creates the ring config, the ring policy over the records and the SPP `RingConfig` at `ring_auth`. | Upgrade authority signs |
 | | **Policy** | | | |
-| 4 | `CreatePolicy` | `7` | Creates the ring policy over the records and pins the first rule table and source map. | Config authority signs |
-| 5 | `SetPolicyRules` | `12` | Replaces the rule table and source map of an existing policy. | Config authority signs |
-| 6 | `SetPolicySource` | `10` | Points one list at the records or the curator. | Config authority signs |
+| 2 | `UpdatePolicy` | `54` | Replaces the rule table and source map, points one list at the records or the curator, or rebinds the records. | Config authority signs |
 | | **Controls** | | | |
-| 7 | `SetAuthority` | `6` | Hands the config to a new authority. | Config authority and new authority sign |
-| 8 | `SetPaused` | `11` | Pauses or resumes the ring in SPP. | Config authority signs |
-| 11 | `SetCoSigner` | `27` | Creates a co-signer's record or sets its scope. | Config authority signs |
-| 12 | `ClearCoSigner` | `21` | Closes a co-signer's record. | Config authority signs |
-| 14 | `SetDelegate` | `24` | Sets the delegate and turns the ring to `ConfidentialEscrow`. | Config authority and delegate sign |
+| 3 | `UpdateAuthority` | `6` | Hands the config to a new authority. | Config authority and new authority sign |
+| 4 | `SetPaused` | `11` | Pauses or resumes the ring in SPP. | Config authority signs |
+| 5 | `SetCoSigner` | `27` | Creates a co-signer's record or sets its scope. | Config authority signs |
+| 6 | `ClearCoSigner` | `21` | Closes a co-signer's record. | Config authority signs |
+| 7 | `SetDelegate` | `24` | Sets the delegate and turns the ring to `ConfidentialEscrow`. | Config authority and delegate sign |
 | | **Money movement** | | | |
-| 19 | `AuditedDeposit` | `31` | Forwards an SPP ring deposit with its deposit proof. | Funder signs |
-| 20 | `Transact` | `43` | Verifies a transfer's ring proofs and forwards it to SPP. | Owner signs, or payer on an anonymous ring |
-| 21 | `DelegateTransact` | `44` | Same as `Transact` on the authority rail. | Delegate signs |
-| 22 | `Merge` | `20` | Forwards an SPP ring merge with its disclosure proof. | Payer signs |
+| 8 | `Deposit` | `31` | Forwards an SPP ring deposit with its deposit proof. | Funder signs |
+| 9 | `Transfer` | `43` | Verifies a transfer's ring proofs and forwards it to SPP. | Owner signs, or payer on an anonymous ring |
+| 10 | `AuthorityTransfer` | `44` | Same as `Transfer` on the authority rail. | Delegate signs |
+| 11 | `Merge` | `20` | Forwards an SPP ring merge with its disclosure proof. | Payer signs |
 | | **Roots** | | | |
-| 23 | `SyncRoots` | `48` | Copies a storage registry's roots into its ring policy mirror. | Anyone |
+| 12 | `SyncRoots` | `48` | Copies a storage registry's roots into its ring policy mirror. | Anyone |
 
-Tag `18` (SPP `RING_DEPOSIT`) fails with `DepositAuditRequired`. Tags `3` and `25` fail with `InvalidInstructionData`. Tags `4`, `5`, `8`, `9`, `22`, `23`, `26`, `28` to `30` and `32` to `42` are retired, never reused, and fail as unknown with `InvalidInstructionData` (`8100`). Clients set each instruction's compute unit limit to `ACCOUNT_UNITS`, the policy writes to `POLICY_UNITS` and every proof instruction to `PROOF_UNITS`.
+Tags `3` and `25` fail with `InvalidInstructionData`. Tags `1`, `2`, `4`, `5`, `7` to `10`, `12`, `18` (SPP `RING_DEPOSIT`), `22`, `23`, `26` and `28` to `42` are retired, never reused, and fail as unknown with `InvalidInstructionData` (`8100`). Clients set each instruction's compute unit limit to `ACCOUNT_UNITS`, `UpdatePolicy` to `POLICY_UNITS`, `Initialize` to `2 * ACCOUNT_UNITS + POLICY_UNITS` and every proof instruction to `PROOF_UNITS`.
 
 Variable instruction data is wincode: little-endian integers, `u8` length prefixes, `bool` as one byte `0` or `1`. Fixed structs are byte-identical Pod layouts. Every proof is a `CustomRingProof`.
 
-`CreateConfig` runs the upgrade authority check, and every instruction the config authority signs runs the config authority check. The upgrade authority check requires the program account and its program data under Loader v3, and a nonzero upgrade authority equal to the signer, else `UnauthorizedInitializer`. An immutable program fails it. The config authority check loads the config (`ConfigNotInitialized`) and requires the signer to equal `config.authority`, else `UnauthorizedAuthority`. Account lists below name each account's role, and an account marked signer fails without its signature. The forwarding instructions pass every trailing account to SPP. `SetPolicySource` refuses extra accounts, and the other instructions ignore them.
+`Initialize` runs the upgrade authority check, and every instruction the config authority signs runs the config authority check. The upgrade authority check requires the program account and its program data under Loader v3, and a nonzero upgrade authority equal to the signer, else `UnauthorizedInitializer`. An immutable program fails it. The config authority check loads the config (`ConfigNotInitialized`) and requires the signer to equal `config.authority`, else `UnauthorizedAuthority`. Account lists below name each account's role, and an account marked signer fails without its signature. The forwarding instructions pass every trailing account to SPP. `UpdatePolicy` refuses extra accounts on its `Source` and `Records` variants, and the other instructions ignore them.
 
 ### Setup
 
 Create the ring and register it with SPP.
 
-#### 1. CreateConfig
+#### 1. Initialize
 
-Tag `1`. Creates the ring config with the auditor key and the ring kind. No SPP account changes.
+Tag `53`. Creates the ring config with the auditor key and the ring kind, the ring policy over the records when the data carries a policy binding, and the SPP `RingConfig` at `ring_auth`, with `ring_auth` as its authority. The signer becomes the config authority.
 
 **Accounts**
 
@@ -451,75 +448,26 @@ Tag `1`. Creates the ring config with the auditor key and the ring kind. No SPP 
 4. `system_program`.
 5. `program`: the ring program account.
 6. `program_data`: its Loader v3 program data.
+7. `protocol_config`: the SPP protocol config.
+8. `ring_auth`: writable.
+9. `spp_program`.
+10. `policy`: `[b"policy"]`. Writable. With a policy binding only, as are 11 and 12.
+11. `records`: the ring's own `StorageRegistry`.
+12. `curators`: zero or one curator `StorageRegistry` for each distinct source number.
 
 **Instruction data**
 
 ```rust
-struct CreateConfigIxData {
+struct InitializeIxData {
     /// `0x04 || u`.
     auditor_pubkey: [u8; 33],
     /// `AuditOnly = 0`, `Policy = 1`, `Anonymous = 2`, `AnonymousPolicy = 3`.
     kind: RingKind,
+    /// `0` for none, `1` then the binding. Required on a policy ring.
+    policy: Option<PolicyBindingIxData>,
 }
-```
 
-The program checks, in order:
-
-1. The data decodes, else `InvalidInstructionData`.
-2. `system_program` is the system program (`InvalidSystemProgram`).
-3. The upgrade authority check.
-4. `auditor_pubkey` has tag `0x04` and a canonical `u` outside the 5 low-order values (`InvalidAuditorPubkey`).
-5. `config` is the canonical `[b"config"]` (`InvalidConfigPda`) and empty (`ConfigAlreadyInitialized`).
-
-It writes the discriminator, `authority`, the auditor key, `bump`, `has_policy` for `Policy` and `AnonymousPolicy`, `mode = Anonymous` for the anonymous kinds else `Confidential`, and `created_slot = Clock::slot`. Every other field is zero.
-
-The program does not check that the auditor holds the key's secret. Ring RPC releases its key with a signed statement. The operator CLI checks that signature against the pinned service key, or accepts any service key under `--trust-ring-rpc` when none is pinned.
-
-#### 3. InitSppRingConfig
-
-Tag `2`. Creates the SPP `RingConfig` at `ring_auth`, with `ring_auth` as its authority.
-
-**Accounts**
-
-1. `payer`: signer, writable.
-2. `authority`: the config authority. Signer.
-3. `config`.
-4. `protocol_config`: the SPP protocol config.
-5. `ring_auth`: writable.
-6. `system_program`.
-7. `spp_program`.
-8. `policy`: the ring policy, on a policy ring only.
-
-**Instruction data**
-
-Empty.
-
-The program checks the config authority, that `spp_program` is SPP and executable (`InvalidShieldedPoolProgram`), on a policy ring that the ring policy loads (`InvalidRingPolicy`) and holds a policy (`PolicyNotSet`), and that `ring_auth` is canonical (`MissingRingAuth`). It invokes SPP `create_ring_config` signed as `ring_auth`. SPP sets `activated` from its protocol config and leaves the authority rail and `paused` off.
-
-The program does not activate the ring. Until SPP governance activates it, no note moves.
-
-### Policy
-
-Pin and change the rule table and its sources. On a policy ring `InitSppRingConfig` needs the policy first.
-
-#### 4. CreatePolicy
-
-Tag `7`. Creates the ring policy, binds the records for the ring's life and pins the first rule table and source map. An audit-only ring takes an empty table and pins no policy. Its ring policy still binds the records its withdrawal exemptions read.
-
-**Accounts**
-
-1. `payer`: pays rent. Signer, writable.
-2. `authority`: the config authority. Signer.
-3. `config`.
-4. `policy`: `[b"policy"]`. Writable.
-5. `records`: the ring's own `StorageRegistry`.
-6. `system_program`.
-7. `curators`: zero or one curator `StorageRegistry` for each distinct source number.
-
-**Instruction data**
-
-```rust
-struct CreatePolicyIxData {
+struct PolicyBindingIxData {
     /// The records may answer to it beside the config authority.
     storage_authority: Address,
     table: PolicyTableIxData,
@@ -536,62 +484,83 @@ Every `Vec` has a `u8` length prefix.
 
 The program checks, in order:
 
-1. The data decodes, `system_program` is the system program and the config authority signs.
-2. An audit-only ring takes no sources and no rules (`PolicyOnAuditOnlyRing`).
-3. `records` is owned by the Storage Program and decodes as a `StorageRegistry` (`InvalidStorageRegistry`). Its authority is the config authority or `storage_authority` (`StorageAuthorityMismatch`).
-4. `policy` is the canonical `[b"policy"]` (`InvalidRingPolicy`) and empty (`RingPolicyAlreadyExists`).
+1. The data decodes, else `InvalidInstructionData`.
+2. `system_program` is the system program (`InvalidSystemProgram`).
+3. The upgrade authority check.
+4. `spp_program` is SPP and executable (`InvalidShieldedPoolProgram`).
+5. `auditor_pubkey` has tag `0x04` and a canonical `u` outside the 5 low-order values (`InvalidAuditorPubkey`).
+6. `config` is the canonical `[b"config"]` (`InvalidConfigPda`) and empty (`ConfigAlreadyInitialized`).
 
-It writes the policy with `records` and both mirrors zero. An audit-only ring stops here. A policy ring then runs the table checks:
+It writes the discriminator, `authority`, the auditor key, `bump`, `has_policy` for `Policy` and `AnonymousPolicy`, `mode = Anonymous` for the anonymous kinds else `Confidential` and `created_slot = Clock::slot`. Every other field is zero. Then the policy binding:
 
-5. The table holds at most `MAX_RULES` rows (`InvalidPolicyRules`).
-6. For each source in order, the source names a list the rules reference, once (`InvalidSource`), and a curator source passes check 7.
-7. A curator is not `records` (`InvalidSource`). It is owned by the Storage Program and decodes as a `StorageRegistry` of any authority (`InvalidStorageRegistry`).
-8. The generation is below `u32::MAX` (`PolicyGenerationOverflow`), and every curator source is one registry (`InvalidSource`).
-9. Each rule decodes canonically, the rows past `rule_count` are zero, and the table holds no duplicate rule (`InvalidPolicyRules`).
-10. Every referenced list is an authority list (`MemberWrittenListRule`) and has a source (`InvalidSource`).
+7. A policy ring carries a binding (`PolicyNotSet`). An audit-only ring without one skips to check 17.
+8. An audit-only ring's table holds no sources and no rules (`PolicyOnAuditOnlyRing`).
+9. `records` is owned by the Storage Program and decodes as a `StorageRegistry` (`InvalidStorageRegistry`). Its authority is the config authority or `storage_authority` (`StorageAuthorityMismatch`).
+10. `policy` is the canonical `[b"policy"]` (`InvalidRingPolicy`) and empty (`RingPolicyAlreadyExists`).
+
+It writes the policy with `records` and both mirrors zero. An audit-only ring pins no policy, and its ring policy binds the records its withdrawal exemptions read. A policy ring then runs the table checks:
+
+11. The table holds at most `MAX_RULES` rows (`InvalidPolicyRules`).
+12. For each source in order, the source names a list the rules reference, once (`InvalidSource`), and a curator source passes check 13.
+13. A curator is not `records` (`InvalidSource`). It is owned by the Storage Program and decodes as a `StorageRegistry` of any authority (`InvalidStorageRegistry`).
+14. Every curator source is one registry (`InvalidSource`).
+15. Each rule decodes canonically, the rows past `rule_count` are zero, and the table holds no duplicate rule (`InvalidPolicyRules`).
+16. Every referenced list is an authority list (`MemberWrittenListRule`) and has a source (`InvalidSource`).
 
 It stores the table, the sources, `policy_hash`, `generation = 1` and `generation_slot = Clock::slot`. It copies no root, `SyncRoots` fills each mirror. It writes no mint setting. The config authority writes those through a [record update](#record-updates).
 
+17. `ring_auth` is canonical (`MissingRingAuth`).
+
+It invokes SPP `create_ring_config` signed as `ring_auth`. SPP sets `activated` from its protocol config and leaves the authority rail and `paused` off. A failure at any check reverts the config and the policy with it.
+
+The program does not check that the auditor holds the key's secret. Ring RPC releases its key with a signed statement. The operator CLI checks that signature against the pinned service key, or accepts any service key under `--trust-ring-rpc` when none is pinned.
+
 The program does not check that the curator serves the list or that the storage authority is the one the ring operator runs. The ring trusts the roots of the records and the curator fully. The operator CLI names a curator by its ring and checks that the curator ring pins a policy serving the list from its own records.
 
-#### 5. SetPolicyRules
+The program does not activate the ring. Until SPP governance activates it, no note moves.
 
-Tag `12`. Replaces the table and the sources together, so every proof over the old table fails.
+### Policy
+
+Change the rule table, its sources and the records.
+
+#### 2. UpdatePolicy
+
+Tag `54`. Replaces the table and the sources together, points one referenced list at the records or the curator, or rebinds the records to another `StorageRegistry`. Every variant adds one to `generation` and sets `generation_slot = Clock::slot`.
 
 **Accounts**
 
 1. `authority`: the config authority. Signer.
 2. `config`.
 3. `policy`: writable.
-4. `curators`: as `CreatePolicy`.
-
-**Instruction data**
-
-`PolicyTableIxData`.
-
-The program checks the config authority, that the ring policy loads (`InvalidRingPolicy`) and holds a policy (`PolicyNotSet`), then `CreatePolicy` checks 5 to 10. A changed curator reads nothing until `SyncRoots` fills its mirror (`MirrorNotSynced`).
-
-#### 6. SetPolicySource
-
-Tag `10`. Points one referenced list at the records or the curator, and stores the new hash over the stored rules.
-
-**Accounts**
-
-As `SetPolicyRules`, with no curator for an own source and one curator for a curator source.
+4. `Rules`: the curators, as `Initialize`. `Source`: no curator for an own source, one curator for a curator source. `Records`: the new records `StorageRegistry`.
 
 **Instruction data**
 
 ```rust
-struct SetPolicySourceIxData { list_id: u8, source: u8 }
+enum UpdatePolicyIxData {
+    Rules(PolicyTableIxData),                // 0
+    Source(PolicySourceIxData),              // 1
+    Records { storage_authority: Address },  // 2
+}
+
+struct PolicySourceIxData { list_id: u8, source: u8 }
 ```
 
-The program checks the config authority, the list id (`InvalidListId`), that `(source, curators)` is `(0, [])` or `(1, [curator])` with the curator checks of `CreatePolicy` check 7 (`InvalidSource`, `InvalidStorageRegistry`), and that the list's slot is already set (`InvalidSource`). It refuses any other trailing account. It then stores the policy as `CreatePolicy` does, which refuses a second distinct curator.
+The variant is one byte.
+
+The program checks the data, the config authority and that the ring policy loads (`InvalidRingPolicy`), then by variant:
+
+- `Rules`: the policy holds a policy (`PolicyNotSet`), then `Initialize` checks 11 to 16. A changed curator reads nothing until `SyncRoots` fills its mirror (`MirrorNotSynced`). Every proof over the old table fails.
+- `Source`: the list id (`InvalidListId`), that `(source, curators)` is `(0, [])` or `(1, [curator])` with the curator checks of `Initialize` check 13 (`InvalidSource`, `InvalidStorageRegistry`), and that the list's slot is already set (`InvalidSource`). It stores the new hash over the stored rules, which refuses a second distinct curator.
+- `Records`: exactly one trailing account, owned by the Storage Program, that decodes as a `StorageRegistry` (`InvalidStorageRegistry`), whose authority is the config authority or `storage_authority` (`StorageAuthorityMismatch`), and that is not the curator (`InvalidSource`). It writes `records` and zeroes `own_roots`. An own root reads nothing until `SyncRoots` of the new records fills the mirror (`MirrorNotSynced`). An audit-only ring rebinds too.
+
+Every variant checks that the generation is below `u32::MAX` (`PolicyGenerationOverflow`).
 
 ### Controls
 
 Change who controls the ring and how.
 
-#### 7. SetAuthority
+#### 3. UpdateAuthority
 
 Tag `6`. Hands the config to `new_authority`.
 
@@ -607,7 +576,7 @@ Empty.
 
 The program checks the config authority and writes `authority = new_authority`. The new authority signs, so a mistyped address cannot strand the config.
 
-#### 8. SetPaused
+#### 4. SetPaused
 
 Tag `11`. Pauses or resumes the ring in SPP.
 
@@ -628,7 +597,7 @@ The program checks the config authority, SPP (`InvalidShieldedPoolProgram`) and 
 
 A pause stops every SPP rail of the ring, so no owner can transfer, exit or withdraw until the authority resumes it. Record writes, policy writes and controls still run.
 
-#### 11. SetCoSigner
+#### 5. SetCoSigner
 
 Tag `27`. Creates the signer's `CoSigner` record, or sets the scope of an existing one. Other co-signers keep their records. The withdrawal thresholds are mint settings, which a [record update](#record-updates) writes.
 
@@ -654,7 +623,7 @@ The program checks the scope (`InvalidCoSignerScope`), a nonzero signer (`Invali
 
 The co-signer may equal any key here. A transfer refuses a demanded co-signer that equals an owner or the delegate.
 
-#### 12. ClearCoSigner
+#### 6. ClearCoSigner
 
 Tag `21`. Closes one `CoSigner` record. It takes no data.
 
@@ -667,7 +636,7 @@ Tag `21`. Closes one `CoSigner` record. It takes no data.
 
 The program checks the config authority, that the record loads (`InvalidCoSignerRecord`) and that `rent_recipient` is not the record. The config counts drop the record's classes, and the record closes into `rent_recipient`. The mint settings keep their withdrawal thresholds.
 
-#### 14. SetDelegate
+#### 7. SetDelegate
 
 Tag `24`. Sets the delegate and the `ConfidentialEscrow` mode on a confidential policy ring. Both are permanent for the deployed binary.
 
@@ -684,13 +653,13 @@ Empty.
 
 The program checks, in order, the config authority, that no delegate exists (`DelegateAlreadySet`), that the ring is not anonymous (`AnonymousRingRefused`), the policy tier (`DelegateRequiresPolicy`), and that the ring policy loads (`InvalidRingPolicy`). It writes `delegate` and `mode = ConfidentialEscrow`.
 
-From this point every transfer sets the key escrow layout bit, and every deposited note and every transfer output, exits included, needs an owner whose record escrows the note's nullifier key. SPP governance must also enable the ring's authority rail before `DelegateTransact` runs.
+From this point every transfer sets the key escrow layout bit, and every deposited note and every transfer output, exits included, needs an owner whose record escrows the note's nullifier key. SPP governance must also enable the ring's authority rail before `AuthorityTransfer` runs.
 
 ### Money movement
 
 Move notes into, inside and out of the ring.
 
-#### 19. AuditedDeposit
+#### 8. Deposit
 
 Tag `31`. Forwards one SPP ring deposit of up to 8 new notes, with a proof that seals each opening to the auditor. Every deposit into a ring runs through it.
 
@@ -704,7 +673,7 @@ Tag `31`. Forwards one SPP ring deposit of up to 8 new notes, with a proof that 
 **Instruction data**
 
 ```rust
-struct AuditedDepositPrefix {
+struct DepositPrefix {
     tag: u8, // 31
     proof: CustomRingProof,
     /// The own root's revision, u64 LE, in `ConfidentialEscrow` mode or on a policy ring, else 0.
@@ -729,7 +698,7 @@ The deposit proof checks, for each of `count` entries:
 
 The program checks, in order:
 
-1. The prefix is complete (`InvalidInstructionData`), its tag is `31` and the SPP data starts with tag `18` (`InvalidAuditedDeposit`), and the SPP body decodes (`InvalidDepositData`).
+1. The prefix is complete (`InvalidInstructionData`), its tag is `31` and the SPP data starts with SPP `RING_DEPOSIT`, tag `18` (`InvalidAuditedDeposit`), and the SPP body decodes (`InvalidDepositData`).
 2. In `ConfidentialEscrow` mode or on a policy ring the ring policy loads (`InvalidRingPolicy`), its own mirror serves `own_revision` ([RingPolicy](#ringpolicy)), and a written `policy_hash` enters the statement. Otherwise the revision is `0` (`UnexpectedMemberRegistryRoot`). When a policy source names a curator, the curator mirror serves `curator_revision`. Otherwise `curator_revision` is `0` (`UnexpectedCuratorRevision`).
 3. When a record covers `DEPOSITS`, a record covering it loads (`InvalidCoSignerRecord`, `CoSignerOutOfScope`) and its signer signs (`MissingCoSigner`, `UnauthorizedCoSigner`).
 4. On an anonymous ring every entry has `ring_data_hash = 0` (`AnonymousRingDataNotZero`).
@@ -741,7 +710,7 @@ It verifies the proof under the key of the smallest capacity in `{1, 2, 4, 8}` a
 
 No owner rule, sender rule or outflow limit runs on a deposit, and the funder is never screened. The rules screen the note's owner when it sends. SPP leaves the view tag opaque, and the proof binds it only through the context hash. A recipient's wallet finds the note by its view tag. The ring SDKs open the scheme 8 body in their ring scan, Rust `DepositOpener` and TypeScript `openRingDeposit`. They keep the note only when it rebuilds the published hash.
 
-#### 20. Transact
+#### 9. Transfer
 
 Tag `43`. Verifies a ring transfer's audit proof, on a policy ring its policy proof, and an optional withdrawal exemption proof, expands the compact frame into the SPP transfer, and invokes SPP signed as `ring_auth`. The ring program writes no ring account.
 
@@ -874,7 +843,7 @@ The program builds each slot from the settlement accounts: the asset `hash_bytes
 
 The program checks, in order:
 
-1. The rail: `Transact` on `Confidential` or `ConfidentialEscrow` is confidential, on `Anonymous` anonymous.
+1. The rail: `Transfer` on `Confidential` or `ConfidentialEscrow` is confidential, on `Anonymous` anonymous.
 2. The frame parses. `CURATOR` and `APPROVAL_REQUIRED` need `POLICY`. `DEFAULT_OWNER_TAG` and `FULL_OPENINGS` need the anonymous rail, `OWNER_IN_PROOF` the confidential rail (`FlagNotAllowed`). No disclosure field is zero (`ZeroDisclosureField`).
 3. The settlement accounts cover the interface transfers (`InvalidSettlementAccounts`). At most 32 legs, none of zero amount (`TooManyPublicLegs`, `ZeroPublicLegAmount`). With a withdrawal exemption proof, the ring policy loads (`InvalidRingPolicy`), the own mirror serves its `own_revision`, the transfer withdraws at most 3 mints (`InvalidInstructionData`), and the proof verifies (`ProofVerificationFailed`).
 4. Policy ring: a policy proof is present (`MissingPolicyProof`), the `CURATOR` flag matches the policy (`FlagNotAllowed`), a policy exists (`PolicyNotSet`), the own mirror serves `own_revision` and the curator mirror serves `curator_revision` ([RingPolicy](#ringpolicy)). Audit-only ring: no policy proof (`UnexpectedPolicyProof`).
@@ -893,13 +862,13 @@ The program checks, in order:
 
 The ring proofs do not check ownership, inclusion, conservation, nullifier uniqueness or expiry. SPP checks them in the same instruction. Exit payloads are not proven, as on any default-ring output, so a sender can publish a payload that does not open, and the recipient misses the exit. The auditor still opens the exit from the disclosure. No proof relates a published `u` to the output's owner, and no proof checks an anonymous tag or body, see [the limitation](#a-sender-can-make-a-note-unreadable-for-its-owner). The program does not check the Solana fee payer of the outer transaction against the hidden owner. The Rust SDK refuses a fee payer or signer equal to the hidden owner, and the TS SDK checks the payer and the co-signer.
 
-#### 21. DelegateTransact
+#### 10. AuthorityTransfer
 
-Tag `44`. Same as `Transact` on the SPP authority rail, signed by the delegate instead of an owner. It moves an escrowed member's notes to escrowed members of the same ring.
+Tag `44`. Same as `Transfer` on the SPP authority rail, signed by the delegate instead of an owner. It moves an escrowed member's notes to escrowed members of the same ring.
 
 Rail row replaced: `Confidential` or `ConfidentialEscrow` with a delegate (`DelegateDisabled`) gives the delegate rail, `RING_AUTHORITY_TRANSACT` (21) with the `RingAuthority` circuit, shapes 2×2 and 4×4 only. An anonymous ring fails with `AnonymousRingRefused`.
 
-Accounts: as `Transact`, with `delegate` (signer) after the co-signer slot and no owner signers. The SPP list is the `ring_authority_transact` list.
+Accounts: as `Transfer`, with `delegate` (signer) after the co-signer slot and no owner signers. The SPP list is the `ring_authority_transact` list.
 
 Audit key replaced: the 2×2 and 4×4 shapes take `DeliveredAudit { 2 | 4 }`.
 
@@ -913,7 +882,7 @@ Policy proof replaced: the `DelegatePolicy` key reopens the inputs. Input `0` is
 
 The SPP authority circuit keeps every input and output in the ring, and no owner signature binds the output owners. The delegate moves a member's notes to any escrowed member the rules admit.
 
-#### 22. Merge
+#### 11. Merge
 
 Tag `20`. Forwards an SPP ring merge, which joins up to 24 notes of one owner and one asset into one note, with a disclosure proof to the auditor. On a `ConfidentialEscrow` ring the proof also opens the owner's escrow record.
 
@@ -955,7 +924,7 @@ No rule runs on a merge, because SPP keeps the owner, asset and value. The proof
 
 Copy storage registry roots into the ring policy.
 
-#### 23. SyncRoots
+#### 12. SyncRoots
 
 Tag `48`. Copies a storage registry's root history into the ring policy mirror of that registry. Anyone sends it, and it pays no lamports.
 
@@ -1325,7 +1294,7 @@ An outflow limit applies per transfer, per mint and per signing key. It keeps no
 | Cap per person across keys | No. Each signing key is its own sender. |
 | Deposit and withdrawal volume per window | Only on co-signed transactions, by `deposit_cap` over `deposit_window_slots` and `withdrawal_cap` over `withdrawal_window_slots`. Ring RPC counts them, no proof does. |
 
-A deposit leg in the same transfer lowers the outflow of its mint, and its funder is not screened. A deposit leg above what the transfer pays away in a limited mint fails the proof, so a sender deposits to itself with `AuditedDeposit`. An exit counts as outflow, also to the sender. A mint whose record holds a zero `cap` and a zero `cosign_above` is unbounded. The delegate rail runs no outflow check.
+A deposit leg in the same transfer lowers the outflow of its mint, and its funder is not screened. A deposit leg above what the transfer pays away in a limited mint fails the proof, so a sender deposits to itself with `Deposit`. An exit counts as outflow, also to the sender. A mint whose record holds a zero `cap` and a zero `cosign_above` is unbounded. The delegate rail runs no outflow check.
 
 ### Guards and block lists bind one transfer and one key
 
@@ -1333,7 +1302,7 @@ An `AboveAmount` or `AboveAmountByAsset` guard sums the payments of one transfer
 
 ### Deposits screen assets only and merges screen nothing
 
-Only the asset rules run on `AuditedDeposit`, and no rule runs on `Merge`. No outflow limit runs on either. A deposit can credit any owner, registered or not. On a `ConfidentialEscrow` ring a deposit and a merge require an escrowed owner. A curator list screens a deposit under the subscriber's curator mirror, so a curator revocation reaches deposits at the next `SyncRoots` of that mirror. The rules screen an owner when it sends and every output owner it pays.
+Only the asset rules run on `Deposit`, and no rule runs on `Merge`. No outflow limit runs on either. A deposit can credit any owner, registered or not. On a `ConfidentialEscrow` ring a deposit and a merge require an escrowed owner. A curator list screens a deposit under the subscriber's curator mirror, so a curator revocation reaches deposits at the next `SyncRoots` of that mirror. The rules screen an owner when it sends and every output owner it pays.
 
 ### List rules publish what they screen
 

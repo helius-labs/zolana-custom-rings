@@ -8,10 +8,9 @@ import { address, generateKeyPairSigner } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
 import {
-  createRingConfigInstruction,
   deployRingProgram,
   fetchRingProgramConfig,
-  initSppRingConfigInstruction,
+  initializeRingInstruction,
   RingProgramBinary,
   verifyRingProgram,
 } from "../../src/ring/index.js";
@@ -69,7 +68,7 @@ describe("ring program", () => {
 
     await sendInstruction(
       client,
-      await createRingConfigInstruction({
+      await initializeRingInstruction({
         ringProgramId: program.address,
         payer: operator,
         authority: operator,
@@ -79,16 +78,6 @@ describe("ring program", () => {
       operator,
     );
     const config = await fetchRingProgramConfig(client, program.address);
-    await sendInstruction(
-      client,
-      await initSppRingConfigInstruction({
-        ringProgramId: program.address,
-        payer: operator,
-        authority: operator,
-        config,
-      }),
-      operator,
-    );
     expect(config.authority).toBe(operator.address);
     expect(config.hasPolicy).toBe(false);
     expect(config.mode).toBe("confidential");

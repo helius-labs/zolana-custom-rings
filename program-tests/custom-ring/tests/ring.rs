@@ -168,7 +168,7 @@ const CUSTOM_RING_TRANSACT_CU_LIMIT: u64 = 1_000_000;
 // Below the requested budget a confirmed transfer can still exceed the ceiling.
 const _: () = assert!(
     WIDEST_TRANSACT_ESTIMATE_CU <= CUSTOM_RING_TRANSACT_CU_LIMIT
-        && CUSTOM_RING_TRANSACT_CU_LIMIT < compute_unit_limit(InstructionTag::Transact) as u64
+        && CUSTOM_RING_TRANSACT_CU_LIMIT < compute_unit_limit(InstructionTag::Transfer) as u64
 );
 
 const DEFAULT_DEPOSIT: u64 = 4_000_000_000;
