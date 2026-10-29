@@ -172,7 +172,7 @@ impl CustomRingProof {
 
 const _: () = assert!(CustomRingProof::SIZE == 192);
 
-/// `tag || proof || own_revision`, then the SPP deposit instruction unchanged.
+/// `tag || proof || own_revision || curator_revision`, then the SPP deposit instruction unchanged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
 pub struct AuditedDepositPrefix {
@@ -180,6 +180,8 @@ pub struct AuditedDepositPrefix {
     pub proof: CustomRingProof,
     /// Zero off an escrow or policy ring.
     pub own_revision: Revision,
+    /// Zero without a curator source.
+    pub curator_revision: Revision,
 }
 
 /// Compressed Groth16 points, `b` decompresses to SPP's raw 128 bytes.

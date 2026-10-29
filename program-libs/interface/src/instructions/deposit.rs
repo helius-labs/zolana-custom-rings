@@ -46,6 +46,8 @@ pub struct DepositedAsset {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DepositRegistry<'a> {
     pub own_root: &'a [u8; 32],
+    /// `None` without a curator source.
+    pub curator_root: Option<&'a [u8; 32]>,
     /// Every deposited owner's record escrows the deposited nullifier key.
     pub key_escrow: bool,
     /// Its table's asset rules screen every deposited asset, `None` before the first policy write.
@@ -66,7 +68,7 @@ pub struct DepositPublicInput<'a> {
 }
 
 /// Every deposit slot padded to the maximum.
-pub const DEPOSIT_PUBLIC_INPUT_ELEMENTS: usize = 4 + MAX_RING_DEPOSIT_AUDIT_SLOTS * 4 + 7;
+pub const DEPOSIT_PUBLIC_INPUT_ELEMENTS: usize = 4 + MAX_RING_DEPOSIT_AUDIT_SLOTS * 4 + 8;
 
 impl DepositPublicInput<'_> {
     pub fn hash(&self) -> Result<[u8; 32], HasherError> {
@@ -110,10 +112,14 @@ impl DepositPublicInput<'_> {
         )]);
         chain[keys + 5] = registry.map_or([0; 32], |registry| *registry.own_root);
         chain[keys + 6] = registry
+            .and_then(|registry| registry.curator_root)
+            .copied()
+            .unwrap_or_default();
+        chain[keys + 7] = registry
             .and_then(|registry| registry.policy_hash)
             .copied()
             .unwrap_or_default();
-        let assets = keys + 7;
+        let assets = keys + 8;
         for (slot, deposited) in self.assets.iter().enumerate() {
             chain[assets + slot * 2] = deposited.asset;
             chain[assets + slot * 2 + 1] = right_align(&deposited.amount.to_be_bytes());

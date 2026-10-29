@@ -106,7 +106,7 @@ pub fn process_audited_deposit_ix(
     let config = Box::new(*load_config(program_id, iter.next_account("config")?)?);
     let mode = config.mode()?;
     let key_escrow = mode == RingMode::ConfidentialEscrow;
-    // 2. An escrow or policy ring binds its own root, a policy ring also its policy.
+    // 2. An escrow or policy ring binds its own root, a policy ring also its policy and any curator root.
     let loaded = match key_escrow || config.has_policy() {
         true => Some(load_policy(program_id, iter.next_account("policy")?)?),
         false if audited.own_revision.value() != 0 => {
@@ -114,8 +114,16 @@ pub fn process_audited_deposit_ix(
         }
         false => None,
     };
-    let own_root = match &loaded {
-        Some(policy) => Some(policy.own_root(audited.own_revision, Clock::get()?.slot)?),
+    let slot = Clock::get()?.slot;
+    let own_root = loaded
+        .as_ref()
+        .map(|policy| policy.own_root(audited.own_revision, slot))
+        .transpose()?;
+    let curator_root = match loaded.as_ref().filter(|policy| policy.curator().is_some()) {
+        Some(policy) => Some(policy.curator_root(audited.curator_revision, slot)?),
+        None if audited.curator_revision.value() != 0 => {
+            return Err(CustomRingError::UnexpectedCuratorRevision.into())
+        }
         None => None,
     };
     let registry = loaded
@@ -123,6 +131,7 @@ pub fn process_audited_deposit_ix(
         .zip(own_root.as_ref())
         .map(|(policy, own_root)| DepositRegistry {
             own_root,
+            curator_root: curator_root.as_ref(),
             key_escrow,
             policy_hash: policy.written_policy_hash(),
         });

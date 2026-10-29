@@ -11,7 +11,7 @@ Every ring proof has one public input. It is the fold of a statement the program
 | Apply | `HashChain4` | 8 | `ApplyRecords`, `AuthorityWriteRecords` |
 | Register key | `HashChain4` | 8 | `RegisterKey` |
 | Withdrawal exemption | `HashChain4` | 8 | `Transact` |
-| Deposit | `HashChain` | 43 | `AuditedDeposit` |
+| Deposit | `HashChain` | 44 | `AuditedDeposit` |
 | Merge | `HashChain` | 17 | `Merge` |
 
 ## Audit
@@ -93,11 +93,11 @@ context_hash = HashChain([ hash_bytes(program id), hash_bytes(tree),
 statement    = HashChain([ CRDP, context_hash, right_align(count), right_align(anonymous),
                            (owner_utxo_hash_i, hash_bytes(capsule ciphertext_i)) × 8,
                            pack_be(auditor_pubkey), pack_be(eph_pk),
-                           right_align(key_escrow), registry_root, policy_hash,
+                           right_align(key_escrow), registry_root, curator_root, policy_hash,
                            (asset_i, right_align(amount_i)) × 8 ])
 ```
 
-`spp_data` is the forwarded SPP data from its tag byte `18`. Slots past `count` are zero. `anonymous` is `mode == Anonymous`. `key_escrow` is `mode == ConfidentialEscrow`. `registry_root` is the own root at the prefix's index in `ConfidentialEscrow` mode or on a policy ring, else `0`. `policy_hash` is the registry's written policy hash on a policy ring, else `0`. `asset_i` is the SPP asset field of entry `i`'s group, `SOL_ASSET_FIELD` or `hash_bytes(mint)`, and `amount_i` its amount.
+`spp_data` is the forwarded SPP data from its tag byte `18`. Slots past `count` are zero. `anonymous` is `mode == Anonymous`. `key_escrow` is `mode == ConfidentialEscrow`. `registry_root` is the own root at the prefix's index in `ConfidentialEscrow` mode or on a policy ring, else `0`. `curator_root` is the curator root at the prefix's `curator_revision` when a policy source names a curator, else `0`. `policy_hash` is the registry's written policy hash on a policy ring, else `0`. `asset_i` is the SPP asset field of entry `i`'s group, `SOL_ASSET_FIELD` or `hash_bytes(mint)`, and `amount_i` its amount.
 
 ## Merge
 

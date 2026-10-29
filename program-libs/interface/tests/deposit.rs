@@ -54,6 +54,7 @@ fn public_statement_binds_each_opening_ciphertext_key_and_context() {
     let registry = |own_root, key_escrow, policy_hash| {
         Some(DepositRegistry {
             own_root,
+            curator_root: None,
             key_escrow,
             policy_hash,
         })
@@ -98,6 +99,15 @@ fn public_statement_binds_each_opening_ciphertext_key_and_context() {
         },
         DepositPublicInput {
             registry: registry(&[0; 32], false, Some(&[9; 32])),
+            ..input
+        },
+        DepositPublicInput {
+            registry: Some(DepositRegistry {
+                own_root: &[0; 32],
+                curator_root: Some(&[9; 32]),
+                key_escrow: false,
+                policy_hash: None,
+            }),
             ..input
         },
         DepositPublicInput {

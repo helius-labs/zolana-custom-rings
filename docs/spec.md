@@ -77,7 +77,7 @@ A custom ring is a Solana program that governs its notes in the zolana shielded 
 1. **Deploy.** The upgrade authority deploys the ring program with Loader v3. The binary carries the verifying keys of its [proving key lock](#keys-and-releases). No ring account exists.
 2. **Create.** The upgrade authority signs `CreateConfig` with the auditor key and the ring kind. The config authority signs `CreateMemberRegistry`, creates the records in the Storage Program, then signs `CreatePolicy`, which binds the records on every ring and pins the table on a policy ring. Anyone then sends `SyncRoots` for the records and for a curator. The config authority signs `InitSppRingConfig`, which creates the SPP `RingConfig` at `ring_auth`. SPP activates the ring at creation when its protocol config allows it. Else SPP governance activates it later. No note moves until the ring is activated.
 3. **Enrol.** An owner signs a [record update](#record-updates) for its own member lists. On a confidential ring the update can also carry an escrow entry, which seals the owner's nullifier secret to the auditor under a register key proof. An anonymous ring refuses the escrow entry. The config authority signs record updates for authority lists and mint settings. Each signer sends its update to Ring RPC, and the writer applies it to the ring's `StorageRegistry`. The CLI writes records only through record updates.
-4. **Deposit.** A funder signs `AuditedDeposit` for up to 8 new ring notes. The deposit proof seals each note's opening to the auditor. On a `ConfidentialEscrow` ring it also proves each owner's escrow record. On a policy ring it proves each deposited asset against the asset rules under the own root.
+4. **Deposit.** A funder signs `AuditedDeposit` for up to 8 new ring notes. The deposit proof seals each note's opening to the auditor. On a `ConfidentialEscrow` ring it also proves each owner's escrow record. On a policy ring it proves each deposited asset against the asset rules under the own root and, for a list a curator serves, under the curator root.
 5. **Transfer.** The sender proves the SPP proof, the audit proof and on a policy ring the policy proof, and submits `Transact`. The program rebuilds both ring statements, verifies the proofs and invokes SPP as `ring_auth`. On a confidential ring the owner signs the transaction. On an anonymous ring the hidden owner signs inside the SPP proof and only the payer signs the transaction.
 6. **Leave.** A transfer pays an exit or withdraws a public leg. The rules screen exit owners and withdrawal owners as output owners. A delegate move can do neither.
 7. **Merge.** An owner merges up to 24 notes of one asset into one note with `Merge`, with a disclosure proof to the auditor. The merge proves the owner's nullifier secret and carries no owner signature. On a `ConfidentialEscrow` ring the proof also opens the owner's escrow record.
@@ -97,7 +97,7 @@ A custom ring is a Solana program that governs its notes in the zolana shielded 
    - the party identities from the accounts
    - the public legs, the withdrawal owners and the gross withdrawal per mint from the settlement accounts
 4. Every transfer verifies an audit proof. The proof seals `tx_viewing_sk` to the auditor. It forces the blinding of each live output in slot `i` to `TXOB(n0, TXOS(n0, CRBS(tx_viewing_sk, salt)), i)` ([Blinding derivations](spec/crypto/hashing.md#blinding-derivations)), so the auditor opens every output of every transfer. On the delivered rails it proves that every ring output's body encrypts the output's blinding and amount to the key its slot publishes. On the anonymous rail the disclosure opens every ring output's owner key and every live output's asset and amount. No output carries data.
-5. Every deposit verifies a deposit proof that seals each new note's opening to the auditor. On a policy ring every active asset rule holds for each deposited asset under the own root, its guard read as for a transfer output. The plain SPP ring deposit tag is refused.
+5. Every deposit verifies a deposit proof that seals each new note's opening to the auditor. On a policy ring every active asset rule holds for each deposited asset on the lists its own and curator records carry, its guard read as for a transfer output. The plain SPP ring deposit tag is refused.
 6. On a policy ring every transfer verifies a policy proof under the stored `policy_hash`. Each active rule holds for each subject. The subjects are the sender, every live output owner and asset, and every withdrawal owner and asset. A rule holds when the subject is on one of its present lists or off one of its absent lists. A refused subject passes only when the rule's guard exempts its amount. Rules join with AND.
 7. Record openings fold to roots the program reads from the ring policy's mirrors. `SyncRoots` copies a storage registry's roots into its mirror, and a transfer after it proves under the new lists. A curator update reaches a subscriber at the next `SyncRoots` of that subscriber's curator mirror.
 8. On a policy ring the policy proof opens the own record of each live output's asset and of each nonzero public asset, absent assets included. For each such asset with a nonzero `cap` or `cosign_above`, `outflow = others - net`, and the co-signer signs above `cosign_above`:
@@ -1005,6 +1005,8 @@ struct AuditedDepositPrefix {
     proof: CustomRingProof,
     /// The own root's revision, u64 LE, in `ConfidentialEscrow` mode or on a policy ring, else 0.
     own_revision: [u8; 8],
+    /// The curator root's revision, u64 LE, when a policy source names a curator, else 0.
+    curator_revision: [u8; 8],
 }
 // followed by the SPP ring deposit data, from its tag byte 18
 ```
@@ -1018,13 +1020,13 @@ The deposit proof checks, for each of `count` entries:
 1. The note's `owner_utxo_hash = Poseidon(Poseidon(owner_pk_hash, nullifier_pk), Poseidon(CRDB, blinding_secret))`.
 2. The capsule seals `(owner hash, blinding, owner key)` to the auditor. On an anonymous ring `owner_pk_hash = solana_owner_identity(owner key)`. Elsewhere the owner key is zero.
 3. In `ConfidentialEscrow` mode the owner's record opens under the bound root with `escrow_key = Poseidon(nullifier_pk, ct_hash)`.
-4. Under a nonzero `policy_hash` the rule table hashes to it, and the entry's asset record or its absence opens under the bound root. Every active asset rule holds for the asset as for a transfer output, an amount guard summing the batch's entries of the asset. An active asset rule that reads a curator list fails, the proof opens no curator root.
-5. The statement binds a context hash over the ring id, the tree and the exact SPP data. It also binds each entry's asset and amount and the policy hash. [Public inputs](spec/crypto/public-inputs.md#deposit)
+4. Under a nonzero `policy_hash` the rule table hashes to it, and the entry's asset record or its absence opens under the own root and, when a policy source names a curator, under the curator root. Each list reads the record of the registry its source names, as for a transfer. Every active asset rule holds for the asset as for a transfer output, an amount guard summing the batch's entries of the asset.
+5. The statement binds a context hash over the ring id, the tree and the exact SPP data. It also binds each entry's asset and amount, the curator root and the policy hash. [Public inputs](spec/crypto/public-inputs.md#deposit)
 
 The program checks, in order:
 
 1. The prefix is complete (`InvalidInstructionData`), its tag is `31` and the SPP data starts with tag `18` (`InvalidAuditedDeposit`), and the SPP body decodes (`InvalidDepositData`).
-2. In `ConfidentialEscrow` mode or on a policy ring the ring policy loads (`InvalidRingPolicy`), its own mirror serves `own_revision` ([RingPolicy](#ringpolicy)), and a written `policy_hash` enters the statement. Otherwise the revision is `0` (`UnexpectedMemberRegistryRoot`).
+2. In `ConfidentialEscrow` mode or on a policy ring the ring policy loads (`InvalidRingPolicy`), its own mirror serves `own_revision` ([RingPolicy](#ringpolicy)), and a written `policy_hash` enters the statement. Otherwise the revision is `0` (`UnexpectedMemberRegistryRoot`). When a policy source names a curator, the curator mirror serves `curator_revision`. Otherwise `curator_revision` is `0` (`UnexpectedCuratorRevision`).
 3. When a record covers `DEPOSITS`, a record covering it loads (`InvalidCoSignerRecord`, `CoSignerOutOfScope`) and its signer signs (`MissingCoSigner`, `UnauthorizedCoSigner`).
 4. On an anonymous ring every entry has `ring_data_hash = 0` (`AnonymousRingDataNotZero`).
 5. `ring_auth` sits at SPP index 2 and at no other index (`MissingRingAuth`, `RingAuthOutOfSlot`). The depositor at SPP index 1 signs (`MissingFundingSigner`).
@@ -1557,7 +1559,7 @@ An `AboveAmount` or `AboveAmountByAsset` guard sums the payments of one transfer
 
 ### Deposits screen assets only and merges screen nothing
 
-Only the asset rules run on `AuditedDeposit`, and no rule runs on `Merge`. No outflow limit runs on either. A deposit can credit any owner, registered or not. On a `ConfidentialEscrow` ring a deposit and a merge require an escrowed owner. An active asset rule over a curator list refuses every deposit, the deposit proof opens no curator root. The rules screen an owner when it sends and every output owner it pays.
+Only the asset rules run on `AuditedDeposit`, and no rule runs on `Merge`. No outflow limit runs on either. A deposit can credit any owner, registered or not. On a `ConfidentialEscrow` ring a deposit and a merge require an escrowed owner. A curator list screens a deposit under the subscriber's curator mirror, so a curator revocation reaches deposits at the next `SyncRoots` of that mirror. The rules screen an owner when it sends and every output owner it pays.
 
 ### List rules publish what they screen
 

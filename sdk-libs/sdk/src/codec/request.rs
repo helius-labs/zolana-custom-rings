@@ -792,6 +792,8 @@ pub(crate) struct DepositRequest<'a> {
     #[serde(with = "fe")]
     pub member_registry_root: [u8; 32],
     #[serde(with = "fe")]
+    pub curator_root: [u8; 32],
+    #[serde(with = "fe")]
     pub policy_hash: [u8; 32],
     #[serde(serialize_with = "fe::seq")]
     pub assets: [[u8; 32]; 1],
@@ -801,6 +803,8 @@ pub(crate) struct DepositRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub table: Option<PolicyTable<'a>>,
     pub asset_records: [Option<MemberOpening>; 1],
+    /// `None` without a curator source.
+    pub curator_asset_records: [Option<MemberOpening>; 1],
 }
 
 /// The Solana key an owner identity hashes, the disclosure names it.
