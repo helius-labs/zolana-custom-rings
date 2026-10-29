@@ -77,7 +77,7 @@ Added
 - `signRecordUpdate`, `verifyRecordUpdate`, `recordUpdateStatementHash`, `recordUpdateQueueEntry` and `walletGrantMember` in `@heliuslabs/zolana-custom-rings/advanced` sign, check and hash record updates byte for byte as the Rust SDK does.
 - `syncRootsInstruction` copies a storage registry's roots into the ring's policy account at `ringPolicyAddress`, `fetchRingPolicy`, `decodeRingPolicy`, `mirrorRoot` and `mirrorCurrentRoot` read its mirrors, and `StorageProgramError` names the storage program's codes.
 - `RingInstructionTag.syncRoots` names the ring program's root sync tag, and `RingProgramError` names the co-signer record and ring policy account codes `invalidCoSignerRecord`, `coSignerRecordAlreadyExists`, `invalidRingPolicy` and `ringPolicyAlreadyExists`.
-- `MintPolicy.limits` holds the mint's `AssetLimits`, per-sender and ring-wide caps over slot windows and per-transaction public deposit and withdrawal caps, `EMPTY_ASSET_LIMITS` sets none, `AuthorityListWrite.withMintPolicy` refuses a window cap or a window set without the other with `RING_MEMBER_REGISTRY_INVALID`, and `RingProgramError.invalidAssetLimits` names the program's refusal.
+- `MintPolicy.limits` holds the mint's `AssetLimits`, per-sender, ring-wide, public deposit and public withdrawal caps each over its own slot window, `EMPTY_ASSET_LIMITS` sets none, `AuthorityListWrite.withMintPolicy` refuses a cap or a window set without the other with `RING_MEMBER_REGISTRY_INVALID`, and `RingProgramError.invalidAssetLimits` names the program's refusal.
 
 Fixed
 

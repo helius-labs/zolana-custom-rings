@@ -604,7 +604,9 @@ function decodeMintPolicy(value: unknown): MintPolicy {
       volumeCap: amount(limits, "volumeCap"),
       volumeWindowSlots: amount(limits, "volumeWindowSlots"),
       depositCap: amount(limits, "depositCap"),
+      depositWindowSlots: amount(limits, "depositWindowSlots"),
       withdrawalCap: amount(limits, "withdrawalCap"),
+      withdrawalWindowSlots: amount(limits, "withdrawalWindowSlots"),
     }),
   });
 }

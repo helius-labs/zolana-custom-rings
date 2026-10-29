@@ -1041,8 +1041,18 @@ function mintSettings(packed: unknown, withdrawal: unknown, limits: unknown) {
     return [(value >> 128n) & mask, (value >> 64n) & mask, value & mask] as const;
   };
   const [threshold, cap, cosignAbove] = amounts(packed);
-  const [senderCap, senderWindowSlots, volumeCap, volumeWindowSlots, depositCap, withdrawalCap] =
-    list(limits).flatMap(amounts);
+  // The last field holds two amounts below an unused top one.
+  const [
+    senderCap,
+    senderWindowSlots,
+    volumeCap,
+    volumeWindowSlots,
+    depositCap,
+    depositWindowSlots,
+    ,
+    withdrawalCap,
+    withdrawalWindowSlots,
+  ] = list(limits).flatMap(amounts);
   return {
     threshold,
     cap,
@@ -1054,7 +1064,9 @@ function mintSettings(packed: unknown, withdrawal: unknown, limits: unknown) {
       volumeCap: volumeCap!,
       volumeWindowSlots: volumeWindowSlots!,
       depositCap: depositCap!,
+      depositWindowSlots: depositWindowSlots!,
       withdrawalCap: withdrawalCap!,
+      withdrawalWindowSlots: withdrawalWindowSlots!,
     },
   };
 }
