@@ -93,13 +93,21 @@ pub(crate) fn patiently<T>(
 pub(crate) fn mint_policies(
     ctx: &Context,
 ) -> Result<std::collections::BTreeMap<[u8; 32], zolana_ring_policy::MintPolicy>> {
+    let label = format!("the mint policies of {}", ctx.ring.program_id());
+    patiently(label, || read_mint_policies(ctx))
+}
+
+fn read_mint_policies(
+    ctx: &Context,
+) -> Result<std::collections::BTreeMap<[u8; 32], zolana_ring_policy::MintPolicy>, RingError> {
     use zolana_ring_client::records::StorageTip;
     use zolana_ring_indexer::rpc::{
         GetStorageMemberRecordsRequest, RingMemberOpening, MAX_RING_MEMBER_PAGE_LIMIT,
     };
     let ring_policy = ctx.block(ctx.ring.require_policy(ctx.chain()))?;
-    let tip = StorageTip::mirrored(&ring_policy)
-        .context("the policy mirrors no root of its records, run `SyncRoots` for them")?;
+    let tip = StorageTip::mirrored(&ring_policy).ok_or(RingError::UnsyncedRoots {
+        registry: ring_policy.records,
+    })?;
     let mut result = std::collections::BTreeMap::new();
     let mut start = Some(1);
     while let Some(index) = start {
@@ -124,7 +132,10 @@ pub(crate) fn mint_policies(
                 &tip.root,
                 &member,
             )?;
-            let policy = read.record().expect("verified present record").mint_policy;
+            let policy = read
+                .record()
+                .ok_or(RingError::InvalidRecordOpening)?
+                .mint_policy;
             if policy != zolana_ring_policy::MintPolicy::EMPTY {
                 result.insert(member, policy);
             }
