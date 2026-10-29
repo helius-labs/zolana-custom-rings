@@ -56,8 +56,8 @@ A custom ring is a Solana program that governs its notes in the zolana shielded 
 | Owner | Wallet (client) | Holds ring notes and their spending keys. Writes its member lists and registers its nullifier key. The sender of a transfer is its owner. |
 | Payer | Key | SPP account `0`. Pays rent and fees. On the anonymous rail it is the only SPP signer. A relayer can be the payer. |
 | Funder | Key | Signs a deposit leg or an `AuditedDeposit` and pays its tokens. |
-| Co-signer | Key | One key in the config, with a scope. Signs every operation its scope or an approval demands. Its withdrawal thresholds are the `withdrawal_threshold` mint settings. |
-| Party identities | Field elements | `solana_owner_identity` of the payer, the configured co-signer and the withdrawal destination, each `0` when absent. The anonymous audit proof shows each nonzero one differs from the hidden owner. |
+| Co-signer | Key | A key with its own `CoSigner` record and scope. A ring has up to 255 per class. One co-signer whose scope covers every demanded class signs a demanded operation. An approval with no demanded class takes any co-signer. Its withdrawal thresholds are the `withdrawal_threshold` mint settings. |
+| Party identities | Field elements | `solana_owner_identity` of the payer, the signing co-signer and the withdrawal destination, each `0` when absent. The anonymous audit proof shows each nonzero one differs from the hidden owner. |
 | Insert fee | Lamports | What a member write or key registration pays the config authority. The authority's own writes pay nothing. |
 | Delegate | Key | Set once on a policy ring, which turns the ring to `ConfidentialEscrow`. Moves escrowed members' notes inside the ring. |
 | Auditor | Key holder | Holds the X25519 auditor key in Ring RPC or a local file. Opens every transfer, deposit, merge and escrowed key. |
@@ -102,12 +102,12 @@ A custom ring is a Solana program that governs its notes in the zolana shielded 
    - `net` is the asset's signed public net, a deposit positive and a withdrawal negative.
    - The proof requires `net <= others`, and `outflow <= cap` when `cap != 0`.
    - The proof sets `approval_required` exactly when some asset has `cosign_above != 0` and `outflow > cosign_above`. The program then demands the co-signer.
-9. The co-signer must sign:
-   - every transfer, delegate move and merge, when its scope holds `TRANSFERS`
-   - every transfer with a deposit leg and every audited deposit, when its scope holds `DEPOSITS`
-   - every transfer with a withdrawal leg, when its scope holds `WITHDRAWALS`, unless the transfer carries a valid withdrawal exemption proof. The proof shows each withdrawn mint's gross withdrawal at or below the mint's `withdrawal_threshold`. A zero or absent threshold exempts no withdrawal, and a deposit leg does not lower the gross amount.
-   - every transfer with `approval_required`, whatever its scope
+9. An operation demands each of its classes that some `CoSigner` record covers, and one co-signer whose scope covers every demanded class signs:
+   - `TRANSFERS` for every transfer, delegate move and merge
+   - `DEPOSITS` for every transfer with a deposit leg and every audited deposit
+   - `WITHDRAWALS` for every transfer with a withdrawal leg, unless the transfer carries a valid withdrawal exemption proof. The proof shows each withdrawn mint's gross withdrawal at or below the mint's `withdrawal_threshold`. A zero or absent threshold exempts no withdrawal, and a deposit leg does not lower the gross amount.
 
+   A transfer with `approval_required` and no demanded class takes any co-signer.
    A demanded co-signer differs from every owner signer and from the delegate.
 10. Owners keep their spending keys. On the confidential rail every owner signer signs, and a policy transfer has exactly one owner. On the anonymous rail the hidden owner's signature is inside the SPP proof. A merge proves the owner's nullifier secret. The delegate rail runs only in `ConfidentialEscrow` mode, keeps every note in the ring, and takes no public leg or exit.
 11. In `ConfidentialEscrow` mode the policy proof requires each live output's owner record to hold `escrow_key = Poseidon(nullifier_pk, hash_bytes(ciphertext))` for the output's nullifier key. A deposit proves the same. The auditor therefore opens the nullifier secret of every note's owner.
@@ -134,7 +134,7 @@ On a `Confidential` or `ConfidentialEscrow` ring (confidential rail):
 
 On an `Anonymous` ring (anonymous rail):
 
-18. Public: the configured co-signer identity, the withdrawal destination, each exit owner, each 32-byte view tag, the length of each body and, on a policy ring, the blinded sender commitment.
+18. Public: the signing co-signer identity, the withdrawal destination, each exit owner, each 32-byte view tag, the length of each body and, on a policy ring, the blinded sender commitment.
 19. Private from chain observers: the sender, every recipient, the amounts, assets and blindings, and the spent notes. The audit proof shows the hidden owner differs from the payer, the co-signer and the withdrawal destination.
 20. A transfer that spends a default-ring note publishes the hidden owner's identity `solana_owner_identity(key)` as `default_owner_tag`, so it names its sender. An exit or a withdrawal publishes its recipient. When ring notes are spent, SPP refuses an exit to the hidden owner's key, and the audit proof refuses a withdrawal to it. No layer checks a recipient key that is only linked to the sender.
 21. A first payment takes the recipient's request tag or bootstrap tag. The bootstrap tag is the recipient's `u`, so it names the recipient's viewing key and links every bootstrap payment to that key. Two payments under one request tag link to each other. Later payments of a pair take shared tags only the holders of the two viewing keys derive. Only the first change output takes the sender tag. A second change output takes a random tag laid out as a derived tag and opens from the sender bundle. An empty body tells change from payments and dummies.
@@ -157,10 +157,11 @@ In every mode:
 
 | Constant | Value | Use |
 | --- | --- | --- |
-| `RING_PROGRAM_CONFIG` | `10` | Discriminator of `RingProgramConfig`, seed `[b"config"]`, 150 bytes. |
+| `RING_PROGRAM_CONFIG` | `10` | Discriminator of `RingProgramConfig`, seed `[b"config"]`, 120 bytes. |
 | `MEMBER_REGISTRY` | `11` | Discriminator of `MemberRegistry`, seed `[b"members"]`, 2388 bytes. |
 | `RECORD_QUEUE` | `12` | Discriminator of `RecordQueue`, seed `[b"queue"]`, 698 bytes. |
 | `READ_ACCESS_RECORD` | `2` | Discriminator of `ReadAccessRecord`, seed `[b"reader", sha256(reader)]`, 36 bytes. |
+| `CO_SIGNER` | `14` | Discriminator of `CoSigner`, seed `[b"co_signer", signer]`, 35 bytes. |
 | Reserved discriminators | `1`, `3` to `9` | Unused. `0` marks an empty account. |
 | `ROOT_HISTORY` | `32` | Roots a member registry keeps. |
 | `QUAD_ARITY`, `QUAD_HEIGHT` | `4`, `10` | Shape of the record tree, `2^20` leaves. |
@@ -211,10 +212,8 @@ pub struct RingProgramConfig {
     pub mode: u8,
     /// Lamports a record write pays the config authority. The authority's own writes pay nothing.
     pub insert_fee: [u8; 8],
-    /// Zero without a co-signer.
-    pub co_signer: Address,
-    /// `TRANSFERS = 1`, `DEPOSITS = 2`, `WITHDRAWALS = 4`.
-    pub co_sign_scope: u8,
+    /// Counts of `CoSigner` records covering `TRANSFERS`, `DEPOSITS` and `WITHDRAWALS`, in that order.
+    pub co_signers: [u8; 3],
     /// Zero without a delegate. Set once, together with `mode = ConfidentialEscrow`.
     pub delegate: Address,
     pub created_slot: [u8; 8],
@@ -222,6 +221,22 @@ pub struct RingProgramConfig {
 ```
 
 The mode changes once at most. `CreateConfig` sets `Anonymous` for the anonymous kinds and `Confidential` for the others. `SetDelegate` sets `Confidential -> ConfidentialEscrow`. No instruction leaves `ConfidentialEscrow` or `Anonymous`.
+
+`SetCoSigner` and `ClearCoSigner` keep each count equal to the records whose scope holds the class. A change that takes a count out of `0..=255` fails with `CoSignerCountOutOfRange`.
+
+### CoSigner
+
+One per co-signer at `[b"co_signer", signer]`, created by `SetCoSigner` and closed by `ClearCoSigner`. `valid()` requires a nonzero `signer` and a nonzero `scope` within the class bits.
+
+```rust
+pub struct CoSigner {
+    pub discriminator: u8,
+    pub signer: Address,
+    /// `TRANSFERS = 1`, `DEPOSITS = 2`, `WITHDRAWALS = 4`.
+    pub scope: u8,
+    pub bump: u8,
+}
+```
 
 ### MemberRegistry
 
@@ -429,8 +444,8 @@ Only `AuthorityWriteRecords` writes mint settings. One write replaces all four v
 | 8 | `SetPaused` | `11` | Pauses or resumes the ring in SPP. | Config authority signs |
 | 9 | `GrantReadAccess` | `4` | Creates a reader's read access record. | Config authority signs |
 | 10 | `RevokeReadAccess` | `5` | Closes a reader's read access record. | Config authority signs |
-| 11 | `SetCoSigner` | `27` | Sets the co-signer and its scope. | Config authority signs |
-| 12 | `ClearCoSigner` | `21` | Removes the co-signer. | Config authority signs |
+| 11 | `SetCoSigner` | `27` | Creates a co-signer's record or sets its scope. | Config authority signs |
+| 12 | `ClearCoSigner` | `21` | Closes a co-signer's record. | Config authority signs |
 | 13 | `SetInsertFee` | `42` | Sets the insert fee. | Config authority signs |
 | 14 | `SetDelegate` | `24` | Sets the delegate and turns the ring to `ConfidentialEscrow`. | Upgrade authority and delegate sign |
 | | **Records** | | | |
@@ -669,30 +684,42 @@ Ring RPC sees the revocation at `confirmed` and does not recheck a read in progr
 
 #### 11. SetCoSigner
 
-Tag `27`. Sets the co-signer and its scope, and replaces any earlier ones. The withdrawal thresholds are mint settings, which `AuthorityWriteRecords` writes.
+Tag `27`. Creates the signer's `CoSigner` record, or sets the scope of an existing one. Other co-signers keep their records. The withdrawal thresholds are mint settings, which `AuthorityWriteRecords` writes.
 
 **Accounts**
 
-1. `authority`: the config authority. Signer.
-2. `config`: writable.
+1. `payer`: signer, writable.
+2. `authority`: the config authority. Signer.
+3. `config`: writable.
+4. `co_signer_record`: `[b"co_signer", signer]`. Writable.
+5. `system_program`.
 
 **Instruction data**
 
 ```rust
-struct SetCoSignerIxData {
-    signer: [u8; 32],
+struct SetCoSignerRecordIxData {
+    signer: Address,
     /// Nonzero subset of `TRANSFERS | DEPOSITS | WITHDRAWALS`.
     scope: u8,
 }
 ```
 
-The program checks the scope (`InvalidCoSignerScope`), a nonzero signer (`InvalidCoSigner`) and the config authority.
+The program checks the scope (`InvalidCoSignerScope`), a nonzero signer (`InvalidCoSigner`), the system program and the config authority. An empty record takes the canonical address (`InvalidCoSignerRecord`) and the payer funds it. An existing record must store `signer` (`InvalidCoSignerRecord`). The config counts move from the old scope to the new one.
 
 The co-signer may equal any key here. A transfer refuses a demanded co-signer that equals an owner or the delegate.
 
 #### 12. ClearCoSigner
 
-Tag `21`. Same as `SetCoSigner` with empty data: it zeroes the co-signer and the scope. The mint settings keep their withdrawal thresholds. It succeeds on a ring without a co-signer.
+Tag `21`. Closes one `CoSigner` record. It takes no data.
+
+**Accounts**
+
+1. `authority`: the config authority. Signer.
+2. `config`: writable.
+3. `co_signer_record`: writable.
+4. `rent_recipient`: writable.
+
+The program checks the config authority, that the record loads (`InvalidCoSignerRecord`) and that `rent_recipient` is not the record. The config counts drop the record's classes, and the record closes into `rent_recipient`. The mint settings keep their withdrawal thresholds.
 
 #### 13. SetInsertFee
 
@@ -885,7 +912,7 @@ Tag `31`. Forwards one SPP ring deposit of up to 8 new notes, with a proof that 
 
 1. `config`.
 2. `registry`: in `ConfidentialEscrow` mode only.
-3. `co_signer`: signer, only when demanded.
+3. `co_signer_record`, then `co_signer` (signer), only when demanded.
 4. `spp_accounts`: the SPP `ring_deposit` list `[tree, depositor, ring_config, spp_program, asset groups…]`. `ring_config` is `ring_auth`.
 
 **Instruction data**
@@ -915,7 +942,7 @@ The program checks, in order:
 
 1. The prefix is complete (`InvalidInstructionData`), its tag is `31` and the SPP data starts with tag `18` (`InvalidAuditedDeposit`), and the SPP body decodes (`InvalidDepositData`).
 2. In `ConfidentialEscrow` mode the own root at `registry_root_index` passes the floor. Otherwise the index is `0` (`UnexpectedMemberRegistryRoot`).
-3. A co-signer with `DEPOSITS` in scope signs (`MissingCoSigner`, `UnauthorizedCoSigner`).
+3. When a record covers `DEPOSITS`, a record covering it loads (`InvalidCoSignerRecord`, `CoSignerOutOfScope`) and its signer signs (`MissingCoSigner`, `UnauthorizedCoSigner`).
 4. On an anonymous ring every entry has `ring_data_hash = 0` (`AnonymousRingDataNotZero`).
 5. `ring_auth` sits at SPP index 2 and at no other index (`MissingRingAuth`, `RingAuthOutOfSlot`). The depositor at SPP index 1 signs (`MissingFundingSigner`).
 6. `1 <= count <= 8`. Each capsule parses with its own position and one shared ephemeral key of tag `0x04` (`InvalidDepositDisclosure`).
@@ -940,7 +967,7 @@ The mode selects the rail:
 1. `config`.
 2. `registry`: on a policy ring, and on any ring when the frame carries a withdrawal exemption proof.
 3. `curator`: when the policy has a curator.
-4. `co_signer`: signer, when the transfer demands one.
+4. `co_signer_record`, then `co_signer` (signer), when the transfer demands one.
 5. `spp_accounts`: the SPP `ring_transact` list, verbatim: `[payer, output_tree, spp_program, system_program, ring_auth, input trees…, nullifier PDAs…, owner signers…, settlement groups…]`.
 
 **Instruction data**
@@ -1060,8 +1087,8 @@ The program checks, in order:
 8. Every deposit leg's funder signs (`MissingFundingSigner`). On the anonymous rail check 7 makes every funder the payer.
 9. The public legs fold to at most 3 assets, each with a nonzero net within u64 (`TooManyPublicAssets`, `ZeroNetPublicAmount`, `PublicAmountOverflow`).
 10. Policy ring: each SOL withdrawal's owner is its recipient. Each SPL withdrawal's token account is a Token or Token-2022 account of the leg's mint owned by the declared owner (`InvalidSettlementAccounts`, `AnonymousExitTokenAccountInvalid`).
-11. Anonymous: every withdrawal names one destination key (`AnonymousExitDestinationsDiffer`). A SOL destination is a system account with no data. An SPL destination is an off-curve token account with no delegate and no close authority (`AnonymousExitAccountHasData`, `AnonymousExitTokenAccountOnCurve`, `AnonymousExitTokenAccountShared`). The party identities are `solana_owner_identity` of the payer, the configured co-signer and the destination key, each `0` when absent. For an SPL withdrawal the destination key is the token account's owner.
-12. The co-signer demand of [Properties](#properties) 9, with the withdrawal class waived when check 3 verified an exemption proof: a demanded co-signer is configured (`ApprovalWithoutCoSigner`), signs (`MissingCoSigner`) and equals the stored one (`UnauthorizedCoSigner`).
+11. Anonymous: every withdrawal names one destination key (`AnonymousExitDestinationsDiffer`). A SOL destination is a system account with no data. An SPL destination is an off-curve token account with no delegate and no close authority (`AnonymousExitAccountHasData`, `AnonymousExitTokenAccountOnCurve`, `AnonymousExitTokenAccountShared`). The party identities are `solana_owner_identity` of the payer, the signing co-signer and the destination key, each `0` when absent. For an SPL withdrawal the destination key is the token account's owner.
+12. The co-signer demand of [Properties](#properties) 9, with the withdrawal class waived when check 3 verified an exemption proof. An approval needs some record (`ApprovalWithoutCoSigner`). The record is the program's (`InvalidCoSignerRecord`) and covers every demanded class (`CoSignerOutOfScope`), and its signer signs (`MissingCoSigner`, `UnauthorizedCoSigner`).
 13. The SPP `proof_b` decompresses (`InvalidSppProofPoint`).
 14. The key escrow layout bit equals `mode == ConfidentialEscrow` (`FlagNotAllowed`).
 15. It builds the audit statement and the policy statement and resolves both keys (`UnsupportedCircuit`). It verifies the audit proof, then the policy proof, each point decompressed (`InvalidRingProofPoint`) and the pairing checked (`ProofVerificationFailed`).
@@ -1097,7 +1124,7 @@ Tag `20`. Forwards an SPP ring merge, which joins up to 24 notes of one owner an
 
 1. `config`.
 2. `registry`: on a non-anonymous ring.
-3. `co_signer`: signer, only when demanded.
+3. `co_signer_record`, then `co_signer` (signer), only when demanded.
 4. `spp_accounts`: the SPP `ring_merge_transact` list `[input_tree, output_tree, ring_config, payer, system_program, spp_program, nullifier PDAs…, merge cache…]`.
 
 **Instruction data**
@@ -1118,7 +1145,7 @@ The program checks, in order:
 
 1. The data parses, and the SPP merge body is a supported form (`InvalidInstructionData`).
 2. On an anonymous ring `registry_root_index = 0` (`UnexpectedMemberRegistryRoot`). On another ring the own root at that index passes the floor.
-3. A co-signer with `TRANSFERS` in scope signs.
+3. When a record covers `TRANSFERS`, a record covering it loads and its signer signs.
 4. `ring_auth` sits at SPP index 2 and at no other index. The payer at SPP index 3 signs. The SPP `proof_b` decompresses (`InvalidSppProofPoint`).
 5. On an anonymous ring the disclosure is present (`MissingMergeDisclosure`), it has the field count of the merge width (`MergeDisclosureWidth`), its ephemeral key has tag `0x04` (`InvalidMergeDisclosure`), and `output_ring_data_hash = 0` (`AnonymousRingDataNotZero`).
 
@@ -1291,7 +1318,7 @@ A registered nullifier key cannot change. A delegate and the `ConfidentialEscrow
 
 ### Rings of another layout need a migration
 
-The program, the SDKs, the ring indexer and the proving keys accept only the 150-byte config, the 2388-byte registry, the six-field record leaf, the seven-field queue entry and policy table version 12. A ring whose accounts or record tree use another layout fails these checks, and its records do not open under these circuits. Its operator migrates the accounts and the record tree before the program upgrade. No ring instruction performs that migration, and a reindex of the ring's instructions does not rebuild its on-chain roots.
+The program, the SDKs, the ring indexer and the proving keys accept only the 120-byte config, the 2388-byte registry, the six-field record leaf, the seven-field queue entry and policy table version 12. A ring whose accounts or record tree use another layout fails these checks, and its records do not open under these circuits. Its operator migrates the accounts and the record tree before the program upgrade. No ring instruction performs that migration, and a reindex of the ring's instructions does not rebuild its on-chain roots.
 
 ### The auditor reads everything
 
