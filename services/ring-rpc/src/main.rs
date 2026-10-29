@@ -2,35 +2,18 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use clap::Parser;
-use custom_ring_sdk::RingClient;
 use log::info;
 use solana_signer::Signer;
-use spr_client::{AsyncProverClient, AsyncSolanaRpc, AsyncZolanaClient, AsyncZolanaIndexer};
 use zolana_ring_client::{
     auditor_view_tag,
     rpc::{public_key_path, read_auditor_key, write_auditor_key, KeyMode},
 };
 use zolana_ring_rpc::{
     read_fee_payer, read_root_secret, run_server, write_fee_payer, write_root_secret, ChainSource,
-    Cli, Command, FeePayerSubmit, Hub, KeyKind, KeygenArgs, LiveStorageChain, ManagedMergeInit,
-    MergeBuilder, OriginPolicy, RelayParts, RelaySubmit, RingSdkMergeBuilder, SdkRelayProver,
-    ServeArgs, ServedRings, ServerOptions, SolanaRelayChain, Store, TransactionSource, Upstreams,
-    MANAGED_MERGE_INTERVAL, RECORD_FLUSH_INTERVAL, RELAY_TRACK_INTERVAL, UTXO_BACKFILL_INTERVAL,
+    Cli, Command, Hub, KeyKind, KeygenArgs, LiveStorageChain, OriginPolicy, RelayServices,
+    RelayServicesInit, ServeArgs, ServedRings, ServerOptions, Store, TransactionSource, Upstreams,
+    MANAGED_MERGE_INTERVAL, STORE_CONNECTIONS,
 };
-
-/// One flush at a time, the rest serve submits and status reads.
-const STORE_CONNECTIONS: u32 = 4;
-
-/// The relay and the managed merge pay through one fee payer.
-struct Relayed {
-    parts: RelayParts,
-    merge: MergeParts,
-}
-
-struct MergeParts {
-    submit: Arc<dyn RelaySubmit>,
-    builder: Arc<dyn MergeBuilder>,
-}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -101,10 +84,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         ),
         None => None,
     };
-    let relayed = match &args.fee_payer_key_file {
-        Some(path) => Some(relayed(&args, path, store.clone())?),
-        None => None,
-    };
+    let relay_services = relay_services(&args, store.clone())?;
     let origin_transport = args.origin_transport();
     let access = args.key_access();
     let mut origin_policy = OriginPolicy::new(args.allow_origins).with_transport(origin_transport);
@@ -123,10 +103,8 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             .with_storage_chain(Arc::new(chain))
             .with_watched_registries(args.watch_registry.clone());
     }
-    let mut merge_parts = None;
-    if let Some(relayed) = relayed {
-        builder = builder.with_relay(relayed.parts);
-        merge_parts = Some(relayed.merge);
+    if let Some(services) = relay_services {
+        builder = builder.with_relay_services(services);
     }
     let hub = match (&args.auditor_key_file, &args.root_secret_file) {
         (Some(path), None) => {
@@ -152,15 +130,8 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             relay.fee_payer() != hub.service_pubkey(),
             "the fee payer key must differ from the service key"
         );
-        tokio::spawn(relay.clone().run(RELAY_TRACK_INTERVAL));
     }
-    if let Some(merge) = merge_parts {
-        let merge = ManagedMergeInit {
-            hub: hub.clone(),
-            builder: merge.builder,
-            relay: merge.submit,
-        }
-        .build();
+    if let Some(merge) = hub.managed_merge() {
         tokio::spawn(merge.run(MANAGED_MERGE_INTERVAL));
     }
     info!("co-signer pubkey {}", hub.co_signer_keypair()?.pubkey());
@@ -176,11 +147,10 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             args.bind, args.port
         ),
     }
-    tokio::spawn(hub.clone().run_utxo_backfill(UTXO_BACKFILL_INTERVAL));
     if let Ok(writer) = hub.record_writer() {
         info!("storage authority {}", writer.authority());
-        tokio::spawn(writer.clone().run(RECORD_FLUSH_INTERVAL));
     }
+    hub.spawn_workers();
     let handle = run_server(hub, options).await?;
     tokio::signal::ctrl_c().await?;
     info!("stopping");
@@ -190,45 +160,27 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
 }
 
 /// One ring with a local auditor key, any ring with derived keys.
-fn relayed(
-    args: &ServeArgs,
-    fee_payer_key_file: &std::path::Path,
-    store: Option<Store>,
-) -> anyhow::Result<Relayed> {
+fn relay_services(args: &ServeArgs, store: Option<Store>) -> anyhow::Result<Option<RelayServices>> {
+    let Some(fee_payer_key_file) = &args.fee_payer_key_file else {
+        return Ok(None);
+    };
     let fee_payer = read_fee_payer(fee_payer_key_file, args.key_access())
         .with_context(|| format!("loading {}", fee_payer_key_file.display()))?;
     let (Some(store), Some(prover_url)) = (store, &args.prover_url) else {
         anyhow::bail!("--fee-payer-key-file needs --store-url and --prover-url");
     };
-    let ring_client = || {
-        let zolana = AsyncZolanaClient::new(
-            AsyncSolanaRpc::new(&args.rpc_url),
-            AsyncZolanaIndexer::new(&args.indexer_url),
-            AsyncProverClient::new(prover_url.clone()),
-        );
-        RingClient::new(zolana, AsyncProverClient::new(prover_url.clone()))
-    };
-    let chain = Arc::new(SolanaRelayChain::new(AsyncSolanaRpc::new(&args.rpc_url)));
-    let submit = Arc::new(FeePayerSubmit::new(fee_payer, chain.clone()));
-    let merge_builder = Arc::new(RingSdkMergeBuilder {
-        client: ring_client(),
-        payer: submit.fee_payer(),
-    });
-    let parts = RelayParts {
-        store,
-        prover: Arc::new(SdkRelayProver::new(ring_client())),
-        submit: submit.clone(),
-        chain,
-        rings: match args.ring_program_id {
-            Some(ring) => ServedRings::One(ring),
-            None => ServedRings::Any,
-        },
-    };
-    Ok(Relayed {
-        parts,
-        merge: MergeParts {
-            submit,
-            builder: merge_builder,
-        },
-    })
+    Ok(Some(
+        RelayServicesInit {
+            fee_payer,
+            store,
+            rpc_url: &args.rpc_url,
+            indexer_url: &args.indexer_url,
+            prover_url,
+            rings: match args.ring_program_id {
+                Some(ring) => ServedRings::One(ring),
+                None => ServedRings::Any,
+            },
+        }
+        .build(),
+    ))
 }

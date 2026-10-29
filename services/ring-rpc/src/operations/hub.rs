@@ -37,15 +37,17 @@ use crate::{
         PublicRequest, RequestRate, MAX_CONCURRENT_AUTHENTICATIONS, MAX_CONCURRENT_DEPOSIT_SCANS,
         MAX_CONCURRENT_READS,
     },
+    managed_merge::{ManagedMerge, ManagedMergeInit},
     merge_settings::MergeSettingsBook,
     origins::Origins,
     record_update::RecordUpdateRefusal,
-    record_writer::{RecordWriter, WriterParts},
-    relay::{Relay, RelayParts},
+    record_writer::{RecordWriter, WriterParts, RECORD_FLUSH_INTERVAL},
+    relay::{Relay, RelayParts, RELAY_TRACK_INTERVAL},
+    relay_services::{MergeParts, RelayServices},
     replay::ReplayGuard,
     storage_chain::StorageChain,
     upstream::{DepositHistory, DepositPage, TransactionSource},
-    utxos::AuditStore,
+    utxos::{AuditStore, UTXO_BACKFILL_INTERVAL},
 };
 
 const READINESS_CACHE_INTERVAL: Duration = Duration::from_secs(1);
@@ -57,6 +59,7 @@ pub struct Hub<S> {
     writer: Option<Arc<RecordWriter>>,
     co_signer: Arc<dyn CoSignPolicy>,
     relay: Option<Arc<Relay>>,
+    merge: Option<MergeParts>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,6 +127,7 @@ pub struct HubBuilder<S> {
     watched_registries: Vec<Address>,
     reader_grants: ReaderGrantStore,
     relay: Option<RelayParts>,
+    merge: Option<MergeParts>,
 }
 
 pub(crate) struct Shared<S> {
@@ -244,6 +248,7 @@ impl<S: TransactionSource> Hub<S> {
             watched_registries: Vec::new(),
             reader_grants: ReaderGrantStore::Tree,
             relay: None,
+            merge: None,
         }
     }
 
@@ -308,6 +313,18 @@ impl<S: TransactionSource> Hub<S> {
 
     pub(crate) fn shared(&self) -> &Shared<S> {
         &self.shared
+    }
+
+    /// Pays through the relay fee payer, `None` without relay services.
+    pub fn managed_merge(self: &Arc<Self>) -> Option<ManagedMerge<S>> {
+        self.merge.as_ref().map(|merge| {
+            ManagedMergeInit {
+                hub: self.clone(),
+                builder: merge.builder.clone(),
+                relay: merge.submit.clone(),
+            }
+            .build()
+        })
     }
 
     pub fn local_view_tag(&self) -> Option<[u8; 32]> {
@@ -459,6 +476,19 @@ impl<S: TransactionSource> Hub<S> {
     }
 }
 
+impl<S: TransactionSource + 'static> Hub<S> {
+    /// Every background worker except the managed merge, its caller picks the interval.
+    pub fn spawn_workers(self: &Arc<Self>) {
+        if let Some(relay) = self.relay() {
+            tokio::spawn(relay.clone().run(RELAY_TRACK_INTERVAL));
+        }
+        tokio::spawn(self.clone().run_utxo_backfill(UTXO_BACKFILL_INTERVAL));
+        if let Ok(writer) = self.record_writer() {
+            tokio::spawn(writer.clone().run(RECORD_FLUSH_INTERVAL));
+        }
+    }
+}
+
 impl<S: TransactionSource + 'static> HubBuilder<S> {
     #[must_use = "use the updated builder"]
     pub fn with_assets(mut self, assets: RingAssets) -> Self {
@@ -508,6 +538,13 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
     #[must_use = "use the updated builder"]
     pub fn with_relay(mut self, relay: RelayParts) -> Self {
         self.relay = Some(relay);
+        self
+    }
+
+    #[must_use = "use the updated builder"]
+    pub fn with_relay_services(mut self, services: RelayServices) -> Self {
+        self.relay = Some(services.parts);
+        self.merge = Some(services.merge);
         self
     }
 
@@ -601,6 +638,7 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
             writer,
             co_signer,
             relay,
+            merge: self.merge,
         })
     }
 }
