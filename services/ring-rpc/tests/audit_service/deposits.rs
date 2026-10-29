@@ -107,6 +107,7 @@ async fn ring_status_reports_the_state_of_each_ring() {
             auditor_pubkey: fixture.auditor.pubkey(),
             authority: authority().pubkey(),
             mode: RingMode::Confidential,
+            delegate: None,
         },
     )]);
     let hub = Arc::new(
@@ -148,6 +149,7 @@ async fn ring_status_reports_the_state_of_each_ring() {
                 auditor_pubkey: derived,
                 authority: authority().pubkey(),
                 mode: RingMode::Confidential,
+                delegate: None,
             },
         ),
         (
@@ -156,6 +158,7 @@ async fn ring_status_reports_the_state_of_each_ring() {
                 auditor_pubkey: fixture.auditor.pubkey(),
                 authority: authority().pubkey(),
                 mode: RingMode::Confidential,
+                delegate: None,
             },
         ),
     ]);

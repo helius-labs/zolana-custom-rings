@@ -64,7 +64,7 @@ Accepted nonces are held in process memory for the timestamp window. Run one pro
 
 ## Relay, record updates and merge settings
 
-`zolana_ring_client::rpc` defines these methods and the TypeScript SDK mirrors them in `protocol/ring-rpc`. The service answers the record update methods through its [record writer](#record-writer), the four relay methods when it runs with a fee payer key, and `setMergeSettings` with a store.
+`zolana_ring_client::rpc` defines these methods and the TypeScript SDK mirrors them in `protocol/ring-rpc`. The service answers the record update methods through its [record writer](#record-writer), the four relay methods and `prepareAuthorityTransfer` when it runs with a fee payer key, and `setMergeSettings` with a store.
 
 | Method | Request | Result |
 | --- | --- | --- |
@@ -75,6 +75,7 @@ Accepted nonces are held in process memory for the timestamp window. Run one pro
 | `submitRecordUpdate` | Storage registry, the update, signer and signature | `updateId` |
 | `getRecordUpdateStatus` | `updateId` | One of `queued`, `submitted`, `applied` with the new revision, or `refused` |
 | `setMergeSettings` | Ring, owner, the settings, timestamp, nonce and signature | The stored settings |
+| `prepareAuthorityTransfer` | Ring, delegate, the transfer, timestamp, nonce and signature | A `RelayStep`, `signMessage` until the delegate signs |
 
 The relay operation is `anonymous`, `confidential`, `delegate`, `deposit` or `merge`. The quote names the fee payer the relay signs with and the last slot it takes the request, at most 150 slots ahead. On the anonymous and confidential rails the intent carries the owner's Ed25519 signature over `SppProofInputs::message_hash`, and the service refuses a request it does not verify before it proves. On the anonymous rail that signature authorizes the spend inside the proof and `prepareRelay` answers `submitted`. The ring program checks a confidential owner as a transaction signer, so on the confidential rail, as on the delegate rail, it answers `signMessage` and each owner or the delegate signs the returned message for `submitRelay`. The service sends once the message carries every signature, the co-signer's included. On the deposit rail it answers `signMessage` and the depositor signs the returned message to fund its SOL or SPL transfer. It refuses a depositor that is the relay fee payer. On the merge rail it answers `submitted`, no wallet signs the merge. A transfer intent may name `tokenAccountSetup`, each entry the owner and mint of an associated token account a withdrawal pays. The service puts an idempotent create, funded by its fee payer, ahead of the transfer, and refuses an entry no withdrawal of its mint pays or an entry that repeats one. The proof inputs carry no Merkle path and no record opening, the service reads those. `relayId` is the SHA-256 of the domain `zolana/ring-rpc-relay/v1` and the request's JSON as the service serializes it, so a retried request names the same relay.
 
@@ -87,6 +88,14 @@ A deposit's `proofInputs` is one `RelayDepositInputs`: the ring, the tree, the d
 A record update names the cluster genesis hash, a ring, its entries and `validUntilSlot`. An entry is a `write` of masked lists with optional mint settings, an `escrow` registration with its register key proof, or a `walletGrant` that sets or clears the reader list of the record `Poseidon(CRWG, wallet, reader)`, with the `wallet` and `reader` identities and `access` of `granted` or `revoked`. The signer signs the 32 bytes of `Poseidon(CRRU, hash_bytes(genesisHash), hash_bytes(ring), hash_bytes(registry), entries_hash, validUntilSlot)`, where `entries_hash` folds `queue_chain` over the entries from a zero start. That hash is the `updateId`.
 
 Merge settings name a mint, a target note count and a minimum average amount. The owner signs them under `zolana/ring-rpc-merge-settings/v1` with the cluster, service, ring, timestamp and nonce of a read authorization.
+
+## Authority transfer
+
+The ring delegate moves a wallet's notes to recipients in the same ring without the wallet. The transfer names the source's shielded address, a mint and its payments, each a recipient shielded address and an amount, all addresses as base58 text. The delegate signs it under `zolana/ring-rpc-authority-transfer/v1` with the cluster, service, ring, delegate, source, mint, one `payment:` line per payment in order, timestamp and nonce, under the skew and nonce set of a read.
+
+The service checks the signature under the named delegate, that the ring config names that key its delegate, and that the config is `ConfidentialEscrow` under the auditor key held here. It opens the source's escrowed nullifier secret with the auditor key and checks it against the source address's nullifier key. The notes it opened for the source under that key and mint, with no data and no nullifier the ring history published, fund the move. The ring SDK picks the fewest notes of one tree, returns the change to the source, encrypts the outputs to their owners and the auditor, and seals the move for the relay's delegate rail. The seal names no co-signer, so a ring that demands one refuses the move. The relay proves it with its policy and escrow checks and stores it under `relayId`, the SHA-256 of the relay domain and the request's JSON, so a repeated request returns the stored step. The delegate signs the returned message through `submitRelay`, and the relay pays, sends and tracks it. The backfill indexes the spent inputs and the new outputs. The secret stays in memory for the request, and the service never logs, stores or serves it.
+
+Errors are `-32220` the signer is not the ring delegate, `-32221` the ring escrows no key to the service, `-32222` the source escrows no nullifier key, `-32223` the source address names another nullifier key, and `-32224` the service runs no relay.
 
 ## Record writer
 
@@ -135,7 +144,7 @@ Co-signer errors are `-32160` disabled, `-32161` over a limit, `-32162` an asset
 
 `setMergeSettings` keeps one row for each ring, owner and mint in the service store that `--store-url` opens. Without a store it fails with `-32170`. The Ed25519 signature must verify under the request's `owner`, within the timestamp skew, with a fresh nonce. A request replaces the row only when its timestamp is later, else it fails with `-32171`. A target note count of zero revokes the settings. The zero row stays, so an older request cannot restore them.
 
-`serve` holds no relay and starts no merge worker. A host that embeds the crate with a `RelaySubmit` spawns `ManagedMerge::run` beside `Hub::run_utxo_backfill`, whose notes and escrow records it reads. On each ring whose `ConfidentialEscrow` config names the service's auditor key, it reads every wallet with a nonzero target. It opens the wallet's escrowed nullifier secret with the auditor key and checks it against the registered nullifier key. The secret stays in memory for one merge build, and the service never logs or serves it.
+With a fee payer key, a store and a prover, `serve` spawns `ManagedMerge::run` beside `Hub::run_utxo_backfill`, whose notes and escrow records it reads, and sends each merge through the relay's fee payer. Its merges name no co-signer, so a ring that demands one refuses them. On each ring whose `ConfidentialEscrow` config names the service's auditor key, it reads every wallet with a nonzero target. It opens the wallet's escrowed nullifier secret with the auditor key and checks it against the registered nullifier key. The secret stays in memory for one merge build, and the service never logs or serves it.
 
 A note is a candidate when the service opened it for that owner, mint and escrowed nullifier key, it has a nonzero amount and no data, and the ring history has not published its nullifier. The wallet keeps at most its target count and, under a nonzero minimum average amount, at most its total divided by that amount, never less than one note. When the candidates exceed that count, one merge joins the smallest notes of the tree that holds the most of them, no more than the count needs and at most `MAX_RING_MERGE_INPUTS`.
 

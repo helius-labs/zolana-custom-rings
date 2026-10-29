@@ -5,8 +5,8 @@ use solana_message::VersionedMessage;
 use solana_signer::Signer;
 use spr_indexer_api::{SerializablePubkey, SerializableSignature};
 use zolana_ring_client::rpc::{
-    GetRelayQuoteRequest, GetRelayStatusRequest, PrepareRelayRequest, RelayId, RelayQuote,
-    RelayStatus, RelayStep, SubmitRelayRequest,
+    GetRelayQuoteRequest, GetRelayStatusRequest, PrepareAuthorityTransferRequest,
+    PrepareRelayRequest, RelayId, RelayQuote, RelayStatus, RelayStep, SubmitRelayRequest,
 };
 
 use crate::RingError;
@@ -17,6 +17,11 @@ pub trait RingRelay: Send + Sync {
         -> Result<RelayQuote, RingError>;
 
     async fn prepare_relay(&self, request: PrepareRelayRequest) -> Result<RelayStep, RingError>;
+
+    async fn prepare_authority_transfer(
+        &self,
+        request: PrepareAuthorityTransferRequest,
+    ) -> Result<RelayStep, RingError>;
 
     async fn submit_relay(&self, request: SubmitRelayRequest) -> Result<RelayStatus, RingError>;
 
@@ -29,6 +34,12 @@ pub trait RingRelay: Send + Sync {
 #[must_use = "send the relay"]
 pub struct PreparedRelay {
     request: PrepareRelayRequest,
+}
+
+/// Ring RPC selects the source's notes and proves, the delegate signs the message it returns.
+#[must_use = "send the authority transfer"]
+pub struct PreparedAuthorityTransfer {
+    request: PrepareAuthorityTransferRequest,
 }
 
 /// The relay Ring RPC accepted, a `SignMessage` step waits for its signer.
@@ -56,23 +67,44 @@ impl PreparedRelay {
 
     pub async fn send<R: RingRelay + ?Sized>(self, relay: &R) -> Result<RelaySent, RingError> {
         let expected = self.relay_id()?;
-        let sent = match relay.prepare_relay(self.request).await? {
-            RelayStep::Submitted { relay_id } => RelaySent::Submitted(relay_id),
-            RelayStep::SignMessage { relay_id, message } => {
-                RelaySent::SignMessage(PendingSignature {
-                    relay_id,
-                    message: message.0,
-                })
-            }
-        };
-        match *sent.relay_id() == expected {
-            true => Ok(sent),
-            false => Err(RingError::RelayIdMismatch),
-        }
+        RelaySent::accepted(relay.prepare_relay(self.request).await?, &expected)
+    }
+}
+
+impl PreparedAuthorityTransfer {
+    pub fn new(request: PrepareAuthorityTransferRequest) -> Self {
+        Self { request }
+    }
+
+    /// A retried request names the same relay.
+    pub fn relay_id(&self) -> Result<RelayId, RingError> {
+        Ok(self.request.relay_id()?)
+    }
+
+    pub async fn send<R: RingRelay + ?Sized>(self, relay: &R) -> Result<RelaySent, RingError> {
+        let expected = self.relay_id()?;
+        RelaySent::accepted(
+            relay.prepare_authority_transfer(self.request).await?,
+            &expected,
+        )
     }
 }
 
 impl RelaySent {
+    fn accepted(step: RelayStep, expected: &RelayId) -> Result<Self, RingError> {
+        let sent = match step {
+            RelayStep::Submitted { relay_id } => Self::Submitted(relay_id),
+            RelayStep::SignMessage { relay_id, message } => Self::SignMessage(PendingSignature {
+                relay_id,
+                message: message.0,
+            }),
+        };
+        match sent.relay_id() == expected {
+            true => Ok(sent),
+            false => Err(RingError::RelayIdMismatch),
+        }
+    }
+
     pub fn relay_id(&self) -> &RelayId {
         match self {
             Self::Submitted(relay_id) => relay_id,

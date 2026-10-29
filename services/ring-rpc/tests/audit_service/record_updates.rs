@@ -200,6 +200,7 @@ impl Records {
                 .expect("auditor key"),
                 authority: authority().pubkey(),
                 mode: RingMode::Confidential,
+                delegate: None,
             },
             accounts: Mutex::default(),
             sent: Mutex::default(),

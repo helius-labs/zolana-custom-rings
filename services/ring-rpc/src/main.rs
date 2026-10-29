@@ -12,14 +12,27 @@ use zolana_ring_client::{
 };
 use zolana_ring_rpc::{
     read_fee_payer, read_root_secret, run_server, write_fee_payer, write_root_secret, ChainSource,
-    Cli, Command, FeePayerSubmit, Hub, KeyKind, KeygenArgs, LiveStorageChain, OriginPolicy,
-    RelayParts, SdkRelayProver, ServeArgs, ServedRings, ServerOptions, SolanaRelayChain, Store,
-    TransactionSource, Upstreams, RECORD_FLUSH_INTERVAL, RELAY_TRACK_INTERVAL,
-    UTXO_BACKFILL_INTERVAL,
+    Cli, Command, FeePayerSubmit, Hub, KeyKind, KeygenArgs, LiveStorageChain, ManagedMergeInit,
+    MergeBuilder, OriginPolicy, RefusingCoSigner, RelayParts, RelaySubmit, RingSdkMergeBuilder,
+    SdkRelayProver, ServeArgs, ServedRings, ServerOptions, SolanaRelayChain, Store,
+    TransactionSource, Upstreams, MANAGED_MERGE_INTERVAL, RECORD_FLUSH_INTERVAL,
+    RELAY_TRACK_INTERVAL, UTXO_BACKFILL_INTERVAL,
 };
 
 /// One flush at a time, the rest serve submits and status reads.
 const STORE_CONNECTIONS: u32 = 4;
+
+/// The relay and the managed merge pay through one fee payer.
+struct Relayed {
+    parts: RelayParts,
+    merge: MergeParts,
+}
+
+/// The managed merge pays through the relay's fee payer.
+struct MergeParts {
+    submit: Arc<dyn RelaySubmit>,
+    builder: Arc<dyn MergeBuilder>,
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -89,8 +102,8 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         ),
         None => None,
     };
-    let relay = match &args.fee_payer_key_file {
-        Some(path) => Some(relay_parts(&args, path, store.clone())?),
+    let relayed = match &args.fee_payer_key_file {
+        Some(path) => Some(relayed(&args, path, store.clone())?),
         None => None,
     };
     let origin_transport = args.origin_transport();
@@ -112,8 +125,10 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     if args.encrypted_reader_grants {
         builder = builder.with_encrypted_grants();
     }
-    if let Some(relay) = relay {
-        builder = builder.with_relay(relay);
+    let mut merge_parts = None;
+    if let Some(relayed) = relayed {
+        builder = builder.with_relay(relayed.parts);
+        merge_parts = Some(relayed.merge);
     }
     let hub = match (&args.auditor_key_file, &args.root_secret_file) {
         (Some(path), None) => {
@@ -140,6 +155,16 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             "the fee payer key must differ from the service key"
         );
         tokio::spawn(relay.clone().run(RELAY_TRACK_INTERVAL));
+    }
+    if let Some(merge) = merge_parts {
+        let merge = ManagedMergeInit {
+            hub: hub.clone(),
+            builder: merge.builder,
+            co_signer: Arc::new(RefusingCoSigner),
+            relay: merge.submit,
+        }
+        .build();
+        tokio::spawn(merge.run(MANAGED_MERGE_INTERVAL));
     }
     info!("co-signer pubkey {}", hub.co_signer_keypair()?.pubkey());
     match (hub.mode(), hub.local_view_tag()) {
@@ -168,31 +193,46 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
 }
 
 /// One ring with a local auditor key, any ring with derived keys.
-fn relay_parts(
+fn relayed(
     args: &ServeArgs,
     fee_payer_key_file: &std::path::Path,
     store: Option<Store>,
-) -> anyhow::Result<RelayParts> {
+) -> anyhow::Result<Relayed> {
     let fee_payer = read_fee_payer(fee_payer_key_file, args.key_access())
         .with_context(|| format!("loading {}", fee_payer_key_file.display()))?;
     let (Some(store), Some(prover_url)) = (store, &args.prover_url) else {
         anyhow::bail!("--fee-payer-key-file needs --store-url and --prover-url");
     };
-    let zolana = AsyncZolanaClient::new(
-        AsyncSolanaRpc::new(&args.rpc_url),
-        AsyncZolanaIndexer::new(&args.indexer_url),
-        AsyncProverClient::new(prover_url.clone()),
-    );
-    let prover = RingClient::new(zolana, AsyncProverClient::new(prover_url.clone()));
+    let ring_client = || {
+        let zolana = AsyncZolanaClient::new(
+            AsyncSolanaRpc::new(&args.rpc_url),
+            AsyncZolanaIndexer::new(&args.indexer_url),
+            AsyncProverClient::new(prover_url.clone()),
+        );
+        RingClient::new(zolana, AsyncProverClient::new(prover_url.clone()))
+    };
     let chain = Arc::new(SolanaRelayChain::new(AsyncSolanaRpc::new(&args.rpc_url)));
-    Ok(RelayParts {
+    let submit = Arc::new(FeePayerSubmit::new(fee_payer, chain.clone()));
+    let merge_builder = Arc::new(RingSdkMergeBuilder {
+        client: ring_client(),
+        payer: submit.fee_payer(),
+        co_signer: None,
+    });
+    let parts = RelayParts {
         store,
-        prover: Arc::new(SdkRelayProver::new(prover)),
-        submit: Arc::new(FeePayerSubmit::new(fee_payer, chain.clone())),
+        prover: Arc::new(SdkRelayProver::new(ring_client())),
+        submit: submit.clone(),
         chain,
         rings: match args.ring_program_id {
             Some(ring) => ServedRings::One(ring),
             None => ServedRings::Any,
+        },
+    };
+    Ok(Relayed {
+        parts,
+        merge: MergeParts {
+            submit,
+            builder: merge_builder,
         },
     })
 }

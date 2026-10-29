@@ -328,7 +328,7 @@ impl<S: TransactionSource> Hub<S> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::{collections::HashMap, sync::Mutex};
 
     use custom_ring_interface::RingMode;
@@ -352,6 +352,7 @@ mod tests {
     use crate::{
         cosign::RefusingCoSigner,
         database::Store,
+        relay::RelayParts,
         upstream::{
             DepositHistory, DepositPage, MergeAuditRequest, RingConfiguration, RingHistoryPage,
             TransactionPage,
@@ -359,11 +360,11 @@ mod tests {
         utxos::{CreatedIn, EscrowRoot, EscrowedOwner},
     };
 
-    const RING: Address = Address::new_from_array([8; 32]);
-    const GENESIS: [u8; 32] = [3; 32];
-    const MINT: Address = Address::new_from_array([6; 32]);
+    pub(crate) const RING: Address = Address::new_from_array([8; 32]);
+    pub(crate) const GENESIS: [u8; 32] = [3; 32];
+    pub(crate) const MINT: Address = Address::new_from_array([6; 32]);
 
-    struct EscrowRingSource {
+    pub(crate) struct EscrowRingSource {
         config: RingConfiguration,
     }
 
@@ -482,7 +483,7 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct RecordingRelay {
+    pub(crate) struct RecordingRelay {
         sent: Mutex<usize>,
     }
 
@@ -510,27 +511,33 @@ mod tests {
         RingAssets::new([Mint::new(MINT, 7)]).expect("assets")
     }
 
-    struct Fixture {
-        hub: Arc<Hub<EscrowRingSource>>,
+    pub(crate) struct Fixture {
+        pub(crate) hub: Arc<Hub<EscrowRingSource>>,
         builder: Arc<RecordingBuilder>,
         relay: Arc<RecordingRelay>,
     }
 
     impl Fixture {
         async fn new() -> Self {
+            Self::serving(None, None).await
+        }
+
+        pub(crate) async fn serving(delegate: Option<Address>, relay: Option<RelayParts>) -> Self {
             let auditor = X25519Keypair::new();
             let source = EscrowRingSource {
                 config: RingConfiguration {
                     auditor_pubkey: auditor.pubkey(),
                     authority: Address::new_from_array([2; 32]),
                     mode: RingMode::ConfidentialEscrow,
+                    delegate,
                 },
             };
             let store = Store::open("sqlite::memory:", 1).await.expect("store");
-            let hub = Hub::builder(source, GENESIS)
-                .with_store(store)
-                .local(RING, auditor)
-                .expect("hub");
+            let mut builder = Hub::builder(source, GENESIS).with_store(store);
+            if let Some(relay) = relay {
+                builder = builder.with_relay(relay);
+            }
+            let hub = builder.local(RING, auditor).expect("hub");
             Self {
                 hub: Arc::new(hub),
                 builder: Arc::default(),
@@ -538,7 +545,7 @@ mod tests {
             }
         }
 
-        fn escrow_notes(&self, wallet: &Keypair, notes: u8) {
+        pub(crate) fn escrow_notes(&self, wallet: &Keypair, notes: u8) -> NullifierKey {
             let key = NullifierKey::from_secret([wallet.pubkey().to_bytes()[0]; 31]);
             let nullifier_pk = key.pubkey().expect("nullifier pk");
             let auditor = self
@@ -585,6 +592,7 @@ mod tests {
                     },
                 }),
             );
+            key
         }
 
         async fn settle(&self, wallet: &Keypair, target_note_count: u32) {

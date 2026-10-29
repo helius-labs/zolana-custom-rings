@@ -71,15 +71,19 @@ import {
   decodeRelayStatus,
   decodeRelayStep,
   decodeSubmitRecordUpdate,
+  encodePrepareAuthorityTransferRequest,
   encodePrepareRelayRequest,
   encodeRecordUpdateStatusRequest,
   encodeRelayQuoteRequest,
   encodeRelayStatusRequest,
   encodeSubmitRecordUpdateRequest,
   encodeSubmitRelayRequest,
+  shieldedAddressText,
 } from "../protocol/ring-rpc/ring-rpc-codec.js";
 import {
   RingRpcMethod,
+  type AuthorityTransfer,
+  type PrepareAuthorityTransferRequest,
   type PrepareRelayRequest,
   type RecordUpdateStatus,
   type RelayQuote,
@@ -117,6 +121,7 @@ const READ_DOMAIN = "zolana/ring-rpc-read/v2";
 const AUDITOR_KEY_DOMAIN = "zolana/ring-auditor-key/v2";
 const AUDITOR_KEY_REQUEST_DOMAIN = "zolana/ring-rpc-auditor-key-request/v1";
 const AUDITED_UTXOS_DOMAIN = "zolana/ring-rpc-audited-utxos/v1";
+const AUTHORITY_TRANSFER_DOMAIN = "zolana/ring-rpc-authority-transfer/v1";
 /** Rust `AUDIT_PAGE_LIMIT`. */
 export const RING_READ_PAGE_LIMIT = 100n;
 /** Rust `AUDITED_UTXOS_LIMIT`, the UTXO hashes one read names. */
@@ -238,6 +243,80 @@ export function auditorKeyRequestAttestation(
       `nonce: ${base64Decoder.decode(input.nonce)}`,
     ].join("\n"),
   );
+}
+
+/** Mirrors Rust `AuthorityTransferAttestation::message`, one `payment:` line per payment in order. */
+export function authorityTransferAttestation(
+  input: Readonly<{
+    target: RingReadTarget;
+    delegate: Address;
+    transfer: AuthorityTransfer;
+    timestamp: bigint;
+    nonce: Bytes32;
+  }>,
+): Uint8Array {
+  return encoder.encode(
+    [
+      AUTHORITY_TRANSFER_DOMAIN,
+      ...targetLines(input.target),
+      `delegate: ${input.delegate}`,
+      `source: ${shieldedAddressText(input.transfer.source)}`,
+      `mint: ${input.transfer.mint}`,
+      ...input.transfer.payments.map(
+        (payment) => `payment: ${shieldedAddressText(payment.recipient)} ${payment.amount}`,
+      ),
+      `timestamp: ${input.timestamp}`,
+      `nonce: ${base64Decoder.decode(input.nonce)}`,
+    ].join("\n"),
+  );
+}
+
+/** Mirrors Rust `AuthorityTransferRequest`, the ring delegate signs it. */
+export class RingAuthorityTransferRequest {
+  readonly #target: RingReadTarget;
+  readonly #transfer: AuthorityTransfer;
+  #timestamp?: bigint;
+
+  private constructor(target: RingReadTarget, transfer: AuthorityTransfer) {
+    this.#target = checkedReadTarget(target);
+    this.#transfer = transfer;
+  }
+
+  static forTransfer(
+    target: RingReadTarget,
+    transfer: AuthorityTransfer,
+  ): RingAuthorityTransferRequest {
+    return new RingAuthorityTransferRequest(target, transfer);
+  }
+
+  /** Unix seconds, the RPC rejects a clock more than its skew away. */
+  at(timestamp: bigint): this {
+    this.#timestamp = checkedUnixTimestamp(timestamp, "timestamp");
+    return this;
+  }
+
+  async sign(delegate: MessagePartialSigner): Promise<PrepareAuthorityTransferRequest> {
+    const timestamp = timestampOrNow(this.#timestamp);
+    const nonce = freshNonce();
+    const signature = await signMessage(
+      delegate,
+      authorityTransferAttestation({
+        target: this.#target,
+        delegate: delegate.address,
+        transfer: this.#transfer,
+        timestamp,
+        nonce,
+      }),
+    );
+    return Object.freeze({
+      ring: this.#target.ringProgramId,
+      delegate: delegate.address,
+      transfer: this.#transfer,
+      timestamp,
+      nonce: base64Decoder.decode(nonce) as indexerTypes.Base64String,
+      signature: base58Decoder.decode(signature) as Signature,
+    });
+  }
 }
 
 export function messageSignerReader(signer: MessagePartialSigner): RingReadSigner {
@@ -738,7 +817,11 @@ export class RingRpc {
    * `limit` counts signatures examined, so an empty page can still carry a cursor over older history.
    */
   async ringDeposits(
-    input: Readonly<{ ringProgramId: Address; limit?: number; cursor?: Uint8Array }>,
+    input: Readonly<{
+      ringProgramId: Address;
+      limit?: number;
+      cursor?: Uint8Array;
+    }>,
     context?: RequestContext,
   ): Promise<RingDepositsPage> {
     const wire = record(
@@ -1049,6 +1132,19 @@ export class RingRpc {
   async prepareRelay(request: PrepareRelayRequest, context?: RequestContext): Promise<RelayStep> {
     return decodeRelayStep(
       await this.#call(RingRpcMethod.prepareRelay, encodePrepareRelayRequest(request), context),
+    );
+  }
+
+  async prepareAuthorityTransfer(
+    request: PrepareAuthorityTransferRequest,
+    context?: RequestContext,
+  ): Promise<RelayStep> {
+    return decodeRelayStep(
+      await this.#call(
+        RingRpcMethod.prepareAuthorityTransfer,
+        encodePrepareAuthorityTransferRequest(request),
+        context,
+      ),
     );
   }
 

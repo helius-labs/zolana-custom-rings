@@ -49,10 +49,10 @@ pub struct DelegateMove<'a> {
 
 /// The delegate moves a member's notes with the recovered key, the member does not sign.
 pub struct Delegated<'a> {
-    delegate: Address,
+    pub(super) delegate: Address,
     payer: Address,
     source: ShieldedAddress,
-    source_key: NullifierKey,
+    pub(super) source_key: NullifierKey,
     inputs: Vec<WalletUtxo>,
     outputs: Vec<DelegateOutput>,
     output_tree_id: Option<u16>,

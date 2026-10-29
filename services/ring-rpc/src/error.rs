@@ -12,8 +12,8 @@ use zolana_ring_client::{
 use zolana_ring_policy::MemberError;
 
 use crate::{
-    authorize::Unauthorized, cosign::CoSignError, record_update::RecordUpdateRefusal,
-    relay::RelayError,
+    authority_transfer::AuthorityTransferError, authorize::Unauthorized, cosign::CoSignError,
+    record_update::RecordUpdateRefusal, relay::RelayError,
 };
 
 #[derive(Debug, Error)]
@@ -62,6 +62,8 @@ pub enum RingRpcError {
     InvalidGrantRow,
     #[error(transparent)]
     Relay(#[from] RelayError),
+    #[error(transparent)]
+    AuthorityTransfer(#[from] AuthorityTransferError),
     #[error(transparent)]
     CoSign(#[from] CoSignError),
     #[error("merge settings need a service store")]
@@ -211,7 +213,12 @@ impl From<RingRpcError> for ErrorObjectOwned {
                 (ErrorCode::InternalError, "audit service is unavailable")
             }
             CoSign(inner) => return (*inner).into(),
-            EscrowedKey | MergeBuild(_) => {
+            AuthorityTransfer(refusal) => return (*refusal).into(),
+            EscrowedKey => {
+                error!("escrowed nullifier key does not open");
+                (ErrorCode::InternalError, "escrowed key is unusable")
+            }
+            MergeBuild(_) => {
                 error!("managed merge failed {}", redacted(&failure));
                 (ErrorCode::InternalError, "managed merge failed")
             }

@@ -14,8 +14,16 @@ import { concatBytes, equalBytes, indexerScalars, sha256 } from "@heliuslabs/zol
 import type { indexerTypes } from "@heliuslabs/zolana/internal";
 
 import { RingError } from "../protocol/error.js";
-import { encodePrepareRelayRequest } from "../protocol/ring-rpc/ring-rpc-codec.js";
-import type { PrepareRelayRequest, RelayStatus } from "../protocol/ring-rpc/ring-rpc-types.js";
+import {
+  encodePrepareAuthorityTransferRequest,
+  encodePrepareRelayRequest,
+} from "../protocol/ring-rpc/ring-rpc-codec.js";
+import type {
+  PrepareAuthorityTransferRequest,
+  PrepareRelayRequest,
+  RelayStatus,
+  RelayStep,
+} from "../protocol/ring-rpc/ring-rpc-types.js";
 import type { RingRpc } from "./ring-rpc.js";
 
 type Hash = indexerTypes.Hash;
@@ -30,11 +38,18 @@ export type RingRelayClient = Pick<
   "getRelayQuote" | "prepareRelay" | "submitRelay" | "getRelayStatus"
 >;
 
+/** Rust `RingRelay`, the calls an authority transfer makes. */
+export type RingAuthorityRelayClient = Pick<RingRpc, "prepareAuthorityTransfer" | "submitRelay">;
+
 /** Rust `PrepareRelayRequest::relay_id`, a retried request names the same relay. */
 export function relayId(request: PrepareRelayRequest): Hash {
-  const wire = new TextEncoder().encode(JSON.stringify(encodePrepareRelayRequest(request)));
+  return wireRelayId(encodePrepareRelayRequest(request));
+}
+
+function wireRelayId(wire: Readonly<Record<string, unknown>>): Hash {
+  const bytes = new TextEncoder().encode(JSON.stringify(wire));
   return indexerScalars.checkedHash(
-    base58.decode(sha256(concatBytes(RELAY_DOMAIN, wire))),
+    base58.decode(sha256(concatBytes(RELAY_DOMAIN, bytes))),
     "relayId",
   );
 }
@@ -54,12 +69,33 @@ export class PreparedRelay {
   }
 
   async send(relay: RingRelayClient, context?: RequestContext): Promise<RelaySent> {
-    const expected = this.relayId();
-    const step = await relay.prepareRelay(this.request, context);
-    if (step.relayId !== expected) throw new RingError("RING_RELAY_ID_MISMATCH");
-    if (step.step === "submitted") return Object.freeze({ step: "submitted", relayId: expected });
-    return new PendingRelaySignature(expected, base64.encode(step.message) as Uint8Array);
+    return accepted(await relay.prepareRelay(this.request, context), this.relayId());
   }
+}
+
+/** Rust `PreparedAuthorityTransfer`, the delegate signs the message Ring RPC returns. */
+export class PreparedAuthorityTransfer {
+  readonly request: PrepareAuthorityTransferRequest;
+
+  constructor(request: PrepareAuthorityTransferRequest) {
+    this.request = request;
+    Object.freeze(this);
+  }
+
+  /** Rust `PrepareAuthorityTransferRequest::relay_id`. */
+  relayId(): Hash {
+    return wireRelayId(encodePrepareAuthorityTransferRequest(this.request));
+  }
+
+  async send(relay: RingAuthorityRelayClient, context?: RequestContext): Promise<RelaySent> {
+    return accepted(await relay.prepareAuthorityTransfer(this.request, context), this.relayId());
+  }
+}
+
+function accepted(step: RelayStep, expected: Hash): RelaySent {
+  if (step.relayId !== expected) throw new RingError("RING_RELAY_ID_MISMATCH");
+  if (step.step === "submitted") return Object.freeze({ step: "submitted", relayId: expected });
+  return new PendingRelaySignature(expected, base64.encode(step.message) as Uint8Array);
 }
 
 /** Rust `RelaySent`, a `signMessage` step waits for its signer. */

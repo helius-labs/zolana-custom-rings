@@ -183,14 +183,18 @@ impl RelayIntent {
 impl PrepareRelayRequest {
     /// SHA-256 over the domain and the request's own serialization, a retry names the same relay.
     pub fn relay_id(&self) -> Result<RelayId, serde_json::Error> {
-        let request = Zeroizing::new(serde_json::to_vec(self)?);
-        let digest: [u8; 32] = Sha256::new()
-            .chain_update(RELAY_DOMAIN)
-            .chain_update(&request)
-            .finalize()
-            .into();
-        Ok(RelayId(Hash(digest)))
+        relay_id(self)
     }
+}
+
+pub(super) fn relay_id(request: &impl Serialize) -> Result<RelayId, serde_json::Error> {
+    let request = Zeroizing::new(serde_json::to_vec(request)?);
+    let digest: [u8; 32] = Sha256::new()
+        .chain_update(RELAY_DOMAIN)
+        .chain_update(&request)
+        .finalize()
+        .into();
+    Ok(RelayId(Hash(digest)))
 }
 
 impl ProofInputBytes {

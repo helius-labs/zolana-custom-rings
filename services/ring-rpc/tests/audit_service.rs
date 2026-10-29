@@ -870,6 +870,7 @@ impl Fixture {
                     auditor_pubkey: self.auditor.pubkey(),
                     authority: authority().pubkey(),
                     mode: RingMode::Confidential,
+                    delegate: None,
                 },
             )]),
             chain: HashMap::new(),

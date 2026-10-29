@@ -1,5 +1,7 @@
 #[path = "operations/audit.rs"]
 mod audit;
+#[path = "operations/authority_transfer.rs"]
+mod authority_transfer;
 #[path = "security/authorize.rs"]
 mod authorize;
 #[path = "config/config.rs"]
@@ -65,6 +67,7 @@ mod utxos;
 mod webauthn;
 
 pub use audit::{AuditRead, AuditService, Page};
+pub use authority_transfer::AuthorityTransferError;
 pub use authorize::{ReadCheck, ReadClaim, Unauthorized, AUTH_SKEW};
 pub use config::{
     read_fee_payer, read_root_secret, write_fee_payer, write_root_secret, Cli, Command, KeyKind,
@@ -95,7 +98,7 @@ pub use relay::{
     Relay, RelayError, RelayParts, RelayPayload, ServedRings, QUOTE_SLOTS, RELAY_TRACK_INTERVAL,
 };
 pub use relay_chain::{ChainOutcome, FeePayerSubmit, RelayChain, SolanaRelayChain};
-pub use relay_prover::{ProvenRelay, RelayProofRequest, RelayProver, SdkRelayProver};
+pub use relay_prover::{DelegateSeal, ProvenRelay, RelayProofRequest, RelayProver, SdkRelayProver};
 pub use relay_submit::{CollectedSignature, RelaySubmit, RelayTransaction};
 pub use server::{relay_module, rpc_module, run_server, BindPolicy, ServerError, ServerOptions};
 pub use storage_chain::{LatestBlockhash, LiveStorageChain, StorageChain, TransactionOutcome};

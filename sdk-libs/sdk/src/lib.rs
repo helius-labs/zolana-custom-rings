@@ -89,7 +89,7 @@ pub use crate::{
         EscrowedRecipients, KeyEscrowAuthority, KeyRegistration, ProvenKeyRegistration,
         RegisterKey, SealedEscrow,
     },
-    relay::{PendingSignature, PreparedRelay, RelaySent, RingRelay},
+    relay::{PendingSignature, PreparedAuthorityTransfer, PreparedRelay, RelaySent, RingRelay},
     select::{select_merge_where, select_spend_where},
     storage::{
         InitializeStorage, StorageApplyProof, SyncRoots, UpdateStorage, UpdateStorageAuthority,

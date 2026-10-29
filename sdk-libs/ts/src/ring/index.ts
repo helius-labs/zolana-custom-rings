@@ -288,9 +288,18 @@ export type {
   PreparedRingRelay,
   RingRelayInput,
 } from "../operations/payments/transfer-rails.js";
-export { PendingRelaySignature, PreparedRelay, relayId, submittedRelay } from "../rpc/relay.js";
-export type { RelaySent, RingRelayClient } from "../rpc/relay.js";
+export {
+  PendingRelaySignature,
+  PreparedAuthorityTransfer,
+  PreparedRelay,
+  relayId,
+  submittedRelay,
+} from "../rpc/relay.js";
+export type { RelaySent, RingAuthorityRelayClient, RingRelayClient } from "../rpc/relay.js";
 export type {
+  AuthorityPayment,
+  AuthorityTransfer,
+  PrepareAuthorityTransferRequest,
   PrepareRelayRequest,
   RelayIntent,
   RelayOperation,
@@ -450,10 +459,12 @@ export {
   RING_READ_PAGE_LIMIT,
   RingAuditedUtxosRequest,
   RingAuditorKeyRequest,
+  RingAuthorityTransferRequest,
   RingReadRequest,
   RingRpc,
   auditedUtxosAttestation,
   auditorKeyStatement,
+  authorityTransferAttestation,
   auditorKeyRequestAttestation,
   messageSignerReader,
   ringReadAttestation,

@@ -30,13 +30,13 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use zolana_ring_client::rpc::{
     CreateAuditorKeyRequest, CreateAuditorKeyResponse, GetAuditedUtxosRequest,
     GetDecryptedTransactionsRequest, GetRecordUpdateStatusRequest, GetRelayQuoteRequest,
-    GetRelayStatusRequest, HealthResponse, PagedRead, PrepareRelayRequest, RingDepositsRequest,
-    RingDepositsResponse, RingState, RingStatusRequest, RingStatusResponse,
-    SetMergeSettingsRequest, SetReaderGrantRequest, SubmitRecordUpdateRequest, SubmitRelayRequest,
-    CREATE_AUDITOR_KEY, GET_AUDITED_MERGES, GET_AUDITED_UTXOS, GET_DECRYPTED_TRANSACTIONS,
-    GET_RECORD_UPDATE_STATUS, GET_RELAY_QUOTE, GET_RELAY_STATUS, HEALTH, PREPARE_RELAY,
-    RING_DEPOSITS, RING_STATUS, SET_MERGE_SETTINGS, SET_READER_GRANT, SUBMIT_RECORD_UPDATE,
-    SUBMIT_RELAY,
+    GetRelayStatusRequest, HealthResponse, PagedRead, PrepareAuthorityTransferRequest,
+    PrepareRelayRequest, RingDepositsRequest, RingDepositsResponse, RingState, RingStatusRequest,
+    RingStatusResponse, SetMergeSettingsRequest, SetReaderGrantRequest, SubmitRecordUpdateRequest,
+    SubmitRelayRequest, CREATE_AUDITOR_KEY, GET_AUDITED_MERGES, GET_AUDITED_UTXOS,
+    GET_DECRYPTED_TRANSACTIONS, GET_RECORD_UPDATE_STATUS, GET_RELAY_QUOTE, GET_RELAY_STATUS,
+    HEALTH, PREPARE_AUTHORITY_TRANSFER, PREPARE_RELAY, RING_DEPOSITS, RING_STATUS,
+    SET_MERGE_SETTINGS, SET_READER_GRANT, SUBMIT_RECORD_UPDATE, SUBMIT_RELAY,
 };
 
 use crate::{
@@ -290,6 +290,14 @@ pub fn rpc_module<S: TransactionSource + 'static>(
         |hub, request: SetMergeSettingsRequest| async move {
             let _authentication = hub.admit(Lane::Authentication)?;
             hub.set_merge_settings(&request).await
+        },
+    )?;
+    method(
+        &mut module,
+        PREPARE_AUTHORITY_TRANSFER,
+        |hub, request: PrepareAuthorityTransferRequest| async move {
+            let _authentication = hub.admit(Lane::Authentication)?;
+            hub.prepare_authority_transfer(&request).await
         },
     )?;
     if let Some(relay) = relay {
@@ -564,6 +572,7 @@ mod tests {
             auditor_pubkey: auditor.pubkey(),
             authority: Address::new_from_array([2; 32]),
             mode: custom_ring_interface::RingMode::Confidential,
+            delegate: None,
         });
         Arc::new(
             Hub::builder(source, TEST_GENESIS)
