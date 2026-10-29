@@ -207,12 +207,12 @@ its next sender tag, and a deposit to another member takes a tag by the
 selection above. In Rust `DepositRecipient::Anonymous` and
 `DepositRecipient::AnonymousPayment` name the two, and
 `RingDeposit::viewing_history` returns the history to store before the deposit
-is sent. In TypeScript `PreparedRingDeposit.viewingHistory` returns it, and
-`buildRingDepositTransaction` refuses an anonymous recipient. A deposit body
-names no sender, so a deposit pairs neither side, and the next payment to that
-recipient takes a first-payment tag again. The ring sync opens the scheme 8
-deposit body with Rust `DepositOpener` or TypeScript `openRingDeposit`. It
-keeps the note only when the note rebuilds the published hash.
+is sent. In TypeScript `PreparedRingDepositRelay.viewingHistory` returns it.
+A deposit body names no sender, so a deposit pairs neither side, and the next
+payment to that recipient takes a first-payment tag again. The ring sync opens
+the scheme 8 deposit body with Rust `DepositOpener` or TypeScript
+`openRingDeposit`. It keeps the note only when the note rebuilds the published
+hash.
 
 A merge consolidates notes of one owner without the owner's signature. See
 [Merges](auditing.md#merges).
@@ -320,9 +320,7 @@ own transactions. The viewing secret never leaves the key holder.
    `RingAddress` needs `anonymous.firstContact`. Store the relay's
    `viewingHistory` before `relay.send`. Exits, entries and withdrawals go
    through `prepareRingExitRelay`, `prepareRingEntryRelay` and
-   `prepareRingWithdrawalRelay`. Their `buildRing*Transaction` and
-   `createRing*Submission` builders refuse an anonymous ring with
-   `RING_ANONYMOUS_RELAY_REQUIRED`.
+   `prepareRingWithdrawalRelay`.
 
 ## Limits
 
