@@ -80,7 +80,7 @@ impl SppWitness<'_> {
             let rail = match (self.rail, self.hidden) {
                 (RingRail::Anonymous, Some(hidden)) => IndexedTransferRail::AnonymousRingEddsa {
                     ring: self.ring,
-                    owner: hidden.owner,
+                    owner: hidden.owner.into(),
                 },
                 (RingRail::Delegate, _) => IndexedTransferRail::RingAuthority(self.ring),
                 (RingRail::Confidential, _) => IndexedTransferRail::Ring(self.ring),
@@ -119,7 +119,7 @@ impl SppWitness<'_> {
                     // The hidden owner signs inside the proof, every public signer slot is zero.
                     signer_pk_hashes: vec![[0; 32]; shape.signer_width()],
                     allow_dummy_inputs,
-                    owner: hidden.owner,
+                    owner: hidden.owner.into(),
                     ring_program_id: Some(self.ring),
                     shape,
                 }
