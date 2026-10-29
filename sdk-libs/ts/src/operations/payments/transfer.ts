@@ -584,7 +584,7 @@ async function buildRingSpend<R>(
   }
 }
 
-/** The relayed terminal, the notes stay leased until the wallet syncs their spend. */
+/** The relayed terminal, the selected notes stay leased for `DEFAULT_RESERVATION_TTL_MS`. */
 async function relayRingSpend<S, R extends RingRelayRail>(
   input: Readonly<{
     params: SpendBase & R;

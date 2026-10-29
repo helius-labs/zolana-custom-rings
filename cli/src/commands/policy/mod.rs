@@ -11,6 +11,8 @@ pub use grammar::{
 };
 pub use render::render;
 
+use std::collections::BTreeMap;
+
 use anyhow::{ensure, Context as _, Result};
 use custom_ring_interface::{ListRegistry, RingPolicy};
 use custom_ring_sdk::{
@@ -18,7 +20,7 @@ use custom_ring_sdk::{
 };
 use solana_address::Address;
 use solana_signer::Signer;
-use zolana_ring_policy::RuleTable;
+use zolana_ring_policy::{MintPolicy, RuleTable};
 
 use crate::{
     catalogue::check_curator,
@@ -284,24 +286,42 @@ impl Line {
     }
 }
 
-/// Replacing policy settings preserves the independent withdrawal co-sign threshold.
 pub(crate) fn mint_changes(
     ctx: &Context,
     compiled: &CompiledPolicy,
-) -> Result<std::collections::BTreeMap<[u8; 32], zolana_ring_policy::MintPolicy>> {
-    let current = crate::records::mint_policies(ctx)?;
-    let mut desired = compiled.mint_policies.clone();
-    for (member, old) in &current {
-        desired.entry(*member).or_default().withdrawal_threshold = old.withdrawal_threshold;
-    }
-    desired.retain(|member, policy| *policy != current.get(member).copied().unwrap_or_default());
-    Ok(desired)
+) -> Result<BTreeMap<[u8; 32], MintPolicy>> {
+    Ok(policy_mint_writes(
+        &crate::records::mint_policies(ctx)?,
+        &compiled.mint_policies,
+    ))
+}
+
+/// Only fields the policy compiles change, the rest keep the record value.
+fn policy_mint_writes(
+    current: &BTreeMap<[u8; 32], MintPolicy>,
+    policies: &BTreeMap<[u8; 32], MintPolicy>,
+) -> BTreeMap<[u8; 32], MintPolicy> {
+    current
+        .keys()
+        .chain(policies.keys())
+        .filter_map(|member| {
+            let old = current.get(member).copied().unwrap_or_default();
+            let policy = policies.get(member).copied().unwrap_or_default();
+            let new = MintPolicy {
+                threshold: policy.threshold,
+                cap: policy.cap,
+                cosign_above: policy.cosign_above,
+                ..old
+            };
+            (new != old).then_some((*member, new))
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zolana_ring_policy::{ListId, Rule, Subject};
+    use zolana_ring_policy::{AssetLimits, ListId, Rule, Subject};
     #[test]
     fn table_lines_show_only_rules() {
         let table = RuleTable::builder()
@@ -309,5 +329,61 @@ mod tests {
             .build();
         assert_eq!(table_lines(&table).len(), 1);
         assert!(table_lines(&RuleTable::empty()).is_empty());
+    }
+
+    #[test]
+    fn a_policy_write_keeps_the_mint_limits() {
+        let (mint, dropped) = ([7; 32], [8; 32]);
+        let limits = AssetLimits {
+            sender_cap: 30,
+            sender_window_slots: 40,
+            ..AssetLimits::EMPTY
+        };
+        let current = BTreeMap::from([
+            (
+                mint,
+                MintPolicy {
+                    threshold: 10,
+                    withdrawal_threshold: 20,
+                    limits,
+                    ..MintPolicy::EMPTY
+                },
+            ),
+            (
+                dropped,
+                MintPolicy {
+                    cap: 5,
+                    limits,
+                    ..MintPolicy::EMPTY
+                },
+            ),
+        ]);
+        let policies = BTreeMap::from([(
+            mint,
+            MintPolicy {
+                threshold: 50,
+                ..MintPolicy::EMPTY
+            },
+        )]);
+
+        assert_eq!(
+            policy_mint_writes(&current, &policies),
+            BTreeMap::from([
+                (
+                    mint,
+                    MintPolicy {
+                        threshold: 50,
+                        ..current[&mint]
+                    },
+                ),
+                (
+                    dropped,
+                    MintPolicy {
+                        cap: 0,
+                        ..current[&dropped]
+                    },
+                ),
+            ])
+        );
     }
 }

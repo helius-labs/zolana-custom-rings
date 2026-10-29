@@ -375,6 +375,31 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_deposit_never_offsets_the_sender_outflow() {
+        let sender = member(7);
+        let signature = Signature::from([1; 64]);
+        let decision = LimitDecision {
+            sender: &sender,
+            assets: &[AssetCheck {
+                flow: AssetFlow {
+                    asset: ASSET,
+                    transferred: 80,
+                    deposited: 60,
+                    withdrawn: 30,
+                },
+                limits: SENDER_LIMITS,
+            }],
+            usage: &WindowUsage {
+                slot: 1_000,
+                reservations: Vec::new(),
+            },
+        }
+        .decide(signature);
+
+        assert_eq!(decision, CoSignDecision::Refused(CoSignRefusal::OverLimit));
+    }
+
     struct FixedLimits;
 
     impl AssetLimitSource for FixedLimits {

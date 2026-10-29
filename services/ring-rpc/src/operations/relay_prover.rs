@@ -20,12 +20,10 @@ use crate::{
 
 pub struct RelayProofRequest<'a> {
     pub ring: Address,
-    pub fee_payer: Address,
+    pub parties: RelayParties,
     pub payload: &'a RelayPayload,
     /// Verified over `SppProofInputs::message_hash`, the anonymous and confidential proofs take it.
     pub owner_signature: Option<[u8; 64]>,
-    /// Read only when the ring demands a co-signer.
-    pub co_signer: Option<Address>,
 }
 
 /// The source's notes open under the escrowed key, the source signs nothing.
@@ -45,6 +43,7 @@ pub struct DelegateSeal<'a> {
 #[derive(Clone, Copy)]
 pub struct RelayParties {
     pub fee_payer: Address,
+    /// Read only when the ring demands a co-signer.
     pub co_signer: Option<Address>,
 }
 
@@ -125,12 +124,12 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
         let mut transfer = RingTransfer::relayed(RelayedTransferInput {
             ring: CustomRing::new(request.ring),
             proof_inputs,
-            fee_payer: request.fee_payer,
+            fee_payer: request.parties.fee_payer,
         });
         if let Some(signature) = request.owner_signature {
             transfer = transfer.with_owner_signature(signature);
         }
-        if let Some(co_signer) = request.co_signer {
+        if let Some(co_signer) = request.parties.co_signer {
             transfer = transfer.with_co_signer(co_signer);
         }
         let proven = transfer
@@ -163,8 +162,8 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
         let prepared = RelayedDeposit {
             ring: CustomRing::new(request.ring),
             inputs: deposit,
-            fee_payer: request.fee_payer,
-            co_signer: request.co_signer,
+            fee_payer: request.parties.fee_payer,
+            co_signer: request.parties.co_signer,
         }
         .prepare(self.client.zolana())
         .await
@@ -193,20 +192,20 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
             .map_err(|error| RelayError::proof(error.into()))?;
         let proven = OwnerMergeProof {
             client: &self.client,
-            payer: request.fee_payer,
+            payer: request.parties.fee_payer,
         }
         .prove(OwnerMerge {
             ring: merge.ring_program_id,
             owner: Address::new_from_array(owner),
             nullifier_key: &merge.nullifier_key,
             inputs: merge.inputs.clone(),
-            co_signer: request.co_signer,
+            co_signer: request.parties.co_signer,
         })
         .await
         .map_err(RelayError::proof)?;
         Ok(ProvenRelay {
             instruction: proven
-                .instruction(request.fee_payer)
+                .instruction(request.parties.fee_payer)
                 .map_err(RelayError::proof)?,
             budget: ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Merge)),
             co_signer: proven.co_signer(),

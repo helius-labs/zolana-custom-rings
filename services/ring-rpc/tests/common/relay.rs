@@ -25,8 +25,8 @@ use zolana_ring_client::rpc::{
     PrepareRelayRequest, ProofInputBytes, RelayIntent, RelayProofInputs, RelayQuote, RelayRail,
 };
 use zolana_ring_rpc::{
-    ChainOutcome, DelegateSeal, ProvenRelay, RelayChain, RelayParties, RelayPayload,
-    RelayProofRequest, RelayProver, RingRpcError,
+    ChainOutcome, DelegateSeal, LatestBlockhash, ProvenRelay, RelayChain, RelayParties,
+    RelayPayload, RelayProofRequest, RelayProver, RingRpcError,
 };
 use zolana_ring_transaction::{AnonymousPlan, TaggedPayment};
 
@@ -46,7 +46,7 @@ impl RelayProver for RecordingProver {
         self.requests
             .lock()
             .expect("requests")
-            .push((request.fee_payer, request.owner_signature));
+            .push((request.parties.fee_payer, request.owner_signature));
         let (signers, data) = match request.payload {
             RelayPayload::Transfer(proof_inputs) => (
                 match proof_inputs.rail {
@@ -58,7 +58,7 @@ impl RelayProver for RecordingProver {
             RelayPayload::Deposit(deposit) => (vec![deposit.depositor], vec![1, 2, 3]),
             RelayPayload::Merge(_) => (Vec::new(), vec![1, 2, 3]),
         };
-        let accounts = core::iter::once(AccountMeta::new(request.fee_payer, true))
+        let accounts = core::iter::once(AccountMeta::new(request.parties.fee_payer, true))
             .chain(
                 signers
                     .iter()
@@ -105,8 +105,8 @@ impl RelayChain for RecordingChain {
         Ok(SLOT)
     }
 
-    async fn latest_blockhash(&self) -> Result<(Hash, u64), RingRpcError> {
-        Ok((Hash::new_from_array([8; 32]), 500))
+    async fn latest_blockhash(&self) -> Result<LatestBlockhash, RingRpcError> {
+        Ok((Hash::new_from_array([8; 32]), 500).into())
     }
 
     async fn block_height(&self) -> Result<u64, RingRpcError> {
