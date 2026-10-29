@@ -13,11 +13,11 @@ A **mode** fixes the rail of every transfer on a ring. `Initialize` sets `Anonym
 
 ### Rail
 
-A **rail** is the signing form of a transfer. The instruction tag and the mode select it, never the frame, the transfer's compact instruction data (`RingRail::of`). The payer is SPP account `0` and pays rent and fees. A co-signer is an optional key with its own `CoSigner` record. The program demands its signature when its scope or an outflow limit names the operation.
+A **rail** is the signing form of a transfer. The instruction tag and the mode select it (`RingRail::of`). On the confidential rail the frame, the transfer's compact instruction data, selects whether the owners sign the transaction or one owner signs inside the SPP proof. The payer is SPP account `0` and pays rent and fees. A co-signer is an optional key with its own `CoSigner` record. The program demands its signature when its scope or an outflow limit names the operation.
 
 | Rail | Mode | Who signs | SPP circuit |
 | --- | --- | --- | --- |
-| Confidential | `Confidential`, `ConfidentialEscrow` | Each owner signer, the payer and a demanded co-signer | `ConfidentialRingEddsa` |
+| Confidential | `Confidential`, `ConfidentialEscrow` | Each owner signer, or the owner inside the SPP proof, plus the payer and a demanded co-signer | `ConfidentialRingEddsa`, or `ConfidentialRingInCircuitEddsa` when the owner signs inside the proof |
 | Anonymous | `Anonymous` | The SPP payer and a demanded co-signer. The hidden owner signs inside the SPP proof. | `AnonymousRingEddsa` |
 
 A third rail, the delegate rail, runs `AuthorityTransfer` in `ConfidentialEscrow` mode only.
@@ -116,22 +116,22 @@ See [Anonymity breaks when its conditions fail](spec.md#anonymity-breaks-when-it
 
 1. **Rail selection**: `program-libs/interface/src/instructions/transact.rs:93`
     - `RingRail::of` maps the tag and the mode to a rail, and `AuthorityTransfer` on `Anonymous` fails.
-2. **Payer-only signer**: `programs/custom-ring/src/instructions/transfer/accounts.rs:124`
+2. **Payer-only signer**: `programs/custom-ring/src/instructions/transfer/accounts.rs:120`
     - Any other SPP signer fails with `InvalidAnonymousSigner`. Line 197 builds the party identities.
 3. **Withdrawal destination**: `program-libs/interface/src/instructions/anonymous_exit.rs:122`
     - Every withdrawal names one key. `identities` at line 175 hashes the three parties.
-4. **Tag selection**: `sdk-libs/client/src/state/viewing_history.rs:221`
-    - `select` takes a known recipient's next shared tag or the caller's first-payment tag. `TransferTagging::plan` at line 380 takes the sender tag.
+4. **Tag selection**: `sdk-libs/client/src/state/viewing_history.rs:260`
+    - `select` takes a known recipient's next shared tag or the caller's first-payment tag. `TransferTagging::plan` at line 433 takes the sender tag.
 5. **Anonymous audit**: `prover/circuits/audit/anonymous.go:89`
     - `openSlot` at line 136 opens each output's owner key, asset and amount, and `spend` at line 150 binds the spent notes. No line derives a tag or opens a body.
-6. **Delivery**: `prover/circuits/audit/delivery.go:53`
-    - On the delivered rails the body opens for `u`. Line 76 binds the owner to the disclosed owner key, and nothing binds `u` to it.
-7. **Parties**: `prover/circuits/shared/parties.go:7`
+6. **Delivery**: `prover/circuits/audit/delivered.go:134`
+    - On the delivered rails the body opens for `u`. Line 157 binds the owner to the disclosed owner key, and nothing binds `u` to it.
+7. **Parties**: `prover/circuits/shared/derivation.go:104`
     - Each nonzero party identity differs from the hidden owner.
-8. **Output layout**: `sdk-libs/transaction/src/anonymous_rail.rs:76`
-    - `slots` gives output 0 the sender tag and a later change output a dummy tag, and refuses a transfer without change. `lead_change` at line 152 moves the change to the front. `AnonymousSeal::body` at line 194 seals each body at its output position. `sender_bundle` at line 230 lists one recipient key per output after the change and seals the bundle at the output count. An exit or a dummy takes the dummy key `0x04 || 0^32`.
-9. **Wallet sync**: `sdk-libs/client/src/operations/anonymous.rs:284`
-    - `entry` runs both phases, `stream` at line 317 resumes from the watermark, and `record_sent` at line 604 opens the wallet's sent payments.
+8. **Output layout**: `sdk-libs/transaction/src/anonymous_rail.rs:95`
+    - `slots` gives output 0 the sender tag and a later change output a dummy tag, and refuses a transfer without change. `lead_change` at line 171 moves the change to the front. `AnonymousSeal::body` at line 213 seals each body at its output position. `sender_bundle` at line 249 lists one recipient key per output after the change and seals the bundle at the output count. An exit or a dummy takes the dummy key `0x04 || 0^32`.
+9. **Wallet sync**: `sdk-libs/client/src/operations/anonymous.rs:291`
+    - `entry` runs the stream rounds of one viewing key, `start_streams` at line 342 opens each new stream, `merges` at line 823 follows the spends of every found or held ring note, and `record_sent` at line 657 opens the wallet's sent payments.
 10. **Ring address**: `sdk-libs/keys/src/ring_address.rs:38`
     - `RingPaymentRequest` at line 118 carries the request tag.
 11. **SPP hidden owner**: `zolana/prover/server/circuits/spp_transaction/custom/anonymous_eddsa.go:198` at `ff04c625c`
@@ -153,7 +153,7 @@ See [Anonymity breaks when its conditions fail](spec.md#anonymity-breaks-when-it
 
 **What each observer learns**
 
-1. Photon, the zolana SPP indexer: the tags of one stream of one viewing key per request, and the nullifiers of the wallet's ring notes (`sdk-libs/client/src/operations/anonymous.rs:317`, `sdk-libs/client/src/rpc/tags.rs:87`, `sdk-libs/client/src/operations/anonymous.rs:797`).
-2. Ring indexer: every call it forwards to Photon, and on a policy ring the members a client opens (`services/ring-indexer/src/rpc/server/mod.rs:43`, `services/ring-indexer/src/rpc/api.rs:164`).
+1. Photon, the zolana SPP indexer: the tags of every stream of one viewing key per request, and the nullifiers of the wallet's ring notes (`sdk-libs/client/src/operations/anonymous.rs:317`, `sdk-libs/client/src/rpc/tags.rs:86`, `sdk-libs/client/src/operations/anonymous.rs:823`).
+2. Ring indexer: every call it forwards to Photon, and on a policy ring the members a client opens (`services/ring-indexer/src/rpc/server/mod.rs:43`).
 3. Prover: the full witness, the hidden owner and every opening included (`prover/circuits/audit/anonymous.go:43`).
 4. Ring RPC reader: what the auditor opens, once granted (`services/ring-rpc/src/operations/audit.rs:284`).

@@ -41,7 +41,7 @@ hidden owner.
 
 The **indexer** serves outputs by exact tag, spends by nullifier and Merkle
 paths by leaf. It sees which tags, nullifiers and leaves a wallet asks for, and
-a sync asks for the tags of one stream together. A wallet trusts it to return
+a sync asks for the tags of every stream of one viewing key together. A wallet trusts it to return
 every match. A paged read fails when the indexer repeats a cursor. A wallet
 that needs unlinkability runs its own indexer.
 
@@ -165,8 +165,7 @@ change.
 ## The anonymous SPP rail
 
 An anonymous ring settles a member transfer on SPP's `AnonymousRingEddsa`
-rail. The hidden owner signs the
-[ring spend message](../program-libs/interface/src/proof/statement.rs). The circuit
+rail. The hidden owner signs SPP's transaction message hash. The circuit
 verifies the signature and checks that the ring program id the owner signs is
 the transfer's ring.
 
@@ -187,10 +186,10 @@ allows them with `EntrySpend::Allow`, and the CLI with
 them with `inputs` of `"ring-or-default"` or `"default"`, and
 `prepareRingEntryRelay` spends them alone.
 
-`AnonymousSpendSigner` produces the signature, so the hidden owner's key can
-stay outside the process that proves. In Rust `spr_keypair::SigningKey` and
-`ed25519_dalek::SigningKey` implement it, and a hardware or remote signer
-implements it itself.
+In TypeScript `AnonymousSpendSigner` produces the signature, so the hidden
+owner's key can stay in a wallet. `signingKeySpendSigner` and
+`messageSignerSpendSigner` build one. Rust's `with_anonymous_signer` takes the
+owner's `spr_keypair::SigningKey`.
 
 The SDKs refuse a payer or a co-signer equal to the hidden owner before they
 prove. They also refuse a withdrawal destination that names the hidden owner

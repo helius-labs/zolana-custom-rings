@@ -6,8 +6,8 @@ Every ring proof has one public input. It is the fold of a statement the program
 |---|---|---|---|
 | Audit, delivered | `HashChain4` | 16 | `Transfer`, `AuthorityTransfer` |
 | Audit, anonymous | `HashChain4` | 19 | `Transfer` |
-| Policy, member key | `HashChain4` | 18 | `Transfer` |
-| Policy, delegate key | `HashChain4` | 17 | `AuthorityTransfer` |
+| Policy, member key | `HashChain4` | `18 + n_out` | `Transfer` |
+| Policy, delegate key | `HashChain4` | `17 + n_out` | `AuthorityTransfer` |
 | Apply | `HashChain4` | 8 | Storage `Update`, `UpdateImmediate` |
 | Register key | `HashChain4` | 8 | Ring RPC writer, off chain |
 | Withdrawal exemption | `HashChain4` | 8 | `Transfer` |
@@ -52,9 +52,9 @@ The delivered statement carries no `private_tx_hash`. They bind the transfer thr
   withdrawal_hash ]
 ```
 
-- `policy_hash`, `own_root` and `curator_root` come from the registries by the frame's indexes. `curator_root` is `0` without a curator.
+- `policy_hash` comes from the ring policy, and `own_root` and `curator_root` are its mirrored roots at the frame's `own_revision` and `curator_revision`. `curator_root` is `0` without a curator.
 - `key_escrow` is `mode == ConfidentialEscrow`. The delegate key binds `approval_required = 0` and `key_escrow = 1`.
-- `sender` is `solana_owner_identity` of the sole owner signer on the confidential rail, `sender_commitment` on the anonymous rail and `0` on the delegate rail.
+- `sender` is `solana_owner_identity` of the sole owner signer or of the in-proof owner on the confidential rail, `sender_commitment` on the anonymous rail and `0` on the delegate rail.
 - `recipient_o` is output `o`'s owner identity from the frame on the confidential and delegate rails, `0` for a dummy slot. Every `recipient_o` is `0` on the anonymous rail.
 - The public slots are SPP's per-asset nets in first-seen order. A slot holds the asset field, then `right_align(net)` for a positive net or `q - |net|` for a negative net. Slots past the used ones are zeros.
 - `withdrawal_hash = HashChain4([CRPW, right_align(count), (owner, asset, right_align(amount)) per withdrawal leg])`, in settlement order. A SOL leg's owner is `solana_owner_identity(recipient)`, an SPL leg's owner is the identity of the token account's owner.
@@ -83,7 +83,7 @@ The statement has 8 elements and no registry root.
 [ CRWX, own_root, asset_0, amount_0, asset_1, amount_1, asset_2, amount_2 ]
 ```
 
-`own_root` is the own root at the proof's `root_index`. Each used slot holds `hash_bytes(mint)` of one withdrawn mint, in first-seen order of the withdrawal legs, and `right_align` of the gross sum of that mint's withdrawal legs. Deposit legs do not enter the sum. Slots past the withdrawn mints are zeros.
+`own_root` is the own mirror's root at the exemption's `own_revision`. Each used slot holds `hash_bytes(mint)` of one withdrawn mint, in first-seen order of the withdrawal legs, and `right_align` of the gross sum of that mint's withdrawal legs. Deposit legs do not enter the sum. Slots past the withdrawn mints are zeros.
 
 ## Deposit
 
@@ -97,7 +97,7 @@ statement    = HashChain([ CRDP, context_hash, right_align(count), right_align(a
                            (asset_i, right_align(amount_i)) × 8 ])
 ```
 
-`spp_data` is the forwarded SPP data from its tag byte `18`. Slots past `count` are zero. `anonymous` is `mode == Anonymous`. `key_escrow` is `mode == ConfidentialEscrow`. `registry_root` is the own root at the prefix's index in `ConfidentialEscrow` mode or on a policy ring, else `0`. `curator_root` is the curator root at the prefix's `curator_revision` when a policy source names a curator, else `0`. `policy_hash` is the registry's written policy hash on a policy ring, else `0`. `asset_i` is the SPP asset field of entry `i`'s group, `SOL_ASSET_FIELD` or `hash_bytes(mint)`, and `amount_i` its amount.
+`spp_data` is the forwarded SPP data from its tag byte `18`. Slots past `count` are zero. `anonymous` is `mode == Anonymous`. `key_escrow` is `mode == ConfidentialEscrow`. `registry_root` is the own root at the prefix's `own_revision` in `ConfidentialEscrow` mode or on a policy ring, else `0`. `curator_root` is the curator root at the prefix's `curator_revision` when a policy source names a curator, else `0`. `policy_hash` is the registry's written policy hash on a policy ring, else `0`. `asset_i` is the SPP asset field of entry `i`'s group, `SOL_ASSET_FIELD` or `hash_bytes(mint)`, and `amount_i` its amount.
 
 ## Merge
 
@@ -108,4 +108,4 @@ statement    = HashChain([ CRDP, context_hash, right_align(count), right_align(a
   party_0, party_1, party_2, right_align(key_escrow), member_registry_root ]
 ```
 
-The salt is the SPP merge output salt. The party identities are the payer, the signing co-signer and `0`. `key_escrow` is `mode == ConfidentialEscrow`, and then `member_registry_root` is the own root at `registry_root_index`, else `0`. SPP's merge proof binds the same `private_tx_hash` and nullifiers.
+The salt is the SPP merge output salt. The party identities are the payer, the signing co-signer and `0`. `key_escrow` is `mode == ConfidentialEscrow`, and then `member_registry_root` is the own root at the merge's `own_revision`, else `0`. SPP's merge proof binds the same `private_tx_hash` and nullifiers.

@@ -55,7 +55,7 @@ curator  = distinct + min(w, 3)
 `p` is 3 on the member key and 0 on the delegate key. Withdrawals settle
 through SPP's 3 public slots, so they add at most 3 distinct assets. Each pool
 holds as many subject rows as records. `recordCapacity` in
-[`pooled_policy.go`](../prover/circuits/policy/pooled_policy.go) and
+[`record_pool.go`](../prover/circuits/policy/record_pool.go) and
 `RingCircuit::record_pools` in
 [`key_catalog.rs`](../program-libs/interface/src/proof/key_catalog.rs) compute
 the same widths.
