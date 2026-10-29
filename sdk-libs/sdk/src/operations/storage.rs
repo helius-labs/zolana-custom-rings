@@ -1,13 +1,21 @@
 use custom_ring_interface::{
+    key_catalog::RingCircuit,
     storage::{RegistryId, StorageRegistry},
     storage_instruction::{tag, InitializeIxData, StorageUpdateIxData, UpdateMode},
     tag::SYNC_ROOTS,
-    STORAGE_PROGRAM_ID, SYSTEM_PROGRAM_ID,
+    ApplyRecordsIxData, STORAGE_PROGRAM_ID, SYSTEM_PROGRAM_ID,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
+use spr_client::AsyncRpc;
+use zolana_ring_member_registry::ApplyProofInputs;
 
-use crate::{CustomRing, RingError};
+use crate::{
+    client::{RingClient, RingIndexerBackend},
+    prover::{to_instruction_proof, RingRequest},
+    request::{ApplyRecords, RecordWrite},
+    CustomRing, RingError,
+};
 
 /// The creator signs and becomes the authority, the payer funds the account.
 #[must_use]
@@ -42,6 +50,13 @@ pub struct UpdateStorageAuthority {
 pub struct SyncRoots {
     pub ring: CustomRing,
     pub registry: Address,
+}
+
+/// Proves `inputs` with the apply key of their write count, the batch padded with empty writes.
+#[must_use]
+#[derive(Clone, Copy, Debug)]
+pub struct StorageApplyProof<'a> {
+    pub inputs: &'a ApplyProofInputs,
 }
 
 impl InitializeStorage {
@@ -101,6 +116,46 @@ impl SyncRoots {
             ],
             data: vec![SYNC_ROOTS],
         }
+    }
+}
+
+impl StorageApplyProof<'_> {
+    pub async fn prove<R: AsyncRpc, I: RingIndexerBackend>(
+        self,
+        client: &RingClient<R, I>,
+    ) -> Result<ApplyRecordsIxData, RingError> {
+        let statement = self.inputs.statement()?;
+        let circuit = RingCircuit::apply_records(statement.count);
+        let RingCircuit::ApplyRecords { writes: batch } = circuit else {
+            return Err(RingError::UnpinnedProvingKey(circuit));
+        };
+        let public_input_hash = statement.hash()?;
+        let mut writes: Vec<Option<RecordWrite>> = self
+            .inputs
+            .writes
+            .iter()
+            .map(|write| Some(write.into()))
+            .collect();
+        writes.resize(usize::from(batch), None);
+        let body = ApplyRecords {
+            public_input_hash,
+            old_root: statement.old_root,
+            new_root: statement.new_root,
+            old_next_index: statement.old_next_index,
+            new_next_index: statement.new_next_index,
+            chain_start: statement.chain_start,
+            chain_end: statement.chain_end,
+            count: u8::try_from(statement.count).map_err(|_| RingError::RecordProjectionStale)?,
+            writes,
+        };
+        let proof = RingRequest::new(circuit, &body)?
+            .prove(client, public_input_hash)
+            .await?;
+        Ok(ApplyRecordsIxData {
+            proof: to_instruction_proof(proof)?,
+            new_root: statement.new_root,
+            new_next_index: statement.new_next_index.to_le_bytes(),
+        })
     }
 }
 
