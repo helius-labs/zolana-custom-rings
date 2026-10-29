@@ -16,6 +16,7 @@ import {
   ringCoSignerAddress,
   ringConfigAddress,
   ringMemberRegistryAddress,
+  ringPolicyAddress,
   ringRecordQueueAddress,
 } from "../../../src/protocol/pda/index.js";
 import {
@@ -363,7 +364,7 @@ describe("config writes", () => {
       [AUTHORITY, SIGN],
       [await ringConfigAddress(RING), WRITE],
       [NEXT, SIGN],
-      [await ringMemberRegistryAddress(RING), READ],
+      [await ringPolicyAddress(RING), READ],
     ]);
   });
 

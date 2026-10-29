@@ -313,15 +313,15 @@ export async function setRingDelegateInstruction(
     delegate: SignerAccount;
   }>,
 ): Promise<Instruction> {
-  const [config, registry] = await Promise.all([
+  const [config, policy] = await Promise.all([
     ringConfigAddress(input.ringProgramId),
-    ringMemberRegistryAddress(input.ringProgramId),
+    ringPolicyAddress(input.ringProgramId),
   ]);
   return ringInstruction(input.ringProgramId, Uint8Array.of(RingInstructionTag.setDelegate), [
     meta(input.authority, true, false),
     meta(config, false, true),
     meta(input.delegate, true, false),
-    meta(registry, false, false),
+    meta(policy, false, false),
   ]);
 }
 
