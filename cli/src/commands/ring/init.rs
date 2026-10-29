@@ -2,14 +2,12 @@
 
 use anyhow::{anyhow, bail, ensure, Context as _, Result};
 use custom_ring_sdk::{
-    CustomRingConfig, InitialPolicy, Initialize, InitializeStorage, ListRegistry, PolicyRecords,
-    PolicyTable, PolicyUpdate, RingError, RingKind, SourceOwner, SyncRoots, UpdateAuthority,
-    UpdatePolicy,
+    CustomRingConfig, InitialPolicy, Initialize, ListRegistry, PolicyTable, PolicyUpdate,
+    RingError, RingKind, SourceOwner, SyncRoots, UpdateAuthority, UpdatePolicy,
 };
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
-use spr_client::Rpc;
 use spr_keypair::X25519Pubkey;
 use zolana_ring_client::rpc::{read_auditor_pubkey, write_auditor_pubkey};
 use zolana_ring_policy::{ListId, RuleTable};
@@ -65,7 +63,7 @@ struct ConfigCreation<'a> {
     existing: Option<&'a CustomRingConfig>,
 }
 
-/// `Initialize` over the config authority's records, then the `SyncRoots` of the records and of every pinned curator.
+/// `Initialize` over the records Ring RPC holds, then the `SyncRoots` of the records and of every pinned curator.
 #[must_use]
 struct RingInitialization<'a> {
     deployer: &'a Keypair,
@@ -176,17 +174,7 @@ pub fn run(ctx: &Context, args: InitArgs) -> Result<()> {
                 .require(trust)?
         }
     };
-    let (ring, payer) = (ctx.ring, config_authority.pubkey());
-    let send = |instruction| {
-        ctx.send(&[config_authority], &[instruction])
-            .map(|_| CREATED)
-    };
-    // `Initialize` binds the records, so they exist first.
-    let storage = InitializeStorage::records(ctx.ring, payer);
-    let records = match ctx.rpc().get_account(storage.registry())? {
-        Some(_) => PRESENT,
-        None => send(storage.instruction())?,
-    };
+    let ring = ctx.ring;
     let created = ConfigCreation {
         deployer: upgrade_authority.as_ref(),
         config_authority,
@@ -196,12 +184,13 @@ pub fn run(ctx: &Context, args: InitArgs) -> Result<()> {
         existing: existing.as_ref(),
     }
     .send(ctx)?;
+    let records = ctx
+        .block(ring.policy(ctx.chain()))?
+        .context(PARTIAL_INIT)?
+        .records;
     let policy = match &policy {
-        None => match ctx.block(ring.policy(ctx.chain()))? {
-            Some(_) if created.config == CREATED => "records only, created",
-            Some(_) => "records only",
-            None => bail!(PARTIAL_INIT),
-        },
+        None if created.config == CREATED => "records only, created",
+        None => "records only",
         Some(policy) => PolicyPin {
             authority: config_authority,
             policy,
@@ -229,7 +218,7 @@ pub fn run(ctx: &Context, args: InitArgs) -> Result<()> {
     }
     line("config", created.config);
     line("authority", created.authority);
-    line("records", format_args!("{} {records}", storage.registry()));
+    line("records", format_args!("{records} {}", created.config));
     line("policy", policy);
     line("spp ring", spp_ring);
     status::announce(&ctx.config);
@@ -343,7 +332,9 @@ impl ConfigOwnership {
 impl RingInitialization<'_> {
     fn send(self, ctx: &Context) -> Result<()> {
         let target = self.config_authority.pubkey();
-        let records = InitializeStorage::records(ctx.ring, target).registry();
+        let records = ctx
+            .ring_rpc()
+            .create_records_registry(ctx.ring_rpc_target()?, self.deployer)?;
         let empty = RuleTable::empty();
         let (rules, shared_sources) = match self.policy {
             Some(policy) => {
@@ -365,10 +356,7 @@ impl RingInitialization<'_> {
                 auditor_pubkey: self.auditor_pk,
                 kind: self.kind,
                 policy: Some(InitialPolicy {
-                    records: PolicyRecords {
-                        records,
-                        storage_authority: target,
-                    },
+                    records,
                     table: PolicyTable {
                         rules,
                         shared_sources,
@@ -387,7 +375,7 @@ impl RingInitialization<'_> {
         ctx.send(&[self.config_authority, self.deployer], &[initialize])?;
         let mut syncs = vec![SyncRoots {
             ring: ctx.ring,
-            registry: records,
+            registry: records.records,
         }
         .instruction()];
         syncs.extend(policy::curator_syncs(ctx.ring, pinned_sources));

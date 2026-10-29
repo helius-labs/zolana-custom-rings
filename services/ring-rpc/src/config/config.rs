@@ -85,11 +85,11 @@ pub struct ServeArgs {
         requires_all = ["store_url", "prover_url"]
     )]
     pub fee_payer_key_file: Option<PathBuf>,
-    /// `postgres://` or `sqlite://` URL of the service store.
-    #[arg(long, env = "RING_RPC_STORE_URL")]
+    /// `postgres://` or `sqlite://` URL of the service store, also turns the record writer on.
+    #[arg(long, env = "RING_RPC_STORE_URL", requires = "prover_url")]
     pub store_url: Option<String>,
     /// Serves the ring keys the record writer and the relay prove with.
-    #[arg(long, env = "RING_RPC_PROVER_URL")]
+    #[arg(long, env = "RING_RPC_PROVER_URL", requires = "store_url")]
     pub prover_url: Option<String>,
     /// A curator `StorageRegistry` whose subscriber rings the record writer syncs, repeatable.
     #[arg(

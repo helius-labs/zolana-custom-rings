@@ -29,12 +29,12 @@ use thiserror::Error;
 use tower::{Layer, Service};
 
 use zolana_ring_client::rpc::{
-    PrepareAuthorityTransferRequest, RefuseEnrolmentRequest, SetMergeSettingsRequest,
-    SetReaderGrantRequest, SubmitRecordUpdateRequest, SubmitRelayRequest, CREATE_AUDITOR_KEY,
-    GET_AUDITED_MERGES, GET_AUDITED_UTXOS, GET_DECRYPTED_TRANSACTIONS, GET_PENDING_ENROLMENTS,
-    GET_RECORD_UPDATE_STATUS, GET_RELAY_QUOTE, GET_RELAY_STATUS, HEALTH,
-    PREPARE_AUTHORITY_TRANSFER, REFUSE_ENROLMENT, RING_DEPOSITS, RING_STATUS, SET_MERGE_SETTINGS,
-    SET_READER_GRANT, SUBMIT_RECORD_UPDATE, SUBMIT_RELAY,
+    CreateRecordsRegistryRequest, PrepareAuthorityTransferRequest, RefuseEnrolmentRequest,
+    SetMergeSettingsRequest, SetReaderGrantRequest, SubmitRecordUpdateRequest, SubmitRelayRequest,
+    CREATE_AUDITOR_KEY, CREATE_RECORDS_REGISTRY, GET_AUDITED_MERGES, GET_AUDITED_UTXOS,
+    GET_DECRYPTED_TRANSACTIONS, GET_PENDING_ENROLMENTS, GET_RECORD_UPDATE_STATUS, GET_RELAY_QUOTE,
+    GET_RELAY_STATUS, HEALTH, PREPARE_AUTHORITY_TRANSFER, REFUSE_ENROLMENT, RING_DEPOSITS,
+    RING_STATUS, SET_MERGE_SETTINGS, SET_READER_GRANT, SUBMIT_RECORD_UPDATE, SUBMIT_RELAY,
 };
 
 use crate::{
@@ -552,6 +552,12 @@ impl RatedCall {
             REFUSE_ENROLMENT => write(
                 params
                     .parse::<RefuseEnrolmentRequest>()
+                    .ok()
+                    .map(|request| request.auth.authority.0),
+            ),
+            CREATE_RECORDS_REGISTRY => write(
+                params
+                    .parse::<CreateRecordsRegistryRequest>()
                     .ok()
                     .map(|request| request.auth.authority.0),
             ),

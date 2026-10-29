@@ -3,6 +3,9 @@ use sea_orm_migration::MigratorTrait;
 
 use crate::{error::RingRpcError, migration::Migrator};
 
+/// One flush at a time, the rest serve submits and status reads.
+pub const STORE_CONNECTIONS: u32 = 4;
+
 /// Migrated when opened, clones share one pool.
 #[derive(Clone)]
 pub struct Store {

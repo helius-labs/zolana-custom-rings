@@ -19,6 +19,7 @@ export const RingRpcMethod = Object.freeze({
   prepareAuthorityTransfer: "prepareAuthorityTransfer",
   getPendingEnrolments: "getPendingEnrolments",
   refuseEnrolment: "refuseEnrolment",
+  createRecordsRegistry: "createRecordsRegistry",
   setReaderGrant: "setReaderGrant",
 } as const);
 export type RingRpcMethod = (typeof RingRpcMethod)[keyof typeof RingRpcMethod];
@@ -161,6 +162,18 @@ export interface RefuseEnrolmentRequest {
   readonly ring: Address;
   readonly updateId: Hash;
   readonly auth: ConfigAuthorityAuth;
+}
+
+/** Rust `CreateRecordsRegistryRequest`, signed by the config authority or, while no config exists, the upgrade authority. */
+export interface CreateRecordsRegistryRequest {
+  readonly ring: Address;
+  readonly auth: ConfigAuthorityAuth;
+}
+
+/** Rust `CreateRecordsRegistryResponse`, `registry` is the ring's records under `storageAuthority`. */
+export interface RecordsRegistry {
+  readonly registry: Address;
+  readonly storageAuthority: Address;
 }
 
 /** Rust `GetPendingEnrolmentsResponse`, oldest first, `nextCursor` absent on the last page. */

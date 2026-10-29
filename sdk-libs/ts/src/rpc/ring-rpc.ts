@@ -56,6 +56,7 @@ import type {
   UnresolvedRingMerge,
 } from "../operations/audit/audit-merge.js";
 import { RingError } from "../protocol/error.js";
+import { ringRecordsAddress } from "../protocol/pda/index.js";
 import {
   checkedReaderKey,
   readerKeyBytes,
@@ -66,12 +67,14 @@ import { memberOfTag } from "../protocol/membership/policy.js";
 import { verifyRecordUpdate } from "../protocol/ring-rpc/record-update.js";
 import {
   decodePendingEnrolmentsPage,
+  decodeRecordsRegistry,
   decodeRecordUpdateStatus,
   decodeRelayQuote,
   decodeRelayStatus,
   decodeReaderGrantAction,
   decodeRelayStep,
   decodeSubmitRecordUpdate,
+  encodeCreateRecordsRegistryRequest,
   encodeGetPendingEnrolmentsRequest,
   encodePrepareAuthorityTransferRequest,
   encodePrepareRelayRequest,
@@ -88,11 +91,13 @@ import {
   RingRpcMethod,
   type AuthorityTransfer,
   type ConfigAuthorityAuth,
+  type CreateRecordsRegistryRequest,
   type GetPendingEnrolmentsRequest,
   type PendingEnrolmentsPage,
   type PrepareAuthorityTransferRequest,
   type PrepareRelayRequest,
   type ReaderGrantAction,
+  type RecordsRegistry,
   type RecordUpdateStatus,
   type RefuseEnrolmentRequest,
   type RelayQuote,
@@ -341,10 +346,11 @@ export class RingAuthorityTransferRequest {
   }
 }
 
-/** Rust `ListEnrolments` or `RefuseEnrolment`, the action the config authority signs. */
+/** Rust `ListEnrolments`, `RefuseEnrolment` or `CreateRecords`, the action the ring authority signs. */
 export type RingEnrolmentAction =
   | Readonly<{ kind: "list"; cursor?: Hash }>
-  | Readonly<{ kind: "refuse"; updateId: Hash }>;
+  | Readonly<{ kind: "refuse"; updateId: Hash }>
+  | Readonly<{ kind: "createRecords" }>;
 
 /** Mirrors Rust `EnrolmentAttestation::message`. */
 export function enrolmentAttestation(
@@ -356,12 +362,7 @@ export function enrolmentAttestation(
     nonce: Bytes32;
   }>,
 ): Uint8Array {
-  const action =
-    input.action.kind === "refuse"
-      ? `refuse ${indexerScalars.checkedHash(input.action.updateId, "updateId")}`
-      : input.action.cursor === undefined
-        ? "list"
-        : `list after ${indexerScalars.checkedHash(input.action.cursor, "cursor")}`;
+  const action = enrolmentActionLine(input.action);
   return encoder.encode(
     [
       ENROLMENT_DOMAIN,
@@ -372,6 +373,19 @@ export function enrolmentAttestation(
       `nonce: ${base64Decoder.decode(input.nonce)}`,
     ].join("\n"),
   );
+}
+
+function enrolmentActionLine(action: RingEnrolmentAction): string {
+  switch (action.kind) {
+    case "refuse":
+      return `refuse ${indexerScalars.checkedHash(action.updateId, "updateId")}`;
+    case "createRecords":
+      return "create records";
+    case "list":
+      return action.cursor === undefined
+        ? "list"
+        : `list after ${indexerScalars.checkedHash(action.cursor, "cursor")}`;
+  }
 }
 
 /** Rust `GetPendingEnrolmentsRequest::read` signed by the config authority, the page after `cursor`. */
@@ -403,6 +417,19 @@ export async function signRefuseEnrolmentRequest(
     ring: checked.ringProgramId,
     updateId,
     auth: await configAuthorityAuth(checked, authority, { kind: "refuse", updateId }, timestamp),
+  });
+}
+
+/** Rust `CreateRecordsRegistryRequest::create` signed by the config authority, or the upgrade authority while no config exists. */
+export async function signCreateRecordsRegistryRequest(
+  target: RingReadTarget,
+  authority: MessagePartialSigner,
+  timestamp?: bigint,
+): Promise<CreateRecordsRegistryRequest> {
+  const checked = checkedReadTarget(target);
+  return Object.freeze({
+    ring: checked.ringProgramId,
+    auth: await configAuthorityAuth(checked, authority, { kind: "createRecords" }, timestamp),
   });
 }
 
@@ -1120,6 +1147,29 @@ export class RingRpc {
         context,
       ),
     );
+  }
+
+  /** Idempotent, the ring's records under the service's storage authority. */
+  async createRecordsRegistry(
+    request: CreateRecordsRegistryRequest,
+    context?: RequestContext,
+  ): Promise<RecordsRegistry> {
+    const records = decodeRecordsRegistry(
+      await this.#call(
+        RingRpcMethod.createRecordsRegistry,
+        encodeCreateRecordsRegistryRequest(request),
+        context,
+      ),
+    );
+    if (records.registry !== (await ringRecordsAddress(request.ring, records.storageAuthority))) {
+      throw new RingError("RING_RPC", {
+        details: {
+          method: RingRpcMethod.createRecordsRegistry,
+          reason: "registry is not the ring records under storageAuthority",
+        },
+      });
+    }
+    return records;
   }
 
   /** Each page is signed again, the attestation binds the nonce, the cursor and the time. */

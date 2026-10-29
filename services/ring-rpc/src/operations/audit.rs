@@ -5,7 +5,7 @@ use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::GetShieldedTransactionsByTagsResponse;
 use spr_indexer_api::{Base64String, Hash, Limit};
-use spr_keypair::{NullifierKey, X25519Keypair, X25519Pubkey};
+use spr_keypair::{hash::owner_hash, NullifierKey, PublicKey, X25519Keypair, X25519Pubkey};
 use spr_transaction::instructions::transact::canonical_shape;
 use zolana_ring_client::{
     auditor_view_tag,
@@ -217,14 +217,9 @@ impl<S: TransactionSource> AuditService<S> {
             now,
         }
         .decide()?;
-        let source = &self.shared.source;
-        let ring_authority = match source.ring_config(self.ring).await? {
-            Some(config) => Some(config.authority),
-            None => source.upgrade_authority(self.ring).await?,
-        };
-        if ring_authority != Some(authority) {
-            return Err(Unauthorized::NotRingAuthority.into());
-        }
+        self.shared
+            .require_ring_authority(self.ring, authority)
+            .await?;
         self.shared.replay.accept(ReplayCheck {
             ring: self.ring,
             nonce,
@@ -423,13 +418,15 @@ impl<S: TransactionSource> AuditService<S> {
                 slot: response.context.slot,
             };
             self.audit_rows(response, config.mode, &store).await?;
-            match frontier {
-                Some(frontier) => {
+            match (frontier, next) {
+                (Some(frontier), _) => {
                     store.absorbed(context);
                     *cursor = Some(frontier);
                     return Ok(());
                 }
-                None => *cursor = next,
+                // An empty stream has no position to resume from.
+                (None, None) => return Ok(()),
+                (None, next) => *cursor = next,
             }
         }
         Ok(())
@@ -580,17 +577,18 @@ impl<S: TransactionSource> AuditService<S> {
                             origin: &origin,
                             ring: self.ring,
                         }
-                        .open(&self.auditor)
+                        .open_for(&self.auditor, store)
                     });
                     match created {
-                        Ok(created) => store.record(
-                            CreatedIn {
+                        Ok(created) => {
+                            let created_in = CreatedIn {
                                 slot: tx.slot,
                                 tx_signature: tx.tx_signature,
                                 event_index,
-                            },
-                            created,
-                        ),
+                            };
+                            store.record(created_in, created.utxos);
+                            store.hold(created_in, created.unowned);
+                        }
                         Err(error) => log::warn!(
                             "ring {} event {}:{event_index} opened no UTXOs because {}",
                             self.ring,
@@ -743,6 +741,7 @@ fn escrowed_owner(
     Ok(Some(EscrowedOwner {
         owner_key: owner.to_bytes(),
         nullifier_pk,
+        owner_hash: owner_hash(&PublicKey::from_ed25519(owner.as_array()), &nullifier_pk)?,
         sealed,
     }))
 }
@@ -768,7 +767,7 @@ fn validate_indexer_response(
     let next = response.next_cursor.as_deref();
     let frontier = response.scanned_through.as_deref();
     if response.transactions.len() > page.limit.get() as usize
-        || next.or(frontier).is_none()
+        || (next.or(frontier).is_none() && !response.transactions.is_empty())
         || next.is_some_and(|cursor| !cursor_in_bounds(cursor) || page.cursor() == Some(cursor))
         || frontier.is_some_and(|cursor| {
             !cursor_in_bounds(cursor) || response.transactions.len() >= page.limit.get() as usize

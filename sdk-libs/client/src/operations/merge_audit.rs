@@ -124,6 +124,7 @@ struct PendingMerge {
 pub(crate) struct MergeOutput {
     pub(crate) commitment: [u8; 32],
     pub(crate) tree_id: u16,
+    pub(crate) leaf_index: u64,
     pub(crate) first_nullifier: [u8; 32],
     pub(crate) width: usize,
     pub(crate) ring_program_id: [u8; 32],
@@ -507,6 +508,7 @@ impl MergeOutput {
         Ok(Self {
             commitment,
             tree_id: slot.output_context.tree_id,
+            leaf_index: slot.output_context.leaf_index,
             first_nullifier,
             width,
             ring_program_id: program_id_proof_input_hash(&Some(ring))?,
@@ -1137,6 +1139,7 @@ mod tests {
             let output = MergeOutput {
                 commitment: self.vector.request_array("outputUtxoHash"),
                 tree_id: u16::from_be_bytes([tree_id[30], tree_id[31]]),
+                leaf_index: 0,
                 first_nullifier: [0; 32],
                 width: 8,
                 ring_program_id: self.vector.request_array("ringProgramId"),

@@ -78,6 +78,8 @@ pub enum RecordUpdateRefusal {
     #[error("enrolment valid until slot is past the enrolment window")]
     EnrolmentWindow = -32245,
     // -32246 retired.
+    #[error("records registry creation did not land")]
+    RecordsNotCreated = -32260,
 }
 
 pub(crate) struct UpdateContext<'a> {

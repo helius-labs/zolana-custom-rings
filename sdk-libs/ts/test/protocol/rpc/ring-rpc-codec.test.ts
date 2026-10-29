@@ -7,6 +7,7 @@ import type { Address, Bytes32, Bytes33, Signature } from "@heliuslabs/zolana/in
 import type { indexerTypes } from "@heliuslabs/zolana/internal";
 import { ShieldedKeypair, SigningKey } from "@heliuslabs/zolana/keypair";
 import {
+  encodeCreateRecordsRegistryRequest,
   encodeGetPendingEnrolmentsRequest,
   encodePrepareAuthorityTransferRequest,
   encodePrepareRelayRequest,
@@ -22,6 +23,7 @@ import {
   enrolmentAttestation,
   readerGrantAttestation,
   ringReadAttestation,
+  signCreateRecordsRegistryRequest,
   signPendingEnrolmentsRequest,
   signRefuseEnrolmentRequest,
   type RingEnrolmentAction,
@@ -105,7 +107,12 @@ describe("enrolment requests", () => {
         new URL("../../../../../test-vectors/rpc/enrolment_attestation.json", import.meta.url),
         "utf8",
       ),
-    ) as { list: Signed; listAfter: Signed; refuse: Signed & { updateId: indexerTypes.Hash } };
+    ) as {
+      list: Signed;
+      listAfter: Signed;
+      refuse: Signed & { updateId: indexerTypes.Hash };
+      createRecords: Signed;
+    };
     const authority = await createKeyPairSignerFromPrivateKeyBytes(new Uint8Array(32).fill(8));
     const target = {
       cluster: new Uint8Array(32).fill(1) as Bytes32,
@@ -126,6 +133,7 @@ describe("enrolment requests", () => {
     expect(message({ kind: "list" })).toBe(vector.list.message);
     expect(message({ kind: "list", cursor: updateId })).toBe(vector.listAfter.message);
     expect(message({ kind: "refuse", updateId })).toBe(vector.refuse.message);
+    expect(message({ kind: "createRecords" })).toBe(vector.createRecords.message);
     const nonce = vi.spyOn(globalThis.crypto, "getRandomValues").mockImplementation((array) => {
       (array as Uint8Array).fill(4);
       return array;
@@ -144,6 +152,14 @@ describe("enrolment requests", () => {
         vector.listAfter.wire,
       );
       expect(JSON.stringify(encodeRefuseEnrolmentRequest(refuse))).toBe(vector.refuse.wire);
+      const createRecords = await signCreateRecordsRegistryRequest(
+        target,
+        authority,
+        1_700_000_000n,
+      );
+      expect(JSON.stringify(encodeCreateRecordsRegistryRequest(createRecords))).toBe(
+        vector.createRecords.wire,
+      );
     } finally {
       nonce.mockRestore();
     }

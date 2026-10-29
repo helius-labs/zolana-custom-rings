@@ -1,4 +1,5 @@
 use anyhow::{bail, ensure, Context as _, Result};
+use custom_ring_sdk::{CustomRing, InitializeStorage, PolicyRecords};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
 use solana_address::Address;
@@ -10,13 +11,15 @@ use zolana_ring_client::{
     auditor_view_tag,
     rpc::{
         AuditorKeyStatement, CreateAuditorKeyRequest, CreateAuditorKeyResponse,
-        DecryptedTransaction, DecryptedTransactionsPage, GetDecryptedTransactionsRequest,
+        CreateRecordsRegistryRequest, CreateRecordsRegistryResponse, DecryptedTransaction,
+        DecryptedTransactionsPage, GetDecryptedTransactionsRequest,
         GetDecryptedTransactionsResponse, GetPendingEnrolmentsRequest,
         GetPendingEnrolmentsResponse, GetRecordUpdateStatusRequest, HealthResponse,
         PendingEnrolment, ReadTarget, RecordUpdateStatus, RingState, RingStatusRequest,
         RingStatusResponse, SubmitRecordUpdateRequest, SubmitRecordUpdateResponse,
-        CREATE_AUDITOR_KEY, GET_DECRYPTED_TRANSACTIONS, GET_PENDING_ENROLMENTS,
-        GET_RECORD_UPDATE_STATUS, HEALTH, RING_STATUS, SUBMIT_RECORD_UPDATE,
+        CREATE_AUDITOR_KEY, CREATE_RECORDS_REGISTRY, GET_DECRYPTED_TRANSACTIONS,
+        GET_PENDING_ENROLMENTS, GET_RECORD_UPDATE_STATUS, HEALTH, RING_STATUS,
+        SUBMIT_RECORD_UPDATE,
     },
 };
 
@@ -121,6 +124,32 @@ impl RingRpcClient {
             auditor_pk,
             service_pubkey,
         })
+    }
+
+    /// The ring's records PDA under the storage authority the service names, created on first call.
+    pub fn create_records_registry(
+        &self,
+        target: ReadTarget,
+        authority: &dyn Signer,
+    ) -> Result<PolicyRecords> {
+        let ring = target.ring;
+        let request =
+            CreateRecordsRegistryRequest::create(target, authority.pubkey()).sign(authority)?;
+        let created: CreateRecordsRegistryResponse = self.call(CREATE_RECORDS_REGISTRY, request)?;
+        let records = PolicyRecords {
+            records: created.registry.0,
+            storage_authority: created.storage_authority.0,
+        };
+        let expected =
+            InitializeStorage::records(CustomRing::new(ring), records.storage_authority).registry();
+        ensure!(
+            records.records == expected,
+            "the ring rpc at {} named registry {} that is not the ring records under storage authority {}",
+            redact_url(&self.url),
+            records.records,
+            records.storage_authority
+        );
+        Ok(records)
     }
 
     /// Unsigned, `release_auditor_key` is the attested path `init` pins from.

@@ -561,6 +561,11 @@ pub(crate) mod tests {
             let owner = EscrowedOwner {
                 owner_key,
                 nullifier_pk,
+                owner_hash: spr_keypair::hash::owner_hash(
+                    &spr_keypair::PublicKey::from_ed25519(&owner_key),
+                    &nullifier_pk,
+                )
+                .expect("owner hash"),
                 sealed: NullifierKeyEnvelope::new(&key, &auditor)
                     .expect("envelope")
                     .sealed,
@@ -582,6 +587,7 @@ pub(crate) mod tests {
                 (0..notes).map(|index| CreatedUtxo {
                     commitment: commitment(owner_key[0], index),
                     slot_index: u32::from(index),
+                    leaf_index: u64::from(index),
                     utxo: KnownUtxo {
                         owner_key,
                         owner: UtxoOwner::Keyed { nullifier_pk },

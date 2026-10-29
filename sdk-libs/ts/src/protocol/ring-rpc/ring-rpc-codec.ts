@@ -8,12 +8,14 @@ import { encodeMintPolicy } from "../indexer/indexer-codec.js";
 import type {
   AuthorityTransfer,
   ConfigAuthorityAuth,
+  CreateRecordsRegistryRequest,
   GetPendingEnrolmentsRequest,
   MergeSettings,
   PendingEnrolment,
   PendingEnrolmentsPage,
   PrepareAuthorityTransferRequest,
   PrepareRelayRequest,
+  RecordsRegistry,
   RecordUpdateEntry,
   RecordUpdateStatus,
   RefuseEnrolmentRequest,
@@ -335,6 +337,25 @@ export function encodeRefuseEnrolmentRequest(value: RefuseEnrolmentRequest): Wir
     ring: checkedAddress(value.ring, "ring"),
     updateId: checkedHash(value.updateId, "updateId"),
     auth: encodeConfigAuthorityAuth(value.auth),
+  };
+}
+
+/** Rust `CreateRecordsRegistryRequest`. */
+export function encodeCreateRecordsRegistryRequest(
+  value: CreateRecordsRegistryRequest,
+): WireObject {
+  return {
+    ring: checkedAddress(value.ring, "ring"),
+    auth: encodeConfigAuthorityAuth(value.auth),
+  };
+}
+
+/** Rust `CreateRecordsRegistryResponse`. */
+export function decodeRecordsRegistry(value: unknown): RecordsRegistry {
+  const row = object(value, "$", ["registry", "storageAuthority"]);
+  return {
+    registry: checkedAddress(row["registry"], "registry"),
+    storageAuthority: checkedAddress(row["storageAuthority"], "storageAuthority"),
   };
 }
 

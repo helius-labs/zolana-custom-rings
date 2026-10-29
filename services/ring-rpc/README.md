@@ -78,6 +78,7 @@ Accepted nonces are held in process memory for the timestamp window. Run one pro
 | `getRecordUpdateStatus` | `updateId` | One of `awaitingAuthority`, `queued`, `submitted`, `applied` with the new revision, or `refused` |
 | `getPendingEnrolments` | Ring, an optional `cursor` and the config authority's authorization | One page of the enrolments that await the config authority, oldest first, after `cursor`, with `nextCursor` on every page but the last |
 | `refuseEnrolment` | Ring, `updateId` and the config authority's authorization | The `refused` status |
+| `createRecordsRegistry` | Ring and the config or upgrade authority's authorization | The ring's records `registry` and the writer's `storageAuthority` |
 | `setMergeSettings` | Ring, owner, the settings, timestamp, nonce and signature | The stored settings |
 | `prepareAuthorityTransfer` | Ring, delegate, the transfer, timestamp, nonce and signature | A `RelayStep`, `signMessage` until the delegate signs |
 
@@ -103,9 +104,11 @@ Errors are `-32220` the signer is not the ring delegate, `-32221` the ring escro
 
 ## Record writer
 
-`--store-url` with `--prover-url` turns the record writer on. The store takes a `postgres://` or `sqlite://` URL, and the prover must serve the ring apply keys.
+`--store-url` turns the record writer on. The store takes a `postgres://` or `sqlite://` URL. The writer proves every storage update, so the service refuses to start with a store and no `--prover-url`, or with a prover and no store. The prover must serve the ring apply keys.
 
-The writer signs every storage update with its storage authority key. The key derives from the auditor key file or the root secret under its own domain, apart from the service key, and the service logs its address at start. A registry the writer serves names the key as its authority, and the ring policy account names the registry as its records.
+The writer signs and pays for every storage update with its storage authority key. The key derives from the auditor key file or the root secret under its own domain, apart from the service key, and the service logs its address at start. Fund it before the first ring. A registry the writer serves names the key as its authority, and the ring policy account names the registry as its records.
+
+`createRecordsRegistry` creates a ring's records, the `StorageRegistry` of the storage authority under the ring program id, and pays for them. The ring's config authority signs the request, or the program's upgrade authority while no config exists, over `zolana/ring-rpc-enrolment/v1` with the `action:` line `create records`. A repeated request returns the same registry. The service answers once the creation confirms and fails with `-32260` when it does not land. `zolana-ring init` binds these records at `Initialize` with the storage authority the answer names.
 
 `submitRecordUpdate` checks the genesis hash against the service's cluster, the signature over the update statement, `validUntilSlot` against the current slot, and the registry against the ring. A wallet writes the `ring-viewing` and `recovery` lists of its own record, its own escrow registration and its own wallet grants. The ring config authority writes the `allow`, `block`, `frozen`, `reader` and `approval` lists and the mint settings of any record. An escrow registration names the signer's owner identity. The writer verifies its register key proof with the committed `RegisterKey` verifying key, over the register key statement it builds with the auditor key of the ring config. An anonymous ring takes no escrow registration. The writer refuses an escrow key for a member whose record holds one under the newest root the policy mirrors, or whose awaiting, queued or submitted update carries one. An escrow registration on a ring whose policy mirrors no own root fails with `-32130`. An update refused at submit is never stored. A resubmitted update returns its first `updateId`.
 
@@ -141,6 +144,7 @@ The leaf commits only the hash of an escrow envelope. The ephemeral key and ciph
 | -32243 | The config authority refused the enrolment, reported only as its status reason |
 | -32244 | `refuseEnrolment` names no awaiting enrolment of the ring |
 | -32245 | An enrolment's `validUntilSlot` lies past `MAX_ENROLMENT_WINDOW_SLOTS` |
+| -32260 | The records creation did not land |
 
 ## Co-signer limits
 

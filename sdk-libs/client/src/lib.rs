@@ -63,7 +63,10 @@ pub use crate::viewing_history::{
 };
 pub use crate::{
     confidential::{open_ring_confidential, RingConfidentialNotes, RingConfidentialScan},
-    created::{CreatedUtxoPage, CreatedUtxoScan, CreatedUtxos},
+    created::{
+        CreatedNotes, CreatedUtxoPage, CreatedUtxoScan, CreatedUtxos, DepositNote, DepositOwner,
+        DepositOwners,
+    },
     decrypt::{EscrowedKeys, KnownUtxos, TransactionAudit},
     deposit::{ring_deposits_in, RingDeposit},
     deposit_payload::deposit_payload,

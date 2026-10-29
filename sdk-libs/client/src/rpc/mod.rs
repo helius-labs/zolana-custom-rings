@@ -65,6 +65,7 @@ pub const SET_READER_GRANT: &str = "setReaderGrant";
 pub const PREPARE_AUTHORITY_TRANSFER: &str = "prepareAuthorityTransfer";
 pub const GET_PENDING_ENROLMENTS: &str = "getPendingEnrolments";
 pub const REFUSE_ENROLMENT: &str = "refuseEnrolment";
+pub const CREATE_RECORDS_REGISTRY: &str = "createRecordsRegistry";
 /// The most UTXO hashes one `getAuditedUtxos` request names.
 pub const AUDITED_UTXOS_LIMIT: usize = 100;
 pub const AUDIT_CURSOR_LIMIT: usize = 256;

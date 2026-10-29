@@ -53,6 +53,8 @@ mod relay;
 mod relay_chain;
 #[path = "operations/relay_prover.rs"]
 mod relay_prover;
+#[path = "operations/relay_services.rs"]
+mod relay_services;
 #[path = "rpc/relay_submit.rs"]
 mod relay_submit;
 #[path = "storage/relays.rs"]
@@ -89,7 +91,7 @@ pub use cosign_limits::{
     AssetCheck, AssetLimitSource, LimitDecision, LimitedCoSigner, LimitedCoSignerInit, WindowUsage,
 };
 pub use cosign_usage::Reservation;
-pub use database::Store;
+pub use database::{Store, STORE_CONNECTIONS};
 pub use error::{GrantRefusal, RingRpcError};
 pub use escrow_merge::RingSdkMergeBuilder;
 pub use hub::{Clock, Hub, HubBuilder, NotReady};
@@ -111,6 +113,7 @@ pub use relay_chain::{ChainOutcome, FeePayerSubmit, RelayChain, SolanaRelayChain
 pub use relay_prover::{
     DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver, SdkRelayProver,
 };
+pub use relay_services::{RelayServices, RelayServicesInit};
 pub use relay_submit::{CollectedSignature, RelaySubmit, RelayTransaction};
 pub use server::{relay_module, rpc_module, run_server, BindPolicy, ServerError, ServerOptions};
 pub use storage_chain::{LatestBlockhash, LiveStorageChain, StorageChain, TransactionOutcome};
