@@ -164,6 +164,7 @@ mod tests {
         relay::{RelayParts, RelayPayload, ServedRings},
         relay_chain::{ChainOutcome, RelayChain},
         relay_prover::{DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver},
+        storage_chain::LatestBlockhash,
     };
 
     #[derive(Default)]
@@ -195,7 +196,7 @@ mod tests {
                 instruction: Instruction {
                     program_id: request.ring,
                     accounts: vec![
-                        AccountMeta::new(request.fee_payer, true),
+                        AccountMeta::new(request.parties.fee_payer, true),
                         AccountMeta::new_readonly(delegate, true),
                     ],
                     data: vec![21],
@@ -251,8 +252,8 @@ mod tests {
             Ok(1)
         }
 
-        async fn latest_blockhash(&self) -> Result<(Hash, u64), RingRpcError> {
-            Ok((Hash::new_from_array([4; 32]), 100))
+        async fn latest_blockhash(&self) -> Result<LatestBlockhash, RingRpcError> {
+            Ok((Hash::new_from_array([4; 32]), 100).into())
         }
 
         async fn block_height(&self) -> Result<u64, RingRpcError> {

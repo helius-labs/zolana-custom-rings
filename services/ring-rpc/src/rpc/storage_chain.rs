@@ -1,3 +1,5 @@
+use std::future::Future;
+
 use async_trait::async_trait;
 use custom_ring_interface::ApplyRecordsIxData;
 use custom_ring_sdk::{RingClient, StorageApplyProof};
@@ -20,7 +22,9 @@ use zolana_ring_member_registry::ApplyProofInputs;
 
 use crate::{
     error::RingRpcError,
-    upstream::{ChainSource, RingConfiguration, Subscriber, TransactionSource, Upstreams},
+    upstream::{
+        ChainSource, OpeningFetch, RingConfiguration, Subscriber, TransactionSource, Upstreams,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,10 +69,28 @@ pub trait StorageChain: Send + Sync {
     async fn outcome(&self, signature: Signature) -> Result<TransactionOutcome, RingRpcError>;
 }
 
+impl OpeningFetch for dyn StorageChain {
+    fn fetch_openings(
+        &self,
+        request: GetStorageMemberOpeningsRequest,
+    ) -> impl Future<Output = Result<GetStorageMemberOpeningsResponse, RingRpcError>> + Send {
+        self.member_openings(request)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LatestBlockhash {
     pub blockhash: Hash,
     pub last_valid_block_height: u64,
+}
+
+impl From<(Hash, u64)> for LatestBlockhash {
+    fn from((blockhash, last_valid_block_height): (Hash, u64)) -> Self {
+        Self {
+            blockhash,
+            last_valid_block_height,
+        }
+    }
 }
 
 pub struct LiveStorageChain {
@@ -143,11 +165,7 @@ impl StorageChain for LiveStorageChain {
     }
 
     async fn latest_blockhash(&self) -> Result<LatestBlockhash, RingRpcError> {
-        let (blockhash, last_valid_block_height) = self.client.get_latest_blockhash().await?;
-        Ok(LatestBlockhash {
-            blockhash,
-            last_valid_block_height,
-        })
+        Ok(self.client.get_latest_blockhash().await?.into())
     }
 
     async fn send(&self, transaction: &VersionedTransaction) -> Result<Signature, RingRpcError> {

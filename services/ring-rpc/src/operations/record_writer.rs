@@ -39,6 +39,7 @@ use crate::{
     },
     storage_chain::{StorageChain, TransactionOutcome},
     update_queue::{AwaitingPage, BatchOutcome, NewBatch, NewUpdate, OpenBatch, UpdateQueue},
+    upstream::VerifiedOpenings,
 };
 
 pub const RECORD_FLUSH_INTERVAL: Duration = Duration::from_secs(2);
@@ -389,19 +390,14 @@ impl RecordWriter {
             return Ok(());
         }
         let records = StorageTip::mirrored(policy).ok_or(GrantRefusal::RecordsUnsynced)?;
-        let response = self
-            .chain
-            .member_openings(records.openings_request(&registering))
-            .await?;
+        let openings = self.chain.verified_openings(&records, &registering).await?;
         let pending = self
             .queue()
             .pending_writes(records.registry, &registering)
             .await?;
         Ok(EscrowUniqueness {
             registering: &registering,
-            records: &records
-                .verify_openings(&response, &registering)
-                .map_err(|_| RingRpcError::InvalidIndexerResponse)?,
+            records: &openings,
             pending: &pending,
         }
         .check()?)

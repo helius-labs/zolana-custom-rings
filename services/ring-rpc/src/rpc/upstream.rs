@@ -116,25 +116,42 @@ pub trait TransactionSource: Send + Sync {
     fn ring_assets(&self) -> impl Future<Output = Result<RingAssets, ClientError>> + Send;
 }
 
-/// No source overrides the opening check.
-pub(crate) trait VerifiedOpenings: TransactionSource {
-    /// Refused unless every opening verifies under `tip`.
-    fn verified_openings<'a>(
-        &'a self,
-        tip: &'a StorageTip,
-        members: &'a [[u8; 32]],
-    ) -> impl Future<Output = Result<Vec<MemberOpeningRead>, RingRpcError>> + Send + 'a;
+/// Unverified, callers read openings through `VerifiedOpenings`.
+pub(crate) trait OpeningFetch: Sync {
+    fn fetch_openings(
+        &self,
+        request: GetStorageMemberOpeningsRequest,
+    ) -> impl Future<Output = Result<GetStorageMemberOpeningsResponse, RingRpcError>> + Send;
 }
 
-impl<S: TransactionSource> VerifiedOpenings for S {
-    async fn verified_openings<'a>(
-        &'a self,
-        tip: &'a StorageTip,
-        members: &'a [[u8; 32]],
+impl<S: TransactionSource> OpeningFetch for S {
+    async fn fetch_openings(
+        &self,
+        request: GetStorageMemberOpeningsRequest,
+    ) -> Result<GetStorageMemberOpeningsResponse, RingRpcError> {
+        Ok(self.storage_member_openings(request).await?)
+    }
+}
+
+/// No source overrides the opening check.
+#[async_trait]
+pub(crate) trait VerifiedOpenings: OpeningFetch {
+    /// Refused unless every opening verifies under `tip`.
+    async fn verified_openings(
+        &self,
+        tip: &StorageTip,
+        members: &[[u8; 32]],
+    ) -> Result<Vec<MemberOpeningRead>, RingRpcError>;
+}
+
+#[async_trait]
+impl<S: OpeningFetch + ?Sized> VerifiedOpenings for S {
+    async fn verified_openings(
+        &self,
+        tip: &StorageTip,
+        members: &[[u8; 32]],
     ) -> Result<Vec<MemberOpeningRead>, RingRpcError> {
-        let response = self
-            .storage_member_openings(tip.openings_request(members))
-            .await?;
+        let response = self.fetch_openings(tip.openings_request(members)).await?;
         tip.verify_openings(&response, members)
             .map_err(|_| RingRpcError::InvalidIndexerResponse)
     }

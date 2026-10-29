@@ -30,6 +30,7 @@ use crate::{
     relay_prover::{DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver},
     relay_submit::{CollectedSignature, RelaySubmit, RelayTransaction},
     relays::{RelayRecord, RelayState, RelayStore},
+    storage_chain::LatestBlockhash,
 };
 
 /// Longest quote window, one blockhash lifetime.
@@ -191,8 +192,11 @@ impl Relay {
         self.submit.fee_payer()
     }
 
-    pub(crate) fn co_signer(&self) -> Option<Address> {
-        self.co_signer.signer()
+    fn parties(&self) -> RelayParties {
+        RelayParties {
+            fee_payer: self.fee_payer(),
+            co_signer: self.co_signer.signer(),
+        }
     }
 
     pub async fn quote(&self, request: &GetRelayQuoteRequest) -> Result<RelayQuote, RingRpcError> {
@@ -214,14 +218,14 @@ impl Relay {
         let ring = request.ring.0;
         self.rings.check(ring)?;
         let payload = RelayPayload::decode(&request.intent).map_err(RelayError::from)?;
-        let fee_payer = self.fee_payer();
+        let parties = self.parties();
         let Checked {
             owner_signature,
             setup,
         } = PrepareCheck {
             request,
             payload: &payload,
-            fee_payer,
+            fee_payer: parties.fee_payer,
             slot: self.chain.slot().await?,
         }
         .check()?;
@@ -230,10 +234,9 @@ impl Relay {
             self.prover
                 .prove(RelayProofRequest {
                     ring,
-                    fee_payer,
+                    parties,
                     payload: &payload,
                     owner_signature,
-                    co_signer: self.co_signer(),
                 })
                 .await?
         };
@@ -265,10 +268,7 @@ impl Relay {
     ) -> Result<RelayStep, RingRpcError> {
         let ring = seal.ring;
         self.rings.check(ring)?;
-        let parties = RelayParties {
-            fee_payer: self.fee_payer(),
-            co_signer: self.co_signer(),
-        };
+        let parties = self.parties();
         let (payload, proven) = {
             let _proof = self.proofs.try_acquire().map_err(|_| RingRpcError::Busy)?;
             let payload = RelayPayload::Transfer(self.prover.seal_delegate(seal, parties).await?);
@@ -276,10 +276,9 @@ impl Relay {
                 .prover
                 .prove(RelayProofRequest {
                     ring,
-                    fee_payer: parties.fee_payer,
+                    parties,
                     payload: &payload,
                     owner_signature: None,
-                    co_signer: parties.co_signer,
                 })
                 .await?;
             (payload, proven)
@@ -302,7 +301,10 @@ impl Relay {
             proven,
         } = proven;
         let fee_payer = self.fee_payer();
-        let (blockhash, last_valid_block_height) = self.chain.latest_blockhash().await?;
+        let LatestBlockhash {
+            blockhash,
+            last_valid_block_height,
+        } = self.chain.latest_blockhash().await?;
         setup.push(proven.instruction.clone());
         let message = compile_message(&fee_payer, &setup, blockhash, proven.budget)?;
         let co_signed = CoSignStep {

@@ -3,7 +3,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use solana_address::Address;
 use solana_commitment_config::CommitmentLevel;
-use solana_hash::Hash;
 use solana_keypair::Keypair;
 use solana_signature::Signature;
 use solana_signer::{PresignerError, Signer, SignerError};
@@ -16,14 +15,14 @@ use crate::{
     error::RingRpcError,
     relay::RelayError,
     relay_submit::{CollectedSignature, RelaySubmit, RelayTransaction},
+    storage_chain::LatestBlockhash,
 };
 
 #[async_trait]
 pub trait RelayChain: Send + Sync {
     async fn slot(&self) -> Result<u64, RingRpcError>;
 
-    /// The blockhash and the last block height a message under it lands at.
-    async fn latest_blockhash(&self) -> Result<(Hash, u64), RingRpcError>;
+    async fn latest_blockhash(&self) -> Result<LatestBlockhash, RingRpcError>;
 
     async fn block_height(&self) -> Result<u64, RingRpcError>;
 
@@ -65,8 +64,8 @@ impl<R: AsyncRpc> RelayChain for SolanaRelayChain<R> {
         Ok(self.rpc.get_slot().await?)
     }
 
-    async fn latest_blockhash(&self) -> Result<(Hash, u64), RingRpcError> {
-        Ok(self.rpc.get_latest_blockhash().await?)
+    async fn latest_blockhash(&self) -> Result<LatestBlockhash, RingRpcError> {
+        Ok(self.rpc.get_latest_blockhash().await?.into())
     }
 
     async fn block_height(&self) -> Result<u64, RingRpcError> {
