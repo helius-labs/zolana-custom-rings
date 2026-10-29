@@ -13,7 +13,7 @@ use thiserror::Error;
 use zeroize::Zeroizing;
 use zolana_secret_file::{create_new, read_key32, Access, SecretFileError, Visibility};
 
-use crate::{origins::OriginTransport, server::BindPolicy};
+use crate::{client_rate::ClientLimitArgs, origins::OriginTransport, server::BindPolicy};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -111,6 +111,8 @@ pub struct ServeArgs {
         requires_if("database", "store_url")
     )]
     pub reader_grants: ReaderGrantStore,
+    #[command(flatten)]
+    pub client_limits: ClientLimitArgs,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]

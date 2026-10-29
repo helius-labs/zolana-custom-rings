@@ -4,6 +4,10 @@ mod audit;
 mod authority_transfer;
 #[path = "security/authorize.rs"]
 mod authorize;
+#[path = "security/client_identity.rs"]
+mod client_identity;
+#[path = "config/client_rate.rs"]
+mod client_rate;
 #[path = "config/config.rs"]
 mod config;
 #[path = "operations/cosign.rs"]
@@ -71,6 +75,8 @@ mod webauthn;
 pub use audit::{AuditRead, AuditService, Page};
 pub use authority_transfer::AuthorityTransferError;
 pub use authorize::{ReadCheck, ReadClaim, Unauthorized, AUTH_SKEW};
+pub use client_identity::{ApiKeyDigest, ApiKeyDigestError, ClientIdentityPolicy};
+pub use client_rate::{BucketRate, ClientLimitArgs, ClientLimits, ClientRates, RateLimit};
 pub use config::{
     read_fee_payer, read_root_secret, write_fee_payer, write_root_secret, Cli, Command, KeyKind,
     KeygenArgs, ReaderGrantStore, RootSecret, RootSecretError, ServeArgs,
@@ -96,7 +102,6 @@ pub use migration::Migrator;
 pub use origins::{OriginError, OriginPolicy, OriginTransport, Origins};
 pub use record_update::{
     RecordUpdateRefusal, BATCH_WINDOW_SLOTS, MAX_BATCH_ATTEMPTS, MAX_ENROLMENT_WINDOW_SLOTS,
-    MAX_PENDING_ENROLMENTS,
 };
 pub use record_writer::{RecordWriter, RECORD_FLUSH_INTERVAL};
 pub use relay::{

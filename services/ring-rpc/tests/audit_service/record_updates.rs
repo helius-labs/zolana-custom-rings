@@ -1,4 +1,4 @@
-//! Record updates refuse a forged escrow proof, a second escrow key, an enrolment past its window or the ring's pending cap or awaiting the reader list in database mode, send only a block entry as an immediate update, and hold an enrolment for its allow entry.
+//! Record updates refuse a forged escrow proof, a second escrow key, an enrolment past its window or awaiting the reader list in database mode, send only a block entry as an immediate update, and hold an enrolment for its allow entry.
 
 use std::sync::atomic::AtomicU64;
 
@@ -29,7 +29,6 @@ use zolana_ring_policy::{ListId, Member, MintPolicy};
 use zolana_ring_rpc::{
     LatestBlockhash, ReaderGrantStore, RecordUpdateRefusal, RecordWriter, StorageChain, Store,
     Subscriber, TransactionOutcome, BATCH_WINDOW_SLOTS, MAX_ENROLMENT_WINDOW_SLOTS,
-    MAX_PENDING_ENROLMENTS,
 };
 
 use super::*;
@@ -692,38 +691,22 @@ fn viewing_enrolment(wallet: &Keypair, awaited: ListId) -> SubmitRecordUpdateReq
 }
 
 #[tokio::test]
-async fn an_enrolment_past_its_window_or_the_rings_pending_cap_is_refused() {
+async fn an_enrolment_past_its_window_is_refused() {
     let records = Records::new().await;
     records.serves_own(ListId::Allow);
-    let enrol = |valid_until_slot: u64| {
-        let wallet = Keypair::new();
-        let enrolment = viewing_enrolment(&wallet, ListId::Allow);
-        signed_update(
-            &wallet,
-            RecordUpdate {
-                valid_until_slot,
-                ..enrolment.update
-            },
-        )
-    };
+    let wallet = Keypair::new();
+    let enrolment = viewing_enrolment(&wallet, ListId::Allow);
+    let late = signed_update(
+        &wallet,
+        RecordUpdate {
+            valid_until_slot: NOW + MAX_ENROLMENT_WINDOW_SLOTS + 1,
+            ..enrolment.update
+        },
+    );
 
     assert_eq!(
-        refusal(
-            records
-                .submit(enrol(NOW + MAX_ENROLMENT_WINDOW_SLOTS + 1))
-                .await
-        ),
+        refusal(records.submit(late).await),
         RecordUpdateRefusal::EnrolmentWindow.code()
-    );
-    for _ in 0..MAX_PENDING_ENROLMENTS {
-        records
-            .submit(enrol(NOW + MAX_ENROLMENT_WINDOW_SLOTS))
-            .await
-            .expect("awaiting");
-    }
-    assert_eq!(
-        refusal(records.submit(enrol(NOW + 1_000)).await),
-        RecordUpdateRefusal::EnrolmentsFull.code()
     );
 }
 

@@ -105,7 +105,7 @@ impl From<RingIndexerError> for RingRpcError {
     }
 }
 
-const API_KEY_PARAMETER: &str = "api-key=";
+pub(crate) const API_KEY_PARAMETER: &str = "api-key=";
 
 /// Upstream errors quote request URLs, a log never carries their API key.
 pub(crate) fn redacted(error: &impl Display) -> String {

@@ -28,7 +28,6 @@ pub const BATCH_WINDOW_SLOTS: u64 = 40;
 pub const MAX_BATCH_ATTEMPTS: u64 = 3;
 /// One day of 250 ms slots.
 pub const MAX_ENROLMENT_WINDOW_SLOTS: u64 = 4 * 60 * 60 * 24;
-pub const MAX_PENDING_ENROLMENTS: usize = 256;
 const REVOKING_SETS: u64 = ListSet::of(&[ListId::Block, ListId::Frozen]).record_bits();
 // A graced reader revocation stops reads at once, grants open under the newest mirrored root.
 const REVOKING_CLEARS: u64 = ListSet::of(&[ListId::Allow, ListId::Approval]).record_bits();
@@ -78,8 +77,7 @@ pub enum RecordUpdateRefusal {
     UnknownEnrolment = -32244,
     #[error("enrolment valid until slot is past the enrolment window")]
     EnrolmentWindow = -32245,
-    #[error("ring holds its maximum of pending enrolments")]
-    EnrolmentsFull = -32246,
+    // -32246 retired.
 }
 
 pub(crate) struct UpdateContext<'a> {
@@ -326,10 +324,7 @@ impl EnrolmentApproval<'_> {
     /// The enrolments whose every awaited list the update sets on their member.
     pub fn decide(self) -> Result<Vec<[u8; 32]>, RecordUpdateRefusal> {
         if self.update.awaited.is_some() {
-            return match self.awaiting.len() < MAX_PENDING_ENROLMENTS {
-                true => Ok(Vec::new()),
-                false => Err(RecordUpdateRefusal::EnrolmentsFull),
-            };
+            return Ok(Vec::new());
         }
         let entries = self
             .update

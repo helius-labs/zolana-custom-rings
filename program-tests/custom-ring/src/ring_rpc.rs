@@ -10,7 +10,8 @@ use anyhow::{anyhow, Result};
 use solana_address::Address;
 use spr_keypair::X25519Keypair;
 use zolana_ring_rpc::{
-    run_server, BindPolicy, ChainSource, Hub, ServerOptions, TransactionSource, Upstreams,
+    run_server, BindPolicy, ChainSource, ClientLimits, Hub, ServerOptions, TransactionSource,
+    Upstreams,
 };
 
 use crate::shared::TestEnv;
@@ -53,6 +54,7 @@ impl RingRpcSpec<'_> {
                     port,
                     max_connections: 16,
                     request_timeout: Duration::from_secs(30),
+                    client_limits: ClientLimits::default(),
                 },
             ))
             .map_err(|e| anyhow!("ring rpc server {e:?}"))?;
