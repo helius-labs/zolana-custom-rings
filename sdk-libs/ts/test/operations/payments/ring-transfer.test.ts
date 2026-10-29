@@ -30,7 +30,11 @@ import {
   approveRingUnattended,
   type RingApprovalRequest,
 } from "../../../src/protocol/transaction/intent.js";
-import { ringConfigAddress, ringMemberRegistryAddress } from "../../../src/protocol/pda/index.js";
+import {
+  ringCoSignerAddress,
+  ringConfigAddress,
+  ringMemberRegistryAddress,
+} from "../../../src/protocol/pda/index.js";
 import { ringIdField } from "../../../src/crypto/derivation/ring-stream.js";
 import {
   RING_COSIGN_DEPOSITS,
@@ -118,6 +122,7 @@ async function prove(
     keys: walletKeys(sender),
     transfer,
     assets,
+    ...(fixture.coSigner === undefined ? {} : { coSigner: fixture.coSigner }),
   });
   return (withdrawal === undefined ? rail : rail.withWithdrawalAccounts(withdrawal)).prove(
     fixture.client,
@@ -443,7 +448,12 @@ describe("policy ring", () => {
     await checkAccounts(instruction, {
       fixture,
       data,
-      prefix: [readonly(registry.address), readonly(fixture.curatorRegistry), signer(coSigner)],
+      prefix: [
+        readonly(registry.address),
+        readonly(fixture.curatorRegistry),
+        readonly(await ringCoSignerAddress(fixture.ringProgramId, coSigner)),
+        signer(coSigner),
+      ],
       payer: fixture.authority,
       ownerSigners: [sender.shieldedAddress().solanaAddress()],
     });
@@ -662,6 +672,7 @@ describe("delegate rail", () => {
         amount: 100n,
       })),
       assets,
+      ...(fixture.coSigner === undefined ? {} : { coSigner: fixture.coSigner }),
     });
   }
 
@@ -1054,7 +1065,7 @@ describe("ring transfer builder", () => {
     const ring = { coSigner: { signer: coSigner, scope: RING_COSIGN_TRANSFERS } };
     for (const [cosigner, reason] of [
       [undefined, "missing"],
-      [randomAddress(), "mismatch"],
+      [randomAddress(), "noRecord"],
     ] as const) {
       const refused = await ringTransfer({
         amount: 300n,
@@ -1065,7 +1076,7 @@ describe("ring transfer builder", () => {
       await expect(refused.build).rejects.toMatchObject({
         code: "RING_BUILD_TRANSFER",
         causeCode: "RING_COSIGNER_REQUIRED",
-        cause: { details: { reason, expected: coSigner } },
+        cause: { details: { reason } },
       });
       expect(refused.requests).toEqual([]);
       expect(refused.fixture.ringRequests).toHaveLength(0);

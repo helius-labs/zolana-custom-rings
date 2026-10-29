@@ -60,6 +60,7 @@ pub fn run(ctx: &Context, args: MergeArgs) -> Result<()> {
             nullifier_key: sender.nullifier_key.clone(),
             input_tree: tree,
             output_tree: tree,
+            co_signer: merge_cosigner.map(|signer| signer.pubkey()),
         },
     );
     let payer = ctx.member_payer(config.mode, sender.pubkey())?;

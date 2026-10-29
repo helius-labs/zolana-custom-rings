@@ -155,7 +155,7 @@ pub enum PolicyCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum CoSignerCommand {
-    /// Create or replace the co-signer, flags absent means the `[cosigner]` table of ring.toml.
+    /// Create or rescope a co-signer's record, flags absent means the `[cosigner]` table of ring.toml.
     Set {
         /// The Solana key that signs beside the sender.
         #[arg(long)]
@@ -167,9 +167,17 @@ pub enum CoSignerCommand {
         #[arg(long, requires = "signer")]
         threshold: Vec<ThresholdSpec>,
     },
-    /// Close the co-signer account, the rent returns to the authority.
-    Clear,
-    Show,
+    /// Close the co-signer's record, the rent returns to the authority.
+    Clear {
+        /// The record's key, absent means the `[cosigner]` key of ring.toml.
+        #[arg(long)]
+        signer: Option<Address>,
+    },
+    /// The classes some record covers and the named record, absent means the `[cosigner]` key.
+    Show {
+        #[arg(long)]
+        signer: Option<Address>,
+    },
 }
 
 #[derive(Debug, Subcommand)]

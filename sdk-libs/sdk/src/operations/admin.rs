@@ -3,7 +3,7 @@
 use custom_ring_interface::SYSTEM_PROGRAM_ID;
 use custom_ring_interface::{
     compute_unit_limit, tag, CoSignScope, CreateConfigIxData, InstructionTag, PolicyTableIxData,
-    ReaderIxData, RingKind, SetCoSignerIxData, SetInsertFeeIxData, SetPausedIxData,
+    ReaderIxData, RingKind, SetCoSignerRecordIxData, SetInsertFeeIxData, SetPausedIxData,
     SetPolicySourceIxData, SourceSpec,
 };
 use solana_address::Address;
@@ -81,13 +81,24 @@ pub struct SetAuthority {
     pub new_authority: Address,
 }
 
+/// Creates the signer's record or rescopes it.
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SetCoSigner {
     pub ring: CustomRing,
+    pub payer: Address,
     pub authority: Address,
     pub signer: Address,
     pub scope: CoSignScope,
+}
+
+#[must_use]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClearCoSigner {
+    pub ring: CustomRing,
+    pub authority: Address,
+    pub signer: Address,
+    pub rent_recipient: Address,
 }
 
 /// The delegate signs and is permanent.
@@ -212,15 +223,33 @@ impl SetAuthority {
 
 impl SetCoSigner {
     pub fn instruction(self) -> Result<Instruction, RingError> {
-        let body = SetCoSignerIxData {
-            signer: self.signer.to_bytes(),
+        let ring = self.ring;
+        let body = SetCoSignerRecordIxData {
+            signer: self.signer,
             scope: self.scope.bits(),
         };
         body.check()?;
-        let data = tagged(tag::SET_CO_SIGNER, &body)?;
-        Ok(self
-            .ring
-            .ix(self.ring.config_write_metas(self.authority), data))
+        let accounts = vec![
+            AccountMeta::new(self.payer, true),
+            AccountMeta::new_readonly(self.authority, true),
+            AccountMeta::new(ring.config_pda(), false),
+            AccountMeta::new(ring.co_signer_pda(&self.signer), false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+        ];
+        Ok(ring.ix(accounts, tagged(tag::SET_CO_SIGNER, &body)?))
+    }
+}
+
+impl ClearCoSigner {
+    pub fn instruction(self) -> Instruction {
+        let ring = self.ring;
+        let accounts = vec![
+            AccountMeta::new_readonly(self.authority, true),
+            AccountMeta::new(ring.config_pda(), false),
+            AccountMeta::new(ring.co_signer_pda(&self.signer), false),
+            AccountMeta::new(self.rent_recipient, false),
+        ];
+        ring.ix(accounts, vec![tag::CLEAR_CO_SIGNER])
     }
 }
 
@@ -339,13 +368,6 @@ impl CustomRing {
 
     pub fn resume(self, authority: Address) -> Result<Instruction, RingError> {
         self.set_paused(authority, SetPausedIxData { paused: false })
-    }
-
-    pub fn clear_cosigner(self, authority: Address) -> Instruction {
-        self.ix(
-            self.config_write_metas(authority),
-            vec![tag::CLEAR_CO_SIGNER],
-        )
     }
 
     /// [`crate::CustomRingConfig::insert_fee`], zero writes free.

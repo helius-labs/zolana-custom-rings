@@ -22,6 +22,7 @@ import type { ProofOutputUtxo } from "@heliuslabs/zolana/transaction";
 import { CUSTOM_RING_PROOF_LENGTH } from "../../protocol/proof/custom-ring-proof.js";
 import {
   ringAuthAddress,
+  ringCoSignerMetas,
   ringConfigAddress,
   ringMemberRegistryAddress,
 } from "../../protocol/pda/index.js";
@@ -78,7 +79,8 @@ export type RingProvingClient = TreeContext &
 /** What the anonymous rail adds to a staged transfer, Rust `AnonymousSpend`. */
 export interface AnonymousSpendValues {
   readonly tokenOwner?: Address;
-  readonly partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
+  /** Binds the signing co-signer, zero when none signs. */
+  partyIdentities(coSigner: Address | undefined): readonly [Bytes32, Bytes32, Bytes32];
   /** Past the transfer's tags. */
   readonly viewingHistory: ViewingHistory;
 }
@@ -119,7 +121,7 @@ export interface RingTransactAccounts {
   readonly ownerSigners: readonly Address[];
   readonly withdrawal?: TransactWithdrawal;
   readonly curator?: Address;
-  /** Signs when the config demands it. */
+  /** The supplied co-signer when the ring demands one, it signs beside its record. */
   readonly coSigner?: Address;
   readonly delegate?: Address;
 }
@@ -138,7 +140,7 @@ export class ProvenRingTransfer {
   readonly accounts: RingTransactAccounts;
   /** Padding included, final slot order. */
   readonly outputs: readonly ProofOutputUtxo[];
-  /** The co-signer the config demands, it signs the transaction. */
+  /** The supplied co-signer when the ring demands one, it signs the transaction. */
   readonly coSigner?: Address;
   readonly approvalRequired: boolean;
   /** The registry roots the policy proof binds, a submission proves again once one leaves the history. */
@@ -178,6 +180,7 @@ interface AssembledTransfer {
   readonly withdrawalExemption: WithdrawalExemption | undefined;
   readonly approvalRequired: boolean;
   readonly coSigner: Address | undefined;
+  readonly partyIdentities: readonly [Bytes32, Bytes32, Bytes32] | undefined;
   readonly privateTxHash: Bytes32;
   readonly privateTxBlinding: Bytes32;
   readonly commitment: Bytes32 | undefined;
@@ -196,6 +199,8 @@ export type StagedTransferInput = Readonly<{
   ringProgramId: Address;
   config: RingProgramConfig;
   staged: StagedTransfer;
+  /** Read only when the ring demands a co-signer, its record must cover the demand. */
+  coSigner?: Address;
   transaction?: RingTransactionFrame;
   approve?: (coSigner: Address | undefined) => Promise<void>;
 }>;
@@ -284,15 +289,21 @@ async function assembleStagedTransfer<T>(
       },
       context,
     );
-    const coSigner = demandedCoSigner({
-      withdrawalExempt: withdrawalExemption !== undefined,
-      ringProgramId,
-      configured: config.coSigner,
-      approvalRequired,
-      transfers: proofInputs.externalData.interfaceTransfers,
-      ownerSigners: staged.ownerSigners,
-      ...(spend.delegate === undefined ? {} : { delegate: spend.delegate }),
-    });
+    const coSigner = await demandedCoSigner(
+      {
+        client,
+        withdrawalExempt: withdrawalExemption !== undefined,
+        ringProgramId,
+        config,
+        approvalRequired,
+        supplied: input.coSigner,
+        transfers: proofInputs.externalData.interfaceTransfers,
+        ownerSigners: staged.ownerSigners,
+        ...(spend.delegate === undefined ? {} : { delegate: spend.delegate }),
+      },
+      context,
+    );
+    const partyIdentities = spend.anonymous?.partyIdentities(coSigner);
     const privateTxHash = proofInputs.privateTxHash();
     const privateTxBlinding = proofInputs.privateTxBlinding();
     const anonymous = spend.anonymous;
@@ -357,6 +368,7 @@ async function assembleStagedTransfer<T>(
         withdrawalExemption,
         approvalRequired,
         coSigner,
+        partyIdentities,
         privateTxHash,
         privateTxBlinding,
         commitment,
@@ -404,17 +416,17 @@ async function proveAssembled(
     ringId,
     publicInputHash: auditStatementHash(
       ringAuditStatement(preview, {
-        partyIdentities: anonymous?.partyIdentities ?? [zeroField(), zeroField(), zeroField()],
+        partyIdentities: assembled.partyIdentities ?? [zeroField(), zeroField(), zeroField()],
         ringId,
         auditorPubkey: auditor.toBytes(),
         keyEscrow: config.keyEscrow,
       }),
     ),
-    ...(anonymous === undefined
+    ...(assembled.partyIdentities === undefined
       ? {}
       : {
           anonymous: Object.freeze({
-            partyIdentities: anonymous.partyIdentities,
+            partyIdentities: assembled.partyIdentities,
             privateTxHash,
             privateTxBlinding: assembled.privateTxBlinding,
             senderCommitment: commitment ?? zeroField(),
@@ -498,7 +510,8 @@ export async function ringTransactInstruction(
   if (data.policy !== undefined || data.withdrawalExemption !== undefined)
     prefix.push(meta(registry, false, false));
   if (accounts.curator !== undefined) prefix.push(meta(accounts.curator, false, false));
-  if (accounts.coSigner !== undefined) prefix.push(meta(accounts.coSigner, true, false));
+  if (accounts.coSigner !== undefined)
+    prefix.push(...(await ringCoSignerMetas(ringProgramId, accounts.coSigner)));
   if (accounts.delegate !== undefined) prefix.push(meta(accounts.delegate, true, false));
   const encoded = RingTransactData.encode(data);
   const bytes = new Uint8Array(1 + encoded.length);

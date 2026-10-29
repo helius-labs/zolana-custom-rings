@@ -120,8 +120,8 @@ fn print_chain(ctx: &Context) -> Result<()> {
     );
     line("mode", mode(config.mode));
     controls::print_insert_fee(config);
-    match &config.co_signer {
-        Some(cosigner) => controls::print_cosigner(cosigner),
+    match config.co_signer_classes {
+        Some(classes) => line("co-signed classes", controls::class_names(classes)),
         None => line("co-signer", "none"),
     }
     match config.delegate {

@@ -558,6 +558,7 @@ impl<'a> MoveSender<'a> {
             asset: Mint::SOL,
             payments,
             entry: EntrySpend::Allow,
+            co_signer: None,
         }
     }
 }
@@ -1039,6 +1040,7 @@ impl<'a> MoveFixture<'a> {
                 })
                 .collect(),
             assets: self.assets,
+            co_signer: None,
         }
     }
 }
@@ -1387,7 +1389,10 @@ async fn an_approval_its_owner_would_co_sign_is_refused_before_proving() {
         )
         .unwrap();
     assert!(matches!(
-        owner_transfer(&sender, transaction).assemble(&client).await,
+        owner_transfer(&sender, transaction)
+            .with_co_signer(owner)
+            .assemble(&client)
+            .await,
         Err(RingError::Program(CustomRingError::CoSignerIsOwner))
     ));
 }
@@ -1414,7 +1419,10 @@ async fn a_scope_co_signer_among_the_owner_signers_is_refused_before_proving() {
         )
         .unwrap();
     assert!(matches!(
-        owner_transfer(&sender, transaction).assemble(&client).await,
+        owner_transfer(&sender, transaction)
+            .with_co_signer(owner)
+            .assemble(&client)
+            .await,
         Err(RingError::Program(CustomRingError::CoSignerIsOwner))
     ));
 }
@@ -1685,6 +1693,7 @@ impl Measure {
             rail,
             shape,
             payer,
+            co_signer: co_signer.map(|(signer, _)| signer),
         };
         match rail {
             Measured::Confidential | Measured::ConfidentialPolicy => {
@@ -1699,7 +1708,7 @@ impl Measure {
                         )
                         .unwrap();
                 }
-                size.of(&owner_transfer(&sender, transaction)).await
+                size.of(owner_transfer(&sender, transaction)).await
             }
             Measured::Anonymous | Measured::AnonymousPolicy => {
                 let mut transfer = owner_transfer(&sender, paid_ring_transaction(utxos, payer))
@@ -1709,7 +1718,7 @@ impl Measure {
                         .with_payment(payment(&ring_address(recipient), 1))
                         .unwrap();
                 }
-                size.of(&transfer).await
+                size.of(transfer).await
             }
             Measured::Delegate => {
                 let transfer = DelegateTransfer::new(DelegateTransferInput {
@@ -1729,7 +1738,7 @@ impl Measure {
                         .collect(),
                 })
                 .with_assets(&assets);
-                size.of(&transfer).await
+                size.of(transfer).await
             }
         }
     }
@@ -1741,11 +1750,16 @@ struct FrameSize<'c> {
     rail: Measured,
     shape: spr_client::Shape,
     payer: Address,
+    co_signer: Option<Address>,
 }
 
 impl FrameSize<'_> {
     /// A refusal past the v1 ceiling carries the bytes of the framed transfer.
-    async fn of<R: Rail>(self, transfer: &RingTransfer<R>) -> usize {
+    async fn of<R: Rail>(self, transfer: RingTransfer<R>) -> usize {
+        let transfer = match self.co_signer {
+            Some(signer) => transfer.with_co_signer(signer),
+            None => transfer,
+        };
         match transfer.frame(self.client).await {
             Ok(unwitnessed) => {
                 assert_eq!(
@@ -1779,187 +1793,187 @@ const SIZE_PINS: [SizePin; 38] = [
     SizePin {
         n_in: 1,
         n_out: 2,
-        bytes: [Some(1357), Some(1616), Some(1668), Some(2023), None],
+        bytes: [Some(1357), Some(1649), Some(1668), Some(2056), None],
     },
     SizePin {
         n_in: 1,
         n_out: 4,
-        bytes: [Some(1693), Some(1888), Some(2370), Some(2725), None],
+        bytes: [Some(1693), Some(1921), Some(2370), Some(2758), None],
     },
     SizePin {
         n_in: 1,
         n_out: 8,
-        bytes: [Some(2365), Some(2432), Some(3742), Some(4097), None],
+        bytes: [Some(2365), Some(2465), Some(3742), Some(4130), None],
     },
     SizePin {
         n_in: 2,
         n_out: 2,
-        bytes: [Some(1422), Some(1681), Some(1765), Some(2120), Some(1681)],
+        bytes: [Some(1422), Some(1714), Some(1765), Some(2153), Some(1714)],
     },
     SizePin {
         n_in: 2,
         n_out: 4,
-        bytes: [Some(1758), Some(1953), Some(2467), Some(2822), None],
+        bytes: [Some(1758), Some(1986), Some(2467), Some(2855), None],
     },
     SizePin {
         n_in: 1,
         n_out: 16,
-        bytes: [Some(3710), Some(3521), None, None, None],
+        bytes: [Some(3710), Some(3554), None, None, None],
     },
     SizePin {
         n_in: 2,
         n_out: 8,
-        bytes: [Some(2430), Some(2497), Some(3839), Some(4194), None],
+        bytes: [Some(2430), Some(2530), Some(3839), Some(4227), None],
     },
     SizePin {
         n_in: 3,
         n_out: 2,
-        bytes: [Some(1487), Some(1746), Some(1830), Some(2185), None],
+        bytes: [Some(1487), Some(1779), Some(1830), Some(2218), None],
     },
     SizePin {
         n_in: 3,
         n_out: 4,
-        bytes: [Some(1823), Some(2018), Some(2532), Some(2887), None],
+        bytes: [Some(1823), Some(2051), Some(2532), Some(2920), None],
     },
     SizePin {
         n_in: 2,
         n_out: 16,
-        bytes: [Some(3775), Some(3586), None, None, None],
+        bytes: [Some(3775), Some(3619), None, None, None],
     },
     SizePin {
         n_in: 3,
         n_out: 8,
-        bytes: [Some(2495), Some(2562), Some(3904), Some(4259), None],
+        bytes: [Some(2495), Some(2595), Some(3904), Some(4292), None],
     },
     SizePin {
         n_in: 4,
         n_out: 2,
-        bytes: [Some(1552), Some(1811), Some(1927), Some(2282), None],
+        bytes: [Some(1552), Some(1844), Some(1927), Some(2315), None],
     },
     SizePin {
         n_in: 4,
         n_out: 4,
-        bytes: [Some(1888), Some(2083), Some(2629), Some(2984), Some(2083)],
+        bytes: [Some(1888), Some(2116), Some(2629), Some(3017), Some(2116)],
     },
     SizePin {
         n_in: 4,
         n_out: 8,
-        bytes: [Some(2560), Some(2627), Some(4001), Some(4356), None],
+        bytes: [Some(2560), Some(2660), Some(4001), Some(4389), None],
     },
     SizePin {
         n_in: 5,
         n_out: 2,
-        bytes: [Some(1617), Some(1876), Some(1992), Some(2347), None],
+        bytes: [Some(1617), Some(1909), Some(1992), Some(2380), None],
     },
     SizePin {
         n_in: 5,
         n_out: 4,
-        bytes: [Some(1953), Some(2148), Some(2694), Some(3049), None],
+        bytes: [Some(1953), Some(2181), Some(2694), Some(3082), None],
     },
     SizePin {
         n_in: 4,
         n_out: 16,
-        bytes: [Some(3905), Some(3716), None, None, None],
+        bytes: [Some(3905), Some(3749), None, None, None],
     },
     SizePin {
         n_in: 5,
         n_out: 8,
-        bytes: [Some(2625), Some(2692), Some(4066), Some(4421), None],
+        bytes: [Some(2625), Some(2725), Some(4066), Some(4454), None],
     },
     SizePin {
         n_in: 6,
         n_out: 2,
-        bytes: [Some(1682), Some(1941), Some(2089), Some(2444), None],
+        bytes: [Some(1682), Some(1974), Some(2089), Some(2477), None],
     },
     SizePin {
         n_in: 6,
         n_out: 4,
-        bytes: [Some(2018), Some(2213), Some(2791), Some(3146), None],
+        bytes: [Some(2018), Some(2246), Some(2791), Some(3179), None],
     },
     SizePin {
         n_in: 5,
         n_out: 16,
-        bytes: [Some(3970), Some(3781), None, None, None],
+        bytes: [Some(3970), Some(3814), None, None, None],
     },
     SizePin {
         n_in: 6,
         n_out: 8,
-        bytes: [Some(2690), Some(2757), Some(4163), Some(4518), None],
+        bytes: [Some(2690), Some(2790), Some(4163), Some(4551), None],
     },
     SizePin {
         n_in: 8,
         n_out: 2,
-        bytes: [Some(1812), Some(2071), Some(2251), Some(2606), None],
+        bytes: [Some(1812), Some(2104), Some(2251), Some(2639), None],
     },
     SizePin {
         n_in: 8,
         n_out: 4,
-        bytes: [Some(2148), Some(2343), Some(2953), Some(3308), None],
+        bytes: [Some(2148), Some(2376), Some(2953), Some(3341), None],
     },
     SizePin {
         n_in: 8,
         n_out: 8,
-        bytes: [Some(2820), Some(2887), Some(4325), Some(4680), None],
+        bytes: [Some(2820), Some(2920), Some(4325), Some(4713), None],
     },
     SizePin {
         n_in: 8,
         n_out: 16,
-        bytes: [Some(4165), Some(3976), None, None, None],
+        bytes: [Some(4165), Some(4009), None, None, None],
     },
     SizePin {
         n_in: 12,
         n_out: 2,
-        bytes: [Some(2072), Some(2331), Some(2575), Some(2930), None],
+        bytes: [Some(2072), Some(2364), Some(2575), Some(2963), None],
     },
     SizePin {
         n_in: 12,
         n_out: 4,
-        bytes: [Some(2408), Some(2603), Some(3277), Some(3632), None],
+        bytes: [Some(2408), Some(2636), Some(3277), Some(3665), None],
     },
     SizePin {
         n_in: 12,
         n_out: 8,
-        bytes: [Some(3080), Some(3147), None, None, None],
+        bytes: [Some(3080), Some(3180), None, None, None],
     },
     SizePin {
         n_in: 16,
         n_out: 2,
-        bytes: [Some(2332), Some(2591), Some(2899), Some(3254), None],
+        bytes: [Some(2332), Some(2624), Some(2899), Some(3287), None],
     },
     SizePin {
         n_in: 16,
         n_out: 4,
-        bytes: [Some(2668), Some(2863), Some(3601), Some(3956), None],
+        bytes: [Some(2668), Some(2896), Some(3601), Some(3989), None],
     },
     SizePin {
         n_in: 16,
         n_out: 8,
-        bytes: [Some(3340), Some(3407), None, None, None],
+        bytes: [Some(3340), Some(3440), None, None, None],
     },
     SizePin {
         n_in: 24,
         n_out: 2,
-        bytes: [Some(2852), Some(3111), None, None, None],
+        bytes: [Some(2852), Some(3144), None, None, None],
     },
     SizePin {
         n_in: 24,
         n_out: 4,
-        bytes: [Some(3188), Some(3383), None, None, None],
+        bytes: [Some(3188), Some(3416), None, None, None],
     },
     SizePin {
         n_in: 32,
         n_out: 2,
-        bytes: [Some(3372), Some(3631), None, None, None],
+        bytes: [Some(3372), Some(3664), None, None, None],
     },
     SizePin {
         n_in: 40,
         n_out: 2,
-        bytes: [Some(3892), Some(4151), None, None, None],
+        bytes: [Some(3892), Some(4184), None, None, None],
     },
     SizePin {
         n_in: 48,
         n_out: 2,
-        bytes: [Some(4412), Some(4671), None, None, None],
+        bytes: [Some(4412), Some(4704), None, None, None],
     },
     SizePin {
         n_in: 49,
@@ -2065,7 +2079,7 @@ async fn a_delegate_its_own_co_signer_is_refused_before_proving() {
     .with_shape(spr_client::Shape::IN2_OUT2)
     .unwrap();
     assert!(matches!(
-        transfer.assemble(&client).await,
+        transfer.with_co_signer(delegate).assemble(&client).await,
         Err(RingError::Program(CustomRingError::CoSignerIsDelegate))
     ));
 }

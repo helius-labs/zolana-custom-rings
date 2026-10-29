@@ -47,7 +47,7 @@ import {
   type RingApprovalRequest,
 } from "../../../src/protocol/transaction/intent.js";
 import { ringProofCircuit } from "../../../src/rpc/prover/ring.js";
-import { ringMemberRegistryAddress } from "../../../src/protocol/pda/index.js";
+import { ringCoSignerAddress, ringMemberRegistryAddress } from "../../../src/protocol/pda/index.js";
 import { ringCircuitType } from "../../../src/protocol/proof/proving-keys.js";
 import { RingAddress, RingPaymentRequest } from "../../../src/crypto/keys/ring-address.js";
 import { ringIdField, senderCommitment } from "../../../src/crypto/derivation/ring-stream.js";
@@ -173,6 +173,7 @@ function rail(
     keys: input.keys ?? walletKeys(sender.keypair),
     transfer: input.transfer,
     assets,
+    ...(fixture.coSigner === undefined ? {} : { coSigner: fixture.coSigner }),
   });
   return (
     input.withdrawal === undefined ? owner : owner.withWithdrawalAccounts(input.withdrawal)
@@ -1542,6 +1543,10 @@ describe("anonymous rail on a policy ring", () => {
       prefix: [
         {
           address: await ringMemberRegistryAddress(fixture.ringProgramId),
+          role: AccountRole.READONLY,
+        },
+        {
+          address: await ringCoSignerAddress(fixture.ringProgramId, coSigner),
           role: AccountRole.READONLY,
         },
         { address: coSigner, role: AccountRole.READONLY_SIGNER },

@@ -7,6 +7,8 @@ mod account;
 mod admin;
 #[path = "rpc/client.rs"]
 mod client;
+#[path = "validation/co_signer.rs"]
+mod co_signer;
 #[path = "operations/deposit.rs"]
 mod deposit;
 mod error;
@@ -54,8 +56,9 @@ pub use crate::{
         RegistryStatus, RingRegistration, RingStatus,
     },
     admin::{
-        CreateConfig, CreateMemberRegistry, GrantReader, InitSppRingConfig, PolicyRules,
-        RevokeReader, SetAuthority, SetCoSigner, SetDelegate, SetSourceOwner, SourceOwner,
+        ClearCoSigner, CreateConfig, CreateMemberRegistry, GrantReader, InitSppRingConfig,
+        PolicyRules, RevokeReader, SetAuthority, SetCoSigner, SetDelegate, SetSourceOwner,
+        SourceOwner,
     },
     client::{RingClient, RingIndexerBackend},
     deposit::{

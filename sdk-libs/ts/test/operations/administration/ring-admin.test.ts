@@ -13,6 +13,7 @@ import {
 } from "@heliuslabs/zolana/keypair";
 import {
   ringAuthAddress,
+  ringCoSignerAddress,
   ringConfigAddress,
   ringMemberRegistryAddress,
   ringRecordQueueAddress,
@@ -200,7 +201,7 @@ describe("ring setup", () => {
 
 describe("config account", () => {
   const MODE_OFFSET = 68;
-  const CREATED_SLOT_OFFSET = 142;
+  const CREATED_SLOT_OFFSET = 112;
   const account = () =>
     ringProgramConfigData({
       authority: AUTHORITY,
@@ -213,7 +214,7 @@ describe("config account", () => {
     const data = account();
     const slot = 3n * (1n << 18n) + 7n;
     data.set(u64le(slot), CREATED_SLOT_OFFSET);
-    expect(data).toHaveLength(150);
+    expect(data).toHaveLength(120);
     expect(decodeRingProgramConfig(data)).toMatchObject({ createdSlot: slot });
   });
 
@@ -265,17 +266,37 @@ describe("config writes", () => {
     ]);
   });
 
-  it("writes the co-signer, its clearing and the insert fee into the config", async () => {
+  it("writes the co-signer's record, its clearing and the insert fee", async () => {
     const config = await ringConfigAddress(RING);
+    const record = await ringCoSignerAddress(RING, NEXT);
     const cosigner = await setRingCoSignerInstruction({
       ringProgramId: RING,
+      payer: PAYER,
       authority: AUTHORITY,
       signer: NEXT,
       scope: 5,
     });
     expect(cosigner.data).toEqual(Uint8Array.of(27, ...addressBytes(NEXT), 5));
-    const clear = await clearRingCoSignerInstruction({ ringProgramId: RING, authority: AUTHORITY });
+    expect(metas(cosigner)).toEqual([
+      [PAYER, SIGN_WRITE],
+      [AUTHORITY, SIGN],
+      [config, WRITE],
+      [record, WRITE],
+      [SYSTEM_PROGRAM, READ],
+    ]);
+    const clear = await clearRingCoSignerInstruction({
+      ringProgramId: RING,
+      authority: AUTHORITY,
+      signer: NEXT,
+      rentRecipient: PAYER,
+    });
     expect(clear.data).toEqual(Uint8Array.of(21));
+    expect(metas(clear)).toEqual([
+      [AUTHORITY, SIGN],
+      [config, WRITE],
+      [record, WRITE],
+      [PAYER, WRITE],
+    ]);
     const fee = await setRingInsertFeeInstruction({
       client: rentClient(890_880n).client,
       ringProgramId: RING,
@@ -283,11 +304,10 @@ describe("config writes", () => {
       fee: 1_000_000n,
     });
     expect(fee.data).toEqual(Uint8Array.of(42, ...u64le(1_000_000n)));
-    for (const instruction of [cosigner, clear, fee])
-      expect(metas(instruction)).toEqual([
-        [AUTHORITY, SIGN],
-        [config, WRITE],
-      ]);
+    expect(metas(fee)).toEqual([
+      [AUTHORITY, SIGN],
+      [config, WRITE],
+    ]);
   });
 
   it("refuses a nonzero insert fee below the rent of an empty account and reads no rent for a free write", async () => {
@@ -323,6 +343,7 @@ describe("config writes", () => {
     await expect(
       setRingCoSignerInstruction({
         ringProgramId: RING,
+        payer: PAYER,
         authority: AUTHORITY,
         signer: NEXT,
         scope: 1,

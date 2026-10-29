@@ -6,15 +6,18 @@ import { addressBytes } from "@heliuslabs/zolana/internal";
 import type { RequestContext } from "@heliuslabs/zolana/interface";
 import {
   ringAuthAddress,
+  ringCoSignerPda,
   ringConfigPda,
   ringMemberRegistryPda,
   ringRecordQueuePda,
 } from "../pda/index.js";
 
 import {
+  decodeRingCoSigner,
   decodeRingMemberRegistry,
   decodeRingProgramConfig,
   decodeRingRecordQueue,
+  type RingCoSigner,
   type RingMemberRegistry,
   type RingProgramConfig,
   type RingRecordQueue,
@@ -74,6 +77,22 @@ export function fetchRingRecordQueue(
     missing: "RING_RECORD_QUEUE_MISSING",
     invalid: "RING_RECORD_QUEUE_INVALID",
   });
+}
+
+/** Mirrors Rust `CustomRing::co_signer`, `undefined` when `signer` holds no record. */
+export async function fetchRingCoSignerRecord(
+  client: AccountReader,
+  ringProgramId: Address,
+  signer: Address,
+  context?: RequestContext,
+): Promise<RingCoSigner | undefined> {
+  const [address, bump] = await ringCoSignerPda(ringProgramId, signer);
+  const stored = await client.getAccount(address, context);
+  if (stored === undefined) return undefined;
+  const record = stored.owner === ringProgramId ? decodeRingCoSigner(stored.data) : undefined;
+  if (record?.bump !== bump || record.signer !== signer)
+    throw new RingError("RING_CO_SIGNER_INVALID", { details: { ringProgramId, address } });
+  return record;
 }
 
 /** A curator's registry named by account, the canonical registry of the program owning it. */

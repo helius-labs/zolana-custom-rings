@@ -20,8 +20,8 @@ use spr_interface::instruction::instruction_data::{
 use crate::{
     common::{
         auditor_pubkey, config_pda, delegate_ring, floored, off_curve_g2, on_curve_g2,
-        reaches_verification, refused, registry_pda, ring_auth, set_co_signer, Ring, Sent, Setup,
-        PROGRAM, SYSTEM,
+        reaches_verification, refused, registry_pda, ring_auth, set_co_signer, CoSignerSlot, Ring,
+        Sent, Setup, PROGRAM, SYSTEM,
     },
     transact_rules::SPP,
 };
@@ -236,9 +236,8 @@ fn an_escrowing_deposit_root_below_the_own_floor_is_refused() {
 fn a_merge_and_a_deposit_carry_the_co_signer_their_class_demands() {
     let co_signer = Keypair::new();
     let with_co_signer = |mut instruction: Instruction, slot: usize| {
-        instruction
-            .accounts
-            .insert(slot, AccountMeta::new_readonly(co_signer.pubkey(), true));
+        let pair = CoSignerSlot::own(co_signer.pubkey()).signed();
+        instruction.accounts.splice(slot..slot, pair);
         instruction
     };
     let mut ring = Ring::new(Setup::AuditOnly);
@@ -250,14 +249,14 @@ fn a_merge_and_a_deposit_carry_the_co_signer_their_class_demands() {
     let merge = merge_instruction(&ring, None);
     refused(
         ring.send(merge.clone(), &[]),
-        CustomRingError::MissingCoSigner,
+        CustomRingError::InvalidCoSignerRecord,
     );
     reaches_verification(ring.send(with_co_signer(merge, MERGE_SPP), &[&co_signer]));
     set_co_signer(&mut ring, &co_signer.pubkey(), CoSignScope::DEPOSITS.bits());
     let deposit = deposit_instruction(&ring, None, &ring_deposit());
     refused(
         ring.send(deposit.clone(), &[]),
-        CustomRingError::MissingCoSigner,
+        CustomRingError::InvalidCoSignerRecord,
     );
     reaches_verification(ring.send(with_co_signer(deposit, DEPOSIT_SPP), &[&co_signer]));
 }

@@ -86,6 +86,8 @@ pub struct AnonymousMove<'a> {
     /// The change returns to the sender.
     pub payments: Vec<RingPayment>,
     pub entry: EntrySpend,
+    /// Read only when the ring demands a co-signer.
+    pub co_signer: Option<Address>,
 }
 
 /// A default-ring spend publishes the hidden owner's key, a move takes one only when allowed.
@@ -124,6 +126,7 @@ impl<'a> RingTransfer<Owner<'a>> {
     ) -> RingTransfer<Anonymous<'a>> {
         RingTransfer {
             ring: self.ring,
+            co_signer: self.co_signer,
             rail: Anonymous {
                 owner: self.rail,
                 signer,
@@ -257,12 +260,15 @@ impl<'a> AnonymousMove<'a> {
             self.payer,
             self.ring.program_id(),
         )?;
-        let transfer = RingTransfer::<Owner<'a>>::new(CustomRingTransferInput {
-            ring: self.ring,
-            sender: self.sender,
-            nullifier_key: Some(self.nullifier_key),
-            transaction,
-        })
+        let transfer = RingTransfer {
+            co_signer: self.co_signer,
+            ..RingTransfer::<Owner<'a>>::new(CustomRingTransferInput {
+                ring: self.ring,
+                sender: self.sender,
+                nullifier_key: Some(self.nullifier_key),
+                transaction,
+            })
+        }
         .with_anonymous_signer(self.signer, self.history);
         self.payments
             .iter()
@@ -301,7 +307,8 @@ impl AnonymousKey {
 pub(crate) struct HiddenOwner(pub Address);
 
 pub(crate) struct AnonymousSpend<'a> {
-    pub party_identities: [[u8; 32]; 3],
+    payer: Address,
+    exit_destination: Option<Address>,
     pub token_owner: Option<Address>,
     signer: &'a SigningKey,
     /// Past the transfer's tags.
@@ -311,6 +318,20 @@ pub(crate) struct AnonymousSpend<'a> {
 impl AnonymousSpend<'_> {
     pub(super) fn hidden(&self) -> HiddenSpend<'_> {
         HiddenSpend { owner: self.signer }
+    }
+
+    /// Binds the signing co-signer, zero when none signs.
+    pub(super) fn party_identities(
+        &self,
+        co_signer: Option<Address>,
+    ) -> Result<[[u8; 32]; 3], RingError> {
+        HiddenOwner::of(&self.signer.pubkey())?.check_signers(co_signer)?;
+        Ok(custom_ring_interface::AnonymousParties {
+            payer: self.payer.as_array(),
+            cosigner: co_signer.as_ref().map(Address::as_array),
+            exit_destination: self.exit_destination.as_ref().map(Address::as_array),
+        }
+        .identities()?)
     }
 }
 
@@ -364,8 +385,7 @@ impl Anonymous<'_> {
             return Err(RingError::AnonymousSignerMismatch);
         }
         let owner = HiddenOwner::of(&sender.signing_pubkey)?;
-        let co_signer = config.co_signer.as_ref().map(|co_signer| co_signer.signer);
-        owner.check_signers(core::iter::once(self.owner.transaction.payer()).chain(co_signer))?;
+        owner.check_signers([self.owner.transaction.payer()])?;
         self.owner.check_settlement_accounts()?;
         self.owner.check_payer_funds_deposits()?;
         let transfers = self.owner.transaction.interface_transfers()?;
@@ -388,13 +408,7 @@ impl Anonymous<'_> {
         {
             return Err(CustomRingError::AnonymousExitDestinationsDiffer.into());
         }
-        let destination = token_owner.or(sol_owner);
-        let party_identities = custom_ring_interface::AnonymousParties {
-            payer: self.owner.transaction.payer().as_array(),
-            cosigner: co_signer.as_ref().map(Address::as_array),
-            exit_destination: destination.as_ref().map(Address::as_array),
-        }
-        .identities()?;
+        let exit_destination = token_owner.or(sol_owner);
         let tags = self.tags()?;
         let transaction = SenderChange {
             shape: self.owner.shape,
@@ -434,7 +448,8 @@ impl Anonymous<'_> {
             owner_signers: Vec::new(),
             interface_transfer_accounts: self.owner.interface_transfer_accounts.clone(),
             spend: Spend::Anonymous(Box::new(AnonymousSpend {
-                party_identities,
+                payer: self.owner.transaction.payer(),
+                exit_destination,
                 token_owner,
                 signer: self.signer,
                 history: tags.history,

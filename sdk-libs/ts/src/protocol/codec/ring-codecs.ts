@@ -26,13 +26,14 @@ export interface RingProgramConfig {
   readonly keyEscrow: boolean;
   /** Lamports a record write by a signer other than the authority pays the authority. */
   readonly insertFee: bigint;
-  readonly coSigner?: RingCoSigner;
+  /** `RING_COSIGN_*` bits some `CoSigner` record covers, absent without a record. */
+  readonly coSignerClasses?: number;
   readonly delegate?: Address;
   /** The slot `CreateConfig` ran in. */
   readonly createdSlot: bigint;
 }
 
-/** Rust `CustomRingCoSigner`, a mint without a threshold row always needs the co-signer. */
+/** Rust `CustomRingCoSigner`, the signer's `CoSigner` record. */
 export interface RingCoSigner {
   readonly signer: Address;
   /** `RING_COSIGN_*` bits. */
@@ -119,7 +120,10 @@ export const DEFAULT_INSERT_FEE = 1_000_000n;
 
 const RING_MODES: readonly RingMode[] = ["confidential", "confidentialEscrow", "anonymous"];
 export const RING_PROGRAM_CONFIG_DISCRIMINATOR = 10;
-export const RING_PROGRAM_CONFIG_SIZE = 150;
+export const RING_PROGRAM_CONFIG_SIZE = 120;
+export const RING_CO_SIGNER_DISCRIMINATOR = 14;
+export const RING_CO_SIGNER_SIZE = 35;
+const RING_COSIGN_CLASSES = [RING_COSIGN_TRANSFERS, RING_COSIGN_DEPOSITS, RING_COSIGN_WITHDRAWALS];
 export const MEMBER_REGISTRY_DISCRIMINATOR = 11;
 export const MEMBER_REGISTRY_SIZE = 2388;
 export const RECORD_QUEUE_DISCRIMINATOR = 12;
@@ -139,8 +143,7 @@ export function decodeRingProgramConfig(data: Uint8Array): RingProgramConfig {
   const modeByte = reader.u8("mode");
   const mode = RING_MODES[modeByte];
   const insertFee = reader.u64("insertFee");
-  const coSigner = reader.bytes(32, "coSigner");
-  const scope = reader.u8("coSignScope");
+  const counts = reader.bytes(RING_COSIGN_CLASSES.length, "coSigners");
   const delegate = reader.bytes(32, "delegate");
   const createdSlot = reader.u64("createdSlot");
   reader.done();
@@ -148,11 +151,10 @@ export function decodeRingProgramConfig(data: Uint8Array): RingProgramConfig {
     throw new RingError("RING_CONFIG_INVALID", {
       details: { mode: modeByte, hasPolicy },
     });
-  const signer = equalBytes(coSigner, ZERO_32) ? undefined : encodeBase58(coSigner);
-  if (signer !== undefined && !validScope(scope))
-    throw new RingError("RING_CONFIG_INVALID", {
-      details: { coSignScope: scope },
-    });
+  const classes = RING_COSIGN_CLASSES.reduce(
+    (covered, bit, index) => (counts[index] === 0 ? covered : covered | bit),
+    0,
+  );
   return Object.freeze({
     authority,
     auditorPublicKey,
@@ -161,17 +163,26 @@ export function decodeRingProgramConfig(data: Uint8Array): RingProgramConfig {
     mode,
     keyEscrow: mode === "confidentialEscrow",
     insertFee,
-    ...(signer === undefined
-      ? {}
-      : {
-          coSigner: Object.freeze({
-            signer,
-            scope,
-          }),
-        }),
+    ...(classes === 0 ? {} : { coSignerClasses: classes }),
     ...(equalBytes(delegate, ZERO_32) ? {} : { delegate: encodeBase58(delegate) }),
     createdSlot,
   });
+}
+
+/** Mirrors Rust `CoSigner::valid`, a nonzero signer under a valid scope. */
+export function decodeRingCoSigner(data: Uint8Array): RingCoSigner & Readonly<{ bump: number }> {
+  const reader = accountReader(data, {
+    discriminator: RING_CO_SIGNER_DISCRIMINATOR,
+    size: RING_CO_SIGNER_SIZE,
+    code: "RING_CO_SIGNER_INVALID",
+  });
+  const signer = reader.bytes(32, "signer");
+  const scope = reader.u8("scope");
+  const bump = reader.u8("bump");
+  reader.done();
+  if (equalBytes(signer, ZERO_32) || !validScope(scope))
+    throw new RingError("RING_CO_SIGNER_INVALID", { details: { scope } });
+  return Object.freeze({ signer: encodeBase58(signer), scope, bump });
 }
 
 /** Mirrors Rust `MemberRegistry::valid`, every rule row past its count zero. */
@@ -339,7 +350,11 @@ function accountReader(
   account: Readonly<{
     discriminator: number;
     size: number;
-    code: "RING_CONFIG_INVALID" | "RING_MEMBER_REGISTRY_INVALID" | "RING_RECORD_QUEUE_INVALID";
+    code:
+      | "RING_CONFIG_INVALID"
+      | "RING_MEMBER_REGISTRY_INVALID"
+      | "RING_RECORD_QUEUE_INVALID"
+      | "RING_CO_SIGNER_INVALID";
   }>,
 ): Reader {
   if (data.length !== account.size || data[0] !== account.discriminator)

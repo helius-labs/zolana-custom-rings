@@ -43,6 +43,8 @@ pub struct DelegateMove<'a> {
     /// The change returns to the source.
     pub payments: Vec<DelegatePayment>,
     pub assets: &'a AssetRegistry,
+    /// Read only when the ring demands a co-signer.
+    pub co_signer: Option<Address>,
 }
 
 /// The delegate moves a member's notes with the recovered key, the member does not sign.
@@ -85,6 +87,7 @@ impl<'a> RingTransfer<Delegated<'a>> {
     pub fn new(input: DelegateTransferInput<'_>) -> Self {
         Self {
             ring: input.ring,
+            co_signer: None,
             rail: Delegated {
                 delegate: input.delegate,
                 payer: input.payer,
@@ -160,7 +163,7 @@ impl<'a> DelegateMove<'a> {
     }
 
     fn transfer(&self, utxos: Vec<WalletUtxo>) -> DelegateTransfer<'a> {
-        DelegateTransfer::new(DelegateTransferInput {
+        let transfer = DelegateTransfer::new(DelegateTransferInput {
             ring: self.ring,
             delegate: self.delegate,
             payer: self.payer,
@@ -177,7 +180,11 @@ impl<'a> DelegateMove<'a> {
                 })
                 .collect(),
         })
-        .with_assets(self.assets)
+        .with_assets(self.assets);
+        DelegateTransfer {
+            co_signer: self.co_signer,
+            ..transfer
+        }
     }
 }
 

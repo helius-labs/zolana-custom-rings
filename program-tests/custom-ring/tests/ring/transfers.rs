@@ -75,7 +75,7 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
         DEFAULT_INSERT_FEE,
         "default insert fee"
     );
-    assert_eq!(config.co_signer(), None, "no co-signer");
+    assert_eq!(config.co_signers.covered(), None, "no co-signer");
     assert_eq!(config.delegate(), None, "no delegate");
 
     // 3. Register the ring with SPP. The `RingConfig` SPP allocates IS the ring's
@@ -948,6 +948,7 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
         &env.payer,
         &[custom_ring_sdk::SetCoSigner {
             ring,
+            payer: env.payer.pubkey(),
             authority: env.payer.pubkey(),
             signer: cosigner.pubkey(),
             scope: CoSignScope::WITHDRAWALS,
@@ -989,7 +990,8 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
         nullifier_key: Some(&sender.nullifier_key),
         transaction: withdraw()?,
     })
-    .with_interface_transfer_accounts(vec![settlement]);
+    .with_interface_transfer_accounts(vec![settlement])
+    .with_co_signer(cosigner.pubkey());
     let unsigned = env.run(unsigned.prove(env.client.ring_client()))?;
     assert_eq!(unsigned.co_signer, Some(cosigner.pubkey()));
     let rejection = send_expecting_rejection(

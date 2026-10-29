@@ -378,7 +378,9 @@ impl RingOperation<'_> {
             Self::Anonymous(transfer) => transfer.check_public_signers(signers),
             Self::Merge(operation) => {
                 let config = operation.prepared.ring().require_config(client).await?;
-                operation.prepared.check_public_signers(signers, &config)
+                operation
+                    .prepared
+                    .check_public_signers(signers.chain(operation.input.co_signer), &config)
             }
             Self::Deposit(deposit) => deposit.check_public_signers(signers),
             Self::Transfer(_)

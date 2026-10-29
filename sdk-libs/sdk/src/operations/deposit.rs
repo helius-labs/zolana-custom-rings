@@ -24,6 +24,7 @@ use zolana_ring_transaction::RingDepositPlaintext;
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
+    co_signer::CoSignerChoice,
     pipeline::{HiddenOwner, RingSender},
     projection::retry_projection_lag,
     prover::{to_instruction_proof, RingRequest},
@@ -115,7 +116,7 @@ pub struct RingDeposit<'a> {
     pub tree: Address,
     pub asset: DepositAsset,
     pub amount: u64,
-    /// Signs when the config's scope covers deposits.
+    /// Signs when a record covers deposits, the record must be its own.
     pub cosigner: Option<&'a (dyn Signer + Sync)>,
 }
 
@@ -236,15 +237,18 @@ impl RingDeposit<'_> {
             deposits: vec![deposit.clone()],
         }
         .instruction()?;
-        let cosigner = custom_ring_interface::cosign::CoSignDemand {
-            approval_required: false,
-            classes: CoSignScope::DEPOSITS,
-            withdrawals: Vec::new(),
+        let cosigner = CoSignerChoice {
+            ring: self.ring,
+            config: &config,
+            demand: &custom_ring_interface::cosign::CoSignDemand {
+                approval_required: false,
+                classes: CoSignScope::DEPOSITS,
+                withdrawals: Vec::new(),
+            },
+            supplied: self.cosigner.map(|signer| signer.pubkey()),
         }
-        .signer(config.account())?;
-        if cosigner.is_some() && cosigner != self.cosigner.map(|signer| signer.pubkey()) {
-            return Err(CustomRingError::MissingCoSigner.into());
-        }
+        .resolve(rpc)
+        .await?;
         Ok(PreparedRingDeposit {
             ring: self.ring,
             cosigner,
@@ -306,7 +310,7 @@ impl RingDeposit<'_> {
         }
     }
 
-    /// A co-signer the config does not demand is no account of the deposit and cannot sign it.
+    /// A co-signer the ring does not demand is no account of the deposit and cannot sign it.
     pub(crate) fn signers(&self, prepared: &PreparedRingDeposit) -> Vec<&(dyn Signer + Sync)> {
         core::iter::once(self.payer)
             .chain(self.cosigner.filter(|_| prepared.cosigner.is_some()))
@@ -386,7 +390,8 @@ impl PreparedRingDeposit {
         }
         accounts.extend(
             self.cosigner
-                .map(|cosigner| AccountMeta::new_readonly(cosigner, true)),
+                .into_iter()
+                .flat_map(|cosigner| self.ring.co_signer_metas(cosigner)),
         );
         instruction.accounts.splice(0..0, accounts);
         Ok(instruction)

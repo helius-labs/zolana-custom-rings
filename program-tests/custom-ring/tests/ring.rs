@@ -586,6 +586,10 @@ impl OwnerTransfer<'_> {
             transaction: self.prepared,
         })
         .with_interface_transfer_accounts(self.interface_transfer_accounts);
+        let transfer = match self.cosigner {
+            Some(cosigner) => transfer.with_co_signer(cosigner.pubkey()),
+            None => transfer,
+        };
         let proven = env.run(transfer.prove(env.client.ring_client()))?;
         assert_eq!(
             proven.co_signer,

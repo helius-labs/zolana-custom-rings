@@ -1,6 +1,7 @@
 use custom_ring_interface::{
-    anonymous_exit_destination, CustomRingError, MemberRegistry, RecordQueue, RingAccount,
-    RingProgramConfig, SettlementAccount, TokenAccountState,
+    anonymous_exit_destination, cosign::CoSignRequirement, CoSigner, CustomRingError,
+    MemberRegistry, RecordQueue, RingAccount, RingProgramConfig, SettlementAccount,
+    TokenAccountState,
 };
 use pinocchio::{
     account::{Ref, RefMut},
@@ -146,14 +147,26 @@ pub fn check_funding_signer(
     Ok(funder)
 }
 
-pub fn check_co_signer(account: &AccountView, expected: &Address) -> ProgramResult {
-    if !account.is_signer() {
-        return Err(CustomRingError::MissingCoSigner.into());
+/// The demanded co-signature's `[co_signer_record, co_signer]` slot.
+#[must_use]
+pub struct CoSignerSlot<'a> {
+    pub program_id: &'a Address,
+    pub record: &'a AccountView,
+    pub signer: &'a AccountView,
+}
+
+impl CoSignerSlot<'_> {
+    /// The record's signer, signing.
+    pub fn verify(self, requirement: CoSignRequirement) -> Result<Address, ProgramError> {
+        let expected = requirement.check(&*load::<CoSigner>(self.program_id, self.record)?)?;
+        if !self.signer.is_signer() {
+            return Err(CustomRingError::MissingCoSigner.into());
+        }
+        if self.signer.address() != &expected {
+            return Err(CustomRingError::UnauthorizedCoSigner.into());
+        }
+        Ok(expected)
     }
-    if account.address() != expected {
-        return Err(CustomRingError::UnauthorizedCoSigner.into());
-    }
-    Ok(())
 }
 
 /// Passes only the program's nonzero loader-v3 upgrade authority.

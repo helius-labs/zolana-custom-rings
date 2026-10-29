@@ -62,6 +62,7 @@ use self::{
 };
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
+    co_signer::CoSignerChoice,
     heap::boxed,
     projection::retry_projection_lag,
     submission::{check_transaction_size, BoundPolicy, BoundState},
@@ -94,6 +95,7 @@ pub enum RailKind<'a> {
 pub struct RingTransfer<R: Rail> {
     ring: CustomRing,
     rail: R,
+    co_signer: Option<Address>,
 }
 
 #[must_use = "build or submit the proven transfer"]
@@ -106,7 +108,7 @@ pub struct ProvenRingTransfer {
     pub tx_viewing_key: ViewingKey,
     /// Padding included.
     pub outputs: Vec<SppProofOutputUtxo>,
-    /// The co-signer the config demands, it signs the transaction.
+    /// The supplied co-signer when the ring demands one, it signs the transaction.
     pub co_signer: Option<Address>,
     /// The anonymous sender's viewing history past the transfer's tags.
     pub viewing_history: Option<ViewingHistory>,
@@ -156,6 +158,13 @@ impl ProofAuthority for TransferAuthority {
 impl<R: Rail> RingTransfer<R> {
     pub fn ring(&self) -> CustomRing {
         self.ring
+    }
+
+    /// Read only when the ring demands a co-signer, its record must cover the demand.
+    #[must_use = "use the updated transfer"]
+    pub fn with_co_signer(mut self, signer: Address) -> Self {
+        self.co_signer = Some(signer);
+        self
     }
 
     pub async fn prove<P: AsyncRpc, I: RingIndexerBackend>(
@@ -209,6 +218,7 @@ impl<R: Rail> RingTransfer<R> {
                 ring: self.ring,
                 config,
                 staged,
+                co_signer: self.co_signer,
             }
             .frame(client)
         })
@@ -220,6 +230,7 @@ struct Pipeline<'a> {
     ring: CustomRing,
     config: CustomRingConfig,
     staged: Staged<'a>,
+    co_signer: Option<Address>,
 }
 
 struct Frame {
@@ -381,8 +392,18 @@ impl<'a> Pipeline<'a> {
             client.zolana(),
         )
         .await?;
-        let co_signer =
-            demand.signer_with_exemption(config.account(), withdrawal_exemption.is_some())?;
+        let demand = match withdrawal_exemption {
+            Some(_) => demand.exempt_withdrawals(),
+            None => demand,
+        };
+        let co_signer = CoSignerChoice {
+            ring: self.ring,
+            config,
+            demand: &demand,
+            supplied: self.co_signer,
+        }
+        .resolve(client.zolana())
+        .await?;
         if co_signer.is_some_and(|co_signer| owner_signers.contains(&co_signer)) {
             return Err(CustomRingError::CoSignerIsOwner.into());
         }
@@ -530,6 +551,9 @@ impl Unwitnessed<'_> {
             Spend::Anonymous(anonymous) => Some(anonymous),
             Spend::Owner | Spend::Delegate { .. } => None,
         };
+        let party_identities = anonymous
+            .map(|anonymous| anonymous.party_identities(frame.co_signer))
+            .transpose()?;
         let hidden = anonymous.map(|anonymous| anonymous.hidden());
         let spp = SppWitness {
             ring: ring.program_id(),
@@ -546,7 +570,7 @@ impl Unwitnessed<'_> {
         let auditor = config.auditor_pubkey;
         let audit_public_input_hash = ParsedTransact::new(frame.parts.data())?
             .audit_statement(AuditBinding {
-                party_identities: &anonymous.map_or([[0; 32]; 3], |a| a.party_identities),
+                party_identities: &party_identities.unwrap_or_default(),
                 ring_id: &frame.ring_id,
                 auditor_pubkey: auditor.as_bytes(),
                 key_escrow: frame.parts.key_escrow,
@@ -557,8 +581,8 @@ impl Unwitnessed<'_> {
             .policy
             .as_ref()
             .and_then(|policy| policy.sender_commitment);
-        let statement = anonymous.map(|anonymous| AnonymousStatement {
-            party_identities: anonymous.party_identities,
+        let statement = party_identities.map(|party_identities| AnonymousStatement {
+            party_identities,
             private_tx_hash,
             private_tx_blinding: frame.private_tx_blinding,
             sender_commitment: sender_commitment.unwrap_or_default(),

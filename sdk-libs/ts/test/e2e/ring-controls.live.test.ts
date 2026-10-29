@@ -112,6 +112,7 @@ describe.each(["client", "prover"] as const)("controls %s", (proofDataSource) =>
         client,
         await setRingCoSignerInstruction({
           ringProgramId,
+          payer: authority,
           authority,
           signer: cosigner.address,
           scope: RING_COSIGN_WITHDRAWALS,
@@ -405,6 +406,7 @@ describe.each(["client", "prover"] as const)("controls %s", (proofDataSource) =>
         client,
         await setRingCoSignerInstruction({
           ringProgramId,
+          payer: authority,
           authority,
           signer: cosigner.address,
           scope: RING_COSIGN_TRANSFERS,
@@ -608,10 +610,15 @@ describe.each(["client", "prover"] as const)("controls %s", (proofDataSource) =>
       });
       await sendInstruction(
         client,
-        await clearRingCoSignerInstruction({ ringProgramId, authority }),
+        await clearRingCoSignerInstruction({
+          ringProgramId,
+          authority,
+          signer: cosigner.address,
+          rentRecipient: authority.address,
+        }),
         authority,
       );
-      expect((await fetchRingProgramConfig(client, ringProgramId)).coSigner).toBeUndefined();
+      expect((await fetchRingProgramConfig(client, ringProgramId)).coSignerClasses).toBeUndefined();
     } finally {
       auditor.destroy();
     }

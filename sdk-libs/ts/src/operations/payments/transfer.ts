@@ -99,7 +99,7 @@ export interface RingSpendParams {
   readonly amount: bigint;
   /** Receives every private output, defaults to `client.tree`. */
   readonly outputTree?: Address;
-  /** The ring's co-signer when its scope or the approval bit demands it. */
+  /** Signs when the ring demands a co-signer, its record must cover the demand. */
   readonly cosigner?: SignerAccount;
   readonly anonymous?: AnonymousRingSpend;
   readonly priorityFeeLamports?: bigint;
@@ -506,6 +506,7 @@ async function buildRingSpend<R>(
       keys: params.keys,
       transfer,
       assets: params.wallet.registry,
+      ...(params.cosigner === undefined ? {} : { coSigner: signerAddress(params.cosigner) }),
     });
     let anonymousPayment: AnonymousPayment | undefined;
     const plan = strategy.configure({
@@ -535,8 +536,7 @@ async function buildRingSpend<R>(
           ? {}
           : { setupInstructions: plan.setupInstructions }),
       },
-      approve: async ({ prepared, coSigner }) => {
-        checkDemandedCoSigner(params.ringProgramId, params.cosigner, coSigner);
+      approve: async ({ prepared }) => {
         const approved = await (params.approve ?? approveRingUnattended)({
           solanaPublicKey: ownerSolanaAccount(owner, params.feePayer),
           intent: plan.intent,
@@ -627,25 +627,6 @@ function anonymousInputCap(selection: "ring" | "entry"): number {
           undefined,
     ).map((shape) => shape.inputs),
   );
-}
-
-/** @internal The co-signer a proven transfer demands is the one the caller supplied. */
-export function checkDemandedCoSigner(
-  ringProgramId: Address,
-  supplied: SignerAccount | undefined,
-  demanded: Address | undefined,
-): void {
-  if (demanded === undefined) return;
-  const reason =
-    supplied === undefined
-      ? "missing"
-      : signerAddress(supplied) === demanded
-        ? undefined
-        : "mismatch";
-  if (reason !== undefined)
-    throw new RingError("RING_COSIGNER_REQUIRED", {
-      details: { ringProgramId, reason, expected: demanded },
-    });
 }
 
 type AnonymousRecipient = Readonly<{ to: RingAddress; firstContact: FirstContact }>;

@@ -428,6 +428,7 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
             nullifier_key: recipient_keys.nullifier_key.clone(),
             input_tree: env.tree,
             output_tree: env.tree,
+            co_signer: None,
         },
     );
     land(&env, merge, payer, &[])?;

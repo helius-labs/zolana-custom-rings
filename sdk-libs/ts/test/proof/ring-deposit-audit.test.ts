@@ -31,7 +31,11 @@ import { SOL_MINT, ownerUtxoHash } from "@heliuslabs/zolana/transaction";
 import { LocalRingKeys } from "../../src/state/ring-keys.js";
 import type { RingMemberProofRequest } from "../../src/rpc/ports.js";
 import type { RingProofRequest } from "../../src/rpc/prover/ring.js";
-import { ringConfigPda, ringMemberRegistryPda } from "../../src/protocol/pda/index.js";
+import {
+  ringCoSignerAddress,
+  ringConfigPda,
+  ringMemberRegistryPda,
+} from "../../src/protocol/pda/index.js";
 import { depositBlinding } from "../../src/crypto/derivation/ring-domain.js";
 import {
   RING_COSIGN_DEPOSITS,
@@ -67,6 +71,7 @@ import { recordTree, type FixtureRecord } from "../helpers/member-registry.js";
 import {
   memberRegistryData,
   ownedAccount,
+  ringCoSignerAccount,
   ringProgramConfigData,
 } from "../helpers/ring-accounts.js";
 import { type RingKeys } from "../../src/state/ring-keys.js";
@@ -383,12 +388,13 @@ describe("audited deposit instruction", () => {
       expect(plain.accounts?.slice(0, 1)).toEqual([
         { address: config, role: AccountRole.READONLY },
       ]);
-      expect(escrowed.accounts?.slice(0, 3)).toEqual([
+      expect(escrowed.accounts?.slice(0, 4)).toEqual([
         { address: config, role: AccountRole.READONLY },
         { address: registry, role: AccountRole.READONLY },
+        { address: await ringCoSignerAddress(RING, RING), role: AccountRole.READONLY },
         { address: RING, role: AccountRole.READONLY_SIGNER },
       ]);
-      expect(escrowed.accounts?.slice(3)).toEqual(plain.accounts?.slice(1));
+      expect(escrowed.accounts?.slice(4)).toEqual(plain.accounts?.slice(1));
       await expect(
         ringDepositInstruction({ ...input, proof, deposits: [...deposits, deposits[0]!] }),
       ).rejects.toMatchObject({ code: "INTERFACE_CODEC", details: { field: "deposit count" } });
@@ -433,6 +439,10 @@ describe("ring deposit builder", () => {
       treeId: 0,
       getLatestBlockhash: async () => BLOCKHASH,
       getAccount: async (account: Address) => {
+        if (input.coSigner !== undefined) {
+          const [record, stored] = await ringCoSignerAccount(RING, input.coSigner);
+          if (account === record) return stored;
+        }
         if (account === config)
           return ownedAccount(
             RING,
@@ -831,10 +841,10 @@ describe("ring deposit builder", () => {
       try {
         const withCoSigner = await signed.prove(covered.client);
         const withoutCoSigner = await unsigned.prove(outside.client);
-        expect(withCoSigner.instruction.accounts?.[1]).toEqual({
-          address: cosigner,
-          role: AccountRole.READONLY_SIGNER,
-        });
+        expect(withCoSigner.instruction.accounts?.slice(1, 3)).toEqual([
+          { address: await ringCoSignerAddress(RING, cosigner), role: AccountRole.READONLY },
+          { address: cosigner, role: AccountRole.READONLY_SIGNER },
+        ]);
         expect(
           withoutCoSigner.instruction.accounts?.map((account) => account.address),
         ).not.toContain(cosigner);

@@ -9,7 +9,7 @@ import { readMemberOpenings } from "../rpc/registered-record.js";
 import type { WithdrawalExemptionProofRequest } from "../rpc/prover/ring.js";
 import { N_PUBLIC_SLOTS } from "../protocol/transaction/spp.js";
 import { currentRoot, type BoundRoot, type PolicyReadClient } from "./policy-proof.js";
-import { checkRingCoSigner, type CoSignDemand } from "./cosign.js";
+import { coSignRequirement, type CoSignDemand } from "./cosign.js";
 
 export interface WithdrawalExemption {
   readonly root: BoundRoot;
@@ -27,16 +27,14 @@ export async function readWithdrawalExemption(
   context?: RequestContext,
 ): Promise<WithdrawalExemption | undefined> {
   const { client, ringProgramId, config, demand, approvalRequired } = input;
-  const signer = (withdrawalExempt: boolean) =>
-    checkRingCoSigner({
-      ringProgramId,
-      configured: config.coSigner,
-      supplied: config.coSigner?.signer,
-      demand,
-      approvalRequired,
-      withdrawalExempt,
-    });
-  if (demand.withdrawals.length === 0 || signer(false) === undefined || signer(true) !== undefined)
+  const required = (withdrawalExempt: boolean) =>
+    coSignRequirement({ ringProgramId, config, demand, approvalRequired, withdrawalExempt });
+  // The proof can waive only withdrawals, never approval, transfers or deposits.
+  if (
+    demand.withdrawals.length === 0 ||
+    required(false) === undefined ||
+    required(true) !== undefined
+  )
     return undefined;
   let root = input.own;
   if (root === undefined) {

@@ -348,8 +348,8 @@ mod tests {
             assert_eq!(args.mint, Some(Mint(spr_transaction::SOL_MINT)));
         }
         assert_eq!(parse(&[]).expect("defaults").count, 24);
-        assert!(parse(&["--count", "50"]).is_ok());
-        assert!(parse(&["--count", "51"]).is_err());
+        assert!(parse(&["--count", "49"]).is_ok());
+        assert!(parse(&["--count", "50"]).is_err());
         assert!(parse(&["--count", "52"]).is_err());
         assert!(parse(&["--count", "1"]).is_err());
     }

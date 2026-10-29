@@ -35,7 +35,7 @@ Then by layout:
 - Delivered: `HashChain4(output hashes)`, `HashChain4(body hash per slot)`, `HashChain4(disclosure)`, `HashChain4(pack_be(u) per slot)`. A body hash is `hash_bytes(body)`, and an exit contributes `0` and two zero key fields.
 - Anonymous: `HashChain4(output hashes)`, `HashChain4(disclosure)`, `private_tx_hash`, `sender_commitment`, `party_0`, `party_1`, `party_2`. No tag and no body enters it.
 
-The sender commitment comes from the frame, `0` without a policy. The party identities are `solana_owner_identity` of the payer, the configured co-signer and the withdrawal destination, each `0` when absent.
+The sender commitment comes from the frame, `0` without a policy. The party identities are `solana_owner_identity` of the payer, the signing co-signer and the withdrawal destination, each `0` when absent.
 
 The delivered statement carries no `private_tx_hash`. They bind the transfer through the first nullifier, the outputs, `tx_viewing_pk`, the salt and the auditor message. SPP's `external_data_hash` covers the outputs, `tx_viewing_pk`, the salt and the message, and the SPP proof binds the first nullifier as a public input.
 
@@ -105,4 +105,4 @@ statement    = HashChain([ CRDP, context_hash, right_align(count), right_align(a
   party_0, party_1, party_2, right_align(key_escrow), member_registry_root ]
 ```
 
-The salt is the SPP merge output salt. The party identities are the payer, the configured co-signer and `0`. `key_escrow` is `mode == ConfidentialEscrow`, and then `member_registry_root` is the own root at `registry_root_index`, else `0`. SPP's merge proof binds the same `private_tx_hash` and nullifiers.
+The salt is the SPP merge output salt. The party identities are the payer, the signing co-signer and `0`. `key_escrow` is `mode == ConfidentialEscrow`, and then `member_registry_root` is the own root at `registry_root_index`, else `0`. SPP's merge proof binds the same `private_tx_hash` and nullifiers.
