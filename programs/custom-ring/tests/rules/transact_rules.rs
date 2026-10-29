@@ -17,9 +17,8 @@ use spr_interface::{
 };
 
 use crate::common::{
-    config_pda, delegate_ring, off_curve_g2, on_curve_g2, policy_pda,
-    reaches_verification, refused, ring_auth, set_co_signer, transact, CoSignerSlot,
-    Ring, Sent, Setup, SYSTEM,
+    config_pda, delegate_ring, off_curve_g2, on_curve_g2, policy_pda, reaches_verification,
+    refused, ring_auth, set_co_signer, transact, CoSignerSlot, Ring, Sent, Setup, SYSTEM,
 };
 
 pub const SPP: Address = Address::new_from_array(SHIELDED_POOL_PROGRAM_ID);
@@ -199,7 +198,11 @@ fn payer_owner(ring: &Ring) -> Vec<AccountMeta> {
 }
 
 /// A confidential transfer from the payer, `prefix` after the config.
-pub fn confidential(ring: &mut Ring, prefix: Vec<AccountMeta>, data: &RingTransactData<'_>) -> Sent {
+pub fn confidential(
+    ring: &mut Ring,
+    prefix: Vec<AccountMeta>,
+    data: &RingTransactData<'_>,
+) -> Sent {
     let spp = spp_list(&ring.payer.pubkey(), data, &payer_owner(ring));
     send(
         ring,
@@ -410,11 +413,7 @@ fn a_key_escrow_bit_off_the_ring_mode_is_refused() {
     );
 
     let mut registry_ring = delegate_ring(&Keypair::new());
-    reaches_verification(confidential(
-        &mut registry_ring,
-        vec![policy_meta()],
-        &data,
-    ));
+    reaches_verification(confidential(&mut registry_ring, vec![policy_meta()], &data));
     data.key_escrow = false;
     fixture.disclose(&mut data);
     refused(

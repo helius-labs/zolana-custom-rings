@@ -298,7 +298,13 @@ fn set_source(ctx: &Context, list_id: ListId, source: SourceOwner) -> Result<()>
         .instruction()?;
         let mut instructions = vec![point];
         if let SourceOwner::Curator(registry) = source {
-            instructions.push(SyncRoots { ring: ctx.ring, registry }.instruction());
+            instructions.push(
+                SyncRoots {
+                    ring: ctx.ring,
+                    registry,
+                }
+                .instruction(),
+            );
         }
         ctx.send(&[authority], &instructions)?;
         "created"

@@ -15,9 +15,7 @@ use spr_interface::instruction::instruction_data::deposit::RingDepositIxDataRef;
 use crate::instructions::{
     deposit_audit::{AuditedDeposit, DepositVerification},
     instruction_runtime::RingAuth,
-    loader::{
-        check_funding_signer, load_config, load_policy, validate_spp_program, CoSignerSlot,
-    },
+    loader::{check_funding_signer, load_config, load_policy, validate_spp_program, CoSignerSlot},
     merge_disclosure::MergeAudit,
 };
 

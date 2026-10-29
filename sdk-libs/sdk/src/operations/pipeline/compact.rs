@@ -1,10 +1,9 @@
 //! The compact transact data a proven transfer owns, and its instruction.
 
 use custom_ring_interface::{
-    storage::Revision,
-    tag, AnonymousProofData, CustomRingProof, InputTrees, PlainGroth16Proof, PolicyProof,
-    RingOutput, RingProgramConfig, RingRail, RingTransactData, SenderBundle, AUDIT_CIPHERTEXT_LEN,
-    RING_DELIVERED_BODY_LEN,
+    storage::Revision, tag, AnonymousProofData, CustomRingProof, InputTrees, PlainGroth16Proof,
+    PolicyProof, RingOutput, RingProgramConfig, RingRail, RingTransactData, SenderBundle,
+    AUDIT_CIPHERTEXT_LEN, RING_DELIVERED_BODY_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};

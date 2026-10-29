@@ -133,7 +133,10 @@ impl BoundRoot {
     }
 
     /// The newest root of the curator mirror, `None` without a curator source.
-    pub(crate) fn curator(ring: CustomRing, policy: &RingPolicy) -> Result<Option<Self>, RingError> {
+    pub(crate) fn curator(
+        ring: CustomRing,
+        policy: &RingPolicy,
+    ) -> Result<Option<Self>, RingError> {
         policy
             .curator()
             .map(|curator| Self::mirrored(ring, Mirror::Curator, &curator, &policy.curator_roots))

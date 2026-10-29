@@ -51,7 +51,9 @@ fn a_curator_sourced_blocklist_governs_the_subscriber_ring() -> Result<()> {
     let stored = policy_registry(subscriber, &env)?;
     assert_eq!(
         stored.registry_for(ListId::Block),
-        Some(ListRegistry::Curator(policy_registry(curator, &env)?.records)),
+        Some(ListRegistry::Curator(
+            policy_registry(curator, &env)?.records
+        )),
         "the Block slot names the curator registry"
     );
     assert_eq!(stored.generation(), 1);

@@ -3,9 +3,9 @@
 use async_trait::async_trait;
 use curve25519_dalek::constants::{ED25519_BASEPOINT_POINT, EIGHT_TORSION};
 use custom_ring_interface::{
-    CreateConfigIxData, CreatePolicyIxData, CustomRingMergeIxData, CustomRingMergeIxDataRef, MemberWriteIxData,
-    MergeDisclosure, PolicyTableIxData, ReadAccessRecord, ReaderIxData, RingMode,
-    RingProgramConfig, SetCoSignerRecordIxData, SetInsertFeeIxData, SetPausedIxData,
+    CreateConfigIxData, CreatePolicyIxData, CustomRingMergeIxData, CustomRingMergeIxDataRef,
+    MemberWriteIxData, MergeDisclosure, PolicyTableIxData, ReadAccessRecord, ReaderIxData,
+    RingMode, RingProgramConfig, SetCoSignerRecordIxData, SetInsertFeeIxData, SetPausedIxData,
     SetPolicySourceIxData, SourceSpec, AUDIT_CIPHERTEXT_LEN, DEFAULT_INSERT_FEE,
     READ_ACCESS_RECORD_PDA_SEED, RING_PROGRAM_CONFIG,
 };

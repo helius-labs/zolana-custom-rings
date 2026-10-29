@@ -13,12 +13,12 @@ mod cosign_usage;
 #[path = "storage/database.rs"]
 mod database;
 mod error;
+#[path = "operations/escrow_merge.rs"]
+mod escrow_merge;
 #[path = "storage/grant_rows.rs"]
 mod grant_rows;
 #[path = "security/grants.rs"]
 mod grants;
-#[path = "operations/escrow_merge.rs"]
-mod escrow_merge;
 #[path = "operations/hub.rs"]
 mod hub;
 #[path = "security/keys.rs"]
@@ -71,8 +71,8 @@ pub use config::{
     KeygenArgs, RootSecret, RootSecretError, ServeArgs,
 };
 pub use cosign::{
-    AssetFlow, CoSignDecision, CoSignError, CoSignRefusal, CoSignRequest, CoSignSettlement,
-    CoSignPolicy, RefusingCoSigner,
+    AssetFlow, CoSignDecision, CoSignError, CoSignPolicy, CoSignRefusal, CoSignRequest,
+    CoSignSettlement, RefusingCoSigner,
 };
 pub use cosign_limits::{
     AssetCheck, AssetLimitSource, LimitDecision, LimitedCoSigner, LimitedCoSignerInit, WindowUsage,

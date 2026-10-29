@@ -12,8 +12,7 @@ use custom_ring_interface::{
     AppliedAt, CoSignScope, CoSigner, CoSignerCounts, EscrowKey, MemberRegistry, QueueEntry,
     RecordQueue, RingMode, RingPolicy, RingProgramConfig, SourceSlot, CONFIG_PDA_SEED, CO_SIGNER,
     DEFAULT_INSERT_FEE, MEMBER_REGISTRY_PDA_SEED, N_SOURCE_SLOTS, RECORD_QUEUE_PDA_SEED,
-    RING_POLICY_PDA_SEED,
-    RING_PROGRAM_CONFIG,
+    RING_POLICY_PDA_SEED, RING_PROGRAM_CONFIG,
 };
 use solana_account::Account;
 use solana_address::Address;
@@ -37,9 +36,9 @@ use spr_transaction::{utxo::SppProofInputUtxo, Data, Mint, Utxo, WalletUtxo};
 use spr_tree::{TreeAccount, UTXO_TREE_HEIGHT};
 use zolana_ring_client::{AsyncRingIndexer, RingIndexerError, ViewingHistory};
 use zolana_ring_indexer::rpc::{
-    GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse,
-    GetStorageRecordPoolRequest, GetStorageRecordPoolResponse, RingIndexedMemberRecordView,
-    RingMemberOpening, RingMemberRecordView, RingRecordPathView, StorageRootView,
+    GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse, GetStorageRecordPoolRequest,
+    GetStorageRecordPoolResponse, RingIndexedMemberRecordView, RingMemberOpening,
+    RingMemberRecordView, RingRecordPathView, StorageRootView,
 };
 use zolana_ring_member_registry::{
     Canopy, MemberRecord, MemberRegistryTree, RecordOpening, RecordTree,

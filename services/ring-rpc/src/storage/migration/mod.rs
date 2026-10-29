@@ -1,10 +1,10 @@
 use sea_orm_migration::prelude::*;
 
-mod records_000001_queue;
-mod grants;
-mod relay_000001_relays;
 mod cosign_m20261029_000001_usage;
+mod grants;
 mod merge_0001_settings;
+mod records_000001_queue;
+mod relay_000001_relays;
 
 pub struct Migrator;
 

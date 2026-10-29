@@ -32,8 +32,8 @@ use crate::{
     },
     statement::{AnonymousAudit, AuditHead, AuditKind, AuditStatement, PolicyKey},
     storage::Revision,
-    tagged_x25519, AuditorMessage, CustomRingProof, InstructionTag, PlainGroth16Proof, RingPolicy,
-    RingMode, RingProgramConfig, AUDIT_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
+    tagged_x25519, AuditorMessage, CustomRingProof, InstructionTag, PlainGroth16Proof, RingMode,
+    RingPolicy, RingProgramConfig, AUDIT_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
 };
 
 const ZERO_FIELD: [u8; 32] = [0; 32];

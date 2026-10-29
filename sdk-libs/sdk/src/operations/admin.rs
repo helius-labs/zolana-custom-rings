@@ -4,8 +4,7 @@ use custom_ring_interface::SYSTEM_PROGRAM_ID;
 use custom_ring_interface::{
     compute_unit_limit, tag, CoSignScope, CreateConfigIxData, CreatePolicyIxData, InstructionTag,
     PolicyTableIxData, ReaderIxData, RingKind, SetCoSignerRecordIxData, SetInsertFeeIxData,
-    SetPausedIxData,
-    SetPolicySourceIxData, SourceSpec,
+    SetPausedIxData, SetPolicySourceIxData, SourceSpec,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};

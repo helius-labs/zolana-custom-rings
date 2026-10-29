@@ -175,7 +175,9 @@ fn the_config_authority_re_pins_the_table_of_a_live_ring() -> Result<()> {
     assert!(repointed.generation_slot() > repinned.generation_slot());
     assert_eq!(
         repointed.registry_for(ListId::Block),
-        Some(ListRegistry::Curator(policy_registry(rings.curator, env)?.records))
+        Some(ListRegistry::Curator(
+            policy_registry(rings.curator, env)?.records
+        ))
     );
     assert_eq!(repointed.rule_table()?, APPROVAL_OR_UNBLOCKED);
     egress.to(&clean, &utxos[1]).land()?;
@@ -208,7 +210,9 @@ fn a_curated_block_list_yields_to_the_subscribers_own_approval_list() -> Result<
     assert!(pinned.generation_slot() > 0);
     assert_eq!(
         pinned.registry_for(ListId::Block),
-        Some(ListRegistry::Curator(policy_registry(rings.curator, env)?.records))
+        Some(ListRegistry::Curator(
+            policy_registry(rings.curator, env)?.records
+        ))
     );
     assert_eq!(
         pinned.registry_for(ListId::Approval),

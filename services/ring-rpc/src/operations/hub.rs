@@ -519,7 +519,12 @@ impl<S: TransactionSource> HubBuilder<S> {
             .store
             .clone()
             .filter(|_| self.encrypted_grants)
-            .map(|store| Ok::<_, RingRpcError>(GrantRows::new(store, GrantRowKey::derive(secret.as_slice())?)))
+            .map(|store| {
+                Ok::<_, RingRpcError>(GrantRows::new(
+                    store,
+                    GrantRowKey::derive(secret.as_slice())?,
+                ))
+            })
             .transpose()?;
         let assets = match self.assets {
             Some(assets) => assets,

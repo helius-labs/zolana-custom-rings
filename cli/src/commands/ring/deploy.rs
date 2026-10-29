@@ -506,8 +506,8 @@ mod tests {
         assert!(ensure_policy_compatible(program, Some(&pinned)).is_ok());
         let short = [0; RingPolicy::SIZE - 1];
         assert!(ensure_policy_compatible(program, Some(&account(foreign, &short))).is_ok());
-        let refused = ensure_policy_compatible(program, Some(&account(program, &short)))
-            .expect_err("short");
+        let refused =
+            ensure_policy_compatible(program, Some(&account(program, &short))).expect_err("short");
         assert!(refused.to_string().contains(&format!(
             "of {} bytes, the release needs {}",
             RingPolicy::SIZE - 1,

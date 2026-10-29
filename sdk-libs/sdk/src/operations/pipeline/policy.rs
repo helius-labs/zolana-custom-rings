@@ -2,7 +2,9 @@
 
 use std::collections::BTreeSet;
 
-use custom_ring_interface::{key_catalog::RingCircuit, PolicyKey, PolicyStatement, RingMode, RingRail};
+use custom_ring_interface::{
+    key_catalog::RingCircuit, PolicyKey, PolicyStatement, RingMode, RingRail,
+};
 use serde::Serialize;
 use solana_address::Address;
 use spr_client::AsyncRpc;

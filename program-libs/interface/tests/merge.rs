@@ -5,9 +5,8 @@ mod common;
 use std::ops::Range;
 
 use custom_ring_interface::{
-    storage::Revision,
-    merge_disclosure_field_count, CustomRingError, CustomRingMergeIxData, CustomRingMergeIxDataRef,
-    CustomRingProof, MergeDisclosure, PlainGroth16Proof,
+    merge_disclosure_field_count, storage::Revision, CustomRingError, CustomRingMergeIxData,
+    CustomRingMergeIxDataRef, CustomRingProof, MergeDisclosure, PlainGroth16Proof,
 };
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
 use spr_interface::instruction::instruction_data::merge_transact::{

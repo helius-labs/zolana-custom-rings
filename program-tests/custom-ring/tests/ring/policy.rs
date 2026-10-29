@@ -218,7 +218,8 @@ fn the_key_escrow_lifecycle_ends_in_a_delegate_move() -> Result<()> {
     let nullifier_key = escrowed.sealed.open(&auditor)?;
     assert_eq!(nullifier_key.pubkey()?, member_address.nullifier_pubkey);
     assert_eq!(
-        env.run(ring.require_registry(env.client.as_async()))?.next_index(),
+        env.run(ring.require_registry(env.client.as_async()))?
+            .next_index(),
         2,
         "one registered member plus sentinel"
     );

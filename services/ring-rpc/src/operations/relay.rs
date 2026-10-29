@@ -19,7 +19,7 @@ use zolana_ring_policy::Member;
 
 use crate::{
     cosign::{
-        AssetFlow, CoSignDecision, CoSignRefusal, CoSignRequest, CoSignSettlement, CoSignPolicy,
+        AssetFlow, CoSignDecision, CoSignPolicy, CoSignRefusal, CoSignRequest, CoSignSettlement,
         RefusingCoSigner,
     },
     database::Store,

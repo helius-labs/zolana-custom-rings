@@ -58,14 +58,17 @@ pub(crate) fn read_curator(
     );
     let mut reads = Vec::with_capacity(members.len());
     for chunk in members.chunks(MAX_RING_MEMBER_PAGE_LIMIT as usize) {
-        let response = ctx
-            .zolana
-            .indexer()
-            .get_storage_member_openings(GetStorageMemberOpeningsRequest {
-                registry: registry.into(),
-                members: chunk.iter().map(|member| Hash(*member.as_bytes())).collect(),
-                expected_root: Hash(newest.hash),
-            })?;
+        let response =
+            ctx.zolana
+                .indexer()
+                .get_storage_member_openings(GetStorageMemberOpeningsRequest {
+                    registry: registry.into(),
+                    members: chunk
+                        .iter()
+                        .map(|member| Hash(*member.as_bytes()))
+                        .collect(),
+                    expected_root: Hash(newest.hash),
+                })?;
         ensure!(
             response.openings.len() == chunk.len(),
             "the indexer served {} openings for {} members",

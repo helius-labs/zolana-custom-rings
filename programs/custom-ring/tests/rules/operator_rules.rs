@@ -17,7 +17,8 @@ use crate::common::{
     allow_list_table, auditor_pubkey, co_signer_record, config_pda, config_write, create_config,
     create_member_registry, create_policy, list_table, policy_pda, policy_write, program_data_of,
     queue_pda, refused, refused_with, ring_auth, set_co_signer, set_delegate, within_budget,
-    write_records, ClearCoSignerIx, Fee, Ring, Sent, SetCoSignerIx, Setup, PROGRAM, RECORDS, SYSTEM,
+    write_records, ClearCoSignerIx, Fee, Ring, Sent, SetCoSignerIx, Setup, PROGRAM, RECORDS,
+    SYSTEM,
 };
 use crate::transact_rules::SPP;
 

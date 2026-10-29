@@ -3,9 +3,9 @@
 use async_trait::async_trait;
 use custom_ring_interface::SYSTEM_PROGRAM_ID;
 use custom_ring_interface::{
-    mint_policy_write, queue_chain, tag, ApplyRecordsIxData,
-    AuthorityWriteRecordsIxData, CustomRingError, MemberRegistry, MemberWriteIxData, QueueEntry,
-    RecordQueue, RecordWriteData, WriteRecordsIxData, APPLY_BATCH,
+    mint_policy_write, queue_chain, tag, ApplyRecordsIxData, AuthorityWriteRecordsIxData,
+    CustomRingError, MemberRegistry, MemberWriteIxData, QueueEntry, RecordQueue, RecordWriteData,
+    WriteRecordsIxData, APPLY_BATCH,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};

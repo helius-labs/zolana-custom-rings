@@ -3,10 +3,9 @@
 use bytemuck::Zeroable;
 use custom_ring_interface::{
     merge_disclosure_field_count, tag, AuditedDepositPrefix, CoSignScope, CustomRingError,
-    CustomRingMergeIxData, MergeDisclosure, RingDepositAuditCapsule,
-    AUDIT_CIPHERTEXT_LEN, MAX_RING_DEPOSIT_AUDIT_SLOTS, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN,
-    RING_DEPOSIT_DEPOSITOR_INDEX, RING_DEPOSIT_RING_CONFIG_INDEX, RING_MERGE_PAYER_INDEX,
-    RING_MERGE_RING_CONFIG_INDEX,
+    CustomRingMergeIxData, MergeDisclosure, RingDepositAuditCapsule, AUDIT_CIPHERTEXT_LEN,
+    MAX_RING_DEPOSIT_AUDIT_SLOTS, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN, RING_DEPOSIT_DEPOSITOR_INDEX,
+    RING_DEPOSIT_RING_CONFIG_INDEX, RING_MERGE_PAYER_INDEX, RING_MERGE_RING_CONFIG_INDEX,
 };
 use solana_address::Address;
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
@@ -99,7 +98,10 @@ fn merge(ring: &mut Ring, registry: Option<u64>) -> Sent {
 #[test]
 fn an_escrow_merge_revision_outside_the_own_mirror_is_refused() {
     let mut ring = delegate_ring(&Keypair::new());
-    refused(merge(&mut ring, Some(1)), CustomRingError::MirrorRootExpired);
+    refused(
+        merge(&mut ring, Some(1)),
+        CustomRingError::MirrorRootExpired,
+    );
     reaches_verification(merge(&mut ring, Some(0)));
 }
 

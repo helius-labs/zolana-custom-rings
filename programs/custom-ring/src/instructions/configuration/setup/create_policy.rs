@@ -59,6 +59,10 @@ pub fn process_create_policy_ix(
     }
     .bind()?;
     // 4. The pinned hash binds every later policy proof.
-    load_policy_mut(program_id, policy)?.set_policy(bound.sources, bound.rules, Clock::get()?.slot)?;
+    load_policy_mut(program_id, policy)?.set_policy(
+        bound.sources,
+        bound.rules,
+        Clock::get()?.slot,
+    )?;
     Ok(())
 }

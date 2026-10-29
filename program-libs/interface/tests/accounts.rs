@@ -2,8 +2,7 @@ use bytemuck::Zeroable;
 use custom_ring_interface::{
     queue_chain, AppliedAt, ApplyRecordsIxData, CustomRingError, MemberRegistry,
     PendingApplication, QueueEntry, RecordQueue, RingAccount, RingPolicy, RingProgramConfig,
-    SourceSlot,
-    WriteRecordsIxData, APPLY_DELAY_SLOTS, AUTHORITY_RESERVED_LEAVES, GRACE_SLOTS,
+    SourceSlot, WriteRecordsIxData, APPLY_DELAY_SLOTS, AUTHORITY_RESERVED_LEAVES, GRACE_SLOTS,
     MEMBER_QUEUE_LIMIT, MEMBER_REGISTRY_CAPACITY, MEMBER_REGISTRY_EMPTY_ROOT, N_SOURCE_SLOTS,
     QUEUE_CAPACITY, RING_PROGRAM_CONFIG,
 };

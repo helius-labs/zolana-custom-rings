@@ -702,9 +702,7 @@ impl Unwitnessed<'_> {
             roots: frame
                 .policy
                 .iter()
-                .flat_map(|policy| {
-                    core::iter::once(policy.own).chain(policy.curator)
-                })
+                .flat_map(|policy| core::iter::once(policy.own).chain(policy.curator))
                 .chain(
                     frame
                         .withdrawal_exemption

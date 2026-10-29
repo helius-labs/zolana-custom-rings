@@ -2,11 +2,11 @@ use bytemuck::{Pod, Zeroable};
 use custom_ring_interface::{
     compute_unit_limit,
     storage::{Revision, Root, StorageRegistry},
-    tag, ApplyRecordsIxData, AuthorityWriteRecordsIxData, CreateConfigIxData,
-    CreatePolicyIxData, CustomRingError, InstructionTag, MemberWriteIxData,
-    PolicyTableIxData, RecordWriteData, RegisterKeyIxData, RingKind, SetCoSignerRecordIxData,
-    SourceSpec, WriteRecordsIxData, CONFIG_PDA_SEED, CO_SIGNER_PDA_SEED, MEMBER_REGISTRY_PDA_SEED,
-    RECORD_QUEUE_PDA_SEED, RING_POLICY_PDA_SEED, STORAGE_PROGRAM_ID,
+    tag, ApplyRecordsIxData, AuthorityWriteRecordsIxData, CreateConfigIxData, CreatePolicyIxData,
+    CustomRingError, InstructionTag, MemberWriteIxData, PolicyTableIxData, RecordWriteData,
+    RegisterKeyIxData, RingKind, SetCoSignerRecordIxData, SourceSpec, WriteRecordsIxData,
+    CONFIG_PDA_SEED, CO_SIGNER_PDA_SEED, MEMBER_REGISTRY_PDA_SEED, RECORD_QUEUE_PDA_SEED,
+    RING_POLICY_PDA_SEED, STORAGE_PROGRAM_ID,
 };
 use litesvm::LiteSVM;
 use solana_account::Account;
@@ -149,7 +149,10 @@ impl Ring {
             InstructionTag::CreatePolicy,
             ring.send(policy, &[&authority]),
         );
-        within_budget(InstructionTag::SyncRoots, ring.send(sync_roots(&RECORDS), &[]));
+        within_budget(
+            InstructionTag::SyncRoots,
+            ring.send(sync_roots(&RECORDS), &[]),
+        );
         ring
     }
 

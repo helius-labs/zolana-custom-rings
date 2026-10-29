@@ -13,8 +13,8 @@ pub use render::render;
 
 use anyhow::{ensure, Context as _, Result};
 use custom_ring_interface::{ListRegistry, RingPolicy};
-use solana_address::Address;
 use custom_ring_sdk::{CustomRing, PinnedPolicy, PolicyRules, SyncRoots};
+use solana_address::Address;
 use solana_signer::Signer;
 use zolana_ring_policy::RuleTable;
 
@@ -142,7 +142,11 @@ pub(crate) fn verify_rows(compiled: &CompiledPolicy, pinned: &Pinned) -> Result<
 }
 
 /// Every referenced list reads the registry ring.toml names.
-pub(crate) fn verify_sources(ctx: &Context, compiled: &CompiledPolicy, pinned: &Pinned) -> Result<()> {
+pub(crate) fn verify_sources(
+    ctx: &Context,
+    compiled: &CompiledPolicy,
+    pinned: &Pinned,
+) -> Result<()> {
     let registry = |source: Option<ListRegistry>| match source {
         Some(ListRegistry::Own) => pinned.account.records,
         Some(ListRegistry::Curator(registry)) => registry,
@@ -199,8 +203,8 @@ fn compiled(ctx: &Context) -> Result<CompiledPolicy> {
 fn set(ctx: &Context, yes: bool) -> Result<()> {
     let program = ctx.ring.program_id();
     let (compiled, current) = (compiled(ctx)?, pinned(ctx)?);
-    let verified = verify_rows(&compiled, &current)
-        .and_then(|()| verify_sources(ctx, &compiled, &current));
+    let verified =
+        verify_rows(&compiled, &current).and_then(|()| verify_sources(ctx, &compiled, &current));
     let mint_changes = mint_changes(ctx, &compiled)?;
     if verified.is_ok() && mint_changes.is_empty() {
         line("policy", "already present");

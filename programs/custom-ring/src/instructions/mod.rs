@@ -44,9 +44,9 @@ mod set_paused;
 mod set_policy_rules;
 #[path = "configuration/policy/set_policy_source.rs"]
 mod set_policy_source;
-mod transact;
 #[path = "records/sync_roots.rs"]
 mod sync_roots;
+mod transact;
 #[path = "verification/verifier.rs"]
 mod verifier;
 #[path = "records/write_records.rs"]

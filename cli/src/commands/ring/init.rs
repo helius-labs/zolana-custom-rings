@@ -416,27 +416,26 @@ impl PolicyPin<'_> {
         crate::records::write_mint_policies(ctx, &policy::mint_changes(ctx, policy)?)?;
         let mut pointed = false;
         for ((list, curator), (_, registry)) in policy.shared_sources.iter().zip(&shared_sources) {
-            let outcome = if pinned.account.registry_for(*list)
-                == Some(ListRegistry::Curator(*registry))
-            {
-                PRESENT
-            } else {
-                let point = SetSourceOwner {
-                    ring: ctx.ring,
-                    authority: authority.pubkey(),
-                    list_id: *list,
-                    source: SourceOwner::Curator(*registry),
-                }
-                .instruction()?;
-                let sync = SyncRoots {
-                    ring: ctx.ring,
-                    registry: *registry,
-                }
-                .instruction();
-                ctx.send(&[authority], &[point, sync])?;
-                pointed = true;
-                CREATED
-            };
+            let outcome =
+                if pinned.account.registry_for(*list) == Some(ListRegistry::Curator(*registry)) {
+                    PRESENT
+                } else {
+                    let point = SetSourceOwner {
+                        ring: ctx.ring,
+                        authority: authority.pubkey(),
+                        list_id: *list,
+                        source: SourceOwner::Curator(*registry),
+                    }
+                    .instruction()?;
+                    let sync = SyncRoots {
+                        ring: ctx.ring,
+                        registry: *registry,
+                    }
+                    .instruction();
+                    ctx.send(&[authority], &[point, sync])?;
+                    pointed = true;
+                    CREATED
+                };
             line(
                 list.name(),
                 format_args!("curator {} {outcome}", curator.program_id()),

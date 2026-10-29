@@ -9,8 +9,8 @@ use thiserror::Error;
 use zolana_ring_indexer::rpc::{
     method::{
         GetRingApplyProofInputs, GetRingMemberOpenings, GetRingMemberRecord, GetRingMemberRecords,
-        GetRingMemberRegistryRoot, GetRingRecordPool, GetRingRecordQueue, GetStorageApplyProofInputs,
-        GetStorageMemberOpenings, GetStorageRecordPool,
+        GetRingMemberRegistryRoot, GetRingRecordPool, GetRingRecordQueue,
+        GetStorageApplyProofInputs, GetStorageMemberOpenings, GetStorageRecordPool,
     },
     RingRpcError,
 };

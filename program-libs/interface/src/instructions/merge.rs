@@ -7,8 +7,8 @@ use spr_interface::instruction::instruction_data::merge_transact::MergeTransactI
 use wincode::{containers, len::FixIntLen, SchemaRead, SchemaWrite};
 
 use crate::{
-    bytes::Bytes, error::CustomRingError, storage::Revision, CustomRingProof,
-    AUDIT_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
+    bytes::Bytes, error::CustomRingError, storage::Revision, CustomRingProof, AUDIT_CIPHERTEXT_LEN,
+    TAGGED_X25519_KEY_LEN,
 };
 
 /// Owner key, nullifier pk, mint, amount and output blinding ahead of the input commitments.

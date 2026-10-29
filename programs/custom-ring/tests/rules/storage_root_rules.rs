@@ -9,8 +9,8 @@ use zolana_ring_policy::ListId;
 
 use crate::{
     common::{
-        allow_list_table, policy_write, reaches_verification, refused, retired, root,
-        sync_roots, Ring, Setup, RECORDS,
+        allow_list_table, policy_write, reaches_verification, refused, retired, root, sync_roots,
+        Ring, Setup, RECORDS,
     },
     transact_rules::{confidential, policy_meta, Fixture},
 };

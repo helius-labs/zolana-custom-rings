@@ -11,10 +11,10 @@ mod authorization;
 mod backfill;
 #[path = "audit_service/deposits.rs"]
 mod deposits;
-#[path = "audit_service/record_updates.rs"]
-mod record_updates;
 #[path = "audit_service/reader_grants.rs"]
 mod reader_grants;
+#[path = "audit_service/record_updates.rs"]
+mod record_updates;
 #[path = "../../../sdk-libs/client/tests/common/transfer.rs"]
 pub mod transfer;
 

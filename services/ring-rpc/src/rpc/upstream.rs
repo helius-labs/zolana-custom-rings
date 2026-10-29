@@ -31,8 +31,7 @@ use spr_transaction::{AssetRegistry, Mint, SOL_MINT};
 use std::num::NonZeroUsize;
 use zolana_ring_client::{
     program_data, ring_deposits_in, AsyncRingIndexer, AuditError, ConfirmedEventKind,
-    MemberOpeningRead, MergeAudit, MergeAuditPage, RingIndexerError, RingOrigin,
-    TransactionOrigin,
+    MemberOpeningRead, MergeAudit, MergeAuditPage, RingIndexerError, RingOrigin, TransactionOrigin,
 };
 use zolana_ring_indexer::rpc::{
     GetRingMemberOpeningsRequest, GetRingMemberOpeningsResponse, GetRingMemberRecordsRequest,
