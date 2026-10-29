@@ -113,6 +113,16 @@ The leaf commits only the hash of an escrow envelope. The ephemeral key and ciph
 | -32148 | An escrow registration proof does not verify |
 | -32149 | `getRecordUpdateStatus` names no stored update |
 
+## Co-signer limits
+
+`LimitedCoSigner` implements the `CoSigner` trait the relay calls before it submits a transaction that demands the co-signer. It reads each asset's `AssetLimits` from the asset's record in the ring's own storage registry, checks the opening against the registry's newest root, and signs only when every limit holds. [Co-signer limits](../../docs/spec.md#co-signer-limits) in the spec gives each limit and its window.
+
+A signature reserves its flows in the `cosign_usage` table, keyed by the co-signature and the asset. `settle` keeps a confirmed reservation and deletes a failed or expired one, and a repeat of either changes nothing. The relay passes the co-signature to `settle`, since it names the transaction before the fee payer signs. A reservation the relay never settles counts until its window passes. The reservation lock lives in process memory, so run one co-signer process for each store.
+
+The co-signer key derives from the auditor key or the root secret, as the service key does, under its own HKDF domain. `serve` logs its public key for the ring's `CoSigner` record.
+
+Co-signer errors are `-32160` disabled, `-32161` over a limit, `-32162` an asset named twice and `-32163` unreadable limits.
+
 ## Audit result
 
 `outputs` lists every slot whose opening rebuilds its published UTXO hash. Each carries its tree context and, unless its `kind` is `dummy`, the UTXO. A confidential or delegate ring output also carries the recipient key, and an anonymous ring output carries its view tag instead. `payloadErrors` names every other slot and why. `frame` is a delivered slot without a body of its layout. `disclosure` is a slot whose disclosure bytes do not parse under the layout. `recipientKey` is a delivered recipient key with no X25519 agreement. `commitment` is an opening that hashes to another UTXO hash. `escrowUnknown` is an owner whose escrowed nullifier key the background backfill has not read from the registry. An asset the registry does not know keeps its opening without a mint.

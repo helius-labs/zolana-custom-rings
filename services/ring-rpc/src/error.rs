@@ -11,7 +11,10 @@ use zolana_ring_client::{
 };
 use zolana_ring_policy::MemberError;
 
-use crate::{authorize::Unauthorized, record_update::RecordUpdateRefusal, relay::RelayError};
+use crate::{
+    authorize::Unauthorized, cosign::CoSignError, record_update::RecordUpdateRefusal,
+    relay::RelayError,
+};
 
 #[derive(Debug, Error)]
 pub enum RingRpcError {
@@ -59,6 +62,8 @@ pub enum RingRpcError {
     InvalidGrantRow,
     #[error(transparent)]
     Relay(#[from] RelayError),
+    #[error(transparent)]
+    CoSign(#[from] CoSignError),
 }
 
 impl From<custom_ring_sdk::RingError> for RingRpcError {
@@ -192,6 +197,7 @@ impl From<RingRpcError> for ErrorObjectOwned {
                 error!("stored grant row does not open under the service key");
                 (ErrorCode::InternalError, "audit service is unavailable")
             }
+            CoSign(inner) => return (*inner).into(),
         };
         ErrorObjectOwned::owned(code.code(), message, None::<()>)
     }

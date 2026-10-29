@@ -1,8 +1,10 @@
 use async_trait::async_trait;
 use custom_ring_interface::cosign::CoSignDemand;
+use jsonrpsee::types::ErrorObjectOwned;
 use solana_address::Address;
 use solana_message::VersionedMessage;
 use solana_signature::Signature;
+use thiserror::Error;
 use zolana_ring_policy::Member;
 
 use crate::error::RingRpcError;
@@ -38,10 +40,44 @@ pub enum CoSignRefusal {
     OverLimit,
 }
 
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
+#[repr(i32)]
+pub enum CoSignError {
+    #[error("co-signing is disabled")]
+    Disabled = -32160,
+    #[error("the transaction exceeds a co-signer limit")]
+    OverLimit = -32161,
+    #[error("the co-sign request names an asset twice")]
+    RepeatedAsset = -32162,
+    #[error("the asset limits are unreadable")]
+    LimitsUnavailable = -32163,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoSignSettlement {
     Confirmed(Signature),
     Failed(Signature),
+}
+
+impl CoSignError {
+    pub const fn code(self) -> i32 {
+        self as i32
+    }
+}
+
+impl From<CoSignRefusal> for CoSignError {
+    fn from(refusal: CoSignRefusal) -> Self {
+        match refusal {
+            CoSignRefusal::Disabled => Self::Disabled,
+            CoSignRefusal::OverLimit => Self::OverLimit,
+        }
+    }
+}
+
+impl From<CoSignError> for ErrorObjectOwned {
+    fn from(error: CoSignError) -> Self {
+        Self::owned(error.code(), error.to_string(), None::<()>)
+    }
 }
 
 #[async_trait]
@@ -62,5 +98,23 @@ impl CoSigner for RefusingCoSigner {
 
     async fn settle(&self, _settlement: CoSignSettlement) -> Result<(), RingRpcError> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cosign_error_codes_are_stable() {
+        use CoSignError::*;
+        for (error, code) in [
+            (Disabled, -32160),
+            (OverLimit, -32161),
+            (RepeatedAsset, -32162),
+            (LimitsUnavailable, -32163),
+        ] {
+            assert_eq!(ErrorObjectOwned::from(error).code(), code);
+        }
     }
 }

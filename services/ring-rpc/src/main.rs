@@ -139,6 +139,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         );
         tokio::spawn(relay.clone().run(RELAY_TRACK_INTERVAL));
     }
+    info!("co-signer pubkey {}", hub.co_signer_keypair()?.pubkey());
     match (hub.mode(), hub.local_view_tag()) {
         (KeyMode::Local, Some(tag)) => info!(
             "ring-rpc listening on {}:{} for auditor tag {}",

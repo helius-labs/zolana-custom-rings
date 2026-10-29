@@ -11,6 +11,8 @@ const DERIVATION_INFO: &[u8] = b"zolana/ring-auditor/v1";
 const SERVICE_KEY_INFO: &[u8] = b"zolana/ring-rpc-service/v1";
 /// Keys the storage authority, apart from every auditor and service key.
 const STORAGE_AUTHORITY_KEY_INFO: &[u8] = b"zolana/ring-rpc-storage-authority/v1";
+/// The ring's `CoSigner` record names the key, a new domain orphans the record.
+const CO_SIGNER_KEY_INFO: &[u8] = b"zolana/ring-rpc-co-signer/v1";
 /// Keys the encrypted grant rows, apart from every auditor and service key.
 pub const GRANT_ROW_KEY_INFO: &[u8] = b"zolana/ring-rpc-grant-rows/v1";
 /// Part of the pinned derivation info of every registered auditor key.
@@ -68,6 +70,10 @@ pub(crate) fn storage_authority_keypair(secret: &[u8]) -> Result<Keypair, RingRp
     derived_keypair(secret, STORAGE_AUTHORITY_KEY_INFO)
 }
 
+pub(crate) fn co_signer_keypair(secret: &[u8]) -> Result<Keypair, RingRpcError> {
+    derived_keypair(secret, CO_SIGNER_KEY_INFO)
+}
+
 fn derived_keypair(secret: &[u8], info: &[u8]) -> Result<Keypair, RingRpcError> {
     let mut seed = Zeroizing::new([0u8; 32]);
     hkdf::Hkdf::<sha2::Sha256>::new(None, secret)
@@ -104,6 +110,13 @@ mod tests {
                 .pubkey()
                 .to_string(),
             "FQ7ZZ4DEkoubT5Ca9BzzbgXDTmjKdRh6a3snGfPjpEZT"
+        );
+        assert_eq!(
+            co_signer_keypair(root.as_bytes())
+                .expect("co-signer key")
+                .pubkey()
+                .to_string(),
+            "5oaC2RxDhvQn7ionYhv2bDFCrXYaU4kQF1GDSDsTGBC4"
         );
     }
 }

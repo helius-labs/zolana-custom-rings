@@ -3,6 +3,7 @@ use sea_orm_migration::prelude::*;
 mod records_000001_queue;
 mod grants;
 mod relay_000001_relays;
+mod cosign_m20261029_000001_usage;
 
 pub struct Migrator;
 
@@ -13,6 +14,7 @@ impl MigratorTrait for Migrator {
             Box::new(records_000001_queue::Migration),
             Box::new(grants::Migration),
             Box::new(relay_000001_relays::Migration),
+            Box::new(cosign_m20261029_000001_usage::Migration),
         ]
     }
 }

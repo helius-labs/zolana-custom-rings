@@ -27,7 +27,10 @@ use crate::{
     error::{redacted, RingRpcError},
     grant_rows::{GrantRowKey, GrantRows},
     grants::{GrantQuery, GrantSource, ReadScope, TreeGrants},
-    keys::{service_keypair, storage_authority_keypair, AuditorKeyDerivation, KeySource},
+    keys::{
+        co_signer_keypair, service_keypair, storage_authority_keypair, AuditorKeyDerivation,
+        KeySource,
+    },
     limits::{
         PublicRequest, RequestRate, MAX_CONCURRENT_AUTHENTICATIONS, MAX_CONCURRENT_DEPOSIT_SCANS,
         MAX_CONCURRENT_READS,
@@ -263,6 +266,10 @@ impl<S: TransactionSource> Hub<S> {
         self.writer
             .as_ref()
             .ok_or_else(|| RecordUpdateRefusal::Disabled.into())
+    }
+
+    pub fn co_signer_keypair(&self) -> Result<Keypair, RingRpcError> {
+        co_signer_keypair(self.keys.service_secret().as_slice())
     }
 
     pub(crate) fn sign_attestation(&self, attestation: &[u8]) -> Signature {
