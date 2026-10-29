@@ -1406,7 +1406,7 @@ Holds the auditor key and serves audited history to readers.
 - `ringDeposits`, `ringStatus` and `health` need no signature.
 - With a fee payer key, a store and a ring prover it relays transfers. The wallet seals the transfer and sends its proof inputs with the nullifier secret, the transaction viewing secret and the audit ephemeral secret. The service reads the record openings and SPP Merkle paths, proves every statement and pays the fees. On the anonymous and confidential rails it verifies the owner's Ed25519 signature over `SppProofInputs::message_hash` before it proves. On the anonymous rail that signature is the prepared owner authorization of the SPP proof, and the service sends at once. On the confidential and delegate rails it returns the v1 message and sends once each owner or the delegate has signed it. It does not relay deposits or merges.
 - A relay is stored by its `relayId` with its message and signatures, never its proof inputs. A repeated request returns the stored relay. The co-signer signs before the send and settles when the relay confirms or fails. A relay that has not landed when its blockhash expires fails.
-- A `LimitedCoSigner` signs a transaction only under the [co-signer limits](#co-signer-limits).
+- The relay co-signs through a `LimitedCoSigner`, only under the [co-signer limits](#co-signer-limits).
 - `setMergeSettings` stores a wallet's target note count and minimum average amount for one mint. The wallet signs them under `zolana/ring-rpc-merge-settings/v1` with the cluster, service key, ring, timestamp and nonce, and the service verifies the signature under the named owner. A later signed request replaces them, and a zero target revokes them.
 - On a `ConfidentialEscrow` ring a host that runs the service with a relay merges a wallet's notes toward its settings. It opens the wallet's escrowed nullifier secret with the auditor key, proves one merge of the smallest notes and sends it through the relay. The merge carries no owner signature.
 - Every audited row is bound to the confirmed SPP event the service rebuilds from Solana `getTransaction`. Photon is trusted for completeness only. A row Photon omits, or labels with no ring, never reaches a reader, and no client detects the gap.
@@ -1415,14 +1415,14 @@ A reader receives each output's owner key, nullifier key, asset, amount and blin
 
 #### Co-signer limits
 
-Each asset's record in the ring's own storage registry holds `AssetLimits`, six u64 values. Ring RPC reads them under the registry's newest root before it co-signs, and checks every opening against that root. A ring without a `RingPolicy` account has no limits. A zero cap is no cap.
+Each asset's record in the ring's own storage registry holds `AssetLimits`, eight u64 values. Ring RPC reads them under the newest own root the ring policy mirrors, one a transfer can prove against, and checks every opening against that root. A ring without a `RingPolicy` account, or before its first `SyncRoots`, has no limits. A zero cap is no cap.
 
 | Limit | Bounds, per asset |
 |---|---|
 | `sender_cap` over `sender_window_slots` | What one sender transfers and withdraws |
 | `volume_cap` over `volume_window_slots` | What the ring transfers, deposits and withdraws |
-| `deposit_cap` over `volume_window_slots` | What the ring deposits |
-| `withdrawal_cap` over `volume_window_slots` | What the ring withdraws |
+| `deposit_cap` over `deposit_window_slots` | What the ring deposits |
+| `withdrawal_cap` over `withdrawal_window_slots` | What the ring withdraws |
 
 A window counts every reservation less than its length in slots before the current slot. A zero window counts the checked transaction alone. A co-signature reserves the transaction's flows under its own signature, in the database transaction that read the window. `settle` with a confirmation keeps the reservation, and a failure, an expiry included, deletes it unless it was confirmed. A transaction never settled counts until its window passes. The same message signed again returns the same signature and reserves nothing more. The co-signer key derives from the auditor key or the root secret with HKDF-SHA256 under `zolana/ring-rpc-co-signer/v1`.
 

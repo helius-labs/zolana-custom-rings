@@ -9,12 +9,16 @@ mod audit_pages;
 mod authorization;
 #[path = "audit_service/backfill.rs"]
 mod backfill;
+#[path = "audit_service/cosign_relay.rs"]
+mod cosign_relay;
 #[path = "audit_service/deposits.rs"]
 mod deposits;
 #[path = "audit_service/reader_grants.rs"]
 mod reader_grants;
 #[path = "audit_service/record_updates.rs"]
 mod record_updates;
+#[path = "common/relay.rs"]
+mod relay_fixture;
 #[path = "../../../sdk-libs/client/tests/common/transfer.rs"]
 pub mod transfer;
 
@@ -33,7 +37,7 @@ use std::{
     time::Duration,
 };
 use zolana_ring_member_registry::{MemberRecord, MemberRegistryTree, RecordOpening, RecordTree};
-use zolana_ring_policy::{ListId, Member};
+use zolana_ring_policy::{ListId, Member, MintPolicy};
 
 use p256::ecdsa::signature::hazmat::PrehashSigner;
 use sha2::Digest;
@@ -674,6 +678,10 @@ impl TransactionSource for StaticSource {
         })
     }
 
+    async fn slot(&self) -> Result<u64, ClientError> {
+        Ok(relay_fixture::SLOT)
+    }
+
     async fn records_root(&self, _ring: Address) -> Result<Option<RecordsRoot>, ClientError> {
         Ok(Some(RecordsRoot {
             registry: RECORDS,
@@ -1240,6 +1248,19 @@ impl Records {
             .unwrap()
             .apply([0; 32], &[entry])
             .expect("record write");
+    }
+
+    fn write_mint_policy(&self, member: Member, policy: MintPolicy) {
+        let entry = QueueEntry {
+            member: *member.as_bytes(),
+            mint_policy: Some(policy),
+            ..QueueEntry::default()
+        };
+        self.0
+            .lock()
+            .unwrap()
+            .apply([0; 32], &[entry])
+            .expect("mint policy write");
     }
 
     fn root(&self) -> [u8; 32] {

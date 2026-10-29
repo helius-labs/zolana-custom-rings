@@ -522,6 +522,10 @@ mod tests {
             Err(ClientError::Rpc("unused source".to_owned()).into())
         }
 
+        async fn slot(&self) -> Result<u64, ClientError> {
+            Err(ClientError::Rpc("unused source".to_owned()))
+        }
+
         async fn records_root(&self, _ring: Address) -> Result<Option<RecordsRoot>, ClientError> {
             Ok(None)
         }

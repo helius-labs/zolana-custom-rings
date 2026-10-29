@@ -442,6 +442,10 @@ mod tests {
             Ok(unused()?)
         }
 
+        async fn slot(&self) -> Result<u64, ClientError> {
+            unused()
+        }
+
         async fn records_root(&self, _ring: Address) -> Result<Option<RecordsRoot>, ClientError> {
             unused()
         }

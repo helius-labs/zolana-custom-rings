@@ -6,7 +6,10 @@ use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signature::Signature;
 use solana_signer::Signer;
+use spr_indexer_api::Hash;
 use tokio::sync::Mutex;
+use zolana_ring_client::MemberOpeningRead;
+use zolana_ring_indexer::rpc::GetStorageMemberOpeningsRequest;
 use zolana_ring_policy::{AssetLimits, Member};
 
 use crate::{
@@ -17,6 +20,8 @@ use crate::{
     cosign_usage::{Reservation, Reserve, UsageLedger, UsageWindow},
     database::Store,
     error::RingRpcError,
+    hub::Shared,
+    upstream::{RecordsRoot, TransactionSource},
 };
 
 pub trait AssetLimitSource: Send + Sync {
@@ -29,6 +34,9 @@ pub trait AssetLimitSource: Send + Sync {
         assets: &[Address],
     ) -> impl Future<Output = Result<Vec<AssetLimits>, RingRpcError>> + Send;
 }
+
+/// Reads each asset record under the ring policy's newest mirrored own root, one transfers can prove against.
+pub(crate) struct MirroredLimits<S>(pub(crate) Arc<Shared<S>>);
 
 pub struct LimitedCoSignerInit<L> {
     pub signer: Keypair,
@@ -169,6 +177,51 @@ impl<L: AssetLimitSource> CoSignPolicy for LimitedCoSigner<L> {
             CoSignSettlement::Failed(signature) => ledger.free(&signature).await?,
         }
         Ok(())
+    }
+}
+
+impl<S: TransactionSource> AssetLimitSource for MirroredLimits<S> {
+    async fn current_slot(&self) -> Result<u64, RingRpcError> {
+        Ok(self.0.source.slot().await?)
+    }
+
+    /// Empty until the writer's first `SyncRoots`, sent with every storage update.
+    async fn asset_limits(
+        &self,
+        ring: Address,
+        assets: &[Address],
+    ) -> Result<Vec<AssetLimits>, RingRpcError> {
+        let source = &self.0.source;
+        let Some(RecordsRoot { registry, root }) = source.records_root(ring).await? else {
+            return Ok(vec![AssetLimits::EMPTY; assets.len()]);
+        };
+        let members = assets
+            .iter()
+            .map(|asset| Member::asset(asset).map(|member| *member.as_bytes()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| CoSignError::LimitsUnavailable)?;
+        let response = source
+            .storage_member_openings(GetStorageMemberOpeningsRequest {
+                registry: registry.into(),
+                members: members.iter().copied().map(Hash).collect(),
+                expected_root: Hash(root),
+            })
+            .await?;
+        if response.openings.len() != members.len() {
+            return Err(RingRpcError::InvalidIndexerResponse);
+        }
+        response
+            .openings
+            .iter()
+            .zip(&members)
+            .map(|(view, member)| {
+                let opening = MemberOpeningRead::verify(view, &root, member)
+                    .map_err(|_| RingRpcError::InvalidIndexerResponse)?;
+                Ok(opening
+                    .record()
+                    .map_or(AssetLimits::EMPTY, |record| record.mint_policy.limits))
+            })
+            .collect()
     }
 }
 

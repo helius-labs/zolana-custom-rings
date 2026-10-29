@@ -23,6 +23,8 @@ use crate::{
     audit::{AuditService, AuditServiceInit, ASSET_REFRESH_INTERVAL},
     authorize::Unauthorized,
     config::RootSecret,
+    cosign::{CoSignPolicy, RefusingCoSigner},
+    cosign_limits::{LimitedCoSignerInit, MirroredLimits},
     database::Store,
     error::{redacted, RingRpcError},
     grant_rows::{GrantRowKey, GrantRows},
@@ -39,7 +41,7 @@ use crate::{
     origins::Origins,
     record_update::RecordUpdateRefusal,
     record_writer::RecordWriter,
-    relay::Relay,
+    relay::{Relay, RelayParts},
     replay::ReplayGuard,
     storage_chain::StorageChain,
     upstream::{DepositHistory, DepositPage, TransactionSource},
@@ -53,6 +55,7 @@ pub struct Hub<S> {
     shared: Arc<Shared<S>>,
     keys: KeySource,
     writer: Option<Arc<RecordWriter>>,
+    co_signer: Arc<dyn CoSignPolicy>,
     relay: Option<Arc<Relay>>,
 }
 
@@ -119,7 +122,7 @@ pub struct HubBuilder<S> {
     store: Option<Store>,
     storage_chain: Option<Arc<dyn StorageChain>>,
     encrypted_grants: bool,
-    relay: Option<Arc<Relay>>,
+    relay: Option<RelayParts>,
 }
 
 pub(crate) struct Shared<S> {
@@ -280,6 +283,11 @@ impl<S: TransactionSource> Hub<S> {
 
     pub fn co_signer_keypair(&self) -> Result<Keypair, RingRpcError> {
         co_signer_keypair(self.keys.service_secret().as_slice())
+    }
+
+    /// Signs under the asset record limits with a store, refuses without one.
+    pub fn co_signer(&self) -> &Arc<dyn CoSignPolicy> {
+        &self.co_signer
     }
 
     pub(crate) fn sign_attestation(&self, attestation: &[u8]) -> Signature {
@@ -447,7 +455,7 @@ impl<S: TransactionSource> Hub<S> {
     }
 }
 
-impl<S: TransactionSource> HubBuilder<S> {
+impl<S: TransactionSource + 'static> HubBuilder<S> {
     #[must_use = "use the updated builder"]
     pub fn with_assets(mut self, assets: RingAssets) -> Self {
         self.assets = Some(assets);
@@ -487,7 +495,7 @@ impl<S: TransactionSource> HubBuilder<S> {
     }
 
     #[must_use = "use the updated builder"]
-    pub fn with_relay(mut self, relay: Arc<Relay>) -> Self {
+    pub fn with_relay(mut self, relay: RelayParts) -> Self {
         self.relay = Some(relay);
         self
     }
@@ -556,14 +564,30 @@ impl<S: TransactionSource> HubBuilder<S> {
             }),
             stores: Mutex::new(HashMap::new()),
             grant_rows,
-            database: self.store,
+            database: self.store.clone(),
         };
+        let shared = Arc::new(shared);
+        let co_signer: Arc<dyn CoSignPolicy> = match self.store {
+            Some(store) => Arc::new(
+                LimitedCoSignerInit {
+                    signer: co_signer_keypair(secret.as_slice())?,
+                    limits: MirroredLimits(shared.clone()),
+                    store: Arc::new(store),
+                }
+                .build(),
+            ),
+            None => Arc::new(RefusingCoSigner),
+        };
+        let relay = self
+            .relay
+            .map(|parts| Arc::new(Relay::new(parts).with_co_signer(co_signer.clone())));
         Ok(Hub {
             signer,
-            shared: Arc::new(shared),
+            shared,
             keys,
             writer,
-            relay: self.relay,
+            co_signer,
+            relay,
         })
     }
 }
