@@ -92,6 +92,8 @@ The recipient rebuilds the slot secret from `X25519(u_sk, tx_viewing_u)`, the au
 | `CRDB` | `0x43524442` | deposit blinding |
 | `CRWX` | `0x43525758` | withdrawal exemption statement |
 | `CRMG` | `0x43524d47` | merge statement |
+| `CRRU` | `0x43525255` | record update statement |
+| `CRWG` | `0x43525747` | wallet grant record key |
 | `CR_S` | `0x43525f53` | envelope shared secret |
 | `CR_MD` | `0x43525f4d44` | merge disclosure pad |
 | `TMOB` | `0x544d4f42` | zolana merge output blinding |
