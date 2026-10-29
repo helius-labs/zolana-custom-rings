@@ -299,7 +299,11 @@ export type { RelaySent, RingAuthorityRelayClient, RingRelayClient } from "../rp
 export type {
   AuthorityPayment,
   AuthorityTransfer,
+  ConfigAuthorityAuth,
+  GetPendingEnrolmentsRequest,
+  PendingEnrolment,
   PrepareAuthorityTransferRequest,
+  RefuseEnrolmentRequest,
   PrepareRelayRequest,
   RelayIntent,
   RelayOperation,
@@ -466,9 +470,13 @@ export {
   auditorKeyStatement,
   authorityTransferAttestation,
   auditorKeyRequestAttestation,
+  enrolmentAttestation,
   messageSignerReader,
   ringReadAttestation,
+  signPendingEnrolmentsRequest,
+  signRefuseEnrolmentRequest,
 } from "../rpc/ring-rpc.js";
+export type { RingEnrolmentAction } from "../rpc/ring-rpc.js";
 export type {
   AuditedMergesPage,
   DecryptedOutputContext,

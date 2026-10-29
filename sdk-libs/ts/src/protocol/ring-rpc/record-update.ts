@@ -40,6 +40,13 @@ const STORAGE_WRITE_BITS = LIST_IDS.filter((id) => id !== ListId.escrow).reduce(
   0n,
 );
 
+/** Rust `ENROLMENT_LISTS`. */
+export const ENROLMENT_LISTS: readonly ListId[] = Object.freeze([
+  ListId.allow,
+  ListId.reader,
+  ListId.approval,
+]);
+
 export interface UnsignedRecordUpdate {
   readonly registry: Address;
   readonly update: RecordUpdate;
@@ -90,11 +97,13 @@ export function recordUpdateQueueEntry(entry: RecordUpdateEntry): QueueEntry {
 
 /**
  * Mirrored by `RecordUpdateStatement::hash` in `sdk-libs/client/src/rpc/record_update.rs`.
- *   `Poseidon(CRRU, hash_bytes(genesis_hash), hash_bytes(ring), hash_bytes(registry), entries_hash, valid_until_slot)`
+ *   `Poseidon(CRRU, hash_bytes(genesis_hash), hash_bytes(ring), hash_bytes(registry), entries_hash, valid_until_slot[, awaited_lists])`
  */
 export function recordUpdateStatementHash(input: UnsignedRecordUpdate): Bytes32 {
   const { genesisHash, ring, entries, validUntilSlot } = input.update;
+  const awaitedLists = input.update.awaitedLists ?? 0n;
   if (validUntilSlot < 0n || validUntilSlot > U64_MAX) throw invalid("ValidUntilSlot");
+  if (awaitedLists < 0n || awaitedLists > U64_MAX) throw invalid("AwaitedLists");
   return poseidon([
     domainField(RingDomain.recordUpdate),
     hashBytes(indexerScalars.hashBytes(genesisHash)) as Bytes32,
@@ -102,6 +111,8 @@ export function recordUpdateStatementHash(input: UnsignedRecordUpdate): Bytes32 
     hashBytes(addressBytes(input.registry, "registry")) as Bytes32,
     entries.map(recordUpdateQueueEntry).reduce(queueChain, ZERO_32),
     bigIntBytes(validUntilSlot) as Bytes32,
+    // The width separates an enrolment's hash from a plain update's.
+    ...(awaitedLists === 0n ? [] : [bigIntBytes(awaitedLists) as Bytes32]),
   ]);
 }
 

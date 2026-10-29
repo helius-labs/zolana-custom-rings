@@ -7,11 +7,15 @@ import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import { encodeMintPolicy } from "../indexer/indexer-codec.js";
 import type {
   AuthorityTransfer,
+  ConfigAuthorityAuth,
+  GetPendingEnrolmentsRequest,
   MergeSettings,
+  PendingEnrolment,
   PrepareAuthorityTransferRequest,
   PrepareRelayRequest,
   RecordUpdateEntry,
   RecordUpdateStatus,
+  RefuseEnrolmentRequest,
   RelayIntent,
   RelayQuote,
   RelayQuoteRequest,
@@ -186,6 +190,9 @@ export function encodeSubmitRecordUpdateRequest(value: SubmitRecordUpdateRequest
         encodeRecordUpdateEntry(entry, `update.entries[${String(index)}]`),
       ),
       validUntilSlot: toU64(value.update.validUntilSlot, "update.validUntilSlot"),
+      ...((value.update.awaitedLists ?? 0n) === 0n
+        ? {}
+        : { awaitedLists: toU64(value.update.awaitedLists ?? 0n, "update.awaitedLists") }),
     },
     signer: checkedAddress(value.signer, "signer"),
     signature: checkedSignature(value.signature, "signature"),
@@ -242,6 +249,7 @@ export function encodeRecordUpdateStatusRequest(updateId: Hash): WireObject {
 export function decodeRecordUpdateStatus(value: unknown): RecordUpdateStatus {
   const status = object(value, "$", ["status", "signature", "revision", "reason"])["status"];
   switch (status) {
+    case "awaitingAuthority":
     case "queued":
       object(value, "$", ["status"]);
       return { status };
@@ -306,6 +314,53 @@ export function decodeMergeSettings(value: unknown): MergeSettings {
       wireInteger(row["targetNoteCount"], "targetNoteCount", 0n, 0xffff_ffffn),
     ),
     minAverageAmount: u64(row["minAverageAmount"], "minAverageAmount"),
+  };
+}
+
+/** Rust `GetPendingEnrolmentsRequest`. */
+export function encodeGetPendingEnrolmentsRequest(value: GetPendingEnrolmentsRequest): WireObject {
+  return { ring: checkedAddress(value.ring, "ring"), auth: encodeConfigAuthorityAuth(value.auth) };
+}
+
+/** Rust `RefuseEnrolmentRequest`. */
+export function encodeRefuseEnrolmentRequest(value: RefuseEnrolmentRequest): WireObject {
+  return {
+    ring: checkedAddress(value.ring, "ring"),
+    updateId: checkedHash(value.updateId, "updateId"),
+    auth: encodeConfigAuthorityAuth(value.auth),
+  };
+}
+
+/** Rust `GetPendingEnrolmentsResponse`, oldest first. */
+export function decodePendingEnrolments(value: unknown): readonly PendingEnrolment[] {
+  const enrolments = object(value, "$", ["enrolments"])["enrolments"];
+  if (!Array.isArray(enrolments))
+    return schemaFailure("INDEXER_SCHEMA_INVALID_TYPE", "enrolments", "an array", enrolments);
+  return enrolments.map((entry: unknown, index) => {
+    const path = `enrolments[${String(index)}]`;
+    const row = object(entry, path, [
+      "updateId",
+      "wallet",
+      "member",
+      "awaitedLists",
+      "validUntilSlot",
+    ]);
+    return {
+      updateId: checkedHash(row["updateId"], `${path}.updateId`),
+      wallet: checkedAddress(row["wallet"], `${path}.wallet`),
+      member: checkedHash(row["member"], `${path}.member`),
+      awaitedLists: u64(row["awaitedLists"], `${path}.awaitedLists`),
+      validUntilSlot: u64(row["validUntilSlot"], `${path}.validUntilSlot`),
+    };
+  });
+}
+
+function encodeConfigAuthorityAuth(value: ConfigAuthorityAuth): WireObject {
+  return {
+    authority: checkedAddress(value.authority, "auth.authority"),
+    timestamp: toU64(value.timestamp, "auth.timestamp"),
+    nonce: checkedBase64(value.nonce, "auth.nonce"),
+    signature: checkedSignature(value.signature, "auth.signature"),
   };
 }
 

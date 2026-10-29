@@ -17,6 +17,8 @@ export const RingRpcMethod = Object.freeze({
   getRecordUpdateStatus: "getRecordUpdateStatus",
   setMergeSettings: "setMergeSettings",
   prepareAuthorityTransfer: "prepareAuthorityTransfer",
+  getPendingEnrolments: "getPendingEnrolments",
+  refuseEnrolment: "refuseEnrolment",
 } as const);
 export type RingRpcMethod = (typeof RingRpcMethod)[keyof typeof RingRpcMethod];
 
@@ -118,6 +120,8 @@ export interface RecordUpdate {
   readonly ring: Address;
   readonly entries: readonly RecordUpdateEntry[];
   readonly validUntilSlot: bigint;
+  /** Record bits of the authority lists the update waits for, absent or zero for none. */
+  readonly awaitedLists?: bigint;
 }
 
 /** Rust `SubmitRecordUpdateRequest`, the signature covers `RecordUpdateStatement::hash`. */
@@ -130,10 +134,41 @@ export interface SubmitRecordUpdateRequest {
 
 /** Rust `RecordUpdateStatus`. */
 export type RecordUpdateStatus =
+  | Readonly<{ status: "awaitingAuthority" }>
   | Readonly<{ status: "queued" }>
   | Readonly<{ status: "submitted"; signature: Signature }>
   | Readonly<{ status: "applied"; signature: Signature; revision: bigint }>
   | Readonly<{ status: "refused"; reason: string }>;
+
+/** Rust `ConfigAuthorityAuth`. */
+export interface ConfigAuthorityAuth {
+  readonly authority: Address;
+  readonly timestamp: bigint;
+  readonly nonce: Base64String;
+  readonly signature: Signature;
+}
+
+/** Rust `GetPendingEnrolmentsRequest`. */
+export interface GetPendingEnrolmentsRequest {
+  readonly ring: Address;
+  readonly auth: ConfigAuthorityAuth;
+}
+
+/** Rust `RefuseEnrolmentRequest`. */
+export interface RefuseEnrolmentRequest {
+  readonly ring: Address;
+  readonly updateId: Hash;
+  readonly auth: ConfigAuthorityAuth;
+}
+
+/** Rust `PendingEnrolment`, `member` is the record an approval writes. */
+export interface PendingEnrolment {
+  readonly updateId: Hash;
+  readonly wallet: Address;
+  readonly member: Hash;
+  readonly awaitedLists: bigint;
+  readonly validUntilSlot: bigint;
+}
 
 /** Rust `MergeSettings`. */
 export interface MergeSettings {
