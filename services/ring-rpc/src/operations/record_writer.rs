@@ -210,7 +210,7 @@ impl RecordWriter {
             mode,
             data: StorageUpdateIxData {
                 revision: checked.revision,
-                writes: &writes,
+                writes,
                 apply: &apply,
             },
         }

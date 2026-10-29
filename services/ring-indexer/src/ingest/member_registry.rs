@@ -231,9 +231,10 @@ impl<C: ConnectionTrait> Projection<'_, '_, C> {
                 recorded_next_index
             )));
         }
+        let writes: Vec<QueuedWrite> = rows.iter().map(|row| row.write).collect();
         let sealing = Sealing {
             base: &loaded.stored,
-            pending: &rows,
+            pending: &writes,
         };
         let records = batch
             .rows
@@ -269,14 +270,14 @@ fn admitted(admission: Result<(), CustomRingError>) -> Result<(), ApplyError> {
     admission.map_err(|error| fault(format!("the projected queue refuses the change ({error})")))
 }
 
-struct Sealing<'a> {
-    base: &'a BTreeMap<[u8; 32], StoredRecord>,
-    pending: &'a [StoredEntry],
+pub(crate) struct Sealing<'a> {
+    pub base: &'a BTreeMap<[u8; 32], StoredRecord>,
+    pub pending: &'a [QueuedWrite],
 }
 
 impl Sealing<'_> {
     /// A record keeps its sealed key, an escrow key the batch filled takes the seal of its entry.
-    fn seal(&self, record: &MemberRecord) -> Result<Option<SealedKey>, ApplyError> {
+    pub fn seal(&self, record: &MemberRecord) -> Result<Option<SealedKey>, ApplyError> {
         if record.escrow_key == [0; 32] {
             return Ok(None);
         }
@@ -289,7 +290,6 @@ impl Sealing<'_> {
         }
         self.pending
             .iter()
-            .map(|pending| pending.write)
             .find(|write| {
                 write.entry.member == record.member && write.entry.escrow_key == record.escrow_key
             })

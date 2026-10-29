@@ -329,7 +329,7 @@ impl<S: TransactionSource> Hub<S> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::{collections::HashMap, sync::Mutex};
 
     use custom_ring_interface::RingMode;
     use solana_keypair::Keypair;
@@ -341,12 +341,11 @@ mod tests {
     use zolana_ring_client::{
         rpc::{unix_now, MergeSettingsRequest, ReadTarget, RingChainStatus, SignedRequest},
         AuditError, CreatedUtxo, KnownUtxo, MergeAuditPage, NullifierKeyEnvelope, RingIndexerError,
-        RingOrigin, UtxoOwner,
+        RingOrigin, StorageTip, UtxoOwner,
     };
     use zolana_ring_indexer::rpc::{
-        GetRingMemberOpeningsRequest, GetRingMemberOpeningsResponse, GetRingMemberRecordsRequest,
-        GetRingMemberRecordsResponse, GetRingRecordQueueResponse, GetStorageMemberOpeningsRequest,
-        GetStorageMemberOpeningsResponse,
+        GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse,
+        GetStorageMemberRecordsRequest, GetStorageMemberRecordsResponse,
     };
 
     use super::*;
@@ -354,8 +353,8 @@ mod tests {
         cosign::RefusingCoSigner,
         database::Store,
         upstream::{
-            DepositHistory, DepositPage, MergeAuditRequest, RecordsRoot, RingConfiguration,
-            RingHistoryPage, TransactionPage,
+            DepositHistory, DepositPage, MergeAuditRequest, RingConfiguration, RingHistoryPage,
+            TransactionPage,
         },
         utxos::{CreatedIn, EscrowRoot, EscrowedOwner},
     };
@@ -421,28 +420,7 @@ mod tests {
             unused()
         }
 
-        async fn ring_member_records(
-            &self,
-            _request: GetRingMemberRecordsRequest,
-        ) -> Result<GetRingMemberRecordsResponse, RingIndexerError> {
-            Ok(unused()?)
-        }
-
-        async fn ring_member_openings(
-            &self,
-            _request: GetRingMemberOpeningsRequest,
-        ) -> Result<GetRingMemberOpeningsResponse, RingIndexerError> {
-            Ok(unused()?)
-        }
-
-        async fn ring_record_queue(
-            &self,
-            _ring: Address,
-        ) -> Result<GetRingRecordQueueResponse, RingIndexerError> {
-            Ok(unused()?)
-        }
-
-        async fn records_root(&self, _ring: Address) -> Result<Option<RecordsRoot>, ClientError> {
+        async fn records_root(&self, _ring: Address) -> Result<Option<StorageTip>, ClientError> {
             unused()
         }
 
@@ -450,6 +428,13 @@ mod tests {
             &self,
             _request: GetStorageMemberOpeningsRequest,
         ) -> Result<GetStorageMemberOpeningsResponse, RingIndexerError> {
+            Ok(unused()?)
+        }
+
+        async fn storage_member_records(
+            &self,
+            _request: GetStorageMemberRecordsRequest,
+        ) -> Result<GetStorageMemberRecordsResponse, RingIndexerError> {
             Ok(unused()?)
         }
 
@@ -566,12 +551,12 @@ mod tests {
                     .expect("envelope")
                     .sealed,
             };
-            store.update_escrow(
+            store.replace_escrow(
                 EscrowRoot {
                     root: [1; 32],
-                    applied: 0,
+                    revision: 0,
                 },
-                [(owner_key, Some(owner))],
+                HashMap::from([(owner_key, owner)]),
             );
             let asset = *assets().fields().next().expect("field");
             store.record(

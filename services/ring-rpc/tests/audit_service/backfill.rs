@@ -247,14 +247,12 @@ async fn concurrent_backfills_read_the_registry_once() {
 }
 
 #[tokio::test]
-async fn an_applied_write_rereads_only_the_members_it_names() {
+async fn a_moved_mirror_root_rereads_the_records() {
     let fixture = Fixture::new();
     let owners = [sol(0xc0, 30), sol(0xc1, 12)];
-    let source = escrowed_source(&fixture, &owners, &owners);
-    let registry = source.registry.clone();
-    *registry.lock().unwrap() = Some(EscrowRegistry::new(&owners[..1]).with_pending(&owners[1..]));
+    let source = escrowed_source(&fixture, &owners, &owners[..1]);
+    let records = source.records.clone();
     let record_reads = source.record_reads.clone();
-    let opening_reads = source.opening_reads.clone();
     let service = fixture.hub(source).service(None).expect("service");
     service.backfill_utxos().await.expect("backfill");
     assert_eq!(
@@ -262,18 +260,10 @@ async fn an_applied_write_rereads_only_the_members_it_names() {
         [OutputPayloadErrorKind::EscrowUnknown]
     );
 
-    *registry.lock().unwrap() = Some(EscrowRegistry::new(&owners).applied(1));
+    records.escrow(&escrow_writes(&owners[1..]));
     service.backfill_utxos().await.expect("backfill");
     assert!(escrow_errors(&read_at(&service, None).await).is_empty());
-    assert_eq!(record_reads.load(Ordering::Relaxed), 1);
-    assert_eq!(opening_reads.load(Ordering::Relaxed), 1);
-
-    // Writes no refresh saw pending leave only the full scan.
-    let late = [owners[0], owners[1], sol(0xc2, 5)];
-    *registry.lock().unwrap() = Some(EscrowRegistry::new(&late).applied(3));
-    service.backfill_utxos().await.expect("backfill");
     assert_eq!(record_reads.load(Ordering::Relaxed), 2);
-    assert_eq!(opening_reads.load(Ordering::Relaxed), 1);
 }
 
 #[tokio::test]
@@ -303,14 +293,7 @@ async fn a_registry_page_short_of_a_record_escrows_no_key() {
     let fixture = Fixture::new();
     let owners = [sol(0xc0, 30), sol(0xc1, 12)];
     let source = escrowed_source(&fixture, &owners, &owners);
-    source
-        .registry
-        .lock()
-        .unwrap()
-        .as_mut()
-        .expect("registry")
-        .records
-        .remove(0);
+    source.records.shorten_pages();
     let record_reads = source.record_reads.clone();
     let service = fixture.hub(source).service(None).expect("service");
     service.backfill_utxos().await.expect("backfill");

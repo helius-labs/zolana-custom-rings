@@ -50,7 +50,7 @@ A custom ring is a Solana program that governs its notes in the zolana shielded 
 | Policy proof | Groth16 proof | Proves the rules and the outflow limits over record openings. Verified on every transfer of a policy ring. |
 | Withdrawal exemption proof | Groth16 proof | Proves that the gross withdrawal of each withdrawn mint is at or below the `withdrawal_threshold` of the mint's record under an own root. A transfer on any ring with a ring policy can carry one. It waives only the withdrawal class of the co-signer demand. |
 | Nullifier secret | Field element | An owner's 31-byte secret, with public key `nullifier_pk = Poseidon(secret)`. A note's nullifier needs the secret, so its holder can link the owner's spends. |
-| Key escrow | Record field | A record's nullifier secret sealed to the auditor by `RegisterKey`. A `ConfidentialEscrow` ring requires it of every output owner. |
+| Key escrow | Record field | A record's nullifier secret sealed to the auditor by `RegisterKey` or an escrow storage write. A `ConfidentialEscrow` ring requires it of every output owner. |
 | Ring address | Payment address | The recipient's shielded address and the ring program id, shared off chain. A `zolana:` payment request adds a request view tag. |
 | View tag | 32 bytes | The owner tag of an anonymous ring output, a zolana [view tag](../zolana/docs/spec.md#view-tags) or a random tag on a dummy. No proof derives it. |
 | First payment | Ring output | A payment to a recipient the sender holds no shared tags with. It takes the recipient's request tag or bootstrap tag, as the caller chooses. |
@@ -1331,21 +1331,27 @@ Another system program fails with `InvalidSystemProgram`, another address with `
 
 **Instruction data**
 
-`revision: u64` little endian, `count: u8`, then `count` × `StorageWriteData` of 113 bytes each, then `ApplyRecordsIxData`.
+`revision: u64` little endian, `count: u8`, then `count` writes, then `ApplyRecordsIxData`. Each write is a kind byte and its body.
 
 ```rust
-struct StorageWriteData {
-    member: [u8; 32],
-    /// u64 little endian each. All zero when the write changes no list.
-    lists: { mask: [u8; 8], value: [u8; 8] },
-    /// As in `RecordWriteData`.
-    mint_policy: [u8; 33],
-    /// Nonzero only on an escrow write.
-    escrow_key: [u8; 32],
+enum StorageWriteData {
+    /// Kind `0`, the 129 bytes of `RecordWriteData`.
+    Record(RecordWriteData),
+    /// Kind `1`, 128 bytes.
+    Escrow(EscrowWriteData),
+}
+
+struct EscrowWriteData {
+    /// Its owner identity is the record's member.
+    owner: Address,
+    nullifier_pk: [u8; 32],
+    eph_u: [u8; 32],
+    /// AES-256-CTR ciphertext of the nullifier secret.
+    ciphertext: [u8; 32],
 }
 ```
 
-`count = 0` fails with `InvalidInstructionData` and `count > 16` with `BatchTooLarge`. A write with a zero `escrow_key` is checked as an `AuthorityWriteRecords` write, with every list except the escrow list writable. A write with a nonzero `escrow_key` is an escrow write, `QueueEntry::escrow_hash(member, escrow_key)`, and fails with `InvalidWrite` when it also carries lists or mint settings. The program does not check an escrow key. The authority checks it before it writes. An escrow key fills once and no write removes it.
+`count = 0` fails with `InvalidInstructionData` and `count > 16` with `BatchTooLarge`. Another kind or a short body fails with `InvalidInstructionData`. A record write is checked as an `AuthorityWriteRecords` write, with every list except the escrow list writable. An escrow write sets the escrow bit and `escrow_key(nullifier_pk, ciphertext)` on the record of `solana_owner_identity(owner)`. The program builds that entry from the published fields, so the apply proof binds every field except `eph_u`. It does not check that the ciphertext seals the key to the auditor. The writer verifies the register key proof before it writes. An escrow key fills once and no write removes it.
 
 A signer other than the authority fails with `Unauthorized`, and a `revision` other than the newest root's with `RevisionChanged`. The chain starts at `HashChain4([APPLY_RECORDS, hash_bytes(registry), revision])` and folds each entry with `queue_chain` in order. The program verifies one apply proof as `ApplyRecords` does, over `(roots[0].hash, next_index, chain_start)` to `(new_root, new_next_index, chain_end)` and `count`.
 
@@ -1390,6 +1396,8 @@ Projects the member registry, record queue and records of every ring from confir
 
 Errors: `-32070` out of sync, `-32071` root changed, `-32075` page gap, `-32076` queue changed.
 
+It projects every `StorageRegistry` update the same way. An escrow write's `owner`, `nullifier_pk`, `eph_u` and `ciphertext` reach the record's opening, and `getStorageMemberRecords` serves a page of up to 100 records with paths under a root the registry history holds. On chain, only the update instruction data holds the envelope.
+
 A client reads the root from the chain `MemberRegistry` and checks every opening against it, so a faulty indexer can refuse or delay but not make a client accept a wrong record. The indexer serves `ephPk` of a registered key, and no tree field binds it. The program binds `eph_u` only in the register key proof. The indexer binds all interfaces with permissive CORS and no authentication, so exposure control is the deployment's.
 
 ### Ring RPC
@@ -1407,6 +1415,7 @@ Holds the auditor key and serves audited history to readers.
 - A relay is stored by its `relayId` with its message and signatures, never its proof inputs. A repeated request returns the stored relay. The co-signer signs before the send and settles when the relay confirms or fails. A relay that has not landed when its blockhash expires fails.
 - A `LimitedCoSigner` signs a transaction only under the [co-signer limits](#co-signer-limits).
 - `setMergeSettings` stores a wallet's target note count and minimum average amount for one mint. The wallet signs them under `zolana/ring-rpc-merge-settings/v1` with the cluster, service key, ring, timestamp and nonce, and the service verifies the signature under the named owner. A later signed request replaces them, and a zero target revokes them.
+- On a `ConfidentialEscrow` ring the backfill reads every escrowed key from the ring's own storage records under the root its policy mirrors. It reads them again once that root moves, and checks every record against the root and each owner against its record's member.
 - On a `ConfidentialEscrow` ring a host that runs the service with a relay merges a wallet's notes toward its settings. It opens the wallet's escrowed nullifier secret with the auditor key, proves one merge of the smallest notes and sends it through the relay. The merge carries no owner signature.
 - Every audited row is bound to the confirmed SPP event the service rebuilds from Solana `getTransaction`. Photon is trusted for completeness only. A row Photon omits, or labels with no ring, never reaches a reader, and no client detects the gap.
 
@@ -1442,7 +1451,7 @@ fn record_update_hash(ring: Address, registry: Address, entries: &[Entry], valid
 |---|---|---|
 | `write` | Owner, own record | The ring-viewing and recovery lists. |
 | `write` | Config authority | Authority lists and mint settings of any record. |
-| `escrow` | Owner, own record | The escrow key, with the register key proof the writer verifies. |
+| `escrow` | Owner, own record | The escrow key, with the register key proof the writer verifies. The `Update` publishes the signer as `owner` with the envelope. |
 | `walletGrant` | The wallet | The reader list of the record `Poseidon(CRWG, wallet, reader)`. |
 
 Each entry becomes the queue entry the apply proof hashes, so the signature binds every write that reaches the tree. A wallet grant names the wallet and the reader identity, so the writer can rebuild the record key and compare the wallet with the signer. The writer refuses an update after `validUntilSlot`, an update with an invalid signature, and an entry the signer does not hold. Both SDKs verify the signature before they send an update, and they refuse a service that answers another update id. `getRecordUpdateStatus` reports `queued`, `submitted`, `applied` with the new registry revision, or `refused` with a reason.

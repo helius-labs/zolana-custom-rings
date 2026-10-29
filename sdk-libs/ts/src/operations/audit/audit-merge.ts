@@ -27,8 +27,8 @@ import { ownerUtxoHash, type TreeId } from "@heliuslabs/zolana/transaction";
 import { MEMBER_REGISTRY_CAPACITY } from "../../protocol/membership/member-registry.js";
 import { ringIdField } from "../../crypto/derivation/ring-stream.js";
 
-import { registryCurrentRoot } from "../../protocol/codec/ring-codecs.js";
-import { fetchRingMemberRegistry } from "../../protocol/membership/config.js";
+import { fetchRingPolicy } from "../../protocol/membership/config.js";
+import { ownRoot, type BoundRoot } from "../../rpc/registered-record.js";
 import { RingError } from "../../protocol/error.js";
 import { readRingHistory, scanLimits, type ScanLimits } from "../../rpc/history.js";
 import {
@@ -46,7 +46,7 @@ import { outputTreeId } from "../../protocol/membership/trees.js";
 export type RingMergeAuditReader = KitRpcAccess &
   Pick<ChainReader, "getAccount"> &
   Pick<IndexerReader, "getShieldedTransactionsByTags"> &
-  Pick<RingRecordReader, "getRingMemberRecords">;
+  Pick<RingRecordReader, "getStorageMemberRecords">;
 
 /** Rust `MergeKeys`, what the auditor holds of the merge owner beyond the opening. */
 export type MergeKeys =
@@ -62,7 +62,7 @@ export interface AuditedRingMerge {
   readonly outputCommitment: Bytes32;
   /** The registry member hash, the merge proof does not disclose the signing key's curve. */
   readonly ownerMember: Bytes32;
-  /** The confirmed `RegisterKey` signer or the disclosed owner, absent in older indexer projections. */
+  /** The owner the escrow write published or the disclosed owner, absent in older indexer projections. */
   readonly ownerPublicKey?: Address;
   readonly mint: Address;
   readonly amount: bigint;
@@ -116,12 +116,10 @@ export async function auditRingMerges(
     if (!Number.isSafeInteger(value) || value < 1)
       throw new RingError("RING_RPC", { details: { reason: "invalid scan limit", name, value } });
   }
-  const registry = await fetchRingMemberRegistry(input.client, input.ringProgramId, context);
-  const tip = {
-    root: registryCurrentRoot(registry).root,
-    rootIndex: registry.historyCursor,
-    nextIndex: registry.nextIndex,
-  };
+  const tip = ownRoot(
+    input.ringProgramId,
+    await fetchRingPolicy(input.client, input.ringProgramId, context),
+  );
   const history = await confirmedMerges(input, limits, context);
   let attempts = 0;
   const opened: AuditedRingMerge[] = [];
@@ -131,7 +129,7 @@ export async function auditRingMerges(
     else opened.push(openDisclosed(input, merge, merge.disclosure));
   }
   if (pending.length > 0)
-    await scanRegistry(input, tip, maxMemberPages, context, (member, key, ownerPublicKey) => {
+    await scanRecords(input, tip, maxMemberPages, context, (member, key, ownerPublicKey) => {
       for (const candidate of pending) {
         if (candidate.opened !== undefined) continue;
         if (input.maxCandidateAttempts !== undefined && attempts >= input.maxCandidateAttempts)
@@ -210,13 +208,6 @@ export interface ConfirmedMerge {
 interface PendingMerge {
   readonly merge: ConfirmedMerge;
   opened?: AuditedRingMerge;
-}
-
-/** The chain's newest registry root, every record page is read under it. */
-interface RegistryTip {
-  readonly root: Bytes32;
-  readonly rootIndex: number;
-  readonly nextIndex: number;
 }
 
 async function confirmedMerges(
@@ -421,36 +412,37 @@ export function recoverMergeOpening(
   });
 }
 
-/** Rust `MergeAudit::scan_registry`, every record authenticated at the chain's root until `visit` stops. */
-async function scanRegistry(
-  input: Readonly<{ client: RingMergeAuditReader; ringProgramId: Address; auditor: X25519Keypair }>,
-  tip: RegistryTip,
+/** Rust `MergeAudit::scan_records`, every record authenticated at the mirrored root until `visit` stops. */
+async function scanRecords(
+  input: Readonly<{ client: RingMergeAuditReader; auditor: X25519Keypair }>,
+  tip: BoundRoot,
   maxMemberPages: number,
   context: RequestContext | undefined,
   visit: (member: Bytes32, key: NullifierKey, ownerPublicKey: Address | undefined) => boolean,
 ): Promise<void> {
-  let startIndex = 1;
-  for (let read = 0; startIndex < tip.nextIndex; read++) {
+  let next: number | undefined = 1;
+  for (let read = 0; next !== undefined; read++) {
+    const startIndex = next;
     if (read === maxMemberPages)
       throw new RingError("RING_RECOVERY_INCOMPLETE", { details: { reason: "member pages" } });
-    const page = await input.client.getRingMemberRecords(
+    const page = await input.client.getStorageMemberRecords(
       {
-        ringProgramId: input.ringProgramId,
+        registry: tip.registry,
         expectedRoot: tip.root,
-        expectedNextIndex: tip.nextIndex,
         startIndex,
         limit: MAX_RING_MEMBER_BATCH,
       },
       context,
     );
-    const endIndex = Math.min(startIndex + MAX_RING_MEMBER_BATCH, tip.nextIndex);
+    const { nextIndex } = page.root;
+    const endIndex = Math.min(startIndex + MAX_RING_MEMBER_BATCH, nextIndex);
     if (
       !equalBytes(page.root.root, tip.root) ||
-      page.root.rootIndex !== tip.rootIndex ||
-      page.root.nextIndex !== tip.nextIndex ||
+      page.root.revision !== tip.revision ||
+      startIndex > endIndex ||
       page.records.length !== endIndex - startIndex ||
       page.records.some((row, offset) => row.path.index !== startIndex + offset) ||
-      page.nextLeafIndex !== (endIndex < tip.nextIndex ? endIndex : undefined)
+      page.nextLeafIndex !== (endIndex < nextIndex ? endIndex : undefined)
     )
       throw new RingError("RING_MEMBER_REGISTRY_INVALID", { details: { startIndex } });
     for (const { record, path, sealedKey } of page.records) {
@@ -479,6 +471,6 @@ async function scanRegistry(
         key.destroy();
       }
     }
-    startIndex = endIndex;
+    next = page.nextLeafIndex;
   }
 }

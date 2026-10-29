@@ -93,6 +93,16 @@ export interface StorageRecordPoolRequest extends StorageOpeningsRequest {
 export type StorageMemberOpenings = Omit<RingMemberOpenings, "root"> &
   Readonly<{ root: StorageRoot }>;
 
+/** Leaves of one `StorageRegistry` from `startIndex`, all under `expectedRoot`. */
+export interface StoragePageRequest {
+  readonly registry: Address;
+  readonly expectedRoot: Bytes32;
+  readonly startIndex: number;
+  readonly limit: number;
+}
+
+export type StorageMemberPage = Omit<RingMemberPage, "root"> & Readonly<{ root: StorageRoot }>;
+
 export type StorageRecordPool = Omit<RingRecordPool, "root"> & Readonly<{ root: StorageRoot }>;
 
 /** A leaf the indexer served, with the key its member escrowed. */
@@ -209,6 +219,10 @@ export interface RingRecordReader {
     request: StorageOpeningsRequest,
     context?: RequestContext,
   ): Promise<StorageMemberOpenings>;
+  getStorageMemberRecords(
+    request: StoragePageRequest,
+    context?: RequestContext,
+  ): Promise<StorageMemberPage>;
   getStorageRecordPool(
     request: StorageRecordPoolRequest,
     context?: RequestContext,

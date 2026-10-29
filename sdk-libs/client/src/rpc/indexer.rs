@@ -10,7 +10,8 @@ use zolana_ring_indexer::rpc::{
     method::{
         GetRingApplyProofInputs, GetRingMemberOpenings, GetRingMemberRecord, GetRingMemberRecords,
         GetRingMemberRegistryRoot, GetRingRecordPool, GetRingRecordQueue,
-        GetStorageApplyProofInputs, GetStorageMemberOpenings, GetStorageRecordPool,
+        GetStorageApplyProofInputs, GetStorageMemberOpenings, GetStorageMemberRecords,
+        GetStorageRecordPool,
     },
     RingRpcError,
 };
@@ -114,6 +115,7 @@ ring_indexer! {
     get_ring_record_queue => GetRingRecordQueue,
     get_ring_apply_proof_inputs => GetRingApplyProofInputs,
     get_storage_member_openings => GetStorageMemberOpenings,
+    get_storage_member_records => GetStorageMemberRecords,
     get_storage_record_pool => GetStorageRecordPool,
     get_storage_apply_proof_inputs => GetStorageApplyProofInputs,
 }

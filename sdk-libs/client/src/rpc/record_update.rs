@@ -1,12 +1,15 @@
 use custom_ring_interface::{
-    domain, mint_policy_write, queue_chain, storage_instruction::StorageWriteData, CustomRingError,
-    EscrowKey, QueueEntry, WriteRecordsIxData, AUDIT_CIPHERTEXT_LEN,
+    domain, mint_policy_write, queue_chain,
+    storage_instruction::{EscrowWriteData, StorageWriteData},
+    CustomRingError, EscrowKey, QueueEntry, RecordWriteData, WriteRecordsIxData,
+    AUDIT_CIPHERTEXT_LEN,
 };
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
 use solana_signer::{Signer, SignerError};
 use spr_hasher::{primitives::right_align, Hasher, Poseidon};
 use spr_indexer_api::{Base64String, Hash, RpcMethod, SerializablePubkey, SerializableSignature};
+use spr_keypair::X25519Pubkey;
 use thiserror::Error;
 use zolana_ring_indexer::rpc::RingListWriteView;
 use zolana_ring_policy::{registry_field, ring_id_field, ListId, Member, MemberError};
@@ -125,6 +128,10 @@ pub enum RecordUpdateError {
     Entry(#[from] CustomRingError),
     #[error("escrow ciphertext is not {AUDIT_CIPHERTEXT_LEN} bytes")]
     CiphertextLength,
+    #[error("escrow ephemeral key is not a tagged X25519 key")]
+    EphemeralKey,
+    #[error("escrow member is not the owner identity of the signer")]
+    EscrowOwner,
     #[error(transparent)]
     Member(#[from] MemberError),
     #[error("record update signing failed")]
@@ -155,56 +162,80 @@ pub mod method {
 impl RecordUpdateEntry {
     /// The leaf write the apply proof hashes for the entry.
     pub fn entry(&self) -> Result<QueueEntry, RecordUpdateError> {
-        Ok(self.write()?.entry()?)
+        let record = match self {
+            Self::Write(write) => list_write(write),
+            Self::Escrow(registration) => {
+                return Ok(QueueEntry::escrow(
+                    registration.member.0,
+                    &registration.key()?,
+                )?);
+            }
+            Self::WalletGrant(grant) => grant.record()?,
+        };
+        Ok(StorageWriteData::Record(record).entry()?)
     }
 
-    pub fn write(&self) -> Result<StorageWriteData, RecordUpdateError> {
-        match self {
-            Self::Write(write) => Ok(StorageWriteData {
-                member: write.member.0,
-                lists: WriteRecordsIxData {
-                    mask: write.mask.to_le_bytes(),
-                    value: write.value.to_le_bytes(),
-                },
-                mint_policy: mint_policy_write(write.mint_policy),
-                escrow_key: [0; 32],
-            }),
-            Self::Escrow(registration) => {
-                let ciphertext =
-                    <&[u8; AUDIT_CIPHERTEXT_LEN]>::try_from(registration.ciphertext.0.as_slice())
-                        .map_err(|_| RecordUpdateError::CiphertextLength)?;
-                let key = EscrowKey {
-                    nullifier_pk: &registration.nullifier_pk.0,
-                    ciphertext,
-                };
-                Ok(StorageWriteData {
-                    member: registration.member.0,
-                    lists: WriteRecordsIxData::default(),
-                    mint_policy: mint_policy_write(None),
-                    escrow_key: key.hash().map_err(CustomRingError::from)?,
-                })
-            }
-            Self::WalletGrant(grant) => {
-                let bit = ListId::Reader.record_bit();
-                let value = match grant.access {
-                    ReaderAccess::Granted => bit,
-                    ReaderAccess::Revoked => 0,
-                };
-                let member = Member::wallet_grant(
-                    &Member::from_bytes(grant.wallet.0)?,
-                    &Member::from_bytes(grant.reader.0)?,
-                )?;
-                Ok(StorageWriteData {
-                    member: *member.as_bytes(),
-                    lists: WriteRecordsIxData {
-                        mask: bit.to_le_bytes(),
-                        value: value.to_le_bytes(),
-                    },
-                    mint_policy: mint_policy_write(None),
-                    escrow_key: [0; 32],
-                })
-            }
+    /// An escrow entry publishes `signer` as its owner.
+    pub fn write(&self, signer: &Address) -> Result<StorageWriteData, RecordUpdateError> {
+        Ok(match self {
+            Self::Write(write) => StorageWriteData::Record(list_write(write)),
+            Self::Escrow(registration) => StorageWriteData::Escrow(registration.write(signer)?),
+            Self::WalletGrant(grant) => StorageWriteData::Record(grant.record()?),
+        })
+    }
+}
+
+impl EscrowRegistration {
+    pub fn key(&self) -> Result<EscrowKey<'_>, RecordUpdateError> {
+        Ok(EscrowKey {
+            nullifier_pk: &self.nullifier_pk.0,
+            ciphertext: self
+                .ciphertext
+                .0
+                .as_slice()
+                .try_into()
+                .map_err(|_| RecordUpdateError::CiphertextLength)?,
+        })
+    }
+
+    fn write(&self, owner: &Address) -> Result<EscrowWriteData, RecordUpdateError> {
+        let eph_pk = <[u8; 33]>::try_from(self.eph_pk.0.as_slice())
+            .ok()
+            .and_then(|bytes| X25519Pubkey::from_bytes(bytes).ok())
+            .ok_or(RecordUpdateError::EphemeralKey)?;
+        let key = self.key()?;
+        let write = EscrowWriteData {
+            owner: *owner,
+            nullifier_pk: *key.nullifier_pk,
+            eph_u: eph_pk.u(),
+            ciphertext: *key.ciphertext,
+        };
+        if write.member()? != self.member.0 {
+            return Err(RecordUpdateError::EscrowOwner);
         }
+        Ok(write)
+    }
+}
+
+impl WalletGrant {
+    fn record(&self) -> Result<RecordWriteData, RecordUpdateError> {
+        let bit = ListId::Reader.record_bit();
+        let value = match self.access {
+            ReaderAccess::Granted => bit,
+            ReaderAccess::Revoked => 0,
+        };
+        let member = Member::wallet_grant(
+            &Member::from_bytes(self.wallet.0)?,
+            &Member::from_bytes(self.reader.0)?,
+        )?;
+        Ok(RecordWriteData {
+            member: *member.as_bytes(),
+            lists: WriteRecordsIxData {
+                mask: bit.to_le_bytes(),
+                value: value.to_le_bytes(),
+            },
+            mint_policy: mint_policy_write(None),
+        })
     }
 }
 
@@ -271,5 +302,16 @@ impl RecordUpdateStatement {
 
     pub fn id(&self) -> Result<RecordUpdateId, CustomRingError> {
         Ok(RecordUpdateId(Hash(self.hash()?)))
+    }
+}
+
+fn list_write(write: &RingListWriteView) -> RecordWriteData {
+    RecordWriteData {
+        member: write.member.0,
+        lists: WriteRecordsIxData {
+            mask: write.mask.to_le_bytes(),
+            value: write.value.to_le_bytes(),
+        },
+        mint_policy: mint_policy_write(write.mint_policy),
     }
 }

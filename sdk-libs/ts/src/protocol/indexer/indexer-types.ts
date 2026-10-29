@@ -204,6 +204,18 @@ export interface StorageMemberOpeningsResponse extends Omit<RingMemberOpeningsRe
   readonly root: StorageRootView;
 }
 
+/** Rust `GetStorageMemberRecordsRequest`. */
+export interface StorageMemberRecordsRequest {
+  readonly registry: Address;
+  readonly expectedRoot: Hash;
+  readonly startIndex: bigint;
+  readonly limit: number;
+}
+
+export interface StorageMemberPageResponse extends Omit<RingMemberPageResponse, "root"> {
+  readonly root: StorageRootView;
+}
+
 /** Rust `GetStorageRecordPoolRequest`. */
 export interface StorageRecordPoolRequest extends StorageMemberOpeningsRequest {
   readonly openings: number;

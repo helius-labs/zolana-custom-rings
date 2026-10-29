@@ -1,15 +1,17 @@
 //! Member record views as record tree types, every opening checked against its root.
 
 use custom_ring_interface::{
-    EscrowKey, QueueEntry, AUDIT_CIPHERTEXT_LEN, QUAD_ARITY, QUAD_HEIGHT, TAGGED_X25519_KEY_LEN,
+    EscrowKey, QueueEntry, RingPolicy, AUDIT_CIPHERTEXT_LEN, QUAD_ARITY, QUAD_HEIGHT,
+    TAGGED_X25519_KEY_LEN,
 };
 use solana_address::Address;
 use spr_hasher::{primitives::hash_bytes, HasherError};
 use spr_keypair::X25519Pubkey;
 use zolana_ring_indexer::rpc::{
     GetRingApplyProofInputsResponse, GetRingMemberRecordsResponse,
-    GetStorageApplyProofInputsResponse, GetStorageRecordPoolResponse, RingMemberOpening,
-    RingMemberRecordView, RingRecordPathView, RingRecordWriteView, MAX_RING_MEMBER_PAGE_LIMIT,
+    GetStorageApplyProofInputsResponse, GetStorageMemberRecordsResponse,
+    GetStorageRecordPoolResponse, RingMemberOpening, RingMemberRecordView, RingRecordPathView,
+    RingRecordWriteView, MAX_RING_MEMBER_PAGE_LIMIT,
 };
 use zolana_ring_member_registry::{
     ApplyProofInputs, Canopy, MemberRecord, OpeningCheck, PoolSubject, QuadPath, RecordOpening,
@@ -37,6 +39,14 @@ pub struct RegistryTip {
     pub root: [u8; 32],
     pub root_index: u8,
     pub next_index: u64,
+}
+
+/// The newest own root a ring policy mirrors, every record page is read under it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StorageTip {
+    pub registry: Address,
+    pub root: [u8; 32],
+    pub revision: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -183,6 +193,44 @@ impl RegistryTip {
                 .enumerate()
                 .all(|(offset, row)| row.path.index == start_index + offset as u64)
             && page.next_leaf_index == (end_index < self.next_index).then_some(end_index)
+    }
+}
+
+impl StorageTip {
+    /// `None` before the own mirror holds a root of the registry the policy names.
+    pub fn mirrored(policy: &RingPolicy) -> Option<Self> {
+        let mirror = &policy.own_roots;
+        let newest = mirror.roots[0];
+        (mirror.registry == policy.records && newest.hash != [0; 32]).then_some(Self {
+            registry: policy.records,
+            root: newest.hash,
+            revision: newest.revision.value(),
+        })
+    }
+
+    /// `None` after the last page, refused unless the page holds every record from `start_index`.
+    pub fn next_page(
+        &self,
+        page: &GetStorageMemberRecordsResponse,
+        start_index: u64,
+    ) -> Result<Option<u64>, AuditError> {
+        let next_index = page.root.next_index;
+        let end_index = start_index
+            .saturating_add(MAX_RING_MEMBER_PAGE_LIMIT)
+            .min(next_index);
+        let complete = page.root.root.0 == self.root
+            && page.root.revision == self.revision
+            && start_index <= end_index
+            && page.records.len() as u64 == end_index - start_index
+            && page
+                .records
+                .iter()
+                .zip(start_index..)
+                .all(|(row, index)| row.path.index == index)
+            && page.next_leaf_index == (end_index < next_index).then_some(end_index);
+        complete
+            .then_some(page.next_leaf_index)
+            .ok_or(AuditError::InvalidMemberRegistry)
     }
 }
 

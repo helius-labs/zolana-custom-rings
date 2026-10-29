@@ -160,9 +160,9 @@ impl RecordUpdateCheck<'_> {
             return Err(RecordUpdateRefusal::RegistryNotServed);
         }
         // 3. Every entry is the signer's to write and every escrow key is sealed to the ring auditor.
-        let signer = RecordSigner::new(signer, context.config.authority)?;
+        let record_signer = RecordSigner::new(signer, context.config.authority)?;
         for entry in entries {
-            if !signer.may_write(entry) {
+            if !record_signer.may_write(entry) {
                 return Err(RecordUpdateRefusal::Unauthorized);
             }
             if let RecordUpdateEntry::Escrow(registration) = entry {
@@ -175,7 +175,7 @@ impl RecordUpdateCheck<'_> {
         }
         let writes = entries
             .iter()
-            .map(RecordUpdateEntry::write)
+            .map(|entry| entry.write(&signer))
             .collect::<Result<Vec<_>, _>>()
             .map_err(invalid_entry)?;
         let urgent = writes

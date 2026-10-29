@@ -9,7 +9,7 @@ use spr_keypair::{NullifierKey, X25519Keypair, X25519Pubkey};
 use spr_transaction::instructions::transact::canonical_shape;
 use zolana_ring_client::{
     auditor_view_tag,
-    records::{MemberOpeningRead, RegistryTip},
+    records::{MemberOpeningRead, StorageTip},
     rpc::{
         cursor_in_bounds, limit_in_bounds, utxo_hashes_in_bounds, Attestation,
         AuditedUtxosAttestation, AuditedUtxosPage, AuditorKeyStatement, AuthorityAuth,
@@ -23,8 +23,7 @@ use zolana_ring_client::{
     TransactionAudit,
 };
 use zolana_ring_indexer::rpc::{
-    GetRingMemberOpeningsRequest, GetRingMemberRecordsRequest, RingMemberOpening,
-    MAX_RING_MEMBER_PAGE_LIMIT,
+    GetStorageMemberRecordsRequest, RingMemberOpening, MAX_RING_MEMBER_PAGE_LIMIT,
 };
 use zolana_ring_policy::Member;
 use zolana_ring_transaction::RingAssets;
@@ -425,95 +424,47 @@ impl<S: TransactionSource> AuditService<S> {
         Ok(())
     }
 
-    /// Rereads only the members the writes applied since the last refresh name, else every record.
+    /// Every escrowed key under the root the ring policy mirrors, read again once that root moves.
     async fn refresh_escrow(&self, store: &AuditStore) -> Result<(), RingRpcError> {
-        let source = &self.shared.source;
-        let Some(registry) = source.ring_chain_status(self.ring).await?.registry else {
+        let Some(tip) = self.shared.source.records_root(self.ring).await? else {
             return Ok(());
         };
-        let newest = registry
-            .history
-            .get(usize::from(registry.history_cursor))
-            .and_then(Option::as_ref)
-            .ok_or(RingRpcError::InvalidIndexerResponse)?;
         let root = EscrowRoot {
-            root: newest.root.0,
-            applied: newest.applied,
+            root: tip.root,
+            revision: tip.revision,
         };
-        let current = store.escrow_root();
         // A lagging RPC node answers an older root, the map never moves back to it.
-        let settled = current
-            .is_some_and(|current| current.root == root.root || root.applied < current.applied);
+        let settled = store
+            .escrow_root()
+            .is_some_and(|current| current.root == root.root || root.revision < current.revision);
         if !settled {
-            let tip = RegistryTip {
-                root: root.root,
-                root_index: registry.history_cursor,
-                next_index: u64::from(registry.next_index),
-            };
-            match current.and_then(|current| store.applied_members(current.applied..root.applied)) {
-                Some(members) => {
-                    store.update_escrow(root, self.reread_members(tip, members).await?)
-                }
-                None => store.replace_escrow(root, self.rescan_registry(tip).await?),
-            }
-        }
-        if registry.queue_head < registry.queue_tail {
-            let queue = source.ring_record_queue(self.ring).await?;
-            store.remember_pending(registry.queue_head..registry.queue_tail, &queue.entries);
+            store.replace_escrow(root, self.rescan_records(tip).await?);
         }
         Ok(())
     }
 
-    /// Each member's opening under the tip, `None` where it escrows no key.
-    async fn reread_members(
+    /// Every record from leaf 1, each verified under the mirrored root.
+    async fn rescan_records(
         &self,
-        tip: RegistryTip,
-        members: Vec<[u8; 32]>,
-    ) -> Result<Vec<([u8; 32], Option<EscrowedOwner>)>, RingRpcError> {
-        let mut reread = Vec::with_capacity(members.len());
-        for chunk in members.chunks(MAX_RING_MEMBER_PAGE_LIMIT as usize) {
-            let response = self
-                .shared
-                .source
-                .ring_member_openings(GetRingMemberOpeningsRequest {
-                    ring_program_id: self.ring.into(),
-                    members: chunk.iter().copied().map(Hash).collect(),
-                    expected_root: Hash(tip.root),
-                })
-                .await?;
-            if response.openings.len() != chunk.len() {
-                return Err(RingRpcError::InvalidIndexerResponse);
-            }
-            for (member, opening) in chunk.iter().zip(&response.openings) {
-                reread.push((*member, escrowed_owner(opening, &tip.root, member)?));
-            }
-        }
-        Ok(reread)
-    }
-
-    /// Every record from leaf 1, each verified under the chain-pinned root.
-    async fn rescan_registry(
-        &self,
-        tip: RegistryTip,
+        tip: StorageTip,
     ) -> Result<HashMap<[u8; 32], EscrowedOwner>, RingRpcError> {
         let mut owners = HashMap::new();
-        let mut start_index = 1;
-        while start_index < tip.next_index {
-            let response = self
+        let mut start_index = Some(1);
+        while let Some(start) = start_index {
+            let page = self
                 .shared
                 .source
-                .ring_member_records(GetRingMemberRecordsRequest {
-                    ring_program_id: self.ring.into(),
+                .storage_member_records(GetStorageMemberRecordsRequest {
+                    registry: tip.registry.into(),
                     expected_root: Hash(tip.root),
-                    expected_next_index: tip.next_index,
-                    start_index,
+                    start_index: start,
                     limit: MAX_RING_MEMBER_PAGE_LIMIT,
                 })
                 .await?;
-            if !tip.covers(&response, start_index) {
-                return Err(RingRpcError::InvalidIndexerResponse);
-            }
-            for row in &response.records {
+            start_index = tip
+                .next_page(&page, start)
+                .map_err(|_| RingRpcError::InvalidIndexerResponse)?;
+            for row in &page.records {
                 let opening = RingMemberOpening {
                     present: true,
                     record: row.record.clone(),
@@ -524,7 +475,6 @@ impl<S: TransactionSource> AuditService<S> {
                     owners.insert(member, owner);
                 }
             }
-            start_index = response.next_leaf_index.unwrap_or(tip.next_index);
         }
         Ok(owners)
     }
