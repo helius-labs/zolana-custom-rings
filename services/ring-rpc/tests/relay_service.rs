@@ -1,9 +1,10 @@
-//! A wallet relays a sealed transfer, Ring RPC proves, pays and sends it.
+//! A wallet relays a sealed transfer, deposit or merge, Ring RPC proves, pays and sends it.
 
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use custom_ring_interface::cosign::CoSignDemand;
+use custom_ring_sdk::DepositAsset;
 use jsonrpsee::RpcModule;
 use solana_address::Address;
 use solana_hash::Hash;
@@ -13,6 +14,7 @@ use solana_signature::Signature;
 use solana_signer::Signer;
 use solana_transaction::versioned::VersionedTransaction;
 use spr_client::ComputeBudgetConfig;
+use spr_event::EncryptedRingDepositData;
 use spr_event::MessageData;
 use spr_interface::{
     instruction::instruction_data::transact::{OwnerTag, TransactOutput},
@@ -21,16 +23,17 @@ use spr_interface::{
 use spr_keypair::{NullifierKey, ShieldedKeypair, SigningKey, ViewingKey, X25519Keypair};
 use spr_transaction::{
     instructions::transact::ExternalData, utxo::SppProofInputUtxo, Data, Mint, SppProofOutputUtxo,
-    Utxo,
+    Utxo, WalletUtxo,
 };
 use zolana_ring_client::rpc::{
-    GetRelayQuoteRequest, GetRelayStatusRequest, PrepareRelayRequest, RelayIntent, RelayOperation,
-    RelayProofInputs, RelayQuote, RelayRail, RelayStatus, RelayStep, SubmitRelayRequest,
-    GET_RELAY_QUOTE, GET_RELAY_STATUS, PREPARE_RELAY, SUBMIT_RELAY,
+    GetRelayQuoteRequest, GetRelayStatusRequest, PrepareRelayRequest, RelayDepositInputs,
+    RelayIntent, RelayMergeInputs, RelayOperation, RelayProofInputs, RelayQuote, RelayRail,
+    RelayStatus, RelayStep, SubmitRelayRequest, GET_RELAY_QUOTE, GET_RELAY_STATUS, PREPARE_RELAY,
+    SUBMIT_RELAY,
 };
 use zolana_ring_rpc::{
     relay_module, ChainOutcome, FeePayerSubmit, ProvenRelay, Relay, RelayChain, RelayParts,
-    RelayProofRequest, RelayProver, RingRpcError, ServedRings, Store,
+    RelayPayload, RelayProofRequest, RelayProver, RingRpcError, ServedRings, Store,
 };
 use zolana_ring_transaction::{AnonymousPlan, TaggedPayment};
 
@@ -50,9 +53,13 @@ impl RelayProver for RecordingProver {
             .lock()
             .expect("requests")
             .push((request.fee_payer, request.owner_signature));
-        let signers = match request.proof_inputs.rail {
-            RelayRail::Confidential => vec![request.proof_inputs.sender.solana_address()?],
-            _ => Vec::new(),
+        let signers = match request.payload {
+            RelayPayload::Transfer(proof_inputs) => match proof_inputs.rail {
+                RelayRail::Confidential => vec![proof_inputs.sender.solana_address()?],
+                _ => Vec::new(),
+            },
+            RelayPayload::Deposit(deposit) => vec![deposit.depositor],
+            RelayPayload::Merge(_) => Vec::new(),
         };
         let accounts = core::iter::once(AccountMeta::new(request.fee_payer, true))
             .chain(
@@ -255,10 +262,12 @@ fn signed_request(quote: RelayQuote, proof_inputs: &RelayProofInputs) -> Prepare
             RelayRail::Anonymous { .. } => RelayIntent::Anonymous {
                 proof_inputs: encoded,
                 owner_signature,
+                token_account_setup: Vec::new(),
             },
             _ => RelayIntent::Confidential {
                 proof_inputs: encoded,
                 owner_signature,
+                token_account_setup: Vec::new(),
             },
         },
     }
@@ -357,6 +366,123 @@ async fn a_confidential_transfer_relays_through_a_signed_message() {
         status,
         RelayStatus::Sent {
             signature: sent.signatures[0].into(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn a_deposit_relays_through_the_depositors_signature() {
+    let fixture = Fixture::new().await;
+    let quote = fixture.quote(RelayOperation::Deposit).await;
+    let depositor = Keypair::new_from_array([41; 32]);
+    let deposit = RelayDepositInputs {
+        ring_program_id: RING,
+        tree: Address::new_from_array([42; 32]),
+        depositor: depositor.pubkey(),
+        recipient: owner().shielded_address().expect("address"),
+        asset: DepositAsset::Sol,
+        amount: 700,
+        view_tag: [43; 32],
+        encrypted: EncryptedRingDepositData {
+            tx_viewing_pk: [44; 33],
+            salt: [45; 16],
+            ciphertext: vec![46; 8],
+        },
+        blinding_secret: zeroize::Zeroizing::new([47; 32]),
+        audit_ephemeral_key: zeroize::Zeroizing::new([48; 32]),
+    };
+    let request = PrepareRelayRequest {
+        ring: RING.into(),
+        quote,
+        intent: RelayIntent::Deposit {
+            proof_inputs: deposit.encode().expect("encode").to_vec().into(),
+        },
+    };
+
+    let step: RelayStep = fixture.call(PREPARE_RELAY, &request).await;
+
+    let RelayStep::SignMessage { relay_id, message } = step else {
+        panic!("the depositor signs its funding, got {step:?}");
+    };
+    assert!(fixture.sent().is_empty());
+    let _: RelayStatus = fixture
+        .call(
+            SUBMIT_RELAY,
+            SubmitRelayRequest {
+                relay_id: relay_id.clone(),
+                signer: depositor.pubkey().into(),
+                signature: depositor.sign_message(&message.0).into(),
+            },
+        )
+        .await;
+    let [sent] = fixture.sent().try_into().expect("one sent transaction");
+    assert_eq!(
+        sent.message.static_account_keys()[..2],
+        [fixture.fee_payer, depositor.pubkey()]
+    );
+    assert!(signers_verify(&sent));
+    let status: RelayStatus = fixture
+        .call(GET_RELAY_STATUS, GetRelayStatusRequest { relay_id })
+        .await;
+    assert_eq!(
+        status,
+        RelayStatus::Confirmed {
+            signature: sent.signatures[0].into(),
+            slot: SLOT + 1,
+        }
+    );
+}
+
+#[tokio::test]
+async fn a_merge_relays_with_one_wallet_call() {
+    let fixture = Fixture::new().await;
+    let quote = fixture.quote(RelayOperation::Merge).await;
+    let spends = proof_inputs(RelayRail::Confidential);
+    let note = |spend: &SppProofInputUtxo| WalletUtxo {
+        utxo: spend.utxo.clone(),
+        nullifier_pubkey: spend.nullifier_pubkey,
+        utxo_hash: spend.utxo_hash,
+        nullifier: spend.nullifier,
+        tx_viewing_key: None,
+        data_hash: None,
+        ring_data_hash: None,
+        tree_id: spend.tree_id,
+        leaf_index: spend.leaf_index,
+        latest_tree_id: None,
+        slot: 0,
+        tx_signature: Signature::default(),
+        slot_index: 0,
+    };
+    let merge = RelayMergeInputs {
+        ring_program_id: RING,
+        sender: spends.sender,
+        nullifier_key: NullifierKey::from_secret(*spends.nullifier_key.secret()),
+        inputs: spends.inputs.iter().map(note).collect(),
+    };
+    let request = PrepareRelayRequest {
+        ring: RING.into(),
+        quote,
+        intent: RelayIntent::Merge {
+            proof_inputs: merge.encode().expect("encode").to_vec().into(),
+        },
+    };
+
+    let step: RelayStep = fixture.call(PREPARE_RELAY, &request).await;
+
+    let RelayStep::Submitted { relay_id } = step else {
+        panic!("a merge needs no wallet signature, got {step:?}");
+    };
+    let [sent] = fixture.sent().try_into().expect("one sent transaction");
+    assert_eq!(sent.signatures.len(), 1);
+    assert!(signers_verify(&sent));
+    let status: RelayStatus = fixture
+        .call(GET_RELAY_STATUS, GetRelayStatusRequest { relay_id })
+        .await;
+    assert_eq!(
+        status,
+        RelayStatus::Confirmed {
+            signature: sent.signatures[0].into(),
+            slot: SLOT + 1,
         }
     );
 }

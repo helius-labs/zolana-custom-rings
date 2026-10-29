@@ -117,6 +117,7 @@ async fn an_anonymous_relay_sends_no_path_or_record_request_and_signs_the_messag
     let RelayIntent::Anonymous {
         proof_inputs,
         owner_signature,
+        ..
     } = &request.intent
     else {
         panic!("the anonymous intent");

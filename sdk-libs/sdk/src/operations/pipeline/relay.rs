@@ -61,6 +61,7 @@ impl RingTransfer<Anonymous<'_>> {
             intent: RelayIntent::Anonymous {
                 proof_inputs: Base64String(proof_inputs.to_vec()),
                 owner_signature: SerializableSignature(Signature::from(owner_signature)),
+                token_account_setup: self.rail.token_account_setup.clone(),
             },
         }))
     }

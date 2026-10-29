@@ -182,7 +182,6 @@ impl Relayed<'_> {
                     },
                 )
             }
-            RelayRail::Deposit | RelayRail::Merge => return Err(RingError::RelayRailUnserved),
         };
         Ok(Staged {
             proof_inputs,

@@ -91,7 +91,9 @@ pub use migration::Migrator;
 pub use origins::{OriginError, OriginPolicy, OriginTransport, Origins};
 pub use record_update::{RecordUpdateRefusal, BATCH_WINDOW_SLOTS};
 pub use record_writer::{RecordWriter, RECORD_FLUSH_INTERVAL};
-pub use relay::{Relay, RelayError, RelayParts, ServedRings, QUOTE_SLOTS, RELAY_TRACK_INTERVAL};
+pub use relay::{
+    Relay, RelayError, RelayParts, RelayPayload, ServedRings, QUOTE_SLOTS, RELAY_TRACK_INTERVAL,
+};
 pub use relay_chain::{ChainOutcome, FeePayerSubmit, RelayChain, SolanaRelayChain};
 pub use relay_prover::{ProvenRelay, RelayProofRequest, RelayProver, SdkRelayProver};
 pub use relay_submit::{CollectedSignature, RelaySubmit, RelayTransaction};

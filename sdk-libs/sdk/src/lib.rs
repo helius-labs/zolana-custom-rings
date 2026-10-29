@@ -64,13 +64,13 @@ pub use crate::{
     },
     client::{RingClient, RingIndexerBackend},
     deposit::{
-        fetch_asset_id_async, DepositRecipient, PreparedRingDeposit, RingDeposit,
+        fetch_asset_id_async, DepositRecipient, PreparedRingDeposit, RelayedDeposit, RingDeposit,
         RingDepositReceipt,
     },
     error::RingError,
     merge::{
-        CustomRingMerge, CustomRingMergeInstruction, MergeProofInput, PreparedCustomRingMerge,
-        ProvenCustomRingMerge, RingMergeOperation, MAX_RING_MERGE_INPUTS,
+        CustomRingMerge, CustomRingMergeInstruction, MergeProofInput, MergeRelay,
+        PreparedCustomRingMerge, ProvenCustomRingMerge, RingMergeOperation, MAX_RING_MERGE_INPUTS,
         MERGE_DEFAULT_INPUT_COUNT,
     },
     pipeline::{
