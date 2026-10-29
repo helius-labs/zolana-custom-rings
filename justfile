@@ -370,12 +370,6 @@ test-ts:
 # Ring TypeScript SDK flows against a fresh validator, Photon, ring indexer, ring prover and ring RPC.
 test-ts-e2e *args: (_test-ts-live "test:ts:e2e" args)
 
-# The fresh ring controls suite on the same stack, its runner creates its own mints.
-test-ts-ring-controls: (_test-ts-live "test:ts:ring-controls")
-
-# One ring happy path through the ring indexer, on the ZOLANA_PHOTON_BIN, ZOLANA_SPP_PROGRAM_SO and ZOLANA_USER_REGISTRY_SO builds when set.
-test-ring-compat: (_test-ts-live "test:ts:ring-compat")
-
 _test-ts-live test-script *args: build-ring-program _spp-programs build-photon build-ring-indexer build-cli build-ring-rpc build-prover-server zolana::build-cli zolana::ensure-surfpool fetch-custom-ring-keys
     #!/usr/bin/env bash
     set -euo pipefail

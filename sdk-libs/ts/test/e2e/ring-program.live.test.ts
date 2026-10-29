@@ -8,7 +8,6 @@ import { address, generateKeyPairSigner } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
 import {
-  DEFAULT_INSERT_FEE,
   createRingConfigInstruction,
   deployRingProgram,
   fetchRingProgramConfig,
@@ -93,6 +92,5 @@ describe("ring program", () => {
     expect(config.authority).toBe(operator.address);
     expect(config.hasPolicy).toBe(false);
     expect(config.mode).toBe("confidential");
-    expect(config.insertFee).toBe(DEFAULT_INSERT_FEE);
   }, 900_000);
 });

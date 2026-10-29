@@ -4,26 +4,15 @@ import type { ChainReader } from "@heliuslabs/zolana/client";
 import { decodeRingConfig, SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana/interface";
 import { addressBytes } from "@heliuslabs/zolana/internal";
 import type { RequestContext } from "@heliuslabs/zolana/interface";
-import {
-  ringAuthAddress,
-  ringCoSignerPda,
-  ringConfigPda,
-  ringMemberRegistryPda,
-  ringPolicyPda,
-  ringRecordQueuePda,
-} from "../pda/index.js";
+import { ringAuthAddress, ringCoSignerPda, ringConfigPda, ringPolicyPda } from "../pda/index.js";
 
 import {
   decodeRingCoSigner,
-  decodeRingMemberRegistry,
   decodeRingPolicy,
   decodeRingProgramConfig,
-  decodeRingRecordQueue,
   type RingCoSigner,
-  type RingMemberRegistry,
   type RingPolicy,
   type RingProgramConfig,
-  type RingRecordQueue,
 } from "../codec/ring-codecs.js";
 import { RingError, type RingErrorCode } from "../error.js";
 
@@ -54,20 +43,6 @@ export function fetchRingProgramConfig(
   });
 }
 
-/** Mirrors Rust `CustomRing::require_registry`. */
-export function fetchRingMemberRegistry(
-  client: AccountReader,
-  ringProgramId: Address,
-  context?: RequestContext,
-): Promise<RingMemberRegistry> {
-  return readRingAccount(client, ringProgramId, context, {
-    pda: ringMemberRegistryPda,
-    decode: decodeRingMemberRegistry,
-    missing: "RING_MEMBER_REGISTRY_MISSING",
-    invalid: "RING_MEMBER_REGISTRY_INVALID",
-  });
-}
-
 export function fetchRingPolicy(
   client: AccountReader,
   ringProgramId: Address,
@@ -78,20 +53,6 @@ export function fetchRingPolicy(
     decode: decodeRingPolicy,
     missing: "RING_POLICY_MISSING",
     invalid: "RING_POLICY_INVALID",
-  });
-}
-
-/** Mirrors Rust `CustomRing::require_queue`. */
-export function fetchRingRecordQueue(
-  client: AccountReader,
-  ringProgramId: Address,
-  context?: RequestContext,
-): Promise<RingRecordQueue> {
-  return readRingAccount(client, ringProgramId, context, {
-    pda: ringRecordQueuePda,
-    decode: decodeRingRecordQueue,
-    missing: "RING_RECORD_QUEUE_MISSING",
-    invalid: "RING_RECORD_QUEUE_INVALID",
   });
 }
 
@@ -109,26 +70,6 @@ export async function fetchRingCoSignerRecord(
   if (record?.bump !== bump || record.signer !== signer)
     throw new RingError("RING_CO_SIGNER_INVALID", { details: { ringProgramId, address } });
   return record;
-}
-
-/** A curator's registry named by account, the canonical registry of the program owning it. */
-export async function fetchCuratorRegistry(
-  client: AccountReader,
-  registry: Address,
-  context?: RequestContext,
-): Promise<Readonly<{ ringProgramId: Address; registry: RingMemberRegistry }>> {
-  const account = await client.getAccount(registry, context);
-  if (account === undefined)
-    throw new RingError("RING_MEMBER_REGISTRY_MISSING", {
-      details: { registry },
-    });
-  const [expected, bump] = await ringMemberRegistryPda(account.owner);
-  const decoded = decodeRingMemberRegistry(account.data);
-  if (registry !== expected || decoded.bump !== bump)
-    throw new RingError("RING_MEMBER_REGISTRY_INVALID", {
-      details: { registry },
-    });
-  return Object.freeze({ ringProgramId: account.owner, registry: decoded });
 }
 
 /** Rust `CustomRing::require_active`, every SPP call through the ring refuses one unregistered, inactive or paused. */

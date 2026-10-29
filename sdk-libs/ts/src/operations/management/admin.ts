@@ -1,7 +1,6 @@
 import type { AccountMeta, Address, Instruction } from "@solana/kit";
 
 import {
-  runKitRpc,
   SYSTEM_PROGRAM,
   meta,
   signerAddress,
@@ -12,17 +11,13 @@ import {
   ZERO_32,
   equalBytes,
 } from "@heliuslabs/zolana/internal";
-import type { KitRpcAccess } from "@heliuslabs/zolana/client";
 import { SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana/interface";
-import type { RequestContext } from "@heliuslabs/zolana/interface";
 import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import {
   ringAuthAddress,
   ringCoSignerAddress,
   ringConfigAddress,
-  ringMemberRegistryAddress,
   ringPolicyAddress,
-  ringRecordQueueAddress,
 } from "../../protocol/pda/index.js";
 import { isSmallOrder } from "../../crypto/keys/x25519.js";
 
@@ -63,10 +58,7 @@ export function ringComputeUnitLimit(tag: RingInstructionTag): number {
     case RingInstructionTag.transact:
     case RingInstructionTag.merge:
     case RingInstructionTag.delegateTransact:
-    case RingInstructionTag.registerKey:
     case RingInstructionTag.auditedDeposit:
-    case RingInstructionTag.authorityWriteRecords:
-    case RingInstructionTag.applyRecords:
       return PROOF_UNITS;
     case RingInstructionTag.deposit:
       return 200_000;
@@ -131,11 +123,11 @@ export async function initSppRingConfigInstruction(
     config: RingProgramConfig;
   }>,
 ): Promise<Instruction> {
-  const [config, protocolConfig, ringAuth, registry] = await Promise.all([
+  const [config, protocolConfig, ringAuth, policy] = await Promise.all([
     ringConfigAddress(input.ringProgramId),
     protocolConfigAddress(),
     ringAuthAddress(input.ringProgramId),
-    ringMemberRegistryAddress(input.ringProgramId),
+    ringPolicyAddress(input.ringProgramId),
   ]);
   return ringInstruction(input.ringProgramId, Uint8Array.of(RingInstructionTag.initSppRingConfig), [
     meta(input.payer, true, true),
@@ -145,35 +137,8 @@ export async function initSppRingConfigInstruction(
     meta(ringAuth, false, true),
     meta(SYSTEM_PROGRAM, false, false),
     meta(SHIELDED_POOL_PROGRAM_ID, false, false),
-    ...(input.config.hasPolicy ? [meta(registry, false, false)] : []),
+    ...(input.config.hasPolicy ? [meta(policy, false, false)] : []),
   ]);
-}
-
-/** Rust `CustomRing::create_member_registry`, the registry with its sentinel and the record queue. */
-export async function createMemberRegistryInstruction(
-  input: Readonly<{
-    ringProgramId: Address;
-    payer: SignerAccount;
-    authority: SignerAccount;
-  }>,
-): Promise<Instruction> {
-  const [config, registry, queue] = await Promise.all([
-    ringConfigAddress(input.ringProgramId),
-    ringMemberRegistryAddress(input.ringProgramId),
-    ringRecordQueueAddress(input.ringProgramId),
-  ]);
-  return ringInstruction(
-    input.ringProgramId,
-    Uint8Array.of(RingInstructionTag.createMemberRegistry),
-    [
-      meta(input.payer, true, true),
-      meta(input.authority, true, false),
-      meta(config, false, false),
-      meta(registry, false, true),
-      meta(queue, false, true),
-      meta(SYSTEM_PROGRAM, false, false),
-    ],
-  );
 }
 
 /** Rust `SyncRoots`, permissionless, `registry` is the ring's records or its curator. */
@@ -278,33 +243,6 @@ export async function clearRingCoSignerInstruction(
   ]);
 }
 
-/** Rust `CustomRing::set_insert_fee`, lamports a member's record write pays the authority, zero writes free. */
-export async function setRingInsertFeeInstruction(
-  input: Readonly<{
-    client: Pick<KitRpcAccess, "solanaRpc">;
-    ringProgramId: Address;
-    authority: SignerAccount;
-    fee: bigint;
-  }>,
-  context?: RequestContext,
-): Promise<Instruction> {
-  if (input.fee !== 0n) {
-    const minimum = await runKitRpc("getMinimumBalanceForRentExemption", context, (abortSignal) =>
-      input.client.solanaRpc.getMinimumBalanceForRentExemption(0n).send({ abortSignal }),
-    );
-    // Rust `InsertFeeBelowRent`, a smaller fee leaves an empty authority below rent and fails every paid write.
-    if (input.fee < minimum)
-      throw new RingError("RING_CONFIG_INVALID", {
-        details: { reason: "InsertFeeBelowRent", fee: input.fee, minimum },
-      });
-  }
-  const data = new Writer()
-    .u8(RingInstructionTag.setInsertFee, "tag")
-    .u64(input.fee, "fee")
-    .finish();
-  return configWriteInstruction(input, data);
-}
-
 /** Rust `CustomRing::set_delegate`, the config authority and the delegate sign, permanent and it turns key escrow on. */
 export async function setRingDelegateInstruction(
   input: Readonly<{
@@ -325,15 +263,15 @@ export async function setRingDelegateInstruction(
   ]);
 }
 
-/** Where a policy list is read, the ring's own registry or another ring's. */
+/** Where a policy list is read, the ring's own records or a curator `StorageRegistry`. */
 export type RingPolicySourceOwner =
   | Readonly<{ kind: "own" }>
-  | Readonly<{ kind: "curator"; ringProgramId: Address }>;
+  | Readonly<{ kind: "curator"; registry: Address }>;
 
-/** A referenced list read from a curator ring's registry. */
+/** A referenced list read from a curator `StorageRegistry`. */
 export interface RingSharedSource {
   readonly listId: ListId;
-  readonly curatorRingProgramId: Address;
+  readonly curatorRegistry: Address;
 }
 
 /** A table and the lists it reads from curators, every other referenced list reads the ring's own. */
@@ -351,14 +289,8 @@ export async function setRingPolicySourceInstruction(
     source: RingPolicySourceOwner;
   }>,
 ): Promise<Instruction> {
-  const curator =
-    input.source.kind === "curator"
-      ? curatorRegistry(input.ringProgramId, input.source.ringProgramId)
-      : undefined;
-  const [accounts, curatorAccount] = await Promise.all([
-    policyWriteMetas(input.ringProgramId, input.authority),
-    curator,
-  ]);
+  const curatorAccount = input.source.kind === "curator" ? input.source.registry : undefined;
+  const accounts = await policyWriteMetas(input.ringProgramId, input.authority);
   return ringInstruction(
     input.ringProgramId,
     Uint8Array.of(
@@ -384,28 +316,16 @@ export function setRingPolicyRulesInstruction(
   return policyTableInstruction(RingInstructionTag.setPolicyRules, input);
 }
 
-/** `[authority, config]`, the config takes the write. */
-async function configWriteInstruction(
-  input: Readonly<{ ringProgramId: Address; authority: SignerAccount }>,
-  data: Uint8Array,
-): Promise<Instruction> {
-  const config = await ringConfigAddress(input.ringProgramId);
-  return ringInstruction(input.ringProgramId, data, [
-    meta(input.authority, true, false),
-    meta(config, false, true),
-  ]);
-}
-
-/** `CreatePolicy`, `SetPolicyRules` and `SetPolicySource` write the registry. */
+/** `CreatePolicy`, `SetPolicyRules` and `SetPolicySource` write the ring policy. */
 async function policyWriteMetas(
   ringProgramId: Address,
   authority: SignerAccount,
 ): Promise<readonly AccountMeta[]> {
-  const [config, registry] = await Promise.all([
+  const [config, policy] = await Promise.all([
     ringConfigAddress(ringProgramId),
-    ringMemberRegistryAddress(ringProgramId),
+    ringPolicyAddress(ringProgramId),
   ]);
-  return [meta(authority, true, false), meta(config, false, false), meta(registry, false, true)];
+  return [meta(authority, true, false), meta(config, false, false), meta(policy, false, true)];
 }
 
 /** Rust `CustomRing::policy_table`, curator registries follow in first-use order and the transaction fits v1. */
@@ -425,7 +345,7 @@ async function policyTableInstruction(
   const curators: Address[] = [];
   const writer = new Writer().u8(tag, "tag").u8(referenced.length, "sources.length");
   for (const listId of referenced) {
-    const curator = shared.find((source) => source.listId === listId)?.curatorRingProgramId;
+    const curator = shared.find((source) => source.listId === listId)?.curatorRegistry;
     if (curator !== undefined && !curators.includes(curator)) curators.push(curator);
     writer
       .u8(listId, "listId")
@@ -435,22 +355,13 @@ async function policyTableInstruction(
   const { rules } = table;
   writer.u8(rules.length, "rules.length");
   for (const rule of rules) writer.bytes(encodeRule(rule), 32, "rule");
-  const [accounts, curatorAccounts] = await Promise.all([
-    policyWriteMetas(input.ringProgramId, input.authority),
-    Promise.all(curators.map((curator) => curatorRegistry(input.ringProgramId, curator))),
-  ]);
+  const accounts = await policyWriteMetas(input.ringProgramId, input.authority);
   const instruction = ringInstruction(input.ringProgramId, writer.finish(), [
     ...accounts,
-    ...curatorAccounts.map((registry) => meta(registry, false, false)),
+    ...curators.map((registry) => meta(registry, false, false)),
   ]);
   checkFits(input.authority, instruction, ringComputeUnitLimit(tag));
   return instruction;
-}
-
-/** A curator source names another ring's registry, the own registry keeps its hard floor. */
-function curatorRegistry(ringProgramId: Address, curator: Address): Promise<Address> {
-  if (curator === ringProgramId) throw sourceInvalid("OwnCurator");
-  return ringMemberRegistryAddress(curator);
 }
 
 /** Rust `fit`, the signed transaction must fit v1 before the authority signs it. */

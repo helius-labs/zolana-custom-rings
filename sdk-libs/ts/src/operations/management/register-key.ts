@@ -1,23 +1,12 @@
-import type { Address, Instruction } from "@solana/kit";
+import type { Address } from "@solana/kit";
 
 import {
   type RingProver,
-  type RingRecordReader,
   type RingSealedKey,
   type RingSealedNullifierKey as SealedNullifierKey,
 } from "../../rpc/ports.js";
 import type { ChainReader } from "@heliuslabs/zolana/client";
-import {
-  waitForProjection,
-  meta,
-  type SignerAccount,
-  Writer,
-  addressBytes,
-  ZERO_32,
-  equalBytes,
-  rightAlign,
-  indexerScalars,
-} from "@heliuslabs/zolana/internal";
+import { addressBytes, equalBytes, rightAlign, indexerScalars } from "@heliuslabs/zolana/internal";
 import type { Bytes31, Bytes32, Bytes33, RequestContext } from "@heliuslabs/zolana/interface";
 import {
   symmetricApply,
@@ -27,34 +16,16 @@ import {
 } from "@heliuslabs/zolana/keypair";
 import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import type { MemberRecord, QuadPath } from "../../protocol/membership/member-registry.js";
-import {
-  ringConfigAddress,
-  ringMemberRegistryAddress,
-  ringRecordQueueAddress,
-} from "../../protocol/pda/index.js";
 import { auditSharedSecret } from "../../crypto/audit/audit.js";
 
-import { RingInstructionTag } from "./admin.js";
 import {
   checkedCustomRingProof,
-  queueAdmitsMemberWrite,
   type RingProgramConfig,
 } from "../../protocol/codec/ring-codecs.js";
-import {
-  fetchRingMemberRegistry,
-  fetchRingProgramConfig,
-  fetchRingRecordQueue,
-} from "../../protocol/membership/config.js";
+import { fetchRingProgramConfig } from "../../protocol/membership/config.js";
 import { RingError, wrapRingError } from "../../protocol/error.js";
-import type { MemberOpeningRead } from "../../protocol/membership/member-opening.js";
 import { memberOfTag } from "../../protocol/membership/policy.js";
-import { MEMBER_REGISTRY_PROJECTION_ERRORS } from "../../rpc/projection.js";
-import { feeAccounts, writeMaxFee } from "./record-writes.js";
-import {
-  readNewest,
-  readOwnRecords,
-  type RingRecordReadClient,
-} from "../../rpc/registered-record.js";
+import { readOwnRecords, type RingRecordReadClient } from "../../rpc/registered-record.js";
 import type { EscrowEntry } from "./record-updates.js";
 import { registerKeyStatementHash } from "../../protocol/proof/statement.js";
 
@@ -147,86 +118,6 @@ export class NullifierKeyEscrow implements KeyEscrowAuthority {
 
   destroy(): void {
     this.#key.destroy();
-  }
-}
-
-export type RingKeyRegistrationClient = Pick<ChainReader, "getAccount"> &
-  Pick<RingRecordReader, "getRingMemberOpenings">;
-
-/** `RegisterKey` instruction ready to sign by the member. */
-export interface ProvenKeyRegistration {
-  readonly instruction: Instruction;
-}
-
-/** Rust `RegisterKey`, queues the member's sealed nullifier key as the escrow key of its record. */
-export class RegisterKey {
-  readonly #ringProgramId: Address;
-  readonly #member: ShieldedAddress;
-  readonly #payer: SignerAccount;
-  readonly #authority: KeyEscrowAuthority;
-
-  constructor(
-    input: Readonly<{
-      ringProgramId: Address;
-      /** Its Solana key signs, its nullifier key is the one escrowed. */
-      member: ShieldedAddress;
-      /** Pays the insert fee the config charges a member. */
-      payer: SignerAccount;
-      authority: KeyEscrowAuthority;
-    }>,
-  ) {
-    this.#ringProgramId = input.ringProgramId;
-    this.#member = input.member;
-    this.#payer = input.payer;
-    this.#authority = input.authority;
-  }
-
-  /** Refuses a member whose record already escrows a key, a second key never replaces it. */
-  async prove(
-    client: RingKeyRegistrationClient,
-    context?: RequestContext,
-  ): Promise<ProvenKeyRegistration> {
-    try {
-      const config = await fetchRingProgramConfig(client, this.#ringProgramId, context);
-      const signer = this.#member.solanaAddress();
-      const member = memberOfTag(addressBytes(signer, "member"));
-      const escrow = escrowProver({ config, member: this.#member, authority: this.#authority });
-      await checkQueueAdmits(client, this.#ringProgramId, context);
-      const { read } = await readRecord(client, this.#ringProgramId, member, context);
-      const registered = read.record();
-      if (registered !== undefined && !equalBytes(registered.escrowKey, ZERO_32))
-        throw new RingError("RING_KEY_ALREADY_REGISTERED");
-      const proven = await escrow(member, context);
-      const [configAddress, registry, queue] = await Promise.all([
-        ringConfigAddress(this.#ringProgramId),
-        ringMemberRegistryAddress(this.#ringProgramId),
-        ringRecordQueueAddress(this.#ringProgramId),
-      ]);
-      const data = writeMaxFee(
-        new Writer()
-          .u8(RingInstructionTag.registerKey, "tag")
-          .bytes(checkedCustomRingProof(proven.proof))
-          .bytes(proven.nullifierPk, 32, "nullifierPk")
-          .bytes(proven.ephU, 32, "ephU")
-          .bytes(proven.ciphertext, 32, "ciphertext"),
-        config,
-      ).finish();
-      return Object.freeze({
-        instruction: {
-          programAddress: this.#ringProgramId,
-          accounts: [
-            meta(signer, true, false),
-            meta(configAddress, false, false),
-            meta(registry, false, false),
-            meta(queue, false, true),
-            ...feeAccounts(config, signer, this.#payer),
-          ],
-          data,
-        },
-      });
-    } catch (cause) {
-      throw wrapRingError("RING_BUILD_KEY_REGISTRATION", cause);
-    }
   }
 }
 
@@ -402,47 +293,4 @@ function escrowProver({
       throw new RingError("RING_NULLIFIER_KEY_MISMATCH");
     return proven;
   };
-}
-
-/** Rust `RecordQueue::admit_member_write`, the refusal the program makes before it verifies. */
-async function checkQueueAdmits(
-  client: Pick<ChainReader, "getAccount">,
-  ringProgramId: Address,
-  context: RequestContext | undefined,
-): Promise<void> {
-  const [registry, queue] = await Promise.all([
-    fetchRingMemberRegistry(client, ringProgramId, context),
-    fetchRingRecordQueue(client, ringProgramId, context),
-  ]);
-  switch (queueAdmitsMemberWrite(queue, registry)) {
-    case "queueFull":
-      throw new RingError("RING_RECORD_QUEUE_FULL");
-    case "authorityLeafReserve":
-      throw new RingError("RING_REGISTRY_FULL");
-    case "admitted":
-      return;
-  }
-}
-
-/** `member`'s opening under the chain's current root, an absent member reads no record. */
-async function readRecord(
-  client: RingKeyRegistrationClient,
-  ringProgramId: Address,
-  member: Bytes32,
-  context: RequestContext | undefined,
-): Promise<Readonly<{ root: Bytes32; read: MemberOpeningRead }>> {
-  return waitForProjection(
-    async (attemptContext) => {
-      const { root, reads } = await readNewest(
-        { client, ringProgramId, members: [member] },
-        attemptContext,
-      );
-      const [read] = reads;
-      if (read === undefined)
-        throw new RingError("RING_MEMBER_REGISTRY_INVALID", { details: { reason: "openings" } });
-      return { root, read };
-    },
-    MEMBER_REGISTRY_PROJECTION_ERRORS,
-    context,
-  );
 }

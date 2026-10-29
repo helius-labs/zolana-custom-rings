@@ -22,47 +22,28 @@ export {
   ringAuthAddress,
   ringCoSignerAddress,
   ringConfigAddress,
-  ringMemberRegistryAddress,
   ringPolicyAddress,
-  ringRecordQueueAddress,
 } from "../protocol/pda/index.js";
 export {
-  APPLY_DELAY_SLOTS,
-  AUTHORITY_RESERVED_LEAVES,
   CUSTOM_RING_PROOF_LENGTH,
-  DEFAULT_INSERT_FEE,
   GRACE_SLOTS,
-  MEMBER_QUEUE_LIMIT,
   RING_COSIGN_DEPOSITS,
   RING_COSIGN_SCOPE_MASK,
   RING_COSIGN_TRANSFERS,
   RING_COSIGN_WITHDRAWALS,
   checkedCustomRingProof,
   decodeRingCoSigner,
-  decodeRingMemberRegistry,
   decodeRingPolicy,
   decodeRingProgramConfig,
-  decodeRingRecordQueue,
-  queueAdmitsMemberWrite,
-  queueApplyDue,
-  queueChainTail,
   mirrorCurrentRoot,
   mirrorRoot,
-  queuePending,
   registryCurator,
-  registryCuratorRoot,
-  registryCurrentRoot,
-  registryOwnRoot,
 } from "../protocol/codec/ring-codecs.js";
 export type {
   RingCoSigner,
-  RingMemberRegistry,
   RingMode,
   RingPolicy,
   RingProgramConfig,
-  RingQueueCheckpoint,
-  RingRecordQueue,
-  RingRootEntry,
   RingSourceSlot,
   RootMirror,
   RootMirrorKind,
@@ -70,12 +51,9 @@ export type {
 } from "../protocol/codec/ring-codecs.js";
 export {
   BPF_LOADER_UPGRADEABLE_ID,
-  fetchCuratorRegistry,
   fetchRingCoSignerRecord,
-  fetchRingMemberRegistry,
   fetchRingPolicy,
   fetchRingProgramConfig,
-  fetchRingRecordQueue,
   requireActiveRing,
   ringProgramDataAddress,
 } from "../protocol/membership/config.js";
@@ -86,7 +64,6 @@ export { ringTreeIdResolver } from "../protocol/membership/trees.js";
 export {
   RingInstructionTag,
   clearRingCoSignerInstruction,
-  createMemberRegistryInstruction,
   createRingConfigInstruction,
   createRingPolicyInstruction,
   initSppRingConfigInstruction,
@@ -94,7 +71,6 @@ export {
   setRingAuthorityInstruction,
   setRingCoSignerInstruction,
   setRingDelegateInstruction,
-  setRingInsertFeeInstruction,
   setRingPausedInstruction,
   setRingPolicyRulesInstruction,
   setRingPolicySourceInstruction,
@@ -142,20 +118,10 @@ export type {
 
 export {
   AUTHORITY_WRITABLE_LISTS,
-  AuthorityListWrite,
   MEMBER_WRITABLE_LISTS,
-  RecordApplication,
-  feeAccounts,
   listWrite,
-  memberListWriteInstruction,
 } from "../operations/management/record-writes.js";
-export type {
-  ListWrite,
-  ProvenRecordWrite,
-  RecordQueueBinding,
-  RingRecordApplicationClient,
-  RingRecordWriteClient,
-} from "../operations/management/record-writes.js";
+export type { ListWrite } from "../operations/management/record-writes.js";
 export {
   AuthorityRecordUpdate,
   WalletRecordUpdate,
@@ -176,7 +142,6 @@ export {
   NF_KEY_ENC_INFO,
   KeyRegistration,
   NullifierKeyEscrow,
-  RegisterKey,
   fetchRingSealedKey,
   openNullifierKey,
   openRingSealedKey,
@@ -187,8 +152,6 @@ export type {
   KeyEscrowRequest,
   NullifierKeyEnvelope,
   ProvenEscrow,
-  ProvenKeyRegistration,
-  RingKeyRegistrationClient,
   RingSealedKeyClient,
   RingSealedKeyEntry,
   SealedNullifierKey,
@@ -483,7 +446,6 @@ export type {
   RingPagedRead,
   RingReadSigner,
   RingReadTarget,
-  RingRegistryStatus,
   RingRpcHealth,
   RingRpcOptions,
   RingState,
@@ -498,16 +460,11 @@ export type {
 export {
   P256ReaderKey,
   checkedReaderKey,
-  decodeReadAccessRecord,
-  fetchReaderGrant,
-  grantReadAccessInstruction,
   parseReaderKey,
-  readAccessRecordAddress,
   readerKeyBytes,
   readerKeyEquals,
   readerKeyFromBytes,
   readerKeyToString,
-  revokeReadAccessInstruction,
 } from "../operations/management/reader-access.js";
-export type { ReadAccessRecord, ReaderKey } from "../operations/management/reader-access.js";
+export type { ReaderKey } from "../operations/management/reader-access.js";
 export { createPasskey, passkeyReader, type Passkey } from "../crypto/keys/passkey.js";

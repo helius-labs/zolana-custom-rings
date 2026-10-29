@@ -36,7 +36,6 @@ import {
 } from "@heliuslabs/zolana/internal";
 import { MAX_MERGE_INPUTS } from "@heliuslabs/zolana/interface";
 import { X25519PublicKey, KeypairError } from "@heliuslabs/zolana/keypair";
-import { ROOT_HISTORY } from "../protocol/membership/member-registry.js";
 import { ringIdField } from "../crypto/derivation/ring-stream.js";
 
 import {
@@ -56,7 +55,6 @@ import type {
   MergeKeys,
   UnresolvedRingMerge,
 } from "../operations/audit/audit-merge.js";
-import type { RingRootEntry } from "../protocol/codec/ring-codecs.js";
 import { RingError } from "../protocol/error.js";
 import {
   checkedReaderKey,
@@ -650,23 +648,6 @@ export interface RingActivation {
   readonly paused: boolean;
 }
 
-/** Mirrors Rust `RegistryStatus`, the registry's history, floor and queue as the chain holds them. */
-export interface RingRegistryStatus {
-  /** Entry `i` sits at history slot `i`, `undefined` for a slot never written. */
-  readonly history: readonly (RingRootEntry | undefined)[];
-  /** The history slot of the newest root. */
-  readonly historyCursor: number;
-  readonly nextIndex: number;
-  /** The applied position every own-ring root must reach. */
-  readonly floor: bigint;
-  readonly priorFloor: bigint;
-  /** The slot of the last floor raise. */
-  readonly floorSlot: bigint;
-  /** Queue positions `queueHead..queueTail` wait for an application. */
-  readonly queueHead: bigint;
-  readonly queueTail: bigint;
-}
-
 /** Mirrors Rust `RingStatusResponse`, unsigned and only what the chain publishes. */
 export interface RingStatus {
   readonly ringProgramId: Address;
@@ -676,8 +657,6 @@ export interface RingStatus {
   readonly servicePublicKey: Address;
   /** Absent until SPP holds a config for the ring. */
   readonly activation?: RingActivation;
-  /** Absent until the ring creates its member registry. */
-  readonly registry?: RingRegistryStatus;
 }
 
 /** Mirrors Rust `DecryptedOutputContext`, the tree is the canonical PDA of `treeId`. */
@@ -966,7 +945,6 @@ export class RingRpc {
     if (ring !== ringProgramId) throw invalid("result.ringProgramId");
     const config = wire["configAuditorPubkey"];
     const activation = wire["activation"];
-    const registry = wire["registry"];
     return Object.freeze({
       ringProgramId: ring,
       state,
@@ -975,7 +953,6 @@ export class RingRpc {
         : { configAuditorPublicKey: x25519Key(config, "result.configAuditorPubkey") }),
       servicePublicKey: address(wire["servicePubkey"], "result.servicePubkey"),
       ...(absent(activation) ? {} : { activation: decodeActivation(activation) }),
-      ...(absent(registry) ? {} : { registry: decodeRegistryStatus(registry) }),
     });
   }
 
@@ -1674,37 +1651,6 @@ function decodeActivation(value: unknown): RingActivation {
     return field;
   };
   return Object.freeze({ activated: flag("activated"), paused: flag("paused") });
-}
-
-function decodeRegistryStatus(value: unknown): RingRegistryStatus {
-  const wire = record(value, "result.registry");
-  const history = list(wire["history"], "result.registry.history");
-  if (history.length !== ROOT_HISTORY) throw invalid("result.registry.history");
-  const historyCursor = u32(wire["historyCursor"], "result.registry.historyCursor");
-  const queueHead = u64(wire["queueHead"], "result.registry.queueHead");
-  const queueTail = u64(wire["queueTail"], "result.registry.queueTail");
-  if (historyCursor >= ROOT_HISTORY || queueHead > queueTail) throw invalid("result.registry");
-  return Object.freeze({
-    history: Object.freeze(
-      history.map((entry, index) => {
-        if (entry === null) return undefined;
-        const path = `result.registry.history[${index}]`;
-        const root = record(entry, path);
-        return Object.freeze({
-          root: hash(root["root"], `${path}.root`),
-          applied: u64(root["applied"], `${path}.applied`),
-          slot: u64(root["slot"], `${path}.slot`),
-        });
-      }),
-    ),
-    historyCursor,
-    nextIndex: u32(wire["nextIndex"], "result.registry.nextIndex"),
-    floor: u64(wire["floor"], "result.registry.floor"),
-    priorFloor: u64(wire["priorFloor"], "result.registry.priorFloor"),
-    floorSlot: u64(wire["floorSlot"], "result.registry.floorSlot"),
-    queueHead,
-    queueTail,
-  });
 }
 
 function absent(value: unknown): boolean {

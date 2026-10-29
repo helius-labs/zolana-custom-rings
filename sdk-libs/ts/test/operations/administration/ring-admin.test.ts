@@ -4,25 +4,16 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { initializePoseidon } from "@heliuslabs/zolana";
 import { SYSTEM_PROGRAM, addressBytes, protocolConfigAddress } from "@heliuslabs/zolana/internal";
 import { SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana/interface";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import {
-  ShieldedKeypair,
-  SigningKey,
-  X25519Keypair,
-  X25519PublicKey,
-} from "@heliuslabs/zolana/keypair";
+import { X25519Keypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import {
   ringAuthAddress,
   ringCoSignerAddress,
   ringConfigAddress,
-  ringMemberRegistryAddress,
   ringPolicyAddress,
-  ringRecordQueueAddress,
 } from "../../../src/protocol/pda/index.js";
 import {
   RingInstructionTag,
   clearRingCoSignerInstruction,
-  createMemberRegistryInstruction,
   createRingConfigInstruction,
   createRingPolicyInstruction,
   initSppRingConfigInstruction,
@@ -30,7 +21,6 @@ import {
   setRingAuthorityInstruction,
   setRingCoSignerInstruction,
   setRingDelegateInstruction,
-  setRingInsertFeeInstruction,
   setRingPausedInstruction,
   setRingPolicyRulesInstruction,
   setRingPolicySourceInstruction,
@@ -44,14 +34,6 @@ import {
   encodeRule,
   type Rule,
 } from "../../../src/protocol/membership/policy.js";
-import {
-  grantReadAccessInstruction,
-  readAccessRecordAddress,
-  readerKeyBytes,
-  revokeReadAccessInstruction,
-} from "../../../src/operations/management/reader-access.js";
-
-import { solanaRpcReads } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { ringProgramConfigData } from "../../helpers/ring-accounts.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
@@ -69,20 +51,6 @@ beforeAll(initializePoseidon);
 
 function metas(instruction: Instruction): readonly (readonly [Address, number])[] {
   return (instruction.accounts ?? []).map(({ address: account, role }) => [account, role] as const);
-}
-
-/** A client whose rent read answers `minimum` and records every space it was asked for. */
-function rentClient(minimum: bigint) {
-  const spaces: bigint[] = [];
-  const solanaRpc = solanaRpcReads({
-    getMinimumBalanceForRentExemption: (space: bigint) => ({
-      send: async () => {
-        spaces.push(space);
-        return minimum;
-      },
-    }),
-  });
-  return { client: { solanaRpc }, spaces };
 }
 
 function u64le(value: bigint): number[] {
@@ -151,7 +119,7 @@ describe("ring setup", () => {
     });
   });
 
-  it("registers with the pool, a policy ring naming its registry", async () => {
+  it("registers with the pool, a policy ring naming its policy", async () => {
     const register = (hasPolicy: boolean) =>
       initSppRingConfigInstruction({
         ringProgramId: RING,
@@ -178,31 +146,14 @@ describe("ring setup", () => {
       [SHIELDED_POOL_PROGRAM_ID, READ],
     ];
     expect(policy.data).toEqual(Uint8Array.of(2));
-    expect(metas(policy)).toEqual([...head, [await ringMemberRegistryAddress(RING), READ]]);
+    expect(metas(policy)).toEqual([...head, [await ringPolicyAddress(RING), READ]]);
     expect(metas(auditOnly)).toEqual(head);
-  });
-
-  it("creates the registry and the queue beside a read-only config", async () => {
-    const instruction = await createMemberRegistryInstruction({
-      ringProgramId: RING,
-      payer: PAYER,
-      authority: AUTHORITY,
-    });
-    expect(instruction.data).toEqual(Uint8Array.of(28));
-    expect(metas(instruction)).toEqual([
-      [PAYER, SIGN_WRITE],
-      [AUTHORITY, SIGN],
-      [await ringConfigAddress(RING), READ],
-      [await ringMemberRegistryAddress(RING), WRITE],
-      [await ringRecordQueueAddress(RING), WRITE],
-      [SYSTEM_PROGRAM, READ],
-    ]);
   });
 });
 
 describe("config account", () => {
   const MODE_OFFSET = 68;
-  const CREATED_SLOT_OFFSET = 112;
+  const CREATED_SLOT_OFFSET = 104;
   const account = () =>
     ringProgramConfigData({
       authority: AUTHORITY,
@@ -215,7 +166,7 @@ describe("config account", () => {
     const data = account();
     const slot = 3n * (1n << 18n) + 7n;
     data.set(u64le(slot), CREATED_SLOT_OFFSET);
-    expect(data).toHaveLength(120);
+    expect(data).toHaveLength(112);
     expect(decodeRingProgramConfig(data)).toMatchObject({ createdSlot: slot });
   });
 
@@ -267,7 +218,7 @@ describe("config writes", () => {
     ]);
   });
 
-  it("writes the co-signer's record, its clearing and the insert fee", async () => {
+  it("writes the co-signer's record and its clearing", async () => {
     const config = await ringConfigAddress(RING);
     const record = await ringCoSignerAddress(RING, NEXT);
     const cosigner = await setRingCoSignerInstruction({
@@ -298,37 +249,6 @@ describe("config writes", () => {
       [record, WRITE],
       [PAYER, WRITE],
     ]);
-    const fee = await setRingInsertFeeInstruction({
-      client: rentClient(890_880n).client,
-      ringProgramId: RING,
-      authority: AUTHORITY,
-      fee: 1_000_000n,
-    });
-    expect(fee.data).toEqual(Uint8Array.of(42, ...u64le(1_000_000n)));
-    expect(metas(fee)).toEqual([
-      [AUTHORITY, SIGN],
-      [config, WRITE],
-    ]);
-  });
-
-  it("refuses a nonzero insert fee below the rent of an empty account and reads no rent for a free write", async () => {
-    const write = (fee: bigint, rent: ReturnType<typeof rentClient>) =>
-      setRingInsertFeeInstruction({
-        client: rent.client,
-        ringProgramId: RING,
-        authority: AUTHORITY,
-        fee,
-      });
-    const floor = rentClient(890_880n);
-    await expect(write(890_879n, floor)).rejects.toMatchObject({
-      code: "RING_CONFIG_INVALID",
-      details: { reason: "InsertFeeBelowRent", fee: "890879", minimum: "890880" },
-    });
-    expect((await write(890_880n, floor)).data).toEqual(Uint8Array.of(42, ...u64le(890_880n)));
-    expect(floor.spaces).toEqual([0n, 0n]);
-    const free = rentClient(890_880n);
-    expect((await write(0n, free)).data).toEqual(Uint8Array.of(42, ...u64le(0n)));
-    expect(free.spaces).toEqual([]);
   });
 
   it.each([
@@ -367,42 +287,6 @@ describe("config writes", () => {
       [await ringPolicyAddress(RING), READ],
     ]);
   });
-
-  it("grants and revokes a reader with its tagged key", async () => {
-    const reader = ShieldedKeypair.fromKeypair(
-      SigningKey.fromEd25519Bytes(new Uint8Array(32).fill(3) as Bytes32),
-    )
-      .shieldedAddress()
-      .solanaAddress();
-    const record = await readAccessRecordAddress(RING, reader);
-    const grant = await grantReadAccessInstruction({
-      ringProgramId: RING,
-      payer: PAYER,
-      authority: AUTHORITY,
-      reader,
-    });
-    const revoke = await revokeReadAccessInstruction({
-      ringProgramId: RING,
-      authority: AUTHORITY,
-      reader,
-      rentRecipient: PAYER,
-    });
-    expect(grant.data).toEqual(Uint8Array.of(4, ...readerKeyBytes(reader)));
-    expect(revoke.data).toEqual(Uint8Array.of(5, ...readerKeyBytes(reader)));
-    expect(metas(grant)).toEqual([
-      [PAYER, SIGN_WRITE],
-      [AUTHORITY, SIGN],
-      [await ringConfigAddress(RING), READ],
-      [record, WRITE],
-      [SYSTEM_PROGRAM, READ],
-    ]);
-    expect(metas(revoke)).toEqual([
-      [AUTHORITY, SIGN],
-      [await ringConfigAddress(RING), READ],
-      [record, WRITE],
-      [PAYER, WRITE],
-    ]);
-  });
 });
 
 describe("policy writes", () => {
@@ -414,7 +298,7 @@ describe("policy writes", () => {
       ringProgramId: RING,
       authority: AUTHORITY,
       table,
-      sharedSources: [{ listId: ListId.block, curatorRingProgramId: CURATOR }],
+      sharedSources: [{ listId: ListId.block, curatorRegistry: CURATOR }],
     });
     expect(instruction.data).toEqual(
       Uint8Array.of(7, 2, ListId.allow, 0, ListId.block, 1, 1, ...encodeRule(rule)),
@@ -422,8 +306,8 @@ describe("policy writes", () => {
     expect(metas(instruction)).toEqual([
       [AUTHORITY, SIGN],
       [await ringConfigAddress(RING), READ],
-      [await ringMemberRegistryAddress(RING), WRITE],
-      [await ringMemberRegistryAddress(CURATOR), READ],
+      [await ringPolicyAddress(RING), WRITE],
+      [CURATOR, READ],
     ]);
     const rules = await setRingPolicyRulesInstruction({
       ringProgramId: RING,
@@ -437,29 +321,24 @@ describe("policy writes", () => {
   it.each([
     [
       "a list the table does not reference",
-      [{ listId: ListId.frozen, curatorRingProgramId: CURATOR }],
+      [{ listId: ListId.frozen, curatorRegistry: CURATOR }],
       "UnreferencedList",
     ],
     [
       "a list shared twice",
       [
-        { listId: ListId.block, curatorRingProgramId: CURATOR },
-        { listId: ListId.block, curatorRingProgramId: CURATOR },
+        { listId: ListId.block, curatorRegistry: CURATOR },
+        { listId: ListId.block, curatorRegistry: CURATOR },
       ],
       "DuplicateList",
     ],
     [
       "two curators",
       [
-        { listId: ListId.allow, curatorRingProgramId: CURATOR },
-        { listId: ListId.block, curatorRingProgramId: NEXT },
+        { listId: ListId.allow, curatorRegistry: CURATOR },
+        { listId: ListId.block, curatorRegistry: NEXT },
       ],
       "MultipleCurators",
-    ],
-    [
-      "the ring as its own curator",
-      [{ listId: ListId.block, curatorRingProgramId: RING }],
-      "OwnCurator",
     ],
   ] as const)("refuses %s", async (_case, sharedSources, reason) => {
     await expect(
@@ -519,7 +398,7 @@ describe("policy writes", () => {
       ringProgramId: RING,
       authority: AUTHORITY,
       listId: ListId.block,
-      source: { kind: "curator", ringProgramId: CURATOR },
+      source: { kind: "curator", registry: CURATOR },
     });
     const own = await setRingPolicySourceInstruction({
       ringProgramId: RING,
@@ -530,19 +409,18 @@ describe("policy writes", () => {
     const head = [
       [AUTHORITY, SIGN],
       [await ringConfigAddress(RING), READ],
-      [await ringMemberRegistryAddress(RING), WRITE],
+      [await ringPolicyAddress(RING), WRITE],
     ];
     expect(curator.data).toEqual(Uint8Array.of(10, ListId.block, 1));
-    expect(metas(curator)).toEqual([...head, [await ringMemberRegistryAddress(CURATOR), READ]]);
+    expect(metas(curator)).toEqual([...head, [CURATOR, READ]]);
     expect(own.data).toEqual(Uint8Array.of(10, ListId.block, 0));
     expect(metas(own)).toEqual(head);
   });
 
   it("budgets each instruction like Rust `compute_unit_limit`", () => {
     expect(ringComputeUnitLimit(RingInstructionTag.createPolicy)).toBe(150_000);
-    expect(ringComputeUnitLimit(RingInstructionTag.registerKey)).toBe(1_400_000);
-    expect(ringComputeUnitLimit(RingInstructionTag.applyRecords)).toBe(1_400_000);
+    expect(ringComputeUnitLimit(RingInstructionTag.auditedDeposit)).toBe(1_400_000);
     expect(ringComputeUnitLimit(RingInstructionTag.deposit)).toBe(200_000);
-    expect(ringComputeUnitLimit(RingInstructionTag.setInsertFee)).toBe(50_000);
+    expect(ringComputeUnitLimit(RingInstructionTag.syncRoots)).toBe(50_000);
   });
 });

@@ -8,16 +8,11 @@ import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 
 import {
   mirrorCurrentRoot,
-  registryCurrentRoot,
   rootMirror,
   type RingPolicy,
   type RootMirrorKind,
 } from "../protocol/codec/ring-codecs.js";
-import {
-  fetchRingMemberRegistry,
-  fetchRingPolicy,
-  fetchRingProgramConfig,
-} from "../protocol/membership/config.js";
+import { fetchRingPolicy, fetchRingProgramConfig } from "../protocol/membership/config.js";
 import { RingError } from "../protocol/error.js";
 import {
   MemberOpeningRead,
@@ -229,29 +224,6 @@ export function readRegisteredRecord(
     MEMBER_REGISTRY_PROJECTION_ERRORS,
     context,
   );
-}
-
-/** @internal The member registry's newest root and every member's read under it. */
-export async function readNewest(
-  input: Readonly<{
-    client: Pick<ChainReader, "getAccount"> & Pick<RingRecordReader, "getRingMemberOpenings">;
-    ringProgramId: Address;
-    members: readonly Bytes32[];
-  }>,
-  context: RequestContext | undefined,
-): Promise<Readonly<{ root: Bytes32; reads: readonly MemberOpeningRead[] }>> {
-  const registry = await fetchRingMemberRegistry(input.client, input.ringProgramId, context);
-  const { root } = registryCurrentRoot(registry);
-  const reads = await openingsInBatches(input.members, root, async (members) => {
-    const served = await input.client.getRingMemberOpenings(
-      { ringProgramId: input.ringProgramId, members, expectedRoot: root },
-      context,
-    );
-    if (!equalBytes(served.root.root, root))
-      throw new RingError("RING_MEMBER_REGISTRY_INVALID", { details: { reason: "openings" } });
-    return served.openings;
-  });
-  return { root, reads };
 }
 
 /** An indexer answer under a root or revision other than the bound one is refused. */

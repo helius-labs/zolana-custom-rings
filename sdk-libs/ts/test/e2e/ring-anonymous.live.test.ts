@@ -1,23 +1,13 @@
-// Fresh anonymous rings keyed by the harness ring rpc in derived mode, one admitting listed senders only.
+// Fresh anonymous rings keyed by the harness ring rpc in derived mode.
 import { generateKeyPairSigner, type KeyPairSigner } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
+import type { RuleTable } from "../../src/ring/advanced.js";
 import {
-  ListId,
-  buildRuleTable,
-  memberOfIdentity,
-  recordBit,
-  type RuleTable,
-} from "../../src/ring/advanced.js";
-import {
-  AuthorityListWrite,
   prepareRingTransferRelay,
-  listWrite,
   messageSignerSpendSigner,
   PreparedRingDeposit,
   RING_DEPOSIT_COMPUTE_UNIT_LIMIT,
-  ringComputeUnitLimit,
-  RingInstructionTag,
   syncRingWallet,
 } from "../../src/ring/index.js";
 import { currentSlot, type Actor } from "./live-helpers.js";
@@ -25,8 +15,6 @@ import {
   airdrop,
   auditedRingAmounts,
   freshActor,
-  indexedKeys,
-  indexedRecord,
   readableRing,
   ringHoldings,
   sendInstruction,
@@ -157,51 +145,5 @@ describe.skip("anonymous ring", () => {
     expect(ringHoldings(recipient, ring.ringProgramId)).toBe(PAYMENT);
     await syncRing(ring, sender);
     expect(ringHoldings(sender, ring.ringProgramId)).toBe(DEPOSIT - PAYMENT);
-  }, 900_000);
-
-  it("refuses an unlisted hidden sender before any proof and pays once the authority lists it", async () => {
-    const ring = await anonymousRing({
-      kind: "anonymousPolicy",
-      table: buildRuleTable({
-        rules: [
-          {
-            subject: "sender",
-            source: { kind: "lists", present: [ListId.allow], absent: [] },
-            guard: { kind: "always" },
-          },
-        ],
-      }),
-    });
-    const sender = await depositor(ring);
-    const recipient = await freshActor(ring.client);
-    const pay = await payment(ring, sender, recipient);
-    await expect(pay()).rejects.toThrow();
-
-    const member = memberOfIdentity(
-      sender.keypair.shieldedAddress().signingPublicKey.ownerProofInputHash(),
-    );
-    const listed = await new AuthorityListWrite({
-      ringProgramId: ring.ringProgramId,
-      authority: ring.authority.address,
-    })
-      .withWrite(member, listWrite({ set: [ListId.allow] }))
-      .prove(ring.client);
-    await sendInstruction(
-      ring.client,
-      listed.instruction,
-      ring.authority,
-      ringComputeUnitLimit(RingInstructionTag.authorityWriteRecords),
-    );
-    // The policy reads the record Photon serves, the indexer lags the chain.
-    for (let attempt = 0; ; attempt++) {
-      const read = await indexedKeys(() => indexedRecord(ring.client, ring.ringProgramId, member));
-      if (((read.record?.lists ?? 0n) & recordBit(ListId.allow)) !== 0n) break;
-      if (attempt === 240) throw new Error("the allow list write was not indexed");
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-    const { signature } = await pay();
-    await expectAudited(ring, sender, signature);
-    await syncRing(ring, recipient);
-    expect(ringHoldings(recipient, ring.ringProgramId)).toBe(PAYMENT);
   }, 900_000);
 });

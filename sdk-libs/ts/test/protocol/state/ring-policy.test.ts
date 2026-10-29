@@ -4,7 +4,7 @@ import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import { getAddressDecoder, type Address } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
-import { decodeRingMemberRegistry } from "../../../src/protocol/codec/ring-codecs.js";
+import { decodeRingPolicy } from "../../../src/protocol/codec/ring-codecs.js";
 import {
   LIST_IDS,
   ListId,
@@ -28,7 +28,7 @@ import {
   type RuleTable,
 } from "../../../src/protocol/membership/policy.js";
 import { RingError } from "../../../src/protocol/error.js";
-import { memberRegistryData } from "../../helpers/ring-accounts.js";
+import { ringPolicyData } from "../../helpers/ring-accounts.js";
 
 await initializePoseidon();
 
@@ -474,11 +474,10 @@ describe("policy hash", () => {
         : { listId: 0, registry: addressOf(filled(0)) },
     );
     const registry = (policyHash: Bytes32) =>
-      decodeRingMemberRegistry(
-        memberRegistryData({
+      decodeRingPolicy(
+        ringPolicyData({
           bump: 1,
-          history: [],
-          nextIndex: 1,
+          records: addressOf(filled(9)),
           policyHash,
           sources,
           table,

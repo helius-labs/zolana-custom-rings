@@ -23,7 +23,7 @@ import { RING_RULE_SLOTS, RING_SOURCE_SLOTS } from "../../rpc/prover/types.js";
 import {
   registryCurator,
   type EncodedRuleTable,
-  type RingMemberRegistry,
+  type RingPolicy,
   type RingSourceSlot,
 } from "../codec/ring-codecs.js";
 import { RingError } from "../error.js";
@@ -226,7 +226,7 @@ function checkRule(rule: Rule): void {
   }
 }
 
-/** Mirrors Rust `EncodedRuleTable::decode`, the padding is checked by `decodeRingMemberRegistry`. */
+/** Mirrors Rust `EncodedRuleTable::decode`, the padding is checked by `decodeRingPolicy`. */
 export function decodeRuleTable(config: EncodedRuleTable): RuleTable {
   if (config.rules.length > RING_RULE_SLOTS) throw ruleTableInvalid("TooManyRules");
   return checkedRuleTable({ ...config, rules: config.rules.map(decodeRule) });
@@ -506,7 +506,7 @@ export interface PinnedPolicy {
 
 /** Mirrors Rust `PinnedPolicy::of`, `RING_POLICY_HASH_MISMATCH` unless the stored table reproduces the hash. */
 export function pinnedPolicy(
-  registry: Pick<RingMemberRegistry, "policyHash" | "sources" | "rules" | "generation">,
+  registry: Pick<RingPolicy, "policyHash" | "sources" | "rules" | "generation">,
 ): PinnedPolicy {
   if (equalBytes(registry.policyHash, ZERO_32))
     throw new RingError("RING_POLICY_NOT_SET", { details: { generation: registry.generation } });

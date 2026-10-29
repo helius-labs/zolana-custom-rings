@@ -76,11 +76,10 @@ export interface ReservationHold {
 export type RingSubmissionBuild = (context?: RequestContext) => Promise<RingSubmissionAttempt>;
 
 const MAX_ATTEMPTS = 3;
-/** Rust `reproof_fixes` codes, a fresh proof fixes an expired or unsynced mirror root or a batch that no longer fits. */
+/** Rust `reproof_fixes` codes, a fresh proof fixes an expired or unsynced mirror root. */
 const STALE_PROOF_CODES: ReadonlySet<number> = new Set([
   RingProgramError.mirrorRootExpired,
   RingProgramError.mirrorNotSynced,
-  RingProgramError.authorityBatchTooLarge,
 ]);
 const NO_RESERVATION: ReservationHold = Object.freeze({ release() {}, extend() {} });
 

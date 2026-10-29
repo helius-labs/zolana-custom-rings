@@ -4,13 +4,8 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { RpcAccount } from "@heliuslabs/zolana/client";
 import { initializePoseidon } from "@heliuslabs/zolana";
 import { X25519Keypair } from "@heliuslabs/zolana/keypair";
-import {
-  ringConfigPda,
-  ringMemberRegistryAddress,
-  ringMemberRegistryPda,
-} from "../../../src/protocol/pda/index.js";
+import { ringConfigPda, ringPolicyPda } from "../../../src/protocol/pda/index.js";
 import type { RingSourceSlot } from "../../../src/protocol/codec/ring-codecs.js";
-import { MEMBER_REGISTRY_EMPTY_ROOT } from "../../../src/protocol/membership/member-opening.js";
 import {
   LIST_IDS,
   ListId,
@@ -24,14 +19,16 @@ import {
 } from "../../../src/operations/management/policy-admin.js";
 import {
   ZERO_ADDRESS,
-  memberRegistryData,
   ownedAccount,
+  ringPolicyData,
   ringProgramConfigData,
 } from "../../helpers/ring-accounts.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 const CURATOR_A = address("CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8");
 const CURATOR_B = address("3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3");
+const RECORDS = address("6NxnStrvfxkDAnWHyvc6SVXkZvBKtpHS3Bd9WfCSgUSv");
+const STORAGE = address("29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2");
 const AUTHORITY = address("4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T");
 const LIFETIME = Object.freeze({
   blockhash: blockhash("11111111111111111111111111111111"),
@@ -48,7 +45,7 @@ const RULES: readonly Rule[] = [
 
 beforeAll(initializePoseidon);
 
-/** The ring's registry reads allow from its own records and block from curator A. */
+/** The ring's policy reads allow from its own records and block from curator A. */
 async function chain(input: Readonly<{ hasPolicy?: boolean }> = {}) {
   const accounts = new Map<Address, RpcAccount>();
   const [config, configBump] = await ringConfigPda(RING);
@@ -64,32 +61,19 @@ async function chain(input: Readonly<{ hasPolicy?: boolean }> = {}) {
       }),
     ),
   );
-  const curator = await ringMemberRegistryAddress(CURATOR_A);
   const sources: RingSourceSlot[] = LIST_IDS.map((listId) =>
     listId === ListId.allow
       ? { listId, registry: ZERO_ADDRESS }
       : listId === ListId.block
-        ? { listId, registry: curator }
+        ? { listId, registry: CURATOR_A }
         : { listId: 0, registry: ZERO_ADDRESS },
   );
-  for (const [ring, registrySources] of [
-    [RING, sources],
-    [CURATOR_A, undefined],
-  ] as const) {
-    const [registry, bump] = await ringMemberRegistryPda(ring);
-    accounts.set(
-      registry,
-      ownedAccount(
-        ring,
-        memberRegistryData({
-          bump,
-          history: [{ root: MEMBER_REGISTRY_EMPTY_ROOT, applied: 0n, slot: 1n }],
-          nextIndex: 1,
-          ...(registrySources === undefined ? {} : { sources: registrySources }),
-        }),
-      ),
-    );
-  }
+  const [policy, policyBump] = await ringPolicyPda(RING);
+  accounts.set(
+    policy,
+    ownedAccount(RING, ringPolicyData({ bump: policyBump, records: RECORDS, sources })),
+  );
+  accounts.set(CURATOR_A, ownedAccount(STORAGE, new Uint8Array(1)));
   return {
     getAccount: vi.fn(async (account: Address) => accounts.get(account)),
     getLatestBlockhash: vi.fn(async () => LIFETIME),
@@ -104,13 +88,10 @@ describe("policy transactions", () => {
       ringProgramId: RING,
       authority: AUTHORITY,
       table: buildRuleTable({ rules: RULES }),
-      sharedSources: [{ listId: ListId.block, curatorRingProgramId: CURATOR_A }],
+      sharedSources: [{ listId: ListId.block, curatorRegistry: CURATOR_A }],
     });
     expect(Object.keys(transaction.signatures)).toEqual([AUTHORITY]);
-    expect(client.getAccount).toHaveBeenCalledWith(
-      await ringMemberRegistryAddress(CURATOR_A),
-      undefined,
-    );
+    expect(client.getAccount).toHaveBeenCalledWith(CURATOR_A, undefined);
   });
 
   it("refuses a curator without a registry before the blockhash", async () => {
@@ -121,7 +102,7 @@ describe("policy transactions", () => {
         ringProgramId: RING,
         authority: AUTHORITY,
         table: buildRuleTable({ rules: RULES }),
-        sharedSources: [{ listId: ListId.block, curatorRingProgramId: CURATOR_B }],
+        sharedSources: [{ listId: ListId.block, curatorRegistry: CURATOR_B }],
       }),
     ).rejects.toMatchObject({
       code: "RING_BUILD_POLICY",
@@ -132,7 +113,7 @@ describe("policy transactions", () => {
 
   it("refuses an audit-only ring before the curator or the blockhash", async () => {
     const client = await chain({ hasPolicy: false });
-    const shared = [{ listId: ListId.block, curatorRingProgramId: CURATOR_A }];
+    const shared = [{ listId: ListId.block, curatorRegistry: CURATOR_A }];
     const table = buildRuleTable({ rules: RULES });
     for (const build of [buildRingCreatePolicyTransaction, buildRingSetPolicyRulesTransaction])
       await expect(
@@ -141,10 +122,7 @@ describe("policy transactions", () => {
         code: "RING_BUILD_POLICY",
         causeCode: "RING_POLICY_TIER_MISMATCH",
       });
-    expect(client.getAccount).not.toHaveBeenCalledWith(
-      await ringMemberRegistryAddress(CURATOR_A),
-      undefined,
-    );
+    expect(client.getAccount).not.toHaveBeenCalledWith(CURATOR_A, undefined);
     expect(client.getLatestBlockhash).not.toHaveBeenCalled();
   });
 
@@ -163,14 +141,21 @@ describe("policy transactions", () => {
       });
     await expect(build(ListId.block, { kind: "own" })).resolves.toBeDefined();
     await expect(
-      build(ListId.allow, { kind: "curator", ringProgramId: CURATOR_A }),
+      build(ListId.allow, { kind: "curator", registry: CURATOR_A }),
     ).resolves.toBeDefined();
     await expect(build(ListId.frozen, { kind: "own" })).rejects.toMatchObject({
       code: "RING_BUILD_POLICY",
       causeCode: "RING_POLICY_SOURCE_INVALID",
     });
     await expect(
-      build(ListId.allow, { kind: "curator", ringProgramId: CURATOR_B }),
+      build(ListId.allow, { kind: "curator", registry: CURATOR_B }),
     ).rejects.toMatchObject({ code: "RING_BUILD_POLICY", causeCode: "RING_POLICY_SOURCE_INVALID" });
+    await expect(
+      build(ListId.block, { kind: "curator", registry: RECORDS }),
+    ).rejects.toMatchObject({
+      code: "RING_BUILD_POLICY",
+      causeCode: "RING_POLICY_SOURCE_INVALID",
+      cause: { details: { reason: "OwnCurator" } },
+    });
   });
 });
