@@ -91,6 +91,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         port: args.port,
         max_connections: args.max_connections.get(),
         request_timeout: args.request_timeout(),
+        client_limits: args.client_limits.client_limits(),
     };
     let store = match &args.store_url {
         Some(url) => Some(

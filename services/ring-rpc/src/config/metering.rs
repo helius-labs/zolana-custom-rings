@@ -74,7 +74,7 @@ where
     }
 }
 
-fn call_units(request: &Request<'_>) -> Option<u32> {
+pub(crate) fn call_units(request: &Request<'_>) -> Option<u32> {
     match request.method_name() {
         RING_DEPOSITS => request
             .params()

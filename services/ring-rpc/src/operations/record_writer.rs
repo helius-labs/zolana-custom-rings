@@ -136,7 +136,7 @@ impl RecordWriter {
                 update_id: update.id,
             });
         }
-        // An expired enrolment holds no pending slot and joins no approval.
+        // An expired enrolment joins no approval.
         queue.expire_awaiting(request.registry.0, slot).await?;
         self.check_escrows(&update, &policy).await?;
         let approves = EnrolmentApproval {

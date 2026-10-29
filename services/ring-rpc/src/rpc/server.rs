@@ -15,8 +15,8 @@ use jsonrpsee::{
             http::{ProxyGetRequestError, ProxyGetRequestLayer},
             rpc::RpcServiceBuilder,
         },
-        BatchRequestConfig, HttpBody, HttpRequest, HttpResponse, ServerBuilder, ServerConfig,
-        ServerHandle,
+        serve_with_graceful_shutdown, stop_channel, BatchRequestConfig, HttpBody, HttpRequest,
+        HttpResponse, Methods, ServerBuilder, ServerConfig, ServerHandle,
     },
     types::ErrorObjectOwned,
     RpcModule,
@@ -24,6 +24,7 @@ use jsonrpsee::{
 use serde::{de::DeserializeOwned, Serialize};
 use spr_rpc_http::MethodPathLayer;
 use thiserror::Error;
+use tokio::net::TcpListener;
 use tower::Service;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
@@ -42,6 +43,8 @@ use zolana_ring_client::rpc::{
 
 use crate::{
     audit::{AuditRead, Page},
+    client_identity::PeerAddress,
+    client_rate::{ClientLayer, ClientLimits, ClientRate, ClientRateLimiter},
     error::RingRpcError,
     hub::{Hub, Lane, ReadinessStatus},
     metering::{Metering, MeteringHeaderLayer},
@@ -66,6 +69,7 @@ pub struct ServerOptions {
     pub port: u16,
     pub max_connections: u32,
     pub request_timeout: Duration,
+    pub client_limits: ClientLimits,
 }
 
 #[derive(Debug, Error)]
@@ -89,7 +93,8 @@ pub async fn run_server<S: TransactionSource + 'static>(
     if options.bind_policy == BindPolicy::LoopbackOnly && !options.bind.is_loopback() {
         return Err(ServerError::PublicBind);
     }
-    let addr = SocketAddr::from((options.bind, options.port));
+    let listener = TcpListener::bind(SocketAddr::from((options.bind, options.port))).await?;
+    let limiter = Arc::new(ClientRateLimiter::new(options.client_limits.rates));
     let middleware = tower::ServiceBuilder::new()
         .layer(cors(hub.origins())?)
         .layer(tower::timeout::TimeoutLayer::new(options.request_timeout))
@@ -100,12 +105,13 @@ pub async fn run_server<S: TransactionSource + 'static>(
                 hub: hub.clone(),
             }
         }))
+        .layer(ClientLayer::new(options.client_limits.identity))
         .layer(MeteringHeaderLayer)
         .layer(ProxyGetRequestLayer::new([("/health", HEALTH)])?)
         .layer(MethodPathLayer {
             max_body_size: MAX_REQUEST_BODY_SIZE as usize,
         });
-    let server = ServerBuilder::default()
+    let services = ServerBuilder::default()
         .set_config(
             ServerConfig::builder()
                 // A WebSocket call runs outside the timeout layer and the CORS check.
@@ -117,10 +123,44 @@ pub async fn run_server<S: TransactionSource + 'static>(
                 .build(),
         )
         .set_http_middleware(middleware)
-        .set_rpc_middleware(RpcServiceBuilder::new().layer_fn(Metering))
-        .build(addr)
-        .await?;
-    Ok(server.start(rpc_module(hub)?))
+        .set_rpc_middleware(
+            RpcServiceBuilder::new()
+                .layer_fn(move |service| ClientRate {
+                    service,
+                    limiter: limiter.clone(),
+                })
+                .layer_fn(Metering),
+        )
+        .to_service_builder();
+    let methods = Methods::from(rpc_module(hub)?);
+    let (stop, handle) = stop_channel();
+    // An owned accept loop, the jsonrpsee server hides the peer address from middleware.
+    tokio::spawn(async move {
+        loop {
+            let (socket, peer) = tokio::select! {
+                accepted = listener.accept() => match accepted {
+                    Ok(accepted) => accepted,
+                    Err(_) => continue,
+                },
+                () = stop.clone().shutdown() => break,
+            };
+            let _ = socket.set_nodelay(true);
+            let service = services.clone().build(methods.clone(), stop.clone());
+            let connection =
+                tower::service_fn(move |request: HttpRequest<hyper::body::Incoming>| {
+                    let mut request = request.map(HttpBody::new);
+                    request.extensions_mut().insert(PeerAddress(peer));
+                    let mut service = service.clone();
+                    async move { service.call(request).await }
+                });
+            tokio::spawn(serve_with_graceful_shutdown(
+                socket,
+                connection,
+                stop.clone().shutdown(),
+            ));
+        }
+    });
+    Ok(handle)
 }
 
 fn cors(origins: &Origins) -> Result<CorsLayer, OriginError> {
@@ -444,7 +484,12 @@ mod tests {
     };
     use zolana_ring_transaction::RingAssets;
 
+    use spr_indexer_api::Hash;
+    use zolana_ring_client::rpc::RecordUpdate;
+
     use crate::{
+        client_identity::ClientIdentityPolicy,
+        client_rate::{BucketRate, ClientRates, RateLimit},
         config::RootSecret,
         error::RingRpcError,
         limits::{
@@ -452,6 +497,7 @@ mod tests {
             MAX_REQUEST_UNITS_PER_SECOND,
         },
         origins::OriginPolicy,
+        record_update::RecordUpdateRefusal,
         upstream::{
             DepositHistory, MergeAuditRequest, RecordsTip, RingConfiguration, RingHistoryPage,
             TransactionPage,
@@ -637,7 +683,117 @@ mod tests {
             port,
             max_connections: 8,
             request_timeout: timeout,
+            client_limits: ClientLimits::default(),
         }
+    }
+
+    /// A server granting each client a burst of two signed writes.
+    async fn write_limited_server(identity: ClientIdentityPolicy) -> (ServerHandle, String) {
+        let server_port = port();
+        let handle = run_server(
+            hub(source(), Origins::default()),
+            ServerOptions {
+                client_limits: ClientLimits {
+                    rates: ClientRates {
+                        signed_writes: BucketRate::new(1, 2),
+                        ..ClientRates::default()
+                    },
+                    identity,
+                },
+                ..options(server_port, Duration::from_secs(1))
+            },
+        )
+        .await
+        .expect("server");
+        (handle, format!("http://127.0.0.1:{server_port}"))
+    }
+
+    async fn submit_as(url: &str, client: &str) -> reqwest::Response {
+        let update = SubmitRecordUpdateRequest {
+            registry: Address::new_from_array([4; 32]).into(),
+            update: RecordUpdate {
+                genesis_hash: Hash(TEST_GENESIS),
+                ring: SERVED_RING.into(),
+                entries: Vec::new(),
+                valid_until_slot: 1,
+                awaited_lists: 0,
+            },
+            signer: Address::new_from_array([6; 32]).into(),
+            signature: Signature::default().into(),
+        };
+        reqwest::Client::new()
+            .post(url)
+            .header("x-forwarded-for", client)
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": SUBMIT_RECORD_UPDATE,
+                "params": update,
+            }))
+            .send()
+            .await
+            .expect("submit")
+    }
+
+    async fn error_code(response: reqwest::Response) -> serde_json::Value {
+        let body: serde_json::Value = response.json().await.expect("JSON-RPC answer");
+        body["error"]["code"].clone()
+    }
+
+    #[tokio::test]
+    async fn a_client_past_its_signed_write_rate_waits_while_another_submits() {
+        let proxy = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let (handle, url) =
+            write_limited_server(ClientIdentityPolicy::default().with_trusted_proxies([proxy]))
+                .await;
+        let served = RecordUpdateRefusal::Disabled.code();
+
+        for _ in 0..2 {
+            assert_eq!(
+                error_code(submit_as(&url, "198.51.100.1").await).await,
+                served
+            );
+        }
+        let refused = submit_as(&url, "198.51.100.1").await;
+        assert_eq!(refused.status(), StatusCode::TOO_MANY_REQUESTS);
+        let retry_after = refused
+            .headers()
+            .get("retry-after")
+            .expect("retry after")
+            .to_str()
+            .expect("ascii")
+            .parse::<u64>()
+            .expect("seconds");
+        assert!((1..=60).contains(&retry_after), "{retry_after}");
+        let body: serde_json::Value = refused.json().await.expect("refusal");
+        assert_eq!(body["error"]["code"], RateLimit::SignedWrites.code());
+        assert!(
+            body["error"]["data"]["retryAfterMs"]
+                .as_u64()
+                .expect("hint")
+                > 0
+        );
+
+        let other = submit_as(&url, "198.51.100.2").await;
+        assert_eq!(other.status(), StatusCode::OK);
+        assert_eq!(error_code(other).await, served);
+        handle.stop().expect("stop");
+        handle.stopped().await;
+    }
+
+    #[tokio::test]
+    async fn a_forwarded_header_from_an_untrusted_peer_keeps_the_peer_identity() {
+        let (handle, url) = write_limited_server(ClientIdentityPolicy::default()).await;
+
+        for _ in 0..2 {
+            submit_as(&url, "198.51.100.1").await;
+        }
+        assert_eq!(
+            error_code(submit_as(&url, "198.51.100.2").await).await,
+            RateLimit::SignedWrites.code()
+        );
+        handle.stop().expect("stop");
+        handle.stopped().await;
     }
 
     #[tokio::test]
@@ -888,6 +1044,7 @@ mod tests {
                 port: 0,
                 max_connections: 1,
                 request_timeout: Duration::from_secs(1),
+                client_limits: ClientLimits::default(),
             },
         )
         .await;
@@ -900,6 +1057,7 @@ mod tests {
                 port: 0,
                 max_connections: 1,
                 request_timeout: Duration::from_secs(1),
+                client_limits: ClientLimits::default(),
             },
         )
         .await
