@@ -55,6 +55,10 @@ impl<T: Borrow<KnownUtxo>> KnownUtxoIndex<T> {
             .map_or(&[], Vec::as_slice)
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = (&[u8; 32], &T)> {
+        self.utxos.iter()
+    }
+
     pub fn len(&self) -> usize {
         self.utxos.len()
     }
