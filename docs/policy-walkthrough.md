@@ -60,7 +60,7 @@ A policy has at most one curator, `N_FOREIGN = 1` (`program-libs/policy/src/rule
 
 ### ListID
 
-A **ListID** names one bit of a member record. Bit `id - 1` marks list `id` (`program-libs/policy/src/list.rs:49`). The config authority is the key that holds the ring config. `RegisterKey` is the instruction that seals a member's nullifier secret to the auditor.
+A **ListID** names one bit of a member record. Bit `id - 1` marks list `id` (`program-libs/policy/src/list.rs:49`). The config authority is the key that holds the ring config. An escrow entry of a record update seals a member's nullifier secret to the auditor.
 
 | List | ID | Writer |
 | --- | --- | --- |
@@ -71,7 +71,7 @@ A **ListID** names one bit of a member record. Bit `id - 1` marks list `id` (`pr
 | Recovery | `5` | Owner, own record |
 | Reader | `6` | Config authority |
 | Approval | `7` | Config authority |
-| Escrow | `8` | `RegisterKey` only |
+| Escrow | `8` | Escrow storage write only |
 
 Rules read only the authority lists: Allow, Block, Frozen, Reader and Approval. A member therefore cannot admit itself. `EncodedRuleTable::validate` refuses any other (`MemberWrittenList`, `program-libs/policy/src/rule_table/mod.rs:631`). A curator source reads the same bit in the curator's records (`prover/circuits/policy/subjects.go:38`).
 

@@ -1,7 +1,7 @@
 # Ring policy
 
 A [policy ring](../README.md#rings-and-rails) keeps its rule table
-in its member registry account, and the program hashes the table at every
+in its ring policy account, and the program hashes the table at every
 policy write. Each policy proof binds that hash. The rules read the
 [member records](member-records.md) of the transfer's
 subjects, and the proof opens those records privately. The table hash and the
@@ -110,8 +110,8 @@ copy of the records. Sources are set per cluster:
 block = "<curator program id>"
 ```
 
-Curator roots follow the floor and grace rules of
-[member records](member-records.md#roots-floors-and-curators).
+Curator roots follow the revision and grace rules of
+[member records](member-records.md#roots-and-curators).
 `zolana-ring list set-source <list> --curator <program id or name>` makes that
 curator's registry the source of one list the table reads. `--own` returns the
 list to the ring's registry. The CLI checks that the curator serves the list
@@ -123,13 +123,13 @@ A policy ring pins its first table with `CreatePolicy`, and `SetPolicyRules`
 replaces the table and the source map together. `CreatePolicy` refuses an
 audit-only ring. `SetPolicySource` re-points one list. The config authority
 signs every policy write. The program validates the table, rehashes it and
-counts the write in the registry's generation. A transfer proven against the
+counts the write in the policy's generation. A transfer proven against the
 old table fails after that write, and its notes stay unspent.
 `InitSppRingConfig` registers a policy ring with SPP only after
 `CreatePolicy`.
 
 An auditor reconstructs the table history from the transaction history of the
-member registry account. Every policy write is a signed instruction on that
+ring policy account. Every policy write is a signed instruction on that
 account. `generation` counts the writes, and `generation_slot` names the slot
 of the last one.
 

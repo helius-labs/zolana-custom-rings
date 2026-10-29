@@ -57,7 +57,7 @@ Every commitment and statement of a custom ring is a Poseidon hash over BN254. T
 
 The recipient rebuilds the slot secret from `X25519(u_sk, tx_viewing_u)`, the auditor from the sealed transaction viewing secret. The anonymous rail hashes no tag and no body. Its view tags and body keys are zolana's [View Tags](../../../zolana/docs/spec.md#view-tags) and [AES Key derivation](../../../zolana/docs/spec.md#aes-key-derivation).
 
-## Member registry
+## Record tree
 
 | Value | Encoding |
 |---|---|
@@ -70,7 +70,7 @@ The recipient rebuilds the slot secret from `X25519(u_sk, tx_viewing_u)`, the au
 | Tree node | `Poseidon(c_0, c_1, c_2, c_3)`, height 10, the leaf index as 20 bits |
 | Queue entry | `Poseidon(CRQW, member, right_align(mask), right_align(value), escrow_key, mint_policy_write, right_align(withdrawal_threshold), limits_0, limits_1, limits_2)` |
 | Mint policy write | `0` when the write keeps the mint settings, else `2^192 + mint policy field`. `withdrawal_threshold` and every asset limit field are `0` when the write keeps them. |
-| Queue chain | `chain(-1) = 0`, `chain(p) = Poseidon(chain(p - 1), entry_p)` |
+| Queue chain | `chain(-1) = chain_start`, `chain(p) = Poseidon(chain(p - 1), entry_p)` |
 
 `policy_hash` is in [EncodedRuleTable](../../spec.md#encodedruletable).
 

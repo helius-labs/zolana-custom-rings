@@ -8,8 +8,8 @@ Every ring proof has one public input. It is the fold of a statement the program
 | Audit, anonymous | `HashChain4` | 19 | `Transact` |
 | Policy, member key | `HashChain4` | 18 | `Transact` |
 | Policy, delegate key | `HashChain4` | 17 | `DelegateTransact` |
-| Apply | `HashChain4` | 8 | `ApplyRecords`, `AuthorityWriteRecords` |
-| Register key | `HashChain4` | 8 | `RegisterKey` |
+| Apply | `HashChain4` | 8 | Storage `Update`, `UpdateImmediate` |
+| Register key | `HashChain4` | 8 | Ring RPC writer, off chain |
 | Withdrawal exemption | `HashChain4` | 8 | `Transact` |
 | Deposit | `HashChain` | 44 | `AuditedDeposit` |
 | Merge | `HashChain` | 17 | `Merge` |
@@ -66,12 +66,12 @@ The delivered statement carries no `private_tx_hash`. They bind the transfer thr
   chain_start, chain_end, right_align(count) ]
 ```
 
-The program supplies `old_root` as the current root, `old_next_index`, `chain_start = queue.chain_head`, `chain_end = chain(tail - 1)` and `count = pending`. Only `new_root` and `new_next_index` come from the instruction.
+The storage program supplies `old_root` as the registry's newest root, `old_next_index`, `chain_start = HashChain4([APPLY_RECORDS, hash_bytes(registry), revision])`, `chain_end` as the chain over the update's writes and `count` as their number. Only `new_root` and `new_next_index` come from the `ApplyRecordsIxData`.
 
 ## Register key
 
 ```text
-[ CRRG, solana_owner_identity(member signer), nullifier_pk,
+[ CRRG, solana_owner_identity(owner), nullifier_pk,
   pack_be(auditor_pubkey), pack_be(0x04 || eph_u), hash_bytes(ciphertext) ]
 ```
 

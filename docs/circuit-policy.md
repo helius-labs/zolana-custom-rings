@@ -61,7 +61,7 @@ holds as many subject rows as records. `recordCapacity` in
 the same widths.
 
 The SDKs collect the distinct members in first use order and read them with
-the ring indexer's `getRingRecordPool` under the root the transfer binds. They
+the ring indexer's `getStorageRecordPool` under the root the transfer binds. They
 check every path and every bracket against that root before they prove, and
 fill the pool to its capacity by repeating its records.
 
