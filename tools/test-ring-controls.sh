@@ -61,7 +61,7 @@ done
 
 # The ring keys are verified in place, the transfer keys download beside them once.
 lock="prover/ring/proving-keys.lock"
-keys_dir="$repo_root/zolana/prover/server/proving-keys"
+keys_dir="${ZOLANA_SPP_KEYS_DIR:-$repo_root/zolana/prover/server/proving-keys}"
 for key in $(jq -r '.keys | keys[] | select(startswith("custom_ring_"))' "$lock"); do
   file="$keys_dir/$key"
   expected="$(jq -er --arg name "$key" '.keys[$name].sha256' "$lock")"

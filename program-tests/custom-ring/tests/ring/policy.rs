@@ -131,6 +131,61 @@ fn an_outflow_limit_ring_bounds_each_transfer() -> Result<()> {
 }
 
 #[test]
+fn a_relayer_pays_a_confidential_policy_transfer_its_owner_signs_in_the_proof() -> Result<()> {
+    let env = setup()?;
+    let ring_program = custom_ring_program_id()?;
+    let ring = CustomRing::new(ring_program);
+    let auditor = X25519Keypair::new();
+    let auditor_tag = auditor_view_tag(&auditor.pubkey());
+    RegisterRing {
+        ring,
+        payer: &env.payer,
+        auditor_pubkey: auditor.pubkey(),
+        tier: Tier::policy(&EMPTY),
+    }
+    .send(&env.client)?;
+    let sender = &env.sender.keypair;
+    let deposit = RingDeposit {
+        ring,
+        payer: sender,
+        recipient: DepositRecipient::Confidential(sender.shielded_address()?),
+        tree: env.tree,
+        asset: DepositAsset::Sol,
+        amount: DEFAULT_DEPOSIT,
+        cosigner: None,
+    };
+    let RingDepositReceipt { utxo, .. } = env.run(deposit.send(env.client.ring_client()))?;
+    let relayer = &env.payer;
+    let mut transaction = ConfidentialTransaction::new_with_ring(
+        vec![indexed_note(utxo, sender, &env, env.tree)?],
+        relayer.pubkey(),
+        ring_program,
+    )?
+    .with_output_tree_id(env.tree_id(env.tree)?)?;
+    transaction.transfer_sol(
+        &env.recipient.keypair.shielded_address()?,
+        DEFAULT_DEPOSIT / 2,
+    )?;
+    let transfer = CustomRingTransfer::new(CustomRingTransferInput {
+        ring,
+        sender,
+        nullifier_key: Some(&sender.nullifier_key),
+        transaction,
+    })
+    .with_in_proof_owner(&sender.signing_key);
+
+    let proven = env.run(transfer.prove(env.client.ring_client()))?;
+
+    assert!(
+        proven.owner_signers().is_empty(),
+        "the owner signs only in the proof"
+    );
+    let signature = land(&env, proven.instruction()?, relayer, &[])?;
+    wait_for_indexed_transaction(env.client.indexer(), auditor_tag, signature);
+    Ok(())
+}
+
+#[test]
 fn the_key_escrow_lifecycle_ends_in_a_delegate_move() -> Result<()> {
     const SEND: u64 = DEFAULT_DEPOSIT / 4;
 
