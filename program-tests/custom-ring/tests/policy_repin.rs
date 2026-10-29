@@ -12,16 +12,14 @@ use custom_ring_test_validator::{
         owner_member, policy_registry, CuratedRings, PolicyTransfer, RegistryWrite, RingNotes,
         APPROVAL_OR_UNBLOCKED, BLOCK_ONLY, DEPOSIT, TRANSFER_AMOUNT,
     },
+    ring_rpc::{LocalRingRpc, RingRpcSpec},
     shared::{send_expecting_rejection, ExpectRejection, TestEnv},
 };
 use solana_signer::Signer;
-use spr_keypair::ShieldedKeypair;
+use spr_keypair::{ShieldedKeypair, X25519Keypair};
 use spr_program_test::Rejection;
 use spr_transaction::Utxo;
 use zolana_ring_policy::ListId;
-
-/// A local ring rpc, `init` reads the auditor key file and contacts nothing.
-const RING_RPC: &str = "http://127.0.0.1:1";
 
 const FORBID_BLOCK_TOML: &str = r#"[policy]
 
@@ -59,7 +57,7 @@ fn the_config_authority_re_pins_the_table_of_a_live_ring() -> Result<()> {
     let egress = Egress { ring, sender, env };
 
     // 1. `init` pins the Block row from `ring.toml` at generation 1.
-    let project = init_subscriber(&rings, FORBID_BLOCK_TOML)?;
+    let Subscriber { project, ring_rpc } = init_subscriber(&rings, FORBID_BLOCK_TOML)?;
     let pinned = policy_registry(ring, env)?;
     assert_eq!(pinned.rule_table()?, BLOCK_ONLY);
     assert_eq!(pinned.generation(), 1);
@@ -93,7 +91,7 @@ fn the_config_authority_re_pins_the_table_of_a_live_ring() -> Result<()> {
     let mixed = APPROVAL_OR_UNBLOCKED_TOML;
     project.write_config(RingToml {
         env,
-        ring_rpc: RING_RPC,
+        ring_rpc: &ring_rpc.url,
         policy: Some(mixed),
         mode: ModeName::Confidential,
     })?;
@@ -205,7 +203,10 @@ fn a_curated_block_list_yields_to_the_subscribers_own_approval_list() -> Result<
     };
 
     // 1. The subscriber pins the mixed group with Block read from the curator.
-    let project = init_subscriber(&rings, &block(CURATED_BLOCK_TOML, &rings))?;
+    let Subscriber {
+        project,
+        ring_rpc: _ring_rpc,
+    } = init_subscriber(&rings, &block(CURATED_BLOCK_TOML, &rings))?;
     let pinned = policy_registry(ring, env)?;
     assert_eq!(pinned.rule_table()?, APPROVAL_OR_UNBLOCKED);
     assert_eq!(pinned.generation(), 1);
@@ -264,11 +265,18 @@ fn block(literal: &str, rings: &CuratedRings) -> String {
 }
 
 /// After `init` the project's config authority holds the config.
-fn init_subscriber(rings: &CuratedRings, policy: &str) -> Result<RingProject> {
-    let project = RingProject::create(&rings.env, &spr_keypair::X25519Keypair::new().pubkey())?;
+fn init_subscriber(rings: &CuratedRings, policy: &str) -> Result<Subscriber> {
+    let auditor = X25519Keypair::new();
+    let ring_rpc = RingRpcSpec {
+        env: &rings.env,
+        ring: rings.subscriber.program_id(),
+        auditor: auditor.clone(),
+    }
+    .serve()?;
+    let project = RingProject::create(&rings.env, &auditor.pubkey())?;
     project.write_config(RingToml {
         env: &rings.env,
-        ring_rpc: RING_RPC,
+        ring_rpc: &ring_rpc.url,
         policy: Some(policy),
         mode: ModeName::Confidential,
     })?;
@@ -276,7 +284,13 @@ fn init_subscriber(rings: &CuratedRings, policy: &str) -> Result<RingProject> {
     for line in ["policy      created", "spp ring    registered"] {
         assert!(init.contains(line), "{line} in\n{init}");
     }
-    Ok(project)
+    Ok(Subscriber { project, ring_rpc })
+}
+
+/// `ring_rpc` serves until the subscriber drops.
+struct Subscriber {
+    project: RingProject,
+    ring_rpc: LocalRingRpc,
 }
 
 struct Egress<'a> {

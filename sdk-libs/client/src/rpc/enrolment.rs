@@ -35,6 +35,22 @@ pub struct RefuseEnrolmentRequest {
     pub auth: ConfigAuthorityAuth,
 }
 
+/// Signed by the config authority, or by the upgrade authority while no config exists.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CreateRecordsRegistryRequest {
+    pub ring: SerializablePubkey,
+    pub auth: ConfigAuthorityAuth,
+}
+
+/// `registry` is the ring's records PDA under `storage_authority`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CreateRecordsRegistryResponse {
+    pub registry: SerializablePubkey,
+    pub storage_authority: SerializablePubkey,
+}
+
 /// Oldest first.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -65,6 +81,9 @@ pub struct ListEnrolments {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RefuseEnrolment(pub RecordUpdateId);
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CreateRecords;
+
 /// The service rebuilds it from its own target and the request fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnrolmentAttestation<A> {
@@ -86,6 +105,7 @@ mod sealed {
 
     impl Sealed for super::ListEnrolments {}
     impl Sealed for super::RefuseEnrolment {}
+    impl Sealed for super::CreateRecords {}
 }
 
 impl EnrolmentAction for ListEnrolments {
@@ -118,6 +138,21 @@ impl EnrolmentAction for RefuseEnrolment {
         RefuseEnrolmentRequest {
             ring: ring.into(),
             update_id: self.0,
+            auth,
+        }
+    }
+}
+
+impl EnrolmentAction for CreateRecords {
+    type Request = CreateRecordsRegistryRequest;
+
+    fn line(&self) -> String {
+        "create records".to_owned()
+    }
+
+    fn request(self, ring: Address, auth: ConfigAuthorityAuth) -> CreateRecordsRegistryRequest {
+        CreateRecordsRegistryRequest {
+            ring: ring.into(),
             auth,
         }
     }
@@ -190,6 +225,19 @@ impl RefuseEnrolmentRequest {
             target,
             authority,
             action: RefuseEnrolment(update_id),
+        })
+    }
+}
+
+impl CreateRecordsRegistryRequest {
+    pub fn create(
+        target: ReadTarget,
+        authority: Address,
+    ) -> SignedRequest<EnrolmentAttestation<CreateRecords>> {
+        SignedRequest::new(EnrolmentAttestation {
+            target,
+            authority,
+            action: CreateRecords,
         })
     }
 }

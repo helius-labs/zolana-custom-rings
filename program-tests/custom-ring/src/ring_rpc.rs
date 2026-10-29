@@ -26,9 +26,9 @@ use zolana_ring_client::rpc::{
     GET_RELAY_STATUS, PREPARE_AUTHORITY_TRANSFER, PREPARE_RELAY, SET_MERGE_SETTINGS, SUBMIT_RELAY,
 };
 use zolana_ring_rpc::{
-    run_server, BindPolicy, ChainSource, ClientLimits, Hub, ManagedMerge, RelayServices,
-    RelayServicesInit, ServedRings, ServerOptions, Store, TransactionSource, Upstreams,
-    STORE_CONNECTIONS,
+    run_server, BindPolicy, ChainSource, ClientLimits, Hub, LiveStorageChain, ManagedMerge,
+    RelayServices, RelayServicesInit, ServedRings, ServerOptions, Store, TransactionSource,
+    Upstreams, STORE_CONNECTIONS,
 };
 
 use crate::shared::{prover_url, TestEnv, ACTOR_AIRDROP};
@@ -57,11 +57,6 @@ pub struct RingRpcRelay {
     http: reqwest::Client,
 }
 
-struct ServedRelay {
-    store: Store,
-    services: RelayServices,
-}
-
 struct Served {
     rpc: LocalRingRpc,
     hub: Arc<Hub<ChainSource>>,
@@ -77,7 +72,8 @@ struct JsonRpcResponse<T> {
 impl RingRpcSpec<'_> {
     pub fn serve(self) -> Result<LocalRingRpc> {
         let runtime = tokio::runtime::Runtime::new()?;
-        Ok(self.start(runtime, None)?.rpc)
+        let store = open_store(&runtime)?;
+        Ok(self.start(runtime, store, None)?.rpc)
     }
 
     pub fn serve_relayed(self) -> Result<RelayedRingRpc> {
@@ -89,14 +85,7 @@ impl RingRpcSpec<'_> {
         let fee_payer = Keypair::new();
         let fee_payer_address = fee_payer.pubkey();
         self.env.fund(fee_payer_address, ACTOR_AIRDROP)?;
-        let store_dir = isolated_temp_path("zolana-ring-relay-store");
-        std::fs::create_dir_all(&store_dir)?;
-        let store = runtime
-            .block_on(Store::open(
-                &format!("sqlite://{store_dir}/store.sqlite?mode=rwc"),
-                STORE_CONNECTIONS,
-            ))
-            .map_err(|e| anyhow!("relay store {e:?}"))?;
+        let store = open_store(&runtime)?;
         let services = RelayServicesInit {
             fee_payer,
             store: store.clone(),
@@ -111,7 +100,7 @@ impl RingRpcSpec<'_> {
             rpc,
             hub,
             genesis_hash,
-        } = self.start(runtime, Some(ServedRelay { store, services }))?;
+        } = self.start(runtime, store, Some(services))?;
         let merge = hub
             .managed_merge()
             .context("relay services run the managed merge")?;
@@ -128,25 +117,37 @@ impl RingRpcSpec<'_> {
         })
     }
 
-    fn start(self, runtime: tokio::runtime::Runtime, relay: Option<ServedRelay>) -> Result<Served> {
-        let source = ChainSource::connect(Upstreams {
+    fn start(
+        self,
+        runtime: tokio::runtime::Runtime,
+        store: Store,
+        relay: Option<RelayServices>,
+    ) -> Result<Served> {
+        let upstreams = Upstreams {
             indexer_url: &self.env.indexer_url,
             rpc_url: &self.env.rpc_url,
             timeout: Duration::from_secs(30),
-        })
-        .map_err(|e| anyhow!("ring rpc upstreams {e:?}"))?;
+        };
+        let source =
+            ChainSource::connect(upstreams).map_err(|e| anyhow!("ring rpc upstreams {e:?}"))?;
         let genesis_hash = runtime
             .block_on(source.genesis_hash())
             .map_err(|e| anyhow!("genesis hash {e:?}"))?;
-        let mut builder = Hub::builder(source, genesis_hash);
-        if let Some(ServedRelay { store, services }) = relay {
-            builder = builder.with_store(store).with_relay_services(services);
+        let storage_chain = LiveStorageChain::connect(upstreams, &prover_url())
+            .map_err(|e| anyhow!("storage chain {e:?}"))?;
+        let mut builder = Hub::builder(source, genesis_hash)
+            .with_store(store)
+            .with_storage_chain(Arc::new(storage_chain));
+        if let Some(services) = relay {
+            builder = builder.with_relay_services(services);
         }
         let hub = Arc::new(
             builder
                 .local(self.ring, self.auditor)
                 .map_err(|e| anyhow!("hub {e:?}"))?,
         );
+        let writer = hub.record_writer().map_err(|e| anyhow!("writer {e:?}"))?;
+        self.env.fund(writer.authority(), ACTOR_AIRDROP)?;
         let port = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?
             .local_addr()?
             .port();
@@ -285,4 +286,15 @@ impl RingRelay for RingRpcRelay {
     ) -> Result<RelayStatus, RingError> {
         self.call(GET_RELAY_STATUS, request).await
     }
+}
+
+fn open_store(runtime: &tokio::runtime::Runtime) -> Result<Store> {
+    let store_dir = isolated_temp_path("zolana-ring-rpc-store");
+    std::fs::create_dir_all(&store_dir)?;
+    runtime
+        .block_on(Store::open(
+            &format!("sqlite://{store_dir}/store.sqlite?mode=rwc"),
+            STORE_CONNECTIONS,
+        ))
+        .map_err(|e| anyhow!("ring rpc store {e:?}"))
 }

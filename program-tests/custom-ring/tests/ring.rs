@@ -202,10 +202,16 @@ fn cli_merge_fragments(amounts: &[u64]) -> Result<()> {
     let tree = env.register_default_tree()?;
     let ring = CustomRing::new(custom_ring_program_id()?);
     let auditor = X25519Keypair::new();
+    let ring_rpc = RingRpcSpec {
+        env: &env,
+        ring: ring.program_id(),
+        auditor: auditor.clone(),
+    }
+    .serve()?;
     let project = RingProject::create(&env, &auditor.pubkey())?;
     project.write_config(RingToml {
         env: &env,
-        ring_rpc: "http://127.0.0.1:1",
+        ring_rpc: &ring_rpc.url,
         policy: None,
         mode: ModeName::Anonymous,
     })?;

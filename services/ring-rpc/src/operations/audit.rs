@@ -217,14 +217,9 @@ impl<S: TransactionSource> AuditService<S> {
             now,
         }
         .decide()?;
-        let source = &self.shared.source;
-        let ring_authority = match source.ring_config(self.ring).await? {
-            Some(config) => Some(config.authority),
-            None => source.upgrade_authority(self.ring).await?,
-        };
-        if ring_authority != Some(authority) {
-            return Err(Unauthorized::NotRingAuthority.into());
-        }
+        self.shared
+            .require_ring_authority(self.ring, authority)
+            .await?;
         self.shared.replay.accept(ReplayCheck {
             ring: self.ring,
             nonce,

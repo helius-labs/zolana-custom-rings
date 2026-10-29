@@ -1008,6 +1008,7 @@ fn the_enrolment_requests_match_the_shared_vector() {
         list: Signed,
         list_after: Signed,
         refuse: Refuse,
+        create_records: Signed,
     }
     let vector: Vector = serde_json::from_str(include_str!(
         "../../../../test-vectors/rpc/enrolment_attestation.json"
@@ -1071,6 +1072,22 @@ fn the_enrolment_requests_match_the_shared_vector() {
     assert_eq!(
         serde_json::to_string(&refuse).expect("json"),
         vector.refuse.wire
+    );
+    let create_records = CreateRecordsRegistryRequest::create(target(), authority.pubkey());
+    assert_eq!(
+        message(create_records.attestation.message(1_700_000_000, &[4; 32])),
+        vector.create_records.message
+    );
+    let create_records = SignedRequest {
+        timestamp: Some(1_700_000_000),
+        nonce: [4; 32],
+        ..create_records
+    }
+    .sign(&authority)
+    .expect("sign the records request");
+    assert_eq!(
+        serde_json::to_string(&create_records).expect("json"),
+        vector.create_records.wire
     );
 }
 

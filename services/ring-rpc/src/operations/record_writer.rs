@@ -9,12 +9,13 @@ use custom_ring_interface::{
     storage_instruction::StorageUpdateIxData,
     RingAccount, RingPolicy, ROOT_HISTORY, STORAGE_PROGRAM_ID,
 };
-use custom_ring_sdk::{CustomRing, SyncRoots, UpdateStorage};
+use custom_ring_sdk::{CustomRing, InitializeStorage, SyncRoots, UpdateStorage};
 use log::warn;
 use sea_orm::DbErr;
 use solana_address::Address;
 use solana_instruction::Instruction;
 use solana_keypair::Keypair;
+use solana_signature::Signature;
 use solana_signer::Signer;
 use spr_client::{compile_message, sign_transaction, ComputeBudgetConfig};
 use spr_indexer_api::Hash;
@@ -42,9 +43,11 @@ use crate::{
 };
 
 pub const RECORD_FLUSH_INTERVAL: Duration = Duration::from_secs(2);
+const CONFIRM_POLL_INTERVAL: Duration = Duration::from_millis(400);
 /// The apply proof pairing and the root sync fit under the transaction ceiling.
 const UPDATE_COMPUTE_UNITS: u32 = 1_400_000;
 const SYNC_COMPUTE_UNITS: u32 = 200_000;
+const CREATE_COMPUTE_UNITS: u32 = 100_000;
 /// Subscriber `SyncRoots` instructions one transaction carries under the account limit.
 const SYNCS_PER_TRANSACTION: usize = 16;
 
@@ -60,6 +63,8 @@ pub struct RecordWriter {
     synced: Mutex<HashMap<Address, [Root; ROOT_HISTORY]>>,
     /// Holds the escrow check and the insert of one update together.
     submits: tokio::sync::Mutex<()>,
+    /// One records creation at a time, a second request finds the first registry.
+    creations: tokio::sync::Mutex<()>,
 }
 
 #[must_use]
@@ -84,6 +89,7 @@ impl WriterParts {
             reader_grants: self.reader_grants,
             synced: Mutex::default(),
             submits: tokio::sync::Mutex::default(),
+            creations: tokio::sync::Mutex::default(),
         }
     }
 }
@@ -91,6 +97,28 @@ impl WriterParts {
 impl RecordWriter {
     pub fn authority(&self) -> Address {
         self.authority.pubkey()
+    }
+
+    /// The writer authority owns and pays for the ring's records.
+    pub(crate) async fn create_records(&self, ring: Address) -> Result<Address, RingRpcError> {
+        let storage = InitializeStorage::records(CustomRing::new(ring), self.authority());
+        let registry = storage.registry();
+        let _creating = self.creations.lock().await;
+        if self.registry(registry).await?.is_some() {
+            return Ok(registry);
+        }
+        let latest = self.chain.latest_blockhash().await?;
+        let message = compile_message(
+            &self.authority(),
+            &[storage.instruction()],
+            latest.blockhash,
+            ComputeBudgetConfig::new(CREATE_COMPUTE_UNITS),
+        )?;
+        let transaction = sign_transaction(message, &[&self.authority])?;
+        let signature = self.chain.send(&transaction).await?;
+        self.confirmed(signature, latest.last_valid_block_height)
+            .await?;
+        Ok(registry)
     }
 
     /// A resubmitted update returns the id it was queued under.
@@ -376,6 +404,27 @@ impl RecordWriter {
             }
         };
         Ok(self.queue().settle(batch.id, outcome).await?)
+    }
+
+    async fn confirmed(
+        &self,
+        signature: Signature,
+        last_valid_block_height: u64,
+    ) -> Result<(), RingRpcError> {
+        loop {
+            match self.chain.outcome(signature).await? {
+                TransactionOutcome::Succeeded => return Ok(()),
+                TransactionOutcome::Failed => {
+                    return Err(RecordUpdateRefusal::RecordsNotCreated.into())
+                }
+                TransactionOutcome::Unknown
+                    if self.chain.block_height().await? > last_valid_block_height =>
+                {
+                    return Err(RecordUpdateRefusal::RecordsNotCreated.into())
+                }
+                TransactionOutcome::Unknown => tokio::time::sleep(CONFIRM_POLL_INTERVAL).await,
+            }
+        }
     }
 
     /// Refuses an escrow key for a member whose record or pending update holds one.

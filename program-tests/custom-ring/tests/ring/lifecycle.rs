@@ -270,6 +270,12 @@ fn cli_init_hands_the_config_over_and_reruns_from_the_chain() -> Result<()> {
     let env = setup()?;
     let ring = CustomRing::new(custom_ring_program_id()?);
     let auditor = X25519Keypair::new();
+    let ring_rpc = RingRpcSpec {
+        env: &env,
+        ring: ring.program_id(),
+        auditor: auditor.clone(),
+    }
+    .serve()?;
     let project = RingProject::create(&env, &auditor.pubkey())?;
     let init = || project.run(&["init"]);
 
@@ -277,7 +283,7 @@ fn cli_init_hands_the_config_over_and_reruns_from_the_chain() -> Result<()> {
     //    under the deployer and handed over in the same run.
     project.write_config(RingToml {
         env: &env,
-        ring_rpc: "http://127.0.0.1:1",
+        ring_rpc: &ring_rpc.url,
         policy: None,
         mode: ModeName::Confidential,
     })?;

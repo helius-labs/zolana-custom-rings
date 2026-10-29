@@ -513,14 +513,15 @@ _test-ts-live test-script *args: build-ring-program _spp-programs build-photon b
       fee_payer="$("$ring_rpc" keygen --kind fee-payer --out "$ring_dir/fee-payer.secret" \
         | sed -n 's/^fee payer *//p')"
       solana airdrop 100 "$fee_payer" --url {{localnet-rpc-url}} >/dev/null
-      relay_args=(--fee-payer-key-file "$ring_dir/fee-payer.secret" \
-        --store-url "sqlite://$PWD/$workdir/relay.sqlite?mode=rwc" \
-        --prover-url {{localnet-prover-url}})
+      relay_args=(--fee-payer-key-file "$ring_dir/fee-payer.secret")
     fi
+    # `init` creates the ring's records through the record writer.
     nohup "$ring_rpc" serve --port {{localnet-ring-rpc-port}} \
       --indexer-url {{localnet-ring-indexer-url}} --rpc-url {{localnet-rpc-url}} \
       --root-secret-file "$ring_dir/root.secret" \
       --allow-origin "$ring_origin" --webauthn-rp-id localhost \
+      --store-url "sqlite://$PWD/$workdir/ring-rpc.sqlite?mode=rwc" \
+      --prover-url {{localnet-prover-url}} \
       ${relay_args[@]+"${relay_args[@]}"} \
       > "$workdir/ring-rpc.log" 2>&1 &
     printf 'waiting for ring rpc %s ' "$ring_rpc_url"
@@ -535,6 +536,10 @@ _test-ts-live test-script *args: build-ring-program _spp-programs build-photon b
       exit 1
     fi
     echo " ready"
+    # The service logs the storage authority it pays every records write from.
+    storage_authority="$(sed -n 's/.*storage authority \([1-9A-HJ-NP-Za-km-z]*\).*/\1/p' "$workdir/ring-rpc.log")"
+    test -n "$storage_authority"
+    solana airdrop 100 "$storage_authority" --url {{localnet-rpc-url}} >/dev/null
     # This recipe started the service, its key needs no pin.
     "$ring_cli" --config "$ring_dir/ring.toml" \
       init --auditor-pubkey-file "auditor.key.pub" --trust-ring-rpc

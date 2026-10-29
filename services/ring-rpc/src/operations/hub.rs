@@ -186,6 +186,22 @@ impl<S> Shared<S> {
 }
 
 impl<S: TransactionSource> Shared<S> {
+    /// The config authority, or the upgrade authority while no config exists.
+    pub(crate) async fn require_ring_authority(
+        &self,
+        ring: Address,
+        signer: Address,
+    ) -> Result<(), RingRpcError> {
+        let ring_authority = match self.source.ring_config(ring).await? {
+            Some(config) => Some(config.authority),
+            None => self.source.upgrade_authority(ring).await?,
+        };
+        if ring_authority != Some(signer) {
+            return Err(Unauthorized::NotRingAuthority.into());
+        }
+        Ok(())
+    }
+
     pub(crate) async fn read_scope(&self, query: GrantQuery) -> Result<ReadScope, RingRpcError> {
         let granted = match &self.grants {
             Grants::Tree => {
