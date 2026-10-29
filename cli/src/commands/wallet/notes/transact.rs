@@ -227,25 +227,17 @@ pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
     );
     let authority = ctx.funded_authority()?;
     let parties = [("sender", &sender), ("recipient", &recipient)];
-    let queued = (config.mode == RingMode::ConfidentialEscrow)
-        .then(|| {
-            KeyEnrolment {
-                funder: authority,
-                members: &[&sender, &recipient],
-            }
-            .queue(ctx)
-        })
-        .transpose()?
-        .flatten();
+    if config.mode == RingMode::ConfidentialEscrow {
+        KeyEnrolment {
+            members: &[&sender, &recipient],
+        }
+        .ensure(ctx)?;
+    }
     AllowEnrolment {
         authority,
         parties: &parties,
     }
     .send(ctx)?;
-    if let Some(queued) = queued {
-        queued.apply(&ctx.zolana, authority)?;
-        line("member keys", "applied");
-    }
     transfer.fund(ctx, inputs.drawn_lamports())?;
     let sent = transfer.send(ctx, inputs)?;
     for (party, keys) in parties {
@@ -308,7 +300,6 @@ pub fn run_transfer(ctx: &Context, args: TransferArgs) -> Result<()> {
     if config.mode == RingMode::ConfidentialEscrow {
         payments.check_escrowed(ctx, &sender)?;
         KeyEnrolment {
-            funder: ctx.funded_authority()?,
             members: &[&sender],
         }
         .ensure(ctx)?;
@@ -352,7 +343,6 @@ pub fn run_deposit(ctx: &Context, args: DepositArgs) -> Result<()> {
     )?;
     if config.mode == RingMode::ConfidentialEscrow {
         KeyEnrolment {
-            funder: ctx.funded_authority()?,
             members: &[&sender],
         }
         .ensure(ctx)?;

@@ -11,8 +11,11 @@ use zolana_ring_client::{
     rpc::{
         AuditorKeyStatement, CreateAuditorKeyRequest, CreateAuditorKeyResponse,
         DecryptedTransaction, DecryptedTransactionsPage, GetDecryptedTransactionsRequest,
-        GetDecryptedTransactionsResponse, HealthResponse, ReadTarget, RingState, RingStatusRequest,
-        RingStatusResponse, CREATE_AUDITOR_KEY, GET_DECRYPTED_TRANSACTIONS, HEALTH, RING_STATUS,
+        GetDecryptedTransactionsResponse, GetRecordUpdateStatusRequest, HealthResponse, ReadTarget,
+        RecordUpdateStatus, RingState, RingStatusRequest, RingStatusResponse,
+        SubmitRecordUpdateRequest, SubmitRecordUpdateResponse, CREATE_AUDITOR_KEY,
+        GET_DECRYPTED_TRANSACTIONS, GET_RECORD_UPDATE_STATUS, HEALTH, RING_STATUS,
+        SUBMIT_RECORD_UPDATE,
     },
 };
 
@@ -158,6 +161,34 @@ impl RingRpcClient {
                     self.call(GET_DECRYPTED_TRANSACTIONS, request)?;
                 Ok(page.value)
             })
+        })
+    }
+
+    /// Blocks until the writer applies the update, a refusal fails.
+    pub fn apply_record_update(&self, request: SubmitRecordUpdateRequest) -> Result<u64> {
+        let update_id = request.verify()?;
+        let submitted: SubmitRecordUpdateResponse = self.call(SUBMIT_RECORD_UPDATE, request)?;
+        ensure!(
+            submitted.update_id == update_id,
+            "the ring rpc at {} answered another update id",
+            redact_url(&self.url)
+        );
+        wait_for("ring rpc to apply the record update", || {
+            let status: RecordUpdateStatus = self.call(
+                GET_RECORD_UPDATE_STATUS,
+                GetRecordUpdateStatusRequest {
+                    update_id: update_id.clone(),
+                },
+            )?;
+            match status {
+                RecordUpdateStatus::Applied { revision, .. } => Ok(Probe::Ready(revision)),
+                RecordUpdateStatus::Refused { reason } => {
+                    bail!("the writer refused the record update, {reason}")
+                }
+                RecordUpdateStatus::Queued | RecordUpdateStatus::Submitted { .. } => {
+                    Ok(Probe::NotYet)
+                }
+            }
         })
     }
 

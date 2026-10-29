@@ -1,36 +1,26 @@
 //! `key`, the member's nullifier key escrowed in its record.
 
 use anyhow::{ensure, Result};
-use custom_ring_sdk::{CustomRing, MemberRecords, RegisterKey, RingMode, RingOperation};
-use solana_keypair::Keypair;
+use custom_ring_sdk::{CustomRing, KeyRegistration, MemberRecords, RingMode, WalletRecordUpdate};
 use solana_signer::Signer;
 use spr_client::{BlockingIndexer, BlockingRpc};
 use spr_keypair::ShieldedKeypair;
 use zolana_ring_client::RingIndexer;
 use zolana_ring_policy::Member;
 
-use crate::{
-    fund::{TopUp, MIN_AUTHORITY_BALANCE},
-    line,
-    records::{self, write_budget, PendingWrites, Queued, Stage},
-    transact::SENDER_FEE_BUDGET,
-    Context, KeyCommand, Zolana,
-};
+use crate::{line, records, Context, KeyCommand, Zolana};
 
 const SEAL_PROMPT: &str = "seal the member key to the ring auditor and register it?";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Plan {
     AlreadyRegistered,
-    AlreadyQueued,
     Enroll,
     Declined,
 }
 
-/// One application after the last registration opens every escrow.
 #[must_use]
 pub(crate) struct KeyEnrolment<'a> {
-    pub funder: &'a Keypair,
     pub members: &'a [&'a ShieldedKeypair],
 }
 
@@ -44,117 +34,54 @@ pub fn key(ctx: &Context, command: KeyCommand) -> Result<()> {
     let sender = ctx.sender()?;
     let member = ShieldedKeypair::from_keypair(&sender)?;
     line("member", sender.pubkey());
-    let queued = match plan(key_stage(ctx, &member)?, || ctx.ask_yes(SEAL_PROMPT, true))? {
-        Plan::AlreadyRegistered => {
-            line("key", "already registered");
-            return Ok(());
-        }
-        Plan::Declined => {
-            line("key", "not registered");
-            return Ok(());
-        }
-        Plan::AlreadyQueued => {
-            line("key", "already queued");
-            ctx.fund(sender.pubkey(), SENDER_FEE_BUDGET)?;
-            Queued::now(&ctx.zolana, ctx.ring)?
-        }
+    let registered = registered(ctx.ring, &ctx.zolana, &member)?;
+    match plan(registered, || ctx.ask_yes(SEAL_PROMPT, true))? {
+        Plan::AlreadyRegistered => line("key", "already registered"),
+        Plan::Declined => line("key", "not registered"),
         Plan::Enroll => {
-            ctx.fund(sender.pubkey(), write_budget(&config, &sender.pubkey()))?;
-            let queued = register(ctx, &member)?;
+            register(ctx, &member)?;
             line("key", "registered");
-            queued
         }
-    };
-    queued.apply(&ctx.zolana, &member)?;
-    line("queue", "applied");
+    }
     Ok(())
 }
 
 impl KeyEnrolment<'_> {
     pub(crate) fn ensure(self, ctx: &Context) -> Result<()> {
-        let funder = self.funder;
-        if let Some(queued) = self.queue(ctx)? {
-            queued.apply(&ctx.zolana, funder)?;
-            line("member keys", "applied");
-        }
-        Ok(())
-    }
-
-    /// `None` when every member already escrows its key.
-    pub(crate) fn queue(self, ctx: &Context) -> Result<Option<Queued>> {
-        let config = ctx.ring_config()?;
-        let stages = self
-            .members
-            .iter()
-            .map(|member| key_stage(ctx, member))
-            .collect::<Result<Vec<_>>>()?;
-        let top_ups = self
-            .members
-            .iter()
-            .zip(&stages)
-            .filter(|(_, stage)| **stage == Stage::Unsent)
-            .map(|(member, _)| write_budget(&config, &member.pubkey()))
-            .fold(MIN_AUTHORITY_BALANCE, u64::saturating_add);
-        ctx.fund(self.funder.pubkey(), top_ups)?;
-        let mut queued = None;
-        for (member, stage) in self.members.iter().zip(stages) {
-            let outcome = match stage {
-                Stage::Applied => "already registered",
-                Stage::Queued => {
-                    queued = Some(Queued::now(&ctx.zolana, ctx.ring)?);
-                    "already queued"
-                }
-                Stage::Unsent => {
-                    TopUp {
-                        funder: self.funder,
-                        who: member.pubkey(),
-                        lamports: write_budget(&config, &member.pubkey()),
-                    }
-                    .send(ctx)?;
-                    queued = Some(register(ctx, member)?);
-                    "registered"
-                }
+        for member in self.members {
+            let outcome = if registered(ctx.ring, &ctx.zolana, member)? {
+                "already registered"
+            } else {
+                register(ctx, member)?;
+                "registered"
             };
             line("member key", format_args!("{} {outcome}", member.pubkey()));
         }
-        Ok(queued)
+        Ok(())
     }
 }
 
-fn register(ctx: &Context, member: &ShieldedKeypair) -> Result<Queued> {
-    ctx.submit(registration(ctx.ring, member)?, member, &[])?;
-    Queued::now(&ctx.zolana, ctx.ring)
+fn register(ctx: &Context, member: &ShieldedKeypair) -> Result<()> {
+    let registration = ctx.block(
+        KeyRegistration {
+            ring: ctx.ring,
+            member: member.shielded_address()?,
+            authority: member,
+        }
+        .prove(ctx.ring_client()),
+    )?;
+    let update = WalletRecordUpdate::new(ctx.record_update_target()?, member.pubkey())?
+        .with_escrow(registration)?
+        .sign(member)?;
+    ctx.ring_rpc().apply_record_update(update)?;
+    Ok(())
 }
 
-/// A submission, so a registry root another batch moved is proved again.
-fn registration(ring: CustomRing, member: &ShieldedKeypair) -> Result<RingOperation<'_>> {
-    Ok(RegisterKey {
-        ring,
-        member: member.shielded_address()?,
-        payer: member.pubkey(),
-        authority: member,
-    }
-    .into())
-}
-
-fn plan(stage: Stage, confirm: impl FnOnce() -> Result<bool>) -> Result<Plan> {
-    Ok(match stage {
-        Stage::Applied => Plan::AlreadyRegistered,
-        Stage::Queued => Plan::AlreadyQueued,
-        Stage::Unsent if confirm()? => Plan::Enroll,
-        Stage::Unsent => Plan::Declined,
-    })
-}
-
-fn key_stage(ctx: &Context, keys: &ShieldedKeypair) -> Result<Stage> {
-    let pending = PendingWrites::read(ctx)?;
-    if registered(ctx.ring, &ctx.zolana, keys)? {
-        return Ok(Stage::Applied);
-    }
-    let member = Member::owner_tag(keys.pubkey().as_array())?;
-    Ok(match pending.registers(&member) {
-        true => Stage::Queued,
-        false => Stage::Unsent,
+fn plan(registered: bool, confirm: impl FnOnce() -> Result<bool>) -> Result<Plan> {
+    Ok(match registered {
+        true => Plan::AlreadyRegistered,
+        false if confirm()? => Plan::Enroll,
+        false => Plan::Declined,
     })
 }
 
@@ -281,16 +208,8 @@ mod tests {
         }
         .served();
         assert!(served.registered(&member).expect("registered"));
-        let plan = plan(Stage::Applied, || panic!("an enrolled member is not asked"));
+        let plan = plan(true, || panic!("an enrolled member is not asked"));
         assert_eq!(plan.expect("plan"), Plan::AlreadyRegistered);
-    }
-
-    #[test]
-    fn a_queued_registration_is_neither_asked_for_nor_sent_again() {
-        let plan = plan(Stage::Queued, || {
-            panic!("a queued registration is not asked")
-        });
-        assert_eq!(plan.expect("plan"), Plan::AlreadyQueued);
     }
 
     #[test]
@@ -307,23 +226,14 @@ mod tests {
         assert!(!registered(ring(), &client, &member).expect("registered"));
         let mut yes = Scripted::new([Answer::Yes(true)]);
         assert_eq!(
-            plan(Stage::Unsent, || yes.confirm(SEAL_PROMPT, true)).expect("plan"),
+            plan(false, || yes.confirm(SEAL_PROMPT, true)).expect("plan"),
             Plan::Enroll
         );
         let mut no = Scripted::new([Answer::Yes(false)]);
         assert_eq!(
-            plan(Stage::Unsent, || no.confirm(SEAL_PROMPT, true)).expect("plan"),
+            plan(false, || no.confirm(SEAL_PROMPT, true)).expect("plan"),
             Plan::Declined
         );
-    }
-
-    #[test]
-    fn registrations_go_through_the_retrying_submission() {
-        let member = member();
-        assert!(matches!(
-            registration(ring(), &member).unwrap(),
-            RingOperation::RegisterKey(_)
-        ));
     }
 
     #[test]

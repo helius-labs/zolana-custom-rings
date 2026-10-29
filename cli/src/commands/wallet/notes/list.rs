@@ -6,8 +6,8 @@ use custom_ring_interface::{
     CustomRingError, ListRegistry, RecordQueue, APPLY_DELAY_SLOTS, MEMBER_QUEUE_LIMIT,
 };
 use custom_ring_sdk::{
-    AuthorityListWrite, CustomRing, MemberListWrite, MemberRecords, RecordApplication, RingError,
-    RingMode, SetSourceOwner, SourceOwner,
+    AuthorityRecordUpdate, CustomRing, MemberRecords, RecordApplication, RingError, RingMode,
+    SetSourceOwner, SourceOwner, WalletRecordUpdate,
 };
 use solana_address::Address;
 use solana_keypair::Keypair;
@@ -19,7 +19,7 @@ use crate::{
     catalogue::{check_curator, Catalogue},
     line,
     policy::{self, Pinned},
-    records::{self, insert_fee, queue, write_budget, PendingWrites, Queued, Stage},
+    records::{self, queue},
     transact::SENDER_FEE_BUDGET,
     ui::{self, icon},
     Context, EntryArgs, ListCommand,
@@ -58,20 +58,6 @@ pub(crate) struct ListUpdate<'a> {
     pub list_id: ListId,
     pub subjects: &'a [Subject],
     pub change: ListChange,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct MemberLists {
-    applied: u64,
-    queued: u64,
-}
-
-/// The authority's writes in queue order.
-#[must_use]
-struct ListWrites<'a> {
-    ring: CustomRing,
-    authority: Address,
-    changes: &'a [(Member, ListWrite)],
 }
 
 pub fn run(ctx: &Context, command: ListCommand) -> Result<()> {
@@ -127,14 +113,12 @@ impl MemberList {
 
     fn write(self, ctx: &Context, change: ListChange) -> Result<()> {
         let list_id = self.0;
-        let config = ctx.ring_config()?;
         let sender = ctx.sender()?;
         let member = Member::owner_tag(sender.pubkey().as_array())?;
         line(
             "member",
             format_args!("{} {}", list_id.name(), sender.pubkey()),
         );
-        let pending = PendingWrites::read(ctx)?;
         let read = records::read_one(
             &ctx.zolana,
             MemberRecords {
@@ -142,44 +126,17 @@ impl MemberList {
                 members: &[member],
             },
         )?;
-        let lists = MemberLists {
-            applied: read.record().map_or(0, |record| record.lists),
-            queued: pending.record_after(&member, read.record()).lists,
-        };
-        let payer = record_payer(ctx, &sender)?;
-        let queued = match change.stage(list_id, lists) {
-            Stage::Applied => {
-                line("list", "already there");
-                return Ok(());
-            }
-            Stage::Queued => {
-                line("list", "already queued");
-                ctx.fund(payer.pubkey(), SENDER_FEE_BUDGET)?;
-                Queued::now(&ctx.zolana, ctx.ring)?
-            }
-            Stage::Unsent => {
-                let write = MemberListWrite {
-                    ring: ctx.ring,
-                    payer: payer.pubkey(),
-                    member: sender.pubkey(),
-                    lists: change.write(list_id)?,
-                };
-                ctx.fund(payer.pubkey(), write_budget(&config, &sender.pubkey()))?;
-                warn_link(ctx, sender.pubkey());
-                let signers: Vec<&dyn Signer> = match payer.pubkey() == sender.pubkey() {
-                    true => vec![&sender],
-                    false => vec![payer, &sender],
-                };
-                ctx.send(&signers, &[write.instruction(&config)?])?;
-                line("list", change.outcome());
-                let fee = insert_fee(&config, &sender.pubkey());
-                line("insert fee", format_args!("{fee} lamports"));
-                Queued::now(&ctx.zolana, ctx.ring)?
-            }
-        };
-        warn_link(ctx, payer.pubkey());
-        queued.apply(&ctx.zolana, payer)?;
-        line("queue", "applied");
+        if read.listed(list_id) == change.present() {
+            line("list", "already there");
+            return Ok(());
+        }
+        let update = WalletRecordUpdate::new(ctx.record_update_target()?, sender.pubkey())?
+            .with_lists(change.write(list_id)?)?
+            .sign(&sender)?;
+        warn_link(ctx, sender.pubkey());
+        let revision = ctx.ring_rpc().apply_record_update(update)?;
+        line("list", change.outcome());
+        line("revision", revision);
         Ok(())
     }
 }
@@ -208,18 +165,6 @@ impl ListChange {
         matches!(self, Self::Set)
     }
 
-    /// A write lands after every pending one, only the state the queue leaves counts.
-    fn stage(self, list_id: ListId, lists: MemberLists) -> Stage {
-        let holds = |lists: u64| (lists & list_id.record_bit() != 0) == self.present();
-        if !holds(lists.queued) {
-            Stage::Unsent
-        } else if holds(lists.applied) {
-            Stage::Applied
-        } else {
-            Stage::Queued
-        }
-    }
-
     const fn outcome(self) -> &'static str {
         match self {
             Self::Set => "added",
@@ -233,7 +178,7 @@ impl EntryArgs {
         let list_id = self.list_id.id();
         let subjects = self.members.subjects()?;
         let outcomes = ListUpdate {
-            authority: ctx.funded_authority()?,
+            authority: ctx.authority()?,
             list_id,
             subjects: &subjects,
             change,
@@ -304,51 +249,24 @@ impl ListUpdate<'_> {
                 members: &members,
             },
         )?;
-        let mut writes = Vec::new();
+        let mut update =
+            AuthorityRecordUpdate::new(ctx.record_update_target()?, self.authority.pubkey());
+        let mut changed = false;
         let mut outcomes = Vec::with_capacity(self.subjects.len());
         for (subject, read) in self.subjects.iter().zip(&reads) {
             if read.listed(list_id) == self.change.present() {
                 outcomes.push("already there");
                 continue;
             }
-            writes.push((subject.member, self.change.write(list_id)?));
+            update = update.with_write(subject.member, self.change.write(list_id)?)?;
+            changed = true;
             outcomes.push(self.change.outcome());
         }
-        ListWrites {
-            ring: ctx.ring,
-            authority: self.authority.pubkey(),
-            changes: &writes,
+        if changed {
+            ctx.ring_rpc()
+                .apply_record_update(update.sign(self.authority)?)?;
         }
-        .send(
-            || Ok(queue(&ctx.zolana, ctx.ring)?.pending()),
-            |batch| ctx.submit(batch, self.authority, &[]).map(drop),
-        )?;
         Ok(outcomes)
-    }
-}
-
-impl ListWrites<'_> {
-    /// The queue is re-read before each batch, its pending writes share the proof.
-    fn send(
-        self,
-        mut pending: impl FnMut() -> Result<u64>,
-        mut send: impl FnMut(AuthorityListWrite) -> Result<()>,
-    ) -> Result<()> {
-        let mut sent = 0;
-        while sent < self.changes.len() {
-            let rest = self.changes[sent..].iter().try_fold(
-                AuthorityListWrite::new(self.ring, self.authority),
-                |write, (member, lists)| write.with_write(*member, *lists),
-            )?;
-            let batch = rest
-                .batches(pending()?)
-                .into_iter()
-                .next()
-                .context("no batch takes the remaining writes")?;
-            sent += batch.writes().len();
-            send(batch)?;
-        }
-        Ok(())
     }
 }
 
@@ -534,21 +452,6 @@ mod tests {
     }
 
     #[test]
-    fn a_member_write_the_queue_already_holds_is_not_sent_again() {
-        let bit = ListId::RingViewing.record_bit();
-        let stage = |change: ListChange, applied, queued| {
-            change.stage(ListId::RingViewing, MemberLists { applied, queued })
-        };
-        assert_eq!(stage(ListChange::Set, 0, bit), Stage::Queued);
-        assert_eq!(stage(ListChange::Set, bit, bit), Stage::Applied);
-        assert_eq!(stage(ListChange::Set, 0, 0), Stage::Unsent);
-        assert_eq!(stage(ListChange::Clear, bit, 0), Stage::Queued);
-        // A pending join undoes an applied leave, the leave goes out again.
-        assert_eq!(stage(ListChange::Clear, 0, bit), Stage::Unsent);
-        assert_eq!(stage(ListChange::Set, bit, 0), Stage::Unsent);
-    }
-
-    #[test]
     fn the_member_lists_are_the_lists_a_member_writes() {
         let lists: Vec<ListId> = MemberList::ALL.into_iter().map(MemberList::id).collect();
         let written: Vec<ListId> = ListId::ALL
@@ -556,79 +459,6 @@ mod tests {
             .filter(|list_id| ListSet::MEMBER_WRITES.contains(*list_id))
             .collect();
         assert_eq!(lists, written);
-    }
-
-    fn allow() -> ListWrite {
-        ListChange::Set.write(ListId::Allow).unwrap()
-    }
-
-    struct Batches {
-        sizes: Vec<usize>,
-        order: Vec<Member>,
-    }
-
-    fn batches(writes: &[(Member, ListWrite)], pending: &[u64]) -> Batches {
-        let mut pending = pending.iter().copied();
-        let mut batches = Batches {
-            sizes: Vec::new(),
-            order: Vec::new(),
-        };
-        ListWrites {
-            ring: CustomRing::new(Address::new_from_array([9; 32])),
-            authority: Address::new_from_array([3; 32]),
-            changes: writes,
-        }
-        .send(
-            || Ok(pending.next().expect("one queue read per batch")),
-            |batch| {
-                batches.sizes.push(batch.writes().len());
-                batches.order.extend(
-                    batch
-                        .writes()
-                        .iter()
-                        .map(|write| Member::from_bytes(write.member).unwrap()),
-                );
-                Ok(())
-            },
-        )
-        .unwrap();
-        batches
-    }
-
-    #[test]
-    fn list_write_splits_at_one_batch() {
-        let writes: Vec<(Member, ListWrite)> = (1..=20u8)
-            .map(|byte| (Member::owner_tag(&[byte; 32]).unwrap(), allow()))
-            .collect();
-        assert_eq!(batches(&writes[..16], &[0]).sizes, [16]);
-        assert_eq!(batches(&writes, &[0, 0]).sizes, [16, 4]);
-        // The first batch takes the room the pending member writes leave, its proof applies them.
-        assert_eq!(batches(&writes, &[8, 0]).sizes, [8, 12]);
-        // A member write queued between two batches shrinks the next.
-        let interleaved = batches(&writes, &[10, 6, 0]);
-        assert_eq!(interleaved.sizes, [6, 10, 4]);
-        let members: Vec<Member> = writes.iter().map(|(member, _)| *member).collect();
-        assert_eq!(
-            interleaved.order, members,
-            "the writes keep their order across batches"
-        );
-    }
-
-    #[test]
-    fn a_list_write_names_each_member_once() {
-        let member = Member::owner_tag(&[1; 32]).unwrap();
-        let writes = [(member, allow()), (member, allow())];
-        let refused = ListWrites {
-            ring: CustomRing::new(Address::new_from_array([9; 32])),
-            authority: Address::new_from_array([3; 32]),
-            changes: &writes,
-        }
-        .send(|| Ok(0), |_| Ok(()))
-        .unwrap_err();
-        assert!(matches!(
-            refused.downcast_ref::<RingError>(),
-            Some(RingError::DuplicateListWrite { .. })
-        ));
     }
 
     #[test]

@@ -2,6 +2,9 @@
 
 use super::*;
 
+/// Slots a signed record update stays acceptable to the writer.
+const RECORD_UPDATE_SLOTS: u64 = 150;
+
 pub struct Context {
     pub config_path: PathBuf,
     /// The directory of ring.toml, relative key paths resolve against it.
@@ -263,6 +266,20 @@ impl Context {
 
     pub fn ring_rpc(&self) -> RingRpcClient {
         RingRpcClient::new(&self.config.urls().ring_rpc)
+    }
+
+    pub fn record_update_target(&self) -> Result<custom_ring_sdk::RecordUpdateTarget> {
+        let policy = self
+            .block(
+                self.ring
+                    .read::<custom_ring_interface::RingPolicy>(self.chain()),
+            )?
+            .context("the ring has no policy account, run `zolana-ring init` first")?;
+        Ok(custom_ring_sdk::RecordUpdateTarget {
+            ring: self.ring,
+            registry: policy.records,
+            valid_until_slot: self.rpc().get_slot()?.saturating_add(RECORD_UPDATE_SLOTS),
+        })
     }
 
     /// `unpinned` applies only when ring.toml pins no service key.
