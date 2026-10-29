@@ -5,9 +5,13 @@ use sea_orm::{
 use solana_address::Address;
 use solana_signature::Signature;
 use zolana_ring_client::rpc::{RecordUpdateStatus, SubmitRecordUpdateRequest};
+use zolana_ring_policy::{ListSet, Member};
 
-use crate::record_update::{CheckedUpdate, QueuedUpdate, RecordUpdateRefusal, MAX_BATCH_ATTEMPTS};
+use crate::record_update::{
+    AwaitingEnrolment, CheckedUpdate, QueuedUpdate, RecordUpdateRefusal, MAX_BATCH_ATTEMPTS,
+};
 
+const AWAITING: &str = "awaiting";
 const QUEUED: &str = "queued";
 const SUBMITTED: &str = "submitted";
 const APPLIED: &str = "applied";
@@ -24,6 +28,8 @@ pub(crate) struct NewUpdate<'a> {
     pub request: &'a SubmitRecordUpdateRequest,
     pub update: &'a CheckedUpdate,
     pub queued_slot: u64,
+    /// Awaiting enrolments that queue joined to the update.
+    pub approves: &'a [[u8; 32]],
 }
 
 /// Recorded and not yet settled, its updates wait on its signature.
@@ -64,24 +70,42 @@ impl<'a> UpdateQueue<'a> {
     pub async fn insert(&self, new: NewUpdate<'_>) -> Result<(), DbErr> {
         let request =
             serde_json::to_string(new.request).map_err(|error| DbErr::Custom(error.to_string()))?;
+        let id = bytes(&new.update.id.0 .0);
+        let (status, awaited) = match new.update.awaited {
+            Some(lists) => (AWAITING, lists.record_bits()),
+            None => (QUEUED, 0),
+        };
+        let transaction = self.db.begin().await?;
         let sql = "INSERT INTO records_updates(id,registry,ring,request,writes,urgent,queued_slot,\
-                   valid_until_slot,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) \
+                   valid_until_slot,status,awaited) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) \
                    ON CONFLICT(id) DO NOTHING";
-        self.exec(
-            sql,
-            vec![
-                bytes(&new.update.id.0 .0),
-                bytes(new.request.registry.0.as_array()),
-                bytes(new.request.update.ring.0.as_array()),
-                request.into(),
-                StorageWriteData::encode_all(&new.update.writes).into(),
-                new.update.urgent.into(),
-                integer(new.queued_slot)?,
-                integer(new.request.update.valid_until_slot)?,
-                QUEUED.into(),
-            ],
-        )
-        .await
+        let values = vec![
+            id.clone(),
+            bytes(new.request.registry.0.as_array()),
+            bytes(new.request.update.ring.0.as_array()),
+            request.into(),
+            StorageWriteData::encode_all(&new.update.writes).into(),
+            new.update.urgent.into(),
+            integer(new.queued_slot)?,
+            integer(new.request.update.valid_until_slot)?,
+            status.into(),
+            integer(awaited)?,
+        ];
+        let inserted = transaction
+            .execute(statement(&transaction, sql, values))
+            .await?
+            .rows_affected()
+            == 1;
+        // A resubmit that lost the insert race joins nothing.
+        let approves = if inserted { new.approves } else { &[] };
+        for enrolment in approves {
+            let sql = "UPDATE records_updates SET status=$1, joined=$2 WHERE id=$3 AND status=$4";
+            let values = vec![QUEUED.into(), id.clone(), bytes(enrolment), AWAITING.into()];
+            transaction
+                .execute(statement(&transaction, sql, values))
+                .await?;
+        }
+        transaction.commit().await
     }
 
     pub async fn status(&self, id: &[u8; 32]) -> Result<Option<RecordUpdateStatus>, DbErr> {
@@ -92,6 +116,7 @@ impl<'a> UpdateQueue<'a> {
         };
         let status = row.try_get::<String>("", "status")?;
         Ok(Some(match status.as_str() {
+            AWAITING => RecordUpdateStatus::AwaitingAuthority,
             QUEUED => RecordUpdateStatus::Queued,
             SUBMITTED => RecordUpdateStatus::Submitted {
                 signature: signature(&row)?.into(),
@@ -111,10 +136,10 @@ impl<'a> UpdateQueue<'a> {
         }))
     }
 
-    /// Every registry with a queued update or an open batch.
+    /// Every registry with an awaiting or queued update or an open batch.
     pub async fn registries(&self) -> Result<Vec<Address>, DbErr> {
-        let sql = "SELECT DISTINCT registry FROM records_updates WHERE status IN ($1,$2)";
-        self.query_all(sql, vec![QUEUED.into(), SUBMITTED.into()])
+        let sql = "SELECT DISTINCT registry FROM records_updates WHERE status IN ($1,$2,$3)";
+        self.query_all(sql, vec![AWAITING.into(), QUEUED.into(), SUBMITTED.into()])
             .await?
             .iter()
             .map(|row| address(row, "registry"))
@@ -131,8 +156,13 @@ impl<'a> UpdateQueue<'a> {
     }
 
     pub async fn pending_writes(&self, registry: Address) -> Result<Vec<StorageWriteData>, DbErr> {
-        let sql = "SELECT writes FROM records_updates WHERE registry=$1 AND status IN ($2,$3)";
-        let values = vec![bytes(registry.as_array()), QUEUED.into(), SUBMITTED.into()];
+        let sql = "SELECT writes FROM records_updates WHERE registry=$1 AND status IN ($2,$3,$4)";
+        let values = vec![
+            bytes(registry.as_array()),
+            AWAITING.into(),
+            QUEUED.into(),
+            SUBMITTED.into(),
+        ];
         let mut writes = Vec::new();
         for row in self.query_all(sql, values).await? {
             writes.extend(stored_writes(&row)?);
@@ -154,29 +184,108 @@ impl<'a> UpdateQueue<'a> {
         }))
     }
 
-    /// Submit order.
+    /// Submit order, each joined enrolment's writes ahead of the update that approved it.
     pub async fn queued(&self, registry: Address) -> Result<Vec<QueuedUpdate>, DbErr> {
-        let sql = "SELECT id, ring, writes, urgent, queued_slot, valid_until_slot \
+        let sql = "SELECT id, ring, writes, urgent, queued_slot, valid_until_slot, joined \
                    FROM records_updates WHERE registry=$1 AND status=$2 ORDER BY seq";
         let values = vec![bytes(registry.as_array()), QUEUED.into()];
+        let mut joined: Vec<([u8; 32], Vec<StorageWriteData>, u64)> = Vec::new();
+        let mut queued = Vec::new();
+        for row in self.query_all(sql, values).await? {
+            let valid_until_slot = unsigned(&row, "valid_until_slot")?;
+            if let Some(approval) = row.try_get::<Option<Vec<u8>>>("", "joined")? {
+                let approval = approval.try_into().map_err(|_| corrupt("joined"))?;
+                joined.push((approval, stored_writes(&row)?, valid_until_slot));
+                continue;
+            }
+            let id = column_bytes(&row, "id")?;
+            let mut writes = Vec::new();
+            let mut until = valid_until_slot;
+            for (_, enrolment, enrolment_until) in
+                joined.iter().filter(|(approval, ..)| *approval == id)
+            {
+                writes.extend_from_slice(enrolment);
+                until = until.min(*enrolment_until);
+            }
+            writes.extend(stored_writes(&row)?);
+            queued.push(QueuedUpdate {
+                id,
+                ring: address(&row, "ring")?,
+                writes,
+                urgent: row.try_get("", "urgent")?,
+                queued_slot: unsigned(&row, "queued_slot")?,
+                valid_until_slot: until,
+            });
+        }
+        Ok(queued)
+    }
+
+    /// Oldest first.
+    pub async fn awaiting(&self, ring: Address) -> Result<Vec<AwaitingEnrolment>, DbErr> {
+        let sql = "SELECT id, request, writes, awaited, valid_until_slot FROM records_updates \
+                   WHERE ring=$1 AND status=$2 ORDER BY seq";
+        let values = vec![bytes(ring.as_array()), AWAITING.into()];
         self.query_all(sql, values)
             .await?
             .iter()
             .map(|row| {
-                Ok(QueuedUpdate {
+                let request: SubmitRecordUpdateRequest =
+                    serde_json::from_str(&row.try_get::<String>("", "request")?)
+                        .map_err(|_| corrupt("request"))?;
+                let wallet = request.signer.0;
+                let lists = u8::try_from(unsigned(row, "awaited")?)
+                    .map(ListSet::from_bits)
+                    .map_err(|_| corrupt("awaited"))?;
+                Ok(AwaitingEnrolment {
                     id: column_bytes(row, "id")?,
-                    ring: address(row, "ring")?,
-                    writes: stored_writes(row)?,
-                    urgent: row.try_get("", "urgent")?,
-                    queued_slot: unsigned(row, "queued_slot")?,
+                    wallet,
+                    member: *Member::owner_tag(wallet.as_array())
+                        .map_err(|_| corrupt("request"))?
+                        .as_bytes(),
+                    lists,
+                    writes: stored_writes(row)?.len(),
                     valid_until_slot: unsigned(row, "valid_until_slot")?,
                 })
             })
             .collect()
     }
 
+    /// `false` when no enrolment of `ring` awaits under `id`.
+    pub async fn refuse_awaiting(&self, ring: Address, id: &[u8; 32]) -> Result<bool, DbErr> {
+        let sql = "UPDATE records_updates SET status=$1, reason=$2 \
+                   WHERE id=$3 AND ring=$4 AND status=$5";
+        let values = vec![
+            REFUSED.into(),
+            RecordUpdateRefusal::EnrolmentRefused.to_string().into(),
+            bytes(id),
+            bytes(ring.as_array()),
+            AWAITING.into(),
+        ];
+        Ok(self
+            .db
+            .execute(statement(self.db, sql, values))
+            .await?
+            .rows_affected()
+            == 1)
+    }
+
+    pub async fn expire_awaiting(&self, registry: Address, slot: u64) -> Result<(), DbErr> {
+        let sql = "UPDATE records_updates SET status=$1, reason=$2 \
+                   WHERE registry=$3 AND status=$4 AND valid_until_slot<$5";
+        let values = vec![
+            REFUSED.into(),
+            RecordUpdateRefusal::Expired.to_string().into(),
+            bytes(registry.as_array()),
+            AWAITING.into(),
+            integer(slot)?,
+        ];
+        self.exec(sql, values).await
+    }
+
+    /// Refuses the enrolments joined to `id` with it.
     pub async fn refuse(&self, id: &[u8; 32], reason: &str) -> Result<(), DbErr> {
-        let sql = "UPDATE records_updates SET status=$2, reason=$3 WHERE id=$1 AND status=$4";
+        let sql = "UPDATE records_updates SET status=$2, reason=$3 \
+                   WHERE (id=$1 OR joined=$1) AND status=$4";
         self.exec(
             sql,
             vec![bytes(id), REFUSED.into(), reason.into(), QUEUED.into()],
@@ -203,7 +312,8 @@ impl<'a> UpdateQueue<'a> {
             .ok_or_else(|| corrupt("batch id"))?
             .try_get("", "id")?;
         for update in batch.updates {
-            let sql = "UPDATE records_updates SET status=$1, batch=$2 WHERE id=$3 AND status=$4";
+            let sql = "UPDATE records_updates SET status=$1, batch=$2 \
+                       WHERE (id=$3 OR joined=$3) AND status=$4";
             let values = vec![
                 SUBMITTED.into(),
                 id.into(),

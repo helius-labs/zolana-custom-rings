@@ -185,9 +185,9 @@ impl RingRpcClient {
                 RecordUpdateStatus::Refused { reason } => {
                     bail!("the writer refused the record update, {reason}")
                 }
-                RecordUpdateStatus::Queued | RecordUpdateStatus::Submitted { .. } => {
-                    Ok(Probe::NotYet)
-                }
+                RecordUpdateStatus::AwaitingAuthority
+                | RecordUpdateStatus::Queued
+                | RecordUpdateStatus::Submitted { .. } => Ok(Probe::NotYet),
             }
         })
     }

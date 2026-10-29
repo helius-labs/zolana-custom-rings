@@ -25,6 +25,7 @@ use zolana_secret_file::{
 };
 
 mod authority_transfer;
+mod enrolment;
 mod merge_settings;
 mod reader_grant;
 mod record_update;
@@ -33,6 +34,7 @@ mod relay_deposit;
 mod relay_proof;
 
 pub use authority_transfer::*;
+pub use enrolment::*;
 pub use merge_settings::*;
 pub use reader_grant::*;
 pub use record_update::*;
@@ -62,6 +64,8 @@ pub const GET_RECORD_UPDATE_STATUS: &str = "getRecordUpdateStatus";
 pub const SET_MERGE_SETTINGS: &str = "setMergeSettings";
 pub const SET_READER_GRANT: &str = "setReaderGrant";
 pub const PREPARE_AUTHORITY_TRANSFER: &str = "prepareAuthorityTransfer";
+pub const GET_PENDING_ENROLMENTS: &str = "getPendingEnrolments";
+pub const REFUSE_ENROLMENT: &str = "refuseEnrolment";
 /// The most UTXO hashes one `getAuditedUtxos` request names.
 pub const AUDITED_UTXOS_LIMIT: usize = 100;
 pub const AUDIT_CURSOR_LIMIT: usize = 256;

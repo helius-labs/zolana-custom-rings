@@ -733,6 +733,7 @@ fn a_signed_wallet_update_verifies_from_the_shared_vector() {
             }),
         ],
         valid_until_slot: 4242,
+        awaited_lists: 0,
     }
     .sign(Address::new_from_array([2; 32]), &wallet)
     .expect("sign");

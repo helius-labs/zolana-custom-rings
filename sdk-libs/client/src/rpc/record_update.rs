@@ -15,9 +15,13 @@ use spr_indexer_api::{Base64String, Hash, RpcMethod, SerializablePubkey, Seriali
 use spr_keypair::X25519Pubkey;
 use thiserror::Error;
 use zolana_ring_indexer::rpc::RingListWriteView;
-use zolana_ring_policy::{registry_field, ring_id_field, ListId, Member, MemberError};
+use zolana_ring_policy::{registry_field, ring_id_field, ListId, ListSet, Member, MemberError};
 
 use super::{GET_RECORD_UPDATE_STATUS, SUBMIT_RECORD_UPDATE};
+
+/// Authority lists that grant, never a restriction.
+pub const ENROLMENT_LISTS: ListSet =
+    ListSet::of(&[ListId::Allow, ListId::Reader, ListId::Approval]);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -66,6 +70,9 @@ pub struct RecordUpdate {
     pub ring: SerializablePubkey,
     pub entries: Vec<RecordUpdateEntry>,
     pub valid_until_slot: u64,
+    /// Record bits of the authority lists the update waits for, zero for none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub awaited_lists: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,6 +111,8 @@ pub struct GetRecordUpdateStatusRequest {
     rename_all_fields = "camelCase"
 )]
 pub enum RecordUpdateStatus {
+    /// Held until a config authority update sets every awaited list of the member.
+    AwaitingAuthority,
     Queued,
     Submitted {
         signature: SerializableSignature,
@@ -126,6 +135,7 @@ pub struct RecordUpdateStatement {
     /// The queue chain of the entries from zero.
     pub entries_hash: [u8; 32],
     pub valid_until_slot: u64,
+    pub awaited_lists: u64,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -258,6 +268,7 @@ impl RecordUpdate {
             registry,
             entries_hash,
             valid_until_slot: self.valid_until_slot,
+            awaited_lists: self.awaited_lists,
         })
     }
 
@@ -297,16 +308,21 @@ impl SubmitRecordUpdateRequest {
 
 impl RecordUpdateStatement {
     /// Mirrored by `recordUpdateStatementHash` in `sdk-libs/ts/src/protocol/ring-rpc/record-update.ts`.
-    ///   `Poseidon(CRRU, hash_bytes(genesis_hash), hash_bytes(ring), hash_bytes(registry), entries_hash, valid_until_slot)`
+    ///   `Poseidon(CRRU, hash_bytes(genesis_hash), hash_bytes(ring), hash_bytes(registry), entries_hash, valid_until_slot[, awaited_lists])`
     pub fn hash(&self) -> Result<[u8; 32], CustomRingError> {
-        Ok(Poseidon::hashv(&[
+        let awaited = right_align(&self.awaited_lists.to_be_bytes());
+        let elements: [&[u8]; 7] = [
             &domain::field(domain::RECORD_UPDATE),
             &hash_bytes(&self.genesis_hash)?,
             &ring_id_field(self.ring.as_array())?,
             &registry_field(self.registry.as_array())?,
             &self.entries_hash,
             &right_align(&self.valid_until_slot.to_be_bytes()),
-        ])?)
+            &awaited,
+        ];
+        // The width separates an enrolment's hash from a plain update's.
+        let width = if self.awaited_lists == 0 { 6 } else { 7 };
+        Ok(Poseidon::hashv(&elements[..width])?)
     }
 
     pub fn id(&self) -> Result<RecordUpdateId, CustomRingError> {
@@ -323,4 +339,8 @@ fn list_write(write: &RingListWriteView) -> RecordWriteData {
         },
         mint_policy: mint_policy_write(write.mint_policy),
     }
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
