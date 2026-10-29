@@ -6,15 +6,20 @@ use std::{
 use base64::{engine::general_purpose::STANDARD, Engine};
 use bytemuck::Zeroable;
 use custom_ring_interface::{
-    instruction::tag, tagged_x25519, AppliedAt, ApplyRecordsIxData, AuthorityWriteRecordsIxData,
-    EscrowKey, MemberWriteIxData, QueueEntry, RecordWriteData, RegisterKeyIxData,
-    WriteRecordsIxData, APPLY_DELAY_SLOTS, MEMBER_QUEUE_LIMIT, MEMBER_REGISTRY_EMPTY_ROOT,
-    QUAD_HEIGHT, ROOT_HISTORY,
+    instruction::tag,
+    storage::{RegistryId, Revision},
+    storage_instruction::{StorageUpdateIxData, StorageWriteData, UpdateMode},
+    tagged_x25519, AppliedAt, ApplyRecordsIxData, AuthorityWriteRecordsIxData, EscrowKey,
+    MemberWriteIxData, QueueEntry, RecordWriteData, RegisterKeyIxData, WriteRecordsIxData,
+    APPLY_DELAY_SLOTS, MEMBER_QUEUE_LIMIT, MEMBER_REGISTRY_EMPTY_ROOT, QUAD_HEIGHT, ROOT_HISTORY,
+    STORAGE_PROGRAM_ID,
 };
+use custom_ring_sdk::{InitializeStorage, UpdateStorage};
 use jsonrpsee::{server::ServerHandle, types::ErrorObjectOwned};
 use sea_orm::{ConnectionTrait, DatabaseConnection};
 use serde_json::{json, Value};
 use solana_address::Address;
+use solana_transaction::Instruction;
 use spr_indexer_api::{Hash, SerializablePubkey};
 use spr_interface::state::{discriminator::RING_CONFIG, RingConfig};
 use zolana_ring_indexer::{
@@ -22,8 +27,9 @@ use zolana_ring_indexer::{
     rpc::{
         GetRingApplyProofInputsRequest, GetRingMemberOpeningsRequest, GetRingMemberRecordRequest,
         GetRingMemberRecordsRequest, GetRingMemberRegistryRootRequest, GetRingRecordQueueRequest,
-        RingListWriteView, RingMemberOpening, RingMemberRecordView, RingQueueEntryView,
-        RingRecordPathView, RingRecordWriteView,
+        GetStorageMemberOpeningsRequest, RingListWriteView, RingMemberOpening,
+        RingMemberRecordView, RingQueueEntryView, RingRecordPathView, RingRecordWriteView,
+        StorageRootView,
     },
     tree::{MemberRecord, OpeningCheck, QuadPath, RecordOpening, RecordTree},
 };
@@ -36,7 +42,7 @@ use crate::{
     indexer::{Indexer, Progress, Readiness, StartSlot, PENDING_TTL_SLOTS},
     member_registry,
     rpc::SolanaRpc,
-    storage::{self, RegistryState, RegistryStore, RingCursor},
+    storage::{self, RegistryState, RegistryStore, RingCursor, StorageStore},
     tests::{create_registry, database, field},
 };
 
@@ -1590,4 +1596,103 @@ async fn mint_records_survive_replay_storage_and_rpc_beyond_eight_mints() {
         );
     }
     ring.stop().await;
+}
+
+fn sent(instruction: &Instruction) -> Value {
+    let accounts = instruction
+        .accounts
+        .iter()
+        .map(|meta| meta.pubkey)
+        .collect::<Vec<_>>();
+    transaction(instruction.program_id, &accounts, &instruction.data)
+}
+
+#[tokio::test]
+async fn a_storage_update_serves_openings_under_its_new_root() {
+    let creator = Address::new_from_array([41; 32]);
+    let initialize = InitializeStorage {
+        payer: Address::new_from_array([1; 32]),
+        creator,
+        registry_id: RegistryId([42; 32]),
+        grace_slots: 100,
+    };
+    let registry = initialize.registry();
+    let member = *Member::owner_tag(&[43; 32]).unwrap().as_bytes();
+    let write = StorageWriteData {
+        member,
+        lists: WriteRecordsIxData {
+            mask: 1u64.to_le_bytes(),
+            value: 1u64.to_le_bytes(),
+        },
+        ..Zeroable::zeroed()
+    };
+    let chain_start = storage_program::chain_start(&registry, Revision::default()).unwrap();
+    let inputs = MemberRegistryTree::new()
+        .unwrap()
+        .apply(chain_start, &[write.entry().unwrap()])
+        .unwrap();
+    let update = UpdateStorage {
+        authority: creator,
+        registry,
+        mode: UpdateMode::Graced,
+        data: StorageUpdateIxData {
+            revision: Revision::default(),
+            writes: &[write],
+            apply: &apply_data(inputs.new_root, inputs.new_next_index),
+        },
+    }
+    .instruction()
+    .unwrap();
+    let chain = Arc::new(Mutex::new(Chain {
+        blocks: BTreeMap::from([
+            (1, block(1, vec![sent(&initialize.instruction())])),
+            (2, block(2, vec![sent(&update)])),
+        ]),
+        ..Default::default()
+    }));
+    let (rpc, handle) = rpc(chain.clone()).await;
+    let indexer = replay_indexer(Arc::new(database().await), rpc);
+    while indexer.synchronize().await.unwrap() == Progress::Behind {}
+    // The chain takes the projected account, as an honest program writes it.
+    let projected = StorageStore::new(indexer.db.as_ref(), registry.to_bytes())
+        .state()
+        .await
+        .unwrap()
+        .unwrap();
+    let image = account(STORAGE_PROGRAM_ID, bytemuck::bytes_of(&*projected.account));
+    chain
+        .lock()
+        .unwrap()
+        .accounts
+        .insert(registry.to_string(), image);
+    let response = api::storage_member_openings(
+        indexer.db.as_ref(),
+        indexer.rpc.as_ref(),
+        GetStorageMemberOpeningsRequest {
+            registry: registry.into(),
+            members: vec![Hash(member)],
+            expected_root: Hash(inputs.new_root),
+        },
+    )
+    .await
+    .unwrap();
+    let served = StorageRootView {
+        root: Hash(inputs.new_root),
+        revision: 1,
+        next_index: inputs.new_next_index,
+    };
+    assert_eq!(response.root, served);
+    let [opening] = response.openings.as_slice() else {
+        panic!("one member opens once");
+    };
+    let opened = OpeningCheck {
+        opening: &record_opening(opening),
+        root: &inputs.new_root,
+        member: &member,
+    }
+    .verify()
+    .unwrap();
+    assert_eq!(opened.map(|record| record.lists), Some(1));
+    handle.stop().unwrap();
+    handle.stopped().await;
 }

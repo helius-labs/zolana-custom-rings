@@ -7,8 +7,11 @@ use std::{
 };
 
 use custom_ring_interface::{
-    check_member, queue_chain, tagged_x25519, RecordWriteData, RootEntry, WriteRecordsIxData,
-    MEMBER_REGISTRY_CAPACITY, QUAD_ARITY,
+    check_member, mint_policy_write, queue_chain,
+    storage::{Revision, StorageRegistry},
+    storage_instruction::StorageWriteData,
+    tagged_x25519, RecordWriteData, RootEntry, WriteRecordsIxData, APPLY_BATCH,
+    MEMBER_REGISTRY_CAPACITY, QUAD_ARITY, STORAGE_PROGRAM_ID,
 };
 use sea_orm::{DatabaseConnection, DatabaseTransaction};
 use solana_address::Address;
@@ -23,14 +26,15 @@ use zolana_ring_indexer::{
         GetRingMemberRecordResponse, GetRingMemberRecordsRequest, GetRingMemberRecordsResponse,
         GetRingMemberRegistryRootRequest, GetRingMemberRegistryRootResponse,
         GetRingRecordPoolRequest, GetRingRecordPoolResponse, GetRingRecordQueueRequest,
-        GetRingRecordQueueResponse, RingIndexedMemberRecordView, RingMemberOpening,
+        GetRingRecordQueueResponse, GetStorageApplyProofInputsRequest,
+        GetStorageApplyProofInputsResponse, GetStorageMemberOpeningsRequest,
+        GetStorageMemberOpeningsResponse, GetStorageRecordPoolRequest,
+        GetStorageRecordPoolResponse, RingIndexedMemberRecordView, RingMemberOpening,
         RingMemberRecordView, RingQueueEntryView, RingRecordPathView, RingRecordWriteView,
-        RingRegistryRootView, RingRootEntryView, MAX_RING_MEMBER_PAGE_LIMIT,
+        RingRegistryRootView, RingRootEntryView, StorageRootView, StorageWriteView,
+        MAX_RING_MEMBER_PAGE_LIMIT,
     },
-    tree::{
-        Canopy, MemberRecord, OpeningCheck, RecordOpening, RecordTree,
-        RecordWriteProofInput,
-    },
+    tree::{Canopy, MemberRecord, OpeningCheck, RecordOpening, RecordTree, RecordWriteProofInput},
 };
 
 use crate::{
@@ -40,7 +44,8 @@ use crate::{
     member_registry::{LoadedRegistry, RecordRead, TreeRead},
     rpc::SolanaRpc,
     storage::{
-        self, HistoryRoot, RegistryState, RegistryStore, RingCursor, StoredEntry, StoredRecord,
+        self, HistoryRoot, RegistryState, RegistryStore, RingCursor, StorageRoot, StorageState,
+        StorageStore, StoredEntry, StoredRecord,
     },
 };
 
@@ -53,57 +58,85 @@ pub(crate) trait ChainSource {
         &self,
         tip: &BlockMetadata,
         state: &RegistryState,
-    ) -> impl Future<Output = Result<Confirmation, RingApiError>> + Send;
+    ) -> impl Future<Output = Result<Confirmation<ChainRegistry>, RingApiError>> + Send;
+
+    /// Fails unless `tip` is canonical and the registry account is no older.
+    fn storage_confirmation(
+        &self,
+        tip: &BlockMetadata,
+        registry: &[u8; 32],
+    ) -> impl Future<Output = Result<Confirmation<StorageRegistry>, RingApiError>> + Send;
 }
 
-#[derive(Clone)]
-pub(crate) struct Confirmation {
+pub(crate) struct Confirmation<T> {
     context: ApiContext,
-    chain: Arc<ChainRegistry>,
+    chain: Arc<T>,
 }
 
-/// Concurrent requests at one tip wait for a single read per ring.
+/// Concurrent requests at one tip wait for a single read per account.
 pub(crate) struct CachedChain {
     rpc: Arc<SolanaRpc>,
-    rings: Mutex<HashMap<[u8; 32], Arc<RingCache>>>,
+    rings: ReadCache<ChainRegistry>,
+    storage: ReadCache<StorageRegistry>,
 }
 
-type RingCache = AsyncMutex<Option<Cached>>;
+struct ReadCache<T> {
+    reads: Mutex<HashMap<[u8; 32], Arc<CacheEntry<T>>>>,
+}
 
-struct Cached {
+type CacheEntry<T> = AsyncMutex<Option<Cached<T>>>;
+
+struct Cached<T> {
     tip: BlockMetadata,
     read_at: Instant,
-    confirmation: Result<Confirmation, RingApiError>,
+    confirmation: Result<Confirmation<T>, RingApiError>,
+}
+
+impl<T> Clone for Confirmation<T> {
+    fn clone(&self) -> Self {
+        Self {
+            context: self.context.clone(),
+            chain: Arc::clone(&self.chain),
+        }
+    }
 }
 
 impl CachedChain {
     pub fn new(rpc: Arc<SolanaRpc>) -> Self {
         Self {
             rpc,
-            rings: Mutex::default(),
+            rings: ReadCache::default(),
+            storage: ReadCache::default(),
         }
-    }
-
-    fn ring(&self, program: [u8; 32]) -> Arc<RingCache> {
-        let mut rings = self.rings.lock().unwrap_or_else(PoisonError::into_inner);
-        Arc::clone(rings.entry(program).or_default())
     }
 }
 
-impl ChainSource for CachedChain {
-    async fn confirmation(
+impl<T> Default for ReadCache<T> {
+    fn default() -> Self {
+        Self {
+            reads: Mutex::default(),
+        }
+    }
+}
+
+impl<T> ReadCache<T> {
+    async fn read(
         &self,
+        key: [u8; 32],
         tip: &BlockMetadata,
-        state: &RegistryState,
-    ) -> Result<Confirmation, RingApiError> {
-        let ring = self.ring(state.program);
-        let mut cached = ring.lock().await;
-        let fresh = |hit: &&Cached| hit.tip == *tip && hit.read_at.elapsed() < CONFIRMATION_AGE;
+        fetch: impl Future<Output = Result<Confirmation<T>, RingApiError>>,
+    ) -> Result<Confirmation<T>, RingApiError> {
+        let entry = {
+            let mut reads = self.reads.lock().unwrap_or_else(PoisonError::into_inner);
+            Arc::clone(reads.entry(key).or_default())
+        };
+        let mut cached = entry.lock().await;
+        let fresh = |hit: &&Cached<T>| hit.tip == *tip && hit.read_at.elapsed() < CONFIRMATION_AGE;
         if let Some(hit) = cached.as_ref().filter(fresh) {
             return hit.confirmation.clone();
         }
         let read_at = Instant::now();
-        let confirmation = self.rpc.confirmation(tip, state).await;
+        let confirmation = fetch.await;
         *cached = Some(Cached {
             tip: tip.clone(),
             read_at,
@@ -113,12 +146,32 @@ impl ChainSource for CachedChain {
     }
 }
 
+impl ChainSource for CachedChain {
+    async fn confirmation(
+        &self,
+        tip: &BlockMetadata,
+        state: &RegistryState,
+    ) -> Result<Confirmation<ChainRegistry>, RingApiError> {
+        let fetch = self.rpc.confirmation(tip, state);
+        self.rings.read(state.program, tip, fetch).await
+    }
+
+    async fn storage_confirmation(
+        &self,
+        tip: &BlockMetadata,
+        registry: &[u8; 32],
+    ) -> Result<Confirmation<StorageRegistry>, RingApiError> {
+        let fetch = self.rpc.storage_confirmation(tip, registry);
+        self.storage.read(*registry, tip, fetch).await
+    }
+}
+
 impl ChainSource for SolanaRpc {
     async fn confirmation(
         &self,
         tip: &BlockMetadata,
         state: &RegistryState,
-    ) -> Result<Confirmation, RingApiError> {
+    ) -> Result<Confirmation<ChainRegistry>, RingApiError> {
         let context = canonical_context(self, tip).await.map_err(out_of_sync)?;
         let read = ChainRead {
             state,
@@ -128,6 +181,28 @@ impl ChainSource for SolanaRpc {
             .load(self)
             .await
             .map_err(|error| out_of_sync(format!("{error:#}")))?;
+        Ok(Confirmation {
+            context,
+            chain: Arc::new(chain),
+        })
+    }
+
+    async fn storage_confirmation(
+        &self,
+        tip: &BlockMetadata,
+        registry: &[u8; 32],
+    ) -> Result<Confirmation<StorageRegistry>, RingApiError> {
+        let context = canonical_context(self, tip).await.map_err(out_of_sync)?;
+        let read = self
+            .get_multiple_accounts_from_slot(&[Address::new_from_array(*registry)], tip.slot)
+            .await
+            .map_err(out_of_sync)?;
+        let chain = read
+            .into_iter()
+            .flatten()
+            .find(|account| account.owner == STORAGE_PROGRAM_ID)
+            .and_then(|account| StorageRegistry::from_data(&account.data).copied())
+            .ok_or_else(|| out_of_sync("storage registry is not an initialized account"))?;
         Ok(Confirmation {
             context,
             chain: Arc::new(chain),
@@ -231,7 +306,7 @@ pub(crate) async fn member_records(
         .map(|row| row.record.record.member)
         .collect::<Vec<_>>();
     let read = TreeRead {
-        root: &root,
+        at: root.tree(),
         records: RecordRead::Leaves(rows),
         inserts: 0,
         canopy: None,
@@ -240,7 +315,7 @@ pub(crate) async fn member_records(
     let records = members
         .iter()
         .map(|member| {
-            let opening = loaded.opening(&root, member)?;
+            let opening = loaded.opening(&root.root, member)?;
             Ok(RingIndexedMemberRecordView {
                 record: opening.record,
                 path: opening.path,
@@ -265,7 +340,7 @@ pub(crate) async fn registry_root(
     let root = HistoryRoot::newest(&snapshot.state);
     let append_path = if root.next_index < MEMBER_REGISTRY_CAPACITY {
         let read = TreeRead {
-            root: &root,
+            at: root.tree(),
             records: RecordRead::Members(BTreeSet::new()),
             inserts: 1,
             canopy: None,
@@ -368,7 +443,7 @@ pub(crate) async fn apply_proof_inputs(
         .chain(authority)
         .collect::<Vec<_>>();
     let root = HistoryRoot::newest(state);
-    let loaded = TreeRead::batch(&root, &entries)
+    let loaded = TreeRead::batch(root.tree(), &entries)
         .load(&store)
         .await
         .map_err(internal)?;
@@ -393,6 +468,113 @@ pub(crate) async fn apply_proof_inputs(
     })
 }
 
+pub(crate) async fn storage_member_openings(
+    db: &DatabaseConnection,
+    chain: &impl ChainSource,
+    request: GetStorageMemberOpeningsRequest,
+) -> Result<GetStorageMemberOpeningsResponse, RingApiError> {
+    check_members(&request.members)?;
+    let read = Snapshot::storage(db, &request.registry)
+        .await?
+        .at_root(&request.expected_root.0)
+        .await?;
+    let openings = read
+        .load(&request.members, None)
+        .await?
+        .openings(&read.root.root, &request.members)?;
+    let root = read.root;
+    let context = read
+        .snapshot
+        .confirm(chain, StorageServed::Root(&root))
+        .await?;
+    Ok(GetStorageMemberOpeningsResponse {
+        context,
+        root: storage_root_view(&root),
+        openings,
+    })
+}
+
+pub(crate) async fn storage_record_pool(
+    db: &DatabaseConnection,
+    chain: &impl ChainSource,
+    request: GetStorageRecordPoolRequest,
+) -> Result<GetStorageRecordPoolResponse, RingApiError> {
+    check_members(&request.members)?;
+    let members = request.members.len() as u64;
+    if request.openings < members || request.openings > MAX_RING_MEMBER_PAGE_LIMIT {
+        return Err(validation("invalid record pool openings"));
+    }
+    let canopy = Canopy::covering(request.openings as usize).map_err(validation)?;
+    let read = Snapshot::storage(db, &request.registry)
+        .await?
+        .at_root(&request.expected_root.0)
+        .await?;
+    let pool = read.load(&request.members, Some(canopy)).await?.pool(
+        &read.root.root,
+        &request.members,
+        canopy,
+    )?;
+    let root = read.root;
+    let context = read
+        .snapshot
+        .confirm(chain, StorageServed::Root(&root))
+        .await?;
+    Ok(GetStorageRecordPoolResponse {
+        context,
+        root: storage_root_view(&root),
+        records: pool.records,
+        canopy: pool.canopy,
+        subjects: pool.subjects,
+    })
+}
+
+/// The writes apply from the current root, as the next `Update` names it.
+pub(crate) async fn storage_apply_proof_inputs(
+    db: &DatabaseConnection,
+    chain: &impl ChainSource,
+    request: GetStorageApplyProofInputsRequest,
+) -> Result<GetStorageApplyProofInputsResponse, RingApiError> {
+    if !(1..=APPLY_BATCH).contains(&request.writes.len()) {
+        return Err(validation("invalid storage write count"));
+    }
+    let entries = request
+        .writes
+        .iter()
+        .map(|write| storage_write(write).entry())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(validation)?;
+    let snapshot = Snapshot::storage(db, &request.registry).await?;
+    let root = StorageRoot::current(&snapshot.state.account);
+    let chain_start = storage_program::chain_start(&request.registry.0, root.revision.into())
+        .map_err(internal)?;
+    let loaded = TreeRead::batch(root.tree(), &entries)
+        .load(snapshot.store().tree())
+        .await
+        .map_err(internal)?;
+    let inputs = loaded
+        .tree
+        .apply_batch(chain_start, &entries)
+        .map_err(internal)?
+        .inputs;
+    if inputs.old_root != root.root {
+        return Err(internal("the loaded tree does not reach the current root"));
+    }
+    let context = snapshot
+        .confirm(chain, StorageServed::Current(&root))
+        .await?;
+    Ok(GetStorageApplyProofInputsResponse {
+        context,
+        revision: root.revision,
+        old_root: Hash(inputs.old_root),
+        new_root: Hash(inputs.new_root),
+        old_next_index: inputs.old_next_index,
+        new_next_index: inputs.new_next_index,
+        chain_start: Hash(inputs.chain_start),
+        chain_end: Hash(inputs.chain_end),
+        writes: inputs.writes.iter().map(write_view).collect(),
+    })
+}
+
 fn check_members(members: &[Hash]) -> Result<(), RingApiError> {
     let count = members.len() as u64;
     if count == 0 || count > MAX_RING_MEMBER_PAGE_LIMIT {
@@ -403,21 +585,37 @@ fn check_members(members: &[Hash]) -> Result<(), RingApiError> {
         .try_for_each(|member| check_member(&member.0).map_err(validation))
 }
 
-/// One ring read in a repeatable read transaction at the projection's tip.
-struct Snapshot {
+/// One read in a repeatable read transaction at the projection's tip.
+struct Snapshot<S> {
     tx: DatabaseTransaction,
-    state: RegistryState,
+    state: S,
     tip: Option<BlockMetadata>,
 }
 
+struct Released<S> {
+    tip: BlockMetadata,
+    state: S,
+}
+
 struct RootRead {
-    snapshot: Snapshot,
+    snapshot: Snapshot<RegistryState>,
     root: HistoryRoot,
 }
 
 struct Confirmed {
     context: ApiContext,
     state: RegistryState,
+}
+
+struct StorageRootRead {
+    snapshot: Snapshot<StorageState>,
+    root: StorageRoot,
+}
+
+struct PoolView {
+    records: Vec<RingIndexedMemberRecordView>,
+    canopy: Vec<Hash>,
+    subjects: Vec<u32>,
 }
 
 enum Served<'r> {
@@ -428,19 +626,45 @@ enum Served<'r> {
     Application,
 }
 
-impl Snapshot {
-    /// Fails before any RPC while the projection catches up, replays the ring or holds it quarantined.
-    async fn open(
-        db: &DatabaseConnection,
-        ring_program_id: &SerializablePubkey,
-    ) -> Result<Self, RingApiError> {
-        let program = ring_program_id.0.to_bytes();
+impl Snapshot<()> {
+    /// Fails before any RPC while the projection catches up or recovers.
+    async fn begin(db: &DatabaseConnection) -> Result<Self, RingApiError> {
         let tx = storage::begin_read(db).await?;
         let cursor = storage::cursor(&tx)
             .await
             .map_err(internal)?
             .filter(RingCursor::is_ready)
             .ok_or_else(|| out_of_sync("indexer is catching up or recovering"))?;
+        Ok(Self {
+            tx,
+            state: (),
+            tip: cursor.tip,
+        })
+    }
+}
+
+impl<S> Snapshot<S> {
+    /// Commits the read before the RPC calls.
+    async fn release(self) -> Result<Released<S>, RingApiError> {
+        self.tx.commit().await?;
+        let tip = self
+            .tip
+            .ok_or_else(|| out_of_sync("cursor has no canonical block"))?;
+        Ok(Released {
+            tip,
+            state: self.state,
+        })
+    }
+}
+
+impl Snapshot<RegistryState> {
+    /// Fails before any RPC while the projection catches up, replays the ring or holds it quarantined.
+    async fn open(
+        db: &DatabaseConnection,
+        ring_program_id: &SerializablePubkey,
+    ) -> Result<Self, RingApiError> {
+        let program = ring_program_id.0.to_bytes();
+        let Snapshot { tx, tip, .. } = Snapshot::begin(db).await?;
         let pending = storage::pending_ring(&tx, &program)
             .await
             .map_err(internal)?;
@@ -455,11 +679,7 @@ impl Snapshot {
         if let Some(fault) = &state.fault {
             return Err(out_of_sync(format!("ring quarantined, {fault}")));
         }
-        Ok(Self {
-            tx,
-            state,
-            tip: cursor.tip,
-        })
+        Ok(Self { tx, state, tip })
     }
 
     fn store(&self) -> RegistryStore<'_, DatabaseTransaction> {
@@ -502,24 +722,19 @@ impl Snapshot {
         Ok(rows)
     }
 
-    /// Commits the read before the RPC calls.
     async fn confirm(
         self,
         chain: &impl ChainSource,
         served: Served<'_>,
     ) -> Result<Confirmed, RingApiError> {
-        self.tx.commit().await?;
-        let tip = self
-            .tip
-            .as_ref()
-            .ok_or_else(|| out_of_sync("cursor has no canonical block"))?;
-        let confirmation = chain.confirmation(tip, &self.state).await?;
-        if !served.agrees(&confirmation.chain, &self.state) {
+        let Released { tip, state } = self.release().await?;
+        let confirmation = chain.confirmation(&tip, &state).await?;
+        if !served.agrees(&confirmation.chain, &state) {
             return Err(served.moved());
         }
         Ok(Confirmed {
             context: confirmation.context,
-            state: self.state,
+            state,
         })
     }
 }
@@ -531,7 +746,7 @@ impl RootRead {
         canopy: Option<Canopy>,
     ) -> Result<LoadedRegistry, RingApiError> {
         let read = TreeRead {
-            root: &self.root,
+            at: self.root.tree(),
             records: RecordRead::Members(members.iter().map(|member| member.0).collect()),
             inserts: 0,
             canopy,
@@ -546,10 +761,7 @@ impl RootRead {
     ) -> Result<GetRingMemberOpeningsResponse, RingApiError> {
         let loaded = self.load(members, None).await?;
         let root = &self.root;
-        let openings = members
-            .iter()
-            .map(|member| loaded.opening(root, &member.0))
-            .collect::<Result<Vec<_>, _>>()?;
+        let openings = loaded.openings(&root.root, members)?;
         let served = Served::Root(root);
         let context = self.snapshot.confirm(chain, served).await?.context;
         Ok(GetRingMemberOpeningsResponse {
@@ -569,41 +781,111 @@ impl RootRead {
     ) -> Result<GetRingRecordPoolResponse, RingApiError> {
         let loaded = self.load(members, Some(canopy)).await?;
         let root = &self.root;
-        let members: Vec<[u8; 32]> = members.iter().map(|member| member.0).collect();
-        let pool = loaded
-            .tree
-            .record_pool(&members, canopy)
-            .map_err(internal)?;
-        pool.verify(&root.root)
-            .map_err(|error| internal(format!("member registry pool disagrees ({error})")))?;
-        let records = pool
-            .records
-            .iter()
-            .zip(&pool.proof.paths)
-            .map(|(record, path)| {
-                let stored = loaded
-                    .stored
-                    .get(&record.member)
-                    .ok_or_else(|| internal("pooled record was not loaded"))?;
-                Ok(RingIndexedMemberRecordView {
-                    record: record_view(stored),
-                    path: path_view(path.index, &path.siblings),
-                })
-            })
-            .collect::<Result<Vec<_>, RingApiError>>()?;
+        let pool = loaded.pool(&root.root, members, canopy)?;
         let served = Served::Root(root);
         let context = self.snapshot.confirm(chain, served).await?.context;
         Ok(GetRingRecordPoolResponse {
             context,
             root: root_view(root),
-            records,
-            canopy: pool.proof.canopy.into_iter().map(Hash).collect(),
-            subjects: pool
-                .subjects
-                .iter()
-                .map(|subject| subject.record_index)
-                .collect(),
+            records: pool.records,
+            canopy: pool.canopy,
+            subjects: pool.subjects,
         })
+    }
+}
+
+impl Snapshot<StorageState> {
+    /// Fails before any RPC while the projection catches up or holds the registry quarantined.
+    async fn storage(
+        db: &DatabaseConnection,
+        registry: &SerializablePubkey,
+    ) -> Result<Self, RingApiError> {
+        let Snapshot { tx, tip, .. } = Snapshot::begin(db).await?;
+        let state = StorageStore::new(&tx, registry.0.to_bytes())
+            .state()
+            .await
+            .map_err(internal)?
+            .ok_or_else(|| out_of_sync("initialization has not been indexed"))?;
+        if let Some(fault) = &state.fault {
+            return Err(out_of_sync(format!(
+                "storage registry quarantined, {fault}"
+            )));
+        }
+        Ok(Self { tx, state, tip })
+    }
+
+    fn store(&self) -> StorageStore<'_, DatabaseTransaction> {
+        StorageStore::new(&self.tx, self.state.registry)
+    }
+
+    /// The newest revision the registry verifies `root` under at the tip.
+    async fn at_root(self, root: &[u8; 32]) -> Result<StorageRootRead, RingApiError> {
+        let slot = self.tip.as_ref().map_or(0, |tip| tip.slot);
+        let account = &self.state.account;
+        let revision = account
+            .roots
+            .iter()
+            .map(|held| held.revision)
+            .filter(|revision| account.root(*revision, slot) == Ok(*root))
+            .max_by_key(|revision| revision.value())
+            .ok_or(RingApiError::RootChanged)?;
+        let root = self
+            .store()
+            .root(revision.value())
+            .await
+            .map_err(internal)?
+            .filter(|stored| stored.root == *root)
+            .ok_or_else(|| internal("a history root is missing from the projection"))?;
+        Ok(StorageRootRead {
+            snapshot: self,
+            root,
+        })
+    }
+
+    async fn confirm(
+        self,
+        chain: &impl ChainSource,
+        served: StorageServed<'_>,
+    ) -> Result<ApiContext, RingApiError> {
+        let Released { tip, state } = self.release().await?;
+        let confirmation = chain.storage_confirmation(&tip, &state.registry).await?;
+        if !served.agrees(&confirmation.chain, tip.slot) {
+            return Err(RingApiError::RootChanged);
+        }
+        Ok(confirmation.context)
+    }
+}
+
+impl StorageRootRead {
+    async fn load(
+        &self,
+        members: &[Hash],
+        canopy: Option<Canopy>,
+    ) -> Result<LoadedRegistry, RingApiError> {
+        let read = TreeRead {
+            at: self.root.tree(),
+            records: RecordRead::Members(members.iter().map(|member| member.0).collect()),
+            inserts: 0,
+            canopy,
+        };
+        read.load(self.snapshot.store().tree())
+            .await
+            .map_err(internal)
+    }
+}
+
+enum StorageServed<'r> {
+    Root(&'r StorageRoot),
+    /// Apply proof inputs hold while the current root stays.
+    Current(&'r StorageRoot),
+}
+
+impl StorageServed<'_> {
+    fn agrees(&self, chain: &StorageRegistry, slot: u64) -> bool {
+        match self {
+            Self::Root(root) => chain.root(Revision::from(root.revision), slot) == Ok(root.root),
+            Self::Current(root) => StorageRoot::current(chain) == **root,
+        }
     }
 }
 
@@ -629,15 +911,62 @@ impl Served<'_> {
 }
 
 impl LoadedRegistry {
+    fn openings(
+        &self,
+        root: &[u8; 32],
+        members: &[Hash],
+    ) -> Result<Vec<RingMemberOpening>, RingApiError> {
+        members
+            .iter()
+            .map(|member| self.opening(root, &member.0))
+            .collect()
+    }
+
+    fn pool(
+        &self,
+        root: &[u8; 32],
+        members: &[Hash],
+        canopy: Canopy,
+    ) -> Result<PoolView, RingApiError> {
+        let members: Vec<[u8; 32]> = members.iter().map(|member| member.0).collect();
+        let pool = self.tree.record_pool(&members, canopy).map_err(internal)?;
+        pool.verify(root)
+            .map_err(|error| internal(format!("member registry pool disagrees ({error})")))?;
+        let records = pool
+            .records
+            .iter()
+            .zip(&pool.proof.paths)
+            .map(|(record, path)| {
+                let stored = self
+                    .stored
+                    .get(&record.member)
+                    .ok_or_else(|| internal("pooled record was not loaded"))?;
+                Ok(RingIndexedMemberRecordView {
+                    record: record_view(stored),
+                    path: path_view(path.index, &path.siblings),
+                })
+            })
+            .collect::<Result<Vec<_>, RingApiError>>()?;
+        Ok(PoolView {
+            records,
+            canopy: pool.proof.canopy.into_iter().map(Hash).collect(),
+            subjects: pool
+                .subjects
+                .iter()
+                .map(|subject| subject.record_index)
+                .collect(),
+        })
+    }
+
     fn opening(
         &self,
-        root: &HistoryRoot,
+        root: &[u8; 32],
         member: &[u8; 32],
     ) -> Result<RingMemberOpening, RingApiError> {
         let opening = self.tree.opening(member).map_err(internal)?;
         OpeningCheck {
             opening: &opening,
-            root: &root.root,
+            root,
             member,
         }
         .verify()
@@ -705,6 +1034,26 @@ fn path_view(index: u64, siblings: &[[[u8; 32]; QUAD_ARITY - 1]]) -> RingRecordP
     RingRecordPathView {
         index,
         siblings: siblings.iter().map(|level| level.map(Hash)).collect(),
+    }
+}
+
+fn storage_root_view(root: &StorageRoot) -> StorageRootView {
+    StorageRootView {
+        root: Hash(root.root),
+        revision: root.revision,
+        next_index: root.next_index,
+    }
+}
+
+fn storage_write(write: &StorageWriteView) -> StorageWriteData {
+    StorageWriteData {
+        member: write.member.0,
+        lists: WriteRecordsIxData {
+            mask: write.mask.to_le_bytes(),
+            value: write.value.to_le_bytes(),
+        },
+        mint_policy: mint_policy_write(write.mint_policy),
+        escrow_key: write.escrow_key.0,
     }
 }
 

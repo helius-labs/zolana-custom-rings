@@ -42,6 +42,7 @@ zolana-ring-client = { path = "sdk-libs/client", version = "0.1.0" }
 zolana-ring-transaction = { path = "sdk-libs/transaction", version = "0.1.0" }
 custom-ring-sdk = { path = "sdk-libs/sdk", version = "0.1.0" }
 custom-ring-program = { path = "programs/custom-ring", version = "0.1.0" }
+storage-program = { path = "programs/storage", version = "0.1.0" }
 custom-ring-cli = { path = "cli", version = "0.1.0" }
 zolana-ring-rpc = { path = "services/ring-rpc", version = "0.1.0" }
 

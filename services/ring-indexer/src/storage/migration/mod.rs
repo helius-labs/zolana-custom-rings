@@ -4,6 +4,7 @@ use sea_orm_migration::prelude::*;
 mod m20261024_000001_drop_ring_spend_records;
 mod m20261024_000002_record_tree;
 mod m20261025_000001_mint_policy;
+mod m20261029_000001_storage_registries;
 
 pub struct Migrator;
 
@@ -15,6 +16,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261024_000001_drop_ring_spend_records::Migration),
             Box::new(m20261024_000002_record_tree::Migration),
             Box::new(m20261025_000001_mint_policy::Migration),
+            Box::new(m20261029_000001_storage_registries::Migration),
         ]
     }
 }

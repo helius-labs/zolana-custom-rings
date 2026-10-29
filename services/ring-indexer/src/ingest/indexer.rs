@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeSet,
+    future::Future,
     ops::RangeInclusive,
     str::FromStr,
     sync::{
@@ -10,7 +11,9 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
-use custom_ring_interface::{instruction::tag, MemberRegistry, RecordQueue, RingAccount};
+use custom_ring_interface::{
+    instruction::tag, MemberRegistry, RecordQueue, RingAccount, STORAGE_PROGRAM_ID,
+};
 use futures::{stream, StreamExt};
 use sea_orm::{DatabaseConnection, DatabaseTransaction, TransactionTrait};
 use solana_account::Account;
@@ -26,8 +29,9 @@ use crate::{
     rpc::{RpcError, SolanaRpc},
     storage::{
         self, BlockJournal, BlockUndo, HistoryRoot, PendingRing, RegistryState, RegistryStore,
-        RingCursor, Undo,
+        RingCursor, StorageState, StorageStore, StorageUndo, Undo,
     },
+    storage_registry::{self, StorageCall, StorageProjection},
 };
 
 const MAX_RETRY_DELAY_SECS: u64 = 15;
@@ -476,6 +480,11 @@ impl Scope {
             pending.insert(program);
         }
     }
+
+    /// A ring replay leaves storage registries to the global pass.
+    fn projects_storage(&self) -> bool {
+        matches!(self, Self::Every { .. })
+    }
 }
 
 fn instruction_view(instruction: &Instruction) -> zolana_ring_indexer::InstructionView<'_> {
@@ -509,6 +518,43 @@ impl From<RpcError> for ApplyError {
 
 pub(crate) fn fault(reason: impl Into<String>) -> ApplyError {
     ApplyError::Fault(reason.into())
+}
+
+pub(crate) trait Quarantine {
+    type State;
+    type Undo;
+
+    fn undo(&self, before: Option<Self::State>) -> Self::Undo;
+
+    fn quarantine(
+        &self,
+        before: Self::State,
+        reason: String,
+    ) -> impl Future<Output = Result<Self::Undo>> + Send;
+}
+
+async fn settle<Q: Quarantine>(
+    store: &Q,
+    before: Q::State,
+    outcome: Result<(), ApplyError>,
+) -> Result<Q::Undo> {
+    match outcome {
+        Ok(()) => Ok(store.undo(Some(before))),
+        Err(ApplyError::Fault(reason)) => store.quarantine(before, reason).await,
+        Err(ApplyError::Retry(error)) => Err(error),
+    }
+}
+
+/// A refused change writes no row.
+async fn keep(
+    savepoint: DatabaseTransaction,
+    saved: Result<(), ApplyError>,
+) -> Result<(), ApplyError> {
+    match saved {
+        Ok(()) => savepoint.commit().await?,
+        Err(_) => savepoint.rollback().await?,
+    }
+    saved
 }
 
 /// A database failure retries, any other storage error is the ring's deterministic inconsistency.
@@ -599,7 +645,11 @@ impl BlockWork<'_> {
         let block = self.block;
         for transaction in block.transactions.iter().filter(|tx| tx.error.is_none()) {
             for instruction in instructions(transaction) {
-                self.project(instruction, &mut undo.records).await?;
+                if instruction.program_id == STORAGE_PROGRAM_ID {
+                    self.project_storage(instruction, &mut undo.storage).await?;
+                } else {
+                    self.project(instruction, &mut undo.records).await?;
+                }
             }
         }
         Ok(undo)
@@ -630,11 +680,38 @@ impl BlockWork<'_> {
             Ok(change) => self.advance(state.clone(), change).await,
             Err(error) => Err(error),
         };
-        match outcome {
-            Ok(()) => undo.push(store.undo(Some(state))),
-            Err(ApplyError::Fault(reason)) => undo.push(store.quarantine(state, reason).await?),
-            Err(ApplyError::Retry(error)) => return Err(error),
+        undo.push(settle(&store, state, outcome).await?);
+        Ok(())
+    }
+
+    async fn project_storage(
+        &mut self,
+        instruction: &Instruction,
+        undo: &mut Vec<StorageUndo>,
+    ) -> Result<()> {
+        let Some(decoded) =
+            storage_registry::decode(instruction).filter(|_| self.scope.projects_storage())
+        else {
+            return Ok(());
+        };
+        let store = StorageStore::new(self.tx, decoded.registry.to_bytes());
+        let Some(state) = store.state().await? else {
+            if let Ok(StorageCall::Initialize(init)) = &decoded.call {
+                if let Some(created) = init.state(decoded.registry) {
+                    storage_registry::create(&store, &created).await?;
+                    undo.push(store.undo(None));
+                }
+            }
+            return Ok(());
+        };
+        if state.fault.is_some() {
+            return Ok(());
         }
+        let outcome = match decoded.call {
+            Ok(call) => self.advance_storage(state.clone(), call).await,
+            Err(error) => Err(fault(error.to_string())),
+        };
+        undo.push(settle(&store, state, outcome).await?);
         Ok(())
     }
 
@@ -707,11 +784,26 @@ impl BlockWork<'_> {
             Ok(()) => store.save_state(&state).await.map_err(ApplyError::Retry),
             Err(error) => Err(error),
         };
-        match saved {
-            Ok(()) => savepoint.commit().await?,
-            Err(_) => savepoint.rollback().await?,
-        }
-        saved
+        keep(savepoint, saved).await
+    }
+
+    async fn advance_storage(
+        &self,
+        mut state: StorageState,
+        call: StorageCall<'_>,
+    ) -> Result<(), ApplyError> {
+        let savepoint = self.tx.begin().await?;
+        let store = StorageStore::new(&savepoint, state.registry);
+        let projection = StorageProjection {
+            store: &store,
+            state: &mut state,
+            slot: self.block.metadata.slot,
+        };
+        let saved = match projection.project(call).await {
+            Ok(()) => store.save_state(&state).await.map_err(ApplyError::Retry),
+            Err(error) => Err(error),
+        };
+        keep(savepoint, saved).await
     }
 }
 

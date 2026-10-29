@@ -18,6 +18,8 @@ mod rpc;
 mod server;
 #[path = "storage/database.rs"]
 mod storage;
+#[path = "ingest/storage_registry.rs"]
+mod storage_registry;
 
 use std::{net::SocketAddr, sync::Arc};
 
