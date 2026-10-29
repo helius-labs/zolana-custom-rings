@@ -11,11 +11,12 @@ use zolana_ring_client::{
     rpc::{
         AuditorKeyStatement, CreateAuditorKeyRequest, CreateAuditorKeyResponse,
         DecryptedTransaction, DecryptedTransactionsPage, GetDecryptedTransactionsRequest,
-        GetDecryptedTransactionsResponse, GetRecordUpdateStatusRequest, HealthResponse, ReadTarget,
-        RecordUpdateStatus, RingState, RingStatusRequest, RingStatusResponse,
-        SubmitRecordUpdateRequest, SubmitRecordUpdateResponse, CREATE_AUDITOR_KEY,
-        GET_DECRYPTED_TRANSACTIONS, GET_RECORD_UPDATE_STATUS, HEALTH, RING_STATUS,
-        SUBMIT_RECORD_UPDATE,
+        GetDecryptedTransactionsResponse, GetPendingEnrolmentsRequest,
+        GetPendingEnrolmentsResponse, GetRecordUpdateStatusRequest, HealthResponse,
+        PendingEnrolment, ReadTarget, RecordUpdateStatus, RingState, RingStatusRequest,
+        RingStatusResponse, SubmitRecordUpdateRequest, SubmitRecordUpdateResponse,
+        CREATE_AUDITOR_KEY, GET_DECRYPTED_TRANSACTIONS, GET_PENDING_ENROLMENTS,
+        GET_RECORD_UPDATE_STATUS, HEALTH, RING_STATUS, SUBMIT_RECORD_UPDATE,
     },
 };
 
@@ -190,6 +191,18 @@ impl RingRpcClient {
                 | RecordUpdateStatus::Submitted { .. } => Ok(Probe::NotYet),
             }
         })
+    }
+
+    /// Signed by the config authority, oldest first.
+    pub fn pending_enrolments(
+        &self,
+        target: ReadTarget,
+        authority: &dyn Signer,
+    ) -> Result<Vec<PendingEnrolment>> {
+        let request =
+            GetPendingEnrolmentsRequest::read(target, authority.pubkey()).sign(authority)?;
+        let pending: GetPendingEnrolmentsResponse = self.call(GET_PENDING_ENROLMENTS, request)?;
+        Ok(pending.enrolments)
     }
 
     /// A service that holds another key for this ring can open nothing here.

@@ -25,10 +25,7 @@ use spr_transaction::{
     },
     SpendableDecryptionResult, WalletUtxo, SOL_MINT,
 };
-use zolana_ring_client::{
-    rpc::{DecryptedOutputKind, ReadTarget},
-    ReaderKey,
-};
+use zolana_ring_client::{rpc::DecryptedOutputKind, ReaderKey};
 use zolana_ring_keys::{ring_address::RING_PAYMENT_SCHEME, RingAddress, RingPaymentRequest};
 use zolana_ring_policy::{ListId, Member, OutflowLimit};
 use zolana_ring_transaction::RingAssets;
@@ -46,7 +43,7 @@ use crate::{
     policy, records,
     ui::{self, icon},
     wallet::WalletScan,
-    Context, CosignerArg, DepositArgs, TransactArgs, TransferArgs, Trust, DEFAULT_TRANSACT_AMOUNT,
+    Context, CosignerArg, DepositArgs, TransactArgs, TransferArgs, DEFAULT_TRANSACT_AMOUNT,
     SENDER_KEYPAIR_FILE,
 };
 
@@ -1220,20 +1217,9 @@ fn print_signatures(ctx: &Context, sent: &Sent) -> Result<()> {
 fn read_back(ctx: &Context, reader: &Keypair, signature: Signature) -> Result<()> {
     println!("waiting for the indexer and the ring rpc to open the transaction");
     ctx.wait_for_indexed(signature)?;
-    let ring_rpc = ctx.ring_rpc();
-    let service = ring_rpc.service_pubkey()?;
-    if let Trust::Pinned(pinned) = ctx.trust(Trust::Unpinned)? {
-        ensure!(
-            pinned == service,
-            "the ring rpc reports service key {service}, ring.toml pins {pinned}"
-        );
-    }
-    let target = ReadTarget {
-        cluster: ctx.rpc().genesis_hash()?,
-        service,
-        ring: ctx.ring.program_id(),
-    };
-    let opened = ring_rpc
+    let target = ctx.ring_rpc_target()?;
+    let opened = ctx
+        .ring_rpc()
         // The submission carries one ring operation, its SPP event sits at index zero.
         .wait_for_decrypted(target, reader, signature, 0)
         .context("the ring rpc did not open the transfer")?;
