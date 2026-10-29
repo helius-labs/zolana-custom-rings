@@ -257,6 +257,7 @@ export type {
   AuthorityPayment,
   AuthorityTransfer,
   ConfigAuthorityAuth,
+  CreateRecordsRegistryRequest,
   GetPendingEnrolmentsRequest,
   PendingEnrolment,
   PendingEnrolmentsPage,
@@ -264,6 +265,7 @@ export type {
   RefuseEnrolmentRequest,
   PrepareRelayRequest,
   ReaderGrantAction,
+  RecordsRegistry,
   RelayIntent,
   RelayOperation,
   RelayQuote,
@@ -425,6 +427,7 @@ export {
   messageSignerReader,
   readerGrantAttestation,
   ringReadAttestation,
+  signCreateRecordsRegistryRequest,
   signPendingEnrolmentsRequest,
   signRefuseEnrolmentRequest,
 } from "../rpc/ring-rpc.js";
