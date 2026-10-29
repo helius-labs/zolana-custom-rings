@@ -345,7 +345,7 @@ ring-rpc-derived:
 
 # === Release and deploy ===
 
-# Release the ring program, ring keys, ring-rpc and zolana-ring, `--upload --prerelease` publishes.
+# Release the ring and storage programs, ring keys, ring-rpc and zolana-ring, `--upload --prerelease` publishes.
 release tag *args: build-programs check-custom-ring-keys
     cargo run -p ring-xtask -- create-release --tag {{tag}} {{args}}
 

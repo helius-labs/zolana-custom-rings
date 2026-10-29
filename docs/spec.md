@@ -1233,7 +1233,7 @@ The proving key lock pins each proving key's name, SHA-256 and size and the rele
 
 The setup is single party: the key generation runs gnark `Setup` once and keeps no randomness. A ring trusts its key generator as it trusts its upgrade authority.
 
-A release publishes the ring program, the proving keys and the Ring RPC binaries. The CLI deploys from the release lock it embeds, and checks each artifact by size and SHA-256. A release image carries a tag derived from its commit on `main`, and no publish overwrites an existing tag.
+A release publishes the ring program, the storage program, the proving keys and the Ring RPC binaries. The CLI deploys from the release lock it embeds, and checks each artifact by size and SHA-256. A release image carries a tag derived from its commit on `main`, and no publish overwrites an existing tag.
 
 ## Limitations
 

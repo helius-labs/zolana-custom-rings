@@ -51,7 +51,7 @@ impl RingRelease {
         Ok(())
     }
 
-    fn parse(lock: &str) -> Result<Self> {
+    pub(crate) fn parse(lock: &str) -> Result<Self> {
         serde_json::from_str(lock).context("the embedded release lock does not parse")
     }
 
@@ -69,6 +69,15 @@ impl RingRelease {
             format!(
                 "release {} ships no key for {}, use a complete custom-rings release",
                 self.tag, key.name
+            )
+        })
+    }
+
+    pub fn genesis_program(&self, section: &str) -> Result<&Asset> {
+        self.assets.get(section).with_context(|| {
+            format!(
+                "release {} ships no {section}, use a complete custom-rings release",
+                self.tag
             )
         })
     }
