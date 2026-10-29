@@ -231,6 +231,7 @@ export interface DepositProofRequest {
   readonly auditorPk: Bytes32;
   readonly keyEscrow: boolean;
   readonly memberRegistryRoot: Bytes32;
+  readonly curatorRoot: Bytes32;
   readonly policyHash: Bytes32;
   /** SPP's asset field of each deposit's group. */
   readonly assets: readonly Bytes32[];
@@ -238,6 +239,8 @@ export interface DepositProofRequest {
   /** Absent without a written policy, `assetRecords` then opens nothing. */
   readonly table?: PolicyTableProofInputs;
   readonly assetRecords: readonly (RecordOpening | undefined)[];
+  /** Undefined entries without a curator source. */
+  readonly curatorAssetRecords: readonly (RecordOpening | undefined)[];
 }
 
 /** Go `MergeParams`. */
@@ -452,6 +455,7 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
         auditorPk: hexBytes(request.auditorPk, 32, "auditorPk"),
         keyEscrow: flag(request.keyEscrow),
         memberRegistryRoot: field(request.memberRegistryRoot, "memberRegistryRoot"),
+        curatorRoot: field(request.curatorRoot, "curatorRoot"),
         policyHash: field(request.policyHash, "policyHash"),
         assets: fields(request.assets, depositCapacity(request.count), "assets"),
         amounts: fields(request.amounts, depositCapacity(request.count), "amounts"),
@@ -461,6 +465,11 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
           depositCapacity(request.count),
           "assetRecords",
         ).map((opening, i) => memberOpeningJson(opening, `assetRecords[${i}]`)),
+        curatorAssetRecords: sized(
+          request.curatorAssetRecords,
+          depositCapacity(request.count),
+          "curatorAssetRecords",
+        ).map((opening, i) => memberOpeningJson(opening, `curatorAssetRecords[${i}]`)),
       };
     case "merge":
       return {

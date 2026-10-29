@@ -131,7 +131,7 @@ describe("deposit disclosure", () => {
         ],
         auditorPublicKey: auditor.publicKey(),
       });
-      expect(hex(hash)).toBe("10e19c9868fa518ed2799983f62d30b1b6463c57bd721b93e0c60eec1f9e17e4");
+      expect(hex(hash)).toBe("29429067e1c71c8fde746d04e9c20bed8b73c04e7a7836095586322c57ab5078");
     } finally {
       generate.mockRestore();
       sealed.ephemeralSecret.fill(0);
@@ -192,6 +192,7 @@ describe("deposit disclosure", () => {
           auditorPublicKey: auditor,
           registry: {
             ownRoot: word(fixture["memberRegistryRoot"]),
+            curatorRoot: word(fixture["curatorRoot"]),
             keyEscrow: fixture["keyEscrow"] === true,
             policyHash: word(fixture["policyHash"]),
           },
@@ -391,16 +392,18 @@ describe("audited deposit instruction", () => {
         ...input,
         proof,
         ownRevision: 5n,
+        curatorRevision: 6n,
         cosigner: RING,
       });
       const [config] = await ringConfigPda(RING);
       const [registry] = await ringPolicyPda(RING);
       expect(plain.data?.[0]).toBe(31);
       expect(plain.data?.slice(1, 193)).toEqual(proof);
-      expect(plain.data?.slice(193, 201)).toEqual(new Uint8Array(8));
-      expect(plain.data?.[201]).toBe(InstructionTag.ringDeposit);
+      expect(plain.data?.slice(193, 209)).toEqual(new Uint8Array(16));
+      expect(plain.data?.[209]).toBe(InstructionTag.ringDeposit);
       expect(escrowed.data?.slice(193, 201)).toEqual(Uint8Array.of(5, 0, 0, 0, 0, 0, 0, 0));
-      expect(escrowed.data?.slice(201)).toEqual(plain.data?.slice(201));
+      expect(escrowed.data?.slice(201, 209)).toEqual(Uint8Array.of(6, 0, 0, 0, 0, 0, 0, 0));
+      expect(escrowed.data?.slice(209)).toEqual(plain.data?.slice(209));
       expect(plain.accounts?.slice(0, 1)).toEqual([
         { address: config, role: AccountRole.READONLY },
       ]);
@@ -596,7 +599,7 @@ describe("ring deposit builder", () => {
         role: AccountRole.READONLY,
       });
       // The recipient opens its note from the ciphertext behind the capsule.
-      const spp = data.slice(201);
+      const spp = data.slice(209);
       expect(spp[0]).toBe(InstructionTag.ringDeposit);
       expect(prepared.utxo.blinding).toEqual(
         depositBlinding(request.blindingSecrets[0] ?? field(0n)),
