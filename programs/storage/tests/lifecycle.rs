@@ -181,7 +181,7 @@ fn write(entry: &Value) -> StorageWriteData {
     StorageWriteData {
         member: field(&entry["member"]),
         lists,
-        mint_policy: [0; 33],
+        mint_policy: custom_ring_interface::mint_policy_write(None),
         escrow_key,
     }
 }
