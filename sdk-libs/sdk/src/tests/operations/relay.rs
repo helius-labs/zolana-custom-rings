@@ -9,8 +9,9 @@ use spr_indexer_api::SerializablePubkey;
 use spr_transaction::{instructions::transact::ConfidentialTransaction, Mint};
 use zolana_ring_client::{
     rpc::{
-        GetRelayQuoteRequest, GetRelayStatusRequest, PrepareRelayRequest, RelayIntent,
-        RelayProofInputs, RelayQuote, RelayStatus, RelayStep, SubmitRelayRequest,
+        GetRelayQuoteRequest, GetRelayStatusRequest, PrepareAuthorityTransferRequest,
+        PrepareRelayRequest, RelayIntent, RelayProofInputs, RelayQuote, RelayStatus, RelayStep,
+        SubmitRelayRequest,
     },
     FirstContact,
 };
@@ -40,6 +41,13 @@ impl RingRelay for StubRelay {
         let relay_id = request.relay_id()?;
         self.prepared.lock().unwrap().push(request);
         Ok(RelayStep::Submitted { relay_id })
+    }
+
+    async fn prepare_authority_transfer(
+        &self,
+        _request: PrepareAuthorityTransferRequest,
+    ) -> Result<RelayStep, RingError> {
+        unreachable!("the wallet names no delegate")
     }
 
     async fn submit_relay(&self, _request: SubmitRelayRequest) -> Result<RelayStatus, RingError> {
