@@ -24,6 +24,8 @@ pub struct RelayProofRequest<'a> {
     pub payload: &'a RelayPayload,
     /// Verified over `SppProofInputs::message_hash`, the proof takes it on the anonymous rail.
     pub owner_signature: Option<[u8; 64]>,
+    /// Read only when the ring demands a co-signer.
+    pub co_signer: Option<Address>,
 }
 
 /// The source's notes open under the escrowed key, the source signs nothing.
@@ -38,6 +40,7 @@ pub struct DelegateSeal<'a> {
     pub mint: Address,
     pub payments: Vec<DelegatePayment>,
     pub assets: &'a AssetRegistry,
+    pub co_signer: Option<Address>,
 }
 
 pub struct ProvenRelay {
@@ -60,22 +63,11 @@ pub trait RelayProver: Send + Sync {
 
 pub struct SdkRelayProver<R, I> {
     client: RingClient<R, I>,
-    co_signer: Option<Address>,
 }
 
 impl<R, I> SdkRelayProver<R, I> {
     pub fn new(client: RingClient<R, I>) -> Self {
-        Self {
-            client,
-            co_signer: None,
-        }
-    }
-
-    /// Named on deposits and merges whose ring demands a co-signer.
-    #[must_use = "use the updated prover"]
-    pub fn with_co_signer(mut self, co_signer: Address) -> Self {
-        self.co_signer = Some(co_signer);
-        self
+        Self { client }
     }
 }
 
@@ -103,7 +95,7 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> RelayProver for Sdk
             mint: seal.mint,
             payments: seal.payments,
             assets: seal.assets,
-            co_signer: None,
+            co_signer: seal.co_signer,
         }
         .select(&self.client)
         .await
@@ -128,6 +120,9 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
         });
         if let Some(signature) = request.owner_signature {
             transfer = transfer.with_owner_signature(signature);
+        }
+        if let Some(co_signer) = request.co_signer {
+            transfer = transfer.with_co_signer(co_signer);
         }
         let proven = transfer
             .prove(&self.client)
@@ -160,7 +155,7 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
             ring: CustomRing::new(request.ring),
             inputs: deposit,
             fee_payer: request.fee_payer,
-            co_signer: self.co_signer,
+            co_signer: request.co_signer,
         }
         .prepare(self.client.zolana())
         .await
@@ -190,13 +185,13 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
         let proven = OwnerMergeProof {
             client: &self.client,
             payer: request.fee_payer,
-            co_signer: self.co_signer,
         }
         .prove(OwnerMerge {
             ring: merge.ring_program_id,
             owner: Address::new_from_array(owner),
             nullifier_key: &merge.nullifier_key,
             inputs: merge.inputs.clone(),
+            co_signer: request.co_signer,
         })
         .await
         .map_err(RelayError::proof)?;

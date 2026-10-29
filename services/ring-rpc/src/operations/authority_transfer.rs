@@ -129,6 +129,7 @@ impl<S: TransactionSource> Hub<S> {
                         })
                         .collect(),
                     assets: assets.registry(),
+                    co_signer: relay.co_signer(),
                 },
             )
             .await

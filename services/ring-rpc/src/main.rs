@@ -13,10 +13,9 @@ use zolana_ring_client::{
 use zolana_ring_rpc::{
     read_fee_payer, read_root_secret, run_server, write_fee_payer, write_root_secret, ChainSource,
     Cli, Command, FeePayerSubmit, Hub, KeyKind, KeygenArgs, LiveStorageChain, ManagedMergeInit,
-    MergeBuilder, OriginPolicy, RefusingCoSigner, RelayParts, RelaySubmit, RingSdkMergeBuilder,
-    SdkRelayProver, ServeArgs, ServedRings, ServerOptions, SolanaRelayChain, Store,
-    TransactionSource, Upstreams, MANAGED_MERGE_INTERVAL, RECORD_FLUSH_INTERVAL,
-    RELAY_TRACK_INTERVAL, UTXO_BACKFILL_INTERVAL,
+    MergeBuilder, OriginPolicy, RelayParts, RelaySubmit, RingSdkMergeBuilder, SdkRelayProver,
+    ServeArgs, ServedRings, ServerOptions, SolanaRelayChain, Store, TransactionSource, Upstreams,
+    MANAGED_MERGE_INTERVAL, RECORD_FLUSH_INTERVAL, RELAY_TRACK_INTERVAL, UTXO_BACKFILL_INTERVAL,
 };
 
 /// One flush at a time, the rest serve submits and status reads.
@@ -160,7 +159,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         let merge = ManagedMergeInit {
             hub: hub.clone(),
             builder: merge.builder,
-            co_signer: Arc::new(RefusingCoSigner),
+            co_signer: hub.co_signer().clone(),
             relay: merge.submit,
         }
         .build();
@@ -216,7 +215,6 @@ fn relayed(
     let merge_builder = Arc::new(RingSdkMergeBuilder {
         client: ring_client(),
         payer: submit.fee_payer(),
-        co_signer: None,
     });
     let parts = RelayParts {
         store,

@@ -106,6 +106,10 @@ impl<L> LimitedCoSignerInit<L> {
 
 #[async_trait]
 impl<L: AssetLimitSource> CoSignPolicy for LimitedCoSigner<L> {
+    fn signer(&self) -> Option<Address> {
+        Some(self.signer.pubkey())
+    }
+
     async fn decide(&self, request: &CoSignRequest) -> Result<CoSignDecision, RingRpcError> {
         // 1. Each asset is named once and has its limits from the ring's registry.
         let assets: Vec<Address> = request.flows.iter().map(|flow| flow.asset).collect();

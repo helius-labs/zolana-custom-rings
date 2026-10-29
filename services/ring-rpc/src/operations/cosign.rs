@@ -82,6 +82,9 @@ impl From<CoSignError> for ErrorObjectOwned {
 
 #[async_trait]
 pub trait CoSignPolicy: Send + Sync {
+    /// `None` when the policy never signs.
+    fn signer(&self) -> Option<Address>;
+
     async fn decide(&self, request: &CoSignRequest) -> Result<CoSignDecision, RingRpcError>;
 
     /// Keeps or frees the usage `decide` reserved for the transaction.
@@ -92,6 +95,10 @@ pub struct RefusingCoSigner;
 
 #[async_trait]
 impl CoSignPolicy for RefusingCoSigner {
+    fn signer(&self) -> Option<Address> {
+        None
+    }
+
     async fn decide(&self, _request: &CoSignRequest) -> Result<CoSignDecision, RingRpcError> {
         Ok(CoSignDecision::Refused(CoSignRefusal::Disabled))
     }

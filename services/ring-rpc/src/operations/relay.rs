@@ -191,6 +191,10 @@ impl Relay {
         self.submit.fee_payer()
     }
 
+    pub(crate) fn co_signer(&self) -> Option<Address> {
+        self.co_signer.signer()
+    }
+
     pub async fn quote(&self, request: &GetRelayQuoteRequest) -> Result<RelayQuote, RingRpcError> {
         self.rings.check(request.ring.0)?;
         Ok(RelayQuote {
@@ -229,6 +233,7 @@ impl Relay {
                     fee_payer,
                     payload: &payload,
                     owner_signature,
+                    co_signer: self.co_signer(),
                 })
                 .await?
         };
@@ -275,6 +280,7 @@ impl Relay {
                     fee_payer,
                     payload: &payload,
                     owner_signature: None,
+                    co_signer: self.co_signer(),
                 })
                 .await?;
             (payload, proven)

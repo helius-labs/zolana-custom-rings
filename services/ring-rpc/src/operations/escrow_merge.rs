@@ -19,8 +19,6 @@ use crate::{
 pub struct RingSdkMergeBuilder<R, I> {
     pub client: RingClient<R, I>,
     pub payer: Address,
-    /// Read only when a `CoSigner` record covers transfers.
-    pub co_signer: Option<Address>,
 }
 
 #[async_trait]
@@ -41,7 +39,6 @@ impl<R: AsyncRpc, I: RingIndexerBackend> RingSdkMergeBuilder<R, I> {
         let proven = OwnerMergeProof {
             client: &self.client,
             payer: self.payer,
-            co_signer: self.co_signer,
         }
         .prove(merge)
         .await?;
@@ -64,7 +61,6 @@ impl<R: AsyncRpc, I: RingIndexerBackend> RingSdkMergeBuilder<R, I> {
 pub(crate) struct OwnerMergeProof<'a, R, I> {
     pub client: &'a RingClient<R, I>,
     pub payer: Address,
-    pub co_signer: Option<Address>,
 }
 
 impl<R: AsyncRpc, I: RingIndexerBackend> OwnerMergeProof<'_, R, I> {
@@ -94,7 +90,7 @@ impl<R: AsyncRpc, I: RingIndexerBackend> OwnerMergeProof<'_, R, I> {
                     nullifier_key: merge.nullifier_key.clone(),
                     input_tree: tree,
                     output_tree: tree,
-                    co_signer: self.co_signer,
+                    co_signer: merge.co_signer,
                 },
                 self.payer,
                 self.client,
