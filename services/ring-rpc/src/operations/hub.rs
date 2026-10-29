@@ -38,7 +38,7 @@ use crate::{
     merge_settings::MergeSettingsBook,
     origins::Origins,
     record_update::RecordUpdateRefusal,
-    record_writer::RecordWriter,
+    record_writer::{RecordWriter, WriterParts},
     relay::Relay,
     replay::ReplayGuard,
     storage_chain::StorageChain,
@@ -118,6 +118,7 @@ pub struct HubBuilder<S> {
     clock: Clock,
     store: Option<Store>,
     storage_chain: Option<Arc<dyn StorageChain>>,
+    watched_registries: Vec<Address>,
     encrypted_grants: bool,
     relay: Option<Arc<Relay>>,
 }
@@ -235,6 +236,7 @@ impl<S: TransactionSource> Hub<S> {
             clock: Clock::System,
             store: None,
             storage_chain: None,
+            watched_registries: Vec::new(),
             encrypted_grants: false,
             relay: None,
         }
@@ -479,6 +481,13 @@ impl<S: TransactionSource> HubBuilder<S> {
         self
     }
 
+    /// The writer also syncs the subscribers of these curator registries.
+    #[must_use = "use the updated builder"]
+    pub fn with_watched_registries(mut self, registries: Vec<Address>) -> Self {
+        self.watched_registries = registries;
+        self
+    }
+
     /// Keeps wallet grants in the store, sealed under a key the service secret derives.
     #[must_use = "use the updated builder"]
     pub fn with_encrypted_grants(mut self) -> Self {
@@ -508,11 +517,16 @@ impl<S: TransactionSource> HubBuilder<S> {
             .clone()
             .zip(self.storage_chain)
             .map(|(store, chain)| {
-                Ok::<_, RingRpcError>(Arc::new(RecordWriter::new(
-                    store,
-                    chain,
-                    storage_authority_keypair(secret.as_slice())?,
-                )))
+                Ok::<_, RingRpcError>(Arc::new(
+                    WriterParts {
+                        store,
+                        chain,
+                        authority: storage_authority_keypair(secret.as_slice())?,
+                        genesis_hash: self.genesis_hash,
+                        watched: self.watched_registries,
+                    }
+                    .writer(),
+                ))
             })
             .transpose()?;
         let grant_rows = self

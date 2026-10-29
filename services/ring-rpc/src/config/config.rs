@@ -91,6 +91,14 @@ pub struct ServeArgs {
     /// Serves the ring keys the record writer and the relay prove with.
     #[arg(long, env = "RING_RPC_PROVER_URL")]
     pub prover_url: Option<String>,
+    /// A curator `StorageRegistry` whose subscriber rings the record writer syncs, repeatable.
+    #[arg(
+        long,
+        env = "RING_RPC_WATCH_REGISTRY",
+        value_delimiter = ',',
+        requires = "prover_url"
+    )]
+    pub watch_registry: Vec<Address>,
     /// Serve plain HTTP on a public address and accept plain HTTP origins, test deployments only.
     #[arg(long, env = "RING_RPC_INSECURE_PUBLIC_BIND")]
     pub insecure_public_bind: bool,

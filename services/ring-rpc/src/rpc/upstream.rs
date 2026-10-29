@@ -2,7 +2,7 @@ use std::{future::Future, time::Duration};
 
 use async_trait::async_trait;
 use custom_ring_interface::{
-    storage::StorageRegistry, RingAccount, RingMode, RingPolicy, RingProgramConfig,
+    storage::StorageRegistry, RingAccount, RingMode, RingPolicy, RingProgramConfig, RootMirror,
     STORAGE_PROGRAM_ID,
 };
 use solana_account::Account;
@@ -23,7 +23,10 @@ use spr_client::{
 use spr_indexer_api::Hash;
 use spr_interface::{
     pda,
-    state::{discriminator::SPL_ASSET_REGISTRY, SplAssetRegistry},
+    state::{
+        discriminator::{RING_CONFIG, SPL_ASSET_REGISTRY},
+        RingConfig as SppRingConfig, SplAssetRegistry,
+    },
     BPF_LOADER_UPGRADEABLE_ID, PROGRAM_ID_PUBKEY,
 };
 use spr_keypair::X25519Pubkey;
@@ -187,6 +190,13 @@ pub struct RecordsRoot {
     pub root: [u8; 32],
 }
 
+/// A ring whose policy reads lists from a curator registry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Subscriber {
+    pub ring: Address,
+    pub curator_roots: RootMirror,
+}
+
 #[derive(Clone, Copy)]
 pub struct RingConfiguration {
     pub auditor_pubkey: X25519Pubkey,
@@ -329,6 +339,46 @@ impl ChainSource {
         &self.rpc
     }
 
+    /// Every ring the shielded pool registered whose policy names `registry` as a source.
+    pub(crate) async fn subscribers(
+        &self,
+        registry: Address,
+    ) -> Result<Vec<Subscriber>, ClientError> {
+        let filter = ProgramAccountsFilter::new(SppRingConfig::SIZE).with_memcmp(0, [RING_CONFIG]);
+        let configs = self
+            .rpc
+            .get_program_accounts_filtered(PROGRAM_ID_PUBKEY, &filter)
+            .await?;
+        let rings = configs.iter().filter_map(|(_, account)| {
+            bytemuck::try_from_bytes::<SppRingConfig>(&account.data)
+                .ok()
+                .filter(|config| config.has_discriminator())
+                .map(|config| config.program_id)
+        });
+        let mut subscribers = Vec::new();
+        for ring in rings {
+            let (address, bump) = Address::find_program_address(&[RingPolicy::SEED], &ring);
+            let Some(account) = self.owned_account(address, ring).await? else {
+                continue;
+            };
+            let policy: Option<RingPolicy> = CanonicalAccount {
+                account: &account,
+                ring,
+                bump,
+            }
+            .decode();
+            if let Some(policy) =
+                policy.filter(|policy| policy.sources.iter().any(|slot| slot.registry == registry))
+            {
+                subscribers.push(Subscriber {
+                    ring,
+                    curator_roots: policy.curator_roots,
+                });
+            }
+        }
+        Ok(subscribers)
+    }
+
     fn history(&self) -> HistorySource<'_> {
         HistorySource {
             rpc: &self.rpc,
@@ -348,6 +398,52 @@ impl ChainSource {
             .get_account(address)
             .await?
             .filter(|account| account.owner == owner))
+    }
+}
+
+impl RecordsRoot {
+    /// `None` before the own mirror holds a root of `policy.records`.
+    pub(crate) fn newest(policy: &RingPolicy) -> Option<Self> {
+        let mirror = &policy.own_roots;
+        if mirror.registry != policy.records {
+            return None;
+        }
+        // The newest revision holds at every slot.
+        mirror
+            .root(mirror.roots[0].revision, 0)
+            .ok()
+            .map(|root| Self {
+                registry: policy.records,
+                root,
+            })
+    }
+
+    pub(crate) fn openings_request(&self, members: &[[u8; 32]]) -> GetStorageMemberOpeningsRequest {
+        GetStorageMemberOpeningsRequest {
+            registry: self.registry.into(),
+            members: members.iter().copied().map(Hash).collect(),
+            expected_root: Hash(self.root),
+        }
+    }
+
+    /// `members[i]` opened under the root, else the indexer response is invalid.
+    pub(crate) fn verify_openings(
+        &self,
+        response: &GetStorageMemberOpeningsResponse,
+        members: &[[u8; 32]],
+    ) -> Result<Vec<MemberOpeningRead>, RingRpcError> {
+        if response.openings.len() != members.len() {
+            return Err(RingRpcError::InvalidIndexerResponse);
+        }
+        response
+            .openings
+            .iter()
+            .zip(members)
+            .map(|(view, member)| {
+                MemberOpeningRead::verify(view, &self.root, member)
+                    .map_err(|_| RingRpcError::InvalidIndexerResponse)
+            })
+            .collect()
     }
 }
 
@@ -726,18 +822,7 @@ impl CanonicalAccount<'_> {
         let policy: RingPolicy = self
             .decode()
             .ok_or_else(|| ClientError::Rpc(INVALID_POLICY.to_owned()))?;
-        let mirror = &policy.own_roots;
-        if mirror.registry != policy.records {
-            return Ok(None);
-        }
-        // The newest revision holds at every slot.
-        Ok(mirror
-            .root(mirror.roots[0].revision, 0)
-            .ok()
-            .map(|root| RecordsRoot {
-                registry: policy.records,
-                root,
-            }))
+        Ok(RecordsRoot::newest(&policy))
     }
 }
 

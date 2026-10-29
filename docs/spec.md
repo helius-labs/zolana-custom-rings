@@ -1427,12 +1427,12 @@ A window counts every reservation less than its length in slots before the curre
 
 ### Record updates
 
-A record update is a signed list of entries for one ring and one `StorageRegistry`. The signer sends it to Ring RPC `submitRecordUpdate`, and the writer applies it.
+A record update is a signed list of entries for one cluster, one ring and one `StorageRegistry`. The signer sends it to Ring RPC `submitRecordUpdate`, and the writer applies it.
 
 ```rust
 /// The signer signs these 32 bytes with Ed25519, and the hash is the update id.
-fn record_update_hash(ring: Address, registry: Address, entries: &[Entry], valid_until_slot: u64) -> Field {
-    Poseidon(CRRU, hash_bytes(ring), hash_bytes(registry),
+fn record_update_hash(genesis_hash: [u8; 32], ring: Address, registry: Address, entries: &[Entry], valid_until_slot: u64) -> Field {
+    Poseidon(CRRU, hash_bytes(genesis_hash), hash_bytes(ring), hash_bytes(registry),
         entries.fold(0, |chain, entry| Poseidon(chain, entry_hash(entry))),
         right_align(valid_until_slot))
 }
@@ -1445,9 +1445,11 @@ fn record_update_hash(ring: Address, registry: Address, entries: &[Entry], valid
 | `escrow` | Owner, own record | The escrow key, with the register key proof the writer verifies. |
 | `walletGrant` | The wallet | The reader list of the record `Poseidon(CRWG, wallet, reader)`. |
 
-Each entry becomes the queue entry the apply proof hashes, so the signature binds every write that reaches the tree. A wallet grant names the wallet and the reader identity, so the writer can rebuild the record key and compare the wallet with the signer. The writer refuses an update after `validUntilSlot`, an update with an invalid signature, and an entry the signer does not hold. Both SDKs verify the signature before they send an update, and they refuse a service that answers another update id. `getRecordUpdateStatus` reports `queued`, `submitted`, `applied` with the new registry revision, or `refused` with a reason.
+Each entry becomes the queue entry the apply proof hashes, so the signature binds every write that reaches the tree. A wallet grant names the wallet and the reader identity, so the writer can rebuild the record key and compare the wallet with the signer. The writer refuses an update under another cluster's genesis hash, an update after `validUntilSlot`, an update with an invalid signature, and an entry the signer does not hold. It refuses an escrow entry on an anonymous ring, and an escrow key for a member whose record holds one under the newest own root the policy mirrors or whose queued or submitted update carries one. Both SDKs verify the signature before they send an update, and they refuse a service that answers another update id. `getRecordUpdateStatus` reports `queued`, `submitted`, `applied` with the new registry revision, or `refused` with a reason.
 
-The hash binds no cluster. A registry address that exists on two clusters accepts the same update on both until `validUntilSlot`.
+An urgent update sets `block` or `frozen`, clears `allow` or `approval`, or writes mint settings, and only the config authority writes one. Urgent and graced updates never share a batch. An urgent batch goes out at once, ahead of queued graced updates that write none of its records. It is an `UpdateImmediate` when it revokes, and a graced `Update` otherwise. A mint settings write revokes when it restricts. A graced batch goes out when it is full, aged, or ahead of a waiting urgent update. A reader grant revocation is graced, because Ring RPC checks grants against the newest mirrored root. An update that rides in `MAX_BATCH_ATTEMPTS` batches that did not apply turns `refused`.
+
+After a batch applies to a registry, and on every pass for each curator registry Ring RPC watches, the writer sends `SyncRoots` to every ring the shielded pool registered whose policy names the registry as a source and whose curator mirror differs from the registry's roots.
 
 ### Relayed transfers
 

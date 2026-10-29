@@ -14,12 +14,13 @@ use spr_client::{
 use zolana_ring_client::AsyncRingIndexer;
 use zolana_ring_indexer::rpc::{
     GetStorageApplyProofInputsRequest, GetStorageApplyProofInputsResponse,
+    GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse,
 };
 use zolana_ring_member_registry::ApplyProofInputs;
 
 use crate::{
     error::RingRpcError,
-    upstream::{ChainSource, RingConfiguration, TransactionSource, Upstreams},
+    upstream::{ChainSource, RingConfiguration, Subscriber, TransactionSource, Upstreams},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +39,14 @@ pub trait StorageChain: Send + Sync {
     async fn account(&self, address: Address) -> Result<Option<Account>, RingRpcError>;
 
     async fn ring_config(&self, ring: Address) -> Result<Option<RingConfiguration>, RingRpcError>;
+
+    async fn member_openings(
+        &self,
+        request: GetStorageMemberOpeningsRequest,
+    ) -> Result<GetStorageMemberOpeningsResponse, RingRpcError>;
+
+    /// Every ring whose policy names `registry` as a source.
+    async fn subscribers(&self, registry: Address) -> Result<Vec<Subscriber>, RingRpcError>;
 
     async fn apply_inputs(
         &self,
@@ -99,6 +108,17 @@ impl StorageChain for LiveStorageChain {
 
     async fn ring_config(&self, ring: Address) -> Result<Option<RingConfiguration>, RingRpcError> {
         Ok(self.source.ring_config(ring).await?)
+    }
+
+    async fn member_openings(
+        &self,
+        request: GetStorageMemberOpeningsRequest,
+    ) -> Result<GetStorageMemberOpeningsResponse, RingRpcError> {
+        Ok(self.source.storage_member_openings(request).await?)
+    }
+
+    async fn subscribers(&self, registry: Address) -> Result<Vec<Subscriber>, RingRpcError> {
+        Ok(self.source.subscribers(registry).await?)
     }
 
     async fn apply_inputs(

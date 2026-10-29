@@ -1,4 +1,4 @@
-//! Record updates refuse a forged escrow proof and send a block entry as an immediate update.
+//! Record updates refuse a forged escrow proof and a second escrow key, and send only a block entry as an immediate update.
 
 use std::sync::atomic::AtomicU64;
 
@@ -14,18 +14,19 @@ use solana_account::Account;
 use solana_transaction::versioned::VersionedTransaction;
 use spr_client::Proof;
 use zolana_ring_client::rpc::{
-    EscrowRegistration, RecordUpdate, RecordUpdateEntry, SubmitRecordUpdateRequest,
-    SubmitRecordUpdateResponse, SUBMIT_RECORD_UPDATE,
+    EscrowRegistration, ReaderAccess, RecordUpdate, RecordUpdateEntry, SubmitRecordUpdateRequest,
+    SubmitRecordUpdateResponse, WalletGrant, SUBMIT_RECORD_UPDATE,
 };
 use zolana_ring_indexer::rpc::{
-    GetStorageApplyProofInputsRequest, GetStorageApplyProofInputsResponse, RingListWriteView,
+    GetStorageApplyProofInputsRequest, GetStorageApplyProofInputsResponse,
+    GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse, RingListWriteView,
     RingRecordWriteView,
 };
 use zolana_ring_member_registry::ApplyProofInputs;
 use zolana_ring_policy::{ListId, MintPolicy};
 use zolana_ring_rpc::{
-    LatestBlockhash, RecordUpdateRefusal, RecordWriter, StorageChain, Store, TransactionOutcome,
-    BATCH_WINDOW_SLOTS,
+    LatestBlockhash, RecordUpdateRefusal, RecordWriter, StorageChain, Store, Subscriber,
+    TransactionOutcome, BATCH_WINDOW_SLOTS,
 };
 
 use super::*;
@@ -44,6 +45,8 @@ struct StubChain {
     config: RingConfiguration,
     accounts: Mutex<HashMap<Address, Account>>,
     sent: Mutex<Vec<VersionedTransaction>>,
+    outcome: Mutex<TransactionOutcome>,
+    records: super::Records,
 }
 
 #[async_trait::async_trait]
@@ -62,6 +65,34 @@ impl StorageChain for StubChain {
 
     async fn ring_config(&self, ring: Address) -> Result<Option<RingConfiguration>, RingRpcError> {
         Ok((ring == RING).then_some(self.config))
+    }
+
+    async fn member_openings(
+        &self,
+        request: GetStorageMemberOpeningsRequest,
+    ) -> Result<GetStorageMemberOpeningsResponse, RingRpcError> {
+        let root = self.records.root();
+        assert_eq!(request.expected_root.0, root);
+        Ok(GetStorageMemberOpeningsResponse {
+            context: spr_indexer_api::Context {
+                block_time: 0,
+                slot: NOW,
+            },
+            root: StorageRootView {
+                root: Hash(root),
+                revision: 0,
+                next_index: 0,
+            },
+            openings: request
+                .members
+                .iter()
+                .map(|member| self.records.opening(&member.0))
+                .collect(),
+        })
+    }
+
+    async fn subscribers(&self, _registry: Address) -> Result<Vec<Subscriber>, RingRpcError> {
+        Ok(Vec::new())
     }
 
     async fn apply_inputs(
@@ -141,7 +172,7 @@ impl StorageChain for StubChain {
     }
 
     async fn outcome(&self, _signature: Signature) -> Result<TransactionOutcome, RingRpcError> {
-        Ok(TransactionOutcome::Unknown)
+        Ok(*self.outcome.lock().unwrap())
     }
 }
 
@@ -170,6 +201,8 @@ impl Records {
             },
             accounts: Mutex::default(),
             sent: Mutex::default(),
+            outcome: Mutex::new(TransactionOutcome::Unknown),
+            records: super::Records::listing(&[]),
         });
         let store = Store::open("sqlite::memory:", 1).await.expect("store");
         let hub = Hub::builder(fixture.source(), GENESIS)
@@ -179,10 +212,12 @@ impl Records {
             .local(RING, fixture.auditor.clone())
             .expect("hub");
         let writer = hub.record_writer().expect("writer").clone();
+        let registry = StorageRegistry::new(writer.authority(), 0);
         let mut policy = RingPolicy::zeroed();
         policy.discriminator = RING_POLICY;
         policy.records = REGISTRY;
-        let registry = StorageRegistry::new(writer.authority(), 0);
+        policy.own_roots.registry = REGISTRY;
+        policy.own_roots.roots = registry.roots;
         chain.accounts.lock().unwrap().extend([
             (
                 CustomRing::new(RING).policy_pda(),
@@ -209,10 +244,34 @@ impl Records {
             .await
     }
 
+    /// The member's record holds an escrow key under the root the policy mirrors.
+    fn escrowed(&self, member: [u8; 32]) {
+        let entry = QueueEntry {
+            member,
+            mask: 0,
+            value: 0,
+            escrow_key: [0x0e; 32],
+            mint_policy: None,
+        };
+        self.chain
+            .records
+            .0
+            .lock()
+            .unwrap()
+            .apply([0; 32], &[entry])
+            .expect("escrow write");
+        let mut accounts = self.chain.accounts.lock().unwrap();
+        let account = accounts
+            .get_mut(&CustomRing::new(RING).policy_pda())
+            .expect("policy");
+        let policy: &mut RingPolicy = bytemuck::from_bytes_mut(&mut account.data);
+        policy.own_roots.roots[0].hash = self.chain.records.root();
+    }
+
     /// The one transaction the flush sent.
     async fn flushed(&self) -> Flushed {
         self.writer.flush().await.expect("flush");
-        let sent = self.chain.sent.lock().unwrap();
+        let sent = std::mem::take(&mut *self.chain.sent.lock().unwrap());
         let [transaction] = sent.as_slice() else {
             panic!("expected one transaction, sent {}", sent.len());
         };
@@ -287,13 +346,21 @@ fn escrow_registration() -> EscrowRegistration {
 }
 
 fn signed(signer: &Keypair, entries: Vec<RecordUpdateEntry>) -> SubmitRecordUpdateRequest {
+    signed_until(signer, entries, NOW + 1_000)
+}
+
+fn signed_until(
+    signer: &Keypair,
+    entries: Vec<RecordUpdateEntry>,
+    valid_until_slot: u64,
+) -> SubmitRecordUpdateRequest {
     let mut request = SubmitRecordUpdateRequest {
         registry: REGISTRY.into(),
         update: RecordUpdate {
             genesis_hash: Hash(GENESIS),
             ring: RING.into(),
             entries,
-            valid_until_slot: NOW + 1_000,
+            valid_until_slot,
         },
         signer: signer.pubkey().into(),
         signature: Signature::default().into(),
@@ -346,10 +413,50 @@ async fn a_wallet_escrow_registration_is_batched_only_after_its_proof_checks() {
 }
 
 #[tokio::test]
-async fn a_block_entry_goes_out_as_an_immediate_update() {
+async fn a_second_escrow_key_for_one_member_is_refused() {
+    let records = Records::new().await;
+    let escrow = || vec![RecordUpdateEntry::Escrow(escrow_registration())];
+    records
+        .submit(signed(&wallet(), escrow()))
+        .await
+        .expect("queued");
+    // Another slot bound names another update for the same member.
+    assert_eq!(
+        refusal(
+            records
+                .submit(signed_until(&wallet(), escrow(), NOW + 1_001))
+                .await
+        ),
+        RecordUpdateRefusal::EscrowRegistered.code()
+    );
+
+    let records = Records::new().await;
+    records.escrowed(escrow_registration().member.0);
+    assert_eq!(
+        refusal(records.submit(signed(&wallet(), escrow())).await),
+        RecordUpdateRefusal::EscrowRegistered.code()
+    );
+}
+
+#[tokio::test]
+async fn a_wallet_reader_revocation_goes_out_graced_and_a_block_entry_immediate_alone() {
     let records = Records::new().await;
     let blocked = ListId::Block.record_bit();
     let member = Hash([0x0c; 32]);
+    let wallet = wallet();
+    let wallet_member = Member::owner_tag(wallet.pubkey().as_array()).expect("wallet member");
+    let reader = Member::owner_tag(&[0x0d; 32]).expect("reader member");
+    records
+        .submit(signed(
+            &wallet,
+            vec![RecordUpdateEntry::WalletGrant(WalletGrant {
+                wallet: Hash(*wallet_member.as_bytes()),
+                reader: Hash(*reader.as_bytes()),
+                access: ReaderAccess::Revoked,
+            })],
+        ))
+        .await
+        .expect("queued");
     records
         .submit(signed(
             &authority(),
@@ -366,4 +473,19 @@ async fn a_block_entry_goes_out_as_an_immediate_update() {
     assert_eq!(flushed.mode, tag::UPDATE_IMMEDIATE);
     assert_eq!(flushed.members, [member.0]);
     assert_eq!(flushed.data[1], [custom_ring_interface::tag::SYNC_ROOTS]);
+
+    *records.chain.outcome.lock().unwrap() = TransactionOutcome::Succeeded;
+    records.writer.flush().await.expect("settle");
+    records
+        .chain
+        .slot
+        .store(NOW + BATCH_WINDOW_SLOTS, Ordering::Relaxed);
+    let flushed = records.flushed().await;
+    assert_eq!(flushed.mode, tag::UPDATE);
+    assert_eq!(
+        flushed.members,
+        [*Member::wallet_grant(&wallet_member, &reader)
+            .expect("grant member")
+            .as_bytes()]
+    );
 }

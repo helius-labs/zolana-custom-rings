@@ -105,7 +105,9 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     }
     if let Some(prover_url) = &args.prover_url {
         let chain = LiveStorageChain::connect(upstreams, prover_url)?;
-        builder = builder.with_storage_chain(Arc::new(chain));
+        builder = builder
+            .with_storage_chain(Arc::new(chain))
+            .with_watched_registries(args.watch_registry.clone());
     }
     if args.encrypted_reader_grants {
         builder = builder.with_encrypted_grants();
