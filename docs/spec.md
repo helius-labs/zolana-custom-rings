@@ -111,8 +111,8 @@ A custom ring is a Solana program that governs its notes in the zolana shielded 
    - `WITHDRAWALS` for every transfer with a withdrawal leg, unless the transfer carries a valid withdrawal exemption proof. The proof shows each withdrawn mint's gross withdrawal at or below the mint's `withdrawal_threshold`. A zero or absent threshold exempts no withdrawal, and a deposit leg does not lower the gross amount.
 
    A transfer with `approval_required` and no demanded class takes any co-signer.
-   A demanded co-signer differs from every owner signer and from the delegate.
-10. Owners keep their spending keys. On the confidential rail every owner signer signs, and a policy transfer has exactly one owner. On the anonymous rail the hidden owner's signature is inside the SPP proof. A merge proves the owner's nullifier secret. The delegate rail runs only in `ConfidentialEscrow` mode, keeps every note in the ring, and takes no public leg or exit.
+   A demanded co-signer differs from every owner signer, the in-proof owner and the delegate.
+10. Owners keep their spending keys. On the confidential rail every owner signer signs, and a policy transfer has exactly one owner. Under `OWNER_IN_PROOF` the owner signs inside the SPP proof and no owner signs the transaction, so any payer sends it. The program refuses every owner signer on that rail, so every input is the in-proof owner's and the policy reads that owner as the sender. On the anonymous rail the hidden owner's signature is inside the SPP proof. A merge proves the owner's nullifier secret. The delegate rail runs only in `ConfidentialEscrow` mode, keeps every note in the ring, and takes no public leg or exit.
 11. In `ConfidentialEscrow` mode the policy proof requires each live output's owner record to hold `escrow_key = Poseidon(nullifier_pk, hash_bytes(ciphertext))` for the output's nullifier key. A deposit and a merge prove the same. The auditor therefore opens the nullifier secret of every note's owner.
 12. An owner writes only its own record and only its member lists. Member writes and key registrations keep a record's mint settings. An owner's writes apply after `APPLY_DELAY_SLOTS` or a full member queue, through a proof any party submits. The apply proof binds the old root, the next index and both queue chain ends the program holds, so no submitter changes a queued write.
 13. The program validates the rule table at every policy write. It requires canonical rows, authority-written lists only, a source for every referenced list and at most one curator. The policy circuit relies on that validation and checks the row encoding only.
@@ -130,7 +130,7 @@ On every transfer, chain observers see:
 
 On a `Confidential` or `ConfidentialEscrow` ring (confidential rail):
 
-14. Public: the owner signer, the co-signer when it signs, each ring output's owner tag `u` (the recipient's viewing key), on a policy ring each live output's owner identity, each exit owner, and each SPL withdrawal owner.
+14. Public: the owner signer, the co-signer when it signs, each ring output's owner tag `u` (the recipient's viewing key), on a policy ring each live output's owner identity, each exit owner, and each SPL withdrawal owner. Under `OWNER_IN_PROOF` the owner key replaces the owner signer, each ring output publishes its owner key beside its `u`, a dummy slot names the sender or an output owner, and on a policy ring the frame marks each dummy slot.
 15. Private from chain observers: the amount, asset, blinding and nullifier key of each output, the exit asset and amount, and which notes the nullifiers spend.
 16. Every payment to one recipient carries the same `u`. The zolana user registry maps a registered `u` to its owner's Solana key, and no proof shows the owner holds `u`. Payments to one recipient therefore link to each other and name it. Change carries the sender's own `u`.
 17. The disclosure opens outputs only, and a nullifier needs the owner's nullifier secret. The auditor therefore learns no spent note of an owner without a registered key. A registered owner's secret is sealed to the auditor on any confidential ring, so the auditor computes that owner's nullifiers and links its spends. A `ConfidentialEscrow` ring requires a registered key of every output owner.
@@ -1047,7 +1047,10 @@ The mode selects the rail:
 | Mode | Rail | SPP instruction and circuit | Who signs | Sender in the policy statement |
 |---|---|---|---|---|
 | `Confidential`, `ConfidentialEscrow` | Confidential | `RING_TRANSACT` (19), `ConfidentialRingEddsa` | Each owner signer, the payer, a demanded co-signer | `solana_owner_identity(owner)` |
+| `Confidential`, `ConfidentialEscrow` with `OWNER_IN_PROOF` | Confidential | `RING_TRANSACT` (19), `ConfidentialRingInCircuitEddsa` | The payer and a demanded co-signer only. The owner signs inside the SPP proof. | `solana_owner_identity` of the frame's owner key |
 | `Anonymous` | Anonymous | `RING_TRANSACT` (19), `AnonymousRingEddsa` | The payer and a demanded co-signer only. The hidden owner signs inside the SPP proof. | `sender_commitment` |
+
+SPP accepts `ConfidentialRingInCircuitEddsa` only in a build with its `ring-confidential-eddsa` feature.
 
 **Accounts**
 
@@ -1061,15 +1064,16 @@ The mode selects the rail:
 The frame is a byte string the program parses in this order. The shape byte selects the shape `n_in × n_out`. Short or trailing bytes and an input count outside `1..=n_in` fail with `RingTransactLength`. The `[exemption]` part has no flag. It is present when exactly 200 bytes follow the tree contexts, and SPP never receives it. A shape index outside the set fails with `RingShapeUnkeyed`. A bad interface transfer list or a bitmap bit past its count fails with `InvalidInstructionData`.
 
 ```text
-flags            u8   POLICY 1, CURATOR 2, APPROVAL_REQUIRED 4, SECOND_TREE 32,
-                      bits 3, 4, 6 and 7 clear
+flags            u8   POLICY 1, CURATOR 2, APPROVAL_REQUIRED 4, OWNER_IN_PROOF 8, SECOND_TREE 32,
+                      bits 4, 6 and 7 clear
 shape            u8   bits 0-5 index into SPP_SUPPORTED_SHAPES, bit 6 DEFAULT_OWNER_TAG, bit 7 clear
 inputs           u8   bits 0-5 published input count, bit 6 KEY_ESCROW, bit 7 FULL_OPENINGS
 audit_proof      CustomRingProof
 [POLICY]         policy_proof CustomRingProof, own_revision u64 LE
 [CURATOR]        curator_revision u64 LE
 [POLICY, anonymous] sender_commitment [32]
-[POLICY, confidential or delegate] recipients [32] per output slot
+[POLICY, confidential or delegate] recipients [32] per output slot, without OWNER_IN_PROOF
+[POLICY, OWNER_IN_PROOF] dummies bitmap of ceil(n_out / 8) bytes
 expiry_unix_ts   u32 LE
 tx_viewing_u     [32]
 salt             [16]
@@ -1079,6 +1083,7 @@ exits            bitmap of ceil(n_out / 8) bytes
 outputs          per slot, by kind:
                    exit      hash [32], owner_tag [32], payload [83]
                    delivered hash [32], u [32], body [40]
+                   owned     hash [32], owner [32], u [32], body [40], under OWNER_IN_PROOF
                    anonymous hash [32], tag [32], len u16 LE, body [len], empty on change
 [anonymous]      sender bundle tag [32], len u16 LE nonzero, body [len]
 eph_u            [32]
@@ -1087,6 +1092,7 @@ disclosure       [32] per field of the layout
 private_tx_hash  [32]
 [anonymous]      commitment [32], commitment_pok [32]
 [DEFAULT_OWNER_TAG] default_owner_tag [32]
+[OWNER_IN_PROOF] owner [32], commitment [32], commitment_pok [32]
 spp_proof        a [32], b [64] compressed, c [32]
 nullifiers       [32] per published input
 [SECOND_TREE]    bitmap of second-tree inputs, then two TreeContext, else one
@@ -1098,10 +1104,10 @@ A bitmap holds bit `i` at byte `i / 8`, bit `i % 8`. A scheme is the zolana tag 
 The program expands the frame to SPP `TransactIxData`:
 
 - `tx_viewing_pk = 0x04 || tx_viewing_u`, the salt and the interface transfers, with no transfer data hashes
-- each output as `OwnerTag::Inline` in the `Encrypted` encoding, with scheme 10 (delivered), 1 (anonymous) or 3 (exit), and an anonymous change output with no data
+- each output as `OwnerTag::Inline` in the `Encrypted` encoding, with scheme 10 (delivered), 11 (owned, `u || body` under the owner key), 1 (anonymous) or 3 (exit), and an anonymous change output with no data
 - on the anonymous rail the sender bundle first, `{ view_tag: tag, data: Encrypted(2 || body) }`
 - the auditor message last, `{ view_tag: auditor u, data: 0x04 || eph_u || sealed || disclosure }`
-- `private_tx_hash`, the rail's circuit and the proof
+- `private_tx_hash`, the rail's circuit and the proof, under `OWNER_IN_PROOF` the circuit carrying the owner key and the commitment
 - the expiry widened to u64, each nullifier as an input with its tree index, and the tree contexts
  A client computes the same SPP external data hash before any proof exists.
 
@@ -1116,7 +1122,7 @@ The audit key follows the rail and the published shape:
 
 The anonymous input classes are `{4, 16}` at 2 and 4 outputs and `{4, 8}` at 8. A shape with no key fails with `RingShapeUnkeyed`.
 
-The sender chooses each output's owner, asset and amount. The audit proof fixes every blinding from `tx_viewing_sk`, the salt and the first nullifier. A recipient finds its notes by its owner tag. That is its viewing key `u` on the confidential rail, or a view tag on the anonymous rail. It opens the body and keeps the note only when a held mint rebuilds the published commitment. On the anonymous rail every payment and dummy carries one body sealed at its output position, and the sender's change leads with no body. Output 0 takes the sender tag, and a second change output takes a dummy tag. The sender bundle message lists one recipient viewing key per output after the change. An exit or a dummy takes the dummy key `0x04 || 0^32`, a custom-ring extension of the zolana sender bundle. [Anonymous rings](anonymous-rings.md#output-layout) The auditor finds every transfer by the auditor view tag.
+The sender chooses each output's owner, asset and amount. The audit proof fixes every blinding from `tx_viewing_sk`, the salt and the first nullifier. A recipient finds its notes by its owner tag. That is its viewing key `u` on the confidential rail, or a view tag on the anonymous rail. Under `OWNER_IN_PROOF` the owner tag is the owner key, and the recipient's `u` leads the scheme 11 body. It opens the body and keeps the note only when a held mint rebuilds the published commitment. On the anonymous rail every payment and dummy carries one body sealed at its output position, and the sender's change leads with no body. Output 0 takes the sender tag, and a second change output takes a dummy tag. The sender bundle message lists one recipient viewing key per output after the change. An exit or a dummy takes the dummy key `0x04 || 0^32`, a custom-ring extension of the zolana sender bundle. [Anonymous rings](anonymous-rings.md#output-layout) The auditor finds every transfer by the auditor view tag.
 
 **Proof**
 
@@ -1166,12 +1172,12 @@ The program builds each slot from the settlement accounts: the asset `hash_bytes
 The program checks, in order:
 
 1. The rail: `Transact` on `Confidential` or `ConfidentialEscrow` is confidential, on `Anonymous` anonymous.
-2. The frame parses. `CURATOR` and `APPROVAL_REQUIRED` need `POLICY`. `DEFAULT_OWNER_TAG` and `FULL_OPENINGS` need the anonymous rail (`FlagNotAllowed`). No disclosure field is zero (`ZeroDisclosureField`).
+2. The frame parses. `CURATOR` and `APPROVAL_REQUIRED` need `POLICY`. `DEFAULT_OWNER_TAG` and `FULL_OPENINGS` need the anonymous rail, `OWNER_IN_PROOF` the confidential rail (`FlagNotAllowed`). No disclosure field is zero (`ZeroDisclosureField`).
 3. The settlement accounts cover the interface transfers (`InvalidSettlementAccounts`). At most 32 legs, none of zero amount (`TooManyPublicLegs`, `ZeroPublicLegAmount`). With a withdrawal exemption proof, the ring policy loads (`InvalidRingPolicy`), the own mirror serves its `own_revision`, the transfer withdraws at most 3 mints (`InvalidInstructionData`), and the proof verifies (`ProofVerificationFailed`).
 4. Policy ring: a policy proof is present (`MissingPolicyProof`), the `CURATOR` flag matches the policy (`FlagNotAllowed`), a policy exists (`PolicyNotSet`), the own mirror serves `own_revision` and the curator mirror serves `curator_revision` ([RingPolicy](#ringpolicy)). Audit-only ring: no policy proof (`UnexpectedPolicyProof`).
 5. No curator account follows, the curator root comes from the ring policy.
 6. `ring_auth` sits at SPP index 4 and at no other SPP index (`MissingRingAuth`, `RingAuthOutOfSlot`). The payer at SPP index 0 signs (`MissingFundingSigner`).
-7. Confidential: every owner signer signs (`MissingOwnerSigner`). On a policy ring there is at least one and all are one address (`OwnerSignerCount`). A demanded co-signer is no owner (`CoSignerIsOwner`). Anonymous: no SPP account but the payer signs (`InvalidAnonymousSigner`).
+7. Confidential: every owner signer signs (`MissingOwnerSigner`). On a policy ring there is at least one and all are one address (`OwnerSignerCount`). A demanded co-signer is no owner (`CoSignerIsOwner`). Under `OWNER_IN_PROOF` the owner signer run is empty (`OwnerSignerOnInProofRail`). SPP then authorizes every input by the owner whose signature its proof verifies, and the policy sender is that owner. A demanded co-signer is not that owner (`CoSignerIsOwner`). Anonymous: no SPP account but the payer signs (`InvalidAnonymousSigner`).
 8. Every deposit leg's funder signs (`MissingFundingSigner`). On the anonymous rail check 7 makes every funder the payer.
 9. The public legs fold to at most 3 assets, each with a nonzero net within u64 (`TooManyPublicAssets`, `ZeroNetPublicAmount`, `PublicAmountOverflow`).
 10. Policy ring: each SOL withdrawal's owner is its recipient. Each SPL withdrawal's token account is a Token or Token-2022 account of the leg's mint owned by the declared owner (`InvalidSettlementAccounts`, `AnonymousExitTokenAccountInvalid`).
@@ -1179,7 +1185,7 @@ The program checks, in order:
 12. The co-signer demand of [Properties](#properties) 9, with the withdrawal class waived when check 3 verified an exemption proof. An approval needs some record (`ApprovalWithoutCoSigner`). The record is the program's (`InvalidCoSignerRecord`) and covers every demanded class (`CoSignerOutOfScope`), and its signer signs (`MissingCoSigner`, `UnauthorizedCoSigner`).
 13. The SPP `proof_b` decompresses (`InvalidSppProofPoint`).
 14. The key escrow layout bit equals `mode == ConfidentialEscrow` (`FlagNotAllowed`).
-15. It builds the audit statement and the policy statement, with the frame's recipients on the confidential and delegate rails and zeros on the anonymous rail, and resolves both keys (`UnsupportedCircuit`). It verifies the audit proof, then the policy proof, each point decompressed (`InvalidRingProofPoint`) and the pairing checked (`ProofVerificationFailed`).
+15. It builds the audit statement and the policy statement, with the frame's recipients on the confidential and delegate rails and zeros on the anonymous rail, and resolves both keys (`UnsupportedCircuit`). Under `OWNER_IN_PROOF` each recipient is `solana_owner_identity` of the slot's owner tag, or `0` on a slot the dummies bitmap marks. It verifies the audit proof, then the policy proof, each point decompressed (`InvalidRingProofPoint`) and the pairing checked (`ProofVerificationFailed`).
 16. It checks the SPP program (`InvalidShieldedPoolProgram`), the forwarded list size (`TooManyAccounts`), and invokes SPP.
 
 The ring proofs do not check ownership, inclusion, conservation, nullifier uniqueness or expiry. SPP checks them in the same instruction. Exit payloads are not proven, as on any default-ring output, so a sender can publish a payload that does not open, and the recipient misses the exit. The auditor still opens the exit from the disclosure. No proof relates a published `u` to the output's owner, and no proof checks an anonymous tag or body, see [the limitation](#a-sender-can-make-a-note-unreadable-for-its-owner). The program does not check the Solana fee payer of the outer transaction against the hidden owner. The Rust SDK refuses a fee payer or signer equal to the hidden owner, and the TS SDK checks the payer and the co-signer.
@@ -1466,12 +1472,12 @@ After a batch applies to a registry, and on every pass for each curator registry
 
 ### Relayed transfers
 
-A wallet sends an anonymous transfer through the Ring RPC relay and reads no Merkle path and no record. The operator CLI and the tests keep the direct path, which proves and sends from the caller.
+A wallet sends an anonymous transfer, or a confidential one under `OWNER_IN_PROOF`, through the Ring RPC relay and reads no Merkle path and no record. The operator CLI and the tests keep the direct path, which proves and sends from the caller.
 
 1. `getRelayQuote` names the fee payer, and the wallet builds the transfer with it as the payer.
-2. The wallet stages the transfer from its own notes and keys, seals the auditor message into the external data and signs `SppProofInputs::message_hash` with the hidden owner's Ed25519 key. It reads the ring config, the SPP ring registration, the tree accounts and the exit accounts only.
+2. The wallet stages the transfer from its own notes and keys, seals the auditor message into the external data and signs `SppProofInputs::message_hash` with the owner's Ed25519 key. It reads the ring config, the SPP ring registration, the tree accounts and the exit accounts only.
 3. `prepareRelay` carries the sealed transfer as `proofInputs` and the signature as `ownerSignature`. The wallet hashes the request to its own `relayId` and refuses an answer that names another one.
-4. On the anonymous rail the wallet accepts only `submitted`. It refuses `signMessage`, a public signature would name the hidden owner. On another rail it signs a `signMessage` step only when the message is a canonical v1 message that lists the signer among its signers.
+4. On the anonymous rail and under `OWNER_IN_PROOF` the owner signs inside the SPP proof, and the wallet accepts only `submitted`. It refuses `signMessage`. On another rail it signs a `signMessage` step only when the message is a canonical v1 message that lists the signer among its signers.
 5. `getRelayStatus` follows the relay to `confirmed` or `failed`.
 
 `proofInputs` hands Ring RPC the nullifier secret, the transaction viewing secret and the auditor ephemeral secret. Ring RPC can link every spend of the owner and open every output of the transfer, so a relayed transfer stays anonymous only toward a Ring RPC trusted as the indexer of [condition 5](#anonymity-breaks-when-its-conditions-fail) and the prover of condition 6.

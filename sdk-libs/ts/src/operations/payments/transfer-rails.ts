@@ -6,7 +6,10 @@ import {
   ownerSignerAddresses,
   prepareRingAuthorityTransfer,
 } from "@heliuslabs/zolana/internal";
-import type { AnonymousRingTransactProver } from "../../rpc/ports.js";
+import type {
+  AnonymousRingTransactProver,
+  InProofOwnerRingTransactProver,
+} from "../../rpc/ports.js";
 import type { ProofAuthority, Prover, WalletKeys } from "@heliuslabs/zolana/client";
 import { type Shape, InstructionTag } from "@heliuslabs/zolana/interface";
 import type {
@@ -16,7 +19,7 @@ import type {
   TransactWithdrawal,
 } from "@heliuslabs/zolana/interface";
 import type { NullifierKey, ShieldedAddress } from "@heliuslabs/zolana/keypair";
-import { ViewingKey } from "@heliuslabs/zolana/keypair";
+import { ShieldedPublicKey, ViewingKey } from "@heliuslabs/zolana/keypair";
 import type { AssetRegistry, ProofInputUtxo, WalletUtxo } from "@heliuslabs/zolana/transaction";
 import { type ConfidentialTransfer, type PreparedTransfer } from "@heliuslabs/zolana/transaction";
 import { DELIVERED_AUDIT_CAPACITIES } from "../../protocol/codec/ring-disclosure-layout.js";
@@ -46,6 +49,7 @@ import {
   sealStagedTransfer,
   type AnonymousSpendValues,
   type ProvenRingTransfer,
+  type RailSpend,
   type RingProvingClient,
   type RingTransactionFrame,
   type StagedTransfer,
@@ -71,7 +75,9 @@ export interface RingTransferApproval {
   ): Promise<void>;
 }
 
-export type CustomRingTransferClient = RingProvingClient & Pick<Prover, "proveRingTransact">;
+export type CustomRingTransferClient = RingProvingClient &
+  Pick<Prover, "proveRingTransact"> &
+  Partial<InProofOwnerRingTransactProver>;
 
 export type AnonymousTransferClient = RingProvingClient & AnonymousRingTransactProver;
 
@@ -89,25 +95,36 @@ export interface CustomRingTransferInput {
   readonly coSigner?: Address;
 }
 
-/** The confidential rail, the owner signs its spends in public, Rust `RingTransfer<Owner>`. */
+/** The confidential rail, the owner signs its spends in public or inside the proof, Rust `RingTransfer<Owner>`. */
 export class CustomRingTransfer {
   readonly #input: CustomRingTransferInput;
   readonly #withdrawal: TransactWithdrawal | undefined;
+  readonly #inProofOwner: AnonymousSpendSigner | undefined;
 
-  private constructor(input: CustomRingTransferInput, withdrawal: TransactWithdrawal | undefined) {
+  private constructor(
+    input: CustomRingTransferInput,
+    withdrawal: TransactWithdrawal | undefined,
+    inProofOwner: AnonymousSpendSigner | undefined,
+  ) {
     this.#input = input;
     this.#withdrawal = withdrawal;
+    this.#inProofOwner = inProofOwner;
     Object.freeze(this);
   }
 
   static new(input: CustomRingTransferInput): CustomRingTransfer {
     input.transfer.withRingProgramId(input.ringProgramId);
-    return new CustomRingTransfer(input, undefined);
+    return new CustomRingTransfer(input, undefined, undefined);
   }
 
   /** The settlement accounts of the transfer's public withdrawal, Rust `with_interface_transfer_accounts`. */
   withWithdrawalAccounts(withdrawal: TransactWithdrawal): CustomRingTransfer {
-    return new CustomRingTransfer(this.#input, withdrawal);
+    return new CustomRingTransfer(this.#input, withdrawal, this.#inProofOwner);
+  }
+
+  /** The sender's signing key signs inside the proof, any fee payer sends the transaction, Rust `with_in_proof_owner`. */
+  withInProofOwner(signer: AnonymousSpendSigner): CustomRingTransfer {
+    return new CustomRingTransfer(this.#input, this.#withdrawal, signer);
   }
 
   /** The hidden Ed25519 owner an anonymous ring proves, it must be the sender's signing key. */
@@ -120,6 +137,7 @@ export class CustomRingTransfer {
     });
   }
 
+  /** An in-proof owner transfer proves through `proveInProofOwnerRingTransact`. */
   prove(client: CustomRingTransferClient, context?: RequestContext): Promise<ProvenRingTransfer> {
     return this.#prove(client, undefined, context);
   }
@@ -133,22 +151,152 @@ export class CustomRingTransfer {
     return this.#prove(client, approval, context);
   }
 
+  /** Rust `prepare_relay`, the in-proof owner signs the message hash, the wallet reads no Merkle path and no record. */
+  async prepareRelay(
+    client: Pick<RingProvingClient, "getAccount">,
+    input: RingRelayInput,
+    context?: RequestContext,
+  ): Promise<PreparedRelay> {
+    const { ringProgramId, keys } = this.#input;
+    const signer = this.#inProofOwner;
+    if (signer === undefined) throw new RingError("RING_IN_PROOF_OWNER_MISMATCH");
+    const { quote } = input;
+    const { config, staged, prepared } = await this.#stage(client, context);
+    try {
+      if (prepared.payer !== quote.feePayer)
+        throw new RingError("RING_RELAY_PAYER_MISMATCH", {
+          details: { payer: prepared.payer, feePayer: quote.feePayer },
+        });
+      const sealed = sealStagedTransfer({
+        ringProgramId,
+        config,
+        staged: { ...staged, spend: { rail: "confidential" } },
+      });
+      let payload: Uint8Array | undefined;
+      try {
+        const { proofInputs } = sealed;
+        const ownerSignature = await signer.sign(proofInputs.messageHash(), context);
+        payload = encodeRelayProofInputs({
+          rail: { kind: "confidential" },
+          ringProgramId,
+          sender: keys.address(),
+          nullifierKey: input.nullifierKey,
+          txViewingKey: staged.rail.txViewingKey,
+          auditEphemeralKey: sealed.sealed.ephemeralSecret,
+          inputs: proofInputs.inputUtxos,
+          leafIndexes: proofInputs.inputUtxos.map((spent) => leafIndexOf(spent, input.notes)),
+          outputs: proofInputs.outputs,
+          externalData: proofInputs.externalData,
+          ...(staged.withdrawal === undefined ? {} : { withdrawal: staged.withdrawal }),
+          blindingSeed: proofInputs.blindingSeed,
+          outputTreeId: proofInputs.outputTreeId,
+          assets: this.#input.assets,
+        });
+        return new PreparedRelay({
+          ring: ringProgramId,
+          quote,
+          intent: {
+            operation: "confidential",
+            proofInputs: base64.decode(payload) as RelayIntent["proofInputs"],
+            ownerSignature: base58.decode(ownerSignature) as Signature,
+          },
+        });
+      } finally {
+        payload?.fill(0);
+        sealed.sealed.ephemeralSecret.fill(0);
+      }
+    } finally {
+      staged.rail.txViewingKey.destroy();
+    }
+  }
+
   async #prove(
     client: CustomRingTransferClient,
     approval: RingTransferApproval | undefined,
     context: RequestContext | undefined,
   ): Promise<ProvenRingTransfer> {
+    const { ringProgramId } = this.#input;
+    const { config, staged, prepared, owner } = await this.#stage(client, context);
+    try {
+      return await proveStagedTransfer(
+        {
+          client,
+          ringProgramId,
+          config,
+          staged: { ...staged, spend: this.#spend(client, owner) },
+          ...suppliedCoSigner(this.#input.coSigner),
+          ...approvedStage(approval, prepared),
+        },
+        context,
+      );
+    } finally {
+      staged.rail.txViewingKey.destroy();
+    }
+  }
+
+  /** The confidential rail's SPP proof, the in-proof owner signs the final inputs inside it. */
+  #spend(client: CustomRingTransferClient, owner: Bytes32 | undefined): RailSpend {
+    const { ringProgramId, keys } = this.#input;
+    const signer = this.#inProofOwner;
+    if (signer === undefined || owner === undefined)
+      return {
+        rail: "confidential",
+        prove: (inputs, _coSigner, proveContext) =>
+          client.proveRingTransact(
+            inputs,
+            ringProgramId,
+            keys,
+            { outputTree: client },
+            proveContext,
+          ),
+      };
+    const prover = client.proveInProofOwnerRingTransact?.bind(client);
+    if (prover === undefined) throw new RingError("RING_IN_PROOF_OWNER_PROVER_REQUIRED");
+    return {
+      rail: "confidential",
+      inProofOwner: owner,
+      prove: async (inputs, _coSigner, proveContext) =>
+        prover(
+          {
+            proofInputs: inputs,
+            ringProgramId,
+            owner: {
+              publicKey: owner,
+              signature: await signer.sign(inputs.messageHash(), proveContext),
+            },
+            keys,
+            config: { outputTree: client },
+          },
+          proveContext,
+        ),
+    };
+  }
+
+  /** The caller destroys `staged.rail.txViewingKey`. */
+  async #stage(
+    client: Pick<RingProvingClient, "getAccount">,
+    context: RequestContext | undefined,
+  ): Promise<
+    Readonly<{
+      config: RingProgramConfig;
+      staged: Omit<StagedTransfer, "spend">;
+      prepared: PreparedTransfer;
+      owner: Bytes32 | undefined;
+    }>
+  > {
     const { ringProgramId, keys } = this.#input;
     const config = await activeConfig(client, ringProgramId, context);
     if (config.mode === "anonymous")
       throw new RingError("RING_ANONYMOUS_SIGNER_REQUIRED", { details: { ringProgramId } });
     const sender = keys.address();
+    const owner = inProofOwnerKey(this.#inProofOwner, sender);
     const prepared = this.#input.transfer.prepare();
     checkWithdrawalAccounts(prepared, this.#withdrawal);
+    const delivery = confidentialDelivery(prepared.shape, "confidential");
     const rail = new RingOutputRail(
       await transactionKey(keys, sender, prepared, context),
       prepared.firstNullifier,
-      confidentialDelivery(prepared.shape, "confidential"),
+      owner === undefined ? delivery : { kind: "owned" },
     );
     try {
       const proofInputs = rail.encrypt({
@@ -157,43 +305,43 @@ export class CustomRingTransfer {
         assets: this.#input.assets,
         instructionDiscriminator: InstructionTag.ringTransact,
       });
-      const ownerSigners = ownerSignerAddresses(proofInputs.inputUtxos, proofInputs.outputs);
+      const ownerSigners =
+        owner === undefined
+          ? ownerSignerAddresses(proofInputs.inputUtxos, proofInputs.outputs)
+          : [];
       // A policy ring spends for exactly one owner.
       const mixed = ownerSigners.findIndex((signer) => signer !== ownerSigners[0]);
       if (config.hasPolicy && mixed >= 0)
         throw new RingError("RING_MIXED_OWNERS", { details: { index: mixed } });
-      return await proveStagedTransfer(
-        {
-          client,
-          ringProgramId,
-          config,
-          staged: {
-            proofInputs,
-            rail,
-            sender,
-            ownerSigners,
-            ...(this.#withdrawal === undefined ? {} : { withdrawal: this.#withdrawal }),
-            spend: {
-              rail: "confidential",
-              prove: (inputs, _coSigner, proveContext) =>
-                client.proveRingTransact(
-                  inputs,
-                  ringProgramId,
-                  keys,
-                  { outputTree: client },
-                  proveContext,
-                ),
-            },
-          },
-          ...suppliedCoSigner(this.#input.coSigner),
-          ...approvedStage(approval, prepared),
+      return {
+        config,
+        prepared,
+        owner,
+        staged: {
+          proofInputs,
+          rail,
+          sender,
+          ownerSigners,
+          ...(this.#withdrawal === undefined ? {} : { withdrawal: this.#withdrawal }),
         },
-        context,
-      );
-    } finally {
+      };
+    } catch (cause) {
       rail.txViewingKey.destroy();
+      throw cause;
     }
   }
+}
+
+/** The signer must hold the sender's signing key. */
+function inProofOwnerKey(
+  signer: AnonymousSpendSigner | undefined,
+  sender: ShieldedAddress,
+): Bytes32 | undefined {
+  if (signer === undefined) return undefined;
+  const signing = signer.publicKey();
+  if (!(signing instanceof ShieldedPublicKey) || !signing.equals(sender.signingPublicKey))
+    throw new RingError("RING_IN_PROOF_OWNER_MISMATCH");
+  return signing.ed25519();
 }
 
 /** The hidden owner's spends on an anonymous ring, no transaction signer names the owner, Rust `RingTransfer<Anonymous>`. */

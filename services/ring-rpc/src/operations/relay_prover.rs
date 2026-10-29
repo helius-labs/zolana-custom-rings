@@ -22,7 +22,7 @@ pub struct RelayProofRequest<'a> {
     pub ring: Address,
     pub fee_payer: Address,
     pub payload: &'a RelayPayload,
-    /// Verified over `SppProofInputs::message_hash`, the proof takes it on the anonymous rail.
+    /// Verified over `SppProofInputs::message_hash`, the anonymous and confidential proofs take it.
     pub owner_signature: Option<[u8; 64]>,
     /// Read only when the ring demands a co-signer.
     pub co_signer: Option<Address>,

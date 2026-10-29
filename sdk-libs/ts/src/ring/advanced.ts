@@ -78,6 +78,7 @@ export {
   anonymousRecipientOutputBody,
   anonymousSenderOutputBody,
   openDeliveredBody,
+  ringOwnerDeliveredOutput,
   RingScheme,
   sealDeliveredBody,
   type DeliveredBodyOpening,
@@ -124,6 +125,7 @@ export {
   ringRail,
   ringRailOf,
   ringSppInputs,
+  outputOwnerTag,
   ringTransactOutput,
   taggedX25519,
 } from "../protocol/transaction/transact.js";
@@ -135,8 +137,10 @@ export {
 } from "../protocol/proof/circuit.js";
 export type {
   AnonymousProofData,
+  InProofOwner,
   InputTrees,
   PolicyProof,
+  PolicyRecipients,
   RingOutput,
   RingRail,
   RingTransactConfig,

@@ -306,6 +306,23 @@ export interface AnonymousRingTransactProver {
   ): Promise<ProvenAnonymousRingTransact>;
 }
 
+export interface InProofOwnerRingTransactProofInput {
+  readonly proofInputs: SppProofInputs;
+  readonly ringProgramId: Address;
+  /** The confidential rail's owner, it signs no transaction. */
+  readonly owner: HiddenOwnerAuthorization;
+  readonly keys: ProofAuthority;
+  readonly config?: RingProvingConfig;
+}
+
+/** The confidential rail's SPP proof with the owner signing inside it, absent from the pinned TS prover. */
+export interface InProofOwnerRingTransactProver {
+  proveInProofOwnerRingTransact(
+    input: InProofOwnerRingTransactProofInput,
+    context?: RequestContext,
+  ): Promise<ProvenAnonymousRingTransact>;
+}
+
 /** The anonymous merge disclosure proof only the nullifier key holder makes. */
 export interface RingSecretProver {
   proveRingWithSecret(

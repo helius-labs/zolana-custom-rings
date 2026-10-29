@@ -6,12 +6,14 @@ import { EncryptedScheme, TransactionError } from "@heliuslabs/zolana/transactio
 import { symmetricAuditApply } from "../../crypto/audit/audit.js";
 import { checkedCounter } from "../../crypto/error.js";
 
-/** The schemes a ring output publishes, SPP stores the ring-owned scheme 10 unparsed. */
+/** The schemes a ring output publishes, SPP stores the ring-owned schemes 10 and 11 unparsed. */
 export const RingScheme = Object.freeze({
   anonymousRecipient: EncryptedScheme.anonymousRecipient,
   anonymousSender: EncryptedScheme.anonymousSender,
   confidential: 3,
   ringConfidentialDelivered: 10,
+  /** Scheme 10 led by its recipient key, under the owner's own key on the in-proof owner rail. */
+  ringOwnerDelivered: 11,
 } as const);
 export type RingScheme = (typeof RingScheme)[keyof typeof RingScheme];
 
@@ -67,6 +69,28 @@ export function anonymousRecipientOutputBody(data: Uint8Array): Uint8Array | und
 
 export function anonymousSenderOutputBody(data: Uint8Array): Uint8Array | undefined {
   return encryptedOutputBody(data, RingScheme.anonymousSender);
+}
+
+/** The recipient key and the body of a scheme 11 output, Rust `ring_owner_delivered_output`. */
+export function ringOwnerDeliveredOutput(
+  data: Uint8Array,
+): Readonly<{ u: Bytes32; body: Uint8Array }> | undefined {
+  const payload = encryptedOutputBody(data, RingScheme.ringOwnerDelivered);
+  if (payload?.length !== 32 + RING_DELIVERED_BODY_LEN) return undefined;
+  return Object.freeze({ u: payload.slice(0, 32) as Bytes32, body: payload.slice(32) });
+}
+
+/** Scheme 11 leads its payload with the recipient key, scheme 10 tags the slot with it. */
+export function deliveredOutput(
+  data: Uint8Array,
+  ownerTag: Bytes32,
+): Readonly<{ u: Bytes32; body: Uint8Array }> | undefined {
+  const owned = ringOwnerDeliveredOutput(data);
+  if (owned !== undefined) return owned;
+  const body = encryptedOutputBody(data, RingScheme.ringConfidentialDelivered);
+  return body?.length === RING_DELIVERED_BODY_LEN
+    ? Object.freeze({ u: ownerTag, body })
+    : undefined;
 }
 
 function encryptedOutputBody(data: Uint8Array, scheme: RingScheme): Uint8Array | undefined {

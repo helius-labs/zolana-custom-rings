@@ -55,6 +55,8 @@ pub use ring_deposit::RingDepositPlaintext;
 pub enum RingDelivery {
     /// Scheme 10 delivered to the owner's viewing key, at `DELIVERED_AUDIT_CAPACITIES`.
     Delivered,
+    /// Scheme 11 under each owner's own key, SPP publishes every owner on the in-proof owner rail.
+    Owned,
     /// Scheme 1 under view tags at each recipient output, scheme 2 in a message.
     Anonymous(Box<AnonymousPlan>),
 }
@@ -105,7 +107,9 @@ impl RingOutputRail {
             false => transaction.with_blinding_seed(blinding_seed)?,
         };
         let mut inputs = match &self.delivery {
-            RingDelivery::Delivered => self.spp_encrypt(transaction, sender)?,
+            RingDelivery::Delivered | RingDelivery::Owned => {
+                self.spp_encrypt(transaction, sender)?
+            }
             RingDelivery::Anonymous(_) => {
                 let mut inputs = OutputEncryption {
                     sender,
@@ -118,7 +122,9 @@ impl RingOutputRail {
             }
         };
         match &self.delivery {
-            RingDelivery::Delivered => self.reencode_delivered(&mut inputs)?,
+            RingDelivery::Delivered | RingDelivery::Owned => {
+                self.reencode_delivered(&mut inputs, sender)?
+            }
             RingDelivery::Anonymous(plan) => self.reencode_anonymous(plan, &mut inputs, sender)?,
         }
         inputs.external_data.salt = self.salt;
@@ -185,8 +191,12 @@ impl RingOutputRail {
         }
     }
 
-    /// Replaces every published slot with its scheme 10, scheme 3 or dummy encoding.
-    fn reencode_delivered(&self, inputs: &mut SppProofInputs) -> Result<(), RingRailError> {
+    /// Replaces every published slot with its scheme 10 or 11, scheme 3 or dummy encoding.
+    fn reencode_delivered(
+        &self,
+        inputs: &mut SppProofInputs,
+        sender: &ShieldedAddress,
+    ) -> Result<(), RingRailError> {
         let first_nullifier = inputs.first_nullifier()?;
         let mut published = inputs.external_data.outputs.iter_mut();
         let mut resolved = inputs.external_data.resolved_owner_tags.iter();
@@ -205,6 +215,7 @@ impl RingOutputRail {
                     tag: transact_output.owner_tag,
                     resolved: *resolved,
                 },
+                participant: participant_key(&inputs.output_utxos, sender, resolved)?,
             })?;
             if message.view_tag != *resolved {
                 return Err(framing);
@@ -320,11 +331,11 @@ impl RingOutputRail {
             .zip(&mut owner_tags)
             .enumerate()
         {
-            let resolved = match self.slot(output, index)? {
-                Slot::Exit => owner_tag.resolved,
-                Slot::Ring { recipient } => recipient.u(),
+            let resolved = match (self.slot(output, index)?, &self.delivery) {
+                (Slot::Exit, _) | (_, RingDelivery::Owned) => owner_tag.resolved,
+                (Slot::Ring { recipient }, _) => recipient.u(),
                 // A random key publishes as a real recipient's would.
-                Slot::Dummy => ViewingKey::new().pubkey().u(),
+                (Slot::Dummy, _) => ViewingKey::new().pubkey().u(),
             };
             *owner_tag = ResolvedOwnerTag {
                 tag: OwnerTag::Inline(resolved),
@@ -370,28 +381,45 @@ impl RingOutputRail {
         // The expansion ignores the hash, only the published bytes are kept.
         let hash = [0; 32];
         let owner_tag = &slot.owner_tag;
-        let body = match self.slot(slot.output, slot_index)? {
+        let owned = matches!(self.delivery, RingDelivery::Owned);
+        let (recipient, amount) = match self.slot(slot.output, slot_index)? {
             Slot::Exit => return self.exit_slot(slot.output, owner_tag.resolved, slot.slot_index),
-            Slot::Ring { recipient } => {
-                let secret =
-                    self.slot_secret(&recipient, &slot.first_nullifier, slot.slot_index)?;
-                RingDeliveredBody {
-                    blinding: slot.output.blinding,
-                    amount: slot.output.amount,
-                }
-                .seal(&secret)?
+            Slot::Ring { recipient } => (recipient, slot.output.amount),
+            // Sealed for the participant its tag names, a zero amount opens to no note.
+            Slot::Dummy if owned => (slot.participant, 0),
+            Slot::Dummy => {
+                return Self::framed(
+                    RingOutput::Delivered {
+                        hash: &hash,
+                        u: &owner_tag.resolved,
+                        body: &random_body(),
+                    },
+                    owner_tag,
+                    slot_index,
+                )
             }
-            Slot::Dummy => random_body(),
         };
-        Self::framed(
-            RingOutput::Delivered {
+        let secret = self.slot_secret(&recipient, &slot.first_nullifier, slot.slot_index)?;
+        let body = RingDeliveredBody {
+            blinding: slot.output.blinding,
+            amount,
+        }
+        .seal(&secret)?;
+        let u = recipient.u();
+        let wire = match owned {
+            true => RingOutput::Owned {
+                hash: &hash,
+                owner: &owner_tag.resolved,
+                u: &u,
+                body: &body,
+            },
+            false => RingOutput::Delivered {
                 hash: &hash,
                 u: &owner_tag.resolved,
                 body: &body,
             },
-            owner_tag,
-            slot_index,
-        )
+        };
+        Self::framed(wire, owner_tag, slot_index)
     }
 }
 
@@ -437,6 +465,25 @@ struct SlotEncode<'a> {
     slot_index: u32,
     first_nullifier: [u8; 32],
     owner_tag: ResolvedOwnerTag,
+    /// The viewing key of the participant `owner_tag` names, the sender when none does.
+    participant: X25519Pubkey,
+}
+
+/// A dummy's tag names the sender or an output owner, SPP's padding picks one of them.
+fn participant_key(
+    outputs: &[SppProofOutputUtxo],
+    sender: &ShieldedAddress,
+    tag: &[u8; 32],
+) -> Result<X25519Pubkey, RingRailError> {
+    let owners = outputs
+        .iter()
+        .filter_map(|output| output.owner_address.as_ref());
+    for owner in core::iter::once(sender).chain(owners) {
+        if owner.signing_pubkey.confidential_view_tag()? == *tag {
+            return Ok(owner.viewing_pubkey);
+        }
+    }
+    Ok(sender.viewing_pubkey)
 }
 
 /// A ring rail slot carries no data and is never compact padding.

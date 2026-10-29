@@ -1,9 +1,9 @@
 //! The compact transact data a proven transfer owns, and its instruction.
 
 use custom_ring_interface::{
-    storage::Revision, tag, AnonymousProofData, CustomRingProof, InputTrees, PlainGroth16Proof,
-    PolicyProof, RingOutput, RingProgramConfig, RingRail, RingTransactData, SenderBundle,
-    AUDIT_CIPHERTEXT_LEN, RING_DELIVERED_BODY_LEN,
+    storage::Revision, tag, AnonymousProofData, CustomRingProof, InProofOwner, InputTrees,
+    PlainGroth16Proof, PolicyProof, PolicyRecipients, RingOutput, RingProgramConfig, RingRail,
+    RingTransactData, SenderBundle, AUDIT_CIPHERTEXT_LEN, RING_DELIVERED_BODY_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -18,6 +18,12 @@ use crate::{CustomRing, RingError};
 pub(crate) enum OwnedOutput {
     Delivered {
         hash: [u8; 32],
+        u: [u8; 32],
+        body: [u8; RING_DELIVERED_BODY_LEN],
+    },
+    Owned {
+        hash: [u8; 32],
+        owner: [u8; 32],
         u: [u8; 32],
         body: [u8; RING_DELIVERED_BODY_LEN],
     },
@@ -63,6 +69,17 @@ impl OwnedOutput {
                 u: *u,
                 body: *body,
             },
+            RingOutput::Owned {
+                hash,
+                owner,
+                u,
+                body,
+            } => Self::Owned {
+                hash: *hash,
+                owner: *owner,
+                u: *u,
+                body: *body,
+            },
             RingOutput::Anonymous { hash, tag, body } => Self::Anonymous {
                 hash: *hash,
                 tag: *tag,
@@ -83,6 +100,17 @@ impl OwnedOutput {
     pub fn view(&self) -> RingOutput<'_> {
         match self {
             Self::Delivered { hash, u, body } => RingOutput::Delivered { hash, u, body },
+            Self::Owned {
+                hash,
+                owner,
+                u,
+                body,
+            } => RingOutput::Owned {
+                hash,
+                owner,
+                u,
+                body,
+            },
             Self::Anonymous { hash, tag, body } => RingOutput::Anonymous {
                 hash,
                 tag,
@@ -108,7 +136,31 @@ pub(crate) struct OwnedPolicyProof {
     pub own_revision: Revision,
     pub curator_revision: Option<Revision>,
     pub sender_commitment: Option<[u8; 32]>,
-    pub recipients: Vec<[u8; 32]>,
+    pub recipients: OwnedRecipients,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum OwnedRecipients {
+    Hidden,
+    Framed(Vec<[u8; 32]>),
+    Published { dummies: u64 },
+}
+
+impl OwnedRecipients {
+    fn view(&self) -> PolicyRecipients<'_> {
+        match self {
+            Self::Hidden => PolicyRecipients::Hidden,
+            Self::Framed(recipients) => PolicyRecipients::Framed(recipients),
+            Self::Published { dummies } => PolicyRecipients::Published { dummies: *dummies },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OwnedInProofOwner {
+    pub owner: [u8; 32],
+    pub commitment: [u8; 32],
+    pub commitment_pok: [u8; 32],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,6 +193,7 @@ pub(crate) struct TransactParts {
     pub disclosure: Vec<[u8; 32]>,
     pub private_tx_hash: [u8; 32],
     pub anonymous: Option<OwnedAnonymousProofData>,
+    pub in_proof_owner: Option<OwnedInProofOwner>,
     pub spp_proof: PlainGroth16Proof,
     pub nullifiers: Vec<[u8; 32]>,
     pub input_trees: InputTrees,
@@ -159,7 +212,7 @@ impl TransactParts {
                 own_revision: policy.own_revision,
                 curator_revision: policy.curator_revision,
                 sender_commitment: policy.sender_commitment.as_ref(),
-                recipients: &policy.recipients,
+                recipients: policy.recipients.view(),
             }),
             withdrawal_exemption: self.withdrawal_exemption.as_ref(),
             approval_required: self.approval_required,
@@ -179,6 +232,11 @@ impl TransactParts {
                 commitment: &anonymous.commitment,
                 commitment_pok: &anonymous.commitment_pok,
                 default_owner_tag: anonymous.default_owner_tag.as_ref(),
+            }),
+            in_proof_owner: self.in_proof_owner.as_ref().map(|owner| InProofOwner {
+                owner: &owner.owner,
+                commitment: &owner.commitment,
+                commitment_pok: &owner.commitment_pok,
             }),
             spp_proof: &self.spp_proof,
             nullifiers: &self.nullifiers,

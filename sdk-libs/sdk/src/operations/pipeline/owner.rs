@@ -1,12 +1,12 @@
 //! The confidential rail.
 
 use custom_ring_interface::{CustomRingError, RingMode, RingRail};
-use spr_client::{AsyncRpc, SettlementAccountValidation};
+use spr_client::{AsyncRpc, OwnerAuthorization, SettlementAccountValidation};
 use spr_interface::shape::Shape;
-use spr_keypair::{NullifierKey, ShieldedAddress};
+use spr_keypair::{NullifierKey, ShieldedAddress, SigningKey};
 use spr_program::instruction::TransactInterfaceTransferAccounts;
 use spr_transaction::instructions::transact::ConfidentialTransaction;
-use zolana_ring_transaction::RingOutputRail;
+use zolana_ring_transaction::{RingDelivery, RingOutputRail};
 
 use super::{
     canonical_shape, delivered, pad_under_rail, sealed, shape_keyed, transaction_key, Rail,
@@ -14,13 +14,14 @@ use super::{
 };
 use crate::{CustomRing, CustomRingConfig, RingError};
 
-/// The sender's spends, it signs the assembled Solana transaction itself.
+/// The sender's spends, it signs the assembled Solana transaction itself or inside the proof.
 pub struct Owner<'a> {
     pub(super) sender: &'a dyn RingSender,
     pub(super) nullifier_key: Option<&'a NullifierKey>,
     pub(super) transaction: ConfidentialTransaction,
     pub(super) interface_transfer_accounts: Vec<TransactInterfaceTransferAccounts>,
     pub(super) shape: Option<Shape>,
+    pub(super) in_proof_owner: Option<&'a SigningKey>,
 }
 
 pub struct CustomRingTransferInput<'a> {
@@ -53,8 +54,16 @@ impl<'a> RingTransfer<Owner<'a>> {
                 transaction: input.transaction,
                 interface_transfer_accounts: Vec::new(),
                 shape: None,
+                in_proof_owner: None,
             },
         }
+    }
+
+    /// The sender's signing key signs inside the proof, any fee payer sends the transaction.
+    #[must_use = "use the updated transfer"]
+    pub fn with_in_proof_owner(mut self, signer: &'a SigningKey) -> Self {
+        self.rail.in_proof_owner = Some(signer);
+        self
     }
 
     #[must_use = "use the updated transfer"]
@@ -135,13 +144,30 @@ impl Owner<'_> {
         self.check_settlement_accounts()?;
         let shape = self.shape(&sender)?;
         let transaction = self.transaction.clone();
-        let delivery = delivered(shape.n_outputs(), RingRail::Confidential)?;
+        let delivery = match (
+            delivered(shape.n_outputs(), RingRail::Confidential)?,
+            self.in_proof_owner,
+        ) {
+            (_, Some(_)) => RingDelivery::Owned,
+            (delivery, None) => delivery,
+        };
         let first_nullifier = *transaction.first_nullifier();
         let rail = RingOutputRail::new(transaction_key(self.sender, first_nullifier)?, delivery);
         let transaction = pad_under_rail(transaction, &rail, shape, &sender)?;
         let proof_inputs = rail.encrypt(transaction, &sender)?;
-        let owner_signers = proof_inputs.owner_signer_pubkeys()?;
-        if config.has_policy && owner_signers.len() != 1 {
+        let (owner_signers, spend) = match self.in_proof_owner {
+            Some(signer) => {
+                if signer.pubkey() != sender.signing_pubkey {
+                    return Err(RingError::InProofOwnerMismatch);
+                }
+                (
+                    Vec::new(),
+                    Spend::InProofOwner(OwnerAuthorization::SigningKey(signer)),
+                )
+            }
+            None => (proof_inputs.owner_signer_pubkeys()?, Spend::Owner),
+        };
+        if config.has_policy && self.in_proof_owner.is_none() && owner_signers.len() != 1 {
             return Err(CustomRingError::OwnerSignerCount.into());
         }
         Ok(Staged {
@@ -153,7 +179,7 @@ impl Owner<'_> {
                 owner: self.nullifier_key.cloned(),
             },
             interface_transfer_accounts: self.interface_transfer_accounts.clone(),
-            spend: Spend::Owner,
+            spend,
             presealed: None,
         })
     }

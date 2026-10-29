@@ -3,8 +3,9 @@
 use custom_ring_interface::{
     funder_account_position, input_flag, key_catalog::RingCircuit, shape_flag, tag, transact_flag,
     AnonymousProofData, CoSignScope, CustomRingError, CustomRingProof, InputTrees,
-    PlainGroth16Proof, PolicyProof, RingOutput, RingPolicy, RingProgramConfig, RingRail,
-    RingTransactData, SenderBundle, RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
+    PlainGroth16Proof, PolicyProof, PolicyRecipients, RingOutput, RingPolicy, RingProgramConfig,
+    RingRail, RingTransactData, SenderBundle, RING_TRANSACT_RING_CONFIG_INDEX,
+    TRANSACT_PAYER_INDEX,
 };
 use solana_address::Address;
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
@@ -87,8 +88,8 @@ impl Fixture {
                 curator_revision: None,
                 sender_commitment: (rail == RingRail::Anonymous).then_some(&self.fields[3]),
                 recipients: match rail.publishes_recipients() {
-                    true => &self.fields[100..100 + usize::from(n_out)],
-                    false => &[],
+                    true => PolicyRecipients::Framed(&self.fields[100..100 + usize::from(n_out)]),
+                    false => PolicyRecipients::Hidden,
                 },
             }),
             approval_required: false,
@@ -112,6 +113,7 @@ impl Fixture {
                 commitment_pok: &self.keys[4],
                 default_owner_tag: None,
             }),
+            in_proof_owner: None,
             spp_proof: &self.spp_proof,
             nullifiers: &self.fields[1..1 + usize::from(n_in)],
             input_trees: InputTrees::One(TreeContext {
@@ -137,6 +139,39 @@ impl Fixture {
                 .collect(),
         };
         self.disclose(&mut data);
+        data
+    }
+
+    /// A confidential transfer with each ring slot under `owner`.
+    pub fn in_proof_owner<'a>(
+        &'a self,
+        owner: &'a [u8; 32],
+        n_in: u8,
+        n_out: u8,
+        policy: bool,
+    ) -> RingTransactData<'a> {
+        let mut data = self.transfer(RingRail::Confidential, n_in, n_out, policy);
+        data.outputs = data
+            .outputs
+            .iter()
+            .map(|output| match *output {
+                RingOutput::Delivered { hash, u, body } => RingOutput::Owned {
+                    hash,
+                    owner,
+                    u,
+                    body,
+                },
+                other => other,
+            })
+            .collect();
+        if let Some(policy) = &mut data.policy {
+            policy.recipients = PolicyRecipients::Published { dummies: 0 };
+        }
+        data.in_proof_owner = Some(custom_ring_interface::InProofOwner {
+            owner,
+            commitment: &self.keys[3],
+            commitment_pok: &self.keys[4],
+        });
         data
     }
 

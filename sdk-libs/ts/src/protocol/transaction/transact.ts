@@ -1,4 +1,10 @@
-import { hashBytes, writeTreeContext, Reader, Writer } from "@heliuslabs/zolana/internal";
+import {
+  hashBytes,
+  solanaOwnerIdentity,
+  writeTreeContext,
+  Reader,
+  Writer,
+} from "@heliuslabs/zolana/internal";
 import {
   encodeRingTransactInstructionData,
   type RingCircuitId,
@@ -62,8 +68,23 @@ export interface PolicyProof {
   readonly curatorRevision?: bigint;
   /** Set exactly on the anonymous rail. */
   readonly senderCommitment?: Bytes32;
-  /** One owner identity per output slot, empty on the anonymous rail. */
-  readonly recipients: readonly Bytes32[];
+  readonly recipients: PolicyRecipients;
+}
+
+/** Fixed by the rail, Rust `PolicyRecipients`. */
+export type PolicyRecipients =
+  /** The anonymous rail, every recipient zero. */
+  | Readonly<{ kind: "hidden" }>
+  /** One owner identity per output slot. */
+  | Readonly<{ kind: "framed"; recipients: readonly Bytes32[] }>
+  /** The in-proof owner rail, a bit per dummy slot, the owner tag names every other slot's recipient. */
+  | Readonly<{ kind: "published"; dummies: bigint }>;
+
+/** The owner SPP verifies in its proof and publishes, no owner signs the transaction. */
+export interface InProofOwner {
+  readonly owner: Bytes32;
+  readonly commitment: Bytes32;
+  readonly commitmentPok: Bytes32;
 }
 
 export function publishesRecipients(rail: RingRail): boolean {
@@ -90,6 +111,8 @@ export type InputTrees =
 /** One published output slot without its SPP framing, Rust `RingOutput`. */
 export type RingOutput =
   | Readonly<{ kind: "delivered"; hash: Bytes32; u: Bytes32; body: Uint8Array }>
+  /** The in-proof owner rail's ring slot, scheme 11 under the owner's key. */
+  | Readonly<{ kind: "owned"; hash: Bytes32; owner: Bytes32; u: Bytes32; body: Uint8Array }>
   /** Under a view tag, its scheme 1 body unproven and absent on a change output. */
   | Readonly<{ kind: "anonymous"; hash: Bytes32; tag: Bytes32; body?: Uint8Array }>
   | Readonly<{ kind: "exit"; hash: Bytes32; ownerTag: Bytes32; payload: Uint8Array }>;
@@ -132,6 +155,8 @@ export interface RingTransactData {
   readonly privateTxHash: Bytes32;
   /** Present exactly on the anonymous rail. */
   readonly anonymous?: AnonymousProofData;
+  /** Set exactly on the in-proof owner rail. */
+  readonly inProofOwner?: InProofOwner;
   /** `a ‖ b ‖ c` with `b` compressed. */
   readonly sppProof: Uint8Array;
   /** One per spent input slot SPP publishes. */
@@ -174,12 +199,14 @@ export function railSppTag(rail: RingRail): number {
 
 /** `hash_bytes(body)` of a delivered slot, zero for any other. */
 export function outputBodyHash(output: RingOutput): Bytes32 {
-  return output.kind === "delivered" ? (hashBytes(checkedBody(output.body)) as Bytes32) : ZERO;
+  return output.kind === "delivered" || output.kind === "owned"
+    ? (hashBytes(checkedBody(output.body)) as Bytes32)
+    : ZERO;
 }
 
 /** `pack_be(u)` of a delivered slot, zeros for any other. */
 export function outputRecipientKeyFields(output: RingOutput): readonly Bytes32[] {
-  return output.kind === "delivered"
+  return output.kind === "delivered" || output.kind === "owned"
     ? (packBytesBe(checkedField(output.u, "u")) as Bytes32[])
     : [ZERO, ZERO];
 }
@@ -280,7 +307,26 @@ export const RingTransactData = Object.freeze({
 
   /** The SPP selector of the data's shape and rail. */
   circuit(data: RingTransactData): RingCircuitId {
-    return circuitId(data.rail, data.nIn, data.nOut, data.anonymous);
+    return circuitId(data);
+  },
+
+  /** One per output slot, on the in-proof owner rail from the owner tags SPP publishes. */
+  policyRecipients(data: RingTransactData): readonly Bytes32[] {
+    const policy = data.policy;
+    if (policy === undefined) throw invalid("MissingPolicyProof");
+    const { recipients } = policy;
+    switch (recipients.kind) {
+      case "hidden":
+        return data.outputs.map(() => ZERO);
+      case "framed":
+        return recipients.recipients;
+      case "published":
+        return data.outputs.map((output, slot) =>
+          ((recipients.dummies >> BigInt(slot)) & 1n) === 1n
+            ? ZERO
+            : (solanaOwnerIdentity(outputOwnerTag(output)) as Bytes32),
+        );
+    }
   },
 
   firstNullifier(data: RingTransactData): Bytes32 {
@@ -338,10 +384,13 @@ const Flag = Object.freeze({
   policy: 1 << 0,
   curator: 1 << 1,
   approvalRequired: 1 << 2,
+  /** The confidential rail's owner signs inside the SPP proof. */
+  ownerInProof: 1 << 3,
   secondTree: 1 << 5,
 });
-/** Bits 3, 4, 6 and 7 are refused. */
-const KNOWN_FLAGS = Flag.policy | Flag.curator | Flag.approvalRequired | Flag.secondTree;
+/** Bits 4, 6 and 7 are refused. */
+const KNOWN_FLAGS =
+  Flag.policy | Flag.curator | Flag.approvalRequired | Flag.ownerInProof | Flag.secondTree;
 
 /** Bytes 1 and 2 of the compact data, the SPP shape's index and the input count below their flags. */
 const FrameByte = Object.freeze({
@@ -433,7 +482,8 @@ function exactly(published: number, outputs: number, layout: DisclosureLayout): 
 
 function readCompact(bytes: TransactReader, rail: RingRail, legacy = false): RingTransactData {
   const flags = bytes.u8("flags");
-  checkFlags(flags);
+  checkFlags(flags, rail, legacy);
+  const owned = has(flags, Flag.ownerInProof);
   const header = readHeader(bytes, rail);
   const { nIn, nOut, inputCount } = header;
   const shape = auditShape(rail, header);
@@ -442,7 +492,9 @@ function readCompact(bytes: TransactReader, rail: RingRail, legacy = false): Rin
     ? readPolicy(bytes, {
         curator: has(flags, Flag.curator),
         anonymous: rail === "anonymous",
-        recipientCount: publishesRecipients(rail) && !legacy ? shape.outputs : 0,
+        recipients:
+          !publishesRecipients(rail) || legacy ? "hidden" : owned ? "published" : "framed",
+        outputs: shape.outputs,
       })
     : undefined;
   const expiryUnixTs = bytes.u32("expiryUnixTs");
@@ -467,7 +519,7 @@ function readCompact(bytes: TransactReader, rail: RingRail, legacy = false): Rin
   if (rail === "delegate" && exits !== 0n) throw invalid("FlagNotAllowed");
   const layout = shape.layout(outputCount, auditLayoutOf(header.flags, exits !== 0n));
   const outputs = Array.from({ length: outputCount }, (_, slot) =>
-    readOutput(bytes, layout, ((exits >> BigInt(slot)) & 1n) === 1n),
+    readOutput(bytes, { layout, owned }, ((exits >> BigInt(slot)) & 1n) === 1n),
   );
   const sender = rail === "anonymous" ? readSender(bytes) : undefined;
   const ephU = field32(bytes, "ephU");
@@ -478,6 +530,13 @@ function readCompact(bytes: TransactReader, rail: RingRail, legacy = false): Rin
   const privateTxHash = field32(bytes, "privateTxHash");
   const anonymous =
     rail === "anonymous" ? readAnonymous(bytes, header.flags.defaultOwnerTag) : undefined;
+  const inProofOwner = owned
+    ? Object.freeze({
+        owner: field32(bytes, "inProofOwner.owner"),
+        commitment: field32(bytes, "inProofOwner.commitment"),
+        commitmentPok: field32(bytes, "inProofOwner.commitmentPok"),
+      })
+    : undefined;
   const sppProof = bytes.bytes(PLAIN_GROTH16_PROOF_LENGTH, "sppProof");
   const nullifiers = Array.from({ length: inputCount }, () => field32(bytes, "nullifier"));
   const inputTrees: InputTrees = has(flags, Flag.secondTree)
@@ -520,6 +579,7 @@ function readCompact(bytes: TransactReader, rail: RingRail, legacy = false): Rin
     disclosure: Object.freeze(disclosure),
     privateTxHash,
     ...(anonymous === undefined ? {} : { anonymous }),
+    ...(inProofOwner === undefined ? {} : { inProofOwner }),
     sppProof,
     nullifiers: Object.freeze(nullifiers),
     inputTrees,
@@ -528,7 +588,12 @@ function readCompact(bytes: TransactReader, rail: RingRail, legacy = false): Rin
 
 function readPolicy(
   bytes: Reader,
-  section: Readonly<{ curator: boolean; anonymous: boolean; recipientCount: number }>,
+  section: Readonly<{
+    curator: boolean;
+    anonymous: boolean;
+    recipients: PolicyRecipients["kind"];
+    outputs: number;
+  }>,
 ): PolicyProof {
   const proof = bytes.bytes(CUSTOM_RING_PROOF_LENGTH, "policy.proof");
   const ownRevision = bytes.u64("policy.ownRevision");
@@ -536,9 +601,17 @@ function readPolicy(
   const senderCommitment = section.anonymous
     ? field32(bytes, "policy.senderCommitment")
     : undefined;
-  const recipients = Array.from({ length: section.recipientCount }, () =>
-    field32(bytes, "policy.recipient"),
-  );
+  const recipients: PolicyRecipients =
+    section.recipients === "framed"
+      ? {
+          kind: "framed",
+          recipients: Object.freeze(
+            Array.from({ length: section.outputs }, () => field32(bytes, "policy.recipient")),
+          ),
+        }
+      : section.recipients === "published"
+        ? { kind: "published", dummies: readBitmap(bytes, section.outputs) }
+        : { kind: "hidden" };
   return Object.freeze({
     proof,
     ownRevision,
@@ -567,8 +640,11 @@ function readAnonymous(bytes: Reader, tagged: boolean): AnonymousProofData {
   });
 }
 
+/** On the in-proof owner rail each ring slot names its owner ahead of its key. */
+type SlotFrame = Readonly<{ layout: DisclosureLayout; owned: boolean }>;
+
 /** No output carries data, every exit payload is a data-free scheme 3 body. */
-function readOutput(bytes: Reader, layout: DisclosureLayout, exit: boolean): RingOutput {
+function readOutput(bytes: Reader, frame: SlotFrame, exit: boolean): RingOutput {
   const hash = field32(bytes, "output.hash");
   if (exit) {
     const ownerTag = field32(bytes, "output.ownerTag");
@@ -579,8 +655,19 @@ function readOutput(bytes: Reader, layout: DisclosureLayout, exit: boolean): Rin
       payload: bytes.bytes(CONFIDENTIAL_DATA_FREE_BODY_LEN, "output.payload"),
     });
   }
-  switch (layout.kind) {
+  switch (frame.layout.kind) {
     case "delivered": {
+      if (frame.owned) {
+        const owner = field32(bytes, "output.owner");
+        const u = field32(bytes, "output.u");
+        return Object.freeze({
+          kind: "owned",
+          hash,
+          owner,
+          u,
+          body: bytes.bytes(RING_DELIVERED_BODY_LEN, "output.body"),
+        });
+      }
       const u = field32(bytes, "output.u");
       return Object.freeze({
         kind: "delivered",
@@ -616,23 +703,24 @@ function readBitmap(bytes: Reader, length: number): bigint {
 
 function writeCompact(data: RingTransactData): Uint8Array {
   const flags = compactFlags(data);
-  checkFlags(flags);
+  checkFlags(flags, data.rail, false);
   if ([data.keyEscrow, data.fullOpenings].some((flag) => typeof flag !== "boolean"))
     throw invalid("InvalidInstructionData");
   const header = headerOf(data);
   const shape = auditShape(data.rail, header);
   const layout = shape.layout(data.outputs.length, RingTransactData.auditLayout(data));
   const anonymousRail = data.rail === "anonymous";
+  const frame: SlotFrame = { layout, owned: data.inProofOwner !== undefined };
   const policyFits =
     data.policy === undefined ||
     ((data.policy.senderCommitment !== undefined) === anonymousRail &&
-      data.policy.recipients.length === (publishesRecipients(data.rail) ? data.outputs.length : 0));
+      recipientsFit(data.policy.recipients, frame, data));
   if (
     !policyFits ||
     (data.anonymous !== undefined) !== anonymousRail ||
     (data.sender !== undefined) !== anonymousRail ||
     data.disclosure.length !== disclosureFieldCount(layout) ||
-    !data.outputs.every((output) => fits(output, layout))
+    !data.outputs.every((output) => fits(output, frame))
   )
     throw invalid("RingTransactLength");
   if (data.rail === "delegate" && data.outputs.some((output) => output.kind === "exit"))
@@ -650,7 +738,14 @@ function writeCompact(data: RingTransactData): Uint8Array {
       out.u64(data.policy.curatorRevision, "policy.curatorRevision");
     if (data.policy.senderCommitment !== undefined)
       out.bytes(data.policy.senderCommitment, 32, "policy.senderCommitment");
-    for (const recipient of data.policy.recipients) out.bytes(recipient, 32, "policy.recipient");
+    const { recipients } = data.policy;
+    if (recipients.kind === "framed")
+      for (const recipient of recipients.recipients) out.bytes(recipient, 32, "policy.recipient");
+    if (recipients.kind === "published")
+      writeBitmap(
+        out,
+        data.outputs.map((_, slot) => ((recipients.dummies >> BigInt(slot)) & 1n) === 1n),
+      );
   }
   out
     .u32(data.expiryUnixTs, "expiryUnixTs")
@@ -685,6 +780,11 @@ function writeCompact(data: RingTransactData): Uint8Array {
     if (data.anonymous.defaultOwnerTag !== undefined)
       out.bytes(data.anonymous.defaultOwnerTag, 32, "anonymous.defaultOwnerTag");
   }
+  if (data.inProofOwner !== undefined)
+    out
+      .bytes(data.inProofOwner.owner, 32, "inProofOwner.owner")
+      .bytes(data.inProofOwner.commitment, 32, "inProofOwner.commitment")
+      .bytes(data.inProofOwner.commitmentPok, 32, "inProofOwner.commitmentPok");
   out.bytes(data.sppProof, PLAIN_GROTH16_PROOF_LENGTH, "sppProof");
   for (const nullifier of data.nullifiers) out.bytes(nullifier, 32, "nullifier");
   if (data.inputTrees.kind === "one") {
@@ -719,6 +819,12 @@ function writeOutput(out: Writer, output: RingOutput): void {
         .bytes(output.u, 32, "output.u")
         .bytes(output.body, RING_DELIVERED_BODY_LEN, "output.body");
       return;
+    case "owned":
+      out
+        .bytes(output.owner, 32, "output.owner")
+        .bytes(output.u, 32, "output.u")
+        .bytes(output.body, RING_DELIVERED_BODY_LEN, "output.body");
+      return;
     case "anonymous":
       out.bytes(output.tag, 32, "output.tag");
       if (output.body === undefined) out.u16(0, "output.length");
@@ -744,9 +850,35 @@ function writeBitmap(out: Writer, bits: readonly boolean[]): void {
   out.bytes(bytes);
 }
 
-/** Whether the slot uses the output encoding `layout` gives ring outputs. */
-function fits(output: RingOutput, layout: DisclosureLayout): boolean {
-  return output.kind === "exit" || output.kind === layout.kind;
+/** Whether the slot uses the output encoding `frame` gives ring outputs. */
+function fits(output: RingOutput, frame: SlotFrame): boolean {
+  if (output.kind === "exit") return true;
+  if (frame.layout.kind === "anonymous") return output.kind === "anonymous" && !frame.owned;
+  return output.kind === (frame.owned ? "owned" : "delivered");
+}
+
+function recipientsFit(
+  recipients: PolicyRecipients,
+  frame: SlotFrame,
+  data: RingTransactData,
+): boolean {
+  switch (recipients.kind) {
+    case "hidden":
+      return data.rail === "anonymous";
+    case "framed":
+      return (
+        data.rail !== "anonymous" &&
+        !frame.owned &&
+        recipients.recipients.length === data.outputs.length
+      );
+    case "published":
+      return (
+        frame.owned &&
+        typeof recipients.dummies === "bigint" &&
+        recipients.dummies >= 0n &&
+        recipients.dummies >> BigInt(data.outputs.length) === 0n
+      );
+  }
 }
 
 function compactFlags(data: RingTransactData): number {
@@ -754,14 +886,16 @@ function compactFlags(data: RingTransactData): number {
     [data.policy !== undefined, Flag.policy],
     [data.policy?.curatorRevision !== undefined, Flag.curator],
     [data.approvalRequired, Flag.approvalRequired],
+    [data.inProofOwner !== undefined, Flag.ownerInProof],
     [data.inputTrees.kind === "two", Flag.secondTree],
   ];
   return bits.reduce((flags, [set, bit]) => (set ? flags | bit : flags), 0);
 }
 
-/** The curator and approval flags need a policy. */
-function checkFlags(flags: number): void {
-  if ((flags & ~KNOWN_FLAGS) !== 0) throw invalid("FlagNotAllowed");
+/** The curator and approval flags need a policy, the in-proof owner flag a non-legacy confidential frame. */
+function checkFlags(flags: number, rail: RingRail, legacy: boolean): void {
+  const foreignOwner = has(flags, Flag.ownerInProof) && (legacy || rail !== "confidential");
+  if ((flags & ~KNOWN_FLAGS) !== 0 || foreignOwner) throw invalid("FlagNotAllowed");
   const needsPolicy = has(flags, Flag.curator) || has(flags, Flag.approvalRequired);
   if (needsPolicy && !has(flags, Flag.policy)) throw invalid("FlagNotAllowed");
 }
@@ -832,15 +966,23 @@ function auditLayoutOf(flags: FrameFlags, exits: boolean): AuditLayout {
   });
 }
 
-function circuitId(
-  rail: RingRail,
-  inputs: number,
-  outputs: number,
-  anonymous: AnonymousProofData | undefined,
-): RingCircuitId {
-  const shape = { inputs, outputs, publicAssetSlots: N_PUBLIC_SLOTS };
-  switch (rail) {
+function circuitId(data: RingTransactData): RingCircuitId {
+  const { anonymous, inProofOwner } = data;
+  const shape = { inputs: data.nIn, outputs: data.nOut, publicAssetSlots: N_PUBLIC_SLOTS };
+  switch (data.rail) {
     case "confidential":
+      if (inProofOwner !== undefined)
+        return Object.freeze({
+          kind: "confidentialRingInCircuitEddsa",
+          ...shape,
+          proofData: Object.freeze({
+            bsb22Commitment: Object.freeze({
+              commitment: inProofOwner.commitment,
+              commitmentPok: inProofOwner.commitmentPok,
+            }),
+            ownerPk: inProofOwner.owner,
+          }),
+        });
       return Object.freeze({ kind: "confidentialRingEddsa", ...shape });
     case "delegate":
       return Object.freeze({ kind: "ringAuthority", ...shape });
@@ -914,6 +1056,14 @@ export function ringTransactOutput(output: RingOutput): TransactOutput {
           output.u,
           encodeRingOutput(RingScheme.ringConfidentialDelivered, checkedBody(output.body)),
         ];
+      case "owned":
+        return [
+          output.owner,
+          encodeRingOutput(
+            RingScheme.ringOwnerDelivered,
+            concat([checkedField(output.u, "u"), checkedBody(output.body)]),
+          ),
+        ];
       case "anonymous":
         return [
           output.tag,
@@ -930,6 +1080,20 @@ export function ringTransactOutput(output: RingOutput): TransactOutput {
     ownerTag: Object.freeze({ kind: "inline", value: checkedField(ownerTag, "ownerTag") }),
     ...(data === undefined ? {} : { data }),
   });
+}
+
+/** The inline tag SPP reads the slot's owner identity from, Rust `RingOutput::owner_tag`. */
+export function outputOwnerTag(output: RingOutput): Bytes32 {
+  switch (output.kind) {
+    case "delivered":
+      return output.u;
+    case "owned":
+      return output.owner;
+    case "anonymous":
+      return output.tag;
+    case "exit":
+      return output.ownerTag;
+  }
 }
 
 function treeIndex(trees: InputTrees, input: number): number {

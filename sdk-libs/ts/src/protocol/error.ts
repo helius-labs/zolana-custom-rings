@@ -146,6 +146,8 @@ export const RING_ERROR_CODES = [
   "RING_RELAY_OWNER_SIGNATURE",
   "RING_RELAY_PAYER_MISMATCH",
   "RING_RELAY_PROOF_INPUTS",
+  "RING_IN_PROOF_OWNER_MISMATCH",
+  "RING_IN_PROOF_OWNER_PROVER_REQUIRED",
 ] as const;
 import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/zolana/internal";
 import type { ErrorEnvelope } from "@heliuslabs/zolana";
@@ -261,6 +263,7 @@ export const RingProgramError = Object.freeze({
   unmirroredRegistry: 8304,
   mirrorNotSynced: 8305,
   mirrorRootExpired: 8306,
+  ownerSignerOnInProofRail: 8350,
   invalidAssetLimits: 8390,
   depositMintAccountMissing: 8410,
   depositAssetIndexUnknown: 8411,

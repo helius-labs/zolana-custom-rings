@@ -5,16 +5,17 @@ mod common;
 use bytemuck::Zeroable;
 use custom_ring_interface::{
     encode_anonymous_recipient_output, encode_anonymous_sender_output,
-    ring_confidential_delivered_output_body, CONFIDENTIAL_DATA_FREE_BODY_LEN,
+    ring_confidential_delivered_output_body, ring_owner_delivered_output,
+    CONFIDENTIAL_DATA_FREE_BODY_LEN,
 };
 use custom_ring_interface::{
     input_flag, shape_flag,
     storage::{Revision, Root, StorageRegistry},
     transact_flag, AnonymousAuditKey, AnonymousLayout, AnonymousProofData, AuditBinding, AuditKind,
-    CustomRingError, CustomRingProof, DeliveredLayout, DisclosureLayout, InputTrees,
-    InstructionTag, ParsedTransact, PlainGroth16Proof, PolicyBinding, PolicyProof, RailSigner,
-    RingMode, RingOutput, RingPolicy, RingProgramConfig, RingRail, RingTransactData, SenderBundle,
-    Settlement, SourceSlot, RING_PROGRAM_CONFIG,
+    CustomRingError, CustomRingProof, DeliveredLayout, DisclosureLayout, InProofOwner, InputTrees,
+    InstructionTag, ParsedTransact, PlainGroth16Proof, PolicyBinding, PolicyProof,
+    PolicyRecipients, RailSigner, RingMode, RingOutput, RingPolicy, RingProgramConfig, RingRail,
+    RingTransactData, SenderBundle, Settlement, SourceSlot, RING_PROGRAM_CONFIG,
 };
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
@@ -121,6 +122,7 @@ impl Fixture {
             disclosure: &[],
             private_tx_hash: &self.fields[0],
             anonymous: None,
+            in_proof_owner: None,
             spp_proof: &self.spp_proof,
             nullifiers: &self.fields[1..1 + usize::from(n_in)],
             input_trees: InputTrees::One(TreeContext {
@@ -153,7 +155,7 @@ impl Fixture {
             own_revision: Revision::from(7),
             curator_revision: Some(Revision::from(3)),
             sender_commitment: None,
-            recipients: &self.fields[50..52],
+            recipients: PolicyRecipients::Framed(&self.fields[50..52]),
         });
         data.approval_required = true;
         data.interface_transfers = vec![
@@ -178,6 +180,32 @@ impl Fixture {
         self.with_disclosure(data)
     }
 
+    /// No owner signs, the ring slots and the change publish their owners, slot 3 a dummy.
+    fn confidential_in_proof_owner(&self) -> RingTransactData<'_> {
+        let mut data = self.base(RingRail::Confidential, 2, 4);
+        data.policy = Some(PolicyProof {
+            spl_withdrawal_owners: &[],
+            proof: &self.proofs[1],
+            own_revision: Revision::from(5),
+            curator_revision: None,
+            sender_commitment: None,
+            recipients: PolicyRecipients::Published { dummies: 0b1000 },
+        });
+        data.interface_transfers = vec![InterfaceTransfer::SolWithdrawal { amount: 4_000 }];
+        data.outputs = (0..4)
+            .map(|slot| match slot {
+                1 => self.exit(slot, &self.payload),
+                _ => self.owned(slot),
+            })
+            .collect();
+        data.in_proof_owner = Some(InProofOwner {
+            owner: &self.bytes[16],
+            commitment: &self.bytes[20],
+            commitment_pok: &self.bytes[21],
+        });
+        self.with_disclosure(data)
+    }
+
     fn confidential_delivered(&self) -> RingTransactData<'_> {
         let mut data = self.base(RingRail::Confidential, 1, 8);
         data.outputs = (0..8)
@@ -197,7 +225,7 @@ impl Fixture {
             own_revision: Revision::from(31),
             curator_revision: None,
             sender_commitment: Some(&self.fields[4]),
-            recipients: &[],
+            recipients: PolicyRecipients::Hidden,
         });
         data.interface_transfers = vec![InterfaceTransfer::SolWithdrawal { amount: 9_999 }];
         data.outputs = (0..4)
@@ -252,13 +280,26 @@ impl Fixture {
             own_revision: Revision::from(0),
             curator_revision: None,
             sender_commitment: None,
-            recipients: &self.fields[50..50 + outputs],
+            recipients: PolicyRecipients::Framed(&self.fields[50..50 + outputs]),
         }
     }
 
     fn delivered(&self, slot: usize) -> RingOutput<'_> {
         RingOutput::Delivered {
             hash: &self.fields[10 + slot],
+            u: &self.bytes[3 + slot],
+            body: &self.bodies[slot],
+        }
+    }
+
+    /// Slots 0 and 3 under the in-proof owner, the change and the dummy.
+    fn owned(&self, slot: usize) -> RingOutput<'_> {
+        RingOutput::Owned {
+            hash: &self.fields[10 + slot],
+            owner: match slot {
+                0 | 3 => &self.bytes[16],
+                _ => &self.bytes[17 + slot],
+            },
             u: &self.bytes[3 + slot],
             body: &self.bodies[slot],
         }
@@ -280,9 +321,13 @@ impl Fixture {
         })
     }
 
-    fn cases(&self) -> [(&'static str, RingTransactData<'_>); 5] {
+    fn cases(&self) -> [(&'static str, RingTransactData<'_>); 6] {
         [
             ("confidential_delivered_policy", self.confidential_policy()),
+            (
+                "confidential_in_proof_owner_policy",
+                self.confidential_in_proof_owner(),
+            ),
             (
                 "confidential_delivered_audit_only",
                 self.confidential_delivered(),
@@ -356,7 +401,11 @@ fn compute_vectors() -> ExpansionVectors {
                       owner tag, a u16 little-endian length and the scheme 1 body, empty on \
                       a change output, the anonymous rail's scheme 2 sender bundle follows \
                       the outputs as a 32-byte tag, a nonzero u16 length and the body, and \
-                      the random 16-byte salt follows the transaction viewing key. Produced by \
+                      the random 16-byte salt follows the transaction viewing key. Under the \
+                      in-proof owner flag (byte 0 bit 3) each ring slot names its owner ahead \
+                      of its key and forwards under scheme 11, a dummy slot bitmap takes the \
+                      place of the recipients, and the owner key, commitment and commitment pok \
+                      follow private_tx_hash. Produced by \
                       program-libs/interface/tests/transact.rs."
             .to_string(),
         auditor_pubkey: hex::encode(config.auditor_pubkey),
@@ -415,6 +464,15 @@ fn ring_transact_expansion_vector() {
                     .as_deref()
                     .and_then(ring_confidential_delivered_output_body)
                     .is_some()),
+                RingOutput::Owned { owner, u, body, .. } => {
+                    assert_eq!(output.owner_tag, OwnerTag::Inline(**owner));
+                    assert_eq!(
+                        output.data.as_deref().and_then(ring_owner_delivered_output),
+                        Some((*u, *body)),
+                        "{}",
+                        case.name
+                    );
+                }
                 RingOutput::Anonymous { tag, body, .. } => {
                     assert_eq!(output.owner_tag, OwnerTag::Inline(**tag));
                     assert_eq!(
@@ -604,11 +662,13 @@ fn the_reserved_frame_bits_are_refused() {
 }
 
 #[test]
-fn flag_bits_3_and_4_are_refused_on_every_rail() {
+fn flag_bit_4_is_refused_on_every_rail_and_the_in_proof_owner_off_the_confidential_rail() {
     let fixture = Fixture::new();
+    assert_eq!(transact_flag::KNOWN & 1 << 4, 0);
     for (name, data) in fixture.cases() {
-        for bit in [1 << 3, 1 << 4] {
-            assert_eq!(transact_flag::KNOWN & bit, 0);
+        let foreign_owner =
+            (data.rail != RingRail::Confidential).then_some(transact_flag::OWNER_IN_PROOF);
+        for bit in [Some(1 << 4), foreign_owner].into_iter().flatten() {
             let mut compact = data.encode().unwrap();
             compact[transact_flag::BYTE] |= bit;
             assert_eq!(

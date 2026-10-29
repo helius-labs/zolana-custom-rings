@@ -595,9 +595,9 @@ describe("ring-transact-expansion.json", () => {
     expect(refused("delegate_move", 1, () => wide)).toThrow(ringError("RingShapeUnkeyed"));
   });
 
-  it("refuses the retired epoch and anchor bits on every rail", () => {
+  it("refuses bit 4 on every rail and the in-proof owner off the confidential rail", () => {
     for (const vector of expansion.cases)
-      for (const bit of [3, 4]) {
+      for (const bit of vector.rail === "confidential" ? [4] : [3, 4]) {
         const compact = bytes(vector.compact);
         compact[0] = (compact[0] ?? 0) | (1 << bit);
         expect(() => RingTransactData.parse(compact, railOf(vector.rail))).toThrow(

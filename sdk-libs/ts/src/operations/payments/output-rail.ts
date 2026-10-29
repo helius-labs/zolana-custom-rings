@@ -29,6 +29,7 @@ import {
   encodeRingOutput,
   readRingOutput,
   RING_DELIVERED_BODY_LEN,
+  ringOwnerDeliveredOutput,
   RingScheme,
   sealDeliveredBody,
 } from "../../protocol/transaction/output.js";
@@ -61,6 +62,8 @@ const MAX_OUTPUTS = Math.max(...SPP_SUPPORTED_SHAPES.map((shape) => shape.output
 export type RingDelivery =
   /** Scheme 10 delivered to the owner's viewing key, at `DELIVERED_AUDIT_CAPACITIES`. */
   | Readonly<{ kind: "delivered" }>
+  /** Scheme 11 under each owner's own key, SPP publishes every owner on the in-proof owner rail. */
+  | Readonly<{ kind: "owned" }>
   /** Scheme 1 under view tags at each recipient output, scheme 2 in a message. */
   | Readonly<{ kind: "anonymous"; plan: AnonymousPlan }>;
 
@@ -327,7 +330,7 @@ export class RingOutputRail {
       frames = this.#anonymousFrames(seal, input.assets);
     } else
       frames = outputs.map((output, slotIndex) =>
-        this.#deliveredFrame(output, slotIndex, input.assets),
+        this.#deliveredFrame({ output, slotIndex, assets: input.assets, outputs, sender }),
       );
     const published: TransactOutput[] = outputs.map((output, slotIndex) => {
       const frame = frames[slotIndex];
@@ -500,22 +503,44 @@ export class RingOutputRail {
   }
 
   /** Rust `RingOutputRail::encode_delivered` under the owner tag `owner_tags` resolves. */
-  #deliveredFrame(output: ProofOutputUtxo, slotIndex: number, assets: AssetRegistry): FramedSlot {
+  #deliveredFrame(
+    input: Readonly<{
+      output: ProofOutputUtxo;
+      slotIndex: number;
+      assets: AssetRegistry;
+      outputs: readonly ProofOutputUtxo[];
+      sender: ShieldedAddress;
+    }>,
+  ): FramedSlot {
+    const { output, slotIndex } = input;
     const slot = deliveredSlot(output);
-    switch (slot.kind) {
-      case "exit":
-        return this.#exitFrame(output, slotIndex, assets);
-      case "ring": {
-        const secret = this.slotSecret(slot.recipient, slotIndex);
-        let body: Uint8Array;
-        try {
-          body = sealDeliveredBody(secret, { blinding: output.blinding, amount: output.amount });
-        } finally {
-          secret.fill(0);
-        }
-        const u = slot.recipient.u();
-        return framed(u, { kind: "delivered", hash: ZERO_32, u, body });
+    const owned = this.delivery.kind === "owned";
+    if (slot.kind === "exit") return this.#exitFrame(output, slotIndex, input.assets);
+    if (slot.kind === "ring" || owned) {
+      const owner =
+        slot.kind === "ring"
+          ? output.ownerAddress?.signingPublicKey.confidentialViewTag()
+          : output.ownerTag;
+      if (owner === undefined) throw framingError(slotIndex);
+      // Sealed for the participant a dummy's tag names, a zero amount opens to no note.
+      const recipient =
+        slot.kind === "ring" ? slot.recipient : participantKey(input.outputs, input.sender, owner);
+      const secret = this.slotSecret(recipient, slotIndex);
+      let body: Uint8Array;
+      try {
+        body = sealDeliveredBody(secret, {
+          blinding: output.blinding,
+          amount: slot.kind === "ring" ? output.amount : 0n,
+        });
+      } finally {
+        secret.fill(0);
       }
+      const u = recipient.u();
+      return owned
+        ? framed(owner, { kind: "owned", hash: ZERO_32, owner, u, body })
+        : framed(u, { kind: "delivered", hash: ZERO_32, u, body });
+    }
+    switch (slot.kind) {
       case "dummy": {
         const body = randomBytes(RING_DELIVERED_BODY_LEN);
         // A random key publishes as a real recipient's would.
@@ -559,9 +584,18 @@ export class RingOutputRail {
     const { hash, ownerTag } = inline(published, slotIndex);
     const body = (scheme: RingScheme): Uint8Array =>
       schemeBody(published.data ?? new Uint8Array(), scheme, slotIndex);
-    return deliveredSlot(output).kind === "exit"
-      ? { kind: "exit", hash, ownerTag, payload: body(RingScheme.confidential) }
-      : { kind: "delivered", hash, u: ownerTag, body: body(RingScheme.ringConfidentialDelivered) };
+    if (deliveredSlot(output).kind === "exit")
+      return { kind: "exit", hash, ownerTag, payload: body(RingScheme.confidential) };
+    if (this.delivery.kind !== "owned")
+      return {
+        kind: "delivered",
+        hash,
+        u: ownerTag,
+        body: body(RingScheme.ringConfidentialDelivered),
+      };
+    const delivered = ringOwnerDeliveredOutput(published.data ?? new Uint8Array());
+    if (delivered === undefined) throw framingError(slotIndex);
+    return { kind: "owned", hash, owner: ownerTag, ...delivered };
   }
 }
 
@@ -611,6 +645,19 @@ function listedRecipient(slot: AnonymousSlot): readonly X25519PublicKey[] {
     case "dummy":
       return [DUMMY_RECIPIENT_VIEWING_PK];
   }
+}
+
+/** A dummy's tag names the sender or an output owner, SPP's padding picks one of them. */
+function participantKey(
+  outputs: readonly ProofOutputUtxo[],
+  sender: ShieldedAddress,
+  tag: Bytes32,
+): X25519PublicKey {
+  const owners = [sender, ...outputs.flatMap((output) => output.ownerAddress ?? [])];
+  const named = owners.find((owner) =>
+    equalBytes(owner.signingPublicKey.confidentialViewTag(), tag),
+  );
+  return (named ?? sender).viewingPublicKey;
 }
 
 function deliveredSlot(output: ProofOutputUtxo): Slot {

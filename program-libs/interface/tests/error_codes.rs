@@ -123,6 +123,7 @@ pinned_codes! {
     UnmirroredRegistry = 8304,
     MirrorNotSynced = 8305,
     MirrorRootExpired = 8306,
+    OwnerSignerOnInProofRail = 8350,
     InvalidAssetLimits = 8390,
     DepositMintAccountMissing = 8410,
     DepositAssetIndexUnknown = 8411,

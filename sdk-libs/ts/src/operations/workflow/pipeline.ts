@@ -4,7 +4,14 @@
  */
 import type { AccountMeta, Instruction } from "@solana/kit";
 
-import { compressG2, meta, treeAddress, bytesKey, equalBytes } from "@heliuslabs/zolana/internal";
+import {
+  compressG2,
+  encodeBase58,
+  meta,
+  treeAddress,
+  bytesKey,
+  equalBytes,
+} from "@heliuslabs/zolana/internal";
 import { type RingProver, type RingRecordReader } from "../../rpc/ports.js";
 import type { ChainReader, ProvenRingTransact, TreeContext } from "@heliuslabs/zolana/client";
 import { ringTransactAccounts, type Shape } from "@heliuslabs/zolana/interface";
@@ -59,6 +66,7 @@ import {
   ringDisclosureLayout,
   ringSppInputs,
   type InputTrees,
+  type PolicyRecipients,
   type RingRail,
   type SenderBundle,
 } from "../../protocol/transaction/transact.js";
@@ -98,6 +106,8 @@ export interface RailSpend {
   /** Signs the transaction beside the payer on the delegate rail. */
   readonly delegate?: Address;
   readonly anonymous?: AnonymousSpendValues;
+  /** The confidential rail's owner key when it signs inside the SPP proof. */
+  readonly inProofOwner?: Bytes32;
 }
 
 /** A transfer past its outputs' sealing, ready for its statements, Rust `Staged`. */
@@ -339,7 +349,10 @@ async function assembleStagedTransfer<T>(
         approvalRequired,
         supplied: input.coSigner,
         transfers: proofInputs.externalData.interfaceTransfers,
-        ownerSigners: staged.ownerSigners,
+        ownerSigners:
+          spend.inProofOwner === undefined
+            ? staged.ownerSigners
+            : [...staged.ownerSigners, encodeBase58(spend.inProofOwner)],
         ...(spend.delegate === undefined ? {} : { delegate: spend.delegate }),
       },
       context,
@@ -377,6 +390,7 @@ async function assembleStagedTransfer<T>(
       approvalRequired,
       ...(policy === undefined ? {} : { policy: { inputs: policy, senderCommitment: commitment } }),
       ...(withdrawalExemption === undefined ? {} : { withdrawalExemption }),
+      ...(spend.inProofOwner === undefined ? {} : { inProofOwner: spend.inProofOwner }),
     });
     // The program's expansion must reproduce the external data the SPP proof binds.
     if (
@@ -605,6 +619,7 @@ function previewData(
     approvalRequired: boolean;
     policy?: Readonly<{ inputs: PolicyInputs; senderCommitment: Bytes32 | undefined }>;
     withdrawalExemption?: WithdrawalExemption;
+    inProofOwner?: Bytes32;
   }>,
 ): RingTransactData {
   const external = input.proofInputs.externalData;
@@ -633,7 +648,7 @@ function previewData(
             ...(input.policy.senderCommitment === undefined
               ? {}
               : { senderCommitment: input.policy.senderCommitment }),
-            recipients: publishesRecipients(input.rail) ? input.policy.inputs.recipients : [],
+            recipients: policyRecipients(input.rail, input.policy.inputs, input),
           },
         }),
     ...(input.withdrawalExemption === undefined
@@ -667,6 +682,15 @@ function previewData(
           },
         }
       : {}),
+    ...(input.inProofOwner === undefined
+      ? {}
+      : {
+          inProofOwner: {
+            owner: input.inProofOwner,
+            commitment: zeroField(),
+            commitmentPok: zeroField(),
+          },
+        }),
     sppProof: new Uint8Array(PLAIN_GROTH16_PROOF_LENGTH),
     nullifiers: Object.freeze(
       input.proofInputs.inputUtxos
@@ -726,7 +750,21 @@ function provenData(
             : { defaultOwnerTag: circuit.proofData.defaultOwnerTag }),
         }
       : undefined;
-  if ((anonymous !== undefined) !== (preview.rail === "anonymous"))
+  const inProofOwner =
+    circuit.kind === "confidentialRingInCircuitEddsa" && preview.inProofOwner !== undefined
+      ? {
+          owner: preview.inProofOwner.owner,
+          commitment: circuit.proofData.bsb22Commitment.commitment,
+          commitmentPok: circuit.proofData.bsb22Commitment.commitmentPok,
+        }
+      : undefined;
+  if (
+    (anonymous !== undefined) !== (preview.rail === "anonymous") ||
+    (circuit.kind === "confidentialRingInCircuitEddsa") !== (preview.inProofOwner !== undefined) ||
+    (inProofOwner !== undefined &&
+      circuit.kind === "confidentialRingInCircuitEddsa" &&
+      !equalBytes(circuit.proofData.ownerPk, inProofOwner.owner))
+  )
     throw new RingError("RING_SPP_PROOF_MISMATCH");
   const sppProof = new Uint8Array(PLAIN_GROTH16_PROOF_LENGTH);
   sppProof.set(spp.proof.a, 0);
@@ -742,10 +780,29 @@ function provenData(
       ? {}
       : { policy: { ...preview.policy, proof: input.policyProof } }),
     ...(anonymous === undefined ? {} : { anonymous }),
+    ...(inProofOwner === undefined ? {} : { inProofOwner }),
     sppProof,
     nullifiers: Object.freeze(nullifiers),
     inputTrees,
   });
+}
+
+function policyRecipients(
+  rail: RingRail,
+  policy: PolicyInputs,
+  input: Readonly<{ proofInputs: SppProofInputs; inProofOwner?: Bytes32 }>,
+): PolicyRecipients {
+  if (!publishesRecipients(rail)) return { kind: "hidden" };
+  return input.inProofOwner === undefined
+    ? { kind: "framed", recipients: policy.recipients }
+    : { kind: "published", dummies: dummySlots(input.proofInputs.outputs) };
+}
+
+function dummySlots(outputs: readonly ProofOutputUtxo[]): bigint {
+  return outputs.reduce(
+    (bits, output, slot) => (output.isDummy() ? bits | (1n << BigInt(slot)) : bits),
+    0n,
+  );
 }
 
 export function spendsDefaultRing(proofInputs: SppProofInputs): boolean {

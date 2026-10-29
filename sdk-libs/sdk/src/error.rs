@@ -204,6 +204,10 @@ pub enum RingError {
     EntryRingInput { index: usize },
     #[error("the hidden signer does not match the sender")]
     AnonymousSignerMismatch,
+    #[error("the in-proof owner does not match the sender")]
+    InProofOwnerMismatch,
+    #[error("the confidential relay carries no owner signature")]
+    MissingInProofOwnerSignature,
     #[error("public transaction signers must differ from the hidden owner")]
     AnonymousPublicSignerLinksOwner,
     #[error("withdrawal destination {0} names the hidden owner")]

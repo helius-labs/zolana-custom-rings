@@ -88,7 +88,9 @@ async fn exit_owner(
     };
     match stage_anonymous(&transfer, &chain).await?.spend {
         Spend::Anonymous(_) => Ok(()),
-        Spend::Owner | Spend::Delegate { .. } => unreachable!("an anonymous ring stages its rail"),
+        Spend::Owner | Spend::InProofOwner(_) | Spend::Delegate { .. } => {
+            unreachable!("an anonymous ring stages its rail")
+        }
     }
 }
 

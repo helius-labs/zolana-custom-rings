@@ -62,6 +62,7 @@ impl RingStatements<'_> {
         let withdrawal_hash =
             custom_ring_interface::policy_withdrawal_hash(&self.accounts.withdrawals)
                 .map_err(CustomRingError::from)?;
+        let recipients = data.policy_recipients()?;
         let statement = PolicyStatement {
             withdrawal_hash: &withdrawal_hash,
             key: data.rail.policy_key(),
@@ -73,7 +74,7 @@ impl RingStatements<'_> {
             own_root: &roots.own_root,
             curator_root: &roots.curator_root,
             sender: &self.accounts.sender,
-            recipients: data.policy_recipients()?,
+            recipients: &recipients,
             public_assets: &public_assets,
             public_amounts: &public_amounts,
         }

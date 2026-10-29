@@ -1,15 +1,17 @@
 //! The wallet half of a relayed transfer, Ring RPC reads the Merkle paths and records and proves.
 
+use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::AsyncRpc;
 use spr_indexer_api::{SerializablePubkey, SerializableSignature};
-use spr_keypair::NullifierKey;
+use spr_keypair::{NullifierKey, SigningKey};
 use zolana_ring_client::rpc::{
     PrepareRelayRequest, ProofInputBytes, RelayIntent, RelayProofInputs, RelayQuote, RelayRail,
+    TokenAccountSetup,
 };
 use zolana_ring_transaction::RingDelivery;
 
-use super::{Anonymous, Delegated, RingTransfer, Sealed};
+use super::{Anonymous, Delegated, Owner, Rail, RingTransfer, Sealed};
 use crate::{PreparedRelay, RingError};
 
 impl RingTransfer<Anonymous<'_>> {
@@ -19,41 +21,98 @@ impl RingTransfer<Anonymous<'_>> {
         client: &C,
         quote: RelayQuote,
     ) -> Result<PreparedRelay, RingError> {
-        let payer = self.rail.owner.transaction.payer();
-        if payer != quote.fee_payer.0 {
+        WalletRelay {
+            transfer: self,
+            payer: self.rail.owner.transaction.payer(),
+            signer: self.rail.signer,
+            exit_token_owner: self.rail.exit_token_owner,
+            token_account_setup: self.rail.token_account_setup.clone(),
+        }
+        .prepare(client, quote)
+        .await
+    }
+}
+
+impl RingTransfer<Owner<'_>> {
+    /// The in-proof owner signs the message hash, the wallet reads no Merkle path and no record.
+    pub async fn prepare_relay<C: AsyncRpc + ?Sized>(
+        &self,
+        client: &C,
+        quote: RelayQuote,
+    ) -> Result<PreparedRelay, RingError> {
+        WalletRelay {
+            transfer: self,
+            payer: self.rail.transaction.payer(),
+            signer: self
+                .rail
+                .in_proof_owner
+                .ok_or(RingError::MissingInProofOwnerSignature)?,
+            exit_token_owner: None,
+            token_account_setup: Vec::new(),
+        }
+        .prepare(client, quote)
+        .await
+    }
+}
+
+struct WalletRelay<'t, R: Rail> {
+    transfer: &'t RingTransfer<R>,
+    payer: Address,
+    signer: &'t SigningKey,
+    exit_token_owner: Option<Address>,
+    token_account_setup: Vec<TokenAccountSetup>,
+}
+
+impl<R: Rail> WalletRelay<'_, R> {
+    async fn prepare<C: AsyncRpc + ?Sized>(
+        self,
+        client: &C,
+        quote: RelayQuote,
+    ) -> Result<PreparedRelay, RingError> {
+        if self.payer != quote.fee_payer.0 {
             return Err(RingError::RelayPayerMismatch {
-                payer,
+                payer: self.payer,
                 fee_payer: quote.fee_payer.0,
             });
         }
-        let sealed = self.seal(client).await?;
+        let sealed = self.transfer.seal(client).await?;
         let staged = &sealed.pipeline.staged;
         let inputs = &staged.proof_inputs;
-        let RingDelivery::Anonymous(plan) = staged.rail.delivery() else {
-            return Err(RingError::NotAnonymousRing);
+        let rail = match staged.rail.delivery() {
+            RingDelivery::Anonymous(plan) => RelayRail::Anonymous {
+                plan: plan.clone(),
+                exit_token_owner: self.exit_token_owner,
+            },
+            RingDelivery::Owned => RelayRail::Confidential,
+            RingDelivery::Delivered => return Err(RingError::MissingInProofOwnerSignature),
         };
         let nullifier_key = staged
             .authority
             .owner
             .clone()
             .ok_or(RingError::MissingAnonymousSigner)?;
-        let owner_signature = self.rail.signer.sign_message(&inputs.message_hash()?)?;
-        let proof_inputs = sealed
-            .relay_proof_inputs(
-                RelayRail::Anonymous {
-                    plan: plan.clone(),
-                    exit_token_owner: self.rail.exit_token_owner,
-                },
-                nullifier_key,
-            )
-            .encode()?;
+        let owner_signature = SerializableSignature(Signature::from(
+            self.signer.sign_message(&inputs.message_hash()?)?,
+        ));
+        let anonymous = matches!(rail, RelayRail::Anonymous { .. });
+        let proof_inputs =
+            ProofInputBytes::new(sealed.relay_proof_inputs(rail, nullifier_key).encode()?);
+        let token_account_setup = self.token_account_setup;
         Ok(PreparedRelay::new(PrepareRelayRequest {
-            ring: SerializablePubkey(self.ring.program_id()),
+            ring: SerializablePubkey(self.transfer.ring.program_id()),
             quote,
-            intent: RelayIntent::Anonymous {
-                proof_inputs: ProofInputBytes::new(proof_inputs),
-                owner_signature: SerializableSignature(Signature::from(owner_signature)),
-                token_account_setup: self.rail.token_account_setup.clone(),
+            intent: if anonymous {
+                RelayIntent::Anonymous {
+                    proof_inputs,
+                    owner_signature,
+                    token_account_setup,
+                }
+            } else {
+                RelayIntent::Confidential {
+                    proof_inputs,
+                    owner_signature,
+                    token_account_setup,
+                }
             },
         }))
     }
