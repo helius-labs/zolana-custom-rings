@@ -14,7 +14,9 @@ import type {
   RingMode,
   RingSourceSlot,
   RingRootEntry,
+  StorageRegistryRoot,
 } from "../../src/protocol/codec/ring-codecs.js";
+import { RING_POLICY_DISCRIMINATOR } from "../../src/protocol/codec/ring-codecs.js";
 import {
   LIST_IDS,
   encodeRule,
@@ -137,16 +139,44 @@ export function memberRegistryData(
       .u64(entry?.applied ?? 0n, "applied")
       .u64(entry?.slot ?? 0n, "slot");
   }
-  writer.bytes(input.policyHash ?? new Uint8Array(32));
-  const sources = input.sources ?? LIST_IDS.map(() => ({ listId: 0, registry: ZERO_ADDRESS }));
-  for (const source of sources)
-    writer.u8(source.listId, "listId").bytes(addressBytes(source.registry));
-  const table = input.table ?? { rules: [] };
-  counted(writer, table.rules.map(encodeRule), 16);
-  return writer
-    .u32(input.generation ?? 0, "generation")
-    .u64(0n, "generationSlot")
-    .finish();
+  return writePolicyFields(writer, input).finish();
+}
+
+/** A mirror copied from `registry`, newest root first. */
+export interface FixtureMirror {
+  readonly registry: Address;
+  readonly roots: readonly StorageRegistryRoot[];
+}
+
+/** Rust `RingPolicy` bytes. */
+export function ringPolicyData(
+  input: Readonly<{
+    bump: number;
+    records: Address;
+    policyHash?: Bytes32;
+    sources?: readonly RingSourceSlot[];
+    table?: RuleTable;
+    generation?: number;
+    ownRoots?: FixtureMirror;
+    curatorRoots?: FixtureMirror;
+  }>,
+): Uint8Array {
+  const writer = new Writer()
+    .u8(RING_POLICY_DISCRIMINATOR, "discriminator")
+    .u8(input.bump, "bump")
+    .bytes(addressBytes(input.records));
+  writePolicyFields(writer, input);
+  for (const mirror of [input.ownRoots, input.curatorRoots]) {
+    writer.bytes(addressBytes(mirror?.registry ?? ZERO_ADDRESS));
+    for (let slot = 0; slot < MEMBER_REGISTRY_ROOT_HISTORY; slot += 1) {
+      const root = mirror?.roots[slot];
+      writer
+        .bytes(root?.hash ?? new Uint8Array(32))
+        .u64(root?.revision ?? 0n, "revision")
+        .u64(root?.expiresAt ?? 0n, "expiresAt");
+    }
+  }
+  return writer.finish();
 }
 
 /** Rust `RecordQueue` bytes, every queued position's checkpoint at `position mod APPLY_BATCH`. */
@@ -173,6 +203,23 @@ export function recordQueueData(
     writer.bytes(checkpoint?.chain ?? new Uint8Array(32)).u64(checkpoint?.slot ?? 0n, "slot");
   }
   return writer.u64(input.nextApplySlot ?? 0n, "nextApplySlot").finish();
+}
+
+function writePolicyFields(
+  writer: Writer,
+  input: Readonly<{
+    policyHash?: Bytes32;
+    sources?: readonly RingSourceSlot[];
+    table?: RuleTable;
+    generation?: number;
+  }>,
+): Writer {
+  writer.bytes(input.policyHash ?? new Uint8Array(32));
+  const sources = input.sources ?? LIST_IDS.map(() => ({ listId: 0, registry: ZERO_ADDRESS }));
+  for (const source of sources)
+    writer.u8(source.listId, "listId").bytes(addressBytes(source.registry));
+  counted(writer, (input.table ?? { rules: [] }).rules.map(encodeRule), 16);
+  return writer.u32(input.generation ?? 0, "generation").u64(0n, "generationSlot");
 }
 
 function counted(writer: Writer, rows: readonly Uint8Array[], slots: number): void {

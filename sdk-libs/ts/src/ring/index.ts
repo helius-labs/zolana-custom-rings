@@ -9,7 +9,13 @@ export type {
   RingDepositPlaintext,
 } from "../protocol/codec/ring-deposit-plaintext.js";
 export { ringTransactAccounts } from "@heliuslabs/zolana/interface";
-export { RING_ERROR_CODES, RingError, RingProgramError, wrapRingError } from "../protocol/error.js";
+export {
+  RING_ERROR_CODES,
+  RingError,
+  RingProgramError,
+  StorageProgramError,
+  wrapRingError,
+} from "../protocol/error.js";
 export type { RingErrorCode, RingProgramErrorName } from "../protocol/error.js";
 
 export {
@@ -17,6 +23,7 @@ export {
   ringCoSignerAddress,
   ringConfigAddress,
   ringMemberRegistryAddress,
+  ringPolicyAddress,
   ringRecordQueueAddress,
 } from "../protocol/pda/index.js";
 export {
@@ -33,11 +40,14 @@ export {
   checkedCustomRingProof,
   decodeRingCoSigner,
   decodeRingMemberRegistry,
+  decodeRingPolicy,
   decodeRingProgramConfig,
   decodeRingRecordQueue,
   queueAdmitsMemberWrite,
   queueApplyDue,
   queueChainTail,
+  mirrorCurrentRoot,
+  mirrorRoot,
   queuePending,
   registryCurator,
   registryCuratorRoot,
@@ -48,17 +58,22 @@ export type {
   RingCoSigner,
   RingMemberRegistry,
   RingMode,
+  RingPolicy,
   RingProgramConfig,
   RingQueueCheckpoint,
   RingRecordQueue,
   RingRootEntry,
   RingSourceSlot,
+  RootMirror,
+  RootMirrorKind,
+  StorageRegistryRoot,
 } from "../protocol/codec/ring-codecs.js";
 export {
   BPF_LOADER_UPGRADEABLE_ID,
   fetchCuratorRegistry,
   fetchRingCoSignerRecord,
   fetchRingMemberRegistry,
+  fetchRingPolicy,
   fetchRingProgramConfig,
   fetchRingRecordQueue,
   requireActiveRing,
@@ -83,6 +98,7 @@ export {
   setRingPausedInstruction,
   setRingPolicyRulesInstruction,
   setRingPolicySourceInstruction,
+  syncRootsInstruction,
 } from "../operations/management/admin.js";
 export type {
   RingKind,

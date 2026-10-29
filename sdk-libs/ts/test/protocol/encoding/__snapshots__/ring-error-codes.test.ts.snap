@@ -140,5 +140,8 @@ exports[`ring error codes > pins the public codes and their order 1`] = `
   "RING_FIRST_CONTACT_REQUIRED",
   "RING_ANONYMOUS_SUBMISSION_REQUIRED",
   "RING_RECORD_UPDATE_INVALID",
+  "RING_POLICY_INVALID",
+  "RING_POLICY_MISSING",
+  "RING_ROOT_NOT_MIRRORED",
 ]
 `;

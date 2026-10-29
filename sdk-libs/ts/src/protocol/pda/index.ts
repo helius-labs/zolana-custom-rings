@@ -70,3 +70,11 @@ export function ringRecordQueuePda(ringProgramId: Address): Promise<ProgramDeriv
 export function ringRecordQueueAddress(ringProgramId: Address): Promise<Address> {
   return ringAddress(ringRecordQueuePda(ringProgramId));
 }
+
+export function ringPolicyPda(ringProgramId: Address): Promise<ProgramDerivedAddress> {
+  return ringPda(ringProgramId, encoder.encode("policy"));
+}
+
+export function ringPolicyAddress(ringProgramId: Address): Promise<Address> {
+  return ringAddress(ringPolicyPda(ringProgramId));
+}

@@ -57,9 +57,9 @@ export type RingRail = "confidential" | "anonymous" | "delegate";
 export interface PolicyProof {
   readonly splWithdrawalOwners: readonly Bytes32[];
   readonly proof: Uint8Array;
-  readonly ownRootIndex: number;
+  readonly ownRevision: bigint;
   /** Set exactly when a source names the curator registry. */
-  readonly curatorRootIndex?: number;
+  readonly curatorRevision?: bigint;
   /** Set exactly on the anonymous rail. */
   readonly senderCommitment?: Bytes32;
   /** One owner identity per output slot, empty on the anonymous rail. */
@@ -110,7 +110,7 @@ export interface RingTransactData {
   readonly auditProof: Uint8Array;
   /** Present exactly on a policy ring. */
   readonly policy?: PolicyProof;
-  readonly withdrawalExemption?: Readonly<{ proof: Uint8Array; rootIndex: number }>;
+  readonly withdrawalExemption?: Readonly<{ proof: Uint8Array; revision: bigint }>;
   readonly approvalRequired: boolean;
   readonly expiryUnixTs: number;
   readonly txViewingU: Bytes32;
@@ -367,6 +367,8 @@ interface FrameHeader {
   readonly flags: FrameFlags;
 }
 
+/** A storage revision, little endian u64. */
+export const REVISION_LENGTH = 8;
 /** `a ‖ b ‖ c` with `b` compressed, Rust `PlainGroth16Proof::SIZE`. */
 export const PLAIN_GROTH16_PROOF_LENGTH = 128;
 const VIEWING_PUBKEY_TAG = 4;
@@ -490,10 +492,10 @@ function readCompact(bytes: TransactReader, rail: RingRail, legacy = false): Rin
       })()
     : Object.freeze({ kind: "one" as const, context: readTreeContext(bytes) });
   const withdrawalExemption =
-    !legacy && bytes.remaining === CUSTOM_RING_PROOF_LENGTH + 1
+    !legacy && bytes.remaining === CUSTOM_RING_PROOF_LENGTH + REVISION_LENGTH
       ? Object.freeze({
           proof: bytes.bytes(CUSTOM_RING_PROOF_LENGTH, "withdrawalExemption.proof"),
-          rootIndex: bytes.u8("withdrawalExemption.rootIndex"),
+          revision: bytes.u64("withdrawalExemption.revision"),
         })
       : undefined;
   bytes.done();
@@ -529,8 +531,8 @@ function readPolicy(
   section: Readonly<{ curator: boolean; anonymous: boolean; recipientCount: number }>,
 ): PolicyProof {
   const proof = bytes.bytes(CUSTOM_RING_PROOF_LENGTH, "policy.proof");
-  const ownRootIndex = bytes.u8("policy.ownRootIndex");
-  const curatorRootIndex = section.curator ? bytes.u8("policy.curatorRootIndex") : undefined;
+  const ownRevision = bytes.u64("policy.ownRevision");
+  const curatorRevision = section.curator ? bytes.u64("policy.curatorRevision") : undefined;
   const senderCommitment = section.anonymous
     ? field32(bytes, "policy.senderCommitment")
     : undefined;
@@ -539,10 +541,10 @@ function readPolicy(
   );
   return Object.freeze({
     proof,
-    ownRootIndex,
+    ownRevision,
     splWithdrawalOwners: Object.freeze([]),
     recipients: Object.freeze(recipients),
-    ...(curatorRootIndex === undefined ? {} : { curatorRootIndex }),
+    ...(curatorRevision === undefined ? {} : { curatorRevision }),
     ...(senderCommitment === undefined ? {} : { senderCommitment }),
   });
 }
@@ -643,9 +645,9 @@ function writeCompact(data: RingTransactData): Uint8Array {
     .bytes(data.auditProof, CUSTOM_RING_PROOF_LENGTH, "auditProof");
   if (data.policy !== undefined) {
     out.bytes(data.policy.proof, CUSTOM_RING_PROOF_LENGTH, "policy.proof");
-    out.u8(data.policy.ownRootIndex, "policy.ownRootIndex");
-    if (data.policy.curatorRootIndex !== undefined)
-      out.u8(data.policy.curatorRootIndex, "policy.curatorRootIndex");
+    out.u64(data.policy.ownRevision, "policy.ownRevision");
+    if (data.policy.curatorRevision !== undefined)
+      out.u64(data.policy.curatorRevision, "policy.curatorRevision");
     if (data.policy.senderCommitment !== undefined)
       out.bytes(data.policy.senderCommitment, 32, "policy.senderCommitment");
     for (const recipient of data.policy.recipients) out.bytes(recipient, 32, "policy.recipient");
@@ -705,7 +707,7 @@ function writeCompact(data: RingTransactData): Uint8Array {
   if (data.withdrawalExemption !== undefined)
     out
       .bytes(data.withdrawalExemption.proof, CUSTOM_RING_PROOF_LENGTH, "withdrawalExemption.proof")
-      .u8(data.withdrawalExemption.rootIndex, "withdrawalExemption.rootIndex");
+      .u64(data.withdrawalExemption.revision, "withdrawalExemption.revision");
   return out.finish();
 }
 
@@ -750,7 +752,7 @@ function fits(output: RingOutput, layout: DisclosureLayout): boolean {
 function compactFlags(data: RingTransactData): number {
   const bits: readonly (readonly [boolean, number])[] = [
     [data.policy !== undefined, Flag.policy],
-    [data.policy?.curatorRootIndex !== undefined, Flag.curator],
+    [data.policy?.curatorRevision !== undefined, Flag.curator],
     [data.approvalRequired, Flag.approvalRequired],
     [data.inputTrees.kind === "two", Flag.secondTree],
   ];

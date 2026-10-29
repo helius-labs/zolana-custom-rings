@@ -31,6 +31,10 @@ import type {
   RingRecordPoolRequest,
   RingRecordReader,
   RingRegistryState,
+  StorageMemberOpenings,
+  StorageOpeningsRequest,
+  StorageRecordPool,
+  StorageRecordPoolRequest,
 } from "./ports.js";
 import { CustomRingProver } from "./prover/client.js";
 import { customRingProof } from "./prover/proof.js";
@@ -107,6 +111,20 @@ export class CustomRingClient extends ZolanaClient implements RingProver, RingRe
     context?: RequestContext,
   ): Promise<RingRecordPool> {
     return this.#ringIndexer.getRingRecordPool(request, context);
+  }
+
+  getStorageMemberOpenings(
+    request: StorageOpeningsRequest,
+    context?: RequestContext,
+  ): Promise<StorageMemberOpenings> {
+    return this.#ringIndexer.getStorageMemberOpenings(request, context);
+  }
+
+  getStorageRecordPool(
+    request: StorageRecordPoolRequest,
+    context?: RequestContext,
+  ): Promise<StorageRecordPool> {
+    return this.#ringIndexer.getStorageRecordPool(request, context);
   }
 
   getRingRecordQueue(

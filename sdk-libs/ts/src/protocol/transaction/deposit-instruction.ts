@@ -19,8 +19,9 @@ import {
   ringAuthAddress,
   ringCoSignerMetas,
   ringConfigAddress,
-  ringMemberRegistryAddress,
+  ringPolicyAddress,
 } from "../pda/index.js";
+import { REVISION_LENGTH } from "./transact.js";
 
 import {
   AUDITED_RING_DEPOSIT_TAG,
@@ -35,10 +36,10 @@ export interface RingDepositSpp {
   readonly accounts: readonly AccountMeta[];
 }
 
-/**
- * `AUDITED_DEPOSIT ‖ proof ‖ registry_root_index ‖ spp`, the accounts
- * `[config, registry?, co_signer?]` ahead of SPP's deposit list.
- */
+/** `AUDITED_DEPOSIT ‖ proof ‖ own_revision` ahead of the forwarded SPP deposit. */
+export const AUDITED_DEPOSIT_PREFIX_LENGTH = 1 + CUSTOM_RING_PROOF_LENGTH + REVISION_LENGTH;
+
+/** The accounts `[config, policy?, co_signer?]` ahead of SPP's deposit list. */
 export async function ringDepositInstruction(
   input: Readonly<{
     ringProgramId: Address;
@@ -46,29 +47,27 @@ export async function ringDepositInstruction(
     depositor: SignerAccount;
     deposits: readonly RingAssetDeposit[];
     proof: Uint8Array;
-    /** The registry history slot of the bound root, present exactly on a ring that escrows keys. */
-    registryRootIndex?: number;
+    /** The revision of the bound own root, present exactly on a ring that escrows keys or has a policy. */
+    ownRevision?: bigint;
     /** The supplied co-signer when a record covers deposits. */
     cosigner?: SignerAccount;
   }>,
 ): Promise<Instruction> {
-  const [spp, config, registry, cosigner] = await Promise.all([
+  const [spp, config, policy, cosigner] = await Promise.all([
     ringDepositSpp(input),
     ringConfigAddress(input.ringProgramId),
-    input.registryRootIndex === undefined
-      ? undefined
-      : ringMemberRegistryAddress(input.ringProgramId),
+    input.ownRevision === undefined ? undefined : ringPolicyAddress(input.ringProgramId),
     input.cosigner === undefined ? [] : ringCoSignerMetas(input.ringProgramId, input.cosigner),
   ]);
   const prefix = new Writer()
     .bytes(input.proof, CUSTOM_RING_PROOF_LENGTH, "deposit proof")
-    .u8(input.registryRootIndex ?? 0, "registryRootIndex")
+    .u64(input.ownRevision ?? 0n, "ownRevision")
     .finish();
   return instruction(
     tagged(AUDITED_RING_DEPOSIT_TAG, new Uint8Array([...prefix, ...spp.data])),
     [
       meta(config, false, false),
-      ...(registry === undefined ? [] : [meta(registry, false, false)]),
+      ...(policy === undefined ? [] : [meta(policy, false, false)]),
       ...cosigner,
       ...spp.accounts,
     ],

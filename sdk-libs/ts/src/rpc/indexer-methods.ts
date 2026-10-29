@@ -15,6 +15,10 @@ import {
   encodeRingMemberRecordsRequest,
   encodeRingMemberRegistryRootRequest,
   encodeRingRecordPoolRequest,
+  decodeStorageMemberOpenings,
+  decodeStorageRecordPool,
+  encodeStorageMemberOpeningsRequest,
+  encodeStorageRecordPoolRequest,
 } from "../protocol/indexer/indexer-codec.js";
 import type {
   RingApplyProofInputsRequest,
@@ -29,6 +33,10 @@ import type {
   RingRecordPoolResponse,
   RingRecordQueueResponse,
   RingRegistryStateResponse,
+  StorageMemberOpeningsRequest,
+  StorageMemberOpeningsResponse,
+  StorageRecordPoolRequest,
+  StorageRecordPoolResponse,
 } from "../protocol/indexer/indexer-types.js";
 
 export const getRingMemberRecordMethod: MethodDescriptor<
@@ -87,4 +95,20 @@ export const getRingApplyProofInputsMethod: MethodDescriptor<
   name: "getRingApplyProofInputs",
   encodeRequest: encodeRingApplyProofInputsRequest,
   decodeResponse: decodeRingApplyProofInputs,
+};
+export const getStorageMemberOpeningsMethod: MethodDescriptor<
+  StorageMemberOpeningsRequest,
+  StorageMemberOpeningsResponse
+> = {
+  name: "getStorageMemberOpenings",
+  encodeRequest: encodeStorageMemberOpeningsRequest,
+  decodeResponse: decodeStorageMemberOpenings,
+};
+export const getStorageRecordPoolMethod: MethodDescriptor<
+  StorageRecordPoolRequest,
+  StorageRecordPoolResponse
+> = {
+  name: "getStorageRecordPool",
+  encodeRequest: encodeStorageRecordPoolRequest,
+  decodeResponse: decodeStorageRecordPool,
 };

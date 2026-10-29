@@ -47,7 +47,7 @@ import {
   type RingApprovalRequest,
 } from "../../../src/protocol/transaction/intent.js";
 import { ringProofCircuit } from "../../../src/rpc/prover/ring.js";
-import { ringCoSignerAddress, ringMemberRegistryAddress } from "../../../src/protocol/pda/index.js";
+import { ringCoSignerAddress, ringPolicyAddress } from "../../../src/protocol/pda/index.js";
 import { ringCircuitType } from "../../../src/protocol/proof/proving-keys.js";
 import { RingAddress, RingPaymentRequest } from "../../../src/crypto/keys/ring-address.js";
 import { ringIdField, senderCommitment } from "../../../src/crypto/derivation/ring-stream.js";
@@ -59,7 +59,7 @@ import {
 } from "../../../src/operations/payments/anonymous.js";
 import {
   RING_COSIGN_TRANSFERS,
-  decodeRingMemberRegistry,
+  decodeRingPolicy,
 } from "../../../src/protocol/codec/ring-codecs.js";
 import {
   ListId,
@@ -1469,17 +1469,15 @@ describe("anonymous rail on a policy ring", () => {
     expect(policy).toMatchObject({ anonymous: true, sender: commitment, senderPkHash });
     const senderRecord = policy.ownPool.subjects[policy.senderEntry.own]?.recordIndex;
     expect(policy.ownPool.records[senderRecord ?? -1]?.member).toEqual(senderPkHash);
-    const registryAccount = fixture.accounts.get(
-      await ringMemberRegistryAddress(fixture.ringProgramId),
-    );
-    if (registryAccount === undefined) throw new Error("no registry");
+    const policyAccount = fixture.accounts.get(await ringPolicyAddress(fixture.ringProgramId));
+    if (policyAccount === undefined) throw new Error("no ring policy");
     const slots = publicSlots(call.proofInputs.externalData.interfaceTransfers);
     expect(policy.publicInputHash).toEqual(
       policyStatementHash({
         withdrawalHash: policyWithdrawalHash([]),
         key: { kind: "member", anonymous: true },
         privateTxHash: data.privateTxHash,
-        policyHash: decodeRingMemberRegistry(registryAccount.data).policyHash,
+        policyHash: decodeRingPolicy(policyAccount.data).policyHash,
         ringId: ringIdField(fixture.ringProgramId),
         approvalRequired: false,
         keyEscrow: false,
@@ -1498,7 +1496,7 @@ describe("anonymous rail on a policy ring", () => {
       data,
       prefix: [
         {
-          address: await ringMemberRegistryAddress(fixture.ringProgramId),
+          address: await ringPolicyAddress(fixture.ringProgramId),
           role: AccountRole.READONLY,
         },
       ],
@@ -1543,7 +1541,7 @@ describe("anonymous rail on a policy ring", () => {
       data,
       prefix: [
         {
-          address: await ringMemberRegistryAddress(fixture.ringProgramId),
+          address: await ringPolicyAddress(fixture.ringProgramId),
           role: AccountRole.READONLY,
         },
         {

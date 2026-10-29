@@ -36,7 +36,7 @@ import type {
   Signature,
 } from "@heliuslabs/zolana/interface";
 import { SOL_MINT } from "@heliuslabs/zolana/transaction";
-import { CUSTOM_RING_PROOF_LENGTH } from "../proof/custom-ring-proof.js";
+import { AUDITED_DEPOSIT_PREFIX_LENGTH } from "./deposit-instruction.js";
 import {
   AUDITED_RING_DEPOSIT_TAG,
   encodeRingDepositCapsule,
@@ -52,7 +52,7 @@ import {
   writeRingMergeDisclosure,
   type RingMergeDisclosure,
 } from "../../crypto/audit/merge-disclosure.js";
-import { RingTransactData, ringRailOf } from "./transact.js";
+import { REVISION_LENGTH, RingTransactData, ringRailOf } from "./transact.js";
 import { decompressG2, readMergeData, writeInterfaceTransfer } from "../codec/codecs.js";
 
 const base58Encoder = getBase58Encoder();
@@ -101,11 +101,12 @@ function confirmedMergeDisclosureOf(found: TrustedEvent): RingMergeDisclosure | 
     wrapper?.data[0] !== InstructionTag.ringMergeTransact
   )
     return undefined;
-  const request = new Reader(wrapper.data.subarray(2));
+  const request = new Reader(wrapper.data.subarray(MERGE_REQUEST_OFFSET));
   const ringDataHash = request.bytes(32, "merge.ringDataHash");
   const disclosure = readRingMergeDisclosure(request);
   if (disclosure === undefined) return undefined;
-  const prefix = 2 + 32 + writeRingMergeDisclosure(new Writer(), disclosure).finish().length;
+  const prefix =
+    MERGE_REQUEST_OFFSET + 32 + writeRingMergeDisclosure(new Writer(), disclosure).finish().length;
   const forwarded = found.source.data;
   if (
     !equalBytes(forwarded.subarray(1, 33), ringDataHash) ||
@@ -118,6 +119,8 @@ function confirmedMergeDisclosureOf(found: TrustedEvent): RingMergeDisclosure | 
   return disclosure;
 }
 
+/** `tag || own_revision` ahead of the ring merge request. */
+const MERGE_REQUEST_OFFSET = 1 + REVISION_LENGTH;
 /** `tag || ringDataHash` ahead of the forwarded SPP merge body. */
 const FORWARDED_MERGE_PREFIX = 1 + 32;
 /** `expiry_unix_ts u64 || proof.a` ahead of `proof.b`, Rust `MERGE_B_OFFSET`. */
@@ -181,7 +184,7 @@ export class ConfirmedDeposit {
       found.wrapper?.data[0] !== AUDITED_RING_DEPOSIT_TAG
     )
       return [];
-    if (!equalBytes(found.wrapper.data.subarray(CUSTOM_RING_PROOF_LENGTH + 2), found.source.data))
+    if (!equalBytes(found.wrapper.data.subarray(AUDITED_DEPOSIT_PREFIX_LENGTH), found.source.data))
       throw invalid("auditedDeposit");
     return ConfirmedDeposit.#decode(found.source.data);
   }

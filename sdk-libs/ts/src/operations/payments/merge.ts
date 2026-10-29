@@ -62,7 +62,7 @@ import {
   ringAuthAddress,
   ringCoSignerMetas,
   ringConfigAddress,
-  ringMemberRegistryAddress,
+  ringPolicyAddress,
 } from "../../protocol/pda/index.js";
 
 import { checkSignersHideOwner } from "./anonymous.js";
@@ -135,8 +135,8 @@ export function createRingMergeSubmission(
 }
 
 /**
- * `MERGE ‖ registry_root_index ‖ output_ring_data_hash ‖ disclosure ‖ body` with the body's
- * `proof.b` compressed, the accounts `[config, registry?, co_signer?]` ahead of SPP's merge list.
+ * `MERGE ‖ own_revision ‖ output_ring_data_hash ‖ disclosure ‖ body` with the body's
+ * `proof.b` compressed, the accounts `[config, policy?, co_signer?]` ahead of SPP's merge list.
  */
 export async function ringMergeInstruction(
   input: Readonly<{
@@ -147,17 +147,15 @@ export async function ringMergeInstruction(
     data: MergeTransactInstructionData;
     outputRingDataHash: Bytes32;
     disclosure: RingMergeDisclosure;
-    /** Key escrow rings only, the registry account then follows the config. */
-    registryRootIndex?: number;
+    /** Key escrow rings only, the policy account then follows the config. */
+    ownRevision?: bigint;
     /** The supplied co-signer when a record covers transfers. */
     cosigner?: SignerAccount;
   }>,
 ): Promise<Instruction> {
-  const [config, registry, auth, nullifiers, cosigner] = await Promise.all([
+  const [config, policy, auth, nullifiers, cosigner] = await Promise.all([
     ringConfigAddress(input.ringProgramId),
-    input.registryRootIndex === undefined
-      ? undefined
-      : ringMemberRegistryAddress(input.ringProgramId),
+    input.ownRevision === undefined ? undefined : ringPolicyAddress(input.ringProgramId),
     ringAuthAddress(input.ringProgramId),
     Promise.all(input.data.nullifiers.map((value) => nullifierPdaAddress(input.inputTree, value))),
     input.cosigner === undefined ? [] : ringCoSignerMetas(input.ringProgramId, input.cosigner),
@@ -167,7 +165,7 @@ export async function ringMergeInstruction(
     writeRingMergeDisclosure(
       new Writer()
         .u8(InstructionTag.ringMergeTransact, "instructionTag")
-        .u8(input.registryRootIndex ?? 0, "registryRootIndex")
+        .u64(input.ownRevision ?? 0n, "ownRevision")
         .bytes(input.outputRingDataHash, 32, "outputRingDataHash"),
       input.disclosure,
     )
@@ -177,7 +175,7 @@ export async function ringMergeInstruction(
       .finish(),
     [
       meta(config, false, false),
-      ...(registry === undefined ? [] : [meta(registry, false, false)]),
+      ...(policy === undefined ? [] : [meta(policy, false, false)]),
       ...cosigner,
       meta(input.inputTree, false, true),
       meta(input.outputTree, false, true),
@@ -288,7 +286,7 @@ async function buildRingMerge(
             // Rust `AnonymousRingDataNotZero` refuses ring data on an anonymous ring.
             outputRingDataHash: ZERO_32,
             disclosure,
-            ...(escrow === undefined ? {} : { registryRootIndex: escrow.index }),
+            ...(escrow === undefined ? {} : { ownRevision: escrow.root.revision }),
             ...(cosigner === undefined ? {} : { cosigner }),
           }),
         ],
@@ -339,7 +337,9 @@ async function buildRingMerge(
         prepared,
         slots: proofInputs.inputs.payload,
         spp: data,
-        ...(escrow === undefined ? {} : { escrow }),
+        ...(escrow === undefined
+          ? {}
+          : { escrow: { root: escrow.root.root, record: escrow.record, ctHash: escrow.ctHash } }),
       },
       context,
     );
@@ -349,10 +349,7 @@ async function buildRingMerge(
       lastValidBlockHeight: lifetime.lastValidBlockHeight,
       intentHash: planned,
       ringInstructionIndex: 0,
-      roots:
-        escrow === undefined
-          ? []
-          : [{ ringProgramId: params.ringProgramId, rootIndex: escrow.index, root: escrow.root }],
+      roots: escrow === undefined ? [] : [escrow.root],
     };
   } catch (cause) {
     if (retry.reservation !== undefined) params.wallet._releaseReservation(retry.reservation.id);

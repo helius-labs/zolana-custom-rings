@@ -19,12 +19,17 @@ import {
   getRingMemberRegistryRootMethod,
   getRingRecordPoolMethod,
   getRingRecordQueueMethod,
+  getStorageMemberOpeningsMethod,
+  getStorageRecordPoolMethod,
 } from "./indexer-methods.js";
 import type {
   RingMemberRecordView as WireRingMemberRecordView,
   RingMemberOpeningView as WireRingMemberOpeningView,
   RingRecordPathView as WireRingRecordPathView,
   RingRegistryRootView as WireRingRegistryRootView,
+  RingMemberOpeningsResponse as WireRingMemberOpenings,
+  RingRecordPoolResponse as WireRingRecordPool,
+  StorageRootView as WireStorageRootView,
 } from "../protocol/indexer/indexer-types.js";
 import {
   QUAD_ARITY,
@@ -50,6 +55,11 @@ import type {
   RingRegistryRoot,
   RingRegistryState,
   RingServedRecord,
+  StorageMemberOpenings,
+  StorageOpeningsRequest,
+  StorageRecordPool,
+  StorageRecordPoolRequest,
+  StorageRoot,
 } from "./ports.js";
 import { RingError, type RingErrorCode } from "../protocol/error.js";
 
@@ -178,29 +188,36 @@ export class RingIndexer implements RingRecordReader {
   ): Promise<RingMemberOpenings> {
     const method = "getRingMemberOpenings";
     try {
-      const expectedRoot = hash(request.expectedRoot);
+      const wire = openingsRequest(request);
       const response = await this.#api.call(
         getRingMemberOpeningsMethod,
-        {
-          ringProgramId: request.ringProgramId,
-          members: request.members.map((member) => hash(member)),
-          expectedRoot,
-        },
+        { ringProgramId: request.ringProgramId, ...wire },
         context,
       );
-      if (
-        response.root.root !== expectedRoot ||
-        response.openings.length !== request.members.length
-      )
-        throw new ClientError("CLIENT_INVALID_RPC_RESPONSE", { details: { method, path: "$" } });
       return Object.freeze({
-        context: response.context,
+        ...servedOpenings(response, wire, method),
         root: registryRoot(response.root),
-        openings: Object.freeze(
-          response.openings.map((opening, index) =>
-            memberOpening(opening, method, `openings[${String(index)}]`),
-          ),
-        ),
+      });
+    } catch (cause) {
+      throw ringIndexerError(cause, method);
+    }
+  }
+
+  async getStorageMemberOpenings(
+    request: StorageOpeningsRequest,
+    context?: RequestContext,
+  ): Promise<StorageMemberOpenings> {
+    const method = "getStorageMemberOpenings";
+    try {
+      const wire = openingsRequest(request);
+      const response = await this.#api.call(
+        getStorageMemberOpeningsMethod,
+        { registry: request.registry, ...wire },
+        context,
+      );
+      return Object.freeze({
+        ...servedOpenings(response, wire, method),
+        root: storageRoot(response.root),
       });
     } catch (cause) {
       throw ringIndexerError(cause, method);
@@ -213,35 +230,36 @@ export class RingIndexer implements RingRecordReader {
   ): Promise<RingRecordPool> {
     const method = "getRingRecordPool";
     try {
-      const expectedRoot = hash(request.expectedRoot);
+      const wire = { ...openingsRequest(request), openings: request.openings };
       const response = await this.#api.call(
         getRingRecordPoolMethod,
-        {
-          ringProgramId: request.ringProgramId,
-          members: request.members.map((member) => hash(member)),
-          expectedRoot,
-          openings: request.openings,
-        },
+        { ringProgramId: request.ringProgramId, ...wire },
         context,
       );
-      if (
-        response.root.root !== expectedRoot ||
-        response.records.length < 1 ||
-        response.records.length > request.openings ||
-        response.canopy.length !== QUAD_ARITY ** canopyLevels(request.openings) ||
-        response.subjects.length !== request.members.length
-      )
-        throw new ClientError("CLIENT_INVALID_RPC_RESPONSE", { details: { method, path: "$" } });
       return Object.freeze({
-        context: response.context,
+        ...servedPool(response, wire, method),
         root: registryRoot(response.root),
-        records: Object.freeze(
-          response.records.map((entry, index) =>
-            servedRecord(entry, method, `records[${String(index)}]`),
-          ),
-        ),
-        canopy: Object.freeze(response.canopy.map(hashBytes)),
-        subjects: Object.freeze([...response.subjects]),
+      });
+    } catch (cause) {
+      throw ringIndexerError(cause, method);
+    }
+  }
+
+  async getStorageRecordPool(
+    request: StorageRecordPoolRequest,
+    context?: RequestContext,
+  ): Promise<StorageRecordPool> {
+    const method = "getStorageRecordPool";
+    try {
+      const wire = { ...openingsRequest(request), openings: request.openings };
+      const response = await this.#api.call(
+        getStorageRecordPoolMethod,
+        { registry: request.registry, ...wire },
+        context,
+      );
+      return Object.freeze({
+        ...servedPool(response, wire, method),
+        root: storageRoot(response.root),
       });
     } catch (cause) {
       throw ringIndexerError(cause, method);
@@ -332,6 +350,69 @@ function memberRequest(request: RingMemberProofRequest) {
     member: hash(request.member),
     expectedRoot: hash(request.expectedRoot),
     expectedNextIndex: BigInt(request.expectedNextIndex),
+  });
+}
+
+function openingsRequest(
+  request: Readonly<{ members: readonly Bytes32[]; expectedRoot: Bytes32 }>,
+) {
+  return {
+    members: request.members.map((member) => hash(member)),
+    expectedRoot: hash(request.expectedRoot),
+  };
+}
+
+type OpeningsWire = ReturnType<typeof openingsRequest>;
+
+/** The served root is the expected one and every member has its opening. */
+function servedOpenings(
+  response: Omit<WireRingMemberOpenings, "root"> & Readonly<{ root: Readonly<{ root: Hash }> }>,
+  wire: OpeningsWire,
+  method: string,
+): Omit<RingMemberOpenings, "root"> {
+  if (response.root.root !== wire.expectedRoot || response.openings.length !== wire.members.length)
+    throw new ClientError("CLIENT_INVALID_RPC_RESPONSE", { details: { method, path: "$" } });
+  return {
+    context: response.context,
+    openings: Object.freeze(
+      response.openings.map((opening, index) =>
+        memberOpening(opening, method, `openings[${String(index)}]`),
+      ),
+    ),
+  };
+}
+
+/** The served root is the expected one and the pool fits the openings asked for. */
+function servedPool(
+  response: Omit<WireRingRecordPool, "root"> & Readonly<{ root: Readonly<{ root: Hash }> }>,
+  wire: OpeningsWire & Readonly<{ openings: number }>,
+  method: string,
+): Omit<RingRecordPool, "root"> {
+  if (
+    response.root.root !== wire.expectedRoot ||
+    response.records.length < 1 ||
+    response.records.length > wire.openings ||
+    response.canopy.length !== QUAD_ARITY ** canopyLevels(wire.openings) ||
+    response.subjects.length !== wire.members.length
+  )
+    throw new ClientError("CLIENT_INVALID_RPC_RESPONSE", { details: { method, path: "$" } });
+  return {
+    context: response.context,
+    records: Object.freeze(
+      response.records.map((entry, index) =>
+        servedRecord(entry, method, `records[${String(index)}]`),
+      ),
+    ),
+    canopy: Object.freeze(response.canopy.map(hashBytes)),
+    subjects: Object.freeze([...response.subjects]),
+  };
+}
+
+function storageRoot(root: WireStorageRootView): StorageRoot {
+  return Object.freeze({
+    root: hashBytes(root.root),
+    revision: root.revision,
+    nextIndex: Number(root.nextIndex),
   });
 }
 

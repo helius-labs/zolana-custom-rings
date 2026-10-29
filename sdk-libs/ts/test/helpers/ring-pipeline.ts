@@ -3,9 +3,9 @@ import { AccountRole, getAddressDecoder, type Address, type Instruction } from "
 import { expect } from "vitest";
 
 import {
-  type RingMemberOpenings,
-  type RingRecordPool,
   type RingRecordReader,
+  type StorageMemberOpenings,
+  type StorageRecordPool,
 } from "../../src/rpc/ports.js";
 import type {
   ChainReader,
@@ -57,7 +57,7 @@ import {
   ringAuthAddress,
   ringConfigAddress,
   ringConfigPda,
-  ringMemberRegistryPda,
+  ringPolicyPda,
 } from "../../src/protocol/pda/index.js";
 import { openTransactionViewingSecret } from "../../src/crypto/audit/audit.js";
 import { openRingDisclosure, type RingDisclosure } from "../../src/crypto/audit/ring-disclosure.js";
@@ -91,9 +91,9 @@ import {
 } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { recordTree, type FixtureRecord } from "./member-registry.js";
 import {
-  memberRegistryData,
   ownedAccount,
   ringCoSignerAccount,
+  ringPolicyData,
   ringProgramConfigData,
   sppRingRegistration,
 } from "./ring-accounts.js";
@@ -105,6 +105,9 @@ import { x25519FromU } from "../../src/crypto/keys/x25519.js";
 
 export const TREE_ID = DEFAULT_TREE_ID;
 export const TREE = treeAddress(TREE_ID);
+/** Distinct, a swapped own and curator revision fails the asserts. */
+export const OWN_REVISION = 7n;
+export const CURATOR_REVISION = 11n;
 const addressDecoder = getAddressDecoder();
 
 export function randomAddress(): Address {
@@ -188,9 +191,7 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
   const auditor = X25519Keypair.generate();
   const authority = randomAddress();
   const accounts = new Map<Address, RpcAccount>();
-  const trees = new Map<Address, ReturnType<typeof recordTree>>();
   const ownTree = recordTree(options.records ?? []);
-  trees.set(ringProgramId, ownTree);
   const hasPolicy = options.table !== undefined;
   const [configAddress, configBump] = await ringConfigPda(ringProgramId);
   accounts.set(
@@ -216,27 +217,18 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
   accounts.set(ringAuth, registration);
   if (options.coSigner !== undefined)
     accounts.set(...(await ringCoSignerAccount(ringProgramId, options.coSigner)));
-  let curatorRing: Address | undefined;
+  const ownRegistry = randomAddress();
+  const trees = new Map<
+    Address,
+    Readonly<{ tree: ReturnType<typeof recordTree>; revision: bigint }>
+  >();
+  trees.set(ownRegistry, { tree: ownTree, revision: OWN_REVISION });
   let curatorRegistry: Address | undefined;
   let curatorTree: ReturnType<typeof recordTree> | undefined;
   if (options.curator !== undefined) {
-    curatorRing = randomAddress();
-    const tree = recordTree(options.curator.records);
-    curatorTree = tree;
-    trees.set(curatorRing, tree);
-    const [address, bump] = await ringMemberRegistryPda(curatorRing);
-    curatorRegistry = address;
-    accounts.set(
-      address,
-      ownedAccount(
-        curatorRing,
-        memberRegistryData({
-          bump,
-          history: [{ root: tree.root, applied: 0n, slot: 0n }],
-          nextIndex: tree.nextIndex,
-        }),
-      ),
-    );
+    curatorRegistry = randomAddress();
+    curatorTree = recordTree(options.curator.records);
+    trees.set(curatorRegistry, { tree: curatorTree, revision: CURATOR_REVISION });
   }
   if (options.table !== undefined || options.records !== undefined) {
     const table = options.table ?? buildRuleTable({ rules: [] });
@@ -253,19 +245,30 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
           }
         : { listId: 0, registry: ZERO_ADDRESS },
     );
-    const [address, bump] = await ringMemberRegistryPda(ringProgramId);
+    const [address, bump] = await ringPolicyPda(ringProgramId);
     accounts.set(
       address,
       ownedAccount(
         ringProgramId,
-        memberRegistryData({
+        ringPolicyData({
           bump,
-          history: [{ root: ownTree.root, applied: 0n, slot: 0n }],
-          nextIndex: ownTree.nextIndex,
+          records: ownRegistry,
           policyHash: policyTableHash(table, policySourceOwners(sources)),
           sources,
           table,
           generation: 1,
+          ownRoots: {
+            registry: ownRegistry,
+            roots: [{ hash: ownTree.root, revision: OWN_REVISION, expiresAt: 0n }],
+          },
+          ...(curatorRegistry === undefined || curatorTree === undefined
+            ? {}
+            : {
+                curatorRoots: {
+                  registry: curatorRegistry,
+                  roots: [{ hash: curatorTree.root, revision: CURATOR_REVISION, expiresAt: 0n }],
+                },
+              }),
         }),
       ),
     );
@@ -275,28 +278,28 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
   const ringRequests: RingProofRequest[] = [];
   const sppCalls: SppCall[] = [];
   let proofs = 0;
-  const treeAt = (ringProgramId: Address, expectedRoot: Bytes32) => {
-    const tree = trees.get(ringProgramId);
-    if (tree === undefined || hex(tree.root) !== hex(expectedRoot))
+  const treeAt = (registry: Address, expectedRoot: Bytes32) => {
+    const served = trees.get(registry);
+    if (served === undefined || hex(served.tree.root) !== hex(expectedRoot))
       throw new Error("openings under an unknown root");
-    return tree;
+    return served;
   };
   const reader: Pick<ChainReader, "getAccount"> &
-    Pick<RingRecordReader, "getRingMemberOpenings" | "getRingRecordPool"> = {
+    Pick<RingRecordReader, "getStorageMemberOpenings" | "getStorageRecordPool"> = {
     getAccount: async (address) => accounts.get(address),
-    getRingMemberOpenings: async (request): Promise<RingMemberOpenings> => {
-      const tree = treeAt(request.ringProgramId, request.expectedRoot);
+    getStorageMemberOpenings: async (request): Promise<StorageMemberOpenings> => {
+      const { tree, revision } = treeAt(request.registry, request.expectedRoot);
       return {
         context,
-        root: { root: tree.root, rootIndex: 0, applied: 0n, nextIndex: tree.nextIndex },
+        root: { root: tree.root, revision, nextIndex: tree.nextIndex },
         openings: request.members.map((member) => tree.opening(member)),
       };
     },
-    getRingRecordPool: async (request): Promise<RingRecordPool> => {
-      const tree = treeAt(request.ringProgramId, request.expectedRoot);
+    getStorageRecordPool: async (request): Promise<StorageRecordPool> => {
+      const { tree, revision } = treeAt(request.registry, request.expectedRoot);
       return {
         context,
-        root: { root: tree.root, rootIndex: 0, applied: 0n, nextIndex: tree.nextIndex },
+        root: { root: tree.root, revision, nextIndex: tree.nextIndex },
         ...tree.pool(request.members, request.openings),
       };
     },
@@ -396,7 +399,7 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
     sppCalls,
     ownTree,
     ...(options.coSigner === undefined ? {} : { coSigner: options.coSigner.signer }),
-    ...(curatorRing === undefined ? {} : { curatorRing }),
+    ownRegistry,
     ...(curatorRegistry === undefined ? {} : { curatorRegistry }),
     ...(curatorTree === undefined ? {} : { curatorTree }),
   };
@@ -496,7 +499,7 @@ export async function checkAccounts(
   expected: Readonly<{
     fixture: Fixture;
     data: RingTransactData;
-    /** After the config, the registry, curator, co-signer, delegate and anchor tree in order. */
+    /** After the config, the policy, co-signer, delegate and anchor tree in order. */
     prefix: readonly AccountEntry[];
     payer: Address;
     ownerSigners?: readonly Address[];

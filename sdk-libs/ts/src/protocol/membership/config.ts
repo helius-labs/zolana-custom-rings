@@ -9,16 +9,19 @@ import {
   ringCoSignerPda,
   ringConfigPda,
   ringMemberRegistryPda,
+  ringPolicyPda,
   ringRecordQueuePda,
 } from "../pda/index.js";
 
 import {
   decodeRingCoSigner,
   decodeRingMemberRegistry,
+  decodeRingPolicy,
   decodeRingProgramConfig,
   decodeRingRecordQueue,
   type RingCoSigner,
   type RingMemberRegistry,
+  type RingPolicy,
   type RingProgramConfig,
   type RingRecordQueue,
 } from "../codec/ring-codecs.js";
@@ -62,6 +65,19 @@ export function fetchRingMemberRegistry(
     decode: decodeRingMemberRegistry,
     missing: "RING_MEMBER_REGISTRY_MISSING",
     invalid: "RING_MEMBER_REGISTRY_INVALID",
+  });
+}
+
+export function fetchRingPolicy(
+  client: AccountReader,
+  ringProgramId: Address,
+  context?: RequestContext,
+): Promise<RingPolicy> {
+  return readRingAccount(client, ringProgramId, context, {
+    pda: ringPolicyPda,
+    decode: decodeRingPolicy,
+    missing: "RING_POLICY_MISSING",
+    invalid: "RING_POLICY_INVALID",
   });
 }
 

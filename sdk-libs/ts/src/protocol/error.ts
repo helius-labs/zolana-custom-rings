@@ -137,6 +137,9 @@ export const RING_ERROR_CODES = [
   "RING_FIRST_CONTACT_REQUIRED",
   "RING_ANONYMOUS_SUBMISSION_REQUIRED",
   "RING_RECORD_UPDATE_INVALID",
+  "RING_POLICY_INVALID",
+  "RING_POLICY_MISSING",
+  "RING_ROOT_NOT_MIRRORED",
 ] as const;
 import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/zolana/internal";
 import type { ErrorEnvelope } from "@heliuslabs/zolana";
@@ -253,6 +256,15 @@ export const RingProgramError = Object.freeze({
 } as const);
 
 export type RingProgramErrorName = keyof typeof RingProgramError;
+
+/** Rust `StorageError`, a mirror refuses a root with the code its registry would. */
+export const StorageProgramError = Object.freeze({
+  invalidRegistry: 9000,
+  unauthorized: 9001,
+  revisionChanged: 9002,
+  rootExpired: 9003,
+  historyFull: 9004,
+} as const);
 
 export class RingError extends Error {
   readonly code: RingErrorCode;
