@@ -4,7 +4,9 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use custom_ring_interface::{MemberRegistry, QueueEntry, RecordQueue, ROOT_HISTORY};
+use custom_ring_interface::{
+    storage::StorageRegistry, MemberRegistry, QueueEntry, RecordQueue, ROOT_HISTORY,
+};
 use sea_orm::{
     AccessMode, ConnectionTrait, DatabaseBackend, DatabaseConnection, DatabaseTransaction,
     IsolationLevel, QueryResult, Statement, TransactionTrait, Value,
@@ -17,7 +19,7 @@ use zolana_ring_indexer::{
     tree::{IndexedRecord, MemberRecord, NodePosition},
 };
 
-use crate::block::BlockMetadata;
+use crate::{block::BlockMetadata, indexer::Quarantine};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct RegistryState {
@@ -64,6 +66,20 @@ impl HistoryRoot {
             history_index: index,
         }
     }
+
+    pub fn tree(&self) -> TreeVersion {
+        TreeVersion {
+            version: self.applied,
+            next_index: self.next_index,
+        }
+    }
+}
+
+/// A read takes each row's newest version at or below `version`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TreeVersion {
+    pub version: u64,
+    pub next_index: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,11 +144,14 @@ pub(crate) struct Undo {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(crate) struct BlockUndo {
     pub records: Vec<Undo>,
+    #[serde(default)]
+    pub storage: Vec<StorageUndo>,
 }
 
 impl BlockUndo {
     pub fn extend(&mut self, other: Self) {
         self.records.extend(other.records);
+        self.storage.extend(other.storage);
     }
 }
 
@@ -153,6 +172,50 @@ pub(crate) struct PendingRing {
     /// Kept past the TTL without another account read.
     #[serde(default)]
     pub registry_seen: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct StorageState {
+    pub registry: [u8; 32],
+    #[serde(
+        serialize_with = "account_image::serialize",
+        deserialize_with = "account_image::storage"
+    )]
+    pub account: Box<StorageRegistry>,
+    /// Cleared only by a rollback.
+    pub fault: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StorageRoot {
+    pub root: [u8; 32],
+    pub revision: u64,
+    pub next_index: u64,
+}
+
+impl StorageRoot {
+    pub fn current(account: &StorageRegistry) -> Self {
+        let current = account.roots[0];
+        Self {
+            root: current.hash,
+            revision: current.revision.value(),
+            next_index: account.next_index().into(),
+        }
+    }
+
+    pub fn tree(&self) -> TreeVersion {
+        TreeVersion {
+            version: self.revision,
+            next_index: self.next_index,
+        }
+    }
+}
+
+/// Rows of one storage registry newer than `before`, `None` for a registry the block created.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct StorageUndo {
+    pub registry: [u8; 32],
+    pub before: Option<StorageState>,
 }
 
 /// Every table a ring's records project into, keyed by `program` first.
@@ -282,6 +345,9 @@ pub(crate) async fn rollback(tx: &DatabaseTransaction, cursor: &mut RingCursor) 
     for undo in journal.undo.records.iter().rev() {
         RegistryStore::new(tx, undo.program).restore(undo).await?;
     }
+    for undo in journal.undo.storage.iter().rev() {
+        StorageStore::new(tx, undo.registry).restore(undo).await?;
+    }
     // Partial replay must rewind with the block that advanced it.
     for mut candidate in pending(tx).await? {
         if candidate
@@ -323,27 +389,6 @@ impl<'c, C: ConnectionTrait> RegistryStore<'c, C> {
         let sql = "INSERT INTO ring_registries(program,state) VALUES($1,$2) \
                    ON CONFLICT(program) DO UPDATE SET state=excluded.state";
         self.exec(sql, vec![json(value)?]).await
-    }
-
-    /// Stops the ring's projection, a rollback of the block resumes it.
-    pub async fn quarantine(&self, before: RegistryState, reason: String) -> Result<Undo> {
-        log::error!(
-            "ring {} stopped projecting its member registry ({reason})",
-            Address::new_from_array(self.program)
-        );
-        self.save_state(&RegistryState {
-            fault: Some(reason),
-            ..before.clone()
-        })
-        .await?;
-        Ok(self.undo(Some(before)))
-    }
-
-    pub fn undo(&self, before: Option<RegistryState>) -> Undo {
-        Undo {
-            program: self.program,
-            before,
-        }
     }
 
     pub async fn root(&self, applied: u64) -> Result<Option<HistoryRoot>> {
@@ -611,6 +656,136 @@ impl<'c, C: ConnectionTrait> RegistryStore<'c, C> {
     }
 }
 
+impl<C: ConnectionTrait> Quarantine for RegistryStore<'_, C> {
+    type State = RegistryState;
+    type Undo = Undo;
+
+    fn undo(&self, before: Option<RegistryState>) -> Undo {
+        Undo {
+            program: self.program,
+            before,
+        }
+    }
+
+    /// Stops the ring's projection, a rollback of the block resumes it.
+    async fn quarantine(&self, before: RegistryState, reason: String) -> Result<Undo> {
+        log::error!(
+            "ring {} stopped projecting its member registry ({reason})",
+            Address::new_from_array(self.program)
+        );
+        self.save_state(&RegistryState {
+            fault: Some(reason),
+            ..before.clone()
+        })
+        .await?;
+        Ok(self.undo(Some(before)))
+    }
+}
+
+/// Tree rows share the ring record tables under the registry address, versioned by revision.
+pub(crate) struct StorageStore<'c, C> {
+    tree: RegistryStore<'c, C>,
+}
+
+impl<'c, C: ConnectionTrait> StorageStore<'c, C> {
+    pub fn new(conn: &'c C, registry: [u8; 32]) -> Self {
+        Self {
+            tree: RegistryStore::new(conn, registry),
+        }
+    }
+
+    pub fn tree(&self) -> &RegistryStore<'c, C> {
+        &self.tree
+    }
+
+    pub async fn state(&self) -> Result<Option<StorageState>> {
+        let sql = "SELECT state FROM storage_registries WHERE registry=$1";
+        let row = self.tree.query_one(sql, vec![]).await?;
+        row.as_ref().map(stored_state).transpose()
+    }
+
+    pub async fn save_state(&self, value: &StorageState) -> Result<()> {
+        let sql = "INSERT INTO storage_registries(registry,state) VALUES($1,$2) \
+                   ON CONFLICT(registry) DO UPDATE SET state=excluded.state";
+        self.tree.exec(sql, vec![json(value)?]).await
+    }
+
+    pub async fn root(&self, revision: u64) -> Result<Option<StorageRoot>> {
+        let sql = "SELECT root, revision, next_index FROM storage_roots \
+                   WHERE registry=$1 AND revision=$2";
+        let row = self.tree.query_one(sql, vec![int(revision)?]).await?;
+        row.as_ref()
+            .map(|row| {
+                Ok(StorageRoot {
+                    root: field(row, "root")?,
+                    revision: uint(row, "revision")?,
+                    next_index: uint(row, "next_index")?,
+                })
+            })
+            .transpose()
+    }
+
+    pub async fn save_root(&self, root: &StorageRoot) -> Result<()> {
+        let sql = "INSERT INTO storage_roots(registry,revision,root,next_index) \
+                   VALUES($1,$2,$3,$4)";
+        let values = vec![
+            int(root.revision)?,
+            bytes(&root.root),
+            int(root.next_index)?,
+        ];
+        self.tree.exec(sql, values).await
+    }
+
+    async fn restore(&self, undo: &StorageUndo) -> Result<()> {
+        let Some(before) = &undo.before else {
+            for sql in [
+                "DELETE FROM ring_records WHERE program=$1",
+                "DELETE FROM ring_record_nodes WHERE program=$1",
+                "DELETE FROM storage_roots WHERE registry=$1",
+                "DELETE FROM storage_registries WHERE registry=$1",
+            ] {
+                self.tree.exec(sql, vec![]).await?;
+            }
+            return Ok(());
+        };
+        let revision = vec![int(StorageRoot::current(&before.account).revision)?];
+        for sql in [
+            "DELETE FROM ring_records WHERE program=$1 AND applied>$2",
+            "DELETE FROM ring_record_nodes WHERE program=$1 AND applied>$2",
+            "DELETE FROM storage_roots WHERE registry=$1 AND revision>$2",
+        ] {
+            self.tree.exec(sql, revision.clone()).await?;
+        }
+        self.save_state(before).await
+    }
+}
+
+impl<C: ConnectionTrait> Quarantine for StorageStore<'_, C> {
+    type State = StorageState;
+    type Undo = StorageUndo;
+
+    fn undo(&self, before: Option<StorageState>) -> StorageUndo {
+        StorageUndo {
+            registry: self.tree.program,
+            before,
+        }
+    }
+
+    /// Stops the registry's projection, a rollback of the block resumes it.
+    async fn quarantine(&self, before: StorageState, reason: String) -> Result<StorageUndo> {
+        log::error!(
+            "storage registry {} stopped projecting ({reason})",
+            Address::new_from_array(self.tree.program)
+        );
+        self.save_state(&StorageState {
+            fault: Some(reason),
+            ..before.clone()
+        })
+        .await?;
+        Ok(self.undo(Some(before)))
+    }
+}
+
 fn history_root(row: &QueryResult) -> Result<HistoryRoot> {
     Ok(HistoryRoot {
         root: field(row, "root")?,
@@ -722,11 +897,12 @@ fn stored_state<T: DeserializeOwned>(row: &QueryResult) -> Result<T> {
 mod account_image {
     use std::ops::Deref;
 
-    use custom_ring_interface::RingAccount;
+    use bytemuck::Pod;
+    use custom_ring_interface::{storage::StorageRegistry, RingAccount};
     use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
     use spr_indexer_api::Base64String;
 
-    pub fn serialize<S: Serializer, A: Deref<Target = T>, T: RingAccount>(
+    pub fn serialize<S: Serializer, A: Deref<Target = T>, T: Pod>(
         value: &A,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
@@ -736,8 +912,21 @@ mod account_image {
     pub fn deserialize<'de, D: Deserializer<'de>, T: RingAccount>(
         deserializer: D,
     ) -> Result<Box<T>, D::Error> {
+        decode(deserializer, T::from_data)
+    }
+
+    pub fn storage<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Box<StorageRegistry>, D::Error> {
+        decode(deserializer, StorageRegistry::from_data)
+    }
+
+    fn decode<'de, D: Deserializer<'de>, T: Pod>(
+        deserializer: D,
+        checked: fn(&[u8]) -> Option<&T>,
+    ) -> Result<Box<T>, D::Error> {
         let Base64String(bytes) = Base64String::deserialize(deserializer)?;
-        T::from_data(&bytes)
+        checked(&bytes)
             .map(|account| Box::new(*account))
             .ok_or_else(|| D::Error::custom("invalid account image"))
     }

@@ -13,7 +13,7 @@ use zolana_ring_indexer::{
 
 use crate::{
     indexer::{fault, from_storage, ApplyError},
-    storage::{HistoryRoot, RegistryState, RegistryStore, StoredEntry, StoredRecord},
+    storage::{HistoryRoot, RegistryState, RegistryStore, StoredEntry, StoredRecord, TreeVersion},
 };
 
 /// `stored` keeps the sealed keys the tree does not hold.
@@ -22,8 +22,8 @@ pub(crate) struct LoadedRegistry {
     pub stored: BTreeMap<[u8; 32], StoredRecord>,
 }
 
-pub(crate) struct TreeRead<'r> {
-    pub root: &'r HistoryRoot,
+pub(crate) struct TreeRead {
+    pub at: TreeVersion,
     pub records: RecordRead,
     /// Empty leaves past `next_index` the read loads for new records.
     pub inserts: u64,
@@ -36,11 +36,11 @@ pub(crate) enum RecordRead {
     Leaves(Vec<StoredRecord>),
 }
 
-impl<'r> TreeRead<'r> {
+impl TreeRead {
     /// Reads for applying `entries`, each entry may insert a record.
-    pub fn batch(root: &'r HistoryRoot, entries: &[QueueEntry]) -> Self {
+    pub fn batch(at: TreeVersion, entries: &[QueueEntry]) -> Self {
         Self {
-            root,
+            at,
             records: RecordRead::Members(entries.iter().map(|entry| entry.member).collect()),
             inserts: entries.len() as u64,
             canopy: None,
@@ -51,7 +51,7 @@ impl<'r> TreeRead<'r> {
         self,
         store: &RegistryStore<'_, C>,
     ) -> anyhow::Result<LoadedRegistry> {
-        let applied = self.root.applied;
+        let applied = self.at.version;
         let mut reads = Vec::new();
         let mut stored = BTreeMap::new();
         match self.records {
@@ -81,7 +81,7 @@ impl<'r> TreeRead<'r> {
                 }
             }
         }
-        let next_index = self.root.next_index;
+        let next_index = self.at.next_index;
         let appended = next_index..(next_index + self.inserts).min(MEMBER_REGISTRY_CAPACITY);
         let leaves = stored.values().map(|record| record.record.index);
         let mut keys = node_keys(leaves.chain(appended))?;
@@ -116,6 +116,14 @@ pub(crate) async fn create<C: ConnectionTrait>(
     store: &RegistryStore<'_, C>,
     state: &RegistryState,
 ) -> anyhow::Result<()> {
+    plant_tree(store).await?;
+    store.save_root(&HistoryRoot::newest(state)).await?;
+    store.save_state(state).await
+}
+
+pub(crate) async fn plant_tree<C: ConnectionTrait>(
+    store: &RegistryStore<'_, C>,
+) -> anyhow::Result<()> {
     let rows = WrittenRows::fresh()?;
     let records = rows
         .records
@@ -126,9 +134,7 @@ pub(crate) async fn create<C: ConnectionTrait>(
         })
         .collect::<Vec<_>>();
     store.save_records(&records, 0).await?;
-    store.save_nodes(&rows.nodes, 0).await?;
-    store.save_root(&HistoryRoot::newest(state)).await?;
-    store.save_state(state).await
+    store.save_nodes(&rows.nodes, 0).await
 }
 
 pub(crate) struct Projection<'p, 'c, C> {
@@ -205,7 +211,7 @@ impl<C: ConnectionTrait> Projection<'_, '_, C> {
             .map_err(from_storage)?;
         let entries = rows.iter().map(|row| row.write.entry).collect::<Vec<_>>();
         let base = HistoryRoot::newest(self.state);
-        let loaded = TreeRead::batch(&base, &entries)
+        let loaded = TreeRead::batch(base.tree(), &entries)
             .load(self.store)
             .await
             .map_err(from_storage)?;

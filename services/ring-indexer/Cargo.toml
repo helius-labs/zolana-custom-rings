@@ -45,9 +45,11 @@ spr-interface = { workspace = true }
 zolana-ring-indexer = { workspace = true }
 zolana-ring-policy = { workspace = true }
 spr-rpc-http = { workspace = true }
+storage-program = { workspace = true }
 
 [dev-dependencies]
 base64 = { workspace = true }
+custom-ring-sdk = { workspace = true }
 hex = { workspace = true }
 hyper-util = { workspace = true }
 zolana-ring-member-registry = { workspace = true }

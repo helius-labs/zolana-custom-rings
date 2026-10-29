@@ -85,14 +85,17 @@ impl MigrationTrait for Migration {
     }
 }
 
-fn blob(manager: &SchemaManager<'_>) -> &'static str {
+pub(super) fn blob(manager: &SchemaManager<'_>) -> &'static str {
     match manager.get_database_backend() {
         sea_orm::DatabaseBackend::Postgres => "BYTEA",
         _ => "BLOB",
     }
 }
 
-async fn execute(manager: &SchemaManager<'_>, statements: Vec<String>) -> Result<(), DbErr> {
+pub(super) async fn execute(
+    manager: &SchemaManager<'_>,
+    statements: Vec<String>,
+) -> Result<(), DbErr> {
     for sql in statements {
         manager.get_connection().execute_unprepared(&sql).await?;
     }
