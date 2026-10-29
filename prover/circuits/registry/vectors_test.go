@@ -25,7 +25,7 @@ func TestApplyRecordsMatchesRustVectors(t *testing.T) {
 			chain := app.ChainStart.Int
 			for i, q := range queued {
 				entries[i] = q.Entry()
-				hash := entryHash(t, entries[i])
+				hash := entries[i].Hash(t)
 				chain = ringtest.MustPoseidonHash(t, chain, hash)
 				if hash.Cmp(q.EntryHash.Int) != 0 || chain.Cmp(q.Chain.Int) != 0 {
 					t.Fatalf("entry %d hash %x chain %x, Rust %x %x", i, hash, chain, q.EntryHash.Int, q.Chain.Int)

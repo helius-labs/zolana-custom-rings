@@ -116,22 +116,22 @@ func (v quadPath) flat() []Field {
 }
 
 func (v recordView) request() any {
-	return RecordOpening{Next: v.Next, Lists: v.Lists, EscrowKey: v.EscrowKey, MintPolicy: v.MintPolicy, WithdrawalThreshold: v.WithdrawalThreshold, Index: v.Path.Index, Path: v.Path.flat()}
+	return RecordOpening{Next: v.Next, Lists: v.Lists, EscrowKey: v.EscrowKey, MintPolicy: v.MintPolicy, WithdrawalThreshold: v.WithdrawalThreshold, AssetLimits: v.AssetLimits, Index: v.Path.Index, Path: v.Path.flat()}
 }
 
 func (v memberView) request() any {
 	return MemberOpening{
 		Present:       v.Present,
-		RecordOpening: RecordOpening{Next: v.Next, Lists: v.Lists, EscrowKey: v.EscrowKey, MintPolicy: v.MintPolicy, WithdrawalThreshold: v.WithdrawalThreshold, Index: v.Path.Index, Path: v.Path.flat()},
-		LowMember:     v.LowMember, LowNext: v.LowNext, LowLists: v.LowLists, LowEscrow: v.LowEscrow, LowMintPolicy: v.LowMintPolicy, LowWithdrawalThreshold: v.LowWithdrawalThreshold,
+		RecordOpening: RecordOpening{Next: v.Next, Lists: v.Lists, EscrowKey: v.EscrowKey, MintPolicy: v.MintPolicy, WithdrawalThreshold: v.WithdrawalThreshold, AssetLimits: v.AssetLimits, Index: v.Path.Index, Path: v.Path.flat()},
+		LowMember:     v.LowMember, LowNext: v.LowNext, LowLists: v.LowLists, LowEscrow: v.LowEscrow, LowMintPolicy: v.LowMintPolicy, LowWithdrawalThreshold: v.LowWithdrawalThreshold, LowAssetLimits: v.LowAssetLimits,
 	}
 }
 
 func (v writeView) request() any {
 	return RecordWrite{
-		Entry: v.Entry, Exists: v.Exists, OldNext: v.OldNext, OldLists: v.OldLists, OldEscrow: v.OldEscrow, OldMintPolicy: v.OldMintPolicy, OldWithdrawalThreshold: v.OldWithdrawalThreshold,
+		Entry: v.Entry, Exists: v.Exists, OldNext: v.OldNext, OldLists: v.OldLists, OldEscrow: v.OldEscrow, OldMintPolicy: v.OldMintPolicy, OldWithdrawalThreshold: v.OldWithdrawalThreshold, OldAssetLimits: v.OldAssetLimits,
 		Index: v.Slot.Index, Path: v.Slot.flat(),
-		LowMember: v.LowMember, LowNext: v.LowNext, LowLists: v.LowLists, LowEscrow: v.LowEscrow, LowMintPolicy: v.LowMintPolicy, LowWithdrawalThreshold: v.LowWithdrawalThreshold,
+		LowMember: v.LowMember, LowNext: v.LowNext, LowLists: v.LowLists, LowEscrow: v.LowEscrow, LowMintPolicy: v.LowMintPolicy, LowWithdrawalThreshold: v.LowWithdrawalThreshold, LowAssetLimits: v.LowAssetLimits,
 		LowIndex: v.Low.Index, LowPath: v.Low.flat(),
 	}
 }

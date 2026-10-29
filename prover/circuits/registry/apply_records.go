@@ -33,11 +33,12 @@ type QueueEntry struct {
 	EscrowKey           frontend.Variable
 	MintPolicy          frontend.Variable
 	WithdrawalThreshold frontend.Variable
+	AssetLimits         [LimitFields]frontend.Variable
 }
 
 // Hash is the entry the program chains at write time in program-libs/interface/src/accounts/member_registry.rs.
 func (e QueueEntry) Hash(api frontend.API) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{shared.QueueWriteDomain, e.Member, e.Mask, e.Value, e.EscrowKey, e.MintPolicy, e.WithdrawalThreshold})
+	return gadget.PoseidonHash(api, append([]frontend.Variable{shared.QueueWriteDomain, e.Member, e.Mask, e.Value, e.EscrowKey, e.MintPolicy, e.WithdrawalThreshold}, e.AssetLimits[:]...))
 }
 
 // RecordWrite's Slot opens the member's leaf, or the empty leaf an insert takes.
@@ -49,6 +50,7 @@ type RecordWrite struct {
 	OldEscrow              frontend.Variable
 	OldMintPolicy          frontend.Variable
 	OldWithdrawalThreshold frontend.Variable
+	OldAssetLimits         [LimitFields]frontend.Variable
 	Slot                   QuadPath
 	LowMember              frontend.Variable
 	LowNext                frontend.Variable
@@ -56,6 +58,7 @@ type RecordWrite struct {
 	LowEscrow              frontend.Variable
 	LowMintPolicy          frontend.Variable
 	LowWithdrawalThreshold frontend.Variable
+	LowAssetLimits         [LimitFields]frontend.Variable
 	Low                    QuadPath
 }
 
@@ -117,6 +120,10 @@ func (w RecordWrite) apply(api frontend.API, active frontend.Variable, s registr
 	policyBits := api.ToBinary(w.Entry.MintPolicy, 193)
 	mintPolicy := api.Select(policyBits[192], api.FromBinary(policyBits[:192]...), w.OldMintPolicy)
 	withdrawalThreshold := api.Select(policyBits[192], w.Entry.WithdrawalThreshold, w.OldWithdrawalThreshold)
+	var limits [LimitFields]frontend.Variable
+	for i := range limits {
+		limits[i] = api.Select(policyBits[192], w.Entry.AssetLimits[i], w.OldAssetLimits[i])
+	}
 	// 3. An absent member has empty old fields and lies strictly inside its low record's link under the running root, a link no present member falls inside.
 	api.AssertIsBoolean(w.Exists)
 	absent := api.Mul(active, api.Sub(1, w.Exists))
@@ -125,20 +132,24 @@ func (w RecordWrite) apply(api frontend.API, active frontend.Variable, s registr
 	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: absent, V: w.OldEscrow})
 	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: absent, V: w.OldMintPolicy})
 	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: absent, V: w.OldWithdrawalThreshold})
-	low := Record{Member: w.LowMember, Next: w.LowNext, Lists: w.LowLists, EscrowKey: w.LowEscrow, MintPolicy: w.LowMintPolicy, WithdrawalThreshold: w.LowWithdrawalThreshold}
-	relinked := Record{Member: w.LowMember, Next: w.Entry.Member, Lists: w.LowLists, EscrowKey: w.LowEscrow, MintPolicy: w.LowMintPolicy, WithdrawalThreshold: w.LowWithdrawalThreshold}
+	for _, old := range w.OldAssetLimits {
+		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: absent, V: old})
+	}
+	low := Record{Member: w.LowMember, Next: w.LowNext, Lists: w.LowLists, EscrowKey: w.LowEscrow, MintPolicy: w.LowMintPolicy, WithdrawalThreshold: w.LowWithdrawalThreshold, AssetLimits: w.LowAssetLimits}
+	relinked := low
+	relinked.Next = w.Entry.Member
 	lowRoot, relinkedRoot := w.Low.Update(api, low.Hash(api), relinked.Hash(api))
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: absent, A: lowRoot, B: s.root})
 	// 4. Only a nonempty new record is inserted, an empty one leaves the member absent.
-	insert := api.Mul(absent, ringgadget.IsAny(api, ringgadget.IsNonZero(api, lists), ringgadget.IsNonZero(api, escrow), ringgadget.IsNonZero(api, mintPolicy), ringgadget.IsNonZero(api, withdrawalThreshold)))
+	insert := api.Mul(absent, ringgadget.IsAny(api, ringgadget.IsNonZero(api, lists), ringgadget.IsNonZero(api, escrow), ringgadget.IsNonZero(api, mintPolicy), ringgadget.IsNonZero(api, withdrawalThreshold), ringgadget.IsNonZero(api, limits[0]), ringgadget.IsNonZero(api, limits[1])))
 	update := api.Mul(active, w.Exists)
 	// 5. An insert relinks the low record to the member and takes the empty leaf at the next index, linking on to the low record's old next.
 	linked := api.Select(insert, relinkedRoot, s.root)
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: insert, A: w.Slot.Index, B: s.next})
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: insert, A: w.OldNext, B: w.LowNext})
 	// 6. An update or insert replaces the slot's old leaf under the running root, an insert's old leaf is the empty leaf 0.
-	before := api.Select(w.Exists, Record{Member: w.Entry.Member, Next: w.OldNext, Lists: w.OldLists, EscrowKey: w.OldEscrow, MintPolicy: w.OldMintPolicy, WithdrawalThreshold: w.OldWithdrawalThreshold}.Hash(api), 0)
-	after := Record{Member: w.Entry.Member, Next: w.OldNext, Lists: lists, EscrowKey: escrow, MintPolicy: mintPolicy, WithdrawalThreshold: withdrawalThreshold}.Hash(api)
+	before := api.Select(w.Exists, Record{Member: w.Entry.Member, Next: w.OldNext, Lists: w.OldLists, EscrowKey: w.OldEscrow, MintPolicy: w.OldMintPolicy, WithdrawalThreshold: w.OldWithdrawalThreshold, AssetLimits: w.OldAssetLimits}.Hash(api), 0)
+	after := Record{Member: w.Entry.Member, Next: w.OldNext, Lists: lists, EscrowKey: escrow, MintPolicy: mintPolicy, WithdrawalThreshold: withdrawalThreshold, AssetLimits: limits}.Hash(api)
 	opened, written := w.Slot.Update(api, before, after)
 	changes := api.Add(insert, update)
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: changes, A: opened, B: linked})

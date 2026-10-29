@@ -15,12 +15,14 @@ type QuadOpening struct {
 	EscrowKey              frontend.Variable
 	MintPolicy             frontend.Variable
 	WithdrawalThreshold    frontend.Variable
+	AssetLimits            [LimitFields]frontend.Variable
 	LowMember              frontend.Variable
 	LowNext                frontend.Variable
 	LowLists               frontend.Variable
 	LowEscrow              frontend.Variable
 	LowMintPolicy          frontend.Variable
 	LowWithdrawalThreshold frontend.Variable
+	LowAssetLimits         [LimitFields]frontend.Variable
 	Path                   QuadPath
 }
 
@@ -41,6 +43,9 @@ func (o QuadOpening) Resolve(api frontend.API, cond, root, member frontend.Varia
 		MintPolicy:          api.Select(o.Present, o.MintPolicy, o.LowMintPolicy),
 		WithdrawalThreshold: api.Select(o.Present, o.WithdrawalThreshold, o.LowWithdrawalThreshold),
 	}
+	for i := range record.AssetLimits {
+		record.AssetLimits[i] = api.Select(o.Present, o.AssetLimits[i], o.LowAssetLimits[i])
+	}
 	// 3. An absent member lies strictly inside its low record's link, and its lists and escrow key are zero.
 	absent := api.Mul(cond, api.Sub(1, o.Present))
 	ringgadget.AssertOrderedWhen(api, absent, o.LowMember, member, o.LowNext)
@@ -59,12 +64,13 @@ type QuadRecordOpening struct {
 	EscrowKey           frontend.Variable
 	MintPolicy          frontend.Variable
 	WithdrawalThreshold frontend.Variable
+	AssetLimits         [LimitFields]frontend.Variable
 	Path                QuadPath
 }
 
 // AssertPresent opens the sentinel for member 0, the caller refuses member 0 directly or through the sentinel's zero escrow key.
 func (o QuadRecordOpening) AssertPresent(api frontend.API, cond, root, member frontend.Variable) {
-	leaf := Record{Member: member, Next: o.Next, Lists: o.Lists, EscrowKey: o.EscrowKey, MintPolicy: o.MintPolicy, WithdrawalThreshold: o.WithdrawalThreshold}.Hash(api)
+	leaf := Record{Member: member, Next: o.Next, Lists: o.Lists, EscrowKey: o.EscrowKey, MintPolicy: o.MintPolicy, WithdrawalThreshold: o.WithdrawalThreshold, AssetLimits: o.AssetLimits}.Hash(api)
 	// The leaf names member, an absent member or another member's record fails the fold.
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: cond, A: o.Path.Root(api, leaf), B: root})
 }

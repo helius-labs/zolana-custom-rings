@@ -150,13 +150,12 @@ func (batch registryBatch) request(t testing.TB) *ApplyRecordsParams {
 	chain := p.ChainStart.Int
 	for i, e := range entries {
 		w := members.Apply(t, e)
-		hash := ringtest.MustPoseidonHash(t, big.NewInt(shared.QueueWriteDomain), e.Member, e.Mask, e.Value, e.EscrowKey, big.NewInt(0), big.NewInt(0))
-		chain = ringtest.MustPoseidonHash(t, chain, hash)
+		chain = ringtest.MustPoseidonHash(t, chain, e.Hash(t))
 		p.Writes[i] = &RecordWrite{
-			Entry:  QueueEntry{Member: fb(e.Member), Mask: e.Mask.Uint64(), Value: e.Value.Uint64(), EscrowKey: fb(e.EscrowKey), MintPolicy: fi(0), WithdrawalThreshold: fi(0)},
-			Exists: w.Exists, OldNext: fb(w.OldNext), OldLists: w.OldLists.Uint64(), OldEscrow: fb(w.OldEscrow), OldMintPolicy: fi(0), OldWithdrawalThreshold: fi(0),
+			Entry:  QueueEntry{Member: fb(e.Member), Mask: e.Mask.Uint64(), Value: e.Value.Uint64(), EscrowKey: fb(e.EscrowKey), MintPolicy: fz(e.MintPolicy), WithdrawalThreshold: fz(e.WithdrawalThreshold), AssetLimits: limitFields(e.AssetLimits)},
+			Exists: w.Exists, OldNext: fb(w.OldNext), OldLists: w.OldLists.Uint64(), OldEscrow: fb(w.OldEscrow), OldMintPolicy: fz(w.OldMintPolicy), OldWithdrawalThreshold: fz(w.OldWithdrawalThreshold), OldAssetLimits: limitFields(w.OldAssetLimits),
 			Index: w.Slot.Index, Path: flatPath(w.Slot),
-			LowMember: fb(w.Low.Member), LowNext: fb(w.Low.Next), LowLists: w.Low.Lists.Uint64(), LowEscrow: fb(w.Low.EscrowKey), LowMintPolicy: fi(0), LowWithdrawalThreshold: fi(0),
+			LowMember: fb(w.Low.Member), LowNext: fb(w.Low.Next), LowLists: w.Low.Lists.Uint64(), LowEscrow: fb(w.Low.EscrowKey), LowMintPolicy: fz(w.Low.MintPolicy), LowWithdrawalThreshold: fz(w.Low.WithdrawalThreshold), LowAssetLimits: limitFields(w.Low.AssetLimits),
 			LowIndex: w.LowPath.Index, LowPath: flatPath(w.LowPath),
 		}
 	}
@@ -200,6 +199,22 @@ func registerKeyRequest(t testing.TB, circuit common.CircuitType, member *big.In
 
 func fi(v int64) Field    { return Field{big.NewInt(v)} }
 func fb(v *big.Int) Field { return Field{new(big.Int).Set(v)} }
+
+// fz reads nil as zero, ringregistry leaves unset settings nil.
+func fz(v *big.Int) Field {
+	if v == nil {
+		return fi(0)
+	}
+	return fb(v)
+}
+
+func limitFields(limits ringregistry.Limits) []Field {
+	fields := make([]Field, len(limits))
+	for i, limit := range limits {
+		fields[i] = fz(limit)
+	}
+	return fields
+}
 
 func fieldsOf(values []*big.Int) []Field {
 	out := make([]Field, len(values))

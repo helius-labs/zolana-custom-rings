@@ -5,7 +5,10 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/consensys/gnark/frontend"
+
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana/prover/server/prover-test/poseidon"
 )
@@ -24,15 +27,31 @@ const (
 // Record mirrors registry.Record.
 type Record struct {
 	Member, Next, Lists, EscrowKey, MintPolicy, WithdrawalThreshold *big.Int
+	AssetLimits                                                     Limits
 }
+
+// Limits mirrors registry.Record.AssetLimits, a nil field reads as zero.
+type Limits [registry.LimitFields]*big.Int
 
 func (r Record) Hash(t testing.TB) *big.Int {
 	t.Helper()
-	return ringtest.MustPoseidonHash(t, r.Member, r.Next, r.Lists, r.EscrowKey, copied(r.MintPolicy), copied(r.WithdrawalThreshold))
+	fields := []*big.Int{r.Member, r.Next, r.Lists, r.EscrowKey, copied(r.MintPolicy), copied(r.WithdrawalThreshold)}
+	for _, field := range r.AssetLimits {
+		fields = append(fields, copied(field))
+	}
+	return ringtest.MustPoseidonHash(t, fields...)
 }
 
 func (r Record) Wires() registry.Record {
-	return registry.Record{Member: copied(r.Member), Next: copied(r.Next), Lists: copied(r.Lists), EscrowKey: copied(r.EscrowKey), MintPolicy: copied(r.MintPolicy), WithdrawalThreshold: copied(r.WithdrawalThreshold)}
+	return registry.Record{Member: copied(r.Member), Next: copied(r.Next), Lists: copied(r.Lists), EscrowKey: copied(r.EscrowKey), MintPolicy: copied(r.MintPolicy), WithdrawalThreshold: copied(r.WithdrawalThreshold), AssetLimits: r.AssetLimits.Wires()}
+}
+
+func (l Limits) Wires() [registry.LimitFields]frontend.Variable {
+	var w [registry.LimitFields]frontend.Variable
+	for i, field := range l {
+		w[i] = copied(field)
+	}
+	return w
 }
 
 // EscrowKey mirrors registry.EscrowKey.
@@ -78,20 +97,21 @@ type Opening struct {
 
 // Wires zeroes the unused half.
 func (o Opening) Wires() registry.QuadOpening {
-	w := registry.QuadOpening{Present: 0, Next: 0, Lists: 0, EscrowKey: 0, MintPolicy: 0, LowMintPolicy: 0, WithdrawalThreshold: 0, LowWithdrawalThreshold: 0, LowMember: 0, LowNext: 0, LowLists: 0, LowEscrow: 0, Path: o.Path.Wires()}
+	zero := Limits{}.Wires()
+	w := registry.QuadOpening{Present: 0, Next: 0, Lists: 0, EscrowKey: 0, MintPolicy: 0, LowMintPolicy: 0, WithdrawalThreshold: 0, LowWithdrawalThreshold: 0, AssetLimits: zero, LowAssetLimits: zero, LowMember: 0, LowNext: 0, LowLists: 0, LowEscrow: 0, Path: o.Path.Wires()}
 	r := o.Record
 	if o.Present {
-		w.Present, w.Next, w.Lists, w.EscrowKey, w.MintPolicy, w.WithdrawalThreshold = 1, copied(r.Next), copied(r.Lists), copied(r.EscrowKey), copied(r.MintPolicy), copied(r.WithdrawalThreshold)
+		w.Present, w.Next, w.Lists, w.EscrowKey, w.MintPolicy, w.WithdrawalThreshold, w.AssetLimits = 1, copied(r.Next), copied(r.Lists), copied(r.EscrowKey), copied(r.MintPolicy), copied(r.WithdrawalThreshold), r.AssetLimits.Wires()
 		return w
 	}
-	w.LowMember, w.LowNext, w.LowLists, w.LowEscrow, w.LowMintPolicy, w.LowWithdrawalThreshold = copied(r.Member), copied(r.Next), copied(r.Lists), copied(r.EscrowKey), copied(r.MintPolicy), copied(r.WithdrawalThreshold)
+	w.LowMember, w.LowNext, w.LowLists, w.LowEscrow, w.LowMintPolicy, w.LowWithdrawalThreshold, w.LowAssetLimits = copied(r.Member), copied(r.Next), copied(r.Lists), copied(r.EscrowKey), copied(r.MintPolicy), copied(r.WithdrawalThreshold), r.AssetLimits.Wires()
 	return w
 }
 
 // RecordWires expects a present member.
 func (o Opening) RecordWires() registry.QuadRecordOpening {
 	r := o.Record
-	return registry.QuadRecordOpening{Next: copied(r.Next), Lists: copied(r.Lists), EscrowKey: copied(r.EscrowKey), MintPolicy: copied(r.MintPolicy), WithdrawalThreshold: copied(r.WithdrawalThreshold), Path: o.Path.Wires()}
+	return registry.QuadRecordOpening{Next: copied(r.Next), Lists: copied(r.Lists), EscrowKey: copied(r.EscrowKey), MintPolicy: copied(r.MintPolicy), WithdrawalThreshold: copied(r.WithdrawalThreshold), AssetLimits: r.AssetLimits.Wires(), Path: o.Path.Wires()}
 }
 
 // UnreadRecordWires is the zero opening a proof assigns where it reads no record.
@@ -103,12 +123,24 @@ func UnreadRecordWires() registry.QuadRecordOpening {
 // Value lies inside Mask, as the program queues an entry.
 type Entry struct {
 	Member, Mask, Value, EscrowKey, MintPolicy, WithdrawalThreshold *big.Int
+	AssetLimits                                                     Limits
+}
+
+// Hash mirrors registry.QueueEntry.Hash.
+func (e Entry) Hash(t testing.TB) *big.Int {
+	t.Helper()
+	fields := []*big.Int{big.NewInt(shared.QueueWriteDomain), e.Member, e.Mask, e.Value, e.EscrowKey, copied(e.MintPolicy), copied(e.WithdrawalThreshold)}
+	for _, field := range e.AssetLimits {
+		fields = append(fields, copied(field))
+	}
+	return ringtest.MustPoseidonHash(t, fields...)
 }
 
 type Write struct {
 	Entry                                                               Entry
 	Exists                                                              bool
 	OldNext, OldLists, OldEscrow, OldMintPolicy, OldWithdrawalThreshold *big.Int
+	OldAssetLimits                                                      Limits
 	Slot                                                                Path // the member's leaf or the next empty leaf, after the relink for an insert
 	Low                                                                 Record
 	LowPath                                                             Path
@@ -160,14 +192,14 @@ func (r *Registry) Apply(t testing.TB, e Entry) Write {
 	index, present := r.find(e.Member)
 	if present {
 		old := r.records[index]
-		w := Write{Entry: e, Exists: true, OldNext: old.Next, OldLists: old.Lists, OldEscrow: old.EscrowKey, OldMintPolicy: copied(old.MintPolicy), OldWithdrawalThreshold: copied(old.WithdrawalThreshold),
-			Slot: r.Path(index), Low: Record{zero, zero, zero, zero, zero, zero}, LowPath: zeroPath()}
-		r.set(t, index, Record{Member: e.Member, Next: old.Next, Lists: masked(old.Lists, e), EscrowKey: fillOnce(old.EscrowKey, e.EscrowKey), MintPolicy: writtenPolicy(old.MintPolicy, e.MintPolicy), WithdrawalThreshold: writtenWithdrawal(old.WithdrawalThreshold, e)})
+		w := Write{Entry: e, Exists: true, OldNext: old.Next, OldLists: old.Lists, OldEscrow: old.EscrowKey, OldMintPolicy: copied(old.MintPolicy), OldWithdrawalThreshold: copied(old.WithdrawalThreshold), OldAssetLimits: old.AssetLimits,
+			Slot: r.Path(index), Low: Record{Member: zero, Next: zero, Lists: zero, EscrowKey: zero, MintPolicy: zero, WithdrawalThreshold: zero}, LowPath: zeroPath()}
+		r.set(t, index, Record{Member: e.Member, Next: old.Next, Lists: masked(old.Lists, e), EscrowKey: fillOnce(old.EscrowKey, e.EscrowKey), MintPolicy: writtenPolicy(old.MintPolicy, e.MintPolicy), WithdrawalThreshold: writtenWithdrawal(old.WithdrawalThreshold, e), AssetLimits: writtenLimits(old.AssetLimits, e)})
 		return w
 	}
 	low, next := r.records[index], r.NextIndex()
 	w := Write{Entry: e, OldNext: low.Next, OldLists: zero, OldEscrow: zero, OldMintPolicy: zero, OldWithdrawalThreshold: zero, Slot: r.Path(next), Low: low, LowPath: r.Path(index)}
-	if masked(zero, e).Sign() == 0 && e.EscrowKey.Sign() == 0 && writtenPolicy(zero, e.MintPolicy).Sign() == 0 && writtenWithdrawal(zero, e).Sign() == 0 {
+	if masked(zero, e).Sign() == 0 && e.EscrowKey.Sign() == 0 && writtenPolicy(zero, e.MintPolicy).Sign() == 0 && writtenWithdrawal(zero, e).Sign() == 0 && writtenLimits(Limits{}, e).IsZero() {
 		return w
 	}
 	return r.Insert(t, e)
@@ -180,9 +212,11 @@ func (r *Registry) Insert(t testing.TB, e Entry) Write {
 	index, _ := r.find(e.Member)
 	low, next := r.records[index], r.NextIndex()
 	w := Write{Entry: e, OldNext: low.Next, OldLists: zero, OldEscrow: zero, OldMintPolicy: zero, OldWithdrawalThreshold: zero, Low: low, LowPath: r.Path(index)}
-	r.set(t, index, Record{Member: low.Member, Next: e.Member, Lists: low.Lists, EscrowKey: low.EscrowKey, MintPolicy: low.MintPolicy, WithdrawalThreshold: low.WithdrawalThreshold})
+	relinked := low
+	relinked.Next = e.Member
+	r.set(t, index, relinked)
 	w.Slot = r.Path(next)
-	r.set(t, next, Record{Member: e.Member, Next: low.Next, Lists: masked(zero, e), EscrowKey: e.EscrowKey, MintPolicy: writtenPolicy(zero, e.MintPolicy), WithdrawalThreshold: writtenWithdrawal(zero, e)})
+	r.set(t, next, Record{Member: e.Member, Next: low.Next, Lists: masked(zero, e), EscrowKey: e.EscrowKey, MintPolicy: writtenPolicy(zero, e.MintPolicy), WithdrawalThreshold: writtenWithdrawal(zero, e), AssetLimits: writtenLimits(Limits{}, e)})
 	return w
 }
 
@@ -280,4 +314,20 @@ func writtenWithdrawal(old *big.Int, e Entry) *big.Int {
 		return copied(old)
 	}
 	return copied(e.WithdrawalThreshold)
+}
+
+func writtenLimits(old Limits, e Entry) Limits {
+	if e.MintPolicy == nil || e.MintPolicy.Sign() == 0 {
+		return old
+	}
+	return e.AssetLimits
+}
+
+func (l Limits) IsZero() bool {
+	for _, field := range l {
+		if field != nil && field.Sign() != 0 {
+			return false
+		}
+	}
+	return true
 }

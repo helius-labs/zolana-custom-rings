@@ -64,35 +64,35 @@
     }
   },
   "custom-ring-apply-records-2": {
-    "statement": "0x152b6e2801f8892454d0562c5472f4fd7ff971937b46d04410014e0cda791d76",
+    "statement": "0x02657b40359a6f83b3676fa4ab6f83ae5822b8ee5172d5204ace60215c359821",
     "proof": {
       "ar": [
-        "0x178aa316d5146d8b2133fac37f15caa77b10e5b962488255ab3f0e10b7d98267",
-        "0x1ba754d0ec4a5a37752cccfd91bb0cc41989de911619d7ec5a472e9423955d51"
+        "0x008aaa1734cc7f52d0fb06c4ad3143ebb04bd4d362b8f3dd7cd5c9bcacb76914",
+        "0x27039cc0689c25dd817660a5e969af54f2736a7316da4f0cb3f60f4febdd0f99"
       ],
       "bs": [
         [
-          "0x02987b6b2cf8800925e0055c945e6fa00b2d145f0facd97b9f5114f8a0828c62",
-          "0x0d818a2d52b62b329913640fc32cb16f4ec41f80e1785e7f4f255c956cf0728d"
+          "0x2a74194e0b2773b3b010d604b105b830f1253fb01b086651a41208e68dca2300",
+          "0x07d835299ab1b22cd6a7e8c73a12786277eae63e7532757cd1248c8d02b80101"
         ],
         [
-          "0x0897e8742e0925a85bb8c7b144d443bc120c1025f421643c891f7b0aa8bd95e4",
-          "0x15aa8f59a1632e23352c09c3fa9ea085c43327f8288aca9cfafcc8edefe303f4"
+          "0x0fa598a38e38216df3c7ec4460a34406cab4dd73a956cc6d00b369e0e81d75fa",
+          "0x10f56336431bd3ab567a5047e915fd151dfa1ef3575e4c328fb1a99bc1bb50fc"
         ]
       ],
       "krs": [
-        "0x211fb0f6702a5bc08aec2d3890e8543d6f8dabcdb307e39a327d4ef7cdca889f",
-        "0x2973d10099b59540f52ba8d679213fe82d5b7ddf8f54c59631eef50a39a38b5b"
+        "0x19f6a6bea6a9e4d322a427278241047b0b29e12efcf52e9fa871080902073b18",
+        "0x22cd7e7a658f58067d647ebc5f61a97e05db7d00420d31f95c514cf84b1f1bc6"
       ],
       "proofCommitment": [
-        "0x10c366382c36e43cd413cafb1168ee13a82fbb87575c947f60a7f74bb7e124e0",
-        "0x04357ebfae5babbf9c425f3a27674bbbaa692cc541cea390633624dd1de0ac57"
+        "0x0f6a0e50b289ea8bdd0ed44c31aaa2d13a1c8a30c5a61e7cf67ff037dae27dae",
+        "0x07fba014e11cf0b1153d3b26f45bc07adc0800c4bfe95c5ff9f13c86a31bfb5d"
       ],
       "proofCommitmentPok": [
-        "0x090dda8ae9b9b45a8034c286f48c337050fd915b4d9d795b1210ed03fbf1e551",
-        "0x21777169d05c5d1c0420b05e429e5a1127c82781ce8d6f85fae054ffeee6a8f8"
+        "0x0afa34b3cfbaf133a58321c9afdd8295457f86fba648707201c88ca7bb64cf8c",
+        "0x278f5234ec5c8bfd76523b183b9b06ba7b230722896fe5f8bdcacaa4f91d1ff7"
       ],
-      "provingKeySha256": "bc56094f853e7706003d81d83f43b2b9281a560a6cc8c430b0ed4d2400776cef"
+      "provingKeySha256": "be27e1ae22999115721e0a7ae3cf76259a0f3dcda65a41ee960c776b7e0c962b"
     }
   },
   "custom-ring-apply-records-4": {
