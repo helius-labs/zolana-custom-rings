@@ -27,11 +27,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--keys-dir", type=pathlib.Path, default=ROOT / "target/circuit-policy-keys")
     parser.add_argument("--jobs", type=int, default=2)
+    parser.add_argument("--fresh", action="store_true", help="set up each missing key, ignoring the lockfile pins")
     args = parser.parse_args()
     args.keys_dir = args.keys_dir.resolve()
     args.keys_dir.mkdir(parents=True, exist_ok=True)
     catalog = json.loads(subprocess.check_output(["go", "run", "./cmd/catalog"], cwd=ROOT / "prover"))
-    previous = json.loads((ROOT / "prover/ring/proving-keys.lock").read_text())
+    previous = {"keys": {}} if args.fresh else json.loads((ROOT / "prover/ring/proving-keys.lock").read_text())
 
     def prepare(key):
         name = key["Circuit"]

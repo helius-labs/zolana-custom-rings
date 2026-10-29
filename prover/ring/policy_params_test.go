@@ -36,7 +36,7 @@ func TestPolicyRequestsDecodeAndSolve(t *testing.T) {
 		for _, width := range []int{2, 4} {
 			key := Key{Family: DelegatePolicy, Inputs: width, Outputs: width, OwnOnly: own}.circuitType()
 			t.Run(string(key), func(t *testing.T) {
-				world := ringpolicy.Delegate(transaction.Shape{NInputs: width, NOutputs: width})
+				world := ringpolicy.Delegate(transaction.NewShape(width, width))
 				world.OwnOnly = own
 				if !own {
 					world.Table.Curator = map[uint64]bool{ringregistry.AllowBit: true}
@@ -127,7 +127,7 @@ func TestOwnPolicyRequestsRequireEmptyCuratorReferences(t *testing.T) {
 }
 
 func TestDelegateRequestsCarryNoPublicAssetEntries(t *testing.T) {
-	params := requestOf[DelegatePolicyParams](t, delegateKey, ringpolicy.Delegate(transaction.Shape{NInputs: 2, NOutputs: 2}).Build(t).Assignment())
+	params := requestOf[DelegatePolicyParams](t, delegateKey, ringpolicy.Delegate(transaction.NewShape(2, 2)).Build(t).Assignment())
 	params.PublicAssetEntries = []uint32{0}
 	if _, err := decode(delegateKey, mustMarshal(t, params)); err == nil {
 		t.Fatal("delegate key accepted a public asset reference")

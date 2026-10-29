@@ -36,7 +36,7 @@ func (k Key) extension() common.ExtensionCircuit {
 	case MemberPolicy:
 		return bindPolicy[MemberPolicyParams](k, policy.NewMemberPolicyCircuit, policy.MemberShape{Outputs: k.Outputs, Withdrawals: k.Withdrawals, OwnOnly: k.OwnOnly})
 	case DelegatePolicy:
-		return bindPolicy[DelegatePolicyParams](k, policy.NewDelegatePolicyCircuit, policy.DelegateShape{Shape: transaction.Shape{NInputs: k.Inputs, NOutputs: k.Outputs}, OwnOnly: k.OwnOnly})
+		return bindPolicy[DelegatePolicyParams](k, policy.NewDelegatePolicyCircuit, policy.DelegateShape{Shape: transaction.NewShape(k.Inputs, k.Outputs), OwnOnly: k.OwnOnly})
 	case ApplyRecords:
 		return bind[ApplyRecordsParams](k, registry.NewApplyRecordsCircuit, k.Inputs)
 	case WithdrawalExemption:

@@ -80,7 +80,7 @@ func hostRequest(t testing.TB, k Key) any {
 		}
 		return requestOf[MemberPolicyParams](t, k.Circuit, w.Build(t).Assignment())
 	case DelegatePolicy:
-		world := ringpolicy.Delegate(transaction.Shape{NInputs: k.Inputs, NOutputs: k.Outputs})
+		world := ringpolicy.Delegate(transaction.NewShape(k.Inputs, k.Outputs))
 		world.OwnOnly = k.OwnOnly
 		if !k.OwnOnly {
 			world.Table.Curator = map[uint64]bool{ringregistry.AllowBit: true}

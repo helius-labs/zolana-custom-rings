@@ -54,7 +54,7 @@ func TestPooledPolicyConstraintMatrix(t *testing.T) {
 		for _, width := range []int{2, 4} {
 			for _, compact := range []bool{true, false} {
 				capacity := compactPools(compact, own)
-				c, err := policy.NewDelegatePolicyCircuit(policy.DelegateShape{Shape: transaction.Shape{NInputs: width, NOutputs: width}, OwnOnly: own, Records: capacity})
+				c, err := policy.NewDelegatePolicyCircuit(policy.DelegateShape{Shape: transaction.NewShape(width, width), OwnOnly: own, Records: capacity})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -135,7 +135,7 @@ func poolWorld(shape policy.MemberShape, distinct, delegate bool) ringpolicy.Wor
 		}
 	} else {
 		world.Outputs = 0
-		world.Shape = transaction.Shape{NInputs: shape.Outputs, NOutputs: shape.Outputs}
+		world.Shape = transaction.NewShape(shape.Outputs, shape.Outputs)
 		for range shape.Outputs {
 			world.Inputs = append(world.Inputs, ringpolicy.Slot{Owner: ringpolicy.Sender, Asset: ringpolicy.AssetA, Amount: 1})
 		}

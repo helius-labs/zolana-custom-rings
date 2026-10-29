@@ -1,434 +1,434 @@
 {
-  "release": "https://github.com/helius-labs/zolana-custom-rings/releases/download/ring-production-keys-v1",
+  "release": "https://github.com/helius-labs/zolana-custom-rings/releases/download/ring-production-keys-v2",
   "keys": {
     "custom_ring_apply_records_1.key": {
-      "sha256": "93b42a0b73215a5d240997895f7b2158f8ce4ca68e120f86e788498a76dab312",
-      "size": 4901089,
+      "sha256": "072bb1efbd76e6bd185613a0c245927f3f3147b9e6a1ea442a7bddc2c79f0cd8",
+      "size": 5026706,
       "source": "release"
     },
     "custom_ring_apply_records_16.key": {
-      "sha256": "ec91e5dc71e4346ebf132d77dba14123bdc734c0f50e6e941598d271e48a6160",
-      "size": 78028964,
+      "sha256": "6d300db8bf4a089008594255f431db4e4568bb5a4b56177b7d09287e357c1898",
+      "size": 79703170,
       "source": "release"
     },
     "custom_ring_apply_records_2.key": {
-      "sha256": "be27e1ae22999115721e0a7ae3cf76259a0f3dcda65a41ee960c776b7e0c962b",
-      "size": 9945796,
+      "sha256": "20379edeffe01a9cb21fbb3b38b15e43e236e5446560d2a3c2ddb3be095e9b4f",
+      "size": 10019875,
       "source": "release"
     },
     "custom_ring_apply_records_4.key": {
-      "sha256": "a94d5adcdc70c46615eb691fd5331ead3b5ae67191d1d5d19666badfbdfd0d2b",
-      "size": 19538356,
+      "sha256": "1ccfb7c4ac4b2a4b2692384ddcfee8606d4cd7f474d1202c428bc94578efbddf",
+      "size": 19983036,
       "source": "release"
     },
     "custom_ring_apply_records_8.key": {
-      "sha256": "ddac9ce96b1040b3893b4f22967f2e04f541fb901869491a4960588edbda92c5",
-      "size": 39040021,
+      "sha256": "585acab3d9138f03f472097eb2a8c4607f2712145b172af69045fe10a747c609",
+      "size": 39897112,
       "source": "release"
     },
     "custom_ring_audit_anonymous_entry_v2_8_2.key": {
-      "sha256": "ae68de8a0210c63c959874380608149580ce5de150ae71a1c79ce769ce9f995e",
+      "sha256": "66779c2d322fd9af9eb6a2b17072937c7ad0d1a380d311731382661e9f35f2d9",
       "size": 31030829,
       "source": "release"
     },
     "custom_ring_audit_anonymous_entry_v2_8_4.key": {
-      "sha256": "fb9971dc393fd8a938e19afde2f0d10696db6854df666b7c91b2703d7a9df818",
+      "sha256": "be91b35eacc1bc7235965e2f845787bced25b0d7a9085c9878292a1a78e19c43",
       "size": 33127074,
       "source": "release"
     },
     "custom_ring_audit_anonymous_entry_v2_8_8.key": {
-      "sha256": "42315d298d206bf1882b848786dd9ef40bccabe9f8f98347022218784d57e206",
+      "sha256": "4709eaa8651a7665ad3a4f960846a87e167c6723b6d818ddb50d5ada0e64f7e8",
       "size": 37436527,
       "source": "release"
     },
     "custom_ring_audit_anonymous_v2_16_2.key": {
-      "sha256": "6c93b1cb2f0bf7785beec1bb32c08abb764bd992c1c5781c9d8dffe1ac82731a",
+      "sha256": "b81a5378693b45cb311b27cf4d4271efedc56a4b71d883c2366ec4c7d687311e",
       "size": 32992546,
       "source": "release"
     },
     "custom_ring_audit_anonymous_v2_16_4.key": {
-      "sha256": "8c09da13d6e7c4fe321aadd0d8dc6bb3b08b82c64ef8893b383a18f83ecf8bff",
+      "sha256": "c620cb6801399f1ef87e151853698b71e5fe4e1c1c3016ff5fa3d2a21162240e",
       "size": 35082074,
       "source": "release"
     },
     "custom_ring_audit_anonymous_v2_4_2.key": {
-      "sha256": "27d5e8a439f9605671733644883be3996c844465d86e0eb8d63f590ff42dd06a",
+      "sha256": "2bf7d2a1278c9a55c6232a4b109ef839432dddefe5dee2afa70c168150355cf6",
       "size": 24268084,
       "source": "release"
     },
     "custom_ring_audit_anonymous_v2_4_4.key": {
-      "sha256": "5199a6f4f8b068c65e348e0fd278e66c495c52b273d400120694d2c05aa2e2db",
+      "sha256": "1e219d9ba0a76d8cfb2cb8a620a3db458b7e8fd598c45dd76953f67d3ca75261",
       "size": 26363626,
       "source": "release"
     },
     "custom_ring_audit_anonymous_v2_4_8.key": {
-      "sha256": "49301fc05332b596faeb52ca6aef75309a3df29ca5a07013e7437ae277b53345",
+      "sha256": "b8d0978f158002a9d45e7585422aa2d0736e0e78fd2c2253b4e98813402e4333",
       "size": 32779046,
       "source": "release"
     },
     "custom_ring_audit_anonymous_v2_8_8.key": {
-      "sha256": "75eec96eb53636b1b5db299b8f5b36aec91fcfbcddd50eb65de35f2342299279",
+      "sha256": "8ad4193aa60443fc4adee578c81a2b5a57dfbbf0a0be35300436a971dc48a5b6",
       "size": 34975879,
       "source": "release"
     },
     "custom_ring_audit_delivered_16.key": {
-      "sha256": "d772c7121b3b513e751c49d4d2aaada7a1090ab00340241d3eafbfc5e070ad46",
+      "sha256": "f3bf53a88bf45dbbbe1a4fd005176a25ce4e3b2c0c6559b477afc534f187d014",
       "size": 224949119,
       "source": "release"
     },
     "custom_ring_audit_delivered_2.key": {
-      "sha256": "951770333cb613485e33ab4260666e92de405ad25e7c8bc8006f7fb09da9995b",
+      "sha256": "171da544cadd9584906039671825cd4616e2f651a1de07d9e56d536a6df67040",
       "size": 45779806,
       "source": "release"
     },
     "custom_ring_audit_delivered_4.key": {
-      "sha256": "54df827e8466094db91ff9cd5a5a02df8b3443a7a726be757df175c9d8e77e90",
+      "sha256": "f7c6e72d5b41bdf27fb3d7f6f69225e7c2d5cf4733b67ac948fa4a3bab82fadd",
       "size": 73780254,
       "source": "release"
     },
     "custom_ring_audit_delivered_8.key": {
-      "sha256": "09856badc833f291d494a2e90c90333a19b88de7b0de92cf1ea3ec377b8aac57",
+      "sha256": "92facd093e1e9436e92b88063c0c6766bb206cda8517c236ee6640cfda58af4f",
       "size": 129941456,
       "source": "release"
     },
     "custom_ring_deposit_1.key": {
-      "sha256": "ff690eece1a141805b42c24c1a2027ca5393a6c3a6d5bbcc1245c78c346d6586",
-      "size": 25044620,
+      "sha256": "8db137d2e9ebd42c89cc36bddf7ef3eddc55c20d60de69ab04e827f96e2076d9",
+      "size": 28405074,
       "source": "release"
     },
     "custom_ring_deposit_2.key": {
-      "sha256": "dce2b781641eeea34c93cbdc2252cbf41fd709b4aae03e2ebec6bb90af05960f",
-      "size": 27797474,
+      "sha256": "0ed90d34ee6e09bdbe980de5d0f893cda1de2a25dc369bab552120f85a1d350f",
+      "size": 34759480,
       "source": "release"
     },
     "custom_ring_deposit_4.key": {
-      "sha256": "8e3506e4e8defbea9e0d7ed84387ad805a76619678f85d29e14e80dc3039fb84",
-      "size": 35895122,
+      "sha256": "19b2c574fda6304dee00e823f31c07e53a011da4ac7ff52370639576a4ab41f9",
+      "size": 51674183,
       "source": "release"
     },
     "custom_ring_deposit_8.key": {
-      "sha256": "9ec8c893887eb538bb35c8a7c307008bafe13b7333eb00c421ba197b68e84614",
-      "size": 56233429,
+      "sha256": "35a4007ffa136cc43680009ffa4a71a223569acf3d507bb51e8c7bcb09024083",
+      "size": 77141259,
       "source": "release"
     },
     "custom_ring_merge_v3_24.key": {
-      "sha256": "ce3968b1d07c1e21ca2a1c0586cf0e7891009d0219f7fc0971e4995e95b3876f",
-      "size": 33470766,
+      "sha256": "f0f61c71f100f817efc797356143d64c386bd82096179b5d84be65db1fe101f0",
+      "size": 33504575,
       "source": "release"
     },
     "custom_ring_merge_v3_8.key": {
-      "sha256": "1d12de999243fb8e991eb87ac346b6c3bac3c533c3c8c1b1f23df5da1006d9ad",
-      "size": 23947235,
+      "sha256": "7c07b069efccb6cdbb32f614d145777c1c4744fd1bddd3b61234c6f91bfa7561",
+      "size": 23979403,
       "source": "release"
     },
     "custom_ring_policy_delegate_v3_2x2_curator.key": {
-      "sha256": "2ff47434a19c6671b5f7c7eeeb7fd0b5fe836a05e0dc0b236114158cc991d6af",
-      "size": 15443402,
+      "sha256": "2e9b3eae38b66b104fcaecf7402a9ec04b92f860ffa1e8b86f23ea57347962cb",
+      "size": 15642916,
       "source": "release"
     },
     "custom_ring_policy_delegate_v3_2x2_own.key": {
-      "sha256": "b6779ec30236d7d3e6a07970bc71fbd33dac6632d0278e769f3879b77542f9f4",
-      "size": 9343264,
+      "sha256": "f6d462da4263c35974d9f4660ee0e70fe203c88bde4ba1a2979b14b651f4597e",
+      "size": 9451093,
       "source": "release"
     },
     "custom_ring_policy_delegate_v3_4x4_curator.key": {
-      "sha256": "f01b9bb2992a3c217e2986f17183f28dfe598f0815d2db8704967012521489e6",
-      "size": 26877804,
+      "sha256": "d81763a07e03b58a22185087a30d8f3a2f68f1619fdb2827b4f89905ff10eb4d",
+      "size": 27314213,
       "source": "release"
     },
     "custom_ring_policy_delegate_v3_4x4_own.key": {
-      "sha256": "aa488e74676a9a56953b6871c15a0384b8d8cbebe36f5cc1d9043eba20a688a0",
-      "size": 16067255,
+      "sha256": "0880460eaf6fe116d0d93f10a1be191514ff6afc495f8fcb03b2ccdf8908ccd8",
+      "size": 16335691,
       "source": "release"
     },
     "custom_ring_policy_member_v3_16_w0_curator.key": {
-      "sha256": "c9918b549dc57d685e9cec36b348ad7d3cba23fadee280c93099bf11031e48d3",
-      "size": 80744186,
+      "sha256": "bcb61766e4317ec725d44442b0f6c92dc8e63d274d6097feac90a078220412c6",
+      "size": 90866139,
       "source": "release"
     },
     "custom_ring_policy_member_v3_16_w0_own.key": {
-      "sha256": "8019e03bcce4fe467380ffe22e2121dabac48cf56f9c6b58feb44bc81b09a58d",
-      "size": 51695877,
+      "sha256": "e22bbf53f7c92e9cabc5006622f2813730d1ece2c8e85edbf2f31d31a71cf456",
+      "size": 52821214,
       "source": "release"
     },
     "custom_ring_policy_member_v3_16_w16_curator.key": {
-      "sha256": "2af48bdc9496af6150ab5466c4055cbbaf5fea358abe45359dae5583b85067b5",
-      "size": 122275258,
+      "sha256": "e54f78155035bf3309d4719d2d1ac2d7e0d9be2ad2595f559f729b89e7132852",
+      "size": 124657777,
       "source": "release"
     },
     "custom_ring_policy_member_v3_16_w16_own.key": {
-      "sha256": "a8586eebd5bcb21b7f5bad752bec302cd512cfa44b957e4ace082261a3460c54",
-      "size": 69053556,
+      "sha256": "798164c492e70eded32aadcc2994302014a96c1d9ac6dca1b416fcbfec5276b6",
+      "size": 70473753,
       "source": "release"
     },
     "custom_ring_policy_member_v3_16_w1_curator.key": {
-      "sha256": "ddd7a2f06dee73c264d350c563aa804c52fa0039b3fd4bf171ab130db5b85327",
-      "size": 91851891,
+      "sha256": "ee03b4c2adfc3b31bbe0e8b748c292214820afce27847939ec6c47a01a5e5c7a",
+      "size": 93643503,
       "source": "release"
     },
     "custom_ring_policy_member_v3_16_w1_own.key": {
-      "sha256": "b07ee3945831b4113049745770238ab125a69d16da519c0223e9750513a1067a",
-      "size": 52773495,
+      "sha256": "bd93f22dd33ffb38e8d8062547c10bc552cdd76edcdb26a33fae4c34526467f7",
+      "size": 53917718,
       "source": "release"
     },
     "custom_ring_policy_member_v3_16_w2_curator.key": {
-      "sha256": "455d54dbb08888c573e8f1c9e866cdd87dac19dd72cb7bd6bdae1003f3fe73ac",
-      "size": 94572243,
+      "sha256": "25c5afa11bce42a9293b1853d18847700183f3a816531b5ac3747e8670c050a7",
+      "size": 96420863,
       "source": "release"
     },
     "custom_ring_policy_member_v3_16_w2_own.key": {
-      "sha256": "417141d498a4d529cf9a864b211318e8fd103cb80df0ea294bcde2199d43e139",
-      "size": 53840826,
+      "sha256": "6e5b55df36b085dcde1342729728cb4273c3ef6114c78a05244e9919d131cc62",
+      "size": 55004014,
       "source": "release"
     },
     "custom_ring_policy_member_v3_16_w32_curator.key": {
-      "sha256": "aff7490614337a151520b3000290503bb274f8bd5996ea1e4444426704ece492",
-      "size": 153112561,
+      "sha256": "1f29678cfc778115ba5b5b2983fd8065d4f372b1425d5be5b310459c01907b55",
+      "size": 156083553,
       "source": "release"
     },
     "custom_ring_policy_member_v3_16_w32_own.key": {
-      "sha256": "4d8e014a82c54dd8649e46082b40183d7931e39387e2974f1feb00547ca47c27",
-      "size": 95213288,
+      "sha256": "2bedd829fa6dd836465ebf679b5858c7a06d2ab9f35a41a068cd87354a2b2c7c",
+      "size": 96925408,
       "source": "release"
     },
     "custom_ring_policy_member_v3_16_w4_curator.key": {
-      "sha256": "1a496289a2821aa79c8ce6db805b708c9a6b76d40e1d5fd4e31c87093ab8723d",
-      "size": 99221216,
+      "sha256": "1ef0cf322e8c6f3516952a368caa7fe83134f0b67030feebfdd88770d6667c72",
+      "size": 101156055,
       "source": "release"
     },
     "custom_ring_policy_member_v3_16_w4_own.key": {
-      "sha256": "7e34904c76546ccd13e1df6679705fea3da4576911dac81031cf0a75250e279e",
-      "size": 55994839,
+      "sha256": "478db8173e5fe03dc2b69bc5275e2775701feb42f0007fc8444442c155d8ef77",
+      "size": 57197584,
       "source": "release"
     },
     "custom_ring_policy_member_v3_16_w8_curator.key": {
-      "sha256": "fd29ae507bfa056e6ea9bdb9c56f8ebae51b8c5eaa13860219a829c4cdfe81bb",
-      "size": 106898418,
+      "sha256": "01d612ab514cf38b848bbaa9bb3f0421356e61426c52859056b4e5ef0c424320",
+      "size": 108983808,
       "source": "release"
     },
     "custom_ring_policy_member_v3_16_w8_own.key": {
-      "sha256": "b63ff6e664874f600edb4ec192359da1bdc60d8f274344ea0801e6df0d019632",
-      "size": 60350222,
+      "sha256": "e674b5956a7b883be1637882eca8a86d69648a8565583c252dfc8254b644ae57",
+      "size": 61626351,
       "source": "release"
     },
     "custom_ring_policy_member_v3_2_w0_curator.key": {
-      "sha256": "6e892f9e9b411bc36832805c0a7d4fe494db73b8d85c9f5ecf23cd6f896cafe1",
-      "size": 17626296,
+      "sha256": "fe7d23fc2aef69ccb69ae86f505f0e0db031541ddfe7dcb5b31f75699d7b2415",
+      "size": 17970397,
       "source": "release"
     },
     "custom_ring_policy_member_v3_2_w0_own.key": {
-      "sha256": "6013b075e46bf9da4ae8371bbc1a8dd161473e9a692288ddc9863eafe05ee024",
-      "size": 12586417,
+      "sha256": "31bf412f5fb9bc6ec79a09464e61bfa320530b438d8a2e84dc695cb2222309e6",
+      "size": 12836948,
       "source": "release"
     },
     "custom_ring_policy_member_v3_2_w16_curator.key": {
-      "sha256": "6d6413470db56ba4c05a9f749dbc2f59fd4a910072611748f129f0d93f58a05c",
-      "size": 58491623,
+      "sha256": "841ac46d93384b7966d8b6cf40fd26e26845f4650b3cde76abe83ff8f20ea5d2",
+      "size": 59482936,
       "source": "release"
     },
     "custom_ring_policy_member_v3_2_w16_own.key": {
-      "sha256": "b75765feb3ba4922854a6aad106ce0bbe1417f10b19bb4a385891dcbed96a6e4",
-      "size": 32582012,
+      "sha256": "fecf6d151ab4538c4da7260d62d5de4957b3b645dccd0534092a429976fb0cd3",
+      "size": 33130592,
       "source": "release"
     },
     "custom_ring_policy_member_v3_2_w1_curator.key": {
-      "sha256": "7fd8aff41752fba7fec46e17beae84c581211a287b682842dca9bdd7173a4f82",
-      "size": 22691211,
+      "sha256": "063deca9d8e42e35e6a91b35a6451e7db0b0336113b399a3b4b504e3de5667d6",
+      "size": 23091344,
       "source": "release"
     },
     "custom_ring_policy_member_v3_2_w1_own.key": {
-      "sha256": "c7b215a28286b5cd9b61b938fd88a70011858a2fd23412ae704c25a85699f4bb",
-      "size": 13726205,
+      "sha256": "11828bc12144b348073df4d8702b1b2d628c8efa4baa84099887ebd79c7f55c2",
+      "size": 13995348,
       "source": "release"
     },
     "custom_ring_policy_member_v3_2_w2_curator.key": {
-      "sha256": "2a2fb1edd09ed77f8e9845165290d468cd8a6027ca79521c077d8bff60156cc2",
-      "size": 25684619,
+      "sha256": "9944bd928bd7534c8e622541baaac99991ef6c2a894058eea1e2520f0980a9d1",
+      "size": 26140027,
       "source": "release"
     },
     "custom_ring_policy_member_v3_2_w2_own.key": {
-      "sha256": "da0f8eb59268a3cca501995965905c63eb171f67c5c64ca0e07b8bb0666ce7c8",
-      "size": 14876134,
+      "sha256": "f3746cd754ed27e285fe9d6dcf404e06b4dadab63cec4563c2edec3560f41da3",
+      "size": 15166164,
       "source": "release"
     },
     "custom_ring_policy_member_v3_2_w32_curator.key": {
-      "sha256": "18e946116b96187915216561df05e9d9e2fa5313261681660c2575c027eb6f82",
-      "size": 97650457,
+      "sha256": "d33f0b4e6e9ca34502f712706a11185797ea9a2d50948a81950a9c1029681226",
+      "size": 99229092,
       "source": "release"
     },
     "custom_ring_policy_member_v3_2_w32_own.key": {
-      "sha256": "2ba19a02548d412b823671e36f81a8453913138849b5637e3e7aede3c89dc0e8",
-      "size": 54255033,
+      "sha256": "28d3cfb398a6b57facea8a142727a3461eae22b1531b17c4e25d35cf7af11f93",
+      "size": 55095077,
       "source": "release"
     },
     "custom_ring_policy_member_v3_2_w4_curator.key": {
-      "sha256": "bfa8b1bc7217d96a9802e5b4ba7c3e9b02f06415aa30f819b7a890885cec417b",
-      "size": 30739740,
+      "sha256": "e39ab020bca2025e0b5b19abd5d851f82e4fbe90d08cf51feaeb90b9b4a62321",
+      "size": 31286217,
       "source": "release"
     },
     "custom_ring_policy_member_v3_2_w4_own.key": {
-      "sha256": "15fe7376c8c318e867c95103855f3a934932c345dabe8fdfe820f150ef980a89",
-      "size": 17171368,
+      "sha256": "22f8058080d44658a8b03b3914cd7f23821906e399d228735357fbc8b62a39ba",
+      "size": 17498986,
       "source": "release"
     },
     "custom_ring_policy_member_v3_2_w8_curator.key": {
-      "sha256": "1ced82402c3a88fe1988e5b91c74f074124637a7f5d63625509346a2588ea111",
-      "size": 39020012,
+      "sha256": "f22243d16b361fe829a737d564e0c9dfe3711242b2897f933880970c4fc02084",
+      "size": 39711111,
       "source": "release"
     },
     "custom_ring_policy_member_v3_2_w8_own.key": {
-      "sha256": "61e7a8c1919f379881ff25e439ae280a4523bffab8248e23ff05d6786a05ec3e",
-      "size": 23919092,
+      "sha256": "1a62eb1a9f5bed3acfa66925e84984c93d2d52854e3294c64c8b34701a6ce3d1",
+      "size": 24315016,
       "source": "release"
     },
     "custom_ring_policy_member_v3_4_w0_curator.key": {
-      "sha256": "60f80e95f79d69ec3188dad8a46e23a3d0f4aacc03aaf6d44636d56d604eff05",
-      "size": 28294995,
+      "sha256": "585a073d10dad4a72452a9eb0f227a8980dd2a57f2e80749deea0ccc00085205",
+      "size": 28790146,
       "source": "release"
     },
     "custom_ring_policy_member_v3_4_w0_own.key": {
-      "sha256": "a54b385d6a570b61483c0b470b5c897dbb4a29610dcbecc3c50c386d79db39fb",
-      "size": 17494172,
+      "sha256": "9d0a4849e2551f852f427fdc4a0c93224159e1523365b224f28dcdaa9c22451a",
+      "size": 17822658,
       "source": "release"
     },
     "custom_ring_policy_member_v3_4_w16_curator.key": {
-      "sha256": "dec116edc56a7b5656064e0f8ac9a1c2bc5a60b320e98da661e4b230089981ae",
-      "size": 66355051,
+      "sha256": "bdea67408600703cdb4f5cb03937b44de87099399855a914d4daaf6d5a20b6e2",
+      "size": 67492671,
       "source": "release"
     },
     "custom_ring_policy_member_v3_4_w16_own.key": {
-      "sha256": "6885e75f5a4232190bd91e6ffca01d9df1070c486d73ffbd298b965e0f0f310b",
-      "size": 37163361,
+      "sha256": "9f6d9685a21bfe1ca5d674f7e3abe6f2ffcc45bc2905df9b6437b7dc66367980",
+      "size": 37785708,
       "source": "release"
     },
     "custom_ring_policy_member_v3_4_w1_curator.key": {
-      "sha256": "7efa4066055423072477ac8df38d685a04004e894919ed967b954e94270bda97",
-      "size": 31285224,
+      "sha256": "92b1c1a5695a01df35799442417769368462b4381cb5d2cc2561db1e36dca5b1",
+      "size": 31833048,
       "source": "release"
     },
     "custom_ring_policy_member_v3_4_w1_own.key": {
-      "sha256": "1a7ca9cefc09a8de94ceca8c69070101dff88077b7507371a3da08876324f39b",
-      "size": 18638842,
+      "sha256": "6f3e40913be750aff64b3ad95c5cb742e29eee77bed93561012bce33ef6df817",
+      "size": 18984405,
       "source": "release"
     },
     "custom_ring_policy_member_v3_4_w2_curator.key": {
-      "sha256": "fd54535656997a1c717c788d9ec1c8c3610359b63522821f59a34d04319b1334",
-      "size": 34276465,
+      "sha256": "5344e24fe7b8b8f49fc6c760594e82ef124d9046297e73678963f18ee2d072f7",
+      "size": 34878583,
       "source": "release"
     },
     "custom_ring_policy_member_v3_4_w2_own.key": {
-      "sha256": "2308eacdd4f2869ca6fc5e5b457d2558ca537506f4b3c18e7f8d650234fbc125",
-      "size": 19795166,
+      "sha256": "138ba5f33c30513b107504a22fce828a9bfb9a23d0381731756773c74a46dcf8",
+      "size": 22257593,
       "source": "release"
     },
     "custom_ring_policy_member_v3_4_w32_curator.key": {
-      "sha256": "f6691d08d8f9a84d332dd63bf3caaa3562cf02997dec71927414f6f6260aa218",
-      "size": 105604096,
+      "sha256": "4e8066bc0e7094508c26e4a2b89fe05a5c015bec4d2d2a8cef467ae67275adae",
+      "size": 107331003,
       "source": "release"
     },
     "custom_ring_policy_member_v3_4_w32_own.key": {
-      "sha256": "ef685aa3fb2432514e9c49d2665fedee760c39b70cb9cb2c39b2eeb66ca87b7d",
-      "size": 58898635,
+      "sha256": "2554f25f5afcfb01d14512062d68f0efdd3dbee5ca6dc9c1e156b4ab604fc8a5",
+      "size": 59815874,
       "source": "release"
     },
     "custom_ring_policy_member_v3_4_w4_curator.key": {
-      "sha256": "ac6fba2fad12e22a1dcdd4759153e46c69d5fcb79dfd444955348586232ccf52",
-      "size": 39318387,
+      "sha256": "9b47728ef203f8755619db9a185b97fcc2c9efad97101391020ce226f438cc4e",
+      "size": 40008494,
       "source": "release"
     },
     "custom_ring_policy_member_v3_4_w4_own.key": {
-      "sha256": "236f84e1e0330d811fe314d799625def7d6da357d735dac53c969e12aecbf63f",
-      "size": 24208863,
+      "sha256": "bdc40871de50d112825c58e42468b0fa026d11a84e06e81028a7dd32ec738f50",
+      "size": 24607312,
       "source": "release"
     },
     "custom_ring_policy_member_v3_4_w8_curator.key": {
-      "sha256": "b143cee6fbccba8cd5dc1267c47b7932e5ed838618d1f3a4ef8443b860905d3d",
-      "size": 51142447,
+      "sha256": "57da127c63115d957274920b8a1425a788e72b4ae543795733b9d22b8cbad6c6",
+      "size": 51987956,
       "source": "release"
     },
     "custom_ring_policy_member_v3_4_w8_own.key": {
-      "sha256": "e43c843c28d31b2c5c845eed8e9d944518c4f77d23b8ebea5fe52d3b95487213",
-      "size": 28563890,
+      "sha256": "993515e5d79053c5c5edf0f14a43b4bdc50cc050de8db6f4b834d8ae7227e92d",
+      "size": 29036426,
       "source": "release"
     },
     "custom_ring_policy_member_v3_8_w0_curator.key": {
-      "sha256": "5bd329f2af518b02cf7987679d0b53b7e82b30e86bedd806b8e000f71b4573bb",
-      "size": 49296818,
+      "sha256": "e8e810a97cb1b3f3949360f4672a3ff23a9eaec48fd2f544268bbd0e9ffd44ec",
+      "size": 50260892,
       "source": "release"
     },
     "custom_ring_policy_member_v3_8_w0_own.key": {
-      "sha256": "2646d027f8fe7c50163150170fc2068ebc7954c71e360ed834baeee4f7c3dadd",
-      "size": 29163225,
+      "sha256": "d89f7eba1bdfd0aaa70d2b33b4a7b6d4c4cfb519586c6cfa4bfb56213116df6b",
+      "size": 29813476,
       "source": "release"
     },
     "custom_ring_policy_member_v3_8_w16_curator.key": {
-      "sha256": "7c76fc337b1b3b9384949b605bb5ab7a646a0d619f8d65c113fa8687febc1586",
-      "size": 90552445,
+      "sha256": "dc30c9715f2e4258555a18eb13928bd5aedf2b659a01c230849c349863ce0579",
+      "size": 92161697,
       "source": "release"
     },
     "custom_ring_policy_member_v3_8_w16_own.key": {
-      "sha256": "f0f8ee6a5954574a58543480ccf7898e02125e3761f04d1f3b64cf3bcdc10059",
-      "size": 50557527,
+      "sha256": "9e136cc46463fa50c7db8bfbcd988c99680a5fc665192817bc7f925dc5689a27",
+      "size": 51500568,
       "source": "release"
     },
     "custom_ring_policy_member_v3_8_w1_curator.key": {
-      "sha256": "179026b61ddfcfaac040c1489be545012cc8325dc40cf5974fe60fb39d1bc225",
-      "size": 51986916,
+      "sha256": "9261ca599bc228a3f27de4fb7ec96f125bc7c0cf38291f04f7db807d719e2b7e",
+      "size": 53004998,
       "source": "release"
     },
     "custom_ring_policy_member_v3_8_w1_own.key": {
-      "sha256": "ffd08ae3eaf0c0c4e1e4175f369f5953b18c21512e4e11a18953ceda3437dd84",
-      "size": 30225722,
+      "sha256": "29c1b5bbc215ce41f98912bba0e525bc66b7eada3274b6dc2e2e014718891a82",
+      "size": 30897310,
       "source": "release"
     },
     "custom_ring_policy_member_v3_8_w2_curator.key": {
-      "sha256": "98136213fa094ee879f485a0dd3411b76ab0019fa29d9bb65ac77dd414404b36",
-      "size": 54678806,
+      "sha256": "757bb749d6a1fcffd090a9123bd48deb153967a17f9e1c5c86276eeea1064b2e",
+      "size": 55753678,
       "source": "release"
     },
     "custom_ring_policy_member_v3_8_w2_own.key": {
-      "sha256": "3680bf9ec7b6f4d6ad58ab9b5a90380a77814380137bc98301d3100362b24610",
-      "size": 31299918,
+      "sha256": "55827f6ce6ae22086564efab9a9f8a4c25f6db0b8493c5cbe986a2a66e3dd87f",
+      "size": 31993405,
       "source": "release"
     },
     "custom_ring_policy_member_v3_8_w32_curator.key": {
-      "sha256": "23dd9fcba58e8d42ddda4669443be5e6ec7edde343e8157c205e20191a1957e5",
-      "size": 121626786,
+      "sha256": "0c82a39e387bcbc39e0a7b5ec68b6ca2616077e8d5a28f6d09877c124bc3d0cd",
+      "size": 123827337,
       "source": "release"
     },
     "custom_ring_policy_member_v3_8_w32_own.key": {
-      "sha256": "aaf7aaec60733c96e1330ccef9f7e61f97d548908379dbad152fa694fb775acd",
-      "size": 68267358,
+      "sha256": "55c4221ac0d70c9a89583f084349cb0b0bd6f64a814c9460f20a7819662a778e",
+      "size": 69508793,
       "source": "release"
     },
     "custom_ring_policy_member_v3_8_w4_curator.key": {
-      "sha256": "1416f0247911bef71272a8356595cdda161a0b972676014db9bb9a68ffd706a4",
-      "size": 59264844,
+      "sha256": "1fb11c48b6ff64870458856d7e207078b67596e7bda897f8785493b6021cc71e",
+      "size": 60429475,
       "source": "release"
     },
     "custom_ring_policy_member_v3_8_w4_own.key": {
-      "sha256": "2a7c74b0cf3e2ed93e254f676f55a411a7b551527385200afd7813a7fa50b529",
-      "size": 33421190,
+      "sha256": "7e7ba39de9202be1faf30eb476726b5272467c7b73b75027545153c1f642bff7",
+      "size": 34146109,
       "source": "release"
     },
     "custom_ring_policy_member_v3_8_w8_curator.key": {
-      "sha256": "20cf08c091ee2a0f10f4d76c4503738dc740ce7976f42b9cc9ca20e42382fbfd",
-      "size": 66840801,
+      "sha256": "157bb0393247fa38dbb2356a674004bf10d5deaf37a1e60c3d9cc99abc50420c",
+      "size": 68152685,
       "source": "release"
     },
     "custom_ring_policy_member_v3_8_w8_own.key": {
-      "sha256": "94821e61723c38cc3adcd99ea1feafc739906e49141d12a31459b8a9fabb7efa",
-      "size": 37691556,
+      "sha256": "7f2ecdf83ad6a35537f996774b7ff8e2d9a5f00d30b6cb93583712feca5bd9ad",
+      "size": 38490323,
       "source": "release"
     },
     "custom_ring_register_key.key": {
-      "sha256": "2cdd45b0ff4ed8b700bc67bec137955a3234bea7b0a227e3e39fb81af29a598b",
+      "sha256": "4ae9314bc5c05392dc93f753a32a328ace377172ae5636caf2d50894e9796d4f",
       "size": 17031964,
       "source": "release"
     },
     "custom_ring_withdrawal_exemption.key": {
-      "sha256": "b47f4c19172eea579d3a5bc848a0f9378655c3c6c80c4ee2d9d714d885d301fb",
-      "size": 3852840,
+      "sha256": "d78f2343ccdac0f88bd39605bf831905308b40a1d72bebf4324817bd341867cb",
+      "size": 3920262,
       "source": "release"
     }
   }

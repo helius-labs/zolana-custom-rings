@@ -236,7 +236,7 @@ func (v statementVector) circuits(t *testing.T) (frontend.Circuit, frontend.Circ
 	if !member && !delegated {
 		t.Fatalf("key %q with anonymous %v, approval %v, key escrow %v fits no key", v.Key, v.Anonymous, v.ApprovalRequired, v.KeyEscrow)
 	}
-	w := ringpolicy.Delegate(transaction.Shape{NInputs: 2, NOutputs: 2})
+	w := ringpolicy.Delegate(transaction.NewShape(2, 2))
 	if member {
 		w = ringpolicy.Confidential()
 		w.Anonymous, w.ApprovalRequired, w.KeyEscrow = *v.Anonymous, v.ApprovalRequired, v.KeyEscrow
