@@ -162,7 +162,7 @@ fn a_relayed_authority_transfer_moves_the_escrowed_members_note() -> Result<()> 
     let delegate = env.funded_keypair()?;
     relayed.escrow(&delegate)?;
     env.enable_authority_rail(relayed.ring)?;
-    relayed.keyed_notes(member)?;
+    relayed.notes(member, 1).deposit()?;
     let ring_rpc = relayed.serve()?;
     let transfer = AuthorityTransfer {
         source: member_address.into(),
@@ -173,7 +173,7 @@ fn a_relayed_authority_transfer_moves_the_escrowed_members_note() -> Result<()> 
         }],
     };
 
-    // The service opens the member's note and escrowed key at its next backfill.
+    // The service opens the member's deposit under its escrowed key at its next backfill.
     let pending = wait_for("the service to open the escrowed note", || {
         let request = AuthorityTransferRequest::new(AuthorityTransferAttestation {
             target: ring_rpc.target,
@@ -193,14 +193,11 @@ fn a_relayed_authority_transfer_moves_the_escrowed_members_note() -> Result<()> 
     env.run(pending.sign(&ring_rpc.relay, &delegate))?;
 
     let signature = ring_rpc.confirmed(env, &relay_id)?;
-    let recovered = relayed.recovered(member, signature)?;
     assert_eq!(
-        recovered.len(),
-        3,
+        relayed.recovered(member, signature)?,
+        [MOVED, DEPOSIT - MOVED],
         "the move pays one note and returns the change"
     );
-    assert!(recovered.contains(&MOVED));
-    assert_eq!(recovered.iter().sum::<u64>(), DEPOSIT);
     Ok(())
 }
 
@@ -210,7 +207,7 @@ fn a_managed_merge_pass_settles_the_wallet_toward_its_target() -> Result<()> {
     let env = &relayed.env;
     let member = &env.sender.keypair;
     relayed.escrow(&env.funded_keypair()?)?;
-    relayed.keyed_notes(member)?;
+    relayed.notes(member, 2).deposit()?;
     let ring_rpc = relayed.serve()?;
     let request = MergeSettingsRequest::new(MergeSettingsAttestation {
         target: ring_rpc.target,
@@ -224,7 +221,7 @@ fn a_managed_merge_pass_settles_the_wallet_toward_its_target() -> Result<()> {
     .sign(member)?;
     env.run(ring_rpc.relay.set_merge_settings(request))?;
 
-    // A pass merges nothing until the backfill opens the notes and the escrowed key.
+    // A pass merges nothing until the backfill opens the deposits under the escrowed key.
     let sent = wait_for("a managed merge", || {
         let sent = ring_rpc.managed_merge_pass()?;
         Ok(if sent.is_empty() {
@@ -244,7 +241,7 @@ fn a_managed_merge_pass_settles_the_wallet_toward_its_target() -> Result<()> {
         )
     })?;
     ensure!(landed.is_ok(), "the merge failed {landed:?}");
-    assert_eq!(relayed.recovered(member, signature)?, [DEPOSIT]);
+    assert_eq!(relayed.recovered(member, signature)?, [2 * DEPOSIT]);
     Ok(())
 }
 
@@ -302,22 +299,6 @@ impl RelayedRing {
             self.ring.program_id(),
         )?
         .with_output_tree_id(env.tree_id(env.tree)?)?)
-    }
-
-    /// Two notes a transfer gave the owner, the service opens no confidential deposit.
-    fn keyed_notes(&self, owner: &ShieldedKeypair) -> Result<()> {
-        let mut prepared = self.deposit_spend(owner, owner.pubkey())?;
-        prepared.transfer_sol(&owner.shielded_address()?, TRANSFER_AMOUNT)?;
-        OwnerTransfer {
-            ring: self.ring,
-            sender: owner,
-            prepared,
-            interface_transfer_accounts: Vec::new(),
-            auditor_tag: auditor_view_tag(&self.auditor.pubkey()),
-            cosigner: None,
-        }
-        .send(&self.env)?;
-        Ok(())
     }
 
     fn escrow(&self, delegate: &Keypair) -> Result<()> {

@@ -14,8 +14,8 @@ use spr_keypair::{NullifierKey, PublicKey};
 use spr_transaction::{Data, Mint, Utxo, WalletUtxo};
 use tokio::sync::Mutex as AsyncMutex;
 use zolana_ring_client::{
-    rpc::AuditedUtxoView, CreatedUtxo, EscrowedKeys, KnownUtxo, KnownUtxoIndex, SealedNullifierKey,
-    UtxoOwner,
+    rpc::AuditedUtxoView, CreatedUtxo, DepositOwner, DepositOwners, EscrowedKeys, KnownUtxo,
+    KnownUtxoIndex, SealedNullifierKey, UtxoOwner,
 };
 
 use crate::error::RingRpcError;
@@ -57,6 +57,7 @@ pub(crate) struct EscrowRoot {
 pub(crate) struct EscrowedOwner {
     pub owner_key: [u8; 32],
     pub nullifier_pk: [u8; 32],
+    pub owner_hash: [u8; 32],
     pub sealed: SealedNullifierKey,
 }
 
@@ -80,6 +81,8 @@ pub(crate) struct StoredUtxo {
 struct EscrowMap {
     root: Option<EscrowRoot>,
     keys: HashMap<[u8; 32], EscrowedOwner>,
+    /// Owner hash to owner key, over the owners of `keys`.
+    owner_keys: HashMap<[u8; 32], [u8; 32]>,
 }
 
 impl AuditStore {
@@ -182,6 +185,10 @@ impl AuditStore {
         owners: HashMap<[u8; 32], EscrowedOwner>,
     ) {
         let mut escrow = self.escrow.write().unwrap_or_else(PoisonError::into_inner);
+        escrow.owner_keys = owners
+            .values()
+            .map(|owner| (owner.owner_hash, owner.owner_key))
+            .collect();
         escrow.keys = owners
             .into_values()
             .map(|owner| (owner.owner_key, owner))
@@ -245,6 +252,17 @@ impl EscrowedKeys for AuditStore {
             .keys
             .get(owner_key)
             .map(|owner| owner.nullifier_pk)
+    }
+}
+
+impl DepositOwners for AuditStore {
+    fn deposit_owner(&self, owner_hash: &[u8; 32]) -> Option<DepositOwner> {
+        let escrow = self.escrow.read().unwrap_or_else(PoisonError::into_inner);
+        let owner = escrow.keys.get(escrow.owner_keys.get(owner_hash)?)?;
+        Some(DepositOwner {
+            owner_key: owner.owner_key,
+            nullifier_pk: owner.nullifier_pk,
+        })
     }
 }
 

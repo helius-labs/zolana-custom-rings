@@ -561,6 +561,11 @@ pub(crate) mod tests {
             let owner = EscrowedOwner {
                 owner_key,
                 nullifier_pk,
+                owner_hash: spr_keypair::hash::owner_hash(
+                    &spr_keypair::PublicKey::from_ed25519(&owner_key),
+                    &nullifier_pk,
+                )
+                .expect("owner hash"),
                 sealed: NullifierKeyEnvelope::new(&key, &auditor)
                     .expect("envelope")
                     .sealed,

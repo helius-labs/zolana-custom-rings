@@ -5,7 +5,7 @@ use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::GetShieldedTransactionsByTagsResponse;
 use spr_indexer_api::{Base64String, Hash, Limit};
-use spr_keypair::{NullifierKey, X25519Keypair, X25519Pubkey};
+use spr_keypair::{hash::owner_hash, NullifierKey, PublicKey, X25519Keypair, X25519Pubkey};
 use spr_transaction::instructions::transact::canonical_shape;
 use zolana_ring_client::{
     auditor_view_tag,
@@ -582,7 +582,7 @@ impl<S: TransactionSource> AuditService<S> {
                             origin: &origin,
                             ring: self.ring,
                         }
-                        .open(&self.auditor)
+                        .open_for(&self.auditor, store)
                     });
                     match created {
                         Ok(created) => store.record(
@@ -745,6 +745,7 @@ fn escrowed_owner(
     Ok(Some(EscrowedOwner {
         owner_key: owner.to_bytes(),
         nullifier_pk,
+        owner_hash: owner_hash(&PublicKey::from_ed25519(owner.as_array()), &nullifier_pk)?,
         sealed,
     }))
 }
