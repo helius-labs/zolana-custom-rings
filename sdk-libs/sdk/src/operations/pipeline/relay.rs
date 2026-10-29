@@ -7,7 +7,6 @@ use spr_indexer_api::{SerializablePubkey, SerializableSignature};
 use spr_keypair::{NullifierKey, SigningKey};
 use zolana_ring_client::rpc::{
     PrepareRelayRequest, ProofInputBytes, RelayIntent, RelayProofInputs, RelayQuote, RelayRail,
-    TokenAccountSetup,
 };
 use zolana_ring_transaction::RingDelivery;
 
@@ -23,10 +22,9 @@ impl RingTransfer<Anonymous<'_>> {
     ) -> Result<PreparedRelay, RingError> {
         WalletRelay {
             transfer: self,
-            payer: self.rail.owner.transaction.payer(),
+            owner: &self.rail.owner,
             signer: self.rail.signer,
             exit_token_owner: self.rail.exit_token_owner,
-            token_account_setup: self.rail.token_account_setup.clone(),
         }
         .prepare(client, quote)
         .await
@@ -42,13 +40,12 @@ impl RingTransfer<Owner<'_>> {
     ) -> Result<PreparedRelay, RingError> {
         WalletRelay {
             transfer: self,
-            payer: self.rail.transaction.payer(),
+            owner: &self.rail,
             signer: self
                 .rail
                 .in_proof_owner
                 .ok_or(RingError::MissingInProofOwnerSignature)?,
             exit_token_owner: None,
-            token_account_setup: Vec::new(),
         }
         .prepare(client, quote)
         .await
@@ -57,10 +54,9 @@ impl RingTransfer<Owner<'_>> {
 
 struct WalletRelay<'t, R: Rail> {
     transfer: &'t RingTransfer<R>,
-    payer: Address,
+    owner: &'t Owner<'t>,
     signer: &'t SigningKey,
     exit_token_owner: Option<Address>,
-    token_account_setup: Vec<TokenAccountSetup>,
 }
 
 impl<R: Rail> WalletRelay<'_, R> {
@@ -69,9 +65,10 @@ impl<R: Rail> WalletRelay<'_, R> {
         client: &C,
         quote: RelayQuote,
     ) -> Result<PreparedRelay, RingError> {
-        if self.payer != quote.fee_payer.0 {
+        let payer = self.owner.transaction.payer();
+        if payer != quote.fee_payer.0 {
             return Err(RingError::RelayPayerMismatch {
-                payer: self.payer,
+                payer,
                 fee_payer: quote.fee_payer.0,
             });
         }
@@ -92,7 +89,7 @@ impl<R: Rail> WalletRelay<'_, R> {
                 .encode()
                 .map(ProofInputBytes::new)
         };
-        let token_account_setup = self.token_account_setup;
+        let token_account_setup = self.owner.token_account_setup.clone();
         let intent = match staged.rail.delivery() {
             RingDelivery::Anonymous(plan) => RelayIntent::Anonymous {
                 proof_inputs: encode(RelayRail::Anonymous {

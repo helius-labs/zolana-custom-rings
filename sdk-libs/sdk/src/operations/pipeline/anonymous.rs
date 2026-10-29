@@ -16,8 +16,7 @@ use spr_transaction::{
     Mint, WalletUtxo,
 };
 use zolana_ring_client::{
-    rpc::TokenAccountSetup, FirstContact, PaymentRecipient, TransferTagging, TransferTags,
-    ViewingHistory,
+    FirstContact, PaymentRecipient, TransferTagging, TransferTags, ViewingHistory,
 };
 use zolana_ring_keys::{RingAddress, RingPaymentRequest};
 use zolana_ring_transaction::{RingDelivery, RingOutputRail};
@@ -105,7 +104,6 @@ pub struct Anonymous<'a> {
     /// In declared order, the order of their ring outputs.
     payments: Vec<AnonymousPayment>,
     pub(super) exit_token_owner: Option<Address>,
-    pub(super) token_account_setup: Vec<TokenAccountSetup>,
 }
 
 pub type AnonymousTransfer<'a> = RingTransfer<Anonymous<'a>>;
@@ -134,7 +132,6 @@ impl<'a> RingTransfer<Owner<'a>> {
                 history,
                 payments: Vec::new(),
                 exit_token_owner: None,
-                token_account_setup: Vec::new(),
             },
         }
     }
@@ -176,13 +173,6 @@ impl RingTransfer<Anonymous<'_>> {
     #[must_use = "use the updated transfer"]
     pub fn with_exit_token_owner(mut self, owner: Address) -> Self {
         self.rail.exit_token_owner = Some(owner);
-        self
-    }
-
-    /// Ring RPC creates each account before a relayed withdrawal pays it.
-    #[must_use = "use the updated transfer"]
-    pub fn with_token_account_setup(mut self, setup: Vec<TokenAccountSetup>) -> Self {
-        self.rail.token_account_setup = setup;
         self
     }
 

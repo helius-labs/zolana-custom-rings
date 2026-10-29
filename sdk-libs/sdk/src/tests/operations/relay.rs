@@ -1,4 +1,4 @@
-//! A relayed anonymous transfer against a stub Ring RPC.
+//! Relayed transfers against a stub Ring RPC.
 
 use std::sync::Mutex;
 
@@ -11,7 +11,7 @@ use zolana_ring_client::{
     rpc::{
         GetRelayQuoteRequest, GetRelayStatusRequest, PrepareAuthorityTransferRequest,
         PrepareRelayRequest, RelayIntent, RelayProofInputs, RelayQuote, RelayStatus, RelayStep,
-        SubmitRelayRequest,
+        SubmitRelayRequest, TokenAccountSetup,
     },
     FirstContact,
 };
@@ -51,7 +51,7 @@ impl RingRelay for StubRelay {
     }
 
     async fn submit_relay(&self, _request: SubmitRelayRequest) -> Result<RelayStatus, RingError> {
-        unreachable!("the anonymous rail takes no message signature")
+        unreachable!("a wallet relay signs inside the proof")
     }
 
     async fn get_relay_status(
@@ -135,4 +135,62 @@ async fn an_anonymous_relay_sends_no_path_or_record_request_and_signs_the_messag
     assert!(sender
         .signing_pubkey()
         .verify_message(&message_hash, owner_signature.0.as_array()));
+}
+
+#[tokio::test]
+async fn a_confidential_relay_carries_its_token_account_setup() {
+    let sender = keypair(1);
+    let recipient = keypair(2);
+    let fee_payer = Address::new_from_array([0x44; 32]);
+    let chain = Chain::ring(RingSettings::new(RingMode::Confidential));
+    let mut transaction = ConfidentialTransaction::new_with_ring(
+        vec![ring_utxo(&sender, Mint::SOL, 10, 0)],
+        fee_payer,
+        ring().program_id(),
+    )
+    .unwrap();
+    transaction
+        .transfer_sol(&recipient.shielded_address().unwrap(), 4)
+        .unwrap();
+    let setup = vec![TokenAccountSetup {
+        owner: SerializablePubkey(Address::new_from_array([0x55; 32])),
+        mint: SerializablePubkey(Address::new_from_array([0x66; 32])),
+    }];
+    let transfer = CustomRingTransfer::new(CustomRingTransferInput {
+        ring: ring(),
+        sender: &sender,
+        nullifier_key: Some(&sender.nullifier_key),
+        transaction,
+    })
+    .with_in_proof_owner(&sender.signing_key)
+    .with_token_account_setup(setup.clone());
+    let quote = RelayQuote {
+        fee_payer: SerializablePubkey(fee_payer),
+        valid_until_slot: u64::MAX,
+    };
+
+    let relay = StubRelay::default();
+    transfer
+        .prepare_relay(&chain, quote)
+        .await
+        .unwrap()
+        .send(&relay)
+        .await
+        .unwrap()
+        .submitted()
+        .unwrap();
+
+    let prepared = relay.prepared.lock().unwrap();
+    let [PrepareRelayRequest {
+        intent:
+            RelayIntent::Confidential {
+                token_account_setup,
+                ..
+            },
+        ..
+    }] = prepared.as_slice()
+    else {
+        panic!("one confidential prepareRelay call");
+    };
+    assert_eq!(token_account_setup, &setup);
 }

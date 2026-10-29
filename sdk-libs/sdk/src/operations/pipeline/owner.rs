@@ -6,6 +6,7 @@ use spr_interface::shape::Shape;
 use spr_keypair::{NullifierKey, ShieldedAddress, SigningKey};
 use spr_program::instruction::TransactInterfaceTransferAccounts;
 use spr_transaction::instructions::transact::ConfidentialTransaction;
+use zolana_ring_client::rpc::TokenAccountSetup;
 use zolana_ring_transaction::{RingDelivery, RingOutputRail};
 
 use super::{
@@ -22,6 +23,7 @@ pub struct Owner<'a> {
     pub(super) interface_transfer_accounts: Vec<TransactInterfaceTransferAccounts>,
     pub(super) shape: Option<Shape>,
     pub(super) in_proof_owner: Option<&'a SigningKey>,
+    pub(super) token_account_setup: Vec<TokenAccountSetup>,
 }
 
 pub struct CustomRingTransferInput<'a> {
@@ -55,6 +57,7 @@ impl<'a> RingTransfer<Owner<'a>> {
                 interface_transfer_accounts: Vec::new(),
                 shape: None,
                 in_proof_owner: None,
+                token_account_setup: Vec::new(),
             },
         }
     }
@@ -63,6 +66,13 @@ impl<'a> RingTransfer<Owner<'a>> {
     #[must_use = "use the updated transfer"]
     pub fn with_in_proof_owner(mut self, signer: &'a SigningKey) -> Self {
         self.rail.in_proof_owner = Some(signer);
+        self
+    }
+
+    /// Ring RPC creates each account before a relayed withdrawal pays it.
+    #[must_use = "use the updated transfer"]
+    pub fn with_token_account_setup(mut self, setup: Vec<TokenAccountSetup>) -> Self {
+        self.rail.token_account_setup = setup;
         self
     }
 
