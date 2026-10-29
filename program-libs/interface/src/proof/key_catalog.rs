@@ -112,7 +112,7 @@ impl RingCircuit {
     }
 }
 
-/// A policy key's record pool widths, mirror `recordCapacity` in `prover/circuits/policy/pooled_policy.go`.
+/// A policy key's record pool widths, mirror `recordCapacity` in `prover/circuits/policy/record_pool.go`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecordPools {
     pub own: usize,
