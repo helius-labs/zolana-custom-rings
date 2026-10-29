@@ -16,9 +16,12 @@ impl<S: TransactionSource> Hub<S> {
         request: &GetPendingEnrolmentsRequest,
     ) -> Result<GetPendingEnrolmentsResponse, RingRpcError> {
         let ring = request.ring.0;
-        let authority = self.authorize_enrolment(ring, &request.auth, ListEnrolments)?;
+        let action = ListEnrolments {
+            cursor: request.cursor.clone(),
+        };
+        let authority = self.authorize_enrolment(ring, &request.auth, action)?;
         self.record_writer()?
-            .pending_enrolments(ring, authority)
+            .pending_enrolments(authority, request)
             .await
     }
 

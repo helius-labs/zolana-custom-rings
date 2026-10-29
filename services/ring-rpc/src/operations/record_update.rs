@@ -102,7 +102,14 @@ pub(crate) struct CheckedUpdate {
     pub writes: Vec<StorageWriteData>,
     pub urgent: bool,
     /// `Some` holds the update until the config authority sets these lists on the signer's record.
-    pub awaited: Option<ListSet>,
+    pub awaited: Option<AwaitedLists>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AwaitedLists {
+    pub lists: ListSet,
+    /// The owner identity of the signer.
+    pub member: [u8; 32],
 }
 
 pub(crate) struct AwaitingEnrolment {
@@ -117,7 +124,7 @@ pub(crate) struct AwaitingEnrolment {
 #[must_use]
 pub(crate) struct EnrolmentApproval<'a> {
     pub update: &'a CheckedUpdate,
-    /// The ring's enrolments, oldest first.
+    /// The awaiting enrolments of the members the update writes, oldest first.
     pub awaiting: &'a [AwaitingEnrolment],
 }
 
@@ -238,7 +245,12 @@ impl RecordUpdateCheck<'_> {
         // 4. A wallet awaits only enrolment lists the policy reads from its own records.
         let awaited = match request.update.awaited_lists {
             0 => None,
-            bits => Some(awaited_lists(bits, context.policy, record_signer)?),
+            bits => Some(AwaitedLists {
+                lists: awaited_lists(bits, context.policy, record_signer)?,
+                member: *Member::owner_tag(signer.as_array())
+                    .map_err(invalid_entry)?
+                    .as_bytes(),
+            }),
         };
         if awaited.is_some()
             && request.update.valid_until_slot
@@ -258,7 +270,7 @@ impl RecordUpdateCheck<'_> {
             .map_err(invalid_entry)?;
         // 5. No entry writes and no enrolment awaits a tree reader list the service never reads.
         if context.reader_grants == ReaderGrantStore::Database
-            && (awaited.is_some_and(|lists| lists.contains(ListId::Reader))
+            && (awaited.is_some_and(|awaited| awaited.lists.contains(ListId::Reader))
                 || queued
                     .iter()
                     .any(|entry| entry.mask & ListId::Reader.record_bit() != 0))
@@ -272,6 +284,20 @@ impl RecordUpdateCheck<'_> {
             urgent,
             awaited,
         })
+    }
+}
+
+impl CheckedUpdate {
+    /// Each member once, in write order.
+    pub fn written_members(&self) -> Result<Vec<[u8; 32]>, RecordUpdateRefusal> {
+        let mut members = Vec::new();
+        for write in &self.writes {
+            let member = write.entry().map_err(invalid_entry)?.member;
+            if !members.contains(&member) {
+                members.push(member);
+            }
+        }
+        Ok(members)
     }
 }
 

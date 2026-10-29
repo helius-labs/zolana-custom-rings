@@ -193,16 +193,34 @@ impl RingRpcClient {
         })
     }
 
-    /// Signed by the config authority, oldest first.
+    /// Every page signed by the config authority, oldest first.
     pub fn pending_enrolments(
         &self,
         target: ReadTarget,
         authority: &dyn Signer,
     ) -> Result<Vec<PendingEnrolment>> {
-        let request =
-            GetPendingEnrolmentsRequest::read(target, authority.pubkey()).sign(authority)?;
-        let pending: GetPendingEnrolmentsResponse = self.call(GET_PENDING_ENROLMENTS, request)?;
-        Ok(pending.enrolments)
+        let mut enrolments = Vec::new();
+        let mut cursor = None;
+        for _ in 0..MAX_PAGES {
+            let read = GetPendingEnrolmentsRequest::read(target, authority.pubkey());
+            let read = match cursor.clone() {
+                Some(cursor) => read.with_cursor(cursor),
+                None => read,
+            };
+            let page: GetPendingEnrolmentsResponse =
+                self.call(GET_PENDING_ENROLMENTS, read.sign(authority)?)?;
+            let Some(next) = page.next_cursor else {
+                enrolments.extend(page.enrolments);
+                return Ok(enrolments);
+            };
+            ensure!(
+                page.enrolments.last().map(|row| &row.update_id) == Some(&next),
+                "the ring rpc named a cursor outside its page"
+            );
+            enrolments.extend(page.enrolments);
+            cursor = Some(next);
+        }
+        bail!("the ring rpc returned more than {MAX_PAGES} pending enrolment pages")
     }
 
     /// A service that holds another key for this ring can open nothing here.

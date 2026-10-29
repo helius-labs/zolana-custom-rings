@@ -72,6 +72,7 @@ pub const AUDIT_CURSOR_LIMIT: usize = 256;
 pub const AUDIT_PAGE_LIMIT: u64 = 100;
 pub const DEPOSITS_PAGE_LIMIT: u32 = 50;
 pub const MAX_DEPOSITS_PAGE_LIMIT: u32 = 200;
+pub const PENDING_ENROLMENTS_PAGE_LIMIT: usize = 100;
 const ATTESTATION_DOMAIN: &[u8] = b"zolana/ring-auditor-key/v2";
 const READ_DOMAIN: &str = "zolana/ring-rpc-read/v2";
 const AUDITOR_KEY_REQUEST_DOMAIN: &str = "zolana/ring-rpc-auditor-key-request/v1";

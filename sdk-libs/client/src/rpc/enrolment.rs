@@ -21,6 +21,9 @@ pub struct ConfigAuthorityAuth {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct GetPendingEnrolmentsRequest {
     pub ring: SerializablePubkey,
+    /// The last enrolment of the previous page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<RecordUpdateId>,
     pub auth: ConfigAuthorityAuth,
 }
 
@@ -37,6 +40,9 @@ pub struct RefuseEnrolmentRequest {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct GetPendingEnrolmentsResponse {
     pub enrolments: Vec<PendingEnrolment>,
+    /// Absent on the last page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<RecordUpdateId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,8 +56,11 @@ pub struct PendingEnrolment {
     pub valid_until_slot: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ListEnrolments;
+/// The page after `cursor`, the first page without one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ListEnrolments {
+    pub cursor: Option<RecordUpdateId>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RefuseEnrolment(pub RecordUpdateId);
@@ -83,12 +92,16 @@ impl EnrolmentAction for ListEnrolments {
     type Request = GetPendingEnrolmentsRequest;
 
     fn line(&self) -> String {
-        "list".to_owned()
+        match &self.cursor {
+            None => "list".to_owned(),
+            Some(cursor) => format!("list after {}", cursor.0.to_base58()),
+        }
     }
 
     fn request(self, ring: Address, auth: ConfigAuthorityAuth) -> GetPendingEnrolmentsRequest {
         GetPendingEnrolmentsRequest {
             ring: ring.into(),
+            cursor: self.cursor,
             auth,
         }
     }
@@ -155,8 +168,15 @@ impl GetPendingEnrolmentsRequest {
         SignedRequest::new(EnrolmentAttestation {
             target,
             authority,
-            action: ListEnrolments,
+            action: ListEnrolments::default(),
         })
+    }
+}
+
+impl SignedRequest<EnrolmentAttestation<ListEnrolments>> {
+    pub fn with_cursor(mut self, cursor: RecordUpdateId) -> Self {
+        self.attestation.action.cursor = Some(cursor);
+        self
     }
 }
 

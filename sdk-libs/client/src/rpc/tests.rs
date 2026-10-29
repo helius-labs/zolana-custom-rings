@@ -1051,8 +1051,10 @@ fn the_enrolment_requests_match_the_shared_vector() {
         wire: String,
     }
     #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
     struct Vector {
         list: Signed,
+        list_after: Signed,
         refuse: Refuse,
     }
     let vector: Vector = serde_json::from_str(include_str!(
@@ -1063,14 +1065,31 @@ fn the_enrolment_requests_match_the_shared_vector() {
     let list = EnrolmentAttestation {
         target: target(),
         authority: authority.pubkey(),
-        action: ListEnrolments,
+        action: ListEnrolments::default(),
     };
     let refuse = EnrolmentAttestation {
         target: target(),
         authority: authority.pubkey(),
         action: RefuseEnrolment(vector.refuse.update_id.clone()),
     };
+    let list_after = GetPendingEnrolmentsRequest::read(target(), authority.pubkey())
+        .with_cursor(vector.refuse.update_id.clone());
     let message = |bytes: Vec<u8>| String::from_utf8(bytes).expect("utf8");
+    assert_eq!(
+        message(list_after.attestation.message(1_700_000_000, &[4; 32])),
+        vector.list_after.message
+    );
+    let list_after = SignedRequest {
+        timestamp: Some(1_700_000_000),
+        nonce: [4; 32],
+        ..list_after
+    }
+    .sign(&authority)
+    .expect("sign the second page");
+    assert_eq!(
+        serde_json::to_string(&list_after).expect("json"),
+        vector.list_after.wire
+    );
     assert_eq!(
         message(list.message(1_700_000_000, &[4; 32])),
         vector.list.message

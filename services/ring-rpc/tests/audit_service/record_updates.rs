@@ -1,4 +1,4 @@
-//! Record updates refuse a forged escrow proof, a second escrow key, an enrolment past its window or awaiting the reader list in database mode, send only a block entry as an immediate update, and hold an enrolment for its allow entry.
+//! Record updates refuse a forged escrow proof, a second escrow key, an enrolment past its window or awaiting the reader list in database mode, send only a block entry as an immediate update, hold an enrolment for its allow entry, and page the enrolments that await the config authority.
 
 use std::sync::atomic::AtomicU64;
 
@@ -17,7 +17,7 @@ use zolana_ring_client::rpc::{
     EscrowRegistration, GetPendingEnrolmentsRequest, GetPendingEnrolmentsResponse,
     GetRecordUpdateStatusRequest, ReadTarget, ReaderAccess, RecordUpdate, RecordUpdateEntry,
     RecordUpdateStatus, SubmitRecordUpdateRequest, SubmitRecordUpdateResponse, WalletGrant,
-    GET_PENDING_ENROLMENTS, SUBMIT_RECORD_UPDATE,
+    GET_PENDING_ENROLMENTS, PENDING_ENROLMENTS_PAGE_LIMIT, SUBMIT_RECORD_UPDATE,
 };
 use zolana_ring_indexer::rpc::{
     GetStorageApplyProofInputsRequest, GetStorageApplyProofInputsResponse,
@@ -708,6 +708,54 @@ async fn an_enrolment_past_its_window_is_refused() {
         refusal(records.submit(late).await),
         RecordUpdateRefusal::EnrolmentWindow.code()
     );
+}
+
+#[tokio::test]
+async fn pending_enrolments_page_oldest_first_after_a_cursor() {
+    let records = Records::new().await;
+    records.serves_own(ListId::Allow);
+    let mut submitted = Vec::new();
+    for _ in 0..=PENDING_ENROLMENTS_PAGE_LIMIT {
+        let enrolment = viewing_enrolment(&Keypair::new(), ListId::Allow);
+        submitted.push(records.submit(enrolment).await.expect("awaiting").update_id);
+    }
+    let target = ReadTarget {
+        cluster: GENESIS,
+        service: records.hub.service_pubkey(),
+        ring: RING,
+    };
+    let list = |page: GetPendingEnrolmentsRequest| {
+        records
+            .module
+            .call::<_, GetPendingEnrolmentsResponse>(GET_PENDING_ENROLMENTS, as_object(page))
+    };
+    let read = || GetPendingEnrolmentsRequest::read(target, authority().pubkey());
+
+    let first = list(read().sign(&authority()).expect("signed list"))
+        .await
+        .expect("first page");
+    let listed: Vec<_> = first
+        .enrolments
+        .iter()
+        .map(|row| row.update_id.clone())
+        .collect();
+    assert_eq!(listed, submitted[..PENDING_ENROLMENTS_PAGE_LIMIT]);
+    let cursor = first.next_cursor.expect("a second page");
+    assert_eq!(cursor, submitted[PENDING_ENROLMENTS_PAGE_LIMIT - 1]);
+
+    let last = list(
+        read()
+            .with_cursor(cursor)
+            .sign(&authority())
+            .expect("signed list"),
+    )
+    .await
+    .expect("last page");
+    let [only] = last.enrolments.as_slice() else {
+        panic!("one enrolment past the cursor, {last:?}");
+    };
+    assert_eq!(only.update_id, submitted[PENDING_ENROLMENTS_PAGE_LIMIT]);
+    assert_eq!(last.next_cursor, None);
 }
 
 #[tokio::test]

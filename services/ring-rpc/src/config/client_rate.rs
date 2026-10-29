@@ -3,7 +3,7 @@
 use std::{
     collections::{BTreeSet, HashMap},
     future::Future,
-    net::IpAddr,
+    net::{IpAddr, Ipv6Addr},
     num::NonZeroU32,
     pin::Pin,
     sync::{Arc, Mutex},
@@ -47,6 +47,8 @@ use crate::{
 
 /// Past it the bucket nearest to full is dropped.
 const MAX_BUCKETS: usize = 65_536;
+/// An IPv6 /48 spends the rates of this many /64 clients.
+pub(crate) const NETWORK_CLIENTS: NonZeroU32 = NonZeroU32::new(16).unwrap();
 const UNKNOWN_API_KEY: i32 = -32254;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -172,6 +174,7 @@ enum RatedCall {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum BucketKey {
     Client(MethodClass, ClientIdentity),
+    Network(MethodClass, Ipv6Addr),
     Signer(Address),
 }
 
@@ -233,6 +236,13 @@ impl BucketRate {
 
     fn capacity(self) -> Duration {
         self.interval().saturating_mul(self.burst.get())
+    }
+
+    fn shared_by(self, clients: NonZeroU32) -> Self {
+        Self {
+            per_minute: self.per_minute.saturating_mul(clients),
+            burst: self.burst.saturating_mul(clients),
+        }
     }
 }
 
@@ -308,15 +318,33 @@ impl ClientRateLimiter {
     ) -> Result<(), Admission> {
         let mut buckets = self.buckets.lock().map_err(|_| Admission::Unavailable)?;
         let class = call.class();
-        let charge = Charge {
+        let rate = self.rates.of(class);
+        let units = call.units();
+        let client_charge = Charge {
             key: BucketKey::Client(class, client),
-            rate: self.rates.of(class),
-            units: call.units(),
+            rate,
+            units,
         };
-        let arrival = buckets
-            .within_burst(charge, now)
-            .map_err(|retry_after| Admission::limited(class.limit(), retry_after))?;
-        buckets.record(charge.key, arrival, now);
+        let network_charge = client.network().map(|network| Charge {
+            key: BucketKey::Network(class, network),
+            rate: rate.shared_by(NETWORK_CLIENTS),
+            units,
+        });
+        let (arrivals, waits): (Vec<_>, Vec<_>) = std::iter::once(client_charge)
+            .chain(network_charge)
+            .map(|charge| {
+                buckets
+                    .within_burst(charge, now)
+                    .map(|arrival| (charge.key, arrival))
+            })
+            .partition(Result::is_ok);
+        // The longest wait, a shorter one leaves the other bucket refusing.
+        if let Some(retry_after) = waits.into_iter().filter_map(Result::err).max() {
+            return Err(Admission::limited(class.limit(), retry_after));
+        }
+        for (key, arrival) in arrivals.into_iter().flatten() {
+            buckets.record(key, arrival, now);
+        }
         if let Some(signer) = call.signer() {
             buckets
                 .within_burst(self.signer_charge(signer), now)

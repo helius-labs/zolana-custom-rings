@@ -61,6 +61,18 @@ impl ApiKeyDigest {
     }
 }
 
+impl ClientIdentity {
+    /// The IPv6 /48 an address client shares with every /64 inside it.
+    pub(crate) fn network(self) -> Option<Ipv6Addr> {
+        match self {
+            Self::Address(IpAddr::V6(address)) => {
+                Some(Ipv6Addr::from(u128::from(address) & (u128::MAX << 80)))
+            }
+            Self::Address(IpAddr::V4(_)) | Self::ApiKey(_) => None,
+        }
+    }
+}
+
 impl ClientIdentityPolicy {
     /// Only these peers may name the client in `x-forwarded-for`.
     pub fn with_trusted_proxies(mut self, proxies: impl IntoIterator<Item = IpAddr>) -> Self {
@@ -102,7 +114,7 @@ impl ClientIdentityPolicy {
     fn forwarded_client(&self, headers: &HeaderMap) -> Option<IpAddr> {
         for value in headers.get_all(FORWARDED_FOR_HEADER).iter().rev() {
             for hop in value.to_str().ok()?.rsplit(',') {
-                let hop = hop.trim().parse::<IpAddr>().ok()?;
+                let hop = hop_address(hop.trim())?;
                 if !self.trusts(hop) {
                     return Some(hop);
                 }
@@ -128,10 +140,38 @@ fn api_key<B>(request: &Request<B>) -> Option<&[u8]> {
         })
 }
 
+fn hop_address(hop: &str) -> Option<IpAddr> {
+    hop.parse()
+        .ok()
+        .or_else(|| hop.parse::<SocketAddr>().ok().map(|socket| socket.ip()))
+        .or_else(|| hop.strip_prefix('[')?.strip_suffix(']')?.parse().ok())
+}
+
 /// One host holds a whole IPv6 /64.
 fn client_address(ip: IpAddr) -> IpAddr {
     match ip.to_canonical() {
         IpAddr::V6(v6) => IpAddr::V6(Ipv6Addr::from(u128::from(v6) & !u128::from(u64::MAX))),
         v4 => v4,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_forwarded_hop_with_a_port_or_brackets_names_its_address() {
+        let v4 = IpAddr::from([198, 51, 100, 7]);
+        let v6 = IpAddr::from(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
+        for (hop, address) in [
+            ("198.51.100.7", v4),
+            ("198.51.100.7:4711", v4),
+            ("2001:db8::1", v6),
+            ("[2001:db8::1]", v6),
+            ("[2001:db8::1]:4711", v6),
+        ] {
+            assert_eq!(hop_address(hop), Some(address), "{hop}");
+        }
+        assert_eq!(hop_address("unknown"), None);
     }
 }

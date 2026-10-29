@@ -489,7 +489,7 @@ mod tests {
 
     use crate::{
         client_identity::ClientIdentityPolicy,
-        client_rate::{BucketRate, ClientRates, RateLimit},
+        client_rate::{BucketRate, ClientRates, RateLimit, NETWORK_CLIENTS},
         config::RootSecret,
         error::RingRpcError,
         limits::{
@@ -777,6 +777,32 @@ mod tests {
         let other = submit_as(&url, "198.51.100.2").await;
         assert_eq!(other.status(), StatusCode::OK);
         assert_eq!(error_code(other).await, served);
+        handle.stop().expect("stop");
+        handle.stopped().await;
+    }
+
+    #[tokio::test]
+    async fn the_64s_of_one_ipv6_48_share_its_signed_write_rate() {
+        let proxy = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let (handle, url) =
+            write_limited_server(ClientIdentityPolicy::default().with_trusted_proxies([proxy]))
+                .await;
+        let served = RecordUpdateRefusal::Disabled.code();
+
+        for subnet in 0..NETWORK_CLIENTS.get() {
+            for _ in 0..2 {
+                let client = format!("2001:db8:0:{subnet:x}::1");
+                assert_eq!(error_code(submit_as(&url, &client).await).await, served);
+            }
+        }
+        assert_eq!(
+            error_code(submit_as(&url, "2001:db8:0:ffff::1").await).await,
+            RateLimit::SignedWrites.code()
+        );
+        assert_eq!(
+            error_code(submit_as(&url, "2001:db8:1::1").await).await,
+            served
+        );
         handle.stop().expect("stop");
         handle.stopped().await;
     }

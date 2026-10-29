@@ -20,8 +20,9 @@ use spr_client::{compile_message, sign_transaction, ComputeBudgetConfig};
 use spr_indexer_api::Hash;
 use zolana_ring_client::{
     rpc::{
-        GetPendingEnrolmentsResponse, GetRecordUpdateStatusRequest, PendingEnrolment,
-        RecordUpdateId, RecordUpdateStatus, SubmitRecordUpdateRequest, SubmitRecordUpdateResponse,
+        GetPendingEnrolmentsRequest, GetPendingEnrolmentsResponse, GetRecordUpdateStatusRequest,
+        PendingEnrolment, RecordUpdateId, RecordUpdateStatus, SubmitRecordUpdateRequest,
+        SubmitRecordUpdateResponse, PENDING_ENROLMENTS_PAGE_LIMIT,
     },
     StorageTip,
 };
@@ -37,7 +38,7 @@ use crate::{
         UpdateContext,
     },
     storage_chain::{StorageChain, TransactionOutcome},
-    update_queue::{BatchOutcome, NewBatch, NewUpdate, OpenBatch, UpdateQueue},
+    update_queue::{AwaitingPage, BatchOutcome, NewBatch, NewUpdate, OpenBatch, UpdateQueue},
 };
 
 pub const RECORD_FLUSH_INTERVAL: Duration = Duration::from_secs(2);
@@ -141,7 +142,9 @@ impl RecordWriter {
         self.check_escrows(&update, &policy).await?;
         let approves = EnrolmentApproval {
             update: &update,
-            awaiting: &queue.awaiting(ring).await?,
+            awaiting: &queue
+                .awaiting_members(ring, &update.written_members()?)
+                .await?,
         }
         .decide()?;
         queue
@@ -167,17 +170,23 @@ impl RecordWriter {
             .ok_or_else(|| RecordUpdateRefusal::UnknownUpdate.into())
     }
 
-    /// The ring's enrolments that await its config authority, oldest first.
+    /// One page of the ring's enrolments that await its config authority, oldest first.
     pub(crate) async fn pending_enrolments(
         &self,
-        ring: Address,
         signer: Address,
+        request: &GetPendingEnrolmentsRequest,
     ) -> Result<GetPendingEnrolmentsResponse, RingRpcError> {
+        let ring = request.ring.0;
         self.require_config_authority(ring, signer).await?;
-        let enrolments = self
+        let mut enrolments = self
             .queue()
-            .awaiting(ring)
+            .awaiting_page(AwaitingPage {
+                ring,
+                cursor: request.cursor.as_ref().map(|cursor| cursor.0 .0),
+                limit: PENDING_ENROLMENTS_PAGE_LIMIT + 1,
+            })
             .await?
+            .ok_or(RecordUpdateRefusal::UnknownUpdate)?
             .into_iter()
             .map(|enrolment| PendingEnrolment {
                 update_id: RecordUpdateId(Hash(enrolment.id)),
@@ -186,8 +195,17 @@ impl RecordWriter {
                 awaited_lists: enrolment.lists.record_bits(),
                 valid_until_slot: enrolment.valid_until_slot,
             })
-            .collect();
-        Ok(GetPendingEnrolmentsResponse { enrolments })
+            .collect::<Vec<_>>();
+        let next_cursor = (enrolments.len() > PENDING_ENROLMENTS_PAGE_LIMIT).then(|| {
+            enrolments.truncate(PENDING_ENROLMENTS_PAGE_LIMIT);
+            enrolments[PENDING_ENROLMENTS_PAGE_LIMIT - 1]
+                .update_id
+                .clone()
+        });
+        Ok(GetPendingEnrolmentsResponse {
+            enrolments,
+            next_cursor,
+        })
     }
 
     pub(crate) async fn refuse_enrolment(
@@ -384,7 +402,10 @@ impl RecordWriter {
             .chain
             .member_openings(records.openings_request(&registering))
             .await?;
-        let pending = self.queue().pending_writes(records.registry).await?;
+        let pending = self
+            .queue()
+            .pending_writes(records.registry, &registering)
+            .await?;
         Ok(EscrowUniqueness {
             registering: &registering,
             records: &records

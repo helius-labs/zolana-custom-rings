@@ -17,6 +17,7 @@ const SUBMITTED: &str = "submitted";
 const APPLIED: &str = "applied";
 const REFUSED: &str = "refused";
 const FAILED: &str = "failed";
+const AWAITING_COLUMNS: &str = "id, request, writes, awaited, valid_until_slot";
 
 /// Every update keyed by its statement hash.
 pub(crate) struct UpdateQueue<'a> {
@@ -49,6 +50,13 @@ pub(crate) struct NewBatch<'a> {
     pub updates: &'a [&'a QueuedUpdate],
 }
 
+/// `cursor` names any update of the ring, the page starts after it in submit order.
+pub(crate) struct AwaitingPage {
+    pub ring: Address,
+    pub cursor: Option<[u8; 32]>,
+    pub limit: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BatchOutcome {
     Applied,
@@ -71,13 +79,18 @@ impl<'a> UpdateQueue<'a> {
         let request =
             serde_json::to_string(new.request).map_err(|error| DbErr::Custom(error.to_string()))?;
         let id = bytes(&new.update.id.0 .0);
-        let (status, awaited) = match new.update.awaited {
-            Some(lists) => (AWAITING, lists.record_bits()),
-            None => (QUEUED, 0),
+        let (status, awaited, member) = match new.update.awaited {
+            Some(awaited) => (
+                AWAITING,
+                awaited.lists.record_bits(),
+                bytes(&awaited.member),
+            ),
+            None => (QUEUED, 0, Value::Bytes(None)),
         };
         let transaction = self.db.begin().await?;
         let sql = "INSERT INTO records_updates(id,registry,ring,request,writes,urgent,queued_slot,\
-                   valid_until_slot,status,awaited) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) \
+                   valid_until_slot,status,awaited,member) \
+                   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) \
                    ON CONFLICT(id) DO NOTHING";
         let values = vec![
             id.clone(),
@@ -90,6 +103,7 @@ impl<'a> UpdateQueue<'a> {
             integer(new.request.update.valid_until_slot)?,
             status.into(),
             integer(awaited)?,
+            member,
         ];
         let inserted = transaction
             .execute(statement(&transaction, sql, values))
@@ -155,16 +169,28 @@ impl<'a> UpdateQueue<'a> {
             .collect()
     }
 
-    pub async fn pending_writes(&self, registry: Address) -> Result<Vec<StorageWriteData>, DbErr> {
-        let sql = "SELECT writes FROM records_updates WHERE registry=$1 AND status IN ($2,$3,$4)";
-        let values = vec![
+    /// Every queued or submitted write, and the awaiting writes of `members` alone.
+    pub async fn pending_writes(
+        &self,
+        registry: Address,
+        members: &[[u8; 32]],
+    ) -> Result<Vec<StorageWriteData>, DbErr> {
+        let sql = format!(
+            "SELECT writes FROM records_updates WHERE registry=$1 AND (status IN ($2,$3) \
+             OR (status=$4 AND member IN ({})))",
+            placeholders(5, members.len())
+        );
+        let values = [
             bytes(registry.as_array()),
-            AWAITING.into(),
             QUEUED.into(),
             SUBMITTED.into(),
-        ];
+            AWAITING.into(),
+        ]
+        .into_iter()
+        .chain(members.iter().map(bytes))
+        .collect();
         let mut writes = Vec::new();
-        for row in self.query_all(sql, values).await? {
+        for row in self.query_all(&sql, values).await? {
             writes.extend(stored_writes(&row)?);
         }
         Ok(writes)
@@ -221,33 +247,62 @@ impl<'a> UpdateQueue<'a> {
     }
 
     /// Oldest first.
-    pub async fn awaiting(&self, ring: Address) -> Result<Vec<AwaitingEnrolment>, DbErr> {
-        let sql = "SELECT id, request, writes, awaited, valid_until_slot FROM records_updates \
-                   WHERE ring=$1 AND status=$2 ORDER BY seq";
-        let values = vec![bytes(ring.as_array()), AWAITING.into()];
-        self.query_all(sql, values)
+    pub async fn awaiting_members(
+        &self,
+        ring: Address,
+        members: &[[u8; 32]],
+    ) -> Result<Vec<AwaitingEnrolment>, DbErr> {
+        if members.is_empty() {
+            return Ok(Vec::new());
+        }
+        let sql = format!(
+            "SELECT {AWAITING_COLUMNS} FROM records_updates \
+             WHERE ring=$1 AND status=$2 AND member IN ({}) ORDER BY seq",
+            placeholders(3, members.len())
+        );
+        let values = [bytes(ring.as_array()), AWAITING.into()]
+            .into_iter()
+            .chain(members.iter().map(bytes))
+            .collect();
+        self.query_all(&sql, values)
             .await?
             .iter()
-            .map(|row| {
-                let request: SubmitRecordUpdateRequest =
-                    serde_json::from_str(&row.try_get::<String>("", "request")?)
-                        .map_err(|_| corrupt("request"))?;
-                let wallet = request.signer.0;
-                let lists = u8::try_from(unsigned(row, "awaited")?)
-                    .map(ListSet::from_bits)
-                    .map_err(|_| corrupt("awaited"))?;
-                Ok(AwaitingEnrolment {
-                    id: column_bytes(row, "id")?,
-                    wallet,
-                    member: *Member::owner_tag(wallet.as_array())
-                        .map_err(|_| corrupt("request"))?
-                        .as_bytes(),
-                    lists,
-                    writes: stored_writes(row)?.len(),
-                    valid_until_slot: unsigned(row, "valid_until_slot")?,
-                })
-            })
+            .map(awaiting_enrolment)
             .collect()
+    }
+
+    /// `None` when `cursor` names no update of the ring.
+    pub async fn awaiting_page(
+        &self,
+        page: AwaitingPage,
+    ) -> Result<Option<Vec<AwaitingEnrolment>>, DbErr> {
+        let ring = bytes(page.ring.as_array());
+        let after = match page.cursor {
+            None => 0,
+            Some(cursor) => {
+                let sql = "SELECT seq FROM records_updates WHERE id=$1 AND ring=$2";
+                match self
+                    .query_one(sql, vec![bytes(&cursor), ring.clone()])
+                    .await?
+                {
+                    Some(row) => row.try_get::<i64>("", "seq")?,
+                    None => return Ok(None),
+                }
+            }
+        };
+        let limit = i64::try_from(page.limit)
+            .map_err(|_| DbErr::Custom("page limit exceeds the store integer range".to_owned()))?;
+        let sql = format!(
+            "SELECT {AWAITING_COLUMNS} FROM records_updates \
+             WHERE ring=$1 AND status=$2 AND seq>$3 ORDER BY seq LIMIT $4"
+        );
+        let values = vec![ring, AWAITING.into(), after.into(), limit.into()];
+        self.query_all(&sql, values)
+            .await?
+            .iter()
+            .map(awaiting_enrolment)
+            .collect::<Result<_, _>>()
+            .map(Some)
     }
 
     /// `false` when no enrolment of `ring` awaits under `id`.
@@ -384,6 +439,37 @@ impl<'a> UpdateQueue<'a> {
     async fn query_all(&self, sql: &str, values: Vec<Value>) -> Result<Vec<QueryResult>, DbErr> {
         self.db.query_all(statement(self.db, sql, values)).await
     }
+}
+
+/// `$first` onward, NULL for none so an empty list matches no row.
+fn placeholders(first: usize, count: usize) -> String {
+    match count {
+        0 => "NULL".to_owned(),
+        _ => (first..first + count)
+            .map(|index| format!("${index}"))
+            .collect::<Vec<_>>()
+            .join(","),
+    }
+}
+
+fn awaiting_enrolment(row: &QueryResult) -> Result<AwaitingEnrolment, DbErr> {
+    let request: SubmitRecordUpdateRequest =
+        serde_json::from_str(&row.try_get::<String>("", "request")?)
+            .map_err(|_| corrupt("request"))?;
+    let wallet = request.signer.0;
+    let lists = u8::try_from(unsigned(row, "awaited")?)
+        .map(ListSet::from_bits)
+        .map_err(|_| corrupt("awaited"))?;
+    Ok(AwaitingEnrolment {
+        id: column_bytes(row, "id")?,
+        wallet,
+        member: *Member::owner_tag(wallet.as_array())
+            .map_err(|_| corrupt("request"))?
+            .as_bytes(),
+        lists,
+        writes: stored_writes(row)?.len(),
+        valid_until_slot: unsigned(row, "valid_until_slot")?,
+    })
 }
 
 fn statement<C: ConnectionTrait>(connection: &C, sql: &str, values: Vec<Value>) -> Statement {
