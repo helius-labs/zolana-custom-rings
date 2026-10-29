@@ -147,6 +147,10 @@ ring_errors! {
     AnonymousRingDataNotZero = 8251 => "an anonymous ring deposit or merge output carries ring data",
     AnonymousBodyLength = 8252 => "an anonymous ring body is empty or longer than u16::MAX",
     OutputBodyLength = 8253 => "a ring output body exceeds the u32 length prefix",
+    InvalidCoSignerRecord = 8260 => "co-signer record account is invalid",
+    CoSignerRecordAlreadyExists = 8261 => "co-signer record already exists",
+    InvalidRingPolicy = 8300 => "ring policy account is invalid",
+    RingPolicyAlreadyExists = 8301 => "ring policy already exists",
 }
 
 impl From<CustomRingError> for ProgramError {

@@ -3911,28 +3911,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
-name = "policy-store-program"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "custom-ring-interface",
- "hex",
- "litesvm",
- "pinocchio 0.11.2",
- "pinocchio-system",
- "serde_json",
- "solana-address 2.6.1",
- "solana-instruction",
- "solana-keypair",
- "solana-transaction-error",
- "spr-account-checks",
- "spr-client",
- "spr-hasher",
- "spr-interface",
- "zolana-ring-policy",
-]
-
-[[package]]
 name = "poly1305"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7776,6 +7754,28 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "storage-program"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "custom-ring-interface",
+ "hex",
+ "litesvm",
+ "pinocchio 0.11.2",
+ "pinocchio-system",
+ "serde_json",
+ "solana-address 2.6.1",
+ "solana-instruction",
+ "solana-keypair",
+ "solana-transaction-error",
+ "spr-account-checks",
+ "spr-client",
+ "spr-hasher",
+ "spr-interface",
+ "zolana-ring-policy",
+]
 
 [[package]]
 name = "stringprep"

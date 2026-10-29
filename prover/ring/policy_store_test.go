@@ -96,7 +96,7 @@ func TestPolicyStoreFixtures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile("../../programs/policy-store/tests/proofs.json", append(encoded, '\n'), 0644); err != nil {
+	if err := os.WriteFile("../../programs/storage/tests/proofs.json", append(encoded, '\n'), 0644); err != nil {
 		t.Fatal(err)
 	}
 }

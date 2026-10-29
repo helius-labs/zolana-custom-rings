@@ -1,14 +1,17 @@
 //! Transfer authorization remains the consumer's responsibility.
 
 use bytemuck::{Pod, Zeroable};
-use custom_ring_interface::{domain, policy_store::Revision, CustomRingError, CustomRingProof};
+use custom_ring_interface::{
+    domain,
+    storage::Revision,
+    storage_instruction::{tag, UpdateMode},
+    CustomRingError, CustomRingProof,
+};
 use pinocchio::{error::ProgramError, AccountView, Address, ProgramResult};
 use spr_hasher::{hash_chain::create_hash_chain_4_from_slice, primitives::right_align};
 use zolana_ring_policy::{registry_field, EncodedRuleTable};
 
-use instructions::{
-    process_initialize_ix, process_update_ix, process_verify_policy_ix, UpdateMode,
-};
+use instructions::{process_initialize_ix, process_update_ix, process_verify_policy_ix};
 
 #[cfg(all(feature = "bpf-entrypoint", not(feature = "no-entrypoint")))]
 mod entrypoint {
@@ -18,12 +21,8 @@ mod entrypoint {
 mod instructions;
 mod loader;
 
-pub mod tag {
-    pub const INITIALIZE: u8 = 0;
-    pub const UPDATE: u8 = 1;
-    pub const UPDATE_IMMEDIATE: u8 = 2;
-    pub const VERIFY_POLICY: u8 = 3;
-}
+/// With the authority's address.
+pub const REGISTRY_SEED: &[u8] = b"policy-store";
 
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]

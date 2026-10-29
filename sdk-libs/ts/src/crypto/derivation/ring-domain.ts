@@ -18,6 +18,8 @@ export const RingDomain = Object.freeze({
   mergeStatement: 0x4352_4d47, // "CRMG"
   withdrawals: 0x4352_5057, // "CRPW"
   withdrawalExemption: 0x4352_5758, // "CRWX"
+  recordUpdate: 0x4352_5255, // "CRRU"
+  walletGrant: 0x4352_5747, // "CRWG"
 } as const);
 export type RingDomain = (typeof RingDomain)[keyof typeof RingDomain];
 

@@ -75,13 +75,18 @@ pub struct QueueEntry {
 
 impl QueueEntry {
     pub fn escrow(member: [u8; 32], key: &EscrowKey<'_>) -> Result<Self, CustomRingError> {
+        Self::escrow_hash(member, key.hash()?)
+    }
+
+    /// `escrow_key` is the [`EscrowKey::hash`] of a key checked elsewhere.
+    pub fn escrow_hash(member: [u8; 32], escrow_key: [u8; 32]) -> Result<Self, CustomRingError> {
         check_member(&member)?;
         let bit = ListId::Escrow.record_bit();
         Ok(Self {
             member,
             mask: bit,
             value: bit,
-            escrow_key: key.hash()?,
+            escrow_key,
             mint_policy: None,
         })
     }

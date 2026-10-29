@@ -26,6 +26,7 @@ fn ring_dispatch_tags_do_not_collide_with_forwarded_spp_tags() {
         tag::AUTHORITY_WRITE_RECORDS,
         tag::APPLY_RECORDS,
         tag::SET_INSERT_FEE,
+        tag::SYNC_ROOTS,
     ];
     let unique: std::collections::BTreeSet<_> = tags.into_iter().collect();
     assert_eq!(unique.len(), tags.len());

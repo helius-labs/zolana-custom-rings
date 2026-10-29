@@ -114,6 +114,10 @@ pinned_codes! {
     AnonymousRingDataNotZero = 8251,
     AnonymousBodyLength = 8252,
     OutputBodyLength = 8253,
+    InvalidCoSignerRecord = 8260,
+    CoSignerRecordAlreadyExists = 8261,
+    InvalidRingPolicy = 8300,
+    RingPolicyAlreadyExists = 8301,
 }
 
 #[test]

@@ -1,11 +1,11 @@
 use bytemuck::bytes_of;
 use custom_ring_interface::{
-    policy_store::{PolicyStoreError, Registry},
+    storage::{StorageError, StorageRegistry},
+    storage_instruction::tag,
     ApplyRecordsIxData, AuthorityWriteRecordsIxData, CustomRingError, CustomRingProof,
     PlainGroth16Proof, RecordWriteData, WriteRecordsIxData,
 };
 use litesvm::LiteSVM;
-use policy_store_program::{tag, InitializeIxData, VerifyPolicyIxData};
 use serde_json::Value;
 use solana_address::Address;
 use solana_instruction::{error::InstructionError, AccountMeta, Instruction};
@@ -17,9 +17,10 @@ use spr_client::{
     sign_transaction, ComputeBudgetConfig,
 };
 use spr_hasher::primitives::right_align;
+use storage_program::{InitializeIxData, VerifyPolicyIxData, REGISTRY_SEED};
 use zolana_ring_policy::TableParts;
 
-const PROGRAM: Address = Address::new_from_array([0x53; 32]);
+const PROGRAM: Address = custom_ring_interface::STORAGE_PROGRAM_ID;
 const GRACE: u64 = 10;
 
 struct Store {
@@ -37,7 +38,7 @@ impl Store {
         let program = std::env::var_os("SBF_OUT_DIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/deploy").into())
-            .join("policy_store_program.so");
+            .join("storage_program.so");
         svm.add_program(PROGRAM, &std::fs::read(program).unwrap())
             .unwrap();
         let writer = Keypair::new_from_array([9; 32]);
@@ -46,7 +47,7 @@ impl Store {
             svm.airdrop(&signer.pubkey(), 1_000_000_000).unwrap();
         }
         let registry =
-            Address::find_program_address(&[Registry::SEED, writer.pubkey().as_ref()], &PROGRAM).0;
+            Address::find_program_address(&[REGISTRY_SEED, writer.pubkey().as_ref()], &PROGRAM).0;
         Self {
             svm,
             writer,
@@ -219,7 +220,7 @@ fn writer_updates_and_readers_verify_retained_roots() {
     wrong_writer.accounts[0].pubkey = store.reader.pubkey();
     assert_eq!(
         store.send(wrong_writer),
-        refusal(PolicyStoreError::Unauthorized as u32)
+        refusal(StorageError::Unauthorized as u32)
     );
     let mut forged = store.update(0);
     *forged.data.last_mut().unwrap() ^= 1;
@@ -230,7 +231,7 @@ fn writer_updates_and_readers_verify_retained_roots() {
     store.send(store.update(0)).unwrap();
     assert_eq!(
         store.send(store.update(0)),
-        refusal(PolicyStoreError::RevisionChanged as u32)
+        refusal(StorageError::RevisionChanged as u32)
     );
     for _ in 0..2 {
         store.reader = Keypair::new();
@@ -258,12 +259,12 @@ fn writer_updates_and_readers_verify_retained_roots() {
         }
         assert_eq!(
             store.send(store.verify()),
-            refusal(PolicyStoreError::RootExpired as u32)
+            refusal(StorageError::RootExpired as u32)
         );
         store.send(store.update(2)).unwrap();
         assert_eq!(
             store.send(store.verify()),
-            refusal(PolicyStoreError::RootExpired as u32)
+            refusal(StorageError::RootExpired as u32)
         );
         let mut current = store.verify();
         bytemuck::from_bytes_mut::<VerifyPolicyIxData>(&mut current.data[1..]).revision = 3.into();
@@ -287,7 +288,7 @@ fn a_graced_update_never_evicts_a_root_that_still_verifies() {
     let mut store = Store::new();
     store.initialize(GRACE);
     let mut account = store.svm.get_account(&store.registry).unwrap();
-    let oldest = bytemuck::from_bytes_mut::<Registry>(&mut account.data)
+    let oldest = bytemuck::from_bytes_mut::<StorageRegistry>(&mut account.data)
         .roots
         .last_mut()
         .unwrap();
@@ -295,7 +296,7 @@ fn a_graced_update_never_evicts_a_root_that_still_verifies() {
     store.svm.set_account(store.registry, account).unwrap();
     assert_eq!(
         store.send(store.update(0)),
-        refusal(PolicyStoreError::HistoryFull as u32)
+        refusal(StorageError::HistoryFull as u32)
     );
     let full = store.svm.clone();
     store

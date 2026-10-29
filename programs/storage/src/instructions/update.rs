@@ -1,9 +1,11 @@
 use bytemuck::Zeroable;
 use custom_ring_interface::{
     key_catalog::RingCircuit,
-    policy_store::{PolicyStoreError, Revision, Root},
-    queue_chain, verifying_key, ApplyRecordsStatement, AuthorityWriteRecordsIxData,
-    CustomRingError, RingProof, ROOT_HISTORY,
+    queue_chain,
+    storage::{Revision, Root, StorageError},
+    storage_instruction::UpdateMode,
+    verifying_key, ApplyRecordsStatement, AuthorityWriteRecordsIxData, CustomRingError, RingProof,
+    ROOT_HISTORY,
 };
 use pinocchio::{
     error::ProgramError,
@@ -13,14 +15,6 @@ use pinocchio::{
 use spr_account_checks::AccountIterator;
 
 use crate::{chain_start, loader::load_registry_mut, parse};
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum UpdateMode {
-    /// The outgoing root stays readable for the grace period.
-    Graced,
-    /// Every earlier root stops verifying.
-    Immediate,
-}
 
 pub fn process_update_ix(
     program_id: &Address,
@@ -34,15 +28,15 @@ pub fn process_update_ix(
     let revision = *parse::<Revision>(revision)?;
     let ix = AuthorityWriteRecordsIxData::parse(data)?;
     let mut accounts = AccountIterator::new(accounts);
-    let writer_account = accounts.next_signer("writer")?;
+    let authority_account = accounts.next_signer("authority")?;
     let registry_account = accounts.next_mut("registry")?;
     let chain_start = chain_start(registry_account.address(), revision)?;
     let mut registry = load_registry_mut(program_id, registry_account)?;
-    if writer_account.address() != &registry.writer {
-        return Err(PolicyStoreError::Unauthorized.into());
+    if authority_account.address() != &registry.authority {
+        return Err(StorageError::Unauthorized.into());
     }
     if revision != registry.roots[0].revision {
-        return Err(PolicyStoreError::RevisionChanged.into());
+        return Err(StorageError::RevisionChanged.into());
     }
     let next_revision = revision
         .value()
@@ -50,7 +44,7 @@ pub fn process_update_ix(
         .ok_or(ProgramError::ArithmeticOverflow)?;
     let slot = Clock::get()?.slot;
     if mode == UpdateMode::Graced && slot < registry.roots[ROOT_HISTORY - 1].expires_at() {
-        return Err(PolicyStoreError::HistoryFull.into());
+        return Err(StorageError::HistoryFull.into());
     }
     // `APPLY_RECORDS` binds the registry address and revision before the ordered writes.
     let chain_end = ix.writes.iter().try_fold(chain_start, |chain, write| {

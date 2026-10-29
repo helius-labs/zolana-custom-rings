@@ -52,17 +52,17 @@ build-spp-programs:
             --manifest-path "programs/$program/Cargo.toml" -- --locked --features bpf-entrypoint
     done
 
-build-ring-program: build-policy-store-program
+build-ring-program: build-storage-program
     #!/usr/bin/env bash
     [[ -z "${ZOLANA_PREBUILT:-}" ]] || exit 0
     SBF_TOOLS_VERSION={{sbf-tools-version}} zolana/tools/build-programs.sh \
         --manifest-path programs/custom-ring/Cargo.toml -- --locked --features bpf-entrypoint
 
-build-policy-store-program:
+build-storage-program:
     #!/usr/bin/env bash
     [[ -z "${ZOLANA_PREBUILT:-}" ]] || exit 0
     SBF_TOOLS_VERSION={{sbf-tools-version}} zolana/tools/build-programs.sh \
-        --manifest-path programs/policy-store/Cargo.toml -- --locked --features bpf-entrypoint
+        --manifest-path programs/storage/Cargo.toml -- --locked --features bpf-entrypoint
 
 # Skipped when ZOLANA_SPP_PROGRAM_SO and ZOLANA_USER_REGISTRY_SO name builds.
 _spp-programs:
@@ -114,7 +114,7 @@ build-localnet-archives dir="target/nextest-archives":
 test-hermetic: test-program-fast test-sdk-libs test-ring-indexer
 
 test-program-fast: build-programs
-    cargo nextest run -p custom-ring-program -p policy-store-program --tests
+    cargo nextest run -p custom-ring-program -p storage-program --tests
 
 test-sdk-libs:
     cargo nextest run {{prepend("-p ", sdk-lib-crates)}}

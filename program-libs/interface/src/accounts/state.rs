@@ -14,6 +14,7 @@ use crate::{
         MEMBER_QUEUE_LIMIT, MEMBER_REGISTRY_CAPACITY, MEMBER_REGISTRY_EMPTY_ROOT, QUEUE_CAPACITY,
     },
     statement::ApplyRecordsStatement,
+    storage::{root_at, Revision, Root, StorageError},
     ApplyRecordsIxData, ReaderKeyBytes, TAGGED_X25519_KEY_LEN,
 };
 
@@ -120,6 +121,11 @@ ring_accounts! {
         InvalidRecordQueue, MemberRegistryAlreadyExists, InvalidRecordQueue,
         |queue: &RecordQueue| queue.head() <= queue.tail()
             && queue.pending() <= QUEUE_CAPACITY as u64;
+    RingPolicy = RING_POLICY: 13, RING_POLICY_PDA_SEED: b"policy",
+        InvalidRingPolicy, RingPolicyAlreadyExists, InvalidRingPolicy;
+    CoSigner = CO_SIGNER: 14, CO_SIGNER_PDA_SEED: b"co_signer",
+        InvalidCoSignerRecord, CoSignerRecordAlreadyExists, InvalidCoSignerRecord,
+        |record: &CoSigner| record.scope().is_some() && record.signer != Address::default();
 }
 
 macro_rules! le_getters {
@@ -141,6 +147,7 @@ le_getters! {
     RootEntry { applied: u64, slot: u64 }
     RecordQueue { head: u64, tail: u64, next_apply_slot: u64 }
     QueueCheckpoint { slot: u64 }
+    RingPolicy { generation: u32, generation_slot: u64 }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Pod, Zeroable)]
@@ -341,6 +348,61 @@ impl SourceSlot {
 pub enum ListRegistry {
     Own,
     Curator(Address),
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Pod, Zeroable)]
+#[repr(C)]
+pub struct RingPolicy {
+    pub discriminator: u8,
+    pub bump: u8,
+    /// The ring's own `StorageRegistry`, fixed at creation.
+    pub records: Address,
+    /// Zero without a policy.
+    pub policy_hash: [u8; 32],
+    /// Non-empty exactly for the lists `rules` references.
+    pub sources: [SourceSlot; N_SOURCE_SLOTS],
+    pub rules: EncodedRuleTable,
+    /// Little endian, one more at every table or source write.
+    pub generation: [u8; 4],
+    /// Little endian, the slot of the write `generation` counts.
+    pub generation_slot: [u8; 8],
+    /// Mirrors `records`.
+    pub own_roots: RootMirror,
+    /// Mirrors the curator registry the sources name.
+    pub curator_roots: RootMirror,
+}
+
+/// A `StorageRegistry` root history as `SyncRoots` last copied it.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Pod, Zeroable)]
+#[repr(C)]
+pub struct RootMirror {
+    /// Zero before the first sync, a reader refuses roots of another registry.
+    pub registry: Address,
+    /// Newest first, as the registry holds them.
+    pub roots: [Root; ROOT_HISTORY],
+}
+
+/// At `[CO_SIGNER_PDA_SEED, signer]`.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Pod, Zeroable)]
+#[repr(C)]
+pub struct CoSigner {
+    pub discriminator: u8,
+    pub signer: Address,
+    /// [`CoSignScope`] bits.
+    pub scope: u8,
+    pub bump: u8,
+}
+
+impl RootMirror {
+    pub fn root(&self, revision: Revision, slot: u64) -> Result<[u8; 32], StorageError> {
+        root_at(&self.roots, revision, slot)
+    }
+}
+
+impl CoSigner {
+    pub const fn scope(&self) -> Option<CoSignScope> {
+        CoSignScope::new(self.scope)
+    }
 }
 
 impl MemberRegistry {
@@ -638,5 +700,8 @@ const _: () = assert!(core::mem::offset_of!(MemberRegistry, rules) == 1863);
 const _: () = assert!(core::mem::offset_of!(MemberRegistry, generation_slot) == 2380);
 const _: () = assert!(ROOT_HISTORY <= u8::MAX as usize);
 const _: () = assert!(RecordQueue::SIZE == 698);
+const _: () = assert!(RingPolicy::SIZE == 3991);
+const _: () = assert!(core::mem::offset_of!(RingPolicy, own_roots) == 855);
+const _: () = assert!(CoSigner::SIZE == 35);
 const _: () = assert!(core::mem::offset_of!(RecordQueue, next_apply_slot) == 690);
 const _: () = assert!(core::mem::offset_of!(RecordQueue, checkpoints) == 50);

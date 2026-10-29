@@ -7,7 +7,7 @@ members = [
     "program-libs/policy",
     "program-tests/custom-ring",
     "programs/custom-ring",
-    "programs/policy-store",
+    "programs/storage",
     "sdk-libs/client",
     "sdk-libs/indexer",
     "sdk-libs/keys",

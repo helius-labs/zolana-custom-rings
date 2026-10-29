@@ -82,6 +82,8 @@ impl ListSet {
     pub const MEMBER_WRITES: Self =
         Self::written_by(Writer::Member).difference(Self::single(ListId::Escrow));
     pub const AUTHORITY_WRITES: Self = Self::written_by(Writer::Authority);
+    /// Every list but escrow, an escrow write carries its key instead.
+    pub const STORAGE_WRITES: Self = Self::AUTHORITY_WRITES.union(Self::MEMBER_WRITES);
 
     pub const fn written_by(writer: Writer) -> Self {
         let mut set = Self::EMPTY;

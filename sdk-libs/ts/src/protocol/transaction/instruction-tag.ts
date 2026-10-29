@@ -28,5 +28,6 @@ export const RingInstructionTag = Object.freeze({
   authorityWriteRecords: 40,
   applyRecords: 41,
   setInsertFee: 42,
+  syncRoots: 48,
 } as const);
 export type RingInstructionTag = (typeof RingInstructionTag)[keyof typeof RingInstructionTag];

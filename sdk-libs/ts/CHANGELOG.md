@@ -65,6 +65,7 @@ Added
   notes from given transactions.
 - `CustomRingClient.getRingRecordPool` reads members' records under one root as a `RingRecordPool` of distinct leaves, each path cut at a shared canopy.
 - `encodeAnonymousRecipient`, `decodeAnonymousRecipient`, `encodeAnonymousSender` and `decodeAnonymousSender` in `@heliuslabs/zolana-custom-rings/advanced` write and read the recipient and sender bundle plaintexts that `openRecipient` and `senderChange` take.
+- `RingInstructionTag.syncRoots` names the ring program's root sync tag, and `RingProgramError` names the co-signer record and ring policy account codes `invalidCoSignerRecord`, `coSignerRecordAlreadyExists`, `invalidRingPolicy` and `ringPolicyAlreadyExists`.
 
 Fixed
 

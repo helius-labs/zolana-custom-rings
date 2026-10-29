@@ -1,5 +1,5 @@
 [package]
-name = "policy-store-program"
+name = "storage-program"
 version = "0.1.0"
 edition.workspace = true
 publish = false

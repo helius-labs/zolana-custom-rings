@@ -1,6 +1,7 @@
 use bytemuck::{Pod, Zeroable};
+use solana_address::Address;
 use wincode::{containers, len::FixIntLen, SchemaRead, SchemaWrite};
-use zolana_ring_policy::{ListSet, ListWrite, Writer};
+use zolana_ring_policy::{ListSet, ListWrite, MintPolicy, Writer};
 
 use crate::{
     error::CustomRingError,
@@ -91,6 +92,8 @@ instruction_tags! {
     AuthorityWriteRecords = AUTHORITY_WRITE_RECORDS: 40 => PROOF_UNITS,
     ApplyRecords = APPLY_RECORDS: 41 => PROOF_UNITS,
     SetInsertFee = SET_INSERT_FEE: 42 => ACCOUNT_UNITS,
+    /// Permissionless and without data, the registry account picks the mirror.
+    SyncRoots = SYNC_ROOTS: 48 => ACCOUNT_UNITS,
 }
 
 /// Fixed for the ring's life.
@@ -142,16 +145,33 @@ pub struct SetCoSignerIxData {
     pub scope: u8,
 }
 
+/// Creates or rescopes the signer's `CoSigner` record, clearing it takes no data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
+pub struct SetCoSignerRecordIxData {
+    pub signer: Address,
+    /// [`CoSignScope`](crate::CoSignScope) bits.
+    pub scope: u8,
+}
+
 impl SetCoSignerIxData {
     /// The scope a stored co-signer takes.
     pub fn check(&self) -> Result<crate::CoSignScope, CustomRingError> {
-        let scope =
-            crate::CoSignScope::new(self.scope).ok_or(CustomRingError::InvalidCoSignerScope)?;
-        if self.signer == [0; 32] {
-            return Err(CustomRingError::InvalidCoSigner);
-        }
-        Ok(scope)
+        co_signer_scope(&self.signer, self.scope)
     }
+}
+
+impl SetCoSignerRecordIxData {
+    pub fn check(&self) -> Result<crate::CoSignScope, CustomRingError> {
+        co_signer_scope(self.signer.as_array(), self.scope)
+    }
+}
+
+fn co_signer_scope(signer: &[u8; 32], scope: u8) -> Result<crate::CoSignScope, CustomRingError> {
+    let scope = crate::CoSignScope::new(scope).ok_or(CustomRingError::InvalidCoSignerScope)?;
+    if *signer == [0; 32] {
+        return Err(CustomRingError::InvalidCoSigner);
+    }
+    Ok(scope)
 }
 
 /// The circuit uses one BSB22 commitment; its point and proof of knowledge are mandatory.
@@ -331,13 +351,20 @@ impl WriteRecordsIxData {
 
     /// The queue entry of `writer` changing `member`'s lists, only the lists `writer` owns.
     pub fn entry(&self, member: [u8; 32], writer: Writer) -> Result<QueueEntry, CustomRingError> {
+        self.entry_within(member, writer.writable())
+    }
+
+    pub(crate) fn entry_within(
+        &self,
+        member: [u8; 32],
+        writable: ListSet,
+    ) -> Result<QueueEntry, CustomRingError> {
         check_member(&member)?;
         let (mask, value) = (self.mask(), self.value());
         if mask == 0 || value & !mask != 0 {
             return Err(CustomRingError::ValueOutsideMask);
         }
-        if !ListSet::from_record_bits(mask).is_some_and(|lists| lists.is_subset(writer.writable()))
-        {
+        if !ListSet::from_record_bits(mask).is_some_and(|lists| lists.is_subset(writable)) {
             return Err(CustomRingError::ListBitNotWritable);
         }
         Ok(QueueEntry {
@@ -354,23 +381,48 @@ impl RecordWriteData {
     pub const SIZE: usize = core::mem::size_of::<Self>();
 
     pub fn entry(&self) -> Result<QueueEntry, CustomRingError> {
-        check_member(&self.member)?;
-        let mut entry = if self.lists == WriteRecordsIxData::default() {
-            QueueEntry {
-                member: self.member,
-                ..QueueEntry::default()
-            }
-        } else {
-            self.lists.entry(self.member, Writer::Authority)?
-        };
-        let [tag, policy @ ..] = self.mint_policy;
-        entry.mint_policy = match tag {
-            0 if self.mint_policy == [0; 33] && entry.mask != 0 => None,
-            1 => Some(zolana_ring_policy::MintPolicy::from_bytes(policy)),
-            _ => return Err(CustomRingError::InvalidInstructionData),
-        };
-        Ok(entry)
+        list_and_mint_entry(
+            self.member,
+            &self.lists,
+            &self.mint_policy,
+            Writer::Authority.writable(),
+        )
     }
+}
+
+/// `1 || MintPolicy::bytes` replaces the settings, all zero keeps them.
+pub fn mint_policy_write(policy: Option<MintPolicy>) -> [u8; 33] {
+    let mut write = [0; 33];
+    if let Some(policy) = policy {
+        write[0] = 1;
+        write[1..].copy_from_slice(&policy.bytes());
+    }
+    write
+}
+
+/// A write that keeps both the lists and the mint settings is refused.
+pub(crate) fn list_and_mint_entry(
+    member: [u8; 32],
+    lists: &WriteRecordsIxData,
+    mint_policy: &[u8; 33],
+    writable: ListSet,
+) -> Result<QueueEntry, CustomRingError> {
+    check_member(&member)?;
+    let mut entry = if *lists == WriteRecordsIxData::default() {
+        QueueEntry {
+            member,
+            ..QueueEntry::default()
+        }
+    } else {
+        lists.entry_within(member, writable)?
+    };
+    let [tag, policy @ ..] = *mint_policy;
+    entry.mint_policy = match tag {
+        0 if *mint_policy == [0; 33] && entry.mask != 0 => None,
+        1 => Some(MintPolicy::from_bytes(policy)),
+        _ => return Err(CustomRingError::InvalidInstructionData),
+    };
+    Ok(entry)
 }
 
 impl ApplyRecordsIxData {
@@ -413,7 +465,7 @@ impl<'a> AuthorityWriteRecordsIxData<'a> {
 }
 
 /// One to `APPLY_BATCH` writes, `AuthorityBatchTooLarge` past it.
-fn write_count(count: usize) -> Result<u8, CustomRingError> {
+pub(crate) fn write_count(count: usize) -> Result<u8, CustomRingError> {
     match count {
         0 => Err(CustomRingError::InvalidInstructionData),
         1..=APPLY_BATCH => Ok(count as u8),
