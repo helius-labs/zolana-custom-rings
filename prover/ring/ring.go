@@ -45,8 +45,8 @@ func (k Key) extension() common.ExtensionCircuit {
 		return bind[RegisterKeyParams](k, unsized[registry.RegisterKeyCircuit], struct{}{})
 	case Deposit:
 		return bind[DepositParams](k, circuits.NewDepositCircuit, k.Inputs)
-	case AnonymousMerge:
-		return bind[AnonymousMergeParams](k, circuits.NewAnonymousMergeCircuit, k.Inputs)
+	case Merge:
+		return bind[MergeParams](k, circuits.NewMergeCircuit, k.Inputs)
 	}
 	panic(fmt.Sprintf("ring: no circuit for ring family %d", k.Family))
 }

@@ -12,7 +12,7 @@ Every ring proof has one public input. It is the fold of a statement the program
 | Register key | `HashChain4` | 8 | `RegisterKey` |
 | Withdrawal exemption | `HashChain4` | 8 | `Transact` |
 | Deposit | `HashChain` | 26 | `AuditedDeposit` |
-| Anonymous merge | `HashChain` | 15 | `Merge` |
+| Merge | `HashChain` | 17 | `Merge` |
 
 ## Audit
 
@@ -96,13 +96,13 @@ statement    = HashChain([ CRDP, context_hash, right_align(count), right_align(a
 
 `spp_data` is the forwarded SPP data from its tag byte `18`. Slots past `count` are zero. `anonymous` is `mode == Anonymous`. `key_escrow` is `mode == ConfidentialEscrow`, and then `registry_root` is the own root at the prefix's index, else `0`.
 
-## Anonymous merge
+## Merge
 
 ```text
 [ CRMG, private_tx_hash, output_utxo_hash, n0, ring_id,
   pack_be(auditor_pubkey), pack_be(eph_pk), hash_bytes(ciphertext), right_align(salt),
   HashChain4(disclosure fields),
-  party_0, party_1, party_2 ]
+  party_0, party_1, party_2, right_align(key_escrow), member_registry_root ]
 ```
 
-The salt is the SPP merge output salt. The party identities are the payer, the configured co-signer and `0`. SPP's merge proof binds the same `private_tx_hash` and nullifiers.
+The salt is the SPP merge output salt. The party identities are the payer, the configured co-signer and `0`. `key_escrow` is `mode == ConfidentialEscrow`, and then `member_registry_root` is the own root at `registry_root_index`, else `0`. SPP's merge proof binds the same `private_tx_hash` and nullifiers.

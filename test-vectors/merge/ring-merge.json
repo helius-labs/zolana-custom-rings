@@ -1,5 +1,5 @@
 {
-  "description": "Known-answer vector for the anonymous ring merge disclosure and statement, width 8. plaintext = owner_key(32) || nullifier_pk(32) || mint(32) || amount u64 big-endian || output_blinding(32) || input_commitments(8 x 32), zero padded to 31-byte chunks, chunk i a big-endian field. seed = Poseidon(0x4352_5f4d44, key_lo, key_hi, salt_field) with key_lo and key_hi PackBytesBE(disclosure_key) and salt_field the 16 salt bytes right aligned, fields[i] = (chunk[i] + Poseidon(seed, i)) mod r. envelope_ciphertext seals disclosure_key from eph to auditor under info CRING/mrg1 as the base Envelope does. elements = CRMG, private_tx_hash, output_utxo_hash, first_nullifier, ring_program_id, auditor lo, hi, eph lo, hi, hash_bytes(envelope_ciphertext), salt_field, hash_chain_4(fields), public_input_hash = hash_chain(elements). request is the prover body. Produced by prover/ring/merge_test.go with WRITE_AUDIT_VECTORS=1.",
+  "description": "Known-answer vector for the ring merge disclosure and statement, width 8, under key escrow. plaintext = owner_key(32) || nullifier_pk(32) || mint(32) || amount u64 big-endian || output_blinding(32) || input_commitments(8 x 32), zero padded to 31-byte chunks, chunk i a big-endian field. seed = Poseidon(0x4352_5f4d44, key_lo, key_hi, salt_field) with key_lo and key_hi PackBytesBE(disclosure_key) and salt_field the 16 salt bytes right aligned, fields[i] = (chunk[i] + Poseidon(seed, i)) mod r. envelope_ciphertext seals disclosure_key from eph to auditor under info CRING/mrg1 as the base Envelope does. elements = CRMG, private_tx_hash, output_utxo_hash, first_nullifier, ring_program_id, auditor lo, hi, eph lo, hi, hash_bytes(envelope_ciphertext), salt_field, hash_chain_4(fields), the three party identities, key_escrow, member_registry_root, public_input_hash = hash_chain(elements). Under key_escrow the owner's record under member_registry_root escrows Poseidon(nullifier_pk, ct_hash). request is the prover body. Produced by prover/ring/merge_test.go with WRITE_AUDIT_VECTORS=1.",
   "width": 8,
   "auditor_sk": "0x01323130373635343b3a39383f3e3d3c23222120272625242b2a29282f2e2d2c",
   "auditor_pk": "0x04708c2645c705baaf44f2ab947574174f9280df58be6fc2f6f2e8881b78a3115a",
@@ -51,12 +51,14 @@
     "0x1f18edb3e807641f199671fed3203f4bfbd8b8213eb777b35916176aad380113",
     "0x000000000000000000000000000000000000000000000000000000000000000b",
     "0x000000000000000000000000000000000000000000000000000000000000000c",
-    "0x0000000000000000000000000000000000000000000000000000000000000000"
+    "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "0x0000000000000000000000000000000000000000000000000000000000000001",
+    "0x0ebc8142d43d11dc51f4ad5fb18f52ab0be9a73a5b4d936749aae58129ddc7b7"
   ],
-  "public_input_hash": "0x17a05d61b0ec7854e7158e6c1466b9fcd24688d103260dd7754e9e737f3e6d04",
+  "public_input_hash": "0x034406049b8dbb033b7f905ca691000cb422f4730bee3ae3c4b7e15231dad1ed",
   "request": {
-    "circuitType": "custom-ring-merge-anonymous-v2-8",
-    "publicInputHash": "0x17a05d61b0ec7854e7158e6c1466b9fcd24688d103260dd7754e9e737f3e6d04",
+    "circuitType": "custom-ring-merge-v3-8",
+    "publicInputHash": "0x034406049b8dbb033b7f905ca691000cb422f4730bee3ae3c4b7e15231dad1ed",
     "partyIdentities": [
       "0x000000000000000000000000000000000000000000000000000000000000000b",
       "0x000000000000000000000000000000000000000000000000000000000000000c",
@@ -135,6 +137,49 @@
       }
     ],
     "outputTreeId": "0x0000000000000000000000000000000000000000000000000000000000000009",
-    "outputRingDataHash": "0x00000000000000000000000000000000000000000000000000000000000000d0"
+    "outputRingDataHash": "0x00000000000000000000000000000000000000000000000000000000000000d0",
+    "keyEscrow": true,
+    "memberRegistryRoot": "0x0ebc8142d43d11dc51f4ad5fb18f52ab0be9a73a5b4d936749aae58129ddc7b7",
+    "ctHash": "0x00000000000000000000000000000000000000000000000000000000000000c7",
+    "member": {
+      "next": "0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000000",
+      "lists": 128,
+      "escrowKey": "0x19e34496323a5ad6c6306c9c4d9851f8b1b0401a9aba4423f77ce631ba9a9f2e",
+      "mintPolicy": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "withdrawalThreshold": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "index": 1,
+      "path": [
+        "0x25adfcfbe60bf6ce97de89eeb6d8b77d80aab007b0845c9c9e3ac6c67259b0a7",
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "0x0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946",
+        "0x0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946",
+        "0x0532fd436e19c70e51209694d9c215250937921b8b79060488c1206db73e9946",
+        "0x1ea8dbbca1ca3a574b1b871aad1e8bc47571c7e11a99a6fb25f3f19d4bfad32c",
+        "0x1ea8dbbca1ca3a574b1b871aad1e8bc47571c7e11a99a6fb25f3f19d4bfad32c",
+        "0x1ea8dbbca1ca3a574b1b871aad1e8bc47571c7e11a99a6fb25f3f19d4bfad32c",
+        "0x1b98ec5a992cd3688e655aef8674386f4e84f0a442eaab4840427e359c214dd2",
+        "0x1b98ec5a992cd3688e655aef8674386f4e84f0a442eaab4840427e359c214dd2",
+        "0x1b98ec5a992cd3688e655aef8674386f4e84f0a442eaab4840427e359c214dd2",
+        "0x0fd83a3939005974d559c13c652a31942ffd61cab9a038e04239af96cafaee14",
+        "0x0fd83a3939005974d559c13c652a31942ffd61cab9a038e04239af96cafaee14",
+        "0x0fd83a3939005974d559c13c652a31942ffd61cab9a038e04239af96cafaee14",
+        "0x11eb54967ae25ce42205223461cda9dbb1a1811db38b71e404d1fd94c9627777",
+        "0x11eb54967ae25ce42205223461cda9dbb1a1811db38b71e404d1fd94c9627777",
+        "0x11eb54967ae25ce42205223461cda9dbb1a1811db38b71e404d1fd94c9627777",
+        "0x1c682a99981cf10a215d2788721e0ca060ddc0932cbb04c903eee3bd899dcfc0",
+        "0x1c682a99981cf10a215d2788721e0ca060ddc0932cbb04c903eee3bd899dcfc0",
+        "0x1c682a99981cf10a215d2788721e0ca060ddc0932cbb04c903eee3bd899dcfc0",
+        "0x2b3de1ae8e72d64a5cb03934061e3fd03789273f370e32d576ae54b4cbeca719",
+        "0x2b3de1ae8e72d64a5cb03934061e3fd03789273f370e32d576ae54b4cbeca719",
+        "0x2b3de1ae8e72d64a5cb03934061e3fd03789273f370e32d576ae54b4cbeca719",
+        "0x1b64ed0dc55f80f1f3da256b451baf16110fc268311a13fe903f87945b734861",
+        "0x1b64ed0dc55f80f1f3da256b451baf16110fc268311a13fe903f87945b734861",
+        "0x1b64ed0dc55f80f1f3da256b451baf16110fc268311a13fe903f87945b734861",
+        "0x06efb4c4a55b0225fd1088d357b2432f422b0593015c57980e373ecef9029c72",
+        "0x06efb4c4a55b0225fd1088d357b2432f422b0593015c57980e373ecef9029c72",
+        "0x06efb4c4a55b0225fd1088d357b2432f422b0593015c57980e373ecef9029c72"
+      ]
+    }
   }
 }

@@ -169,8 +169,8 @@ pub enum RingError {
     DepositAboveOutflow { asset: [u8; 32] },
     #[error("the compact transfer expands to external data the SPP proof does not bind")]
     ExternalDataMismatch,
-    #[error("an anonymous merge of {width} slots does not fit a v1 transaction")]
-    AnonymousMergeTooWide { width: usize },
+    #[error("a ring merge of {width} slots does not fit a v1 transaction beside its disclosure")]
+    MergeTooWide { width: usize },
     #[error("the ring is not anonymous, its owners sign in public")]
     NotAnonymousRing,
     #[error("an anonymous ring spends only through the hidden owner's proof")]

@@ -77,7 +77,7 @@ A custom ring is a Solana program that governs its notes in the zolana shielded 
 4. **Deposit.** A funder signs `AuditedDeposit` for up to 8 new ring notes. The deposit proof seals each note's opening to the auditor. On a `ConfidentialEscrow` ring it also proves each owner's escrow record. No list rule runs.
 5. **Transfer.** The sender proves the SPP proof, the audit proof and on a policy ring the policy proof, and submits `Transact`. The program rebuilds both ring statements, verifies the proofs and invokes SPP as `ring_auth`. On a confidential ring the owner signs the transaction. On an anonymous ring the hidden owner signs inside the SPP proof and only the payer signs the transaction.
 6. **Leave.** A transfer pays an exit or withdraws a public leg. The rules screen exit owners and withdrawal owners as output owners. A delegate move can do neither.
-7. **Merge.** On an anonymous ring an owner merges up to 24 notes of one asset into one note with `Merge`, with a disclosure proof to the auditor. The merge proves the owner's nullifier secret and carries no owner signature. A merge on a confidential ring fails.
+7. **Merge.** An owner merges up to 24 notes of one asset into one note with `Merge`, with a disclosure proof to the auditor. The merge proves the owner's nullifier secret and carries no owner signature. On a `ConfidentialEscrow` ring the proof also opens the owner's escrow record.
 8. **Delegate.** The config authority and the delegate sign `SetDelegate` on a confidential policy ring, which sets the mode to `ConfidentialEscrow`. SPP governance enables the ring's authority rail. The auditor opens an escrowed member's nullifier secret for the delegate, and the delegate moves that member's notes to escrowed members with `DelegateTransact`.
 9. **Audit.** The auditor opens every transfer, deposit and merge from its auditor message. The config authority grants readers with `GrantReadAccess`, and Ring RPC serves them the openings. A revoked reader keeps what it already read.
 10. **Govern.** The config authority repins the policy, writes mint settings, sets the co-signer, the insert fee and the pause, and hands the config to a new authority. A repin refuses every proof over the old table. A floor raise refuses every proof under an older own root, and the sender proves again. A repin and a mint-setting write are separate instructions, so a transfer between them proves under the new table and the old settings.
@@ -110,7 +110,7 @@ A custom ring is a Solana program that governs its notes in the zolana shielded 
 
    A demanded co-signer differs from every owner signer and from the delegate.
 10. Owners keep their spending keys. On the confidential rail every owner signer signs, and a policy transfer has exactly one owner. On the anonymous rail the hidden owner's signature is inside the SPP proof. A merge proves the owner's nullifier secret. The delegate rail runs only in `ConfidentialEscrow` mode, keeps every note in the ring, and takes no public leg or exit.
-11. In `ConfidentialEscrow` mode the policy proof requires each live output's owner record to hold `escrow_key = Poseidon(nullifier_pk, hash_bytes(ciphertext))` for the output's nullifier key. A deposit proves the same. The auditor therefore opens the nullifier secret of every note's owner.
+11. In `ConfidentialEscrow` mode the policy proof requires each live output's owner record to hold `escrow_key = Poseidon(nullifier_pk, hash_bytes(ciphertext))` for the output's nullifier key. A deposit and a merge prove the same. The auditor therefore opens the nullifier secret of every note's owner.
 12. An owner writes only its own record and only its member lists. Member writes and key registrations keep a record's mint settings. An owner's writes apply after `APPLY_DELAY_SLOTS` or a full member queue, through a proof any party submits. The apply proof binds the old root, the next index and both queue chain ends the program holds, so no submitter changes a queued write.
 13. The program validates the rule table at every policy write. It requires canonical rows, authority-written lists only, a source for every referenced list and at most one curator. The policy circuit relies on that validation and checks the row encoding only.
 
@@ -143,12 +143,12 @@ On an `Anonymous` ring (anonymous rail):
 On deposits, merges and delegate moves:
 
 23. An `AuditedDeposit` publishes the funder, the mint, each note's amount, owner commitment and view tag. On a confidential ring the SDK sets the view tag to the recipient's `u`, which links funder and recipient. No layer on chain checks that the funder differs from the owner.
-24. An anonymous `Merge` publishes the payer and every input nullifier, and SPP requires one owner and one asset across the inputs. It links up to 24 notes to one owner. The auditor opens the owner, the amount and every input hash.
+24. A `Merge` publishes the payer and every input nullifier, and SPP requires one owner and one asset across the inputs. It links up to 24 notes to one owner. The auditor opens the owner, the amount and every input hash.
 25. A delegate move publishes the delegate and the recipients' `u` as the confidential rail does. The source member stays private from chain observers. The delegate holds the source member's nullifier secret, so it computes that member's nullifiers.
 
 In every mode:
 
-26. The auditor opens every output, every exit's asset and amount, every deposit and anonymous merge, and every escrowed nullifier secret. Ring RPC serves every opening, blindings included, to every reader, with no scope or expiry. It serves no nullifier secret. A revoked reader keeps what it read.
+26. The auditor opens every output, every exit's asset and amount, every deposit and merge, and every escrowed nullifier secret. Ring RPC serves every opening, blindings included, to every reader, with no scope or expiry. It serves no nullifier secret. A revoked reader keeps what it read.
 27. A recipient opens its body with its viewing key and finds the asset by trial. On the anonymous rail the body names the sender's viewing key, and no proof checks it.
 28. The co-signer and the relayer see chain data only. No ring code hands them plaintext.
 29. The ring indexer sees the members a client opens. It learns a policy transfer's sender, recipients and assets before the transfer lands, and it sees authority writes before they land. Photon pairs each spent leaf with its nullifier and sees the tags of one stream of a viewing key grouped per request. The ring prover receives the full witness. [Services](#services) gives the details.
@@ -1089,40 +1089,39 @@ The SPP authority circuit keeps every input and output in the ring, and no owner
 
 #### 22. Merge
 
-Tag `20`. Forwards an SPP ring merge, which joins up to 24 notes of one owner and one asset into one note, with a disclosure proof to the auditor. It succeeds on an anonymous ring only.
+Tag `20`. Forwards an SPP ring merge, which joins up to 24 notes of one owner and one asset into one note, with a disclosure proof to the auditor. On a `ConfidentialEscrow` ring the proof also opens the owner's escrow record.
 
 **Accounts**
 
 1. `config`.
-2. `registry`: on a non-anonymous ring.
+2. `registry`: on a `ConfidentialEscrow` ring only.
 3. `co_signer`: signer, only when demanded.
 4. `spp_accounts`: the SPP `ring_merge_transact` list `[input_tree, output_tree, ring_config, payer, system_program, spp_program, nullifier PDAs…, merge cache…]`.
 
 **Instruction data**
 
-`registry_root_index: u8`, `output_ring_data_hash: [32]`, then the disclosure as `Option` (`0` none, `1` then `proof`, `eph_pk [33]`, `ciphertext [32]`, `count u8` and `count` fields), then the SPP merge body with a compressed `proof_b`.
+`registry_root_index: u8`, `output_ring_data_hash: [32]`, then the disclosure as `proof`, `eph_pk [33]`, `ciphertext [32]`, `count u8` and `count` fields, then the SPP merge body with a compressed `proof_b`.
 
 **Proof**
 
-The anonymous merge proof checks:
+The merge proof checks:
 
 1. Every input is a UTXO or a dummy, input `0` is a UTXO, and every UTXO has the owner, the asset and the ring id of the output and `data_hash = 0`.
 2. The output amount is the 64-bit sum of the inputs, its blinding is `TMOB(nullifier_secret, n0)`, and its hash is the published output hash.
 3. `private_tx_hash` reopens with the inputs and the output.
 4. The envelope seals a disclosure key to the auditor under label `CRING/mrg1`. Each disclosure field is a chunk of the owner key, nullifier key, mint, amount, output blinding and input hashes, plus a pad from that key and the salt. [Disclosure](spec/crypto/disclosure.md#merge-disclosure)
 5. The party identities are the payer and the co-signer, each different from the owner, and the third is `0`.
+6. When `key_escrow = 1`, the owner's record opens under `member_registry_root` with `escrow_key = Poseidon(nullifier_pk, ct_hash)` for the nullifier key the inputs and the output spend under. `ct_hash` is the hash of the owner's `RegisterKey` ciphertext.
 
 The program checks, in order:
 
 1. The data parses, and the SPP merge body is a supported form (`InvalidInstructionData`).
-2. On an anonymous ring `registry_root_index = 0` (`UnexpectedMemberRegistryRoot`). On another ring the own root at that index passes the floor.
+2. On a `ConfidentialEscrow` ring the own root at `registry_root_index` passes the floor, and the statement binds `key_escrow = 1` and that root. On another ring `registry_root_index = 0` (`UnexpectedMemberRegistryRoot`), and the statement binds `key_escrow = 0` and root `0`.
 3. A co-signer with `TRANSFERS` in scope signs.
 4. `ring_auth` sits at SPP index 2 and at no other index. The payer at SPP index 3 signs. The SPP `proof_b` decompresses (`InvalidSppProofPoint`).
-5. On an anonymous ring the disclosure is present (`MissingMergeDisclosure`), it has the field count of the merge width (`MergeDisclosureWidth`), its ephemeral key has tag `0x04` (`InvalidMergeDisclosure`), and `output_ring_data_hash = 0` (`AnonymousRingDataNotZero`).
+5. The disclosure has the field count of the merge width (`MergeDisclosureWidth`), and its ephemeral key has tag `0x04` (`InvalidMergeDisclosure`). On an anonymous ring `output_ring_data_hash = 0` (`AnonymousRingDataNotZero`).
 
-It verifies the proof under `AnonymousMerge { 8 }` or `AnonymousMerge { 24 }`. A merge of more than 24 inputs takes SPP width 52 and fails with `UnsupportedCircuit`.
-
-On a confidential ring every merge fails: without a disclosure with `EscrowMergeUnverified`, with one with `InvalidMergeDisclosure`. The ring has no merge key for those modes.
+It verifies the proof under `Merge { 8 }` or `Merge { 24 }`. A merge of more than 24 inputs takes SPP width 52 and fails with `UnsupportedCircuit`.
 
 No rule runs on a merge, because SPP keeps the owner, asset and value. The proof does not check that the merge output ciphertext opens. SPP publishes it unverified.
 
@@ -1286,7 +1285,7 @@ The ring circuits have 86 Groth16 keys, each with one public input and one BSB22
 | `RegisterKey` | one |
 | `WithdrawalExemption` | one |
 | `Deposit` | capacity 1, 2, 4, 8 |
-| `AnonymousMerge` | width 8, 24 |
+| `Merge` | width 8, 24 |
 
 The proving key lock pins each proving key's name, SHA-256 and size and the release that serves it. Each verifying key the program compiles carries its proving key's SHA-256, and the lock, the verifying keys and the program change together. The program binary carries a setup marker per key. The operator CLI refuses to deploy a binary whose markers do not cover every key it pins, or that carries an insecure test setup marker. Both SDKs pin the key name and SHA-256 of every ring proof request. The Rust SDK also verifies each ring proof against the committed verifying key before it submits it.
 
@@ -1361,7 +1360,7 @@ An `AboveAmount` or `AboveAmountByAsset` guard sums the payments of one transfer
 
 ### Deposits and merges are not screened
 
-No rule or outflow limit runs on `AuditedDeposit` or `Merge`. A deposit can credit any owner, registered or not, except that a `ConfidentialEscrow` ring requires an escrowed owner. The rules screen an owner when it sends and every output owner it pays.
+No rule or outflow limit runs on `AuditedDeposit` or `Merge`. A deposit can credit any owner, registered or not. On a `ConfidentialEscrow` ring a deposit and a merge require an escrowed owner. The rules screen an owner when it sends and every output owner it pays.
 
 ### List rules publish what they screen
 
@@ -1374,10 +1373,6 @@ On the delivered rails no proof relates a recipient key `u` to the owner of its 
 ### A curator controls its subscribers
 
 A ring trusts its curator's roots and floors fully. The program checks the curator's account shape and address derivation only. A curator that stops raising its floor keeps stale lists valid, and a curator write reaches subscribers within `GRACE_SLOTS`.
-
-### Confidential rings cannot merge
-
-The ring has no merge key for `Confidential` and `ConfidentialEscrow`, so every merge there fails. An owner on a confidential ring joins notes with a transfer to its own address.
 
 ### Public legs that net to zero fail
 

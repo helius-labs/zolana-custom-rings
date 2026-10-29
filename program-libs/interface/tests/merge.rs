@@ -13,11 +13,11 @@ use spr_interface::instruction::instruction_data::merge_transact::{
     MergeOutputEncryption, MergeProof, MergeTransactIxData,
 };
 
-fn request(disclosure: Option<MergeDisclosure>) -> CustomRingMergeIxData {
+fn request() -> CustomRingMergeIxData {
     CustomRingMergeIxData {
         registry_root_index: 3,
         output_ring_data_hash: [8; 32],
-        disclosure,
+        disclosure: disclosure(),
         merge: MergeTransactIxData {
             expiry_unix_ts: 42,
             proof: MergeProof {
@@ -58,36 +58,27 @@ fn disclosure() -> MergeDisclosure {
 
 #[test]
 fn the_view_rebuilds_the_exact_spp_body_from_the_compressed_point() {
-    for disclosure in [None, Some(disclosure())] {
-        let request = request(disclosure);
-        let bytes = request.serialize().unwrap();
-        let spp_body = request.merge.serialize().unwrap();
-        let view = CustomRingMergeIxDataRef::from_bytes(&bytes).unwrap();
-        assert_eq!(view.registry_root_index, 3);
-        assert_eq!(view.output_ring_data_hash, &[8; 32]);
-        assert_eq!(view.spp_merge_body().unwrap(), spp_body);
-        assert_eq!(
-            bytes.len() + 64,
-            1 + 32 + spp_body.len() + disclosure_len(&request)
-        );
-        match (&view.disclosure, &request.disclosure) {
-            (Some(view), Some(owned)) => {
-                assert_eq!(view.proof, &owned.proof);
-                assert_eq!(view.eph_pk, &owned.eph_pk);
-                assert_eq!(view.ciphertext, &owned.ciphertext);
-                assert_eq!(view.fields, owned.fields);
-            }
-            (None, None) => {}
-            _ => panic!("the view changed the disclosure presence"),
-        }
-    }
+    let request = request();
+    let bytes = request.serialize().unwrap();
+    let spp_body = request.merge.serialize().unwrap();
+    let view = CustomRingMergeIxDataRef::from_bytes(&bytes).unwrap();
+    assert_eq!(view.registry_root_index, 3);
+    assert_eq!(view.output_ring_data_hash, &[8; 32]);
+    assert_eq!(view.spp_merge_body().unwrap(), spp_body);
+    assert_eq!(
+        bytes.len() + 64,
+        1 + 32 + spp_body.len() + disclosure_len(&request)
+    );
+    let (view, owned) = (&view.disclosure, &request.disclosure);
+    assert_eq!(view.proof, &owned.proof);
+    assert_eq!(view.eph_pk, &owned.eph_pk);
+    assert_eq!(view.ciphertext, &owned.ciphertext);
+    assert_eq!(view.fields, owned.fields);
 }
 
-/// The wincode option tag and, when present, the disclosure.
+/// The proof, the envelope keys and the counted fields ahead of the SPP body.
 fn disclosure_len(request: &CustomRingMergeIxData) -> usize {
-    request.disclosure.as_ref().map_or(1, |disclosure| {
-        1 + CustomRingProof::SIZE + 33 + 32 + 1 + 32 * disclosure.fields.len()
-    })
+    CustomRingProof::SIZE + 33 + 32 + 1 + 32 * request.disclosure.fields.len()
 }
 
 fn compressed_b(bytes: &[u8]) -> Range<usize> {
@@ -101,7 +92,7 @@ fn compressed_b(bytes: &[u8]) -> Range<usize> {
 
 #[test]
 fn a_compressed_point_off_the_curve_is_refused() {
-    let mut bytes = request(None).serialize().unwrap();
+    let mut bytes = request().serialize().unwrap();
     let b = compressed_b(&bytes);
     bytes[b].fill(0xff);
     let view = CustomRingMergeIxDataRef::from_bytes(&bytes).unwrap();
@@ -113,11 +104,9 @@ fn a_compressed_point_off_the_curve_is_refused() {
 
 #[test]
 fn framing_errors_are_refused_before_or_by_the_spp_parser() {
-    let bytes = request(None).serialize().unwrap();
-    let mut tag = bytes.clone();
-    tag[33] = 2;
+    let bytes = request().serialize().unwrap();
     let truncated = &bytes[..compressed_b(&bytes).end - 1];
-    for refused in [&tag[..], truncated] {
+    for refused in [truncated, &bytes[..40]] {
         assert_eq!(
             CustomRingMergeIxDataRef::from_bytes(refused).err(),
             Some(CustomRingError::InvalidInstructionData)

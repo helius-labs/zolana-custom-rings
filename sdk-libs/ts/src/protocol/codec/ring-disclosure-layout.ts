@@ -15,8 +15,8 @@ export const ANONYMOUS_AUDIT_CLASSES: readonly Readonly<{
 export const ANONYMOUS_ENTRY_CLASS = 8;
 /** Output capacities of the anonymous entry keys. */
 export const ANONYMOUS_ENTRY_OUTPUTS: readonly number[] = Object.freeze([2, 4, 8]);
-/** Rust `ANONYMOUS_MERGE_WIDTHS`, the merge widths whose disclosure still fits one v1 transaction. */
-export const ANONYMOUS_MERGE_WIDTHS: readonly number[] = Object.freeze([8, 24]);
+/** Rust `MERGE_WIDTHS`, the merge widths whose disclosure still fits one v1 transaction. */
+export const MERGE_WIDTHS: readonly number[] = Object.freeze([8, 24]);
 /** The widest commitment class, no anonymous key serves more inputs. */
 export const ANONYMOUS_MAX_INPUTS = Math.max(
   ...ANONYMOUS_AUDIT_CLASSES.flatMap((entry) => entry.classes),

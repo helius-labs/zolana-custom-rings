@@ -44,10 +44,10 @@ pub mod deposit_2_verifying_key;
 pub mod deposit_4_verifying_key;
 #[path = "deposit/deposit_8_verifying_key.rs"]
 pub mod deposit_8_verifying_key;
-#[path = "merge/merge_anonymous_v2_24_verifying_key.rs"]
-pub mod merge_anonymous_v2_24_verifying_key;
-#[path = "merge/merge_anonymous_v2_8_verifying_key.rs"]
-pub mod merge_anonymous_v2_8_verifying_key;
+#[path = "merge/merge_v3_24_verifying_key.rs"]
+pub mod merge_v3_24_verifying_key;
+#[path = "merge/merge_v3_8_verifying_key.rs"]
+pub mod merge_v3_8_verifying_key;
 #[path = "policy/delegate/policy_delegate_v3_2x2_curator_verifying_key.rs"]
 pub mod policy_delegate_v3_2x2_curator_verifying_key;
 #[path = "policy/delegate/policy_delegate_v3_2x2_own_verifying_key.rs"]
@@ -510,12 +510,12 @@ pub const PROVING_KEY_SHA256S: &[(&str, [u8; 32])] = &[
         deposit_8_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_merge_anonymous_v2_8.key",
-        merge_anonymous_v2_8_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_merge_v3_8.key",
+        merge_v3_8_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_merge_anonymous_v2_24.key",
-        merge_anonymous_v2_24_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_merge_v3_24.key",
+        merge_v3_24_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
 ];
 pub fn verifying_key(
@@ -901,11 +901,11 @@ pub fn verifying_key(
         key_catalog::RingCircuit::Deposit { capacity: 8 } => {
             Some(&deposit_8_verifying_key::VERIFYINGKEY)
         }
-        key_catalog::RingCircuit::AnonymousMerge { width: 8 } => {
-            Some(&merge_anonymous_v2_8_verifying_key::VERIFYINGKEY)
+        key_catalog::RingCircuit::Merge { width: 8 } => {
+            Some(&merge_v3_8_verifying_key::VERIFYINGKEY)
         }
-        key_catalog::RingCircuit::AnonymousMerge { width: 24 } => {
-            Some(&merge_anonymous_v2_24_verifying_key::VERIFYINGKEY)
+        key_catalog::RingCircuit::Merge { width: 24 } => {
+            Some(&merge_v3_24_verifying_key::VERIFYINGKEY)
         }
         _ => None,
     }

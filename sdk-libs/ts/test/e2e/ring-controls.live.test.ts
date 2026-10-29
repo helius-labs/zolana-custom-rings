@@ -277,19 +277,18 @@ describe.each(["client", "prover"] as const)("controls %s", (proofDataSource) =>
       } finally {
         depositKey.destroy();
       }
-      // A key escrow ring merges only once the ring merge proof lands.
-      await expect(
-        createRingMergeSubmission({
+      await settle(
+        await createRingMergeSubmission({
           client,
           ringProgramId,
           wallet: sender.wallet,
           keys: sender.keys,
           feePayer: sender.signer.address,
+          asset: SOL_MINT,
         }),
-      ).rejects.toMatchObject({
-        code: "RING_BUILD_MERGE",
-        causeCode: "RING_ESCROW_MERGE_UNVERIFIED",
-      });
+        client,
+        [sender.signer],
+      );
       await sync(client, sender);
       expect(
         sender.wallet
@@ -300,9 +299,8 @@ describe.each(["client", "prover"] as const)("controls %s", (proofDataSource) =>
               note.utxo.ringProgramId === ringProgramId &&
               note.utxo.asset === SOL_MINT,
           )
-          .map((note) => note.utxo.amount)
-          .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
-      ).toEqual([900_000_000n, 1_100_000_000n]);
+          .map((note) => note.utxo.amount),
+      ).toEqual([2_000_000_000n]);
       const transfer = {
         client,
         ringProgramId,

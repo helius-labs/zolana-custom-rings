@@ -286,7 +286,7 @@ type DepositParams struct {
 	MemberRegistryRoot Field            `json:"memberRegistryRoot"`
 }
 
-// MergeInput is one SPP merge slot as the anonymous merge circuit opens it.
+// MergeInput is one SPP merge slot as the merge circuit opens it.
 type MergeInput struct {
 	Domain       Field `json:"domain"`
 	TreeID       Field `json:"treeId"`
@@ -295,24 +295,28 @@ type MergeInput struct {
 	RingDataHash Field `json:"ringDataHash"`
 }
 
-// AnonymousMergeParams discloses an anonymous ring's SPP merge to its auditor.
-type AnonymousMergeParams struct {
+// MergeParams discloses a ring's SPP merge to its auditor, Member is nil without key escrow.
+type MergeParams struct {
 	RequestHead
-	PartyIdentities    []Field      `json:"partyIdentities"`
-	PrivateTxHash      Field        `json:"privateTxHash"`
-	OutputUtxoHash     Field        `json:"outputUtxoHash"`
-	FirstNullifier     Field        `json:"firstNullifier"`
-	RingProgramID      Field        `json:"ringProgramId"`
-	AuditorPk          Bytes        `json:"auditorPk"`
-	Salt               Field        `json:"salt"`
-	EphSk              Bytes        `json:"ephSk"`
-	DisclosureKey      Bytes        `json:"disclosureKey"`
-	OwnerKey           Bytes        `json:"ownerKey"`
-	NullifierSecret    Field        `json:"nullifierSecret"`
-	MintChunks         []Field      `json:"mintChunks"`
-	Inputs             []MergeInput `json:"inputs"`
-	OutputTreeID       Field        `json:"outputTreeId"`
-	OutputRingDataHash Field        `json:"outputRingDataHash"`
+	PartyIdentities    []Field        `json:"partyIdentities"`
+	PrivateTxHash      Field          `json:"privateTxHash"`
+	OutputUtxoHash     Field          `json:"outputUtxoHash"`
+	FirstNullifier     Field          `json:"firstNullifier"`
+	RingProgramID      Field          `json:"ringProgramId"`
+	AuditorPk          Bytes          `json:"auditorPk"`
+	Salt               Field          `json:"salt"`
+	EphSk              Bytes          `json:"ephSk"`
+	DisclosureKey      Bytes          `json:"disclosureKey"`
+	OwnerKey           Bytes          `json:"ownerKey"`
+	NullifierSecret    Field          `json:"nullifierSecret"`
+	MintChunks         []Field        `json:"mintChunks"`
+	Inputs             []MergeInput   `json:"inputs"`
+	OutputTreeID       Field          `json:"outputTreeId"`
+	OutputRingDataHash Field          `json:"outputRingDataHash"`
+	KeyEscrow          bool           `json:"keyEscrow"`
+	MemberRegistryRoot Field          `json:"memberRegistryRoot"`
+	CtHash             Field          `json:"ctHash"`
+	Member             *RecordOpening `json:"member"`
 }
 
 // Unmarshal refuses an unknown or repeated key, a missing key without omitempty and trailing data.

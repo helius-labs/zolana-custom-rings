@@ -40,10 +40,8 @@ export const RING_PROVING_KEY_SHA256S: Readonly<Record<string, string>> = Object
   "custom_ring_deposit_2.key": "dce2b781641eeea34c93cbdc2252cbf41fd709b4aae03e2ebec6bb90af05960f",
   "custom_ring_deposit_4.key": "8e3506e4e8defbea9e0d7ed84387ad805a76619678f85d29e14e80dc3039fb84",
   "custom_ring_deposit_8.key": "9ec8c893887eb538bb35c8a7c307008bafe13b7333eb00c421ba197b68e84614",
-  "custom_ring_merge_anonymous_v2_24.key":
-    "fc7707fd089d38038374385f6404d80de2b034f1f816e5d21779c58bcd90e697",
-  "custom_ring_merge_anonymous_v2_8.key":
-    "d235d3897ed3aef58e8d0ae06b8887b8691bed43bb962c167d9472fef4cfcc66",
+  "custom_ring_merge_v3_24.key": "ce3968b1d07c1e21ca2a1c0586cf0e7891009d0219f7fc0971e4995e95b3876f",
+  "custom_ring_merge_v3_8.key": "1d12de999243fb8e991eb87ac346b6c3bac3c533c3c8c1b1f23df5da1006d9ad",
   "custom_ring_policy_delegate_v3_2x2_curator.key":
     "2ff47434a19c6671b5f7c7eeeb7fd0b5fe836a05e0dc0b236114158cc991d6af",
   "custom_ring_policy_delegate_v3_2x2_own.key":

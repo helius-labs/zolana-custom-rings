@@ -8,6 +8,7 @@ import (
 	"github.com/consensys/gnark/std/rangecheck"
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
@@ -17,8 +18,9 @@ import (
 
 // Properties:
 // 1. PrivateTxHash, OutputUtxoHash and FirstNullifier are the SPP merge's, recomputed under one owner, one asset and the owner's nullifier secret.
-// 2. Membership is not proven, a merge consolidates one owner's notes and moves no value between parties.
+// 2. No list membership is proven, a merge consolidates one owner's notes and moves no value between parties.
 // 3. Only the auditor opens the disclosure of the owner key, nullifier key, mint, amount, output blinding and every input commitment.
+// 4. Under KeyEscrow the owner's record lies under MemberRegistryRoot and escrows the nullifier key the merge spends under.
 
 // MergeInput carries no owner, asset or ring program, every slot takes the circuit's.
 type MergeInput struct {
@@ -29,8 +31,8 @@ type MergeInput struct {
 	RingDataHash frontend.Variable
 }
 
-// AnonymousMergeCircuit binds an anonymous ring's SPP merge to a disclosure only its auditor opens.
-type AnonymousMergeCircuit struct {
+// MergeCircuit binds a ring's SPP merge to a disclosure only its auditor opens.
+type MergeCircuit struct {
 	NumInputs int `gnark:"-"`
 
 	PublicInputHash frontend.Variable `gnark:",public"`
@@ -52,19 +54,25 @@ type AnonymousMergeCircuit struct {
 	Inputs             []MergeInput
 	OutputTreeID       frontend.Variable
 	OutputRingDataHash frontend.Variable
+	// Set on a key escrow ring alone, the record fields below bind only under it.
+	KeyEscrow          frontend.Variable
+	MemberRegistryRoot frontend.Variable
+	// hash_bytes of the RegisterKey ciphertext the owner's record escrows beside the nullifier key.
+	CtHash frontend.Variable
+	Member registry.QuadRecordOpening
 }
 
-// MergeWidths are the input counts the anonymous merge keys ship.
+// MergeWidths are the input counts the ring merge keys ship, a wider merge leaves no room for its disclosure.
 var MergeWidths = []int{8, 24}
 
-func NewAnonymousMergeCircuit(width int) (*AnonymousMergeCircuit, error) {
+func NewMergeCircuit(width int) (*MergeCircuit, error) {
 	if !slices.Contains(MergeWidths, width) {
 		return nil, fmt.Errorf("merge: unsupported input count %d, want one of %v", width, MergeWidths)
 	}
-	return &AnonymousMergeCircuit{NumInputs: width, Inputs: make([]MergeInput, width)}, nil
+	return &MergeCircuit{NumInputs: width, Inputs: make([]MergeInput, width)}, nil
 }
 
-func (c *AnonymousMergeCircuit) Define(api frontend.API) error {
+func (c *MergeCircuit) Define(api frontend.API) error {
 	if !slices.Contains(MergeWidths, c.NumInputs) {
 		return fmt.Errorf("merge: unsupported input count %d, want one of %v", c.NumInputs, MergeWidths)
 	}
@@ -80,8 +88,12 @@ func (c *AnonymousMergeCircuit) Define(api frontend.API) error {
 	ownerHash := gadget.PoseidonHash(api, []frontend.Variable{ownerPkHash, nullifierPk})
 	asset := gadget.HashChain(api, c.MintChunks[:])
 	mint := slices.Concat(gadget.BitsToBytesBE(api, api.ToBinary(c.MintChunks[0], 31*8)), gadget.BitsToBytesBE(api, api.ToBinary(c.MintChunks[1], 8)))
+	// 2. Under key escrow the owner's record lies under the registry root and escrows the nullifier key the output stays under.
+	api.AssertIsBoolean(c.KeyEscrow)
+	c.Member.AssertPresent(api, c.KeyEscrow, c.MemberRegistryRoot, ownerPkHash)
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: c.KeyEscrow, A: c.Member.EscrowKey, B: registry.EscrowKey(api, nullifierPk, c.CtHash)})
 
-	// 2. Every slot is a dataless UTXO of that owner, asset and ring or a dummy, slot zero yields the public first nullifier.
+	// 3. Every slot is a dataless UTXO of that owner, asset and ring or a dummy, slot zero yields the public first nullifier.
 	inputHashes := make([]frontend.Variable, c.NumInputs)
 	addressNullifiers := make([]frontend.Variable, c.NumInputs)
 	sum := frontend.Variable(0)
@@ -112,7 +124,7 @@ func (c *AnonymousMergeCircuit) Define(api frontend.API) error {
 			api.AssertIsEqual(c.FirstNullifier, firstNullifier)
 		}
 	}
-	// 3. The output is the SPP merge output, the 64-bit sum under the owner with the TMOB blinding.
+	// 4. The output is the SPP merge output, the 64-bit sum under the owner with the TMOB blinding.
 	amount := gadget.BitsToBytesBE(api, api.ToBinary(sum, 64))
 	outputBlinding := mergeshared.MergeOutputBlinding(api, c.NullifierSecret, firstNullifier)
 	outputHash := transaction.UtxoHashCircuit(api, transaction.UtxoCircuitFields{
@@ -121,13 +133,13 @@ func (c *AnonymousMergeCircuit) Define(api frontend.API) error {
 		RingDataHash: c.OutputRingDataHash, RingProgramID: c.RingProgramID,
 	}, c.OutputTreeID)
 	api.AssertIsEqual(c.OutputUtxoHash, outputHash)
-	// 4. The private tx hash is SPP's, so the disclosed commitments are the ones SPP spent.
+	// 5. The private tx hash is SPP's, so the disclosed commitments are the ones SPP spent.
 	api.AssertIsEqual(c.PrivateTxHash, transaction.PrivateTxHashCircuit(api, inputHashes,
 		[]frontend.Variable{outputHash}, addressNullifiers, transaction.DerivePrivateTxBlinding(api, firstNullifier, c.NullifierSecret)))
 
-	// 5. The envelope seals the disclosure key to the auditor, its cipher bounds every key and ciphertext byte.
+	// 6. The envelope seals the disclosure key to the auditor, its cipher bounds every key and ciphertext byte.
 	sealed := shared.Envelope{Plaintext: c.DisclosureKey[:], EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: shared.MergeEncInfo}.Seal(api)
-	// 6. The disclosure is the canonical opening of the output and every input commitment under the key's pad.
+	// 7. The disclosure is the canonical opening of the output and every input commitment under the key's pad.
 	rc := rangecheck.New(api)
 	nullifierPkBytes, outputBlindingBytes := ringgadget.FieldToBytesBEWith(api, rc, nullifierPk), ringgadget.FieldToBytesBEWith(api, rc, outputBlinding)
 	plaintext := slices.Concat(c.OwnerKey[:], nullifierPkBytes[:], mint, amount, outputBlindingBytes[:])
@@ -140,20 +152,22 @@ func (c *AnonymousMergeCircuit) Define(api frontend.API) error {
 	for i := range fields {
 		fields[i] = api.Add(fields[i], pad[i])
 	}
-	// 7. The statement binds the SPP merge, the ring, the envelope and the masked disclosure.
+	// 8. The statement binds the SPP merge, the ring, the envelope and the masked disclosure.
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain(api, c.statement(api, sealed, fields)))
 	return nil
 }
 
-// statement is the anonymous merge preimage, mirrored by MergeAnonymousPublicInput::elements in program-libs/interface/src/instructions/merge.rs.
+// statement is the merge preimage, mirrored by MergePublicInput::elements in program-libs/interface/src/instructions/merge.rs.
 //
-//	CRMG, private_tx_hash, output_utxo_hash, first_nullifier, ring_id, aud0, aud1, eph0, eph1, ct_hash, salt, HashChain4(fields)
-func (c *AnonymousMergeCircuit) statement(api frontend.API, sealed shared.Sealed, fields []frontend.Variable) []frontend.Variable {
+//	CRMG, private_tx_hash, output_utxo_hash, first_nullifier, ring_id, aud0, aud1, eph0, eph1, ct_hash, salt, HashChain4(fields),
+//	payer, cosigner, exit_destination, key_escrow, member_registry_root
+func (c *MergeCircuit) statement(api frontend.API, sealed shared.Sealed, fields []frontend.Variable) []frontend.Variable {
 	return slices.Concat(
 		[]frontend.Variable{shared.MergeStatementDomain, c.PrivateTxHash, c.OutputUtxoHash, c.FirstNullifier, c.RingProgramID},
 		sealed.Auditor,
 		sealed.Eph,
 		[]frontend.Variable{gadget.HashBoundedBytes(api, sealed.Ciphertext), c.Salt, gadget.HashChain4(api, fields)},
 		c.PartyIdentities[:],
+		[]frontend.Variable{c.KeyEscrow, c.MemberRegistryRoot},
 	)
 }

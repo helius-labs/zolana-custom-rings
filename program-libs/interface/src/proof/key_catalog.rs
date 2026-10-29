@@ -42,7 +42,7 @@ pub enum RingCircuit {
     Deposit {
         capacity: u8,
     },
-    AnonymousMerge {
+    Merge {
         width: u8,
     },
 }

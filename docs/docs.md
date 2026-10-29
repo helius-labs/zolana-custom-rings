@@ -23,7 +23,7 @@ The operator runs the `zolana-ring` CLI from a `ring.toml`. Members pay through 
 4. **Build clients**
    1. Deposit into the ring with an audited deposit.
    2. Register the member's key on a key-escrow ring, and apply the queue.
-   3. Prove and submit transfers, exits and withdrawals, and merges on an anonymous ring.
+   3. Prove and submit transfers, exits, withdrawals and merges.
    4. Sync the wallet to find received notes.
 5. **Audit**
    1. Ring RPC opens every transfer with the auditor key.
@@ -365,7 +365,7 @@ CustomRingTransfer::new(CustomRingTransferInput {
 
 `transfer.viewing_history()` is the sender's history past the transfer's tags, stored before the transfer is sent. `AnonymousSync::new(keys, &assets).fetch(indexer, &history)` finds received notes and returns the raised history.
 
-Merge on an anonymous ring:
+Merge on any ring. On a key-escrow ring the owner's record must escrow the nullifier key:
 
 ```rust
 let prepared = CustomRingMerge::new(ring, merged_inputs.clone(), None)?
@@ -438,10 +438,9 @@ ring-rpc serve --port 8785 --indexer-url <ring indexer> --rpc-url <solana> \
 1. **Confidential rings name their parties:** the sender signs and each ring output publishes the recipient's viewing key, which the zolana user registry maps to its Solana key. Use an anonymous ring to hide them.
 2. **Anonymity needs a relayer and request tags:** the payer and fee payer must not link to the owner, and a first payment under the bootstrap tag publishes the recipient's viewing key. A default-ring spend, an exit or a withdrawal to a linked key ends the anonymity of that transfer.
 3. **Outflow limits bound one transfer:** no limit counts across transfers, keys or time. A per-day cap per customer is not expressible.
-4. **Deposits and merges are not screened:** rules screen the sender and the outputs of each transfer. A key-escrow ring refuses a deposit to an owner without an escrowed key.
-5. **Confidential rings cannot merge:** join notes with a transfer to yourself.
-6. **Key escrow and the delegate are permanent:** a registered key cannot change, and nothing removes a delegate.
-7. **Records are public:** every list write names its member. On an anonymous ring a member's own list write publishes its Solana key.
-8. **The auditor reads everything:** a reader grant has no scope or expiry.
-9. **TypeScript anonymous rings are partial:** the TypeScript SDK builds anonymous transfers, but its client has no anonymous SPP prover and it has no anonymous wallet sync. Use the Rust SDK or the CLI.
-10. **Single-party setup:** the ring's proving keys come from one gnark setup. Trust the key generator as you trust the upgrade authority.
+4. **Deposits and merges are not screened:** rules screen the sender and the outputs of each transfer. A key-escrow ring refuses a deposit to or a merge of an owner without an escrowed key.
+5. **Key escrow and the delegate are permanent:** a registered key cannot change, and nothing removes a delegate.
+6. **Records are public:** every list write names its member. On an anonymous ring a member's own list write publishes its Solana key.
+7. **The auditor reads everything:** a reader grant has no scope or expiry.
+8. **TypeScript anonymous rings are partial:** the TypeScript SDK builds anonymous transfers, but its client has no anonymous SPP prover and it has no anonymous wallet sync. Use the Rust SDK or the CLI.
+9. **Single-party setup:** the ring's proving keys come from one gnark setup. Trust the key generator as you trust the upgrade authority.

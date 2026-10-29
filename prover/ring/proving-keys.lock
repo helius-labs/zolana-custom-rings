@@ -111,14 +111,14 @@
       "size": 56233429,
       "source": "release"
     },
-    "custom_ring_merge_anonymous_v2_24.key": {
-      "sha256": "fc7707fd089d38038374385f6404d80de2b034f1f816e5d21779c58bcd90e697",
-      "size": 32215568,
+    "custom_ring_merge_v3_24.key": {
+      "sha256": "ce3968b1d07c1e21ca2a1c0586cf0e7891009d0219f7fc0971e4995e95b3876f",
+      "size": 33470766,
       "source": "release"
     },
-    "custom_ring_merge_anonymous_v2_8.key": {
-      "sha256": "d235d3897ed3aef58e8d0ae06b8887b8691bed43bb962c167d9472fef4cfcc66",
-      "size": 22633255,
+    "custom_ring_merge_v3_8.key": {
+      "sha256": "1d12de999243fb8e991eb87ac346b6c3bac3c533c3c8c1b1f23df5da1006d9ad",
+      "size": 23947235,
       "source": "release"
     },
     "custom_ring_policy_delegate_v3_2x2_curator.key": {

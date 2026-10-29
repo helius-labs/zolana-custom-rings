@@ -1,18 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
 
-import vector from "../../../../test-vectors/merge/ring-merge-anonymous.json" with { type: "json" };
+import vector from "../../../../test-vectors/merge/ring-merge.json" with { type: "json" };
 import { initializePoseidon } from "@heliuslabs/zolana";
-import { Reader, Writer, addressBytes, encodeBase58 } from "@heliuslabs/zolana/internal";
+import {
+  Reader,
+  Writer,
+  addressBytes,
+  encodeBase58,
+  solanaOwnerIdentity,
+} from "@heliuslabs/zolana/internal";
 import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 import { X25519Keypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import { DISCLOSURE_CHUNK_BYTES } from "../../src/protocol/codec/ring-disclosure-layout.js";
+import { EMPTY_MINT_POLICY } from "../../src/protocol/membership/mint-policy.js";
 import { ringProofRequestBody } from "../../src/rpc/prover/ring.js";
 import {
   mergeDisclosureFieldCount,
   openRingMergeDisclosure,
   sealRingMergeDisclosureWith,
   readRingMergeDisclosure,
-  ringMergeAnonymousPublicInputHash,
+  ringMergePublicInputHash,
   writeRingMergeDisclosure,
   type RingMergeDisclosure,
   type RingMergeOpening,
@@ -44,7 +51,7 @@ function opening(): RingMergeOpening {
   };
 }
 
-describe("anonymous ring merge disclosure (test-vectors/merge/ring-merge-anonymous.json)", () => {
+describe("ring merge disclosure (test-vectors/merge/ring-merge.json)", () => {
   it("opens the Go disclosure and hashes the Go statement", async () => {
     await initializePoseidon();
     const auditor = X25519Keypair.fromBytes(bytes(vector.auditor_sk, 32));
@@ -68,7 +75,7 @@ describe("anonymous ring merge disclosure (test-vectors/merge/ring-merge-anonymo
     otherSalt[0] = (otherSalt[0] ?? 0) ^ 1;
     expect(() => openRingMergeDisclosure(auditor, disclosure(), otherSalt)).toThrow();
 
-    const hash = ringMergeAnonymousPublicInputHash({
+    const hash = ringMergePublicInputHash({
       partyIdentities: vector.request.partyIdentities.map((value) => bytes<Bytes32>(value, 32)) as [
         Bytes32,
         Bytes32,
@@ -81,6 +88,9 @@ describe("anonymous ring merge disclosure (test-vectors/merge/ring-merge-anonymo
       auditorPublicKey: X25519PublicKey.fromBytes(bytes(vector.auditor_pk, 33)),
       disclosure: disclosure(),
       salt,
+      ...(vector.request.keyEscrow
+        ? { memberRegistryRoot: bytes<Bytes32>(vector.request.memberRegistryRoot, 32) }
+        : {}),
     });
     expect(`0x${Buffer.from(hash).toString("hex")}`).toBe(vector.public_input_hash);
   });
@@ -162,11 +172,12 @@ describe("anonymous ring merge disclosure (test-vectors/merge/ring-merge-anonymo
     }
   });
 
-  it("writes the Go prover body of custom-ring-merge-anonymous-8", () => {
+  it("writes the Go prover body of custom-ring-merge-v3-8", () => {
     const request = vector.request;
     const field = (value: string) => bytes<Bytes32>(value, 32);
+    const siblings = request.member.path.map(field);
     const body = ringProofRequestBody({
-      kind: "anonymousMerge",
+      kind: "merge",
       partyIdentities: request.partyIdentities.map(field) as [Bytes32, Bytes32, Bytes32],
       publicInputHash: field(request.publicInputHash),
       privateTxHash: field(request.privateTxHash),
@@ -189,19 +200,34 @@ describe("anonymous ring merge disclosure (test-vectors/merge/ring-merge-anonymo
       })),
       outputTreeId: field(request.outputTreeId),
       outputRingDataHash: field(request.outputRingDataHash),
+      keyEscrow: request.keyEscrow,
+      memberRegistryRoot: field(request.memberRegistryRoot),
+      ctHash: field(request.ctHash),
+      member: {
+        kind: "present",
+        record: {
+          member: solanaOwnerIdentity(field(request.ownerKey)) as Bytes32,
+          next: field(request.member.next),
+          lists: BigInt(request.member.lists),
+          escrowKey: field(request.member.escrowKey),
+          mintPolicy: EMPTY_MINT_POLICY,
+        },
+        path: {
+          index: request.member.index,
+          siblings: Array.from({ length: siblings.length / 3 }, (_, level) =>
+            siblings.slice(3 * level, 3 * level + 3),
+          ),
+        },
+      },
     });
     expect(JSON.parse(JSON.stringify(body))).toEqual(request);
   });
 
-  it("writes the option ahead of the SPP body and reads back its own layout", () => {
+  it("writes the disclosure ahead of the SPP body and reads back its own layout", () => {
     expect([8, 24, 52].map(mergeDisclosureFieldCount)).toEqual([13, 30, 59]);
-    const absent = writeRingMergeDisclosure(new Writer(), undefined).finish();
-    expect(absent).toEqual(Uint8Array.of(0));
     const present = writeRingMergeDisclosure(new Writer(), disclosure()).finish();
-    expect(present.length).toBe(1 + 192 + 33 + 32 + 1 + 32 * vector.fields.length);
+    expect(present.length).toBe(192 + 33 + 32 + 1 + 32 * vector.fields.length);
     expect(readRingMergeDisclosure(new Reader(present))).toEqual(disclosure());
-    const tagged = present.slice();
-    tagged[0] = 2;
-    expect(() => readRingMergeDisclosure(new Reader(tagged))).toThrow();
+    expect(() => readRingMergeDisclosure(new Reader(present.slice(0, -1)))).toThrow();
   });
 });

@@ -14,10 +14,10 @@ use crate::{
 /// Owner key, nullifier pk, mint, amount and output blinding ahead of the input commitments.
 pub const MERGE_DISCLOSURE_HEADER_LEN: usize = 32 + 32 + 32 + 8 + 32;
 pub const MERGE_DISCLOSURE_INFO: &[u8; 10] = b"CRING/mrg1";
-pub const MERGE_ANONYMOUS_PUBLIC_INPUT_ELEMENTS: usize = 15;
+pub const MERGE_PUBLIC_INPUT_ELEMENTS: usize = 17;
 
-/// SPP merge widths whose anonymous merge, disclosure and nullifier accounts fit one v1 transaction.
-pub const ANONYMOUS_MERGE_WIDTHS: [usize; 2] = [8, 24];
+/// SPP merge widths whose merge, disclosure and nullifier accounts fit one v1 transaction.
+pub const MERGE_WIDTHS: [usize; 2] = [8, 24];
 /// `expiry_unix_ts u64 || proof.a` open the SPP merge body ahead of `proof.b`.
 const MERGE_B_OFFSET: usize = core::mem::size_of::<u64>() + 32;
 
@@ -34,14 +34,14 @@ pub const fn merge_disclosure_field_count(width: usize) -> usize {
 /// The SPP merge body with `proof.b` compressed, the program resolves `registry_root_index` to its root.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CustomRingMergeIxData {
+    /// Read on a key escrow ring alone, zero elsewhere.
     pub registry_root_index: u8,
     pub output_ring_data_hash: [u8; 32],
-    /// Present exactly in an anonymous ring, whose SPP merge skips the escrow key.
-    pub disclosure: Option<MergeDisclosure>,
+    pub disclosure: MergeDisclosure,
     pub merge: MergeTransactIxData,
 }
 
-/// The auditor's opening of an anonymous merge, proven against the SPP merge it precedes.
+/// The auditor's opening of a merge, proven against the SPP merge it precedes.
 #[derive(Clone, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
 pub struct MergeDisclosure {
     pub proof: CustomRingProof,
@@ -85,7 +85,7 @@ fn invalid_data<E>(_: E) -> CustomRingError {
 pub struct CustomRingMergeIxDataRef<'a> {
     pub registry_root_index: u8,
     pub output_ring_data_hash: &'a [u8; 32],
-    pub disclosure: Option<MergeDisclosureRef<'a>>,
+    pub disclosure: MergeDisclosureRef<'a>,
     head: &'a [u8; MERGE_B_OFFSET],
     compressed_b: &'a [u8; 64],
     tail: &'a [u8],
@@ -126,28 +126,23 @@ impl<'a> CustomRingMergeIxDataRef<'a> {
 }
 
 impl<'a> MergeDisclosureRef<'a> {
-    /// The wincode option ahead of the SPP body.
-    fn read(bytes: &mut Bytes<'a>) -> Result<Option<Self>, CustomRingError> {
-        match bytes.byte()? {
-            0 => return Ok(None),
-            1 => {}
-            _ => return Err(CustomRingError::InvalidInstructionData),
-        }
+    /// The wincode disclosure ahead of the SPP body.
+    fn read(bytes: &mut Bytes<'a>) -> Result<Self, CustomRingError> {
         let proof = bytes.pod()?;
         let eph_pk = bytes.array()?;
         let ciphertext = bytes.array()?;
         let count = bytes.byte()?;
-        Ok(Some(Self {
+        Ok(Self {
             proof,
             eph_pk,
             ciphertext,
             fields: bytes.fields(usize::from(count))?,
-        }))
+        })
     }
 }
 
-/// The anonymous merge statement, `prover/circuits/merge.go`.
-pub struct MergeAnonymousPublicInput<'a> {
+/// The merge statement, `prover/circuits/merge.go`.
+pub struct MergePublicInput<'a> {
     pub party_identities: &'a [[u8; 32]; 3],
     pub private_tx_hash: &'a [u8; 32],
     pub output_utxo_hash: &'a [u8; 32],
@@ -160,16 +155,16 @@ pub struct MergeAnonymousPublicInput<'a> {
     /// The SPP output ciphertext salt, the merge pad reuses it.
     pub salt: &'a [u8; 16],
     pub fields: &'a [[u8; 32]],
+    /// The own root a key escrow ring binds, its owner's record escrows the merged key.
+    pub member_registry_root: Option<&'a [u8; 32]>,
 }
 
-impl MergeAnonymousPublicInput<'_> {
+impl MergePublicInput<'_> {
     pub fn hash(&self) -> Result<[u8; 32], HasherError> {
         create_hash_chain_from_slice(&self.elements()?)
     }
 
-    pub fn elements(
-        &self,
-    ) -> Result<[[u8; 32]; MERGE_ANONYMOUS_PUBLIC_INPUT_ELEMENTS], HasherError> {
+    pub fn elements(&self) -> Result<[[u8; 32]; MERGE_PUBLIC_INPUT_ELEMENTS], HasherError> {
         let [auditor_lo, auditor_hi] = pack_be(self.auditor_pk);
         let [eph_lo, eph_hi] = pack_be(self.eph_pk);
         Ok([
@@ -188,6 +183,8 @@ impl MergeAnonymousPublicInput<'_> {
             self.party_identities[0],
             self.party_identities[1],
             self.party_identities[2],
+            right_align(&[u8::from(self.member_registry_root.is_some())]),
+            self.member_registry_root.copied().unwrap_or_default(),
         ])
     }
 }
@@ -199,7 +196,7 @@ mod tests {
     #[test]
     fn the_statement_matches_the_go_vector() {
         let vector: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../test-vectors/merge/ring-merge-anonymous.json"
+            "../../../../test-vectors/merge/ring-merge.json"
         ))
         .unwrap();
         let bytes = |value: &serde_json::Value| -> Vec<u8> {
@@ -213,7 +210,11 @@ mod tests {
             .iter()
             .map(array)
             .collect();
-        let statement = MergeAnonymousPublicInput {
+        let root = request["keyEscrow"]
+            .as_bool()
+            .unwrap()
+            .then(|| array(&request["memberRegistryRoot"]));
+        let statement = MergePublicInput {
             party_identities: &core::array::from_fn(|i| array(&request["partyIdentities"][i])),
             private_tx_hash: &array(&request["privateTxHash"]),
             output_utxo_hash: &array(&request["outputUtxoHash"]),
@@ -224,6 +225,7 @@ mod tests {
             ciphertext: &array(&vector["envelope_ciphertext"]),
             salt: &bytes(&vector["salt"]).try_into().unwrap(),
             fields: &fields,
+            member_registry_root: root.as_ref(),
         };
         let elements: Vec<[u8; 32]> = vector["elements"]
             .as_array()

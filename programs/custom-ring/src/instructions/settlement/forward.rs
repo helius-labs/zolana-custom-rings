@@ -26,15 +26,17 @@ pub fn process_merge_ix(
 
     let mut iter = AccountIterator::new(accounts);
     let config = Box::new(*load_config(program_id, iter.next_account("config")?)?);
-    let anonymous = config.mode()? == RingMode::Anonymous;
-    // 1. An anonymous merge opens no member record.
-    let root = match anonymous {
-        true if request.registry_root_index != 0 => {
+    let mode = config.mode()?;
+    // 1. Only a key escrow ring binds its own root, its owner's record escrows the merged key.
+    let root = match mode {
+        RingMode::ConfidentialEscrow => Some(
+            load_registry(program_id, iter.next_account("registry")?)?
+                .own_root(request.registry_root_index)?,
+        ),
+        _ if request.registry_root_index != 0 => {
             return Err(CustomRingError::UnexpectedMemberRegistryRoot.into())
         }
-        true => [0; 32],
-        false => load_registry(program_id, iter.next_account("registry")?)?
-            .own_root(request.registry_root_index)?,
+        _ => None,
     };
     // 2. A merge is a transfer, a co-signer scoped to transfers signs it.
     let demand = CoSignDemand {
@@ -53,7 +55,7 @@ pub fn process_merge_ix(
 
     // 4. A bad SPP proof point is refused before the disclosure pairing.
     let spp_body = request.spp_merge_body()?;
-    // 5. An anonymous merge proves its owner's opening to the auditor, an escrow-mode merge its record.
+    // 5. The disclosure proves the owner's opening to the auditor, under key escrow its record too.
     let parties = custom_ring_interface::AnonymousParties {
         payer: spp_accounts[RING_MERGE_PAYER_INDEX].address().as_array(),
         cosigner: config.co_signer().map(Address::as_array),
@@ -65,8 +67,8 @@ pub fn process_merge_ix(
         party_identities: &parties,
         program_id,
         config: &config,
-        anonymous,
-        member_registry_root: &root,
+        anonymous: mode == RingMode::Anonymous,
+        member_registry_root: root.as_ref(),
         output_ring_data_hash: request.output_ring_data_hash,
         disclosure: request.disclosure,
         spp_body: &spp_body,

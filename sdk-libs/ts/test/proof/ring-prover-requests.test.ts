@@ -459,10 +459,10 @@ function request(item: Json): RingProofRequest {
       memberRegistryRoot: field(item["memberRegistryRoot"]),
     };
   }
-  if (circuitType.startsWith("custom-ring-merge-anonymous-")) {
+  if (circuitType.startsWith("custom-ring-merge-v3-")) {
     const ownerKey = bytes<Bytes32>(item["ownerKey"], 32);
     return {
-      kind: "anonymousMerge",
+      kind: "merge",
       partyIdentities: fields(item["partyIdentities"]) as [Bytes32, Bytes32, Bytes32],
       publicInputHash,
       privateTxHash: field(item["privateTxHash"]),
@@ -488,6 +488,12 @@ function request(item: Json): RingProofRequest {
       }),
       outputTreeId: field(item["outputTreeId"]),
       outputRingDataHash: field(item["outputRingDataHash"]),
+      keyEscrow: flag(item["keyEscrow"]),
+      memberRegistryRoot: field(item["memberRegistryRoot"]),
+      ctHash: field(item["ctHash"]),
+      ...(item["member"] === null
+        ? {}
+        : { member: presentRecord(item["member"], solanaOwnerIdentity(ownerKey) as Bytes32) }),
     };
   }
   throw new Error(`no request for ${circuitType}`);

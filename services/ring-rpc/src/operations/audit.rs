@@ -293,7 +293,7 @@ impl<S: TransactionSource> AuditService<S> {
         })
     }
 
-    /// Opens the ring's transfers, audited deposits and anonymous merges from the store's resume point.
+    /// Opens the ring's transfers, audited deposits and merges from the store's resume point.
     pub async fn backfill_utxos(&self) -> Result<(), RingRpcError> {
         let source = &self.shared.source;
         let Some(config) = source.ring_config(self.ring).await? else {

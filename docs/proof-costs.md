@@ -18,8 +18,8 @@ rotation.
   and a delegate policy statement.
 - An audited deposit proves a deposit statement; SPP's `ring_deposit` takes no
   separate proof.
-- A merge proves SPP's ring merge statement. An anonymous ring adds a merge
-  disclosure statement.
+- A merge proves SPP's ring merge statement and one merge disclosure
+  statement, which opens the owner's escrow record under key escrow.
 - Key registration and record application each prove their own statement.
 - A withdrawal below configured thresholds can add a withdrawal exemption proof
   to waive withdrawal-scoped co-signing. Supplying the demanded co-signer needs
@@ -53,7 +53,7 @@ for the small output shapes, and transaction size limits the wider shapes.
 
 ## Registry, deposits and merge disclosures
 
-Record application, key registration, audited deposits and anonymous merge
+Record application, key registration, audited deposits and merge
 disclosures have separate keys. The [registry tests](../prover/circuits/registry/registry_test.go)
 pin opening constraints. Verify the current cost of any other key by compiling
 it with the [ring key tests](../prover/ring/keys_test.go).
