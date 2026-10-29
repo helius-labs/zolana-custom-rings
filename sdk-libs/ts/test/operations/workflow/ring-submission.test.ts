@@ -26,7 +26,7 @@ const MEMO = address("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
 const STALE_ROOT: RingSubmissionStatus = {
   kind: "failed",
   instructionIndex: 0,
-  customCode: RingProgramError.rootBelowFloor,
+  customCode: RingProgramError.mirrorRootExpired,
 };
 
 const OWN_REGISTRY = address("Stor111111111111111111111111111111111111111");
@@ -195,9 +195,8 @@ describe("ring submission ownership", () => {
   });
 
   it.each([
-    RingProgramError.rootBelowFloor,
-    RingProgramError.curatorRootStale,
-    RingProgramError.rootIndexEmpty,
+    RingProgramError.mirrorRootExpired,
+    RingProgramError.mirrorNotSynced,
     RingProgramError.authorityBatchTooLarge,
   ])("rebuilds after the stale proof code %i", async (customCode) => {
     const f = await fixture();
@@ -218,7 +217,7 @@ describe("ring submission ownership", () => {
       kind: "failed",
       attempts: 3,
       instructionIndex: 0,
-      customCode: RingProgramError.rootBelowFloor,
+      customCode: RingProgramError.mirrorRootExpired,
     });
     expect(status).not.toHaveBeenCalled();
     expect(f.build).toHaveBeenCalledTimes(3);
@@ -236,7 +235,7 @@ describe("ring submission ownership", () => {
       kind: "failed",
       attempts: 1,
       instructionIndex: 1,
-      customCode: RingProgramError.rootBelowFloor,
+      customCode: RingProgramError.mirrorRootExpired,
     });
     expect(f.build).toHaveBeenCalledTimes(1);
   });

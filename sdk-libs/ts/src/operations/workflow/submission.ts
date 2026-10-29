@@ -29,7 +29,7 @@ import {
 import type { RingSubmissionStatus, RingSubmissionTransport } from "../../rpc/ports.js";
 import { fetchRingPolicy } from "../../protocol/membership/config.js";
 import { rootMirror } from "../../protocol/codec/ring-codecs.js";
-import { RingError, RingProgramError, StorageProgramError } from "../../protocol/error.js";
+import { RingError, RingProgramError } from "../../protocol/error.js";
 import type { RingBoundState } from "./pipeline.js";
 import type { ViewingHistory } from "../../state/viewing-history.js";
 
@@ -76,13 +76,11 @@ export interface ReservationHold {
 export type RingSubmissionBuild = (context?: RequestContext) => Promise<RingSubmissionAttempt>;
 
 const MAX_ATTEMPTS = 3;
-/** Rust `retryable`, a fresh proof fixes a root under a raised floor, an emptied slot or a batch that no longer fits. */
+/** Rust `reproof_fixes`, a fresh proof fixes a revision the mirror dropped or a batch that no longer fits. */
 const STALE_PROOF_CODES: ReadonlySet<number> = new Set([
-  RingProgramError.rootBelowFloor,
-  RingProgramError.curatorRootStale,
-  RingProgramError.rootIndexEmpty,
+  RingProgramError.mirrorRootExpired,
+  RingProgramError.mirrorNotSynced,
   RingProgramError.authorityBatchTooLarge,
-  StorageProgramError.rootExpired,
 ]);
 const NO_RESERVATION: ReservationHold = Object.freeze({ release() {}, extend() {} });
 
