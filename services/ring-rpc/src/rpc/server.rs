@@ -436,7 +436,8 @@ mod tests {
         },
         origins::OriginPolicy,
         upstream::{
-            DepositHistory, MergeAuditRequest, RingConfiguration, RingHistoryPage, TransactionPage,
+            DepositHistory, MergeAuditRequest, RecordsTip, RingConfiguration, RingHistoryPage,
+            TransactionPage,
         },
     };
 
@@ -509,11 +510,8 @@ mod tests {
             Err(ClientError::Rpc("unused source".to_owned()))
         }
 
-        async fn records_root(
-            &self,
-            _ring: Address,
-        ) -> Result<Option<zolana_ring_client::StorageTip>, ClientError> {
-            Ok(None)
+        async fn records_root(&self, _ring: Address) -> Result<RecordsTip, ClientError> {
+            Ok(RecordsTip::NoPolicy)
         }
 
         async fn storage_member_openings(

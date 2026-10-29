@@ -103,7 +103,7 @@ pub use relay_submit::{CollectedSignature, RelaySubmit, RelayTransaction};
 pub use server::{relay_module, rpc_module, run_server, BindPolicy, ServerError, ServerOptions};
 pub use storage_chain::{LatestBlockhash, LiveStorageChain, StorageChain, TransactionOutcome};
 pub use upstream::{
-    ChainSource, DepositHistory, DepositPage, MergeAuditRequest, RingConfiguration,
+    ChainSource, DepositHistory, DepositPage, MergeAuditRequest, RecordsTip, RingConfiguration,
     RingHistoryPage, Subscriber, TransactionPage, TransactionSource, Upstreams,
 };
 pub use utxos::UTXO_BACKFILL_INTERVAL;

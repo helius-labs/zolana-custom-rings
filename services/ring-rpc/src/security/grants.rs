@@ -9,7 +9,7 @@ use zolana_ring_policy::{ListId, Member};
 
 use crate::{
     error::{GrantRefusal, RingRpcError},
-    upstream::TransactionSource,
+    upstream::{RecordsTip, TransactionSource},
 };
 
 #[must_use]
@@ -108,11 +108,9 @@ impl<S: TransactionSource> GrantSource for TreeGrants<'_, S> {
             let wallet = Member::owner_tag(wallet.as_array())?;
             members.push(*Member::wallet_grant(&wallet, &reader)?.as_bytes());
         }
-        let records = self
-            .source
-            .records_root(query.ring)
-            .await?
-            .ok_or(GrantRefusal::RecordsUnsynced)?;
+        let RecordsTip::Mirrored(records) = self.source.records_root(query.ring).await? else {
+            return Err(GrantRefusal::RecordsUnsynced.into());
+        };
         let response = self
             .source
             .storage_member_openings(records.openings_request(&members))

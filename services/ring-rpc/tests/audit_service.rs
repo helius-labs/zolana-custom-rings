@@ -77,8 +77,9 @@ use zolana_ring_indexer::rpc::{
 };
 use zolana_ring_rpc::{
     rpc_module, AuditRead, AuditService, Clock, DepositHistory, DepositPage, Hub,
-    MergeAuditRequest, OriginPolicy, Origins, Page, ReadCheck, RingConfiguration, RingHistoryPage,
-    RingRpcError, RootSecret, Store, TransactionPage, TransactionSource, Unauthorized, AUTH_SKEW,
+    MergeAuditRequest, OriginPolicy, Origins, Page, ReadCheck, RecordsTip, RingConfiguration,
+    RingHistoryPage, RingRpcError, RootSecret, Store, TransactionPage, TransactionSource,
+    Unauthorized, AUTH_SKEW,
 };
 use zolana_ring_transaction::{RingAssets, RingDeliveredBody};
 
@@ -593,9 +594,9 @@ impl TransactionSource for StaticSource {
         Ok(relay_fixture::SLOT)
     }
 
-    async fn records_root(&self, _ring: Address) -> Result<Option<StorageTip>, ClientError> {
+    async fn records_root(&self, _ring: Address) -> Result<RecordsTip, ClientError> {
         let root = self.records.root();
-        Ok(Some(StorageTip {
+        Ok(RecordsTip::Mirrored(StorageTip {
             registry: RECORDS,
             root: root.root.0,
             revision: root.revision,

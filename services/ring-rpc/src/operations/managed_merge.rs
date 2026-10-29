@@ -344,7 +344,7 @@ pub(crate) mod tests {
     use zolana_ring_client::{
         rpc::{unix_now, MergeSettingsRequest, ReadTarget, RingChainStatus, SignedRequest},
         AuditError, CreatedUtxo, KnownUtxo, MergeAuditPage, NullifierKeyEnvelope, RingIndexerError,
-        RingOrigin, StorageTip, UtxoOwner,
+        RingOrigin, UtxoOwner,
     };
     use zolana_ring_indexer::rpc::{
         GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse,
@@ -357,8 +357,8 @@ pub(crate) mod tests {
         database::Store,
         relay::RelayParts,
         upstream::{
-            DepositHistory, DepositPage, MergeAuditRequest, RingConfiguration, RingHistoryPage,
-            TransactionPage,
+            DepositHistory, DepositPage, MergeAuditRequest, RecordsTip, RingConfiguration,
+            RingHistoryPage, TransactionPage,
         },
         utxos::{CreatedIn, EscrowRoot, EscrowedOwner},
     };
@@ -428,7 +428,7 @@ pub(crate) mod tests {
             unused()
         }
 
-        async fn records_root(&self, _ring: Address) -> Result<Option<StorageTip>, ClientError> {
+        async fn records_root(&self, _ring: Address) -> Result<RecordsTip, ClientError> {
             unused()
         }
 

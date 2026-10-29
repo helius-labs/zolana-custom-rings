@@ -21,7 +21,7 @@ use crate::{
     database::Store,
     error::RingRpcError,
     hub::Shared,
-    upstream::TransactionSource,
+    upstream::{RecordsTip, TransactionSource},
 };
 
 pub trait AssetLimitSource: Send + Sync {
@@ -189,15 +189,20 @@ impl<S: TransactionSource> AssetLimitSource for MirroredLimits<S> {
         Ok(self.0.source.slot().await?)
     }
 
-    /// Empty until the writer's first `SyncRoots`, sent with every storage update.
+    /// Empty without a ring policy, refused for an asset until the writer's first `SyncRoots`.
     async fn asset_limits(
         &self,
         ring: Address,
         assets: &[Address],
     ) -> Result<Vec<AssetLimits>, RingRpcError> {
+        if assets.is_empty() {
+            return Ok(Vec::new());
+        }
         let source = &self.0.source;
-        let Some(StorageTip { registry, root, .. }) = source.records_root(ring).await? else {
-            return Ok(vec![AssetLimits::EMPTY; assets.len()]);
+        let StorageTip { registry, root, .. } = match source.records_root(ring).await? {
+            RecordsTip::NoPolicy => return Ok(vec![AssetLimits::EMPTY; assets.len()]),
+            RecordsTip::Unsynced => return Err(CoSignError::LimitsUnavailable.into()),
+            RecordsTip::Mirrored(tip) => tip,
         };
         let members = assets
             .iter()

@@ -36,7 +36,9 @@ use crate::{
     hub::Shared,
     limits::ReaderPermit,
     replay::ReplayCheck,
-    upstream::{MergeAuditRequest, RingHistoryPage, TransactionPage, TransactionSource},
+    upstream::{
+        MergeAuditRequest, RecordsTip, RingHistoryPage, TransactionPage, TransactionSource,
+    },
     utxos::{AuditStore, CreatedIn, EscrowRoot, EscrowedOwner, MAX_BACKFILL_PAGES},
 };
 
@@ -426,7 +428,7 @@ impl<S: TransactionSource> AuditService<S> {
 
     /// Every escrowed key under the root the ring policy mirrors, read again once that root moves.
     async fn refresh_escrow(&self, store: &AuditStore) -> Result<(), RingRpcError> {
-        let Some(tip) = self.shared.source.records_root(self.ring).await? else {
+        let RecordsTip::Mirrored(tip) = self.shared.source.records_root(self.ring).await? else {
             return Ok(());
         };
         let root = EscrowRoot {

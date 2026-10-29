@@ -86,11 +86,10 @@ pub trait TransactionSource: Send + Sync {
 
     fn slot(&self) -> impl Future<Output = Result<u64, ClientError>> + Send;
 
-    /// `None` without a ring policy or before its own mirror is synced.
     fn records_root(
         &self,
         ring: Address,
-    ) -> impl Future<Output = Result<Option<StorageTip>, ClientError>> + Send;
+    ) -> impl Future<Output = Result<RecordsTip, ClientError>> + Send;
 
     fn storage_member_openings(
         &self,
@@ -164,6 +163,14 @@ impl From<DepositHistory> for RingDepositsResponse {
             oldest_slot: history.oldest_slot,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecordsTip {
+    NoPolicy,
+    /// The policy mirror holds no root of its records registry yet.
+    Unsynced,
+    Mirrored(StorageTip),
 }
 
 /// A ring whose policy reads lists from a curator registry.
@@ -518,10 +525,10 @@ impl TransactionSource for ChainSource {
         self.rpc.get_slot().await
     }
 
-    async fn records_root(&self, ring: Address) -> Result<Option<StorageTip>, ClientError> {
+    async fn records_root(&self, ring: Address) -> Result<RecordsTip, ClientError> {
         let (address, bump) = Address::find_program_address(&[RingPolicy::SEED], &ring);
         let Some(account) = self.owned_account(address, ring).await? else {
-            return Ok(None);
+            return Ok(RecordsTip::NoPolicy);
         };
         CanonicalAccount {
             account: &account,
@@ -676,11 +683,11 @@ impl CanonicalAccount<'_> {
         })
     }
 
-    fn records_root(self) -> Result<Option<StorageTip>, ClientError> {
+    fn records_root(self) -> Result<RecordsTip, ClientError> {
         let policy: RingPolicy = self
             .decode()
             .ok_or_else(|| ClientError::Rpc(INVALID_POLICY.to_owned()))?;
-        Ok(StorageTip::mirrored(&policy))
+        Ok(StorageTip::mirrored(&policy).map_or(RecordsTip::Unsynced, RecordsTip::Mirrored))
     }
 }
 
