@@ -14,6 +14,7 @@ export type { RingErrorCode, RingProgramErrorName } from "../protocol/error.js";
 
 export {
   ringAuthAddress,
+  ringCoSignerAddress,
   ringConfigAddress,
   ringMemberRegistryAddress,
   ringRecordQueueAddress,
@@ -30,6 +31,7 @@ export {
   RING_COSIGN_TRANSFERS,
   RING_COSIGN_WITHDRAWALS,
   checkedCustomRingProof,
+  decodeRingCoSigner,
   decodeRingMemberRegistry,
   decodeRingProgramConfig,
   decodeRingRecordQueue,
@@ -55,6 +57,7 @@ export type {
 export {
   BPF_LOADER_UPGRADEABLE_ID,
   fetchCuratorRegistry,
+  fetchRingCoSignerRecord,
   fetchRingMemberRegistry,
   fetchRingProgramConfig,
   fetchRingRecordQueue,

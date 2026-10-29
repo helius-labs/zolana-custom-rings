@@ -245,6 +245,8 @@ export const RingProgramError = Object.freeze({
   outputBodyLength: 8253,
   invalidCoSignerRecord: 8260,
   coSignerRecordAlreadyExists: 8261,
+  coSignerOutOfScope: 8262,
+  coSignerCountOutOfRange: 8263,
   invalidRingPolicy: 8300,
   ringPolicyAlreadyExists: 8301,
 } as const);

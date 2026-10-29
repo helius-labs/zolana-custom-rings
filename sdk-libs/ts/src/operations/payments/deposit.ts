@@ -33,7 +33,7 @@ import { depositBlinding } from "../../crypto/derivation/ring-domain.js";
 import { checkSignersHideOwner } from "./anonymous.js";
 import type { RingProgramConfig } from "../../protocol/codec/ring-codecs.js";
 import { fetchRingProgramConfig } from "../../protocol/membership/config.js";
-import { DEPOSIT_DEMAND, checkRingCoSigner } from "../../proof/cosign.js";
+import { DEPOSIT_DEMAND, resolveRingCoSigner } from "../../proof/cosign.js";
 import { type RingDepositCapsule } from "../../protocol/codec/deposit-capsule.js";
 import {
   ringDepositContextHash,
@@ -92,7 +92,7 @@ export interface RingDepositParams {
   readonly splTokenAccount?: Address;
   readonly splTokenProgram?: Address | null;
   readonly memo?: Uint8Array;
-  /** Signs when the config's scope covers deposits. */
+  /** Signs when a record covers deposits, the record must be its own. */
   readonly cosigner?: SignerAccount;
 }
 
@@ -180,13 +180,18 @@ export class PreparedRingDeposit {
             party === undefined ? undefined : signerAddress(party),
           ),
         );
-      const cosigner = checkRingCoSigner({
-        ringProgramId: params.ringProgramId,
-        configured: config.coSigner,
-        supplied: params.cosigner,
-        demand: DEPOSIT_DEMAND,
-        approvalRequired: false,
-      });
+      const demanded = await resolveRingCoSigner(
+        {
+          client: params.client,
+          ringProgramId: params.ringProgramId,
+          config,
+          demand: DEPOSIT_DEMAND,
+          approvalRequired: false,
+          supplied: params.cosigner === undefined ? undefined : signerAddress(params.cosigner),
+        },
+        context,
+      );
+      const cosigner = demanded === undefined ? undefined : params.cosigner;
       const asset = params.asset ?? SOL_MINT;
       const settlement = await resolveDepositSettlement(
         {

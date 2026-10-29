@@ -59,6 +59,7 @@ import type { RingMemberProofRequest, RingSecretProver } from "../../../src/rpc/
 import type { RingProofRequest } from "../../../src/rpc/prover/ring.js";
 import {
   ringAuthAddress,
+  ringCoSignerAddress,
   ringConfigPda,
   ringMemberRegistryPda,
 } from "../../../src/protocol/pda/index.js";
@@ -86,6 +87,7 @@ import { recordTree, type FixtureRecord } from "../../helpers/member-registry.js
 import {
   memberRegistryData,
   ownedAccount,
+  ringCoSignerAccount,
   ringProgramConfigData,
 } from "../../helpers/ring-accounts.js";
 import { decompressG2 } from "../../../src/protocol/codec/codecs.js";
@@ -312,6 +314,10 @@ async function ringMergeParams({
       tree: treeAddress(7),
       treeId: 7,
       getAccount: async (account: Address) => {
+        if (coSigner !== undefined) {
+          const [record, stored] = await ringCoSignerAccount(RING, coSigner);
+          if (account === record) return stored;
+        }
         if (account === config)
           return ownedAccount(
             RING,
@@ -437,8 +443,8 @@ describe("ring merge", () => {
     }
   });
 
-  it("caps custom merges at 50 before any read", async () => {
-    const wallet = ringWallet(Array.from({ length: 51 }, (_, index) => BigInt(index + 1)));
+  it("caps custom merges at 49 before any read", async () => {
+    const wallet = ringWallet(Array.from({ length: 50 }, (_, index) => BigInt(index + 1)));
     const proveMerge = vi.fn<MergeAssembler["proveMerge"]>();
     const keys = LocalKeys.fromKeypair(owner, proofService());
     const derive = vi.spyOn(keys, "derive");
@@ -447,9 +453,9 @@ describe("ring merge", () => {
     const build = (maxInputs: number) =>
       buildRingMergeTransaction({ ...params, client: { ...params.client, getAccount }, maxInputs });
     try {
-      expect(MAX_RING_MERGE_INPUTS).toBe(50);
+      expect(MAX_RING_MERGE_INPUTS).toBe(49);
       for (const [maxInputs, causeCode] of [
-        [51, "RING_TOO_MANY_INPUTS"],
+        [50, "RING_TOO_MANY_INPUTS"],
         [1, "RING_NOTHING_TO_MERGE"],
         [2.5, "RING_NOTHING_TO_MERGE"],
         [Number.NaN, "RING_NOTHING_TO_MERGE"],
@@ -608,16 +614,17 @@ describe("ring merge", () => {
     expect(decompressG2(body.slice(40, 104) as Bytes64)).toEqual(data.proof.b);
     const [config] = await ringConfigPda(RING);
     const [registry] = await ringMemberRegistryPda(RING);
-    expect(instruction.accounts?.slice(0, 3)).toEqual([
+    expect(instruction.accounts?.slice(0, 4)).toEqual([
       { address: config, role: AccountRole.READONLY },
       { address: registry, role: AccountRole.READONLY },
+      { address: await ringCoSignerAddress(RING, cosigner), role: AccountRole.READONLY },
       { address: cosigner, role: AccountRole.READONLY_SIGNER },
     ]);
-    expect(instruction.accounts?.[5]).toEqual({
+    expect(instruction.accounts?.[6]).toEqual({
       address: await ringAuthAddress(RING),
       role: AccountRole.READONLY,
     });
-    expect(instruction.accounts).toHaveLength(9 + inputs.length);
+    expect(instruction.accounts).toHaveLength(10 + inputs.length);
     const without = await ringMergeInstruction({
       ringProgramId: RING,
       inputTree: treeAddress(7),
@@ -627,7 +634,7 @@ describe("ring merge", () => {
       registryRootIndex: 11,
       data,
     });
-    expect(without.accounts?.slice(2)).toEqual(instruction.accounts?.slice(3));
+    expect(without.accounts?.slice(2)).toEqual(instruction.accounts?.slice(4));
   });
 
   it("binds ring identity and destination into approval", () => {
@@ -773,7 +780,7 @@ describe("anonymous ring merge", () => {
         buildRingMergeTransaction({
           ...params,
           client: { ...params.client, getRingMemberRecord },
-          maxInputs: 50,
+          maxInputs: 49,
         }),
       ).rejects.toMatchObject({
         code: "RING_BUILD_MERGE",

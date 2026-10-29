@@ -1,9 +1,13 @@
 import {
+  getAddressEncoder,
   getProgramDerivedAddress,
+  type AccountMeta,
   type Address,
   type ProgramDerivedAddress,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+
+import { meta, signerAddress, type SignerAccount } from "@heliuslabs/zolana/internal";
 
 export { ringAuthAddress } from "@heliuslabs/zolana/internal";
 
@@ -29,6 +33,26 @@ export function ringConfigPda(ringProgramId: Address): Promise<ProgramDerivedAdd
 
 export function ringConfigAddress(ringProgramId: Address): Promise<Address> {
   return ringAddress(ringConfigPda(ringProgramId));
+}
+
+export function ringCoSignerPda(
+  ringProgramId: Address,
+  signer: Address,
+): Promise<ProgramDerivedAddress> {
+  return ringPda(ringProgramId, encoder.encode("co_signer"), getAddressEncoder().encode(signer));
+}
+
+export function ringCoSignerAddress(ringProgramId: Address, signer: Address): Promise<Address> {
+  return ringAddress(ringCoSignerPda(ringProgramId, signer));
+}
+
+/** The program reads the record first, the signer next. */
+export async function ringCoSignerMetas(
+  ringProgramId: Address,
+  signer: SignerAccount,
+): Promise<readonly [AccountMeta, AccountMeta]> {
+  const record = await ringCoSignerAddress(ringProgramId, signerAddress(signer));
+  return [meta(record, false, false), meta(signer, true, false)];
 }
 
 export function ringMemberRegistryPda(ringProgramId: Address): Promise<ProgramDerivedAddress> {

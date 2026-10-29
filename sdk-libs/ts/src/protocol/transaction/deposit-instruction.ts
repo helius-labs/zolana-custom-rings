@@ -15,7 +15,12 @@ import {
 } from "@heliuslabs/zolana/internal";
 import { InstructionTag } from "@heliuslabs/zolana/interface";
 import type { Address, RingAssetDeposit } from "@heliuslabs/zolana/interface";
-import { ringAuthAddress, ringConfigAddress, ringMemberRegistryAddress } from "../pda/index.js";
+import {
+  ringAuthAddress,
+  ringCoSignerMetas,
+  ringConfigAddress,
+  ringMemberRegistryAddress,
+} from "../pda/index.js";
 
 import {
   AUDITED_RING_DEPOSIT_TAG,
@@ -43,16 +48,17 @@ export async function ringDepositInstruction(
     proof: Uint8Array;
     /** The registry history slot of the bound root, present exactly on a ring that escrows keys. */
     registryRootIndex?: number;
-    /** The co-signer the config demands for deposits. */
+    /** The supplied co-signer when a record covers deposits. */
     cosigner?: SignerAccount;
   }>,
 ): Promise<Instruction> {
-  const [spp, config, registry] = await Promise.all([
+  const [spp, config, registry, cosigner] = await Promise.all([
     ringDepositSpp(input),
     ringConfigAddress(input.ringProgramId),
     input.registryRootIndex === undefined
       ? undefined
       : ringMemberRegistryAddress(input.ringProgramId),
+    input.cosigner === undefined ? [] : ringCoSignerMetas(input.ringProgramId, input.cosigner),
   ]);
   const prefix = new Writer()
     .bytes(input.proof, CUSTOM_RING_PROOF_LENGTH, "deposit proof")
@@ -63,7 +69,7 @@ export async function ringDepositInstruction(
     [
       meta(config, false, false),
       ...(registry === undefined ? [] : [meta(registry, false, false)]),
-      ...(input.cosigner === undefined ? [] : [meta(input.cosigner, true, false)]),
+      ...cosigner,
       ...spp.accounts,
     ],
     input.ringProgramId,

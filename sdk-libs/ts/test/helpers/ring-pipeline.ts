@@ -93,6 +93,7 @@ import { recordTree, type FixtureRecord } from "./member-registry.js";
 import {
   memberRegistryData,
   ownedAccount,
+  ringCoSignerAccount,
   ringProgramConfigData,
   sppRingRegistration,
 } from "./ring-accounts.js";
@@ -213,6 +214,8 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
     ...options.registration,
   });
   accounts.set(ringAuth, registration);
+  if (options.coSigner !== undefined)
+    accounts.set(...(await ringCoSignerAccount(ringProgramId, options.coSigner)));
   let curatorRing: Address | undefined;
   let curatorRegistry: Address | undefined;
   let curatorTree: ReturnType<typeof recordTree> | undefined;
@@ -392,6 +395,7 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
     ringRequests,
     sppCalls,
     ownTree,
+    ...(options.coSigner === undefined ? {} : { coSigner: options.coSigner.signer }),
     ...(curatorRing === undefined ? {} : { curatorRing }),
     ...(curatorRegistry === undefined ? {} : { curatorRegistry }),
     ...(curatorTree === undefined ? {} : { curatorTree }),

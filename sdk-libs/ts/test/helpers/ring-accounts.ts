@@ -4,7 +4,7 @@ import type { RpcAccount } from "@heliuslabs/zolana/client";
 import { Writer, addressBytes } from "@heliuslabs/zolana/internal";
 import { SHIELDED_POOL_PROGRAM_ID, StateDiscriminator } from "@heliuslabs/zolana/interface";
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import { ringAuthAddress } from "../../src/protocol/pda/index.js";
+import { ringAuthAddress, ringCoSignerPda } from "../../src/protocol/pda/index.js";
 import {
   APPLY_BATCH,
   MEMBER_REGISTRY_ROOT_HISTORY,
@@ -80,12 +80,30 @@ export function ringProgramConfigData(
     .u8(input.hasPolicy ? 1 : 0, "hasPolicy")
     .u8(MODES.indexOf(input.mode ?? "confidential"), "mode")
     .u64(input.insertFee ?? 0n, "insertFee")
-    .bytes(addressBytes(input.coSigner?.signer ?? ZERO_ADDRESS))
-    .u8(input.coSigner?.scope ?? 0, "coSignScope");
+    .bytes(
+      Uint8Array.from([1, 2, 4], (bit) => (((input.coSigner?.scope ?? 0) & bit) === 0 ? 0 : 1)),
+      3,
+      "coSigners",
+    );
   return writer
     .bytes(addressBytes(input.delegate ?? ZERO_ADDRESS))
     .u64(input.createdSlot ?? 0n, "createdSlot")
     .finish();
+}
+
+/** Rust `CoSigner` at its canonical PDA. */
+export async function ringCoSignerAccount(
+  ringProgramId: Address,
+  coSigner: RingCoSigner,
+): Promise<readonly [Address, RpcAccount]> {
+  const [address, bump] = await ringCoSignerPda(ringProgramId, coSigner.signer);
+  const data = new Writer()
+    .u8(14, "discriminator")
+    .bytes(addressBytes(coSigner.signer))
+    .u8(coSigner.scope, "scope")
+    .u8(bump, "bump")
+    .finish();
+  return [address, ownedAccount(ringProgramId, data)];
 }
 
 /** Rust `MemberRegistry` bytes, the newest root at `historyCursor`. */

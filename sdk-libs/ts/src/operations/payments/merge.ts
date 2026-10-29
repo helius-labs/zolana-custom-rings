@@ -59,13 +59,14 @@ import type { PreparedMerge, Wallet } from "@heliuslabs/zolana/transaction";
 import type { RingMergeClient, RingSecretProver } from "../../rpc/ports.js";
 import {
   ringAuthAddress,
+  ringCoSignerMetas,
   ringConfigAddress,
   ringMemberRegistryAddress,
 } from "../../protocol/pda/index.js";
 
 import { checkSignersHideOwner } from "./anonymous.js";
 import { fetchRingProgramConfig } from "../../protocol/membership/config.js";
-import { TRANSFER_DEMAND, checkRingCoSigner } from "../../proof/cosign.js";
+import { TRANSFER_DEMAND, resolveRingCoSigner } from "../../proof/cosign.js";
 import { RingError, RingProgramError, wrapRingError } from "../../protocol/error.js";
 import {
   checkAnonymousMergeWidth,
@@ -86,7 +87,7 @@ import { resolveRingOutputTree } from "../../protocol/membership/trees.js";
 import { SIZE_PROBE_LIFETIME } from "../workflow/compile.js";
 
 /** Rust `MAX_MERGE_INPUTS`. */
-export const MAX_RING_MERGE_INPUTS = 50;
+export const MAX_RING_MERGE_INPUTS = 49;
 /** Rust `compute_unit_limit(Merge)`. */
 export const RING_MERGE_COMPUTE_UNIT_LIMIT = 1_400_000;
 /** `expiry_unix_ts u64 ‖ proof.a` ahead of `proof.b` in the SPP merge body, Rust `MERGE_B_OFFSET`. */
@@ -103,7 +104,7 @@ export interface RingMergeTransactionParams {
   /** The most notes merged, smallest first, from 2 through `MAX_RING_MERGE_INPUTS`, default `MERGE_INPUT_COUNT`. */
   readonly maxInputs?: number;
   readonly outputTree?: Address;
-  /** Signs when the config's scope covers transfers. */
+  /** Signs when a record covers transfers, the record must be its own. */
   readonly cosigner?: SignerAccount;
   readonly approve?: ApprovalHandler;
 }
@@ -142,7 +143,7 @@ export async function ringMergeInstruction(
     payer: SignerAccount;
     data: MergeTransactInstructionData;
     outputRingDataHash: Bytes32;
-    /** The co-signer the config demands for transfers. */
+    /** The supplied co-signer when a record covers transfers. */
     cosigner?: SignerAccount;
   }> &
     (
@@ -151,11 +152,12 @@ export async function ringMergeInstruction(
       | Readonly<{ disclosure: RingMergeDisclosure; registryRootIndex?: undefined }>
     ),
 ): Promise<Instruction> {
-  const [config, registry, auth, nullifiers] = await Promise.all([
+  const [config, registry, auth, nullifiers, cosigner] = await Promise.all([
     ringConfigAddress(input.ringProgramId),
     input.disclosure === undefined ? ringMemberRegistryAddress(input.ringProgramId) : undefined,
     ringAuthAddress(input.ringProgramId),
     Promise.all(input.data.nullifiers.map((value) => nullifierPdaAddress(input.inputTree, value))),
+    input.cosigner === undefined ? [] : ringCoSignerMetas(input.ringProgramId, input.cosigner),
   ]);
   const body = encodeMergeTransactInstructionData(input.data);
   return instruction(
@@ -173,7 +175,7 @@ export async function ringMergeInstruction(
     [
       meta(config, false, false),
       ...(registry === undefined ? [] : [meta(registry, false, false)]),
-      ...(input.cosigner === undefined ? [] : [meta(input.cosigner, true, false)]),
+      ...cosigner,
       meta(input.inputTree, false, true),
       meta(input.outputTree, false, true),
       meta(auth, false, false),
@@ -200,18 +202,20 @@ async function buildRingMerge(
       resolveRingOutputTree(params.client, params.outputTree, context),
     ]);
     if (config.mode !== "anonymous") return escrowMerge(params.ringProgramId);
-    const cosigner = checkRingCoSigner({
-      ringProgramId: params.ringProgramId,
-      configured: config.coSigner,
-      supplied: params.cosigner,
-      demand: TRANSFER_DEMAND,
-      approvalRequired: false,
-    });
+    const demanded = await resolveRingCoSigner(
+      {
+        client: params.client,
+        ringProgramId: params.ringProgramId,
+        config,
+        demand: TRANSFER_DEMAND,
+        approvalRequired: false,
+        supplied: params.cosigner === undefined ? undefined : signerAddress(params.cosigner),
+      },
+      context,
+    );
+    const cosigner = demanded === undefined ? undefined : params.cosigner;
     const owner = params.keys.address();
-    checkSignersHideOwner(owner.signingPublicKey.ed25519(), [
-      params.feePayer,
-      cosigner === undefined ? undefined : signerAddress(cosigner),
-    ]);
+    checkSignersHideOwner(owner.signingPublicKey.ed25519(), [params.feePayer, demanded]);
     const asset = params.asset ?? SOL_MINT;
     const reserved = reservedUtxoKeys(params.wallet);
     if (retry.entries !== undefined) checkRetainedEntries(params.wallet, retry.entries);
@@ -312,7 +316,7 @@ async function buildRingMerge(
     if (!equalBytes(data.outputUtxoHash, expectedHash)) throw ringIntentMismatch("output");
     const disclosure = await proveMergeDisclosure(
       {
-        partyIdentities: anonymousPartyIdentities(params.feePayer, config.coSigner?.signer),
+        partyIdentities: anonymousPartyIdentities(params.feePayer, demanded),
         keys: params.keys,
         ringProgramId: params.ringProgramId,
         auditor: config.auditorPublicKey,

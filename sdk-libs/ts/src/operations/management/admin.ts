@@ -18,6 +18,7 @@ import type { RequestContext } from "@heliuslabs/zolana/interface";
 import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import {
   ringAuthAddress,
+  ringCoSignerAddress,
   ringConfigAddress,
   ringMemberRegistryAddress,
   ringRecordQueueAddress,
@@ -214,10 +215,11 @@ export async function setRingPausedInstruction(
   ]);
 }
 
-/** Rust `CustomRing::set_cosigner`, a mint without a threshold always needs the co-signer. */
+/** Rust `SetCoSigner`, creates the signer's record or rescopes it. */
 export async function setRingCoSignerInstruction(
   input: Readonly<{
     ringProgramId: Address;
+    payer: SignerAccount;
     authority: SignerAccount;
     signer: Address;
     /** A nonzero subset of the `RING_COSIGN_*` bits. */
@@ -225,18 +227,43 @@ export async function setRingCoSignerInstruction(
   }>,
 ): Promise<Instruction> {
   checkCoSigner(input.signer, input.scope);
-  const writer = new Writer()
+  const [config, record] = await Promise.all([
+    ringConfigAddress(input.ringProgramId),
+    ringCoSignerAddress(input.ringProgramId, input.signer),
+  ]);
+  const data = new Writer()
     .u8(RingInstructionTag.setCoSigner, "tag")
     .bytes(addressBytes(input.signer, "signer"), 32, "signer")
-    .u8(input.scope, "scope");
-  return configWriteInstruction(input, writer.finish());
+    .u8(input.scope, "scope")
+    .finish();
+  return ringInstruction(input.ringProgramId, data, [
+    meta(input.payer, true, true),
+    meta(input.authority, true, false),
+    meta(config, false, true),
+    meta(record, false, true),
+    meta(SYSTEM_PROGRAM, false, false),
+  ]);
 }
 
-/** Rust `CustomRing::clear_cosigner`. */
-export function clearRingCoSignerInstruction(
-  input: Readonly<{ ringProgramId: Address; authority: SignerAccount }>,
+/** Rust `ClearCoSigner`, the record's rent goes to `rentRecipient`. */
+export async function clearRingCoSignerInstruction(
+  input: Readonly<{
+    ringProgramId: Address;
+    authority: SignerAccount;
+    signer: Address;
+    rentRecipient: Address;
+  }>,
 ): Promise<Instruction> {
-  return configWriteInstruction(input, Uint8Array.of(RingInstructionTag.clearCoSigner));
+  const [config, record] = await Promise.all([
+    ringConfigAddress(input.ringProgramId),
+    ringCoSignerAddress(input.ringProgramId, input.signer),
+  ]);
+  return ringInstruction(input.ringProgramId, Uint8Array.of(RingInstructionTag.clearCoSigner), [
+    meta(input.authority, true, false),
+    meta(config, false, true),
+    meta(record, false, true),
+    meta(input.rentRecipient, false, true),
+  ]);
 }
 
 /** Rust `CustomRing::set_insert_fee`, lamports a member's record write pays the authority, zero writes free. */

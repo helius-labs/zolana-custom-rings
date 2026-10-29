@@ -13,6 +13,7 @@ import { DELIVERED_AUDIT_CAPACITIES } from "../../protocol/codec/ring-disclosure
 import {
   anonymousExitTokenOwner,
   checkAnonymousSigner,
+  checkSignersHideOwner,
   checkAnonymousSlots,
   checkEntryInputs,
   type AnonymousPayment,
@@ -61,6 +62,8 @@ export interface CustomRingTransferInput {
   /** Prepared by the rail, every output it already holds keeps its slot. */
   readonly transfer: ConfidentialTransfer;
   readonly assets: AssetRegistry;
+  /** Read only when the ring demands a co-signer, its record must cover the demand. */
+  readonly coSigner?: Address;
 }
 
 /** The confidential rail, the owner signs its spends in public, Rust `RingTransfer<Owner>`. */
@@ -159,6 +162,7 @@ export class CustomRingTransfer {
                 ),
             },
           },
+          ...suppliedCoSigner(this.#input.coSigner),
           ...approvedStage(approval, prepared),
         },
         context,
@@ -277,7 +281,6 @@ export class AnonymousTransfer {
       signer: this.#signer,
       sender,
       payer: prepared.payer,
-      coSigner: config.coSigner?.signer,
     });
     const exitTokenOwner = await anonymousExitTokenOwner(
       {
@@ -292,11 +295,6 @@ export class AnonymousTransfer {
     const destination = solExit?.kind === "sol" ? solExit.userSolAccount : exitTokenOwner;
     if (destination !== undefined && exitTokenOwner !== undefined && destination !== exitTokenOwner)
       throw new RingError("RING_ANONYMOUS_EXIT_DESTINATIONS_DIFFER");
-    const partyIdentities = anonymousPartyIdentities(
-      prepared.payer,
-      config.coSigner?.signer,
-      destination,
-    );
     const tags = await this.#tags(keys, context);
     const plan = tags.payments.reduce(
       (planned, tag) => planned.withPayment(tag.payment),
@@ -345,13 +343,23 @@ export class AnonymousTransfer {
             ),
           anonymous: {
             ...(exitTokenOwner === undefined ? {} : { tokenOwner: exitTokenOwner }),
-            partyIdentities,
+            partyIdentities: (coSigner: Address | undefined) => {
+              checkSignersHideOwner(owner, [coSigner]);
+              return anonymousPartyIdentities(prepared.payer, coSigner, destination);
+            },
             viewingHistory: tags.history,
           },
         },
       };
       return await proveStagedTransfer(
-        { client, ringProgramId, config, staged, ...approvedStage(approval, prepared) },
+        {
+          client,
+          ringProgramId,
+          config,
+          staged,
+          ...suppliedCoSigner(this.#owner.coSigner),
+          ...approvedStage(approval, prepared),
+        },
         context,
       );
     } finally {
@@ -416,6 +424,8 @@ export interface DelegateTransferInput {
   readonly assets: AssetRegistry;
   /** The outputs land in the first input's tree unless named. */
   readonly outputTreeId?: number;
+  /** Read only when the ring demands a co-signer, its record must cover the demand. */
+  readonly coSigner?: Address;
 }
 
 /** The delegate moves one member's notes with the member's escrowed key, the member does not sign, Rust `RingTransfer<Delegated>`. */
@@ -510,6 +520,7 @@ export class DelegateTransfer {
                 ),
             },
           },
+          ...suppliedCoSigner(input.coSigner),
           ...approvedStage(approval, prepared),
         },
         context,
@@ -518,6 +529,10 @@ export class DelegateTransfer {
       rail.txViewingKey.destroy();
     }
   }
+}
+
+function suppliedCoSigner(coSigner: Address | undefined): Pick<StagedTransferInput, "coSigner"> {
+  return coSigner === undefined ? {} : { coSigner };
 }
 
 /** The approval a pipeline runs, bound to the prepared transfer the rail proves. */
