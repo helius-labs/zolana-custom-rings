@@ -4,11 +4,14 @@ use custom_ring_interface::{
 };
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
+use solana_signer::{Signer, SignerError};
 use spr_hasher::{primitives::right_align, Hasher, Poseidon};
-use spr_indexer_api::{Base64String, Hash, SerializablePubkey, SerializableSignature};
+use spr_indexer_api::{Base64String, Hash, RpcMethod, SerializablePubkey, SerializableSignature};
 use thiserror::Error;
 use zolana_ring_indexer::rpc::RingListWriteView;
-use zolana_ring_policy::{registry_field, ring_id_field};
+use zolana_ring_policy::{registry_field, ring_id_field, ListId, Member, MemberError};
+
+use super::{GET_RECORD_UPDATE_STATUS, SUBMIT_RECORD_UPDATE};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -16,6 +19,23 @@ pub enum RecordUpdateEntry {
     Write(RingListWriteView),
     /// The service checks `proof` against the escrow key before it queues the entry.
     Escrow(EscrowRegistration),
+    /// The writer takes it only on the signature of `wallet`.
+    WalletGrant(WalletGrant),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct WalletGrant {
+    pub wallet: Hash,
+    pub reader: Hash,
+    pub access: ReaderAccess,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReaderAccess {
+    Granted,
+    Revoked,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,6 +125,31 @@ pub enum RecordUpdateError {
     Entry(#[from] CustomRingError),
     #[error("escrow ciphertext is not {AUDIT_CIPHERTEXT_LEN} bytes")]
     CiphertextLength,
+    #[error(transparent)]
+    Member(#[from] MemberError),
+    #[error("record update signing failed")]
+    Signing(#[source] SignerError),
+    #[error("record update signature is invalid")]
+    Signature,
+}
+
+pub mod method {
+    use super::*;
+
+    pub struct SubmitRecordUpdate;
+    pub struct GetRecordUpdateStatus;
+
+    impl RpcMethod for SubmitRecordUpdate {
+        const NAME: &'static str = SUBMIT_RECORD_UPDATE;
+        type Request = SubmitRecordUpdateRequest;
+        type Response = SubmitRecordUpdateResponse;
+    }
+
+    impl RpcMethod for GetRecordUpdateStatus {
+        const NAME: &'static str = GET_RECORD_UPDATE_STATUS;
+        type Request = GetRecordUpdateStatusRequest;
+        type Response = RecordUpdateStatus;
+    }
 }
 
 impl RecordUpdateEntry {
@@ -131,27 +176,77 @@ impl RecordUpdateEntry {
                 };
                 Ok(QueueEntry::escrow(registration.member.0, &key)?)
             }
+            Self::WalletGrant(grant) => {
+                let bit = ListId::Reader.record_bit();
+                let value = match grant.access {
+                    ReaderAccess::Granted => bit,
+                    ReaderAccess::Revoked => 0,
+                };
+                let member = Member::wallet_grant(
+                    &Member::from_bytes(grant.wallet.0)?,
+                    &Member::from_bytes(grant.reader.0)?,
+                )?;
+                Ok(StorageWriteData {
+                    member: *member.as_bytes(),
+                    lists: WriteRecordsIxData {
+                        mask: bit.to_le_bytes(),
+                        value: value.to_le_bytes(),
+                    },
+                    mint_policy: [0; 33],
+                    escrow_key: [0; 32],
+                }
+                .entry()?)
+            }
         }
+    }
+}
+
+impl RecordUpdate {
+    pub fn statement(&self, registry: Address) -> Result<RecordUpdateStatement, RecordUpdateError> {
+        let entries_hash = self.entries.iter().try_fold([0; 32], |chain, entry| {
+            Ok::<_, RecordUpdateError>(
+                queue_chain(&chain, &entry.entry()?).map_err(CustomRingError::from)?,
+            )
+        })?;
+        Ok(RecordUpdateStatement {
+            ring: self.ring.0,
+            registry,
+            entries_hash,
+            valid_until_slot: self.valid_until_slot,
+        })
+    }
+
+    /// The writer refuses a `signer` that does not hold every entry.
+    pub fn sign<S: Signer + ?Sized>(
+        self,
+        registry: Address,
+        signer: &S,
+    ) -> Result<SubmitRecordUpdateRequest, RecordUpdateError> {
+        let hash = self.statement(registry)?.hash()?;
+        let signature = signer
+            .try_sign_message(&hash)
+            .map_err(RecordUpdateError::Signing)?;
+        Ok(SubmitRecordUpdateRequest {
+            registry: registry.into(),
+            update: self,
+            signer: signer.pubkey().into(),
+            signature: signature.into(),
+        })
     }
 }
 
 impl SubmitRecordUpdateRequest {
     pub fn statement(&self) -> Result<RecordUpdateStatement, RecordUpdateError> {
-        let entries_hash = self
-            .update
-            .entries
-            .iter()
-            .try_fold([0; 32], |chain, entry| {
-                Ok::<_, RecordUpdateError>(
-                    queue_chain(&chain, &entry.entry()?).map_err(CustomRingError::from)?,
-                )
-            })?;
-        Ok(RecordUpdateStatement {
-            ring: self.update.ring.0,
-            registry: self.registry.0,
-            entries_hash,
-            valid_until_slot: self.update.valid_until_slot,
-        })
+        self.update.statement(self.registry.0)
+    }
+
+    /// Signature only, the writer checks what `signer` may write.
+    pub fn verify(&self) -> Result<RecordUpdateId, RecordUpdateError> {
+        let id = self.statement()?.id()?;
+        if !self.signature.0.verify(self.signer.0.as_ref(), &id.0 .0) {
+            return Err(RecordUpdateError::Signature);
+        }
+        Ok(id)
     }
 }
 

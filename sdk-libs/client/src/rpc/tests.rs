@@ -686,3 +686,56 @@ fn a_relay_request_serializes_to_the_shared_vector() {
     let read: PrepareRelayRequest = serde_json::from_str(&vector.wire).expect("read");
     assert_eq!(read.intent.operation(), RelayOperation::Anonymous);
 }
+
+/// The TypeScript signer writes the same wire bytes.
+#[test]
+fn a_signed_wallet_update_verifies_from_the_shared_vector() {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Vector {
+        wire: String,
+        update_id: RecordUpdateId,
+    }
+    let vector: Vector = serde_json::from_str(include_str!(
+        "../../../../test-vectors/rpc/record_update.json"
+    ))
+    .expect("vector");
+    let wallet = Keypair::new_from_array([7; 32]);
+    let identity = Hash(
+        *zolana_ring_policy::Member::owner_tag(wallet.pubkey().as_array())
+            .expect("wallet")
+            .as_bytes(),
+    );
+    let reader = Hash(
+        *zolana_ring_policy::Member::owner_tag(&[9; 32])
+            .expect("reader")
+            .as_bytes(),
+    );
+    let bit = zolana_ring_policy::ListId::RingViewing.record_bit();
+    let signed = RecordUpdate {
+        ring: Address::new_from_array([1; 32]).into(),
+        entries: vec![
+            RecordUpdateEntry::Write(zolana_ring_indexer::rpc::RingListWriteView {
+                mint_policy: None,
+                member: identity.clone(),
+                mask: bit,
+                value: bit,
+            }),
+            RecordUpdateEntry::WalletGrant(WalletGrant {
+                wallet: identity,
+                reader,
+                access: ReaderAccess::Granted,
+            }),
+        ],
+        valid_until_slot: 4242,
+    }
+    .sign(Address::new_from_array([2; 32]), &wallet)
+    .expect("sign");
+    assert_eq!(serde_json::to_string(&signed).expect("json"), vector.wire);
+    let read: SubmitRecordUpdateRequest = serde_json::from_str(&vector.wire).expect("read");
+    assert_eq!(read.verify(), Ok(vector.update_id));
+    // The signature covers the slot bound, a later one names another statement.
+    let mut extended = read;
+    extended.update.valid_until_slot += 1;
+    assert_eq!(extended.verify(), Err(RecordUpdateError::Signature));
+}

@@ -20,6 +20,7 @@ rpc = [
     "dep:rand",
     "dep:solana-signer",
     "dep:zolana-secret-file",
+    "solana-signature/verify",
 ]
 
 [dependencies]
