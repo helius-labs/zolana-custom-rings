@@ -194,19 +194,19 @@ describe("ring submission ownership", () => {
     expect(f.submission.viewingHistory?.toJson()).toBe(viewingHistory(1).toJson());
   });
 
-  it.each([
-    RingProgramError.mirrorRootExpired,
-    RingProgramError.mirrorNotSynced,
-  ])("rebuilds after the stale proof code %i", async (customCode) => {
-    const f = await fixture();
-    const result = await f.submission.send({
-      sign: f.sign,
-      send: f.send,
-      status: async () => ({ kind: "failed", instructionIndex: 0, customCode }),
-    });
-    expect(result).toMatchObject({ kind: "failed", attempts: 3, customCode });
-    expect(f.build).toHaveBeenCalledTimes(3);
-  });
+  it.each([RingProgramError.mirrorRootExpired, RingProgramError.mirrorNotSynced])(
+    "rebuilds after the stale proof code %i",
+    async (customCode) => {
+      const f = await fixture();
+      const result = await f.submission.send({
+        sign: f.sign,
+        send: f.send,
+        status: async () => ({ kind: "failed", instructionIndex: 0, customCode }),
+      });
+      expect(result).toMatchObject({ kind: "failed", attempts: 3, customCode });
+      expect(f.build).toHaveBeenCalledTimes(3);
+    },
+  );
 
   it("treats a refusal returned by send as a confirmed failure", async () => {
     const f = await fixture();

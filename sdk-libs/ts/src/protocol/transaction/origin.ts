@@ -38,7 +38,6 @@ import type {
 import { SOL_MINT } from "@heliuslabs/zolana/transaction";
 import { AUDITED_DEPOSIT_PREFIX_LENGTH } from "./deposit-instruction.js";
 import {
-  AUDITED_RING_DEPOSIT_TAG,
   encodeRingDepositCapsule,
   readRingDepositCapsule,
   RING_DEPOSIT_AUDIT_SLOTS,
@@ -181,7 +180,7 @@ export class ConfirmedDeposit {
     if (
       found === undefined ||
       found.source.data[0] !== InstructionTag.ringDeposit ||
-      found.wrapper?.data[0] !== AUDITED_RING_DEPOSIT_TAG
+      found.wrapper?.data[0] !== RingInstructionTag.deposit
     )
       return [];
     if (!equalBytes(found.wrapper.data.subarray(AUDITED_DEPOSIT_PREFIX_LENGTH), found.source.data))

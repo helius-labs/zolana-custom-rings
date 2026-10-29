@@ -193,7 +193,6 @@ export { openDisclosedMerge } from "../operations/audit/audit-merge.js";
 export { recoverMergeOpening, type MergeAuditorOpening } from "../operations/audit/audit-merge.js";
 
 export {
-  AUDITED_RING_DEPOSIT_TAG,
   RING_DEPOSIT_AUDIT_SLOTS,
   RING_DEPOSIT_OPENING_LENGTH,
   RING_DEPOSIT_OPENING_OWNER_KEY_OFFSET,

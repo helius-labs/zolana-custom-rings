@@ -153,12 +153,12 @@ describe("policy transactions", () => {
     await expect(
       build(ListId.allow, { kind: "curator", registry: CURATOR_B }),
     ).rejects.toMatchObject({ code: "RING_BUILD_POLICY", causeCode: "RING_POLICY_SOURCE_INVALID" });
-    await expect(
-      build(ListId.block, { kind: "curator", registry: RECORDS }),
-    ).rejects.toMatchObject({
-      code: "RING_BUILD_POLICY",
-      causeCode: "RING_POLICY_SOURCE_INVALID",
-      cause: { details: { reason: "OwnCurator" } },
-    });
+    await expect(build(ListId.block, { kind: "curator", registry: RECORDS })).rejects.toMatchObject(
+      {
+        code: "RING_BUILD_POLICY",
+        causeCode: "RING_POLICY_SOURCE_INVALID",
+        cause: { details: { reason: "OwnCurator" } },
+      },
+    );
   });
 });

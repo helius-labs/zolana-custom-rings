@@ -23,11 +23,8 @@ import {
 } from "../pda/index.js";
 import { REVISION_LENGTH } from "./transact.js";
 
-import {
-  AUDITED_RING_DEPOSIT_TAG,
-  RING_DEPOSIT_AUDIT_SLOTS,
-  readRingDepositCapsule,
-} from "../codec/deposit-capsule.js";
+import { RING_DEPOSIT_AUDIT_SLOTS, readRingDepositCapsule } from "../codec/deposit-capsule.js";
+import { RingInstructionTag } from "./instruction-tag.js";
 
 /** The SPP ring deposit the ring program forwards unchanged, Rust `RingDeposit`. */
 export interface RingDepositSpp {
@@ -67,7 +64,7 @@ export async function ringDepositInstruction(
     .u64(input.curatorRevision ?? 0n, "curatorRevision")
     .finish();
   return instruction(
-    tagged(AUDITED_RING_DEPOSIT_TAG, new Uint8Array([...prefix, ...spp.data])),
+    tagged(RingInstructionTag.deposit, new Uint8Array([...prefix, ...spp.data])),
     [
       meta(config, false, false),
       ...(policy === undefined ? [] : [meta(policy, false, false)]),

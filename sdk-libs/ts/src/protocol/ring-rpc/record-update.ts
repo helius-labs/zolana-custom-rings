@@ -15,16 +15,14 @@ import {
 import { RingDomain, domainField } from "../../crypto/derivation/ring-domain.js";
 import { ringIdField } from "../../crypto/derivation/ring-stream.js";
 import { signMessage } from "../../rpc/ring-rpc.js";
+import {
+  AUTHORITY_WRITABLE_LISTS,
+  MEMBER_WRITABLE_LISTS,
+} from "../../operations/management/record-writes.js";
 import { RingError } from "../error.js";
 import type { QueueEntry } from "../membership/member-registry.js";
 import { checkMember, escrowEntry, queueChain } from "../membership/member-opening.js";
-import {
-  LIST_IDS,
-  ListId,
-  recordBit,
-  walletGrantMember,
-  type Member,
-} from "../membership/policy.js";
+import { ListId, recordBit, walletGrantMember, type Member } from "../membership/policy.js";
 import type {
   RecordUpdate,
   RecordUpdateEntry,
@@ -34,8 +32,8 @@ import type {
 const base58Decoder = getBase58Decoder();
 const base58Encoder = getBase58Encoder();
 
-/** Rust `ListSet::STORAGE_WRITES`, an escrow bit comes only from an escrow entry. */
-const STORAGE_WRITE_BITS = LIST_IDS.filter((id) => id !== ListId.escrow).reduce(
+/** Rust `ListSet::STORAGE_WRITES`. */
+const STORAGE_WRITE_BITS = [...AUTHORITY_WRITABLE_LISTS, ...MEMBER_WRITABLE_LISTS].reduce(
   (bits, id) => bits | recordBit(id),
   0n,
 );

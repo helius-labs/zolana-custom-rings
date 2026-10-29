@@ -2,7 +2,6 @@ import { copyBytes, fail } from "@heliuslabs/zolana/internal";
 import type { Bytes33, Bytes96 } from "@heliuslabs/zolana";
 
 export const RING_DEPOSIT_AUDIT_SLOTS = 8;
-export const AUDITED_RING_DEPOSIT_TAG = 31;
 /** One opening is `ownerHash || blinding || ownerKey`, the owner key is zero outside anonymous rings. */
 export const RING_DEPOSIT_OPENING_LENGTH = 96;
 export const RING_DEPOSIT_OPENING_OWNER_KEY_OFFSET = 64;
