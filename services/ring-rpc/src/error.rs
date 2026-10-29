@@ -44,7 +44,18 @@ pub enum RingRpcError {
     Busy,
     #[error("service store failed because {0}")]
     Store(#[from] sea_orm::DbErr),
+    #[error("merge settings need a service store")]
+    MergeSettingsUnavailable,
+    #[error("stored merge settings are signed at the same time or later")]
+    StaleMergeSettings,
+    #[error("escrowed nullifier key does not open to its registered key")]
+    EscrowedKey,
+    #[error("merge build failed because {0}")]
+    MergeBuild(Box<custom_ring_sdk::RingError>),
 }
+
+const MERGE_SETTINGS_UNAVAILABLE: i32 = -32170;
+const STALE_MERGE_SETTINGS: i32 = -32171;
 
 impl From<RingIndexerError> for RingRpcError {
     fn from(error: RingIndexerError) -> Self {
@@ -52,6 +63,12 @@ impl From<RingIndexerError> for RingRpcError {
             RingIndexerError::Refused(refused) => Self::Refused(refused),
             RingIndexerError::Client(error) => Self::Upstream(error),
         }
+    }
+}
+
+impl From<custom_ring_sdk::RingError> for RingRpcError {
+    fn from(error: custom_ring_sdk::RingError) -> Self {
+        Self::MergeBuild(Box::new(error))
     }
 }
 
@@ -100,6 +117,14 @@ impl From<RingRpcError> for ErrorObjectOwned {
                     None::<()>,
                 );
             }
+            MergeSettingsUnavailable => {
+                let message = failure.to_string();
+                return ErrorObjectOwned::owned(MERGE_SETTINGS_UNAVAILABLE, message, None::<()>);
+            }
+            StaleMergeSettings => {
+                let message = failure.to_string();
+                return ErrorObjectOwned::owned(STALE_MERGE_SETTINGS, message, None::<()>);
+            }
             Busy => (ErrorCode::ServerIsBusy, "audit service is busy"),
             Upstream(inner) => {
                 error!("upstream request failed {}", redacted(inner));
@@ -136,6 +161,10 @@ impl From<RingRpcError> for ErrorObjectOwned {
             Store(inner) => {
                 error!("service store failed {}", redacted(inner));
                 (ErrorCode::InternalError, "audit service is unavailable")
+            }
+            EscrowedKey | MergeBuild(_) => {
+                error!("managed merge failed {}", redacted(&failure));
+                (ErrorCode::InternalError, "managed merge failed")
             }
         };
         ErrorObjectOwned::owned(code.code(), message, None::<()>)

@@ -9216,6 +9216,7 @@ dependencies = [
  "bytemuck",
  "clap",
  "custom-ring-interface",
+ "custom-ring-sdk",
  "hex",
  "hkdf",
  "hyper",

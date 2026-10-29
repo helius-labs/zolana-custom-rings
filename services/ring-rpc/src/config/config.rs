@@ -26,7 +26,7 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    Serve(ServeArgs),
+    Serve(Box<ServeArgs>),
     Keygen(KeygenArgs),
 }
 
@@ -69,6 +69,9 @@ pub struct ServeArgs {
     pub allow_origins: Vec<String>,
     #[arg(long, env = "RING_RPC_WEBAUTHN_RP_ID")]
     pub webauthn_rp_id: Option<String>,
+    /// A `postgres://` or `sqlite://` URL, `setMergeSettings` needs one.
+    #[arg(long, env = "RING_RPC_DATABASE_URL")]
+    pub database_url: Option<String>,
     #[arg(long, env = "RING_RPC_MAX_CONNECTIONS", default_value = "256")]
     pub max_connections: NonZeroU32,
     #[arg(long, env = "RING_RPC_REQUEST_TIMEOUT_SECS", default_value = "30")]

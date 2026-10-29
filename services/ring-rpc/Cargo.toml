@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 async-trait = { workspace = true }
 custom-ring-interface = { workspace = true }
+custom-ring-sdk = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 hex = { workspace = true }

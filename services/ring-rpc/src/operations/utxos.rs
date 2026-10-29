@@ -2,19 +2,25 @@
 
 use std::{
     borrow::Borrow,
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     ops::Range,
     sync::{PoisonError, RwLock, RwLockReadGuard},
     time::Duration,
 };
 
+use solana_address::Address;
 use solana_signature::Signature;
 use spr_indexer_api::{Context, Hash};
+use spr_keypair::{NullifierKey, PublicKey};
+use spr_transaction::{Data, Mint, Utxo, WalletUtxo};
 use tokio::sync::Mutex as AsyncMutex;
 use zolana_ring_client::{
-    rpc::AuditedUtxoView, CreatedUtxo, EscrowedKeys, KnownUtxo, KnownUtxoIndex,
+    rpc::AuditedUtxoView, CreatedUtxo, EscrowedKeys, KnownUtxo, KnownUtxoIndex, SealedNullifierKey,
+    UtxoOwner,
 };
 use zolana_ring_indexer::rpc::RingQueueEntryView;
+
+use crate::error::RingRpcError;
 
 pub const UTXO_BACKFILL_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -26,6 +32,8 @@ pub(crate) const MAX_BACKFILL_PAGES: usize = 64;
 pub(crate) struct AuditStore {
     utxos: RwLock<KnownUtxoIndex<StoredUtxo>>,
     escrow: RwLock<EscrowMap>,
+    /// Every nullifier the ring history published.
+    spent: RwLock<HashSet<[u8; 32]>>,
     /// The indexer context when the backfill last reached the scan frontier.
     context: RwLock<Context>,
     /// The ring history position the next backfill resumes from, one backfill and escrow
@@ -52,6 +60,15 @@ pub(crate) struct EscrowRoot {
 pub(crate) struct EscrowedOwner {
     pub owner_key: [u8; 32],
     pub nullifier_pk: [u8; 32],
+    pub sealed: SealedNullifierKey,
+}
+
+#[must_use]
+pub(crate) struct SpendableNotes<'a> {
+    pub ring: Address,
+    pub owner_key: [u8; 32],
+    pub mint: Mint,
+    pub nullifier_key: &'a NullifierKey,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,7 +81,7 @@ pub(crate) struct StoredUtxo {
 #[derive(Default)]
 struct EscrowMap {
     root: Option<EscrowRoot>,
-    keys: HashMap<[u8; 32], [u8; 32]>,
+    keys: HashMap<[u8; 32], EscrowedOwner>,
     /// A rewritten member drops the key it escrowed before.
     owners: HashMap<[u8; 32], [u8; 32]>,
     pending: BTreeMap<u64, [u8; 32]>,
@@ -87,6 +104,46 @@ impl AuditStore {
                 },
             );
         }
+    }
+
+    /// A Photon nullifier enters unbound, a false one only holds a note back from a merge.
+    pub(crate) fn spend(&self, nullifiers: impl IntoIterator<Item = [u8; 32]>) {
+        self.spent
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend(nullifiers);
+    }
+
+    pub(crate) fn spendable(
+        &self,
+        notes: SpendableNotes<'_>,
+    ) -> Result<Vec<WalletUtxo>, RingRpcError> {
+        let owner = UtxoOwner::Keyed {
+            nullifier_pk: notes.nullifier_key.pubkey()?,
+        };
+        let spent = self.spent.read().unwrap_or_else(PoisonError::into_inner);
+        let known = self.known();
+        known
+            .iter()
+            .filter(|(_, stored)| {
+                let utxo = &stored.utxo;
+                utxo.owner_key == notes.owner_key
+                    && utxo.owner == owner
+                    && utxo.mint == Some(notes.mint.asset)
+                    && utxo.data_hash == [0; 32]
+            })
+            .map(|(commitment, stored)| stored.wallet_utxo(commitment, &notes))
+            .filter(|note| !matches!(note, Ok(note) if spent.contains(&note.nullifier)))
+            .collect()
+    }
+
+    pub(crate) fn escrowed(&self, owner_key: &[u8; 32]) -> Option<EscrowedOwner> {
+        self.escrow
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .keys
+            .get(owner_key)
+            .copied()
     }
 
     pub(crate) fn absorbed(&self, context: Context) {
@@ -156,7 +213,7 @@ impl AuditStore {
         let mut escrow = self.escrow.write().unwrap_or_else(PoisonError::into_inner);
         escrow.keys = owners
             .values()
-            .map(|owner| (owner.owner_key, owner.nullifier_pk))
+            .map(|owner| (owner.owner_key, *owner))
             .collect();
         escrow.owners = owners
             .into_iter()
@@ -177,7 +234,7 @@ impl AuditStore {
                 escrow.keys.remove(&previous);
             }
             if let Some(owner) = owner {
-                escrow.keys.insert(owner.owner_key, owner.nullifier_pk);
+                escrow.keys.insert(owner.owner_key, owner);
                 escrow.owners.insert(member, owner.owner_key);
             }
         }
@@ -201,6 +258,39 @@ impl EscrowMap {
     }
 }
 
+impl StoredUtxo {
+    fn wallet_utxo(
+        &self,
+        commitment: &[u8; 32],
+        notes: &SpendableNotes<'_>,
+    ) -> Result<WalletUtxo, RingRpcError> {
+        let utxo = &self.utxo;
+        Ok(WalletUtxo {
+            utxo: Utxo {
+                owner: PublicKey::from_ed25519(&utxo.owner_key),
+                asset: notes.mint,
+                amount: utxo.amount,
+                blinding: utxo.blinding,
+                ring_program_id: Some(notes.ring),
+                data: Data::default(),
+            },
+            nullifier_pubkey: notes.nullifier_key.pubkey()?,
+            utxo_hash: *commitment,
+            nullifier: notes.nullifier_key.nullifier(commitment, &utxo.blinding)?,
+            tx_viewing_key: None,
+            data_hash: None,
+            ring_data_hash: (utxo.ring_data_hash != [0; 32]).then_some(utxo.ring_data_hash),
+            tree_id: utxo.tree_id,
+            // Merkle proofs are read by commitment.
+            leaf_index: 0,
+            latest_tree_id: None,
+            slot: self.created_in.slot,
+            tx_signature: self.created_in.tx_signature,
+            slot_index: self.slot_index,
+        })
+    }
+}
+
 impl Borrow<KnownUtxo> for StoredUtxo {
     fn borrow(&self) -> &KnownUtxo {
         &self.utxo
@@ -214,7 +304,7 @@ impl EscrowedKeys for AuditStore {
             .unwrap_or_else(PoisonError::into_inner)
             .keys
             .get(owner_key)
-            .copied()
+            .map(|owner| owner.nullifier_pk)
     }
 }
 

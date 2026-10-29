@@ -5,7 +5,7 @@ use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::GetShieldedTransactionsByTagsResponse;
 use spr_indexer_api::{Base64String, Hash, Limit};
-use spr_keypair::{X25519Keypair, X25519Pubkey};
+use spr_keypair::{NullifierKey, X25519Keypair, X25519Pubkey};
 use spr_transaction::instructions::transact::canonical_shape;
 use zolana_ring_client::{
     auditor_view_tag,
@@ -156,6 +156,24 @@ impl<S: TransactionSource> AuditService<S> {
         self.view_tag
     }
 
+    /// Opened from the verified escrow record, never kept past one merge.
+    pub(crate) fn escrowed_nullifier_key(
+        &self,
+        owner_key: &[u8; 32],
+    ) -> Result<Option<NullifierKey>, RingRpcError> {
+        let Some(escrowed) = self.shared.store(self.ring).escrowed(owner_key) else {
+            return Ok(None);
+        };
+        let key = escrowed
+            .sealed
+            .open(&self.auditor)
+            .map_err(|_| RingRpcError::EscrowedKey)?;
+        if key.pubkey()? != escrowed.nullifier_pk {
+            return Err(RingRpcError::EscrowedKey);
+        }
+        Ok(Some(key))
+    }
+
     /// `None` until the config exists, the config then fixes the key forever.
     pub async fn configured_auditor(&self) -> Result<Option<X25519Pubkey>, RingRpcError> {
         let config = self.shared.source.ring_config(self.ring).await?;
@@ -217,7 +235,7 @@ impl<S: TransactionSource> AuditService<S> {
     }
 
     /// The service's own cluster, key and ring, a reader's signature carries to no other.
-    fn read_target(&self) -> ReadTarget {
+    pub(crate) fn read_target(&self) -> ReadTarget {
         ReadTarget {
             cluster: self.shared.genesis_hash,
             service: self.shared.service,
@@ -517,6 +535,7 @@ impl<S: TransactionSource> AuditService<S> {
             if tx.ring_program_id != Some(self.ring) {
                 continue;
             }
+            store.spend(tx.nullifiers.iter().copied());
             let event_index = tx.event_index.ok_or(RingRpcError::InvalidIndexerResponse)?;
             let origin = match origins.get(&(tx.tx_signature, event_index)) {
                 Some(known) => known.clone(),
@@ -684,9 +703,9 @@ fn escrowed_owner(
     let Some(nullifier_pk) = read.nullifier_pk else {
         return Ok(None);
     };
-    if read.sealed.is_none() {
+    let Some(sealed) = read.sealed else {
         return Ok(None);
-    }
+    };
     // The record binds the owner key through its member identity.
     let bound = Member::owner_tag(owner.as_array()).is_ok_and(|tag| tag.as_bytes() == member);
     let escrowed = read.escrowed(&nullifier_pk).map_err(invalid)?;
@@ -696,6 +715,7 @@ fn escrowed_owner(
     Ok(Some(EscrowedOwner {
         owner_key: owner.to_bytes(),
         nullifier_pk,
+        sealed,
     }))
 }
 

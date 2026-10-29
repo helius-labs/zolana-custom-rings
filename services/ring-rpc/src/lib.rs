@@ -9,12 +9,18 @@ mod cosign;
 #[path = "storage/database.rs"]
 mod database;
 mod error;
+#[path = "operations/escrow_merge.rs"]
+mod escrow_merge;
 #[path = "operations/hub.rs"]
 mod hub;
 #[path = "security/keys.rs"]
 mod keys;
 #[path = "config/limits.rs"]
 mod limits;
+#[path = "operations/managed_merge.rs"]
+mod managed_merge;
+#[path = "storage/merge_settings.rs"]
+mod merge_settings;
 #[path = "config/metering.rs"]
 mod metering;
 #[path = "storage/migration/mod.rs"]
@@ -46,8 +52,13 @@ pub use cosign::{
 };
 pub use database::Store;
 pub use error::RingRpcError;
+pub use escrow_merge::RingSdkMergeBuilder;
 pub use hub::{Clock, Hub, HubBuilder, NotReady};
 pub use keys::GRANT_ROW_KEY_INFO;
+pub use managed_merge::{
+    BuiltMerge, ManagedMerge, ManagedMergeInit, MergeBuilder, MergeTarget, OwnerMerge,
+    MANAGED_MERGE_INTERVAL,
+};
 pub use migration::Migrator;
 pub use origins::{OriginError, OriginPolicy, OriginTransport, Origins};
 pub use relay_submit::{CollectedSignature, RelaySubmit, RelayTransaction};

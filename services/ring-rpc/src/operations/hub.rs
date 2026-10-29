@@ -23,12 +23,14 @@ use crate::{
     audit::{AuditService, AuditServiceInit, ASSET_REFRESH_INTERVAL},
     authorize::Unauthorized,
     config::RootSecret,
+    database::Store,
     error::{redacted, RingRpcError},
     keys::{service_keypair, AuditorKeyDerivation, KeySource},
     limits::{
         PublicRequest, RequestRate, MAX_CONCURRENT_AUTHENTICATIONS, MAX_CONCURRENT_DEPOSIT_SCANS,
         MAX_CONCURRENT_READS,
     },
+    merge_settings::MergeSettingsBook,
     origins::Origins,
     replay::ReplayGuard,
     upstream::{DepositHistory, DepositPage, TransactionSource},
@@ -103,6 +105,7 @@ pub struct HubBuilder<S> {
     assets: Option<RingAssets>,
     origins: Origins,
     clock: Clock,
+    store: Option<Store>,
 }
 
 pub(crate) struct Shared<S> {
@@ -119,6 +122,7 @@ pub(crate) struct Shared<S> {
     readiness: AsyncMutex<ReadinessCache>,
     /// One per ring an authorized read or the backfill opened.
     stores: Mutex<HashMap<Address, Arc<AuditStore>>>,
+    database: Option<Store>,
 }
 
 struct AssetCache {
@@ -147,6 +151,14 @@ impl<S> Shared<S> {
     fn store_rings(&self) -> Vec<Address> {
         let stores = self.stores.lock().unwrap_or_else(PoisonError::into_inner);
         stores.keys().copied().collect()
+    }
+
+    pub(crate) fn merge_settings(&self) -> Result<MergeSettingsBook<'_>, RingRpcError> {
+        let database = self
+            .database
+            .as_ref()
+            .ok_or(RingRpcError::MergeSettingsUnavailable)?;
+        Ok(MergeSettingsBook::new(database.connection()))
     }
 }
 
@@ -191,6 +203,7 @@ impl<S: TransactionSource> Hub<S> {
             assets: None,
             origins: Origins::default(),
             clock: Clock::System,
+            store: None,
         }
     }
 
@@ -232,6 +245,10 @@ impl<S: TransactionSource> Hub<S> {
 
     pub fn origins(&self) -> &Origins {
         &self.shared.origins
+    }
+
+    pub(crate) fn shared(&self) -> &Shared<S> {
+        &self.shared
     }
 
     pub fn local_view_tag(&self) -> Option<[u8; 32]> {
@@ -402,6 +419,12 @@ impl<S: TransactionSource> HubBuilder<S> {
         self
     }
 
+    #[must_use = "use the updated builder"]
+    pub fn with_store(mut self, store: Store) -> Self {
+        self.store = Some(store);
+        self
+    }
+
     pub fn local(self, ring: Address, auditor: X25519Keypair) -> Result<Hub<S>, RingRpcError> {
         let signer = service_keypair(auditor.secret_bytes().as_slice())?;
         self.build(signer, KeySource::Local { ring, auditor })
@@ -442,6 +465,7 @@ impl<S: TransactionSource> HubBuilder<S> {
                 in_flight: None,
             }),
             stores: Mutex::new(HashMap::new()),
+            database: self.store,
         };
         Ok(Hub {
             signer,

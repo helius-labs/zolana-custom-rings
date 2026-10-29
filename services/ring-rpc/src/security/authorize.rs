@@ -84,6 +84,17 @@ pub(crate) struct AuthorityClaim {
     pub nonce: [u8; 32],
 }
 
+/// Ed25519 under `owner` alone, with no passkey and no read access record.
+#[must_use]
+pub(crate) struct OwnerCheck<'a, A> {
+    pub owner: Address,
+    pub signature: &'a Signature,
+    pub timestamp: u64,
+    pub nonce: &'a Base64String,
+    pub attestation: &'a A,
+    pub now: u64,
+}
+
 enum Proof<'a> {
     Ed25519 {
         reader: ReaderKey,
@@ -141,6 +152,19 @@ impl AuthorityCheck<'_> {
             authority: auth.authority.0,
             nonce,
         })
+    }
+}
+
+impl<A: Attestation> OwnerCheck<'_, A> {
+    pub(crate) fn decide(self) -> Result<[u8; 32], Unauthorized> {
+        fresh(self.now, self.timestamp)?;
+        let nonce = nonce(self.nonce)?;
+        Ed25519Proof {
+            signer: self.owner,
+            signature: self.signature.as_ref(),
+        }
+        .verify(&self.attestation.message(self.timestamp, &nonce))?;
+        Ok(nonce)
     }
 }
 
