@@ -114,6 +114,8 @@ pinned_codes! {
     AnonymousRingDataNotZero = 8251,
     AnonymousBodyLength = 8252,
     OutputBodyLength = 8253,
+    DepositMintAccountMissing = 8410,
+    DepositAssetIndexUnknown = 8411,
 }
 
 #[test]

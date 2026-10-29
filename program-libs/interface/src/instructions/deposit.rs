@@ -36,20 +36,37 @@ impl DepositContext<'_> {
     }
 }
 
+/// `asset` is SPP's asset field of the entry's group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DepositedAsset {
+    pub asset: [u8; 32],
+    pub amount: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DepositRegistry<'a> {
+    pub own_root: &'a [u8; 32],
+    /// Every deposited owner's record escrows the deposited nullifier key.
+    pub key_escrow: bool,
+    /// Its table's asset rules screen every deposited asset, `None` before the first policy write.
+    pub policy_hash: Option<&'a [u8; 32]>,
+}
+
 pub struct DepositPublicInput<'a> {
     pub context_hash: &'a [u8; 32],
     /// Binds the proof to the ring's on-chain owner admission rule.
     pub anonymous: bool,
     pub owner_utxo_hashes: &'a [[u8; 32]],
     pub ciphertexts: &'a [[u8; RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN]],
+    pub assets: &'a [DepositedAsset],
     pub auditor_pk: &'a [u8; TAGGED_X25519_KEY_LEN],
     pub eph_pk: &'a [u8; TAGGED_X25519_KEY_LEN],
-    /// Present exactly when deposited nullifier keys must be escrowed in its records.
-    pub member_registry_root: Option<&'a [u8; 32]>,
+    /// `None` off an escrow or policy ring.
+    pub registry: Option<DepositRegistry<'a>>,
 }
 
 /// Every deposit slot padded to the maximum.
-pub const DEPOSIT_PUBLIC_INPUT_ELEMENTS: usize = 4 + MAX_RING_DEPOSIT_AUDIT_SLOTS * 2 + 6;
+pub const DEPOSIT_PUBLIC_INPUT_ELEMENTS: usize = 4 + MAX_RING_DEPOSIT_AUDIT_SLOTS * 4 + 7;
 
 impl DepositPublicInput<'_> {
     pub fn hash(&self) -> Result<[u8; 32], HasherError> {
@@ -58,7 +75,10 @@ impl DepositPublicInput<'_> {
 
     pub fn elements(&self) -> Result<[[u8; 32]; DEPOSIT_PUBLIC_INPUT_ELEMENTS], HasherError> {
         let count = self.owner_utxo_hashes.len();
-        if !(1..=MAX_RING_DEPOSIT_AUDIT_SLOTS).contains(&count) || self.ciphertexts.len() != count {
+        if !(1..=MAX_RING_DEPOSIT_AUDIT_SLOTS).contains(&count)
+            || self.ciphertexts.len() != count
+            || self.assets.len() != count
+        {
             return Err(HasherError::InvalidNumFields);
         }
         let [auditor_lo, auditor_hi] = pack_be(self.auditor_pk);
@@ -84,8 +104,20 @@ impl DepositPublicInput<'_> {
             ephemeral_lo,
             ephemeral_hi,
         ]);
-        chain[keys + 4] = right_align(&[u8::from(self.member_registry_root.is_some())]);
-        chain[keys + 5] = self.member_registry_root.copied().unwrap_or_default();
+        let registry = self.registry.as_ref();
+        chain[keys + 4] = right_align(&[u8::from(
+            registry.is_some_and(|registry| registry.key_escrow),
+        )]);
+        chain[keys + 5] = registry.map_or([0; 32], |registry| *registry.own_root);
+        chain[keys + 6] = registry
+            .and_then(|registry| registry.policy_hash)
+            .copied()
+            .unwrap_or_default();
+        let assets = keys + 7;
+        for (slot, deposited) in self.assets.iter().enumerate() {
+            chain[assets + slot * 2] = deposited.asset;
+            chain[assets + slot * 2 + 1] = right_align(&deposited.amount.to_be_bytes());
+        }
         Ok(chain)
     }
 }

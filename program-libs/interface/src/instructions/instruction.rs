@@ -175,7 +175,7 @@ const _: () = assert!(CustomRingProof::SIZE == 192);
 pub struct AuditedDepositPrefix {
     pub tag: u8,
     pub proof: CustomRingProof,
-    /// The registry history slot of the bound root, zero unless the ring escrows nullifier keys.
+    /// The registry history slot of the bound root, zero off an escrow or policy ring.
     pub registry_root_index: u8,
 }
 

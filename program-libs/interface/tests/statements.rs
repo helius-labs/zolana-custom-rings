@@ -3,8 +3,9 @@
 use custom_ring_interface::{
     AnonymousAudit, AnonymousAuditKey, AnonymousLayout, ApplyRecordsStatement, AuditHead,
     AuditKind, AuditLayout, AuditStatement, DeliveredLayout, DepositContext, DepositPublicInput,
-    DisclosureLayout, PolicyKey, PolicyStatement, RegisterKeyStatement, RingOutput,
-    ANONYMOUS_SLOT_BYTES, AUDIT_HEAD_ELEMENTS, DEPOSIT_PUBLIC_INPUT_ELEMENTS,
+    DepositRegistry, DepositedAsset, DisclosureLayout, PolicyKey, PolicyStatement,
+    RegisterKeyStatement, RingOutput, ANONYMOUS_SLOT_BYTES, AUDIT_HEAD_ELEMENTS,
+    DEPOSIT_PUBLIC_INPUT_ELEMENTS,
 };
 use custom_ring_interface::{PublicLeg, PublicSlotError, PublicSlots, SOL_ASSET_ADDRESS};
 use serde::{Deserialize, Serialize};
@@ -119,7 +120,11 @@ struct DepositCase {
     ciphertexts: Vec<String>,
     auditor_pubkey: String,
     eph_pk: String,
+    assets: Vec<String>,
+    amounts: Vec<u64>,
+    key_escrow: bool,
     member_registry_root: Option<String>,
+    policy_hash: Option<String>,
     elements: Vec<String>,
     public_input_hash: String,
 }
@@ -423,14 +428,29 @@ fn compute_vectors() -> StatementVectors {
     let owners = [values.fields[14], values.fields[15]];
     let ciphertexts = [[0x21; 96], [0x22; 96]];
     let eph_pk = tagged(0xa2);
+    let deposited = [
+        DepositedAsset {
+            asset: values.fields[17],
+            amount: 1_000,
+        },
+        DepositedAsset {
+            asset: values.fields[18],
+            amount: 2_000,
+        },
+    ];
     let deposit = DepositPublicInput {
         context_hash: &context_hash,
         anonymous: false,
         owner_utxo_hashes: &owners,
         ciphertexts: &ciphertexts,
+        assets: &deposited,
         auditor_pk: &values.auditor_pubkey,
         eph_pk: &eph_pk,
-        member_registry_root: Some(&values.fields[16]),
+        registry: Some(DepositRegistry {
+            own_root: &values.fields[16],
+            key_escrow: true,
+            policy_hash: Some(&values.fields[19]),
+        }),
     };
     StatementVectors {
         description: "Every ring statement and its public input HashChain4(elements). Audit \
@@ -446,8 +466,9 @@ fn compute_vectors() -> StatementVectors {
                       key with 3 inputs and 4 outputs. The deposit statement is HashChain(elements) \
                       over CRDP, the context hash of the program id, tree and SPP data, the \
                       count, the anonymous flag, each owner hash with its capsule ciphertext hash \
-                      zero padded to 8 slots, both tagged keys packed, the registry flag and \
-                      root. Produced by program-libs/interface/tests/statements.rs."
+                      zero padded to 8 slots, both tagged keys packed, the escrow flag, the \
+                      registry root, the policy hash and each asset hash with its amount zero \
+                      padded to 8 slots. Produced by program-libs/interface/tests/statements.rs."
             .to_string(),
         audit: audit.iter().map(audit_case).collect(),
         policy: [confidential, anonymous_policy, delegate]
@@ -484,7 +505,16 @@ fn compute_vectors() -> StatementVectors {
             ciphertexts: ciphertexts.iter().map(hex::encode).collect(),
             auditor_pubkey: hex::encode(deposit.auditor_pk),
             eph_pk: hex::encode(deposit.eph_pk),
-            member_registry_root: deposit.member_registry_root.map(hex::encode),
+            assets: deposited.iter().map(|value| hex::encode(value.asset)).collect(),
+            amounts: deposited.iter().map(|value| value.amount).collect(),
+            key_escrow: deposit.registry.is_some_and(|registry| registry.key_escrow),
+            member_registry_root: deposit
+                .registry
+                .map(|registry| hex::encode(registry.own_root)),
+            policy_hash: deposit
+                .registry
+                .and_then(|registry| registry.policy_hash)
+                .map(hex::encode),
             elements: hexes(&deposit.elements().unwrap()),
             public_input_hash: hex::encode(deposit.hash().unwrap()),
         },

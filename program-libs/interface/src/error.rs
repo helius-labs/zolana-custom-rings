@@ -147,6 +147,8 @@ ring_errors! {
     AnonymousRingDataNotZero = 8251 => "an anonymous ring deposit or merge output carries ring data",
     AnonymousBodyLength = 8252 => "an anonymous ring body is empty or longer than u16::MAX",
     OutputBodyLength = 8253 => "a ring output body exceeds the u32 length prefix",
+    DepositMintAccountMissing = 8410 => "an spl deposit group has no mint account",
+    DepositAssetIndexUnknown = 8411 => "a deposit entry names no asset group",
 }
 
 impl From<CustomRingError> for ProgramError {

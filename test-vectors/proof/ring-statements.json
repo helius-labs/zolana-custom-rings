@@ -1,5 +1,5 @@
 {
-  "description": "Every ring statement and its public input HashChain4(elements). Audit heads are [CRAU, n0, ring_id, pack_be(0x04 || tx_u), pack_be(auditor_pubkey), pack_be(0x04 || eph_u), hash_bytes(sealed), salt, layout] with the frame's random salt and layout = exits | key_escrow << 1 | full_openings << 3, the tails chain the published output hashes, then on the delivered rail the body hashes (zero for an exit), the disclosure fields and pack_be(u) per delivered slot, on the anonymous rail the disclosure fields, private_tx_hash, the sender commitment and the three party identities, no tag or body of an anonymous slot. Each disclosure holds the field count of its layout, delivered with 2 escrowed outputs and with 8, anonymous of commitment class 4 and of the entry key with 3 inputs and 4 outputs. The deposit statement is HashChain(elements) over CRDP, the context hash of the program id, tree and SPP data, the count, the anonymous flag, each owner hash with its capsule ciphertext hash zero padded to 8 slots, both tagged keys packed, the registry flag and root. Produced by program-libs/interface/tests/statements.rs.",
+  "description": "Every ring statement and its public input HashChain4(elements). Audit heads are [CRAU, n0, ring_id, pack_be(0x04 || tx_u), pack_be(auditor_pubkey), pack_be(0x04 || eph_u), hash_bytes(sealed), salt, layout] with the frame's random salt and layout = exits | key_escrow << 1 | full_openings << 3, the tails chain the published output hashes, then on the delivered rail the body hashes (zero for an exit), the disclosure fields and pack_be(u) per delivered slot, on the anonymous rail the disclosure fields, private_tx_hash, the sender commitment and the three party identities, no tag or body of an anonymous slot. Each disclosure holds the field count of its layout, delivered with 2 escrowed outputs and with 8, anonymous of commitment class 4 and of the entry key with 3 inputs and 4 outputs. The deposit statement is HashChain(elements) over CRDP, the context hash of the program id, tree and SPP data, the count, the anonymous flag, each owner hash with its capsule ciphertext hash zero padded to 8 slots, both tagged keys packed, the escrow flag, the registry root, the policy hash and each asset hash with its amount zero padded to 8 slots. Produced by program-libs/interface/tests/statements.rs.",
   "audit": [
     {
       "kind": "delivered",
@@ -526,7 +526,17 @@
     ],
     "auditor_pubkey": "04a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
     "eph_pk": "04a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+    "assets": [
+      "1e11111111111111111111111111111111111111111111111111111111111111",
+      "1e12121212121212121212121212121212121212121212121212121212121212"
+    ],
+    "amounts": [
+      1000,
+      2000
+    ],
+    "key_escrow": true,
     "member_registry_root": "1e10101010101010101010101010101010101010101010101010101010101010",
+    "policy_hash": "1e13131313131313131313131313131313131313131313131313131313131313",
     "elements": [
       "0000000000000000000000000000000000000000000000000000000043524450",
       "05e9b84e21ba4012f8361ab44134fb77e5c81032dc807f871f0b70f97c6f3b0a",
@@ -553,8 +563,25 @@
       "0004a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
       "000000000000000000000000000000000000000000000000000000000000a2a2",
       "0000000000000000000000000000000000000000000000000000000000000001",
-      "1e10101010101010101010101010101010101010101010101010101010101010"
+      "1e10101010101010101010101010101010101010101010101010101010101010",
+      "1e13131313131313131313131313131313131313131313131313131313131313",
+      "1e11111111111111111111111111111111111111111111111111111111111111",
+      "00000000000000000000000000000000000000000000000000000000000003e8",
+      "1e12121212121212121212121212121212121212121212121212121212121212",
+      "00000000000000000000000000000000000000000000000000000000000007d0",
+      "0000000000000000000000000000000000000000000000000000000000000000",
+      "0000000000000000000000000000000000000000000000000000000000000000",
+      "0000000000000000000000000000000000000000000000000000000000000000",
+      "0000000000000000000000000000000000000000000000000000000000000000",
+      "0000000000000000000000000000000000000000000000000000000000000000",
+      "0000000000000000000000000000000000000000000000000000000000000000",
+      "0000000000000000000000000000000000000000000000000000000000000000",
+      "0000000000000000000000000000000000000000000000000000000000000000",
+      "0000000000000000000000000000000000000000000000000000000000000000",
+      "0000000000000000000000000000000000000000000000000000000000000000",
+      "0000000000000000000000000000000000000000000000000000000000000000",
+      "0000000000000000000000000000000000000000000000000000000000000000"
     ],
-    "public_input_hash": "23e163895c16e0b5c642f7a18f877c7b76fc2878dde878bb20cd216f3add04a5"
+    "public_input_hash": "11b2abb91222d949d10cafcc8ae93928347cbe63248e73b9198096c527bdf3d9"
   }
 }

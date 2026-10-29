@@ -738,7 +738,7 @@ impl RecordOpeningRequest {
 /// The audited deposit's witness, one slot per deposited note.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct DepositRequest {
+pub(crate) struct DepositRequest<'a> {
     #[serde(with = "fe")]
     pub public_input_hash: [u8; 32],
     #[serde(with = "fe")]
@@ -764,6 +764,16 @@ pub(crate) struct DepositRequest {
     pub key_escrow: bool,
     #[serde(with = "fe")]
     pub member_registry_root: [u8; 32],
+    #[serde(with = "fe")]
+    pub policy_hash: [u8; 32],
+    #[serde(serialize_with = "fe::seq")]
+    pub assets: [[u8; 32]; 1],
+    #[serde(serialize_with = "fe::seq")]
+    pub amounts: [[u8; 32]; 1],
+    /// `None` without a written policy, `asset_records` then opens nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub table: Option<PolicyTable<'a>>,
+    pub asset_records: [Option<MemberOpening>; 1],
 }
 
 /// The Solana key an owner identity hashes, the disclosure names it.

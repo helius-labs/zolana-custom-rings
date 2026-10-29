@@ -404,10 +404,12 @@ impl MemberRegistry {
 
     /// `PolicyNotSet` before the first policy write.
     pub fn policy_hash(&self) -> Result<&[u8; 32], CustomRingError> {
-        if self.policy_hash == [0; 32] {
-            return Err(CustomRingError::PolicyNotSet);
-        }
-        Ok(&self.policy_hash)
+        self.written_policy_hash()
+            .ok_or(CustomRingError::PolicyNotSet)
+    }
+
+    pub fn written_policy_hash(&self) -> Option<&[u8; 32]> {
+        (self.policy_hash != [0; 32]).then_some(&self.policy_hash)
     }
 
     /// Validates the table against the sources and repins its hash.
