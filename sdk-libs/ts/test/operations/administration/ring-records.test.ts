@@ -349,7 +349,7 @@ describe("authority list writes", () => {
           ...field(write.member),
           ...u64le(BigInt(write.mask)),
           ...u64le(BigInt(write.value)),
-          ...new Uint8Array(33),
+          ...new Uint8Array(81),
         ]),
         ...PROOF,
         ...field(vector.new_root),

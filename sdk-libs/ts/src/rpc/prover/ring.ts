@@ -1,7 +1,9 @@
 import {
   EMPTY_MINT_POLICY,
+  assetLimitsFields,
   mintPolicyField,
   mintPolicyWriteField,
+  type AssetLimits,
 } from "../../protocol/membership/mint-policy.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 
@@ -665,6 +667,10 @@ function memberOpeningJson(opening: RecordOpening | undefined, name: string): Js
       bigIntBytes(record?.mintPolicy.withdrawalThreshold ?? 0n, 32) as Bytes32,
       `${name}.withdrawalThreshold`,
     ),
+    assetLimits: limitsJson(
+      (record?.mintPolicy ?? EMPTY_MINT_POLICY).limits,
+      `${name}.assetLimits`,
+    ),
     ...quadPathJson(opening.path, name, "index", "path"),
     lowMember: field(low?.member ?? ZERO, `${name}.lowMember`),
     lowNext: field(low?.next ?? ZERO, `${name}.lowNext`),
@@ -677,6 +683,10 @@ function memberOpeningJson(opening: RecordOpening | undefined, name: string): Js
     lowWithdrawalThreshold: field(
       bigIntBytes(low?.mintPolicy.withdrawalThreshold ?? 0n, 32) as Bytes32,
       `${name}.lowWithdrawalThreshold`,
+    ),
+    lowAssetLimits: limitsJson(
+      (low?.mintPolicy ?? EMPTY_MINT_POLICY).limits,
+      `${name}.lowAssetLimits`,
     ),
   };
 }
@@ -700,6 +710,7 @@ function recordFieldsJson(record: MemberRecord, name: string): Json {
       bigIntBytes(record.mintPolicy.withdrawalThreshold, 32) as Bytes32,
       `${name}.withdrawalThreshold`,
     ),
+    assetLimits: limitsJson(record.mintPolicy.limits, `${name}.assetLimits`),
   };
 }
 
@@ -715,6 +726,7 @@ function writeJson(write: RecordWriteProofInput, name: string): Json {
       bigIntBytes(write.oldMintPolicy.withdrawalThreshold, 32) as Bytes32,
       `${name}.oldWithdrawalThreshold`,
     ),
+    oldAssetLimits: limitsJson(write.oldMintPolicy.limits, `${name}.oldAssetLimits`),
     ...quadPathJson(write.slot, name, "index", "path"),
     lowMember: field(write.low.member, `${name}.lowMember`),
     lowNext: field(write.low.next, `${name}.lowNext`),
@@ -725,6 +737,7 @@ function writeJson(write: RecordWriteProofInput, name: string): Json {
       bigIntBytes(write.low.mintPolicy.withdrawalThreshold, 32) as Bytes32,
       `${name}.lowWithdrawalThreshold`,
     ),
+    lowAssetLimits: limitsJson(write.low.mintPolicy.limits, `${name}.lowAssetLimits`),
     ...quadPathJson(write.lowPath, name, "lowIndex", "lowPath"),
   };
 }
@@ -740,7 +753,12 @@ function queueEntryJson(entry: QueueEntry, name: string): Json {
       bigIntBytes(entry.mintPolicy?.withdrawalThreshold ?? 0n, 32) as Bytes32,
       `${name}.withdrawalThreshold`,
     ),
+    assetLimits: limitsJson((entry.mintPolicy ?? EMPTY_MINT_POLICY).limits, `${name}.assetLimits`),
   };
+}
+
+function limitsJson(limits: AssetLimits, name: string): string[] {
+  return assetLimitsFields(limits).map((limit, index) => field(limit, `${name}[${String(index)}]`));
 }
 
 function mergeInputJson(input: MergeInputOpening, name: string): Json {

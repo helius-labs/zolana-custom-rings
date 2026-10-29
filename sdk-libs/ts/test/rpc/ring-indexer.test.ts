@@ -32,7 +32,20 @@ describe("ring member registry wire", () => {
     siblings: Array.from({ length: levels }, level),
   });
   const record = {
-    mintPolicy: { threshold: 0, cap: 0, cosignAbove: 0, withdrawalThreshold: 0 },
+    mintPolicy: {
+      threshold: 0,
+      cap: 0,
+      cosignAbove: 0,
+      withdrawalThreshold: 0,
+      limits: {
+        senderCap: 0,
+        senderWindowSlots: 0,
+        volumeCap: 0,
+        volumeWindowSlots: 0,
+        depositCap: 0,
+        withdrawalCap: 0,
+      },
+    },
     member: MEMBER,
     next: TAG,
     lists: 3,

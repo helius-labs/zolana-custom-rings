@@ -1,6 +1,6 @@
 import {
-  mintPolicyField,
-  mintPolicyWriteField,
+  mintPolicyWrite,
+  sameMintPolicy,
   type MintPolicy,
 } from "../../protocol/membership/mint-policy.js";
 import type { AccountMeta, Address, Instruction } from "@solana/kit";
@@ -15,7 +15,6 @@ import {
   type SignerAccount,
   Writer,
   ZERO_32,
-  bigIntBytes,
   equalBytes,
 } from "@heliuslabs/zolana/internal";
 import type { Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
@@ -159,12 +158,18 @@ export class AuthorityListWrite {
   /** Replaces all mint settings; zero values clear the corresponding settings. */
   withMintPolicy(member: Member, mintPolicy: MintPolicy): AuthorityListWrite {
     checkMember(member);
-    mintPolicyField(mintPolicy);
+    mintPolicyWrite(mintPolicy);
     if (this.#writes.some((known) => equalBytes(known.member, member)))
       throw listWriteInvalid("Duplicate");
     return this.#holding([
       ...this.#writes,
-      Object.freeze({ member, mintPolicy: Object.freeze({ ...mintPolicy }) }),
+      Object.freeze({
+        member,
+        mintPolicy: Object.freeze({
+          ...mintPolicy,
+          limits: Object.freeze({ ...mintPolicy.limits }),
+        }),
+      }),
     ]);
   }
 
@@ -226,8 +231,7 @@ export class AuthorityListWrite {
         data.bytes(member, 32, "member");
         if (write === undefined) data.bytes(new Uint8Array(16));
         else writeLists(data, write);
-        data.bytes(mintPolicyWriteField(mintPolicy).subarray(7));
-        data.bytes(bigIntBytes(mintPolicy?.withdrawalThreshold ?? 0n, 8));
+        data.bytes(mintPolicyWrite(mintPolicy));
       }
       data.bytes(await proveApplication(client, application.inputs, context));
       return Object.freeze({
@@ -478,11 +482,7 @@ function sameEntry(entry: QueueEntry, expected: QueueEntry | undefined): boolean
     equalBytes(entry.escrowKey, expected.escrowKey) &&
     (expected.mintPolicy === undefined
       ? entry.mintPolicy === undefined
-      : entry.mintPolicy !== undefined &&
-        entry.mintPolicy.threshold === expected.mintPolicy.threshold &&
-        entry.mintPolicy.cap === expected.mintPolicy.cap &&
-        entry.mintPolicy.cosignAbove === expected.mintPolicy.cosignAbove &&
-        entry.mintPolicy.withdrawalThreshold === expected.mintPolicy.withdrawalThreshold)
+      : entry.mintPolicy !== undefined && sameMintPolicy(entry.mintPolicy, expected.mintPolicy))
   );
 }
 

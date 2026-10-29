@@ -11,7 +11,7 @@ export const MEMBER_REGISTRY_ROOT_HISTORY = 32;
 /** Rust `APPLY_BATCH`, the writes the larger apply key proves and the record queue holds. */
 export const APPLY_BATCH = 16;
 
-/** One leaf, `Poseidon(member, next, lists, escrow_key, mint_policy, withdrawal_threshold)`, Rust `MemberRecord`. */
+/** One leaf, `Poseidon(member, next, lists, escrow_key, mint_policy, withdrawal_threshold, limits_0, limits_1)`, Rust `MemberRecord`. */
 export interface MemberRecord {
   readonly member: Bytes32;
   readonly next: Bytes32;

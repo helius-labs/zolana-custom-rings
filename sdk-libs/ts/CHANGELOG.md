@@ -66,6 +66,7 @@ Added
 - `CustomRingClient.getRingRecordPool` reads members' records under one root as a `RingRecordPool` of distinct leaves, each path cut at a shared canopy.
 - `encodeAnonymousRecipient`, `decodeAnonymousRecipient`, `encodeAnonymousSender` and `decodeAnonymousSender` in `@heliuslabs/zolana-custom-rings/advanced` write and read the recipient and sender bundle plaintexts that `openRecipient` and `senderChange` take.
 - `RingInstructionTag.syncRoots` names the ring program's root sync tag, and `RingProgramError` names the co-signer record and ring policy account codes `invalidCoSignerRecord`, `coSignerRecordAlreadyExists`, `invalidRingPolicy` and `ringPolicyAlreadyExists`.
+- `MintPolicy.limits` holds the mint's `AssetLimits`, per-sender and ring-wide caps over slot windows and per-transaction public deposit and withdrawal caps, `EMPTY_ASSET_LIMITS` sets none, `AuthorityListWrite.withMintPolicy` refuses a window cap or a window set without the other with `RING_MEMBER_REGISTRY_INVALID`, and `RingProgramError.invalidAssetLimits` names the program's refusal.
 
 Fixed
 

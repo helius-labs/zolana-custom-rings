@@ -177,7 +177,11 @@ function presentRecord(value: unknown, member: Bytes32): PresentRecordOpening {
   return {
     kind: "present",
     record: {
-      mintPolicy: mintSettings(item["mintPolicy"], item["withdrawalThreshold"]),
+      mintPolicy: mintSettings(
+        item["mintPolicy"],
+        item["withdrawalThreshold"],
+        item["assetLimits"],
+      ),
       member,
       next: field(item["next"]),
       lists: BigInt(count(item["lists"])),
@@ -194,7 +198,11 @@ function memberOpening(value: unknown, member: Bytes32): RecordOpening | undefin
   return {
     kind: "absent",
     low: {
-      mintPolicy: mintSettings(item["lowMintPolicy"], item["lowWithdrawalThreshold"]),
+      mintPolicy: mintSettings(
+        item["lowMintPolicy"],
+        item["lowWithdrawalThreshold"],
+        item["lowAssetLimits"],
+      ),
       member: field(item["lowMember"]),
       next: field(item["lowNext"]),
       lists: BigInt(count(item["lowLists"])),
@@ -214,7 +222,7 @@ function entry(value: unknown): PolicySubjectEntry {
 function memberRecord(value: unknown): MemberRecord {
   const item = record(value);
   return {
-    mintPolicy: mintSettings(item["mintPolicy"], item["withdrawalThreshold"]),
+    mintPolicy: mintSettings(item["mintPolicy"], item["withdrawalThreshold"], item["assetLimits"]),
     member: field(item["member"]),
     next: field(item["next"]),
     lists: BigInt(count(item["lists"])),
@@ -335,7 +343,11 @@ function write(value: unknown): RecordWriteProofInput {
   const item = record(value);
   const queued = record(item["entry"]);
   return {
-    oldMintPolicy: mintSettings(item["oldMintPolicy"], item["oldWithdrawalThreshold"]),
+    oldMintPolicy: mintSettings(
+      item["oldMintPolicy"],
+      item["oldWithdrawalThreshold"],
+      item["oldAssetLimits"],
+    ),
     entry: {
       member: field(queued["member"]),
       mask: BigInt(count(queued["mask"])),
@@ -348,7 +360,11 @@ function write(value: unknown): RecordWriteProofInput {
     oldEscrow: field(item["oldEscrow"]),
     slot: quadPath(item["index"], item["path"]),
     low: {
-      mintPolicy: mintSettings(item["lowMintPolicy"], item["lowWithdrawalThreshold"]),
+      mintPolicy: mintSettings(
+        item["lowMintPolicy"],
+        item["lowWithdrawalThreshold"],
+        item["lowAssetLimits"],
+      ),
       member: field(item["lowMember"]),
       next: field(item["lowNext"]),
       lists: BigInt(count(item["lowLists"])),
@@ -996,13 +1012,27 @@ function slotSecret(
   });
 }
 
-function mintSettings(packed: unknown, withdrawal: unknown) {
-  const value = amountOf(field(packed));
+function mintSettings(packed: unknown, withdrawal: unknown, limits: unknown) {
   const mask = (1n << 64n) - 1n;
+  const amounts = (fieldValue: unknown) => {
+    const value = amountOf(field(fieldValue));
+    return [(value >> 128n) & mask, (value >> 64n) & mask, value & mask] as const;
+  };
+  const [threshold, cap, cosignAbove] = amounts(packed);
+  const [senderCap, senderWindowSlots, volumeCap, volumeWindowSlots, depositCap, withdrawalCap] =
+    list(limits).flatMap(amounts);
   return {
-    threshold: (value >> 128n) & mask,
-    cap: (value >> 64n) & mask,
-    cosignAbove: value & mask,
+    threshold,
+    cap,
+    cosignAbove,
     withdrawalThreshold: amountOf(field(withdrawal)),
+    limits: {
+      senderCap: senderCap!,
+      senderWindowSlots: senderWindowSlots!,
+      volumeCap: volumeCap!,
+      volumeWindowSlots: volumeWindowSlots!,
+      depositCap: depositCap!,
+      withdrawalCap: withdrawalCap!,
+    },
   };
 }

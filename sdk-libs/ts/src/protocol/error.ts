@@ -247,6 +247,7 @@ export const RingProgramError = Object.freeze({
   coSignerRecordAlreadyExists: 8261,
   invalidRingPolicy: 8300,
   ringPolicyAlreadyExists: 8301,
+  invalidAssetLimits: 8390,
 } as const);
 
 export type RingProgramErrorName = keyof typeof RingProgramError;
