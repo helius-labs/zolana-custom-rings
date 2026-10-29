@@ -49,23 +49,23 @@ use std::{
 };
 
 use anyhow::{anyhow, ensure, Context, Result};
-use custom_ring_cli::{wait_for, Landing, ModeName, Probe, Queued};
+use custom_ring_cli::{wait_for, Landing, ModeName, Probe};
 use custom_ring_interface::{
     anonymous_recipient_output_body, anonymous_sender_output_body, AnonymousProofData,
     CustomRingError, RingMode, RingProgramConfig, RingRail, RingTransactData, CONFIG_PDA_SEED,
-    DEFAULT_INSERT_FEE, RING_PROGRAM_CONFIG,
+    RING_PROGRAM_CONFIG,
 };
 use custom_ring_sdk::{
     compute_unit_limit, AnonymousTransfer, CoSignScope, CustomRing, CustomRingMerge,
     CustomRingTransfer, CustomRingTransferInput, DelegateOutput, DelegateTransfer,
-    DelegateTransferInput, DepositRecipient, FirstContact, InstructionTag, MergeProofInput,
-    ProvenRingTransfer, RegisterKey, RingClient, RingDeposit, RingDepositReceipt, RingError,
+    DelegateTransferInput, DepositRecipient, FirstContact, InstructionTag, KeyRegistration,
+    MergeProofInput, ProvenRingTransfer, RingClient, RingDeposit, RingDepositReceipt, RingError,
     RingMergeOperation, RingOperation, RingRegistration,
 };
 use custom_ring_test_validator::{
     cli::{merged, RingProject, RingToml},
     policy::{
-        owner_member, policy_registry, RegistryWrite, RingNotes, EMPTY, LIMIT_CAP,
+        owner_member, policy_registry, RegistryWrite, RingNotes, StorageRecords, EMPTY, LIMIT_CAP,
         LIMIT_COSIGN_ABOVE,
     },
     ring_rpc::RingRpcSpec,
@@ -120,7 +120,7 @@ use spr_tree::TreeAccount;
 use spr_user_registry_interface::user_registry_program_id;
 use zolana_ring_client::{
     auditor_view_tag,
-    rpc::{write_auditor_key, CreateAuditorKeyRequest},
+    rpc::{write_auditor_key, CreateAuditorKeyRequest, RecordUpdateEntry},
     AuditedTransaction, OutputOpening, RingRecovery, RingScan, SourceMember, ViewingHistory,
 };
 use zolana_ring_keys::{RingAddress, RingPaymentRequest};
@@ -314,10 +314,7 @@ struct EscrowedDelegate<'a> {
 
 impl EscrowedDelegate<'_> {
     fn set(self, env: &TestEnv) -> Result<()> {
-        for member in self.members {
-            register_key(env, self.ring, member)?;
-        }
-        Queued::now(&env.client, self.ring)?.apply(&env.client, &env.payer)?;
+        register_keys(env, self.ring, self.members)?;
         DelegateAppointment {
             ring: self.ring,
             delegate: self.delegate,
@@ -376,15 +373,23 @@ fn land<'a>(
     .settle(&env.client)
 }
 
-/// The write waits in the record queue until `Queued::apply`.
-fn register_key(env: &TestEnv, ring: CustomRing, member: &ShieldedKeypair) -> Result<()> {
-    let registration = RegisterKey {
-        ring,
-        member: member.shielded_address()?,
-        payer: member.pubkey(),
-        authority: member,
-    };
-    land(env, registration, member, &[])?;
+/// Every member's escrow write in one update.
+fn register_keys(env: &TestEnv, ring: CustomRing, members: &[&ShieldedKeypair]) -> Result<()> {
+    let writes = members
+        .iter()
+        .map(|member| {
+            let registration = env.run(
+                KeyRegistration {
+                    ring,
+                    member: member.shielded_address()?,
+                    authority: *member,
+                }
+                .prove(env.client.ring_client()),
+            )?;
+            Ok(RecordUpdateEntry::Escrow(registration).write(&member.pubkey())?)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    StorageRecords { ring, writes, env }.send()?;
     Ok(())
 }
 

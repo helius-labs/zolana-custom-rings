@@ -1185,8 +1185,14 @@ fn held_total(utxos: &[WalletUtxo]) -> Result<u64> {
 }
 
 fn granted(ctx: &Context, reader: &ReaderKey) -> Result<bool> {
-    let record = ctx.block(ctx.ring.access_record(ctx.chain(), reader))?;
-    Ok(record.is_some())
+    let read = records::read_one(
+        &ctx.zolana,
+        custom_ring_sdk::MemberRecords {
+            ring: ctx.ring,
+            members: &[reader.member()?],
+        },
+    )?;
+    Ok(read.listed(ListId::Reader))
 }
 
 /// The `list` member argument of a party.

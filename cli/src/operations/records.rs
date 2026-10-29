@@ -1,30 +1,20 @@
-//! Member records read while the projection catches up, and the record queue applied once due.
+//! Member records read while the projection catches up.
 
 use std::fmt::Display;
 
 use anyhow::{bail, ensure, Context as _, Result};
-use custom_ring_interface::{CustomRingError, RecordQueue, RingPolicy};
-use custom_ring_sdk::{
-    AuthorityRecordUpdate, CustomRing, MemberRecords, RecordApplication, RingError,
-};
+use custom_ring_interface::RingPolicy;
+use custom_ring_sdk::{AuthorityRecordUpdate, MemberRecords, RingError};
 use solana_signer::Signer;
-use spr_client::{BlockingIndexer, BlockingRpc, Rpc};
+use spr_client::{BlockingIndexer, BlockingRpc};
 use spr_indexer_api::Hash;
 use zolana_ring_client::{records::MemberOpeningRead, RingIndexer};
 use zolana_ring_policy::Member;
 
-use crate::{wait_for, Context, Landing, Probe, Zolana};
+use crate::{wait_for, Context, Probe, Zolana};
 
-pub const NO_MEMBER_REGISTRY: &str =
-    "the ring has no member registry, its authority must run `zolana-ring init` first";
 pub const NO_RING_POLICY: &str =
     "the ring has no ring policy, its authority must run `zolana-ring init` first";
-
-#[must_use]
-pub struct Queued {
-    ring: CustomRing,
-    tail: u64,
-}
 
 pub(crate) fn read<R: BlockingRpc, I: BlockingIndexer + RingIndexer>(
     zolana: &Zolana<R, I>,
@@ -94,87 +84,35 @@ pub(crate) fn patiently<T>(
     wait_for(label, || match read() {
         Ok(value) => Ok(Probe::Ready(value)),
         Err(error) if error.is_projection_lag() => Ok(Probe::Retry(error.into())),
-        Err(RingError::MissingMemberRegistry) => bail!(NO_MEMBER_REGISTRY),
         Err(RingError::MissingRingPolicy) => bail!(NO_RING_POLICY),
         Err(error) => Err(error.into()),
     })
 }
 
-impl Queued {
-    pub fn now(zolana: &Zolana, ring: CustomRing) -> Result<Self> {
-        Ok(Self {
-            ring,
-            tail: queue(zolana, ring)?.tail(),
-        })
-    }
-
-    pub fn apply(self, zolana: &Zolana, payer: &(dyn Signer + Sync)) -> Result<()> {
-        let due = wait_for("the record queue to come due", || {
-            let queue = queue(zolana, self.ring)?;
-            if queue.head() >= self.tail {
-                return Ok(Probe::Ready(false));
-            }
-            match queue.apply_due(zolana.rpc().get_slot()?) {
-                Ok(()) => Ok(Probe::Ready(true)),
-                Err(CustomRingError::ApplyNotDue | CustomRingError::ApplyTooSoon) => {
-                    Ok(Probe::NotYet)
-                }
-                Err(error) => Err(RingError::from(error).into()),
-            }
-        })?;
-        if !due {
-            return Ok(());
-        }
-        let applied = Landing {
-            operation: RecordApplication::new(self.ring).into(),
-            payer,
-            signers: &[],
-        }
-        .settle(zolana);
-        match applied {
-            Ok(_) => Ok(()),
-            // A rival application can land after the due check.
-            Err(_) if queue(zolana, self.ring)?.head() >= self.tail => Ok(()),
-            Err(error) => Err(error),
-        }
-    }
-}
-
-pub(crate) fn queue(zolana: &Zolana, ring: CustomRing) -> Result<RecordQueue> {
-    Ok(zolana.block_on(ring.require_queue(zolana.as_async()))?)
-}
-
-/// All nonzero mint settings, authenticated under one complete registry snapshot.
+/// All nonzero mint settings, authenticated under the newest mirrored root of the ring's records.
 pub(crate) fn mint_policies(
     ctx: &Context,
 ) -> Result<std::collections::BTreeMap<[u8; 32], zolana_ring_policy::MintPolicy>> {
-    use zolana_ring_client::records::RegistryTip;
+    use zolana_ring_client::records::StorageTip;
     use zolana_ring_indexer::rpc::{
-        GetRingMemberRecordsRequest, RingMemberOpening, MAX_RING_MEMBER_PAGE_LIMIT,
+        GetStorageMemberRecordsRequest, RingMemberOpening, MAX_RING_MEMBER_PAGE_LIMIT,
     };
-    let registry = ctx.block(ctx.ring.require_registry(ctx.chain()))?;
-    let tip = RegistryTip {
-        root: registry.current_root(),
-        root_index: registry.history_cursor,
-        next_index: u64::from(registry.next_index()),
-    };
+    let ring_policy = ctx.block(ctx.ring.require_policy(ctx.chain()))?;
+    let tip = StorageTip::mirrored(&ring_policy)
+        .context("the policy mirrors no root of its records, run `SyncRoots` for them")?;
     let mut result = std::collections::BTreeMap::new();
-    let mut index = 1;
-    while index < tip.next_index {
-        let page = ctx
-            .zolana
-            .indexer()
-            .get_ring_member_records(GetRingMemberRecordsRequest {
-                ring_program_id: ctx.ring.program_id().into(),
-                expected_root: tip.root.into(),
-                expected_next_index: tip.next_index,
-                start_index: index,
-                limit: MAX_RING_MEMBER_PAGE_LIMIT,
-            })?;
-        ensure!(
-            tip.covers(&page, index),
-            "the indexer served an incomplete registry page"
-        );
+    let mut start = Some(1);
+    while let Some(index) = start {
+        let page =
+            ctx.zolana
+                .indexer()
+                .get_storage_member_records(GetStorageMemberRecordsRequest {
+                    registry: tip.registry.into(),
+                    expected_root: Hash(tip.root),
+                    start_index: index,
+                    limit: MAX_RING_MEMBER_PAGE_LIMIT,
+                })?;
+        start = tip.next_page(&page, index)?;
         for row in page.records {
             let member = row.record.member.0;
             let read = MemberOpeningRead::verify(
@@ -190,7 +128,6 @@ pub(crate) fn mint_policies(
             if policy != zolana_ring_policy::MintPolicy::EMPTY {
                 result.insert(member, policy);
             }
-            index += 1;
         }
     }
     Ok(result)

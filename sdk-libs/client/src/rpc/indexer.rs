@@ -8,8 +8,6 @@ use spr_indexer_api::RpcMethod;
 use thiserror::Error;
 use zolana_ring_indexer::rpc::{
     method::{
-        GetRingApplyProofInputs, GetRingMemberOpenings, GetRingMemberRecord, GetRingMemberRecords,
-        GetRingMemberRegistryRoot, GetRingRecordPool, GetRingRecordQueue,
         GetStorageApplyProofInputs, GetStorageMemberOpenings, GetStorageMemberRecords,
         GetStorageRecordPool,
     },
@@ -107,13 +105,6 @@ macro_rules! ring_indexer {
 }
 
 ring_indexer! {
-    get_ring_member_record => GetRingMemberRecord,
-    get_ring_member_records => GetRingMemberRecords,
-    get_ring_member_openings => GetRingMemberOpenings,
-    get_ring_record_pool => GetRingRecordPool,
-    get_ring_member_registry_root => GetRingMemberRegistryRoot,
-    get_ring_record_queue => GetRingRecordQueue,
-    get_ring_apply_proof_inputs => GetRingApplyProofInputs,
     get_storage_member_openings => GetStorageMemberOpenings,
     get_storage_member_records => GetStorageMemberRecords,
     get_storage_record_pool => GetStorageRecordPool,
@@ -153,7 +144,7 @@ mod tests {
         BlockingHttpClient, BlockingZolanaApi, HttpClient, HttpFuture, HttpRequest, HttpResponse,
     };
     use spr_indexer_api::{Hash, SerializablePubkey};
-    use zolana_ring_indexer::rpc::GetRingRecordQueueRequest;
+    use zolana_ring_indexer::rpc::GetStorageMemberRecordsRequest;
 
     use super::*;
 
@@ -203,62 +194,56 @@ mod tests {
         json!({"id": "test-account", "jsonrpc": "2.0", "result": result})
     }
 
-    fn query() -> GetRingRecordQueueRequest {
-        GetRingRecordQueueRequest {
-            ring_program_id: SerializablePubkey::from([1; 32]),
+    fn query() -> GetStorageMemberRecordsRequest {
+        GetStorageMemberRecordsRequest {
+            registry: SerializablePubkey::from([1; 32]),
+            expected_root: Hash([5; 32]),
+            start_index: 1,
+            limit: 1,
         }
     }
 
-    fn queue_result(slot: u64) -> Value {
+    fn page_result(slot: u64) -> Value {
         rpc_result(json!({
             "context": {"blockTime": 90, "slot": slot},
-            "head": 3,
-            "tail": 4,
-            "chainHead": Hash([5; 32]),
-            "entries": [{
-                "position": 3,
-                "member": Hash([2; 32]),
-                "mask": 1,
-                "value": 1,
-                "escrowKey": Hash([0; 32]),
-                "slot": slot - 1,
-            }],
+            "root": {"root": Hash([5; 32]), "revision": 3, "nextIndex": 1},
+            "records": [],
+            "nextLeafIndex": null,
         }))
     }
 
     #[test]
-    fn record_queue_transport_returns_the_pending_writes() {
-        let http = Canned::new(queue_result(20));
+    fn storage_page_transport_returns_the_page() {
+        let http = Canned::new(page_result(20));
         let indexer = ZolanaIndexer::with_api(BlockingZolanaApi::with_client(
             "http://indexer",
             http.clone(),
         ));
-        let response = indexer.get_ring_record_queue(query()).unwrap();
+        let response = indexer.get_storage_member_records(query()).unwrap();
         let (url, body) = http.sent();
-        assert_eq!(url, "http://indexer/getRingRecordQueue");
-        assert_eq!(body["method"], "getRingRecordQueue");
+        assert_eq!(url, "http://indexer/getStorageMemberRecords");
+        assert_eq!(body["method"], "getStorageMemberRecords");
         assert_eq!(body["params"], serde_json::to_value(query()).unwrap());
         assert_eq!(response.context.slot, 20);
-        assert_eq!((response.head, response.tail), (3, 4));
-        assert_eq!(response.entries[0].member, Hash([2; 32]));
+        assert_eq!(response.root.revision, 3);
     }
 
     #[tokio::test]
-    async fn async_record_queue_transport_returns_the_pending_writes() {
-        let http = Canned::new(queue_result(21));
+    async fn async_storage_page_transport_returns_the_page() {
+        let http = Canned::new(page_result(21));
         let indexer =
             AsyncZolanaIndexer::with_api(ZolanaApi::with_client("http://indexer", http.clone()));
-        let response = indexer.get_ring_record_queue(query()).await.unwrap();
-        assert_eq!(http.sent().1["method"], "getRingRecordQueue");
+        let response = indexer.get_storage_member_records(query()).await.unwrap();
+        assert_eq!(http.sent().1["method"], "getStorageMemberRecords");
         assert_eq!(response.context.slot, 21);
-        assert_eq!(response.entries.len(), 1);
+        assert!(response.records.is_empty());
     }
 
     #[test]
     fn preserves_ring_error_codes() {
         for expected in RingRpcError::ALL {
             let error = ring_error(ApiError::JsonRpc {
-                method: GetRingRecordQueue::NAME,
+                method: GetStorageMemberRecords::NAME,
                 code: Some(i64::from(expected.code())),
                 message: Some("projection error".into()),
             });
@@ -268,7 +253,7 @@ mod tests {
             );
         }
         let other = ring_error(ApiError::JsonRpc {
-            method: GetRingRecordQueue::NAME,
+            method: GetStorageMemberRecords::NAME,
             code: Some(-32603),
             message: Some("internal".into()),
         });

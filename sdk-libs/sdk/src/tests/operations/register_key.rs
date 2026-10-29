@@ -1,80 +1,13 @@
-use custom_ring_interface::{CustomRingError, QueueEntry, RingMode, MEMBER_QUEUE_LIMIT};
-use zolana_ring_policy::Member;
+use custom_ring_interface::RingMode;
 
-use super::support::{keypair, owner_identity, payer, ring, Chain, Registry, RingSettings, SLOT};
-use crate::{EscrowedRecipients, MemberRecords, RegisterKey, RingError};
+use super::support::{keypair, owner_identity, ring, Chain, Registry, RingSettings};
+use crate::{EscrowedRecipients, MemberRecords, RingError};
 
 fn escrowed() -> RingSettings {
     RingSettings {
         has_policy: true,
         ..RingSettings::new(RingMode::ConfidentialEscrow)
     }
-}
-
-#[tokio::test]
-async fn a_key_registers_once_for_the_member_it_derives_on_a_confidential_ring() {
-    let member = keypair(1);
-    let registered = keypair(2);
-    let register = |chain: Chain, authority: &spr_keypair::ShieldedKeypair| {
-        let address = member.shielded_address().unwrap();
-        let client = chain.client();
-        let authority = authority.nullifier_key.clone();
-        async move {
-            RegisterKey {
-                ring: ring(),
-                member: address,
-                payer: payer(),
-                authority: &authority,
-            }
-            .prove(&client)
-            .await
-        }
-    };
-    assert!(matches!(
-        register(Chain::ring(RingSettings::new(RingMode::Anonymous)), &member).await,
-        Err(RingError::Program(CustomRingError::AnonymousRingRefused))
-    ));
-    assert!(matches!(
-        register(Chain::ring(escrowed()), &registered).await,
-        Err(RingError::NullifierKeyMismatch)
-    ));
-    let chain = Chain::ring(escrowed())
-        .with_registry(Registry::new(&[(&member, 1)]), &super::pipeline_rules())
-        .with_queue(&[], SLOT, 0);
-    assert!(matches!(
-        register(chain, &member).await,
-        Err(RingError::KeyAlreadyRegistered { member: refused }) if refused == owner_identity(&member)
-    ));
-}
-
-/// The program refuses a registration past the member share of the queue, the SDK before proving.
-#[tokio::test]
-async fn a_full_member_queue_refuses_a_key_before_proving() {
-    let member = keypair(1);
-    let pending: Vec<QueueEntry> = (1..=MEMBER_QUEUE_LIMIT as u8)
-        .map(|byte| QueueEntry {
-            mint_policy: Default::default(),
-            member: *Member::owner_tag(&[byte; 32]).unwrap().as_bytes(),
-            mask: 1,
-            value: 1,
-            escrow_key: [0; 32],
-        })
-        .collect();
-    let client = Chain::ring(escrowed())
-        .with_registry(Registry::new(&[]), &super::pipeline_rules())
-        .with_queue(&pending, SLOT, 0)
-        .client();
-    assert!(matches!(
-        RegisterKey {
-            ring: ring(),
-            member: member.shielded_address().unwrap(),
-            payer: payer(),
-            authority: &member.nullifier_key,
-        }
-        .prove(&client)
-        .await,
-        Err(RingError::Program(CustomRingError::QueueFull))
-    ));
 }
 
 #[tokio::test]

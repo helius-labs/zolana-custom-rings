@@ -2,7 +2,7 @@ use std::fmt::Write;
 
 use anyhow::Result;
 use custom_ring_interface::{RingPolicy, RootMirror};
-use custom_ring_sdk::{CustomRing, QueueStatus, RegistryStatus, RingError, RingMode};
+use custom_ring_sdk::{RingError, RingMode};
 use solana_signer::Signer;
 use spr_client::Rpc;
 
@@ -120,7 +120,6 @@ fn print_chain(ctx: &Context) -> Result<()> {
         ),
     );
     line("mode", mode(config.mode));
-    controls::print_insert_fee(config);
     match config.co_signer_classes {
         Some(classes) => line("co-signed classes", controls::class_names(classes)),
         None => line("co-signer", "none"),
@@ -128,16 +127,6 @@ fn print_chain(ctx: &Context) -> Result<()> {
     match config.delegate {
         Some(delegate) => line("delegate", delegate),
         None => line("delegate", "none"),
-    }
-    match &status.registry {
-        Some(registry) => print_registry(ring, registry),
-        None => line(
-            "registry",
-            format_args!("not created ({})", ring.registry_pda()),
-        ),
-    }
-    if let Some(queue) = &status.queue {
-        print_queue(ring, queue);
     }
     if let Some(policy) = &status.policy {
         print_roots(policy);
@@ -181,33 +170,6 @@ fn mode(mode: RingMode) -> &'static str {
     }
 }
 
-/// Every own-ring proof binds a root at or above the floor.
-fn print_registry(ring: CustomRing, registry: &RegistryStatus) {
-    line(
-        "registry",
-        format_args!("{} next index {}", ring.registry_pda(), registry.next_index),
-    );
-    if let Some(newest) = registry.roots.first() {
-        line(
-            "root",
-            format_args!(
-                "{} applied {} at slot {}",
-                hex::encode(newest.root),
-                newest.applied,
-                newest.slot
-            ),
-        );
-    }
-    line("roots", format_args!("{} in history", registry.roots.len()));
-    line(
-        "floor",
-        format_args!(
-            "{} raised at slot {}, prior {}",
-            registry.floor, registry.floor_slot, registry.prior_floor
-        ),
-    );
-}
-
 /// The newest root each mirror holds, a proof names its revision.
 fn print_roots(policy: &RingPolicy) {
     let newest = |mirror: &RootMirror| {
@@ -232,23 +194,6 @@ fn print_roots(policy: &RingPolicy) {
         };
         line("curator", format_args!("{curator} {synced}"));
     }
-}
-
-fn print_queue(ring: CustomRing, queue: &QueueStatus) {
-    line(
-        "queue",
-        format_args!(
-            "{} pending {} at positions {}..{}",
-            ring.queue_pda(),
-            queue.pending,
-            queue.head,
-            queue.tail
-        ),
-    );
-    line(
-        "next apply",
-        format_args!("from slot {}", queue.next_apply_slot),
-    );
 }
 
 fn program_state(ctx: &Context) -> Result<String> {

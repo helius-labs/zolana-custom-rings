@@ -70,11 +70,6 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
         },
         "custom-ring config account"
     );
-    assert_eq!(
-        config.insert_fee(),
-        DEFAULT_INSERT_FEE,
-        "default insert fee"
-    );
     assert_eq!(config.co_signers.covered(), None, "no co-signer");
     assert_eq!(config.delegate(), None, "no delegate");
 
@@ -376,10 +371,6 @@ fn an_audit_only_ring_audits_every_transfer() -> Result<()> {
         tier: Tier::AuditOnly,
     }
     .send(&env.client)?;
-    assert!(
-        env.run(ring.registry(env.client.as_async()))?.is_none(),
-        "an audit-only ring keeps no member registry"
-    );
     let config: RingProgramConfig = fetch_state(rpc, &ring.config_pda())?;
     assert_eq!(config.has_policy, 0, "audit-only config flag");
 
@@ -955,18 +946,16 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
         }
         .instruction()?],
     )?;
-    land(
+    StorageRecords::mint_policy(
+        ring,
+        Member::asset(&usdc)?,
+        zolana_ring_policy::MintPolicy {
+            withdrawal_threshold: USDC_WITHDRAW_AMOUNT - 1,
+            ..Default::default()
+        },
         &env,
-        custom_ring_sdk::AuthorityListWrite::new(ring, env.payer.pubkey()).with_mint_policy(
-            Member::asset(&usdc)?,
-            zolana_ring_policy::MintPolicy {
-                withdrawal_threshold: USDC_WITHDRAW_AMOUNT - 1,
-                ..Default::default()
-            },
-        )?,
-        &env.payer,
-        &[],
-    )?;
+    )
+    .send()?;
     let withdraw = || -> Result<ConfidentialTransaction> {
         let mut transfer = ConfidentialTransaction::new_with_ring(
             vec![exit_change.input_utxo(&env)?],

@@ -205,7 +205,6 @@ pub fn rpc_module<S: TransactionSource + 'static>(
                 config_auditor_pubkey: configured.map(Into::into),
                 service_pubkey: hub.service_pubkey().into(),
                 activation: chain.activation,
-                registry: chain.registry,
             })
         },
     )?;

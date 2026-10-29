@@ -3,23 +3,27 @@ use std::sync::{
     Arc,
 };
 
-use custom_ring_interface::{instruction::tag, MEMBER_REGISTRY_EMPTY_ROOT};
+use custom_ring_interface::{
+    storage::{Revision, StorageRegistry},
+    storage_instruction::tag,
+    MEMBER_REGISTRY_EMPTY_ROOT,
+};
 use sea_orm::{Database, DatabaseConnection, TransactionTrait};
 use sea_orm_migration::MigratorTrait;
 use solana_address::Address;
 use solana_signature::Signature;
 use spr_indexer_api::Hash;
-use zolana_ring_indexer::rpc::{GetRingMemberRecordRequest, GetRingMemberRecordsRequest};
+use zolana_ring_indexer::rpc::{GetStorageMemberOpeningsRequest, GetStorageMemberRecordsRequest};
 
 use crate::{
     api,
     block::{BlockInfo, BlockMetadata, Instruction, InstructionGroup, TransactionInfo},
     error::RingApiError,
     indexer::{block_batch, Indexer, Readiness, StartSlot, MIN_BLOCK_BATCH},
-    member_registry,
     migration::Migrator,
     rpc::SolanaRpc,
-    storage::{self, RegistryState, RegistryStore, RingCursor},
+    storage::{self, RingCursor, StorageRoot, StorageState, StorageStore},
+    storage_registry,
 };
 
 pub(crate) fn field(value: u8) -> [u8; 32] {
@@ -34,7 +38,7 @@ pub(crate) async fn database() -> DatabaseConnection {
     db
 }
 
-pub(crate) async fn fixture() -> (DatabaseConnection, RegistryState, RingCursor) {
+pub(crate) async fn fixture() -> (DatabaseConnection, StorageState, RingCursor) {
     let db = database().await;
     let cursor = RingCursor::new(0);
     let state = create_registry(&db, [11; 32]).await;
@@ -42,10 +46,15 @@ pub(crate) async fn fixture() -> (DatabaseConnection, RegistryState, RingCursor)
     (db, state, cursor)
 }
 
-pub(crate) async fn create_registry(db: &DatabaseConnection, program: [u8; 32]) -> RegistryState {
-    let state = member_registry::created(program, 0);
+/// A registry as `Initialize` leaves it.
+pub(crate) async fn create_registry(db: &DatabaseConnection, registry: [u8; 32]) -> StorageState {
+    let state = StorageState {
+        registry,
+        account: Box::new(StorageRegistry::new(Address::new_from_array([3; 32]), 0)),
+        fault: None,
+    };
     let tx = db.begin().await.unwrap();
-    member_registry::create(&RegistryStore::new(&tx, program), &state)
+    storage_registry::create(&StorageStore::new(&tx, registry), &state)
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -62,34 +71,35 @@ pub(crate) fn indexer(db: &DatabaseConnection, start: Option<StartSlot>) -> Inde
     }
 }
 
-fn record_request(state: &RegistryState, root: [u8; 32]) -> GetRingMemberRecordRequest {
-    GetRingMemberRecordRequest {
-        ring_program_id: Address::new_from_array(state.program).into(),
-        member: Hash(field(4)),
+fn openings_request(state: &StorageState, root: [u8; 32]) -> GetStorageMemberOpeningsRequest {
+    GetStorageMemberOpeningsRequest {
+        registry: Address::new_from_array(state.registry).into(),
+        members: vec![Hash(field(4))],
         expected_root: Hash(root),
-        expected_next_index: 1,
     }
 }
 
 #[tokio::test]
 async fn member_page_reports_a_missing_leaf_instead_of_skipping_it() {
     let (db, mut state, mut cursor) = fixture().await;
-    state.registry.next_index = 2u32.to_le_bytes();
-    RegistryStore::new(&db, state.program)
-        .save_state(&state)
+    state.account.next_index = 2u32.to_le_bytes();
+    state.account.roots[0].revision = Revision::from(1);
+    let store = StorageStore::new(&db, state.registry);
+    store.save_state(&state).await.unwrap();
+    store
+        .save_root(&StorageRoot::current(&state.account))
         .await
         .unwrap();
     cursor.resume(&db).await.unwrap();
-    let request = GetRingMemberRecordsRequest {
-        ring_program_id: Address::new_from_array(state.program).into(),
+    let request = GetStorageMemberRecordsRequest {
+        registry: Address::new_from_array(state.registry).into(),
         expected_root: Hash(MEMBER_REGISTRY_EMPTY_ROOT),
-        expected_next_index: 2,
         start_index: 1,
         limit: 1,
     };
     let rpc = indexer(&db, None).rpc;
     assert_eq!(
-        api::member_records(&db, rpc.as_ref(), request).await,
+        api::storage_member_records(&db, rpc.as_ref(), request).await,
         Err(RingApiError::PageGap)
     );
 }
@@ -98,16 +108,13 @@ async fn member_page_reports_a_missing_leaf_instead_of_skipping_it() {
 async fn reads_fail_closed_before_rpc_while_catching_up_or_off_the_history() {
     let (db, state, mut cursor) = fixture().await;
     let rpc = indexer(&db, None).rpc;
-    let read = |request| api::member_record(&db, rpc.as_ref(), request);
-    let request = record_request(&state, MEMBER_REGISTRY_EMPTY_ROOT);
+    let read = |request| api::storage_member_openings(&db, rpc.as_ref(), request);
+    let request = openings_request(&state, MEMBER_REGISTRY_EMPTY_ROOT);
     let catching_up = RingApiError::OutOfSync("indexer is catching up or recovering".into());
     assert_eq!(read(request.clone()).await, Err(catching_up));
     cursor.resume(&db).await.unwrap();
-    let off_history = record_request(&state, field(9));
+    let off_history = openings_request(&state, field(9));
     assert_eq!(read(off_history).await, Err(RingApiError::RootChanged));
-    let mut stale = request.clone();
-    stale.expected_next_index = 2;
-    assert_eq!(read(stale).await, Err(RingApiError::RootChanged));
     // A held root passes every projection check and stops at the chain confirmation.
     let unconfirmed = RingApiError::OutOfSync("cursor has no canonical block".into());
     assert_eq!(read(request).await, Err(unconfirmed));
@@ -188,77 +195,7 @@ fn start_slots_parse_a_slot_or_latest() {
 }
 
 #[tokio::test]
-async fn an_invalid_instruction_quarantines_only_its_ring_until_rollback() {
-    let (db, faulty, mut cursor) = fixture().await;
-    let healthy = create_registry(&db, [12; 32]).await;
-    let garbage = |program: [u8; 32], error: Option<String>| TransactionInfo {
-        signature: Signature::from([1; 64]),
-        error,
-        instruction_groups: vec![InstructionGroup {
-            outer_instruction: Instruction {
-                program_id: Address::new_from_array(program),
-                data: vec![tag::REGISTER_KEY, 1, 2, 3],
-                accounts: vec![],
-                stack_height: Some(1),
-            },
-            inner_instructions: vec![],
-        }],
-    };
-    let block = BlockInfo {
-        metadata: BlockMetadata {
-            slot: 3,
-            blockhash: Hash(field(3)),
-            ..Default::default()
-        },
-        transactions: vec![
-            garbage(faulty.program, None),
-            garbage(healthy.program, Some("failed".into())),
-        ],
-    };
-    let indexer = indexer(&db, None);
-    let tx = db.begin().await.unwrap();
-    indexer.apply_block(&tx, &block, &mut cursor).await.unwrap();
-    tx.commit().await.unwrap();
-
-    assert!(fault_of(&db, faulty.program).await.is_some());
-    assert!(fault_of(&db, healthy.program).await.is_none());
-    cursor.resume(&db).await.unwrap();
-    let read = |state: &RegistryState| {
-        api::member_record(
-            &db,
-            indexer.rpc.as_ref(),
-            record_request(state, MEMBER_REGISTRY_EMPTY_ROOT),
-        )
-    };
-    assert!(matches!(
-        read(&faulty).await,
-        Err(RingApiError::OutOfSync(reason)) if reason.contains("quarantined")
-    ));
-    // The healthy ring serves the read up to the chain confirmation at the dead RPC.
-    assert!(matches!(
-        read(&healthy).await,
-        Err(RingApiError::OutOfSync(reason)) if !reason.contains("quarantined")
-    ));
-
-    let mut restarted = storage::cursor(&db).await.unwrap().unwrap();
-    let tx = db.begin().await.unwrap();
-    storage::rollback(&tx, &mut restarted).await.unwrap();
-    tx.commit().await.unwrap();
-    assert!(fault_of(&db, faulty.program).await.is_none());
-    assert!(restarted.tip.is_none());
-}
-
-async fn fault_of(db: &DatabaseConnection, program: [u8; 32]) -> Option<String> {
-    RegistryStore::new(db, program)
-        .state()
-        .await
-        .unwrap()
-        .unwrap()
-        .fault
-}
-
-#[tokio::test]
-async fn record_shaped_instructions_of_other_programs_cost_no_queries() {
+async fn storage_shaped_instructions_of_other_programs_cost_no_queries() {
     let mut db = database().await;
     let statements = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&statements);
@@ -267,14 +204,13 @@ async fn record_shaped_instructions_of_other_programs_cost_no_queries() {
     });
     create_registry(&db, [11; 32]).await;
     let foreign = Address::new_from_array([0x55; 32]);
-    let record_tags = [
-        tag::CREATE_MEMBER_REGISTRY,
-        tag::REGISTER_KEY,
-        tag::WRITE_RECORDS,
-        tag::AUTHORITY_WRITE_RECORDS,
-        tag::APPLY_RECORDS,
+    let storage_tags = [
+        tag::INITIALIZE,
+        tag::UPDATE,
+        tag::UPDATE_IMMEDIATE,
+        tag::UPDATE_AUTHORITY,
     ];
-    let shaped = record_tags
+    let shaped = storage_tags
         .into_iter()
         .map(|tag| TransactionInfo {
             signature: Signature::from([1; 64]),
@@ -326,7 +262,6 @@ async fn the_record_tree_migration_rewinds_a_key_registry_index_to_its_start() {
     let rewound = storage::cursor(&db).await.unwrap().unwrap();
     assert_eq!((rewound.start_slot, rewound.scanned_slot), (9, 9));
     assert!(rewound.tip.is_none() && !rewound.is_ready());
-    assert!(storage::registries(&db).await.unwrap().is_empty());
 }
 
 #[test]
@@ -335,7 +270,6 @@ fn ring_errors_keep_their_wire_codes() {
         (RingApiError::OutOfSync(String::new()), -32070),
         (RingApiError::RootChanged, -32071),
         (RingApiError::PageGap, -32075),
-        (RingApiError::QueueChanged, -32076),
         (RingApiError::InvalidRequest(String::new()), -32600),
         (RingApiError::Internal(String::new()), -32603),
     ] {
@@ -353,9 +287,9 @@ async fn postgres_migrates_both_ways_and_serves_the_ring_queries() {
     Migrator::down(&db, None).await.unwrap();
     Migrator::up(&db, None).await.unwrap();
     let state = create_registry(&db, [11; 32]).await;
-    let store = RegistryStore::new(&db, state.program);
+    let store = StorageStore::new(&db, state.registry);
     assert_eq!(store.state().await.unwrap(), Some(state));
-    let low = store.low_record(&field(4), 0).await.unwrap();
+    let low = store.tree().low_record(&field(4), 0).await.unwrap();
     assert_eq!(low.record.index, 0);
     let mut cursor = RingCursor::new(0);
     cursor.resume(&db).await.unwrap();

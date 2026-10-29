@@ -166,7 +166,7 @@ async fn ring_methods_and_refused_paths_never_reach_photon() {
     }
     let response = client
         .post(format!("{url}/v1/zolana/getMerkleProofs"))
-        .body(r#"{"jsonrpc":"2.0","id":7,"method":"getRingMemberRecord"}"#)
+        .body(r#"{"jsonrpc":"2.0","id":7,"method":"getStorageMemberRecords"}"#)
         .send()
         .await
         .unwrap();

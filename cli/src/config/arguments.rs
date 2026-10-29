@@ -75,19 +75,16 @@ pub enum Command {
     /// Set, clear or show the ring's co-signer.
     #[command(subcommand)]
     Cosigner(CoSignerCommand),
-    /// Set or show the lamports a member's record write pays the config authority.
-    #[command(subcommand)]
-    InsertFee(InsertFeeCommand),
     /// Set or show the permanent delegate, or move a note as the delegate.
     #[command(subcommand)]
     Delegate(DelegateCommand),
-    /// Escrow the member's nullifier key in its record of the ring member registry.
+    /// Escrow the member's nullifier key in its record of the ring's storage registry.
     #[command(subcommand)]
     Key(KeyCommand),
     /// List the wallet enrolments that await the config authority, or approve one.
     #[command(subcommand)]
     Enrolment(EnrolmentCommand),
-    /// Read and write the list bits of member records and apply the record queue.
+    /// Read and write the list bits of member records.
     #[command(subcommand)]
     List(ListCommand),
     /// Read, check and replace the pinned rule table.
@@ -103,7 +100,7 @@ pub enum Command {
 
 #[derive(Debug, Subcommand)]
 pub enum ListCommand {
-    /// Set the list bit of each member's record, the pending writes apply in the same proof.
+    /// Set the list bit of each member's record.
     Add(EntryArgs),
     /// Clear the list bit of each member's record.
     Clear(EntryArgs),
@@ -120,9 +117,7 @@ pub enum ListCommand {
         #[arg(long)]
         own: bool,
     },
-    /// Apply the queued member writes once the queue is full or aged, anyone may.
-    Apply,
-    /// Set a list the sender writes on its own record, it applies with the queue.
+    /// Set a list the sender writes on its own record.
     Join {
         #[arg(value_enum)]
         list: MemberList,
@@ -181,15 +176,6 @@ pub enum CoSignerCommand {
         #[arg(long)]
         signer: Option<Address>,
     },
-}
-
-#[derive(Debug, Subcommand)]
-pub enum InsertFeeCommand {
-    /// Zero lets members write their records free.
-    Set {
-        lamports: u64,
-    },
-    Show,
 }
 
 #[derive(Debug, Subcommand)]
@@ -254,7 +240,7 @@ pub enum KeyCommand {
 pub enum ReaderCommand {
     /// A base58 Solana key or the 66-hex P-256 key of a passkey.
     Grant { reader: ReaderKey },
-    /// Close the reader's record, the rent returns to the authority.
+    /// Clear the `reader` list of the reader's record.
     Revoke { reader: ReaderKey },
 }
 

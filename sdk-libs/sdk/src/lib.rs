@@ -54,13 +54,12 @@ pub use spr_program::instruction::{DepositAsset, DepositSplAccounts};
 pub use crate::prover::secret_json_body;
 pub use crate::{
     account::{
-        CustomRing, CustomRingCoSigner, CustomRingConfig, PinnedPolicy, QueueStatus, RegistryRoot,
-        RegistryStatus, RingRegistration, RingStatus,
+        CustomRing, CustomRingCoSigner, CustomRingConfig, PinnedPolicy, RingRegistration,
+        RingStatus,
     },
     admin::{
-        ClearCoSigner, CreateConfig, CreateMemberRegistry, GrantReader, InitSppRingConfig,
-        PolicyRecords, PolicyRules, RevokeReader, SetAuthority, SetCoSigner, SetDelegate,
-        SetSourceOwner, SourceOwner,
+        ClearCoSigner, CreateConfig, InitSppRingConfig, PolicyRecords, PolicyRules, SetAuthority,
+        SetCoSigner, SetDelegate, SetSourceOwner, SourceOwner,
     },
     client::{RingClient, RingIndexerBackend},
     deposit::{
@@ -82,14 +81,10 @@ pub use crate::{
         RingTransfer,
     },
     records::{
-        AuthorityListWrite, AuthorityRecordUpdate, MemberListWrite, MemberRecords,
-        ProvenRecordWrite, RecordApplication, RecordUpdateService, RecordUpdateTarget,
+        AuthorityRecordUpdate, MemberRecords, RecordUpdateService, RecordUpdateTarget,
         WalletRecordUpdate,
     },
-    register_key::{
-        EscrowedRecipients, KeyEscrowAuthority, KeyRegistration, ProvenKeyRegistration,
-        RegisterKey, SealedEscrow,
-    },
+    register_key::{EscrowedRecipients, KeyEscrowAuthority, KeyRegistration, SealedEscrow},
     relay::{PendingSignature, PreparedAuthorityTransfer, PreparedRelay, RelaySent, RingRelay},
     select::{select_merge_where, select_spend_where},
     storage::{

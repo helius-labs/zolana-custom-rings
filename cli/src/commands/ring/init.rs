@@ -2,9 +2,9 @@
 
 use anyhow::{anyhow, ensure, Context as _, Result};
 use custom_ring_sdk::{
-    CreateConfig, CreateMemberRegistry, CustomRingConfig, InitSppRingConfig, InitializeStorage,
-    ListRegistry, PolicyRecords, PolicyRules, RingError, RingKind, SetAuthority, SetSourceOwner,
-    SourceOwner, SyncRoots,
+    CreateConfig, CustomRingConfig, InitSppRingConfig, InitializeStorage, ListRegistry,
+    PolicyRecords, PolicyRules, RingError, RingKind, SetAuthority, SetSourceOwner, SourceOwner,
+    SyncRoots,
 };
 use solana_address::Address;
 use solana_keypair::Keypair;
@@ -17,7 +17,7 @@ use zolana_ring_policy::{ListId, RuleTable};
 use crate::{
     catalogue,
     config::{expand_tilde, ModeName},
-    controls, deploy, line,
+    deploy, line,
     policy::{self, CompiledPolicy, PolicySpec},
     status, Context, InitArgs, Trust,
 };
@@ -210,17 +210,6 @@ pub fn run(ctx: &Context, args: InitArgs) -> Result<()> {
         ctx.send(&[config_authority], &[instruction])
             .map(|_| CREATED)
     };
-    let member_registry = match ctx.block(ring.registry(ctx.chain()))? {
-        Some(_) => PRESENT,
-        None => send(
-            CreateMemberRegistry {
-                ring,
-                payer,
-                authority: payer,
-            }
-            .instruction(),
-        )?,
-    };
     let storage = InitializeStorage::records(ctx.ring, payer);
     let records = match ctx.rpc().get_account(storage.registry())? {
         Some(_) => PRESENT,
@@ -272,11 +261,9 @@ pub fn run(ctx: &Context, args: InitArgs) -> Result<()> {
     }
     line("config", created.config);
     line("authority", created.authority);
-    line("member registry", member_registry);
     line("records", format_args!("{} {records}", storage.registry()));
     line("policy", policy);
     line("spp ring", spp_ring);
-    controls::print_insert_fee(&ctx.ring_config()?);
     status::announce(&ctx.config);
     Ok(())
 }

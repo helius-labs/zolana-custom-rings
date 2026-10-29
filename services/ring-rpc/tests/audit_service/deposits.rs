@@ -122,23 +122,6 @@ async fn ring_status_reports_the_state_of_each_ring() {
             activated: true,
             paused: false,
         }),
-        registry: Some(RegistryStatus {
-            history: vec![
-                Some(RegistryRoot {
-                    root: Hash([1; 32]),
-                    applied: 3,
-                    slot: 40,
-                }),
-                None,
-            ],
-            history_cursor: 0,
-            next_index: 3,
-            floor: 3,
-            prior_floor: 0,
-            floor_slot: 40,
-            queue_head: 3,
-            queue_tail: 5,
-        }),
     };
     let mut source = fixture.source();
     source.chain = HashMap::from([(served, chain.clone())]);
@@ -191,10 +174,7 @@ async fn ring_status_reports_the_state_of_each_ring() {
             true => chain.clone(),
             false => RingChainStatus::default(),
         };
-        assert_eq!(
-            (status.activation, status.registry),
-            (expected.activation, expected.registry)
-        );
+        assert_eq!(status.activation, expected.activation);
     }
 
     let object = as_object(RingStatusRequest {
@@ -220,5 +200,4 @@ async fn ring_status_reports_the_state_of_each_ring() {
         .await
         .expect("status");
     assert!(raw.get("activation").is_none());
-    assert!(raw.get("registry").is_none());
 }

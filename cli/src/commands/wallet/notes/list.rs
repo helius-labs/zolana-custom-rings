@@ -2,25 +2,21 @@
 
 use anyhow::{bail, Context as _, Result};
 use clap::{builder::PossibleValue, Args, ValueEnum};
-use custom_ring_interface::{
-    CustomRingError, ListRegistry, RecordQueue, APPLY_DELAY_SLOTS, MEMBER_QUEUE_LIMIT,
-};
+use custom_ring_interface::ListRegistry;
 use custom_ring_sdk::{
-    AuthorityRecordUpdate, MemberRecords, RecordApplication, RingError, RingMode, SetSourceOwner,
-    SourceOwner, SyncRoots, WalletRecordUpdate,
+    AuthorityRecordUpdate, MemberRecords, SetSourceOwner, SourceOwner, SyncRoots,
+    WalletRecordUpdate,
 };
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
-use spr_client::Rpc;
 use zolana_ring_policy::{ListId, ListSet, ListWrite, ListWriteError, Member};
 
 use crate::{
     catalogue::{check_curator, Catalogue},
     line,
     policy::{self, Pinned},
-    records::{self, queue},
-    transact::SENDER_FEE_BUDGET,
+    records,
     ui::{self, icon},
     Context, EntryArgs, ListCommand,
 };
@@ -81,7 +77,6 @@ pub fn run(ctx: &Context, command: ListCommand) -> Result<()> {
             };
             set_source(ctx, list_id.id(), source)
         }
-        ListCommand::Apply => apply(ctx),
         ListCommand::Join { list } => list.write(ctx, ListChange::Set),
         ListCommand::Leave { list } => list.write(ctx, ListChange::Clear),
     }
@@ -329,56 +324,11 @@ fn set_source(ctx: &Context, list_id: ListId, source: SourceOwner) -> Result<()>
     Ok(())
 }
 
-/// Anyone may apply a due queue, the sender pays.
-fn apply(ctx: &Context) -> Result<()> {
-    let queue = queue(&ctx.zolana, ctx.ring)?;
-    line("pending", queue.pending());
-    match queue.apply_due(ctx.rpc().get_slot()?) {
-        Ok(()) => {
-            let sender = ctx.sender()?;
-            let payer = record_payer(ctx, &sender)?;
-            ctx.fund(payer.pubkey(), SENDER_FEE_BUDGET)?;
-            warn_link(ctx, payer.pubkey());
-            let signature = ctx.submit(RecordApplication::new(ctx.ring), payer, &[])?;
-            line("queue", "applied");
-            line("application", signature);
-        }
-        Err(CustomRingError::ApplyNotDue) => line("queue", not_due(&queue)),
-        Err(CustomRingError::ApplyTooSoon) => line(
-            "queue",
-            format_args!(
-                "due, the next application lands from slot {}",
-                queue.next_apply_slot()
-            ),
-        ),
-        Err(error) => return Err(RingError::from(error).into()),
-    }
-    Ok(())
-}
-
-/// An anonymous ring's hidden owner never pays, the fee payer does.
-fn record_payer<'a>(ctx: &'a Context, member: &'a Keypair) -> Result<&'a Keypair> {
-    let mode = ctx.ring_config()?.mode;
-    match mode {
-        RingMode::Anonymous => ctx.member_payer(mode, member.pubkey()),
-        RingMode::Confidential | RingMode::ConfidentialEscrow => Ok(member),
-    }
-}
-
 fn warn_link(ctx: &Context, signer: Address) {
     let ring = ctx.ring.program_id();
     ui::warn(format!(
         "{signer} signs, the chain links that key to ring {ring}"
     ));
-}
-
-fn not_due(queue: &RecordQueue) -> String {
-    match queue.pending() {
-        0 => "empty".to_owned(),
-        pending => format!(
-            "{pending} pending, due at {MEMBER_QUEUE_LIMIT} or once the oldest is {APPLY_DELAY_SLOTS} slots old"
-        ),
-    }
 }
 
 #[cfg(test)]

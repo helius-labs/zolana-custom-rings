@@ -1,19 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use custom_ring_interface::{
-    ApplyRecordsIxData, CustomRingError, MemberRegistry, PendingApplication, QueueEntry,
-    RecordQueue, MEMBER_REGISTRY_CAPACITY,
-};
+use custom_ring_interface::{QueueEntry, MEMBER_REGISTRY_CAPACITY};
 use sea_orm::ConnectionTrait;
-use spr_indexer_api::Hash;
 use zolana_ring_indexer::{
-    records::{CanonicalAccounts, QueuedWrite, RecordAction, RecordChange, SealedKey},
+    records::{QueuedWrite, SealedKey},
     tree::{node_keys, Canopy, LoadedTree, MemberRead, MemberRecord, ReadRows, WrittenRows},
 };
 
 use crate::{
-    indexer::{fault, from_storage, ApplyError},
-    storage::{HistoryRoot, RegistryState, RegistryStore, StoredEntry, StoredRecord, TreeVersion},
+    indexer::{fault, ApplyError},
+    storage::{RegistryStore, StoredRecord, TreeVersion},
 };
 
 /// `stored` keeps the sealed keys the tree does not hold.
@@ -99,28 +95,6 @@ impl TreeRead {
     }
 }
 
-/// The accounts as `CreateMemberRegistry` writes them at `slot`.
-pub(crate) fn created(program: [u8; 32], slot: u64) -> RegistryState {
-    let canonical = CanonicalAccounts::of(&program.into());
-    RegistryState {
-        program,
-        registry_address: canonical.accounts.registry.to_bytes(),
-        queue_address: canonical.accounts.queue.to_bytes(),
-        registry: Box::new(MemberRegistry::new(canonical.registry_bump, slot)),
-        queue: Box::new(RecordQueue::new(canonical.queue_bump)),
-        fault: None,
-    }
-}
-
-pub(crate) async fn create<C: ConnectionTrait>(
-    store: &RegistryStore<'_, C>,
-    state: &RegistryState,
-) -> anyhow::Result<()> {
-    plant_tree(store).await?;
-    store.save_root(&HistoryRoot::newest(state)).await?;
-    store.save_state(state).await
-}
-
 pub(crate) async fn plant_tree<C: ConnectionTrait>(
     store: &RegistryStore<'_, C>,
 ) -> anyhow::Result<()> {
@@ -135,139 +109,6 @@ pub(crate) async fn plant_tree<C: ConnectionTrait>(
         .collect::<Vec<_>>();
     store.save_records(&records, 0).await?;
     store.save_nodes(&rows.nodes, 0).await
-}
-
-pub(crate) struct Projection<'p, 'c, C> {
-    pub store: &'p RegistryStore<'c, C>,
-    pub state: &'p mut RegistryState,
-    pub slot: u64,
-}
-
-#[derive(Clone, Copy)]
-enum Settlement {
-    Permissionless,
-    Authority,
-}
-
-impl<C: ConnectionTrait> Projection<'_, '_, C> {
-    /// A refusal of the program's own admission checks means the projection drifted.
-    pub async fn project(mut self, change: RecordChange) -> Result<(), ApplyError> {
-        if change.accounts != self.state.accounts() {
-            return Err(fault("record instruction names another registry or queue"));
-        }
-        let state = &*self.state;
-        match change.action {
-            RecordAction::Queue(write) => {
-                admitted(state.queue.admit_member_write(&state.registry))?;
-                self.queue(write).await
-            }
-            RecordAction::AuthorityWrite { writes, apply } => {
-                let count = writes.len() as u64;
-                admitted(state.queue.admit_authority_writes(count))?;
-                for entry in writes {
-                    self.queue(QueuedWrite { entry, seal: None }).await?;
-                }
-                self.apply(&apply, Settlement::Authority).await
-            }
-            RecordAction::Apply(apply) => {
-                admitted(state.queue.apply_due(self.slot))?;
-                self.apply(&apply, Settlement::Permissionless).await
-            }
-        }
-    }
-
-    async fn queue(&mut self, write: QueuedWrite) -> Result<(), ApplyError> {
-        let position = self.state.queue.tail();
-        self.state
-            .queue
-            .push(&write.entry, self.slot)
-            .map_err(|error| fault(format!("queue chain failed ({error})")))?;
-        let entry = StoredEntry {
-            position,
-            write,
-            slot: self.slot,
-            chain: self.state.queue.chain_tail(),
-        };
-        self.store.save_entry(&entry).await?;
-        Ok(())
-    }
-
-    /// The projected root must be the one the program recorded.
-    async fn apply(
-        &mut self,
-        recorded: &ApplyRecordsIxData,
-        settlement: Settlement,
-    ) -> Result<(), ApplyError> {
-        let pending = self.state.queue.head()..self.state.queue.tail();
-        if pending.is_empty() {
-            return Err(fault(
-                "the program applied a queue the projection holds empty",
-            ));
-        }
-        let rows = self
-            .store
-            .entries(pending.clone())
-            .await
-            .map_err(from_storage)?;
-        let entries = rows.iter().map(|row| row.write.entry).collect::<Vec<_>>();
-        let base = HistoryRoot::newest(self.state);
-        let loaded = TreeRead::batch(base.tree(), &entries)
-            .load(self.store)
-            .await
-            .map_err(from_storage)?;
-        let batch = loaded
-            .tree
-            .apply_batch(self.state.queue.chain_head, &entries)
-            .map_err(|error| fault(format!("records do not apply ({error})")))?;
-        let inputs = &batch.inputs;
-        let recorded_next_index = u64::from(recorded.new_next_index());
-        if inputs.new_root != recorded.new_root || inputs.new_next_index != recorded_next_index {
-            return Err(fault(format!(
-                "applied root mismatch at position {}, projected {} at {}, program {} at {}",
-                pending.end,
-                Hash(inputs.new_root),
-                inputs.new_next_index,
-                Hash(recorded.new_root),
-                recorded_next_index
-            )));
-        }
-        let writes: Vec<QueuedWrite> = rows.iter().map(|row| row.write).collect();
-        let sealing = Sealing {
-            base: &loaded.stored,
-            pending: &writes,
-        };
-        let records = batch
-            .rows
-            .records
-            .values()
-            .map(|record| {
-                Ok(StoredRecord {
-                    record: *record,
-                    seal: sealing.seal(&record.record)?,
-                })
-            })
-            .collect::<Result<Vec<_>, ApplyError>>()?;
-        self.store.save_records(&records, pending.end).await?;
-        self.store
-            .save_nodes(&batch.rows.nodes, pending.end)
-            .await?;
-        let application = PendingApplication {
-            registry: &mut self.state.registry,
-            queue: &mut self.state.queue,
-        };
-        match settlement {
-            Settlement::Permissionless => application.settle_permissionless(recorded, self.slot),
-            Settlement::Authority => application.settle_authority(recorded, self.slot),
-        }
-        self.store
-            .save_root(&HistoryRoot::newest(self.state))
-            .await?;
-        Ok(())
-    }
-}
-
-fn admitted(admission: Result<(), CustomRingError>) -> Result<(), ApplyError> {
-    admission.map_err(|error| fault(format!("the projected queue refuses the change ({error})")))
 }
 
 pub(crate) struct Sealing<'a> {

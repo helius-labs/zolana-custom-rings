@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::HashMap,
     fmt::Display,
     future::Future,
     ops::Range,
@@ -8,11 +8,11 @@ use std::{
 };
 
 use custom_ring_interface::{
-    check_member, mint_policy_write, queue_chain,
+    check_member, mint_policy_write,
     storage::{chain_start, Revision, StorageRegistry},
     storage_instruction::StorageWriteData,
-    tagged_x25519, CustomRingError, QueueEntry, RecordWriteData, RootEntry, WriteRecordsIxData,
-    APPLY_BATCH, MEMBER_REGISTRY_CAPACITY, QUAD_ARITY, STORAGE_PROGRAM_ID,
+    tagged_x25519, CustomRingError, QueueEntry, RecordWriteData, WriteRecordsIxData, APPLY_BATCH,
+    QUAD_ARITY, STORAGE_PROGRAM_ID,
 };
 use sea_orm::{ConnectionTrait, DatabaseConnection, DatabaseTransaction};
 use solana_address::Address;
@@ -22,17 +22,11 @@ use spr_indexer_api::{Base64String, Context as ApiContext, Hash, SerializablePub
 use tokio::sync::Mutex as AsyncMutex;
 use zolana_ring_indexer::{
     rpc::{
-        GetRingApplyProofInputsRequest, GetRingApplyProofInputsResponse,
-        GetRingMemberOpeningsRequest, GetRingMemberOpeningsResponse, GetRingMemberRecordRequest,
-        GetRingMemberRecordResponse, GetRingMemberRecordsRequest, GetRingMemberRecordsResponse,
-        GetRingMemberRegistryRootRequest, GetRingMemberRegistryRootResponse,
-        GetRingRecordPoolRequest, GetRingRecordPoolResponse, GetRingRecordQueueRequest,
-        GetRingRecordQueueResponse, GetStorageApplyProofInputsRequest,
-        GetStorageApplyProofInputsResponse, GetStorageMemberOpeningsRequest,
-        GetStorageMemberOpeningsResponse, GetStorageMemberRecordsRequest,
-        GetStorageMemberRecordsResponse, GetStorageRecordPoolRequest, GetStorageRecordPoolResponse,
-        RingIndexedMemberRecordView, RingMemberOpening, RingMemberRecordView, RingQueueEntryView,
-        RingRecordPathView, RingRecordWriteView, RingRegistryRootView, RingRootEntryView,
+        GetStorageApplyProofInputsRequest, GetStorageApplyProofInputsResponse,
+        GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse,
+        GetStorageMemberRecordsRequest, GetStorageMemberRecordsResponse,
+        GetStorageRecordPoolRequest, GetStorageRecordPoolResponse, RingIndexedMemberRecordView,
+        RingMemberOpening, RingMemberRecordView, RingRecordPathView, RingRecordWriteView,
         StorageRootView, StorageWriteView, MAX_RING_MEMBER_PAGE_LIMIT,
     },
     tree::{Canopy, MemberRecord, OpeningCheck, RecordOpening, RecordTree, RecordWriteProofInput},
@@ -41,12 +35,11 @@ use zolana_ring_indexer::{
 use crate::{
     block::BlockMetadata,
     error::RingApiError,
-    indexer::{ChainRead, ChainRegistry},
     member_registry::{LoadedRegistry, RecordRead, TreeRead},
     rpc::SolanaRpc,
     storage::{
-        self, HistoryRoot, RegistryState, RegistryStore, RingCursor, StorageRoot, StorageState,
-        StorageStore, StoredEntry, StoredRecord, TreeVersion,
+        self, RegistryStore, RingCursor, StorageRoot, StorageState, StorageStore, StoredRecord,
+        TreeVersion,
     },
 };
 
@@ -54,13 +47,6 @@ use crate::{
 pub(crate) const CONFIRMATION_AGE: Duration = Duration::from_millis(DEFAULT_MS_PER_SLOT);
 
 pub(crate) trait ChainSource {
-    /// Fails unless `tip` is canonical and the accounts are no older.
-    fn confirmation(
-        &self,
-        tip: &BlockMetadata,
-        state: &RegistryState,
-    ) -> impl Future<Output = Result<Confirmation<ChainRegistry>, RingApiError>> + Send;
-
     /// Fails unless `tip` is canonical and the registry account is no older.
     fn storage_confirmation(
         &self,
@@ -77,7 +63,6 @@ pub(crate) struct Confirmation<T> {
 /// Concurrent requests at one tip wait for a single read per account.
 pub(crate) struct CachedChain {
     rpc: Arc<SolanaRpc>,
-    rings: ReadCache<ChainRegistry>,
     storage: ReadCache<StorageRegistry>,
 }
 
@@ -106,7 +91,6 @@ impl CachedChain {
     pub fn new(rpc: Arc<SolanaRpc>) -> Self {
         Self {
             rpc,
-            rings: ReadCache::default(),
             storage: ReadCache::default(),
         }
     }
@@ -148,15 +132,6 @@ impl<T> ReadCache<T> {
 }
 
 impl ChainSource for CachedChain {
-    async fn confirmation(
-        &self,
-        tip: &BlockMetadata,
-        state: &RegistryState,
-    ) -> Result<Confirmation<ChainRegistry>, RingApiError> {
-        let fetch = self.rpc.confirmation(tip, state);
-        self.rings.read(state.program, tip, fetch).await
-    }
-
     async fn storage_confirmation(
         &self,
         tip: &BlockMetadata,
@@ -168,26 +143,6 @@ impl ChainSource for CachedChain {
 }
 
 impl ChainSource for SolanaRpc {
-    async fn confirmation(
-        &self,
-        tip: &BlockMetadata,
-        state: &RegistryState,
-    ) -> Result<Confirmation<ChainRegistry>, RingApiError> {
-        let context = canonical_context(self, tip).await.map_err(out_of_sync)?;
-        let read = ChainRead {
-            state,
-            min_slot: tip.slot,
-        };
-        let chain = read
-            .load(self)
-            .await
-            .map_err(|error| out_of_sync(format!("{error:#}")))?;
-        Ok(Confirmation {
-            context,
-            chain: Arc::new(chain),
-        })
-    }
-
     async fn storage_confirmation(
         &self,
         tip: &BlockMetadata,
@@ -209,242 +164,6 @@ impl ChainSource for SolanaRpc {
             chain: Arc::new(chain),
         })
     }
-}
-
-pub(crate) async fn member_record(
-    db: &DatabaseConnection,
-    chain: &impl ChainSource,
-    request: GetRingMemberRecordRequest,
-) -> Result<GetRingMemberRecordResponse, RingApiError> {
-    let members = std::slice::from_ref(&request.member);
-    check_members(members)?;
-    let read = Snapshot::open(db, &request.ring_program_id)
-        .await?
-        .at_root(&request.expected_root.0)
-        .await?;
-    if read.root.next_index != request.expected_next_index {
-        return Err(RingApiError::RootChanged);
-    }
-    let GetRingMemberOpeningsResponse {
-        context,
-        root,
-        openings,
-    } = read.openings(chain, members).await?;
-    let [opening] = <[RingMemberOpening; 1]>::try_from(openings)
-        .map_err(|_| internal("one member did not open exactly once"))?;
-    Ok(GetRingMemberRecordResponse {
-        context,
-        root,
-        opening,
-    })
-}
-
-pub(crate) async fn member_openings(
-    db: &DatabaseConnection,
-    chain: &impl ChainSource,
-    request: GetRingMemberOpeningsRequest,
-) -> Result<GetRingMemberOpeningsResponse, RingApiError> {
-    check_members(&request.members)?;
-    Snapshot::open(db, &request.ring_program_id)
-        .await?
-        .at_root(&request.expected_root.0)
-        .await?
-        .openings(chain, &request.members)
-        .await
-}
-
-pub(crate) async fn record_pool(
-    db: &DatabaseConnection,
-    chain: &impl ChainSource,
-    request: GetRingRecordPoolRequest,
-) -> Result<GetRingRecordPoolResponse, RingApiError> {
-    check_members(&request.members)?;
-    let members = request.members.len() as u64;
-    if request.openings < members || request.openings > MAX_RING_MEMBER_PAGE_LIMIT {
-        return Err(validation("invalid record pool openings"));
-    }
-    let canopy = Canopy::covering(request.openings as usize).map_err(validation)?;
-    Snapshot::open(db, &request.ring_program_id)
-        .await?
-        .at_root(&request.expected_root.0)
-        .await?
-        .pool(chain, &request.members, canopy)
-        .await
-}
-
-/// Contiguous, authenticated member leaves at the newest root.
-pub(crate) async fn member_records(
-    db: &DatabaseConnection,
-    chain: &impl ChainSource,
-    request: GetRingMemberRecordsRequest,
-) -> Result<GetRingMemberRecordsResponse, RingApiError> {
-    if request.limit == 0 || request.limit > MAX_RING_MEMBER_PAGE_LIMIT {
-        return Err(validation("invalid member registry page limit"));
-    }
-    if request.start_index == 0 || request.start_index > request.expected_next_index {
-        return Err(validation("invalid member registry page start"));
-    }
-    let snapshot = Snapshot::open(db, &request.ring_program_id).await?;
-    let root = HistoryRoot::newest(&snapshot.state);
-    if root.root != request.expected_root.0 || root.next_index != request.expected_next_index {
-        return Err(RingApiError::RootChanged);
-    }
-    let end = request
-        .start_index
-        .saturating_add(request.limit)
-        .min(root.next_index);
-    let records = LeafPage {
-        store: &snapshot.store(),
-        root: &root.root,
-        at: root.tree(),
-        leaves: request.start_index..end,
-    }
-    .read()
-    .await?;
-    let context = snapshot.confirm(chain, Served::Root(&root)).await?.context;
-    Ok(GetRingMemberRecordsResponse {
-        context,
-        root: root_view(&root),
-        records,
-        next_leaf_index: (end < root.next_index).then_some(end),
-    })
-}
-
-pub(crate) async fn registry_root(
-    db: &DatabaseConnection,
-    chain: &impl ChainSource,
-    request: GetRingMemberRegistryRootRequest,
-) -> Result<GetRingMemberRegistryRootResponse, RingApiError> {
-    let snapshot = Snapshot::open(db, &request.ring_program_id).await?;
-    let root = HistoryRoot::newest(&snapshot.state);
-    let append_path = if root.next_index < MEMBER_REGISTRY_CAPACITY {
-        let read = TreeRead {
-            at: root.tree(),
-            records: RecordRead::Members(BTreeSet::new()),
-            inserts: 1,
-            canopy: None,
-        };
-        let loaded = read.load(&snapshot.store()).await.map_err(internal)?;
-        let path = loaded.tree.path(root.next_index).map_err(internal)?;
-        if path.root([0; 32]).map_err(internal)? != root.root {
-            return Err(internal("the append path does not reach the newest root"));
-        }
-        Some(path_view(path.index, &path.siblings))
-    } else {
-        None
-    };
-    let Confirmed { context, state } = snapshot.confirm(chain, Served::Registry).await?;
-    let registry = &state.registry;
-    Ok(GetRingMemberRegistryRootResponse {
-        context,
-        history: registry.history.iter().map(root_entry_view).collect(),
-        history_cursor: registry.history_cursor,
-        next_index: root.next_index,
-        floor: registry.floor(),
-        prior_floor: registry.prior_floor(),
-        floor_slot: registry.floor_slot(),
-        append_path,
-    })
-}
-
-pub(crate) async fn record_queue(
-    db: &DatabaseConnection,
-    chain: &impl ChainSource,
-    request: GetRingRecordQueueRequest,
-) -> Result<GetRingRecordQueueResponse, RingApiError> {
-    let snapshot = Snapshot::open(db, &request.ring_program_id).await?;
-    let entries = snapshot
-        .chained_entries()
-        .await?
-        .iter()
-        .map(|entry| RingQueueEntryView {
-            position: entry.position,
-            member: Hash(entry.write.entry.member),
-            mask: entry.write.entry.mask,
-            value: entry.write.entry.value,
-            escrow_key: Hash(entry.write.entry.escrow_key),
-            mint_policy: entry.write.entry.mint_policy,
-            slot: entry.slot,
-        })
-        .collect();
-    let Confirmed { context, state } = snapshot.confirm(chain, Served::Queue).await?;
-    Ok(GetRingRecordQueueResponse {
-        context,
-        head: state.queue.head(),
-        tail: state.queue.tail(),
-        chain_head: Hash(state.queue.chain_head),
-        entries,
-    })
-}
-
-pub(crate) async fn apply_proof_inputs(
-    db: &DatabaseConnection,
-    chain: &impl ChainSource,
-    request: GetRingApplyProofInputsRequest,
-) -> Result<GetRingApplyProofInputsResponse, RingApiError> {
-    let authority = request
-        .authority_writes
-        .iter()
-        .map(|write| {
-            let lists = WriteRecordsIxData {
-                mask: write.mask.to_le_bytes(),
-                value: write.value.to_le_bytes(),
-            };
-            RecordWriteData {
-                member: write.member.0,
-                lists,
-                mint_policy: custom_ring_interface::mint_policy_write(write.mint_policy),
-            }
-            .entry()
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(validation)?;
-    let snapshot = Snapshot::open(db, &request.ring_program_id).await?;
-    let state = &snapshot.state;
-    let count = authority.len() as u64;
-    let refusal = match state.queue.admit_authority_writes(count) {
-        Err(error) => Some(validation(error)),
-        Ok(()) if state.queue.pending() + count == 0 => {
-            Some(validation("the record queue is empty"))
-        }
-        Ok(()) => None,
-    };
-    if let Some(refusal) = refusal {
-        // A refusal of the projected queue stands only while the chain holds the same queue.
-        snapshot.confirm(chain, Served::Application).await?;
-        return Err(refusal);
-    }
-    let store = snapshot.store();
-    let pending = snapshot.chained_entries().await?;
-    let entries = pending
-        .iter()
-        .map(|row| row.write.entry)
-        .chain(authority)
-        .collect::<Vec<_>>();
-    let root = HistoryRoot::newest(state);
-    let loaded = TreeRead::batch(root.tree(), &entries)
-        .load(&store)
-        .await
-        .map_err(internal)?;
-    let inputs = loaded
-        .tree
-        .apply_batch(state.queue.chain_head, &entries)
-        .map_err(internal)?
-        .inputs;
-    if inputs.old_root != root.root {
-        return Err(internal("the loaded tree does not reach the newest root"));
-    }
-    let context = snapshot.confirm(chain, Served::Application).await?.context;
-    Ok(GetRingApplyProofInputsResponse {
-        context,
-        old_root: Hash(inputs.old_root),
-        new_root: Hash(inputs.new_root),
-        old_next_index: inputs.old_next_index,
-        new_next_index: inputs.new_next_index,
-        chain_start: Hash(inputs.chain_start),
-        chain_end: Hash(inputs.chain_end),
-        writes: inputs.writes.iter().map(write_view).collect(),
-    })
 }
 
 pub(crate) async fn storage_member_openings(
@@ -616,16 +335,6 @@ struct Released<S> {
     state: S,
 }
 
-struct RootRead {
-    snapshot: Snapshot<RegistryState>,
-    root: HistoryRoot,
-}
-
-struct Confirmed {
-    context: ApiContext,
-    state: RegistryState,
-}
-
 struct StorageRootRead {
     snapshot: Snapshot<StorageState>,
     root: StorageRoot,
@@ -635,14 +344,6 @@ struct PoolView {
     records: Vec<RingIndexedMemberRecordView>,
     canopy: Vec<Hash>,
     subjects: Vec<u32>,
-}
-
-enum Served<'r> {
-    Root(&'r HistoryRoot),
-    Registry,
-    Queue,
-    /// Apply proof inputs, they hold while the queue and the root it applies to stay.
-    Application,
 }
 
 impl Snapshot<()> {
@@ -672,143 +373,6 @@ impl<S> Snapshot<S> {
         Ok(Released {
             tip,
             state: self.state,
-        })
-    }
-}
-
-impl Snapshot<RegistryState> {
-    /// Fails before any RPC while the projection catches up, replays the ring or holds it quarantined.
-    async fn open(
-        db: &DatabaseConnection,
-        ring_program_id: &SerializablePubkey,
-    ) -> Result<Self, RingApiError> {
-        let program = ring_program_id.0.to_bytes();
-        let Snapshot { tx, tip, .. } = Snapshot::begin(db).await?;
-        let pending = storage::pending_ring(&tx, &program)
-            .await
-            .map_err(internal)?;
-        if pending.is_some() {
-            return Err(out_of_sync("ring history is being replayed"));
-        }
-        let state = RegistryStore::new(&tx, program)
-            .state()
-            .await
-            .map_err(internal)?
-            .ok_or_else(|| out_of_sync("initialization has not been indexed"))?;
-        if let Some(fault) = &state.fault {
-            return Err(out_of_sync(format!("ring quarantined, {fault}")));
-        }
-        Ok(Self { tx, state, tip })
-    }
-
-    fn store(&self) -> RegistryStore<'_, DatabaseTransaction> {
-        RegistryStore::new(&self.tx, self.state.program)
-    }
-
-    /// The newest history entry holding `root`, its applied position decides the floor rule.
-    async fn at_root(self, root: &[u8; 32]) -> Result<RootRead, RingApiError> {
-        let (index, entry) = (0u8..)
-            .zip(self.state.registry.history.iter())
-            .filter(|(_, entry)| entry.root == *root && *root != [0; 32])
-            .max_by_key(|(_, entry)| entry.applied())
-            .ok_or(RingApiError::RootChanged)?;
-        let root = self
-            .store()
-            .root(entry.applied())
-            .await
-            .map_err(internal)?
-            .filter(|stored| stored.root == entry.root && stored.history_index == index)
-            .ok_or_else(|| internal("a history root is missing from the projection"))?;
-        Ok(RootRead {
-            snapshot: self,
-            root,
-        })
-    }
-
-    async fn chained_entries(&self) -> Result<Vec<StoredEntry>, RingApiError> {
-        let queue = &self.state.queue;
-        let rows = self
-            .store()
-            .entries(queue.head()..queue.tail())
-            .await
-            .map_err(internal)?;
-        let chained = rows.iter().try_fold(queue.chain_head, |chain, row| {
-            queue_chain(&chain, &row.write.entry)
-        });
-        if !chained.is_ok_and(|end| end == queue.chain_tail()) {
-            return Err(out_of_sync("queue rows do not reach the queue chain"));
-        }
-        Ok(rows)
-    }
-
-    async fn confirm(
-        self,
-        chain: &impl ChainSource,
-        served: Served<'_>,
-    ) -> Result<Confirmed, RingApiError> {
-        let Released { tip, state } = self.release().await?;
-        let confirmation = chain.confirmation(&tip, &state).await?;
-        if !served.agrees(&confirmation.chain, &state) {
-            return Err(served.moved());
-        }
-        Ok(Confirmed {
-            context: confirmation.context,
-            state,
-        })
-    }
-}
-
-impl RootRead {
-    async fn load(
-        &self,
-        members: &[Hash],
-        canopy: Option<Canopy>,
-    ) -> Result<LoadedRegistry, RingApiError> {
-        let read = TreeRead {
-            at: self.root.tree(),
-            records: RecordRead::Members(members.iter().map(|member| member.0).collect()),
-            inserts: 0,
-            canopy,
-        };
-        read.load(&self.snapshot.store()).await.map_err(internal)
-    }
-
-    async fn openings(
-        self,
-        chain: &impl ChainSource,
-        members: &[Hash],
-    ) -> Result<GetRingMemberOpeningsResponse, RingApiError> {
-        let loaded = self.load(members, None).await?;
-        let root = &self.root;
-        let openings = loaded.openings(&root.root, members)?;
-        let served = Served::Root(root);
-        let context = self.snapshot.confirm(chain, served).await?.context;
-        Ok(GetRingMemberOpeningsResponse {
-            context,
-            root: root_view(root),
-            openings,
-        })
-    }
-}
-
-impl RootRead {
-    async fn pool(
-        self,
-        chain: &impl ChainSource,
-        members: &[Hash],
-        canopy: Canopy,
-    ) -> Result<GetRingRecordPoolResponse, RingApiError> {
-        let loaded = self.load(members, Some(canopy)).await?;
-        let root = &self.root;
-        let pool = loaded.pool(&root.root, members, canopy)?;
-        let served = Served::Root(root);
-        let context = self.snapshot.confirm(chain, served).await?.context;
-        Ok(GetRingRecordPoolResponse {
-            context,
-            root: root_view(root),
-            records: pool.records,
-            canopy: pool.canopy,
-            subjects: pool.subjects,
         })
     }
 }
@@ -946,27 +510,6 @@ impl StorageServed<'_> {
         match self {
             Self::Root(root) => chain.root(Revision::from(root.revision), slot) == Ok(root.root),
             Self::Current(root) => StorageRoot::current(chain) == **root,
-        }
-    }
-}
-
-impl Served<'_> {
-    fn agrees(&self, chain: &ChainRegistry, state: &RegistryState) -> bool {
-        match self {
-            Self::Root(root) => chain.holds(root),
-            Self::Registry => chain.records_match(state),
-            Self::Queue => chain.queue == state.queue,
-            Self::Application => chain.queue_matches(state),
-        }
-    }
-
-    fn moved(&self) -> RingApiError {
-        match self {
-            Self::Root(_) => RingApiError::RootChanged,
-            Self::Application => RingApiError::QueueChanged,
-            Self::Registry | Self::Queue => {
-                RingApiError::OutOfSync("the on-chain registry has moved".into())
-            }
         }
     }
 }
@@ -1124,23 +667,6 @@ fn storage_entry(write: &StorageWriteView) -> Result<QueueEntry, CustomRingError
         return Err(CustomRingError::InvalidInstructionData);
     }
     Ok(entry)
-}
-
-fn root_view(root: &HistoryRoot) -> RingRegistryRootView {
-    RingRegistryRootView {
-        root: Hash(root.root),
-        root_index: root.history_index,
-        applied: root.applied,
-        next_index: root.next_index,
-    }
-}
-
-fn root_entry_view(entry: &RootEntry) -> Option<RingRootEntryView> {
-    (entry.root != [0; 32]).then(|| RingRootEntryView {
-        root: Hash(entry.root),
-        applied: entry.applied(),
-        slot: entry.slot(),
-    })
 }
 
 async fn canonical_context(rpc: &SolanaRpc, tip: &BlockMetadata) -> anyhow::Result<ApiContext> {
