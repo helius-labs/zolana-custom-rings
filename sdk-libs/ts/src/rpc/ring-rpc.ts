@@ -66,7 +66,7 @@ import {
 import { memberOfTag } from "../protocol/membership/policy.js";
 import { verifyRecordUpdate } from "../protocol/ring-rpc/record-update.js";
 import {
-  decodePendingEnrolments,
+  decodePendingEnrolmentsPage,
   decodeRecordUpdateStatus,
   decodeRelayQuote,
   decodeRelayStatus,
@@ -88,7 +88,7 @@ import {
   type AuthorityTransfer,
   type ConfigAuthorityAuth,
   type GetPendingEnrolmentsRequest,
-  type PendingEnrolment,
+  type PendingEnrolmentsPage,
   type PrepareAuthorityTransferRequest,
   type PrepareRelayRequest,
   type RecordUpdateStatus,
@@ -329,7 +329,7 @@ export class RingAuthorityTransferRequest {
 
 /** Rust `ListEnrolments` or `RefuseEnrolment`, the action the config authority signs. */
 export type RingEnrolmentAction =
-  | Readonly<{ kind: "list" }>
+  | Readonly<{ kind: "list"; cursor?: Hash }>
   | Readonly<{ kind: "refuse"; updateId: Hash }>;
 
 /** Mirrors Rust `EnrolmentAttestation::message`. */
@@ -343,9 +343,11 @@ export function enrolmentAttestation(
   }>,
 ): Uint8Array {
   const action =
-    input.action.kind === "list"
-      ? "list"
-      : `refuse ${indexerScalars.checkedHash(input.action.updateId, "updateId")}`;
+    input.action.kind === "refuse"
+      ? `refuse ${indexerScalars.checkedHash(input.action.updateId, "updateId")}`
+      : input.action.cursor === undefined
+        ? "list"
+        : `list after ${indexerScalars.checkedHash(input.action.cursor, "cursor")}`;
   return encoder.encode(
     [
       ENROLMENT_DOMAIN,
@@ -358,16 +360,20 @@ export function enrolmentAttestation(
   );
 }
 
-/** Rust `GetPendingEnrolmentsRequest::read` signed by the config authority. */
+/** Rust `GetPendingEnrolmentsRequest::read` signed by the config authority, the page after `cursor`. */
 export async function signPendingEnrolmentsRequest(
   target: RingReadTarget,
   authority: MessagePartialSigner,
+  cursor?: Hash,
   timestamp?: bigint,
 ): Promise<GetPendingEnrolmentsRequest> {
   const checked = checkedReadTarget(target);
+  const action =
+    cursor === undefined ? { kind: "list" as const } : { kind: "list" as const, cursor };
   return Object.freeze({
     ring: checked.ringProgramId,
-    auth: await configAuthorityAuth(checked, authority, { kind: "list" }, timestamp),
+    ...(cursor === undefined ? {} : { cursor }),
+    auth: await configAuthorityAuth(checked, authority, action, timestamp),
   });
 }
 
@@ -1007,12 +1013,12 @@ export class RingRpc {
     );
   }
 
-  /** The config authority's read of the enrolments that await it, oldest first. */
+  /** One page of the enrolments that await the config authority, oldest first. */
   async getPendingEnrolments(
     request: GetPendingEnrolmentsRequest,
     context?: RequestContext,
-  ): Promise<readonly PendingEnrolment[]> {
-    return decodePendingEnrolments(
+  ): Promise<PendingEnrolmentsPage> {
+    return decodePendingEnrolmentsPage(
       await this.#call(
         RingRpcMethod.getPendingEnrolments,
         encodeGetPendingEnrolmentsRequest(request),
@@ -1306,6 +1312,14 @@ export class RingRpc {
       );
     } catch (error) {
       if (!(error instanceof TransportFailure)) throw error;
+      const status = error.kind === "http" ? error.facts["status"] : undefined;
+      // Ring RPC answers -32250 to -32253 with 429 and -32254 with 401.
+      if (status === 429)
+        throw new RingError("RING_RPC_RATE_LIMITED", { details: { method, ...error.facts } });
+      if (status === 401)
+        throw new RingError("RING_RPC_CONFIG", {
+          details: { method, field: "apiKey", ...error.facts },
+        });
       const code =
         error.kind === "envelope" || error.kind === "missingResult" || error.kind === "rpc"
           ? "RING_RPC"

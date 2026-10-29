@@ -148,9 +148,10 @@ export interface ConfigAuthorityAuth {
   readonly signature: Signature;
 }
 
-/** Rust `GetPendingEnrolmentsRequest`. */
+/** Rust `GetPendingEnrolmentsRequest`, `cursor` is the last enrolment of the previous page. */
 export interface GetPendingEnrolmentsRequest {
   readonly ring: Address;
+  readonly cursor?: Hash;
   readonly auth: ConfigAuthorityAuth;
 }
 
@@ -159,6 +160,12 @@ export interface RefuseEnrolmentRequest {
   readonly ring: Address;
   readonly updateId: Hash;
   readonly auth: ConfigAuthorityAuth;
+}
+
+/** Rust `GetPendingEnrolmentsResponse`, oldest first, `nextCursor` absent on the last page. */
+export interface PendingEnrolmentsPage {
+  readonly enrolments: readonly PendingEnrolment[];
+  readonly nextCursor?: Hash;
 }
 
 /** Rust `PendingEnrolment`, `member` is the record an approval writes. */

@@ -377,6 +377,24 @@ describe("ring rpc gateway", () => {
     expect(error).toMatchObject({ code: "RING_RPC_TRANSPORT" });
     expect(JSON.stringify(error)).not.toContain("secret-key");
   });
+
+  it("names a rate limit and an unknown api key apart from a transport failure", async () => {
+    const refusal = async (status: number) =>
+      new RingRpc("https://gateway.example", {
+        fetch: () => Promise.resolve(new Response("{}", { status })),
+      })
+        .health()
+        .then(
+          () => undefined,
+          (cause: unknown) => cause,
+        );
+
+    expect(await refusal(429)).toMatchObject({ code: "RING_RPC_RATE_LIMITED" });
+    expect(await refusal(401)).toMatchObject({
+      code: "RING_RPC_CONFIG",
+      details: { field: "apiKey" },
+    });
+  });
 });
 
 describe("ring deposits", () => {

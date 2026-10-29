@@ -11,6 +11,7 @@ import type {
   GetPendingEnrolmentsRequest,
   MergeSettings,
   PendingEnrolment,
+  PendingEnrolmentsPage,
   PrepareAuthorityTransferRequest,
   PrepareRelayRequest,
   RecordUpdateEntry,
@@ -319,7 +320,11 @@ export function decodeMergeSettings(value: unknown): MergeSettings {
 
 /** Rust `GetPendingEnrolmentsRequest`. */
 export function encodeGetPendingEnrolmentsRequest(value: GetPendingEnrolmentsRequest): WireObject {
-  return { ring: checkedAddress(value.ring, "ring"), auth: encodeConfigAuthorityAuth(value.auth) };
+  return {
+    ring: checkedAddress(value.ring, "ring"),
+    ...(value.cursor === undefined ? {} : { cursor: checkedHash(value.cursor, "cursor") }),
+    auth: encodeConfigAuthorityAuth(value.auth),
+  };
 }
 
 /** Rust `RefuseEnrolmentRequest`. */
@@ -332,11 +337,12 @@ export function encodeRefuseEnrolmentRequest(value: RefuseEnrolmentRequest): Wir
 }
 
 /** Rust `GetPendingEnrolmentsResponse`, oldest first. */
-export function decodePendingEnrolments(value: unknown): readonly PendingEnrolment[] {
-  const enrolments = object(value, "$", ["enrolments"])["enrolments"];
+export function decodePendingEnrolmentsPage(value: unknown): PendingEnrolmentsPage {
+  const page = object(value, "$", ["enrolments", "nextCursor"]);
+  const enrolments = page["enrolments"];
   if (!Array.isArray(enrolments))
     return schemaFailure("INDEXER_SCHEMA_INVALID_TYPE", "enrolments", "an array", enrolments);
-  return enrolments.map((entry: unknown, index) => {
+  const rows = enrolments.map((entry: unknown, index): PendingEnrolment => {
     const path = `enrolments[${String(index)}]`;
     const row = object(entry, path, [
       "updateId",
@@ -353,6 +359,10 @@ export function decodePendingEnrolments(value: unknown): readonly PendingEnrolme
       validUntilSlot: u64(row["validUntilSlot"], `${path}.validUntilSlot`),
     };
   });
+  const nextCursor = page["nextCursor"];
+  return nextCursor === undefined
+    ? { enrolments: rows }
+    : { enrolments: rows, nextCursor: checkedHash(nextCursor, "nextCursor") };
 }
 
 function encodeConfigAuthorityAuth(value: ConfigAuthorityAuth): WireObject {

@@ -301,6 +301,7 @@ export type {
   ConfigAuthorityAuth,
   GetPendingEnrolmentsRequest,
   PendingEnrolment,
+  PendingEnrolmentsPage,
   PrepareAuthorityTransferRequest,
   RefuseEnrolmentRequest,
   PrepareRelayRequest,

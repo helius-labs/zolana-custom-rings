@@ -99,7 +99,7 @@ describe("enrolment requests", () => {
         new URL("../../../../../test-vectors/rpc/enrolment_attestation.json", import.meta.url),
         "utf8",
       ),
-    ) as { list: Signed; refuse: Signed & { updateId: indexerTypes.Hash } };
+    ) as { list: Signed; listAfter: Signed; refuse: Signed & { updateId: indexerTypes.Hash } };
     const authority = await createKeyPairSignerFromPrivateKeyBytes(new Uint8Array(32).fill(8));
     const target = {
       cluster: new Uint8Array(32).fill(1) as Bytes32,
@@ -118,15 +118,25 @@ describe("enrolment requests", () => {
         }),
       );
     expect(message({ kind: "list" })).toBe(vector.list.message);
+    expect(message({ kind: "list", cursor: updateId })).toBe(vector.listAfter.message);
     expect(message({ kind: "refuse", updateId })).toBe(vector.refuse.message);
     const nonce = vi.spyOn(globalThis.crypto, "getRandomValues").mockImplementation((array) => {
       (array as Uint8Array).fill(4);
       return array;
     });
     try {
-      const list = await signPendingEnrolmentsRequest(target, authority, 1_700_000_000n);
+      const list = await signPendingEnrolmentsRequest(target, authority, undefined, 1_700_000_000n);
+      const listAfter = await signPendingEnrolmentsRequest(
+        target,
+        authority,
+        updateId,
+        1_700_000_000n,
+      );
       const refuse = await signRefuseEnrolmentRequest(target, authority, updateId, 1_700_000_000n);
       expect(JSON.stringify(encodeGetPendingEnrolmentsRequest(list))).toBe(vector.list.wire);
+      expect(JSON.stringify(encodeGetPendingEnrolmentsRequest(listAfter))).toBe(
+        vector.listAfter.wire,
+      );
       expect(JSON.stringify(encodeRefuseEnrolmentRequest(refuse))).toBe(vector.refuse.wire);
     } finally {
       nonce.mockRestore();
