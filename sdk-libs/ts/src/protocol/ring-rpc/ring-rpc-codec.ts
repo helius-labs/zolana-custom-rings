@@ -15,6 +15,7 @@ import type {
   SetMergeSettingsRequest,
   SubmitRecordUpdateRequest,
   SubmitRelayRequest,
+  TokenAccountSetup,
 } from "./ring-rpc-types.js";
 
 const { object, toWireInteger, wireInteger } = indexerCodec;
@@ -24,7 +25,7 @@ const { checkedAddress, checkedBase64, checkedHash, checkedSignature, schemaFail
 type WireObject = Record<string, unknown>;
 type Hash = indexerTypes.Hash;
 
-const RELAY_OPERATIONS = ["anonymous", "confidential", "delegate", "deposit"] as const;
+const RELAY_OPERATIONS = ["anonymous", "confidential", "delegate", "deposit", "merge"] as const;
 
 function toU64(value: bigint, path: string): number {
   return toWireInteger(value, path, 0n, U64_MAX);
@@ -82,11 +83,29 @@ function encodeRelayIntent(intent: RelayIntent): WireObject {
         operation: intent.operation,
         proofInputs,
         ownerSignature: checkedSignature(intent.ownerSignature, "intent.ownerSignature"),
+        ...encodeTokenAccountSetup(intent.tokenAccountSetup),
       };
     case "delegate":
+      return {
+        operation: intent.operation,
+        proofInputs,
+        ...encodeTokenAccountSetup(intent.tokenAccountSetup),
+      };
     case "deposit":
+    case "merge":
       return { operation: intent.operation, proofInputs };
   }
+}
+
+/** Rust skips an empty list, a retry hashes to the same relay. */
+function encodeTokenAccountSetup(setup: readonly TokenAccountSetup[] | undefined): WireObject {
+  if (setup === undefined || setup.length === 0) return {};
+  return {
+    tokenAccountSetup: setup.map((entry, index) => ({
+      owner: checkedAddress(entry.owner, `intent.tokenAccountSetup[${index}].owner`),
+      mint: checkedAddress(entry.mint, `intent.tokenAccountSetup[${index}].mint`),
+    })),
+  };
 }
 
 /** Rust `RelayStep`. */

@@ -21,7 +21,11 @@ import type { AssetRegistry, ProofInputUtxo, WalletUtxo } from "@heliuslabs/zola
 import { type ConfidentialTransfer, type PreparedTransfer } from "@heliuslabs/zolana/transaction";
 import { DELIVERED_AUDIT_CAPACITIES } from "../../protocol/codec/ring-disclosure-layout.js";
 import { encodeRelayProofInputs } from "../../protocol/ring-rpc/relay-proof-inputs.js";
-import type { RelayIntent, RelayQuote } from "../../protocol/ring-rpc/ring-rpc-types.js";
+import type {
+  RelayIntent,
+  RelayQuote,
+  TokenAccountSetup,
+} from "../../protocol/ring-rpc/ring-rpc-types.js";
 import { PreparedRelay } from "../../rpc/relay.js";
 
 import {
@@ -399,6 +403,9 @@ export class AnonymousTransfer {
               operation: "anonymous",
               proofInputs: base64.decode(payload) as RelayIntent["proofInputs"],
               ownerSignature: base58.decode(ownerSignature) as Signature,
+              ...(input.tokenAccountSetup === undefined
+                ? {}
+                : { tokenAccountSetup: input.tokenAccountSetup }),
             },
           }),
           viewingHistory: staged.anonymous.viewingHistory,
@@ -739,6 +746,8 @@ export interface RingRelayInput {
   readonly nullifierKey: NullifierKey;
   /** The wallet notes the transfer spends, each names its leaf. */
   readonly notes: readonly WalletUtxo[];
+  /** Ring RPC creates each account before the withdrawal pays it. */
+  readonly tokenAccountSetup?: readonly TokenAccountSetup[];
 }
 
 /** Store `viewingHistory` in place of the old one before `relay.send`. */

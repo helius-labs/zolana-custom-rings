@@ -19,7 +19,7 @@ export const RingRpcMethod = Object.freeze({
 export type RingRpcMethod = (typeof RingRpcMethod)[keyof typeof RingRpcMethod];
 
 /** Rust `RelayOperation`. */
-export type RelayOperation = "anonymous" | "confidential" | "delegate" | "deposit";
+export type RelayOperation = "anonymous" | "confidential" | "delegate" | "deposit" | "merge";
 
 /** Rust `GetRelayQuoteRequest`. */
 export interface RelayQuoteRequest {
@@ -33,6 +33,12 @@ export interface RelayQuote {
   readonly validUntilSlot: bigint;
 }
 
+/** Rust `TokenAccountSetup`, the fee payer creates the associated token account a withdrawal of `mint` pays. */
+export interface TokenAccountSetup {
+  readonly owner: Address;
+  readonly mint: Address;
+}
+
 /** Rust `RelayIntent`, `proofInputs` without Merkle paths or record openings. */
 export type RelayIntent =
   | Readonly<{
@@ -40,8 +46,15 @@ export type RelayIntent =
       proofInputs: Base64String;
       /** Raw Ed25519 over `SppProofInputs::message_hash`. */
       ownerSignature: Signature;
+      tokenAccountSetup?: readonly TokenAccountSetup[];
     }>
-  | Readonly<{ operation: "delegate" | "deposit"; proofInputs: Base64String }>;
+  | Readonly<{
+      operation: "delegate";
+      proofInputs: Base64String;
+      tokenAccountSetup?: readonly TokenAccountSetup[];
+    }>
+  /** `proofInputs` is a Rust `RelayDepositInputs` or `RelayMergeInputs`. */
+  | Readonly<{ operation: "deposit" | "merge"; proofInputs: Base64String }>;
 
 /** Rust `PrepareRelayRequest`. */
 export interface PrepareRelayRequest {

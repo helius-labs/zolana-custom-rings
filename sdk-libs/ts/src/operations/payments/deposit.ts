@@ -1,4 +1,4 @@
-import type { Instruction } from "@solana/kit";
+import { getBase64Decoder, type Instruction } from "@solana/kit";
 
 import { type RingProver, type RingRecordReader } from "../../rpc/ports.js";
 import { encodeRingDepositPlaintext } from "../../protocol/codec/ring-deposit-plaintext.js";
@@ -58,6 +58,11 @@ import { pinnedPolicy, policyTableProofInputs } from "../../protocol/membership/
 import { type RingKeys } from "../../state/ring-keys.js";
 import type { RingAddress } from "../../crypto/keys/ring-address.js";
 import type { FirstContact, ViewingHistory } from "../../state/viewing-history.js";
+import { encodeRelayDepositInputs } from "../../protocol/ring-rpc/relay-deposit-inputs.js";
+import type { RelayIntent, RelayQuote } from "../../protocol/ring-rpc/ring-rpc-types.js";
+import { PreparedRelay } from "../../rpc/relay.js";
+
+const base64 = getBase64Decoder();
 
 /** Rust `compute_unit_limit(AuditedDeposit)`. */
 export const RING_DEPOSIT_COMPUTE_UNIT_LIMIT = 1_400_000;
@@ -104,6 +109,35 @@ export interface RingDepositParams {
   readonly cosigner?: SignerAccount;
 }
 
+/** Rust `RingDeposit::prepare_relay`. */
+export interface RingDepositRelayParams extends DepositSealingParams {
+  readonly quote: RelayQuote;
+}
+
+/** Store `viewingHistory` in place of the old one before `relay.send`. */
+export interface PreparedRingDepositRelay {
+  readonly relay: PreparedRelay;
+  readonly viewingHistory?: ViewingHistory;
+}
+
+type DepositSealingParams = Omit<
+  RingDepositParams,
+  "client" | "feePayer" | "depositor" | "cosigner"
+> &
+  Readonly<{
+    client: DepositClient;
+    /** Funds the deposit and signs its message. */
+    depositor: SignerAccount;
+  }>;
+
+type DepositSealing = Readonly<{
+  config: RingProgramConfig;
+  recipient: TaggedRecipient;
+  ownerKey: Bytes32 | undefined;
+  asset: Address;
+  settlement: RingAssetDeposit["asset"];
+}>;
+
 /** A proven deposit with the registry root its proof binds. */
 export interface ProvenRingDeposit {
   readonly instruction: Instruction;
@@ -130,6 +164,7 @@ export class PreparedRingDeposit {
   readonly viewingHistory?: ViewingHistory;
   readonly #ringProgramId: Address;
   readonly #tree: Address;
+  readonly #recipient: ShieldedAddress;
   readonly #depositor: SignerAccount;
   readonly #cosigner: SignerAccount | undefined;
   readonly #deposit: RingAssetDeposit;
@@ -151,6 +186,7 @@ export class PreparedRingDeposit {
     viewingHistory: ViewingHistory | undefined;
     ringProgramId: Address;
     tree: Address;
+    recipient: ShieldedAddress;
     depositor: SignerAccount;
     cosigner: SignerAccount | undefined;
     deposit: RingAssetDeposit;
@@ -170,6 +206,7 @@ export class PreparedRingDeposit {
     if (state.viewingHistory !== undefined) this.viewingHistory = state.viewingHistory;
     this.#ringProgramId = state.ringProgramId;
     this.#tree = state.tree;
+    this.#recipient = state.recipient;
     this.#depositor = state.depositor;
     this.#cosigner = state.cosigner;
     this.#deposit = state.deposit;
@@ -192,58 +229,75 @@ export class PreparedRingDeposit {
     context?: RequestContext,
   ): Promise<PreparedRingDeposit> {
     try {
-      await initializePoseidon();
-      const config = await fetchRingProgramConfig(params.client, params.ringProgramId, context);
-      const anonymous = config.mode === "anonymous";
       const depositor = params.depositor ?? params.feePayer;
-      const recipient = await depositRecipient(params, anonymous, context);
-      const ownerKey = anonymous ? recipient.address.signingPublicKey.ed25519() : undefined;
-      if (ownerKey !== undefined)
-        checkSignersHideOwner(
-          ownerKey,
-          [params.feePayer, depositor, params.cosigner].map((party) =>
-            party === undefined ? undefined : signerAddress(party),
-          ),
-        );
+      const sealingParams = { ...params, depositor };
+      const sealing = await depositSealing(sealingParams, context);
+      checkDepositSigners(sealing, [params.feePayer, depositor, params.cosigner]);
       const demanded = await resolveRingCoSigner(
         {
           client: params.client,
           ringProgramId: params.ringProgramId,
-          config,
+          config: sealing.config,
           demand: DEPOSIT_DEMAND,
           approvalRequired: false,
           supplied: params.cosigner === undefined ? undefined : signerAddress(params.cosigner),
         },
         context,
       );
-      const cosigner = demanded === undefined ? undefined : params.cosigner;
-      const asset = params.asset ?? SOL_MINT;
-      const settlement = await resolveDepositSettlement(
-        {
-          asset,
-          depositor: signerAddress(depositor),
-          ...(params.splTokenAccount === undefined
-            ? {}
-            : { splTokenAccount: params.splTokenAccount }),
-          ...(params.splTokenProgram === undefined
-            ? {}
-            : { splTokenProgram: params.splTokenProgram }),
-        },
-        () => new RingError("RING_BUILD_DEPOSIT", { details: { reason: "missing token account" } }),
-      );
       return PreparedRingDeposit.#seal({
-        params,
-        config,
-        depositor,
-        cosigner,
-        recipient,
-        ownerKey,
-        asset,
-        settlement,
+        params: sealingParams,
+        sealing,
+        cosigner: demanded === undefined ? undefined : params.cosigner,
         tree: params.tree ?? params.client.tree,
       });
     } catch (cause) {
       throw wrapRingError("RING_BUILD_DEPOSIT", cause);
+    }
+  }
+
+  /** Reads no record, Ring RPC answers with the message the depositor signs. */
+  static async prepareRelay(
+    params: RingDepositRelayParams,
+    context?: RequestContext,
+  ): Promise<PreparedRingDepositRelay> {
+    let prepared: PreparedRingDeposit | undefined;
+    let payload: Uint8Array | undefined;
+    try {
+      const sealing = await depositSealing(params, context);
+      checkDepositSigners(sealing, [params.quote.feePayer, params.depositor]);
+      prepared = await PreparedRingDeposit.#seal({
+        params,
+        sealing,
+        cosigner: undefined,
+        tree: params.tree ?? params.client.tree,
+      });
+      payload = encodeRelayDepositInputs({
+        ringProgramId: prepared.#ringProgramId,
+        tree: prepared.#tree,
+        depositor: signerAddress(prepared.#depositor),
+        recipient: prepared.#recipient,
+        deposit: prepared.#deposit,
+        blindingSecret: prepared.#blindingSecret,
+        auditEphemeralKey: prepared.#ephemeralSecret,
+      });
+      return Object.freeze({
+        relay: new PreparedRelay({
+          ring: params.ringProgramId,
+          quote: params.quote,
+          intent: {
+            operation: "deposit",
+            proofInputs: base64.decode(payload) as RelayIntent["proofInputs"],
+          },
+        }),
+        ...(prepared.viewingHistory === undefined
+          ? {}
+          : { viewingHistory: prepared.viewingHistory }),
+      });
+    } catch (cause) {
+      throw wrapRingError("RING_BUILD_DEPOSIT", cause);
+    } finally {
+      payload?.fill(0);
+      prepared?.destroy();
     }
   }
 
@@ -369,18 +423,14 @@ export class PreparedRingDeposit {
   /** The note, its recipient ciphertext and the auditor capsule, sealed under fresh secrets. */
   static async #seal(
     input: Readonly<{
-      params: RingDepositParams;
-      config: RingProgramConfig;
-      depositor: SignerAccount;
+      params: DepositSealingParams;
+      sealing: DepositSealing;
       cosigner: SignerAccount | undefined;
-      recipient: TaggedRecipient;
-      ownerKey: Bytes32 | undefined;
-      asset: Address;
-      settlement: RingAssetDeposit["asset"];
       tree: Address;
     }>,
   ): Promise<PreparedRingDeposit> {
-    const { params, recipient } = input;
+    const { params, sealing } = input;
+    const { recipient } = sealing;
     const blindingSecret = randomBlinding();
     const blinding = depositBlinding(blindingSecret);
     const ownerHash = recipient.address.ownerHash();
@@ -398,7 +448,7 @@ export class PreparedRingDeposit {
           {
             ownerHash,
             blinding,
-            ...(input.ownerKey === undefined ? {} : { ownerKey: input.ownerKey }),
+            ...(sealing.ownerKey === undefined ? {} : { ownerKey: sealing.ownerKey }),
             recipientCiphertext: envelope.encryptRingDeposit(
               recipient.address.viewingPublicKey,
               plaintext,
@@ -406,14 +456,14 @@ export class PreparedRingDeposit {
             ),
           },
         ],
-        input.config.auditorPublicKey,
+        sealing.config.auditorPublicKey,
       );
       ephemeralSecret = sealed.ephemeralSecret;
       const [capsule] = sealed.capsules;
       const [payload] = sealed.payloads;
       if (capsule === undefined || payload === undefined) throw new RingError("RING_BUILD_DEPOSIT");
       const deposit: RingAssetDeposit = Object.freeze({
-        asset: input.settlement,
+        asset: sealing.settlement,
         viewTag: recipient.viewTag,
         ownerUtxoHash: ownerUtxoHash(ownerHash, blinding),
         amount: params.amount,
@@ -427,13 +477,13 @@ export class PreparedRingDeposit {
       const spp = await ringDepositSpp({
         ringProgramId: params.ringProgramId,
         tree: input.tree,
-        depositor: input.depositor,
+        depositor: params.depositor,
         deposits: [deposit],
       });
       const prepared = new PreparedRingDeposit({
         utxo: new Utxo({
           owner: recipient.address.signingPublicKey,
-          asset: input.asset,
+          asset: sealing.asset,
           amount: params.amount,
           blinding,
           data: new Data(),
@@ -442,18 +492,19 @@ export class PreparedRingDeposit {
         viewingHistory: recipient.history,
         ringProgramId: params.ringProgramId,
         tree: input.tree,
-        depositor: input.depositor,
+        recipient: recipient.address,
+        depositor: params.depositor,
         cosigner: input.cosigner,
         deposit,
         capsule,
         contextHash: ringDepositContextHash(params.ringProgramId, input.tree, spp.data),
         ownerPkHash: recipient.address.signingPublicKey.ownerProofInputHash(),
         nullifierPk: recipient.address.nullifierPublicKey,
-        ownerKey: input.ownerKey,
-        auditor: input.config.auditorPublicKey,
-        keyEscrow: input.config.keyEscrow,
-        hasPolicy: input.config.hasPolicy,
-        asset: Object.freeze({ asset: assetField(input.asset), amount: params.amount }),
+        ownerKey: sealing.ownerKey,
+        auditor: sealing.config.auditorPublicKey,
+        keyEscrow: sealing.config.keyEscrow,
+        hasPolicy: sealing.config.hasPolicy,
+        asset: Object.freeze({ asset: assetField(sealing.asset), amount: params.amount }),
         blindingSecret,
         ephemeralSecret,
       });
@@ -497,9 +548,48 @@ export async function buildRingDepositTransaction(
   }
 }
 
+async function depositSealing(
+  params: DepositSealingParams,
+  context: RequestContext | undefined,
+): Promise<DepositSealing> {
+  await initializePoseidon();
+  const config = await fetchRingProgramConfig(params.client, params.ringProgramId, context);
+  const anonymous = config.mode === "anonymous";
+  const recipient = await depositRecipient(params, anonymous, context);
+  const asset = params.asset ?? SOL_MINT;
+  const settlement = await resolveDepositSettlement(
+    {
+      asset,
+      depositor: signerAddress(params.depositor),
+      ...(params.splTokenAccount === undefined ? {} : { splTokenAccount: params.splTokenAccount }),
+      ...(params.splTokenProgram === undefined ? {} : { splTokenProgram: params.splTokenProgram }),
+    },
+    () => new RingError("RING_BUILD_DEPOSIT", { details: { reason: "missing token account" } }),
+  );
+  return Object.freeze({
+    config,
+    recipient,
+    ownerKey: anonymous ? recipient.address.signingPublicKey.ed25519() : undefined,
+    asset,
+    settlement,
+  });
+}
+
+/** No transaction signer may name an anonymous ring's owner. */
+function checkDepositSigners(
+  sealing: DepositSealing,
+  signers: readonly (Address | SignerAccount | undefined)[],
+): void {
+  if (sealing.ownerKey === undefined) return;
+  checkSignersHideOwner(
+    sealing.ownerKey,
+    signers.map((party) => (party === undefined ? undefined : signerAddress(party))),
+  );
+}
+
 /** The recipient's address and the tag its scan reads, refused when the ring mode disagrees. */
 async function depositRecipient(
-  params: RingDepositParams,
+  params: DepositSealingParams,
   anonymous: boolean,
   context: RequestContext | undefined,
 ): Promise<TaggedRecipient> {
