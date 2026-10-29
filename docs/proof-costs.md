@@ -65,15 +65,15 @@ BN254 constraints of selected policy keys, from
 
 | Policy key | Own | Curator |
 | --- | ---: | ---: |
-| Member, 2 outputs, no withdrawals | 38,085 | 55,659 |
-| Member, 4 outputs, no withdrawals | 55,801 | 86,191 |
-| Member, 8 outputs, no withdrawals | 90,244 | 145,881 |
-| Member, 16 outputs, no withdrawals | 156,732 | 258,002 |
-| Member, 2 outputs, 32 withdrawals | 172,413 | 294,865 |
-| Member, 16 outputs, 32 withdrawals | 290,445 | 491,460 |
-| Delegate, 2x2 | 30,315 | 47,890 |
-| Delegate, 4x4 | 50,562 | 80,953 |
+| Member, 2 outputs, no withdrawals | 38,889 | 56,778 |
+| Member, 4 outputs, no withdrawals | 56,869 | 87,826 |
+| Member, 8 outputs, no withdrawals | 92,416 | 149,124 |
+| Member, 16 outputs, no withdrawals | 160,536 | 263,885 |
+| Member, 2 outputs, 32 withdrawals | 175,233 | 300,205 |
+| Member, 16 outputs, 32 withdrawals | 296,265 | 501,564 |
+| Delegate, 2x2 | 30,640 | 48,530 |
+| Delegate, 4x4 | 51,437 | 82,395 |
 
-Apply 16 records takes 240,828, deposit 8 takes 149,392 and the withdrawal
-exemption takes 12,102. Adding configured mints increases registry storage,
+Apply 16 records takes 246,444, deposit 8 takes 223,168 and the withdrawal
+exemption takes 12,300. Adding configured mints increases registry storage,
 not these circuit sizes.
