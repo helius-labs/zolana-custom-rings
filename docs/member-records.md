@@ -8,10 +8,12 @@ records. Owners and the config authority sign record updates, and the Ring RPC
 writer applies them in a storage update with its apply proof. The same
 transaction sends `SyncRoots`, so the ring policy mirrors the new root at once.
 A policy proof opens records under a root the mirror holds and reveals no
-record it opened. The records themselves are public. The queue entry, the
-chain and the apply statement are in
+record it opened. The records themselves are public. The write hash and the
+chain are in
 [Member registry](../program-libs/interface/src/accounts/member_registry.rs),
-and the storage layouts are in [Storage program](spec.md#storage-program).
+the apply statement is in
+[statement.rs](../program-libs/interface/src/proof/statement.rs), and the
+storage layouts are in [Storage program](spec.md#storage-program).
 
 ## Members and lists
 
@@ -68,8 +70,8 @@ Each asset record stores `threshold`, `cap`, `cosign_above`,
 `withdrawal_threshold` and the eight `AssetLimits` values of the Ring RPC
 co-signer, all unsigned 64-bit integers. The first three pack into
 one 192-bit field; the withdrawal threshold occupies another field, and the
-limits pack three to a field into three more. [Mint settings](spec.md#mint-settings)
-gives the leaf and the queue entry hash.
+limits pack three to a field into three more. [Member records](spec.md#member-records)
+gives the leaf hash and [Record writes](spec.md#record-writes) the write hash.
 Bit 192 of `mint_policy_write` distinguishes an explicit replacement from a
 list/key write that preserves every setting. An explicit all-zero value
 clears settings while preserving lists and the escrow key. Member writes and
@@ -104,8 +106,8 @@ The registry keeps the last `ROOT_HISTORY` roots, each with its revision. A
 graced `Update` keeps the outgoing root readable for the registry's
 `grace_slots`, and `UpdateImmediate` retires every earlier root at once. A
 policy transfer names the revision of each root its proof binds and reads the
-root from the ring policy's mirror. A merge on a confidential ring and an
-audited deposit under key escrow do the same.
+root from the ring policy's mirror. A merge on a key-escrow ring and an
+audited deposit on a key-escrow or policy ring do the same.
 
 A ring that reads a list from a curator's registry reads the curator root from
 its curator mirror. A curator update reaches a subscriber at the next

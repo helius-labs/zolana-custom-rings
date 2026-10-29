@@ -5,14 +5,14 @@ conservation and tree membership, and ownership outside the delegate rail. The
 ring proves its rules over the same transaction and supplies the required
 authorization. List facts stay private.
 
-The config authority pins admission rules as data in the ring's member
-registry. A transferring wallet must prove every rule satisfied against list
-state it does not control. A **curator** is another ring whose lists many rings
-read by reference.
+The config authority pins admission rules as data in the ring policy. A
+transferring wallet must prove every rule satisfied against list state it does
+not control. A **curator** is a storage registry whose lists many rings read by
+reference.
 
 A list membership is one bit of a member record, a leaf of an indexed Merkle
 tree that belongs to the ring. A policy is a proof obligation over the records
-of the transfer's subjects. The proof opens them under a root the registry
+of the transfer's subjects. The proof opens them under a root the ring policy
 mirrors and binds them to the transfer through `private_tx_hash`.
 
 The running example is a blocklist ring. Its pinned table holds one rule,
@@ -27,7 +27,7 @@ therefore serves every rule subject. One list holds owners and assets side by
 side, and an owner key and a mint with equal bytes stay distinct members.
 
 A record holds a member, the next member above it, a list bitmap, an escrow
-key and four per-mint amounts. One opening answers every list for its member. The links order the
+key and the mint settings. One opening answers every list for its member. The links order the
 records by member, and leaf 0 holds a sentinel whose link spans the field.
 Every member lies strictly inside that link, so an absent member always has a
 present low record whose link brackets it. A proof of absence opens that low
@@ -132,7 +132,8 @@ proof binds. Its one public input is the hash of a statement the program
 rebuilds from its accounts and the transfer's data. The program reads the
 policy hash from the ring policy and resolves each root from a revision the
 transfer carries. It derives the key escrow bit and SPP's public slots itself,
-and on the confidential rail the sender from the owner signer. The approval bit
+and on the confidential rail the sender from the owner signer or the frame's
+in-proof owner key. The approval bit
 comes from the transfer, and the policy proof shows it is exact. A wallet
 cannot satisfy the audit statement while it skips the policy statement, because
 the program verifies both against the one transaction.
@@ -153,7 +154,7 @@ meet every rule while SPP settles the real hash. The recompute forces the
 screened owners, assets and amounts to be the preimage of the hash SPP settles.
 
 A policy transfer has one sender. On the confidential rail it is the one owner
-signer, and the program derives its identity from the signer. On the anonymous
+signer or the in-proof owner, and the program derives its identity from that key. On the anonymous
 rail the statement carries `sender_commitment`. The anonymous audit proof binds
 the same value and shows that every spent note belongs to the hidden sender.
 The policy proof opens the owner that `sender_commitment` hides. On the

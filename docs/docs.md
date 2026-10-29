@@ -142,7 +142,7 @@ limits = [
 
 Change to the sender's own ring identity is not outflow. A deposit leg in the same transfer offsets it, and a deposit larger than the outflow of a limited mint fails. The limit holds per transfer and per signing key, and keeps no window.
 
-`zolana-ring policy check` compares `ring.toml` with the pinned table and the mint records on the target cluster. `new --policy-from` compiles a table for both clusters. `policy set --yes` repins it, which makes every proof over the old table fail, and then writes the changed mint records in separate transactions. It keeps each mint's withdrawal threshold.
+`zolana-ring policy check` compares `ring.toml` with the pinned table and the mint records on the target cluster. `new --policy-from` compiles a table for both clusters. `policy set --yes` repins it, which makes every proof over the old table fail, and then sends the changed mint records to Ring RPC in one record update. It keeps each mint's withdrawal threshold.
 
 ## Operator CLI
 
@@ -174,10 +174,10 @@ zolana-ring cosigner set --signer <KEY> --scope transfers,withdrawals --threshol
 ## Client
 
 1. Read the ring config and check that SPP activated the ring.
-2. Deposit: the SDK seals each new note to the auditor and proves the deposit.
+2. Deposit: the SDK seals each new note to the auditor and proves the deposit, or the Ring RPC relay proves it.
 3. On a key-escrow ring, register the member's key and wait for the record update to apply.
-4. Transfer: the SDK reads the policy and the records, proves the SPP, audit and policy proofs together, and builds one instruction. When only the withdrawal class demands a co-signer and every withdrawn mint stays within its withdrawal threshold, it adds a withdrawal exemption proof, and no co-signer signs.
-5. Submit: the SDK re-proves when a root or the policy moved before the transfer landed.
+4. Transfer: the SDK reads the policy and the records, proves the SPP, audit and policy proofs together, and builds one instruction. When only the withdrawal class demands a co-signer and every withdrawn mint stays within its withdrawal threshold, it adds a withdrawal exemption proof, and no co-signer signs. A relayed transfer sends its proof inputs to Ring RPC, which reads the records, proves and sends.
+5. Submit: the SDK re-proves when a root or the policy moved before the transfer landed. A relayed transfer that misses its blockhash fails.
 6. Sync: the wallet finds received notes by its tags and opens them.
 
 ### TypeScript
@@ -382,6 +382,7 @@ let merge = RingMergeOperation::new(
         nullifier_key: env.recipient.keypair.nullifier_key.clone(),
         input_tree: env.tree,
         output_tree: env.tree,
+        co_signer: None,
     },
 );
 ```
@@ -414,7 +415,7 @@ let proven = env.run(proven.prove(env.client.ring_client()))?;
 
 ## Services
 
-The ring indexer projects member registries from Solana and forwards every other call to Photon. Point clients and the prover at it, so ring and Photon calls go to one URL. `indexer` in `ring.toml` names the ring indexer, and the ring indexer names Photon with `--photon-url`. The example runs them on two ports.
+The ring indexer projects storage registries from Solana and forwards every other call to Photon. Point clients and the prover at it, so ring and Photon calls go to one URL. `indexer` in `ring.toml` names the ring indexer, and the ring indexer names Photon with `--photon-url`. The example runs them on two ports.
 
 ```bash
 ring-indexer --db-url 'sqlite://ring-indexer.db?mode=rwc' --rpc-url http://127.0.0.1:8899 \
@@ -442,7 +443,7 @@ ring-rpc serve --port 8785 --indexer-url <ring indexer> --rpc-url <solana> \
 
 1. **Confidential rings name their parties:** the sender signs and each ring output publishes the recipient's viewing key, which the zolana user registry maps to its Solana key. Use an anonymous ring to hide them.
 2. **Anonymity needs a relayer and request tags:** the payer and fee payer must not link to the owner, and a first payment under the bootstrap tag publishes the recipient's viewing key. A default-ring spend, an exit or a withdrawal to a linked key ends the anonymity of that transfer.
-3. **Outflow limits bound one transfer:** no limit counts across transfers, keys or time. A per-day cap per customer is not expressible.
+3. **Outflow limits bound one transfer:** the proven `cap` and `cosign_above` count no other transfer. Only the Ring RPC co-signer counts windowed caps from the mint's `AssetLimits`, on transactions that demand its signature.
 4. **Deposits screen assets only and merges screen nothing:** rules screen the sender and the outputs of each transfer, a deposit only its assets. A key-escrow ring refuses a deposit to or a merge of an owner without an escrowed key.
 5. **Key escrow and the delegate are permanent:** a registered key cannot change, and nothing removes a delegate.
 6. **Records are public:** every list write names its member. On an anonymous ring a member's own list write publishes its Solana key.

@@ -162,7 +162,7 @@ In every mode:
 | Retired discriminators | `1` to `9`, `11`, `12` | Never reused. `0` marks an empty account. |
 | `ROOT_HISTORY` | `32` | Roots a storage registry and each ring policy mirror keep. |
 | `QUAD_ARITY`, `QUAD_HEIGHT` | `4`, `10` | Shape of the record tree, `2^20` leaves. |
-| `MEMBER_REGISTRY_EMPTY_ROOT` | `053b2136ce0e6cffb89cb76c7a81b6d7e1bd424159ff4579f284a7e5f198956d` | Root of a tree that holds only the sentinel, 32 bytes big endian. |
+| `MEMBER_REGISTRY_EMPTY_ROOT` | `00c0b07d78024d985b995bd9db525f329d0bfb285f75cc222f900d8f6faf5130` | Root of a tree that holds only the sentinel, 32 bytes big endian. |
 | `APPLY_BATCH` | `16` | Writes the widest apply proof takes. |
 | `GRACE_SLOTS` | `750` slots (about 3 minutes) | The `grace_slots` `InitializeStorage::records` gives the records. |
 | `MAX_RULES`, `MAX_SOURCES` | `16`, `8` | Rule table widths. |
@@ -174,7 +174,7 @@ In every mode:
 | `ACCOUNT_UNITS`, `POLICY_UNITS`, `PROOF_UNITS` | `50_000`, `150_000`, `1_400_000` | Compute unit limits clients set per instruction tag. The program does not check them. |
 | `CustomRingProof` | 192 bytes | Groth16 `a [32]`, `b [64]`, `c [32]` in compressed form, then the BSB22 `commitment [32]` and `commitment_pok [32]`. |
 | `WithdrawalExemptionProof` | 200 bytes | A `CustomRingProof`, then the own revision `u64` LE. |
-| Error codes | `8100` to `8306` | `CustomRingError`, above the SPP range. |
+| Error codes | `8100` to `8470` | `CustomRingError`, above the SPP range. |
 
 Each domain tag is its ASCII bytes read as one big-endian integer, as in zolana. A 33-byte tagged X25519 key is `0x04 || u` with `u` canonical little endian. Integers in ring accounts are little endian, and integers inside `EncodedRuleTable`, a mint-setting write and every proof field are big endian. [Hashing](spec/crypto/hashing.md) lists every domain tag and encoding.
 
@@ -323,7 +323,8 @@ Each write of an `Update` or `UpdateImmediate` is a `QueueEntry`. The apply proo
 fn entry_hash(e: &QueueEntry) -> Field {
     let p = e.mint_policy.unwrap_or_default();
     Poseidon(field("CRQW"), e.member, right_align(e.mask), right_align(e.value), e.escrow_key,
-        mint_policy_write(e), right_align(p.withdrawal_threshold), limits(p)[0], limits(p)[1])
+        mint_policy_write(e), right_align(p.withdrawal_threshold), limits(p)[0], limits(p)[1],
+        limits(p)[2])
 }
 // 0 when the entry keeps the settings, else 2^192 + pack(policy). See Mint settings.
 fn mint_policy_write(e: &QueueEntry) -> Field {
@@ -342,11 +343,11 @@ SPP owns the `RingConfig` at `ring_auth`, 69 bytes: authority, program id, the a
 A record lists one member's lists and holds its escrow key and its mint settings. Records are public: every write names its member, its bits and its mint settings in instruction data, and the ring indexer serves every record with its path.
 
 ```rust
-/// Leaf of the 4-ary record tree. Leaf 0 is the sentinel `(0, q - 1, 0, 0, 0, 0, 0, 0)`.
+/// Leaf of the 4-ary record tree. Leaf 0 is the sentinel `(0, q - 1, 0, 0, 0, 0, 0, 0, 0)`.
 fn record_hash(r: &MemberRecord) -> Field {
     Poseidon(r.member, r.next, right_align(r.lists), r.escrow_key,
         pack(r.mint_policy), right_align(r.mint_policy.withdrawal_threshold),
-        limits(r.mint_policy)[0], limits(r.mint_policy)[1])
+        limits(r.mint_policy)[0], limits(r.mint_policy)[1], limits(r.mint_policy)[2])
 }
 /// Set once by an escrow storage write. A second escrow write keeps the first key.
 fn escrow_key(nullifier_pk: Field, ciphertext: &[u8; 32]) -> Field {
@@ -847,14 +848,14 @@ The program checks, in order:
 2. The frame parses. `CURATOR` and `APPROVAL_REQUIRED` need `POLICY`. `DEFAULT_OWNER_TAG` and `FULL_OPENINGS` need the anonymous rail, `OWNER_IN_PROOF` the confidential rail (`FlagNotAllowed`). No disclosure field is zero (`ZeroDisclosureField`).
 3. The settlement accounts cover the interface transfers (`InvalidSettlementAccounts`). At most 32 legs, none of zero amount (`TooManyPublicLegs`, `ZeroPublicLegAmount`). With a withdrawal exemption proof, the ring policy loads (`InvalidRingPolicy`), the own mirror serves its `own_revision`, the transfer withdraws at most 3 mints (`InvalidInstructionData`), and the proof verifies (`ProofVerificationFailed`).
 4. Policy ring: a policy proof is present (`MissingPolicyProof`), the `CURATOR` flag matches the policy (`FlagNotAllowed`), a policy exists (`PolicyNotSet`), the own mirror serves `own_revision` and the curator mirror serves `curator_revision` ([RingPolicy](#ringpolicy)). Audit-only ring: no policy proof (`UnexpectedPolicyProof`).
-5. No curator account follows, the curator root comes from the ring policy.
+5. No curator account follows, the curator root comes from the ring policy. When check 12 demands a co-signer, the record is the program's (`InvalidCoSignerRecord`) and covers every demanded class (`CoSignerOutOfScope`), and its signer signs (`MissingCoSigner`, `UnauthorizedCoSigner`).
 6. `ring_auth` sits at SPP index 4 and at no other SPP index (`MissingRingAuth`, `RingAuthOutOfSlot`). The payer at SPP index 0 signs (`MissingFundingSigner`).
 7. Confidential: every owner signer signs (`MissingOwnerSigner`). On a policy ring there is at least one and all are one address (`OwnerSignerCount`). A demanded co-signer is no owner (`CoSignerIsOwner`). Under `OWNER_IN_PROOF` the owner signer run is empty (`OwnerSignerOnInProofRail`). SPP then authorizes every input by the owner whose signature its proof verifies, and the policy sender is that owner. A demanded co-signer is not that owner (`CoSignerIsOwner`). Anonymous: no SPP account but the payer signs (`InvalidAnonymousSigner`).
 8. Every deposit leg's funder signs (`MissingFundingSigner`). On the anonymous rail check 7 makes every funder the payer.
 9. The public legs fold to at most 3 assets, each with a nonzero net within u64 (`TooManyPublicAssets`, `ZeroNetPublicAmount`, `PublicAmountOverflow`).
 10. Policy ring: each SOL withdrawal's owner is its recipient. Each SPL withdrawal's token account is a Token or Token-2022 account of the leg's mint owned by the declared owner (`InvalidSettlementAccounts`, `AnonymousExitTokenAccountInvalid`).
 11. Anonymous: every withdrawal names one destination key (`AnonymousExitDestinationsDiffer`). A SOL destination is a system account with no data. An SPL destination is an off-curve token account with no delegate and no close authority (`AnonymousExitAccountHasData`, `AnonymousExitTokenAccountOnCurve`, `AnonymousExitTokenAccountShared`). The party identities are `solana_owner_identity` of the payer, the signing co-signer and the destination key, each `0` when absent. For an SPL withdrawal the destination key is the token account's owner.
-12. The co-signer demand of [Properties](#properties) 9, with the withdrawal class waived when check 3 verified an exemption proof. An approval needs some record (`ApprovalWithoutCoSigner`). The record is the program's (`InvalidCoSignerRecord`) and covers every demanded class (`CoSignerOutOfScope`), and its signer signs (`MissingCoSigner`, `UnauthorizedCoSigner`).
+12. The co-signer demand of [Properties](#properties) 9, with the withdrawal class waived when check 3 verified an exemption proof. An approval needs some record (`ApprovalWithoutCoSigner`).
 13. The SPP `proof_b` decompresses (`InvalidSppProofPoint`).
 14. The key escrow layout bit equals `mode == ConfidentialEscrow` (`FlagNotAllowed`).
 15. It builds the audit statement and the policy statement, with the frame's recipients on the confidential and delegate rails and zeros on the anonymous rail, and resolves both keys (`UnsupportedCircuit`). Under `OWNER_IN_PROOF` each recipient is `solana_owner_identity` of the slot's owner tag, or `0` on a slot the dummies bitmap marks. It verifies the audit proof, then the policy proof, each point decompressed (`InvalidRingProofPoint`) and the pairing checked (`ProofVerificationFailed`).
@@ -910,11 +911,11 @@ The merge proof checks:
 
 The program checks, in order:
 
-1. The data parses, and the SPP merge body is a supported form (`InvalidInstructionData`).
+1. The data parses (`InvalidInstructionData`).
 2. On a `ConfidentialEscrow` ring the ring policy loads (`InvalidRingPolicy`), its own mirror serves `own_revision`, and the statement binds `key_escrow = 1` and that root. On another ring `own_revision = 0` (`UnexpectedMemberRegistryRoot`), and the statement binds `key_escrow = 0` and root `0`.
 3. When a record covers `TRANSFERS`, a record covering it loads and its signer signs.
 4. `ring_auth` sits at SPP index 2 and at no other index. The payer at SPP index 3 signs. The SPP `proof_b` decompresses (`InvalidSppProofPoint`).
-5. The disclosure has the field count of the merge width (`MergeDisclosureWidth`), and its ephemeral key has tag `0x04` (`InvalidMergeDisclosure`). On an anonymous ring `output_ring_data_hash = 0` (`AnonymousRingDataNotZero`).
+5. The SPP merge body parses to a supported width (`InvalidInstructionData`). The disclosure has the field count of the merge width (`MergeDisclosureWidth`), and its ephemeral key has tag `0x04` (`InvalidMergeDisclosure`). On an anonymous ring `output_ring_data_hash = 0` (`AnonymousRingDataNotZero`).
 
 It verifies the proof under `Merge { 8 }` or `Merge { 24 }`. A merge of more than 24 inputs takes SPP width 52 and fails with `UnsupportedCircuit`.
 
@@ -1128,7 +1129,7 @@ Holds the auditor key and serves audited history to readers.
 - In its database the service stores both grants and checks them without the ring policy. `setReaderGrant` takes a wallet grant under the wallet's Ed25519 signature and a ring-wide grant under the config authority's, over the ring, the wallet of a wallet grant, the reader and the action, with the timestamp and nonce rules of a read. A row is sealed with AES-256-GCM under a key HKDF-SHA256 derives from the service key source, and it keeps in plaintext only its insert order and a keyed hash of the reader key. The newest signed row for a grant holds. The record writer refuses an update that writes a `reader` list.
 - `ringDeposits`, `ringStatus` and `health` need no signature.
 - Every call spends a token from a bucket of its client, one bucket for each class of public reads, signed reads and signed writes. The client is the TCP peer, an IPv6 peer by its /64 and also by its /48 at 16 times the rate and burst, the address a configured trusted proxy names in `x-forwarded-for`, or a configured API key. A signed write also needs a token of the key it names as signer, spent only when the call succeeds. A refusal answers HTTP 429 with the wait.
-- With a fee payer key, a store and a ring prover it relays transfers. The wallet seals the transfer and sends its proof inputs with the nullifier secret, the transaction viewing secret and the audit ephemeral secret. The service reads the record openings and SPP Merkle paths, proves every statement and pays the fees. On the anonymous and confidential rails it verifies the owner's Ed25519 signature over `SppProofInputs::message_hash` before it proves. On the anonymous rail that signature is the prepared owner authorization of the SPP proof, and the service sends at once. On the confidential and delegate rails it returns the v1 message and sends once each owner or the delegate has signed it. It also relays [deposits and user merges](#relayed-deposits-and-merges).
+- With a fee payer key, a store and a ring prover it relays transfers. The wallet seals the transfer and sends its proof inputs with the nullifier secret, the transaction viewing secret and the audit ephemeral secret. The service reads the record openings and SPP Merkle paths, proves every statement and pays the fees. On the anonymous and confidential rails it verifies the owner's Ed25519 signature over `SppProofInputs::message_hash` before it proves. On the anonymous and confidential rails that signature is the prepared owner authorization of the SPP proof, and the service sends at once. On the delegate rail it returns the v1 message and sends once the delegate has signed it. It also relays [deposits and user merges](#relayed-deposits-and-merges).
 - A relay is stored by its `relayId` with its message and signatures, never its proof inputs. A repeated request returns the stored relay. The co-signer signs before the send and settles when the relay confirms or fails. A relay that has not landed when its blockhash expires fails.
 - The relay co-signs through a `LimitedCoSigner`, only under the [co-signer limits](#co-signer-limits).
 - `setMergeSettings` stores a wallet's target note count and minimum average amount for one mint. The wallet signs them under `zolana/ring-rpc-merge-settings/v1` with the cluster, service key, ring, timestamp and nonce, and the service verifies the signature under the named owner. A later signed request replaces them, and a zero target revokes them.
@@ -1142,7 +1143,7 @@ A reader receives each output's owner key, nullifier key, asset, amount and blin
 
 #### Co-signer limits
 
-Each asset's record in the ring's own storage registry holds `AssetLimits`, eight u64 values. Ring RPC reads them under the newest own root the ring policy mirrors, one a transfer can prove against, and checks every opening against that root. A ring without a `RingPolicy` account, or before its first `SyncRoots`, has no limits. A zero cap is no cap.
+Each asset's record in the ring's own storage registry holds `AssetLimits`, eight u64 values. Ring RPC reads them under the newest own root the ring policy mirrors, one a transfer can prove against, and checks every opening against that root. A ring without a `RingPolicy` account has no limits. Before its first `SyncRoots` the co-signer refuses a transaction that moves an asset (`-32163`). A zero cap is no cap.
 
 | Limit | Bounds, per asset |
 |---|---|
@@ -1327,7 +1328,7 @@ A registered nullifier key cannot change. A delegate and the `ConfidentialEscrow
 
 ### Rings of another layout need a migration
 
-The program, the SDKs, the ring indexer and the proving keys accept only the 112-byte config, the eight-field record leaf, the nine-field queue entry and policy table version 12. A ring whose accounts or record tree use another layout fails these checks, and its records do not open under these circuits. Its operator migrates the accounts and the record tree before the program upgrade. No ring instruction performs that migration, and a reindex does not rebuild its on-chain roots.
+The program, the SDKs, the ring indexer and the proving keys accept only the 112-byte config, the nine-field record leaf, the ten-field queue entry and policy table version 12. A ring whose accounts or record tree use another layout fails these checks, and its records do not open under these circuits. Its operator migrates the accounts and the record tree before the program upgrade. No ring instruction performs that migration, and a reindex does not rebuild its on-chain roots.
 
 ### The auditor reads everything
 
