@@ -254,7 +254,7 @@ function deliveredSlot(slot: PublishedSlot, tree: number): DeliveredSlotProofInp
   const { output, wire } = slot;
   const zero = zeroField();
   const [recipientKey, body] =
-    wire.kind === "delivered"
+    wire.kind === "delivered" || wire.kind === "owned"
       ? [wire.u, wire.body]
       : [zero, new Uint8Array(RING_DELIVERED_BODY_LEN)];
   const ring = !output.isDummy() && wire.kind !== "exit";

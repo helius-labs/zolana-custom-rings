@@ -149,5 +149,7 @@ exports[`ring error codes > pins the public codes and their order 1`] = `
   "RING_RELAY_OWNER_SIGNATURE",
   "RING_RELAY_PAYER_MISMATCH",
   "RING_RELAY_PROOF_INPUTS",
+  "RING_IN_PROOF_OWNER_MISMATCH",
+  "RING_IN_PROOF_OWNER_PROVER_REQUIRED",
 ]
 `;
