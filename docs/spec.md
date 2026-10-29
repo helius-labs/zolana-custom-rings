@@ -1442,7 +1442,7 @@ Each asset's record in the ring's own storage registry holds `AssetLimits`, eigh
 | `deposit_cap` over `deposit_window_slots` | What the ring deposits |
 | `withdrawal_cap` over `withdrawal_window_slots` | What the ring withdraws |
 
-A window counts every reservation less than its length in slots before the current slot. A zero window counts the checked transaction alone. A co-signature reserves the transaction's flows under its own signature, in the database transaction that read the window. `settle` with a confirmation keeps the reservation, and a failure, an expiry included, deletes it unless it was confirmed. A transaction never settled counts until its window passes. The same message signed again returns the same signature and reserves nothing more. The co-signer key derives from the auditor key or the root secret with HKDF-SHA256 under `zolana/ring-rpc-co-signer/v1`.
+A transfer counts every live output but a ring output to the sender, an exit to the sender included. A window counts every reservation less than its length in slots before the current slot. A zero window counts the checked transaction alone. A co-signature reserves the transaction's flows under its own signature, in the database transaction that read the window. `settle` with a confirmation keeps the reservation, and a failure, an expiry included, deletes it unless it was confirmed. A transaction never settled counts until its window passes. The same message signed again returns the same signature and reserves nothing more. The co-signer key derives from the auditor key or the root secret with HKDF-SHA256 under `zolana/ring-rpc-co-signer/v1`.
 
 ### Record updates
 
