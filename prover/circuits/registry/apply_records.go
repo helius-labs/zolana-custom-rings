@@ -10,7 +10,6 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
-	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
 // Properties:
@@ -78,7 +77,7 @@ func NewApplyRecordsCircuit(writes int) (*ApplyRecordsCircuit, error) {
 }
 
 func (c *ApplyRecordsCircuit) Define(api frontend.API) error {
-	if err := errors.Join(shared.ValidateWidth("registry", c.NumWrites, ApplyWidths), transaction.ValidateLength("write", len(c.Writes), c.NumWrites)); err != nil {
+	if err := errors.Join(shared.ValidateWidth("registry", c.NumWrites, ApplyWidths), shared.ValidateLength("registry", "write", len(c.Writes), c.NumWrites)); err != nil {
 		return err
 	}
 	// 1. Count selects a prefix of one write up to the capacity, the writes past it act on nothing.

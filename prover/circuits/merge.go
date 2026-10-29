@@ -73,7 +73,7 @@ func NewMergeCircuit(width int) (*MergeCircuit, error) {
 }
 
 func (c *MergeCircuit) Define(api frontend.API) error {
-	if err := errors.Join(shared.ValidateWidth("merge", c.NumInputs, MergeWidths), transaction.ValidateLength("input", len(c.Inputs), c.NumInputs)); err != nil {
+	if err := errors.Join(shared.ValidateWidth("merge", c.NumInputs, MergeWidths), shared.ValidateLength("merge", "input", len(c.Inputs), c.NumInputs)); err != nil {
 		return err
 	}
 	// 1. One owner from the disclosed key and the secret's nullifier key, one asset whose 31 and 1 byte chunks open to one mint.

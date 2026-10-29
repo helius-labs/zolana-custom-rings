@@ -11,3 +11,10 @@ func ValidateWidth(circuit string, width int, shipped []int) error {
 	}
 	return nil
 }
+
+func ValidateLength(circuit, name string, got, want int) error {
+	if got != want {
+		return fmt.Errorf("%s: %s count %d, want %d", circuit, name, got, want)
+	}
+	return nil
+}

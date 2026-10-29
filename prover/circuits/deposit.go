@@ -14,7 +14,6 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
-	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
 // Properties:
@@ -69,16 +68,16 @@ func NewDepositCircuit(capacity int) (*DepositCircuit, error) {
 func (c *DepositCircuit) Define(api frontend.API) error {
 	if err := errors.Join(
 		shared.ValidateWidth("deposit", c.Capacity, DepositCapacities),
-		transaction.ValidateLength("owner", len(c.OwnerPkHashes), c.Capacity),
-		transaction.ValidateLength("owner key", len(c.OwnerKeys), c.Capacity),
-		transaction.ValidateLength("nullifier key", len(c.NullifierPks), c.Capacity),
-		transaction.ValidateLength("blinding secret", len(c.BlindingSecrets), c.Capacity),
-		transaction.ValidateLength("ciphertext hash", len(c.CtHashes), c.Capacity),
-		transaction.ValidateLength("member", len(c.Members), c.Capacity),
-		transaction.ValidateLength("asset", len(c.Assets), c.Capacity),
-		transaction.ValidateLength("amount", len(c.Amounts), c.Capacity),
-		transaction.ValidateLength("asset record", len(c.AssetRecords), c.Capacity),
-		transaction.ValidateLength("curator asset record", len(c.CuratorAssetRecords), c.Capacity),
+		shared.ValidateLength("deposit", "owner", len(c.OwnerPkHashes), c.Capacity),
+		shared.ValidateLength("deposit", "owner key", len(c.OwnerKeys), c.Capacity),
+		shared.ValidateLength("deposit", "nullifier key", len(c.NullifierPks), c.Capacity),
+		shared.ValidateLength("deposit", "blinding secret", len(c.BlindingSecrets), c.Capacity),
+		shared.ValidateLength("deposit", "ciphertext hash", len(c.CtHashes), c.Capacity),
+		shared.ValidateLength("deposit", "member", len(c.Members), c.Capacity),
+		shared.ValidateLength("deposit", "asset", len(c.Assets), c.Capacity),
+		shared.ValidateLength("deposit", "amount", len(c.Amounts), c.Capacity),
+		shared.ValidateLength("deposit", "asset record", len(c.AssetRecords), c.Capacity),
+		shared.ValidateLength("deposit", "curator asset record", len(c.CuratorAssetRecords), c.Capacity),
 	); err != nil {
 		return err
 	}
