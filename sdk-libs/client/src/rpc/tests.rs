@@ -1168,7 +1168,9 @@ fn the_reader_grants_and_wallet_reads_match_the_shared_vector() {
 /// The TypeScript codec writes and reads the same bytes.
 #[test]
 fn the_storage_writes_of_a_wallet_update_match_the_shared_vector() {
-    use custom_ring_interface::storage_instruction::StorageWriteData;
+    use custom_ring_interface::{
+        storage_instruction::StorageWriteData, CustomRingError, RecordWriteData,
+    };
     use zolana_ring_policy::{AssetLimits, ListId, Member, MintPolicy};
     #[derive(Deserialize)]
     struct Vector {
@@ -1225,6 +1227,15 @@ fn the_storage_writes_of_a_wallet_update_match_the_shared_vector() {
         hex::encode(StorageWriteData::encode_all(&writes)),
         vector.writes
     );
-    let read = StorageWriteData::parse_all(&hex::decode(&vector.writes).expect("hex"));
-    assert_eq!(read, Ok(writes));
+    let bytes = hex::decode(&vector.writes).expect("hex");
+    assert_eq!(StorageWriteData::parse_all(&bytes), Ok(writes));
+    let tag = 1 + core::mem::offset_of!(RecordWriteData, mint_policy);
+    for refused in [2, 0] {
+        let mut tampered = bytes.clone();
+        tampered[tag] = refused;
+        assert_eq!(
+            StorageWriteData::parse_all(&tampered),
+            Err(CustomRingError::InvalidInstructionData)
+        );
+    }
 }

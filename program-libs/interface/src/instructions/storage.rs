@@ -5,7 +5,7 @@ use zolana_ring_policy::ListSet;
 
 use crate::{
     error::CustomRingError,
-    instruction::{list_and_mint_entry, write_count},
+    instruction::{list_and_mint_entry, mint_policy_write, write_count},
     member_registry::{EscrowKey, QueueEntry},
     storage::{RegistryId, Revision, StorageError},
     ApplyRecordsIxData, RecordWriteData, AUDIT_CIPHERTEXT_LEN,
@@ -116,10 +116,16 @@ impl StorageWriteData {
         out
     }
 
+    /// Refuses a mint settings tag above 1 and nonzero settings under tag 0.
     pub fn parse_all(mut data: &[u8]) -> Result<Vec<Self>, CustomRingError> {
         let mut writes = Vec::new();
         while !data.is_empty() {
             let (write, rest) = Self::split(data)?;
+            if let Self::Record(RecordWriteData { mint_policy, .. }) = &write {
+                if mint_policy[0] != 1 && *mint_policy != mint_policy_write(None) {
+                    return Err(CustomRingError::InvalidInstructionData);
+                }
+            }
             writes.push(write);
             data = rest;
         }
