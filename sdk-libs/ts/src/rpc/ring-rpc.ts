@@ -56,6 +56,7 @@ import type {
   UnresolvedRingMerge,
 } from "../operations/audit/audit-merge.js";
 import { RingError } from "../protocol/error.js";
+import { ringRecordsAddress } from "../protocol/pda/index.js";
 import {
   checkedReaderKey,
   readerKeyBytes,
@@ -1153,13 +1154,22 @@ export class RingRpc {
     request: CreateRecordsRegistryRequest,
     context?: RequestContext,
   ): Promise<RecordsRegistry> {
-    return decodeRecordsRegistry(
+    const records = decodeRecordsRegistry(
       await this.#call(
         RingRpcMethod.createRecordsRegistry,
         encodeCreateRecordsRegistryRequest(request),
         context,
       ),
     );
+    if (records.registry !== (await ringRecordsAddress(request.ring, records.storageAuthority))) {
+      throw new RingError("RING_RPC", {
+        details: {
+          method: RingRpcMethod.createRecordsRegistry,
+          reason: "registry is not the ring records under storageAuthority",
+        },
+      });
+    }
+    return records;
   }
 
   /** Each page is signed again, the attestation binds the nonce, the cursor and the time. */

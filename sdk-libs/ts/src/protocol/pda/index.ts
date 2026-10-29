@@ -1,4 +1,5 @@
 import {
+  address,
   getAddressEncoder,
   getProgramDerivedAddress,
   type AccountMeta,
@@ -12,6 +13,8 @@ import { meta, signerAddress, type SignerAccount } from "@heliuslabs/zolana/inte
 export { ringAuthAddress } from "@heliuslabs/zolana/internal";
 
 const encoder = new TextEncoder();
+
+const STORAGE_PROGRAM_ID = address("6cGXszer5keoaWm8Co5G9f4KGBThuGz4NsKTqYij1emg");
 
 function ringPda(
   ringProgramId: Address,
@@ -61,4 +64,22 @@ export function ringPolicyPda(ringProgramId: Address): Promise<ProgramDerivedAdd
 
 export function ringPolicyAddress(ringProgramId: Address): Promise<Address> {
   return ringAddress(ringPolicyPda(ringProgramId));
+}
+
+/** Seeds match Rust `InitializeStorage::records`. */
+export function ringRecordsAddress(
+  ringProgramId: Address,
+  storageAuthority: Address,
+): Promise<Address> {
+  const addresses = getAddressEncoder();
+  return ringAddress(
+    getProgramDerivedAddress({
+      programAddress: STORAGE_PROGRAM_ID,
+      seeds: [
+        encoder.encode("storage"),
+        addresses.encode(storageAuthority),
+        addresses.encode(ringProgramId),
+      ],
+    }),
+  );
 }
