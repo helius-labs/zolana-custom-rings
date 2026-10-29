@@ -710,11 +710,7 @@ fn a_signed_wallet_update_verifies_from_the_shared_vector() {
             .expect("wallet")
             .as_bytes(),
     );
-    let reader = Hash(
-        *zolana_ring_policy::Member::owner_tag(&[9; 32])
-            .expect("reader")
-            .as_bytes(),
-    );
+    let reader = Hash(*passkey_reader().member().expect("reader").as_bytes());
     let bit = zolana_ring_policy::ListId::RingViewing.record_bit();
     let signed = RecordUpdate {
         genesis_hash: Hash([3; 32]),
@@ -1101,4 +1097,159 @@ fn the_enrolment_requests_match_the_shared_vector() {
         serde_json::to_string(&refuse).expect("json"),
         vector.refuse.wire
     );
+}
+
+/// The P-256 generator, a passkey reader the shared vectors name.
+fn passkey_reader() -> ReaderKey {
+    let key = hex::decode("036b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296")
+        .expect("hex");
+    ReaderKey::p256(
+        crate::P256ReaderKey::from_bytes(key.try_into().expect("33 bytes")).expect("on curve"),
+    )
+    .expect("passkey")
+}
+
+/// The TypeScript signers write the same messages and wire bytes.
+#[test]
+fn the_reader_grants_and_wallet_reads_match_the_shared_vector() {
+    #[derive(Deserialize)]
+    struct Signed {
+        message: String,
+        wire: String,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Vector {
+        ring_wide: Signed,
+        wallet: Signed,
+        wallet_read: String,
+        wallet_utxos: String,
+    }
+    let vector: Vector = serde_json::from_str(include_str!(
+        "../../../../test-vectors/rpc/reader_grant.json"
+    ))
+    .expect("vector");
+    let authority = Keypair::new_from_array([8; 32]);
+    let wallet = Keypair::new_from_array([7; 32]);
+    let reader = ReaderKey::ed25519(Keypair::new_from_array([9; 32]).pubkey()).expect("reader");
+    let grants = [
+        (
+            &authority,
+            None,
+            reader,
+            ReaderGrantAction::Grant,
+            &vector.ring_wide,
+        ),
+        (
+            &wallet,
+            Some(wallet.pubkey()),
+            passkey_reader(),
+            ReaderGrantAction::Revoke,
+            &vector.wallet,
+        ),
+    ];
+    let text = |bytes: Vec<u8>| String::from_utf8(bytes).expect("utf8");
+    for (signer, wallet, reader, action, expected) in grants {
+        let attestation = ReaderGrantAttestation {
+            target: target(),
+            wallet,
+            reader,
+            action,
+        };
+        let message = attestation.message(1_700_000_000, &[4; 32]);
+        assert_eq!(text(message.clone()), expected.message);
+        let signed = SignedRequest {
+            attestation,
+            timestamp: Some(1_700_000_000),
+            nonce: [4; 32],
+        }
+        .sign(signer)
+        .expect("sign");
+        assert_eq!(serde_json::to_string(&signed).expect("json"), expected.wire);
+        let read: SetReaderGrantRequest = serde_json::from_str(&expected.wire).expect("read");
+        assert!(read.signature.0.verify(signer.pubkey().as_ref(), &message));
+    }
+    let read = ReadAttestation {
+        read: PagedRead::DecryptedTransactions,
+        target: target(),
+        cursor: None,
+        limit: None,
+        wallet: Some(wallet.pubkey()),
+    };
+    assert_eq!(
+        text(read.message(1_700_000_000, &[4; 32])),
+        vector.wallet_read
+    );
+    let utxos = AuditedUtxosAttestation {
+        wallet: Some(wallet.pubkey()),
+        ..AuditedUtxosAttestation::new(target(), &[Hash([5; 32])])
+    };
+    assert_eq!(
+        text(utxos.message(1_700_000_000, &[4; 32])),
+        vector.wallet_utxos
+    );
+}
+
+/// The TypeScript codec writes and reads the same bytes.
+#[test]
+fn the_storage_writes_of_a_wallet_update_match_the_shared_vector() {
+    use custom_ring_interface::storage_instruction::StorageWriteData;
+    use zolana_ring_policy::{AssetLimits, ListId, Member, MintPolicy};
+    #[derive(Deserialize)]
+    struct Vector {
+        writes: String,
+    }
+    let vector: Vector = serde_json::from_str(include_str!(
+        "../../../../test-vectors/registry/storage_writes.json"
+    ))
+    .expect("vector");
+    let wallet = Keypair::new_from_array([7; 32]);
+    let identity = Member::owner_tag(wallet.pubkey().as_array()).expect("wallet");
+    let bit = ListId::RingViewing.record_bit();
+    let entries = [
+        RecordUpdateEntry::Write(zolana_ring_indexer::rpc::RingListWriteView {
+            mint_policy: Some(MintPolicy {
+                threshold: 1,
+                cap: 2,
+                cosign_above: 3,
+                withdrawal_threshold: 4,
+                limits: AssetLimits {
+                    sender_cap: 5,
+                    sender_window_slots: 6,
+                    volume_cap: 7,
+                    volume_window_slots: 8,
+                    deposit_cap: 9,
+                    deposit_window_slots: 10,
+                    withdrawal_cap: 11,
+                    withdrawal_window_slots: 12,
+                },
+            }),
+            member: Hash(*identity.as_bytes()),
+            mask: bit,
+            value: bit,
+        }),
+        RecordUpdateEntry::WalletGrant(WalletGrant {
+            wallet: Hash(*identity.as_bytes()),
+            reader: Hash(*passkey_reader().member().expect("member").as_bytes()),
+            access: ReaderAccess::Granted,
+        }),
+        RecordUpdateEntry::Escrow(EscrowRegistration {
+            member: Hash(*identity.as_bytes()),
+            nullifier_pk: Hash([0x11; 32]),
+            eph_pk: [&[4][..], &[5; 32]].concat().into(),
+            ciphertext: vec![0x22; 32].into(),
+            proof: vec![0; 192].into(),
+        }),
+    ];
+    let writes: Vec<StorageWriteData> = entries
+        .iter()
+        .map(|entry| entry.write(&wallet.pubkey()))
+        .collect::<Result<_, _>>()
+        .expect("writes");
+    assert_eq!(
+        hex::encode(StorageWriteData::encode_all(&writes)),
+        vector.writes
+    );
+    let read = StorageWriteData::parse_all(&hex::decode(&vector.writes).expect("hex"));
+    assert_eq!(read, Ok(writes));
 }

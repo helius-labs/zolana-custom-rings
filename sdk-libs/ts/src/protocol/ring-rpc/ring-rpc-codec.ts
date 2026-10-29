@@ -21,7 +21,9 @@ import type {
   RelayQuoteRequest,
   RelayStatus,
   RelayStep,
+  ReaderGrantAction,
   SetMergeSettingsRequest,
+  SetReaderGrantRequest,
   SubmitRecordUpdateRequest,
   SubmitRelayRequest,
   TokenAccountSetup,
@@ -392,4 +394,28 @@ function encodeAuthorityTransfer(value: AuthorityTransfer): WireObject {
       amount: toU64(payment.amount, `transfer.payments[${index}].amount`),
     })),
   };
+}
+
+/** Rust `SetReaderGrantRequest`, its serialization byte for byte. */
+export function encodeSetReaderGrantRequest(value: SetReaderGrantRequest): WireObject {
+  return {
+    ring: checkedAddress(value.ring, "ring"),
+    ...(value.wallet === undefined ? {} : { wallet: checkedAddress(value.wallet, "wallet") }),
+    reader: checkedBase64(value.reader, "reader"),
+    action: readerGrantAction(value.action, "action"),
+    timestamp: toU64(value.timestamp, "timestamp"),
+    nonce: checkedBase64(value.nonce, "nonce"),
+    signature: checkedSignature(value.signature, "signature"),
+  };
+}
+
+/** Rust `SetReaderGrantResponse`, the action the service holds after the write. */
+export function decodeReaderGrantAction(value: unknown): ReaderGrantAction {
+  return readerGrantAction(value, "$");
+}
+
+function readerGrantAction(value: unknown, path: string): ReaderGrantAction {
+  if (value !== "grant" && value !== "revoke")
+    return schemaFailure("INDEXER_SCHEMA_INVALID_TYPE", path, "grant or revoke", value);
+  return value;
 }

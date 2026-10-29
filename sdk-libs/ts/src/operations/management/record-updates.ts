@@ -19,6 +19,7 @@ import type {
   RecordUpdateEntry,
   SubmitRecordUpdateRequest,
 } from "../../protocol/ring-rpc/ring-rpc-types.js";
+import { checkedReaderKey, readerKeyMember, type ReaderKey } from "./reader-access.js";
 import { checkWriter, listBits, listMask, listWrite, type ListWrite } from "./record-writes.js";
 
 /** The writer refuses the update after `validUntilSlot`. */
@@ -59,13 +60,14 @@ export class WalletRecordUpdate {
     });
   }
 
-  /** Sets or clears the `reader` list of the record `walletGrantMember(wallet, reader)` keys. */
-  withWalletGrant(reader: Member, access: ReaderAccess): WalletRecordUpdate {
-    walletGrantMember(this.#member, reader);
+  /** Sets or clears the `reader` list of the record `walletGrantMember(wallet, readerKeyMember(reader))` keys. */
+  withWalletGrant(reader: ReaderKey, access: ReaderAccess): WalletRecordUpdate {
+    const member = readerKeyMember(checkedReaderKey(reader));
+    walletGrantMember(this.#member, member);
     return this.#with({
       kind: "walletGrant",
       wallet: indexerScalars.hash(this.#member),
-      reader: indexerScalars.hash(reader),
+      reader: indexerScalars.hash(member),
       access,
     });
   }

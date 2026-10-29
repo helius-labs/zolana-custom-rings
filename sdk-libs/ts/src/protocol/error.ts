@@ -149,6 +149,8 @@ export const RING_ERROR_CODES = [
   "RING_IN_PROOF_OWNER_MISMATCH",
   "RING_IN_PROOF_OWNER_PROVER_REQUIRED",
   "RING_TRANSFER_TOO_WIDE",
+  "RING_STORAGE_WRITE_INVALID",
+  "RING_RPC_REFUSED",
 ] as const;
 import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/zolana/internal";
 import type { ErrorEnvelope } from "@heliuslabs/zolana";

@@ -3,11 +3,12 @@ import { readFileSync } from "node:fs";
 import { createKeyPairSignerFromPrivateKeyBytes, getBase58Decoder } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
-import type { Address, Bytes32 } from "@heliuslabs/zolana/interface";
-import { addressBytes, indexerScalars } from "@heliuslabs/zolana/internal";
+import type { Address, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
+import { indexerScalars } from "@heliuslabs/zolana/internal";
+import { P256ReaderKey } from "../../../src/operations/management/reader-access.js";
 import { WalletRecordUpdate } from "../../../src/operations/management/record-updates.js";
 import { listWrite } from "../../../src/operations/management/record-writes.js";
-import { ListId, memberOfTag } from "../../../src/protocol/membership/policy.js";
+import { ListId } from "../../../src/protocol/membership/policy.js";
 import { verifyRecordUpdate } from "../../../src/protocol/ring-rpc/record-update.js";
 import { encodeSubmitRecordUpdateRequest } from "../../../src/protocol/ring-rpc/ring-rpc-codec.js";
 
@@ -34,7 +35,17 @@ describe("submitRecordUpdate", () => {
       validUntilSlot: 4242n,
     })
       .withLists(listWrite({ set: [ListId.ringViewing] }))
-      .withWalletGrant(memberOfTag(addressBytes(filled(9))), "granted")
+      .withWalletGrant(
+        P256ReaderKey.fromBytes(
+          Uint8Array.from(
+            Buffer.from(
+              "036b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296",
+              "hex",
+            ),
+          ) as Bytes33,
+        ),
+        "granted",
+      )
       .sign(wallet);
     expect(JSON.stringify(encodeSubmitRecordUpdateRequest(signed))).toBe(vector.wire);
     expect(verifyRecordUpdate(signed)).toEqual(

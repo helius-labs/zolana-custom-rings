@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { createKeyPairSignerFromPrivateKeyBytes, getBase58Decoder } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
 
-import type { Address, Bytes32, Signature } from "@heliuslabs/zolana/interface";
+import type { Address, Bytes32, Bytes33, Signature } from "@heliuslabs/zolana/interface";
 import type { indexerTypes } from "@heliuslabs/zolana/internal";
 import { ShieldedKeypair, SigningKey } from "@heliuslabs/zolana/keypair";
 import {
@@ -11,11 +11,17 @@ import {
   encodePrepareAuthorityTransferRequest,
   encodePrepareRelayRequest,
   encodeRefuseEnrolmentRequest,
+  encodeSetReaderGrantRequest,
 } from "../../../src/protocol/ring-rpc/ring-rpc-codec.js";
+import { P256ReaderKey } from "../../../src/operations/management/reader-access.js";
 import {
   RingAuthorityTransferRequest,
+  RingReaderGrantRequest,
+  auditedUtxosAttestation,
   authorityTransferAttestation,
   enrolmentAttestation,
+  readerGrantAttestation,
+  ringReadAttestation,
   signPendingEnrolmentsRequest,
   signRefuseEnrolmentRequest,
   type RingEnrolmentAction,
@@ -131,5 +137,88 @@ describe("enrolment requests", () => {
     } finally {
       nonce.mockRestore();
     }
+  });
+});
+
+describe("setReaderGrant", () => {
+  it("signs ring-wide and wallet grants and wallet reads byte for byte as the Rust vector", async () => {
+    type Signed = { message: string; wire: string };
+    const vector = JSON.parse(
+      readFileSync(
+        new URL("../../../../../test-vectors/rpc/reader_grant.json", import.meta.url),
+        "utf8",
+      ),
+    ) as { ringWide: Signed; wallet: Signed; walletRead: string; walletUtxos: string };
+    const authority = await createKeyPairSignerFromPrivateKeyBytes(new Uint8Array(32).fill(8));
+    const wallet = await createKeyPairSignerFromPrivateKeyBytes(new Uint8Array(32).fill(7));
+    const reader = await createKeyPairSignerFromPrivateKeyBytes(new Uint8Array(32).fill(9));
+    const passkey = P256ReaderKey.fromBytes(
+      Uint8Array.from(
+        Buffer.from("036b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296", "hex"),
+      ) as Bytes33,
+    );
+    const target = {
+      cluster: new Uint8Array(32).fill(1) as Bytes32,
+      service: filled(2, 32) as Address,
+      ringProgramId: filled(7, 32) as Address,
+    };
+    const timestamp = 1_700_000_000n;
+    const nonce = new Uint8Array(32).fill(4) as Bytes32;
+    const text = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
+    const grants = [
+      {
+        signer: authority,
+        grant: { reader: reader.address, action: "grant" as const },
+        expected: vector.ringWide,
+      },
+      {
+        signer: wallet,
+        grant: { wallet: wallet.address, reader: passkey, action: "revoke" as const },
+        expected: vector.wallet,
+      },
+    ];
+    const random = vi.spyOn(globalThis.crypto, "getRandomValues").mockImplementation((array) => {
+      (array as Uint8Array).fill(4);
+      return array;
+    });
+    try {
+      for (const { signer, grant, expected } of grants) {
+        expect(text(readerGrantAttestation({ target, ...grant, timestamp, nonce }))).toBe(
+          expected.message,
+        );
+        const signed = await RingReaderGrantRequest.forGrant(target, grant)
+          .at(timestamp)
+          .sign(signer);
+        expect(JSON.stringify(encodeSetReaderGrantRequest(signed))).toBe(expected.wire);
+      }
+    } finally {
+      random.mockRestore();
+    }
+    // A wallet grant signed by another key never reaches the service.
+    await expect(
+      RingReaderGrantRequest.forGrant(target, grants[1]!.grant).sign(authority),
+    ).rejects.toMatchObject({ code: "RING_RPC" });
+    expect(
+      text(
+        ringReadAttestation({
+          method: "getDecryptedTransactions",
+          target,
+          timestamp,
+          nonce,
+          wallet: wallet.address,
+        }),
+      ),
+    ).toBe(vector.walletRead);
+    expect(
+      text(
+        auditedUtxosAttestation({
+          target,
+          timestamp,
+          nonce,
+          utxoHashes: [new Uint8Array(32).fill(5) as Bytes32],
+          wallet: wallet.address,
+        }),
+      ),
+    ).toBe(vector.walletUtxos);
   });
 });

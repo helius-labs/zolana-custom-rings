@@ -152,5 +152,7 @@ exports[`ring error codes > pins the public codes and their order 1`] = `
   "RING_IN_PROOF_OWNER_MISMATCH",
   "RING_IN_PROOF_OWNER_PROVER_REQUIRED",
   "RING_TRANSFER_TOO_WIDE",
+  "RING_STORAGE_WRITE_INVALID",
+  "RING_RPC_REFUSED",
 ]
 `;
