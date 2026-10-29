@@ -235,8 +235,8 @@ pub struct MemberWriteIxData {
 pub struct RecordWriteData {
     pub member: [u8; 32],
     pub lists: WriteRecordsIxData,
-    /// A replacement flag followed by four big-endian u64 amounts; all zero preserves settings.
-    pub mint_policy: [u8; 33],
+    /// [`mint_policy_write`] of the replacement settings.
+    pub mint_policy: MintPolicyWrite,
 }
 
 impl Default for RecordWriteData {
@@ -372,9 +372,11 @@ impl RecordWriteData {
     }
 }
 
+pub type MintPolicyWrite = [u8; 1 + MintPolicy::LEN];
+
 /// `1 || MintPolicy::bytes` replaces the settings, all zero keeps them.
-pub fn mint_policy_write(policy: Option<MintPolicy>) -> [u8; 33] {
-    let mut write = [0; 33];
+pub fn mint_policy_write(policy: Option<MintPolicy>) -> MintPolicyWrite {
+    let mut write = [0; 1 + MintPolicy::LEN];
     if let Some(policy) = policy {
         write[0] = 1;
         write[1..].copy_from_slice(&policy.bytes());
@@ -386,7 +388,7 @@ pub fn mint_policy_write(policy: Option<MintPolicy>) -> [u8; 33] {
 pub(crate) fn list_and_mint_entry(
     member: [u8; 32],
     lists: &WriteRecordsIxData,
-    mint_policy: &[u8; 33],
+    mint_policy: &MintPolicyWrite,
     writable: ListSet,
 ) -> Result<QueueEntry, CustomRingError> {
     check_member(&member)?;
@@ -400,8 +402,12 @@ pub(crate) fn list_and_mint_entry(
     };
     let [tag, policy @ ..] = *mint_policy;
     entry.mint_policy = match tag {
-        0 if *mint_policy == [0; 33] && entry.mask != 0 => None,
-        1 => Some(MintPolicy::from_bytes(policy)),
+        0 if *mint_policy == mint_policy_write(None) && entry.mask != 0 => None,
+        1 => {
+            let policy = MintPolicy::from_bytes(policy);
+            policy.limits.check()?;
+            Some(policy)
+        }
         _ => return Err(CustomRingError::InvalidInstructionData),
     };
     Ok(entry)
@@ -458,7 +464,7 @@ pub(crate) fn write_count(count: usize) -> Result<u8, CustomRingError> {
 const _: () = assert!(WriteRecordsIxData::SIZE == 16);
 const _: () = assert!(MemberWriteIxData::SIZE == 24);
 const _: () = assert!(core::mem::align_of::<RecordWriteData>() == 1);
-const _: () = assert!(RecordWriteData::SIZE == 81);
+const _: () = assert!(RecordWriteData::SIZE == 129);
 const _: () = assert!(ApplyRecordsIxData::SIZE == 228);
 const _: () = assert!(RegisterKeyIxData::SIZE == 296);
 const _: () = assert!(APPLY_BATCH <= u8::MAX as usize);
@@ -508,7 +514,7 @@ mod tests {
     fn the_authority_writes_only_the_authority_lists() {
         let write = |mask| {
             RecordWriteData {
-                mint_policy: [0; 33],
+                mint_policy: mint_policy_write(None),
                 member: right_align(&[9]),
                 lists: lists(mask, 0),
             }

@@ -39,7 +39,7 @@ fn recovery() -> WriteRecordsIxData {
 
 fn allow(member: [u8; 32]) -> RecordWriteData {
     RecordWriteData {
-        mint_policy: [0; 33],
+        mint_policy: custom_ring_interface::mint_policy_write(None),
         member,
         lists: lists(ListId::Allow.record_bit(), ListId::Allow.record_bit()),
     }
@@ -229,7 +229,7 @@ fn a_full_registry_still_takes_an_authority_block_write() {
     fill_registry(&mut ring, MEMBER_REGISTRY_CAPACITY);
     let authority = ring.authority.insecure_clone();
     let block = RecordWriteData {
-        mint_policy: [0; 33],
+        mint_policy: custom_ring_interface::mint_policy_write(None),
         member: member(5),
         lists: lists(ListId::Block.record_bit(), ListId::Block.record_bit()),
     };
@@ -407,7 +407,7 @@ fn the_authority_writes_only_authority_lists_of_members_in_range() {
     let viewing = ListId::RingViewing.record_bit();
     refused(
         write(&[RecordWriteData {
-            mint_policy: [0; 33],
+            mint_policy: custom_ring_interface::mint_policy_write(None),
             member: member(5),
             lists: lists(viewing, viewing),
         }]),

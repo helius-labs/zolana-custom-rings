@@ -2,9 +2,9 @@
 
 use custom_ring_interface::SYSTEM_PROGRAM_ID;
 use custom_ring_interface::{
-    key_catalog::RingCircuit, queue_chain, tag, ApplyRecordsIxData, AuthorityWriteRecordsIxData,
-    CustomRingError, MemberRegistry, MemberWriteIxData, QueueEntry, RecordQueue, RecordWriteData,
-    WriteRecordsIxData, APPLY_BATCH,
+    key_catalog::RingCircuit, mint_policy_write, queue_chain, tag, ApplyRecordsIxData,
+    AuthorityWriteRecordsIxData, CustomRingError, MemberRegistry, MemberWriteIxData, QueueEntry,
+    RecordQueue, RecordWriteData, WriteRecordsIxData, APPLY_BATCH,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -270,7 +270,7 @@ impl AuthorityListWrite {
         self.push(RecordWriteData {
             member: *member.as_bytes(),
             lists: WriteRecordsIxData::new(write),
-            mint_policy: [0; 33],
+            mint_policy: mint_policy_write(None),
         })?;
         Ok(self)
     }
@@ -281,12 +281,9 @@ impl AuthorityListWrite {
         member: Member,
         policy: zolana_ring_policy::MintPolicy,
     ) -> Result<Self, RingError> {
-        let mut mint_policy = [0; 33];
-        mint_policy[0] = 1;
-        mint_policy[1..].copy_from_slice(&policy.bytes());
         self.push(RecordWriteData {
             member: *member.as_bytes(),
-            mint_policy,
+            mint_policy: mint_policy_write(Some(policy)),
             ..RecordWriteData::default()
         })?;
         Ok(self)

@@ -861,7 +861,7 @@ impl GrowingRing {
                     .unwrap()
                     .iter()
                     .map(|write| RecordWriteData {
-                        mint_policy: [0; 33],
+                        mint_policy: custom_ring_interface::mint_policy_write(None),
                         member: bytes32(&write["member"]),
                         lists: vector_lists(write),
                     })
@@ -1215,7 +1215,7 @@ impl AuthorityGrowth {
         let allow = zolana_ring_policy::ListId::Allow.record_bit();
         for member in members {
             let write = RecordWriteData {
-                mint_policy: [0; 33],
+                mint_policy: custom_ring_interface::mint_policy_write(None),
                 member: *member,
                 lists: WriteRecordsIxData {
                     mask: allow.to_le_bytes(),
@@ -1511,7 +1511,7 @@ fn replay_indexer(db: Arc<DatabaseConnection>, rpc: Arc<SolanaRpc>) -> Indexer {
 
 #[tokio::test]
 async fn mint_records_survive_replay_storage_and_rpc_beyond_eight_mints() {
-    use zolana_ring_policy::MintPolicy;
+    use zolana_ring_policy::{AssetLimits, MintPolicy};
     let mut ring = GrowingRing::created(Address::new_from_array([39; 32])).await;
     let mut tree = MemberRegistryTree::new().unwrap();
     let mut chain = [0; 32];
@@ -1520,6 +1520,14 @@ async fn mint_records_survive_replay_storage_and_rpc_beyond_eight_mints() {
         cap: 500,
         cosign_above: 100,
         withdrawal_threshold: 200,
+        limits: AssetLimits {
+            sender_cap: 1_000,
+            sender_window_slots: 9_000,
+            volume_cap: u64::MAX,
+            volume_window_slots: 216_000,
+            deposit_cap: 300,
+            withdrawal_cap: 400,
+        },
     };
     let members: Vec<_> = (1..=12)
         .map(|i| {
@@ -1529,12 +1537,11 @@ async fn mint_records_survive_replay_storage_and_rpc_beyond_eight_mints() {
         })
         .collect();
     for member in &members {
-        let mut write = RecordWriteData {
+        let write = RecordWriteData {
             member: *member,
+            mint_policy: custom_ring_interface::mint_policy_write(Some(policy)),
             ..Default::default()
         };
-        write.mint_policy[0] = 1;
-        write.mint_policy[1..].copy_from_slice(&policy.bytes());
         let inputs = tree.apply(chain, &[write.entry().unwrap()]).unwrap();
         chain = inputs.chain_end;
         ring.land(vec![ring.program.authority(
@@ -1543,7 +1550,7 @@ async fn mint_records_survive_replay_storage_and_rpc_beyond_eight_mints() {
         )])
         .await;
     }
-    // A later list-only write must preserve all four settings in storage and paths.
+    // A later list-only write must preserve every setting in storage and paths.
     let write = RecordWriteData {
         member: members[8],
         lists: WriteRecordsIxData {

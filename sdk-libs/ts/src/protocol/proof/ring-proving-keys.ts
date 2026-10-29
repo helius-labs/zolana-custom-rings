@@ -5,7 +5,7 @@ export const RING_PROVING_KEY_SHA256S: Readonly<Record<string, string>> = Object
   "custom_ring_apply_records_16.key":
     "ec91e5dc71e4346ebf132d77dba14123bdc734c0f50e6e941598d271e48a6160",
   "custom_ring_apply_records_2.key":
-    "bc56094f853e7706003d81d83f43b2b9281a560a6cc8c430b0ed4d2400776cef",
+    "be27e1ae22999115721e0a7ae3cf76259a0f3dcda65a41ee960c776b7e0c962b",
   "custom_ring_apply_records_4.key":
     "a94d5adcdc70c46615eb691fd5331ead3b5ae67191d1d5d19666badfbdfd0d2b",
   "custom_ring_apply_records_8.key":

@@ -42,7 +42,7 @@ func applyBatch(t *testing.T, members *ringregistry.Registry, n int, chainStart 
 		w := members.Apply(t, e)
 		b.writes = append(b.writes, w)
 		c.Writes[i] = writeWires(w)
-		b.chain = append(b.chain, ringtest.MustPoseidonHash(t, b.chain[i], entryHash(t, e)))
+		b.chain = append(b.chain, ringtest.MustPoseidonHash(t, b.chain[i], e.Hash(t)))
 	}
 	c.NewRoot, c.NewNextIndex, c.ChainEnd = members.Root(), new(big.Int).SetUint64(members.NextIndex()), b.chain[len(entries)]
 	b.bind(t)
@@ -60,12 +60,6 @@ func (b *batch) bind(t *testing.T) {
 	c.PublicInputHash = spptest.MustHashChain4(t, statement)
 }
 
-// entryHash mirrors registry.QueueEntry.Hash.
-func entryHash(t *testing.T, e ringregistry.Entry) *big.Int {
-	t.Helper()
-	return ringtest.MustPoseidonHash(t, big.NewInt(shared.QueueWriteDomain), e.Member, e.Mask, e.Value, e.EscrowKey, policyValue(e.MintPolicy), policyValue(e.WithdrawalThreshold))
-}
-
 func writeWires(w ringregistry.Write) registry.RecordWrite {
 	e := w.Entry
 	exists := 0
@@ -73,13 +67,14 @@ func writeWires(w ringregistry.Write) registry.RecordWrite {
 		exists = 1
 	}
 	return registry.RecordWrite{
-		Entry:                  registry.QueueEntry{Member: e.Member, Mask: e.Mask, Value: e.Value, EscrowKey: e.EscrowKey, MintPolicy: policyValue(e.MintPolicy), WithdrawalThreshold: policyValue(e.WithdrawalThreshold)},
+		Entry:                  registry.QueueEntry{Member: e.Member, Mask: e.Mask, Value: e.Value, EscrowKey: e.EscrowKey, MintPolicy: policyValue(e.MintPolicy), WithdrawalThreshold: policyValue(e.WithdrawalThreshold), AssetLimits: e.AssetLimits.Wires()},
 		Exists:                 exists,
 		OldNext:                w.OldNext,
 		OldLists:               w.OldLists,
 		OldEscrow:              w.OldEscrow,
 		OldMintPolicy:          policyValue(w.OldMintPolicy),
 		OldWithdrawalThreshold: policyValue(w.OldWithdrawalThreshold),
+		OldAssetLimits:         w.OldAssetLimits.Wires(),
 		Slot:                   w.Slot.Wires(),
 		LowMember:              w.Low.Member,
 		LowNext:                w.Low.Next,
@@ -87,6 +82,7 @@ func writeWires(w ringregistry.Write) registry.RecordWrite {
 		LowEscrow:              w.Low.EscrowKey,
 		LowMintPolicy:          policyValue(w.Low.MintPolicy),
 		LowWithdrawalThreshold: policyValue(w.Low.WithdrawalThreshold),
+		LowAssetLimits:         w.Low.AssetLimits.Wires(),
 		Low:                    w.LowPath.Wires(),
 	}
 }

@@ -339,12 +339,7 @@ pub(crate) async fn apply_proof_inputs(
             RecordWriteData {
                 member: write.member.0,
                 lists,
-                mint_policy: write.mint_policy.map_or([0; 33], |policy| {
-                    let mut bytes = [0; 33];
-                    bytes[0] = 1;
-                    bytes[1..].copy_from_slice(&policy.bytes());
-                    bytes
-                }),
+                mint_policy: custom_ring_interface::mint_policy_write(write.mint_policy),
             }
             .entry()
         })

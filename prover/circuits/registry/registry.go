@@ -15,6 +15,8 @@ const (
 	Capacity  = 1 << IndexBits
 	// ListBits is the width of a record's list bitmap, bit id-1 marks list id.
 	ListBits = 64
+	// LimitFields mirrors AssetLimits::fields in program-libs/policy/src/asset_limits.rs.
+	LimitFields = 2
 )
 
 // The empty leaf is 0, and the sentinel (0, q-1, 0, 0) at index 0 brackets every member in [1, q-2].
@@ -25,10 +27,11 @@ type Record struct {
 	EscrowKey           frontend.Variable
 	MintPolicy          frontend.Variable
 	WithdrawalThreshold frontend.Variable
+	AssetLimits         [LimitFields]frontend.Variable
 }
 
 func (r Record) Hash(api frontend.API) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{r.Member, r.Next, r.Lists, r.EscrowKey, r.MintPolicy, r.WithdrawalThreshold})
+	return gadget.PoseidonHash(api, append([]frontend.Variable{r.Member, r.Next, r.Lists, r.EscrowKey, r.MintPolicy, r.WithdrawalThreshold}, r.AssetLimits[:]...))
 }
 
 // EscrowKey is the record field RegisterKey fills, mirrored by EscrowKey::hash in program-libs/interface/src/accounts/member_registry.rs.

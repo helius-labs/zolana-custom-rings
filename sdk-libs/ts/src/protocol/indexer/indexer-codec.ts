@@ -1,4 +1,4 @@
-import type { MintPolicy } from "../membership/mint-policy.js";
+import { ASSET_LIMIT_KEYS, type MintPolicy } from "../membership/mint-policy.js";
 import type { Address } from "@heliuslabs/zolana";
 import type { indexerTypes } from "@heliuslabs/zolana/internal";
 import { U64_MAX, indexerCodec, indexerScalars } from "@heliuslabs/zolana/internal";
@@ -503,6 +503,9 @@ export function encodeMintPolicy(policy: MintPolicy | null): WireObject | null {
         cap: toU64(policy.cap, "cap"),
         cosignAbove: toU64(policy.cosignAbove, "cosignAbove"),
         withdrawalThreshold: toU64(policy.withdrawalThreshold, "withdrawalThreshold"),
+        limits: Object.fromEntries(
+          ASSET_LIMIT_KEYS.map((key) => [key, toU64(policy.limits[key], `limits.${key}`)]),
+        ),
       };
 }
 
@@ -585,12 +588,23 @@ function decodeMintPolicy(value: unknown): MintPolicy {
     "cap",
     "cosignAbove",
     "withdrawalThreshold",
+    "limits",
   ]);
-  const amount = (key: string) => wireInteger(row[key], `mintPolicy.${key}`, 0n, (1n << 64n) - 1n);
+  const amount = (from: WireObject, key: string): bigint =>
+    wireInteger(from[key], `mintPolicy.${key}`, 0n, (1n << 64n) - 1n);
+  const limits = object(row["limits"], "mintPolicy.limits", ASSET_LIMIT_KEYS);
   return Object.freeze({
-    threshold: amount("threshold"),
-    cap: amount("cap"),
-    cosignAbove: amount("cosignAbove"),
-    withdrawalThreshold: amount("withdrawalThreshold"),
+    threshold: amount(row, "threshold"),
+    cap: amount(row, "cap"),
+    cosignAbove: amount(row, "cosignAbove"),
+    withdrawalThreshold: amount(row, "withdrawalThreshold"),
+    limits: Object.freeze({
+      senderCap: amount(limits, "senderCap"),
+      senderWindowSlots: amount(limits, "senderWindowSlots"),
+      volumeCap: amount(limits, "volumeCap"),
+      volumeWindowSlots: amount(limits, "volumeWindowSlots"),
+      depositCap: amount(limits, "depositCap"),
+      withdrawalCap: amount(limits, "withdrawalCap"),
+    }),
   });
 }

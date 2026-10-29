@@ -107,6 +107,7 @@ type RecordOpening struct {
 	EscrowKey           Field   `json:"escrowKey"`
 	MintPolicy          Field   `json:"mintPolicy"`
 	WithdrawalThreshold Field   `json:"withdrawalThreshold"`
+	AssetLimits         []Field `json:"assetLimits"`
 	Index               uint64  `json:"index"`
 	Path                []Field `json:"path"`
 }
@@ -115,12 +116,13 @@ type RecordOpening struct {
 type MemberOpening struct {
 	Present bool `json:"present"`
 	RecordOpening
-	LowMember              Field  `json:"lowMember"`
-	LowNext                Field  `json:"lowNext"`
-	LowLists               uint64 `json:"lowLists"`
-	LowEscrow              Field  `json:"lowEscrow"`
-	LowMintPolicy          Field  `json:"lowMintPolicy"`
-	LowWithdrawalThreshold Field  `json:"lowWithdrawalThreshold"`
+	LowMember              Field   `json:"lowMember"`
+	LowNext                Field   `json:"lowNext"`
+	LowLists               uint64  `json:"lowLists"`
+	LowEscrow              Field   `json:"lowEscrow"`
+	LowMintPolicy          Field   `json:"lowMintPolicy"`
+	LowWithdrawalThreshold Field   `json:"lowWithdrawalThreshold"`
+	LowAssetLimits         []Field `json:"lowAssetLimits"`
 }
 
 type Withdrawal struct {
@@ -148,12 +150,13 @@ type PolicyInputsParams struct {
 }
 
 type PooledRecord struct {
-	Member              Field  `json:"member"`
-	Next                Field  `json:"next"`
-	Lists               uint64 `json:"lists"`
-	EscrowKey           Field  `json:"escrowKey"`
-	MintPolicy          Field  `json:"mintPolicy"`
-	WithdrawalThreshold Field  `json:"withdrawalThreshold"`
+	Member              Field   `json:"member"`
+	Next                Field   `json:"next"`
+	Lists               uint64  `json:"lists"`
+	EscrowKey           Field   `json:"escrowKey"`
+	MintPolicy          Field   `json:"mintPolicy"`
+	WithdrawalThreshold Field   `json:"withdrawalThreshold"`
+	AssetLimits         []Field `json:"assetLimits"`
 }
 
 type PooledSubject struct {
@@ -217,12 +220,13 @@ type DelegatePolicyParams struct {
 }
 
 type QueueEntry struct {
-	Member              Field  `json:"member"`
-	Mask                uint64 `json:"mask"`
-	Value               uint64 `json:"value"`
-	EscrowKey           Field  `json:"escrowKey"`
-	MintPolicy          Field  `json:"mintPolicy"`
-	WithdrawalThreshold Field  `json:"withdrawalThreshold"`
+	Member              Field   `json:"member"`
+	Mask                uint64  `json:"mask"`
+	Value               uint64  `json:"value"`
+	EscrowKey           Field   `json:"escrowKey"`
+	MintPolicy          Field   `json:"mintPolicy"`
+	WithdrawalThreshold Field   `json:"withdrawalThreshold"`
+	AssetLimits         []Field `json:"assetLimits"`
 }
 
 type RecordWrite struct {
@@ -233,6 +237,7 @@ type RecordWrite struct {
 	OldEscrow              Field      `json:"oldEscrow"`
 	OldMintPolicy          Field      `json:"oldMintPolicy"`
 	OldWithdrawalThreshold Field      `json:"oldWithdrawalThreshold"`
+	OldAssetLimits         []Field    `json:"oldAssetLimits"`
 	// Index and Path open the member's leaf or the leaf an insert takes.
 	Index                  uint64  `json:"index"`
 	Path                   []Field `json:"path"`
@@ -242,6 +247,7 @@ type RecordWrite struct {
 	LowEscrow              Field   `json:"lowEscrow"`
 	LowMintPolicy          Field   `json:"lowMintPolicy"`
 	LowWithdrawalThreshold Field   `json:"lowWithdrawalThreshold"`
+	LowAssetLimits         []Field `json:"lowAssetLimits"`
 	// LowIndex and LowPath open the low record.
 	LowIndex uint64  `json:"lowIndex"`
 	LowPath  []Field `json:"lowPath"`

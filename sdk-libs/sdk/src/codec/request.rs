@@ -210,6 +210,8 @@ pub(crate) struct MemberOpening {
     pub mint_policy: [u8; 32],
     #[serde(with = "fe")]
     pub withdrawal_threshold: [u8; 32],
+    #[serde(serialize_with = "fe::seq")]
+    pub asset_limits: [[u8; 32]; 2],
     pub index: u64,
     #[serde(serialize_with = "path")]
     pub path: QuadPath,
@@ -224,6 +226,8 @@ pub(crate) struct MemberOpening {
     pub low_mint_policy: [u8; 32],
     #[serde(with = "fe")]
     pub low_withdrawal_threshold: [u8; 32],
+    #[serde(serialize_with = "fe::seq")]
+    pub low_asset_limits: [[u8; 32]; 2],
 }
 
 impl From<&RecordOpening> for MemberOpening {
@@ -238,6 +242,7 @@ impl From<&RecordOpening> for MemberOpening {
                 withdrawal_threshold: right_align(
                     &record.mint_policy.withdrawal_threshold.to_be_bytes(),
                 ),
+                asset_limits: record.mint_policy.limits.fields(),
                 index: path.index,
                 path: *path,
                 low_member: [0; 32],
@@ -246,6 +251,7 @@ impl From<&RecordOpening> for MemberOpening {
                 low_escrow: [0; 32],
                 low_mint_policy: [0; 32],
                 low_withdrawal_threshold: [0; 32],
+                low_asset_limits: [[0; 32]; 2],
             },
             RecordOpening::Absent { low, path } => Self {
                 present: false,
@@ -254,6 +260,7 @@ impl From<&RecordOpening> for MemberOpening {
                 escrow_key: [0; 32],
                 mint_policy: [0; 32],
                 withdrawal_threshold: [0; 32],
+                asset_limits: [[0; 32]; 2],
                 index: path.index,
                 path: *path,
                 low_member: low.member,
@@ -264,6 +271,7 @@ impl From<&RecordOpening> for MemberOpening {
                 low_withdrawal_threshold: right_align(
                     &low.mint_policy.withdrawal_threshold.to_be_bytes(),
                 ),
+                low_asset_limits: low.mint_policy.limits.fields(),
             },
         }
     }
@@ -298,6 +306,8 @@ impl Serialize for RecordPools {
             mint_policy: [u8; 32],
             #[serde(with = "fe")]
             withdrawal_threshold: [u8; 32],
+            #[serde(serialize_with = "fe::seq")]
+            asset_limits: [[u8; 32]; 2],
         }
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
@@ -341,6 +351,7 @@ impl Serialize for RecordPools {
                         withdrawal_threshold: right_align(
                             &record.mint_policy.withdrawal_threshold.to_be_bytes(),
                         ),
+                        asset_limits: record.mint_policy.limits.fields(),
                     })
                     .collect()
             })
@@ -507,6 +518,8 @@ pub(crate) struct RecordWrite {
     pub old_mint_policy: [u8; 32],
     #[serde(with = "fe")]
     pub old_withdrawal_threshold: [u8; 32],
+    #[serde(serialize_with = "fe::seq")]
+    pub old_asset_limits: [[u8; 32]; 2],
     pub index: u64,
     #[serde(serialize_with = "path")]
     pub path: QuadPath,
@@ -521,6 +534,8 @@ pub(crate) struct RecordWrite {
     pub low_mint_policy: [u8; 32],
     #[serde(with = "fe")]
     pub low_withdrawal_threshold: [u8; 32],
+    #[serde(serialize_with = "fe::seq")]
+    pub low_asset_limits: [[u8; 32]; 2],
     pub low_index: u64,
     #[serde(serialize_with = "path")]
     pub low_path: QuadPath,
@@ -539,23 +554,21 @@ pub(crate) struct QueueEntryRequest {
     pub mint_policy: [u8; 32],
     #[serde(with = "fe")]
     pub withdrawal_threshold: [u8; 32],
+    #[serde(serialize_with = "fe::seq")]
+    pub asset_limits: [[u8; 32]; 2],
 }
 
 impl From<&QueueEntry> for QueueEntryRequest {
     fn from(entry: &QueueEntry) -> Self {
+        let policy = entry.mint_policy.unwrap_or_default();
         Self {
             member: entry.member,
             mask: entry.mask,
             value: entry.value,
             escrow_key: entry.escrow_key,
             mint_policy: entry.mint_policy_field(),
-            withdrawal_threshold: right_align(
-                &entry
-                    .mint_policy
-                    .unwrap_or_default()
-                    .withdrawal_threshold
-                    .to_be_bytes(),
-            ),
+            withdrawal_threshold: right_align(&policy.withdrawal_threshold.to_be_bytes()),
+            asset_limits: policy.limits.fields(),
         }
     }
 }
@@ -579,6 +592,7 @@ impl From<&RecordWriteProofInput> for RecordWrite {
             old_withdrawal_threshold: right_align(
                 &write.old_mint_policy.withdrawal_threshold.to_be_bytes(),
             ),
+            old_asset_limits: write.old_mint_policy.limits.fields(),
             index: write.slot.index,
             path: write.slot,
             low_member,
@@ -589,6 +603,7 @@ impl From<&RecordWriteProofInput> for RecordWrite {
             low_withdrawal_threshold: right_align(
                 &low_mint_policy.withdrawal_threshold.to_be_bytes(),
             ),
+            low_asset_limits: low_mint_policy.limits.fields(),
             low_index: write.low_path.index,
             low_path: write.low_path,
         }
@@ -721,6 +736,8 @@ pub(crate) struct RecordOpeningRequest {
     pub mint_policy: [u8; 32],
     #[serde(with = "fe")]
     pub withdrawal_threshold: [u8; 32],
+    #[serde(serialize_with = "fe::seq")]
+    pub asset_limits: [[u8; 32]; 2],
     pub index: u64,
     #[serde(serialize_with = "path")]
     pub path: QuadPath,
@@ -736,6 +753,7 @@ impl RecordOpeningRequest {
             withdrawal_threshold: right_align(
                 &record.mint_policy.withdrawal_threshold.to_be_bytes(),
             ),
+            asset_limits: record.mint_policy.limits.fields(),
             index: path.index,
             path: *path,
         }

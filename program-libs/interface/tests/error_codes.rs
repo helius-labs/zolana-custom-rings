@@ -118,6 +118,7 @@ pinned_codes! {
     CoSignerCountOutOfRange = 8263,
     InvalidRingPolicy = 8300,
     RingPolicyAlreadyExists = 8301,
+    InvalidAssetLimits = 8390,
 }
 
 #[test]

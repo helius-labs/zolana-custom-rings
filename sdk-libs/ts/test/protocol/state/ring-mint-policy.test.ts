@@ -4,7 +4,9 @@ import { ZERO_32 } from "@heliuslabs/zolana/internal";
 import vector from "../../../../../test-vectors/registry/mint-records.json" with { type: "json" };
 import {
   EMPTY_MINT_POLICY,
+  assetLimitsFields,
   mintPolicyField,
+  mintPolicyWrite,
 } from "../../../src/protocol/membership/mint-policy.js";
 import {
   queueEntryHash,
@@ -21,6 +23,14 @@ const records = vector.rows.map((row) => ({
     cap: BigInt(row.amount),
     cosignAbove: BigInt(row.amount),
     withdrawalThreshold: BigInt(row.amount),
+    limits: {
+      senderCap: BigInt(row.amount) - 1n,
+      senderWindowSlots: BigInt(row.amount) - 2n,
+      volumeCap: BigInt(row.amount) - 3n,
+      volumeWindowSlots: BigInt(row.amount) - 4n,
+      depositCap: BigInt(row.amount) - 5n,
+      withdrawalCap: BigInt(row.amount) - 6n,
+    },
   },
 }));
 describe("mint records shared with Rust and Go", () => {
@@ -30,6 +40,14 @@ describe("mint records shared with Rust and Go", () => {
     for (const [i, record] of records.entries()) {
       expect(Buffer.from(mintPolicyField(record.mintPolicy)).toString("hex")).toBe(
         vector.rows[i]!.field,
+      );
+      expect(
+        assetLimitsFields(record.mintPolicy.limits).map((limit) =>
+          Buffer.from(limit).toString("hex"),
+        ),
+      ).toEqual(vector.rows[i]!.limits);
+      expect(Buffer.from(mintPolicyWrite(record.mintPolicy).subarray(1)).toString("hex")).toBe(
+        vector.rows[i]!.wire,
       );
       expect(
         Buffer.from(
