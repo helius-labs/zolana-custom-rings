@@ -605,11 +605,11 @@ pub const RING_KEYS: [RingKey; 86] = [
         name: "custom-ring-deposit-8",
     },
     RingKey {
-        circuit: RingCircuit::AnonymousMerge { width: 8 },
-        name: "custom-ring-merge-anonymous-v2-8",
+        circuit: RingCircuit::Merge { width: 8 },
+        name: "custom-ring-merge-v3-8",
     },
     RingKey {
-        circuit: RingCircuit::AnonymousMerge { width: 24 },
-        name: "custom-ring-merge-anonymous-v2-24",
+        circuit: RingCircuit::Merge { width: 24 },
+        name: "custom-ring-merge-v3-24",
     },
 ];

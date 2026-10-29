@@ -626,15 +626,11 @@ fn an_anonymous_merge_names_no_registry() {
         output_tree,
         payer: payer(),
         co_signer: None,
+        key_escrow: false,
         data: CustomRingMergeIxData {
             registry_root_index: 0,
             output_ring_data_hash: [0; 32],
-            disclosure: Some(MergeDisclosure {
-                proof: bytemuck::Zeroable::zeroed(),
-                eph_pk: [0; 33],
-                ciphertext: [0; AUDIT_CIPHERTEXT_LEN],
-                fields: vec![[0; 32]],
-            }),
+            disclosure: zero_disclosure(),
             merge,
         },
     }
@@ -656,7 +652,7 @@ fn a_merge_names_the_config_the_registry_and_the_co_signer_ahead_of_spp() {
     let data = CustomRingMergeIxData {
         registry_root_index: 3,
         output_ring_data_hash: [9; 32],
-        disclosure: None,
+        disclosure: zero_disclosure(),
         merge: MergeTransactIxData {
             expiry_unix_ts: u64::MAX,
             proof: MergeProof::zeroed(),
@@ -689,6 +685,7 @@ fn a_merge_names_the_config_the_registry_and_the_co_signer_ahead_of_spp() {
             output_tree,
             payer: payer(),
             co_signer,
+            key_escrow: true,
             data: data.clone(),
         }
         .instruction()
@@ -709,10 +706,19 @@ fn a_merge_names_the_config_the_registry_and_the_co_signer_ahead_of_spp() {
             (
                 parsed.registry_root_index,
                 *parsed.output_ring_data_hash,
-                parsed.disclosure
+                parsed.disclosure.fields.len()
             ),
-            (3, [9; 32], None)
+            (3, [9; 32], 1)
         );
+    }
+}
+
+fn zero_disclosure() -> MergeDisclosure {
+    MergeDisclosure {
+        proof: bytemuck::Zeroable::zeroed(),
+        eph_pk: [0; 33],
+        ciphertext: [0; AUDIT_CIPHERTEXT_LEN],
+        fields: vec![[0; 32]],
     }
 }
 

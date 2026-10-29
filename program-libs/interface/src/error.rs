@@ -85,8 +85,7 @@ ring_errors! {
     InvalidDepositData = 8180 => "forwarded deposit data is invalid",
     // 8181 to 8191 retired.
     MissingOwnerSigner = 8192 => "forwarded owner signer must sign on entry",
-    // 8193 to 8197 retired.
-    MissingMergeDisclosure = 8198 => "an anonymous ring merge carries its disclosure proof",
+    // 8193 to 8198 retired.
     MergeDisclosureWidth = 8199 => "the merge disclosure field count does not match the merge width",
     RingTransactLength = 8200 => "the compact transact data length disagrees with its flags and shape",
     RingShapeUnkeyed = 8201 => "no audit key or SPP rail key serves the shape on the rail",
@@ -133,7 +132,7 @@ ring_errors! {
     InvalidSettlementAccounts = 8242 => "settlement accounts do not match the public legs",
     TooManyPublicLegs = 8243 => "too many public legs",
     InvalidAuditedDeposit = 8244 => "audited deposit does not wrap an SPP deposit",
-    EscrowMergeUnverified = 8245 => "an escrow-mode merge needs a ring merge proof",
+    // 8245 retired.
     AnonymousExitDestinationsDiffer = 8246 =>
         "all withdrawals of an anonymous spend must name the same destination key",
     AnonymousExitTokenAccountShared = 8247 =>

@@ -348,7 +348,7 @@ pub(crate) fn frame_layout(mode: RingMode, frame: &[u8]) -> Result<DisclosureLay
 /// The ring merge forwards `output_ring_data_hash || body` behind the tag.
 const FORWARDED_MERGE_PREFIX_LEN: usize = 1 + 32;
 
-/// A disclosure counts only when the ring forwarded the exact SPP body, the program takes one from an anonymous ring alone.
+/// A disclosure counts only when the ring forwarded the exact SPP body it proved against.
 fn confirmed_merge_disclosure(
     groups: &[InstructionGroup],
     source: &ParsedInstruction,
@@ -364,7 +364,7 @@ fn confirmed_merge_disclosure(
     }
     let request =
         custom_ring_interface::CustomRingMergeIxDataRef::from_bytes(&caller.data[1..]).ok()?;
-    let disclosure = request.disclosure?;
+    let disclosure = request.disclosure;
     let forwarded = source.data.get(1..FORWARDED_MERGE_PREFIX_LEN)?;
     let body = request.spp_merge_body().ok()?;
     (forwarded == request.output_ring_data_hash.as_slice()

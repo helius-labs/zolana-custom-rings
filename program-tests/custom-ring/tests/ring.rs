@@ -194,11 +194,7 @@ const USDC_FINAL_CHANGE: u64 = USDC_EXIT_CHANGE - USDC_WITHDRAW_AMOUNT - USDC_FI
 
 fn cli_merge_fragments(amounts: &[u64]) -> Result<()> {
     let count = amounts.len().to_string();
-    let merged_count = amounts.len().min(
-        *custom_ring_interface::ANONYMOUS_MERGE_WIDTHS
-            .last()
-            .unwrap(),
-    );
+    let merged_count = amounts.len().min(custom_ring_sdk::MAX_RING_MERGE_INPUTS);
     let total: u64 = amounts[..merged_count].iter().sum();
     let env = setup()?;
     let tree = env.register_default_tree()?;

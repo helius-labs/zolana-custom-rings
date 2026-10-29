@@ -27,7 +27,7 @@ use crate::{
     pipeline::{HiddenOwner, RingSender},
     projection::retry_projection_lag,
     prover::{to_instruction_proof, RingRequest},
-    records::{MemberRead, OwnerRead},
+    records::{EscrowOpening, EscrowRead},
     request::{DepositRequest, RecordOpeningRequest},
     submission::BoundRoot,
     CustomRing, RingError, RingSubmission, SettledSubmission,
@@ -153,11 +153,6 @@ struct DepositDisclosure {
     auditor: X25519Pubkey,
     /// The recipient's record must escrow the key the note uses.
     escrow: bool,
-}
-
-struct EscrowedRecord {
-    opening: RecordOpeningRequest,
-    ct_hash: [u8; 32],
 }
 
 impl RingDeposit<'_> {
@@ -404,28 +399,20 @@ impl DepositDisclosure {
         &self,
         rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
         root: BoundRoot,
-    ) -> Result<EscrowedRecord, RingError> {
-        let read = MemberRead {
+    ) -> Result<EscrowOpening, RingError> {
+        EscrowRead {
             root,
-            member: self.owner_pk_hash,
+            owner: self.owner_pk_hash,
+            nullifier_pk: self.nullifier_pk,
         }
         .read(rpc)
-        .await?;
-        let escrowed = OwnerRead {
-            owner: self.owner_pk_hash,
-            read: &read,
-        }
-        .escrowed(&self.nullifier_pk)?;
-        Ok(EscrowedRecord {
-            opening: RecordOpeningRequest::present(escrowed.record, escrowed.path),
-            ct_hash: escrowed.ct_hash()?,
-        })
+        .await
     }
 
     fn body(
         &self,
         root: Option<[u8; 32]>,
-        record: Option<&EscrowedRecord>,
+        record: Option<&EscrowOpening>,
     ) -> Result<Box<DepositRequest>, RingError> {
         let public_input_hash = DepositPublicInput {
             context_hash: &self.context_hash,

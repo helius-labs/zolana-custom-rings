@@ -27,7 +27,7 @@ use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
     projection::retry_projection_lag,
     prover::{to_instruction_proof, RingRequest},
-    request::{ApplyRecords, RecordWrite},
+    request::{ApplyRecords, RecordOpeningRequest, RecordWrite},
     submission::BoundRoot,
     CustomRing, CustomRingConfig, RingError,
 };
@@ -158,6 +158,42 @@ impl<'a> OwnerRead<'a> {
                 owner: Member::from_bytes(self.owner)?,
             }),
         }
+    }
+}
+
+/// The owner's record under `root`, refused unless it escrows `nullifier_pk`.
+#[derive(Clone, Copy)]
+pub(crate) struct EscrowRead {
+    pub root: BoundRoot,
+    pub owner: [u8; 32],
+    pub nullifier_pk: [u8; 32],
+}
+
+pub(crate) struct EscrowOpening {
+    pub opening: RecordOpeningRequest,
+    pub ct_hash: [u8; 32],
+}
+
+impl EscrowRead {
+    pub async fn read(
+        self,
+        rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
+    ) -> Result<EscrowOpening, RingError> {
+        let read = MemberRead {
+            root: self.root,
+            member: self.owner,
+        }
+        .read(rpc)
+        .await?;
+        let escrowed = OwnerRead {
+            owner: self.owner,
+            read: &read,
+        }
+        .escrowed(&self.nullifier_pk)?;
+        Ok(EscrowOpening {
+            opening: RecordOpeningRequest::present(escrowed.record, escrowed.path),
+            ct_hash: escrowed.ct_hash()?,
+        })
     }
 }
 

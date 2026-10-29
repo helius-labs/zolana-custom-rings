@@ -8,9 +8,7 @@ use solana_keypair::{Keypair, Signer};
 
 use crate::{
     common::{key_registration, reaches_verification, refused, register_key, Ring, Sent, Setup},
-    forward_rules::{
-        deposit_instruction, merge_data, merge_disclosure, merge_instruction_with, ring_deposit,
-    },
+    forward_rules::{deposit_instruction, merge_data, merge_instruction_with, ring_deposit},
     transact_rules::{registry_meta, send, spp_list, Fixture},
 };
 
@@ -176,22 +174,17 @@ fn an_anonymous_policy_merge_discloses_its_owner_to_the_auditor_alone() {
     let disclosed = |registry, inputs| {
         let mut data = merge_data(registry, inputs);
         data.output_ring_data_hash = [0; 32];
-        data.disclosure = Some(merge_disclosure(inputs));
         data
     };
-    refused(
-        merge(merge_data(None, 8)),
-        CustomRingError::MissingMergeDisclosure,
-    );
     refused(
         merge(disclosed(Some(1), 8)),
         CustomRingError::UnexpectedMemberRegistryRoot,
     );
     let mut narrow = disclosed(None, 8);
-    narrow.disclosure.as_mut().unwrap().fields.pop();
+    narrow.disclosure.fields.pop();
     refused(merge(narrow), CustomRingError::MergeDisclosureWidth);
     let mut untagged = disclosed(None, 8);
-    untagged.disclosure.as_mut().unwrap().eph_pk[0] = 0;
+    untagged.disclosure.eph_pk[0] = 0;
     refused(merge(untagged), CustomRingError::InvalidMergeDisclosure);
     refused(
         merge(disclosed(None, 25)),

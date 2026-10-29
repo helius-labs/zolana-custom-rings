@@ -666,7 +666,7 @@ impl core::fmt::Debug for MergeSlot {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct MergeAnonymous {
+pub(crate) struct MergeRequest {
     #[serde(serialize_with = "fe::seq")]
     pub party_identities: [[u8; 32]; 3],
     #[serde(with = "fe")]
@@ -699,6 +699,13 @@ pub(crate) struct MergeAnonymous {
     pub output_tree_id: [u8; 32],
     #[serde(with = "fe")]
     pub output_ring_data_hash: [u8; 32],
+    pub key_escrow: bool,
+    #[serde(with = "fe")]
+    pub member_registry_root: [u8; 32],
+    #[serde(with = "fe")]
+    pub ct_hash: [u8; 32],
+    /// `Some` on a key escrow ring alone.
+    pub member: Option<RecordOpeningRequest>,
 }
 
 /// A present record as the deposit circuit opens it.

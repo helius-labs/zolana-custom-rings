@@ -3,9 +3,10 @@
 use std::collections::{BTreeMap, HashSet};
 
 use anyhow::{anyhow, ensure, Result};
-use custom_ring_interface::ANONYMOUS_MERGE_WIDTHS;
 use custom_ring_sdk::select_merge_where;
-use custom_ring_sdk::{CustomRingMerge, MergeProofInput, RingMergeOperation, RingMode};
+use custom_ring_sdk::{
+    CustomRingMerge, MergeProofInput, RingMergeOperation, RingMode, MAX_RING_MERGE_INPUTS,
+};
 use solana_address::Address;
 use solana_signer::Signer;
 use spr_interface::pda;
@@ -45,10 +46,7 @@ pub fn run(ctx: &Context, args: MergeArgs) -> Result<()> {
     if !spendable.unknown_mints.is_empty() {
         line("unregistered mints", spendable.unknown_mints.len());
     }
-    let count = match config.mode {
-        RingMode::Anonymous => (args.count as usize).min(widest_anonymous_merge()),
-        RingMode::Confidential | RingMode::ConfidentialEscrow => args.count as usize,
-    };
+    let count = (args.count as usize).min(MAX_RING_MERGE_INPUTS);
     let selected = select(&spendable, ctx.ring.program_id(), mint, count)?;
     let (input_count, tree_id) = (selected.len(), selected[0].tree_id);
     let tree = pda::tree(tree_id);
@@ -66,8 +64,8 @@ pub fn run(ctx: &Context, args: MergeArgs) -> Result<()> {
     );
     let payer = ctx.member_payer(config.mode, sender.pubkey())?;
     ctx.fund(payer.pubkey(), MIN_AUTHORITY_BALANCE)?;
-    // The merge proves the owner's escrowed key.
-    if config.mode != RingMode::Anonymous {
+    // A key escrow merge proves the owner's escrowed key.
+    if config.mode == RingMode::ConfidentialEscrow {
         KeyEnrolment {
             funder: payer,
             members: &[&sender],
@@ -88,10 +86,6 @@ pub fn run(ctx: &Context, args: MergeArgs) -> Result<()> {
     line("tree", tree);
     println!("merge preserves value and binds its ciphertext to registered auditor recovery");
     Ok(())
-}
-
-fn widest_anonymous_merge() -> usize {
-    ANONYMOUS_MERGE_WIDTHS.into_iter().max().unwrap_or_default()
 }
 
 /// The smallest clean notes of the tree holding the most of them, at most `count`.
