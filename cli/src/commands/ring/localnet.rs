@@ -10,7 +10,9 @@ use std::{
 };
 
 use anyhow::{ensure, Context as _, Result};
+use custom_ring_interface::STORAGE_PROGRAM_ID;
 use serde::Deserialize;
+use solana_address::Address;
 use zolana_cli_common::{
     config_dir,
     process::{answers, process_scope, spawn_owned, stop_owned_listener, wait_until},
@@ -26,6 +28,19 @@ use crate::{
     workspace::{Workspace, WRONG_TARGET},
     Context, LocalnetArgs, AUDITOR_KEY_FILE,
 };
+
+/// A fixed id with no deploy keypair.
+pub struct GenesisProgram {
+    pub address: Address,
+    /// Relative to the workspace root.
+    pub path: &'static str,
+}
+
+/// Mirrored by ring-genesis-programs in justfile.
+pub const GENESIS_PROGRAMS: [GenesisProgram; 1] = [GenesisProgram {
+    address: STORAGE_PROGRAM_ID,
+    path: "target/deploy/storage_program.so",
+}];
 
 /// SIMD-0500 off, the ring program deploys as SBPF v0 like on devnet.
 const SBPF_V0_FEATURE: &str = "B8JJXCy5amZyWG9r7EnUYLwzXSXTxG7GZ1qZ1qggo83g";
@@ -134,8 +149,14 @@ fn bring_up_workspace(
             .arg(snapshots)
             .arg("--sbf-program")
             .arg(spr_interface::pda::shielded_pool_program_id().to_string())
-            .arg(workspace.shielded_pool_so()?)
-            .args(["--", "--deactivate-feature", SBPF_V0_FEATURE]);
+            .arg(workspace.shielded_pool_so()?);
+        for program in &GENESIS_PROGRAMS {
+            command
+                .arg("--sbf-program")
+                .arg(program.address.to_string())
+                .arg(workspace.artifact(program.path)?);
+        }
+        command.args(["--", "--deactivate-feature", SBPF_V0_FEATURE]);
         ZOLANA
             .named("workspace zolana dev start")
             .run(&mut command)?;
@@ -396,6 +417,20 @@ mod tests {
         assert!(
             error.starts_with("http://localhost carries no port"),
             "{error}"
+        );
+    }
+
+    #[test]
+    fn the_justfile_loads_every_genesis_program() {
+        let flags = GENESIS_PROGRAMS
+            .iter()
+            .map(|program| format!("--sbf-program {} {}", program.address, program.path))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let variable = format!("ring-genesis-programs := \"{flags}\"");
+        assert!(
+            include_str!("../../../../justfile").contains(&variable),
+            "the justfile misses {variable}"
         );
     }
 }

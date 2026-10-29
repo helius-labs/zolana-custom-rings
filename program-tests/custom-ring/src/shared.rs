@@ -15,7 +15,7 @@ use std::{
 };
 
 use anyhow::{anyhow, ensure, Context, Result};
-use custom_ring_cli::{Zolana, ZolanaServices};
+use custom_ring_cli::{localnet::GENESIS_PROGRAMS, Zolana, ZolanaServices};
 use custom_ring_sdk::{
     compute_unit_limit, CreateConfig, CreateMemberRegistry, CustomRing, InitSppRingConfig,
     InitializeStorage, InstructionTag, MemberRecords, PolicyRecords, PolicyRules, RingError,
@@ -515,6 +515,7 @@ pub fn setup() -> Result<TestEnv> {
 pub fn setup_with_extra_rings(extra_ring_programs: &[Address]) -> Result<TestEnv> {
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../zolana");
     let artifacts = WorkspaceArtifacts::new(root);
+    let ring_artifacts = ring_artifacts();
     let cli =
         std::env::var("ZOLANA_CLI_BIN").unwrap_or_else(|_| artifacts.path("target/debug/zolana"));
     let ring_program = custom_ring_program_id()?;
@@ -537,7 +538,7 @@ pub fn setup_with_extra_rings(extra_ring_programs: &[Address]) -> Result<TestEnv
         ports: LocalnetPorts::checkout()?,
         account_dir: account_dir.into(),
         log_dir: artifacts.path("test-ledger").into(),
-        programs: vec![
+        programs: [
             (
                 user_registry_program_id(),
                 artifacts.path("target/deploy/spr_user_registry.so").into(),
@@ -548,7 +549,14 @@ pub fn setup_with_extra_rings(extra_ring_programs: &[Address]) -> Result<TestEnv
                     .path("target/deploy/squads_smart_account_program.so")
                     .into(),
             ),
-        ],
+        ]
+        .into_iter()
+        .chain(
+            GENESIS_PROGRAMS
+                .iter()
+                .map(|program| (program.address, ring_artifacts.path(program.path).into())),
+        )
+        .collect(),
         slot_time: None,
     };
     let deployments: Vec<UpgradeableProgram> = std::iter::once(UpgradeableProgram {
@@ -720,9 +728,12 @@ pub fn custom_ring_program_id() -> Result<Address> {
 }
 
 pub fn ring_program_so() -> String {
-    let artifacts = WorkspaceArtifacts::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
     std::env::var("CUSTOM_RING_PROGRAM_SO")
-        .unwrap_or_else(|_| artifacts.path("target/deploy/custom_ring_program.so"))
+        .unwrap_or_else(|_| ring_artifacts().path("target/deploy/custom_ring_program.so"))
+}
+
+fn ring_artifacts() -> WorkspaceArtifacts {
+    WorkspaceArtifacts::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
 }
 
 /// A fresh eddsa actor: one keypair funded on chain, its shielded address,

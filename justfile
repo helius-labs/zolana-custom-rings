@@ -32,6 +32,8 @@ export PROVER_INDEXER_URL := localnet-ring-indexer-url
 # Any genesis address works, the shared ring binary serves it.
 export CUSTOM_RING_PROGRAM_ID := env_var_or_default("CUSTOM_RING_PROGRAM_ID", "9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh")
 export PROVER_BIN := justfile_directory() / "target/prover-server"
+# Mirrored by GENESIS_PROGRAMS in cli/src/commands/ring/localnet.rs.
+ring-genesis-programs := "--sbf-program 6cGXszer5keoaWm8Co5G9f4KGBThuGz4NsKTqYij1emg target/deploy/storage_program.so"
 sdk-lib-crates := "zolana-ring-client zolana-ring-indexer zolana-ring-transaction zolana-ring-rpc custom-ring-sdk custom-ring-cli custom-ring-interface zolana-ring-policy zolana-ring-member-registry"
 
 default:
@@ -255,6 +257,7 @@ ring-localnet: check-custom-ring-keys build-programs zolana::build-cli build-pho
       --account-dir "$accounts_dir" --limit-ledger-size 5000000 \
       --sbf-program "$SHIELDED_POOL_PROGRAM_ID" zolana/target/deploy/shielded_pool_program.so \
       --sbf-program "$USER_REGISTRY_PROGRAM_ID" zolana/target/deploy/spr_user_registry.so \
+      {{ring-genesis-programs}} \
       -- --deactivate-feature B8JJXCy5amZyWG9r7EnUYLwzXSXTxG7GZ1qZ1qggo83g
     tools/start-ring-indexer.sh "$workdir/ring-indexer" {{localnet-rpc-url}} {{localnet-photon-url}} \
       {{localnet-ring-indexer-port}}
@@ -446,6 +449,7 @@ _test-ts-live test-script *args: build-ring-program _spp-programs build-photon b
       --photon-port {{localnet-photon-port}} --account-dir "$accounts_dir" \
       --sbf-program "$SHIELDED_POOL_PROGRAM_ID" "$spp_so" \
       --sbf-program "$USER_REGISTRY_PROGRAM_ID" "$registry_so" \
+      {{ring-genesis-programs}} \
       --upgradeable-program "$ring_program_id" target/deploy/custom_ring_program.so \
       "$ring_authority"
     tools/start-ring-indexer.sh "$workdir/ring-indexer" {{localnet-rpc-url}} {{localnet-photon-url}} \
