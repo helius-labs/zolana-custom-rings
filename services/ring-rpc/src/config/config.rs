@@ -8,6 +8,7 @@ use std::{
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use rand::RngCore;
 use solana_address::Address;
+use solana_keypair::Keypair;
 use thiserror::Error;
 use zeroize::Zeroizing;
 use zolana_secret_file::{create_new, read_key32, Access, SecretFileError, Visibility};
@@ -26,7 +27,7 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    Serve(ServeArgs),
+    Serve(Box<ServeArgs>),
     Keygen(KeygenArgs),
 }
 
@@ -77,6 +78,18 @@ pub struct ServeArgs {
     pub upstream_timeout_secs: NonZeroU64,
     #[arg(long, env = "RING_RPC_ALLOW_SHARED_KEY_FILE")]
     pub allow_shared_key_file: bool,
+    /// Lowercase hex Ed25519 seed, set to relay transfers and pay their fees.
+    #[arg(
+        long,
+        env = "RING_RPC_FEE_PAYER_KEY_FILE",
+        requires_all = ["store_url", "prover_url"]
+    )]
+    pub fee_payer_key_file: Option<PathBuf>,
+    /// A `postgres://` or `sqlite://` URL.
+    #[arg(long, env = "RING_RPC_STORE_URL")]
+    pub store_url: Option<String>,
+    #[arg(long, env = "RING_RPC_PROVER_URL")]
+    pub prover_url: Option<String>,
     /// Serve plain HTTP on a public address and accept plain HTTP origins, test deployments only.
     #[arg(long, env = "RING_RPC_INSECURE_PUBLIC_BIND")]
     pub insecure_public_bind: bool,
@@ -94,6 +107,7 @@ pub struct KeygenArgs {
 pub enum KeyKind {
     Auditor,
     Root,
+    FeePayer,
 }
 
 impl ServeArgs {
@@ -170,6 +184,17 @@ pub fn read_root_secret(path: &Path, access: Access) -> Result<RootSecret, RootS
 pub fn write_root_secret(out: &Path) -> Result<(), RootSecretError> {
     let root = Zeroizing::new(hex::encode(RootSecret::random().as_bytes()));
     Ok(create_new(out, root.as_bytes(), Visibility::Secret)?)
+}
+
+pub fn read_fee_payer(path: &Path, access: Access) -> Result<Keypair, SecretFileError> {
+    Ok(Keypair::new_from_array(*read_key32(path, access)?))
+}
+
+pub fn write_fee_payer(out: &Path) -> Result<Keypair, SecretFileError> {
+    let mut seed = Zeroizing::new([0u8; 32]);
+    rand::rngs::OsRng.fill_bytes(seed.as_mut_slice());
+    create_new(out, hex::encode(*seed).as_bytes(), Visibility::Secret)?;
+    Ok(Keypair::new_from_array(*seed))
 }
 
 #[cfg(test)]

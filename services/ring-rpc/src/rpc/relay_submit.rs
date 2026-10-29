@@ -19,6 +19,9 @@ pub struct CollectedSignature {
 
 #[async_trait]
 pub trait RelaySubmit: Send + Sync {
+    /// The SPP payer every relayed message names.
+    fn fee_payer(&self) -> Address;
+
     /// The signature names the sent transaction, confirmation is the caller's to track.
     async fn submit(&self, transaction: RelayTransaction) -> Result<Signature, RingRpcError>;
 }

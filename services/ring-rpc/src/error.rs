@@ -10,7 +10,7 @@ use zolana_ring_client::{
     AuditError, RingIndexerError, RingRpcError as RingRefusal,
 };
 
-use crate::authorize::Unauthorized;
+use crate::{authorize::Unauthorized, relay::RelayError};
 
 #[derive(Debug, Error)]
 pub enum RingRpcError {
@@ -44,6 +44,8 @@ pub enum RingRpcError {
     Busy,
     #[error("service store failed because {0}")]
     Store(#[from] sea_orm::DbErr),
+    #[error(transparent)]
+    Relay(#[from] RelayError),
 }
 
 impl From<RingIndexerError> for RingRpcError {
@@ -92,6 +94,7 @@ impl From<RingRpcError> for ErrorObjectOwned {
     fn from(failure: RingRpcError) -> Self {
         use RingRpcError::*;
         let (code, message) = match &failure {
+            Relay(relay) => return relay.into(),
             RingRequired | RingNotServed | InvalidPage | InvalidUtxoRequest | Unauthorized(_) => {
                 let message = failure.to_string();
                 return ErrorObjectOwned::owned(

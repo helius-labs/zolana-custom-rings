@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 async-trait = { workspace = true }
 custom-ring-interface = { workspace = true }
+custom-ring-sdk = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 hex = { workspace = true }
@@ -40,11 +41,17 @@ solana-signer = { workspace = true }
 solana-commitment-config = { workspace = true }
 solana-rpc-client = { workspace = true }
 solana-signature = { workspace = true, features = ["verify"] }
+solana-hash = { workspace = true }
+solana-instruction = { workspace = true }
+solana-transaction = { workspace = true }
+solana-transaction-error = { workspace = true }
+solana-transaction-status-client-types = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["signal", "sync", "time"] }
 tower = { workspace = true, features = ["timeout"] }
 tower-http = { workspace = true }
 tracing-subscriber = { workspace = true }
+wincode = { workspace = true }
 zeroize = { workspace = true }
 spr-api = { workspace = true, features = ["reqwest"] }
 spr-client = { workspace = true, features = ["solana-rpc"] }

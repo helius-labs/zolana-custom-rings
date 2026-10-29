@@ -30,6 +30,7 @@ use crate::{
         MAX_CONCURRENT_READS,
     },
     origins::Origins,
+    relay::Relay,
     replay::ReplayGuard,
     upstream::{DepositHistory, DepositPage, TransactionSource},
     utxos::AuditStore,
@@ -41,6 +42,7 @@ pub struct Hub<S> {
     signer: Keypair,
     shared: Arc<Shared<S>>,
     keys: KeySource,
+    relay: Option<Arc<Relay>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,6 +105,7 @@ pub struct HubBuilder<S> {
     assets: Option<RingAssets>,
     origins: Origins,
     clock: Clock,
+    relay: Option<Arc<Relay>>,
 }
 
 pub(crate) struct Shared<S> {
@@ -191,6 +194,7 @@ impl<S: TransactionSource> Hub<S> {
             assets: None,
             origins: Origins::default(),
             clock: Clock::System,
+            relay: None,
         }
     }
 
@@ -232,6 +236,10 @@ impl<S: TransactionSource> Hub<S> {
 
     pub fn origins(&self) -> &Origins {
         &self.shared.origins
+    }
+
+    pub fn relay(&self) -> Option<&Arc<Relay>> {
+        self.relay.as_ref()
     }
 
     pub fn local_view_tag(&self) -> Option<[u8; 32]> {
@@ -402,6 +410,12 @@ impl<S: TransactionSource> HubBuilder<S> {
         self
     }
 
+    #[must_use = "use the updated builder"]
+    pub fn with_relay(mut self, relay: Arc<Relay>) -> Self {
+        self.relay = Some(relay);
+        self
+    }
+
     pub fn local(self, ring: Address, auditor: X25519Keypair) -> Result<Hub<S>, RingRpcError> {
         let signer = service_keypair(auditor.secret_bytes().as_slice())?;
         self.build(signer, KeySource::Local { ring, auditor })
@@ -447,6 +461,7 @@ impl<S: TransactionSource> HubBuilder<S> {
             signer,
             shared: Arc::new(shared),
             keys,
+            relay: self.relay,
         })
     }
 }
