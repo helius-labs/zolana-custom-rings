@@ -75,6 +75,10 @@ pub enum RingError {
     MissingRingConfig,
     #[error("the ring has no member registry")]
     MissingMemberRegistry,
+    #[error("the ring has no ring policy")]
+    MissingRingPolicy,
+    #[error("the ring policy holds no synced roots of registry {registry}")]
+    UnsyncedRoots { registry: Address },
     #[error("the ring has no record queue")]
     MissingRecordQueue,
     #[error("the ring is not registered with the shielded pool, run InitSppRingConfig")]

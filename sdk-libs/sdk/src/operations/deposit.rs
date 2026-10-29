@@ -371,7 +371,7 @@ impl PreparedRingDeposit {
         .await
     }
 
-    /// `[config, registry?, co-signer?]`, then SPP's deposit list.
+    /// `[config, policy?, co-signer?]`, then SPP's deposit list.
     fn instruction(
         &self,
         proof: CustomRingProof,
@@ -381,12 +381,12 @@ impl PreparedRingDeposit {
         let prefix = AuditedDepositPrefix {
             tag: tag::AUDITED_DEPOSIT,
             proof,
-            registry_root_index: root.map_or(0, |root| root.index),
+            own_revision: root.map_or_else(Default::default, |root| root.revision),
         };
         instruction.data = [bytemuck::bytes_of(&prefix), &instruction.data].concat();
         let mut accounts = vec![AccountMeta::new_readonly(self.ring.config_pda(), false)];
         if root.is_some() {
-            accounts.push(AccountMeta::new_readonly(self.ring.registry_pda(), false));
+            accounts.push(AccountMeta::new_readonly(self.ring.policy_pda(), false));
         }
         accounts.extend(
             self.cosigner

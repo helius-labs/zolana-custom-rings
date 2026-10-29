@@ -2,7 +2,7 @@
 
 use custom_ring_interface::{
     tag, CoSignScope, CoSigner, CreateConfigIxData, CustomRingError, InstructionTag,
-    MemberRegistry, ReadAccessRecord, ReaderIxData, RingKind, RingMode, RingProgramConfig,
+    ReadAccessRecord, ReaderIxData, RingKind, RingMode, RingPolicy, RingProgramConfig,
     SetPausedIxData, SetPolicySourceIxData, WriteRecordsIxData, DEFAULT_INSERT_FEE,
     READER_KEY_P256, READ_ACCESS_RECORD_PDA_SEED,
 };
@@ -15,9 +15,9 @@ use zolana_ring_policy::{ListChange, ListId, ListSet};
 
 use crate::common::{
     allow_list_table, auditor_pubkey, co_signer_record, config_pda, config_write, create_config,
-    create_member_registry, list_table, policy_write, program_data_of, queue_pda, refused,
-    refused_with, registry_pda, ring_auth, set_co_signer, set_delegate, within_budget,
-    write_records, ClearCoSignerIx, Fee, Ring, Sent, SetCoSignerIx, Setup, PROGRAM, SYSTEM,
+    create_member_registry, create_policy, list_table, policy_pda, policy_write, program_data_of,
+    queue_pda, refused, refused_with, ring_auth, set_co_signer, set_delegate, within_budget,
+    write_records, ClearCoSignerIx, Fee, Ring, Sent, SetCoSignerIx, Setup, PROGRAM, RECORDS, SYSTEM,
 };
 use crate::transact_rules::SPP;
 
@@ -258,15 +258,11 @@ fn a_rule_over_a_member_written_list_is_refused() {
 fn policy_writes_need_a_policy_ring_and_a_foreign_curator() {
     let mut audit_only = Ring::new(Setup::AuditOnly);
     let authority = audit_only.authority.pubkey();
+    let payer = audit_only.payer.pubkey();
     refused(
         authority_send(
             &mut audit_only,
-            policy_write(
-                tag::CREATE_POLICY,
-                &authority,
-                allow_list_table(Vec::new()),
-                &[],
-            ),
+            create_policy(&payer, &authority, allow_list_table(Vec::new()), &[]),
         ),
         CustomRingError::PolicyOnAuditOnlyRing,
     );
@@ -285,25 +281,21 @@ fn policy_writes_need_a_policy_ring_and_a_foreign_curator() {
 
     let mut ring = Ring::new(Setup::Policy);
     let authority = ring.authority.pubkey();
+    let payer = ring.payer.pubkey();
     refused(
         authority_send(
             &mut ring,
-            policy_write(
-                tag::CREATE_POLICY,
-                &authority,
-                allow_list_table(Vec::new()),
-                &[],
-            ),
+            create_policy(&payer, &authority, allow_list_table(Vec::new()), &[]),
         ),
-        CustomRingError::PolicyAlreadySet,
+        CustomRingError::RingPolicyAlreadyExists,
     );
-    let before: MemberRegistry = ring.read(&registry_pda());
+    let before: RingPolicy = ring.read(&policy_pda());
     let mut own = allow_list_table(Vec::new());
     own.sources[0].source = 1;
     refused(
         authority_send(
             &mut ring,
-            policy_write(tag::SET_POLICY_RULES, &authority, own, &[registry_pda()]),
+            policy_write(tag::SET_POLICY_RULES, &authority, own, &[RECORDS]),
         ),
         CustomRingError::InvalidSource,
     );
@@ -335,7 +327,7 @@ fn policy_writes_need_a_policy_ring_and_a_foreign_curator() {
         ),
     )
     .expect("rewrite the table");
-    let after: MemberRegistry = ring.read(&registry_pda());
+    let after: RingPolicy = ring.read(&policy_pda());
     assert_eq!(after.policy_hash, before.policy_hash);
     assert_eq!(after.generation(), before.generation() + 1);
 }
@@ -344,9 +336,9 @@ fn policy_writes_need_a_policy_ring_and_a_foreign_curator() {
 fn a_policy_ring_registers_with_spp_once_its_table_is_set() {
     let mut ring = Ring::new(Setup::Policy);
     ring.deploy_stand_in(SPP);
-    let mut registry: MemberRegistry = ring.read(&registry_pda());
-    registry.policy_hash = [0; 32];
-    ring.write(&registry_pda(), &registry);
+    let mut policy: RingPolicy = ring.read(&policy_pda());
+    policy.policy_hash = [0; 32];
+    ring.write(&policy_pda(), &policy);
     let register = init_spp_ring_config(&ring);
     refused(
         authority_send(&mut ring, register),
@@ -365,7 +357,7 @@ fn init_spp_ring_config(ring: &Ring) -> Instruction {
             AccountMeta::new(ring_auth(), false),
             AccountMeta::new_readonly(SYSTEM, false),
             AccountMeta::new_readonly(SPP, false),
-            AccountMeta::new_readonly(registry_pda(), false),
+            AccountMeta::new_readonly(policy_pda(), false),
         ],
         data: vec![tag::INIT_SPP_RING_CONFIG],
     }
@@ -403,13 +395,13 @@ fn every_authority_write_refuses_a_stranger() {
             0,
         ),
         (
-            policy_write(
-                tag::CREATE_POLICY,
+            create_policy(
+                &ring.payer.pubkey(),
                 &authority,
                 allow_list_table(Vec::new()),
                 &[],
             ),
-            0,
+            1,
         ),
         (
             policy_write(
@@ -424,7 +416,7 @@ fn every_authority_write_refuses_a_stranger() {
             config_write(
                 tag::SET_POLICY_SOURCE,
                 &authority,
-                &[AccountMeta::new(registry_pda(), false)],
+                &[AccountMeta::new(policy_pda(), false)],
                 &wincode::serialize(&source).unwrap(),
             ),
             0,
@@ -770,7 +762,7 @@ fn a_source_write_names_a_known_list() {
             accounts: vec![
                 AccountMeta::new_readonly(authority, true),
                 AccountMeta::new_readonly(config_pda(), false),
-                AccountMeta::new(registry_pda(), false),
+                AccountMeta::new(policy_pda(), false),
             ],
             data: [
                 &[tag::SET_POLICY_SOURCE][..],
@@ -786,7 +778,7 @@ fn a_source_write_names_a_known_list() {
 }
 
 #[test]
-fn a_table_write_decodes_and_counts_its_generation_on_the_own_registry() {
+fn a_table_write_decodes_and_counts_its_generation_on_the_policy() {
     let mut ring = Ring::new(Setup::Policy);
     let authority = ring.authority.pubkey();
     let mut malformed = allow_list_table(Vec::new());
@@ -799,20 +791,20 @@ fn a_table_write_decodes_and_counts_its_generation_on_the_own_registry() {
         ),
         CustomRingError::InvalidPolicyRules,
     );
-    let mut queue_as_registry = policy_write(
+    let mut queue_as_policy = policy_write(
         tag::SET_POLICY_RULES,
         &authority,
         allow_list_table(Vec::new()),
         &[],
     );
-    queue_as_registry.accounts[2] = AccountMeta::new(queue_pda(), false);
+    queue_as_policy.accounts[2] = AccountMeta::new(queue_pda(), false);
     refused(
-        authority_send(&mut ring, queue_as_registry),
-        CustomRingError::InvalidMemberRegistry,
+        authority_send(&mut ring, queue_as_policy),
+        CustomRingError::InvalidRingPolicy,
     );
-    let mut registry: MemberRegistry = ring.read(&registry_pda());
-    registry.generation = u32::MAX.to_le_bytes();
-    ring.write(&registry_pda(), &registry);
+    let mut policy: RingPolicy = ring.read(&policy_pda());
+    policy.generation = u32::MAX.to_le_bytes();
+    ring.write(&policy_pda(), &policy);
     refused(
         authority_send(
             &mut ring,

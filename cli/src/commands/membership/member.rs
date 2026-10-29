@@ -187,13 +187,13 @@ mod tests {
     use zolana_ring_client::{AuditError, NullifierKeyEnvelope};
     use zolana_ring_client::{RingIndexer, RingIndexerError, RingRpcError};
     use zolana_ring_indexer::rpc::{
-        GetRingMemberOpeningsRequest, GetRingMemberOpeningsResponse, RingMemberOpening,
+        GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse, RingMemberOpening,
     };
     use zolana_ring_member_registry::MemberRegistryTree;
 
     use super::*;
     use crate::{
-        records::fixtures::{ring, tree, zolana, IndexerAnswer, RegistryRpc},
+        records::fixtures::{ring, tree, zolana, IndexerAnswer, PolicyRpc},
         ui::{Answer, Ask, Scripted},
     };
 
@@ -207,17 +207,17 @@ mod tests {
             .as_bytes()
     }
 
-    struct Stub(GetRingMemberOpeningsResponse);
+    struct Stub(GetStorageMemberOpeningsResponse);
 
     impl WitnessReader for Stub {}
 
     impl Rpc for Stub {}
 
     impl RingIndexer for Stub {
-        fn get_ring_member_openings(
+        fn get_storage_member_openings(
             &self,
-            _request: GetRingMemberOpeningsRequest,
-        ) -> Result<GetRingMemberOpeningsResponse, RingIndexerError> {
+            _request: GetStorageMemberOpeningsRequest,
+        ) -> Result<GetStorageMemberOpeningsResponse, RingIndexerError> {
             Ok(self.0.clone())
         }
     }
@@ -229,7 +229,7 @@ mod tests {
     }
 
     struct Served {
-        rpc: RegistryRpc,
+        rpc: PolicyRpc,
         indexer: Stub,
     }
 
@@ -253,7 +253,7 @@ mod tests {
             }
             .openings();
             Served {
-                rpc: RegistryRpc::of(tree),
+                rpc: PolicyRpc::of(tree),
                 indexer: Stub(answer),
             }
         }
@@ -303,7 +303,7 @@ mod tests {
             sealed: None,
         }
         .openings();
-        let client = zolana(RegistryRpc::of(empty), Stub(absent));
+        let client = zolana(PolicyRpc::of(empty), Stub(absent));
         assert!(!registered(ring(), &client, &member).expect("registered"));
         let mut yes = Scripted::new([Answer::Yes(true)]);
         assert_eq!(
@@ -328,14 +328,14 @@ mod tests {
 
     #[test]
     fn a_lagging_registry_is_polled_until_it_answers() {
-        struct Lagging(AtomicU8, GetRingMemberOpeningsResponse);
+        struct Lagging(AtomicU8, GetStorageMemberOpeningsResponse);
         impl WitnessReader for Lagging {}
         impl Rpc for Lagging {}
         impl RingIndexer for Lagging {
-            fn get_ring_member_openings(
+            fn get_storage_member_openings(
                 &self,
-                _request: GetRingMemberOpeningsRequest,
-            ) -> Result<GetRingMemberOpeningsResponse, RingIndexerError> {
+                _request: GetStorageMemberOpeningsRequest,
+            ) -> Result<GetStorageMemberOpeningsResponse, RingIndexerError> {
                 if self.0.fetch_add(1, Ordering::Relaxed) == 0 {
                     return Err(RingRpcError::RegistryOutOfSync.into());
                 }
@@ -350,21 +350,21 @@ mod tests {
             sealed: None,
         }
         .openings();
-        let client = zolana(RegistryRpc::of(empty), Lagging(AtomicU8::new(0), absent));
+        let client = zolana(PolicyRpc::of(empty), Lagging(AtomicU8::new(0), absent));
         assert!(!registered(ring(), &client, &member).expect("registered"));
         assert_eq!(client.indexer().0.load(Ordering::Relaxed), 2);
     }
 
     #[test]
     fn a_changed_registry_root_is_refetched_before_retrying() {
-        struct Advanced(AtomicU8, [u8; 32], GetRingMemberOpeningsResponse);
+        struct Advanced(AtomicU8, [u8; 32], GetStorageMemberOpeningsResponse);
         impl WitnessReader for Advanced {}
         impl Rpc for Advanced {}
         impl RingIndexer for Advanced {
-            fn get_ring_member_openings(
+            fn get_storage_member_openings(
                 &self,
-                request: GetRingMemberOpeningsRequest,
-            ) -> Result<GetRingMemberOpeningsResponse, RingIndexerError> {
+                request: GetStorageMemberOpeningsRequest,
+            ) -> Result<GetStorageMemberOpeningsResponse, RingIndexerError> {
                 if self.0.fetch_add(1, Ordering::Relaxed) == 0 {
                     assert_eq!(request.expected_root.0, self.1);
                     return Err(RingRpcError::RegistryRootChanged.into());
@@ -390,7 +390,7 @@ mod tests {
         .openings();
         let first = MemberRegistryTree::new().unwrap();
         let first_root = zolana_ring_member_registry::RecordTree::root(&first).unwrap();
-        let rpc = RegistryRpc::of(first).advancing_to(advanced);
+        let rpc = PolicyRpc::of(first).advancing_to(advanced);
         let client = zolana(rpc, Advanced(AtomicU8::new(0), first_root, answer));
         assert!(!registered(ring(), &client, &member).expect("registered"));
         assert_eq!(client.indexer().0.load(Ordering::Relaxed), 2);
@@ -440,10 +440,10 @@ mod tests {
         impl WitnessReader for Down {}
         impl Rpc for Down {}
         impl RingIndexer for Down {
-            fn get_ring_member_openings(
+            fn get_storage_member_openings(
                 &self,
-                _request: GetRingMemberOpeningsRequest,
-            ) -> Result<GetRingMemberOpeningsResponse, RingIndexerError> {
+                _request: GetStorageMemberOpeningsRequest,
+            ) -> Result<GetStorageMemberOpeningsResponse, RingIndexerError> {
                 Err(ClientError::IndexerUnavailable("down".to_owned()).into())
             }
         }
@@ -451,7 +451,7 @@ mod tests {
         assert!(matches!(
             ring_error(registered(
                 ring(),
-                &zolana(RegistryRpc::of(empty), Down),
+                &zolana(PolicyRpc::of(empty), Down),
                 &member()
             )),
             RingError::Client(_)

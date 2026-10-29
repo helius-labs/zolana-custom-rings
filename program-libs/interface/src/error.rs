@@ -152,6 +152,12 @@ ring_errors! {
     CoSignerCountOutOfRange = 8263 => "co-signer count of a class leaves the u8 range",
     InvalidRingPolicy = 8300 => "ring policy account is invalid",
     RingPolicyAlreadyExists = 8301 => "ring policy already exists",
+    InvalidStorageRegistry = 8302 => "storage registry account is invalid",
+    StorageAuthorityMismatch = 8303 =>
+        "the records registry answers to neither the config authority nor the named storage authority",
+    UnmirroredRegistry = 8304 => "the registry is neither the policy records nor its curator source",
+    MirrorNotSynced = 8305 => "the root mirror holds no roots of the registry the policy names",
+    MirrorRootExpired = 8306 => "the revision names no unexpired root of the mirror",
     InvalidAssetLimits = 8390 => "a window cap and its window are not set together",
 }
 

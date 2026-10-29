@@ -15,7 +15,7 @@ use spr_keypair::X25519Keypair;
 use crate::{
     config::{Base58Address, CoSignClass, CoSignerSpec},
     file, keys, line, policy,
-    records::NO_MEMBER_REGISTRY,
+    records::NO_RING_POLICY,
     ui::{self, icon},
     CoSignerCommand, Context, DelegateCommand, InsertFeeCommand, ReaderCommand, AUDITOR_KEY_FILE,
 };
@@ -276,8 +276,8 @@ pub fn delegate(ctx: &Context, command: DelegateCommand) -> Result<()> {
                 "a delegate escrows keys only on a confidential policy ring"
             );
             ring_auditor_key(ctx, Path::new(AUDITOR_KEY_FILE))?;
-            ctx.block(ctx.ring.registry(ctx.chain()))?
-                .context(NO_MEMBER_REGISTRY)?;
+            ctx.block(ctx.ring.policy(ctx.chain()))?
+                .context(NO_RING_POLICY)?;
             let authority = ctx.funded_authority()?;
             let set = SetDelegate {
                 ring: ctx.ring,

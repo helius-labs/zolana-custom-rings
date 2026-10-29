@@ -5,4 +5,5 @@ mod common;
 mod forward_rules;
 mod operator_rules;
 mod record_queue_rules;
+mod storage_root_rules;
 mod transact_rules;

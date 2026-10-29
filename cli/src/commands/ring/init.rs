@@ -2,15 +2,17 @@
 
 use anyhow::{anyhow, ensure, Context as _, Result};
 use custom_ring_sdk::{
-    CreateConfig, CreateMemberRegistry, CustomRing, CustomRingConfig, InitSppRingConfig,
-    ListRegistry, PolicyRules, RingError, RingKind, SetAuthority, SetSourceOwner, SourceOwner,
+    CreateConfig, CreateMemberRegistry, CustomRingConfig, InitSppRingConfig, InitializeStorage,
+    ListRegistry, PolicyRecords, PolicyRules, RingError, RingKind, SetAuthority, SetSourceOwner,
+    SourceOwner, SyncRoots,
 };
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
+use spr_client::Rpc;
 use spr_keypair::X25519Pubkey;
 use zolana_ring_client::rpc::{read_auditor_pubkey, write_auditor_pubkey};
-use zolana_ring_policy::ListId;
+use zolana_ring_policy::{ListId, RuleTable};
 
 use crate::{
     catalogue,
@@ -90,6 +92,37 @@ struct ForeignConfigAuthority(Address);
 struct PolicyPin<'a> {
     authority: &'a Keypair,
     policy: &'a CompiledPolicy,
+}
+
+/// `CreatePolicy` with the `SyncRoots` of its records and of every named curator.
+fn create_policy(
+    ctx: &Context,
+    authority: Address,
+    rules: &RuleTable,
+    shared_sources: &[(ListId, Address)],
+) -> Result<Vec<solana_instruction::Instruction>, RingError> {
+    let records = InitializeStorage::records(ctx.ring, authority).registry();
+    let create = PolicyRules {
+        ring: ctx.ring,
+        authority,
+        rules,
+        shared_sources,
+    }
+    .create(PolicyRecords {
+        payer: authority,
+        records,
+        storage_authority: authority,
+    })?;
+    let mut instructions = vec![
+        create,
+        SyncRoots {
+            ring: ctx.ring,
+            registry: records,
+        }
+        .instruction(),
+    ];
+    instructions.extend(policy::curator_syncs(ctx.ring, shared_sources));
+    Ok(instructions)
 }
 
 pub fn run(ctx: &Context, args: InitArgs) -> Result<()> {
@@ -177,7 +210,6 @@ pub fn run(ctx: &Context, args: InitArgs) -> Result<()> {
         ctx.send(&[config_authority], &[instruction])
             .map(|_| CREATED)
     };
-    // The registry holds the policy, it precedes the policy pin.
     let member_registry = match ctx.block(ring.registry(ctx.chain()))? {
         Some(_) => PRESENT,
         None => send(
@@ -189,8 +221,22 @@ pub fn run(ctx: &Context, args: InitArgs) -> Result<()> {
             .instruction(),
         )?,
     };
+    let storage = InitializeStorage::records(ctx.ring, payer);
+    let records = match ctx.rpc().get_account(storage.registry())? {
+        Some(_) => PRESENT,
+        None => send(storage.instruction())?,
+    };
     let policy = match &policy {
-        None => "absent",
+        None => match ctx.block(ring.policy(ctx.chain()))? {
+            Some(_) => "records only",
+            None => {
+                ctx.send(
+                    &[config_authority],
+                    &create_policy(ctx, payer, &RuleTable::empty(), &[])?,
+                )?;
+                "records only, created"
+            }
+        },
         Some(policy) => PolicyPin {
             authority: config_authority,
             policy,
@@ -227,6 +273,7 @@ pub fn run(ctx: &Context, args: InitArgs) -> Result<()> {
     line("config", created.config);
     line("authority", created.authority);
     line("member registry", member_registry);
+    line("records", format_args!("{} {records}", storage.registry()));
     line("policy", policy);
     line("spp ring", spp_ring);
     controls::print_insert_fee(&ctx.ring_config()?);
@@ -346,28 +393,21 @@ impl PolicyPin<'_> {
         for (list, curator) in &policy.shared_sources {
             catalogue::check_curator(ctx, *curator, *list)?;
         }
+        let shared_sources = policy::curator_sources(ctx, &policy.shared_sources)?;
         let outcome = match policy::pinned_if_any(ctx)? {
             Some(_) => PRESENT,
             None => {
-                let create = |shared_sources: &[(ListId, CustomRing)]| {
-                    PolicyRules {
-                        ring: ctx.ring,
-                        authority: authority.pubkey(),
-                        rules: &policy.rules,
-                        shared_sources,
-                    }
-                    .create()
+                let create = |shared_sources: &[(ListId, Address)]| {
+                    create_policy(ctx, authority.pubkey(), &policy.rules, shared_sources)
                 };
                 // Curators past the transaction size are pointed one by one below.
-                let instruction = match create(&policy.shared_sources) {
-                    Err(RingError::TransactionTooLarge { .. })
-                        if !policy.shared_sources.is_empty() =>
-                    {
+                let instructions = match create(&shared_sources) {
+                    Err(RingError::TransactionTooLarge { .. }) if !shared_sources.is_empty() => {
                         create(&[])?
                     }
                     result => result?,
                 };
-                ctx.send(&[authority], &[instruction])?;
+                ctx.send(&[authority], &instructions)?;
                 CREATED
             }
         };
@@ -375,9 +415,9 @@ impl PolicyPin<'_> {
         policy::verify_rows(policy, &pinned).context(POLICY_DRIFT)?;
         crate::records::write_mint_policies(ctx, &policy::mint_changes(ctx, policy)?)?;
         let mut pointed = false;
-        for (list, curator) in &policy.shared_sources {
-            let outcome = if pinned.registry.registry_for(*list)
-                == Some(ListRegistry::Curator(curator.registry_pda()))
+        for ((list, curator), (_, registry)) in policy.shared_sources.iter().zip(&shared_sources) {
+            let outcome = if pinned.account.registry_for(*list)
+                == Some(ListRegistry::Curator(*registry))
             {
                 PRESENT
             } else {
@@ -385,10 +425,15 @@ impl PolicyPin<'_> {
                     ring: ctx.ring,
                     authority: authority.pubkey(),
                     list_id: *list,
-                    source: SourceOwner::Shared(*curator),
+                    source: SourceOwner::Curator(*registry),
                 }
                 .instruction()?;
-                ctx.send(&[authority], &[point])?;
+                let sync = SyncRoots {
+                    ring: ctx.ring,
+                    registry: *registry,
+                }
+                .instruction();
+                ctx.send(&[authority], &[point, sync])?;
                 pointed = true;
                 CREATED
             };
@@ -402,7 +447,7 @@ impl PolicyPin<'_> {
         } else {
             pinned
         };
-        policy::verify_sources(ctx.ring, policy, &pinned).context(POLICY_DRIFT)?;
+        policy::verify_sources(ctx, policy, &pinned).context(POLICY_DRIFT)?;
         Ok(outcome)
     }
 }

@@ -1071,7 +1071,7 @@ fn an_anonymous_merge_binds_the_disclosure_its_ring_forwarded() {
         fields: vec![[6; 32]; 13],
     };
     let request = CustomRingMergeIxData {
-        registry_root_index: 0,
+        own_revision: Default::default(),
         output_ring_data_hash: spp.output_ring_data_hash,
         disclosure: disclosure.clone(),
         merge: spp.merge.clone(),

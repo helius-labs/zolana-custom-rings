@@ -69,6 +69,6 @@ pub fn process_instruction(
         }
         InstructionTag::ApplyRecords => process_apply_records_ix(program_id, accounts, ix_data),
         InstructionTag::SetInsertFee => process_set_insert_fee_ix(program_id, accounts, ix_data),
-        InstructionTag::SyncRoots => Err(CustomRingError::InvalidInstructionData.into()),
+        InstructionTag::SyncRoots => process_sync_roots_ix(program_id, accounts, ix_data),
     }
 }

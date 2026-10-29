@@ -1,11 +1,10 @@
 use custom_ring_interface::{
-    anonymous_exit_destination, cosign::CoSignRequirement, CoSigner, CustomRingError,
-    MemberRegistry, RecordQueue, RingAccount, RingProgramConfig, SettlementAccount,
-    TokenAccountState,
+    anonymous_exit_destination, cosign::CoSignRequirement, storage::StorageRegistry, CoSigner,
+    CustomRingError, MemberRegistry, RecordQueue, RingAccount, RingPolicy, RingProgramConfig,
+    SettlementAccount, TokenAccountState, STORAGE_PROGRAM_ID,
 };
 use pinocchio::{
     account::{Ref, RefMut},
-    address::address_eq,
     error::ProgramError,
     AccountView, Address, ProgramResult,
 };
@@ -94,23 +93,32 @@ pub fn load_registry_mut<'a>(
     load_mut(program_id, account)
 }
 
-/// A registry of another ring, the `[b"members"]` PDA of the program owning it.
-pub fn load_curator_registry(
+#[inline(always)]
+pub fn load_policy<'a>(
+    program_id: &Address,
+    account: &'a AccountView,
+) -> Result<Ref<'a, RingPolicy>, ProgramError> {
+    load(program_id, account)
+}
+
+#[inline(always)]
+pub fn load_policy_mut<'a>(
+    program_id: &Address,
+    account: &'a mut AccountView,
+) -> Result<RefMut<'a, RingPolicy>, ProgramError> {
+    load_mut(program_id, account)
+}
+
+/// Any authority's registry, the storage program creates it only at its canonical PDA.
+pub fn load_storage_registry(
     account: &AccountView,
-) -> Result<Ref<'_, MemberRegistry>, ProgramError> {
-    let invalid = CustomRingError::InvalidCuratorRegistry;
-    let curator_program = *account.owner();
-    let data = account.try_borrow().map_err(|_| invalid)?;
-    let registry = Ref::filter_map(data, MemberRegistry::from_data).map_err(|_| invalid)?;
-    let address = Address::derive_address(
-        &[MemberRegistry::SEED],
-        Some(registry.bump),
-        &curator_program,
-    );
-    if !address_eq(account.address(), &address) {
+) -> Result<Ref<'_, StorageRegistry>, ProgramError> {
+    let invalid = CustomRingError::InvalidStorageRegistry;
+    if !account.owned_by(&STORAGE_PROGRAM_ID) {
         return Err(invalid.into());
     }
-    Ok(registry)
+    let data = account.try_borrow().map_err(|_| invalid)?;
+    Ref::filter_map(data, StorageRegistry::from_data).map_err(|_| invalid.into())
 }
 
 #[inline(always)]

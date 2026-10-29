@@ -3,7 +3,11 @@ use custom_ring_interface::{
     CustomRingMergeIxDataRef, RingMode, RING_DEPOSIT_DEPOSITOR_INDEX,
     RING_DEPOSIT_RING_CONFIG_INDEX, RING_MERGE_PAYER_INDEX, RING_MERGE_RING_CONFIG_INDEX,
 };
-use pinocchio::{error::ProgramError, AccountView, Address, ProgramResult};
+use pinocchio::{
+    error::ProgramError,
+    sysvars::{clock::Clock, Sysvar},
+    AccountView, Address, ProgramResult,
+};
 use spr_account_checks::AccountIterator;
 use spr_interface::instruction::instruction_data::deposit::RingDepositIxDataRef;
 
@@ -11,7 +15,7 @@ use crate::instructions::{
     deposit_audit::{AuditedDeposit, DepositVerification},
     instruction_runtime::RingAuth,
     loader::{
-        check_funding_signer, load_config, load_registry, validate_spp_program, CoSignerSlot,
+        check_funding_signer, load_config, load_policy, validate_spp_program, CoSignerSlot,
     },
     merge_disclosure::MergeAudit,
 };
@@ -30,10 +34,10 @@ pub fn process_merge_ix(
     // 1. Only a key escrow ring binds its own root, its owner's record escrows the merged key.
     let root = match mode {
         RingMode::ConfidentialEscrow => Some(
-            load_registry(program_id, iter.next_account("registry")?)?
-                .own_root(request.registry_root_index)?,
+            load_policy(program_id, iter.next_account("policy")?)?
+                .own_root(request.own_revision, Clock::get()?.slot)?,
         ),
-        _ if request.registry_root_index != 0 => {
+        _ if request.own_revision.value() != 0 => {
             return Err(CustomRingError::UnexpectedMemberRegistryRoot.into())
         }
         _ => None,
@@ -105,10 +109,10 @@ pub fn process_audited_deposit_ix(
     // 2. Only a registry-mode ring binds its own root, its outputs escrow keys.
     let registry_root = match mode {
         RingMode::ConfidentialEscrow => Some(
-            load_registry(program_id, iter.next_account("registry")?)?
-                .own_root(audited.registry_root_index)?,
+            load_policy(program_id, iter.next_account("policy")?)?
+                .own_root(audited.own_revision, Clock::get()?.slot)?,
         ),
-        _ if audited.registry_root_index != 0 => {
+        _ if audited.own_revision.value() != 0 => {
             return Err(CustomRingError::UnexpectedMemberRegistryRoot.into())
         }
         _ => None,

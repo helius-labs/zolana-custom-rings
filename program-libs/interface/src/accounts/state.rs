@@ -14,7 +14,7 @@ use crate::{
         MEMBER_QUEUE_LIMIT, MEMBER_REGISTRY_CAPACITY, MEMBER_REGISTRY_EMPTY_ROOT, QUEUE_CAPACITY,
     },
     statement::ApplyRecordsStatement,
-    storage::{root_at, Revision, Root, StorageError},
+    storage::{root_at, Revision, Root, StorageError, StorageRegistry},
     ApplyRecordsIxData, ReaderKeyBytes, TAGGED_X25519_KEY_LEN,
 };
 
@@ -357,7 +357,7 @@ pub struct MemberRegistry {
 #[repr(C)]
 pub struct SourceSlot {
     pub list_id: u8,
-    /// The curator's `MemberRegistry` account serving the list, zero for the ring's own.
+    /// The curator's `StorageRegistry` serving the list, zero for the ring's own records.
     pub registry: Address,
 }
 
@@ -426,8 +426,116 @@ pub struct CoSigner {
 }
 
 impl RootMirror {
+    /// The registry's root rule over the last synced copy, a root dropped since stays valid until the next sync.
     pub fn root(&self, revision: Revision, slot: u64) -> Result<[u8; 32], StorageError> {
         root_at(&self.roots, revision, slot)
+    }
+
+    fn root_of(
+        &self,
+        registry: &Address,
+        revision: Revision,
+        slot: u64,
+    ) -> Result<[u8; 32], CustomRingError> {
+        if self.registry != *registry {
+            return Err(CustomRingError::MirrorNotSynced);
+        }
+        self.root(revision, slot)
+            .map_err(|_| CustomRingError::MirrorRootExpired)
+    }
+}
+
+impl RingPolicy {
+    /// Unsynced mirrors and no policy, boxed in place past the SBF stack frame.
+    pub fn new(bump: u8, records: Address) -> Box<Self> {
+        let mut policy: Box<Self> = bytemuck::zeroed_box();
+        policy.discriminator = RING_POLICY;
+        policy.bump = bump;
+        policy.records = records;
+        policy
+    }
+
+    /// `PolicyNotSet` before the first policy write.
+    pub fn policy_hash(&self) -> Result<&[u8; 32], CustomRingError> {
+        if self.policy_hash == [0; 32] {
+            return Err(CustomRingError::PolicyNotSet);
+        }
+        Ok(&self.policy_hash)
+    }
+
+    /// Validates the table against the sources and repins its hash.
+    pub fn set_policy(
+        &mut self,
+        sources: [SourceSlot; N_SOURCE_SLOTS],
+        rules: EncodedRuleTable,
+        slot: u64,
+    ) -> Result<(), CustomRingError> {
+        let generation = self
+            .generation()
+            .checked_add(1)
+            .ok_or(CustomRingError::PolicyGenerationOverflow)?;
+        let source_map = source_map(&sources)?;
+        rules.validate(&source_map)?;
+        self.policy_hash = rules.hash(&source_map)?;
+        self.sources = sources;
+        self.rules = rules;
+        self.generation = generation.to_le_bytes();
+        self.generation_slot = slot.to_le_bytes();
+        Ok(())
+    }
+
+    /// The registry serving `list_id`, `None` when the table does not reference it.
+    pub fn registry_for(&self, list_id: ListId) -> Option<ListRegistry> {
+        let slot = self.sources[list_id.slot()];
+        (slot.list_id != 0).then(|| match slot.registry {
+            registry if registry == Address::default() => ListRegistry::Own,
+            registry => ListRegistry::Curator(registry),
+        })
+    }
+
+    /// The one curator registry the sources name, `None` when every list is the ring's own.
+    pub fn curator(&self) -> Option<Address> {
+        self.sources
+            .iter()
+            .map(|slot| slot.registry)
+            .find(|registry| *registry != Address::default())
+    }
+
+    /// The map `policy_hash` was computed over.
+    pub fn source_map(&self) -> Result<SourceMap, CustomRingError> {
+        source_map(&self.sources)
+    }
+
+    pub fn rule_table(&self) -> Result<RuleTable, CustomRingError> {
+        Ok(self.rules.validate(&self.source_map()?)?)
+    }
+
+    /// `UnmirroredRegistry` unless `registry` is the records or the curator.
+    pub fn sync(
+        &mut self,
+        registry: &Address,
+        source: &StorageRegistry,
+    ) -> Result<(), CustomRingError> {
+        let mirror = match self.curator() {
+            _ if *registry == self.records => &mut self.own_roots,
+            Some(curator) if curator == *registry => &mut self.curator_roots,
+            _ => return Err(CustomRingError::UnmirroredRegistry),
+        };
+        *mirror = RootMirror {
+            registry: *registry,
+            roots: source.roots,
+        };
+        Ok(())
+    }
+
+    pub fn own_root(&self, revision: Revision, slot: u64) -> Result<[u8; 32], CustomRingError> {
+        self.own_roots.root_of(&self.records, revision, slot)
+    }
+
+    /// `MirrorNotSynced` without a curator source.
+    pub fn curator_root(&self, revision: Revision, slot: u64) -> Result<[u8; 32], CustomRingError> {
+        let curator = self.curator().ok_or(CustomRingError::MirrorNotSynced)?;
+        self.curator_roots.root_of(&curator, revision, slot)
     }
 }
 
@@ -494,61 +602,6 @@ impl MemberRegistry {
         self.prior_floor = self.floor;
         self.floor = newest.applied;
         self.floor_slot = newest.slot;
-    }
-
-    /// `PolicyNotSet` before the first policy write.
-    pub fn policy_hash(&self) -> Result<&[u8; 32], CustomRingError> {
-        if self.policy_hash == [0; 32] {
-            return Err(CustomRingError::PolicyNotSet);
-        }
-        Ok(&self.policy_hash)
-    }
-
-    /// Validates the table against the sources and repins its hash.
-    pub fn set_policy(
-        &mut self,
-        sources: [SourceSlot; N_SOURCE_SLOTS],
-        rules: EncodedRuleTable,
-        slot: u64,
-    ) -> Result<(), CustomRingError> {
-        let generation = self
-            .generation()
-            .checked_add(1)
-            .ok_or(CustomRingError::PolicyGenerationOverflow)?;
-        let source_map = source_map(&sources)?;
-        rules.validate(&source_map)?;
-        self.policy_hash = rules.hash(&source_map)?;
-        self.sources = sources;
-        self.rules = rules;
-        self.generation = generation.to_le_bytes();
-        self.generation_slot = slot.to_le_bytes();
-        Ok(())
-    }
-
-    /// The registry serving `list_id`, `None` when the table does not reference it.
-    pub fn registry_for(&self, list_id: ListId) -> Option<ListRegistry> {
-        let slot = self.sources[list_id.slot()];
-        (slot.list_id != 0).then(|| match slot.registry {
-            registry if registry == Address::default() => ListRegistry::Own,
-            registry => ListRegistry::Curator(registry),
-        })
-    }
-
-    /// The one curator registry the sources name, `None` when every list is the ring's own.
-    pub fn curator(&self) -> Option<Address> {
-        self.sources
-            .iter()
-            .map(|slot| slot.registry)
-            .find(|registry| *registry != Address::default())
-    }
-
-    /// The map `policy_hash` was computed over.
-    pub fn source_map(&self) -> Result<SourceMap, CustomRingError> {
-        source_map(&self.sources)
-    }
-
-    pub fn rule_table(&self) -> Result<RuleTable, CustomRingError> {
-        Ok(self.rules.validate(&self.source_map()?)?)
     }
 
     fn entry(&self, index: u8) -> Result<&RootEntry, CustomRingError> {

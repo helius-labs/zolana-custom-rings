@@ -45,6 +45,8 @@ mod set_policy_rules;
 #[path = "configuration/policy/set_policy_source.rs"]
 mod set_policy_source;
 mod transact;
+#[path = "records/sync_roots.rs"]
+mod sync_roots;
 #[path = "verification/verifier.rs"]
 mod verifier;
 #[path = "records/write_records.rs"]
@@ -66,5 +68,6 @@ pub(crate) use set_insert_fee::process_set_insert_fee_ix;
 pub(crate) use set_paused::process_set_paused_ix;
 pub(crate) use set_policy_rules::process_set_policy_rules_ix;
 pub(crate) use set_policy_source::process_set_policy_source_ix;
+pub(crate) use sync_roots::process_sync_roots_ix;
 pub(crate) use transact::process_transact_ix;
 pub(crate) use write_records::process_write_records_ix;

@@ -9,7 +9,7 @@ use std::{
 
 use custom_ring_cli::Landing;
 use custom_ring_cli::Zolana;
-use custom_ring_interface::MemberRegistry;
+use custom_ring_interface::RingPolicy;
 use custom_ring_sdk::{
     AuthorityListWrite, CustomRing, CustomRingTransfer, CustomRingTransferInput, DepositAsset,
     DepositRecipient, ProvenRingTransfer, RingDeposit, RingDepositReceipt, RingError,
@@ -62,8 +62,8 @@ pub fn owner_member(owner: &ShieldedKeypair) -> Result<Member> {
     )?)
 }
 
-pub fn policy_registry(ring: CustomRing, env: &TestEnv) -> Result<Box<MemberRegistry>> {
-    Ok(env.run(ring.require_registry(env.client.as_async()))?)
+pub fn policy_registry(ring: CustomRing, env: &TestEnv) -> Result<Box<RingPolicy>> {
+    Ok(env.run(ring.require_policy(env.client.as_async()))?)
 }
 
 pub struct CuratedRings {

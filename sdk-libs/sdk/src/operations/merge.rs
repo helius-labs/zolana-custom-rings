@@ -245,7 +245,7 @@ impl PreparedCustomRingMerge {
             co_signer,
             bound,
             data: CustomRingMergeIxData {
-                registry_root_index: bound.map_or(0, |bound| bound.index),
+                own_revision: bound.map_or_else(Default::default, |bound| bound.revision),
                 output_ring_data_hash: data.output_ring_data_hash,
                 disclosure,
                 merge: data.merge,
@@ -324,7 +324,7 @@ impl RingMergeOperation {
             .map(|(_, signer)| signer),
             key_escrow: config.mode == RingMode::ConfidentialEscrow,
             data: CustomRingMergeIxData {
-                registry_root_index: 0,
+                own_revision: Default::default(),
                 output_ring_data_hash: merge.inner.output_utxo.ring_data_hash.unwrap_or_default(),
                 disclosure,
                 merge: MergeTransactIxData {
@@ -353,7 +353,7 @@ impl RingMergeOperation {
     }
 }
 
-/// `[config, registry?, co-signer record and signer?]` ahead of SPP's merge list, the registry on a key escrow ring alone.
+/// `[config, policy?, co-signer record and signer?]` ahead of SPP's merge list, the policy on a key escrow ring alone.
 #[must_use]
 pub struct CustomRingMergeInstruction {
     pub ring: CustomRing,
@@ -361,7 +361,7 @@ pub struct CustomRingMergeInstruction {
     pub output_tree: Address,
     pub payer: Address,
     pub co_signer: Option<Address>,
-    /// Set on a key escrow ring, the merge then binds `registry_root_index` of the registry.
+    /// Set on a key escrow ring, the merge then binds `own_revision` of the ring policy.
     pub key_escrow: bool,
     pub data: CustomRingMergeIxData,
 }
@@ -387,7 +387,7 @@ impl CustomRingMergeInstruction {
         instruction.data = data;
         let mut prefix = vec![AccountMeta::new_readonly(self.ring.config_pda(), false)];
         if self.key_escrow {
-            prefix.push(AccountMeta::new_readonly(self.ring.registry_pda(), false));
+            prefix.push(AccountMeta::new_readonly(self.ring.policy_pda(), false));
         }
         prefix.extend(
             self.co_signer

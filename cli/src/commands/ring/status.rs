@@ -1,6 +1,7 @@
 use std::fmt::Write;
 
 use anyhow::Result;
+use custom_ring_interface::{RingPolicy, RootMirror};
 use custom_ring_sdk::{CustomRing, QueueStatus, RegistryStatus, RingError, RingMode};
 use solana_signer::Signer;
 use spr_client::Rpc;
@@ -138,15 +139,18 @@ fn print_chain(ctx: &Context) -> Result<()> {
     if let Some(queue) = &status.queue {
         print_queue(ring, queue);
     }
-    let pinned = match &status.registry {
-        Some(registry) => Pinned::of(Box::new(*registry.account()))?,
+    if let Some(policy) = &status.policy {
+        print_roots(policy);
+    }
+    let pinned = match &status.policy {
+        Some(policy) => Pinned::of(policy.clone())?,
         None => None,
     };
     if !config.has_policy {
         line("policy", "none (audit-only ring)");
     } else if let Some(pinned) = pinned {
-        line("policy", ring.registry_pda());
-        print_pinned(ring, &pinned);
+        line("policy", ring.policy_pda());
+        print_pinned(&pinned);
     } else {
         line("policy", "not pinned");
     }
@@ -202,6 +206,32 @@ fn print_registry(ring: CustomRing, registry: &RegistryStatus) {
             registry.floor, registry.floor_slot, registry.prior_floor
         ),
     );
+}
+
+/// The newest root each mirror holds, a proof names its revision.
+fn print_roots(policy: &RingPolicy) {
+    let newest = |mirror: &RootMirror| {
+        let root = mirror.roots[0];
+        match root.hash == [0; 32] {
+            true => "not synced".to_owned(),
+            false => format!(
+                "revision {} root {}",
+                root.revision.value(),
+                hex::encode(root.hash)
+            ),
+        }
+    };
+    line(
+        "records",
+        format_args!("{} {}", policy.records, newest(&policy.own_roots)),
+    );
+    if let Some(curator) = policy.curator() {
+        let synced = match policy.curator_roots.registry == curator {
+            true => newest(&policy.curator_roots),
+            false => "not synced".to_owned(),
+        };
+        line("curator", format_args!("{curator} {synced}"));
+    }
 }
 
 fn print_queue(ring: CustomRing, queue: &QueueStatus) {

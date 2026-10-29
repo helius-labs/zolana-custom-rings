@@ -41,10 +41,14 @@ impl Exemption {
         let root = match own {
             Some(root) => root,
             None => {
-                let Some(registry) = ring.registry(client).await? else {
+                let Some(policy) = ring.policy(client).await? else {
                     return Ok(None);
                 };
-                BoundRoot::current(ring, &registry)
+                match BoundRoot::own(ring, &policy) {
+                    Ok(root) => root,
+                    Err(RingError::UnsyncedRoots { .. }) => return Ok(None),
+                    Err(error) => return Err(error),
+                }
             }
         };
         let statement = WithdrawalExemptionStatement::new(root.root, demand)?;

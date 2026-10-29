@@ -5,6 +5,7 @@ mod common;
 use std::ops::Range;
 
 use custom_ring_interface::{
+    storage::Revision,
     merge_disclosure_field_count, CustomRingError, CustomRingMergeIxData, CustomRingMergeIxDataRef,
     CustomRingProof, MergeDisclosure, PlainGroth16Proof,
 };
@@ -15,7 +16,7 @@ use spr_interface::instruction::instruction_data::merge_transact::{
 
 fn request() -> CustomRingMergeIxData {
     CustomRingMergeIxData {
-        registry_root_index: 3,
+        own_revision: Revision::from(3),
         output_ring_data_hash: [8; 32],
         disclosure: disclosure(),
         merge: MergeTransactIxData {
@@ -62,12 +63,12 @@ fn the_view_rebuilds_the_exact_spp_body_from_the_compressed_point() {
     let bytes = request.serialize().unwrap();
     let spp_body = request.merge.serialize().unwrap();
     let view = CustomRingMergeIxDataRef::from_bytes(&bytes).unwrap();
-    assert_eq!(view.registry_root_index, 3);
+    assert_eq!(view.own_revision, Revision::from(3));
     assert_eq!(view.output_ring_data_hash, &[8; 32]);
     assert_eq!(view.spp_merge_body().unwrap(), spp_body);
     assert_eq!(
         bytes.len() + 64,
-        1 + 32 + spp_body.len() + disclosure_len(&request)
+        8 + 32 + spp_body.len() + disclosure_len(&request)
     );
     let (view, owned) = (&view.disclosure, &request.disclosure);
     assert_eq!(view.proof, &owned.proof);
@@ -106,7 +107,7 @@ fn a_compressed_point_off_the_curve_is_refused() {
 fn framing_errors_are_refused_before_or_by_the_spp_parser() {
     let bytes = request().serialize().unwrap();
     let truncated = &bytes[..compressed_b(&bytes).end - 1];
-    for refused in [truncated, &bytes[..40]] {
+    for refused in [truncated, &bytes[..47]] {
         assert_eq!(
             CustomRingMergeIxDataRef::from_bytes(refused).err(),
             Some(CustomRingError::InvalidInstructionData)

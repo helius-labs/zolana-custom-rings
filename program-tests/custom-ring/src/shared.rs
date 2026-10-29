@@ -18,7 +18,8 @@ use anyhow::{anyhow, ensure, Context, Result};
 use custom_ring_cli::{Zolana, ZolanaServices};
 use custom_ring_sdk::{
     compute_unit_limit, CreateConfig, CreateMemberRegistry, CustomRing, InitSppRingConfig,
-    InstructionTag, MemberRecords, PolicyRules, RingError, RingKind,
+    InitializeStorage, InstructionTag, MemberRecords, PolicyRecords, PolicyRules, RingError,
+    RingKind, SyncRoots,
 };
 use solana_address::Address;
 use solana_instruction::Instruction;
@@ -324,7 +325,7 @@ impl<'a> RegisterRing<'a> {
         self.configure(client.rpc())?.pin(client)
     }
 
-    /// A policy ring also gets its registry, the policy lives there.
+    /// Every ring gets its records, a policy ring also the member registry.
     pub fn configure(self, rpc: &SolanaRpc) -> Result<ConfiguredRing<'a>> {
         let authority = self.payer.pubkey();
         let kind = self.tier.kind();
@@ -346,6 +347,7 @@ impl<'a> RegisterRing<'a> {
                 .instruction(),
             );
         }
+        instructions.push(InitializeStorage::records(self.ring, authority).instruction());
         send(rpc, self.payer, &instructions)?;
         Ok(ConfiguredRing {
             ring: self.ring,
@@ -371,24 +373,52 @@ impl<'a> ConfiguredRing<'a> {
 
     pub fn pin(self, client: &Zolana) -> Result<PinnedRing<'a>> {
         let registration = self.registration(client)?;
-        if let Tier::Policy {
-            rules,
-            shared_sources,
-        }
-        | Tier::AnonymousPolicy {
-            rules,
-            shared_sources,
-        } = self.tier
-        {
-            let pin = PolicyRules {
-                ring: self.ring,
-                authority: self.payer.pubkey(),
+        let empty = RuleTable::empty();
+        let (rules, curators) = match self.tier {
+            Tier::Policy {
                 rules,
-                shared_sources: &shared_sources,
+                shared_sources,
             }
-            .create()?;
-            send(client.rpc(), self.payer, &[pin])?;
+            | Tier::AnonymousPolicy {
+                rules,
+                shared_sources,
+            } => (rules, shared_sources),
+            Tier::AuditOnly | Tier::AnonymousAuditOnly => (&empty, Vec::new()),
+        };
+        let shared_sources = curators
+            .iter()
+            .map(|&(list_id, curator)| {
+                let policy = client.block_on(curator.require_policy(client.as_async()))?;
+                Ok((list_id, policy.records))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let authority = self.payer.pubkey();
+        let records = InitializeStorage::records(self.ring, authority).registry();
+        let pin = PolicyRules {
+            ring: self.ring,
+            authority,
+            rules,
+            shared_sources: &shared_sources,
         }
+        .create(PolicyRecords {
+            payer: authority,
+            records,
+            storage_authority: authority,
+        })?;
+        let mut instructions = vec![pin];
+        let mut registries: Vec<Address> = core::iter::once(records)
+            .chain(shared_sources.iter().map(|(_, registry)| *registry))
+            .collect();
+        registries.sort();
+        registries.dedup();
+        instructions.extend(registries.into_iter().map(|registry| {
+            SyncRoots {
+                ring: self.ring,
+                registry,
+            }
+            .instruction()
+        }));
+        send(client.rpc(), self.payer, &instructions)?;
         Ok(PinnedRing {
             payer: self.payer,
             registration,

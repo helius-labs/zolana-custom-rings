@@ -32,7 +32,7 @@ pub fn group(ring: Address, audited: bool, deposits: Vec<([u8; 32], Vec<u8>)>) -
     let mut data = vec![tag::RING_DEPOSIT];
     data.extend(deposit.serialize().unwrap());
     let mut outer_data = if audited {
-        let mut header = vec![0; 2 + custom_ring_interface::CustomRingProof::SIZE];
+        let mut header = vec![0; custom_ring_interface::AuditedDepositPrefix::SIZE];
         header[0] = custom_ring_interface::tag::AUDITED_DEPOSIT;
         header
     } else {

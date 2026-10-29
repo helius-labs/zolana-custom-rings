@@ -31,8 +31,9 @@ use crate::{
         CONFIDENTIAL_DATA_FREE_BODY_LEN, RING_DELIVERED_BODY_LEN,
     },
     statement::{AnonymousAudit, AuditHead, AuditKind, AuditStatement, PolicyKey},
-    tagged_x25519, AuditorMessage, CustomRingProof, InstructionTag, MemberRegistry,
-    PlainGroth16Proof, RingMode, RingProgramConfig, AUDIT_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
+    storage::Revision,
+    tagged_x25519, AuditorMessage, CustomRingProof, InstructionTag, PlainGroth16Proof, RingPolicy,
+    RingMode, RingProgramConfig, AUDIT_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
 };
 
 const ZERO_FIELD: [u8; 32] = [0; 32];
@@ -233,9 +234,9 @@ pub struct PolicyProof<'a> {
     /// Token owners checked on chain, in SPL withdrawal order (v2 only).
     pub spl_withdrawal_owners: &'a [[u8; 32]],
     pub proof: &'a CustomRingProof,
-    pub own_root_index: u8,
-    /// Set exactly when a source names the curator registry.
-    pub curator_root_index: Option<u8>,
+    pub own_revision: Revision,
+    /// Set exactly when a source names a curator registry.
+    pub curator_revision: Option<Revision>,
     /// Set exactly on the anonymous rail.
     pub sender_commitment: Option<&'a [u8; 32]>,
 }
@@ -245,13 +246,7 @@ pub struct PolicyBinding<'a> {
     pub proof: PolicyProof<'a>,
     pub policy_hash: [u8; 32],
     pub own_root: [u8; 32],
-    pub curator: Option<CuratorRoot>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CuratorRoot {
-    pub registry: Address,
-    pub root_index: u8,
+    pub curator_root: Option<[u8; 32]>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -596,10 +591,10 @@ impl<'a> RingTransactData<'a> {
             true => Some(PolicyProof {
                 spl_withdrawal_owners: &[],
                 proof: bytes.pod()?,
-                own_root_index: bytes.byte()?,
-                curator_root_index: flags
+                own_revision: *bytes.pod()?,
+                curator_revision: flags
                     .has(transact_flag::CURATOR)
-                    .then(|| bytes.byte())
+                    .then(|| bytes.pod().copied())
                     .transpose()?,
                 sender_commitment: (rail == RingRail::Anonymous)
                     .then(|| bytes.array())
@@ -732,9 +727,9 @@ impl<'a> RingTransactData<'a> {
         out.extend_from_slice(bytemuck::bytes_of(self.audit_proof));
         if let Some(policy) = &self.policy {
             out.extend_from_slice(bytemuck::bytes_of(policy.proof));
-            out.push(policy.own_root_index);
-            if let Some(index) = policy.curator_root_index {
-                out.push(index);
+            out.extend_from_slice(&policy.own_revision.0);
+            if let Some(revision) = policy.curator_revision {
+                out.extend_from_slice(&revision.0);
             }
             if let Some(commitment) = policy.sender_commitment {
                 out.extend_from_slice(commitment);
@@ -805,23 +800,21 @@ impl<'a> RingTransactData<'a> {
         Ok(out)
     }
 
-    /// The policy proof the registry of a policy ring demands, `None` on an audit-only ring.
+    /// The policy proof a policy ring demands at `slot`, `None` on an audit-only ring.
     pub fn check_policy(
         &self,
-        registry: Option<&MemberRegistry>,
+        policy: Option<&RingPolicy>,
+        slot: u64,
     ) -> Result<Option<PolicyBinding<'a>>, CustomRingError> {
-        let (proof, registry) = match (self.policy, registry) {
+        let (proof, policy) = match (self.policy, policy) {
             (None, None) => return Ok(None),
             (Some(_), None) => return Err(CustomRingError::UnexpectedPolicyProof),
             (None, Some(_)) => return Err(CustomRingError::MissingPolicyProof),
-            (Some(proof), Some(registry)) => (proof, registry),
+            (Some(proof), Some(policy)) => (proof, policy),
         };
-        let curator = match (proof.curator_root_index, registry.curator()) {
+        let curator_revision = match (proof.curator_revision, policy.curator()) {
             (None, None) => None,
-            (Some(root_index), Some(registry)) => Some(CuratorRoot {
-                registry,
-                root_index,
-            }),
+            (Some(revision), Some(_)) => Some(revision),
             _ => return Err(CustomRingError::FlagNotAllowed),
         };
         if self.approval_required && self.rail == RingRail::Delegate {
@@ -829,9 +822,11 @@ impl<'a> RingTransactData<'a> {
         }
         Ok(Some(PolicyBinding {
             proof,
-            policy_hash: *registry.policy_hash()?,
-            own_root: registry.own_root(proof.own_root_index)?,
-            curator,
+            policy_hash: *policy.policy_hash()?,
+            own_root: policy.own_root(proof.own_revision, slot)?,
+            curator_root: curator_revision
+                .map(|revision| policy.curator_root(revision, slot))
+                .transpose()?,
         }))
     }
 
@@ -975,7 +970,7 @@ impl<'a> RingTransactData<'a> {
             (self.policy.is_some(), transact_flag::POLICY),
             (
                 self.policy
-                    .is_some_and(|policy| policy.curator_root_index.is_some()),
+                    .is_some_and(|policy| policy.curator_revision.is_some()),
                 transact_flag::CURATOR,
             ),
             (self.approval_required, transact_flag::APPROVAL_REQUIRED),
@@ -1190,7 +1185,7 @@ fn push_tree_context(out: &mut Vec<u8>, context: TreeContext) -> Result<(), Cust
 #[repr(C)]
 pub struct WithdrawalExemptionProof {
     pub proof: CustomRingProof,
-    pub root_index: u8,
+    pub own_revision: Revision,
 }
 impl WithdrawalExemptionProof {
     pub const SIZE: usize = core::mem::size_of::<Self>();

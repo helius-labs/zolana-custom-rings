@@ -8,12 +8,13 @@ use custom_ring_interface::{
     ring_confidential_delivered_output_body, CONFIDENTIAL_DATA_FREE_BODY_LEN,
 };
 use custom_ring_interface::{
-    input_flag, shape_flag, transact_flag, AnonymousAuditKey, AnonymousLayout, AnonymousProofData,
-    AppliedAt, AuditBinding, AuditKind, CuratorRoot, CustomRingError, CustomRingProof,
-    DeliveredLayout, DisclosureLayout, InputTrees, InstructionTag, MemberRegistry, ParsedTransact,
-    PlainGroth16Proof, PolicyBinding, PolicyProof, RailSigner, RingMode, RingOutput,
-    RingProgramConfig, RingRail, RingTransactData, SenderBundle, Settlement, SourceSlot,
-    N_SOURCE_SLOTS, RING_PROGRAM_CONFIG,
+    input_flag, shape_flag,
+    storage::{Revision, Root, StorageRegistry},
+    transact_flag, AnonymousAuditKey, AnonymousLayout, AnonymousProofData, AuditBinding, AuditKind,
+    CustomRingError, CustomRingProof, DeliveredLayout, DisclosureLayout, InputTrees,
+    InstructionTag, ParsedTransact, PlainGroth16Proof, PolicyBinding, PolicyProof, RailSigner,
+    RingMode, RingOutput, RingPolicy, RingProgramConfig, RingRail, RingTransactData, SenderBundle,
+    Settlement, SourceSlot, RING_PROGRAM_CONFIG,
 };
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
@@ -149,8 +150,8 @@ impl Fixture {
         data.policy = Some(PolicyProof {
             spl_withdrawal_owners: &[],
             proof: &self.proofs[1],
-            own_root_index: 7,
-            curator_root_index: Some(3),
+            own_revision: Revision::from(7),
+            curator_revision: Some(Revision::from(3)),
             sender_commitment: None,
         });
         data.approval_required = true;
@@ -192,8 +193,8 @@ impl Fixture {
         data.policy = Some(PolicyProof {
             spl_withdrawal_owners: &[],
             proof: &self.proofs[1],
-            own_root_index: 31,
-            curator_root_index: None,
+            own_revision: Revision::from(31),
+            curator_revision: None,
             sender_commitment: Some(&self.fields[4]),
         });
         data.interface_transfers = vec![InterfaceTransfer::SolWithdrawal { amount: 9_999 }];
@@ -246,8 +247,8 @@ impl Fixture {
         PolicyProof {
             spl_withdrawal_owners: &[],
             proof: &self.proofs[1],
-            own_root_index: 0,
-            curator_root_index: None,
+            own_revision: Revision::from(0),
+            curator_revision: None,
             sender_commitment: None,
         }
     }
@@ -777,71 +778,80 @@ fn an_spp_point_off_the_curve_is_refused_at_expansion() {
 }
 
 #[test]
-fn the_policy_proof_follows_the_registry() {
+fn the_policy_proof_follows_the_ring_policy() {
     let fixture = Fixture::new();
     let policy = fixture.confidential_policy();
-    let mut registry = MemberRegistry::new(254, 0);
+    let records = Address::new_from_array([2; 32]);
+    let curator = Address::new_from_array([3; 32]);
+    let mut ring_policy = RingPolicy::new(254, records);
     assert_eq!(
-        policy.check_policy(None),
+        policy.check_policy(None, 0),
         Err(CustomRingError::UnexpectedPolicyProof)
     );
     assert_eq!(
-        policy.check_policy(Some(&registry)),
+        policy.check_policy(Some(&ring_policy), 0),
         Err(CustomRingError::FlagNotAllowed)
     );
-    let mut sources = [SourceSlot::zeroed(); N_SOURCE_SLOTS];
-    sources[0] = SourceSlot {
+    ring_policy.sources[0] = SourceSlot {
         list_id: ListId::Allow as u8,
-        registry: Address::new_from_array([3; 32]),
+        registry: curator,
     };
-    registry.sources = sources;
     let mut uncurated = policy.clone();
     uncurated.policy = uncurated.policy.map(|policy| PolicyProof {
         spl_withdrawal_owners: &[],
-        curator_root_index: None,
+        curator_revision: None,
         ..policy
     });
     assert_eq!(
-        uncurated.check_policy(Some(&registry)),
+        uncurated.check_policy(Some(&ring_policy), 0),
         Err(CustomRingError::FlagNotAllowed)
     );
     assert_eq!(
-        policy.check_policy(Some(&registry)),
+        policy.check_policy(Some(&ring_policy), 0),
         Err(CustomRingError::PolicyNotSet)
     );
-
+    ring_policy.policy_hash = [9; 32];
     assert_eq!(
-        policy.check_policy(Some(&registry)),
-        Err(CustomRingError::PolicyNotSet)
+        policy.check_policy(Some(&ring_policy), 0),
+        Err(CustomRingError::MirrorNotSynced)
     );
-    registry.policy_hash = [9; 32];
-    for applied in 1..=7 {
-        let at = AppliedAt {
-            applied,
-            slot: applied,
+    let registry = |revision: u64, hash: u8| {
+        let mut registry = StorageRegistry::new(Address::default(), 0);
+        registry.roots[0] = Root {
+            hash: [hash; 32],
+            revision: Revision::from(revision),
+            expires_at: [0; 8],
         };
-        registry.push_root([applied as u8; 32], at);
-    }
+        registry
+    };
+    ring_policy.sync(&records, &registry(7, 7)).unwrap();
+    ring_policy.sync(&curator, &registry(3, 3)).unwrap();
     assert_eq!(
-        policy.check_policy(Some(&registry)),
+        ring_policy.sync(&Address::new_from_array([4; 32]), &registry(3, 3)),
+        Err(CustomRingError::UnmirroredRegistry)
+    );
+    assert_eq!(
+        policy.check_policy(Some(&ring_policy), 0),
         Ok(Some(PolicyBinding {
             proof: policy.policy.unwrap(),
             policy_hash: [9; 32],
             own_root: [7; 32],
-            curator: Some(CuratorRoot {
-                registry: Address::new_from_array([3; 32]),
-                root_index: 3,
-            }),
+            curator_root: Some([3; 32]),
         }))
+    );
+    ring_policy.sync(&records, &registry(8, 8)).unwrap();
+    assert_eq!(
+        policy.check_policy(Some(&ring_policy), 0),
+        Err(CustomRingError::MirrorRootExpired)
     );
     assert_eq!(
         fixture
             .confidential_delivered()
-            .check_policy(Some(&registry)),
+            .check_policy(Some(&ring_policy), 0),
         Err(CustomRingError::MissingPolicyProof)
     );
     assert_eq!(
-        fixture.confidential_delivered().check_policy(None),
+        fixture.confidential_delivered().check_policy(None, 0),
         Ok(None)
     );
 }
@@ -1036,7 +1046,7 @@ fn withdrawal_exemption_suffix_round_trips_and_rejects_partial_proofs() {
     let fixture = Fixture::new();
     let exemption = WithdrawalExemptionProof {
         proof: CustomRingProof::zeroed(),
-        root_index: 7,
+        own_revision: Revision::from(7),
     };
     let (_, mut data) = fixture
         .cases()

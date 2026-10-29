@@ -1,7 +1,7 @@
 use custom_ring_interface::{
     cosign::{CoSignDemand, CoSignRequirement},
-    funder_account_position, AnonymousParties, CuratorRoot, CustomRingError, CustomRingProof,
-    InputTrees, PublicSlots, RailSigner, RingProgramConfig, RingTransactData, ANONYMOUS_PARTIES,
+    funder_account_position, AnonymousParties, CustomRingError, CustomRingProof, InputTrees,
+    PublicSlots, RailSigner, RingProgramConfig, RingTransactData, ANONYMOUS_PARTIES,
     RING_TRANSACT_ACCOUNT_PREFIX_LEN, RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
 };
 use pinocchio::{error::ProgramError, AccountView, Address};
@@ -10,15 +10,12 @@ use spr_interface::instruction::instruction_data::settlement_accounts;
 
 use crate::instructions::{
     instruction_runtime::{PlacedRingAuth, RingAuth},
-    loader::{
-        check_funding_signer, load_anonymous_exit, load_curator_registry, load_registry,
-        CoSignerSlot,
-    },
+    loader::{check_funding_signer, load_anonymous_exit, load_policy, CoSignerSlot},
     public_legs::PublicLegs,
 };
 
-/// The registry follows the config on a policy ring.
-const REGISTRY_INDEX: usize = 1;
+/// The ring policy follows the config, the one account every own and curator root comes from.
+const POLICY_INDEX: usize = 1;
 
 pub(super) struct PolicyRoots<'a> {
     pub own_only: bool,
@@ -58,20 +55,20 @@ impl<'a> TransactCheck<'a> {
         let window = settlement_accounts(&data.interface_transfers, data.circuit(), accounts)
             .ok_or(CustomRingError::InvalidSettlementAccounts)?;
         let legs = PublicLegs::new(&data.interface_transfers, window)?;
-        let registry = if config.has_policy() || data.withdrawal_exemption.is_some() {
-            Some(load_registry(
+        let ring_policy = if config.has_policy() || data.withdrawal_exemption.is_some() {
+            Some(load_policy(
                 self.program_id,
-                account_at(accounts, REGISTRY_INDEX)?,
+                account_at(accounts, POLICY_INDEX)?,
             )?)
         } else {
             None
         };
         let demand = CoSignDemand::transact(data.approval_required, legs.legs());
         if let Some(exemption) = data.withdrawal_exemption {
-            let root = registry
+            let root = ring_policy
                 .as_ref()
-                .ok_or(CustomRingError::InvalidMemberRegistry)?
-                .own_root(exemption.root_index)?;
+                .ok_or(CustomRingError::InvalidRingPolicy)?
+                .own_root(exemption.own_revision, self.slot)?;
             crate::instructions::verifier::RingProof {
                 proof: &exemption.proof,
                 statement: custom_ring_interface::cosign::WithdrawalExemptionStatement::new(
@@ -90,28 +87,18 @@ impl<'a> TransactCheck<'a> {
             None => demand,
         };
         let requirement = demand.requirement(config);
-        let binding = data.check_policy(if config.has_policy() {
-            registry.as_deref()
-        } else {
-            None
-        })?;
-        let prefix = self.prefix(
-            binding.and_then(|binding| binding.curator),
-            requirement.as_ref().ok().copied().flatten(),
-        );
-        let policy = match binding {
-            Some(binding) => Some(PolicyRoots {
-                own_only: binding.curator.is_none(),
-                proof: binding.proof.proof,
-                policy_hash: binding.policy_hash,
-                own_root: binding.own_root,
-                curator_root: match &prefix.curator {
-                    Some(curator) => curator.root(accounts, self.slot)?,
-                    None => [0; 32],
-                },
-            }),
-            None => None,
-        };
+        let binding = data.check_policy(
+            ring_policy.as_deref().filter(|_| config.has_policy()),
+            self.slot,
+        )?;
+        let prefix = self.prefix(requirement.as_ref().ok().copied().flatten());
+        let policy = binding.map(|binding| PolicyRoots {
+            own_only: binding.curator_root.is_none(),
+            proof: binding.proof.proof,
+            policy_hash: binding.policy_hash,
+            own_root: binding.own_root,
+            curator_root: binding.curator_root.unwrap_or_default(),
+        });
 
         let co_signer = prefix
             .co_signer
@@ -214,12 +201,11 @@ impl<'a> TransactCheck<'a> {
         })
     }
 
-    fn prefix(&self, curator: Option<CuratorRoot>, co_signer: Option<CoSignRequirement>) -> Prefix {
+    fn prefix(&self, co_signer: Option<CoSignRequirement>) -> Prefix {
         let mut next = Cursor(
-            REGISTRY_INDEX
+            POLICY_INDEX
                 + usize::from(self.config.has_policy() || self.data.withdrawal_exemption.is_some()),
         );
-        let curator = curator.map(|root| next.slot(root));
         let co_signer = co_signer.map(|requirement| next.pair(requirement));
         let signer = match self.signer {
             RailSigner::Owners => SignerSlot::Owners,
@@ -227,7 +213,6 @@ impl<'a> TransactCheck<'a> {
             RailSigner::Delegate(expected) => SignerSlot::Delegate(next.slot(expected)),
         };
         Prefix {
-            curator,
             co_signer,
             signer,
             spp: next.0,
@@ -257,16 +242,6 @@ struct Slot<T> {
     expected: T,
 }
 
-impl Slot<CuratorRoot> {
-    fn root(&self, accounts: &[AccountView], now: u64) -> Result<[u8; 32], ProgramError> {
-        let account = account_at(accounts, self.index)?;
-        if account.address() != &self.expected.registry {
-            return Err(CustomRingError::InvalidCuratorRegistry.into());
-        }
-        Ok(load_curator_registry(account)?.curator_root(self.expected.root_index, now)?)
-    }
-}
-
 impl Slot<CoSignRequirement> {
     fn signer(
         &self,
@@ -289,7 +264,6 @@ enum SignerSlot {
 }
 
 struct Prefix {
-    curator: Option<Slot<CuratorRoot>>,
     /// The record, its signer next.
     co_signer: Option<Slot<CoSignRequirement>>,
     signer: SignerSlot,

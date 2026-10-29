@@ -3,7 +3,7 @@
 use bytemuck::Zeroable;
 use custom_ring_interface::{
     merge_disclosure_field_count, tag, AuditedDepositPrefix, CoSignScope, CustomRingError,
-    CustomRingMergeIxData, MemberRegistry, MergeDisclosure, RingDepositAuditCapsule,
+    CustomRingMergeIxData, MergeDisclosure, RingDepositAuditCapsule,
     AUDIT_CIPHERTEXT_LEN, MAX_RING_DEPOSIT_AUDIT_SLOTS, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN,
     RING_DEPOSIT_DEPOSITOR_INDEX, RING_DEPOSIT_RING_CONFIG_INDEX, RING_MERGE_PAYER_INDEX,
     RING_MERGE_RING_CONFIG_INDEX,
@@ -19,17 +19,17 @@ use spr_interface::instruction::instruction_data::{
 
 use crate::{
     common::{
-        auditor_pubkey, config_pda, delegate_ring, floored, off_curve_g2, on_curve_g2,
-        reaches_verification, refused, registry_pda, ring_auth, set_co_signer, CoSignerSlot, Ring,
-        Sent, Setup, PROGRAM, SYSTEM,
+        auditor_pubkey, config_pda, delegate_ring, off_curve_g2, on_curve_g2, policy_pda,
+        reaches_verification, refused, ring_auth, set_co_signer, CoSignerSlot, Ring, Sent, Setup,
+        PROGRAM, SYSTEM,
     },
     transact_rules::SPP,
 };
 
-/// A merge of `inputs` notes, `registry` the own root index a key escrow ring binds.
-pub fn merge_data(registry: Option<u8>, inputs: usize) -> CustomRingMergeIxData {
+/// A merge of `inputs` notes, `registry` the own revision a key escrow ring binds.
+pub fn merge_data(registry: Option<u64>, inputs: usize) -> CustomRingMergeIxData {
     CustomRingMergeIxData {
-        registry_root_index: registry.unwrap_or_default(),
+        own_revision: registry.unwrap_or_default().into(),
         output_ring_data_hash: [8; 32],
         disclosure: merge_disclosure(inputs),
         merge: MergeTransactIxData {
@@ -63,15 +63,15 @@ pub fn merge_disclosure(inputs: usize) -> MergeDisclosure {
     }
 }
 
-/// `registry` the own root index a key escrow ring binds, the registry follows the config.
-fn merge_instruction(ring: &Ring, registry: Option<u8>) -> Instruction {
+/// `registry` the own revision a key escrow ring binds, the policy follows the config.
+fn merge_instruction(ring: &Ring, registry: Option<u64>) -> Instruction {
     merge_instruction_with(ring, registry, &merge_data(registry, 8))
 }
 
-/// The forwarded list follows the config and, with `registry`, the registry.
+/// The forwarded list follows the config and, with `registry`, the policy.
 pub fn merge_instruction_with(
     ring: &Ring,
-    registry: Option<u8>,
+    registry: Option<u64>,
     data: &CustomRingMergeIxData,
 ) -> Instruction {
     let mut spp: Vec<AccountMeta> = (0..RING_MERGE_PAYER_INDEX)
@@ -81,7 +81,7 @@ pub fn merge_instruction_with(
     spp.push(AccountMeta::new(ring.payer.pubkey(), true));
     let mut accounts = vec![AccountMeta::new_readonly(config_pda(), false)];
     if registry.is_some() {
-        accounts.push(AccountMeta::new_readonly(registry_pda(), false));
+        accounts.push(AccountMeta::new_readonly(policy_pda(), false));
     }
     accounts.extend(spp);
     Instruction {
@@ -91,20 +91,16 @@ pub fn merge_instruction_with(
     }
 }
 
-fn merge(ring: &mut Ring, registry: Option<u8>) -> Sent {
+fn merge(ring: &mut Ring, registry: Option<u64>) -> Sent {
     let instruction = merge_instruction(ring, registry);
     ring.send(instruction, &[])
 }
 
 #[test]
-fn an_escrow_merge_root_below_the_own_floor_is_refused() {
+fn an_escrow_merge_revision_outside_the_own_mirror_is_refused() {
     let mut ring = delegate_ring(&Keypair::new());
-    let base: MemberRegistry = ring.read(&registry_pda());
-    ring.write(&registry_pda(), &floored(&base, 4, 5));
-    refused(merge(&mut ring, Some(1)), CustomRingError::RootBelowFloor);
-    ring.write(&registry_pda(), &floored(&base, 4, 4));
-    reaches_verification(merge(&mut ring, Some(1)));
-    refused(merge(&mut ring, Some(5)), CustomRingError::RootIndexEmpty);
+    refused(merge(&mut ring, Some(1)), CustomRingError::MirrorRootExpired);
+    reaches_verification(merge(&mut ring, Some(0)));
 }
 
 #[test]
@@ -175,21 +171,21 @@ pub fn ring_deposit() -> RingDepositIxData {
     deposit_of(vec![deposit_entry(0, &auditor_pubkey())])
 }
 
-/// `registry` the root index a Registry-mode ring binds, the registry account follows the config.
-fn audited_deposit(ring: &mut Ring, registry: Option<u8>) -> Sent {
+/// `registry` the own revision an escrow-mode ring binds, the policy follows the config.
+fn audited_deposit(ring: &mut Ring, registry: Option<u64>) -> Sent {
     let instruction = deposit_instruction(ring, registry, &ring_deposit());
     ring.send(instruction, &[])
 }
 
 pub fn deposit_instruction(
     ring: &Ring,
-    registry: Option<u8>,
+    registry: Option<u64>,
     deposit: &RingDepositIxData,
 ) -> Instruction {
     let prefix = AuditedDepositPrefix {
         tag: tag::AUDITED_DEPOSIT,
         proof: Zeroable::zeroed(),
-        registry_root_index: registry.unwrap_or_default(),
+        own_revision: registry.unwrap_or_default().into(),
     };
     let data = [
         bytemuck::bytes_of(&prefix),
@@ -209,7 +205,7 @@ pub fn deposit_instruction(
     ]);
     let mut accounts = vec![AccountMeta::new_readonly(config_pda(), false)];
     if registry.is_some() {
-        accounts.push(AccountMeta::new_readonly(registry_pda(), false));
+        accounts.push(AccountMeta::new_readonly(policy_pda(), false));
     }
     accounts.extend(spp);
     Instruction {
@@ -220,16 +216,13 @@ pub fn deposit_instruction(
 }
 
 #[test]
-fn an_escrowing_deposit_root_below_the_own_floor_is_refused() {
+fn an_escrowing_deposit_revision_outside_the_own_mirror_is_refused() {
     let mut ring = delegate_ring(&Keypair::new());
-    let base: MemberRegistry = ring.read(&registry_pda());
-    ring.write(&registry_pda(), &floored(&base, 4, 5));
     refused(
         audited_deposit(&mut ring, Some(1)),
-        CustomRingError::RootBelowFloor,
+        CustomRingError::MirrorRootExpired,
     );
-    ring.write(&registry_pda(), &floored(&base, 4, 4));
-    reaches_verification(audited_deposit(&mut ring, Some(1)));
+    reaches_verification(audited_deposit(&mut ring, Some(0)));
 }
 
 #[test]

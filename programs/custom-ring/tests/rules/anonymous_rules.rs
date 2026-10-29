@@ -9,13 +9,13 @@ use solana_keypair::{Keypair, Signer};
 use crate::{
     common::{key_registration, reaches_verification, refused, register_key, Ring, Sent, Setup},
     forward_rules::{deposit_instruction, merge_data, merge_instruction_with, ring_deposit},
-    transact_rules::{registry_meta, send, spp_list, Fixture},
+    transact_rules::{policy_meta, send, spp_list, Fixture},
 };
 
 /// An anonymous policy transfer, `prefix` after the registry, the payer its only signer.
 fn transfer(ring: &mut Ring, prefix: Vec<AccountMeta>, data: &RingTransactData<'_>) -> Sent {
     let spp = spp_list(&ring.payer.pubkey(), data, &[]);
-    let prefix = [vec![registry_meta()], prefix].concat();
+    let prefix = [vec![policy_meta()], prefix].concat();
     send(
         ring,
         tag::TRANSACT,
@@ -52,7 +52,7 @@ fn an_anonymous_policy_transfer_takes_no_signer_but_the_payer() {
         send(
             &mut ring,
             tag::TRANSACT,
-            vec![registry_meta()],
+            vec![policy_meta()],
             data.encode().unwrap(),
             spp,
             &[&owner],
@@ -85,7 +85,7 @@ fn an_anonymous_transfer_reaches_its_keys_under_any_tags_and_bodies() {
             body: &body,
         });
         let prefix = match policy {
-            true => vec![registry_meta()],
+            true => vec![policy_meta()],
             false => Vec::new(),
         };
         let spp = spp_list(&ring.payer.pubkey(), &data, &[]);
@@ -153,7 +153,7 @@ fn an_anonymous_policy_ring_refuses_the_delegate_rail() {
             &mut ring,
             tag::DELEGATE_TRANSACT,
             vec![
-                registry_meta(),
+                policy_meta(),
                 AccountMeta::new_readonly(delegate.pubkey(), true),
             ],
             data.encode().unwrap(),

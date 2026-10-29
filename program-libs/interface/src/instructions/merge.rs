@@ -7,8 +7,8 @@ use spr_interface::instruction::instruction_data::merge_transact::MergeTransactI
 use wincode::{containers, len::FixIntLen, SchemaRead, SchemaWrite};
 
 use crate::{
-    bytes::Bytes, error::CustomRingError, CustomRingProof, AUDIT_CIPHERTEXT_LEN,
-    TAGGED_X25519_KEY_LEN,
+    bytes::Bytes, error::CustomRingError, storage::Revision, CustomRingProof,
+    AUDIT_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
 };
 
 /// Owner key, nullifier pk, mint, amount and output blinding ahead of the input commitments.
@@ -31,11 +31,11 @@ pub const fn merge_disclosure_field_count(width: usize) -> usize {
     pack_be_chunks(merge_disclosure_len(width))
 }
 
-/// The SPP merge body with `proof.b` compressed, the program resolves `registry_root_index` to its root.
+/// The SPP merge body with `proof.b` compressed, the program resolves `own_revision` to its root.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CustomRingMergeIxData {
     /// Read on a key escrow ring alone, zero elsewhere.
-    pub registry_root_index: u8,
+    pub own_revision: Revision,
     pub output_ring_data_hash: [u8; 32],
     pub disclosure: MergeDisclosure,
     pub merge: MergeTransactIxData,
@@ -65,7 +65,7 @@ impl CustomRingMergeIxData {
         let b = solana_bn254::compression::prelude::alt_bn128_g2_compress_be(&self.merge.proof.b)
             .map_err(|_| CustomRingError::InvalidSppProofPoint)?;
         Ok([
-            &[self.registry_root_index][..],
+            &self.own_revision.0[..],
             &self.output_ring_data_hash,
             &wincode::serialize(&self.disclosure).map_err(invalid_data)?,
             head,
@@ -83,7 +83,7 @@ fn invalid_data<E>(_: E) -> CustomRingError {
 
 /// Borrowed view of the compact request, the SPP merge body read around its compressed `b`.
 pub struct CustomRingMergeIxDataRef<'a> {
-    pub registry_root_index: u8,
+    pub own_revision: Revision,
     pub output_ring_data_hash: &'a [u8; 32],
     pub disclosure: MergeDisclosureRef<'a>,
     head: &'a [u8; MERGE_B_OFFSET],
@@ -102,13 +102,13 @@ pub struct MergeDisclosureRef<'a> {
 impl<'a> CustomRingMergeIxDataRef<'a> {
     pub fn from_bytes(data: &'a [u8]) -> Result<Self, CustomRingError> {
         let mut bytes = Bytes::new(data, CustomRingError::InvalidInstructionData);
-        let registry_root_index = bytes.byte()?;
+        let own_revision = *bytes.pod()?;
         let output_ring_data_hash = bytes.array()?;
         let disclosure = MergeDisclosureRef::read(&mut bytes)?;
         let head = bytes.array()?;
         let compressed_b = bytes.array()?;
         Ok(Self {
-            registry_root_index,
+            own_revision,
             output_ring_data_hash,
             disclosure,
             head,

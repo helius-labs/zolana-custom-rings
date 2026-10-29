@@ -4,7 +4,7 @@ use spr_account_checks::AccountIterator;
 
 use crate::instructions::{
     instruction_runtime::no_data,
-    loader::{load_authorized_config_mut, load_registry},
+    loader::{load_authorized_config_mut, load_policy},
 };
 
 #[inline(never)]
@@ -18,7 +18,7 @@ pub fn process_set_delegate_ix(
     let authority = iter.next_signer("authority")?;
     let config = iter.next_mut("config")?;
     let delegate = iter.next_signer("delegate")?;
-    let registry = iter.next_account("registry")?;
+    let policy = iter.next_account("policy")?;
 
     // 1. The delegate is permanent for the instructions of the deployed binary.
     let mut config = load_authorized_config_mut(program_id, config, authority)?;
@@ -32,8 +32,8 @@ pub fn process_set_delegate_ix(
     if !config.has_policy() {
         return Err(CustomRingError::DelegateRequiresPolicy.into());
     }
-    // 3. `ConfidentialEscrow` mode escrows every output nullifier key in the member registry.
-    load_registry(program_id, registry)?;
+    // 3. `ConfidentialEscrow` mode escrows every output nullifier key in the policy's records.
+    load_policy(program_id, policy)?;
     config.delegate = *delegate.address();
     config.mode = RingMode::ConfidentialEscrow as u8;
     Ok(())
