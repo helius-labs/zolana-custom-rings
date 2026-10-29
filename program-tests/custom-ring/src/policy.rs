@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use custom_ring_cli::{wait_for, Probe, Zolana};
+use custom_ring_cli::{patiently, wait_for, Probe, Zolana};
 use custom_ring_interface::{
     mint_policy_write,
     storage::Revision,
@@ -373,12 +373,16 @@ impl StorageRecords<'_> {
             .iter()
             .map(|write| Ok(StorageWriteView::from(&write.entry()?)))
             .collect::<Result<Vec<_>>>()?;
-        let response = env.client.indexer().get_storage_apply_proof_inputs(
-            GetStorageApplyProofInputsRequest {
-                registry: registry.into(),
-                writes,
-            },
-        )?;
+        let request = GetStorageApplyProofInputsRequest {
+            registry: registry.into(),
+            writes,
+        };
+        let response = patiently("the storage apply proof inputs", || {
+            env.client
+                .indexer()
+                .get_storage_apply_proof_inputs(request.clone())
+                .map_err(RingError::from)
+        })?;
         let inputs = storage_apply_proof_inputs(&response)?;
         let apply =
             env.run(StorageApplyProof { inputs: &inputs }.prove(env.client.ring_client()))?;

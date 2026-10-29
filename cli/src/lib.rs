@@ -61,6 +61,7 @@ pub mod policy;
 pub mod probe;
 #[path = "operations/records.rs"]
 mod records;
+pub use records::patiently;
 #[path = "commands/ring/release.rs"]
 pub mod release;
 #[path = "runtime/ring_rpc.rs"]

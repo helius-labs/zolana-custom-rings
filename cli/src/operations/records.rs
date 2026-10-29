@@ -77,7 +77,7 @@ pub(crate) fn read_curator(
 }
 
 /// Read again under the newest root while the projection lags the chain.
-pub(crate) fn patiently<T>(
+pub fn patiently<T>(
     label: impl Display,
     mut read: impl FnMut() -> Result<T, RingError>,
 ) -> Result<T> {
