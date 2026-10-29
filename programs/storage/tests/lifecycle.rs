@@ -1,9 +1,9 @@
-use bytemuck::bytes_of;
 use custom_ring_interface::{
-    storage::{StorageError, StorageRegistry},
-    storage_instruction::tag,
-    ApplyRecordsIxData, AuthorityWriteRecordsIxData, CustomRingError, CustomRingProof,
-    PlainGroth16Proof, RecordWriteData, WriteRecordsIxData,
+    storage::{RegistryId, Revision, StorageError, StorageRegistry},
+    storage_instruction::{
+        tag, InitializeIxData, StorageUpdateIxData, StorageWriteData, UpdateMode,
+    },
+    ApplyRecordsIxData, CustomRingError, CustomRingProof, PlainGroth16Proof, WriteRecordsIxData,
 };
 use litesvm::LiteSVM;
 use serde_json::Value;
@@ -16,17 +16,15 @@ use spr_client::{
     prover::{Proof, ProofCompressed},
     sign_transaction, ComputeBudgetConfig,
 };
-use spr_hasher::primitives::right_align;
-use storage_program::{InitializeIxData, VerifyPolicyIxData, REGISTRY_SEED};
-use zolana_ring_policy::TableParts;
 
 const PROGRAM: Address = custom_ring_interface::STORAGE_PROGRAM_ID;
 const GRACE: u64 = 10;
+const REGISTRY_ID: RegistryId = RegistryId([1; 32]);
 
 struct Store {
     svm: LiteSVM,
-    writer: Keypair,
-    reader: Keypair,
+    authority: Keypair,
+    payer: Keypair,
     registry: Address,
     proofs: Value,
 }
@@ -41,52 +39,51 @@ impl Store {
             .join("storage_program.so");
         svm.add_program(PROGRAM, &std::fs::read(program).unwrap())
             .unwrap();
-        let writer = Keypair::new_from_array([9; 32]);
-        let reader = Keypair::new();
-        for signer in [&writer, &reader] {
-            svm.airdrop(&signer.pubkey(), 1_000_000_000).unwrap();
-        }
-        let registry =
-            Address::find_program_address(&[REGISTRY_SEED, writer.pubkey().as_ref()], &PROGRAM).0;
+        let authority = Keypair::new_from_array([9; 32]);
+        let payer = Keypair::new();
+        svm.airdrop(&payer.pubkey(), 1_000_000_000).unwrap();
+        let registry = StorageRegistry::find_address(&authority.pubkey(), &REGISTRY_ID).0;
+        let proofs: Value = serde_json::from_str(include_str!("proofs.json")).unwrap();
+        // The apply proofs bind the registry address.
+        assert_eq!(hex::encode(registry), proofs["registry"].as_str().unwrap());
         Self {
             svm,
-            writer,
-            reader,
+            authority,
+            payer,
             registry,
-            proofs: serde_json::from_str(include_str!("proofs.json")).unwrap(),
+            proofs,
         }
     }
 
     fn initialize(&mut self, grace_slots: u64) {
-        self.send(self.instruction(
-            tag::INITIALIZE,
-            bytes_of(&InitializeIxData {
-                grace_slots: grace_slots.to_le_bytes(),
-            }),
-        ))
-        .unwrap();
-    }
-
-    fn update_with(&self, revision: u64, mode: u8) -> Instruction {
-        let mut update = self.update(revision);
-        update.data[0] = mode;
-        update
+        let data = InitializeIxData {
+            registry_id: REGISTRY_ID,
+            grace_slots: grace_slots.to_le_bytes(),
+        };
+        let instruction = Instruction {
+            program_id: PROGRAM,
+            accounts: vec![
+                AccountMeta::new(self.payer.pubkey(), true),
+                AccountMeta::new_readonly(self.authority.pubkey(), true),
+                AccountMeta::new(self.registry, false),
+                AccountMeta::new_readonly(Address::new_from_array([0; 32]), false),
+            ],
+            data: [&[tag::INITIALIZE], bytemuck::bytes_of(&data)].concat(),
+        };
+        self.send_as_authority(instruction).unwrap();
     }
 
     fn update(&self, revision: u64) -> Instruction {
+        self.update_with(revision, UpdateMode::Graced)
+    }
+
+    fn update_with(&self, revision: u64, mode: UpdateMode) -> Instruction {
         let vector = &self.proofs[format!("update{revision}")];
         let writes = vector["writes"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|entry| RecordWriteData {
-                member: field(&entry["member"]),
-                lists: WriteRecordsIxData {
-                    mask: entry["mask"].as_u64().unwrap().to_le_bytes(),
-                    value: entry["value"].as_u64().unwrap().to_le_bytes(),
-                },
-                ..RecordWriteData::default()
-            })
+            .map(write)
             .collect::<Vec<_>>();
         let apply = ApplyRecordsIxData {
             proof: proof(vector),
@@ -95,80 +92,62 @@ impl Store {
                 .unwrap()
                 .to_le_bytes(),
         };
-        self.instruction(
-            tag::UPDATE,
-            &[
-                revision.to_le_bytes().as_slice(),
-                &AuthorityWriteRecordsIxData {
-                    writes: &writes,
-                    apply: &apply,
-                }
-                .encode()
-                .unwrap(),
-            ]
-            .concat(),
+        let data = StorageUpdateIxData {
+            revision: revision.into(),
+            writes: &writes,
+            apply: &apply,
+        };
+        Instruction {
+            program_id: PROGRAM,
+            accounts: vec![
+                AccountMeta::new_readonly(self.authority.pubkey(), true),
+                AccountMeta::new(self.registry, false),
+            ],
+            data: [vec![mode.tag()], data.encode().unwrap()].concat(),
+        }
+    }
+
+    fn update_authority(&self, authority: &Keypair, new_authority: &Keypair) -> Instruction {
+        Instruction {
+            program_id: PROGRAM,
+            accounts: vec![
+                AccountMeta::new_readonly(authority.pubkey(), true),
+                AccountMeta::new_readonly(new_authority.pubkey(), true),
+                AccountMeta::new(self.registry, false),
+            ],
+            data: vec![tag::UPDATE_AUTHORITY],
+        }
+    }
+
+    fn registry(&self) -> StorageRegistry {
+        *bytemuck::from_bytes(&self.svm.get_account(&self.registry).unwrap().data)
+    }
+
+    fn root(&self, revision: u64) -> Result<[u8; 32], StorageError> {
+        self.registry().root(
+            Revision::from(revision),
+            self.svm.get_sysvar::<solana_clock::Clock>().slot,
         )
     }
 
-    fn verify(&self) -> Instruction {
-        let vector = &self.proofs["reader"];
-        let rows = vector["rules"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(field)
-            .collect::<Vec<_>>();
-        let ix = VerifyPolicyIxData {
-            revision: 1.into(),
-            table: TableParts { rows: &rows }.encode().unwrap(),
-            action: field(&vector["action"]),
-            sender: right_align(&1001u64.to_be_bytes()),
-            proof: proof(vector),
-        };
-        self.instruction(tag::VERIFY_POLICY, bytes_of(&ix))
+    fn send_as_authority(&mut self, instruction: Instruction) -> Result<(), TransactionError> {
+        let authority = self.authority.insecure_clone();
+        self.send(instruction, &[&authority])
     }
 
-    fn instruction(&self, opcode: u8, data: &[u8]) -> Instruction {
-        let mut accounts = vec![AccountMeta {
-            pubkey: self.registry,
-            is_signer: false,
-            is_writable: opcode != tag::VERIFY_POLICY,
-        }];
-        if opcode != tag::VERIFY_POLICY {
-            accounts.insert(
-                0,
-                AccountMeta {
-                    pubkey: self.writer.pubkey(),
-                    is_signer: true,
-                    is_writable: opcode == tag::INITIALIZE,
-                },
-            );
-        }
-        if opcode == tag::INITIALIZE {
-            accounts.push(AccountMeta::new_readonly(
-                Address::new_from_array([0; 32]),
-                false,
-            ));
-        }
-        Instruction {
-            program_id: PROGRAM,
-            accounts,
-            data: [&[opcode], data].concat(),
-        }
-    }
-
-    fn send(&mut self, instruction: Instruction) -> Result<(), TransactionError> {
+    fn send(
+        &mut self,
+        instruction: Instruction,
+        signers: &[&Keypair],
+    ) -> Result<(), TransactionError> {
         self.svm.expire_blockhash();
-        let mut signers: Vec<&dyn Signer> = vec![&self.reader];
-        if instruction
-            .accounts
-            .iter()
-            .any(|account| account.is_signer && account.pubkey == self.writer.pubkey())
-        {
-            signers.push(&self.writer);
-        }
+        let signers = [&self.payer]
+            .into_iter()
+            .chain(signers.iter().copied())
+            .map(|signer| signer as &dyn Signer)
+            .collect::<Vec<_>>();
         let message = compile_message(
-            &self.reader.pubkey(),
+            &self.payer.pubkey(),
             &[instruction],
             self.svm.latest_blockhash(),
             ComputeBudgetConfig::new(1_400_000),
@@ -187,6 +166,24 @@ fn refusal(code: u32) -> Result<(), TransactionError> {
         0,
         InstructionError::Custom(code),
     ))
+}
+
+fn write(entry: &Value) -> StorageWriteData {
+    let escrow_key = field(&entry["escrowKey"]);
+    let lists = if escrow_key == [0; 32] {
+        WriteRecordsIxData {
+            mask: entry["mask"].as_u64().unwrap().to_le_bytes(),
+            value: entry["value"].as_u64().unwrap().to_le_bytes(),
+        }
+    } else {
+        WriteRecordsIxData::default()
+    };
+    StorageWriteData {
+        member: field(&entry["member"]),
+        lists,
+        mint_policy: [0; 33],
+        escrow_key,
+    }
 }
 
 fn field(value: &Value) -> [u8; 32] {
@@ -213,62 +210,71 @@ fn proof(vector: &Value) -> CustomRingProof {
 }
 
 #[test]
-fn writer_updates_and_readers_verify_retained_roots() {
+fn authority_rotates_and_the_old_authority_is_refused() {
     let mut store = Store::new();
     store.initialize(GRACE);
-    let mut wrong_writer = store.update(0);
-    wrong_writer.accounts[0].pubkey = store.reader.pubkey();
+    let old = store.authority.insecure_clone();
+    let new = Keypair::new();
+    store
+        .send(store.update_authority(&old, &new), &[&old, &new])
+        .unwrap();
     assert_eq!(
-        store.send(wrong_writer),
+        store.send(store.update_authority(&old, &old), &[&old]),
+        refusal(StorageError::Unauthorized as u32)
+    );
+    assert_eq!(
+        store.send_as_authority(store.update(0)),
+        refusal(StorageError::Unauthorized as u32)
+    );
+    let mut update = store.update(0);
+    update.accounts[0].pubkey = new.pubkey();
+    store.send(update, &[&new]).unwrap();
+}
+
+#[test]
+fn an_escrow_write_applies() {
+    let mut store = Store::new();
+    store.initialize(GRACE);
+    for revision in 0..3 {
+        store.send_as_authority(store.update(revision)).unwrap();
+    }
+    assert_eq!(store.root(3), Ok(field(&store.proofs["update2"]["root"])));
+}
+
+#[test]
+fn updates_retire_roots_by_mode() {
+    let mut store = Store::new();
+    store.initialize(GRACE);
+    let mut wrong_authority = store.update(0);
+    wrong_authority.accounts[0].pubkey = store.payer.pubkey();
+    assert_eq!(
+        store.send(wrong_authority, &[]),
         refusal(StorageError::Unauthorized as u32)
     );
     let mut forged = store.update(0);
     *forged.data.last_mut().unwrap() ^= 1;
     assert_eq!(
-        store.send(forged),
+        store.send_as_authority(forged),
         refusal(CustomRingError::ProofVerificationFailed as u32)
     );
-    store.send(store.update(0)).unwrap();
+    store.send_as_authority(store.update(0)).unwrap();
     assert_eq!(
-        store.send(store.update(0)),
+        store.send_as_authority(store.update(0)),
         refusal(StorageError::RevisionChanged as u32)
-    );
-    for _ in 0..2 {
-        store.reader = Keypair::new();
-        store
-            .svm
-            .airdrop(&store.reader.pubkey(), 1_000_000_000)
-            .unwrap();
-        store.send(store.verify()).unwrap();
-    }
-    let mut wrong_action = store.verify();
-    bytemuck::from_bytes_mut::<VerifyPolicyIxData>(&mut wrong_action.data[1..]).action[31] ^= 1;
-    assert_eq!(
-        store.send(wrong_action),
-        refusal(CustomRingError::ProofVerificationFailed as u32)
     );
 
     let seeded = store.svm.clone();
-    for mode in [tag::UPDATE, tag::UPDATE_IMMEDIATE] {
+    for mode in [UpdateMode::Graced, UpdateMode::Immediate] {
         store.svm = seeded.clone();
-        store.send(store.update_with(1, mode)).unwrap();
-        if mode == tag::UPDATE {
+        store.send_as_authority(store.update_with(1, mode)).unwrap();
+        if mode == UpdateMode::Graced {
             store.svm.warp_to_slot(GRACE - 1);
-            store.send(store.verify()).unwrap();
+            assert!(store.root(1).is_ok());
             store.svm.warp_to_slot(GRACE);
         }
-        assert_eq!(
-            store.send(store.verify()),
-            refusal(StorageError::RootExpired as u32)
-        );
-        store.send(store.update(2)).unwrap();
-        assert_eq!(
-            store.send(store.verify()),
-            refusal(StorageError::RootExpired as u32)
-        );
-        let mut current = store.verify();
-        bytemuck::from_bytes_mut::<VerifyPolicyIxData>(&mut current.data[1..]).revision = 3.into();
-        store.send(current).unwrap();
+        assert_eq!(store.root(1), Err(StorageError::RootExpired));
+        store.send_as_authority(store.update(2)).unwrap();
+        assert_eq!(store.root(1), Err(StorageError::RootExpired));
     }
 }
 
@@ -277,9 +283,9 @@ fn unbounded_grace_keeps_both_update_modes() {
     let mut store = Store::new();
     store.initialize(u64::MAX);
     store.svm.warp_to_slot(1);
-    store.send(store.update_with(0, tag::UPDATE)).unwrap();
+    store.send_as_authority(store.update(0)).unwrap();
     store
-        .send(store.update_with(1, tag::UPDATE_IMMEDIATE))
+        .send_as_authority(store.update_with(1, UpdateMode::Immediate))
         .unwrap();
 }
 
@@ -295,15 +301,15 @@ fn a_graced_update_never_evicts_a_root_that_still_verifies() {
     oldest.expires_at = GRACE.to_le_bytes();
     store.svm.set_account(store.registry, account).unwrap();
     assert_eq!(
-        store.send(store.update(0)),
+        store.send_as_authority(store.update(0)),
         refusal(StorageError::HistoryFull as u32)
     );
     let full = store.svm.clone();
     store
-        .send(store.update_with(0, tag::UPDATE_IMMEDIATE))
+        .send_as_authority(store.update_with(0, UpdateMode::Immediate))
         .unwrap();
     store.svm = full;
     // Evictable from the slot `RootExpired` starts refusing it.
     store.svm.warp_to_slot(GRACE);
-    store.send(store.update(0)).unwrap();
+    store.send_as_authority(store.update(0)).unwrap();
 }

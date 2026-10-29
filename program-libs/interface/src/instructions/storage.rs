@@ -13,7 +13,7 @@ pub mod tag {
     pub const INITIALIZE: u8 = 0;
     pub const UPDATE: u8 = 1;
     pub const UPDATE_IMMEDIATE: u8 = 2;
-    pub const VERIFY_POLICY: u8 = 3;
+    // 3 retired.
     /// No data, the authority and the new authority both sign.
     pub const UPDATE_AUTHORITY: u8 = 4;
 }

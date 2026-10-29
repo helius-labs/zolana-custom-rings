@@ -1128,6 +1128,106 @@ On a confidential ring every merge fails: without a disclosure with `EscrowMerge
 
 No rule runs on a merge, because SPP keeps the owner, asset and value. The proof does not check that the merge output ciphertext opens. SPP publishes it unverified.
 
+## Storage program
+
+The storage program keeps the root history of a record tree for one authority. It is one deployment at `STORAGE_PROGRAM_ID`, apart from the ring program. It verifies apply proofs and keeps no policy. A consumer reads a root through `StorageRegistry::root(revision, slot)`, the one rule for which root a revision names. `StorageError` holds codes `9000` to `9004`, and the write and proof checks fail with `CustomRingError` codes.
+
+### StorageRegistry
+
+One per creator and registry id at `[b"storage", creator, registry_id]`, 1581 bytes, discriminator `1`. `Initialize` creates it and nothing closes it. The creator is in the seeds, so no other signer can take its addresses. The loader checks the owner, the size, the discriminator and `1 <= next_index <= 2^20`, and does not derive the address again.
+
+```rust
+pub struct Root { pub hash: [u8; 32], pub revision: Revision, pub expires_at: [u8; 8] }   // 48 bytes
+
+pub struct StorageRegistry {
+    pub discriminator: u8,
+    /// Written by `Initialize` and `UpdateAuthority`.
+    pub authority: Address,
+    pub grace_slots: [u8; 8],
+    /// Leaf the next insert takes. Leaf `0` is the sentinel.
+    pub next_index: [u8; 4],
+    /// Newest first, only retired roots have an expiry.
+    pub roots: [Root; 32],
+}
+```
+
+`root(revision, slot)` returns the hash of the nonzero root with that revision when it is the newest root, or when `slot < expires_at`. Else it fails with `RootExpired`.
+
+### Storage instructions
+
+| Instruction | Tag | Description | Access |
+| --- | --- | --- | --- |
+| `Initialize` | `0` | Creates the registry with the sentinel root at revision `0`. | Payer and creator sign |
+| `Update` | `1` | Applies writes and retires the old root after the grace period. | Authority signs |
+| `UpdateImmediate` | `2` | Applies writes and clears every earlier root. | Authority signs |
+| `UpdateAuthority` | `4` | Hands the registry to a new authority. | Authority and new authority sign |
+
+Tag `3` is retired. Every tag outside the table fails with `InvalidInstructionData`.
+
+#### Initialize
+
+**Accounts**
+
+1. `payer`: signer, writable. Funds the account.
+2. `creator`: signer. Becomes the authority.
+3. `registry`: writable, at `[b"storage", creator, registry_id]` under the canonical bump.
+4. `system_program`.
+
+**Instruction data**
+
+```rust
+struct InitializeIxData {
+    registry_id: [u8; 32],
+    /// u64 little endian.
+    grace_slots: [u8; 8],
+}
+```
+
+Another system program fails with `IncorrectProgramId`, another address with `InvalidRegistry` and an occupied account with `AccountAlreadyInitialized`. The registry starts with `next_index = 1` and `roots[0] = { MEMBER_REGISTRY_EMPTY_ROOT, 0, 0 }`.
+
+#### Update and UpdateImmediate
+
+**Accounts**
+
+1. `authority`: signer.
+2. `registry`: writable.
+
+**Instruction data**
+
+`revision: u64` little endian, `count: u8`, then `count` × `StorageWriteData` of 113 bytes each, then `ApplyRecordsIxData`.
+
+```rust
+struct StorageWriteData {
+    member: [u8; 32],
+    /// u64 little endian each. All zero when the write changes no list.
+    lists: { mask: [u8; 8], value: [u8; 8] },
+    /// As in `RecordWriteData`.
+    mint_policy: [u8; 33],
+    /// Nonzero only on an escrow write.
+    escrow_key: [u8; 32],
+}
+```
+
+`count = 0` fails with `InvalidInstructionData` and `count > 16` with `AuthorityBatchTooLarge`. A write with a zero `escrow_key` is checked as an `AuthorityWriteRecords` write, with every list except the escrow list writable. A write with a nonzero `escrow_key` is an escrow write, `QueueEntry::escrow_hash(member, escrow_key)`, and fails with `InvalidInstructionData` when it also carries lists or mint settings. The program does not check an escrow key. The authority checks it before it writes. An escrow key fills once and no write removes it.
+
+A signer other than the authority fails with `Unauthorized`, and a `revision` other than the newest root's with `RevisionChanged`. The chain starts at `HashChain4([APPLY_RECORDS, hash_bytes(registry), revision])` and folds each entry with `queue_chain` in order. The program verifies one apply proof as `ApplyRecords` does, over `(roots[0].hash, next_index, chain_start)` to `(new_root, new_next_index, chain_end)` and `count`.
+
+`Update` fails with `HistoryFull` while the oldest root has not expired. It sets the outgoing root's `expires_at = slot + grace_slots`, saturating, and shifts the history by one. `UpdateImmediate` clears every root. Both then write `roots[0] = { new_root, revision + 1, 0 }` and `next_index = new_next_index`. The revision does not wrap.
+
+#### UpdateAuthority
+
+**Accounts**
+
+1. `authority`: signer.
+2. `new_authority`: signer.
+3. `registry`: writable.
+
+**Instruction data**
+
+Empty.
+
+A signer other than the authority fails with `Unauthorized`. The new authority signs, so a mistyped key cannot take the registry out of reach.
+
 ## Services
 
 A ring runs with three services next to Photon. None holds an authority key. Each answer a client acts on is checked against chain state, except where this section says otherwise.
