@@ -38,6 +38,8 @@ mod merge;
 mod migration;
 #[path = "ring/policy.rs"]
 mod policy;
+#[path = "ring/relay.rs"]
+mod relay;
 #[path = "ring/transfers.rs"]
 mod transfers;
 
@@ -766,7 +768,7 @@ struct AnonymousPayment<'a> {
     sender: &'a ShieldedKeypair,
     /// The sender's counterparties pick the payment's tag.
     history: &'a ViewingHistory,
-    payer: &'a Keypair,
+    payer: Address,
     inputs: Vec<WalletUtxo>,
     to: RingAddress,
     first_contact: FirstContact,
@@ -778,7 +780,7 @@ impl<'a> AnonymousPayment<'a> {
         let shape = canonical_shape(self.inputs.len(), 2)?;
         let transaction = ConfidentialTransaction::new_with_ring(
             self.inputs,
-            self.payer.pubkey(),
+            self.payer,
             self.ring.program_id(),
         )?;
         Ok(CustomRingTransfer::new(CustomRingTransferInput {

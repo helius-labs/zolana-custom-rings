@@ -1595,11 +1595,14 @@ name = "custom-ring-test-validator"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bincode 2.0.1",
  "custom-ring-cli",
  "custom-ring-interface",
  "custom-ring-sdk",
  "hex",
+ "reqwest",
+ "serde",
  "serde_json",
  "solana-address 2.6.1",
  "solana-instruction",
@@ -1620,6 +1623,7 @@ dependencies = [
  "spr-tree",
  "spr-user-registry-interface",
  "tokio",
+ "tracing-subscriber",
  "zolana-ring-client",
  "zolana-ring-indexer",
  "zolana-ring-keys",
