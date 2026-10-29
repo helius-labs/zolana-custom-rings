@@ -30,14 +30,16 @@ import {
   RING_COSIGN_WITHDRAWALS,
   ringComputeUnitLimit,
   createKitRingSubmissionTransport,
-  createRingTransferSubmission,
-  createRingMergeSubmission,
-  createRingWithdrawalSubmission,
   createRingDelegateSubmission,
-  buildRingTransferTransaction,
   buildRingDelegateTransferTransaction,
-  buildRingDepositTransaction,
 } from "../../src/ring/index.js";
+import {
+  buildRingTransferTransaction,
+  createRingTransferSubmission,
+  createRingWithdrawalSubmission,
+} from "../../src/operations/payments/transfer.js";
+import { createRingMergeSubmission } from "../../src/operations/payments/merge.js";
+import { buildRingDepositTransaction } from "../../src/operations/payments/deposit.js";
 import {
   EMPTY_MINT_POLICY,
   ListId,

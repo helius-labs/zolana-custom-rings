@@ -4,12 +4,9 @@ import { createCustomRingClient } from "../../src/rpc/client.js";
 import { address } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 import { ListId, memberOfTag, pinnedPolicy } from "../../src/ring/advanced.js";
-import {
-  buildRingDepositTransaction,
-  buildRingTransferTransaction,
-  fetchRingMemberRegistry,
-  registryCurrentRoot,
-} from "../../src/ring/index.js";
+import { fetchRingMemberRegistry, registryCurrentRoot } from "../../src/ring/index.js";
+import { buildRingDepositTransaction } from "../../src/operations/payments/deposit.js";
+import { buildRingTransferTransaction } from "../../src/operations/payments/transfer.js";
 import { signSendAndConfirm } from "./live-helpers.js";
 import {
   airdrop,

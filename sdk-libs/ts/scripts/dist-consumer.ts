@@ -40,10 +40,10 @@ export type {
 export {
   buildRingDelegateTransferTransaction,
   createRingDelegateSubmission,
-  createRingTransferSubmission,
-  createRingWithdrawalSubmission,
-  createRingExitSubmission,
-  createRingEntrySubmission,
+  prepareRingTransferRelay,
+  prepareRingWithdrawalRelay,
+  prepareRingExitRelay,
+  prepareRingEntryRelay,
   createKitRingSubmissionTransport,
   createMemberRegistryInstruction,
   fetchRingMemberRegistry,
@@ -61,7 +61,7 @@ export {
   recoverRingMemberNotes,
   buildRingDelegateRecoveredTransaction,
   createRingDelegateRecoveredSubmission,
-  buildRingDepositTransaction,
+  PreparedRingDeposit,
   createRingConfigInstruction,
   initSppRingConfigInstruction,
   sealRingDepositOpenings,
@@ -93,11 +93,7 @@ export type {
   RecoveredRingNotes,
   RingDelegateRecoveredParams,
 } from "@heliuslabs/zolana-custom-rings";
-export {
-  buildRingMergeTransaction,
-  createRingMergeSubmission,
-  customRingDepositPayload,
-} from "@heliuslabs/zolana-custom-rings";
+export { prepareRingMergeRelay, customRingDepositPayload } from "@heliuslabs/zolana-custom-rings";
 export { MEMBER_REGISTRY_CAPACITY } from "@heliuslabs/zolana-custom-rings/advanced";
 export type {
   MemberRecord,
