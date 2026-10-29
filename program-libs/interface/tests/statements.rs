@@ -125,6 +125,7 @@ struct DepositCase {
     amounts: Vec<u64>,
     key_escrow: bool,
     member_registry_root: Option<String>,
+    curator_root: Option<String>,
     policy_hash: Option<String>,
     elements: Vec<String>,
     public_input_hash: String,
@@ -454,6 +455,7 @@ fn compute_vectors() -> StatementVectors {
         eph_pk: &eph_pk,
         registry: Some(DepositRegistry {
             own_root: &values.fields[16],
+            curator_root: Some(&values.fields[20]),
             key_escrow: true,
             policy_hash: Some(&values.fields[19]),
         }),
@@ -473,7 +475,7 @@ fn compute_vectors() -> StatementVectors {
                       over CRDP, the context hash of the program id, tree and SPP data, the \
                       count, the anonymous flag, each owner hash with its capsule ciphertext hash \
                       zero padded to 8 slots, both tagged keys packed, the escrow flag, the \
-                      registry root, the policy hash and each asset hash with its amount zero \
+                      registry root, the curator root, the policy hash and each asset hash with its amount zero \
                       padded to 8 slots. Produced by program-libs/interface/tests/statements.rs."
             .to_string(),
         audit: audit.iter().map(audit_case).collect(),
@@ -517,6 +519,10 @@ fn compute_vectors() -> StatementVectors {
             member_registry_root: deposit
                 .registry
                 .map(|registry| hex::encode(registry.own_root)),
+            curator_root: deposit
+                .registry
+                .and_then(|registry| registry.curator_root)
+                .map(hex::encode),
             policy_hash: deposit
                 .registry
                 .and_then(|registry| registry.policy_hash)

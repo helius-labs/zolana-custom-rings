@@ -144,8 +144,8 @@ pub struct PreparedRingDeposit {
 
 pub(crate) struct BoundDeposit {
     pub instruction: Instruction,
-    /// `None` off an escrow or policy ring.
-    pub root: Option<BoundRoot>,
+    /// Empty off an escrow or policy ring.
+    pub roots: Vec<BoundRoot>,
     pub policy: Option<BoundPolicy>,
 }
 
@@ -175,6 +175,13 @@ struct AssetScreen {
     policy: Box<RingPolicy>,
     sources: SourceMap,
     policy_hash: [u8; 32],
+    asset: MemberOpening,
+    /// `None` without a curator source.
+    curator: Option<CuratorAsset>,
+}
+
+struct CuratorAsset {
+    root: BoundRoot,
     asset: MemberOpening,
 }
 
@@ -390,10 +397,10 @@ impl PreparedRingDeposit {
             let proof = RingRequest::new(RingCircuit::deposit(body.count as u8), &*body)?
                 .prove(client, body.public_input_hash)
                 .await?;
-            let root = records.as_ref().map(|records| records.root);
+            let roots = records.as_ref().map(DepositRecords::roots);
             Ok(BoundDeposit {
-                instruction: self.instruction(to_instruction_proof(proof)?, root)?,
-                root,
+                instruction: self.instruction(to_instruction_proof(proof)?, roots)?,
+                roots: roots.map_or_else(Vec::new, |roots| roots.bound().collect()),
                 policy: records
                     .as_ref()
                     .and_then(|records| records.policy.as_ref())
@@ -410,17 +417,20 @@ impl PreparedRingDeposit {
     fn instruction(
         &self,
         proof: CustomRingProof,
-        root: Option<BoundRoot>,
+        roots: Option<DepositRoots>,
     ) -> Result<Instruction, RingError> {
         let mut instruction = self.spp.clone();
         let prefix = AuditedDepositPrefix {
             tag: tag::AUDITED_DEPOSIT,
             proof,
-            own_revision: root.map_or_else(Default::default, |root| root.revision),
+            own_revision: roots.map_or_else(Default::default, |roots| roots.own.revision),
+            curator_revision: roots
+                .and_then(|roots| roots.curator)
+                .map_or_else(Default::default, |curator| curator.revision),
         };
         instruction.data = [bytemuck::bytes_of(&prefix), &instruction.data].concat();
         let mut accounts = vec![AccountMeta::new_readonly(self.ring.config_pda(), false)];
-        if root.is_some() {
+        if roots.is_some() {
             accounts.push(AccountMeta::new_readonly(self.ring.policy_pda(), false));
         }
         accounts.extend(
@@ -430,6 +440,33 @@ impl PreparedRingDeposit {
         );
         instruction.accounts.splice(0..0, accounts);
         Ok(instruction)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct DepositRoots {
+    own: BoundRoot,
+    curator: Option<BoundRoot>,
+}
+
+impl DepositRoots {
+    fn bound(self) -> impl Iterator<Item = BoundRoot> {
+        core::iter::once(self.own).chain(self.curator)
+    }
+}
+
+impl DepositRecords {
+    fn roots(&self) -> DepositRoots {
+        DepositRoots {
+            own: self.root,
+            curator: self.curator().map(|curator| curator.root),
+        }
+    }
+
+    fn curator(&self) -> Option<&CuratorAsset> {
+        self.policy
+            .as_ref()
+            .and_then(|policy| policy.curator.as_ref())
     }
 }
 
@@ -448,16 +485,19 @@ impl DepositDisclosure {
         let screen = match policy.written_policy_hash() {
             Some(_) => {
                 let pinned = PinnedPolicy::of(&policy)?;
-                let read = MemberRead {
-                    root,
-                    member: self.asset.asset,
-                }
-                .read(rpc)
-                .await?;
+                let asset = self.asset_opening(rpc, root).await?;
+                let curator = match BoundRoot::curator(ring, &policy)? {
+                    Some(root) => Some(CuratorAsset {
+                        root,
+                        asset: self.asset_opening(rpc, root).await?,
+                    }),
+                    None => None,
+                };
                 Some(AssetScreen {
                     sources: pinned.sources,
                     policy_hash: pinned.policy_hash,
-                    asset: MemberOpening::from(&read.opening),
+                    asset,
+                    curator,
                     policy,
                 })
             }
@@ -468,6 +508,20 @@ impl DepositDisclosure {
             escrowed,
             policy: screen,
         })
+    }
+
+    async fn asset_opening(
+        &self,
+        rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
+        root: BoundRoot,
+    ) -> Result<MemberOpening, RingError> {
+        let read = MemberRead {
+            root,
+            member: self.asset.asset,
+        }
+        .read(rpc)
+        .await?;
+        Ok(MemberOpening::from(&read.opening))
     }
 
     /// The recipient's record under `root`, it must escrow the deposited key.
@@ -491,6 +545,7 @@ impl DepositDisclosure {
     ) -> Result<Box<DepositRequest<'a>>, RingError> {
         let record = records.and_then(|records| records.escrowed.as_ref());
         let policy = records.and_then(|records| records.policy.as_ref());
+        let curator = records.and_then(DepositRecords::curator);
         let public_input_hash = DepositPublicInput {
             context_hash: &self.context_hash,
             anonymous: self.owner_key.is_some(),
@@ -501,6 +556,7 @@ impl DepositDisclosure {
             eph_pk: self.encryption.ephemeral_pk.as_bytes(),
             registry: records.map(|records| DepositRegistry {
                 own_root: &records.root.root,
+                curator_root: curator.map(|curator| &curator.root.root),
                 key_escrow: self.key_escrow,
                 policy_hash: policy.map(|policy| &policy.policy_hash),
             }),
@@ -524,6 +580,7 @@ impl DepositDisclosure {
             auditor_pk: self.auditor,
             key_escrow: record.is_some(),
             member_registry_root: records.map_or([0; 32], |records| records.root.root),
+            curator_root: curator.map_or([0; 32], |curator| curator.root.root),
             policy_hash: policy.map_or([0; 32], |policy| policy.policy_hash),
             assets: first(self.asset.asset),
             amounts: first(right_align(&self.asset.amount.to_be_bytes())),
@@ -532,6 +589,7 @@ impl DepositDisclosure {
                 sources: &policy.sources,
             }),
             asset_records: [policy.map(|policy| policy.asset.clone())],
+            curator_asset_records: [curator.map(|curator| curator.asset.clone())],
         }))
     }
 }

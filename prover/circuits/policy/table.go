@@ -114,6 +114,14 @@ func (t Table) readSources(api frontend.API) sourceView {
 	return view
 }
 
+func (s sourceView) lists(api frontend.API, own, curated [NSources]frontend.Variable) [NSources]frontend.Variable {
+	var onList [NSources]frontend.Variable
+	for i := range onList {
+		onList[i] = api.Select(s.foreign[i], curated[i], own[i])
+	}
+	return onList
+}
+
 func decodeRule(api frontend.API, rc frontend.Rangechecker, packed frontend.Variable) ruleFields {
 	// 1. The hint proposes the parts, untrusted until the range checks and the recomposition bind them.
 	parts, err := api.Compiler().NewHint(rulePartsHint, len(ruleParts), packed)

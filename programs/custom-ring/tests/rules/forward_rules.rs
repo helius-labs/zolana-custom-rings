@@ -187,6 +187,7 @@ pub fn deposit_instruction(
         tag: tag::AUDITED_DEPOSIT,
         proof: Zeroable::zeroed(),
         own_revision: registry.unwrap_or_default().into(),
+        curator_revision: Default::default(),
     };
     let data = [
         bytemuck::bytes_of(&prefix),

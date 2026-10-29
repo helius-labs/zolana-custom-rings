@@ -501,6 +501,7 @@ describe("ring-statements.json", () => {
       ephPk: bytes<Bytes33>(deposit.eph_pk, 33),
       registry: {
         ownRoot: field(deposit.member_registry_root),
+        curatorRoot: field(deposit.curator_root),
         keyEscrow: deposit.key_escrow,
         policyHash: field(deposit.policy_hash),
       },

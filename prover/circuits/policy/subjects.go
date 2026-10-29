@@ -34,9 +34,7 @@ func (p *Policy) resolveSubjects(api frontend.API, table tableView, sender front
 		view := subjectView{onList: record.onList, escrowKey: record.escrowKey}
 		if !p.OwnOnly {
 			curated := curator.resolve(api, recordQuery{active: api.Mul(active, table.sources.anyForeign), member: member, index: entry.Curator[0]})
-			for i, on := range curated.onList {
-				view.onList[i] = api.Select(table.sources.foreign[i], on, record.onList[i])
-			}
+			view.onList = table.sources.lists(api, record.onList, curated.onList)
 		}
 		return view, record.mintPolicy
 	}

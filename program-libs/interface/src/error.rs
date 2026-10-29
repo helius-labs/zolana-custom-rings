@@ -161,6 +161,7 @@ ring_errors! {
     InvalidAssetLimits = 8390 => "a window cap and its window are not set together",
     DepositMintAccountMissing = 8410 => "an spl deposit group has no mint account",
     DepositAssetIndexUnknown = 8411 => "a deposit entry names no asset group",
+    UnexpectedCuratorRevision = 8470 => "the deposit names a curator revision without a curator source",
 }
 
 impl From<CustomRingError> for ProgramError {

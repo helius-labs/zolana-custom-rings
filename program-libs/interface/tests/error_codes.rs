@@ -126,6 +126,7 @@ pinned_codes! {
     InvalidAssetLimits = 8390,
     DepositMintAccountMissing = 8410,
     DepositAssetIndexUnknown = 8411,
+    UnexpectedCuratorRevision = 8470,
 }
 
 #[test]

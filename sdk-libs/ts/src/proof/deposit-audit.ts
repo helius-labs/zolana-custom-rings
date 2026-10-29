@@ -188,6 +188,8 @@ export interface DepositedAsset {
 /** Rust `DepositRegistry`. */
 export interface DepositRegistry {
   readonly ownRoot: Bytes32;
+  /** Absent without a curator source. */
+  readonly curatorRoot?: Bytes32;
   /** Every deposited owner's record escrows the deposited nullifier key. */
   readonly keyEscrow: boolean;
   /** Its table's asset rules screen every deposited asset, absent before the first policy write. */
@@ -244,6 +246,7 @@ export function depositStatementElements(input: DepositStatement): readonly Byte
     ...pack33(input.ephPk),
     bigIntBytes(registry?.keyEscrow === true ? 1n : 0n) as Bytes32,
     registry?.ownRoot ?? ZERO,
+    registry?.curatorRoot ?? ZERO,
     registry?.policyHash ?? ZERO,
     ...Array.from({ length: RING_DEPOSIT_AUDIT_SLOTS }, (_, slot) => {
       const deposited = input.assets[slot];

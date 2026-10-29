@@ -12,6 +12,7 @@ use crate::instructions::verifier::{ring_key, RingProof};
 pub(crate) struct AuditedDeposit<'a> {
     pub proof: CustomRingProof,
     pub own_revision: Revision,
+    pub curator_revision: Revision,
     pub spp_data: &'a [u8],
 }
 
@@ -27,6 +28,7 @@ impl<'a> AuditedDeposit<'a> {
         Ok(Self {
             proof: prefix.proof,
             own_revision: prefix.own_revision,
+            curator_revision: prefix.curator_revision,
             spp_data,
         })
     }

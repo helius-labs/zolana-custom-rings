@@ -86,6 +86,15 @@ func TestDepositScreensEachAssetOnItsRecord(t *testing.T) {
 	ringtest.RequireRefused(t, solveDeposit(unlisted), "policy.paymentScreen.assert", "policy.DepositAssets.Assert")
 }
 
+// A curator served allow list admits a listed asset and refuses one off it.
+func TestDepositScreensEachAssetOnItsCuratorRecord(t *testing.T) {
+	if err := solveDeposit(ringdeposit.BuildScreened(t, 2, ringdeposit.CuratorAllowlisted(ringpolicy.AssetA)).Circuit); err != nil {
+		t.Fatalf("curator listed asset refused: %v", err)
+	}
+	unlisted := ringdeposit.BuildScreened(t, 2, ringdeposit.CuratorAllowlisted(ringpolicy.AssetB)).Circuit
+	ringtest.RequireRefused(t, solveDeposit(unlisted), "policy.paymentScreen.assert", "policy.DepositAssets.Assert")
+}
+
 func TestDepositKey(t *testing.T) {
 	ringkey.RequirePinned(t, "custom_ring_deposit_8", ringkey.Compile(t, depositCircuit(t, circuits.MaxDeposits)))
 }

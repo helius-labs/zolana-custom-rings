@@ -481,11 +481,15 @@ function request(item: Json): RingProofRequest {
       auditorPk: bytes<Bytes32>(item["auditorPk"], 32),
       keyEscrow: flag(item["keyEscrow"]),
       memberRegistryRoot: field(item["memberRegistryRoot"]),
+      curatorRoot: field(item["curatorRoot"]),
       policyHash: field(item["policyHash"]),
       assets: fields(item["assets"]),
       amounts: fields(item["amounts"]),
       ...(item["table"] === undefined ? {} : { table: table(record(item["table"])) }),
       assetRecords: list(item["assetRecords"]).map((opening, i) =>
+        memberOpening(opening, fields(item["assets"])[i] ?? ZERO),
+      ),
+      curatorAssetRecords: list(item["curatorAssetRecords"]).map((opening, i) =>
         memberOpening(opening, fields(item["assets"])[i] ?? ZERO),
       ),
     };

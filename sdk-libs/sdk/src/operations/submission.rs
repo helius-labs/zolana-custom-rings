@@ -535,7 +535,7 @@ impl RingOperation<'_> {
                     proven.instruction,
                     InstructionTag::AuditedDeposit,
                     BoundState {
-                        roots: proven.root.into_iter().collect(),
+                        roots: proven.roots,
                         policy: proven.policy,
                         ..BoundState::default()
                     },

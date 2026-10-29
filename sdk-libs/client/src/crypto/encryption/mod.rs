@@ -439,7 +439,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             hex::encode(public_hash),
-            "10e19c9868fa518ed2799983f62d30b1b6463c57bd721b93e0c60eec1f9e17e4"
+            "29429067e1c71c8fde746d04e9c20bed8b73c04e7a7836095586322c57ab5078"
         );
     }
 
