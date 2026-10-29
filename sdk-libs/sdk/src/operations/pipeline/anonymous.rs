@@ -104,7 +104,7 @@ pub struct Anonymous<'a> {
     history: &'a ViewingHistory,
     /// In declared order, the order of their ring outputs.
     payments: Vec<AnonymousPayment>,
-    exit_token_owner: Option<Address>,
+    pub(super) exit_token_owner: Option<Address>,
 }
 
 pub type AnonymousTransfer<'a> = RingTransfer<Anonymous<'a>>;

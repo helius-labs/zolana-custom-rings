@@ -283,7 +283,19 @@ export type {
   DelegateOutput,
   DelegateTransferClient,
   DelegateTransferInput,
+  PreparedRingRelay,
+  RingRelayInput,
 } from "../operations/payments/transfer-rails.js";
+export { PendingRelaySignature, PreparedRelay, relayId, submittedRelay } from "../rpc/relay.js";
+export type { RelaySent, RingRelayClient } from "../rpc/relay.js";
+export type {
+  PrepareRelayRequest,
+  RelayIntent,
+  RelayOperation,
+  RelayQuote,
+  RelayStatus,
+  RelayStep,
+} from "../protocol/ring-rpc/ring-rpc-types.js";
 export { ProvenRingTransfer, ringTransactInstruction } from "../operations/workflow/pipeline.js";
 export type {
   AnonymousSpendValues,
@@ -301,9 +313,14 @@ export {
   createRingExitSubmission,
   createRingTransferSubmission,
   createRingWithdrawalSubmission,
+  prepareRingEntryRelay,
+  prepareRingExitRelay,
+  prepareRingTransferRelay,
+  prepareRingWithdrawalRelay,
 } from "../operations/payments/transfer.js";
 export type {
   AnonymousRingSpend,
+  RingRelaySpendParams,
   RingEntryTransactionParams,
   RingExitTransactionParams,
   RingSpendParams,

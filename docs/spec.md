@@ -1432,6 +1432,17 @@ fn record_update_hash(ring: Address, registry: Address, entries: &[Entry], valid
 Each entry becomes the queue entry the apply proof hashes, so the signature binds every write that reaches the tree. A wallet grant names the wallet and the reader identity, so the writer can rebuild the record key and compare the wallet with the signer. The writer refuses an update after `validUntilSlot`, an update with an invalid signature, and an entry the signer does not hold. Both SDKs verify the signature before they send an update, and they refuse a service that answers another update id. `getRecordUpdateStatus` reports `queued`, `submitted`, `applied` with the new registry revision, or `refused` with a reason.
 
 The hash binds no cluster. A registry address that exists on two clusters accepts the same update on both until `validUntilSlot`.
+### Relayed transfers
+
+A wallet sends an anonymous transfer through the Ring RPC relay and reads no Merkle path and no record. The operator CLI and the tests keep the direct path, which proves and sends from the caller.
+
+1. `getRelayQuote` names the fee payer, and the wallet builds the transfer with it as the payer.
+2. The wallet stages the transfer from its own notes and keys, seals the auditor message into the external data and signs `SppProofInputs::message_hash` with the hidden owner's Ed25519 key. It reads the ring config, the SPP ring registration, the tree accounts and the exit accounts only.
+3. `prepareRelay` carries the sealed transfer as `proofInputs` and the signature as `ownerSignature`. The wallet hashes the request to its own `relayId` and refuses an answer that names another one.
+4. On the anonymous rail the wallet accepts only `submitted`. It refuses `signMessage`, a public signature would name the hidden owner. On another rail it signs a `signMessage` step only when the message is a canonical v1 message that lists the signer among its signers.
+5. `getRelayStatus` follows the relay to `confirmed` or `failed`.
+
+`proofInputs` hands Ring RPC the nullifier secret, the transaction viewing secret and the auditor ephemeral secret. Ring RPC can link every spend of the owner and open every output of the transfer, so a relayed transfer stays anonymous only toward a Ring RPC trusted as the indexer of [condition 5](#anonymity-breaks-when-its-conditions-fail) and the prover of condition 6.
 
 ### Ring prover
 

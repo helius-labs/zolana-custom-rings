@@ -15,7 +15,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildRingEntryTransaction,
   buildRingTransferTransaction,
-  createRingEntrySubmission,
+  prepareRingEntryRelay,
   selectRingInputs,
 } from "../../../src/operations/payments/transfer.js";
 import { ringTransferClient } from "../../helpers/clients.js";
@@ -388,15 +388,16 @@ describe("ring approval summary", () => {
       Array.from({ length: 9 }, () => [1_000n, undefined] as const),
     );
     const { approve, requests } = recordingApproval();
-    const error: unknown = await createRingEntrySubmission({
+    const error: unknown = await prepareRingEntryRelay({
       client: await approvalClient(keypair, "anonymous"),
       ringProgramId: RING,
       wallet,
       keys: localKeys(keypair),
       approve,
-      feePayer: PAYER,
       amount,
       anonymous: {
+        quote: { feePayer: PAYER, validUntilSlot: 1n },
+        nullifierKey: keypair.nullifierKey(),
         signer: signingKeySpendSigner(SigningKey.fromEd25519Bytes(filled(42))),
         history: ViewingHistory.create(keypair.shieldedAddress().viewingPublicKey, 0n),
       },

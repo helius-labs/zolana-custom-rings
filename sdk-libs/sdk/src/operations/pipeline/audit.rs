@@ -55,6 +55,13 @@ pub(super) struct AuditSeal<'a> {
     pub auditor: &'a X25519Pubkey,
 }
 
+impl SealedAudit {
+    /// Opens `sealed` with the auditor public key alone.
+    pub(crate) fn ephemeral_secret(&self) -> &Zeroizing<[u8; 32]> {
+        &self.eph_sk
+    }
+}
+
 impl AuditSeal<'_> {
     pub fn seal(self) -> Result<SealedAudit, RingError> {
         let first_nullifier = self

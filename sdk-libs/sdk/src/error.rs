@@ -69,6 +69,12 @@ pub enum RingError {
     Rail(#[from] RingRailError),
     #[error(transparent)]
     Anonymous(#[from] AnonymousError),
+    #[error(transparent)]
+    Signer(#[from] solana_signer::SignerError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    RelayProofInputs(#[from] zolana_ring_client::rpc::RelayProofInputsError),
     #[error("custom ring account {address} is invalid")]
     InvalidAccount { address: Address },
     #[error("custom ring config does not exist")]
@@ -250,6 +256,14 @@ pub enum RingError {
     RelayAuditorMessage,
     #[error("a relayed deposit or merge is not proven here")]
     RelayRailUnserved,
+    #[error("the transfer pays from {payer}, the relay quote names {fee_payer}")]
+    RelayPayerMismatch { payer: Address, fee_payer: Address },
+    #[error("ring rpc names another relay than the request hashes to")]
+    RelayIdMismatch,
+    #[error("the relay asks the hidden owner for a public signature")]
+    RelayAskedOwnerSignature,
+    #[error("the relay message is not a v1 message the signer signs")]
+    RelayMessageInvalid,
     #[error("{signature} failed with {error}")]
     Rejected {
         signature: Signature,

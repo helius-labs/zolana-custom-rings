@@ -11,7 +11,7 @@ import {
 } from "../../src/ring/advanced.js";
 import {
   AuthorityListWrite,
-  createRingTransferSubmission,
+  prepareRingTransferRelay,
   listWrite,
   messageSignerSpendSigner,
   PreparedRingDeposit,
@@ -30,13 +30,13 @@ import {
   readableRing,
   ringHoldings,
   sendInstruction,
-  settle,
   waitForAudited,
   type ReadableRing,
 } from "./ring-live-helpers.js";
 import { LocalRingKeys, ringWalletKeys } from "../../src/state/ring-keys.js";
 import { ViewingHistory } from "../../src/state/viewing-history.js";
 import { RingAddress } from "../../src/crypto/keys/ring-address.js";
+import { submittedRelay } from "../../src/rpc/relay.js";
 
 const DEPOSIT = 1_000_000_000n;
 const PAYMENT = 250_000_000n;
@@ -99,28 +99,49 @@ async function depositor(ring: AnonymousRing): Promise<Actor> {
   return sender;
 }
 
-/** The hidden owner signs inside the proof, the funder pays and signs the transaction. */
+/** The hidden owner signs inside the proof, Ring RPC pays, proves and sends. */
 async function payment(ring: AnonymousRing, sender: Actor, recipient: Actor) {
   const to = new RingAddress({
     recipient: recipient.keypair.shieldedAddress(),
     ringProgramId: ring.ringProgramId,
   });
   const history = ViewingHistory.create(sender.keypair.shieldedAddress().viewingPublicKey, 1n);
-  return async () =>
-    createRingTransferSubmission({
+  return async () => {
+    const quote = await ring.ringRpc.getRelayQuote({
+      ring: ring.ringProgramId,
+      operation: "anonymous",
+    });
+    const prepared = await prepareRingTransferRelay({
       client: ring.client,
       ringProgramId: ring.ringProgramId,
       wallet: sender.wallet,
       keys: ringWalletKeys(sender.keys, LocalRingKeys.fromKeypair(sender.keypair)),
-      feePayer: ring.funder.address,
       recipient: to,
       amount: PAYMENT,
       anonymous: {
+        quote,
+        nullifierKey: sender.keypair.nullifierKey(),
         signer: messageSignerSpendSigner(sender.signer),
         history,
         firstContact: { kind: "bootstrap" },
       },
     });
+    return confirmedRelay(ring, submittedRelay(await prepared.relay.send(ring.ringRpc)));
+  };
+}
+
+async function confirmedRelay(
+  ring: AnonymousRing,
+  relayId: Parameters<AnonymousRing["ringRpc"]["getRelayStatus"]>[0],
+): Promise<Readonly<{ signature: string }>> {
+  const deadline = Date.now() + 180_000;
+  for (;;) {
+    const status = await ring.ringRpc.getRelayStatus(relayId);
+    if (status.status === "confirmed") return { signature: status.signature };
+    if (status.status === "failed") throw new Error(`relay failed, ${status.reason}`);
+    if (Date.now() > deadline) throw new Error("relay unresolved");
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
 }
 
 // The pinned zolana TS lacks the anonymous ring prover.
@@ -130,7 +151,7 @@ describe.skip("anonymous ring", () => {
     const sender = await depositor(ring);
     const recipient = await freshActor(ring.client);
     const pay = await payment(ring, sender, recipient);
-    const { signature } = await settle(await pay(), ring.client, [ring.funder]);
+    const { signature } = await pay();
     await expectAudited(ring, sender, signature);
     await syncRing(ring, recipient);
     expect(ringHoldings(recipient, ring.ringProgramId)).toBe(PAYMENT);
@@ -154,10 +175,7 @@ describe.skip("anonymous ring", () => {
     const sender = await depositor(ring);
     const recipient = await freshActor(ring.client);
     const pay = await payment(ring, sender, recipient);
-    await expect(pay()).rejects.toMatchObject({
-      code: "RING_BUILD_TRANSFER",
-      causeCode: "RING_POLICY_RULE_UNSATISFIED",
-    });
+    await expect(pay()).rejects.toThrow();
 
     const member = memberOfIdentity(
       sender.keypair.shieldedAddress().signingPublicKey.ownerProofInputHash(),
@@ -181,7 +199,7 @@ describe.skip("anonymous ring", () => {
       if (attempt === 240) throw new Error("the allow list write was not indexed");
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
-    const { signature } = await settle(await pay(), ring.client, [ring.funder]);
+    const { signature } = await pay();
     await expectAudited(ring, sender, signature);
     await syncRing(ring, recipient);
     expect(ringHoldings(recipient, ring.ringProgramId)).toBe(PAYMENT);

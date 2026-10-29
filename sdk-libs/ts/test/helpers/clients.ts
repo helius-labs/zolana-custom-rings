@@ -26,7 +26,6 @@ export function ringTransferClient(
     getStorageRecordPool: notImplemented("getStorageRecordPool"),
     proveRing: notImplemented("proveRing"),
     proveRingTransact: notImplemented("proveRingTransact"),
-    proveAnonymousRingTransact: notImplemented("proveAnonymousRingTransact"),
     ...overrides,
   };
 }
