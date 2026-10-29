@@ -6,7 +6,7 @@ A custom ring is a Solana program that governs its notes in the zolana shielded 
 
 ### Mode
 
-A **mode** fixes the rail of every transfer on a ring. `CreateConfig` sets `Anonymous` for the `Anonymous` and `AnonymousPolicy` ring kinds and `Confidential` for the `AuditOnly` and `Policy` kinds (`programs/custom-ring/src/instructions/configuration/setup/create_config.rs:65`).
+A **mode** fixes the rail of every transfer on a ring. `Initialize` sets `Anonymous` for the `Anonymous` and `AnonymousPolicy` ring kinds and `Confidential` for the `AuditOnly` and `Policy` kinds (`programs/custom-ring/src/instructions/configuration/setup/initialize.rs:67`).
 - `Confidential`: owners sign in public, and each ring output publishes its recipient's viewing key.
 - `ConfidentialEscrow`: `Confidential` with key escrow and a delegate. Each output owner's nullifier secret is sealed to the auditor, and the delegate can move escrowed notes.
 - `Anonymous`: the sender and the recipient are hidden from chain observers.
@@ -20,7 +20,7 @@ A **rail** is the signing form of a transfer. The instruction tag and the mode s
 | Confidential | `Confidential`, `ConfidentialEscrow` | Each owner signer, the payer and a demanded co-signer | `ConfidentialRingEddsa` |
 | Anonymous | `Anonymous` | The SPP payer and a demanded co-signer. The hidden owner signs inside the SPP proof. | `AnonymousRingEddsa` |
 
-A third rail, the delegate rail, runs `DelegateTransact` in `ConfidentialEscrow` mode only.
+A third rail, the delegate rail, runs `AuthorityTransfer` in `ConfidentialEscrow` mode only.
 
 ### Hidden owner
 
@@ -115,8 +115,8 @@ See [Anonymity breaks when its conditions fail](spec.md#anonymity-breaks-when-it
 ## Code reading guide
 
 1. **Rail selection**: `program-libs/interface/src/instructions/transact.rs:93`
-    - `RingRail::of` maps the tag and the mode to a rail, and `DelegateTransact` on `Anonymous` fails.
-2. **Payer-only signer**: `programs/custom-ring/src/instructions/transact/accounts.rs:124`
+    - `RingRail::of` maps the tag and the mode to a rail, and `AuthorityTransfer` on `Anonymous` fails.
+2. **Payer-only signer**: `programs/custom-ring/src/instructions/transfer/accounts.rs:124`
     - Any other SPP signer fails with `InvalidAnonymousSigner`. Line 197 builds the party identities.
 3. **Withdrawal destination**: `program-libs/interface/src/instructions/anonymous_exit.rs:122`
     - Every withdrawal names one key. `identities` at line 175 hashes the three parties.

@@ -70,7 +70,7 @@ and [The insert fee](member-records.md#the-insert-fee).
 ## The table, the source map, and one hash
 
 The rule table arrives as instruction data and lives in the member registry.
-`CreatePolicy` and `SetPolicyRules` carry the rule rows and source specs.
+`Initialize` and `UpdatePolicy` carry the rule rows and source specs.
 Mint thresholds and outflow limits are authority writes to asset records. The program encodes and validates them,
 and an illegal table fails the instruction and never reaches the account. The
 CLI builds the same table from `ring.toml` through `RuleTableBuilder::try_build`
@@ -113,11 +113,11 @@ fails the policy write before any hash is stored.
 
 ## The on-chain binding
 
-The config authority signs every policy write. `CreatePolicy` pins the first
-table and refuses an audit-only ring and a ring that already has one.
-`SetPolicyRules` replaces the table and the map, and `SetPolicySource`
-re-points one list. Each write validates the table against the new map and
-stores both in the member registry beside the root history. It re-hashes them
+The upgrade authority pins the first table with `Initialize`, which refuses a
+table on an audit-only ring and a ring that already has a policy. The config
+authority signs every later write. `UpdatePolicy` replaces the table and the
+map, re-points one list, or rebinds the records. Each table write validates the
+table against the new map and stores both in the ring policy. It re-hashes them
 and counts one more `generation` at the current slot. A changed hash binds
 every later transfer, and a proof built against the old table fails. Generation
 itself is not hashed, so an identical re-pin preserves the proof statement.
@@ -146,7 +146,7 @@ cannot satisfy the audit statement while it skips the policy statement, because
 the program verifies both against the one transaction.
 
 An audit-only ring carries the SPP and audit proofs alone. The tier is the
-config's `has_policy` flag, fixed by the kind `CreateConfig` takes. A policy
+config's `has_policy` flag, fixed by the kind `Initialize` takes. A policy
 ring therefore cannot present the audit statement alone to skip its rules. The
 audit proof is the same on both tiers, so the auditor reads every transfer.
 
@@ -244,7 +244,7 @@ ring statements, the delegate rail under its own keys.
 the delegate, writes the policy and the authority lists and re-points
 sources. It grants and revokes readers, sets the co-signers and the insert fee
 and pauses the ring. A member writes its own `RingViewing` and `Recovery` bits
-and registers its key. The auditor holds the X25519 key fixed at `CreateConfig`
+and registers its key. The auditor holds the X25519 key fixed at `Initialize`
 and decrypts transfers, and that key cannot authorize an ownership transfer or
 a withdrawal. SPP governance activates the ring and enables the authority rail
 through `set_ring_activation`, and nothing in the ring program can. No

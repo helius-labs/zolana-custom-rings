@@ -79,5 +79,5 @@ and `merge`, or through the Rust and TypeScript SDKs.
 ## Limits
 
 - The upgrade authority can replace every check of the ring program.
-- No instruction replaces the auditor key after `CreateConfig`.
+- No instruction replaces the auditor key after `Initialize`.
 - A paused ring, or one SPP governance has not activated, moves no note.

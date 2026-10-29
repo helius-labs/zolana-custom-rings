@@ -4,14 +4,14 @@ Every ring proof has one public input. It is the fold of a statement the program
 
 | Statement | Fold | Elements | Verified by |
 |---|---|---|---|
-| Audit, delivered | `HashChain4` | 16 | `Transact`, `DelegateTransact` |
-| Audit, anonymous | `HashChain4` | 19 | `Transact` |
-| Policy, member key | `HashChain4` | 18 | `Transact` |
-| Policy, delegate key | `HashChain4` | 17 | `DelegateTransact` |
+| Audit, delivered | `HashChain4` | 16 | `Transfer`, `AuthorityTransfer` |
+| Audit, anonymous | `HashChain4` | 19 | `Transfer` |
+| Policy, member key | `HashChain4` | 18 | `Transfer` |
+| Policy, delegate key | `HashChain4` | 17 | `AuthorityTransfer` |
 | Apply | `HashChain4` | 8 | `ApplyRecords`, `AuthorityWriteRecords` |
 | Register key | `HashChain4` | 8 | `RegisterKey` |
-| Withdrawal exemption | `HashChain4` | 8 | `Transact` |
-| Deposit | `HashChain` | 44 | `AuditedDeposit` |
+| Withdrawal exemption | `HashChain4` | 8 | `Transfer` |
+| Deposit | `HashChain` | 44 | `Deposit` |
 | Merge | `HashChain` | 17 | `Merge` |
 
 ## Audit

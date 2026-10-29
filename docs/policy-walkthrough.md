@@ -12,10 +12,10 @@ A **member record** is one leaf `Poseidon(member, next, lists, escrow_key, mint_
 
 The policy lives in the ring's `RingPolicy` PDA at seed `[b"policy"]`, alongside:
 
-- `records`: the ring's own `StorageRegistry`, fixed at creation
+- `records`: the ring's own `StorageRegistry`, bound by `Initialize` and rebound by `UpdatePolicy`
 - `own_roots`, `curator_roots`: the mirrors of the records' and the curator's root history, see **Root freshness** below
 - `policy_hash`: the commitment to the table and the source map
-- `generation`: plus one at every table or source write, not hashed
+- `generation`: plus one at every table, source or records write, not hashed
 
 The account stores the whole table. It stores no member record, only the mirrored roots of the record trees. The records reach clients through instruction data and the ring indexer. See `RingPolicy` in `program-libs/interface/src/accounts/state.rs:387`. [RingPolicy](spec.md#ringpolicy)
 
@@ -201,17 +201,17 @@ Alice's curator record answers Block. Approval cannot override Frozen because bo
 
 The circuit binds three things (`prover/circuits/policy/member.go:56`):
 
-1. **Subjects to the transaction**: outputs reopen `private_tx_hash`, SPP's blinded hash over the spent note hashes and the output hashes, which the SPP proof binds (`prover/circuits/policy/transaction.go:45`). Withdrawals hash to `withdrawal_hash`, which the program rebuilds from the settlement accounts (`prover/circuits/policy/withdrawals.go:35`, `programs/custom-ring/src/instructions/transact/verify.rs:66`). The sender is the statement's `sender`, which the program supplies: the sole owner signer identity, or on the anonymous rail the sender commitment the circuit opens to the hidden sender (`programs/custom-ring/src/instructions/transact/accounts.rs:118`, `prover/circuits/policy/member.go:84`). On the delegate rail the circuit takes it from the reopened inputs (`prover/circuits/policy/delegate.go:75`).
+1. **Subjects to the transaction**: outputs reopen `private_tx_hash`, SPP's blinded hash over the spent note hashes and the output hashes, which the SPP proof binds (`prover/circuits/policy/transaction.go:45`). Withdrawals hash to `withdrawal_hash`, which the program rebuilds from the settlement accounts (`prover/circuits/policy/withdrawals.go:35`, `programs/custom-ring/src/instructions/transfer/verify.rs:66`). The sender is the statement's `sender`, which the program supplies: the sole owner signer identity, or on the anonymous rail the sender commitment the circuit opens to the hidden sender (`programs/custom-ring/src/instructions/transfer/accounts.rs:118`, `prover/circuits/policy/member.go:84`). On the delegate rail the circuit takes it from the reopened inputs (`prover/circuits/policy/delegate.go:75`).
 2. **Rules to the ring**: the table and the source map hash to the `policy_hash` the program reads from the ring policy (`prover/circuits/policy/table.go:60`, `program-libs/interface/src/instructions/transact.rs:842`).
-3. **Openings to the registries**: every pool folds to `own_root` or `curator_root`, which the program reads by revision from the ring policy's mirrors (`program-libs/interface/src/instructions/transact.rs:843`, `program-libs/interface/src/accounts/state.rs:533`).
+3. **Openings to the registries**: every pool folds to `own_root` or `curator_root`, which the program reads by revision from the ring policy's mirrors (`program-libs/interface/src/instructions/transact.rs:843`, `program-libs/interface/src/accounts/state.rs:550`).
 
-It then requires every enabled rule to pass and every outflow limit to hold. The program validates the table at write time, and the circuit trusts that validation (`program-libs/interface/src/accounts/state.rs:469`, `prover/circuits/policy/table.go:57`). The program then verifies the proof and only then CPIs SPP (`programs/custom-ring/src/instructions/transact/processor.rs:58`). [Transact](spec.md#20-transact)
+It then requires every enabled rule to pass and every outflow limit to hold. The program validates the table at write time, and the circuit trusts that validation (`program-libs/interface/src/accounts/state.rs:469`, `prover/circuits/policy/table.go:57`). The program then verifies the proof and only then CPIs SPP (`programs/custom-ring/src/instructions/transfer/processor.rs:58`). [Transfer](spec.md#17-transfer)
 
 <aside>
 
 **Root freshness:** a statement names each root by its revision. `SyncRoots` copies a storage registry's roots into the ring policy's mirror. A mirrored root verifies while it is the newest one or its `expires_at` lies above the current slot. The Storage Program's `Update` sets a retired root's `expires_at` to the slot plus the registry's `grace_slots`, and `UpdateImmediate` clears every earlier root, so a block binds every transfer after the next `SyncRoots`. A root the registry dropped stays valid in the mirror until that sync.
 
-`program-libs/interface/src/accounts/state.rs:430`, `:533`, `:538`, `root_at` in `program-libs/interface/src/accounts/storage.rs`
+`program-libs/interface/src/accounts/state.rs:430`, `:550`, `:555`, `root_at` in `program-libs/interface/src/accounts/storage.rs`
 
 ```text
 root at revision r: nonzero, and r is the newest revision or slot < expires_at
@@ -237,8 +237,8 @@ UpdateImmediate:    every earlier root cleared
     - See how `enabled`, `refused` and `exempt` combine per payment, with the row split in `prover/circuits/policy/table.go:118` and the list bits in `prover/circuits/policy/subjects.go:38`. Every rule must pass.
 6. **Outflow limits**: `prover/circuits/policy/outflow.go:18`
     - The bound runs once for each live output's asset and each nonzero public asset, with the `cap` and `cosign_above` of that asset's own record. `others` sums the asset over live outputs, except ring outputs to the sender. `net` is the asset's signed public net, a deposit positive and a withdrawal negative. See how `outflow = others - net` is bounded and how `approval_required` is set, the bit that makes the program demand a co-signer.
-7. **On-chain verification**: `programs/custom-ring/src/instructions/transact/verify.rs:54`
-    - The program supplies `policy_hash`, the roots, the sender and the withdrawals (`programs/custom-ring/src/instructions/transact/accounts.rs:56`), verifies the policy proof, and only then authorizes the SPP call that executes the transfer.
+7. **On-chain verification**: `programs/custom-ring/src/instructions/transfer/verify.rs:54`
+    - The program supplies `policy_hash`, the roots, the sender and the withdrawals (`programs/custom-ring/src/instructions/transfer/accounts.rs:56`), verifies the policy proof, and only then authorizes the SPP call that executes the transfer.
 
 ### Common misreadings
 
