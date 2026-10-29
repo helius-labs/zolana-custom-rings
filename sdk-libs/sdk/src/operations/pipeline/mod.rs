@@ -6,6 +6,7 @@ mod compact;
 mod delegate;
 mod owner;
 mod policy;
+mod relay;
 mod selection;
 mod spp;
 #[cfg(test)]
@@ -190,17 +191,19 @@ impl<R: Rail> RingTransfer<R> {
         &self,
         client: &RingClient<P, I>,
     ) -> Result<Unwitnessed<'_>, RingError> {
-        let config = self.ring.require_config(client.zolana()).await?;
-        self.ring.require_active(client.zolana()).await?;
+        let sealed = boxed(|| self.seal(client.zolana())).await?;
+        boxed(|| sealed.frame(client)).await
+    }
+
+    /// Reads accounts only, no Merkle path and no record.
+    async fn seal<C: AsyncRpc + ?Sized>(&self, client: &C) -> Result<Sealed<'_>, RingError> {
+        let config = self.ring.require_config(client).await?;
+        self.ring.require_active(client).await?;
         let staged = match self.rail.kind() {
-            RailKind::Owner(owner) => {
-                boxed(|| owner.stage(self.ring, client.zolana(), &config)).await?
-            }
-            RailKind::Anonymous(rail) => {
-                boxed(|| rail.stage(self.ring, client.zolana(), &config)).await?
-            }
+            RailKind::Owner(owner) => boxed(|| owner.stage(self.ring, client, &config)).await?,
+            RailKind::Anonymous(rail) => boxed(|| rail.stage(self.ring, client, &config)).await?,
             RailKind::Delegated(delegated) => {
-                boxed(|| delegated.stage(self.ring, client.zolana(), &config)).await?
+                boxed(|| delegated.stage(self.ring, client, &config)).await?
             }
         };
         check_ring_output_markers(&staged.proof_inputs)?;
@@ -210,7 +213,7 @@ impl<R: Rail> RingTransfer<R> {
                 config,
                 staged,
             }
-            .frame(client)
+            .seal(client)
         })
         .await
     }
@@ -249,6 +252,47 @@ struct Unwitnessed<'a> {
     trees: SpendTrees,
 }
 
+/// A transfer whose external data is final, before any record read.
+struct Sealed<'a> {
+    pipeline: Pipeline<'a>,
+    sealed: SealedAudit,
+    trees: SpendTrees,
+    preview: Preview,
+    published_inputs: usize,
+}
+
+#[derive(Clone, Copy)]
+struct Preview {
+    rail: RingRail,
+    key_escrow: bool,
+    n_in: u8,
+    n_out: u8,
+    trees: usize,
+    expiry_unix_ts: u32,
+}
+
+impl Preview {
+    fn parts(
+        self,
+        inputs: &SppProofInputs,
+        rail: &RingOutputRail,
+        sender: &ShieldedAddress,
+    ) -> Result<TransactParts, RingError> {
+        Ok(preview_parts(PreviewParts {
+            rail: self.rail,
+            key_escrow: self.key_escrow,
+            n_in: self.n_in,
+            n_out: self.n_out,
+            inputs,
+            published: &rail.published_slots(inputs, sender)?,
+            sender: rail.published_sender(inputs)?,
+            trees: self.trees,
+            expiry_unix_ts: self.expiry_unix_ts,
+            tx_viewing_u: rail.tx_viewing_key().pubkey().u(),
+        }))
+    }
+}
+
 /// A transfer whose compact data is final but for its proofs.
 pub(crate) struct Assembled {
     frame: Frame,
@@ -263,10 +307,8 @@ pub(crate) struct Assembled {
 }
 
 impl<'a> Pipeline<'a> {
-    async fn frame<P: AsyncRpc, I: RingIndexerBackend>(
-        self,
-        client: &RingClient<P, I>,
-    ) -> Result<Unwitnessed<'a>, RingError> {
+    /// The external data is final after the seal, the owner signs its message hash.
+    async fn seal<R: AsyncRpc + ?Sized>(self, client: &R) -> Result<Sealed<'a>, RingError> {
         let Staged {
             mut proof_inputs,
             rail,
@@ -290,7 +332,7 @@ impl<'a> Pipeline<'a> {
             &proof_inputs.output_utxos,
         )?;
         let trees = spend_trees(
-            client.zolana(),
+            client,
             &proof_inputs.input_utxos,
             proof_inputs.output_tree_id,
         )
@@ -303,26 +345,18 @@ impl<'a> Pipeline<'a> {
             .iter()
             .filter(|input| !input.is_compact())
             .count();
-        let ring_id = self.ring.ring_id()?;
         let auditor = config.auditor_pubkey;
-        let key_escrow = config.mode == RingMode::ConfidentialEscrow;
-        let preview = |proof_inputs: &SppProofInputs| -> Result<TransactParts, RingError> {
-            Ok(preview_parts(PreviewParts {
-                rail: ring_rail,
-                key_escrow,
-                n_in,
-                n_out,
-                inputs: proof_inputs,
-                published: &rail.published_slots(proof_inputs, &sender)?,
-                sender: rail.published_sender(proof_inputs)?,
-                trees: trees.inputs.len(),
-                expiry_unix_ts,
-                tx_viewing_u: rail.tx_viewing_key().pubkey().u(),
-            }))
+        let preview = Preview {
+            rail: ring_rail,
+            key_escrow: config.mode == RingMode::ConfidentialEscrow,
+            n_in,
+            n_out,
+            trees: trees.inputs.len(),
+            expiry_unix_ts,
         };
 
         // The auditor message precedes every hash over the external data.
-        let unsealed = preview(&proof_inputs)?;
+        let unsealed = preview.parts(&proof_inputs, &rail, &sender)?;
         let sealed = AuditSeal {
             rail: &rail,
             layout: unsealed.data().disclosure_layout()?,
@@ -339,6 +373,58 @@ impl<'a> Pipeline<'a> {
             .push(sealed.message(&auditor));
         proof_inputs.external_data.instruction_discriminator = ring_rail.spp_tag();
 
+        Ok(Sealed {
+            pipeline: Pipeline {
+                ring: self.ring,
+                config: self.config,
+                staged: Staged {
+                    proof_inputs,
+                    rail,
+                    sender,
+                    authority,
+                    owner_signers,
+                    interface_transfer_accounts,
+                    spend,
+                },
+            },
+            sealed,
+            trees,
+            preview,
+            published_inputs,
+        })
+    }
+}
+
+impl<'a> Sealed<'a> {
+    async fn frame<P: AsyncRpc, I: RingIndexerBackend>(
+        self,
+        client: &RingClient<P, I>,
+    ) -> Result<Unwitnessed<'a>, RingError> {
+        let Sealed {
+            pipeline:
+                Pipeline {
+                    ring,
+                    config: ring_config,
+                    staged,
+                },
+            sealed,
+            trees,
+            preview,
+            published_inputs,
+        } = self;
+        let Staged {
+            proof_inputs,
+            rail,
+            sender,
+            authority,
+            owner_signers,
+            interface_transfer_accounts,
+            spend,
+        } = staged;
+        let config = &ring_config;
+        let ring_rail = preview.rail;
+        let (n_in, n_out) = (preview.n_in, preview.n_out);
+        let ring_id = ring.ring_id()?;
         let public = public_slots(&proof_inputs.external_data.interface_transfers)?;
         let public_assets = public.asset_fields()?;
         let public_amounts = public.amounts();
@@ -352,7 +438,7 @@ impl<'a> Pipeline<'a> {
                         Spend::Anonymous(a) => a.token_owner,
                         _ => None,
                     },
-                    ring: self.ring,
+                    ring,
                     config,
                     rail: ring_rail,
                     inputs: &proof_inputs,
@@ -374,7 +460,7 @@ impl<'a> Pipeline<'a> {
         let legs: Vec<_> = transfers.iter().map(public_leg).collect();
         let demand = CoSignDemand::transact(approval_required, &legs);
         let withdrawal_exemption = withdrawals::Exemption::read(
-            self.ring,
+            ring,
             config,
             &demand,
             policy.as_ref().map(|policy| policy.own),
@@ -414,14 +500,14 @@ impl<'a> Pipeline<'a> {
             owner_signers,
             interface_transfer_accounts,
             registry: (config.has_policy || withdrawal_exemption.is_some())
-                .then(|| self.ring.registry_pda()),
+                .then(|| ring.registry_pda()),
             curator: policy
                 .as_ref()
                 .and_then(|policy| policy.curator.map(|curator| curator.address)),
             co_signer,
             delegate,
         };
-        let mut parts = preview(&proof_inputs)?;
+        let mut parts = preview.parts(&proof_inputs, &rail, &sender)?;
         parts.eph_u = sealed.eph_u;
         parts.sealed = sealed.sealed;
         parts.disclosure = sealed.fields.clone();
@@ -470,7 +556,7 @@ impl<'a> Pipeline<'a> {
         }
         let unwitnessed = Unwitnessed {
             frame: Frame {
-                ring: self.ring,
+                ring,
                 ring_id,
                 proof_inputs,
                 rail,
@@ -487,7 +573,7 @@ impl<'a> Pipeline<'a> {
                 accounts,
                 co_signer,
             },
-            config: self.config,
+            config: ring_config,
             authority,
             spend,
             trees,

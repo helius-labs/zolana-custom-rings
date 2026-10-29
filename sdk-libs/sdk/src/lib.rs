@@ -26,6 +26,8 @@ mod prover;
 mod records;
 #[path = "operations/register_key.rs"]
 mod register_key;
+#[path = "rpc/relay.rs"]
+mod relay;
 #[path = "codec/request.rs"]
 mod request;
 #[path = "operations/utxo_selection.rs"]
@@ -80,6 +82,7 @@ pub use crate::{
     register_key::{
         EscrowedRecipients, KeyEscrowAuthority, ProvenKeyRegistration, RegisterKey, SealedEscrow,
     },
+    relay::{PendingSignature, PreparedRelay, RelaySent, RingRelay},
     select::{select_merge_where, select_spend_where},
     storage::{InitializeStorage, SyncRoots, UpdateStorage, UpdateStorageAuthority},
     submission::{RingOperation, RingSubmission, SettledSubmission, SubmissionStatus},

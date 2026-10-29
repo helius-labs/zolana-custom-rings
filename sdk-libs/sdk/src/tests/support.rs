@@ -256,6 +256,8 @@ pub(crate) struct Chain {
     /// The leaves of every Merkle proof request.
     pub proof_requests: Arc<Mutex<Vec<Vec<[u8; 32]>>>>,
     pub witness_requests: Arc<Mutex<Vec<Vec<[u8; 32]>>>>,
+    /// The ring of every record opening or pool request.
+    pub record_requests: Arc<Mutex<Vec<SerializablePubkey>>>,
 }
 
 impl Chain {
@@ -412,6 +414,10 @@ impl AsyncRingIndexer for Chain {
         &self,
         request: GetRingMemberOpeningsRequest,
     ) -> Result<GetRingMemberOpeningsResponse, RingIndexerError> {
+        self.record_requests
+            .lock()
+            .unwrap()
+            .push(request.ring_program_id);
         let registry = self
             .registry
             .as_ref()
@@ -436,6 +442,10 @@ impl AsyncRingIndexer for Chain {
         &self,
         request: GetRingRecordPoolRequest,
     ) -> Result<GetRingRecordPoolResponse, RingIndexerError> {
+        self.record_requests
+            .lock()
+            .unwrap()
+            .push(request.ring_program_id);
         let registry = self
             .registry
             .as_ref()
