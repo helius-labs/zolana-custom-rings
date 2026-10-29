@@ -54,6 +54,8 @@ pub(super) struct PolicyInputs {
     public_asset_entries: Vec<u32>,
     /// The escrowed key ciphertext hash of every UTXO output's owner, under key escrow.
     ct_hashes: Vec<Option<[u8; 32]>>,
+    /// One per output slot, zero on a dummy and on the anonymous rail.
+    pub recipients: Vec<[u8; 32]>,
     pub approval_required: bool,
     pub key_escrow: bool,
 }
@@ -128,6 +130,14 @@ impl PolicyRead<'_> {
                 _ => Ok(None),
             })
             .collect::<Result<Vec<_>, RingError>>()?;
+        let publishes = self.rail.publishes_recipients();
+        let recipients = owners
+            .iter()
+            .map(|owner| match owner {
+                Some(owner) if publishes => owner.member,
+                _ => [0; 32],
+            })
+            .collect();
         let mut subjects = PoolSubjects::default();
         let entry = |index| pool_entry(index, curator.as_ref());
         let sender_entry = entry(subjects.index(Some(self.sender)));
@@ -283,6 +293,7 @@ impl PolicyRead<'_> {
             asset_entries,
             public_asset_entries,
             ct_hashes,
+            recipients,
             approval_required,
             key_escrow,
         })
@@ -365,6 +376,7 @@ impl PolicyInputs {
             own_root: &self.own.root,
             curator_root: &self.curator_root(),
             sender: &proving.sender,
+            recipients: &self.recipients,
             public_assets: &proving.public_assets,
             public_amounts: &proving.public_amount_fields,
         }
@@ -446,6 +458,7 @@ impl PolicyInputs {
             address_chain: create_nonzero_hash_chain_from_slice(&address_nullifiers)?,
             private_tx_blinding: proving.private_tx_blinding,
             outputs,
+            recipients: &self.recipients,
             sender_pk_hash: proving.sender_pk_hash,
             pools: RecordPools {
                 own: own_pool,

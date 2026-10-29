@@ -31,6 +31,8 @@ pub struct InitializeIxData {
     pub grace_slots: [u8; 8],
 }
 
+pub const VERIFY_POLICY_OUTPUTS: usize = 2;
+
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 pub struct VerifyPolicyIxData {
@@ -38,6 +40,7 @@ pub struct VerifyPolicyIxData {
     pub table: EncodedRuleTable,
     pub action: [u8; 32],
     pub sender: [u8; 32],
+    pub recipients: [[u8; 32]; VERIFY_POLICY_OUTPUTS],
     pub proof: CustomRingProof,
 }
 

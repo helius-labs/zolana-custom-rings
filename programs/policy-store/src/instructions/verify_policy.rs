@@ -10,10 +10,10 @@ use spr_account_checks::AccountIterator;
 use spr_interface::N_PUBLIC_SLOTS;
 use zolana_ring_policy::{registry_field, SourceMap};
 
-use crate::{loader::load_registry, parse, VerifyPolicyIxData};
+use crate::{loader::load_registry, parse, VerifyPolicyIxData, VERIFY_POLICY_OUTPUTS};
 
 const MEMBER_POLICY_CIRCUIT: RingCircuit = RingCircuit::MemberPolicy {
-    outputs: 2,
+    outputs: VERIFY_POLICY_OUTPUTS as u8,
     withdrawals: 0,
     own_only: true,
 };
@@ -50,6 +50,7 @@ pub fn process_verify_policy_ix(
         own_root: &root,
         curator_root: &[0; 32],
         sender: &ix.sender,
+        recipients: &ix.recipients,
         public_assets: &[[0; 32]; N_PUBLIC_SLOTS],
         public_amounts: &[[0; 32]; N_PUBLIC_SLOTS],
         withdrawal_hash: &policy_withdrawal_hash(&[]).map_err(CustomRingError::from)?,

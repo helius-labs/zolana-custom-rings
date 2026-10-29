@@ -146,6 +146,8 @@ pub struct PolicyStatement<'a> {
     pub curator_root: &'a [u8; 32],
     /// The owner signer's identity, the sender commitment on an anonymous ring, zero on the delegate rail.
     pub sender: &'a [u8; 32],
+    /// One owner identity per output slot, zero on a dummy and on the anonymous rail.
+    pub recipients: &'a [[u8; 32]],
     /// SPP's public asset fields, zero past the used slots.
     pub public_assets: &'a [[u8; 32]; N_PUBLIC_SLOTS],
     /// SPP's public amount fields, a withdrawal is `q - |amount|`.
@@ -170,6 +172,7 @@ impl PolicyStatement<'_> {
             *self.curator_root,
             *self.sender,
         ]);
+        elements.extend_from_slice(self.recipients);
         for (asset, amount) in self.public_assets.iter().zip(self.public_amounts) {
             elements.extend([*asset, *amount]);
         }

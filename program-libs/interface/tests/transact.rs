@@ -153,6 +153,7 @@ impl Fixture {
             own_root_index: 7,
             curator_root_index: Some(3),
             sender_commitment: None,
+            recipients: &self.fields[50..52],
         });
         data.approval_required = true;
         data.interface_transfers = vec![
@@ -196,6 +197,7 @@ impl Fixture {
             own_root_index: 31,
             curator_root_index: None,
             sender_commitment: Some(&self.fields[4]),
+            recipients: &[],
         });
         data.interface_transfers = vec![InterfaceTransfer::SolWithdrawal { amount: 9_999 }];
         data.outputs = (0..4)
@@ -229,7 +231,7 @@ impl Fixture {
     fn delegate(&self) -> RingTransactData<'_> {
         let mut data = self.base(RingRail::Delegate, 2, 2);
         data.key_escrow = true;
-        data.policy = Some(self.delegate_policy());
+        data.policy = Some(self.delegate_policy(2));
         data.outputs = vec![self.delivered(0), self.delivered(1)];
         self.with_disclosure(data)
     }
@@ -238,18 +240,19 @@ impl Fixture {
     fn delegate_delivered(&self) -> RingTransactData<'_> {
         let mut data = self.base(RingRail::Delegate, 2, 8);
         data.key_escrow = true;
-        data.policy = Some(self.delegate_policy());
+        data.policy = Some(self.delegate_policy(8));
         data.outputs = (0..8).map(|slot| self.delivered(slot)).collect();
         data
     }
 
-    fn delegate_policy(&self) -> PolicyProof<'_> {
+    fn delegate_policy(&self, outputs: usize) -> PolicyProof<'_> {
         PolicyProof {
             spl_withdrawal_owners: &[],
             proof: &self.proofs[1],
             own_root_index: 0,
             curator_root_index: None,
             sender_commitment: None,
+            recipients: &self.fields[50..50 + outputs],
         }
     }
 

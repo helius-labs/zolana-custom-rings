@@ -14,7 +14,7 @@ use spr_interface::{
         TransactIxData, TransactIxDataRef, TransactOutput, TransactProof, TreeContext,
     },
     shape::{Shape, SPP_SUPPORTED_SHAPES},
-    N_PUBLIC_SLOTS,
+    MAX_OUTPUTS, N_PUBLIC_SLOTS,
 };
 use wincode::{containers, len::FixIntLen, Serialize};
 
@@ -36,6 +36,7 @@ use crate::{
 };
 
 const ZERO_FIELD: [u8; 32] = [0; 32];
+const HIDDEN_RECIPIENTS: [[u8; 32]; MAX_OUTPUTS] = [ZERO_FIELD; MAX_OUTPUTS];
 /// Key support reads the shape alone.
 const NO_PROOF_DATA: AnonymousRingEddsaProofData = AnonymousRingEddsaProofData {
     bsb22_commitment: Bsb22Commitment {
@@ -117,6 +118,10 @@ impl RingRail {
             Self::Confidential | Self::Anonymous => RING_TRANSACT,
             Self::Delegate => RING_AUTHORITY_TRANSACT,
         }
+    }
+
+    pub const fn publishes_recipients(self) -> bool {
+        !matches!(self, Self::Anonymous)
     }
 
     pub const fn policy_key(self) -> PolicyKey {
@@ -238,6 +243,8 @@ pub struct PolicyProof<'a> {
     pub curator_root_index: Option<u8>,
     /// Set exactly on the anonymous rail.
     pub sender_commitment: Option<&'a [u8; 32]>,
+    /// One owner identity per output slot, empty on the anonymous rail.
+    pub recipients: &'a [[u8; 32]],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -604,6 +611,10 @@ impl<'a> RingTransactData<'a> {
                 sender_commitment: (rail == RingRail::Anonymous)
                     .then(|| bytes.array())
                     .transpose()?,
+                recipients: match rail.publishes_recipients() && !legacy {
+                    true => bytes.fields(shape.outputs())?,
+                    false => &[],
+                },
             }),
         };
         let expiry_unix_ts = bytes.u32()?;
@@ -713,10 +724,15 @@ impl<'a> RingTransactData<'a> {
         let shape = self.rail.audit_shape(&header)?;
         let layout = shape.layout(output_count, self.audit_layout())?;
         let anonymous_rail = self.rail == RingRail::Anonymous;
-        let commitment_fits = self
-            .policy
-            .is_none_or(|policy| policy.sender_commitment.is_some() == anonymous_rail);
-        if !commitment_fits
+        let published_recipients = match self.rail.publishes_recipients() {
+            true => output_count,
+            false => 0,
+        };
+        let policy_fits = self.policy.is_none_or(|policy| {
+            policy.sender_commitment.is_some() == anonymous_rail
+                && policy.recipients.len() == published_recipients
+        });
+        if !policy_fits
             || self.anonymous.is_some() != anonymous_rail
             || self.sender.is_some() != anonymous_rail
             || self.disclosure.len() != layout.field_count()
@@ -739,6 +755,7 @@ impl<'a> RingTransactData<'a> {
             if let Some(commitment) = policy.sender_commitment {
                 out.extend_from_slice(commitment);
             }
+            out.extend_from_slice(policy.recipients.as_flattened());
         }
         out.extend_from_slice(&self.expiry_unix_ts.to_le_bytes());
         out.extend_from_slice(self.tx_viewing_u);
@@ -860,6 +877,17 @@ impl<'a> RingTransactData<'a> {
         self.policy
             .and_then(|policy| policy.sender_commitment)
             .unwrap_or(&ZERO_FIELD)
+    }
+
+    /// Zero per output slot on the anonymous rail.
+    pub fn policy_recipients(&self) -> Result<&'a [[u8; 32]], CustomRingError> {
+        let policy = self.policy.ok_or(CustomRingError::MissingPolicyProof)?;
+        match self.rail.publishes_recipients() {
+            true => Ok(policy.recipients),
+            false => HIDDEN_RECIPIENTS
+                .get(..self.outputs.len())
+                .ok_or(CustomRingError::RingTransactLength),
+        }
     }
 
     /// The statement's layout element, the exits flag read from the outputs.

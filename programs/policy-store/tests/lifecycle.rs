@@ -122,6 +122,7 @@ impl Store {
             table: TableParts { rows: &rows }.encode().unwrap(),
             action: field(&vector["action"]),
             sender: right_align(&1001u64.to_be_bytes()),
+            recipients: [0, 1].map(|slot| field(&vector["recipients"][slot])),
             proof: proof(vector),
         };
         self.instruction(tag::VERIFY_POLICY, bytes_of(&ix))

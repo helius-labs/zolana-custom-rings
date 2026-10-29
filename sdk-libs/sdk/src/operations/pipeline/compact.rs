@@ -108,6 +108,7 @@ pub(crate) struct OwnedPolicyProof {
     pub own_root_index: u8,
     pub curator_root_index: Option<u8>,
     pub sender_commitment: Option<[u8; 32]>,
+    pub recipients: Vec<[u8; 32]>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -158,6 +159,7 @@ impl TransactParts {
                 own_root_index: policy.own_root_index,
                 curator_root_index: policy.curator_root_index,
                 sender_commitment: policy.sender_commitment.as_ref(),
+                recipients: &policy.recipients,
             }),
             withdrawal_exemption: self.withdrawal_exemption.as_ref(),
             approval_required: self.approval_required,

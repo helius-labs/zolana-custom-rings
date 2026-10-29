@@ -456,6 +456,8 @@ pub(crate) struct PolicyParams<'a> {
     #[serde(with = "fe")]
     pub private_tx_blinding: [u8; 32],
     pub outputs: Vec<OutputOpening>,
+    #[serde(serialize_with = "fe::seq")]
+    pub recipients: &'a [[u8; 32]],
     #[serde(with = "fe")]
     pub sender_pk_hash: [u8; 32],
     #[serde(flatten)]

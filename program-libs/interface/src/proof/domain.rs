@@ -35,7 +35,7 @@ pub const WITHDRAWALS: u32 = 0x4352_5057;
 pub const WITHDRAWAL_EXEMPTION: u32 = 0x4352_5758;
 
 /// Bound into every policy statement, a layout change raises it.
-pub const POLICY_STATEMENT_VERSION: u8 = 3;
+pub const POLICY_STATEMENT_VERSION: u8 = 4;
 
 pub fn field(domain: u32) -> [u8; 32] {
     right_align(&domain.to_be_bytes())
