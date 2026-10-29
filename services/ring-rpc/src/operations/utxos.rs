@@ -73,6 +73,7 @@ pub(crate) struct StoredUtxo {
     utxo: KnownUtxo,
     created_in: CreatedIn,
     slot_index: u32,
+    leaf_index: u64,
 }
 
 #[derive(Default)]
@@ -95,6 +96,7 @@ impl AuditStore {
                     utxo: created.utxo,
                     created_in,
                     slot_index: created.slot_index,
+                    leaf_index: created.leaf_index,
                 },
             );
         }
@@ -220,8 +222,7 @@ impl StoredUtxo {
             data_hash: None,
             ring_data_hash: (utxo.ring_data_hash != [0; 32]).then_some(utxo.ring_data_hash),
             tree_id: utxo.tree_id,
-            // Merkle proofs are read by commitment.
-            leaf_index: 0,
+            leaf_index: self.leaf_index,
             latest_tree_id: None,
             slot: self.created_in.slot,
             tx_signature: self.created_in.tx_signature,
@@ -258,6 +259,7 @@ mod tests {
         CreatedUtxo {
             commitment: [1; 32],
             slot_index: 0,
+            leaf_index: 0,
             utxo: KnownUtxo {
                 owner_key: [2; 32],
                 owner: UtxoOwner::Keyed {

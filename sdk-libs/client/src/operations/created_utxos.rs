@@ -171,6 +171,7 @@ impl CreatedUtxos<'_> {
             utxos.push(CreatedUtxo {
                 commitment,
                 slot_index,
+                leaf_index: context.leaf_index,
                 utxo: KnownUtxo {
                     owner_key,
                     owner: UtxoOwner::Deposited {
@@ -199,6 +200,7 @@ impl CreatedUtxos<'_> {
         Ok(vec![CreatedUtxo {
             commitment: output.commitment,
             slot_index: 0,
+            leaf_index: output.leaf_index,
             utxo: KnownUtxo {
                 owner_key: opening.owner_key,
                 owner: UtxoOwner::Keyed {
