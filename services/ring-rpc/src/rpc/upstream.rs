@@ -29,8 +29,9 @@ use spr_keypair::X25519Pubkey;
 use spr_transaction::{AssetRegistry, Mint, SOL_MINT};
 use std::num::NonZeroUsize;
 use zolana_ring_client::{
-    program_data, ring_deposits_in, AsyncRingIndexer, AuditError, ConfirmedEventKind, MergeAudit,
-    MergeAuditPage, RingIndexerError, RingOrigin, StorageTip, TransactionOrigin,
+    program_data, ring_deposits_in, AsyncRingIndexer, AuditError, ConfirmedEventKind,
+    MemberOpeningRead, MergeAudit, MergeAuditPage, RingIndexerError, RingOrigin, StorageTip,
+    TransactionOrigin,
 };
 use zolana_ring_indexer::rpc::{
     GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse,
@@ -40,7 +41,7 @@ use zolana_ring_transaction::RingAssets;
 
 use zolana_ring_client::rpc::{DepositRecord, RingChainStatus, RingDepositsResponse};
 
-use crate::audit::Page;
+use crate::{audit::Page, error::RingRpcError};
 
 const MAX_MERGE_MEMBER_PAGES: NonZeroUsize = NonZeroUsize::new(100).unwrap();
 const MAX_MERGE_CANDIDATE_ATTEMPTS: NonZeroUsize = NonZeroUsize::new(100_000).unwrap();
@@ -113,6 +114,30 @@ pub trait TransactionSource: Send + Sync {
     fn genesis_hash(&self) -> impl Future<Output = Result<[u8; 32], ClientError>> + Send;
 
     fn ring_assets(&self) -> impl Future<Output = Result<RingAssets, ClientError>> + Send;
+}
+
+/// No source overrides the opening check.
+pub(crate) trait VerifiedOpenings: TransactionSource {
+    /// Refused unless every opening verifies under `tip`.
+    fn verified_openings<'a>(
+        &'a self,
+        tip: &'a StorageTip,
+        members: &'a [[u8; 32]],
+    ) -> impl Future<Output = Result<Vec<MemberOpeningRead>, RingRpcError>> + Send + 'a;
+}
+
+impl<S: TransactionSource> VerifiedOpenings for S {
+    async fn verified_openings<'a>(
+        &'a self,
+        tip: &'a StorageTip,
+        members: &'a [[u8; 32]],
+    ) -> Result<Vec<MemberOpeningRead>, RingRpcError> {
+        let response = self
+            .storage_member_openings(tip.openings_request(members))
+            .await?;
+        tip.verify_openings(&response, members)
+            .map_err(|_| RingRpcError::InvalidIndexerResponse)
+    }
 }
 
 #[must_use]

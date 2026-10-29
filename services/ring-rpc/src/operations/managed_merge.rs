@@ -22,10 +22,11 @@ use zolana_ring_transaction::RingAssets;
 use crate::{
     audit::AuditService,
     authorize::WalletCheck,
-    cosign::{CoSignDecision, CoSignPolicy, CoSignRequest},
+    cosign::{CoSignDecision, CoSignRequest},
     error::{redacted, RingRpcError},
     hub::Hub,
     merge_settings::{MergeSettingsBook, SignedMergeSettings, WalletMergeSettings},
+    relay::RelayError,
     relay_submit::{CollectedSignature, RelaySubmit, RelayTransaction},
     replay::ReplayCheck,
     upstream::TransactionSource,
@@ -66,14 +67,12 @@ pub trait MergeBuilder: Send + Sync {
 pub struct ManagedMergeInit<S> {
     pub hub: Arc<Hub<S>>,
     pub builder: Arc<dyn MergeBuilder>,
-    pub co_signer: Arc<dyn CoSignPolicy>,
     pub relay: Arc<dyn RelaySubmit>,
 }
 
 pub struct ManagedMerge<S> {
     hub: Arc<Hub<S>>,
     builder: Arc<dyn MergeBuilder>,
-    co_signer: Arc<dyn CoSignPolicy>,
     relay: Arc<dyn RelaySubmit>,
     /// Nullifiers of sent merges, held back for the life of the process.
     pending: Mutex<HashSet<[u8; 32]>>,
@@ -124,7 +123,6 @@ impl<S> ManagedMergeInit<S> {
         ManagedMerge {
             hub: self.hub,
             builder: self.builder,
-            co_signer: self.co_signer,
             relay: self.relay,
             pending: Mutex::new(HashSet::new()),
         }
@@ -230,6 +228,7 @@ impl<S: TransactionSource> ManagedMerge<S> {
         };
         // 3. The secret leaves memory once the merge is proven.
         let nullifiers: Vec<[u8; 32]> = inputs.iter().map(|input| input.nullifier).collect();
+        let co_signer = self.hub.co_signer();
         let built = self
             .builder
             .build(OwnerMerge {
@@ -237,15 +236,17 @@ impl<S: TransactionSource> ManagedMerge<S> {
                 owner: wallet.owner,
                 nullifier_key: &nullifier_key,
                 inputs,
-                co_signer: self.co_signer.signer(),
+                co_signer: co_signer.signer(),
             })
             .await?;
         drop(nullifier_key);
         // 4. A co-signer whose scope covers transfers signs, or the merge waits.
         let mut signatures = Vec::new();
-        if let Some(signer) = built.co_signer {
-            let decision = self
-                .co_signer
+        if let Some(named) = built.co_signer {
+            let signer = co_signer
+                .signer_named(named)
+                .ok_or(RelayError::CoSignRefused)?;
+            let decision = co_signer
                 .decide(&CoSignRequest {
                     ring,
                     message: built.message.clone(),
@@ -353,7 +354,6 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::{
-        cosign::RefusingCoSigner,
         database::Store,
         relay::RelayParts,
         upstream::{
@@ -627,7 +627,6 @@ pub(crate) mod tests {
             ManagedMergeInit {
                 hub: self.hub.clone(),
                 builder: self.builder.clone(),
-                co_signer: Arc::new(RefusingCoSigner),
                 relay: self.relay.clone(),
             }
             .build()

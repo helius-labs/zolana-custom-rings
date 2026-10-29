@@ -103,7 +103,9 @@ pub use relay::{
     Relay, RelayError, RelayParts, RelayPayload, ServedRings, QUOTE_SLOTS, RELAY_TRACK_INTERVAL,
 };
 pub use relay_chain::{ChainOutcome, FeePayerSubmit, RelayChain, SolanaRelayChain};
-pub use relay_prover::{DelegateSeal, ProvenRelay, RelayProofRequest, RelayProver, SdkRelayProver};
+pub use relay_prover::{
+    DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver, SdkRelayProver,
+};
 pub use relay_submit::{CollectedSignature, RelaySubmit, RelayTransaction};
 pub use server::{relay_module, rpc_module, run_server, BindPolicy, ServerError, ServerOptions};
 pub use storage_chain::{LatestBlockhash, LiveStorageChain, StorageChain, TransactionOutcome};

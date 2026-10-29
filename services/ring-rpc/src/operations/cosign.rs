@@ -91,6 +91,13 @@ pub trait CoSignPolicy: Send + Sync {
     async fn settle(&self, settlement: CoSignSettlement) -> Result<(), RingRpcError>;
 }
 
+impl dyn CoSignPolicy + '_ {
+    /// `None` unless the policy signs as the co-signer the proof names.
+    pub(crate) fn signer_named(&self, named: Address) -> Option<Address> {
+        self.signer().filter(|signer| *signer == named)
+    }
+}
+
 pub struct RefusingCoSigner;
 
 #[async_trait]

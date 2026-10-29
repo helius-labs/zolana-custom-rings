@@ -157,7 +157,6 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         let merge = ManagedMergeInit {
             hub: hub.clone(),
             builder: merge.builder,
-            co_signer: hub.co_signer().clone(),
             relay: merge.submit,
         }
         .build();

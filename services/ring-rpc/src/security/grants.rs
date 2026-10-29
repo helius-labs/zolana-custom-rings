@@ -10,7 +10,7 @@ use zolana_ring_policy::{ListId, Member};
 use crate::{
     error::{GrantRefusal, RingRpcError},
     grant_rows::GrantRows,
-    upstream::{RecordsTip, TransactionSource},
+    upstream::{RecordsTip, TransactionSource, VerifiedOpenings},
 };
 
 #[must_use]
@@ -118,13 +118,10 @@ impl<S: TransactionSource> GrantSource for TreeGrants<'_, S> {
         let RecordsTip::Mirrored(records) = self.source.records_root(query.ring).await? else {
             return Err(GrantRefusal::RecordsUnsynced.into());
         };
-        let response = self
+        Ok(self
             .source
-            .storage_member_openings(records.openings_request(&members))
-            .await?;
-        Ok(records
-            .verify_openings(&response, &members)
-            .map_err(|_| RingRpcError::InvalidIndexerResponse)?
+            .verified_openings(&records, &members)
+            .await?
             .iter()
             .any(|read| read.listed(ListId::Reader)))
     }

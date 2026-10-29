@@ -1,4 +1,4 @@
-//! The relay co-signs within its asset's sender window cap and refuses an outflow beyond it.
+//! The relay co-signs within its asset's sender window cap and refuses an outflow beyond it or a proof naming another co-signer.
 
 use jsonrpsee::{MethodsError, RpcModule};
 use spr_keypair::{ShieldedKeypair, SigningKey};
@@ -27,6 +27,11 @@ struct CappedRelay {
 
 impl CappedRelay {
     async fn new(rail: fn() -> RelayRail) -> Self {
+        Self::naming(rail, None).await
+    }
+
+    /// `named` replaces the hub's co-signer in the proof.
+    async fn naming(rail: fn() -> RelayRail, named: Option<Address>) -> Self {
         let fixture = Fixture::new();
         let source = fixture.source();
         source.records.write_mint_policy(
@@ -53,7 +58,7 @@ impl CappedRelay {
             .with_relay(RelayParts {
                 store,
                 prover: Arc::new(RecordingProver {
-                    co_signer: Some(co_signer),
+                    co_signer: Some(named.unwrap_or(co_signer)),
                     ..RecordingProver::default()
                 }),
                 submit: Arc::new(FeePayerSubmit::new(
@@ -133,4 +138,29 @@ async fn a_relayed_exit_to_the_sender_over_the_sender_window_cap_is_refused() {
         // An exit leaves the ring even to the sender, the sender cap counts it.
         .assert_second_refused(|inputs| inputs.outputs[0].ring_program_id = None)
         .await;
+}
+
+#[tokio::test]
+async fn a_proof_naming_another_co_signer_is_refused_unsent() {
+    let relay =
+        CappedRelay::naming(anonymous_rail, Some(Address::new_from_array([0x99; 32]))).await;
+
+    let refused = relay
+        .module
+        .call::<_, RelayStep>(
+            PREPARE_RELAY,
+            as_object(signed_request(
+                relay.quote.clone(),
+                &proof_inputs(RING, anonymous_rail()),
+            )),
+        )
+        .await;
+
+    match refused {
+        Err(MethodsError::JsonRpc(error)) => {
+            assert_eq!(error.code(), RelayError::CoSignRefused.code())
+        }
+        other => panic!("the policy signs as another key, got {other:?}"),
+    }
+    assert!(relay.chain.sent().is_empty());
 }

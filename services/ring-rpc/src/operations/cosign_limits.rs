@@ -18,7 +18,7 @@ use crate::{
     database::Store,
     error::RingRpcError,
     hub::Shared,
-    upstream::{RecordsTip, TransactionSource},
+    upstream::{RecordsTip, TransactionSource, VerifiedOpenings},
 };
 
 pub trait AssetLimitSource: Send + Sync {
@@ -206,12 +206,9 @@ impl<S: TransactionSource> AssetLimitSource for MirroredLimits<S> {
             .map(|asset| Member::asset(asset).map(|member| *member.as_bytes()))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| CoSignError::LimitsUnavailable)?;
-        let response = source
-            .storage_member_openings(tip.openings_request(&members))
-            .await?;
-        Ok(tip
-            .verify_openings(&response, &members)
-            .map_err(|_| RingRpcError::InvalidIndexerResponse)?
+        Ok(source
+            .verified_openings(&tip, &members)
+            .await?
             .iter()
             .map(|opening| {
                 opening

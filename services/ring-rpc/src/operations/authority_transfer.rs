@@ -115,7 +115,6 @@ impl<S: TransactionSource> Hub<S> {
                 DelegateSeal {
                     ring,
                     delegate,
-                    fee_payer: relay.fee_payer(),
                     source,
                     nullifier_key: &nullifier_key,
                     notes: &notes,
@@ -129,7 +128,6 @@ impl<S: TransactionSource> Hub<S> {
                         })
                         .collect(),
                     assets: assets.registry(),
-                    co_signer: relay.co_signer(),
                 },
             )
             .await
@@ -165,7 +163,7 @@ mod tests {
         managed_merge::tests::{Fixture, RecordingRelay, GENESIS, MINT, RING},
         relay::{RelayParts, RelayPayload, ServedRings},
         relay_chain::{ChainOutcome, RelayChain},
-        relay_prover::{DelegateSeal, ProvenRelay, RelayProofRequest, RelayProver},
+        relay_prover::{DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver},
     };
 
     #[derive(Default)]
@@ -212,6 +210,7 @@ mod tests {
         async fn seal_delegate(
             &self,
             seal: DelegateSeal<'_>,
+            _parties: RelayParties,
         ) -> Result<RelayProofInputs, RingRpcError> {
             self.sealed.lock().expect("sealed").push(Sealed {
                 delegate: seal.delegate,

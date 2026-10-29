@@ -27,7 +27,7 @@ use crate::{
     database::Store,
     error::{redacted, RingRpcError},
     relay_chain::{ChainOutcome, RelayChain},
-    relay_prover::{DelegateSeal, ProvenRelay, RelayProofRequest, RelayProver},
+    relay_prover::{DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver},
     relay_submit::{CollectedSignature, RelaySubmit, RelayTransaction},
     relays::{RelayRecord, RelayState, RelayStore},
 };
@@ -265,22 +265,21 @@ impl Relay {
     ) -> Result<RelayStep, RingRpcError> {
         let ring = seal.ring;
         self.rings.check(ring)?;
-        let fee_payer = self.fee_payer();
+        let parties = RelayParties {
+            fee_payer: self.fee_payer(),
+            co_signer: self.co_signer(),
+        };
         let (payload, proven) = {
             let _proof = self.proofs.try_acquire().map_err(|_| RingRpcError::Busy)?;
-            let payload = RelayPayload::Transfer(
-                self.prover
-                    .seal_delegate(DelegateSeal { fee_payer, ..seal })
-                    .await?,
-            );
+            let payload = RelayPayload::Transfer(self.prover.seal_delegate(seal, parties).await?);
             let proven = self
                 .prover
                 .prove(RelayProofRequest {
                     ring,
-                    fee_payer,
+                    fee_payer: parties.fee_payer,
                     payload: &payload,
                     owner_signature: None,
-                    co_signer: self.co_signer(),
+                    co_signer: parties.co_signer,
                 })
                 .await?;
             (payload, proven)
@@ -532,12 +531,15 @@ impl CoSignStep<'_> {
             payload,
             proven,
         } = self;
-        let Some(co_signer_address) = proven.co_signer else {
+        let Some(named) = proven.co_signer else {
             return Ok(CoSigned {
                 signature: None,
                 signers: proven.signers,
             });
         };
+        let signer = co_signer
+            .signer_named(named)
+            .ok_or(RelayError::CoSignRefused)?;
         let sender = payload.sender()?;
         let request = CoSignRequest {
             ring: payload.ring_program_id(),
@@ -548,10 +550,7 @@ impl CoSignStep<'_> {
         };
         match co_signer.decide(&request).await? {
             CoSignDecision::Signed(signature) => Ok(CoSigned {
-                signature: Some(CollectedSignature {
-                    signer: co_signer_address,
-                    signature,
-                }),
+                signature: Some(CollectedSignature { signer, signature }),
                 signers: proven.signers,
             }),
             CoSignDecision::Refused(CoSignRefusal::Disabled | CoSignRefusal::OverLimit) => {

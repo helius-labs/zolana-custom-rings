@@ -33,13 +33,18 @@ pub struct RelayProofRequest<'a> {
 pub struct DelegateSeal<'a> {
     pub ring: Address,
     pub delegate: Address,
-    pub fee_payer: Address,
     pub source: ShieldedAddress,
     pub nullifier_key: &'a NullifierKey,
     pub notes: &'a [WalletUtxo],
     pub mint: Address,
     pub payments: Vec<DelegatePayment>,
     pub assets: &'a AssetRegistry,
+}
+
+/// Read from the relay, never from the request.
+#[derive(Clone, Copy)]
+pub struct RelayParties {
+    pub fee_payer: Address,
     pub co_signer: Option<Address>,
 }
 
@@ -57,8 +62,11 @@ pub trait RelayProver: Send + Sync {
     async fn prove(&self, request: RelayProofRequest<'_>) -> Result<ProvenRelay, RingRpcError>;
 
     /// Selects the notes and seals the delegate's move, `prove` proves it.
-    async fn seal_delegate(&self, seal: DelegateSeal<'_>)
-        -> Result<RelayProofInputs, RingRpcError>;
+    async fn seal_delegate(
+        &self,
+        seal: DelegateSeal<'_>,
+        parties: RelayParties,
+    ) -> Result<RelayProofInputs, RingRpcError>;
 }
 
 pub struct SdkRelayProver<R, I> {
@@ -84,18 +92,19 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> RelayProver for Sdk
     async fn seal_delegate(
         &self,
         seal: DelegateSeal<'_>,
+        parties: RelayParties,
     ) -> Result<RelayProofInputs, RingRpcError> {
         let transfer = DelegateMove {
             ring: CustomRing::new(seal.ring),
             delegate: seal.delegate,
-            payer: seal.fee_payer,
+            payer: parties.fee_payer,
             source: seal.source,
             source_nullifier_key: seal.nullifier_key,
             utxos: seal.notes,
             mint: seal.mint,
             payments: seal.payments,
             assets: seal.assets,
-            co_signer: seal.co_signer,
+            co_signer: parties.co_signer,
         }
         .select(&self.client)
         .await
