@@ -301,16 +301,7 @@ impl RecordWriter {
             .chain
             .apply_inputs(GetStorageApplyProofInputsRequest {
                 registry: registry.into(),
-                writes: entries
-                    .iter()
-                    .map(|entry| StorageWriteView {
-                        member: Hash(entry.member),
-                        mask: entry.mask,
-                        value: entry.value,
-                        escrow_key: Hash(entry.escrow_key),
-                        mint_policy: entry.mint_policy,
-                    })
-                    .collect(),
+                writes: entries.iter().map(StorageWriteView::from).collect(),
             })
             .await?;
         let checked = ApplyInputsCheck {

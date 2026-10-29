@@ -21,9 +21,8 @@ use spr_client::{
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
-    heap::boxed, records::BoundQueue, AnonymousTransfer, AuthorityListWrite, CustomRing,
-    CustomRingTransfer, DelegateTransfer, PreparedRingDeposit, RecordApplication, RegisterKey,
-    RingError, RingMergeOperation,
+    heap::boxed, AnonymousTransfer, CustomRing, CustomRingTransfer, DelegateTransfer,
+    PreparedRingDeposit, RingError, RingMergeOperation,
 };
 
 #[cfg(test)]
@@ -78,10 +77,6 @@ pub enum RingOperation<'a> {
     Transfer(Box<CustomRingTransfer<'a>>),
     Anonymous(Box<AnonymousTransfer<'a>>),
     Delegate(Box<DelegateTransfer<'a>>),
-    RegisterKey(Box<RegisterKey<'a>>),
-    /// One batch, [`AuthorityListWrite::batches`] splits a larger write.
-    AuthorityListWrite(Box<AuthorityListWrite>),
-    RecordApplication(RecordApplication),
     Merge(Box<RingMergeOperation>),
     Deposit(Box<PreparedRingDeposit>),
     /// A built instruction, sent as is, its budget from its tag.
@@ -102,9 +97,6 @@ operations! {
     Transfer(CustomRingTransfer<'a>) => Box::new,
     Anonymous(AnonymousTransfer<'a>) => Box::new,
     Delegate(DelegateTransfer<'a>) => Box::new,
-    RegisterKey(RegisterKey<'a>) => Box::new,
-    AuthorityListWrite(AuthorityListWrite) => Box::new,
-    RecordApplication(RecordApplication) => core::convert::identity,
     Merge(RingMergeOperation) => Box::new,
     Deposit(PreparedRingDeposit) => Box::new,
     Instruction(Instruction) => core::convert::identity,
@@ -194,7 +186,6 @@ pub(crate) struct BoundPolicy {
 pub(crate) struct BoundState {
     pub roots: Vec<BoundRoot>,
     pub policy: Option<BoundPolicy>,
-    pub queue: Option<BoundQueue>,
 }
 
 impl BoundState {
@@ -213,7 +204,6 @@ impl BoundState {
         Ok([
             CustomRingError::MirrorRootExpired,
             CustomRingError::MirrorNotSynced,
-            CustomRingError::AuthorityBatchTooLarge,
         ]
         .into_iter()
         .any(|stale| code == stale as u32))
@@ -227,16 +217,6 @@ impl BoundState {
         }
         if let Some(policy) = self.policy {
             if policy.ring.require_policy(client).await?.policy_hash != policy.hash {
-                return Ok(true);
-            }
-        }
-        if let Some(queue) = &self.queue {
-            let registry = queue.ring.require_registry(client).await?;
-            let current = queue.ring.require_queue(client).await?;
-            if current.tail() != queue.tail
-                || current.chain_tail() != queue.chain_tail
-                || registry.current_root() != queue.root
-            {
                 return Ok(true);
             }
         }
@@ -425,12 +405,7 @@ impl RingOperation<'_> {
                     .check_public_signers(signers.chain(operation.input.co_signer), &config)
             }
             Self::Deposit(deposit) => deposit.check_public_signers(signers),
-            Self::Transfer(_)
-            | Self::Delegate(_)
-            | Self::RegisterKey(_)
-            | Self::AuthorityListWrite(_)
-            | Self::RecordApplication(_)
-            | Self::Instruction(_) => Ok(()),
+            Self::Transfer(_) | Self::Delegate(_) | Self::Instruction(_) => Ok(()),
         }
     }
 
@@ -469,38 +444,6 @@ impl RingOperation<'_> {
                     proven.bound(),
                 )
             }
-            Self::RegisterKey(registration) => {
-                let proven = boxed(|| registration.prove(client)).await?;
-                proved(
-                    proven.instruction,
-                    InstructionTag::RegisterKey,
-                    BoundState::default(),
-                )
-            }
-            Self::AuthorityListWrite(write) => {
-                let proven = boxed(|| write.prove(client)).await?;
-                proved(
-                    proven.instruction,
-                    InstructionTag::AuthorityWriteRecords,
-                    BoundState {
-                        queue: Some(proven.bound),
-                        ..BoundState::default()
-                    },
-                )
-            }
-            Self::RecordApplication(application) => {
-                let proven = boxed(|| application.prove(client))
-                    .await?
-                    .ok_or(RingError::ApplicationNotDue)?;
-                proved(
-                    proven.instruction,
-                    InstructionTag::ApplyRecords,
-                    BoundState {
-                        queue: Some(proven.bound),
-                        ..BoundState::default()
-                    },
-                )
-            }
             Self::Merge(operation) => {
                 let budget = ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Merge));
                 let config = operation
@@ -537,7 +480,6 @@ impl RingOperation<'_> {
                     BoundState {
                         roots: proven.roots,
                         policy: proven.policy,
-                        ..BoundState::default()
                     },
                 )
             }

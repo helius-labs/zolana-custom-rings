@@ -15,9 +15,7 @@
     "check:ts": "npm run build --workspace @heliuslabs/zolana && npm run check --workspace @heliuslabs/zolana-custom-rings",
     "docs:ts": "npm run build --workspace @heliuslabs/zolana && typedoc --options sdk-libs/ts/typedoc.json",
     "test:ts": "npm run test --workspace @heliuslabs/zolana-custom-rings",
-    "test:ts:e2e": "npm run test:e2e --workspace @heliuslabs/zolana-custom-rings",
-    "test:ts:ring-controls": "npm run test:ring-controls:live --workspace @heliuslabs/zolana-custom-rings",
-    "test:ts:ring-compat": "npm run test:ring-compat --workspace @heliuslabs/zolana-custom-rings"
+    "test:ts:e2e": "npm run test:e2e --workspace @heliuslabs/zolana-custom-rings"
   },
   "devDependencies": {
     "@solana/kit": "^8.3.0",

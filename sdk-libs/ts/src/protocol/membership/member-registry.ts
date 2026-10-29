@@ -8,7 +8,7 @@ export const QUAD_HEIGHT = 10;
 export const MEMBER_REGISTRY_CAPACITY = 1n << BigInt(2 * QUAD_HEIGHT);
 /** Rust `ROOT_HISTORY`, the roots a registry or a policy mirror keeps. */
 export const ROOT_HISTORY = 32;
-/** Rust `APPLY_BATCH`, the writes the larger apply key proves and the record queue holds. */
+/** Rust `APPLY_BATCH`, the writes the larger apply key proves. */
 export const APPLY_BATCH = 16;
 
 /** One leaf, `Poseidon(member, next, lists, escrow_key, mint_policy, withdrawal_threshold, limits_0, limits_1)`, Rust `MemberRecord`. */

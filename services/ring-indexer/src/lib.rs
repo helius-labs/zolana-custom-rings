@@ -1,4 +1,4 @@
-//! Indexes custom ring member registries and forwards every other JSON-RPC
+//! Indexes storage registries and forwards every other JSON-RPC
 //! call to Photon.
 
 #[path = "rpc/api.rs"]

@@ -197,7 +197,6 @@ describe("ring submission ownership", () => {
   it.each([
     RingProgramError.mirrorRootExpired,
     RingProgramError.mirrorNotSynced,
-    RingProgramError.authorityBatchTooLarge,
   ])("rebuilds after the stale proof code %i", async (customCode) => {
     const f = await fixture();
     const result = await f.submission.send({

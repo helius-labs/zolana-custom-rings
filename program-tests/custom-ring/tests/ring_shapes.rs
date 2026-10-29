@@ -159,23 +159,20 @@ impl<'a> ColumnSetup<'a> {
         .send(&env.client)?;
         let delegate = env.funded_keypair()?;
         let members = [&env.sender.keypair, &env.recipient.keypair];
-        let queue = QueueHead { env, ring };
         let applied = match self.column {
-            Column::ConfidentialPolicy => Some(queue.applied_by(|| {
-                register_key(env, ring, &env.sender.keypair)?;
-                Queued::now(&env.client, ring)?.apply(&env.client, &env.payer)
-            })?),
+            Column::ConfidentialPolicy => {
+                register_keys(env, ring, &[&env.sender.keypair])?;
+                Some(1)
+            }
             Column::Delegate => {
-                let applied = queue.applied_by(|| {
-                    EscrowedDelegate {
-                        ring,
-                        delegate: &delegate,
-                        members: &members,
-                    }
-                    .set(env)
-                })?;
+                EscrowedDelegate {
+                    ring,
+                    delegate: &delegate,
+                    members: &members,
+                }
+                .set(env)?;
                 env.enable_authority_rail(ring)?;
-                Some(applied)
+                Some(members.len() as u64)
             }
             Column::Confidential | Column::Anonymous | Column::AnonymousPolicy => None,
         };
@@ -224,26 +221,6 @@ impl<'a> ColumnSetup<'a> {
             )),
             escrowed,
         })
-    }
-}
-
-struct QueueHead<'a> {
-    env: &'a TestEnv,
-    ring: CustomRing,
-}
-
-impl QueueHead<'_> {
-    /// The writes `apply` moved the record queue head past.
-    fn applied_by(self, apply: impl FnOnce() -> Result<()>) -> Result<u64> {
-        let head = || -> Result<u64> {
-            Ok(self
-                .env
-                .run(self.ring.require_queue(self.env.client.as_async()))?
-                .head())
-        };
-        let before = head()?;
-        apply()?;
-        Ok(head()? - before)
     }
 }
 

@@ -9,7 +9,6 @@ use spr_hasher::{primitives::hash_bytes, HasherError};
 use spr_indexer_api::Hash;
 use spr_keypair::X25519Pubkey;
 use zolana_ring_indexer::rpc::{
-    GetRingApplyProofInputsResponse, GetRingMemberRecordsResponse,
     GetStorageApplyProofInputsResponse, GetStorageMemberOpeningsRequest,
     GetStorageMemberOpeningsResponse, GetStorageMemberRecordsResponse,
     GetStorageRecordPoolResponse, RingMemberOpening, RingMemberRecordView, RingRecordPathView,
@@ -29,18 +28,10 @@ pub struct MemberOpeningRead {
     pub opening: RecordOpening,
     /// The nullifier secret a registered member sealed to the auditor.
     pub sealed: Option<SealedNullifierKey>,
-    /// The `RegisterKey` signer whose owner identity is the member.
+    /// The escrow write's owner, its owner identity is the member.
     pub owner_pubkey: Option<Address>,
     /// The key the escrow key binds beside the sealed secret.
     pub nullifier_pk: Option<[u8; 32]>,
-}
-
-/// The chain-pinned newest registry root every record page is read under.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RegistryTip {
-    pub root: [u8; 32],
-    pub root_index: u8,
-    pub next_index: u64,
 }
 
 /// The newest own root a ring policy mirrors, every record page is read under it.
@@ -173,28 +164,6 @@ impl RecordPoolRead {
             .iter()
             .find(|subject| subject.member == *member)
             .map(|subject| subject.record_index as usize)
-    }
-}
-
-impl RegistryTip {
-    /// True only for every record from `start_index` to the page end, read under the tip.
-    #[must_use]
-    pub fn covers(&self, page: &GetRingMemberRecordsResponse, start_index: u64) -> bool {
-        if start_index >= self.next_index {
-            return false;
-        }
-        let end_index =
-            start_index + (self.next_index - start_index).min(MAX_RING_MEMBER_PAGE_LIMIT);
-        page.root.root.0 == self.root
-            && page.root.root_index == self.root_index
-            && page.root.next_index == self.next_index
-            && page.records.len() == (end_index - start_index) as usize
-            && page
-                .records
-                .iter()
-                .enumerate()
-                .all(|(offset, row)| row.path.index == start_index + offset as u64)
-            && page.next_leaf_index == (end_index < self.next_index).then_some(end_index)
     }
 }
 
@@ -368,33 +337,19 @@ pub fn member_record(view: &RingMemberRecordView) -> MemberRecord {
     }
 }
 
-/// Both apply responses carry the same proof input fields.
-macro_rules! proof_inputs {
-    ($response:expr) => {
-        Ok(ApplyProofInputs {
-            old_root: $response.old_root.0,
-            new_root: $response.new_root.0,
-            old_next_index: $response.old_next_index,
-            new_next_index: $response.new_next_index,
-            chain_start: $response.chain_start.0,
-            chain_end: $response.chain_end.0,
-            writes: record_writes(&$response.writes)?,
-        })
-    };
-}
-
-/// The proof inputs of one application, in queue order.
-pub fn apply_proof_inputs(
-    response: &GetRingApplyProofInputsResponse,
-) -> Result<ApplyProofInputs, AuditError> {
-    proof_inputs!(response)
-}
-
 /// The proof inputs of one storage `Update`, in request order.
 pub fn storage_apply_proof_inputs(
     response: &GetStorageApplyProofInputsResponse,
 ) -> Result<ApplyProofInputs, AuditError> {
-    proof_inputs!(response)
+    Ok(ApplyProofInputs {
+        old_root: response.old_root.0,
+        new_root: response.new_root.0,
+        old_next_index: response.old_next_index,
+        new_next_index: response.new_next_index,
+        chain_start: response.chain_start.0,
+        chain_end: response.chain_end.0,
+        writes: record_writes(&response.writes)?,
+    })
 }
 
 fn record_writes(views: &[RingRecordWriteView]) -> Result<Vec<RecordWriteProofInput>, AuditError> {

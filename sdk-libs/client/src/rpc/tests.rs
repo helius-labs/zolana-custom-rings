@@ -426,50 +426,6 @@ fn payload_errors_keep_the_encoding_of_the_shared_vector() {
     );
 }
 
-/// A root history slot never written reads as absent.
-#[test]
-fn ring_status_reads_the_registry_history_and_queue() {
-    let mut registry = MemberRegistry::new(7, 100);
-    registry.push_root(
-        [5; 32],
-        custom_ring_interface::AppliedAt {
-            applied: 3,
-            slot: 120,
-        },
-    );
-    registry.raise_floor();
-    let mut queue = RecordQueue::new(9);
-    queue.head = 3u64.to_le_bytes();
-    queue.tail = 5u64.to_le_bytes();
-    let status = RegistryStatus::new(&registry, &queue);
-    assert_eq!(status.history.len(), custom_ring_interface::ROOT_HISTORY);
-    assert_eq!(
-        status.history[..3],
-        [
-            Some(RegistryRoot {
-                root: custom_ring_interface::MEMBER_REGISTRY_EMPTY_ROOT.into(),
-                applied: 0,
-                slot: 100,
-            }),
-            Some(RegistryRoot {
-                root: [5; 32].into(),
-                applied: 3,
-                slot: 120,
-            }),
-            None,
-        ]
-    );
-    assert_eq!(
-        (status.history_cursor, status.next_index),
-        (1, registry.next_index())
-    );
-    assert_eq!(
-        (status.floor, status.prior_floor, status.floor_slot),
-        (3, 0, 120)
-    );
-    assert_eq!((status.queue_head, status.queue_tail), (3, 5));
-}
-
 #[test]
 fn a_signed_read_carries_the_reader_and_the_bounds_it_signed() {
     let reader = Keypair::new();

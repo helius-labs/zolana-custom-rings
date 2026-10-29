@@ -14,15 +14,15 @@ The operator runs the `zolana-ring` CLI from a `ring.toml`. Members pay through 
    3. Add a `[policy]` table for a policy ring, or leave it out for an audit-only ring.
 2. **Deploy and initialize**
    1. `zolana-ring deploy` deploys the program under the upgrade authority.
-   2. `zolana-ring init` fixes the auditor key, creates the config, the member registry and the policy, and registers the ring with SPP.
+   2. `zolana-ring init` fixes the auditor key, creates the config, the records and the policy, and registers the ring with SPP.
    3. SPP governance activates the ring unless its protocol config activates rings on creation.
 3. **Operate**
    1. Write authority lists with `list add`, and point a list at a curator with `list set-source <list> --curator <id>`.
-   2. Grant readers, set the co-signers and the insert fee, pause and resume.
+   2. Grant readers, set the co-signers, pause and resume.
    3. On a confidential policy ring, set a delegate to turn on key escrow.
 4. **Build clients**
    1. Deposit into the ring with an audited deposit.
-   2. Register the member's key on a key-escrow ring, and apply the queue.
+   2. Register the member's key on a key-escrow ring.
    3. Prove and submit transfers, exits, withdrawals and merges.
    4. Sync the wallet to find received notes.
 5. **Audit**
@@ -40,24 +40,22 @@ The operator runs the `zolana-ring` CLI from a `ring.toml`. Members pay through 
 | 5 | Mode | `Confidential`, `ConfidentialEscrow` or `Anonymous`. `ConfidentialEscrow` is `Confidential` with key escrow and a delegate. |
 | 6 | Audit proof | Proves that the auditor key opens every output. Every transfer carries one. |
 | 7 | Policy proof | Proves the rule table and outflow limits. Every transfer of a policy ring carries one. |
-| 8 | Member registry | The ring's member records: one per owner or asset, with list bits, an escrow key and, for an asset, its mint settings. The chain holds the last 32 roots. |
+| 8 | Records | The ring's member records in its storage registry: one per owner or asset, with list bits, an escrow key and, for an asset, its mint settings. The chain holds the last 32 roots. |
 | 9 | List | A record bit. The config authority writes allow, block, frozen, reader and approval. A member writes ring-viewing and recovery. |
 | 10 | Rule | A list condition on the sender, every output owner or every output asset. |
 | 11 | Outflow limit | A per-transfer cap and a co-signer threshold for one mint, stored in the mint's record. |
-| 12 | Curator | Another ring whose member registry a policy reads for one or more lists. |
+| 12 | Curator | A storage registry a policy reads for one or more lists. |
 | 13 | Upgrade authority | The program's Loader v3 upgrade authority. Creates the config. |
-| 14 | Config authority | Holds the config after `init`. Sets the policy, lists, readers, co-signers, insert fee, pause and delegate. |
+| 14 | Config authority | Holds the config after `init`. Sets the policy, lists, readers, co-signers, pause and delegate. |
 | 15 | Co-signer | A key with its own record and scope. One co-signer whose scope covers every class an operation demands signs it. A transfer that needs approval and demands no class takes any co-signer. A withdrawal below the mint's withdrawal threshold can skip it with an exemption proof. |
 | 16 | Delegate | Moves escrowed members' notes inside a key-escrow ring without their signature. |
 | 17 | Auditor key | The X25519 key every transfer's audit proof seals to. Ring RPC or a local file holds it. |
-| 18 | Reader | An Ed25519 key or a P-256 passkey with a read access record. Reads audited history from Ring RPC. |
+| 18 | Reader | An Ed25519 key or a P-256 passkey with a grant on the `reader` list of its record. Reads audited history from Ring RPC. |
 | 19 | Ring address | An anonymous-ring payment address, the recipient's shielded address and the ring. A `zolana:` payment request adds the recipient's request tag. |
 | 20 | Ring indexer | Serves member records and forwards every other call to Photon. |
 | 21 | Ring RPC | Holds the auditor key and serves readers. |
 | 22 | Hidden owner | The sender on an anonymous ring. It signs inside the SPP proof, so its key stays off chain. |
 | 23 | Relayer | A key that pays and submits an anonymous transfer for the hidden owner. |
-| 24 | Record queue | Pending member writes. An apply proof that anyone can submit moves them into the member registry. |
-| 25 | Insert fee | The lamports a member's record write pays the config authority. |
 
 ## Configuration
 
@@ -97,7 +95,7 @@ forbid = "block"
 - `[cosigner]` holds `key`, `scope` and `thresholds` for `cosigner set` without flags. The thresholds go to the mints' records.
 - A `.env` beside `ring.toml` fills `${NAME}` in the URL keys.
 
-Readers, the delegate and the insert fee have no `ring.toml` key. They live on chain and change through CLI commands.
+Readers and the delegate have no `ring.toml` key. They live on chain and change through CLI commands.
 
 ## Policy
 
@@ -116,7 +114,7 @@ subject = "output-owner"
 any = [{ require = "approval" }, { forbid = "block" }]
 
 [policy.sources.localnet]
-# the block list reads the member registry of the named curator ring
+# the block list reads the records of the named curator ring
 block = "Gy3wjbn1MpGvJNrjinhWuSzLsp7HLazpmbQynmmMd91Z"
 ```
 
@@ -159,14 +157,14 @@ zolana-ring init
 zolana-ring list add block --owner <ADDRESS>
 zolana-ring reader grant <SOLANA_KEY>
 zolana-ring cosigner set --signer <KEY> --scope transfers,withdrawals --threshold sol=1000000000
-zolana-ring insert-fee set 0
 ```
 
 - `deploy` deploys the released program of the embedded release lock, or `--program-so`. It refuses a binary whose verifying key markers do not cover every pinned proving key, and an existing program under another upgrade authority.
 - `init` skips every step the chain already agrees with. The upgrade authority signs `CreateConfig` and, when the two keys differ, hands the config to the config authority in the same transaction.
 - `init` takes the auditor key from Ring RPC when no config and no `keys/auditor.key.pub` exist, and checks the service signature. With a hosted Ring RPC, `--local-auditor` pins `keys/auditor.key.pub` instead.
 - `cosigner set` creates or rescopes the signer's co-signer record, then writes its withdrawal thresholds into the mints' records and clears the others. `cosigner clear` closes the signer's record and keeps the mint records.
-- `list add` and `list clear` write authority lists, which apply at once. `list join` and `list leave` queue the member's own lists, and `list apply` applies a due queue.
+- `list add` and `list clear` write authority lists, and `list join` and `list leave` write the member's own lists, each through a record update Ring RPC applies.
+- `reader grant` and `reader revoke` set and clear the `reader` list of the reader's own record.
 - `delegate set --delegate-keypair <FILE>` turns a confidential policy ring into a key-escrow ring for good. SPP governance must enable the ring's authority rail, the SPP rail a delegate move runs on, before `delegate move` runs.
 - `authority transfer` moves the upgrade authority without the new key's signature. `authority transfer-config` moves the config authority, and both keys sign.
 - `--fee-payer-keypair` pays member operations of an anonymous ring. The CLI refuses it when it equals the hidden owner.
@@ -175,7 +173,7 @@ zolana-ring insert-fee set 0
 
 1. Read the ring config and check that SPP activated the ring.
 2. Deposit: the SDK seals each new note to the auditor and proves the deposit.
-3. On a key-escrow ring, register the member's key and wait for the queue to apply.
+3. On a key-escrow ring, register the member's key and wait for the record update to apply.
 4. Transfer: the SDK reads the policy and the records, proves the SPP, audit and policy proofs together, and builds one instruction. When only the withdrawal class demands a co-signer and every withdrawn mint stays within its withdrawal threshold, it adds a withdrawal exemption proof, and no co-signer signs.
 5. Submit: the SDK re-proves when a root or the policy moved before the transfer landed.
 6. Sync: the wallet finds received notes by its tags and opens them.
@@ -210,31 +208,26 @@ const sent = await deposit.relay.send(ringRpc);
 if (sent.step === "signMessage") await sent.sign(ringRpc, sender.signer);
 ```
 
-Register the member's nullifier key on a key-escrow ring, then apply the queue:
+Register the member's nullifier key on a key-escrow ring through a record update. `target` is the `RecordUpdateTarget` of the ring's records:
 
 ```ts
 const nullifierKey = member.keypair.nullifierKey();
 const escrow = new NullifierKeyEscrow(nullifierKey, client);
 try {
-  const registration = await new RegisterKey({
+  const entry = await new KeyRegistration({
     ringProgramId,
     member: member.keypair.shieldedAddress(),
-    payer: member.signer,
     authority: escrow,
   }).prove(client);
-  await sendInstruction(
-    client,
-    registration.instruction,
-    member.signer,
-    ringComputeUnitLimit(RingInstructionTag.registerKey),
-  );
+  const update = await new WalletRecordUpdate({ ...target, wallet: member.signer.address })
+    .withEscrow(entry)
+    .sign(member.signer);
+  await ringRpc.submitRecordUpdate(update);
 } finally {
   escrow.destroy();
   nullifierKey.destroy();
 }
 ```
-
-`new RecordApplication(ringProgramId).prove(client)` proves the application once the queue is due.
 
 Transfer on a confidential ring. The sender signs the message hash inside the proof, and Ring RPC pays, co-signs and sends.
 
@@ -311,19 +304,23 @@ let RingDepositReceipt { utxo, .. } =
     env.run(deposit.send_with_fee_payer(env.client.ring_client(), sender))?;
 ```
 
-Register a key, then apply the queue once it is due:
+Register a key through a record update, `target` the `RecordUpdateTarget` of the ring's records:
 
 ```rust
-let registration = RegisterKey {
-    ring,
-    member: member.shielded_address()?,
-    payer: member.pubkey(),
-    authority: member,
-};
-land(env, registration, member, &[])?;
+let registration = env.run(
+    KeyRegistration {
+        ring,
+        member: member.shielded_address()?,
+        authority: member,
+    }
+    .prove(env.client.ring_client()),
+)?;
+let update = WalletRecordUpdate::new(target, member.pubkey())?
+    .with_escrow(registration)?
+    .sign(member)?;
 ```
 
-`RegisterKey::prove(&ring_client)` returns the instruction, and `RecordApplication` proves the application.
+`RecordUpdateService::submit_record_update` sends the signed update to Ring RPC.
 
 Transfer on a confidential ring:
 

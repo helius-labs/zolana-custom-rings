@@ -55,22 +55,6 @@ export async function ringCoSignerMetas(
   return [meta(record, false, false), meta(signer, true, false)];
 }
 
-export function ringMemberRegistryPda(ringProgramId: Address): Promise<ProgramDerivedAddress> {
-  return ringPda(ringProgramId, encoder.encode("members"));
-}
-
-export function ringMemberRegistryAddress(ringProgramId: Address): Promise<Address> {
-  return ringAddress(ringMemberRegistryPda(ringProgramId));
-}
-
-export function ringRecordQueuePda(ringProgramId: Address): Promise<ProgramDerivedAddress> {
-  return ringPda(ringProgramId, encoder.encode("queue"));
-}
-
-export function ringRecordQueueAddress(ringProgramId: Address): Promise<Address> {
-  return ringAddress(ringRecordQueuePda(ringProgramId));
-}
-
 export function ringPolicyPda(ringProgramId: Address): Promise<ProgramDerivedAddress> {
   return ringPda(ringProgramId, encoder.encode("policy"));
 }

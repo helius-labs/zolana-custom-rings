@@ -13,7 +13,7 @@ read by reference.
 A list membership is one bit of a member record, a leaf of an indexed Merkle
 tree that belongs to the ring. A policy is a proof obligation over the records
 of the transfer's subjects. The proof opens them under a root the registry
-holds and binds them to the transfer through `private_tx_hash`.
+mirrors and binds them to the transfer through `private_tx_hash`.
 
 The running example is a blocklist ring. Its pinned table holds one rule,
 forbid `output-owner` on `Block`. A curator ring serves the `Block` list. The
@@ -39,37 +39,30 @@ bitmap in place, so removal is an ordinary write and absence keeps one
 provable shape. The records are public. Every write names its member and its
 bits on chain, and the ring indexer replays the writes into its copy of the tree.
 
-## Writers, the queue and the apply proof
+## Writers and the apply proof
 
 [Members and lists](member-records.md#members-and-lists)
-names the writer of each list. The program derives a member's own record from
-the signer. The circuit proves membership, never who wrote it, so
-authorization stays in the program.
+names the writer of each list. The Ring RPC writer derives a member's own
+record from the update's signer. The circuit proves membership, never who
+wrote it, so authorization stays outside the circuit.
 
 Every write is masked. It sets the bits inside its mask to its value and keeps
-the others. A member write takes no proof. The program checks the signer and
-the mask, charges the insert fee and appends the write to the ring's record
-queue. The queue keeps a Poseidon chain over every queued write. An apply proof
-then moves the tree from its newest root to the next. The statement binds both
-roots, the next free leaf before and after, and both ends of the chain over
-exactly the pending writes. An application therefore cannot drop, reorder or
-invent a write, and the program never hashes the tree itself.
+the others. A member signs a record update and takes no proof. The writer
+checks the signer and the mask and batches the write into a storage update.
+The update chains its writes with Poseidon from a start that binds the
+registry and its revision. Its apply proof moves the tree from its newest root
+to the next. The statement binds both roots, the next free leaf before and
+after, and both ends of the chain over exactly the update's writes. An update
+therefore cannot drop, reorder or invent a write, and the storage program
+never hashes the tree itself.
 
-The config authority's writes take the same queue but apply in their own
-instruction. `AuthorityWriteRecords` appends its writes behind the pending ones
-and carries the apply proof over all of them. A ban therefore settles in the
-transaction that writes it, and [Roots and revocation](#roots-and-revocation)
-shows how it binds every later transfer. `ApplyRecords` applies every pending
-write and needs no signer. It runs once the queue is full or its oldest write
-has waited `APPLY_DELAY_SLOTS`, and at most once per `APPLY_DELAY_SLOTS`.
-
-Member writes and key registrations cannot fill the registry. See
-[Queue and leaf limits](member-records.md#queue-and-leaf-limits)
-and [The insert fee](member-records.md#the-insert-fee).
+The config authority's revoking writes go out as `UpdateImmediate`, which
+retires every earlier root. [Roots and revocation](#roots-and-revocation)
+shows how a ban binds every later transfer.
 
 ## The table, the source map, and one hash
 
-The rule table arrives as instruction data and lives in the member registry.
+The rule table arrives as instruction data and lives in the ring policy.
 `CreatePolicy` and `SetPolicyRules` carry the rule rows and source specs.
 Mint thresholds and outflow limits are authority writes to asset records. The program encodes and validates them,
 and an illegal table fails the instruction and never reaches the account. The
@@ -92,8 +85,7 @@ so one rule has one row and one hash.
 
 A rule reads only the lists the config authority writes. The program refuses a
 table with a rule over `RingViewing`, `Recovery` or `Escrow`. Members write the
-first two, and a member's `RegisterKey` sets `Escrow`. The root floor below
-tracks no member write and no key registration.
+first two, and an escrow write sets `Escrow`.
 
 The **source map** decides which registry serves each list. It is eight
 positional slots, and slot `i` is empty or serves list `i + 1`. An occupied
@@ -117,13 +109,13 @@ The config authority signs every policy write. `CreatePolicy` pins the first
 table and refuses an audit-only ring and a ring that already has one.
 `SetPolicyRules` replaces the table and the map, and `SetPolicySource`
 re-points one list. Each write validates the table against the new map and
-stores both in the member registry beside the root history. It re-hashes them
+stores both in the ring policy beside the root mirrors. It re-hashes them
 and counts one more `generation` at the current slot. A changed hash binds
 every later transfer, and a proof built against the old table fails. Generation
 itself is not hashed, so an identical re-pin preserves the proof statement.
 
-Curatorship is permissionless. A curator source names the `["members"]`
-registry PDA of another program, and the program checks only that shape. There
+Curatorship is permissionless. A curator source names a `StorageRegistry` of
+any authority, and the program checks only that the storage program owns it. There
 is no curator registry. The trust decision is the operator's choice of account.
 The ring opens records in the curator's own tree, never through the curator's
 sources. A curator re-pointing its own lists therefore moves nothing
@@ -138,7 +130,7 @@ transaction, the audit proof shows what the auditor reads, and the policy proof
 shows the rules hold. Each ring proof binds the same `private_tx_hash` the SPP
 proof binds. Its one public input is the hash of a statement the program
 rebuilds from its accounts and the transfer's data. The program reads the
-policy hash from the registry and resolves each root from a history index the
+policy hash from the ring policy and resolves each root from a revision the
 transfer carries. It derives the key escrow bit and SPP's public slots itself,
 and on the confidential rail the sender from the owner signer. The approval bit
 comes from the transfer, and the policy proof shows it is exact. A wallet
@@ -195,35 +187,33 @@ even when no private output carries that asset.
 
 ## Roots and revocation
 
-Each registry keeps its last `ROOT_HISTORY` roots, each with the queue position
-it applied and its slot. A transfer names the history index of each root its
-proof binds, and the program reads the root from that slot. A slot that holds
-no root fails with `RootIndexEmpty`. Once later applications replace a root in
-the history, its slot holds another root, the proof fails and the wallet proves
-again.
+Each registry keeps its last `ROOT_HISTORY` roots, each with its revision, and
+the ring policy mirrors them. A transfer names the revision of each root its
+proof binds, and the program reads the root from the mirror. A revision the
+mirror does not hold, or a retired root past its expiry, fails with
+`MirrorRootExpired`, and the wallet proves again.
 
 Inclusion and absence both read one root, so an old root can show a revoked
-member as clean. The floor prevents that. Every authority write raises the
-registry's floor to the position it applied, and an own root below the floor
-fails with `RootBelowFloor`. After a ban settles, no transfer of the ring binds
-a root without it. Member writes and key registrations raise no floor, and no
-rule reads the lists they write.
+member as clean. A graced `Update` keeps the outgoing root readable for the
+registry's `grace_slots`. A revoking update goes out as `UpdateImmediate` and
+retires every earlier root, so after the `SyncRoots` in its transaction no
+transfer of the ring binds a root without the ban. Member writes and escrow
+writes go out graced, and no rule reads the lists they write.
 
-A curator root is accepted at or above the curator's floor. For `GRACE_SLOTS`
-slots after a raise it is also accepted at or above the prior floor, and
-outside both it fails with `CuratorRootStale`. In the example, the curator's
-write that bans Mr. Evil raises its floor. A proof Mr. Crazy built a moment
-before still lands within the grace window. After it, every proof that pays
-Mr. Evil must open his record under a root that holds the ban, and the rule
-fails.
+A curator root follows the same rule in the curator's registry, read from the
+subscriber's curator mirror. In the example, the curator's write that bans
+Mr. Evil goes out as `UpdateImmediate`. A proof Mr. Crazy built a moment
+before still lands until the subscriber's curator mirror syncs. After the
+sync, every proof that pays Mr. Evil must open his record under a root that
+holds the ban, and the rule fails.
 
 ## The wallet cycle
 
-1. The wallet reads the member registry and trusts the stored table and
+1. The wallet reads the ring policy and trusts the stored table and
    sources only after they reproduce `policy_hash`.
 2. It collects its members, the sender, the owner and the asset of every
    output and withdrawal, and every nonzero public asset.
-3. It reads them as one record pool per registry with `getRingRecordPool`,
+3. It reads them as one record pool per registry with `getStorageRecordPool`,
    under the newest own root and, with a curator, the newest curator root. It
    checks every record and every bracket against the root before it uses it.
    A lying indexer stalls proving but cannot steer the answer.
@@ -232,8 +222,8 @@ fails.
    request. The chain never learns of the refused transfer.
 5. It builds the SPP witness, yielding `private_tx_hash`, then proves the SPP
    statement, the audit statement and the policy statement.
-6. It sends the transfer with the proofs and the history index of each root.
-   Rust's `RingSubmission` proves again when a bound root leaves the history.
+6. It sends the transfer with the proofs and the revision of each root.
+   Rust's `RingSubmission` proves again when a bound root leaves the mirror.
 
 ## Co-signing, delegation and outflow limits
 
@@ -242,8 +232,8 @@ ring statements, the delegate rail under its own keys.
 
 **Actors.** The upgrade authority creates the config. The config authority sets
 the delegate, writes the policy and the authority lists and re-points
-sources. It grants and revokes readers, sets the co-signers and the insert fee
-and pauses the ring. A member writes its own `RingViewing` and `Recovery` bits
+sources. It grants and revokes readers, sets the co-signers and pauses the
+ring. A member writes its own `RingViewing` and `Recovery` bits
 and registers its key. The auditor holds the X25519 key fixed at `CreateConfig`
 and decrypts transfers, and that key cannot authorize an ownership transfer or
 a withdrawal. SPP governance activates the ring and enables the authority rail
@@ -308,8 +298,8 @@ their constraint budget.
 
 **Revocation at the next application.** It buys one write path for everyone.
 A ban would bind only after an application lands, and the banned member could
-still transfer until then. Authority writes apply in their own instruction and
-raise the floor instead.
+still transfer until then. Revoking writes go out at once as
+`UpdateImmediate` instead.
 
 **Encrypted records.** It buys list privacy. Every prover opens foreign
 records to build its proof. Encryption would restrict proving to key holders,
@@ -325,5 +315,5 @@ an extra in-circuit preimage per subject.
 - The builder rejects any table carrying `ExitDestination`. Public withdrawal
   destinations stay outside the list rules.
 - [Ring policy](ring-policy.md#limits) and
-  [Member records](member-records.md#queue-and-leaf-limits)
+  [Member records](member-records.md#applying-writes)
   state the table and registry limits.

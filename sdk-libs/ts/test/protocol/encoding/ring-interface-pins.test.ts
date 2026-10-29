@@ -13,15 +13,7 @@ import {
   ringComputeUnitLimit,
 } from "../../../src/operations/management/admin.js";
 import {
-  APPLY_DELAY_SLOTS,
-  AUTHORITY_RESERVED_LEAVES,
-  DEFAULT_INSERT_FEE,
   GRACE_SLOTS,
-  MEMBER_QUEUE_LIMIT,
-  MEMBER_REGISTRY_DISCRIMINATOR,
-  MEMBER_REGISTRY_SIZE,
-  RECORD_QUEUE_DISCRIMINATOR,
-  RECORD_QUEUE_SIZE,
   RING_PROGRAM_CONFIG_DISCRIMINATOR,
   RING_PROGRAM_CONFIG_SIZE,
 } from "../../../src/protocol/codec/ring-codecs.js";
@@ -72,7 +64,7 @@ describe("ring interface pins", () => {
     }
   });
 
-  it("bounds the record queue and registry like Rust `member_registry`", () => {
+  it("bounds the record tree like Rust `member_registry`", () => {
     const constants = new Map(
       [
         ...rust("accounts/member_registry.rs").matchAll(
@@ -83,10 +75,6 @@ describe("ring interface pins", () => {
     expect(constants.get("QUAD_ARITY")).toBe(BigInt(QUAD_ARITY));
     expect(constants.get("QUAD_HEIGHT")).toBe(BigInt(QUAD_HEIGHT));
     expect(constants.get("APPLY_BATCH")).toBe(BigInt(APPLY_BATCH));
-    expect(constants.get("MEMBER_QUEUE_LIMIT")).toBe(MEMBER_QUEUE_LIMIT);
-    expect(constants.get("AUTHORITY_RESERVED_LEAVES")).toBe(AUTHORITY_RESERVED_LEAVES);
-    expect(constants.get("DEFAULT_INSERT_FEE")).toBe(DEFAULT_INSERT_FEE);
-    expect(constants.get("APPLY_DELAY_SLOTS")).toBe(APPLY_DELAY_SLOTS);
     expect(constants.get("GRACE_SLOTS")).toBe(GRACE_SLOTS);
   });
 
@@ -99,14 +87,6 @@ describe("ring interface pins", () => {
     expect([discriminator("RingProgramConfig"), size("RingProgramConfig")]).toEqual([
       RING_PROGRAM_CONFIG_DISCRIMINATOR,
       RING_PROGRAM_CONFIG_SIZE,
-    ]);
-    expect([discriminator("MemberRegistry"), size("MemberRegistry")]).toEqual([
-      MEMBER_REGISTRY_DISCRIMINATOR,
-      MEMBER_REGISTRY_SIZE,
-    ]);
-    expect([discriminator("RecordQueue"), size("RecordQueue")]).toEqual([
-      RECORD_QUEUE_DISCRIMINATOR,
-      RECORD_QUEUE_SIZE,
     ]);
   });
 });

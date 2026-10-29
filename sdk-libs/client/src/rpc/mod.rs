@@ -5,7 +5,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use custom_ring_interface::{MemberRegistry, RecordQueue, RingAccount, RootEntry};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -191,9 +190,6 @@ pub struct RingStatusResponse {
     /// Absent until SPP holds a config for the ring.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activation: Option<RingActivation>,
-    /// Absent until the ring creates its member registry.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub registry: Option<RegistryStatus>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -203,37 +199,9 @@ pub struct RingActivation {
     pub paused: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RegistryStatus {
-    /// Entry `i` sits at history slot `i`, `null` for a slot never written.
-    pub history: Vec<Option<RegistryRoot>>,
-    /// The history slot of the newest root.
-    pub history_cursor: u8,
-    pub next_index: u32,
-    /// The applied position every own-ring root must reach.
-    pub floor: u64,
-    pub prior_floor: u64,
-    /// The slot of the last floor raise.
-    pub floor_slot: u64,
-    /// Queue positions `head..tail` wait for an application.
-    pub queue_head: u64,
-    pub queue_tail: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RegistryRoot {
-    pub root: Hash,
-    /// The queue head right after the application that pushed the root.
-    pub applied: u64,
-    pub slot: u64,
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RingChainStatus {
     pub activation: Option<RingActivation>,
-    pub registry: Option<RegistryStatus>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -997,47 +965,12 @@ impl From<AuditedInput> for DecryptedInput {
     }
 }
 
-impl RegistryStatus {
-    pub fn new(registry: &MemberRegistry, queue: &RecordQueue) -> Self {
-        Self {
-            history: registry
-                .history
-                .iter()
-                .map(|entry| (entry.root != [0; 32]).then(|| RegistryRoot::from(entry)))
-                .collect(),
-            history_cursor: registry.history_cursor,
-            next_index: registry.next_index(),
-            floor: registry.floor(),
-            prior_floor: registry.prior_floor(),
-            floor_slot: registry.floor_slot(),
-            queue_head: queue.head(),
-            queue_tail: queue.tail(),
-        }
-    }
-}
-
-impl From<&RootEntry> for RegistryRoot {
-    fn from(entry: &RootEntry) -> Self {
-        Self {
-            root: entry.root.into(),
-            applied: entry.applied(),
-            slot: entry.slot(),
-        }
-    }
-}
-
 impl RingChainStatus {
     /// An account of another owner reads as absent, a malformed one of the ring is an error.
     pub async fn read<R: AsyncRpc + ?Sized>(rpc: &R, ring: Address) -> Result<Self, ClientError> {
         let pool = Address::new_from_array(SHIELDED_POOL_PROGRAM_ID);
         let (config, config_bump) = Address::find_program_address(&[RING_AUTH_PDA_SEED], &ring);
-        let (registry, registry_bump) =
-            Address::find_program_address(&[MemberRegistry::SEED], &ring);
-        let (queue, queue_bump) = Address::find_program_address(&[RecordQueue::SEED], &ring);
-        let accounts = rpc
-            .get_multiple_accounts(vec![config, registry, queue])
-            .await?;
-        let [config, registry, queue] = <[_; 3]>::try_from(accounts)
+        let [config] = <[_; 1]>::try_from(rpc.get_multiple_accounts(vec![config]).await?)
             .map_err(|_| ClientError::Rpc("ring status accounts are missing".to_owned()))?;
         let invalid = |name: &str| ClientError::Rpc(format!("ring {name} account is invalid"));
         let activation = config
@@ -1054,26 +987,7 @@ impl RingChainStatus {
                     .ok_or_else(|| invalid("SPP config"))
             })
             .transpose()?;
-        let registry = match (
-            registry.filter(|account| account.owner == ring),
-            queue.filter(|account| account.owner == ring),
-        ) {
-            (Some(registry), Some(queue)) => {
-                let registry = MemberRegistry::decode(&registry.owner, &ring, &registry.data)
-                    .filter(|registry| registry.bump == registry_bump)
-                    .ok_or_else(|| invalid("member registry"))?;
-                let queue = RecordQueue::decode(&queue.owner, &ring, &queue.data)
-                    .filter(|queue| queue.bump == queue_bump)
-                    .ok_or_else(|| invalid("record queue"))?;
-                Some(RegistryStatus::new(&registry, &queue))
-            }
-            (None, None) => None,
-            _ => return Err(invalid("member registry")),
-        };
-        Ok(Self {
-            activation,
-            registry,
-        })
+        Ok(Self { activation })
     }
 }
 

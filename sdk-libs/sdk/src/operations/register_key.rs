@@ -1,11 +1,8 @@
 //! Escrows a member's nullifier key to the ring auditor, the proof covers the encryption alone.
 
 use custom_ring_interface::{
-    key_catalog::RingCircuit, tag, CustomRingError, CustomRingProof, RegisterKeyIxData,
-    RegisterKeyStatement, RingMode,
+    key_catalog::RingCircuit, CustomRingError, CustomRingProof, RegisterKeyStatement, RingMode,
 };
-use solana_address::Address;
-use solana_instruction::Instruction;
 use spr_client::AsyncRpc;
 use spr_hasher::primitives::{right_align, solana_owner_identity};
 use spr_indexer_api::Hash;
@@ -13,12 +10,11 @@ use spr_keypair::{NullifierKey, ShieldedAddress, ShieldedKeypair, X25519Pubkey};
 use zeroize::Zeroizing;
 use zolana_ring_client::AsyncRingIndexer;
 use zolana_ring_client::{rpc::EscrowRegistration, NullifierKeyEnvelope, SealedNullifierKey};
-use zolana_ring_policy::Member;
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
     prover::{to_instruction_proof, RingRequest},
-    records::{MemberRead, MemberWrite, OwnerRead, RecordReads},
+    records::{OwnerRead, RecordReads},
     request::KeyRegister,
     submission::BoundRoot,
     CustomRing, CustomRingConfig, RingError,
@@ -91,80 +87,6 @@ impl KeyEscrowAuthority for ShieldedKeypair {
 
     fn seal(&self, auditor: &X25519Pubkey) -> Result<SealedEscrow, RingError> {
         self.nullifier_key.seal(auditor)
-    }
-}
-
-#[must_use]
-pub struct RegisterKey<'a> {
-    pub ring: CustomRing,
-    /// Its signing key signs the instruction, its nullifier key is the one escrowed.
-    pub member: ShieldedAddress,
-    /// Pays the insert fee the config charges a member.
-    pub payer: Address,
-    pub authority: &'a dyn KeyEscrowAuthority,
-}
-
-#[must_use]
-pub struct ProvenKeyRegistration {
-    pub instruction: Instruction,
-}
-
-impl RegisterKey<'_> {
-    /// Refuses a member whose record already escrows a key, a second key never replaces it.
-    pub async fn prove<R: AsyncRpc, I: RingIndexerBackend>(
-        &self,
-        client: &RingClient<R, I>,
-    ) -> Result<ProvenKeyRegistration, RingError> {
-        let config = self.ring.require_config(client.zolana()).await?;
-        let escrow = EscrowProof {
-            config: &config,
-            member: &self.member,
-            authority: self.authority,
-        };
-        let nullifier_pk = escrow.nullifier_pk()?;
-        let signer = self.member.solana_address()?;
-        let identity = solana_owner_identity(signer.as_array())?;
-        let registry = self.ring.require_registry(client.zolana()).await?;
-        self.ring
-            .require_queue(client.zolana())
-            .await?
-            .admit_member_write(&registry)?;
-        let read = MemberRead {
-            root: BoundRoot::newest(self.ring, client.zolana()).await?,
-            member: identity,
-        }
-        .read(client.zolana())
-        .await?;
-        if read
-            .record()
-            .is_some_and(|record| record.escrow_key != [0; 32])
-        {
-            return Err(RingError::KeyAlreadyRegistered {
-                member: Member::from_bytes(identity)?,
-            });
-        }
-        let ProvenEscrow { proof, sealed, .. } = escrow.prove(client).await?;
-        let write = MemberWrite {
-            ring: self.ring,
-            config: &config,
-            member: signer,
-            payer: self.payer,
-        };
-        let mut data = vec![tag::REGISTER_KEY];
-        data.extend_from_slice(bytemuck::bytes_of(&RegisterKeyIxData {
-            proof,
-            nullifier_pk,
-            eph_u: sealed.eph_pk.u(),
-            ciphertext: sealed.ciphertext,
-            max_fee: write.max_fee(),
-        }));
-        Ok(ProvenKeyRegistration {
-            instruction: Instruction {
-                program_id: self.ring.program_id(),
-                accounts: write.metas(),
-                data,
-            },
-        })
     }
 }
 

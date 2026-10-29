@@ -115,7 +115,6 @@ pub use crate::{
     config::{CoSignClass, Mint, ModeName, RingConfig, Service, Target, ThresholdSpec, RING_TOML},
     list::{MemberArgs, MemberList},
     policy::ListName,
-    records::Queued,
     ring_rpc::{RingRpcClient, Trust},
     transact::{EntrySpendName, Funding, OwnerRail, Recipient},
     ui::{line, Ask},
@@ -149,7 +148,6 @@ fn hint(error: &ClientError) -> Option<&'static str> {
         (CustomRingError::UnauthorizedInitializer as u32, "the program was deployed with an upgrade authority and only that key may create the config"),
         (CustomRingError::UnauthorizedAuthority as u32, "the config is held by another authority, `status` shows it"),
         (CustomRingError::InvalidPolicyRules as u32, "the program refuses the compiled rows, the program log names the refusal"),
-        (CustomRingError::QueueFull as u32, "the record queue holds its member share, `zolana-ring list apply` applies it once it is due"),
         (ShieldedPoolError::UnauthorizedCaller as u32, "ring creation on this cluster is gated by the SPP ring creation authority"),
     ]
     .into_iter()
@@ -256,7 +254,6 @@ fn dispatch(ctx: &mut Context, command: Command) -> Result<()> {
         Command::Authority(command) => authority::run(ctx, command),
         Command::Reader(command) => controls::reader(ctx, command),
         Command::Cosigner(command) => controls::cosigner(ctx, command),
-        Command::InsertFee(command) => controls::insert_fee(ctx, command),
         Command::Delegate(command) => controls::delegate(ctx, command),
         Command::Key(command) => member::key(ctx, command),
         Command::Enrolment(command) => enrolment::run(ctx, command),

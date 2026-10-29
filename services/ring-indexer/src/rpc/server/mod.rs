@@ -29,9 +29,8 @@ use spr_rpc_http::MethodPathLayer;
 use tower::{Layer, Service};
 use tower_http::cors::{Any, CorsLayer};
 use zolana_ring_indexer::rpc::method::{
-    GetRingApplyProofInputs, GetRingMemberOpenings, GetRingMemberRecord, GetRingMemberRecords,
-    GetRingMemberRegistryRoot, GetRingRecordPool, GetRingRecordQueue, GetStorageApplyProofInputs,
-    GetStorageMemberOpenings, GetStorageMemberRecords, GetStorageRecordPool,
+    GetStorageApplyProofInputs, GetStorageMemberOpenings, GetStorageMemberRecords,
+    GetStorageRecordPool,
 };
 
 use crate::{
@@ -41,14 +40,7 @@ use crate::{
 };
 
 /// Served here, every other call goes to Photon untouched.
-pub const RING_METHODS: [&str; 11] = [
-    GetRingMemberRecord::NAME,
-    GetRingMemberRecords::NAME,
-    GetRingMemberOpenings::NAME,
-    GetRingRecordPool::NAME,
-    GetRingMemberRegistryRoot::NAME,
-    GetRingRecordQueue::NAME,
-    GetRingApplyProofInputs::NAME,
+pub const RING_METHODS: [&str; 4] = [
     GetStorageMemberOpenings::NAME,
     GetStorageMemberRecords::NAME,
     GetStorageRecordPool::NAME,
@@ -147,13 +139,6 @@ fn ring_methods(lookups: Lookups) -> Result<RpcModule<Lookups>> {
     let mut module = RpcModule::new(lookups);
     register!(
         module,
-        GetRingMemberRecord => api::member_record,
-        GetRingMemberRecords => api::member_records,
-        GetRingMemberOpenings => api::member_openings,
-        GetRingRecordPool => api::record_pool,
-        GetRingMemberRegistryRoot => api::registry_root,
-        GetRingRecordQueue => api::record_queue,
-        GetRingApplyProofInputs => api::apply_proof_inputs,
         GetStorageMemberOpenings => api::storage_member_openings,
         GetStorageMemberRecords => api::storage_member_records,
         GetStorageRecordPool => api::storage_record_pool,

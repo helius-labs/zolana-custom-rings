@@ -758,7 +758,6 @@ impl Unwitnessed<'_> {
                 ring,
                 hash: policy.policy_hash,
             }),
-            queue: None,
         };
         let policy_sender = match (ring_rail, sender_commitment) {
             (RingRail::Delegate, _) => [0; 32],

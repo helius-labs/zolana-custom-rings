@@ -31,6 +31,7 @@ spr-protocol-instructions = { workspace = true }
 spr-keypair = { workspace = true }
 spr-program-test = { workspace = true, features = ["localnet"] }
 zolana-ring-client = { workspace = true, features = ["rpc", "solana-rpc"] }
+zolana-ring-indexer = { workspace = true }
 zolana-ring-keys = { workspace = true }
 zolana-ring-policy = { workspace = true }
 zolana-ring-rpc = { workspace = true }

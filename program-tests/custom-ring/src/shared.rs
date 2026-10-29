@@ -17,9 +17,8 @@ use std::{
 use anyhow::{anyhow, ensure, Context, Result};
 use custom_ring_cli::{localnet::GENESIS_PROGRAMS, Zolana, ZolanaServices};
 use custom_ring_sdk::{
-    compute_unit_limit, CreateConfig, CreateMemberRegistry, CustomRing, InitSppRingConfig,
-    InitializeStorage, InstructionTag, MemberRecords, PolicyRecords, PolicyRules, RingError,
-    RingKind, SyncRoots,
+    compute_unit_limit, CreateConfig, CustomRing, InitSppRingConfig, InitializeStorage,
+    InstructionTag, MemberRecords, PolicyRecords, PolicyRules, RingError, RingKind, SyncRoots,
 };
 use solana_address::Address;
 use solana_instruction::Instruction;
@@ -325,29 +324,20 @@ impl<'a> RegisterRing<'a> {
         self.configure(client.rpc())?.pin(client)
     }
 
-    /// Every ring gets its records, a policy ring also the member registry.
+    /// Every ring gets its records, the payer their storage authority.
     pub fn configure(self, rpc: &SolanaRpc) -> Result<ConfiguredRing<'a>> {
         let authority = self.payer.pubkey();
-        let kind = self.tier.kind();
-        let mut instructions = vec![CreateConfig {
-            ring: self.ring,
-            payer: authority,
-            authority,
-            auditor_pubkey: self.auditor_pubkey,
-            kind,
-        }
-        .instruction()?];
-        if kind.has_policy() {
-            instructions.push(
-                CreateMemberRegistry {
-                    ring: self.ring,
-                    payer: authority,
-                    authority,
-                }
-                .instruction(),
-            );
-        }
-        instructions.push(InitializeStorage::records(self.ring, authority).instruction());
+        let instructions = [
+            CreateConfig {
+                ring: self.ring,
+                payer: authority,
+                authority,
+                auditor_pubkey: self.auditor_pubkey,
+                kind: self.tier.kind(),
+            }
+            .instruction()?,
+            InitializeStorage::records(self.ring, authority).instruction(),
+        ];
         send(rpc, self.payer, &instructions)?;
         Ok(ConfiguredRing {
             ring: self.ring,

@@ -126,13 +126,6 @@ impl SolanaRpc {
         }
     }
 
-    pub async fn get_multiple_accounts(
-        &self,
-        addresses: &[Address],
-    ) -> Result<Vec<Option<Account>>, RpcError> {
-        self.multiple_accounts(addresses, account_config()).await
-    }
-
     /// The node refuses to answer from a bank older than `min_context_slot`.
     pub async fn get_multiple_accounts_from_slot(
         &self,

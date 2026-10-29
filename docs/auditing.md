@@ -67,7 +67,7 @@ every output are zero.
 A ring under key escrow does not disclose the output nullifier keys in the
 delivered layout. Its policy proof shows instead that each output
 owner's member record escrows the nullifier key of that output. The auditor
-reads the key from the owner's `RegisterKey` instruction, which carries the
+reads the key from the owner's escrow storage write, which carries the
 nullifier key and its secret sealed to the auditor. With the secret the
 auditor also computes the nullifier of every note the member owns.
 
@@ -91,9 +91,9 @@ covers the owner key, the nullifier key, the mint, the amount, the output
 blinding and every input UTXO hash, and the merge names no owner on chain.
 
 On a `ConfidentialEscrow` ring the same proof opens the owner's member record
-under a root the registry holds and shows that the record escrows the
+under a root the ring policy mirrors and shows that the record escrows the
 nullifier key the inputs spend under. The merged output stays under that key,
-so the auditor reads its secret from the owner's `RegisterKey` instruction. An
+so the auditor reads its secret from the owner's escrow storage write. An
 owner without a registered key cannot merge on such a ring. A ring without key
 escrow, an anonymous ring included, opens no record.
 

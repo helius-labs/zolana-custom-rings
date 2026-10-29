@@ -2,22 +2,24 @@
 
 use std::path::Path;
 
-use anyhow::{bail, ensure, Context as _, Result};
+use anyhow::{anyhow, bail, ensure, Context as _, Result};
 use custom_ring_sdk::{
-    ClearCoSigner, CoSignScope, CustomRingCoSigner, CustomRingConfig, GrantReader, RevokeReader,
-    RingMode, RingRegistration, SetCoSigner, SetDelegate,
+    ClearCoSigner, CoSignScope, CustomRingCoSigner, RingMode, RingRegistration, SetCoSigner,
+    SetDelegate,
 };
 use solana_address::Address;
 use solana_signer::Signer;
-use spr_client::Rpc;
 use spr_keypair::X25519Keypair;
+use zolana_ring_policy::ListId;
 
 use crate::{
     config::{Base58Address, CoSignClass, CoSignerSpec},
-    file, keys, line, policy,
+    file, keys, line,
+    list::{ListChange, ListUpdate, Subject},
+    policy,
     records::NO_RING_POLICY,
     ui::{self, icon},
-    CoSignerCommand, Context, DelegateCommand, InsertFeeCommand, ReaderCommand, AUDITOR_KEY_FILE,
+    CoSignerCommand, Context, DelegateCommand, ReaderCommand, AUDITOR_KEY_FILE,
 };
 
 #[must_use]
@@ -25,9 +27,6 @@ pub(crate) struct DualControl {
     pub cosigner: Option<Address>,
     pub delegate: Option<Address>,
 }
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct RentFloor(u64);
 
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -178,56 +177,25 @@ pub(crate) fn print_cosigner(cosigner: &CustomRingCoSigner) {
     line("scope", class_names(cosigner.scope));
 }
 
-pub fn insert_fee(ctx: &Context, command: InsertFeeCommand) -> Result<()> {
-    if let InsertFeeCommand::Set { lamports } = command {
-        RentFloor(ctx.rpc().get_minimum_balance_for_rent_exemption(0)?).admits(lamports)?;
-        let authority = ctx.funded_authority()?;
-        let set = ctx.ring.set_insert_fee(authority.pubkey(), lamports);
-        ctx.send(&[authority], &[set])?;
-    }
-    print_insert_fee(&ctx.ring_config()?);
-    Ok(())
-}
-
-pub(crate) fn print_insert_fee(config: &CustomRingConfig) {
-    line(
-        "insert fee",
-        format_args!("{} lamports per member write", config.insert_fee),
-    );
-}
-
 /// A grant of a granted reader and a revoke of an absent one send nothing.
 pub fn reader(ctx: &Context, command: ReaderCommand) -> Result<()> {
-    let authority = ctx.funded_authority()?;
-    let a = authority.pubkey();
-    let (ReaderCommand::Grant { reader } | ReaderCommand::Revoke { reader }) = command;
-    let granted = ctx.block(ctx.ring.access_record(ctx.chain(), &reader))?;
-    let outcome = match (command, granted.is_some()) {
-        (ReaderCommand::Grant { .. }, true) => "already granted",
-        (ReaderCommand::Grant { .. }, false) => {
-            let grant = GrantReader {
-                ring: ctx.ring,
-                payer: a,
-                authority: a,
-                reader,
-            };
-            ctx.send(&[authority], &[grant.instruction()?])?;
-            "granted"
-        }
-        (ReaderCommand::Revoke { .. }, true) => {
-            let revoke = RevokeReader {
-                ring: ctx.ring,
-                authority: a,
-                reader,
-                rent_recipient: a,
-            };
-            ctx.send(&[authority], &[revoke.instruction()?])?;
-            "revoked"
-        }
-        (ReaderCommand::Revoke { .. }, false) => "not granted",
+    let (change, reader) = match command {
+        ReaderCommand::Grant { reader } => (ListChange::Set, reader),
+        ReaderCommand::Revoke { reader } => (ListChange::Clear, reader),
     };
+    let subject = Subject {
+        member: reader.member()?,
+        label: format!("reader {reader}"),
+    };
+    let outcomes = ListUpdate {
+        authority: ctx.authority()?,
+        list_id: ListId::Reader,
+        subjects: core::slice::from_ref(&subject),
+        change,
+    }
+    .send(ctx)?;
+    let [outcome] = <[_; 1]>::try_from(outcomes).map_err(|_| anyhow!("one reader, one outcome"))?;
     line("reader", format_args!("{reader} {outcome}"));
-    line("record", ctx.ring.read_access_record_pda(&reader));
     Ok(())
 }
 
@@ -349,17 +317,6 @@ impl DualControl {
     }
 }
 
-impl RentFloor {
-    fn admits(self, fee: u64) -> Result<()> {
-        let RentFloor(floor) = self;
-        ensure!(
-            fee == 0 || fee >= floor,
-            "an insert fee of {fee} lamports is below the {floor} an empty account needs, set 0 or at least {floor}"
-        );
-        Ok(())
-    }
-}
-
 fn check_thresholds(scope: CoSignScope, thresholds: &[crate::config::ThresholdSpec]) -> Result<()> {
     ensure!(
         thresholds.is_empty() || scope.contains(CoSignScope::WITHDRAWALS),
@@ -371,15 +328,6 @@ fn check_thresholds(scope: CoSignScope, thresholds: &[crate::config::ThresholdSp
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_nonzero_insert_fee_below_the_rent_floor_is_refused() {
-        let floor = RentFloor(890_880);
-        assert!(floor.admits(0).is_ok());
-        assert!(floor.admits(890_880).is_ok());
-        let refused = floor.admits(890_879).unwrap_err().to_string();
-        assert!(refused.contains("890880"), "{refused}");
-    }
 
     #[test]
     fn co_signer_thresholds_need_the_withdrawal_scope() {

@@ -82,14 +82,10 @@ pub enum RingError {
     InvalidAccount { address: Address },
     #[error("custom ring config does not exist")]
     MissingRingConfig,
-    #[error("the ring has no member registry")]
-    MissingMemberRegistry,
     #[error("the ring has no ring policy")]
     MissingRingPolicy,
     #[error("the ring policy holds no synced roots of registry {registry}")]
     UnsyncedRoots { registry: Address },
-    #[error("the ring has no record queue")]
-    MissingRecordQueue,
     #[error("the ring is not registered with the shielded pool, run InitSppRingConfig")]
     RingNotRegistered,
     #[error("the shielded pool has not activated the ring, governance runs set_ring_activation")]
@@ -112,8 +108,6 @@ pub enum RingError {
     DuplicateSharedSource(ListId),
     #[error("curator registry {address} is not an initialized member registry")]
     InvalidCuratorRegistry { address: Address },
-    #[error("the write names member {member:?} twice")]
-    DuplicateListWrite { member: Member },
     #[error("the write changes no list")]
     EmptyListWrite,
     #[error(transparent)]
@@ -128,20 +122,8 @@ pub enum RingError {
     RecordUpdateIdMismatch,
     #[error("the {writer:?} writer may not write the list {list:?}")]
     ListNotWritable { list: ListId, writer: Writer },
-    #[error("{writes} authority writes take {batches} batches beside {pending} pending, prove each batch after the one before lands")]
-    AuthorityBatchSplit {
-        writes: usize,
-        pending: u64,
-        batches: usize,
-    },
-    #[error("no application of the record queue is due")]
-    ApplicationNotDue,
-    #[error(
-        "the indexer's record queue or registry differs from the chain's, the projection lags"
-    )]
+    #[error("the indexer's registry differs from the chain's, the projection lags")]
     RecordProjectionStale,
-    #[error("{member:?} already registered a key")]
-    KeyAlreadyRegistered { member: Member },
     #[error("the transaction takes {bytes} bytes, a v1 transaction carries {limit}")]
     TransactionTooLarge { bytes: usize, limit: usize },
     #[error("the transaction names {addresses} addresses, a v1 transaction carries {limit}")]
@@ -308,9 +290,7 @@ impl RingError {
             Self::RecordProjectionStale
                 | Self::Client(ClientError::IndexerProofDataNotReady)
                 | Self::Indexer(
-                    RingRpcError::RegistryOutOfSync
-                        | RingRpcError::RegistryRootChanged
-                        | RingRpcError::RecordQueueChanged
+                    RingRpcError::RegistryOutOfSync | RingRpcError::RegistryRootChanged
                 )
         )
     }

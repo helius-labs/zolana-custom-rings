@@ -25,21 +25,19 @@ fn an_outflow_limit_ring_bounds_each_transfer() -> Result<()> {
         tier: Tier::policy(&EMPTY),
     }
     .send(&env.client)?;
-    land(
+    StorageRecords::mint_policy(
+        ring,
+        Member::asset(&Address::new_from_array(
+            custom_ring_interface::SOL_ASSET_ADDRESS,
+        ))?,
+        zolana_ring_policy::MintPolicy {
+            cap: LIMIT_CAP,
+            cosign_above: LIMIT_COSIGN_ABOVE,
+            ..Default::default()
+        },
         &env,
-        custom_ring_sdk::AuthorityListWrite::new(ring, env.payer.pubkey()).with_mint_policy(
-            Member::asset(&Address::new_from_array(
-                custom_ring_interface::SOL_ASSET_ADDRESS,
-            ))?,
-            zolana_ring_policy::MintPolicy {
-                cap: LIMIT_CAP,
-                cosign_above: LIMIT_COSIGN_ABOVE,
-                ..Default::default()
-            },
-        )?,
-        &env.payer,
-        &[],
-    )?;
+    )
+    .send()?;
     let sender = &env.sender.keypair;
     let sender_address = sender.shielded_address()?;
     let recipient = env.recipient.keypair.shielded_address()?;
@@ -257,8 +255,7 @@ fn the_key_escrow_lifecycle_ends_in_a_delegate_move() -> Result<()> {
 
     // 2. The member escrows its nullifier key, the auditor opens it from the
     //    applied record.
-    register_key(&env, ring, member)?;
-    Queued::now(&env.client, ring)?.apply(&env.client, &env.payer)?;
+    register_keys(&env, ring, &[member])?;
     let member_tag = owner_member(member)?;
     let read = wait_for("the registered key", || {
         Ok(match env.member_record(ring, member_tag) {
@@ -272,9 +269,12 @@ fn the_key_escrow_lifecycle_ends_in_a_delegate_move() -> Result<()> {
         .context("the record escrows the member's nullifier key")?;
     let nullifier_key = escrowed.sealed.open(&auditor)?;
     assert_eq!(nullifier_key.pubkey()?, member_address.nullifier_pubkey);
+    let records: custom_ring_interface::storage::StorageRegistry = fetch_state(
+        env.client.rpc(),
+        &custom_ring_sdk::InitializeStorage::records(ring, env.payer.pubkey()).registry(),
+    )?;
     assert_eq!(
-        env.run(ring.require_registry(env.client.as_async()))?
-            .next_index(),
+        records.next_index(),
         2,
         "one registered member plus sentinel"
     );

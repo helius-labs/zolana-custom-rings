@@ -467,10 +467,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: e2e ring controls
-            recipe: test-ts-ring-controls
           - name: e2e flows
-            recipe: test-ts-e2e --exclude test/e2e/ring-controls.live.test.ts
+            recipe: test-ts-e2e
     env:
       ZOLANA_PREBUILT: "1"
       ZOLANA_XTASK_BIN: ${{ github.workspace }}/zolana/target/debug/xtask

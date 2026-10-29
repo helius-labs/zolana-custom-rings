@@ -9,10 +9,9 @@ use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
 use custom_ring_interface::{
     storage::{Revision, StorageRegistry},
-    AppliedAt, CoSignScope, CoSigner, CoSignerCounts, EscrowKey, MemberRegistry, QueueEntry,
-    RecordQueue, RingMode, RingPolicy, RingProgramConfig, SourceSlot, CONFIG_PDA_SEED, CO_SIGNER,
-    DEFAULT_INSERT_FEE, MEMBER_REGISTRY_PDA_SEED, N_SOURCE_SLOTS, RECORD_QUEUE_PDA_SEED,
-    RING_POLICY_PDA_SEED, RING_PROGRAM_CONFIG,
+    CoSignScope, CoSigner, CoSignerCounts, EscrowKey, RingMode, RingPolicy, RingProgramConfig,
+    SourceSlot, CONFIG_PDA_SEED, CO_SIGNER, N_SOURCE_SLOTS, RING_POLICY_PDA_SEED,
+    RING_PROGRAM_CONFIG,
 };
 use solana_account::Account;
 use solana_address::Address;
@@ -236,7 +235,6 @@ impl RingSettings {
         config.bump = Address::find_program_address(&[CONFIG_PDA_SEED], &program()).1;
         config.has_policy = u8::from(self.has_policy);
         config.mode = self.mode as u8;
-        config.insert_fee = DEFAULT_INSERT_FEE.to_le_bytes();
         config.created_slot = self.created_slot.to_le_bytes();
         if let Some((_, scope)) = self.co_signer {
             config.co_signers = CoSignerCounts::default().added(scope).expect("one record");
@@ -322,29 +320,12 @@ impl Chain {
 
     /// The ring policy pinning `rules`, every list read from the ring's records.
     pub(crate) fn with_registry(self, registry: Registry, rules: &RuleTable) -> Self {
-        let member_registry = registry.account();
         let policy = registry.policy(rules);
         Self {
             registry: Some(Arc::new(registry)),
             ..self
         }
-        .with(ring().registry_pda(), member_registry)
         .with(ring().policy_pda(), policy)
-    }
-
-    pub(crate) fn with_queue(
-        self,
-        entries: &[QueueEntry],
-        queued_at: u64,
-        next_apply_slot: u64,
-    ) -> Self {
-        let bump = Address::find_program_address(&[RECORD_QUEUE_PDA_SEED], &program()).1;
-        let mut queue = RecordQueue::new(bump);
-        for entry in entries {
-            queue.push(entry, queued_at).unwrap();
-        }
-        queue.next_apply_slot = next_apply_slot.to_le_bytes();
-        self.with(ring().queue_pda(), account(program(), &queue))
     }
 
     /// The indexed route, the prover fetches the input proofs and no witness is read here.
@@ -611,20 +592,6 @@ impl Registry {
 
     pub(crate) fn root(&self) -> [u8; 32] {
         self.tree.root().unwrap()
-    }
-
-    /// The queue's record writes still apply to the member registry.
-    fn account(&self) -> Account {
-        let bump = Address::find_program_address(&[MEMBER_REGISTRY_PDA_SEED], &program()).1;
-        let mut registry = MemberRegistry::new(bump, SLOT);
-        registry.push_root(
-            self.root(),
-            AppliedAt {
-                applied: 0,
-                slot: SLOT,
-            },
-        );
-        account(program(), &registry)
     }
 
     /// `rules` over the records, synced at `REVISION`.

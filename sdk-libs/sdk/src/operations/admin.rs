@@ -3,8 +3,8 @@
 use custom_ring_interface::SYSTEM_PROGRAM_ID;
 use custom_ring_interface::{
     compute_unit_limit, tag, CoSignScope, CreateConfigIxData, CreatePolicyIxData, InstructionTag,
-    PolicyTableIxData, ReaderIxData, RingKind, SetCoSignerRecordIxData, SetInsertFeeIxData,
-    SetPausedIxData, SetPolicySourceIxData, SourceSpec,
+    PolicyTableIxData, RingKind, SetCoSignerRecordIxData, SetPausedIxData, SetPolicySourceIxData,
+    SourceSpec,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -12,7 +12,6 @@ use spr_client::ComputeBudgetConfig;
 use spr_interface::pda;
 use spr_keypair::X25519Pubkey;
 use wincode::{config::DefaultConfig, SchemaWrite};
-use zolana_ring_client::ReaderKey;
 use zolana_ring_policy::{ListId, ListSet, Rule, RuleTable, SourceMap};
 
 use crate::{submission::check_transaction_size, CustomRing, CustomRingConfig, RingError};
@@ -43,34 +42,6 @@ pub struct InitSppRingConfig<'a> {
     pub payer: Address,
     pub authority: Address,
     pub config: &'a CustomRingConfig,
-}
-
-/// The record queue is created beside the registry and its sentinel.
-#[must_use]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CreateMemberRegistry {
-    pub ring: CustomRing,
-    pub payer: Address,
-    pub authority: Address,
-}
-
-/// Authorizes `reader` to read the ring through the ring RPC.
-#[must_use]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct GrantReader {
-    pub ring: CustomRing,
-    pub payer: Address,
-    pub authority: Address,
-    pub reader: ReaderKey,
-}
-
-#[must_use]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RevokeReader {
-    pub ring: CustomRing,
-    pub authority: Address,
-    pub reader: ReaderKey,
-    pub rent_recipient: Address,
 }
 
 /// Both keys sign, a mistyped address cannot strand the config.
@@ -181,48 +152,6 @@ impl InitSppRingConfig<'_> {
             accounts.push(AccountMeta::new_readonly(ring.policy_pda(), false));
         }
         ring.ix(accounts, vec![tag::INIT_SPP_RING_CONFIG])
-    }
-}
-
-impl CreateMemberRegistry {
-    pub fn instruction(self) -> Instruction {
-        let ring = self.ring;
-        let accounts = vec![
-            AccountMeta::new(self.payer, true),
-            AccountMeta::new_readonly(self.authority, true),
-            AccountMeta::new_readonly(ring.config_pda(), false),
-            AccountMeta::new(ring.registry_pda(), false),
-            AccountMeta::new(ring.queue_pda(), false),
-            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
-        ];
-        ring.ix(accounts, vec![tag::CREATE_MEMBER_REGISTRY])
-    }
-}
-
-impl GrantReader {
-    pub fn instruction(self) -> Result<Instruction, RingError> {
-        let ring = self.ring;
-        let accounts = vec![
-            AccountMeta::new(self.payer, true),
-            AccountMeta::new_readonly(self.authority, true),
-            AccountMeta::new_readonly(ring.config_pda(), false),
-            AccountMeta::new(ring.read_access_record_pda(&self.reader), false),
-            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
-        ];
-        Ok(ring.ix(accounts, reader_data(tag::GRANT_READ_ACCESS, self.reader)?))
-    }
-}
-
-impl RevokeReader {
-    pub fn instruction(self) -> Result<Instruction, RingError> {
-        let ring = self.ring;
-        let accounts = vec![
-            AccountMeta::new_readonly(self.authority, true),
-            AccountMeta::new_readonly(ring.config_pda(), false),
-            AccountMeta::new(ring.read_access_record_pda(&self.reader), false),
-            AccountMeta::new(self.rent_recipient, false),
-        ];
-        Ok(ring.ix(accounts, reader_data(tag::REVOKE_READ_ACCESS, self.reader)?))
     }
 }
 
@@ -411,15 +340,6 @@ impl CustomRing {
         self.set_paused(authority, SetPausedIxData { paused: false })
     }
 
-    /// [`crate::CustomRingConfig::insert_fee`], zero writes free.
-    pub fn set_insert_fee(self, authority: Address, fee: u64) -> Instruction {
-        let mut data = vec![tag::SET_INSERT_FEE];
-        data.extend_from_slice(bytemuck::bytes_of(&SetInsertFeeIxData {
-            fee: fee.to_le_bytes(),
-        }));
-        self.ix(self.config_write_metas(authority), data)
-    }
-
     fn set_paused(
         self,
         authority: Address,
@@ -472,13 +392,4 @@ pub(crate) fn tagged<T: SchemaWrite<DefaultConfig, Src = T>>(
     let mut data = vec![instruction_tag];
     data.extend(wincode::serialize(body)?);
     Ok(data)
-}
-
-fn reader_data(instruction_tag: u8, reader: ReaderKey) -> Result<Vec<u8>, RingError> {
-    tagged(
-        instruction_tag,
-        &ReaderIxData {
-            reader: reader.to_bytes(),
-        },
-    )
 }

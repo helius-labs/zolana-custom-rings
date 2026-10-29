@@ -7,7 +7,7 @@ use solana_instruction::AccountMeta;
 use solana_keypair::{Keypair, Signer};
 
 use crate::{
-    common::{key_registration, reaches_verification, refused, register_key, Ring, Sent, Setup},
+    common::{reaches_verification, refused, Ring, Sent, Setup},
     forward_rules::{deposit_instruction, merge_data, merge_instruction_with, ring_deposit},
     transact_rules::{policy_meta, send, spp_list, Fixture},
 };
@@ -132,12 +132,6 @@ fn an_anonymous_policy_ring_escrows_no_key() {
     refused(
         transfer(&mut ring, Vec::new(), &data),
         CustomRingError::FlagNotAllowed,
-    );
-    let member = Keypair::new();
-    let registration = register_key(&member.pubkey(), &key_registration(), None);
-    refused(
-        ring.send(registration, &[&member]),
-        CustomRingError::AnonymousRingRefused,
     );
 }
 

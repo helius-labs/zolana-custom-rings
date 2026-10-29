@@ -64,8 +64,7 @@ Set a Ring up in this order.
    Ring only after its policy exists.
 5. On a permissioned pool the governance authority activates the Ring with
    `getSetRingActivationInstructionAsync` from `@heliuslabs/zolana/instructions`.
-6. `buildRingListWriteTransaction` fills the lists and
-   `grantReadAccessInstruction` admits readers.
+6. `AuthorityRecordUpdate` fills the lists through `RingRpc.submitRecordUpdate`.
 
 A wallet spends through Ring RPC and reads no Merkle path and no record.
 `prepareRingEntryRelay`, `prepareRingTransferRelay`, `prepareRingExitRelay`

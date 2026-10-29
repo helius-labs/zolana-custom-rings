@@ -7,8 +7,7 @@ export const RingInstructionTag = Object.freeze({
   transact: 43,
   legacyTransact: 3,
   legacyDelegateTransact: 25,
-  grantReadAccess: 4,
-  revokeReadAccess: 5,
+  // Tags 4 and 5 are retired, never reuse them.
   setAuthority: 6,
   createPolicy: 7,
   setPolicySource: 10,
@@ -21,13 +20,9 @@ export const RingInstructionTag = Object.freeze({
   setDelegate: 24,
   delegateTransact: 44,
   setCoSigner: 27,
-  createMemberRegistry: 28,
-  registerKey: 29,
+  // Tags 28 and 29 are retired, never reuse them.
   auditedDeposit: 31,
-  writeRecords: 39,
-  authorityWriteRecords: 40,
-  applyRecords: 41,
-  setInsertFee: 42,
+  // Tags 39 to 42 are retired, never reuse them.
   syncRoots: 48,
 } as const);
 export type RingInstructionTag = (typeof RingInstructionTag)[keyof typeof RingInstructionTag];
