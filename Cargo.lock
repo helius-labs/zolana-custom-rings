@@ -7767,6 +7767,7 @@ dependencies = [
  "pinocchio-system",
  "serde_json",
  "solana-address 2.6.1",
+ "solana-clock",
  "solana-instruction",
  "solana-keypair",
  "solana-transaction-error",

@@ -2,10 +2,9 @@ use bytemuck::Zeroable;
 use custom_ring_interface::{
     key_catalog::RingCircuit,
     queue_chain,
-    storage::{Revision, Root, StorageError},
-    storage_instruction::UpdateMode,
-    verifying_key, ApplyRecordsStatement, AuthorityWriteRecordsIxData, CustomRingError, RingProof,
-    ROOT_HISTORY,
+    storage::{Root, StorageError},
+    storage_instruction::{StorageUpdateIxData, UpdateMode},
+    verifying_key, ApplyRecordsStatement, CustomRingError, RingProof, ROOT_HISTORY,
 };
 use pinocchio::{
     error::ProgramError,
@@ -14,7 +13,10 @@ use pinocchio::{
 };
 use spr_account_checks::AccountIterator;
 
-use crate::{chain_start, loader::load_registry_mut, parse};
+use crate::{
+    chain_start,
+    loader::{check_authority, load_registry_mut},
+};
 
 pub fn process_update_ix(
     program_id: &Address,
@@ -22,23 +24,18 @@ pub fn process_update_ix(
     data: &[u8],
     mode: UpdateMode,
 ) -> ProgramResult {
-    let (revision, data) = data
-        .split_at_checked(core::mem::size_of::<Revision>())
-        .ok_or(ProgramError::InvalidInstructionData)?;
-    let revision = *parse::<Revision>(revision)?;
-    let ix = AuthorityWriteRecordsIxData::parse(data)?;
+    let ix = StorageUpdateIxData::parse(data)?;
     let mut accounts = AccountIterator::new(accounts);
     let authority_account = accounts.next_signer("authority")?;
     let registry_account = accounts.next_mut("registry")?;
-    let chain_start = chain_start(registry_account.address(), revision)?;
+    let chain_start = chain_start(registry_account.address(), ix.revision)?;
     let mut registry = load_registry_mut(program_id, registry_account)?;
-    if authority_account.address() != &registry.authority {
-        return Err(StorageError::Unauthorized.into());
-    }
-    if revision != registry.roots[0].revision {
+    check_authority(&registry, authority_account)?;
+    if ix.revision != registry.roots[0].revision {
         return Err(StorageError::RevisionChanged.into());
     }
-    let next_revision = revision
+    let next_revision = ix
+        .revision
         .value()
         .checked_add(1)
         .ok_or(ProgramError::ArithmeticOverflow)?;

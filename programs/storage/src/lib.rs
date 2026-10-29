@@ -1,17 +1,17 @@
 //! Transfer authorization remains the consumer's responsibility.
 
-use bytemuck::{Pod, Zeroable};
+use bytemuck::Pod;
 use custom_ring_interface::{
     domain,
     storage::Revision,
     storage_instruction::{tag, UpdateMode},
-    CustomRingError, CustomRingProof,
+    CustomRingError,
 };
 use pinocchio::{error::ProgramError, AccountView, Address, ProgramResult};
 use spr_hasher::{hash_chain::create_hash_chain_4_from_slice, primitives::right_align};
-use zolana_ring_policy::{registry_field, EncodedRuleTable};
+use zolana_ring_policy::registry_field;
 
-use instructions::{process_initialize_ix, process_update_ix, process_verify_policy_ix};
+use instructions::{process_initialize_ix, process_update_authority_ix, process_update_ix};
 
 #[cfg(all(feature = "bpf-entrypoint", not(feature = "no-entrypoint")))]
 mod entrypoint {
@@ -20,25 +20,6 @@ mod entrypoint {
 
 mod instructions;
 mod loader;
-
-/// With the authority's address.
-pub const REGISTRY_SEED: &[u8] = b"policy-store";
-
-#[derive(Clone, Copy, Pod, Zeroable)]
-#[repr(C)]
-pub struct InitializeIxData {
-    pub grace_slots: [u8; 8],
-}
-
-#[derive(Clone, Copy, Pod, Zeroable)]
-#[repr(C)]
-pub struct VerifyPolicyIxData {
-    pub revision: Revision,
-    pub table: EncodedRuleTable,
-    pub action: [u8; 32],
-    pub sender: [u8; 32],
-    pub proof: CustomRingProof,
-}
 
 pub fn process_instruction(
     program_id: &Address,
@@ -54,7 +35,7 @@ pub fn process_instruction(
         tag::UPDATE_IMMEDIATE => {
             process_update_ix(program_id, accounts, data, UpdateMode::Immediate)
         }
-        tag::VERIFY_POLICY => process_verify_policy_ix(program_id, accounts, data),
+        tag::UPDATE_AUTHORITY => process_update_authority_ix(program_id, accounts, data),
         _ => Err(ProgramError::InvalidInstructionData),
     }
 }

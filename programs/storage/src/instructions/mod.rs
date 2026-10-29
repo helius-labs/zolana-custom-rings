@@ -1,7 +1,7 @@
 mod initialize;
 mod update;
-mod verify_policy;
+mod update_authority;
 
 pub use initialize::process_initialize_ix;
 pub use update::process_update_ix;
-pub use verify_policy::process_verify_policy_ix;
+pub use update_authority::process_update_authority_ix;

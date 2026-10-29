@@ -1,16 +1,16 @@
 # Storage
 
-Storage verifies registry updates and policy decisions for one authority and multiple readers. Start with [the instruction entry point](src/lib.rs).
+Storage keeps record tree roots for one authority and any number of readers. Start with [the instruction entry point](src/lib.rs).
 
-The authority creates a registry at the PDA derived from `REGISTRY_SEED` and its address. The account layout and errors live in `custom_ring_interface::storage`. Initialization fixes the authority and grace period. The initial root contains only the tree sentinel.
+A creator makes a registry at the PDA `[b"storage", creator, registry_id]`. The creator and the payer both sign, and the creator becomes the first authority. Because the creator is in the seeds, no other signer can take its addresses. The account layout and `StorageError` live in `custom_ring_interface::storage`, and the instruction data in `custom_ring_interface::storage_instruction`. Initialization fixes the grace period. The initial root holds only the tree sentinel.
 
-Updates carry public record changes and an apply proof. The program checks the authority signature, validates the changes, and binds their ordered hash to the registry address and expected revision. The proof binds the old root and leaf index to their replacements. List contents and rule tables stay outside the account. Readers need access to the tree data to construct proofs.
+An update carries record writes and an apply proof. The program checks the authority signature, turns each write into its tree entry, and chains the entries in order from a start that binds the registry address and the expected revision. The proof binds the old root and leaf index to their replacements. A write changes lists, mint settings or both, or it is an escrow write and carries only its escrow key. Only an escrow write sets the escrow list. The program does not check an escrow key. The authority checks it before it writes. An escrow key fills once and no write removes it. List contents and rule tables stay outside the account, so readers need the tree data to build proofs.
 
-A normal update gives the outgoing root a fixed expiry slot, saturating at `u64::MAX`, where the root never expires. Earlier expiry slots stay fixed. A normal update fails if it would replace an unexpired root. An immediate update clears all earlier roots. Both update modes advance the revision without wraparound.
+A normal update gives the outgoing root a fixed expiry slot, saturating at `u64::MAX`, where the root never expires. Earlier expiry slots stay fixed. A normal update fails if it would replace an unexpired root. An immediate update clears all earlier roots. Both update modes advance the revision without wraparound. `StorageRegistry::root` is the one rule for which root a revision names at a slot.
 
-Readers supply a revision, rule table, action hash, sender and policy proof. Verification reads the registry without changing it. All referenced lists come from the same registry. The proof uses the member policy circuit with confidential outputs, no withdrawals, no public asset flow and no key escrow. A proof can verify at another revision when the root bytes are equal.
+The authority hands the registry to a new authority with `UpdateAuthority`. Both keys sign, so a typo cannot lock the registry. The old authority loses every right at once.
 
-The consumer authenticates the registry, rules, sender and action before it acts on a successful verification. It also enforces replay protection, required approval and settlement. A successful policy proof alone does not authorize a transfer. The authority controls policy records, including mint limits. Member recovery and escrow records cannot be written through the update instruction.
+The program verifies no policy. A consumer reads a root and authenticates the registry, the rules and the action before it acts. The authority controls every record, including mint settings and escrow keys.
 
 Build and run the lifecycle test from the workspace root.
 
@@ -19,9 +19,11 @@ just build-storage-program
 cargo test --locked -p storage-program --test lifecycle
 ```
 
-The test uses checked in proofs and needs no prover service. To replace the fixtures, install the pinned ring proving keys and run the generator from `prover/`. The generator uses the registry address in [proofs.json](tests/proofs.json).
+The test uses checked in proofs and needs no prover service. To replace the fixtures, install the pinned ring proving keys and run the generator from `prover/`. The proofs bind the registry address in [proofs.json](tests/proofs.json), and the test refuses a fixture made for another address.
 
 ```sh
 POLICY_STORE_REGISTRY="$(jq -r .registry ../programs/storage/tests/proofs.json)" \
 REQUIRE_RING_KEYS=1 go test ./ring -run '^TestPolicyStoreFixtures$' -count=1
 ```
+
+`ZOLANA_PROVER_KEYS_DIR` points the generator at another key directory.
