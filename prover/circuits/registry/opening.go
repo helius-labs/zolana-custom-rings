@@ -26,7 +26,7 @@ type QuadOpening struct {
 	Path                   QuadPath
 }
 
-// Resolve returns the member's lists and escrow key, zero for an absent member or an unset cond, binding the opening to root while the boolean cond is set.
+// Resolve zeroes every output for an absent member or an unset cond, and binds the opening to root while the boolean cond is set.
 func (o QuadOpening) Resolve(api frontend.API, cond, root, member frontend.Variable) (lists, escrowKey, mintPolicy, withdrawalThreshold frontend.Variable) {
 	// A fixed-shape circuit opens no record for a slot it never reads.
 	if ringgadget.IsConstantZero(api, cond) {
