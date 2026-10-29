@@ -13,7 +13,7 @@ import {
   resolveShieldedRecipient,
 } from "@heliuslabs/zolana/internal";
 import { initializePoseidon } from "@heliuslabs/zolana";
-import type { SignerAccount } from "@heliuslabs/zolana/internal";
+import { checkIntentApproval, type SignerAccount } from "@heliuslabs/zolana/internal";
 import type {
   Address,
   Bytes32,
@@ -28,7 +28,16 @@ import {
   ViewingKey,
 } from "@heliuslabs/zolana/keypair";
 import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
-import { assetField, SOL_MINT, Data, Utxo, ownerUtxoHash } from "@heliuslabs/zolana/transaction";
+import {
+  assetField,
+  SOL_MINT,
+  Data,
+  Utxo,
+  ownerUtxoHash,
+  approveUnattended,
+  type ApprovalHandler,
+  type TransactionIntent,
+} from "@heliuslabs/zolana/transaction";
 import type { DepositClient } from "@heliuslabs/zolana/wallet";
 import type { DepositProofRequest, PolicyTableProofInputs } from "../../rpc/prover/ring.js";
 import { depositBlinding } from "../../crypto/derivation/ring-domain.js";
@@ -66,6 +75,8 @@ import type { FirstContact, ViewingHistory } from "../../state/viewing-history.j
 import { encodeRelayDepositInputs } from "../../protocol/ring-rpc/relay-deposit-inputs.js";
 import type { RelayIntent, RelayQuote } from "../../protocol/ring-rpc/ring-rpc-types.js";
 import { PreparedRelay } from "../../rpc/relay.js";
+import { ringIntentMismatch } from "../workflow/selection.js";
+import { assetLabel } from "./transfer.js";
 
 const base64 = getBase64Decoder();
 
@@ -117,6 +128,7 @@ export interface RingDepositParams {
 /** Rust `RingDeposit::prepare_relay`. */
 export interface RingDepositRelayParams extends DepositSealingParams {
   readonly quote: RelayQuote;
+  readonly approve?: ApprovalHandler;
 }
 
 /** Store `viewingHistory` in place of the old one before `relay.send`. */
@@ -278,6 +290,22 @@ export class PreparedRingDeposit {
         cosigner: undefined,
         tree: params.tree ?? params.client.tree,
       });
+      // A deposit approves as a ring entry with no default funding.
+      const intent: TransactionIntent = {
+        kind: "ringTransfer",
+        ringProgramId: params.ringProgramId,
+        asset: sealing.asset,
+        amount: params.amount,
+        recipient: prepared.#recipient,
+        boundary: "entry",
+        defaultFunding: 0n,
+      };
+      const approval = await (params.approve ?? approveUnattended)({
+        solanaPublicKey: signerAddress(params.depositor),
+        intent,
+        summary: `ring deposit of ${String(params.amount)} ${assetLabel(sealing.asset)} into ring ${params.ringProgramId}`,
+      });
+      checkIntentApproval(approval, intent, ringIntentMismatch);
       payload = encodeRelayDepositInputs({
         ringProgramId: prepared.#ringProgramId,
         tree: prepared.#tree,

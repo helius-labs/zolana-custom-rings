@@ -861,6 +861,6 @@ function firstContactOf(
   return Object.freeze({ kind: "request", tag: recipient.requestViewTag });
 }
 
-function assetLabel(asset: Address): string {
+export function assetLabel(asset: Address): string {
   return asset === SOL_MINT ? "SOL" : asset;
 }

@@ -3,7 +3,16 @@ import { describe, expect, it } from "vitest";
 
 import { initializePoseidon } from "@heliuslabs/zolana";
 import { randomBlinding, ShieldedKeypair, SigningKey } from "@heliuslabs/zolana/keypair";
-import { AssetRegistry, SOL_MINT, Utxo, Wallet } from "@heliuslabs/zolana/transaction";
+import {
+  AssetRegistry,
+  SOL_MINT,
+  Utxo,
+  Wallet,
+  approveUnattended,
+  type ApprovalHandler,
+  type ApprovalRequest,
+} from "@heliuslabs/zolana/transaction";
+import type { Bytes32 } from "@heliuslabs/zolana/interface";
 
 import { PreparedRingDeposit } from "../../../src/operations/payments/deposit.js";
 import { prepareRingMergeRelay } from "../../../src/operations/payments/merge.js";
@@ -167,32 +176,63 @@ describe("wallet relay", () => {
   it("relays a deposit into a key escrow ring with no opening request", async () => {
     const fixture = await ringFixture({ mode: "confidentialEscrow", records: [] });
     const network = walletNetwork(fixture);
+    const recipient = ShieldedKeypair.generate().shieldedAddress();
+    const approvals: ApprovalRequest[] = [];
     const prepared = await PreparedRingDeposit.prepareRelay({
       client: network.client,
       ringProgramId: fixture.ringProgramId,
       depositor: randomAddress(),
-      recipient: { kind: "confidential", address: ShieldedKeypair.generate().shieldedAddress() },
+      recipient: { kind: "confidential", address: recipient },
       amount: 5n,
       quote: { feePayer: fixture.authority, validUntilSlot: 100n },
+      approve: (request) => {
+        approvals.push(request);
+        return approveUnattended(request);
+      },
     });
 
+    expect(approvals).toMatchObject([
+      { intent: { kind: "ringTransfer", boundary: "entry", amount: 5n, recipient } },
+    ]);
     expect(await network.send(prepared.relay)).toEqual(["prepareRelay"]);
   });
 
-  it("relays a merge on a key escrow ring with no path or opening request", async () => {
+  it("relays an approved merge of the wallet's leased notes with no path or opening request", async () => {
     const fixture = await ringFixture({ mode: "confidentialEscrow", records: [] });
     const network = walletNetwork(fixture);
     const sender = owner(fixture, 3);
-    const relay = prepareRingMergeRelay({
-      client: network.client,
-      ringProgramId: fixture.ringProgramId,
-      sender: sender.keypair.shieldedAddress(),
-      nullifierKey: sender.keypair.nullifierKey(),
-      notes: sender.wallet.utxos(),
-      assets: new AssetRegistry(),
-      quote: { feePayer: fixture.authority, validUntilSlot: 100n },
-    });
+    const approvals: ApprovalRequest[] = [];
+    const recorded: ApprovalHandler = (request) => {
+      approvals.push(request);
+      return approveUnattended(request);
+    };
+    const merge = (feePayer: Address, approve = recorded) =>
+      prepareRingMergeRelay({
+        client: network.client,
+        ringProgramId: fixture.ringProgramId,
+        wallet: sender.wallet,
+        nullifierKey: sender.keypair.nullifierKey(),
+        quote: { feePayer, validUntilSlot: 100n },
+        approve,
+      });
 
+    await expect(merge(sender.keypair.shieldedAddress().solanaAddress())).rejects.toMatchObject({
+      cause: { code: "RING_ANONYMOUS_SIGNER_LINKS_OWNER" },
+    });
+    // A refused approval releases the lease, the next merge takes the same notes.
+    await expect(
+      merge(fixture.authority, () =>
+        Promise.resolve({ intentHash: new Uint8Array(32) as Bytes32 }),
+      ),
+    ).rejects.toMatchObject({ cause: { code: "RING_INTENT_MISMATCH" } });
+    const relay = await merge(fixture.authority);
+
+    expect(approvals).toMatchObject([
+      { intent: { kind: "ringMerge", numInputs: 3, mergedAmount: 30n, outputTree: TREE } },
+    ]);
     expect(await network.send(relay)).toEqual(["prepareRelay"]);
+    await expect(merge(fixture.authority)).rejects.toMatchObject({
+      cause: { code: "RING_NOTHING_TO_MERGE" },
+    });
   });
 });

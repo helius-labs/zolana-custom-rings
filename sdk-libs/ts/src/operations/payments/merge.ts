@@ -31,6 +31,7 @@ import {
   checkIntentApproval,
   ownerSolanaAccount,
   equalBytes,
+  type UtxoReservation,
 } from "@heliuslabs/zolana/internal";
 import { customRingProof } from "../../rpc/prover/proof.js";
 import { MERGE_WIDTHS } from "../../protocol/codec/ring-disclosure-layout.js";
@@ -57,12 +58,7 @@ import {
   type TransactionIntent,
   checkKeysIdentity,
 } from "@heliuslabs/zolana/transaction";
-import type {
-  AssetRegistry,
-  PreparedMerge,
-  Wallet,
-  WalletUtxo,
-} from "@heliuslabs/zolana/transaction";
+import type { PreparedMerge, Wallet, WalletUtxo } from "@heliuslabs/zolana/transaction";
 import { encodeRelayMergeInputs } from "../../protocol/ring-rpc/relay-proof-inputs.js";
 import type { RelayIntent, RelayQuote } from "../../protocol/ring-rpc/ring-rpc-types.js";
 import { PreparedRelay } from "../../rpc/relay.js";
@@ -123,29 +119,55 @@ export interface RingMergeTransactionParams {
   readonly approve?: ApprovalHandler;
 }
 
-export interface RingMergeRelayParams {
+export interface RingMergeRelayParams extends Pick<
+  RingMergeTransactionParams,
+  "ringProgramId" | "wallet" | "asset" | "maxInputs" | "approve"
+> {
   readonly client: TreeContext;
-  readonly ringProgramId: Address;
-  /** Owns every note. */
-  readonly sender: ShieldedAddress;
   /** Ring RPC proves with it and so links every spend of the owner. */
   readonly nullifierKey: NullifierKey;
-  readonly notes: readonly WalletUtxo[];
-  readonly assets: AssetRegistry;
   readonly quote: RelayQuote;
 }
 
-/** Rust `MergeRelay::prepare`, Ring RPC derives the merged note and no wallet signature follows. */
-export function prepareRingMergeRelay(params: RingMergeRelayParams): PreparedRelay {
+/** The selected notes stay leased for the reservation lifetime. */
+export async function prepareRingMergeRelay(params: RingMergeRelayParams): Promise<PreparedRelay> {
+  let reservation: UtxoReservation | undefined;
   let payload: Uint8Array | undefined;
   try {
+    await initializePoseidon();
+    const sender = params.wallet.identity;
+    const { feePayer } = params.quote;
+    // The merge circuit keeps the owner off the payer on every ring.
+    checkSignersHideOwner(sender.signingPublicKey.ed25519(), [feePayer]);
+    const asset = params.asset ?? SOL_MINT;
+    const notes = selectMergeNotes({
+      wallet: params.wallet,
+      ringProgramId: params.ringProgramId,
+      tree: params.client.tree,
+      asset,
+      maxInputs: mergeWidth(params.maxInputs),
+    });
+    reservation = reserveEntries(params.wallet, notes);
+    await approveMerge({
+      approve: params.approve,
+      owner: sender,
+      feePayer,
+      intent: {
+        kind: "ringMerge",
+        ringProgramId: params.ringProgramId,
+        outputTree: params.client.tree,
+        asset,
+        numInputs: notes.length,
+        mergedAmount: notes.reduce((total, note) => total + note.utxo.amount, 0n),
+      },
+    });
     payload = encodeRelayMergeInputs({
       ringProgramId: params.ringProgramId,
-      sender: params.sender,
+      sender,
       nullifierKey: params.nullifierKey,
-      inputs: params.notes.map((note) => ringProofInput(note, params.sender, params.client)),
-      leafIndexes: params.notes.map((note) => note.outputContext.leafIndex),
-      assets: params.assets,
+      inputs: notes.map((note) => ringProofInput(note, sender, params.client)),
+      leafIndexes: notes.map((note) => note.outputContext.leafIndex),
+      assets: params.wallet.registry,
     });
     return new PreparedRelay({
       ring: params.ringProgramId,
@@ -155,6 +177,9 @@ export function prepareRingMergeRelay(params: RingMergeRelayParams): PreparedRel
         proofInputs: base64.decode(payload) as RelayIntent["proofInputs"],
       },
     });
+  } catch (cause) {
+    if (reservation !== undefined) params.wallet._releaseReservation(reservation.id);
+    throw wrapRingError("RING_BUILD_MERGE", cause);
   } finally {
     payload?.fill(0);
   }
@@ -266,29 +291,16 @@ async function buildRingMerge(
     // The merge circuit keeps the owner off the payer and co-signer on every ring.
     checkSignersHideOwner(owner.signingPublicKey.ed25519(), [params.feePayer, demanded]);
     const asset = params.asset ?? SOL_MINT;
-    const reserved = reservedUtxoKeys(params.wallet);
     if (retry.entries !== undefined) checkRetainedEntries(params.wallet, retry.entries);
     const entries =
       retry.entries ??
-      selectUtxos({
+      selectMergeNotes({
         wallet: params.wallet,
+        ringProgramId: params.ringProgramId,
+        tree: params.client.tree,
         asset,
-        target: { kind: "consolidate", minInputs: 2 },
-        policy: {
-          eligible: (entry) =>
-            unreserved(reserved)(entry) &&
-            entry.utxo.ringProgramId === params.ringProgramId &&
-            entry.dataHash === undefined &&
-            entry.utxo.data.records().every((record) => record.kind !== "utxoData"),
-          ordering: "smallestFirst",
-          maxInputs,
-          tree: { kind: "fixed", tree: params.client.tree },
-          errors: {
-            ...ringSelectionErrors,
-            tooFewUtxos: () => new RingError("RING_NOTHING_TO_MERGE"),
-          },
-        },
-      }).entries;
+        maxInputs,
+      });
     checkMergeWidth(mergePaddedInputCount(entries.length) ?? entries.length);
     retry.entries = entries;
     retry.reservation ??= reserveEntries(params.wallet, entries, retry.lifetime);
@@ -352,7 +364,7 @@ async function buildRingMerge(
       SIZE_PROBE_LIFETIME,
       emptyRingMergeDisclosure(prepared.inputs.length),
     );
-    const intent: TransactionIntent = {
+    const intent: RingMergeIntent = {
       kind: "ringMerge",
       ringProgramId: params.ringProgramId,
       outputTree: outputTree.tree,
@@ -364,12 +376,7 @@ async function buildRingMerge(
     if (retry.intent !== undefined && !equalBytes(retry.intent, planned))
       throw ringIntentMismatch("retryIntent");
     retry.intent = planned;
-    const approval = await (params.approve ?? approveUnattended)({
-      solanaPublicKey: ownerSolanaAccount(owner, params.feePayer),
-      intent,
-      summary: `merge ${String(inputs.length)} inputs in ring ${params.ringProgramId}`,
-    });
-    checkIntentApproval(approval, intent, ringIntentMismatch);
+    await approveMerge({ approve: params.approve, owner, feePayer: params.feePayer, intent });
     const { data } = await withProofDataRetry(
       params.client.proofDataSource,
       (attempt) => params.client.proveMerge({ prepared, keys: params.keys }, attempt),
@@ -403,6 +410,56 @@ async function buildRingMerge(
     if (retry.reservation !== undefined) params.wallet._releaseReservation(retry.reservation.id);
     throw wrapRingError("RING_BUILD_MERGE", cause);
   }
+}
+
+type RingMergeIntent = Extract<TransactionIntent, { kind: "ringMerge" }>;
+
+function selectMergeNotes(
+  input: Readonly<{
+    wallet: Wallet;
+    ringProgramId: Address;
+    tree: Address;
+    asset: Address;
+    maxInputs: number;
+  }>,
+): readonly WalletUtxo[] {
+  const reserved = reservedUtxoKeys(input.wallet);
+  return selectUtxos({
+    wallet: input.wallet,
+    asset: input.asset,
+    target: { kind: "consolidate", minInputs: 2 },
+    policy: {
+      eligible: (entry) =>
+        unreserved(reserved)(entry) &&
+        entry.utxo.ringProgramId === input.ringProgramId &&
+        entry.dataHash === undefined &&
+        entry.utxo.data.records().every((record) => record.kind !== "utxoData"),
+      ordering: "smallestFirst",
+      maxInputs: input.maxInputs,
+      tree: { kind: "fixed", tree: input.tree },
+      errors: {
+        ...ringSelectionErrors,
+        tooFewUtxos: () => new RingError("RING_NOTHING_TO_MERGE"),
+      },
+    },
+  }).entries;
+}
+
+async function approveMerge(
+  input: Readonly<{
+    approve: ApprovalHandler | undefined;
+    owner: ShieldedAddress;
+    feePayer: Address;
+    intent: RingMergeIntent;
+  }>,
+): Promise<void> {
+  const { intent } = input;
+  const approval = await (input.approve ?? approveUnattended)({
+    solanaPublicKey: ownerSolanaAccount(input.owner, input.feePayer),
+    intent,
+    summary: `merge ${String(intent.numInputs)} inputs in ring ${intent.ringProgramId}`,
+  });
+  checkIntentApproval(approval, intent, ringIntentMismatch);
 }
 
 /** Only the key holder adds the nullifier secret. */

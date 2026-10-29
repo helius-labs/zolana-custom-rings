@@ -74,7 +74,8 @@ the nullifier key and the sender's signer, as `anonymous` on an anonymous Ring
 and as `confidential` on any other, and `relay.send` hands the spend to Ring
 RPC. On an anonymous Ring they also take the sender's `ViewingHistory`.
 `PreparedRingDeposit.prepareRelay` relays a deposit, whose message the
-depositor signs, and `prepareRingMergeRelay` relays a merge. `RingRpc` reads
+depositor signs, and `prepareRingMergeRelay` relays a merge of the wallet's
+smallest notes. `RingRpc` reads
 decrypted Ring transactions for a granted reader.
 
 Connect to a hosted Ring RPC with its service base URL and your API key:
