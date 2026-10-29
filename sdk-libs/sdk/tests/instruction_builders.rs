@@ -665,7 +665,7 @@ fn an_anonymous_merge_names_no_registry() {
         output_tree,
         payer: payer(),
         co_signer: None,
-        key_escrow: false,
+        mode: RingMode::Anonymous,
         data: CustomRingMergeIxData {
             own_revision: Default::default(),
             output_ring_data_hash: [0; 32],
@@ -724,7 +724,7 @@ fn a_merge_names_the_config_the_policy_and_the_co_signer_ahead_of_spp() {
             output_tree,
             payer: payer(),
             co_signer,
-            key_escrow: true,
+            mode: RingMode::ConfidentialEscrow,
             data: data.clone(),
         }
         .instruction()
