@@ -60,6 +60,8 @@ pub enum RingRpcError {
     Member(#[from] MemberError),
     #[error("stored grant row does not open under the service key")]
     InvalidGrantRow,
+    #[error("database reader grants need a service store")]
+    GrantStoreMissing,
     #[error(transparent)]
     Relay(#[from] RelayError),
     #[error(transparent)]
@@ -81,8 +83,8 @@ pub enum RingRpcError {
 pub enum GrantRefusal {
     #[error("ring mirrors no root of its own records")]
     RecordsUnsynced = -32130,
-    #[error("service stores no wallet grants")]
-    GrantStoreDisabled = -32131,
+    #[error("service keeps reader grants in the storage tree")]
+    GrantsInTree = -32131,
 }
 
 impl GrantRefusal {
@@ -208,8 +210,8 @@ impl From<RingRpcError> for ErrorObjectOwned {
                 error!("grant identity failed {inner}");
                 (ErrorCode::InternalError, "audit service is unavailable")
             }
-            InvalidGrantRow => {
-                error!("stored grant row does not open under the service key");
+            InvalidGrantRow | GrantStoreMissing => {
+                error!("{failure}");
                 (ErrorCode::InternalError, "audit service is unavailable")
             }
             CoSign(inner) => return (*inner).into(),
@@ -244,10 +246,10 @@ mod tests {
     #[test]
     fn grant_refusal_codes_are_stable() {
         use GrantRefusal::*;
-        for refusal in [RecordsUnsynced, GrantStoreDisabled] {
+        for refusal in [RecordsUnsynced, GrantsInTree] {
             let code = match refusal {
                 RecordsUnsynced => -32130,
-                GrantStoreDisabled => -32131,
+                GrantsInTree => -32131,
             };
             assert_eq!(
                 ErrorObjectOwned::from(RingRpcError::Grant(refusal)).code(),

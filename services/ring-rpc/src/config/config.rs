@@ -102,9 +102,24 @@ pub struct ServeArgs {
     /// Serve plain HTTP on a public address and accept plain HTTP origins, test deployments only.
     #[arg(long, env = "RING_RPC_INSECURE_PUBLIC_BIND")]
     pub insecure_public_bind: bool,
-    /// Keep wallet reader grants encrypted in the service store.
-    #[arg(long, env = "RING_RPC_ENCRYPTED_READER_GRANTS", requires = "store_url")]
-    pub encrypted_reader_grants: bool,
+    /// The one store the service reads reader grants from.
+    #[arg(
+        long,
+        env = "RING_RPC_READER_GRANTS",
+        value_enum,
+        default_value_t = ReaderGrantStore::Tree,
+        requires_if("database", "store_url")
+    )]
+    pub reader_grants: ReaderGrantStore,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum ReaderGrantStore {
+    /// `Reader` lists of the ring's own storage tree.
+    #[default]
+    Tree,
+    /// Sealed rows of the service store, signed through `setReaderGrant`.
+    Database,
 }
 
 #[derive(Debug, Args)]

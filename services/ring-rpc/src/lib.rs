@@ -71,7 +71,7 @@ pub use authority_transfer::AuthorityTransferError;
 pub use authorize::{ReadCheck, ReadClaim, Unauthorized, AUTH_SKEW};
 pub use config::{
     read_fee_payer, read_root_secret, write_fee_payer, write_root_secret, Cli, Command, KeyKind,
-    KeygenArgs, RootSecret, RootSecretError, ServeArgs,
+    KeygenArgs, ReaderGrantStore, RootSecret, RootSecretError, ServeArgs,
 };
 pub use cosign::{
     AssetFlow, CoSignDecision, CoSignError, CoSignPolicy, CoSignRefusal, CoSignRequest,

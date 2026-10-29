@@ -9,6 +9,7 @@ use zolana_ring_policy::{ListId, Member};
 
 use crate::{
     error::{GrantRefusal, RingRpcError},
+    grant_rows::GrantRows,
     upstream::{RecordsTip, TransactionSource},
 };
 
@@ -18,6 +19,12 @@ pub struct GrantQuery {
     pub ring: Address,
     pub reader: ReaderKey,
     pub wallet: Option<Address>,
+}
+
+/// Fixed at startup, a read consults no other grant source.
+pub(crate) enum Grants {
+    Tree,
+    Database(Box<GrantRows>),
 }
 
 /// A named wallet narrows any grant to that wallet's rows.
