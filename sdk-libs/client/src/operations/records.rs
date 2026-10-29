@@ -8,8 +8,8 @@ use spr_hasher::{primitives::hash_bytes, HasherError};
 use spr_keypair::X25519Pubkey;
 use zolana_ring_indexer::rpc::{
     GetRingApplyProofInputsResponse, GetRingMemberRecordsResponse, GetRingRecordPoolResponse,
-    RingMemberOpening, RingMemberRecordView, RingRecordPathView, RingRecordWriteView,
-    MAX_RING_MEMBER_PAGE_LIMIT,
+    GetStorageApplyProofInputsResponse, RingMemberOpening, RingMemberRecordView,
+    RingRecordPathView, RingRecordWriteView, MAX_RING_MEMBER_PAGE_LIMIT,
 };
 use zolana_ring_member_registry::{
     ApplyProofInputs, Canopy, MemberRecord, OpeningCheck, PoolSubject, QuadPath, RecordOpening,
@@ -293,23 +293,37 @@ pub fn member_record(view: &RingMemberRecordView) -> MemberRecord {
     }
 }
 
+/// Both apply responses carry the same proof input fields.
+macro_rules! proof_inputs {
+    ($response:expr) => {
+        Ok(ApplyProofInputs {
+            old_root: $response.old_root.0,
+            new_root: $response.new_root.0,
+            old_next_index: $response.old_next_index,
+            new_next_index: $response.new_next_index,
+            chain_start: $response.chain_start.0,
+            chain_end: $response.chain_end.0,
+            writes: record_writes(&$response.writes)?,
+        })
+    };
+}
+
 /// The proof inputs of one application, in queue order.
 pub fn apply_proof_inputs(
     response: &GetRingApplyProofInputsResponse,
 ) -> Result<ApplyProofInputs, AuditError> {
-    Ok(ApplyProofInputs {
-        old_root: response.old_root.0,
-        new_root: response.new_root.0,
-        old_next_index: response.old_next_index,
-        new_next_index: response.new_next_index,
-        chain_start: response.chain_start.0,
-        chain_end: response.chain_end.0,
-        writes: response
-            .writes
-            .iter()
-            .map(record_write)
-            .collect::<Result<_, _>>()?,
-    })
+    proof_inputs!(response)
+}
+
+/// The proof inputs of one storage `Update`, in request order.
+pub fn storage_apply_proof_inputs(
+    response: &GetStorageApplyProofInputsResponse,
+) -> Result<ApplyProofInputs, AuditError> {
+    proof_inputs!(response)
+}
+
+fn record_writes(views: &[RingRecordWriteView]) -> Result<Vec<RecordWriteProofInput>, AuditError> {
+    views.iter().map(record_write).collect()
 }
 
 /// The sealed nullifier secret a record view carries, refused when only half of it is present.
