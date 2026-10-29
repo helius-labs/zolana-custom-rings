@@ -1,7 +1,6 @@
 {
   "description": "Compact ring transact data of each rail and what the ring program forwards for it, the SPP TransactIxData, the SPP instruction data (tag 19 or 21 then the data) and the external data hash over the SPP tag, the data before private_tx_hash and two settlement accounts per leg. Byte 1 of the compact data indexes SPP_SUPPORTED_SHAPES below the default owner tag flag (bit 6), bit 7 refused. Byte 2 is the input count below the key escrow flag (bit 6) and the anonymous entry key flag (bit 7), the expiry is a u32, every rail publishes all n_out slots with no output count, exit payloads take 83 bytes without a u16 prefix, an anonymous slot is its hash, a 32-byte owner tag, a u16 little-endian length and the scheme 1 body, empty on a change output, the anonymous rail's scheme 2 sender bundle follows the outputs as a 32-byte tag, a nonzero u16 length and the body, and the random 16-byte salt follows the transaction viewing key. Produced by program-libs/interface/tests/transact.rs.",
   "auditor_pubkey": "04a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
-  "co_signer": "c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5",
   "cases": [
     {
       "name": "confidential_delivered_policy",

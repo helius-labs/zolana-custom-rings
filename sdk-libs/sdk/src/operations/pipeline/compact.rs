@@ -249,7 +249,8 @@ impl TransactAccounts {
         );
         accounts.extend(
             self.co_signer
-                .map(|co_signer| AccountMeta::new_readonly(co_signer, true)),
+                .into_iter()
+                .flat_map(|co_signer| ring.co_signer_metas(co_signer)),
         );
         accounts.extend(
             self.delegate

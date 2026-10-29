@@ -8,9 +8,10 @@ use std::{
 use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
 use custom_ring_interface::{
-    AppliedAt, CoSignScope, EscrowKey, MemberRegistry, QueueEntry, RecordQueue, RingMode,
-    RingProgramConfig, SourceSlot, CONFIG_PDA_SEED, DEFAULT_INSERT_FEE, MEMBER_REGISTRY_PDA_SEED,
-    N_SOURCE_SLOTS, RECORD_QUEUE_PDA_SEED, RING_PROGRAM_CONFIG,
+    AppliedAt, CoSignScope, CoSigner, CoSignerCounts, EscrowKey, MemberRegistry, QueueEntry,
+    RecordQueue, RingMode, RingProgramConfig, SourceSlot, CONFIG_PDA_SEED, CO_SIGNER,
+    DEFAULT_INSERT_FEE, MEMBER_REGISTRY_PDA_SEED, N_SOURCE_SLOTS, RECORD_QUEUE_PDA_SEED,
+    RING_PROGRAM_CONFIG,
 };
 use solana_account::Account;
 use solana_address::Address;
@@ -233,9 +234,8 @@ impl RingSettings {
         config.mode = self.mode as u8;
         config.insert_fee = DEFAULT_INSERT_FEE.to_le_bytes();
         config.created_slot = self.created_slot.to_le_bytes();
-        if let Some((signer, scope)) = self.co_signer {
-            config.co_signer = signer;
-            config.co_sign_scope = scope.bits();
+        if let Some((_, scope)) = self.co_signer {
+            config.co_signers = CoSignerCounts::default().added(scope).expect("one record");
         }
         if let Some(delegate) = self.delegate {
             config.delegate = delegate;
@@ -269,7 +269,27 @@ impl Chain {
             activated: 1,
             bump: Address::find_program_address(&[RING_AUTH_PDA_SEED], &program()).1,
         };
-        Self::default()
+        let chain = Self::default();
+        let chain = match settings.co_signer {
+            Some((signer, scope)) => chain.with(
+                ring().co_signer_pda(&signer),
+                account(
+                    program(),
+                    &CoSigner {
+                        discriminator: CO_SIGNER,
+                        signer,
+                        scope: scope.bits(),
+                        bump: Address::find_program_address(
+                            &[CoSigner::SEED, signer.as_ref()],
+                            &program(),
+                        )
+                        .1,
+                    },
+                ),
+            ),
+            None => chain,
+        };
+        chain
             .with(ring().config_pda(), account(program(), &settings.config()))
             .with(
                 ring().ring_auth_pda(),

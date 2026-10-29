@@ -116,6 +116,8 @@ pinned_codes! {
     OutputBodyLength = 8253,
     InvalidCoSignerRecord = 8260,
     CoSignerRecordAlreadyExists = 8261,
+    CoSignerOutOfScope = 8262,
+    CoSignerCountOutOfRange = 8263,
     InvalidRingPolicy = 8300,
     RingPolicyAlreadyExists = 8301,
 }

@@ -38,7 +38,6 @@ const VECTORS: &str = concat!(
 struct ExpansionVectors {
     description: String,
     auditor_pubkey: String,
-    co_signer: String,
     cases: Vec<Case>,
 }
 
@@ -302,7 +301,6 @@ fn config() -> RingProgramConfig {
     config.discriminator = RING_PROGRAM_CONFIG;
     config.auditor_pubkey[0] = 4;
     config.auditor_pubkey[1..].copy_from_slice(&[0xa1; 32]);
-    config.co_signer = Address::new_from_array([0xc5; 32]);
     config
 }
 
@@ -358,7 +356,6 @@ fn compute_vectors() -> ExpansionVectors {
                       program-libs/interface/tests/transact.rs."
             .to_string(),
         auditor_pubkey: hex::encode(config.auditor_pubkey),
-        co_signer: hex::encode(config.co_signer.as_array()),
         cases,
     }
 }

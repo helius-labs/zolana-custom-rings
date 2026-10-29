@@ -323,6 +323,7 @@ impl ShapeRing<'_> {
                     nullifier_key: env.sender.keypair.nullifier_key.clone(),
                     input_tree: env.tree,
                     output_tree: env.tree,
+                    co_signer: None,
                 },
             );
             land(env, merge, &env.payer, &[])?;

@@ -178,10 +178,7 @@ pub struct RingProgramConfig {
     pub mode: u8,
     /// Lamports a record write by a signer other than the authority pays the authority.
     pub insert_fee: [u8; 8],
-    /// Zero without a co-signer.
-    pub co_signer: Address,
-    /// [`CoSignScope`] bits, zero without a co-signer.
-    pub co_sign_scope: u8,
+    pub co_signers: CoSignerCounts,
     /// Zero without a delegate.
     pub delegate: Address,
     /// Little endian, the slot `CreateConfig` ran in.
@@ -218,15 +215,6 @@ impl RingProgramConfig {
 
     pub const fn has_policy(&self) -> bool {
         self.has_policy == 1
-    }
-
-    pub fn co_signer(&self) -> Option<&Address> {
-        (self.co_signer != Address::default()).then_some(&self.co_signer)
-    }
-
-    /// `None` without a co-signer, every set scope bit is a known class.
-    pub const fn co_sign_scope(&self) -> Option<CoSignScope> {
-        CoSignScope::new(self.co_sign_scope)
     }
 
     pub fn delegate(&self) -> Option<&Address> {
@@ -275,6 +263,50 @@ impl BitOr for CoSignScope {
 
     fn bitor(self, rhs: Self) -> Self {
         Self(self.0 | rhs.0)
+    }
+}
+
+/// Count of `CoSigner` records covering each class, a class with none demands no co-signer.
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Pod, Zeroable)]
+#[repr(C)]
+pub struct CoSignerCounts([u8; 3]);
+
+impl CoSignerCounts {
+    const CLASSES: [CoSignScope; 3] = [
+        CoSignScope::TRANSFERS,
+        CoSignScope::DEPOSITS,
+        CoSignScope::WITHDRAWALS,
+    ];
+
+    /// `None` without a record.
+    pub fn covered(&self) -> Option<CoSignScope> {
+        let bits = Self::CLASSES
+            .iter()
+            .zip(self.0)
+            .filter(|(_, count)| *count != 0)
+            .fold(0, |bits, (class, _)| bits | class.bits());
+        CoSignScope::new(bits)
+    }
+
+    pub fn added(self, scope: CoSignScope) -> Result<Self, CustomRingError> {
+        self.step(scope, u8::checked_add)
+    }
+
+    pub fn removed(self, scope: CoSignScope) -> Result<Self, CustomRingError> {
+        self.step(scope, u8::checked_sub)
+    }
+
+    fn step(
+        mut self,
+        scope: CoSignScope,
+        step: fn(u8, u8) -> Option<u8>,
+    ) -> Result<Self, CustomRingError> {
+        for (class, count) in Self::CLASSES.iter().zip(&mut self.0) {
+            if scope.contains(*class) {
+                *count = step(*count, 1).ok_or(CustomRingError::CoSignerCountOutOfRange)?;
+            }
+        }
+        Ok(self)
     }
 }
 
@@ -686,11 +718,11 @@ impl PendingApplication<'_> {
 }
 
 const _: () = assert!(ReadAccessRecord::SIZE == 36);
-const _: () = assert!(RingProgramConfig::SIZE == 150);
+const _: () = assert!(RingProgramConfig::SIZE == 120);
 const _: () = assert!(core::mem::offset_of!(RingProgramConfig, insert_fee) == 69);
-const _: () = assert!(core::mem::offset_of!(RingProgramConfig, co_signer) == 77);
-const _: () = assert!(core::mem::offset_of!(RingProgramConfig, delegate) == 110);
-const _: () = assert!(core::mem::offset_of!(RingProgramConfig, created_slot) == 142);
+const _: () = assert!(core::mem::offset_of!(RingProgramConfig, co_signers) == 77);
+const _: () = assert!(core::mem::offset_of!(RingProgramConfig, delegate) == 80);
+const _: () = assert!(core::mem::offset_of!(RingProgramConfig, created_slot) == 112);
 const _: () = assert!(core::mem::size_of::<SourceSlot>() == 33);
 const _: () = assert!(MemberRegistry::SIZE == 2388);
 const _: () = assert!(core::mem::offset_of!(MemberRegistry, next_index) == 3);

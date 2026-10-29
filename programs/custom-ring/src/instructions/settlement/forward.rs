@@ -11,7 +11,7 @@ use crate::instructions::{
     deposit_audit::{AuditedDeposit, DepositVerification},
     instruction_runtime::RingAuth,
     loader::{
-        check_co_signer, check_funding_signer, load_config, load_registry, validate_spp_program,
+        check_funding_signer, load_config, load_registry, validate_spp_program, CoSignerSlot,
     },
     merge_disclosure::MergeAudit,
 };
@@ -42,9 +42,17 @@ pub fn process_merge_ix(
         classes: CoSignScope::TRANSFERS,
         withdrawals: Vec::new(),
     };
-    if let Some(expected) = demand.signer(&config)? {
-        check_co_signer(iter.next_account("co_signer")?, &expected)?;
-    }
+    let co_signer = match demand.requirement(&config)? {
+        Some(requirement) => Some(
+            CoSignerSlot {
+                program_id,
+                record: iter.next_account("co_signer_record")?,
+                signer: iter.next_account("co_signer")?,
+            }
+            .verify(requirement)?,
+        ),
+        None => None,
+    };
     // 3. The ring PDA sits in its SPP slot alone and the payer SPP debits signs.
     let spp_accounts = iter.remaining()?;
     let ring_auth =
@@ -56,7 +64,7 @@ pub fn process_merge_ix(
     // 5. An anonymous merge proves its owner's opening to the auditor, an escrow-mode merge its record.
     let parties = custom_ring_interface::AnonymousParties {
         payer: spp_accounts[RING_MERGE_PAYER_INDEX].address().as_array(),
-        cosigner: config.co_signer().map(Address::as_array),
+        cosigner: co_signer.as_ref().map(Address::as_array),
         exit_destination: None,
     }
     .identities()
@@ -109,8 +117,13 @@ pub fn process_audited_deposit_ix(
         classes: CoSignScope::DEPOSITS,
         withdrawals: Vec::new(),
     };
-    if let Some(expected) = demand.signer(&config)? {
-        check_co_signer(iter.next_account("co_signer")?, &expected)?;
+    if let Some(requirement) = demand.requirement(&config)? {
+        CoSignerSlot {
+            program_id,
+            record: iter.next_account("co_signer_record")?,
+            signer: iter.next_account("co_signer")?,
+        }
+        .verify(requirement)?;
     }
     let spp_accounts = iter.remaining()?;
     let anonymous = mode == RingMode::Anonymous;

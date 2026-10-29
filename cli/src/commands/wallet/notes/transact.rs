@@ -3,7 +3,10 @@
 use std::str::FromStr;
 
 use anyhow::{bail, ensure, Context as _, Result};
-use custom_ring_interface::{cosign::CoSignDemand, AnonymousSpend, RingProgramConfig, RingRail};
+use custom_ring_interface::{
+    cosign::{CoSignDemand, CoSignRequirement},
+    AnonymousSpend, RingProgramConfig, RingRail,
+};
 use custom_ring_sdk::{
     select_spend_where, shape_keyed, AnonymousMove, AnonymousPayment, CoSignScope,
     CustomRingConfig, CustomRingTransfer, CustomRingTransferInput, DepositAsset, DepositRecipient,
@@ -132,8 +135,7 @@ struct Outflow {
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Requirement {
-    configured: Option<Address>,
-    demanded: Option<Address>,
+    demanded: Option<CoSignRequirement>,
 }
 
 /// The demo parties a table referencing `Allow` refuses until their records carry it.
@@ -810,17 +812,10 @@ impl CoSigner {
         self.sign_for(Requirement::of(config.account(), demand)?)
     }
 
-    /// Refused when the operation demands a co-signer the operator did not pass, or another key is passed.
+    /// Refused when the operation demands a co-signer the operator did not pass.
     fn sign_for(&self, requirement: Requirement) -> Result<Option<&(dyn Signer + Sync)>> {
-        let provided = self.keypair.as_ref().map(Signer::pubkey);
-        if let (Some(configured), Some(found)) = (requirement.configured, provided) {
-            ensure!(
-                found == configured,
-                "the configured co-signer is {configured}, not {found}"
-            );
-        }
         ensure!(
-            requirement.demanded.is_none() || provided.is_some(),
+            requirement.demanded.is_none() || self.keypair.is_some(),
             "the operation needs the co-signer's approval, pass --cosigner-keypair"
         );
         Ok(self
@@ -839,8 +834,7 @@ impl Requirement {
             withdrawals: Vec::new(),
         };
         Ok(Self {
-            configured: config.co_signer().copied(),
-            demanded: demanded.signer(config)?,
+            demanded: demanded.requirement(config)?,
         })
     }
 }
@@ -1050,6 +1044,9 @@ impl Transfer<'_> {
                 if let Some(shape) = shape {
                     transfer = transfer.with_shape(shape)?;
                 }
+                if let Some(cosigner) = self.cosigner {
+                    transfer = transfer.with_co_signer(cosigner.pubkey());
+                }
                 // The owner signs its spends, it pays the transaction too.
                 TopUp {
                     funder: self.payer,
@@ -1081,6 +1078,7 @@ impl Transfer<'_> {
                             asset: mint,
                             payments: payees.clone(),
                             entry: *entry,
+                            co_signer: self.cosigner.map(|signer| signer.pubkey()),
                         };
                         ctx.block(select.select(ctx.ring_client()))?
                     }
@@ -1109,8 +1107,12 @@ impl Transfer<'_> {
                                 amount: payment.amount,
                             })?;
                         }
-                        match shape {
+                        let transfer = match shape {
                             Some(shape) => transfer.with_shape(shape)?,
+                            None => transfer,
+                        };
+                        match self.cosigner {
+                            Some(cosigner) => transfer.with_co_signer(cosigner.pubkey()),
                             None => transfer,
                         }
                     }
@@ -1289,10 +1291,11 @@ mod tests {
 
     const RING: Address = Address::new_from_array([4; 32]);
 
-    fn configured(co_signer: Address, scope: CoSignScope) -> RingProgramConfig {
+    fn configured(scope: CoSignScope) -> RingProgramConfig {
         let mut config = RingProgramConfig::zeroed();
-        config.co_signer = co_signer;
-        config.co_sign_scope = scope.bits();
+        config.co_signers = custom_ring_interface::CoSignerCounts::default()
+            .added(scope)
+            .unwrap();
         config
     }
 
@@ -1317,9 +1320,9 @@ mod tests {
     }
 
     #[test]
-    fn blanket_scope_and_private_approval_require_the_configured_signer() {
-        let (key, stranger) = (Keypair::new(), Keypair::new());
-        let transfers = configured(key.pubkey(), CoSignScope::TRANSFERS);
+    fn blanket_scope_and_private_approval_require_a_co_signer() {
+        let key = Keypair::new();
+        let transfers = configured(CoSignScope::TRANSFERS);
         assert!(
             refusal(ABSENT.signs(&transfers, Demand::Transfer)).contains("pass --cosigner-keypair")
         );
@@ -1329,11 +1332,7 @@ mod tests {
                 .unwrap(),
             Some(key.pubkey())
         );
-        assert!(
-            refusal(CoSigner::passing(&stranger).signs(&transfers, Demand::Transfer))
-                .starts_with("the configured co-signer is")
-        );
-        let withdrawals = configured(key.pubkey(), CoSignScope::WITHDRAWALS);
+        let withdrawals = configured(CoSignScope::WITHDRAWALS);
         assert_eq!(ABSENT.signs(&withdrawals, Demand::Transfer).unwrap(), None);
         assert!(refusal(ABSENT.signs(&withdrawals, Demand::Approval))
             .contains("pass --cosigner-keypair"));
@@ -1352,7 +1351,7 @@ mod tests {
             (CoSignScope::TRANSFERS, false, true),
             (CoSignScope::WITHDRAWALS, false, false),
         ] {
-            let config = configured(key.pubkey(), scope);
+            let config = configured(scope);
             let handed = |demand| passed.signs(&config, demand).unwrap().is_some();
             assert_eq!(handed(Demand::Deposit), deposit, "{scope:?}");
             assert_eq!(handed(Demand::Transfer), transfer, "{scope:?}");

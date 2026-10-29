@@ -29,6 +29,7 @@ use zolana_ring_client::{MergeDisclosureEncryption, MergeOpening};
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
+    co_signer::CoSignerChoice,
     pipeline::HiddenOwner,
     prover::{to_instruction_proof, RingRequest},
     request::{MergeAnonymous, MergeSlot},
@@ -38,7 +39,7 @@ use crate::{
 
 pub use spr_transaction::instructions::merge::MERGE_DEFAULT_INPUT_COUNT;
 /// The most real inputs a ring merge forwards in one v1 transaction.
-pub const MAX_RING_MERGE_INPUTS: usize = 50;
+pub const MAX_RING_MERGE_INPUTS: usize = 49;
 
 #[must_use]
 #[derive(Clone)]
@@ -98,6 +99,8 @@ pub struct MergeProofInput {
     pub nullifier_key: NullifierKey,
     pub input_tree: Address,
     pub output_tree: Address,
+    /// Read only when a record covers transfers.
+    pub co_signer: Option<Address>,
 }
 
 pub struct ProvenCustomRingMerge {
@@ -134,11 +137,7 @@ impl PreparedCustomRingMerge {
         if config.mode != RingMode::Anonymous {
             return Ok(());
         }
-        HiddenOwner::of(&self.inner.signing_pubkey)?.check_signers(
-            signers
-                .into_iter()
-                .chain(config.co_signer.as_ref().map(|c| c.signer)),
-        )
+        HiddenOwner::of(&self.inner.signing_pubkey)?.check_signers(signers)
     }
 
     fn anonymous_width(&self) -> Result<usize, RingError> {
@@ -158,8 +157,16 @@ impl PreparedCustomRingMerge {
         let config = self.ring.require_config(client.zolana()).await?;
         self.ring.require_active(client.zolana()).await?;
         let anonymous = config.mode == RingMode::Anonymous;
+        let co_signer = CoSignerChoice {
+            ring: self.ring,
+            config: &config,
+            demand: &merge_demand(),
+            supplied: input.co_signer,
+        }
+        .resolve(client.zolana())
+        .await?;
         if anonymous {
-            self.check_public_signers([payer], &config)?;
+            self.check_public_signers(core::iter::once(payer).chain(co_signer), &config)?;
             self.anonymous_width()?;
         }
         let input_tree_id = tree_id(client.zolana(), input.input_tree).await?;
@@ -200,7 +207,7 @@ impl PreparedCustomRingMerge {
                 AnonymousMergeDisclosure {
                     party_identities: custom_ring_interface::AnonymousParties {
                         payer: payer.as_array(),
-                        cosigner: config.co_signer.as_ref().map(|c| c.signer.as_array()),
+                        cosigner: co_signer.as_ref().map(Address::as_array),
                         exit_destination: None,
                     }
                     .identities()?,
@@ -215,7 +222,6 @@ impl PreparedCustomRingMerge {
             ),
             false => None,
         };
-        let co_signer = merge_co_signer(&config)?;
         let inner = self.inner;
         Ok(ProvenCustomRingMerge {
             input_tree: input.input_tree,
@@ -241,7 +247,7 @@ impl PreparedCustomRingMerge {
 }
 
 impl ProvenCustomRingMerge {
-    /// `Some` when the config's scope covers transfers, it signs the transaction.
+    /// `Some` when a record covers transfers, it signs the transaction.
     pub fn co_signer(&self) -> Option<Address> {
         self.co_signer
     }
@@ -295,7 +301,14 @@ impl RingMergeOperation {
             input_tree: self.input.input_tree,
             output_tree: self.input.output_tree,
             payer,
-            co_signer: merge_co_signer(config)?,
+            co_signer: CoSignerChoice {
+                ring: merge.ring,
+                config,
+                demand: &merge_demand(),
+                supplied: self.input.co_signer,
+            }
+            .unchecked()?
+            .map(|(_, signer)| signer),
             data: CustomRingMergeIxData {
                 registry_root_index: 0,
                 output_ring_data_hash: merge.inner.output_utxo.ring_data_hash.unwrap_or_default(),
@@ -326,7 +339,7 @@ impl RingMergeOperation {
     }
 }
 
-/// `[config, registry?, co-signer?]` ahead of SPP's merge list, no registry on an anonymous ring.
+/// `[config, registry?, co-signer record and signer?]` ahead of SPP's merge list, no registry on an anonymous ring.
 #[must_use]
 pub struct CustomRingMergeInstruction {
     pub ring: CustomRing,
@@ -362,7 +375,8 @@ impl CustomRingMergeInstruction {
         }
         prefix.extend(
             self.co_signer
-                .map(|co_signer| AccountMeta::new_readonly(co_signer, true)),
+                .into_iter()
+                .flat_map(|co_signer| self.ring.co_signer_metas(co_signer)),
         );
         instruction.accounts.splice(0..0, prefix);
         Ok(instruction)
@@ -475,6 +489,6 @@ fn escrow_merge_root() -> Result<BoundRoot, RingError> {
 }
 
 /// A merge is a transfer, no public leg adds a class.
-fn merge_co_signer(config: &CustomRingConfig) -> Result<Option<Address>, RingError> {
-    Ok(CoSignDemand::transact(false, &[]).signer(config.account())?)
+fn merge_demand() -> CoSignDemand {
+    CoSignDemand::transact(false, &[])
 }

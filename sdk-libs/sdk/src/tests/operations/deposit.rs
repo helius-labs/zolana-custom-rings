@@ -116,7 +116,7 @@ async fn a_deposit_names_the_co_signer_a_deposit_scope_demands() {
     };
     assert!(matches!(
         wrong.prepare(&chain).await,
-        Err(RingError::Program(CustomRingError::MissingCoSigner))
+        Err(RingError::Program(CustomRingError::InvalidCoSignerRecord))
     ));
 }
 

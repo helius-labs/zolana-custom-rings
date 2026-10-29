@@ -149,6 +149,8 @@ ring_errors! {
     OutputBodyLength = 8253 => "a ring output body exceeds the u32 length prefix",
     InvalidCoSignerRecord = 8260 => "co-signer record account is invalid",
     CoSignerRecordAlreadyExists = 8261 => "co-signer record already exists",
+    CoSignerOutOfScope = 8262 => "the co-signer's scope misses a demanded class",
+    CoSignerCountOutOfRange = 8263 => "co-signer count of a class leaves the u8 range",
     InvalidRingPolicy = 8300 => "ring policy account is invalid",
     RingPolicyAlreadyExists = 8301 => "ring policy already exists",
 }

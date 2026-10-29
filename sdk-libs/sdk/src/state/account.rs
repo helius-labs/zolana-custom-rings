@@ -29,7 +29,8 @@ pub struct CustomRingConfig {
     pub mode: RingMode,
     /// Lamports a member's record write pays the authority.
     pub insert_fee: u64,
-    pub co_signer: Option<CustomRingCoSigner>,
+    /// The classes some `CoSigner` record covers.
+    pub co_signer_classes: Option<CoSignScope>,
     pub delegate: Option<Address>,
     pub created_slot: u64,
     account: RingProgramConfig,
@@ -39,6 +40,7 @@ pub struct CustomRingConfig {
 pub struct CustomRingCoSigner {
     pub signer: Address,
     pub scope: CoSignScope,
+    account: CoSigner,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -242,6 +244,29 @@ impl CustomRing {
             .ok_or(RingError::InvalidAccount { address })
     }
 
+    /// `None` when `signer` holds no record.
+    pub async fn co_signer(
+        self,
+        rpc: &(impl AsyncRpc + ?Sized),
+        signer: &Address,
+    ) -> Result<Option<CustomRingCoSigner>, RingError> {
+        let (address, bump) = self.pda(&[CoSigner::SEED, signer.as_ref()]);
+        let Some(account) = rpc.get_account(address).await? else {
+            return Ok(None);
+        };
+        CoSigner::decode(&account.owner, &self.program_id, &account.data)
+            .filter(|record| record.bump() == bump && record.signer == *signer)
+            .and_then(|record| {
+                Some(CustomRingCoSigner {
+                    signer: record.signer,
+                    scope: record.scope()?,
+                    account: record,
+                })
+            })
+            .map(Some)
+            .ok_or(RingError::InvalidAccount { address })
+    }
+
     pub async fn registration(
         self,
         rpc: &(impl AsyncRpc + ?Sized),
@@ -287,16 +312,15 @@ impl CustomRing {
     }
 }
 
+impl CustomRingCoSigner {
+    pub fn account(&self) -> &CoSigner {
+        &self.account
+    }
+}
+
 impl CustomRingConfig {
     fn new(account: RingProgramConfig, address: Address) -> Result<Self, RingError> {
         let invalid = || RingError::InvalidAccount { address };
-        let co_signer = match account.co_signer() {
-            Some(signer) => Some(CustomRingCoSigner {
-                signer: *signer,
-                scope: account.co_sign_scope().ok_or_else(invalid)?,
-            }),
-            None => None,
-        };
         Ok(Self {
             authority: account.authority,
             auditor_pubkey: X25519Pubkey::from_bytes(account.auditor_pubkey)
@@ -304,7 +328,7 @@ impl CustomRingConfig {
             has_policy: account.has_policy(),
             mode: account.mode()?,
             insert_fee: account.insert_fee(),
-            co_signer,
+            co_signer_classes: account.co_signers.covered(),
             delegate: account.delegate().copied(),
             created_slot: account.created_slot(),
             account,

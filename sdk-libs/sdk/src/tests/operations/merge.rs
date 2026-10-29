@@ -35,6 +35,7 @@ impl Merge<'_> {
                 nullifier_key: self.owner.nullifier_key.clone(),
                 input_tree: pda::tree(TREE_ID),
                 output_tree: pda::tree(TREE_ID),
+                co_signer: self.settings.co_signer.map(|(signer, _)| signer),
             },
         );
         RingSubmission::new(merge)
@@ -107,6 +108,7 @@ async fn the_widest_merge_fits_a_transaction_beside_its_co_signer() {
             nullifier_key: owner.nullifier_key.clone(),
             input_tree: pda::tree(TREE_ID),
             output_tree: pda::tree(TREE_ID),
+            co_signer: Some(Address::new_from_array([0x46; 32])),
         },
     );
     let config = ring()

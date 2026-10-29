@@ -137,14 +137,6 @@ pub struct SetPausedIxData {
     pub paused: bool,
 }
 
-/// Requires co-signing for the selected public operations.
-#[derive(Clone, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
-pub struct SetCoSignerIxData {
-    pub signer: [u8; 32],
-    /// [`CoSignScope`](crate::CoSignScope) bits.
-    pub scope: u8,
-}
-
 /// Creates or rescopes the signer's `CoSigner` record, clearing it takes no data.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
 pub struct SetCoSignerRecordIxData {
@@ -153,25 +145,15 @@ pub struct SetCoSignerRecordIxData {
     pub scope: u8,
 }
 
-impl SetCoSignerIxData {
-    /// The scope a stored co-signer takes.
-    pub fn check(&self) -> Result<crate::CoSignScope, CustomRingError> {
-        co_signer_scope(&self.signer, self.scope)
-    }
-}
-
 impl SetCoSignerRecordIxData {
     pub fn check(&self) -> Result<crate::CoSignScope, CustomRingError> {
-        co_signer_scope(self.signer.as_array(), self.scope)
+        let scope =
+            crate::CoSignScope::new(self.scope).ok_or(CustomRingError::InvalidCoSignerScope)?;
+        if self.signer == Address::default() {
+            return Err(CustomRingError::InvalidCoSigner);
+        }
+        Ok(scope)
     }
-}
-
-fn co_signer_scope(signer: &[u8; 32], scope: u8) -> Result<crate::CoSignScope, CustomRingError> {
-    let scope = crate::CoSignScope::new(scope).ok_or(CustomRingError::InvalidCoSignerScope)?;
-    if *signer == [0; 32] {
-        return Err(CustomRingError::InvalidCoSigner);
-    }
-    Ok(scope)
 }
 
 /// The circuit uses one BSB22 commitment; its point and proof of knowledge are mandatory.

@@ -67,13 +67,15 @@ fn an_outflow_limit_ring_bounds_each_transfer() -> Result<()> {
         transfer.transfer_sol(&recipient, amount)?;
         Ok(transfer)
     };
+    let cosigner = Keypair::new();
     let prove = |transaction: ConfidentialTransaction| {
         let transfer = CustomRingTransfer::new(CustomRingTransferInput {
             ring,
             sender,
             nullifier_key: Some(&sender.nullifier_key),
             transaction,
-        });
+        })
+        .with_co_signer(cosigner.pubkey());
         env.run(transfer.prove(env.client.ring_client()))
     };
 
@@ -88,12 +90,12 @@ fn an_outflow_limit_ring_bounds_each_transfer() -> Result<()> {
     wait_for_indexed_transaction(indexer, auditor_tag, signature);
 
     // Above the threshold the chain refuses the send until the co-signer signs.
-    let cosigner = Keypair::new();
     send(
         rpc,
         &env.payer,
         &[custom_ring_sdk::SetCoSigner {
             ring,
+            payer: env.payer.pubkey(),
             authority: env.payer.pubkey(),
             signer: cosigner.pubkey(),
             scope: CoSignScope::WITHDRAWALS,

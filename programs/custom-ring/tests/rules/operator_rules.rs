@@ -1,10 +1,10 @@
 //! Config, policy and read access writes and their declared budgets.
 
 use custom_ring_interface::{
-    tag, CreateConfigIxData, CustomRingError, InstructionTag, MemberRegistry, ReadAccessRecord,
-    ReaderIxData, RingKind, RingMode, RingProgramConfig, SetCoSignerIxData, SetPausedIxData,
-    SetPolicySourceIxData, WriteRecordsIxData, DEFAULT_INSERT_FEE, READER_KEY_P256,
-    READ_ACCESS_RECORD_PDA_SEED,
+    tag, CoSignScope, CoSigner, CreateConfigIxData, CustomRingError, InstructionTag,
+    MemberRegistry, ReadAccessRecord, ReaderIxData, RingKind, RingMode, RingProgramConfig,
+    SetPausedIxData, SetPolicySourceIxData, WriteRecordsIxData, DEFAULT_INSERT_FEE,
+    READER_KEY_P256, READ_ACCESS_RECORD_PDA_SEED,
 };
 use solana_address::Address;
 use solana_instruction::{error::InstructionError, AccountMeta, Instruction};
@@ -14,16 +14,12 @@ use spr_account_checks::AccountError;
 use zolana_ring_policy::{ListChange, ListId, ListSet};
 
 use crate::common::{
-    allow_list_table, auditor_pubkey, config_pda, config_write, create_config,
+    allow_list_table, auditor_pubkey, co_signer_record, config_pda, config_write, create_config,
     create_member_registry, list_table, policy_write, program_data_of, queue_pda, refused,
-    refused_with, registry_pda, ring_auth, set_delegate, within_budget, write_records, Fee, Ring,
-    Sent, Setup, PROGRAM, SYSTEM,
+    refused_with, registry_pda, ring_auth, set_co_signer, set_delegate, within_budget,
+    write_records, ClearCoSignerIx, Fee, Ring, Sent, SetCoSignerIx, Setup, PROGRAM, SYSTEM,
 };
 use crate::transact_rules::SPP;
-
-fn set_co_signer_data(signer: [u8; 32], scope: u8, _mints: &[[u8; 32]]) -> Vec<u8> {
-    wincode::serialize(&SetCoSignerIxData { signer, scope }).unwrap()
-}
 
 fn authority_send(ring: &mut Ring, instruction: Instruction) -> Sent {
     let authority = ring.authority.insecure_clone();
@@ -36,7 +32,11 @@ fn only_the_upgrade_authority_creates_a_config_for_a_usable_auditor_key() {
     let config: RingProgramConfig = ring.read(&config_pda());
     assert_eq!(config.authority, ring.authority.pubkey());
     assert_eq!(
-        (config.co_signer(), config.delegate(), config.insert_fee()),
+        (
+            config.co_signers.covered(),
+            config.delegate(),
+            config.insert_fee()
+        ),
         (None, None, DEFAULT_INSERT_FEE)
     );
 
@@ -106,57 +106,53 @@ fn the_config_records_the_slot_it_was_created_in() {
 }
 
 #[test]
-fn the_co_signer_and_scope_live_in_the_config() {
+fn each_co_signer_lives_in_its_own_record() {
     let mut ring = Ring::new(Setup::AuditOnly);
-    let authority = ring.authority.pubkey();
-    let usdc = [7; 32];
+    let (payer, authority) = (ring.payer.pubkey(), ring.authority.pubkey());
+    let set = |signer, scope| {
+        SetCoSignerIx {
+            payer,
+            authority,
+            signer: Address::new_from_array(signer),
+            scope,
+        }
+        .instruction()
+    };
     refused(
-        authority_send(
-            &mut ring,
-            config_write(
-                tag::SET_CO_SIGNER,
-                &authority,
-                &[],
-                &set_co_signer_data([1; 32], 0, &[]),
-            ),
-        ),
+        authority_send(&mut ring, set([1; 32], 0)),
         CustomRingError::InvalidCoSignerScope,
     );
     refused(
-        authority_send(
-            &mut ring,
-            config_write(
-                tag::SET_CO_SIGNER,
-                &authority,
-                &[],
-                &set_co_signer_data([0; 32], 1, &[]),
-            ),
-        ),
+        authority_send(&mut ring, set([0; 32], 1)),
         CustomRingError::InvalidCoSigner,
     );
     within_budget(
         InstructionTag::SetCoSigner,
-        authority_send(
-            &mut ring,
-            config_write(
-                tag::SET_CO_SIGNER,
-                &authority,
-                &[],
-                &set_co_signer_data([1; 32], 4, &[usdc]),
-            ),
-        ),
+        authority_send(&mut ring, set([1; 32], 4)),
     );
+    within_budget(
+        InstructionTag::SetCoSigner,
+        authority_send(&mut ring, set([1; 32], 5)),
+    );
+    let signer = Address::new_from_array([1; 32]);
+    let record: CoSigner = ring.read(&co_signer_record(&signer));
+    assert_eq!((record.signer, record.scope), (signer, 5));
     let config: RingProgramConfig = ring.read(&config_pda());
-    assert_eq!(config.co_signer(), Some(&Address::new_from_array([1; 32])));
+    assert_eq!(config.co_signers.covered(), CoSignScope::new(5));
     within_budget(
         InstructionTag::ClearCoSigner,
         authority_send(
             &mut ring,
-            config_write(tag::CLEAR_CO_SIGNER, &authority, &[], &[]),
+            ClearCoSignerIx {
+                authority,
+                signer,
+                rent_recipient: payer,
+            }
+            .instruction(),
         ),
     );
     let config: RingProgramConfig = ring.read(&config_pda());
-    assert_eq!(config.co_signer(), None);
+    assert_eq!(config.co_signers.covered(), None);
 }
 
 fn appoint(ring: &mut Ring, delegate: &Keypair) -> Sent {
@@ -381,13 +377,28 @@ fn every_authority_write_refuses_a_stranger() {
         list_id: ListId::Allow as u8,
         source: 0,
     };
-    let co_signer = set_co_signer_data([1; 32], 1, &[]);
+    let payer = ring.payer.pubkey();
+    set_co_signer(&mut ring, &Address::new_from_array([1; 32]), 1);
     let writes = [
         (
-            config_write(tag::SET_CO_SIGNER, &authority, &[], &co_signer),
+            SetCoSignerIx {
+                payer,
+                authority,
+                signer: Address::new_from_array([1; 32]),
+                scope: 1,
+            }
+            .instruction(),
+            1,
+        ),
+        (
+            ClearCoSignerIx {
+                authority,
+                signer: Address::new_from_array([1; 32]),
+                rent_recipient: payer,
+            }
+            .instruction(),
             0,
         ),
-        (config_write(tag::CLEAR_CO_SIGNER, &authority, &[], &[]), 0),
         (
             policy_write(
                 tag::CREATE_POLICY,
@@ -580,6 +591,7 @@ fn retired_and_unknown_tags_are_refused() {
 fn operator_and_record_instructions_fit_their_declared_budgets() {
     let mut ring = Ring::new(Setup::Policy);
     let authority = ring.authority.pubkey();
+    let payer = ring.payer.pubkey();
     within_budget(
         InstructionTag::SetPolicyRules,
         authority_send(
@@ -596,12 +608,13 @@ fn operator_and_record_instructions_fit_their_declared_budgets() {
         InstructionTag::SetCoSigner,
         authority_send(
             &mut ring,
-            config_write(
-                tag::SET_CO_SIGNER,
-                &authority,
-                &[],
-                &set_co_signer_data([1; 32], 4, &[[7; 32]]),
-            ),
+            SetCoSignerIx {
+                payer,
+                authority,
+                signer: Address::new_from_array([1; 32]),
+                scope: 4,
+            }
+            .instruction(),
         ),
     );
     within_budget(

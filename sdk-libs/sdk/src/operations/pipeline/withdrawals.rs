@@ -29,9 +29,11 @@ impl Exemption {
     ) -> Result<Option<Self>, RingError> {
         // The proof can waive only withdrawals, never approval, transfers or deposits.
         if demand.withdrawals.is_empty()
-            || demand.signer(config.account())?.is_none()
+            || demand.requirement(config.account())?.is_none()
             || demand
-                .signer_with_exemption(config.account(), true)?
+                .clone()
+                .exempt_withdrawals()
+                .requirement(config.account())?
                 .is_some()
         {
             return Ok(None);

@@ -2,8 +2,9 @@ use bytemuck::{Pod, Zeroable};
 use custom_ring_interface::{
     compute_unit_limit, tag, AppliedAt, ApplyRecordsIxData, AuthorityWriteRecordsIxData,
     CreateConfigIxData, CustomRingError, InstructionTag, MemberRegistry, MemberWriteIxData,
-    PolicyTableIxData, RecordWriteData, RegisterKeyIxData, RingKind, SetCoSignerIxData, SourceSpec,
-    WriteRecordsIxData, CONFIG_PDA_SEED, MEMBER_REGISTRY_PDA_SEED, RECORD_QUEUE_PDA_SEED,
+    PolicyTableIxData, RecordWriteData, RegisterKeyIxData, RingKind, SetCoSignerRecordIxData,
+    SourceSpec, WriteRecordsIxData, CONFIG_PDA_SEED, CO_SIGNER_PDA_SEED, MEMBER_REGISTRY_PDA_SEED,
+    RECORD_QUEUE_PDA_SEED,
 };
 use litesvm::LiteSVM;
 use solana_account::Account;
@@ -432,22 +433,97 @@ pub fn config_write(
     instruction(accounts, tagged(tag, body))
 }
 
+pub fn co_signer_record(signer: &Address) -> Address {
+    Address::find_program_address(&[CO_SIGNER_PDA_SEED, signer.as_ref()], &PROGRAM).0
+}
+
+/// The `[co_signer_record, co_signer]` slot of a demanded co-signature.
+#[derive(Clone, Copy)]
+pub struct CoSignerSlot {
+    pub record_of: Address,
+    pub signer: Address,
+}
+
+impl CoSignerSlot {
+    pub const fn own(signer: Address) -> Self {
+        Self {
+            record_of: signer,
+            signer,
+        }
+    }
+
+    pub fn signed(self) -> Vec<AccountMeta> {
+        self.metas(true)
+    }
+
+    pub fn unsigned(self) -> Vec<AccountMeta> {
+        self.metas(false)
+    }
+
+    fn metas(self, signs: bool) -> Vec<AccountMeta> {
+        vec![
+            AccountMeta::new_readonly(co_signer_record(&self.record_of), false),
+            AccountMeta::new_readonly(self.signer, signs),
+        ]
+    }
+}
+
+pub struct SetCoSignerIx {
+    pub payer: Address,
+    pub authority: Address,
+    pub signer: Address,
+    pub scope: u8,
+}
+
+impl SetCoSignerIx {
+    pub fn instruction(self) -> Instruction {
+        let data = SetCoSignerRecordIxData {
+            signer: self.signer,
+            scope: self.scope,
+        };
+        instruction(
+            vec![
+                AccountMeta::new(self.payer, true),
+                AccountMeta::new_readonly(self.authority, true),
+                AccountMeta::new(config_pda(), false),
+                AccountMeta::new(co_signer_record(&self.signer), false),
+                AccountMeta::new_readonly(SYSTEM, false),
+            ],
+            tagged(tag::SET_CO_SIGNER, &wincode::serialize(&data).unwrap()),
+        )
+    }
+}
+
+pub struct ClearCoSignerIx {
+    pub authority: Address,
+    pub signer: Address,
+    pub rent_recipient: Address,
+}
+
+impl ClearCoSignerIx {
+    pub fn instruction(self) -> Instruction {
+        instruction(
+            vec![
+                AccountMeta::new_readonly(self.authority, true),
+                AccountMeta::new(config_pda(), false),
+                AccountMeta::new(co_signer_record(&self.signer), false),
+                AccountMeta::new(self.rent_recipient, false),
+            ],
+            tagged(tag::CLEAR_CO_SIGNER, &[]),
+        )
+    }
+}
+
 pub fn set_co_signer(ring: &mut Ring, co_signer: &Address, scope: u8) {
     let authority = ring.authority.insecure_clone();
-    let data = SetCoSignerIxData {
-        signer: co_signer.to_bytes(),
+    let set = SetCoSignerIx {
+        payer: ring.payer.pubkey(),
+        authority: authority.pubkey(),
+        signer: *co_signer,
         scope,
-    };
-    ring.send(
-        config_write(
-            tag::SET_CO_SIGNER,
-            &authority.pubkey(),
-            &[],
-            &wincode::serialize(&data).unwrap(),
-        ),
-        &[&authority],
-    )
-    .expect("set the co-signer");
+    }
+    .instruction();
+    ring.send(set, &[&authority]).expect("set the co-signer");
 }
 
 #[derive(Clone, Copy)]

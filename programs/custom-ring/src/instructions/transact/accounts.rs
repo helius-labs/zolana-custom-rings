@@ -1,8 +1,8 @@
 use custom_ring_interface::{
-    cosign::CoSignDemand, funder_account_position, AnonymousParties, CuratorRoot, CustomRingError,
-    CustomRingProof, InputTrees, PublicSlots, RailSigner, RingProgramConfig, RingTransactData,
-    ANONYMOUS_PARTIES, RING_TRANSACT_ACCOUNT_PREFIX_LEN, RING_TRANSACT_RING_CONFIG_INDEX,
-    TRANSACT_PAYER_INDEX,
+    cosign::{CoSignDemand, CoSignRequirement},
+    funder_account_position, AnonymousParties, CuratorRoot, CustomRingError, CustomRingProof,
+    InputTrees, PublicSlots, RailSigner, RingProgramConfig, RingTransactData, ANONYMOUS_PARTIES,
+    RING_TRANSACT_ACCOUNT_PREFIX_LEN, RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
 };
 use pinocchio::{error::ProgramError, AccountView, Address};
 use spr_hasher::primitives::solana_owner_identity;
@@ -11,8 +11,8 @@ use spr_interface::instruction::instruction_data::settlement_accounts;
 use crate::instructions::{
     instruction_runtime::{PlacedRingAuth, RingAuth},
     loader::{
-        check_co_signer, check_funding_signer, load_anonymous_exit, load_curator_registry,
-        load_registry,
+        check_funding_signer, load_anonymous_exit, load_curator_registry, load_registry,
+        CoSignerSlot,
     },
     public_legs::PublicLegs,
 };
@@ -85,7 +85,11 @@ impl<'a> TransactCheck<'a> {
             }
             .verify()?;
         }
-        let co_signer = demand.signer_with_exemption(config, data.withdrawal_exemption.is_some());
+        let demand = match data.withdrawal_exemption {
+            Some(_) => demand.exempt_withdrawals(),
+            None => demand,
+        };
+        let requirement = demand.requirement(config);
         let binding = data.check_policy(if config.has_policy() {
             registry.as_deref()
         } else {
@@ -93,7 +97,7 @@ impl<'a> TransactCheck<'a> {
         })?;
         let prefix = self.prefix(
             binding.and_then(|binding| binding.curator),
-            co_signer.as_ref().ok().copied().flatten(),
+            requirement.as_ref().ok().copied().flatten(),
         );
         let policy = match binding {
             Some(binding) => Some(PolicyRoots {
@@ -109,6 +113,11 @@ impl<'a> TransactCheck<'a> {
             None => None,
         };
 
+        let co_signer = prefix
+            .co_signer
+            .as_ref()
+            .map(|slot| slot.signer(self.program_id, accounts))
+            .transpose()?;
         let spp = accounts
             .get(prefix.spp..)
             .ok_or(ProgramError::NotEnoughAccountKeys)?;
@@ -135,10 +144,8 @@ impl<'a> TransactCheck<'a> {
                         .map_err(CustomRingError::from)?,
                     None => [0; 32],
                 };
-                if prefix.co_signer.as_ref().is_some_and(|co_signer| {
-                    owners
-                        .iter()
-                        .any(|owner| owner.address() == &co_signer.expected)
+                if co_signer.is_some_and(|co_signer| {
+                    owners.iter().any(|owner| owner.address() == &co_signer)
                 }) {
                     return Err(CustomRingError::CoSignerIsOwner.into());
                 }
@@ -152,11 +159,7 @@ impl<'a> TransactCheck<'a> {
                 if !delegate.is_signer() || delegate.address() != &slot.expected {
                     return Err(CustomRingError::UnauthorizedDelegate.into());
                 }
-                if prefix
-                    .co_signer
-                    .as_ref()
-                    .is_some_and(|co_signer| co_signer.expected == slot.expected)
-                {
+                if co_signer == Some(slot.expected) {
                     return Err(CustomRingError::CoSignerIsDelegate.into());
                 }
                 [0; 32]
@@ -191,7 +194,7 @@ impl<'a> TransactCheck<'a> {
                 let exit = load_anonymous_exit(&data.interface_transfers, window)?;
                 let parties = AnonymousParties {
                     payer: payer.address().as_array(),
-                    cosigner: config.co_signer().map(Address::as_array),
+                    cosigner: co_signer.as_ref().map(Address::as_array),
                     exit_destination: exit.as_ref(),
                 };
                 Some(parties.identities().map_err(CustomRingError::from)?)
@@ -199,10 +202,7 @@ impl<'a> TransactCheck<'a> {
             RailSigner::Owners | RailSigner::Delegate(_) => None,
         };
 
-        co_signer?;
-        if let Some(slot) = prefix.co_signer {
-            check_co_signer(account_at(accounts, slot.index)?, &slot.expected)?;
-        }
+        requirement?;
         Ok(TransactAccounts {
             policy,
             sender,
@@ -214,13 +214,13 @@ impl<'a> TransactCheck<'a> {
         })
     }
 
-    fn prefix(&self, curator: Option<CuratorRoot>, co_signer: Option<Address>) -> Prefix {
+    fn prefix(&self, curator: Option<CuratorRoot>, co_signer: Option<CoSignRequirement>) -> Prefix {
         let mut next = Cursor(
             REGISTRY_INDEX
                 + usize::from(self.config.has_policy() || self.data.withdrawal_exemption.is_some()),
         );
         let curator = curator.map(|root| next.slot(root));
-        let co_signer = co_signer.map(|expected| next.slot(expected));
+        let co_signer = co_signer.map(|requirement| next.pair(requirement));
         let signer = match self.signer {
             RailSigner::Owners => SignerSlot::Owners,
             RailSigner::Payer => SignerSlot::Payer,
@@ -267,6 +267,21 @@ impl Slot<CuratorRoot> {
     }
 }
 
+impl Slot<CoSignRequirement> {
+    fn signer(
+        &self,
+        program_id: &Address,
+        accounts: &[AccountView],
+    ) -> Result<Address, ProgramError> {
+        CoSignerSlot {
+            program_id,
+            record: account_at(accounts, self.index)?,
+            signer: account_at(accounts, self.index + 1)?,
+        }
+        .verify(self.expected)
+    }
+}
+
 enum SignerSlot {
     Owners,
     Payer,
@@ -275,7 +290,8 @@ enum SignerSlot {
 
 struct Prefix {
     curator: Option<Slot<CuratorRoot>>,
-    co_signer: Option<Slot<Address>>,
+    /// The record, its signer next.
+    co_signer: Option<Slot<CoSignRequirement>>,
     signer: SignerSlot,
     spp: usize,
 }
@@ -289,6 +305,12 @@ impl Cursor {
             index: self.0 - 1,
             expected,
         }
+    }
+
+    fn pair<T>(&mut self, expected: T) -> Slot<T> {
+        let slot = self.slot(expected);
+        self.0 += 1;
+        slot
     }
 }
 

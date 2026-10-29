@@ -2,10 +2,10 @@
 
 use custom_ring_interface::{
     funder_account_position, input_flag, key_catalog::RingCircuit, shape_flag, tag, transact_flag,
-    AnonymousProofData, AppliedAt, CustomRingError, CustomRingProof, InputTrees, MemberRegistry,
-    PlainGroth16Proof, PolicyProof, RingOutput, RingProgramConfig, RingRail, RingTransactData,
-    SenderBundle, GRACE_SLOTS, MEMBER_REGISTRY_PDA_SEED, RING_TRANSACT_RING_CONFIG_INDEX,
-    TRANSACT_PAYER_INDEX,
+    AnonymousProofData, AppliedAt, CoSignScope, CustomRingError, CustomRingProof, InputTrees,
+    MemberRegistry, PlainGroth16Proof, PolicyProof, RingOutput, RingProgramConfig, RingRail,
+    RingTransactData, SenderBundle, GRACE_SLOTS, MEMBER_REGISTRY_PDA_SEED,
+    RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
 };
 use solana_address::Address;
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
@@ -19,8 +19,8 @@ use spr_interface::{
 
 use crate::common::{
     allow_list_table, config_pda, delegate_ring, floored, off_curve_g2, on_curve_g2, policy_write,
-    reaches_verification, refused, registry_pda, ring_auth, set_co_signer, transact, Ring, Sent,
-    Setup, SYSTEM,
+    reaches_verification, refused, registry_pda, ring_auth, set_co_signer, transact, CoSignerSlot,
+    Ring, Sent, Setup, SYSTEM,
 };
 
 pub const SPP: Address = Address::new_from_array(SHIELDED_POOL_PROGRAM_ID);
@@ -708,7 +708,7 @@ fn a_demanded_co_signer_signs_with_the_configured_key() {
         send(
             &mut ring,
             tag::TRANSACT,
-            vec![AccountMeta::new_readonly(co_signer.pubkey(), false)],
+            CoSignerSlot::own(co_signer.pubkey()).unsigned(),
             data.encode().unwrap(),
             spp.clone(),
             &[],
@@ -720,21 +720,82 @@ fn a_demanded_co_signer_signs_with_the_configured_key() {
         send(
             &mut ring,
             tag::TRANSACT,
-            vec![AccountMeta::new_readonly(other.pubkey(), true)],
+            CoSignerSlot {
+                record_of: co_signer.pubkey(),
+                signer: other.pubkey(),
+            }
+            .signed(),
             data.encode().unwrap(),
             spp.clone(),
             &[&other],
         ),
         CustomRingError::UnauthorizedCoSigner,
     );
+    refused(
+        send(
+            &mut ring,
+            tag::TRANSACT,
+            CoSignerSlot::own(other.pubkey()).signed(),
+            data.encode().unwrap(),
+            spp.clone(),
+            &[&other],
+        ),
+        CustomRingError::InvalidCoSignerRecord,
+    );
     reaches_verification(send(
         &mut ring,
         tag::TRANSACT,
-        vec![AccountMeta::new_readonly(co_signer.pubkey(), true)],
+        CoSignerSlot::own(co_signer.pubkey()).signed(),
         data.encode().unwrap(),
         spp,
         &[&co_signer],
     ));
+}
+
+/// A plain transfer from the payer, co-signed by `co_signer` under its own record.
+fn co_signed_transfer(ring: &mut Ring, co_signer: &Keypair) -> Sent {
+    let fixture = Fixture::new();
+    let data = fixture.transfer(RingRail::Confidential, 2, 2, false);
+    let spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(ring));
+    let slot = CoSignerSlot::own(co_signer.pubkey()).signed();
+    send(
+        ring,
+        tag::TRANSACT,
+        slot.to_vec(),
+        data.encode().unwrap(),
+        spp,
+        &[co_signer],
+    )
+}
+
+#[test]
+fn a_second_co_signer_signs_a_transfer_in_its_scope() {
+    let (first, second) = (Keypair::new(), Keypair::new());
+    let mut ring = Ring::new(Setup::AuditOnly);
+    set_co_signer(&mut ring, &first.pubkey(), CoSignScope::TRANSFERS.bits());
+    set_co_signer(&mut ring, &second.pubkey(), CoSignScope::ALL.bits());
+    reaches_verification(co_signed_transfer(&mut ring, &first));
+    reaches_verification(co_signed_transfer(&mut ring, &second));
+}
+
+#[test]
+fn a_co_signer_whose_scope_misses_the_demanded_class_is_refused() {
+    let (transfers, withdrawals) = (Keypair::new(), Keypair::new());
+    let mut ring = Ring::new(Setup::AuditOnly);
+    set_co_signer(
+        &mut ring,
+        &transfers.pubkey(),
+        CoSignScope::TRANSFERS.bits(),
+    );
+    set_co_signer(
+        &mut ring,
+        &withdrawals.pubkey(),
+        CoSignScope::WITHDRAWALS.bits(),
+    );
+    refused(
+        co_signed_transfer(&mut ring, &withdrawals),
+        CustomRingError::CoSignerOutOfScope,
+    );
 }
 
 /// The payer withdraws each `legs` amount in SOL as the one owner, `prefix` after the config.
@@ -782,7 +843,7 @@ fn a_withdrawal_without_an_exemption_proof_demands_the_co_signer() {
         withdraw(
             &mut ring,
             &[101],
-            vec![AccountMeta::new_readonly(co_signer.pubkey(), false)],
+            CoSignerSlot::own(co_signer.pubkey()).unsigned(),
             &[],
         ),
         CustomRingError::MissingCoSigner,
@@ -790,14 +851,14 @@ fn a_withdrawal_without_an_exemption_proof_demands_the_co_signer() {
     reaches_verification(withdraw(
         &mut ring,
         &[101],
-        vec![AccountMeta::new_readonly(co_signer.pubkey(), true)],
+        CoSignerSlot::own(co_signer.pubkey()).signed(),
         &[&co_signer],
     ));
     refused(
         withdraw(
             &mut ring,
             &[60, 60],
-            vec![AccountMeta::new_readonly(co_signer.pubkey(), false)],
+            CoSignerSlot::own(co_signer.pubkey()).unsigned(),
             &[],
         ),
         CustomRingError::MissingCoSigner,
@@ -813,7 +874,7 @@ fn a_withdrawal_co_signed_by_its_own_owner_is_refused() {
         withdraw(
             &mut ring,
             &[1_000],
-            vec![AccountMeta::new_readonly(owner.pubkey(), true)],
+            CoSignerSlot::own(owner.pubkey()).signed(),
             &[&owner],
         ),
         CustomRingError::CoSignerIsOwner,
@@ -845,10 +906,8 @@ fn an_approval_co_signed_by_its_own_owner_is_refused() {
     let mut ring = Ring::new(Setup::LimitedPolicy);
     let co_signed = |ring: &mut Ring, co_signer: &Keypair| {
         let spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(ring));
-        let prefix = vec![
-            registry_meta(),
-            AccountMeta::new_readonly(co_signer.pubkey(), true),
-        ];
+        let mut prefix = vec![registry_meta()];
+        prefix.extend(CoSignerSlot::own(co_signer.pubkey()).signed());
         send(
             ring,
             tag::TRANSACT,
@@ -1147,11 +1206,9 @@ fn a_delegate_move_co_signed_by_the_delegate_is_refused() {
     let data = fixture.transfer(RingRail::Delegate, 2, 2, true);
     let spp = spp_list(&ring.payer.pubkey(), &data, &[]);
     let co_signed = |ring: &mut Ring, co_signer: &Keypair| {
-        let prefix = vec![
-            registry_meta(),
-            AccountMeta::new_readonly(co_signer.pubkey(), true),
-            AccountMeta::new_readonly(delegate.pubkey(), true),
-        ];
+        let mut prefix = vec![registry_meta()];
+        prefix.extend(CoSignerSlot::own(co_signer.pubkey()).signed());
+        prefix.push(AccountMeta::new_readonly(delegate.pubkey(), true));
         send(
             ring,
             tag::DELEGATE_TRANSACT,

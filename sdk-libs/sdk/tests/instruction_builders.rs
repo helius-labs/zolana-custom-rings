@@ -5,15 +5,15 @@ use curve25519_dalek::constants::{ED25519_BASEPOINT_POINT, EIGHT_TORSION};
 use custom_ring_interface::{
     CreateConfigIxData, CustomRingMergeIxData, CustomRingMergeIxDataRef, MemberWriteIxData,
     MergeDisclosure, PolicyTableIxData, ReadAccessRecord, ReaderIxData, RingMode,
-    RingProgramConfig, SetCoSignerIxData, SetInsertFeeIxData, SetPausedIxData,
+    RingProgramConfig, SetCoSignerRecordIxData, SetInsertFeeIxData, SetPausedIxData,
     SetPolicySourceIxData, SourceSpec, AUDIT_CIPHERTEXT_LEN, DEFAULT_INSERT_FEE,
     READ_ACCESS_RECORD_PDA_SEED, RING_PROGRAM_CONFIG,
 };
 use custom_ring_sdk::{
-    tag, CoSignScope, CreateConfig, CreateMemberRegistry, CustomRing, CustomRingConfig,
-    CustomRingMergeInstruction, GrantReader, InitSppRingConfig, MemberListWrite, PolicyRules,
-    RevokeReader, RingError, RingKind, SetAuthority, SetCoSigner, SetDelegate, SetSourceOwner,
-    SourceOwner,
+    tag, ClearCoSigner, CoSignScope, CreateConfig, CreateMemberRegistry, CustomRing,
+    CustomRingConfig, CustomRingMergeInstruction, GrantReader, InitSppRingConfig, MemberListWrite,
+    PolicyRules, RevokeReader, RingError, RingKind, SetAuthority, SetCoSigner, SetDelegate,
+    SetSourceOwner, SourceOwner,
 };
 use solana_account::Account;
 use solana_address::Address;
@@ -331,33 +331,55 @@ fn pause_and_resume_reach_spp_through_the_ring_auth() {
 }
 
 #[test]
-fn co_signer_writes_take_the_authority_and_the_writable_config() {
-    let config_write = vec![
-        AccountMeta::new_readonly(authority(), true),
-        AccountMeta::new(ring().config_pda(), false),
-    ];
+fn co_signer_writes_name_the_signers_record() {
     let signer = Address::new_from_array([32; 32]);
+    let record = AccountMeta::new(ring().co_signer_pda(&signer), false);
     let scope = CoSignScope::TRANSFERS | CoSignScope::WITHDRAWALS;
     let set = SetCoSigner {
         ring: ring(),
+        payer: payer(),
         authority: authority(),
         signer,
         scope,
     }
     .instruction()
     .unwrap();
-    assert_eq!(set.accounts, config_write);
+    assert_eq!(
+        set.accounts,
+        vec![
+            AccountMeta::new(payer(), true),
+            AccountMeta::new_readonly(authority(), true),
+            AccountMeta::new(ring().config_pda(), false),
+            record.clone(),
+            AccountMeta::new_readonly(Address::default(), false),
+        ]
+    );
     let (ix_tag, body) = split(&set);
     assert_eq!(ix_tag, tag::SET_CO_SIGNER);
     assert_eq!(
-        parse::<SetCoSignerIxData>(body),
-        SetCoSignerIxData {
-            signer: signer.to_bytes(),
+        parse::<SetCoSignerRecordIxData>(body),
+        SetCoSignerRecordIxData {
+            signer,
             scope: scope.bits(),
         }
     );
-    let clear = ring().clear_cosigner(authority());
-    assert_eq!(clear.accounts, config_write);
+    let rent_recipient = Address::new_from_array([33; 32]);
+    let clear = ClearCoSigner {
+        ring: ring(),
+        authority: authority(),
+        signer,
+        rent_recipient,
+    }
+    .instruction();
+    assert_eq!(
+        clear.accounts,
+        vec![
+            AccountMeta::new_readonly(authority(), true),
+            AccountMeta::new(ring().config_pda(), false),
+            record,
+            AccountMeta::new(rent_recipient, false),
+        ]
+    );
     assert_eq!(clear.data, [tag::CLEAR_CO_SIGNER]);
 }
 
@@ -697,7 +719,12 @@ fn a_merge_names_the_config_the_registry_and_the_co_signer_ahead_of_spp() {
             AccountMeta::new_readonly(ring().config_pda(), false),
             AccountMeta::new_readonly(ring().registry_pda(), false),
         ];
-        prefix.extend(co_signer.map(|co_signer| AccountMeta::new_readonly(co_signer, true)));
+        prefix.extend(co_signer.into_iter().flat_map(|co_signer| {
+            [
+                AccountMeta::new_readonly(ring().co_signer_pda(&co_signer), false),
+                AccountMeta::new_readonly(co_signer, true),
+            ]
+        }));
         assert_eq!(
             instruction.accounts,
             [prefix, spp.accounts.clone()].concat()
