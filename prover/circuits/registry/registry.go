@@ -16,7 +16,7 @@ const (
 	// ListBits is the width of a record's list bitmap, bit id-1 marks list id.
 	ListBits = 64
 	// LimitFields mirrors AssetLimits::fields in program-libs/policy/src/asset_limits.rs.
-	LimitFields = 2
+	LimitFields = 3
 )
 
 // The empty leaf is 0, and the sentinel (0, q-1, 0, 0) at index 0 brackets every member in [1, q-2].

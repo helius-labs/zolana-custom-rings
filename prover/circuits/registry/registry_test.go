@@ -94,8 +94,8 @@ func TestOpeningConstraintCounts(t *testing.T) {
 		circuit frontend.Circuit
 		pinned  int
 	}{
-		{"present", &presentCount{}, 3504},
-		{"member", &memberCount{}, 3790},
+		{"present", &presentCount{}, 3519},
+		{"member", &memberCount{}, 3806},
 	} {
 		if got := ringkey.Compile(t, tc.circuit).GetNbConstraints(); got != tc.pinned {
 			t.Errorf("%s opening constraints=%d, pinned %d", tc.name, got, tc.pinned)

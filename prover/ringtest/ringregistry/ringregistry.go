@@ -46,6 +46,18 @@ func (r Record) Wires() registry.Record {
 	return registry.Record{Member: copied(r.Member), Next: copied(r.Next), Lists: copied(r.Lists), EscrowKey: copied(r.EscrowKey), MintPolicy: copied(r.MintPolicy), WithdrawalThreshold: copied(r.WithdrawalThreshold), AssetLimits: r.AssetLimits.Wires()}
 }
 
+func VectorLimits(t testing.TB, fields []ringtest.Hex) Limits {
+	t.Helper()
+	var limits Limits
+	if len(fields) != len(limits) {
+		t.Fatalf("%d limit fields, want %d", len(fields), len(limits))
+	}
+	for i, field := range fields {
+		limits[i] = field.Int
+	}
+	return limits
+}
+
 func (l Limits) Wires() [registry.LimitFields]frontend.Variable {
 	var w [registry.LimitFields]frontend.Variable
 	for i, field := range l {
