@@ -42,7 +42,7 @@ use crate::{
     origins::Origins,
     record_update::RecordUpdateRefusal,
     record_writer::{RecordWriter, WriterParts, RECORD_FLUSH_INTERVAL},
-    relay::{Relay, RelayParts, RELAY_TRACK_INTERVAL},
+    relay::{Relay, RelayParts, ServedRings, RELAY_TRACK_INTERVAL},
     relay_services::{MergeParts, RelayServices},
     replay::ReplayGuard,
     storage_chain::StorageChain,
@@ -587,6 +587,10 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
                         authority: storage_authority_keypair(secret.as_slice())?,
                         genesis_hash: self.genesis_hash,
                         watched: self.watched_registries,
+                        rings: match &keys {
+                            KeySource::Local { ring, .. } => ServedRings::One(*ring),
+                            KeySource::Derived(_) => ServedRings::Any,
+                        },
                         reader_grants: self.reader_grants,
                     }
                     .writer(),

@@ -7,7 +7,7 @@ use std::{
 use custom_ring_interface::{
     storage::{Root, StorageRegistry},
     storage_instruction::StorageUpdateIxData,
-    RingAccount, RingPolicy, ROOT_HISTORY, STORAGE_PROGRAM_ID,
+    RingAccount, RingPolicy, RootMirror, ROOT_HISTORY, STORAGE_PROGRAM_ID,
 };
 use custom_ring_sdk::{CustomRing, InitializeStorage, SyncRoots, UpdateStorage};
 use log::warn;
@@ -38,6 +38,7 @@ use crate::{
         EscrowUniqueness, ModeDecision, QueuedUpdate, RecordUpdateCheck, RecordUpdateRefusal,
         UpdateContext,
     },
+    relay::ServedRings,
     storage_chain::{StorageChain, TransactionOutcome},
     update_queue::{AwaitingPage, BatchOutcome, NewBatch, NewUpdate, OpenBatch, UpdateQueue},
 };
@@ -58,6 +59,7 @@ pub struct RecordWriter {
     authority: Keypair,
     genesis_hash: [u8; 32],
     watched: Vec<Address>,
+    rings: ServedRings,
     reader_grants: ReaderGrantStore,
     /// Each registry's roots every subscriber mirrored at the last check.
     synced: Mutex<HashMap<Address, [Root; ROOT_HISTORY]>>,
@@ -75,6 +77,7 @@ pub(crate) struct WriterParts {
     pub genesis_hash: [u8; 32],
     /// Curator registries whose subscribers the writer syncs.
     pub watched: Vec<Address>,
+    pub rings: ServedRings,
     pub reader_grants: ReaderGrantStore,
 }
 
@@ -86,6 +89,7 @@ impl WriterParts {
             authority: self.authority,
             genesis_hash: self.genesis_hash,
             watched: self.watched,
+            rings: self.rings,
             reader_grants: self.reader_grants,
             synced: Mutex::default(),
             submits: tokio::sync::Mutex::default(),
@@ -277,10 +281,18 @@ impl RecordWriter {
         curated.extend_from_slice(&self.watched);
         curated.sort_unstable();
         curated.dedup();
-        for registry in curated {
-            if let Err(error) = self.sync_subscribers(registry).await {
+        for registry in &curated {
+            if let Err(error) = self.sync_subscribers(*registry).await {
                 warn!(
                     "subscriber sync of registry {registry} failed because {}",
+                    redacted(&error)
+                );
+            }
+        }
+        for ring in self.written_rings().await? {
+            if let Err(error) = self.follow_curator(ring, &curated).await {
+                warn!(
+                    "curator sync of ring {ring} failed because {}",
                     redacted(&error)
                 );
             }
@@ -470,8 +482,11 @@ impl RecordWriter {
             .await?
             .into_iter()
             .filter(|subscriber| {
-                subscriber.curator_roots.registry != registry
-                    || subscriber.curator_roots.roots != state.roots
+                subscriber.curator_roots
+                    != RootMirror {
+                        registry,
+                        roots: state.roots,
+                    }
             })
             .map(|subscriber| subscriber.ring)
             .collect();
@@ -482,7 +497,34 @@ impl RecordWriter {
                 .map_err(|_| RingRpcError::StateUnavailable)?
                 .insert(registry, state.roots);
         }
-        for rings in stale.chunks(SYNCS_PER_TRANSACTION) {
+        self.send_syncs(registry, &stale).await
+    }
+
+    async fn follow_curator(&self, ring: Address, curated: &[Address]) -> Result<(), RingRpcError> {
+        let Some(policy) = self.ring_policy(ring).await? else {
+            return Ok(());
+        };
+        let Some(registry) = policy
+            .curator()
+            .filter(|curator| !curated.contains(curator))
+        else {
+            return Ok(());
+        };
+        let Some(state) = self.registry(registry).await? else {
+            return Ok(());
+        };
+        let synced = RootMirror {
+            registry,
+            roots: state.roots,
+        };
+        if policy.curator_roots == synced {
+            return Ok(());
+        }
+        self.send_syncs(registry, &[ring]).await
+    }
+
+    async fn send_syncs(&self, registry: Address, rings: &[Address]) -> Result<(), RingRpcError> {
+        for rings in rings.chunks(SYNCS_PER_TRANSACTION) {
             let instructions: Vec<Instruction> = rings
                 .iter()
                 .map(|ring| {
@@ -506,6 +548,17 @@ impl RecordWriter {
         Ok(())
     }
 
+    /// Every ring the update queue holds, the local ring before its first update.
+    async fn written_rings(&self) -> Result<Vec<Address>, RingRpcError> {
+        let mut rings = self.queue().rings().await?;
+        if let ServedRings::One(ring) = self.rings {
+            if !rings.contains(&ring) {
+                rings.push(ring);
+            }
+        }
+        Ok(rings)
+    }
+
     async fn require_config_authority(
         &self,
         ring: Address,
@@ -527,13 +580,17 @@ impl RecordWriter {
     }
 
     async fn policy(&self, ring: Address) -> Result<RingPolicy, RingRpcError> {
+        self.ring_policy(ring)
+            .await?
+            .ok_or_else(|| RecordUpdateRefusal::RegistryNotServed.into())
+    }
+
+    async fn ring_policy(&self, ring: Address) -> Result<Option<RingPolicy>, RingRpcError> {
         let account = self
             .chain
             .account(CustomRing::new(ring).policy_pda())
             .await?;
-        account
-            .and_then(|account| RingPolicy::decode(&account.owner, &ring, &account.data))
-            .ok_or_else(|| RecordUpdateRefusal::RegistryNotServed.into())
+        Ok(account.and_then(|account| RingPolicy::decode(&account.owner, &ring, &account.data)))
     }
 
     async fn registry(&self, address: Address) -> Result<Option<StorageRegistry>, RingRpcError> {

@@ -194,12 +194,16 @@ fn a_curated_block_list_yields_to_the_subscribers_own_approval_list() -> Result<
     let recipient = &env.recipient.keypair;
     let egress = Egress { ring, sender, env };
     let member = owner_member(recipient)?;
-    let curator_block = |present| RegistryWrite {
-        ring: rings.curator,
-        list_id: ListId::Block,
-        member,
-        present,
-        env,
+    let curator_block = |present| {
+        RegistryWrite {
+            ring: rings.curator,
+            list_id: ListId::Block,
+            member,
+            present,
+            env,
+        }
+        .send()?;
+        rings.wait_for_subscriber_mirror()
     };
 
     // 1. The subscriber pins the mixed group with Block read from the curator.
@@ -232,7 +236,7 @@ fn a_curated_block_list_yields_to_the_subscribers_own_approval_list() -> Result<
 
     // 2. One curator write refuses the recipient, the subscriber's own
     //    Approval bit admits it.
-    curator_block(true).send()?;
+    curator_block(true)?;
     egress.to(recipient, &utxos[0]).expect_refusal()?;
     project.write_list(ListWrite {
         env,
@@ -253,7 +257,7 @@ fn a_curated_block_list_yields_to_the_subscribers_own_approval_list() -> Result<
     egress.to(recipient, &utxos[1]).expect_refusal()?;
 
     // 4. The curator clearing its bit admits the recipient again.
-    curator_block(false).send()?;
+    curator_block(false)?;
     egress.to(recipient, &utxos[1]).land()?;
     project.remove()?;
     Ok(())

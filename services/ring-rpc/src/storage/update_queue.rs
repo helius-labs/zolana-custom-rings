@@ -169,6 +169,15 @@ impl<'a> UpdateQueue<'a> {
             .collect()
     }
 
+    pub async fn rings(&self) -> Result<Vec<Address>, DbErr> {
+        let sql = "SELECT DISTINCT ring FROM records_updates";
+        self.query_all(sql, Vec::new())
+            .await?
+            .iter()
+            .map(|row| address(row, "ring"))
+            .collect()
+    }
+
     /// Every queued or submitted write, and the awaiting writes of `members` alone.
     pub async fn pending_writes(
         &self,

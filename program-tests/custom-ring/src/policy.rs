@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use custom_ring_cli::Zolana;
+use custom_ring_cli::{wait_for, Probe, Zolana};
 use custom_ring_interface::{
     mint_policy_write,
     storage::Revision,
@@ -97,6 +97,18 @@ impl CuratedRings {
             env,
             curator,
             subscriber: CustomRing::new(custom_ring_program_id()?),
+        })
+    }
+
+    pub fn wait_for_subscriber_mirror(&self) -> Result<()> {
+        wait_for("the subscriber's curator mirror", || {
+            let curator = policy_registry(self.curator, &self.env)?.own_roots;
+            let mirrored = policy_registry(self.subscriber, &self.env)?.curator_roots;
+            Ok(if mirrored == curator {
+                Probe::Ready(())
+            } else {
+                Probe::NotYet
+            })
         })
     }
 }
