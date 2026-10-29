@@ -14,6 +14,27 @@ type outputTotals struct {
 }
 
 func (p *PolicyInputs) assertRules(api frontend.API, cmp comparator, table tableView, resolved subjects, outputs []utxoView) {
+	// 1. Every payment's guard inputs fold once.
+	screen := newPaymentScreen(api, cmp, resolved, outputs)
+	// 2. A scalar guard sums one owner's outputs, under one every UTXO output carries one asset.
+	assertScalarAssets(api, outputs, table.scalarOwner)
+	// 3. Every active rule holds for its subjects, the sender once and each live output owner or asset.
+	for r, rule := range table.rules {
+		// The one sender meets every sender rule, with or without a spent input.
+		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Mul(table.ruleActive[r], rule.onSender), V: rule.refuses(api, resolved.sender.onList)})
+		screen.assert(api, rule, api.Mul(table.ruleActive[r], api.Add(rule.onOwner, rule.onAsset)))
+	}
+}
+
+type paymentScreen struct {
+	cmp                    comparator
+	resolved               subjects
+	outputs                []utxoView
+	liveOwner, assetExempt []frontend.Variable
+	totals                 []outputTotals
+}
+
+func newPaymentScreen(api frontend.API, cmp comparator, resolved subjects, outputs []utxoView) paymentScreen {
 	// 1. A zero owner carries no obligation, an asset needs no such gate since SPP refuses a UTXO of asset 0.
 	liveOwner := make([]frontend.Variable, len(outputs))
 	for o, out := range outputs {
@@ -25,24 +46,21 @@ func (p *PolicyInputs) assertRules(api frontend.API, cmp comparator, table table
 	for o := range outputs {
 		assetExempt[o] = cmp.atMost(api, totals[o].byOwnerAndAsset, resolved.mintPolicies[o].threshold)
 	}
-	// 3. A scalar guard sums one owner's outputs, under one every UTXO output carries one asset.
-	assertScalarAssets(api, outputs, table.scalarOwner)
-	// 4. Every active rule holds for its subjects, the sender once and each live output owner or asset.
-	for r, rule := range table.rules {
-		// The one sender meets every sender rule, with or without a spent input.
-		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Mul(table.ruleActive[r], rule.onSender), V: rule.refuses(api, resolved.sender.onList)})
-		onOutput := api.Mul(table.ruleActive[r], api.Add(rule.onOwner, rule.onAsset))
-		for o := range outputs {
-			enabled := api.Mul(onOutput, api.Select(rule.onAsset, outputs[o].utxo, liveOwner[o]))
-			refused := rule.refuses(api, subjectLists(api, rule.onAsset, resolved.assets[o], resolved.owners[o]))
-			// An asset guarded rule needs an inline limit for the output's asset.
-			transaction.AssertWhen(api, api.Mul(enabled, rule.assetGuard), ringgadget.IsNonZero(api, resolved.mintPolicies[o].threshold))
-			total := api.Select(rule.onAsset, totals[o].byAsset, totals[o].byOwner)
-			scalar := api.Mul(rule.scalarGuard, cmp.atMost(api, total, rule.threshold))
-			exempt := api.Or(scalar, api.Mul(rule.assetGuard, assetExempt[o]))
-			// A subject the lists refuse needs its amounts within the rule's guard.
-			transaction.AssertWhen(api, api.Mul(enabled, refused), exempt)
-		}
+	return paymentScreen{cmp: cmp, resolved: resolved, outputs: outputs, liveOwner: liveOwner, assetExempt: assetExempt, totals: totals}
+}
+
+// assert holds one rule for every live payment while onOutput is set.
+func (s paymentScreen) assert(api frontend.API, rule ruleFields, onOutput frontend.Variable) {
+	for o := range s.outputs {
+		enabled := api.Mul(onOutput, api.Select(rule.onAsset, s.outputs[o].utxo, s.liveOwner[o]))
+		refused := rule.refuses(api, subjectLists(api, rule.onAsset, s.resolved.assets[o], s.resolved.owners[o]))
+		// An asset guarded rule needs an inline limit for the output's asset.
+		transaction.AssertWhen(api, api.Mul(enabled, rule.assetGuard), ringgadget.IsNonZero(api, s.resolved.mintPolicies[o].threshold))
+		total := api.Select(rule.onAsset, s.totals[o].byAsset, s.totals[o].byOwner)
+		scalar := api.Mul(rule.scalarGuard, s.cmp.atMost(api, total, rule.threshold))
+		exempt := api.Or(scalar, api.Mul(rule.assetGuard, s.assetExempt[o]))
+		// A subject the lists refuse needs its amounts within the rule's guard.
+		transaction.AssertWhen(api, api.Mul(enabled, refused), exempt)
 	}
 }
 

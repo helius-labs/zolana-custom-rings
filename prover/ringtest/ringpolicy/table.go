@@ -48,6 +48,8 @@ func (r Rows) Wires() policy.Table {
 	return table
 }
 
+func (table Table) Wires() policy.Table { return table.rows().Wires() }
+
 // rows serves the list of record bit i from source slot i, its list id i+1.
 func (table Table) rows() Rows {
 	sources := make([]policy.SourceWires, policy.NSources)

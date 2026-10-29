@@ -44,13 +44,19 @@ func openRecordPool(api frontend.API, active, root frontend.Variable, records []
 	for i, record := range records {
 		leaves[i] = record.Hash(api)
 		// No stored record fails these splits, ValueOutsideMask in program-libs/interface/src/instructions/instruction.rs keeps lists u64 and registry/apply_records.go keeps mint policy below 2^192.
-		bits := api.ToBinary(record.Lists, registry.ListBits)
-		row := pooledRecord{escrowKey: record.EscrowKey, mintPolicy: decodeMintPolicy(api, record.MintPolicy)}
-		copy(row.onList[:], bits)
+		onList := sourceLists(api, record.Lists)
+		row := pooledRecord{escrowKey: record.EscrowKey, onList: onList, mintPolicy: decodeMintPolicy(api, record.MintPolicy)}
 		pool.table.Insert(row.columns(record.Member, record.Next))
 	}
 	proof.AssertLeavesWhen(api, active, root, leaves)
 	return pool
+}
+
+// sourceLists keeps the NSources list bits a table can source, the split bounds lists below 2^ListBits.
+func sourceLists(api frontend.API, lists frontend.Variable) [NSources]frontend.Variable {
+	var onList [NSources]frontend.Variable
+	copy(onList[:], api.ToBinary(lists, registry.ListBits))
+	return onList
 }
 
 func decodeMintPolicy(api frontend.API, packed frontend.Variable) mintPolicyWires {

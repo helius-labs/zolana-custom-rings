@@ -94,7 +94,7 @@ func hostRequest(t testing.TB, k Key) any {
 	case RegisterKey:
 		return registerKeyRequest(t, k.Circuit, big.NewInt(0x0b))
 	case Deposit:
-		return requestOf[DepositParams](t, k.Circuit, ringdeposit.BuildCapacity(t, k.Inputs, k.Inputs, ringdeposit.ModeRegistry).Circuit)
+		return requestOf[DepositParams](t, k.Circuit, ringdeposit.BuildScreened(t, k.Inputs, ringdeposit.Allowlisted(ringpolicy.AssetA)).Narrow(t, k.Inputs).Circuit)
 	case AnonymousMerge:
 		return requestOf[AnonymousMergeParams](t, k.Circuit, ringmerge.Build(t, k.Inputs).Circuit)
 	}

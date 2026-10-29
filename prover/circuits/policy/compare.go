@@ -19,7 +19,11 @@ type comparator struct {
 
 // comparator bounds gross output/withdrawal sums and the existing public net, each leg bounded to u64.
 func (p *PolicyInputs) comparator(rc frontend.Rangechecker) comparator {
-	return comparator{rc: rc, width: transaction.AmountBits + bits.Len(uint(len(p.Outputs)+len(p.Withdrawals)+1))}
+	return newComparator(rc, len(p.Outputs)+len(p.Withdrawals))
+}
+
+func newComparator(rc frontend.Rangechecker, payments int) comparator {
+	return comparator{rc: rc, width: transaction.AmountBits + bits.Len(uint(payments+1))}
 }
 
 // atMost returns total <= threshold, the caller bounds their difference below 2^width in magnitude.

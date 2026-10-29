@@ -284,6 +284,12 @@ type DepositParams struct {
 	AuditorPk          Bytes            `json:"auditorPk"`
 	KeyEscrow          bool             `json:"keyEscrow"`
 	MemberRegistryRoot Field            `json:"memberRegistryRoot"`
+	PolicyHash         Field            `json:"policyHash"`
+	Assets             []Field          `json:"assets"`
+	Amounts            []Field          `json:"amounts"`
+	// Table and AssetRecords are absent without a written policy.
+	Table        *PolicyTable     `json:"table,omitempty"`
+	AssetRecords []*MemberOpening `json:"assetRecords"`
 }
 
 // MergeInput is one SPP merge slot as the anonymous merge circuit opens it.
