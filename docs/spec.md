@@ -1210,7 +1210,7 @@ The deposit hands Ring RPC the note's blinding secret, the merge hands it the nu
 
 ### Ring prover
 
-The zolana prover with the 86 ring circuits registered as extensions. It proves every ring statement from a complete client witness and fetches no record itself. It sees every secret of the witness: the transaction viewing secret, every opening, owner keys, recipient keys and the hidden owner's key. The zolana client attests a remote prover's TEE by default.
+The zolana prover with the 86 ring circuits registered as extensions. It proves every ring statement from a complete client witness and fetches no record itself. It sees every secret of the witness: the transaction viewing secret, every opening, owner keys, recipient keys and the hidden owner's key. The zolana client refuses a remote prover without a caller-supplied TEE policy.
 
 The SPP half of a transfer can use zolana's indexed route, where the prover reads Merkle and non-inclusion proofs from the indexer its operator configures. The client checks the resolved trees, roots and public input hash, and the program verifies the proof.
 

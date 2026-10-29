@@ -241,7 +241,7 @@ fn is_default<T: Default + PartialEq>(value: &T) -> bool {
 }
 
 impl Urls {
-    /// `pinned` replaces the cluster's policy file and the release's enclave pin.
+    /// `pinned` replaces the cluster's policy file.
     pub fn prover_client(
         &self,
         root: &Path,
@@ -561,7 +561,7 @@ ring_rpc = "http://127.0.0.1:8785"
 
     #[test]
     fn a_cluster_tee_policy_reads_beside_ring_toml_and_a_pinned_one_replaces_it() {
-        let policy = TeePolicy::default_deployment().unwrap();
+        let policy = probe_policy();
         let dir = std::env::temp_dir().join(format!("ring-cluster-tee-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let loopback = |policy_file: Option<&str>| Urls {
@@ -595,7 +595,7 @@ ring_rpc = "http://127.0.0.1:8785"
 
     #[test]
     fn a_tee_policy_file_reads_bare_or_as_a_deployment_pin() {
-        let policy = TeePolicy::default_deployment().unwrap();
+        let policy = probe_policy();
         let bare = serde_json::to_string(&policy).unwrap();
         let dir = std::env::temp_dir().join(format!("ring-tee-policy-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -611,6 +611,13 @@ ring_rpc = "http://127.0.0.1:8785"
         std::fs::write(&unpinned, r#"{"deployment":null}"#).unwrap();
         assert!(read_tee_policy(&unpinned).is_err());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn probe_policy() -> TeePolicy {
+        TeePolicy::from_json(include_str!(
+            "../../../zolana/prover/tee/testdata/probe_policy.json"
+        ))
+        .unwrap()
     }
 
     fn prover_urls(prover: &str) -> Urls {

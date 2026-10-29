@@ -15,7 +15,7 @@ pub struct Cli {
     #[arg(long, global = true, env = "RING_CATALOGUE")]
     pub catalogue: Option<String>,
     /// Require the prover to attest to the TEE policy in FILE, bare or as a {"deployment": ...}
-    /// pin file, in place of the release pin.
+    /// pin file.
     #[arg(
         long,
         value_name = "FILE",
