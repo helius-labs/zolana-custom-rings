@@ -54,6 +54,7 @@ import { auditStatementHash, ringAuditStatement } from "../../protocol/proof/sta
 import {
   PLAIN_GROTH16_PROOF_LENGTH,
   RingTransactData,
+  publishesRecipients,
   ringDisclosureLayout,
   ringSppInputs,
   type InputTrees,
@@ -581,6 +582,7 @@ function previewData(
             ...(input.policy.senderCommitment === undefined
               ? {}
               : { senderCommitment: input.policy.senderCommitment }),
+            recipients: publishesRecipients(input.rail) ? input.policy.inputs.recipients : [],
           },
         }),
     ...(input.withdrawalExemption === undefined

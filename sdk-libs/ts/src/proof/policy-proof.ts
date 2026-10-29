@@ -47,7 +47,7 @@ import {
 import { readRecordPool } from "../rpc/registered-record.js";
 import { policyStatementHash, type PolicyKey } from "../protocol/proof/statement.js";
 import { policyPoolCapacity } from "../protocol/proof/proving-keys.js";
-import type { RingRail } from "../protocol/transaction/transact.js";
+import { publishesRecipients, type RingRail } from "../protocol/transaction/transact.js";
 import { publicAmountFields, type PublicSlots } from "../protocol/transaction/spp.js";
 
 /** The registry root a statement names by its history slot. */
@@ -83,6 +83,8 @@ export interface PolicyInputs {
   readonly publicAssetEntries: readonly number[];
   /** The escrowed key ciphertext hash of every UTXO output's owner, under key escrow. */
   readonly ctHashes: readonly (Bytes32 | undefined)[];
+  /** One per output slot, zero on a dummy and on the anonymous rail. */
+  readonly recipients: readonly Bytes32[];
   readonly approvalRequired: boolean;
   readonly keyEscrow: boolean;
 }
@@ -291,6 +293,11 @@ export async function readPolicy(
       memberRail ? input.publicSlots.assets.map((asset) => subject(ownReads, asset)) : [],
     ),
     ctHashes: Object.freeze(ctHashes),
+    recipients: Object.freeze(
+      owners.map((owner) =>
+        publishesRecipients(input.rail) && owner !== undefined ? owner : zeroField(),
+      ),
+    ),
     approvalRequired,
     keyEscrow,
   });
@@ -310,6 +317,7 @@ export function policyPublicInputHash(policy: PolicyInputs, proving: PolicyProvi
     ownRoot: policy.own.root,
     curatorRoot: policy.curator?.root.root ?? zeroField(),
     sender: proving.sender,
+    recipients: policy.recipients,
     publicAssets: proving.publicSlots.assets,
     publicAmounts: publicAmountFields(proving.publicSlots),
   });
@@ -353,6 +361,7 @@ export function policyProofRequest(
         ...(ctHash === undefined ? {} : { ctHash }),
       });
     }),
+    recipients: policy.recipients,
     senderPkHash: proving.senderPkHash,
     ownPool: policy.ownPool,
     ...(policy.curator === undefined ? {} : { curatorPool: policy.curator.pool }),

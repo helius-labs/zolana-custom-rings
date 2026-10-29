@@ -322,6 +322,7 @@ function policy(item: Json): PolicyProofInputs {
     addressChain: field(item["addressChain"]),
     privateTxBlinding: field(item["privateTxBlinding"]),
     outputs,
+    recipients: fields(item["recipients"]),
     senderPkHash: field(item["senderPkHash"]),
     ownPool,
     ...(curatorPool === undefined ? {} : { curatorPool }),
@@ -935,6 +936,7 @@ describe.runIf(HAS_GOLDENS)("ring statements rebuilt from the Go goldens", () =>
         curatorRoot: typed.curatorRoot,
         publicAssets: typed.publicAssets,
         publicAmounts: typed.publicAmounts,
+        recipients: typed.recipients,
       };
       const hash =
         typed.kind === "memberPolicy"

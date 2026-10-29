@@ -1485,6 +1485,7 @@ describe("anonymous rail on a policy ring", () => {
         ownRoot: fixture.ownTree.root,
         curatorRoot: ZERO,
         sender: commitment,
+        recipients: data.outputs.map(() => new Uint8Array(32) as Bytes32),
         publicAssets: slots.assets,
         publicAmounts: publicAmountFields(slots),
       }),
