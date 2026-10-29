@@ -78,14 +78,6 @@ impl<R: Rail> WalletRelay<'_, R> {
         let sealed = self.transfer.seal(client).await?;
         let staged = &sealed.pipeline.staged;
         let inputs = &staged.proof_inputs;
-        let rail = match staged.rail.delivery() {
-            RingDelivery::Anonymous(plan) => RelayRail::Anonymous {
-                plan: plan.clone(),
-                exit_token_owner: self.exit_token_owner,
-            },
-            RingDelivery::Owned => RelayRail::Confidential,
-            RingDelivery::Delivered => return Err(RingError::MissingInProofOwnerSignature),
-        };
         let nullifier_key = staged
             .authority
             .owner
@@ -94,26 +86,33 @@ impl<R: Rail> WalletRelay<'_, R> {
         let owner_signature = SerializableSignature(Signature::from(
             self.signer.sign_message(&inputs.message_hash()?)?,
         ));
-        let anonymous = matches!(rail, RelayRail::Anonymous { .. });
-        let proof_inputs =
-            ProofInputBytes::new(sealed.relay_proof_inputs(rail, nullifier_key).encode()?);
+        let encode = |rail| {
+            sealed
+                .relay_proof_inputs(rail, nullifier_key)
+                .encode()
+                .map(ProofInputBytes::new)
+        };
         let token_account_setup = self.token_account_setup;
+        let intent = match staged.rail.delivery() {
+            RingDelivery::Anonymous(plan) => RelayIntent::Anonymous {
+                proof_inputs: encode(RelayRail::Anonymous {
+                    plan: plan.clone(),
+                    exit_token_owner: self.exit_token_owner,
+                })?,
+                owner_signature,
+                token_account_setup,
+            },
+            RingDelivery::Owned => RelayIntent::Confidential {
+                proof_inputs: encode(RelayRail::Confidential)?,
+                owner_signature,
+                token_account_setup,
+            },
+            RingDelivery::Delivered => return Err(RingError::MissingInProofOwnerSignature),
+        };
         Ok(PreparedRelay::new(PrepareRelayRequest {
             ring: SerializablePubkey(self.transfer.ring.program_id()),
             quote,
-            intent: if anonymous {
-                RelayIntent::Anonymous {
-                    proof_inputs,
-                    owner_signature,
-                    token_account_setup,
-                }
-            } else {
-                RelayIntent::Confidential {
-                    proof_inputs,
-                    owner_signature,
-                    token_account_setup,
-                }
-            },
+            intent,
         }))
     }
 }

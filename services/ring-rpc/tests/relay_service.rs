@@ -24,8 +24,8 @@ use zolana_ring_client::rpc::{
 use zolana_ring_rpc::{relay_module, FeePayerSubmit, Relay, RelayParts, ServedRings, Store};
 
 use relay_fixture::{
-    anonymous_rail, owner, proof_inputs, signed_request, signers_verify,
-    RecordingChain, RecordingProver, SLOT,
+    anonymous_rail, owner, proof_inputs, signed_request, signers_verify, RecordingChain,
+    RecordingProver, SLOT,
 };
 
 const RING: Address = Address::new_from_array([6; 32]);
