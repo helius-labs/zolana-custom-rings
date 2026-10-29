@@ -5,7 +5,7 @@ use crate::{
     error::CustomRingError,
     instruction::{list_and_mint_entry, mint_policy_write, write_count, MintPolicyWrite},
     member_registry::QueueEntry,
-    storage::{RegistryId, Revision},
+    storage::{RegistryId, Revision, StorageError},
     ApplyRecordsIxData, WriteRecordsIxData,
 };
 
@@ -94,27 +94,28 @@ impl StorageWriteData {
 }
 
 impl<'a> StorageUpdateIxData<'a> {
-    pub fn parse(data: &'a [u8]) -> Result<Self, CustomRingError> {
+    pub fn parse(data: &'a [u8]) -> Result<Self, StorageError> {
         let (revision, data) = data
             .split_first_chunk::<8>()
-            .ok_or(CustomRingError::InvalidInstructionData)?;
+            .ok_or(StorageError::InvalidInstructionData)?;
         let (count, rest) = data
             .split_first()
-            .ok_or(CustomRingError::InvalidInstructionData)?;
-        let count = write_count(usize::from(*count))?;
+            .ok_or(StorageError::InvalidInstructionData)?;
+        let count = storage_write_count(usize::from(*count))?;
         let (writes, apply) = rest
             .split_at_checked(usize::from(count) * StorageWriteData::SIZE)
-            .ok_or(CustomRingError::InvalidInstructionData)?;
+            .ok_or(StorageError::InvalidInstructionData)?;
         Ok(Self {
             revision: Revision(*revision),
             writes: bytemuck::try_cast_slice(writes)
-                .map_err(|_| CustomRingError::InvalidInstructionData)?,
-            apply: ApplyRecordsIxData::parse(apply)?,
+                .map_err(|_| StorageError::InvalidInstructionData)?,
+            apply: ApplyRecordsIxData::parse(apply)
+                .map_err(|_| StorageError::InvalidInstructionData)?,
         })
     }
 
-    pub fn encode(&self) -> Result<Vec<u8>, CustomRingError> {
-        let count = write_count(self.writes.len())?;
+    pub fn encode(&self) -> Result<Vec<u8>, StorageError> {
+        let count = storage_write_count(self.writes.len())?;
         Ok([
             &self.revision.0[..],
             &[count],
@@ -123,6 +124,13 @@ impl<'a> StorageUpdateIxData<'a> {
         ]
         .concat())
     }
+}
+
+fn storage_write_count(count: usize) -> Result<u8, StorageError> {
+    write_count(count).map_err(|error| match error {
+        CustomRingError::AuthorityBatchTooLarge => StorageError::BatchTooLarge,
+        _ => StorageError::InvalidInstructionData,
+    })
 }
 
 const _: () = assert!(core::mem::align_of::<InitializeIxData>() == 1);

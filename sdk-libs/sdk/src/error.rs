@@ -1,5 +1,6 @@
 use custom_ring_interface::{
-    key_catalog::RingCircuit, stream::StreamError, CustomRingError, PublicSlotError, RingRail,
+    key_catalog::RingCircuit, storage::StorageError, stream::StreamError, CustomRingError,
+    PublicSlotError, RingRail,
 };
 use solana_address::Address;
 use solana_signature::Signature;
@@ -31,6 +32,8 @@ pub enum RingError {
     Stream(#[from] StreamError),
     #[error(transparent)]
     Program(#[from] CustomRingError),
+    #[error(transparent)]
+    Storage(#[from] StorageError),
     #[error(transparent)]
     Keypair(#[from] KeypairError),
     #[error(transparent)]

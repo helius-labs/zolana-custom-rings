@@ -1,11 +1,15 @@
 use bytemuck::{Pod, Zeroable};
 use solana_address::Address;
 use solana_program_error::ProgramError;
+use spr_hasher::{hash_chain::create_hash_chain_4_from_slice, primitives::right_align};
 use thiserror::Error;
+use zolana_ring_policy::registry_field;
 
 use crate::{
+    domain,
     member_registry::{MEMBER_REGISTRY_CAPACITY, MEMBER_REGISTRY_EMPTY_ROOT},
     state::ROOT_HISTORY,
+    storage_instruction::{StorageUpdateIxData, UpdateMode},
     STORAGE_PROGRAM_ID,
 };
 
@@ -50,6 +54,37 @@ pub enum StorageError {
     RootExpired = 9003,
     #[error("root history is full")]
     HistoryFull = 9004,
+    #[error("instruction data is invalid")]
+    InvalidInstructionData = 9005,
+    #[error("update carries more writes than one apply proof takes")]
+    BatchTooLarge = 9006,
+    #[error("write is neither a record write nor an escrow write")]
+    InvalidWrite = 9007,
+    #[error("apply proof does not verify")]
+    ProofVerificationFailed = 9008,
+    #[error("hashing failed")]
+    HashingFailed = 9009,
+    #[error("accounts are missing")]
+    MissingAccounts = 9010,
+    #[error("required signer did not sign")]
+    MissingSignature = 9011,
+    #[error("registry account is not writable")]
+    ReadOnlyRegistry = 9012,
+    #[error("system program account is invalid")]
+    InvalidSystemProgram = 9013,
+    #[error("registry is already initialized")]
+    AlreadyInitialized = 9014,
+    #[error("revision overflows u64")]
+    RevisionOverflow = 9015,
+    #[error("no apply key serves the write count")]
+    UnsupportedBatch = 9016,
+}
+
+#[must_use]
+pub struct RootUpdate<'a> {
+    pub mode: UpdateMode,
+    pub slot: u64,
+    pub data: &'a StorageUpdateIxData<'a>,
 }
 
 impl From<u64> for Revision {
@@ -120,10 +155,52 @@ impl StorageRegistry {
         root_at(&self.roots, revision, slot)
     }
 
+    /// Writes nothing on a refusal.
+    pub fn update(&mut self, update: RootUpdate<'_>) -> Result<(), StorageError> {
+        let RootUpdate { mode, slot, data } = update;
+        if data.revision != self.roots[0].revision {
+            return Err(StorageError::RevisionChanged);
+        }
+        let revision = data
+            .revision
+            .value()
+            .checked_add(1)
+            .ok_or(StorageError::RevisionOverflow)?;
+        match mode {
+            UpdateMode::Graced if slot < self.roots[ROOT_HISTORY - 1].expires_at() => {
+                return Err(StorageError::HistoryFull);
+            }
+            UpdateMode::Graced => {
+                // A saturated expiry never lapses.
+                self.roots[0].expires_at = slot.saturating_add(self.grace_slots()).to_le_bytes();
+                self.roots.rotate_right(1);
+            }
+            UpdateMode::Immediate => self.roots.fill(Root::zeroed()),
+        }
+        self.roots[0] = Root {
+            hash: data.apply.new_root,
+            revision: revision.into(),
+            expires_at: [0; 8],
+        };
+        self.next_index = data.apply.new_next_index;
+        Ok(())
+    }
+
     fn valid(&self) -> bool {
         self.discriminator == Self::DISCRIMINATOR
             && (1..=MEMBER_REGISTRY_CAPACITY).contains(&u64::from(self.next_index()))
     }
+}
+
+/// `APPLY_RECORDS` binds the registry address and revision before the ordered writes.
+pub fn chain_start(registry: &Address, revision: Revision) -> Result<[u8; 32], StorageError> {
+    let registry = registry_field(registry.as_array()).map_err(|_| StorageError::HashingFailed)?;
+    create_hash_chain_4_from_slice(&[
+        domain::field(domain::APPLY_RECORDS),
+        registry,
+        right_align(&revision.value().to_be_bytes()),
+    ])
+    .map_err(|_| StorageError::HashingFailed)
 }
 
 /// The current root, or a retired one before its expiry.
@@ -165,6 +242,18 @@ mod tests {
             RevisionChanged,
             RootExpired,
             HistoryFull,
+            InvalidInstructionData,
+            BatchTooLarge,
+            InvalidWrite,
+            ProofVerificationFailed,
+            HashingFailed,
+            MissingAccounts,
+            MissingSignature,
+            ReadOnlyRegistry,
+            InvalidSystemProgram,
+            AlreadyInitialized,
+            RevisionOverflow,
+            UnsupportedBatch,
         ] {
             let code = match error {
                 InvalidRegistry => 9000,
@@ -172,6 +261,18 @@ mod tests {
                 RevisionChanged => 9002,
                 RootExpired => 9003,
                 HistoryFull => 9004,
+                InvalidInstructionData => 9005,
+                BatchTooLarge => 9006,
+                InvalidWrite => 9007,
+                ProofVerificationFailed => 9008,
+                HashingFailed => 9009,
+                MissingAccounts => 9010,
+                MissingSignature => 9011,
+                ReadOnlyRegistry => 9012,
+                InvalidSystemProgram => 9013,
+                AlreadyInitialized => 9014,
+                RevisionOverflow => 9015,
+                UnsupportedBatch => 9016,
             };
             assert_eq!(error as u32, code);
         }

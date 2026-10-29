@@ -4439,7 +4439,6 @@ dependencies = [
  "spr-indexer-api",
  "spr-interface",
  "spr-rpc-http",
- "storage-program",
  "thiserror 2.0.20",
  "tokio",
  "tower",
@@ -7773,11 +7772,7 @@ dependencies = [
  "solana-instruction",
  "solana-keypair",
  "solana-transaction-error",
- "spr-account-checks",
  "spr-client",
- "spr-hasher",
- "spr-interface",
- "zolana-ring-policy",
 ]
 
 [[package]]

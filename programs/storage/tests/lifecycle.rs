@@ -1,9 +1,9 @@
 use custom_ring_interface::{
-    storage::{RegistryId, Revision, StorageError, StorageRegistry},
+    storage::{RegistryId, Revision, RootUpdate, StorageError, StorageRegistry},
     storage_instruction::{
         tag, InitializeIxData, StorageUpdateIxData, StorageWriteData, UpdateMode,
     },
-    ApplyRecordsIxData, CustomRingError, CustomRingProof, PlainGroth16Proof, WriteRecordsIxData,
+    ApplyRecordsIxData, CustomRingProof, PlainGroth16Proof, WriteRecordsIxData,
 };
 use litesvm::LiteSVM;
 use serde_json::Value;
@@ -255,7 +255,7 @@ fn updates_retire_roots_by_mode() {
     *forged.data.last_mut().unwrap() ^= 1;
     assert_eq!(
         store.send_as_authority(forged),
-        refusal(CustomRingError::ProofVerificationFailed as u32)
+        refusal(StorageError::ProofVerificationFailed as u32)
     );
     store.send_as_authority(store.update(0)).unwrap();
     assert_eq!(
@@ -312,4 +312,31 @@ fn a_graced_update_never_evicts_a_root_that_still_verifies() {
     // Evictable from the slot `RootExpired` starts refusing it.
     store.svm.warp_to_slot(GRACE);
     store.send_as_authority(store.update(0)).unwrap();
+}
+
+/// The indexer projects every update through `StorageRegistry::update`.
+#[test]
+fn the_program_rotates_roots_as_the_indexer_projects_them() {
+    let mut store = Store::new();
+    store.initialize(GRACE);
+    let mut projected = store.registry();
+    for (revision, mode) in [
+        (0, UpdateMode::Graced),
+        (1, UpdateMode::Graced),
+        (2, UpdateMode::Immediate),
+    ] {
+        let slot = revision + 1;
+        store.svm.warp_to_slot(slot);
+        let instruction = store.update_with(revision, mode);
+        let data = StorageUpdateIxData::parse(&instruction.data[1..]).unwrap();
+        projected
+            .update(RootUpdate {
+                mode,
+                slot,
+                data: &data,
+            })
+            .unwrap();
+        store.send_as_authority(instruction).unwrap();
+        assert_eq!(store.registry(), projected);
+    }
 }

@@ -1,10 +1,8 @@
-use bytemuck::Zeroable;
 use custom_ring_interface::{
-    storage::{Root, StorageRegistry},
+    storage::{chain_start, RootUpdate, StorageError, StorageRegistry},
     storage_instruction::{
         tag, InitializeIxData, StorageUpdateIxData, StorageWriteData, UpdateMode,
     },
-    CustomRingError, ROOT_HISTORY,
 };
 use sea_orm::ConnectionTrait;
 use solana_address::Address;
@@ -40,7 +38,7 @@ pub(crate) struct StorageUpdate<'a> {
 /// `call` fails on data the program refuses.
 pub(crate) struct StorageInstruction<'a> {
     pub registry: Address,
-    pub call: Result<StorageCall<'a>, CustomRingError>,
+    pub call: Result<StorageCall<'a>, StorageError>,
 }
 
 /// Account order of the `custom_ring_sdk` storage builders.
@@ -51,7 +49,7 @@ pub(crate) fn decode(instruction: &Instruction) -> Option<StorageInstruction<'_>
             .accounts
             .get(index)
             .copied()
-            .ok_or(CustomRingError::InvalidInstructionData)
+            .ok_or(StorageError::MissingAccounts)
     };
     let registry = |index: usize| account(index).ok();
     let instruction = match tag {
@@ -59,7 +57,7 @@ pub(crate) fn decode(instruction: &Instruction) -> Option<StorageInstruction<'_>
             registry: registry(2)?,
             call: account(1).and_then(|creator| {
                 let data = bytemuck::try_from_bytes(data)
-                    .map_err(|_| CustomRingError::InvalidInstructionData)?;
+                    .map_err(|_| StorageError::InvalidInstructionData)?;
                 Ok(StorageCall::Initialize(StorageInit { creator, data }))
             }),
         },
@@ -146,21 +144,15 @@ impl<C: ConnectionTrait> StorageProjection<'_, '_, C> {
         // 1. The program admits the update at the projected revision.
         self.authorize(&authority)?;
         let account = &*self.state.account;
-        if data.revision != account.roots[0].revision {
-            return Err(fault(format!(
-                "update names revision {}, projected {}",
-                data.revision.value(),
-                account.roots[0].revision.value()
-            )));
-        }
-        if mode == UpdateMode::Graced && self.slot < account.roots[ROOT_HISTORY - 1].expires_at() {
-            return Err(fault("graced update over a full root history"));
-        }
-        let revision = data
-            .revision
-            .value()
-            .checked_add(1)
-            .ok_or_else(|| fault("revision overflow"))?;
+        let mut rotated = *account;
+        rotated
+            .update(RootUpdate {
+                mode,
+                slot: self.slot,
+                data: &data,
+            })
+            .map_err(|error| fault(format!("update refused ({error})")))?;
+        let revision = rotated.roots[0].revision.value();
         // 2. The writes reach the root the program recorded.
         let entries = data
             .writes
@@ -169,7 +161,7 @@ impl<C: ConnectionTrait> StorageProjection<'_, '_, C> {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| fault(format!("storage write refused ({error})")))?;
         let registry = Address::new_from_array(self.state.registry);
-        let chain_start = storage_program::chain_start(&registry, data.revision)
+        let chain_start = chain_start(&registry, data.revision)
             .map_err(|error| fault(format!("chain start failed ({error})")))?;
         let loaded = TreeRead::batch(StorageRoot::current(account).tree(), &entries)
             .load(self.store.tree())
@@ -206,24 +198,10 @@ impl<C: ConnectionTrait> StorageProjection<'_, '_, C> {
             .save_nodes(&batch.rows.nodes, revision)
             .await?;
         // 4. The roots rotate as the program rotates them.
-        let account = &mut *self.state.account;
-        match mode {
-            UpdateMode::Graced => {
-                account.roots[0].expires_at = self
-                    .slot
-                    .saturating_add(account.grace_slots())
-                    .to_le_bytes();
-                account.roots.rotate_right(1);
-            }
-            UpdateMode::Immediate => account.roots.fill(Root::zeroed()),
-        }
-        account.roots[0] = Root {
-            hash: data.apply.new_root,
-            revision: revision.into(),
-            expires_at: [0; 8],
-        };
-        account.next_index = data.apply.new_next_index;
-        self.store.save_root(&StorageRoot::current(account)).await?;
+        *self.state.account = rotated;
+        self.store
+            .save_root(&StorageRoot::current(&rotated))
+            .await?;
         Ok(())
     }
 
