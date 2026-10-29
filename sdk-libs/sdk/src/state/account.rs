@@ -1,8 +1,8 @@
 //! The ring's accounts as the chain holds them, every read checked against its canonical address.
 
 use custom_ring_interface::{
-    CoSignScope, MemberRegistry, ReadAccessRecord, RecordQueue, RingAccount, RingMode,
-    RingProgramConfig, ROOT_HISTORY,
+    CoSignScope, CoSigner, MemberRegistry, ReadAccessRecord, RecordQueue, RingAccount, RingMode,
+    RingPolicy, RingProgramConfig, ROOT_HISTORY,
 };
 use solana_account::Account;
 use solana_address::Address;
@@ -125,6 +125,14 @@ impl CustomRing {
 
     pub fn queue_pda(self) -> Address {
         self.pda(&[RecordQueue::SEED]).0
+    }
+
+    pub fn policy_pda(self) -> Address {
+        self.pda(&[RingPolicy::SEED]).0
+    }
+
+    pub fn co_signer_pda(self, signer: &Address) -> Address {
+        self.pda(&[CoSigner::SEED, signer.as_ref()]).0
     }
 
     pub fn read_access_record_pda(self, reader: &ReaderKey) -> Address {

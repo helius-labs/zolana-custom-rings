@@ -30,6 +30,8 @@ mod register_key;
 mod request;
 #[path = "operations/utxo_selection.rs"]
 mod select;
+#[path = "operations/storage.rs"]
+mod storage;
 #[path = "operations/submission.rs"]
 mod submission;
 #[cfg(test)]
@@ -79,6 +81,7 @@ pub use crate::{
         EscrowedRecipients, KeyEscrowAuthority, ProvenKeyRegistration, RegisterKey, SealedEscrow,
     },
     select::{select_merge_where, select_spend_where},
+    storage::{InitializeStorage, SyncRoots, UpdateStorage, UpdateStorageAuthority},
     submission::{RingOperation, RingSubmission, SettledSubmission, SubmissionStatus},
     trees::tree_id,
 };
