@@ -1,6 +1,8 @@
-use serde::{Deserialize, Serialize};
+use base64::{engine::general_purpose::STANDARD, Engine};
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 use spr_indexer_api::{Base64String, Hash, SerializablePubkey, SerializableSignature};
+use zeroize::Zeroizing;
 
 const RELAY_DOMAIN: &[u8] = b"zolana/ring-rpc-relay/v1";
 
@@ -46,20 +48,24 @@ pub struct PrepareRelayRequest {
 pub enum RelayIntent {
     /// `owner_signature` is raw Ed25519 over `SppProofInputs::message_hash`.
     Anonymous {
-        proof_inputs: Base64String,
+        proof_inputs: ProofInputBytes,
         owner_signature: SerializableSignature,
     },
     Confidential {
-        proof_inputs: Base64String,
+        proof_inputs: ProofInputBytes,
         owner_signature: SerializableSignature,
     },
     Delegate {
-        proof_inputs: Base64String,
+        proof_inputs: ProofInputBytes,
     },
     Deposit {
-        proof_inputs: Base64String,
+        proof_inputs: ProofInputBytes,
     },
 }
+
+/// Base64 on the wire, zeroized on drop and never printed.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ProofInputBytes(Zeroizing<Vec<u8>>);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -127,17 +133,58 @@ impl RelayIntent {
             Self::Deposit { .. } => RelayOperation::Deposit,
         }
     }
+
+    pub const fn proof_inputs(&self) -> &ProofInputBytes {
+        match self {
+            Self::Anonymous { proof_inputs, .. }
+            | Self::Confidential { proof_inputs, .. }
+            | Self::Delegate { proof_inputs }
+            | Self::Deposit { proof_inputs } => proof_inputs,
+        }
+    }
 }
 
 impl PrepareRelayRequest {
     /// SHA-256 over the domain and the request's own serialization, a retry names the same relay.
     pub fn relay_id(&self) -> Result<RelayId, serde_json::Error> {
-        let request = serde_json::to_vec(self)?;
+        let request = Zeroizing::new(serde_json::to_vec(self)?);
         let digest: [u8; 32] = Sha256::new()
             .chain_update(RELAY_DOMAIN)
-            .chain_update(request)
+            .chain_update(&request)
             .finalize()
             .into();
         Ok(RelayId(Hash(digest)))
+    }
+}
+
+impl ProofInputBytes {
+    pub fn new(bytes: Zeroizing<Vec<u8>>) -> Self {
+        Self(bytes)
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl core::fmt::Debug for ProofInputBytes {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("ProofInputBytes(..)")
+    }
+}
+
+impl Serialize for ProofInputBytes {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&Zeroizing::new(STANDARD.encode(&*self.0)))
+    }
+}
+
+impl<'de> Deserialize<'de> for ProofInputBytes {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let encoded = Zeroizing::new(String::deserialize(deserializer)?);
+        STANDARD
+            .decode(encoded.as_bytes())
+            .map(|bytes| Self(Zeroizing::new(bytes)))
+            .map_err(de::Error::custom)
     }
 }

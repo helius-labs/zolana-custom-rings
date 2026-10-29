@@ -190,7 +190,7 @@ impl Relay {
         }
         let ring = request.ring.0;
         self.rings.check(ring)?;
-        let proof_inputs = RelayProofInputs::decode(&proof_input_bytes(&request.intent).0)
+        let proof_inputs = RelayProofInputs::decode(request.intent.proof_inputs().as_bytes())
             .map_err(RelayError::from)?;
         let fee_payer = self.fee_payer();
         let owner_signature = PrepareCheck {
@@ -225,6 +225,8 @@ impl Relay {
         }
         .decide(self.co_signer.as_ref())
         .await?;
+        // The decoded secrets zeroize before the store and send awaits.
+        drop(proof_inputs);
         let mut record = RelayRecord {
             message,
             signatures: co_signed.signature.into_iter().collect(),
@@ -516,15 +518,6 @@ impl PrepareCheck<'_> {
             true => Ok(Some(signature)),
             false => Err(RelayError::OwnerSignature.into()),
         }
-    }
-}
-
-fn proof_input_bytes(intent: &RelayIntent) -> &spr_indexer_api::Base64String {
-    match intent {
-        RelayIntent::Anonymous { proof_inputs, .. }
-        | RelayIntent::Confidential { proof_inputs, .. }
-        | RelayIntent::Delegate { proof_inputs }
-        | RelayIntent::Deposit { proof_inputs } => proof_inputs,
     }
 }
 

@@ -681,7 +681,7 @@ fn a_relay_request_serializes_to_the_shared_vector() {
             valid_until_slot: 4242,
         },
         intent: RelayIntent::Anonymous {
-            proof_inputs: vec![3, 4, 5].into(),
+            proof_inputs: ProofInputBytes::new(zeroize::Zeroizing::new(vec![3, 4, 5])),
             owner_signature: Signature::from([7; 64]).into(),
         },
     };

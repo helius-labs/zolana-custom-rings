@@ -121,7 +121,7 @@ async fn an_anonymous_relay_sends_no_path_or_record_request_and_signs_the_messag
     else {
         panic!("the anonymous intent");
     };
-    let sent = RelayProofInputs::decode(&proof_inputs.0).unwrap();
+    let sent = RelayProofInputs::decode(proof_inputs.as_bytes()).unwrap();
     let message_hash = sent.spp_proof_inputs(fee_payer).message_hash().unwrap();
     assert!(sender
         .signing_pubkey()
