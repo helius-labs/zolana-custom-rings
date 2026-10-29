@@ -40,6 +40,11 @@ pub(crate) struct SealedAudit {
     pub fields: Vec<[u8; 32]>,
 }
 
+pub(crate) struct PresealedAudit {
+    pub message: MessageData,
+    pub eph_sk: Zeroizing<[u8; 32]>,
+}
+
 pub(super) struct AuditSeal<'a> {
     pub rail: &'a RingOutputRail,
     pub layout: DisclosureLayout,
@@ -124,6 +129,31 @@ impl AuditSeal<'_> {
                     })
                     .collect::<Result<_, RingError>>()?,
             },
+        })
+    }
+}
+
+impl PresealedAudit {
+    /// Refused unless the message sits under the ring auditor's tag in the layout of the transfer.
+    pub fn open(
+        self,
+        layout: DisclosureLayout,
+        flags: AuditLayout,
+        auditor: &X25519Pubkey,
+    ) -> Result<SealedAudit, RingError> {
+        let message = AuditorMessage::parse(&self.message.data, layout)
+            .filter(|_| self.message.view_tag == auditor.u())
+            .ok_or(RingError::RelayAuditorMessage)?;
+        let eph_u = message.eph_pk[1..]
+            .try_into()
+            .map_err(|_| RingError::RelayAuditorMessage)?;
+        Ok(SealedAudit {
+            layout,
+            flags,
+            eph_u,
+            sealed: *message.sealed,
+            eph_sk: self.eph_sk,
+            fields: message.disclosure.to_vec(),
         })
     }
 }

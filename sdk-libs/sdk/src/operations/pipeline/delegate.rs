@@ -264,6 +264,7 @@ impl Delegated<'_> {
             spend: Spend::Delegate {
                 delegate: self.delegate,
             },
+            presealed: None,
         })
     }
 }

@@ -487,7 +487,10 @@ async fn a_known_recipient_takes_the_shared_tag_and_the_history_advances() {
     let Spend::Anonymous(spend) = staged.spend else {
         panic!("an anonymous ring stages its rail");
     };
-    let second = &spend.history;
+    let second = spend
+        .history
+        .as_ref()
+        .expect("the wallet rail keeps its history");
     assert_eq!(second, &pay(&first));
     assert_eq!(second.current().tx_count(), 2);
     assert_eq!(

@@ -84,6 +84,15 @@ impl RingOutputRail {
         }
     }
 
+    /// The rail a wallet sealed under `salt`, proven again away from the wallet.
+    pub fn sealed(tx_viewing_key: ViewingKey, salt: Salt, delivery: RingDelivery) -> Self {
+        Self {
+            tx_viewing_key,
+            salt,
+            delivery,
+        }
+    }
+
     /// SPP's encryption fixes the slots and blindings, the rail then re-encodes every slot.
     pub fn encrypt(
         &self,
