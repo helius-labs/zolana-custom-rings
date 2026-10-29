@@ -68,7 +68,6 @@ pub fn run(ctx: &Context, args: MergeArgs) -> Result<()> {
     // A key escrow merge proves the owner's escrowed key.
     if config.mode == RingMode::ConfidentialEscrow {
         KeyEnrolment {
-            funder: payer,
             members: &[&sender],
         }
         .ensure(ctx)?;

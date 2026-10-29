@@ -543,6 +543,17 @@ export function memberOfAsset(mint: Address): Member {
   return checkedMember(hashBytes(decodeAddress(mint)) as Bytes32);
 }
 
+/** Mirrors Rust `Member::wallet_grant`, its `reader` list is the wallet's grant to `reader`. */
+export function walletGrantMember(wallet: Member, reader: Member): Member {
+  return checkedMember(
+    poseidon([
+      domainField(RingDomain.walletGrant),
+      checkedMember(wallet),
+      checkedMember(reader),
+    ]) as Bytes32,
+  );
+}
+
 function checkedMember(bytes: Bytes32): Member {
   if (equalBytes(bytes, ZERO_32)) throw entryInvalid("zeroMember");
   return bytes as Member;

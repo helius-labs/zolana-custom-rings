@@ -31,6 +31,8 @@ import {
   ZERO_32,
   equalBytes,
   assetField,
+  indexerScalars,
+  type indexerTypes,
 } from "@heliuslabs/zolana/internal";
 import { MAX_MERGE_INPUTS } from "@heliuslabs/zolana/interface";
 import { X25519PublicKey, KeypairError } from "@heliuslabs/zolana/keypair";
@@ -62,6 +64,20 @@ import {
   readerKeyFromBytes,
 } from "../operations/management/reader-access.js";
 import { memberOfTag } from "../protocol/membership/policy.js";
+import { verifyRecordUpdate } from "../protocol/ring-rpc/record-update.js";
+import {
+  decodeRecordUpdateStatus,
+  decodeSubmitRecordUpdate,
+  encodeRecordUpdateStatusRequest,
+  encodeSubmitRecordUpdateRequest,
+} from "../protocol/ring-rpc/ring-rpc-codec.js";
+import {
+  RingRpcMethod,
+  type RecordUpdateStatus,
+  type SubmitRecordUpdateRequest,
+} from "../protocol/ring-rpc/ring-rpc-types.js";
+
+type Hash = indexerTypes.Hash;
 
 const base58Decoder = getBase58Decoder();
 const base64Decoder = getBase64Decoder();
@@ -770,6 +786,34 @@ export class RingRpc {
       ...(absent(activation) ? {} : { activation: decodeActivation(activation) }),
       ...(absent(registry) ? {} : { registry: decodeRegistryStatus(registry) }),
     });
+  }
+
+  /** Refused before sending unless the signature verifies, the service must answer the same id. */
+  async submitRecordUpdate(
+    request: SubmitRecordUpdateRequest,
+    context?: RequestContext,
+  ): Promise<Hash> {
+    const id = indexerScalars.hash(verifyRecordUpdate(request));
+    const wire = await this.#call(
+      RingRpcMethod.submitRecordUpdate,
+      encodeSubmitRecordUpdateRequest(request),
+      context,
+    );
+    if (decodeSubmitRecordUpdate(wire) !== id) throw invalid("result.updateId");
+    return id;
+  }
+
+  async getRecordUpdateStatus(
+    updateId: Hash,
+    context?: RequestContext,
+  ): Promise<RecordUpdateStatus> {
+    return decodeRecordUpdateStatus(
+      await this.#call(
+        RingRpcMethod.getRecordUpdateStatus,
+        encodeRecordUpdateStatusRequest(updateId),
+        context,
+      ),
+    );
   }
 
   /** Each page is signed again, the attestation binds the nonce, the cursor and the time. */

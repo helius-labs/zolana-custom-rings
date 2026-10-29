@@ -184,6 +184,20 @@ function encodeRecordUpdateEntry(entry: RecordUpdateEntry, path: string): WireOb
         ciphertext: checkedBase64(entry.ciphertext, `${path}.ciphertext`),
         proof: checkedBase64(entry.proof, `${path}.proof`),
       };
+    case "walletGrant":
+      if (entry.access !== "granted" && entry.access !== "revoked")
+        return schemaFailure(
+          "INDEXER_SCHEMA_INVALID_TYPE",
+          `${path}.access`,
+          "a reader access",
+          entry.access,
+        );
+      return {
+        kind: entry.kind,
+        wallet: checkedHash(entry.wallet, `${path}.wallet`),
+        reader: checkedHash(entry.reader, `${path}.reader`),
+        access: entry.access,
+      };
   }
 }
 

@@ -227,7 +227,15 @@ export {
   recordBit,
   referencedLists,
   ruleAlternatives,
+  walletGrantMember,
 } from "../protocol/membership/policy.js";
+export {
+  recordUpdateQueueEntry,
+  recordUpdateStatementHash,
+  signRecordUpdate,
+  verifyRecordUpdate,
+} from "../protocol/ring-rpc/record-update.js";
+export type { UnsignedRecordUpdate } from "../protocol/ring-rpc/record-update.js";
 export type {
   ListWriter,
   Member,

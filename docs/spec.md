@@ -76,7 +76,7 @@ A custom ring is a Solana program that governs its notes in the zolana shielded 
 
 1. **Deploy.** The upgrade authority deploys the ring program with Loader v3. The binary carries the verifying keys of its [proving key lock](#keys-and-releases). No ring account exists.
 2. **Create.** The upgrade authority signs `CreateConfig` with the auditor key and the ring kind. The config authority signs `CreateMemberRegistry`, creates the records in the Storage Program, then signs `CreatePolicy`, which binds the records on every ring and pins the table on a policy ring. Anyone then sends `SyncRoots` for the records and for a curator. The config authority signs `InitSppRingConfig`, which creates the SPP `RingConfig` at `ring_auth`. SPP activates the ring at creation when its protocol config allows it. Else SPP governance activates it later. No note moves until the ring is activated.
-3. **Enrol.** An owner writes its own member lists with `WriteRecords`. On a confidential ring it also seals its nullifier secret to the auditor with `RegisterKey`, which an anonymous ring refuses. Both pay the insert fee and wait in the record queue. Anyone applies the queue with `ApplyRecords` when 8 writes wait or the oldest is 150 slots old, at most once per 150 slots. The config authority writes authority lists and mint settings with `AuthorityWriteRecords`, which applies at once and raises the floor.
+3. **Enrol.** An owner signs a [record update](#record-updates) for its own member lists. On a confidential ring the update can also carry an escrow entry, which seals the owner's nullifier secret to the auditor under a register key proof. An anonymous ring refuses the escrow entry. The config authority signs record updates for authority lists and mint settings. Each signer sends its update to Ring RPC, and the writer applies it to the ring's `StorageRegistry`. The CLI writes records only through record updates.
 4. **Deposit.** A funder signs `AuditedDeposit` for up to 8 new ring notes. The deposit proof seals each note's opening to the auditor. On a `ConfidentialEscrow` ring it also proves each owner's escrow record. On a policy ring it proves each deposited asset against the asset rules under the own root.
 5. **Transfer.** The sender proves the SPP proof, the audit proof and on a policy ring the policy proof, and submits `Transact`. The program rebuilds both ring statements, verifies the proofs and invokes SPP as `ring_auth`. On a confidential ring the owner signs the transaction. On an anonymous ring the hidden owner signs inside the SPP proof and only the payer signs the transaction.
 6. **Leave.** A transfer pays an exit or withdraws a public leg. The rules screen exit owners and withdrawal owners as output owners. A delegate move can do neither.
@@ -1406,6 +1406,30 @@ Holds the auditor key and serves audited history to readers.
 - Every audited row is bound to the confirmed SPP event the service rebuilds from Solana `getTransaction`. Photon is trusted for completeness only. A row Photon omits, or labels with no ring, never reaches a reader, and no client detects the gap.
 
 A reader receives each output's owner key, nullifier key, asset, amount and blinding, the recipient `u` on the delivered rails, and on the anonymous rail the view tag, the hidden sender and every input's opening. It receives no nullifier secret. Pages carry no signature, so a faulty service can serve a false opening to a reader that does not rebuild the commitment. `getAuditedUtxos` answers are checked by both SDKs against their requested hashes. Nonces and rate windows live in memory, so one key runs in one process.
+
+### Record updates
+
+A record update is a signed list of entries for one ring and one `StorageRegistry`. The signer sends it to Ring RPC `submitRecordUpdate`, and the writer applies it.
+
+```rust
+/// The signer signs these 32 bytes with Ed25519, and the hash is the update id.
+fn record_update_hash(ring: Address, registry: Address, entries: &[Entry], valid_until_slot: u64) -> Field {
+    Poseidon(CRRU, hash_bytes(ring), hash_bytes(registry),
+        entries.fold(0, |chain, entry| Poseidon(chain, entry_hash(entry))),
+        right_align(valid_until_slot))
+}
+```
+
+| Entry | Signer | Write |
+|---|---|---|
+| `write` | Owner, own record | The ring-viewing and recovery lists. |
+| `write` | Config authority | Authority lists and mint settings of any record. |
+| `escrow` | Owner, own record | The escrow key, with the register key proof the writer verifies. |
+| `walletGrant` | The wallet | The reader list of the record `Poseidon(CRWG, wallet, reader)`. |
+
+Each entry becomes the queue entry the apply proof hashes, so the signature binds every write that reaches the tree. A wallet grant names the wallet and the reader identity, so the writer can rebuild the record key and compare the wallet with the signer. The writer refuses an update after `validUntilSlot`, an update with an invalid signature, and an entry the signer does not hold. Both SDKs verify the signature before they send an update, and they refuse a service that answers another update id. `getRecordUpdateStatus` reports `queued`, `submitted`, `applied` with the new registry revision, or `refused` with a reason.
+
+The hash binds no cluster. A registry address that exists on two clusters accepts the same update on both until `validUntilSlot`.
 
 ### Ring prover
 

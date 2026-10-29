@@ -37,7 +37,7 @@ spr-program = { workspace = true }
 spr-hasher = { workspace = true }
 spr-indexer-api = { workspace = true }
 spr-keypair = { workspace = true }
-zolana-ring-client = { workspace = true }
+zolana-ring-client = { workspace = true, features = ["rpc"] }
 zolana-ring-indexer = { workspace = true }
 zolana-ring-keys = { workspace = true }
 zolana-ring-member-registry = { workspace = true }
