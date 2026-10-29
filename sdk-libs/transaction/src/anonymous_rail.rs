@@ -61,6 +61,19 @@ impl AnonymousPlan {
         }
     }
 
+    /// `dummy_tags` must be the tags the sealed outputs publish.
+    pub fn from_tags(
+        sender_tag: ViewTag,
+        payments: Vec<TaggedPayment>,
+        dummy_tags: [ViewTag; MAX_OUTPUTS],
+    ) -> Self {
+        Self {
+            sender_tag,
+            payments,
+            dummy_tags,
+        }
+    }
+
     pub fn with_payment(mut self, payment: TaggedPayment) -> Self {
         self.payments.push(payment);
         self
@@ -72,6 +85,10 @@ impl AnonymousPlan {
 
     pub fn payments(&self) -> &[TaggedPayment] {
         &self.payments
+    }
+
+    pub fn dummy_tags(&self) -> &[ViewTag; MAX_OUTPUTS] {
+        &self.dummy_tags
     }
 
     /// Change leads, every other ring output takes the next payment in declared order.

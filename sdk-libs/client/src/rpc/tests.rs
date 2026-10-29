@@ -686,3 +686,132 @@ fn a_relay_request_serializes_to_the_shared_vector() {
     let read: PrepareRelayRequest = serde_json::from_str(&vector.wire).expect("read");
     assert_eq!(read.intent.operation(), RelayOperation::Anonymous);
 }
+
+fn relay_proof_inputs() -> RelayProofInputs {
+    use spr_event::MessageData;
+    use spr_instruction::instruction::{
+        TransactInterfaceTransferAccounts, TransactSolTransferAccounts,
+    };
+    use spr_interface::{
+        instruction::instruction_data::transact::{OwnerTag, TransactOutput},
+        MAX_OUTPUTS,
+    };
+    use spr_keypair::{NullifierKey, ShieldedKeypair, SigningKey, X25519Keypair};
+    use spr_transaction::{
+        instructions::transact::{ExternalData, SettlementTransfer},
+        utxo::SppProofInputUtxo,
+        Data, Mint, SppProofOutputUtxo, Utxo,
+    };
+    use zolana_ring_transaction::{AnonymousPlan, TaggedPayment};
+    let owner =
+        ShieldedKeypair::from_keypair(SigningKey::from_ed25519_bytes(&[5; 32])).expect("owner");
+    let sender = owner.shielded_address().expect("address");
+    let ring = Address::new_from_array([6; 32]);
+    let utxo = Utxo {
+        owner: sender.signing_pubkey,
+        asset: Mint::SOL,
+        amount: 900,
+        blinding: [11; 32],
+        ring_program_id: Some(ring),
+        data: Data::default(),
+    };
+    let utxo_hash = utxo
+        .hash(&sender.nullifier_pubkey, &[0; 32], &[0; 32], 4)
+        .expect("hash");
+    let spend = SppProofInputUtxo {
+        address: false,
+        nullifier: owner
+            .nullifier_key
+            .nullifier(&utxo_hash, &utxo.blinding)
+            .expect("nullifier"),
+        utxo,
+        nullifier_pubkey: sender.nullifier_pubkey,
+        utxo_hash,
+        data_hash: None,
+        ring_data_hash: None,
+        tree_id: 4,
+        leaf_index: 17,
+        cache_slot: None,
+        compact: false,
+    };
+    let change = SppProofOutputUtxo {
+        asset: Mint::SOL,
+        amount: 800,
+        blinding: [12; 32],
+        ring_program_id: Some(ring),
+        owner_address: Some(sender),
+        ..SppProofOutputUtxo::default()
+    };
+    let tx_viewing_key = ViewingKey::from_secret_key(X25519Keypair::from_bytes(&[13; 32]));
+    let recipient = Address::new_from_array([14; 32]);
+    let external_data = ExternalData {
+        interface_transfers: vec![SettlementTransfer::Sol {
+            is_deposit: false,
+            amount: 100,
+            user_sol_account: recipient,
+        }],
+        ..ExternalData::new(
+            *tx_viewing_key.pubkey().as_bytes(),
+            [15; 16],
+            vec![TransactOutput {
+                utxo_hash: [16; 32],
+                owner_tag: OwnerTag::Inline([17; 32]),
+                data: Some(vec![18, 19]),
+            }],
+            vec![[20; 32]],
+            vec![MessageData {
+                view_tag: [21; 32],
+                data: vec![22],
+            }],
+        )
+    };
+    RelayProofInputs {
+        rail: RelayRail::Anonymous {
+            plan: Box::new(AnonymousPlan::from_tags(
+                [23; 32],
+                vec![TaggedPayment {
+                    recipient: owner.viewing_pubkey(),
+                    tag: [24; 32],
+                }],
+                [[25; 32]; MAX_OUTPUTS],
+            )),
+            exit_token_owner: None,
+        },
+        ring_program_id: ring,
+        nullifier_key: NullifierKey::from_secret(*owner.nullifier_key.secret()),
+        sender,
+        tx_viewing_key,
+        audit_ephemeral_key: zeroize::Zeroizing::new([26; 32]),
+        inputs: vec![
+            spend,
+            SppProofInputUtxo::dummy_with_blinding([27; 32], 4).expect("dummy"),
+        ],
+        outputs: vec![change],
+        external_data,
+        interface_transfer_accounts: vec![TransactInterfaceTransferAccounts::Sol(
+            TransactSolTransferAccounts { recipient },
+        )],
+        blinding_seed: [28; 32],
+        output_tree_id: 4,
+    }
+}
+
+#[test]
+fn relay_proof_inputs_encode_to_the_shared_vector() {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Vector {
+        proof_inputs: Base64String,
+    }
+    let vector: Vector = serde_json::from_str(include_str!(
+        "../../../../test-vectors/rpc/relay_proof_inputs.json"
+    ))
+    .expect("vector");
+    let inputs = relay_proof_inputs();
+    assert_eq!(*inputs.encode().expect("encode"), vector.proof_inputs.0);
+    let read = RelayProofInputs::decode(&vector.proof_inputs.0).expect("decode");
+    assert_eq!(read.inputs, inputs.inputs);
+    assert_eq!(read.outputs, inputs.outputs);
+    assert_eq!(read.external_data, inputs.external_data);
+    assert_eq!(read.rail.operation(), Some(RelayOperation::Anonymous));
+}
