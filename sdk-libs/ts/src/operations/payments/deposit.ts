@@ -3,9 +3,12 @@ import type { Instruction } from "@solana/kit";
 import { type RingProver, type RingRecordReader } from "../../rpc/ports.js";
 import { encodeRingDepositPlaintext } from "../../protocol/codec/ring-deposit-plaintext.js";
 import {
+  bigIntBytes,
   compileUnsignedTransaction,
+  equalBytes,
   resolveDepositSettlement,
   signerAddress,
+  waitForProjection,
   ZERO_32,
   resolveShieldedRecipient,
 } from "@heliuslabs/zolana/internal";
@@ -25,9 +28,9 @@ import {
   ViewingKey,
 } from "@heliuslabs/zolana/keypair";
 import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
-import { SOL_MINT, Data, Utxo, ownerUtxoHash } from "@heliuslabs/zolana/transaction";
+import { assetField, SOL_MINT, Data, Utxo, ownerUtxoHash } from "@heliuslabs/zolana/transaction";
 import type { DepositClient } from "@heliuslabs/zolana/wallet";
-import type { DepositProofRequest } from "../../rpc/prover/ring.js";
+import type { DepositProofRequest, PolicyTableProofInputs } from "../../rpc/prover/ring.js";
 import { depositBlinding } from "../../crypto/derivation/ring-domain.js";
 
 import { checkSignersHideOwner } from "./anonymous.js";
@@ -39,14 +42,20 @@ import {
   ringDepositContextHash,
   ringDepositPublicInputHash,
   sealRingDepositOpenings,
+  type DepositedAsset,
 } from "../../proof/deposit-audit.js";
 import {
   ringDepositInstruction,
   ringDepositSpp,
 } from "../../protocol/transaction/deposit-instruction.js";
 import { RingError, wrapRingError } from "../../protocol/error.js";
-import type { BoundRoot } from "../../proof/policy-proof.js";
-import { readRegisteredRecord } from "../../rpc/registered-record.js";
+import { currentRoot, type BoundRoot } from "../../proof/policy-proof.js";
+import { readMemberOpenings } from "../../rpc/registered-record.js";
+import { MEMBER_REGISTRY_PROJECTION_ERRORS } from "../../rpc/projection.js";
+import { fetchRingMemberRegistry } from "../../protocol/membership/config.js";
+import { ownerEscrowed, type EscrowedRecord } from "../../protocol/membership/member-opening.js";
+import type { RecordOpening } from "../../protocol/membership/member-registry.js";
+import { pinnedPolicy, policyTableProofInputs } from "../../protocol/membership/policy.js";
 import { type RingKeys } from "../../state/ring-keys.js";
 import type { RingAddress } from "../../crypto/keys/ring-address.js";
 import type { FirstContact, ViewingHistory } from "../../state/viewing-history.js";
@@ -76,7 +85,7 @@ type TaggedRecipient = Readonly<{
 }>;
 
 export type RingDepositClient = DepositClient &
-  Pick<RingRecordReader, "getRingMemberRecord"> &
+  Pick<RingRecordReader, "getRingMemberOpenings"> &
   RingProver;
 
 export interface RingDepositParams {
@@ -99,8 +108,19 @@ export interface RingDepositParams {
 /** A proven deposit with the registry root its proof binds. */
 export interface ProvenRingDeposit {
   readonly instruction: Instruction;
-  /** The registry root an escrowing ring's proof binds by history slot. */
+  /** The registry root an escrow or policy ring's proof binds by history slot. */
   readonly roots?: readonly BoundRoot[];
+}
+
+/** Rust `DepositRecords`. */
+interface DepositRecords {
+  readonly root: BoundRoot;
+  readonly escrowed?: EscrowedRecord;
+  readonly policy?: Readonly<{
+    policyHash: Bytes32;
+    table: PolicyTableProofInputs;
+    asset: RecordOpening;
+  }>;
 }
 
 /** A deposit whose note and auditor ciphertext every proof reuses, Rust `PreparedRingDeposit`. */
@@ -122,6 +142,8 @@ export class PreparedRingDeposit {
   readonly #ownerKey: Bytes32 | undefined;
   readonly #auditor: X25519PublicKey;
   readonly #keyEscrow: boolean;
+  readonly #hasPolicy: boolean;
+  readonly #asset: DepositedAsset;
   readonly #blindingSecret: Bytes32;
   readonly #ephemeralSecret: Bytes32;
 
@@ -140,6 +162,8 @@ export class PreparedRingDeposit {
     ownerKey: Bytes32 | undefined;
     auditor: X25519PublicKey;
     keyEscrow: boolean;
+    hasPolicy: boolean;
+    asset: DepositedAsset;
     blindingSecret: Bytes32;
     ephemeralSecret: Bytes32;
   }) {
@@ -157,6 +181,8 @@ export class PreparedRingDeposit {
     this.#ownerKey = state.ownerKey;
     this.#auditor = state.auditor;
     this.#keyEscrow = state.keyEscrow;
+    this.#hasPolicy = state.hasPolicy;
+    this.#asset = state.asset;
     this.#blindingSecret = state.blindingSecret;
     this.#ephemeralSecret = state.ephemeralSecret;
   }
@@ -220,17 +246,10 @@ export class PreparedRingDeposit {
   /** A root below a raised floor is proved again over the same note under a fresh root. */
   async prove(client: RingDepositClient, context?: RequestContext): Promise<ProvenRingDeposit> {
     try {
-      const escrow = this.#keyEscrow
-        ? await readRegisteredRecord(
-            {
-              client,
-              ringProgramId: this.#ringProgramId,
-              member: this.#ownerPkHash,
-              escrowed: this.#nullifierPk,
-            },
-            context,
-          )
-        : undefined;
+      const records =
+        this.#keyEscrow || this.#hasPolicy ? await this.#records(client, context) : undefined;
+      const escrowed = records?.escrowed;
+      const policy = records?.policy;
       const anonymous = this.#ownerKey !== undefined;
       const commitment = this.#deposit.ownerUtxoHash;
       const first = <T>(value: T, _padding: T): readonly T[] => [value];
@@ -241,8 +260,17 @@ export class PreparedRingDeposit {
           anonymous,
           ownerCommitments: [commitment],
           capsules: [this.#capsule],
+          assets: [this.#asset],
           auditorPublicKey: this.#auditor,
-          ...(escrow === undefined ? {} : { memberRegistryRoot: escrow.root }),
+          ...(records === undefined
+            ? {}
+            : {
+                registry: {
+                  ownRoot: records.root.root,
+                  keyEscrow: this.#keyEscrow,
+                  ...(policy === undefined ? {} : { policyHash: policy.policyHash }),
+                },
+              }),
         }),
         contextHash: this.#contextHash,
         count: 1,
@@ -251,12 +279,26 @@ export class PreparedRingDeposit {
         ...(this.#ownerKey === undefined ? {} : { ownerKeys: first(this.#ownerKey, ZERO_32) }),
         nullifierPks: first(this.#nullifierPk, ZERO_32),
         blindingSecrets: first(this.#blindingSecret, ZERO_32),
-        ctHashes: first(escrow?.ctHash ?? ZERO_32, ZERO_32),
-        members: first(escrow?.record, undefined),
+        ctHashes: first(escrowed?.ctHash ?? ZERO_32, ZERO_32),
+        members: first(
+          escrowed === undefined
+            ? undefined
+            : Object.freeze({
+                kind: "present" as const,
+                record: escrowed.record,
+                path: escrowed.path,
+              }),
+          undefined,
+        ),
         ephSk: this.#ephemeralSecret,
         auditorPk: this.#auditor.u(),
-        keyEscrow: escrow !== undefined,
-        memberRegistryRoot: escrow?.root ?? ZERO_32,
+        keyEscrow: escrowed !== undefined,
+        memberRegistryRoot: records?.root.root ?? ZERO_32,
+        policyHash: policy?.policyHash ?? ZERO_32,
+        assets: first(this.#asset.asset, ZERO_32),
+        amounts: first(bigIntBytes(this.#asset.amount, 32) as Bytes32, ZERO_32),
+        ...(policy === undefined ? {} : { table: policy.table }),
+        assetRecords: first(policy?.asset, undefined),
       };
       const proof = await client.proveRing(request, context);
       return Object.freeze({
@@ -266,20 +308,10 @@ export class PreparedRingDeposit {
           depositor: this.#depositor,
           deposits: [this.#deposit],
           proof,
-          ...(escrow === undefined ? {} : { registryRootIndex: escrow.index }),
+          ...(records === undefined ? {} : { registryRootIndex: records.root.rootIndex }),
           ...(this.#cosigner === undefined ? {} : { cosigner: this.#cosigner }),
         }),
-        ...(escrow === undefined
-          ? {}
-          : {
-              roots: Object.freeze([
-                Object.freeze({
-                  ringProgramId: this.#ringProgramId,
-                  rootIndex: escrow.index,
-                  root: escrow.root,
-                }),
-              ]),
-            }),
+        ...(records === undefined ? {} : { roots: Object.freeze([records.root]) }),
       });
     } catch (cause) {
       throw wrapRingError("RING_BUILD_DEPOSIT", cause);
@@ -290,6 +322,51 @@ export class PreparedRingDeposit {
   destroy(): void {
     this.#blindingSecret.fill(0);
     this.#ephemeralSecret.fill(0);
+  }
+
+  #records(
+    client: RingDepositClient,
+    context: RequestContext | undefined,
+  ): Promise<DepositRecords> {
+    return waitForProjection(
+      async (attempt) => {
+        const registry = await fetchRingMemberRegistry(client, this.#ringProgramId, attempt);
+        const root = currentRoot(this.#ringProgramId, registry);
+        const pinned = equalBytes(registry.policyHash, ZERO_32)
+          ? undefined
+          : pinnedPolicy(registry);
+        const owners = this.#keyEscrow ? [this.#ownerPkHash] : [];
+        const assets = pinned === undefined ? [] : [this.#asset.asset];
+        const reads = await readMemberOpenings(
+          {
+            client,
+            ringProgramId: this.#ringProgramId,
+            root: root.root,
+            members: [...owners, ...assets],
+          },
+          attempt,
+        );
+        const escrowed = this.#keyEscrow
+          ? ownerEscrowed(this.#ownerPkHash, reads[0], this.#nullifierPk)
+          : undefined;
+        const asset = reads[owners.length];
+        return Object.freeze({
+          root,
+          ...(escrowed === undefined ? {} : { escrowed }),
+          ...(pinned === undefined || asset === undefined
+            ? {}
+            : {
+                policy: Object.freeze({
+                  policyHash: pinned.policyHash,
+                  table: policyTableProofInputs(pinned.table, pinned.sources),
+                  asset: asset.opening,
+                }),
+              }),
+        });
+      },
+      MEMBER_REGISTRY_PROJECTION_ERRORS,
+      context,
+    );
   }
 
   /** The note, its recipient ciphertext and the auditor capsule, sealed under fresh secrets. */
@@ -378,6 +455,8 @@ export class PreparedRingDeposit {
         ownerKey: input.ownerKey,
         auditor: input.config.auditorPublicKey,
         keyEscrow: input.config.keyEscrow,
+        hasPolicy: input.config.hasPolicy,
+        asset: Object.freeze({ asset: assetField(input.asset), amount: params.amount }),
         blindingSecret,
         ephemeralSecret,
       });

@@ -243,6 +243,8 @@ export const RingProgramError = Object.freeze({
   anonymousRingDataNotZero: 8251,
   anonymousBodyLength: 8252,
   outputBodyLength: 8253,
+  depositMintAccountMissing: 8410,
+  depositAssetIndexUnknown: 8411,
 } as const);
 
 export type RingProgramErrorName = keyof typeof RingProgramError;

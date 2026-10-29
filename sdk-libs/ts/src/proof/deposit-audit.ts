@@ -9,6 +9,7 @@ import {
   hashChain,
   isZero,
   readOutputData,
+  U64_MAX,
 } from "@heliuslabs/zolana/internal";
 import { pack33 } from "@heliuslabs/zolana/interface";
 import type { Address, Bytes32, Bytes33, Bytes96 } from "@heliuslabs/zolana/interface";
@@ -178,6 +179,21 @@ export function ringDepositContextHash(ring: Address, tree: Address, sppWire: Ui
   ]);
 }
 
+/** Rust `DepositedAsset`, `asset` is SPP's asset field of the entry's group. */
+export interface DepositedAsset {
+  readonly asset: Bytes32;
+  readonly amount: bigint;
+}
+
+/** Rust `DepositRegistry`. */
+export interface DepositRegistry {
+  readonly ownRoot: Bytes32;
+  /** Every deposited owner's record escrows the deposited nullifier key. */
+  readonly keyEscrow: boolean;
+  /** Its table's asset rules screen every deposited asset, absent before the first policy write. */
+  readonly policyHash?: Bytes32;
+}
+
 /** Rust `DepositPublicInput`, the tagged keys as the statement packs them. */
 export interface DepositStatement {
   readonly contextHash: Bytes32;
@@ -185,23 +201,33 @@ export interface DepositStatement {
   readonly anonymous: boolean;
   readonly ownerUtxoHashes: readonly Bytes32[];
   readonly ciphertexts: readonly Bytes96[];
+  readonly assets: readonly DepositedAsset[];
   readonly auditorPk: Bytes33;
   readonly ephPk: Bytes33;
-  /** Present exactly when deposited nullifier keys must be escrowed in its records. */
-  readonly memberRegistryRoot?: Bytes32;
+  /** Absent off an escrow or policy ring. */
+  readonly registry?: DepositRegistry;
 }
 
 /** Rust `DepositPublicInput::elements`, every slot padded to the maximum. */
 export function depositStatementElements(input: DepositStatement): readonly Bytes32[] {
   const count = input.ownerUtxoHashes.length;
-  if (count < 1 || count > RING_DEPOSIT_AUDIT_SLOTS || input.ciphertexts.length !== count)
+  if (
+    count < 1 ||
+    count > RING_DEPOSIT_AUDIT_SLOTS ||
+    input.ciphertexts.length !== count ||
+    input.assets.length !== count
+  )
     throw new RingError("RING_BUILD_DEPOSIT", { details: { reason: "deposit count" } });
   if (
     !isCanonicalField(input.contextHash) ||
     typeof input.anonymous !== "boolean" ||
-    !input.ownerUtxoHashes.every(isCanonicalField)
+    !input.ownerUtxoHashes.every(isCanonicalField) ||
+    !input.assets.every(
+      ({ asset, amount }) => isCanonicalField(asset) && amount >= 0n && amount <= U64_MAX,
+    )
   )
     throw new RingError("RING_BUILD_DEPOSIT");
+  const registry = input.registry;
   return Object.freeze([
     domainField(RingDomain.depositStatement),
     input.contextHash,
@@ -216,8 +242,15 @@ export function depositStatementElements(input: DepositStatement): readonly Byte
     }).flat(),
     ...pack33(input.auditorPk),
     ...pack33(input.ephPk),
-    bigIntBytes(input.memberRegistryRoot === undefined ? 0n : 1n) as Bytes32,
-    input.memberRegistryRoot ?? ZERO,
+    bigIntBytes(registry?.keyEscrow === true ? 1n : 0n) as Bytes32,
+    registry?.ownRoot ?? ZERO,
+    registry?.policyHash ?? ZERO,
+    ...Array.from({ length: RING_DEPOSIT_AUDIT_SLOTS }, (_, slot) => {
+      const deposited = input.assets[slot];
+      return deposited === undefined
+        ? [ZERO, ZERO]
+        : [deposited.asset, bigIntBytes(deposited.amount) as Bytes32];
+    }).flat(),
   ]);
 }
 
@@ -228,8 +261,9 @@ export function ringDepositPublicInputHash(
     anonymous: boolean;
     ownerCommitments: readonly Bytes32[];
     capsules: readonly RingDepositCapsule[];
+    assets: readonly DepositedAsset[];
     auditorPublicKey: X25519PublicKey;
-    memberRegistryRoot?: Bytes32;
+    registry?: DepositRegistry;
   }>,
 ): Bytes32 {
   const [first] = input.capsules;
@@ -250,11 +284,10 @@ export function ringDepositPublicInputHash(
       anonymous: input.anonymous,
       ownerUtxoHashes: input.ownerCommitments,
       ciphertexts: input.capsules.map((capsule) => capsule.ciphertext),
+      assets: input.assets,
       auditorPk: input.auditorPublicKey.toBytes(),
       ephPk: first.ephemeralPublicKey,
-      ...(input.memberRegistryRoot === undefined
-        ? {}
-        : { memberRegistryRoot: input.memberRegistryRoot }),
+      ...(input.registry === undefined ? {} : { registry: input.registry }),
     }),
   );
 }
