@@ -423,13 +423,15 @@ impl<S: TransactionSource> AuditService<S> {
                 slot: response.context.slot,
             };
             self.audit_rows(response, config.mode, &store).await?;
-            match frontier {
-                Some(frontier) => {
+            match (frontier, next) {
+                (Some(frontier), _) => {
                     store.absorbed(context);
                     *cursor = Some(frontier);
                     return Ok(());
                 }
-                None => *cursor = next,
+                // An empty stream has no position to resume from.
+                (None, None) => return Ok(()),
+                (None, next) => *cursor = next,
             }
         }
         Ok(())
@@ -768,7 +770,7 @@ fn validate_indexer_response(
     let next = response.next_cursor.as_deref();
     let frontier = response.scanned_through.as_deref();
     if response.transactions.len() > page.limit.get() as usize
-        || next.or(frontier).is_none()
+        || (next.or(frontier).is_none() && !response.transactions.is_empty())
         || next.is_some_and(|cursor| !cursor_in_bounds(cursor) || page.cursor() == Some(cursor))
         || frontier.is_some_and(|cursor| {
             !cursor_in_bounds(cursor) || response.transactions.len() >= page.limit.get() as usize
