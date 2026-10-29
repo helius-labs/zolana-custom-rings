@@ -6,7 +6,7 @@ import { RING_RULE_SLOTS, RING_SOURCE_SLOTS } from "../../rpc/prover/types.js";
 import {
   APPLY_BATCH,
   MEMBER_REGISTRY_CAPACITY,
-  MEMBER_REGISTRY_ROOT_HISTORY,
+  ROOT_HISTORY,
 } from "../membership/member-registry.js";
 
 import { RingError } from "../error.js";
@@ -76,7 +76,7 @@ export interface RingMemberRegistry {
   readonly priorFloor: bigint;
   /** The slot of the last floor raise. */
   readonly floorSlot: bigint;
-  /** `MEMBER_REGISTRY_ROOT_HISTORY` slots, `undefined` where no root was pushed. */
+  /** `ROOT_HISTORY` slots, `undefined` where no root was pushed. */
   readonly history: readonly (RingRootEntry | undefined)[];
   /** Zero before the first policy write. */
   readonly policyHash: Bytes32;
@@ -232,7 +232,7 @@ export function decodeRingMemberRegistry(data: Uint8Array): RingMemberRegistry {
   const floor = reader.u64("floor");
   const priorFloor = reader.u64("priorFloor");
   const floorSlot = reader.u64("floorSlot");
-  const history = Array.from({ length: MEMBER_REGISTRY_ROOT_HISTORY }, () => {
+  const history = Array.from({ length: ROOT_HISTORY }, () => {
     const root = reader.bytes(32, "history.root") as Bytes32;
     const applied = reader.u64("history.applied");
     const slot = reader.u64("history.slot");
@@ -240,7 +240,7 @@ export function decodeRingMemberRegistry(data: Uint8Array): RingMemberRegistry {
   });
   const policy = readPolicyFields(reader, "RING_MEMBER_REGISTRY_INVALID");
   reader.done();
-  if (historyCursor >= MEMBER_REGISTRY_ROOT_HISTORY || BigInt(nextIndex) > MEMBER_REGISTRY_CAPACITY)
+  if (historyCursor >= ROOT_HISTORY || BigInt(nextIndex) > MEMBER_REGISTRY_CAPACITY)
     throw new RingError("RING_MEMBER_REGISTRY_INVALID", {
       details: { historyCursor, nextIndex },
     });
@@ -471,7 +471,7 @@ function readPolicyFields(reader: Reader, code: AccountInvalidCode) {
 
 function readRootMirror(reader: Reader): RootMirror {
   const registry = reader.bytes(32, "mirror.registry");
-  const roots = Array.from({ length: MEMBER_REGISTRY_ROOT_HISTORY }, () => {
+  const roots = Array.from({ length: ROOT_HISTORY }, () => {
     const hash = reader.bytes(32, "mirror.root") as Bytes32;
     const revision = reader.u64("mirror.revision");
     const expiresAt = reader.u64("mirror.expiresAt");

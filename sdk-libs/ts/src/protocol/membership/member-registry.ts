@@ -6,8 +6,8 @@ export const QUAD_ARITY = 4;
 export const QUAD_HEIGHT = 10;
 /** Rust `MEMBER_REGISTRY_CAPACITY`, `4^10` leaves. */
 export const MEMBER_REGISTRY_CAPACITY = 1n << BigInt(2 * QUAD_HEIGHT);
-/** Rust `ROOT_HISTORY`, the registry roots a proof may bind. */
-export const MEMBER_REGISTRY_ROOT_HISTORY = 32;
+/** Rust `ROOT_HISTORY`, the roots a registry or a policy mirror keeps. */
+export const ROOT_HISTORY = 32;
 /** Rust `APPLY_BATCH`, the writes the larger apply key proves and the record queue holds. */
 export const APPLY_BATCH = 16;
 

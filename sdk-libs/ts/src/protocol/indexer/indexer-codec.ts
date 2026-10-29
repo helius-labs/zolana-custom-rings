@@ -6,7 +6,7 @@ import { U64_MAX, indexerCodec, indexerScalars } from "@heliuslabs/zolana/intern
 import {
   APPLY_BATCH,
   MEMBER_REGISTRY_CAPACITY,
-  MEMBER_REGISTRY_ROOT_HISTORY,
+  ROOT_HISTORY,
   QUAD_ARITY,
   QUAD_HEIGHT,
   canopyLevels,
@@ -185,12 +185,7 @@ function registryRoot(value: unknown, path: string): RingRegistryRootView {
   return {
     root: checkedHash(row["root"], `${path}.root`),
     rootIndex: Number(
-      wireInteger(
-        row["rootIndex"],
-        `${path}.rootIndex`,
-        0n,
-        BigInt(MEMBER_REGISTRY_ROOT_HISTORY - 1),
-      ),
+      wireInteger(row["rootIndex"], `${path}.rootIndex`, 0n, BigInt(ROOT_HISTORY - 1)),
     ),
     applied: unboundedU64(row["applied"], `${path}.applied`),
     nextIndex: wireInteger(row["nextIndex"], `${path}.nextIndex`, 1n, MEMBER_REGISTRY_CAPACITY),
@@ -389,23 +384,18 @@ export function decodeRingRegistryState(value: unknown): RingRegistryStateRespon
       slot: unboundedU64(item["slot"], `${path}.slot`),
     };
   });
-  if (history.length !== MEMBER_REGISTRY_ROOT_HISTORY)
+  if (history.length !== ROOT_HISTORY)
     return schemaFailure(
       "INDEXER_SCHEMA_INVALID_TYPE",
       "history",
-      `${String(MEMBER_REGISTRY_ROOT_HISTORY)} entries`,
+      `${String(ROOT_HISTORY)} entries`,
       row["history"],
     );
   return {
     context: context(row["context"], "context"),
     history,
     historyCursor: Number(
-      wireInteger(
-        row["historyCursor"],
-        "historyCursor",
-        0n,
-        BigInt(MEMBER_REGISTRY_ROOT_HISTORY - 1),
-      ),
+      wireInteger(row["historyCursor"], "historyCursor", 0n, BigInt(ROOT_HISTORY - 1)),
     ),
     nextIndex: wireInteger(row["nextIndex"], "nextIndex", 1n, MEMBER_REGISTRY_CAPACITY),
     floor: unboundedU64(row["floor"], "floor"),
