@@ -64,7 +64,7 @@ Accepted nonces are held in process memory for the timestamp window. Run one pro
 
 ## Relay, record updates and merge settings
 
-`zolana_ring_client::rpc` defines these methods and the TypeScript SDK mirrors them in `protocol/ring-rpc`. The service answers the record update methods through its [record writer](#record-writer), and the four relay methods when it runs with a fee payer key.
+`zolana_ring_client::rpc` defines these methods and the TypeScript SDK mirrors them in `protocol/ring-rpc`. The service answers the record update methods through its [record writer](#record-writer), the four relay methods when it runs with a fee payer key, and `setMergeSettings` with a store.
 
 | Method | Request | Result |
 | --- | --- | --- |
@@ -122,6 +122,16 @@ A signature reserves its flows in the `cosign_usage` table, keyed by the co-sign
 The co-signer key derives from the auditor key or the root secret, as the service key does, under its own HKDF domain. `serve` logs its public key for the ring's `CoSigner` record.
 
 Co-signer errors are `-32160` disabled, `-32161` over a limit, `-32162` an asset named twice and `-32163` unreadable limits.
+
+## Managed merge
+
+`setMergeSettings` keeps one row for each ring, owner and mint in the service store that `--store-url` opens. Without a store it fails with `-32170`. The Ed25519 signature must verify under the request's `owner`, within the timestamp skew, with a fresh nonce. A request replaces the row only when its timestamp is later, else it fails with `-32171`. A target note count of zero revokes the settings. The zero row stays, so an older request cannot restore them.
+
+`serve` holds no relay and starts no merge worker. A host that embeds the crate with a `RelaySubmit` spawns `ManagedMerge::run` beside `Hub::run_utxo_backfill`, whose notes and escrow records it reads. On each ring whose `ConfidentialEscrow` config names the service's auditor key, it reads every wallet with a nonzero target. It opens the wallet's escrowed nullifier secret with the auditor key and checks it against the registered nullifier key. The secret stays in memory for one merge build, and the service never logs or serves it.
+
+A note is a candidate when the service opened it for that owner, mint and escrowed nullifier key, it has a nonzero amount and no data, and the ring history has not published its nullifier. The wallet keeps at most its target count and, under a nonzero minimum average amount, at most its total divided by that amount, never less than one note. When the candidates exceed that count, one merge joins the smallest notes of the tree that holds the most of them, no more than the count needs and at most `MAX_RING_MERGE_INPUTS`.
+
+The merge needs the fee payer, the co-signer signature when the config scope covers transfers, and the nullifier secret. It needs no owner signature. `RingSdkMergeBuilder` proves it through the ring SDK, and the worker sends it through `RelaySubmit`. The inputs of a sent merge stay out of later merges until the process restarts.
 
 ## Audit result
 

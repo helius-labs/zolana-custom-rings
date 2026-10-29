@@ -31,11 +31,12 @@ use zolana_ring_client::rpc::{
     CreateAuditorKeyRequest, CreateAuditorKeyResponse, GetAuditedUtxosRequest,
     GetDecryptedTransactionsRequest, GetRecordUpdateStatusRequest, GetRelayQuoteRequest,
     GetRelayStatusRequest, HealthResponse, PagedRead, PrepareRelayRequest, RingDepositsRequest,
-    RingDepositsResponse, RingState, RingStatusRequest, RingStatusResponse, SetReaderGrantRequest,
-    SubmitRecordUpdateRequest, SubmitRelayRequest, CREATE_AUDITOR_KEY, GET_AUDITED_MERGES,
-    GET_AUDITED_UTXOS, GET_DECRYPTED_TRANSACTIONS, GET_RECORD_UPDATE_STATUS, GET_RELAY_QUOTE,
-    GET_RELAY_STATUS, HEALTH, PREPARE_RELAY, RING_DEPOSITS, RING_STATUS, SET_READER_GRANT,
-    SUBMIT_RECORD_UPDATE, SUBMIT_RELAY,
+    RingDepositsResponse, RingState, RingStatusRequest, RingStatusResponse,
+    SetMergeSettingsRequest, SetReaderGrantRequest, SubmitRecordUpdateRequest, SubmitRelayRequest,
+    CREATE_AUDITOR_KEY, GET_AUDITED_MERGES, GET_AUDITED_UTXOS, GET_DECRYPTED_TRANSACTIONS,
+    GET_RECORD_UPDATE_STATUS, GET_RELAY_QUOTE, GET_RELAY_STATUS, HEALTH, PREPARE_RELAY,
+    RING_DEPOSITS, RING_STATUS, SET_MERGE_SETTINGS, SET_READER_GRANT, SUBMIT_RECORD_UPDATE,
+    SUBMIT_RELAY,
 };
 
 use crate::{
@@ -281,6 +282,14 @@ pub fn rpc_module<S: TransactionSource + 'static>(
             let _authentication = hub.admit(Lane::Authentication)?;
             let service = hub.service(Some(request.ring.0))?;
             service.set_reader_grant(&request).await
+        },
+    )?;
+    method(
+        &mut module,
+        SET_MERGE_SETTINGS,
+        |hub, request: SetMergeSettingsRequest| async move {
+            let _authentication = hub.admit(Lane::Authentication)?;
+            hub.set_merge_settings(&request).await
         },
     )?;
     if let Some(relay) = relay {

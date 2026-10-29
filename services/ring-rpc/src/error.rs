@@ -64,12 +64,14 @@ pub enum RingRpcError {
     Relay(#[from] RelayError),
     #[error(transparent)]
     CoSign(#[from] CoSignError),
-}
-
-impl From<custom_ring_sdk::RingError> for RingRpcError {
-    fn from(error: custom_ring_sdk::RingError) -> Self {
-        Self::StorageUpdate(Box::new(error))
-    }
+    #[error("merge settings need a service store")]
+    MergeSettingsUnavailable,
+    #[error("stored merge settings are signed at the same time or later")]
+    StaleMergeSettings,
+    #[error("escrowed nullifier key does not open to its registered key")]
+    EscrowedKey,
+    #[error("merge build failed because {0}")]
+    MergeBuild(Box<custom_ring_sdk::RingError>),
 }
 
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
@@ -86,6 +88,9 @@ impl GrantRefusal {
         self as i32
     }
 }
+
+const MERGE_SETTINGS_UNAVAILABLE: i32 = -32170;
+const STALE_MERGE_SETTINGS: i32 = -32171;
 
 impl From<RingIndexerError> for RingRpcError {
     fn from(error: RingIndexerError) -> Self {
@@ -141,6 +146,14 @@ impl From<RingRpcError> for ErrorObjectOwned {
                     message,
                     None::<()>,
                 );
+            }
+            MergeSettingsUnavailable => {
+                let message = failure.to_string();
+                return ErrorObjectOwned::owned(MERGE_SETTINGS_UNAVAILABLE, message, None::<()>);
+            }
+            StaleMergeSettings => {
+                let message = failure.to_string();
+                return ErrorObjectOwned::owned(STALE_MERGE_SETTINGS, message, None::<()>);
             }
             Grant(refusal) => {
                 return ErrorObjectOwned::owned(refusal.code(), refusal.to_string(), None::<()>);
@@ -198,6 +211,10 @@ impl From<RingRpcError> for ErrorObjectOwned {
                 (ErrorCode::InternalError, "audit service is unavailable")
             }
             CoSign(inner) => return (*inner).into(),
+            EscrowedKey | MergeBuild(_) => {
+                error!("managed merge failed {}", redacted(&failure));
+                (ErrorCode::InternalError, "managed merge failed")
+            }
         };
         ErrorObjectOwned::owned(code.code(), message, None::<()>)
     }

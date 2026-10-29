@@ -35,6 +35,7 @@ use crate::{
         PublicRequest, RequestRate, MAX_CONCURRENT_AUTHENTICATIONS, MAX_CONCURRENT_DEPOSIT_SCANS,
         MAX_CONCURRENT_READS,
     },
+    merge_settings::MergeSettingsBook,
     origins::Origins,
     record_update::RecordUpdateRefusal,
     record_writer::RecordWriter,
@@ -136,6 +137,7 @@ pub(crate) struct Shared<S> {
     /// One per ring an authorized read or the backfill opened.
     stores: Mutex<HashMap<Address, Arc<AuditStore>>>,
     pub(crate) grant_rows: Option<GrantRows>,
+    database: Option<Store>,
 }
 
 struct AssetCache {
@@ -164,6 +166,14 @@ impl<S> Shared<S> {
     fn store_rings(&self) -> Vec<Address> {
         let stores = self.stores.lock().unwrap_or_else(PoisonError::into_inner);
         stores.keys().copied().collect()
+    }
+
+    pub(crate) fn merge_settings(&self) -> Result<MergeSettingsBook<'_>, RingRpcError> {
+        let database = self
+            .database
+            .as_ref()
+            .ok_or(RingRpcError::MergeSettingsUnavailable)?;
+        Ok(MergeSettingsBook::new(database.connection()))
     }
 }
 
@@ -282,6 +292,10 @@ impl<S: TransactionSource> Hub<S> {
 
     pub fn relay(&self) -> Option<&Arc<Relay>> {
         self.relay.as_ref()
+    }
+
+    pub(crate) fn shared(&self) -> &Shared<S> {
+        &self.shared
     }
 
     pub fn local_view_tag(&self) -> Option<[u8; 32]> {
@@ -537,6 +551,7 @@ impl<S: TransactionSource> HubBuilder<S> {
             }),
             stores: Mutex::new(HashMap::new()),
             grant_rows,
+            database: self.store,
         };
         Ok(Hub {
             signer,
