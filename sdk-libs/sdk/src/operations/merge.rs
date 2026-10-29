@@ -353,7 +353,7 @@ impl RingMergeOperation {
     }
 }
 
-/// `[config, policy?, co-signer record and signer?]` ahead of SPP's merge list, the policy on a key escrow ring alone.
+/// `[config, policy?, co-signer record and signer?]` ahead of SPP's merge list.
 #[must_use]
 pub struct CustomRingMergeInstruction {
     pub ring: CustomRing,
@@ -361,7 +361,7 @@ pub struct CustomRingMergeInstruction {
     pub output_tree: Address,
     pub payer: Address,
     pub co_signer: Option<Address>,
-    /// Set on a key escrow ring, the merge then binds `own_revision` of the ring policy.
+    /// Set on a key escrow ring, the merge then binds the policy's own root at `own_revision`.
     pub key_escrow: bool,
     pub data: CustomRingMergeIxData,
 }

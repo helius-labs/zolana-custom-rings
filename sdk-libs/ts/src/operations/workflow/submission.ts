@@ -76,7 +76,7 @@ export interface ReservationHold {
 export type RingSubmissionBuild = (context?: RequestContext) => Promise<RingSubmissionAttempt>;
 
 const MAX_ATTEMPTS = 3;
-/** Rust `reproof_fixes`, a fresh proof fixes a revision the mirror dropped or a batch that no longer fits. */
+/** Rust `reproof_fixes` codes, a fresh proof fixes an expired or unsynced mirror root or a batch that no longer fits. */
 const STALE_PROOF_CODES: ReadonlySet<number> = new Set([
   RingProgramError.mirrorRootExpired,
   RingProgramError.mirrorNotSynced,

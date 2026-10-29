@@ -136,7 +136,7 @@ export function createRingMergeSubmission(
 
 /**
  * `MERGE ‖ own_revision ‖ output_ring_data_hash ‖ disclosure ‖ body` with the body's
- * `proof.b` compressed, the accounts `[config, policy?, co_signer?]` ahead of SPP's merge list.
+ * `proof.b` compressed, the accounts `[config, policy?, co-signer record and signer?]` ahead of SPP's merge list.
  */
 export async function ringMergeInstruction(
   input: Readonly<{

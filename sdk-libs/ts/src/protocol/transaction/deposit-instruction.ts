@@ -47,7 +47,7 @@ export async function ringDepositInstruction(
     depositor: SignerAccount;
     deposits: readonly RingAssetDeposit[];
     proof: Uint8Array;
-    /** The revision of the bound own root, present exactly on a ring that escrows keys or has a policy. */
+    /** Escrow or policy rings only, the policy account then follows the config. */
     ownRevision?: bigint;
     /** The supplied co-signer when a record covers deposits. */
     cosigner?: SignerAccount;

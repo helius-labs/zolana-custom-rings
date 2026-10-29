@@ -618,7 +618,6 @@ async function stageRingSpend<R>(
     strategy: RingSpendStrategy<R>;
     retry: RingSubmissionBuildState;
     anonymousRing: boolean;
-    /** Read only when the ring demands a co-signer, its record must cover the demand. */
     coSigner?: Address;
   }>,
   context: RequestContext | undefined,

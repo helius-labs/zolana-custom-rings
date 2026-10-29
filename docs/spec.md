@@ -993,7 +993,7 @@ Tag `31`. Forwards one SPP ring deposit of up to 8 new notes, with a proof that 
 **Accounts**
 
 1. `config`.
-2. `policy`: the ring policy, in `ConfidentialEscrow` mode and on a policy ring.
+2. `policy`: the ring policy, in `ConfidentialEscrow` mode or on a policy ring.
 3. `co_signer_record`, then `co_signer` (signer), only when demanded.
 4. `spp_accounts`: the SPP `ring_deposit` list `[tree, depositor, ring_config, spp_program, asset groups…]`. `ring_config` is `ring_auth`.
 

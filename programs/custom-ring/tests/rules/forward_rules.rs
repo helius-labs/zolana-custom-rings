@@ -62,7 +62,6 @@ pub fn merge_disclosure(inputs: usize) -> MergeDisclosure {
     }
 }
 
-/// `registry` the own revision a key escrow ring binds, the policy follows the config.
 fn merge_instruction(ring: &Ring, registry: Option<u64>) -> Instruction {
     merge_instruction_with(ring, registry, &merge_data(registry, 8))
 }
