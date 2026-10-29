@@ -51,6 +51,31 @@ pub trait DepositOwners {
     fn deposit_owner(&self, owner_hash: &[u8; 32]) -> Option<DepositOwner>;
 }
 
+/// A deposit note its capsule opened, the commitment checked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DepositNote {
+    pub commitment: [u8; 32],
+    pub slot_index: u32,
+    pub leaf_index: u64,
+    pub owner_hash: [u8; 32],
+    /// Named by an anonymous ring's capsule alone.
+    pub owner_key: Option<[u8; 32]>,
+    pub asset: [u8; 32],
+    pub mint: Address,
+    pub amount: u64,
+    pub blinding: [u8; 32],
+    pub data_hash: [u8; 32],
+    pub ring_data_hash: [u8; 32],
+    pub tree_id: u16,
+}
+
+#[derive(Debug, Default)]
+pub struct CreatedNotes {
+    pub utxos: Vec<CreatedUtxo>,
+    /// Confidential deposits no escrowed owner names yet.
+    pub unowned: Vec<DepositNote>,
+}
+
 /// `next_cursor` is live only when the page cap stopped the read.
 pub struct CreatedUtxoPage {
     pub utxos: Vec<CreatedUtxo>,
@@ -140,7 +165,7 @@ impl<'a> CreatedUtxoScan<'a> {
 impl CreatedUtxos<'_> {
     /// Empty for a transfer and for a confidential ring's deposit or merge.
     pub fn open(self, auditor: &X25519Keypair) -> Result<Vec<CreatedUtxo>, AuditError> {
-        self.open_for(auditor, &HashMap::new())
+        Ok(self.open_for(auditor, &HashMap::new())?.utxos)
     }
 
     /// Also opens a confidential deposit of an owner `owners` names.
@@ -148,20 +173,28 @@ impl CreatedUtxos<'_> {
         self,
         auditor: &X25519Keypair,
         owners: &dyn DepositOwners,
-    ) -> Result<Vec<CreatedUtxo>, AuditError> {
+    ) -> Result<CreatedNotes, AuditError> {
         match self.origin.event.kind() {
-            ConfirmedEventKind::Deposit => self.deposits(auditor, owners),
-            ConfirmedEventKind::Merge => self.merge(auditor),
-            ConfirmedEventKind::Transfer => Ok(Vec::new()),
+            ConfirmedEventKind::Deposit => {
+                let mut notes = CreatedNotes::default();
+                for note in self.deposits(auditor)? {
+                    match note.created(owners) {
+                        Some(utxo) => notes.utxos.push(utxo),
+                        None => notes.unowned.push(note),
+                    }
+                }
+                Ok(notes)
+            }
+            ConfirmedEventKind::Merge => Ok(CreatedNotes {
+                utxos: self.merge(auditor)?,
+                unowned: Vec::new(),
+            }),
+            ConfirmedEventKind::Transfer => Ok(CreatedNotes::default()),
         }
     }
 
-    fn deposits(
-        &self,
-        auditor: &X25519Keypair,
-        owners: &dyn DepositOwners,
-    ) -> Result<Vec<CreatedUtxo>, AuditError> {
-        let mut utxos = Vec::new();
+    fn deposits(&self, auditor: &X25519Keypair) -> Result<Vec<DepositNote>, AuditError> {
+        let mut notes = Vec::new();
         for (slot_index, slot) in (0u32..).zip(&self.transaction.output_slots) {
             let Some(output) = deposit_output(slot, self.ring) else {
                 continue;
@@ -176,19 +209,6 @@ impl CreatedUtxos<'_> {
                 continue;
             };
             let owner_hash = opening.owner_hash;
-            let (owner_key, owner) = match owners.deposit_owner(&owner_hash) {
-                Some(escrowed) => (
-                    escrowed.owner_key,
-                    UtxoOwner::Keyed {
-                        nullifier_pk: escrowed.nullifier_pk,
-                    },
-                ),
-                // Only an anonymous ring's capsule names the owner key.
-                None => match opening.owner_key {
-                    Some(owner_key) => (owner_key, UtxoOwner::Deposited { owner_hash }),
-                    None => continue,
-                },
-            };
             let mint = Address::new_from_array(output.asset);
             let data_hash = output.data_hash.unwrap_or_default();
             let context = &slot.output_context;
@@ -205,24 +225,22 @@ impl CreatedUtxos<'_> {
             if commitment != context.hash {
                 return Err(AuditError::DepositOpeningMismatch);
             }
-            utxos.push(CreatedUtxo {
+            notes.push(DepositNote {
                 commitment,
                 slot_index,
                 leaf_index: context.leaf_index,
-                utxo: KnownUtxo {
-                    owner_key,
-                    owner,
-                    asset: hash_bytes(mint.as_array())?,
-                    mint: Some(mint),
-                    amount: output.amount,
-                    blinding: *opening.blinding,
-                    data_hash,
-                    ring_data_hash: output.ring_data_hash,
-                    tree_id: context.tree_id,
-                },
+                owner_hash,
+                owner_key: opening.owner_key,
+                asset: hash_bytes(mint.as_array())?,
+                mint,
+                amount: output.amount,
+                blinding: *opening.blinding,
+                data_hash,
+                ring_data_hash: output.ring_data_hash,
+                tree_id: context.tree_id,
             });
         }
-        Ok(utxos)
+        Ok(notes)
     }
 
     fn merge(&self, auditor: &X25519Keypair) -> Result<Vec<CreatedUtxo>, AuditError> {
@@ -250,6 +268,38 @@ impl CreatedUtxos<'_> {
                 tree_id: output.tree_id,
             },
         }])
+    }
+}
+
+impl DepositNote {
+    /// `None` until `owners` or the capsule names the owner key.
+    pub fn created(&self, owners: &dyn DepositOwners) -> Option<CreatedUtxo> {
+        let owner_hash = self.owner_hash;
+        let (owner_key, owner) = match owners.deposit_owner(&owner_hash) {
+            Some(escrowed) => (
+                escrowed.owner_key,
+                UtxoOwner::Keyed {
+                    nullifier_pk: escrowed.nullifier_pk,
+                },
+            ),
+            None => (self.owner_key?, UtxoOwner::Deposited { owner_hash }),
+        };
+        Some(CreatedUtxo {
+            commitment: self.commitment,
+            slot_index: self.slot_index,
+            leaf_index: self.leaf_index,
+            utxo: KnownUtxo {
+                owner_key,
+                owner,
+                asset: self.asset,
+                mint: Some(self.mint),
+                amount: self.amount,
+                blinding: self.blinding,
+                data_hash: self.data_hash,
+                ring_data_hash: self.ring_data_hash,
+                tree_id: self.tree_id,
+            },
+        })
     }
 }
 

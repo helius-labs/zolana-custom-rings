@@ -580,14 +580,15 @@ impl<S: TransactionSource> AuditService<S> {
                         .open_for(&self.auditor, store)
                     });
                     match created {
-                        Ok(created) => store.record(
-                            CreatedIn {
+                        Ok(created) => {
+                            let created_in = CreatedIn {
                                 slot: tx.slot,
                                 tx_signature: tx.tx_signature,
                                 event_index,
-                            },
-                            created,
-                        ),
+                            };
+                            store.record(created_in, created.utxos);
+                            store.hold(created_in, created.unowned);
+                        }
                         Err(error) => log::warn!(
                             "ring {} event {}:{event_index} opened no UTXOs because {}",
                             self.ring,

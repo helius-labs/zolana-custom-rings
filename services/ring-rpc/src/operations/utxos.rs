@@ -14,8 +14,8 @@ use spr_keypair::{NullifierKey, PublicKey};
 use spr_transaction::{Data, Mint, Utxo, WalletUtxo};
 use tokio::sync::Mutex as AsyncMutex;
 use zolana_ring_client::{
-    rpc::AuditedUtxoView, CreatedUtxo, DepositOwner, DepositOwners, EscrowedKeys, KnownUtxo,
-    KnownUtxoIndex, SealedNullifierKey, UtxoOwner,
+    rpc::AuditedUtxoView, CreatedUtxo, DepositNote, DepositOwner, DepositOwners, EscrowedKeys,
+    KnownUtxo, KnownUtxoIndex, SealedNullifierKey, UtxoOwner,
 };
 
 use crate::error::RingRpcError;
@@ -30,6 +30,8 @@ pub(crate) const MAX_BACKFILL_PAGES: usize = 64;
 pub(crate) struct AuditStore {
     utxos: RwLock<KnownUtxoIndex<StoredUtxo>>,
     escrow: RwLock<EscrowMap>,
+    /// Confidential deposits by commitment, each opens once the escrow names its owner.
+    unowned: RwLock<HashMap<[u8; 32], (CreatedIn, DepositNote)>>,
     /// Every nullifier the ring history published.
     spent: RwLock<HashSet<[u8; 32]>>,
     /// The indexer context when the backfill last reached the scan frontier.
@@ -102,6 +104,13 @@ impl AuditStore {
                     leaf_index: created.leaf_index,
                 },
             );
+        }
+    }
+
+    pub(crate) fn hold(&self, created_in: CreatedIn, notes: impl IntoIterator<Item = DepositNote>) {
+        let mut unowned = self.unowned.write().unwrap_or_else(PoisonError::into_inner);
+        for note in notes {
+            unowned.insert(note.commitment, (created_in, note));
         }
     }
 
@@ -184,21 +193,41 @@ impl AuditStore {
         root: EscrowRoot,
         owners: HashMap<[u8; 32], EscrowedOwner>,
     ) {
-        let mut escrow = self.escrow.write().unwrap_or_else(PoisonError::into_inner);
-        escrow.owner_keys = owners
-            .values()
-            .map(|owner| (owner.owner_hash, owner.owner_key))
-            .collect();
-        escrow.keys = owners
-            .into_values()
-            .map(|owner| (owner.owner_key, owner))
-            .collect();
-        escrow.root = Some(root);
+        {
+            let mut escrow = self.escrow.write().unwrap_or_else(PoisonError::into_inner);
+            escrow.owner_keys = owners
+                .values()
+                .map(|owner| (owner.owner_hash, owner.owner_key))
+                .collect();
+            escrow.keys = owners
+                .into_values()
+                .map(|owner| (owner.owner_key, owner))
+                .collect();
+            escrow.root = Some(root);
+        }
+        self.open_held();
     }
 
     /// An audit holds the guard for its full run, no UTXO enters between two of its lookups.
     pub(crate) fn known(&self) -> RwLockReadGuard<'_, KnownUtxoIndex<StoredUtxo>> {
         self.utxos.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn open_held(&self) {
+        let mut opened = Vec::new();
+        self.unowned
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|_, (created_in, note)| match note.created(self) {
+                Some(utxo) => {
+                    opened.push((*created_in, utxo));
+                    false
+                }
+                None => true,
+            });
+        for (created_in, utxo) in opened {
+            self.record(created_in, [utxo]);
+        }
     }
 
     fn stored(&self, utxo_hash: &[u8; 32]) -> Option<StoredUtxo> {
@@ -269,7 +298,8 @@ impl DepositOwners for AuditStore {
 #[cfg(test)]
 mod tests {
     use solana_address::Address;
-    use zolana_ring_client::UtxoOwner;
+    use spr_keypair::X25519Keypair;
+    use zolana_ring_client::{NullifierKeyEnvelope, UtxoOwner};
 
     use super::*;
 
@@ -309,5 +339,58 @@ mod tests {
         assert_eq!(stored_mint(), Some(mint));
         store.record(created_in, [created(None)]);
         assert_eq!(stored_mint(), Some(mint));
+    }
+
+    #[test]
+    fn an_escrowed_owner_opens_the_deposits_audited_before_its_key() {
+        let store = AuditStore::default();
+        let created_in = CreatedIn {
+            slot: 1,
+            tx_signature: Signature::from([7; 64]),
+            event_index: 0,
+        };
+        let note = DepositNote {
+            commitment: [1; 32],
+            slot_index: 0,
+            leaf_index: 0,
+            owner_hash: [8; 32],
+            owner_key: None,
+            asset: [4; 32],
+            mint: Address::new_from_array([6; 32]),
+            amount: 10,
+            blinding: [5; 32],
+            data_hash: [0; 32],
+            ring_data_hash: [0; 32],
+            tree_id: 1,
+        };
+        let owner = EscrowedOwner {
+            owner_key: [2; 32],
+            nullifier_pk: [3; 32],
+            owner_hash: note.owner_hash,
+            sealed: NullifierKeyEnvelope::new(
+                &NullifierKey::from_secret([9; 31]),
+                &X25519Keypair::new().pubkey(),
+            )
+            .expect("envelope")
+            .sealed,
+        };
+        store.hold(created_in, [note]);
+        assert!(store.stored(&note.commitment).is_none());
+        store.replace_escrow(
+            EscrowRoot {
+                root: [1; 32],
+                revision: 1,
+            },
+            HashMap::from([(owner.owner_key, owner)]),
+        );
+        let opened = store.stored(&note.commitment).expect("reopened deposit");
+        assert_eq!(opened.created_in, created_in);
+        assert_eq!(opened.utxo.owner_key, owner.owner_key);
+        assert_eq!(
+            opened.utxo.owner,
+            UtxoOwner::Keyed {
+                nullifier_pk: owner.nullifier_pk
+            }
+        );
     }
 }
