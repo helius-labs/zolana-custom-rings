@@ -72,6 +72,7 @@ async fn a_key_escrow_merge_of_an_unregistered_owner_is_refused() {
             nullifier_key: stranger.nullifier_key.clone(),
             input_tree: pda::tree(TREE_ID),
             output_tree: pda::tree(TREE_ID),
+            co_signer: None,
         },
     );
     let owner = owner_identity(&stranger);
