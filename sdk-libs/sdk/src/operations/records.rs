@@ -281,7 +281,7 @@ impl AuthorityListWrite {
         Ok(self)
     }
 
-    /// Replaces the mint's threshold, cap and co-sign setting under the same root as its lists.
+    /// Replaces every mint setting under the same root as its lists.
     pub fn with_mint_policy(
         mut self,
         member: Member,

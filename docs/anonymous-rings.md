@@ -34,9 +34,10 @@ spent note, every recipient's owner key, every amount and every asset. See
 
 The **payer** is the SPP payer account, and it signs the transaction. Among
 the SPP accounts the ring program accepts no other signer. Nothing on chain
-checks the transaction's Solana fee payer against the hidden owner. The
-TypeScript builders make the SPP payer the Solana fee payer, and Rust's
-`RingSubmission` refuses a fee payer that is the hidden owner.
+checks the transaction's Solana fee payer against the hidden owner. In
+TypeScript the fee payer of the Ring RPC relay quote is the SPP payer and the
+Solana fee payer, and Rust's `RingSubmission` refuses a fee payer that is the
+hidden owner.
 
 The **indexer** serves outputs by exact tag, spends by nullifier and Merkle
 paths by leaf. It sees which tags, nullifiers and leaves a wallet asks for, and
@@ -173,7 +174,7 @@ Three parties are public, and the circuit proves each one distinct from the
 hidden owner:
 
 1. The SPP payer.
-2. The ring's co-signer, or the zero address when the ring has none.
+2. The signing co-signer, or the zero address when none signs.
 3. The key every withdrawal names, or zero without a withdrawal.
 
 A transfer can spend the hidden owner's default-ring notes in place of ring
@@ -184,7 +185,7 @@ notes alone unless the sender allows default-ring notes. Rust's `AnonymousMove`
 allows them with `EntrySpend::Allow`, and the CLI with
 `transfer --funding held --entry-spend allow`. A TypeScript transfer allows
 them with `inputs` of `"ring-or-default"` or `"default"`, and
-`createRingEntrySubmission` spends them alone.
+`prepareRingEntryRelay` spends them alone.
 
 `AnonymousSpendSigner` produces the signature, so the hidden owner's key can
 stay outside the process that proves. In Rust `spr_keypair::SigningKey` and
@@ -312,15 +313,16 @@ own transactions. The viewing secret never leaves the key holder.
 3. To sync, build `AnonymousSync.create(keys, assets)`, pass the wallet's notes
    to `withHeldNotes` and the addresses it pays to `withRecipientAddresses`.
    Call `fetch(indexer, history)` and store the scan's `history`.
-4. To pay, call `createRingTransferSubmission` with `anonymous` holding the
-   hidden owner's signer and the history. A `RingPaymentRequest` recipient
-   takes its request tag, and a bare `RingAddress` needs
-   `anonymous.firstContact`. Store the submission's `viewingHistory` before
-   the first `send`. Exits, entries and withdrawals go through
-   `createRingExitSubmission`, `createRingEntrySubmission` and
-   `createRingWithdrawalSubmission`. The plain `buildRing*Transaction`
-   builders return no history and refuse an anonymous ring with
-   `RING_ANONYMOUS_SUBMISSION_REQUIRED`.
+4. To pay, quote the relay with `RingRpc.getRelayQuote` and call
+   `prepareRingTransferRelay` with `anonymous` holding the quote, the
+   nullifier key, the hidden owner's signer and the history. A
+   `RingPaymentRequest` recipient takes its request tag, and a bare
+   `RingAddress` needs `anonymous.firstContact`. Store the relay's
+   `viewingHistory` before `relay.send`. Exits, entries and withdrawals go
+   through `prepareRingExitRelay`, `prepareRingEntryRelay` and
+   `prepareRingWithdrawalRelay`. Their `buildRing*Transaction` and
+   `createRing*Submission` builders refuse an anonymous ring with
+   `RING_ANONYMOUS_RELAY_REQUIRED`.
 
 ## Limits
 

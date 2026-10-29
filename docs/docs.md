@@ -18,7 +18,7 @@ The operator runs the `zolana-ring` CLI from a `ring.toml`. Members pay through 
    3. SPP governance activates the ring unless its protocol config activates rings on creation.
 3. **Operate**
    1. Write authority lists with `list add`, and point a list at a curator with `list set-source <list> --curator <id>`.
-   2. Grant readers, set the co-signer and the insert fee, pause and resume.
+   2. Grant readers, set the co-signers and the insert fee, pause and resume.
    3. On a confidential policy ring, set a delegate to turn on key escrow.
 4. **Build clients**
    1. Deposit into the ring with an audited deposit.
@@ -46,8 +46,8 @@ The operator runs the `zolana-ring` CLI from a `ring.toml`. Members pay through 
 | 11 | Outflow limit | A per-transfer cap and a co-signer threshold for one mint, stored in the mint's record. |
 | 12 | Curator | Another ring whose member registry a policy reads for one or more lists. |
 | 13 | Upgrade authority | The program's Loader v3 upgrade authority. Creates the config. |
-| 14 | Config authority | Holds the config after `init`. Sets the policy, lists, readers, co-signer, insert fee, pause and delegate. |
-| 15 | Co-signer | One key that must sign the operations its scope names and every transfer that needs approval. A withdrawal below the mint's withdrawal threshold can skip it with an exemption proof. |
+| 14 | Config authority | Holds the config after `init`. Sets the policy, lists, readers, co-signers, insert fee, pause and delegate. |
+| 15 | Co-signer | A key with its own record and scope. One co-signer whose scope covers every class an operation demands signs it. A transfer that needs approval and demands no class takes any co-signer. A withdrawal below the mint's withdrawal threshold can skip it with an exemption proof. |
 | 16 | Delegate | Moves escrowed members' notes inside a key-escrow ring without their signature. |
 | 17 | Auditor key | The X25519 key every transfer's audit proof seals to. Ring RPC or a local file holds it. |
 | 18 | Reader | An Ed25519 key or a P-256 passkey with a read access record. Reads audited history from Ring RPC. |
@@ -133,7 +133,7 @@ limits = [
 ]
 ```
 
-Outflow limits bound what one transfer sends away from its sender in one mint. A transfer fails above `cap`, and needs the co-signer above `cosign_above`. Zero turns either off. The zero address names SOL. The table holds rules only. The CLI writes every mint's threshold, `cap` and `cosign_above` into that mint's record in the ring's own registry, so the number of mints has no table limit.
+Outflow limits bound what one transfer sends away from its sender in one mint. A transfer fails above `cap`, and needs a co-signer above `cosign_above`. Zero turns either off. The zero address names SOL. The table holds rules only. The CLI writes every mint's threshold, `cap` and `cosign_above` into that mint's record in the ring's own registry, so the number of mints has no table limit.
 
 ```toml
 [policy]
@@ -165,7 +165,7 @@ zolana-ring insert-fee set 0
 - `deploy` deploys the released program of the embedded release lock, or `--program-so`. It refuses a binary whose verifying key markers do not cover every pinned proving key, and an existing program under another upgrade authority.
 - `init` skips every step the chain already agrees with. The upgrade authority signs `CreateConfig` and, when the two keys differ, hands the config to the config authority in the same transaction.
 - `init` takes the auditor key from Ring RPC when no config and no `keys/auditor.key.pub` exist, and checks the service signature. With a hosted Ring RPC, `--local-auditor` pins `keys/auditor.key.pub` instead.
-- `cosigner set` sets the co-signer, then writes its withdrawal thresholds into the mints' records and clears the others. `cosigner clear` keeps the records.
+- `cosigner set` creates or rescopes the signer's co-signer record, then writes its withdrawal thresholds into the mints' records and clears the others. `cosigner clear` closes the signer's record and keeps the mint records.
 - `list add` and `list clear` write authority lists, which apply at once. `list join` and `list leave` queue the member's own lists, and `list apply` applies a due queue.
 - `delegate set --delegate-keypair <FILE>` turns a confidential policy ring into a key-escrow ring for good. SPP governance must enable the ring's authority rail, the SPP rail a delegate move runs on, before `delegate move` runs.
 - `authority transfer` moves the upgrade authority without the new key's signature. `authority transfer-config` moves the config authority, and both keys sign.
@@ -176,7 +176,7 @@ zolana-ring insert-fee set 0
 1. Read the ring config and check that SPP activated the ring.
 2. Deposit: the SDK seals each new note to the auditor and proves the deposit.
 3. On a key-escrow ring, register the member's key and wait for the queue to apply.
-4. Transfer: the SDK reads the policy and the records, proves the SPP, audit and policy proofs together, and builds one instruction. When only the withdrawal class demands the co-signer and every withdrawn mint stays within its withdrawal threshold, it adds a withdrawal exemption proof, and the co-signer does not sign.
+4. Transfer: the SDK reads the policy and the records, proves the SPP, audit and policy proofs together, and builds one instruction. When only the withdrawal class demands a co-signer and every withdrawn mint stays within its withdrawal threshold, it adds a withdrawal exemption proof, and no co-signer signs.
 5. Submit: the SDK re-proves when a root or the policy moved before the transfer landed.
 6. Sync: the wallet finds received notes by its tags and opens them.
 
@@ -442,5 +442,5 @@ ring-rpc serve --port 8785 --indexer-url <ring indexer> --rpc-url <solana> \
 5. **Key escrow and the delegate are permanent:** a registered key cannot change, and nothing removes a delegate.
 6. **Records are public:** every list write names its member. On an anonymous ring a member's own list write publishes its Solana key.
 7. **The auditor reads everything:** a reader grant has no scope or expiry.
-8. **TypeScript anonymous rings are partial:** the TypeScript SDK builds anonymous transfers, but its client has no anonymous SPP prover and it has no anonymous wallet sync. Use the Rust SDK or the CLI.
+8. **TypeScript anonymous spends go through Ring RPC:** the pinned TypeScript prover has no anonymous spend proof, so the TypeScript SDK spends an anonymous ring through the Ring RPC relay, which receives the nullifier key and proves the spend. Use the Rust SDK or the CLI to prove locally.
 9. **Single-party setup:** the ring's proving keys come from one gnark setup. Trust the key generator as you trust the upgrade authority.
