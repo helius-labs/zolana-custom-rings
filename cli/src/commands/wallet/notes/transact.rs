@@ -60,6 +60,13 @@ named_enum! {
 }
 
 named_enum! {
+    pub enum OwnerRail("owner rail") {
+        Signer = "signer",
+        InProof = "in-proof",
+    }
+}
+
+named_enum! {
     pub enum EntrySpendName("entry spend") {
         Refuse = "refuse",
         Allow = "allow",
@@ -160,6 +167,7 @@ struct Transfer<'a> {
     sender: &'a ShieldedKeypair,
     payments: &'a Payments,
     cosigner: Option<&'a (dyn Signer + Sync)>,
+    owner_rail: OwnerRail,
 }
 
 enum Inputs<'a> {
@@ -186,6 +194,7 @@ struct Sent {
 
 pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
     let config = ctx.ring_config()?;
+    args.owner_rail.check(config.mode)?;
     let program = ctx.ring.program_id();
     let sender = ShieldedKeypair::from_keypair(&ctx.sender()?)?;
     let recipient = ShieldedKeypair::new_ed25519()?;
@@ -216,6 +225,7 @@ pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
         sender: &sender,
         payments: &payments,
         cosigner: cosigner.sign(&config, demand)?,
+        owner_rail: args.owner_rail,
     };
     payments.fits(&inputs)?;
     ctx.ring_rpc().check_serves(program)?;
@@ -255,6 +265,7 @@ pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
 /// Every recipient is checked against the ring's mode before anything is deposited.
 pub fn run_transfer(ctx: &Context, args: TransferArgs) -> Result<()> {
     let config = ctx.ring_config()?;
+    args.owner_rail.check(config.mode)?;
     let payments = PaymentPlan::of(&args).resolve(config.mode, ctx.ring.program_id())?;
     let total = payments.total()?;
     let sender = ShieldedKeypair::from_keypair(&ctx.sender()?)?;
@@ -269,6 +280,7 @@ pub fn run_transfer(ctx: &Context, args: TransferArgs) -> Result<()> {
         sender: &sender,
         payments: &payments,
         cosigner: cosigner.sign(&config, demand)?,
+        owner_rail: args.owner_rail,
     };
     let inputs = match args.funding {
         Funding::Deposit => {
@@ -387,6 +399,16 @@ impl FromStr for Recipient {
                     "{text} is neither a shielded address, a ring address nor a `zolana:` request"
                 )
             })
+    }
+}
+
+impl OwnerRail {
+    fn check(self, mode: RingMode) -> Result<()> {
+        ensure!(
+            self == Self::Signer || mode != RingMode::Anonymous,
+            "--owner-rail in-proof needs a confidential ring"
+        );
+        Ok(())
     }
 }
 
@@ -1014,7 +1036,11 @@ impl Transfer<'_> {
         };
         match &self.payments.payees {
             Payees::Confidential(payees) => {
-                let mut transaction = transaction(inputs, self.sender.pubkey())?;
+                let payer: &(dyn Signer + Sync) = match self.owner_rail {
+                    OwnerRail::Signer => self.sender,
+                    OwnerRail::InProof => self.payer,
+                };
+                let mut transaction = transaction(inputs, payer.pubkey())?;
                 for payment in payees {
                     if self.payments.mint == SOL_MINT {
                         transaction.transfer_sol(&payment.to, payment.amount)?;
@@ -1034,14 +1060,19 @@ impl Transfer<'_> {
                 if let Some(cosigner) = self.cosigner {
                     transfer = transfer.with_co_signer(cosigner.pubkey());
                 }
-                // The owner signs its spends, it pays the transaction too.
-                TopUp {
-                    funder: self.payer,
-                    who: self.sender.pubkey(),
-                    lamports: SENDER_FEE_BUDGET,
+                match self.owner_rail {
+                    // The owner signs its spends, it pays the transaction too.
+                    OwnerRail::Signer => TopUp {
+                        funder: self.payer,
+                        who: self.sender.pubkey(),
+                        lamports: SENDER_FEE_BUDGET,
+                    }
+                    .send(ctx)?,
+                    OwnerRail::InProof => {
+                        transfer = transfer.with_in_proof_owner(&self.sender.signing_key);
+                    }
                 }
-                .send(ctx)?;
-                ctx.submit(transfer, self.sender, self.cosigner.as_slice())
+                ctx.submit(transfer, payer, self.cosigner.as_slice())
             }
             Payees::Anonymous {
                 ring: payees,

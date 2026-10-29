@@ -117,7 +117,7 @@ pub use crate::{
     policy::ListName,
     records::Queued,
     ring_rpc::{RingRpcClient, Trust},
-    transact::{EntrySpendName, Funding, Recipient},
+    transact::{EntrySpendName, Funding, OwnerRail, Recipient},
     ui::{line, Ask},
 };
 
@@ -406,6 +406,32 @@ mod tests {
         assert!(parse(&[]).is_err(), "a transfer names a recipient");
         assert!(parse(&[&first, "--funding", "faucet"]).is_err());
         assert!(parse(&[&first, "--entry-spend", "always"]).is_err());
+    }
+
+    #[test]
+    fn transfers_spend_on_the_signer_rail_unless_the_owner_signs_in_the_proof() {
+        let to = spr_keypair::ShieldedKeypair::from_keypair(
+            spr_keypair::SigningKey::from_ed25519_bytes(&[1; 32]),
+        )
+        .unwrap()
+        .shielded_address()
+        .unwrap()
+        .to_string();
+        assert_eq!(
+            transfer_args(&[&to]).expect("default").owner_rail,
+            OwnerRail::Signer
+        );
+        let in_proof = transfer_args(&[&to, "--owner-rail", "in-proof"]).expect("in proof");
+        assert_eq!(in_proof.owner_rail, OwnerRail::InProof);
+        assert!(transfer_args(&[&to, "--owner-rail", "relay"]).is_err());
+        assert!(matches!(
+            Cli::try_parse_from(["zolana-ring", "transact", "--owner-rail", "in-proof"])
+                .map(|cli| cli.command),
+            Ok(Command::Transact(TransactArgs {
+                owner_rail: OwnerRail::InProof,
+                ..
+            }))
+        ));
     }
 
     #[test]
