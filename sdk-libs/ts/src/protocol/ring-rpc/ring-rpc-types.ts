@@ -1,5 +1,6 @@
 import type { Address, Signature } from "@heliuslabs/zolana/interface";
 import type { indexerTypes } from "@heliuslabs/zolana/internal";
+import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 
 import type { MintPolicy } from "../membership/mint-policy.js";
 
@@ -15,6 +16,7 @@ export const RingRpcMethod = Object.freeze({
   submitRecordUpdate: "submitRecordUpdate",
   getRecordUpdateStatus: "getRecordUpdateStatus",
   setMergeSettings: "setMergeSettings",
+  prepareAuthorityTransfer: "prepareAuthorityTransfer",
 } as const);
 export type RingRpcMethod = (typeof RingRpcMethod)[keyof typeof RingRpcMethod];
 
@@ -130,6 +132,29 @@ export interface SetMergeSettingsRequest {
   readonly ring: Address;
   readonly owner: Address;
   readonly settings: MergeSettings;
+  readonly timestamp: bigint;
+  readonly nonce: Base64String;
+  readonly signature: Signature;
+}
+
+/** Rust `AuthorityPayment`. */
+export interface AuthorityPayment {
+  readonly recipient: ShieldedAddress;
+  readonly amount: bigint;
+}
+
+/** Rust `AuthorityTransfer`, the change returns to `source`. */
+export interface AuthorityTransfer {
+  readonly source: ShieldedAddress;
+  readonly mint: Address;
+  readonly payments: readonly AuthorityPayment[];
+}
+
+/** Rust `PrepareAuthorityTransferRequest`, answered with a `signMessage` step until the delegate signs. */
+export interface PrepareAuthorityTransferRequest {
+  readonly ring: Address;
+  readonly delegate: Address;
+  readonly transfer: AuthorityTransfer;
   readonly timestamp: bigint;
   readonly nonce: Base64String;
   readonly signature: Signature;

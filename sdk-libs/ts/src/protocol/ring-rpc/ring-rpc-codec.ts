@@ -1,9 +1,14 @@
+import { getBase58Decoder } from "@solana/kit";
+
 import { U64_MAX, indexerCodec, indexerScalars } from "@heliuslabs/zolana/internal";
 import type { indexerTypes } from "@heliuslabs/zolana/internal";
+import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 
 import { encodeMintPolicy } from "../indexer/indexer-codec.js";
 import type {
+  AuthorityTransfer,
   MergeSettings,
+  PrepareAuthorityTransferRequest,
   PrepareRelayRequest,
   RecordUpdateEntry,
   RecordUpdateStatus,
@@ -23,6 +28,8 @@ const { checkedAddress, checkedBase64, checkedHash, checkedSignature, schemaFail
 
 type WireObject = Record<string, unknown>;
 type Hash = indexerTypes.Hash;
+
+const base58 = getBase58Decoder();
 
 const RELAY_OPERATIONS = ["anonymous", "confidential", "delegate", "deposit"] as const;
 
@@ -279,5 +286,35 @@ export function decodeMergeSettings(value: unknown): MergeSettings {
       wireInteger(row["targetNoteCount"], "targetNoteCount", 0n, 0xffff_ffffn),
     ),
     minAverageAmount: u64(row["minAverageAmount"], "minAverageAmount"),
+  };
+}
+
+/** Rust `SerializableShieldedAddress`, the base58 text of `ShieldedAddress::to_bytes`. */
+export function shieldedAddressText(address: ShieldedAddress): string {
+  return base58.decode(address.toBytes());
+}
+
+/** Rust `PrepareAuthorityTransferRequest`, its serialization byte for byte. */
+export function encodePrepareAuthorityTransferRequest(
+  value: PrepareAuthorityTransferRequest,
+): WireObject {
+  return {
+    ring: checkedAddress(value.ring, "ring"),
+    delegate: checkedAddress(value.delegate, "delegate"),
+    transfer: encodeAuthorityTransfer(value.transfer),
+    timestamp: toU64(value.timestamp, "timestamp"),
+    nonce: checkedBase64(value.nonce, "nonce"),
+    signature: checkedSignature(value.signature, "signature"),
+  };
+}
+
+function encodeAuthorityTransfer(value: AuthorityTransfer): WireObject {
+  return {
+    source: shieldedAddressText(value.source),
+    mint: checkedAddress(value.mint, "transfer.mint"),
+    payments: value.payments.map((payment, index) => ({
+      recipient: shieldedAddressText(payment.recipient),
+      amount: toU64(payment.amount, `transfer.payments[${index}].amount`),
+    })),
   };
 }
