@@ -18,7 +18,7 @@ use zolana_ring_policy::{
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
-    limits::Outflows,
+    limits::{Outflows, SenderOutflow},
     prover::{to_instruction_proof, RingRequest},
     records::PoolRead,
     request::{
@@ -258,8 +258,10 @@ impl PolicyRead<'_> {
         let approval_required = match self.rail {
             RingRail::Delegate => false,
             RingRail::Confidential | RingRail::Anonymous => Outflows {
-                sender: self.sender,
-                ring: self.ring.program_id(),
+                rule: SenderOutflow {
+                    sender: Member::from_bytes(self.sender)?,
+                    ring: self.ring.program_id(),
+                },
                 outputs,
                 public_assets: self.public_assets,
                 public_amounts: self.public_amounts,

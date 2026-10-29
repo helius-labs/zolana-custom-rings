@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use custom_ring_sdk::RingError;
+use custom_ring_sdk::{RingError, SenderOutflow};
 use jsonrpsee::types::ErrorObjectOwned;
 use log::warn;
 use solana_address::Address;
@@ -538,12 +538,13 @@ impl CoSignStep<'_> {
                 signers: proven.signers,
             });
         };
+        let sender = payload.sender()?;
         let request = CoSignRequest {
             ring: payload.ring_program_id(),
             message: message.clone(),
-            sender: payload.sender()?,
+            sender,
             demand: proven.co_sign_demand,
-            flows: payload.flows(),
+            flows: payload.flows(sender)?,
         };
         match co_signer.decide(&request).await? {
             CoSignDecision::Signed(signature) => Ok(CoSigned {
@@ -664,9 +665,9 @@ impl RelayPayload {
         Member::from_bytes(owner_hash).map_err(|error| RelayError::Proof(error.to_string()))
     }
 
-    fn flows(&self) -> Vec<AssetFlow> {
-        match self {
-            Self::Transfer(proof_inputs) => asset_flows(proof_inputs),
+    fn flows(&self, sender: Member) -> Result<Vec<AssetFlow>, RingRpcError> {
+        Ok(match self {
+            Self::Transfer(proof_inputs) => asset_flows(proof_inputs, sender)?,
             Self::Deposit(inputs) => vec![AssetFlow {
                 asset: inputs.asset.mint(),
                 transferred: 0,
@@ -674,7 +675,7 @@ impl RelayPayload {
                 withdrawn: 0,
             }],
             Self::Merge(_) => Vec::new(),
-        }
+        })
     }
 }
 
@@ -706,17 +707,18 @@ fn relay_status(state: &RelayState) -> Result<RelayStatus, RingRpcError> {
     })
 }
 
-/// One flow per asset, every live output but a ring output to the sender counts as transferred.
-fn asset_flows(proof_inputs: &RelayProofInputs) -> Vec<AssetFlow> {
+/// One flow per asset.
+fn asset_flows(
+    proof_inputs: &RelayProofInputs,
+    sender: Member,
+) -> Result<Vec<AssetFlow>, RingRpcError> {
     let mut flows: Vec<AssetFlow> = Vec::new();
-    let sender = &proof_inputs.sender.signing_pubkey;
+    let rule = SenderOutflow {
+        sender,
+        ring: proof_inputs.ring_program_id,
+    };
     for output in &proof_inputs.outputs {
-        let Some(owner) = &output.owner_address else {
-            continue;
-        };
-        let change = owner.signing_pubkey == *sender
-            && output.ring_program_id == Some(proof_inputs.ring_program_id);
-        if !change {
+        if rule.counts(output).map_err(RelayError::proof)? {
             let flow = flow(&mut flows, output.asset.asset);
             flow.transferred = flow.transferred.saturating_add(output.amount);
         }
@@ -733,7 +735,7 @@ fn asset_flows(proof_inputs: &RelayProofInputs) -> Vec<AssetFlow> {
         };
         *total = total.saturating_add(transfer.amount());
     }
-    flows
+    Ok(flows)
 }
 
 fn flow(flows: &mut Vec<AssetFlow>, asset: Address) -> &mut AssetFlow {

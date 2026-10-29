@@ -68,6 +68,7 @@ pub use crate::{
         RingDepositReceipt,
     },
     error::RingError,
+    limits::SenderOutflow,
     merge::{
         CustomRingMerge, CustomRingMergeInstruction, MergeProofInput, MergeRelay,
         PreparedCustomRingMerge, ProvenCustomRingMerge, RingMergeOperation, MAX_RING_MERGE_INPUTS,
