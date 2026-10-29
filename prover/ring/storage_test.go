@@ -15,10 +15,10 @@ import (
 	"github.com/helius-labs/zolana/prover/server/prover/common"
 )
 
-func TestPolicyStoreFixtures(t *testing.T) {
-	address := os.Getenv("POLICY_STORE_REGISTRY")
+func TestStorageFixtures(t *testing.T) {
+	address := os.Getenv("STORAGE_REGISTRY")
 	if address == "" {
-		t.Skip("POLICY_STORE_REGISTRY is unset")
+		t.Skip("STORAGE_REGISTRY is unset")
 	}
 	raw, err := hex.DecodeString(address)
 	if err != nil || len(raw) != 32 {

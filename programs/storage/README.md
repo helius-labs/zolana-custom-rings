@@ -22,8 +22,8 @@ cargo test --locked -p storage-program --test lifecycle
 The test uses checked in proofs and needs no prover service. To replace the fixtures, install the pinned ring proving keys and run the generator from `prover/`. The proofs bind the registry address in [proofs.json](tests/proofs.json), and the test refuses a fixture made for another address.
 
 ```sh
-POLICY_STORE_REGISTRY="$(jq -r .registry ../programs/storage/tests/proofs.json)" \
-REQUIRE_RING_KEYS=1 go test ./ring -run '^TestPolicyStoreFixtures$' -count=1
+STORAGE_REGISTRY="$(jq -r .registry ../programs/storage/tests/proofs.json)" \
+REQUIRE_RING_KEYS=1 go test ./ring -run '^TestStorageFixtures$' -count=1
 ```
 
 `ZOLANA_PROVER_KEYS_DIR` points the generator at another key directory.
