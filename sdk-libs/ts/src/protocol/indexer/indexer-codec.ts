@@ -1,5 +1,6 @@
 import type { MintPolicy } from "../membership/mint-policy.js";
 import type { Address } from "@heliuslabs/zolana";
+import type { indexerTypes } from "@heliuslabs/zolana/internal";
 import { U64_MAX, indexerCodec, indexerScalars } from "@heliuslabs/zolana/internal";
 
 import {
@@ -27,14 +28,23 @@ import type {
   RingRecordPoolRequest,
   RingRecordPoolResponse,
   RingRecordQueueResponse,
+  RingRecordWriteView,
   RingRegistryRootView,
   RingRegistryStateResponse,
+  StorageApplyProofInputsRequest,
+  StorageApplyProofInputsResponse,
+  StorageMemberOpeningsRequest,
+  StorageMemberOpeningsResponse,
+  StorageRecordPoolRequest,
+  StorageRecordPoolResponse,
+  StorageRootView,
 } from "./indexer-types.js";
 
 const { array, context, object, toWireInteger, wireInteger } = indexerCodec;
 const { checkedAddress, checkedBase64, checkedHash, schemaFailure } = indexerScalars;
 
 type WireObject = Record<string, unknown>;
+type Hash = indexerTypes.Hash;
 
 /** No leading zero, no sign on zero, no exponent: one spelling per value. */
 const DECIMAL_INTEGER = /^(?:0|-?[1-9][0-9]*)$/;
@@ -187,6 +197,15 @@ function registryRoot(value: unknown, path: string): RingRegistryRootView {
   };
 }
 
+function storageRoot(value: unknown, path: string): StorageRootView {
+  const row = object(value, path, ["root", "revision", "nextIndex"]);
+  return {
+    root: checkedHash(row["root"], `${path}.root`),
+    revision: unboundedU64(row["revision"], `${path}.revision`),
+    nextIndex: wireInteger(row["nextIndex"], `${path}.nextIndex`, 1n, MEMBER_REGISTRY_CAPACITY),
+  };
+}
+
 function memberOpening(value: unknown, path: string): RingMemberOpeningView {
   const row = object(value, path, ["present", "record", "path"]);
   return {
@@ -207,6 +226,20 @@ export function decodeRingMemberOpening(value: unknown): RingMemberOpeningRespon
 }
 
 export function encodeRingMemberOpeningsRequest(value: RingMemberOpeningsRequest): WireObject {
+  return {
+    ringProgramId: checkedAddress(value.ringProgramId, "ringProgramId"),
+    ...openingsFields(value),
+  };
+}
+
+/** Rust `GetStorageMemberOpeningsRequest`. */
+export function encodeStorageMemberOpeningsRequest(
+  value: StorageMemberOpeningsRequest,
+): WireObject {
+  return { registry: checkedAddress(value.registry, "registry"), ...openingsFields(value) };
+}
+
+function openingsFields(value: Readonly<{ members: readonly Hash[]; expectedRoot: Hash }>) {
   const members: unknown = value.members;
   if (!Array.isArray(members) || members.length < 1 || members.length > MAX_RING_MEMBER_BATCH)
     return schemaFailure(
@@ -216,29 +249,45 @@ export function encodeRingMemberOpeningsRequest(value: RingMemberOpeningsRequest
       members,
     );
   return {
-    ringProgramId: checkedAddress(value.ringProgramId, "ringProgramId"),
     members: members.map((member, index) => checkedHash(member, `$.members[${String(index)}]`)),
     expectedRoot: checkedHash(value.expectedRoot, "expectedRoot"),
   };
 }
 
 export function decodeRingMemberOpenings(value: unknown): RingMemberOpeningsResponse {
+  return decodeOpenings(value, registryRoot);
+}
+
+/** Rust `GetStorageMemberOpeningsResponse`. */
+export function decodeStorageMemberOpenings(value: unknown): StorageMemberOpeningsResponse {
+  return decodeOpenings(value, storageRoot);
+}
+
+function decodeOpenings<Root>(value: unknown, root: (value: unknown, path: string) => Root) {
   const row = object(value, "$", ["context", "root", "openings"]);
   return {
     context: context(row["context"], "context"),
-    root: registryRoot(row["root"], "root"),
+    root: root(row["root"], "root"),
     openings: array(row["openings"], "openings", memberOpening),
   };
 }
 
 export function encodeRingRecordPoolRequest(value: RingRecordPoolRequest): WireObject {
+  return { ...encodeRingMemberOpeningsRequest(value), ...poolOpenings(value) };
+}
+
+/** Rust `GetStorageRecordPoolRequest`. */
+export function encodeStorageRecordPoolRequest(value: StorageRecordPoolRequest): WireObject {
+  return { ...encodeStorageMemberOpeningsRequest(value), ...poolOpenings(value) };
+}
+
+function poolOpenings(value: Readonly<{ members: readonly Hash[]; openings: number }>) {
   const openings = toWireInteger(
     BigInt(value.openings),
     "openings",
     1n,
     BigInt(MAX_RING_MEMBER_BATCH),
   );
-  const request = encodeRingMemberOpeningsRequest(value);
   if (value.members.length > openings)
     return schemaFailure(
       "INDEXER_SCHEMA_INVALID_TYPE",
@@ -246,11 +295,20 @@ export function encodeRingRecordPoolRequest(value: RingRecordPoolRequest): WireO
       `at most ${String(openings)} members`,
       value.members,
     );
-  return { ...request, openings };
+  return { openings };
 }
 
 /** The `getRingRecordPool` response, its canopy width fixing the path height. */
 export function decodeRingRecordPool(value: unknown): RingRecordPoolResponse {
+  return decodeRecordPool(value, registryRoot);
+}
+
+/** Rust `GetStorageRecordPoolResponse`. */
+export function decodeStorageRecordPool(value: unknown): StorageRecordPoolResponse {
+  return decodeRecordPool(value, storageRoot);
+}
+
+function decodeRecordPool<Root>(value: unknown, root: (value: unknown, path: string) => Root) {
   const row = object(value, "$", ["context", "root", "records", "canopy", "subjects"]);
   const canopy = array(row["canopy"], "canopy", checkedHash);
   const levels = canopyLevels(canopy.length);
@@ -272,7 +330,7 @@ export function decodeRingRecordPool(value: unknown): RingRecordPoolResponse {
     );
   return {
     context: context(row["context"], "context"),
-    root: registryRoot(row["root"], "root"),
+    root: root(row["root"], "root"),
     records,
     canopy,
     subjects: array(row["subjects"], "subjects", (index, path) =>
@@ -411,34 +469,65 @@ export function encodeRingApplyProofInputsRequest(value: RingApplyProofInputsReq
         member: checkedHash(write.member, `${path}.member`),
         mask: toU64(write.mask, `${path}.mask`),
         value: toU64(write.value, `${path}.value`),
-        mintPolicy:
-          write.mintPolicy === null
-            ? null
-            : {
-                threshold: toU64(write.mintPolicy.threshold, "threshold"),
-                cap: toU64(write.mintPolicy.cap, "cap"),
-                cosignAbove: toU64(write.mintPolicy.cosignAbove, "cosignAbove"),
-                withdrawalThreshold: toU64(
-                  write.mintPolicy.withdrawalThreshold,
-                  "withdrawalThreshold",
-                ),
-              },
+        mintPolicy: encodeMintPolicy(write.mintPolicy),
       };
     }),
   };
 }
 
+/** Rust `GetStorageApplyProofInputsRequest`, each write in Rust `StorageWriteView` order. */
+export function encodeStorageApplyProofInputsRequest(
+  value: StorageApplyProofInputsRequest,
+): WireObject {
+  return {
+    registry: checkedAddress(value.registry, "registry"),
+    writes: value.writes.map((write, index) => {
+      const path = `$.writes[${String(index)}]`;
+      return {
+        member: checkedHash(write.member, `${path}.member`),
+        mask: toU64(write.mask, `${path}.mask`),
+        value: toU64(write.value, `${path}.value`),
+        escrowKey: checkedHash(write.escrowKey, `${path}.escrowKey`),
+        mintPolicy: encodeMintPolicy(write.mintPolicy),
+      };
+    }),
+  };
+}
+
+/** Rust `MintPolicy` in its field order, `null` keeps the stored settings. */
+export function encodeMintPolicy(policy: MintPolicy | null): WireObject | null {
+  return policy === null
+    ? null
+    : {
+        threshold: toU64(policy.threshold, "threshold"),
+        cap: toU64(policy.cap, "cap"),
+        cosignAbove: toU64(policy.cosignAbove, "cosignAbove"),
+        withdrawalThreshold: toU64(policy.withdrawalThreshold, "withdrawalThreshold"),
+      };
+}
+
 export function decodeRingApplyProofInputs(value: unknown): RingApplyProofInputsResponse {
-  const row = object(value, "$", [
-    "context",
-    "oldRoot",
-    "newRoot",
-    "oldNextIndex",
-    "newNextIndex",
-    "chainStart",
-    "chainEnd",
-    "writes",
-  ]);
+  return applyProofInputs(object(value, "$", APPLY_FIELDS));
+}
+
+/** Rust `GetStorageApplyProofInputsResponse`. */
+export function decodeStorageApplyProofInputs(value: unknown): StorageApplyProofInputsResponse {
+  const row = object(value, "$", ["revision", ...APPLY_FIELDS]);
+  return { ...applyProofInputs(row), revision: unboundedU64(row["revision"], "revision") };
+}
+
+const APPLY_FIELDS = [
+  "context",
+  "oldRoot",
+  "newRoot",
+  "oldNextIndex",
+  "newNextIndex",
+  "chainStart",
+  "chainEnd",
+  "writes",
+] as const;
+
+function applyProofInputs(row: WireObject): RingApplyProofInputsResponse {
   return {
     context: context(row["context"], "context"),
     oldRoot: checkedHash(row["oldRoot"], "oldRoot"),
@@ -447,38 +536,40 @@ export function decodeRingApplyProofInputs(value: unknown): RingApplyProofInputs
     newNextIndex: wireInteger(row["newNextIndex"], "newNextIndex", 1n, MEMBER_REGISTRY_CAPACITY),
     chainStart: checkedHash(row["chainStart"], "chainStart"),
     chainEnd: checkedHash(row["chainEnd"], "chainEnd"),
-    writes: array(row["writes"], "writes", (entry, path) => {
-      const item = object(entry, path, [
-        "member",
-        "mask",
-        "value",
-        "escrowKey",
-        "mintPolicy",
-        "exists",
-        "oldNext",
-        "oldLists",
-        "oldEscrow",
-        "oldMintPolicy",
-        "slot",
-        "low",
-        "lowPath",
-      ]);
-      return {
-        member: checkedHash(item["member"], `${path}.member`),
-        mask: u64(item["mask"], `${path}.mask`),
-        value: u64(item["value"], `${path}.value`),
-        escrowKey: checkedHash(item["escrowKey"], `${path}.escrowKey`),
-        mintPolicy: item["mintPolicy"] == null ? null : decodeMintPolicy(item["mintPolicy"]),
-        exists: boolean(item["exists"], `${path}.exists`),
-        oldNext: checkedHash(item["oldNext"], `${path}.oldNext`),
-        oldLists: unboundedU64(item["oldLists"], `${path}.oldLists`),
-        oldEscrow: checkedHash(item["oldEscrow"], `${path}.oldEscrow`),
-        oldMintPolicy: decodeMintPolicy(item["oldMintPolicy"]),
-        slot: recordPath(item["slot"], `${path}.slot`),
-        low: sealedMemberRecord(item["low"], `${path}.low`),
-        lowPath: recordPath(item["lowPath"], `${path}.lowPath`),
-      };
-    }),
+    writes: array(row["writes"], "writes", recordWrite),
+  };
+}
+
+function recordWrite(entry: unknown, path: string): RingRecordWriteView {
+  const item = object(entry, path, [
+    "member",
+    "mask",
+    "value",
+    "escrowKey",
+    "mintPolicy",
+    "exists",
+    "oldNext",
+    "oldLists",
+    "oldEscrow",
+    "oldMintPolicy",
+    "slot",
+    "low",
+    "lowPath",
+  ]);
+  return {
+    member: checkedHash(item["member"], `${path}.member`),
+    mask: u64(item["mask"], `${path}.mask`),
+    value: u64(item["value"], `${path}.value`),
+    escrowKey: checkedHash(item["escrowKey"], `${path}.escrowKey`),
+    mintPolicy: item["mintPolicy"] == null ? null : decodeMintPolicy(item["mintPolicy"]),
+    exists: boolean(item["exists"], `${path}.exists`),
+    oldNext: checkedHash(item["oldNext"], `${path}.oldNext`),
+    oldLists: unboundedU64(item["oldLists"], `${path}.oldLists`),
+    oldEscrow: checkedHash(item["oldEscrow"], `${path}.oldEscrow`),
+    oldMintPolicy: decodeMintPolicy(item["oldMintPolicy"]),
+    slot: recordPath(item["slot"], `${path}.slot`),
+    low: sealedMemberRecord(item["low"], `${path}.low`),
+    lowPath: recordPath(item["lowPath"], `${path}.lowPath`),
   };
 }
 

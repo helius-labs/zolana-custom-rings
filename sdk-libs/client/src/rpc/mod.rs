@@ -24,6 +24,14 @@ use zolana_secret_file::{
     create_new, read_key32, Access, KeyPairFiles, SecretFileError, Visibility,
 };
 
+mod merge_settings;
+mod record_update;
+mod relay;
+
+pub use merge_settings::*;
+pub use record_update::*;
+pub use relay::*;
+
 use crate::{
     AuditError, AuditedInput, AuditedOutput, AuditedTransaction, AuditedUtxo, InputOpening,
     InputRing, KnownUtxo, MergeAuditPage, MergeKeys, OutputOpening, OutputPayloadErrorKind,
@@ -37,6 +45,13 @@ pub const RING_DEPOSITS: &str = "ringDeposits";
 pub const GET_DECRYPTED_TRANSACTIONS: &str = "getDecryptedTransactions";
 pub const GET_AUDITED_MERGES: &str = "getAuditedMerges";
 pub const GET_AUDITED_UTXOS: &str = "getAuditedUtxos";
+pub const GET_RELAY_QUOTE: &str = "getRelayQuote";
+pub const PREPARE_RELAY: &str = "prepareRelay";
+pub const SUBMIT_RELAY: &str = "submitRelay";
+pub const GET_RELAY_STATUS: &str = "getRelayStatus";
+pub const SUBMIT_RECORD_UPDATE: &str = "submitRecordUpdate";
+pub const GET_RECORD_UPDATE_STATUS: &str = "getRecordUpdateStatus";
+pub const SET_MERGE_SETTINGS: &str = "setMergeSettings";
 /// The most UTXO hashes one `getAuditedUtxos` request names.
 pub const AUDITED_UTXOS_LIMIT: usize = 100;
 pub const AUDIT_CURSOR_LIMIT: usize = 256;

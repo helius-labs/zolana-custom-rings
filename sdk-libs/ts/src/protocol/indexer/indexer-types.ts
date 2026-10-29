@@ -185,3 +185,45 @@ export interface RingApplyProofInputsResponse {
   /** Queue order. */
   readonly writes: readonly RingRecordWriteView[];
 }
+
+/** Rust `StorageRootView`. */
+export interface StorageRootView {
+  readonly root: Hash;
+  readonly revision: bigint;
+  readonly nextIndex: bigint;
+}
+
+/** Rust `GetStorageMemberOpeningsRequest`, `registry` a `StorageRegistry` account. */
+export interface StorageMemberOpeningsRequest {
+  readonly registry: Address;
+  readonly members: readonly Hash[];
+  readonly expectedRoot: Hash;
+}
+
+export interface StorageMemberOpeningsResponse extends Omit<RingMemberOpeningsResponse, "root"> {
+  readonly root: StorageRootView;
+}
+
+/** Rust `GetStorageRecordPoolRequest`. */
+export interface StorageRecordPoolRequest extends StorageMemberOpeningsRequest {
+  readonly openings: number;
+}
+
+export interface StorageRecordPoolResponse extends Omit<RingRecordPoolResponse, "root"> {
+  readonly root: StorageRootView;
+}
+
+/** Rust `StorageWriteView`, `escrowKey` zero except on an escrow write. */
+export interface StorageWriteView extends RingListWriteView {
+  readonly escrowKey: Hash;
+}
+
+/** Rust `GetStorageApplyProofInputsRequest`. */
+export interface StorageApplyProofInputsRequest {
+  readonly registry: Address;
+  readonly writes: readonly StorageWriteView[];
+}
+
+export interface StorageApplyProofInputsResponse extends RingApplyProofInputsResponse {
+  readonly revision: bigint;
+}

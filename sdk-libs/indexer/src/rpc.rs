@@ -47,6 +47,9 @@ pub mod method {
     pub struct GetRingMemberRegistryRoot;
     pub struct GetRingRecordQueue;
     pub struct GetRingApplyProofInputs;
+    pub struct GetStorageMemberOpenings;
+    pub struct GetStorageRecordPool;
+    pub struct GetStorageApplyProofInputs;
 
     impl RpcMethod for GetRingMemberRecord {
         const NAME: &'static str = "getRingMemberRecord";
@@ -88,6 +91,24 @@ pub mod method {
         const NAME: &'static str = "getRingApplyProofInputs";
         type Request = GetRingApplyProofInputsRequest;
         type Response = GetRingApplyProofInputsResponse;
+    }
+
+    impl RpcMethod for GetStorageMemberOpenings {
+        const NAME: &'static str = "getStorageMemberOpenings";
+        type Request = GetStorageMemberOpeningsRequest;
+        type Response = GetStorageMemberOpeningsResponse;
+    }
+
+    impl RpcMethod for GetStorageRecordPool {
+        const NAME: &'static str = "getStorageRecordPool";
+        type Request = GetStorageRecordPoolRequest;
+        type Response = GetStorageRecordPoolResponse;
+    }
+
+    impl RpcMethod for GetStorageApplyProofInputs {
+        const NAME: &'static str = "getStorageApplyProofInputs";
+        type Request = GetStorageApplyProofInputsRequest;
+        type Response = GetStorageApplyProofInputsResponse;
     }
 }
 
@@ -354,6 +375,94 @@ pub struct GetRingApplyProofInputsResponse {
     pub chain_start: Hash,
     pub chain_end: Hash,
     /// In queue order.
+    pub writes: Vec<RingRecordWriteView>,
+}
+
+/// Up to [`MAX_RING_MEMBER_PAGE_LIMIT`] members under one root the registry history holds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct GetStorageMemberOpeningsRequest {
+    /// A `StorageRegistry` account.
+    pub registry: SerializablePubkey,
+    pub members: Vec<Hash>,
+    pub expected_root: Hash,
+}
+
+/// Each member's record or low record under one root, a shared record opened once.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct GetStorageRecordPoolRequest {
+    pub registry: SerializablePubkey,
+    pub members: Vec<Hash>,
+    pub expected_root: Hash,
+    /// At least `members.len()` and at most [`MAX_RING_MEMBER_PAGE_LIMIT`].
+    pub openings: u64,
+}
+
+/// The writes one `Update` carries, applied in order from the current root.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct GetStorageApplyProofInputsRequest {
+    pub registry: SerializablePubkey,
+    pub writes: Vec<StorageWriteView>,
+}
+
+/// `StorageWriteData` on the wire, `escrow_key` zero except on an escrow write.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StorageWriteView {
+    pub member: Hash,
+    pub mask: u64,
+    /// Lies inside `mask`.
+    pub value: u64,
+    pub escrow_key: Hash,
+    pub mint_policy: Option<zolana_ring_policy::MintPolicy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StorageRootView {
+    pub root: Hash,
+    pub revision: u64,
+    pub next_index: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct GetStorageMemberOpeningsResponse {
+    pub context: Context,
+    pub root: StorageRootView,
+    /// In request order.
+    pub openings: Vec<RingMemberOpening>,
+}
+
+/// Each path stops below the canopy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct GetStorageRecordPoolResponse {
+    pub context: Context,
+    pub root: StorageRootView,
+    /// Distinct leaves in first use order.
+    pub records: Vec<RingIndexedMemberRecordView>,
+    /// The narrowest tree level at least `openings` nodes wide.
+    pub canopy: Vec<Hash>,
+    /// The `records` index opening each requested member, in request order.
+    pub subjects: Vec<u32>,
+}
+
+/// `chain_start` binds the registry and `revision`, the revision `Update` names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct GetStorageApplyProofInputsResponse {
+    pub context: Context,
+    pub revision: u64,
+    pub old_root: Hash,
+    pub new_root: Hash,
+    pub old_next_index: u64,
+    pub new_next_index: u64,
+    pub chain_start: Hash,
+    pub chain_end: Hash,
+    /// In request order.
     pub writes: Vec<RingRecordWriteView>,
 }
 

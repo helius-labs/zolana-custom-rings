@@ -659,3 +659,30 @@ fn audited_utxos_are_used_only_when_they_rebuild_their_hashes() {
         Err(AuditError::AuditedUtxosCount { got: 3, want: 2 })
     ));
 }
+
+/// The TypeScript encoder writes the same bytes.
+#[test]
+fn a_relay_request_serializes_to_the_shared_vector() {
+    #[derive(Deserialize)]
+    struct Vector {
+        wire: String,
+    }
+    let vector: Vector = serde_json::from_str(include_str!(
+        "../../../../test-vectors/rpc/relay_request.json"
+    ))
+    .expect("vector");
+    let request = PrepareRelayRequest {
+        ring: Address::new_from_array([1; 32]).into(),
+        quote: RelayQuote {
+            fee_payer: Address::new_from_array([2; 32]).into(),
+            valid_until_slot: 4242,
+        },
+        intent: RelayIntent::Anonymous {
+            proof_inputs: vec![3, 4, 5].into(),
+            owner_signature: Signature::from([7; 64]).into(),
+        },
+    };
+    assert_eq!(serde_json::to_string(&request).expect("json"), vector.wire);
+    let read: PrepareRelayRequest = serde_json::from_str(&vector.wire).expect("read");
+    assert_eq!(read.intent.operation(), RelayOperation::Anonymous);
+}

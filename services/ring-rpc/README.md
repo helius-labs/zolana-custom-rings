@@ -51,6 +51,26 @@ Allowed WebAuthn origins need an explicit RP ID. The RP ID can be the origin hos
 
 Accepted nonces are held in process memory for the timestamp window. Run one process for each service key. Multiple replicas need a shared nonce store before they can use the same key.
 
+## Relay, record updates and merge settings
+
+`zolana_ring_client::rpc` defines these methods and the TypeScript SDK mirrors them in `protocol/ring-rpc`. This service does not answer them.
+
+| Method | Request | Result |
+| --- | --- | --- |
+| `getRelayQuote` | Ring and relay operation | `feePayer` and `validUntilSlot` |
+| `prepareRelay` | Ring, the quote, and the `intent` with the rail's proof inputs | A `RelayStep`, `submitted` or `signMessage` with the v1 message to sign |
+| `submitRelay` | `relayId`, signer and its signature over that message | `RelayStatus` |
+| `getRelayStatus` | `relayId` | `RelayStatus`, one of `awaitingSignature`, `sent`, `confirmed` or `failed` |
+| `submitRecordUpdate` | Storage registry, the update, signer and signature | `updateId` |
+| `getRecordUpdateStatus` | `updateId` | One of `queued`, `submitted`, `applied` with the new revision, or `refused` |
+| `setMergeSettings` | Ring, owner, the settings, timestamp, nonce and signature | The stored settings |
+
+The relay operation is `anonymous`, `confidential`, `delegate` or `deposit`. The quote names the fee payer the relay signs with and the last slot it takes the request. On the anonymous and confidential rails the intent carries the owner's Ed25519 signature over `SppProofInputs::message_hash`, and `prepareRelay` answers `submitted`. On the delegate and deposit rails it answers `signMessage`, and the wallet signs the returned message for `submitRelay`. The proof inputs carry no Merkle path and no record opening, the service reads those. `relayId` is the SHA-256 of the domain `zolana/ring-rpc-relay/v1` and the request's JSON as the service serializes it, so a retried request names the same relay.
+
+A record update names a ring, its entries and `validUntilSlot`. An entry is a `write` of masked lists with optional mint settings, or an `escrow` registration with its register key proof. The signer signs the 32 bytes of `Poseidon(CRRU, hash_bytes(ring), hash_bytes(registry), entries_hash, validUntilSlot)`, where `entries_hash` folds `queue_chain` over the entries from a zero start. That hash is the `updateId`. The statement binds no cluster, so a registry address that exists on two clusters accepts the update on both until `validUntilSlot`.
+
+Merge settings name a mint, a target note count and a minimum average amount. The owner signs them under `zolana/ring-rpc-merge-settings/v1` with the cluster, service, ring, timestamp and nonce of a read authorization.
+
 ## Audit result
 
 `outputs` lists every slot whose opening rebuilds its published UTXO hash. Each carries its tree context and, unless its `kind` is `dummy`, the UTXO. A confidential or delegate ring output also carries the recipient key, and an anonymous ring output carries its view tag instead. `payloadErrors` names every other slot and why. `frame` is a delivered slot without a body of its layout. `disclosure` is a slot whose disclosure bytes do not parse under the layout. `recipientKey` is a delivered recipient key with no X25519 agreement. `commitment` is an opening that hashes to another UTXO hash. `escrowUnknown` is an owner whose escrowed nullifier key the background backfill has not read from the registry. An asset the registry does not know keeps its opening without a mint.
