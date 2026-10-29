@@ -192,6 +192,7 @@ pub struct RingConfiguration {
     pub auditor_pubkey: X25519Pubkey,
     pub authority: Address,
     pub mode: RingMode,
+    pub delegate: Option<Address>,
 }
 
 #[must_use]
@@ -719,6 +720,7 @@ impl CanonicalAccount<'_> {
                 .map_err(|_| invalid())?,
             authority: config.authority,
             mode: config.mode().map_err(|_| invalid())?,
+            delegate: config.delegate().copied(),
         })
     }
 

@@ -25,7 +25,7 @@ use crate::{
     database::Store,
     error::{redacted, RingRpcError},
     relay_chain::{ChainOutcome, RelayChain},
-    relay_prover::{ProvenRelay, RelayProofRequest, RelayProver},
+    relay_prover::{DelegateSeal, ProvenRelay, RelayProofRequest, RelayProver},
     relay_submit::{CollectedSignature, RelaySubmit, RelayTransaction},
     relays::{RelayRecord, RelayState, RelayStore},
 };
@@ -185,8 +185,8 @@ impl Relay {
         let relay_id = request
             .relay_id()
             .map_err(|_| RingRpcError::StateUnavailable)?;
-        if let Some(record) = self.relays().get(&relay_id).await? {
-            return Ok(step(relay_id, &record));
+        if let Some(step) = self.stored(&relay_id).await? {
+            return Ok(step);
         }
         let ring = request.ring.0;
         self.rings.check(ring)?;
@@ -211,6 +211,67 @@ impl Relay {
                 })
                 .await?
         };
+        self.stage(ProvenStep {
+            relay_id,
+            proof_inputs: &proof_inputs,
+            proven,
+        })
+        .await
+    }
+
+    pub(crate) async fn stored(
+        &self,
+        relay_id: &RelayId,
+    ) -> Result<Option<RelayStep>, RingRpcError> {
+        Ok(self
+            .relays()
+            .get(relay_id)
+            .await?
+            .map(|record| step(relay_id.clone(), &record)))
+    }
+
+    /// The source signs nothing, the delegate signs the returned message.
+    pub(crate) async fn prepare_delegated(
+        &self,
+        relay_id: RelayId,
+        seal: DelegateSeal<'_>,
+    ) -> Result<RelayStep, RingRpcError> {
+        let ring = seal.ring;
+        self.rings.check(ring)?;
+        let fee_payer = self.fee_payer();
+        let (proof_inputs, proven) = {
+            let _proof = self.proofs.try_acquire().map_err(|_| RingRpcError::Busy)?;
+            let proof_inputs = self
+                .prover
+                .seal_delegate(DelegateSeal { fee_payer, ..seal })
+                .await?;
+            let proven = self
+                .prover
+                .prove(RelayProofRequest {
+                    ring,
+                    fee_payer,
+                    proof_inputs: &proof_inputs,
+                    owner_signature: None,
+                })
+                .await?;
+            (proof_inputs, proven)
+        };
+        self.stage(ProvenStep {
+            relay_id,
+            proof_inputs: &proof_inputs,
+            proven,
+        })
+        .await
+    }
+
+    /// The co-signer signs before the record lands, a lost insert frees its reservation.
+    async fn stage(&self, proven: ProvenStep<'_>) -> Result<RelayStep, RingRpcError> {
+        let ProvenStep {
+            relay_id,
+            proof_inputs,
+            proven,
+        } = proven;
+        let fee_payer = self.fee_payer();
         let (blockhash, last_valid_block_height) = self.chain.latest_blockhash().await?;
         let message = compile_message(
             &fee_payer,
@@ -220,7 +281,7 @@ impl Relay {
         )?;
         let co_signed = CoSignStep {
             message: &message,
-            proof_inputs: &proof_inputs,
+            proof_inputs,
             proven,
         }
         .decide(self.co_signer.as_ref())
@@ -415,6 +476,12 @@ impl Relay {
             None => Ok(()),
         }
     }
+}
+
+struct ProvenStep<'a> {
+    relay_id: RelayId,
+    proof_inputs: &'a RelayProofInputs,
+    proven: ProvenRelay,
 }
 
 struct CoSignStep<'a> {

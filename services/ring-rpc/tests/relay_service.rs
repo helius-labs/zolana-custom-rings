@@ -29,8 +29,8 @@ use zolana_ring_client::rpc::{
     GET_RELAY_QUOTE, GET_RELAY_STATUS, PREPARE_RELAY, SUBMIT_RELAY,
 };
 use zolana_ring_rpc::{
-    relay_module, ChainOutcome, FeePayerSubmit, ProvenRelay, Relay, RelayChain, RelayParts,
-    RelayProofRequest, RelayProver, RingRpcError, ServedRings, Store,
+    relay_module, ChainOutcome, DelegateSeal, FeePayerSubmit, ProvenRelay, Relay, RelayChain,
+    RelayParts, RelayProofRequest, RelayProver, RingRpcError, ServedRings, Store,
 };
 use zolana_ring_transaction::{AnonymousPlan, TaggedPayment};
 
@@ -72,6 +72,13 @@ impl RelayProver for RecordingProver {
             co_sign_demand: CoSignDemand::transact(false, &[]),
             signers,
         })
+    }
+
+    async fn seal_delegate(
+        &self,
+        _seal: DelegateSeal<'_>,
+    ) -> Result<RelayProofInputs, RingRpcError> {
+        unreachable!("the wallet seals its own transfer")
     }
 }
 

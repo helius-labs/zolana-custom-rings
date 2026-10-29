@@ -623,6 +623,7 @@ async fn two_rings_read_only_their_own_transactions() {
                 auditor_pubkey: key_a,
                 authority: authority().pubkey(),
                 mode: RingMode::Confidential,
+                delegate: None,
             },
         ),
         (
@@ -631,6 +632,7 @@ async fn two_rings_read_only_their_own_transactions() {
                 auditor_pubkey: key_b,
                 authority: authority().pubkey(),
                 mode: RingMode::Confidential,
+                delegate: None,
             },
         ),
     ]);
