@@ -7,9 +7,15 @@ use spr_hasher::{
     HasherError,
 };
 use spr_interface::{
-    error::ShieldedPoolError, instruction::InterfaceTransfer, N_PUBLIC_SLOTS, SOL_ASSET_FIELD,
+    error::ShieldedPoolError,
+    instruction::{
+        instruction_data::deposit::RingDepositIxDataRef, DepositAssetKind, InterfaceTransfer,
+    },
+    N_PUBLIC_SLOTS, SOL_ASSET_FIELD,
 };
 use thiserror::Error;
+
+use crate::{CustomRingError, DepositedAsset};
 
 /// The fee payer in every SPP transact account list.
 pub const TRANSACT_PAYER_INDEX: usize = 0;
@@ -21,6 +27,8 @@ pub const RING_TRANSACT_ACCOUNT_PREFIX_LEN: usize = RING_TRANSACT_RING_CONFIG_IN
 pub const RING_DEPOSIT_DEPOSITOR_INDEX: usize = 1;
 /// The signed `RingConfig` in an SPP ring deposit account list.
 pub const RING_DEPOSIT_RING_CONFIG_INDEX: usize = 2;
+/// The first settlement group in an SPP ring deposit account list, past the SPP program.
+pub const RING_DEPOSIT_GROUPS_INDEX: usize = RING_DEPOSIT_RING_CONFIG_INDEX + 2;
 /// The signed `RingConfig` in an SPP ring merge account list.
 pub const RING_MERGE_RING_CONFIG_INDEX: usize = 2;
 /// The funding signer in an SPP ring merge account list.
@@ -184,6 +192,41 @@ pub fn settlement_mints<'a, T>(
             })
             .transpose()
     })
+}
+
+/// `address` reads a position of the SPP ring deposit account list.
+pub fn ring_deposit_assets(
+    deposit: &RingDepositIxDataRef<'_>,
+    address: impl Fn(usize) -> Option<[u8; 32]>,
+) -> Result<Vec<DepositedAsset>, CustomRingError> {
+    let mut start = RING_DEPOSIT_GROUPS_INDEX;
+    let mut groups = Vec::with_capacity(deposit.assets.len());
+    for kind in &deposit.assets {
+        // Mirrors SPP DepositAccounts::validate_and_parse, a wrong stride misreads the mint.
+        groups.push(match kind {
+            DepositAssetKind::Sol => {
+                start += 2;
+                SOL_ASSET_FIELD
+            }
+            DepositAssetKind::Spl { .. } => {
+                let mint = address(start + 1).ok_or(CustomRingError::DepositMintAccountMissing)?;
+                start += 4;
+                hash_bytes(&mint)?
+            }
+        });
+    }
+    deposit
+        .deposits
+        .iter()
+        .map(|entry| {
+            Ok(DepositedAsset {
+                asset: *groups
+                    .get(usize::from(entry.asset_index))
+                    .ok_or(CustomRingError::DepositAssetIndexUnknown)?,
+                amount: entry.amount,
+            })
+        })
+        .collect()
 }
 
 /// Position of the signer a deposit moves funds from, `None` for a withdrawal.

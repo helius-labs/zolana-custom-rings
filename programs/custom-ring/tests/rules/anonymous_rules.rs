@@ -201,17 +201,12 @@ fn an_anonymous_policy_deposit_names_no_recipient() {
     let mut ring = Ring::new(Setup::AnonymousPolicy);
     let mut named = ring_deposit();
     named.deposits[0].ring_data_hash = [1; 32];
-    let instruction = deposit_instruction(&ring, None, &named);
+    let instruction = deposit_instruction(&ring, Some(0), &named);
     refused(
         ring.send(instruction, &[]),
         CustomRingError::AnonymousRingDataNotZero,
     );
-    let instruction = deposit_instruction(&ring, Some(1), &ring_deposit());
-    refused(
-        ring.send(instruction, &[]),
-        CustomRingError::UnexpectedMemberRegistryRoot,
-    );
-    let instruction = deposit_instruction(&ring, None, &ring_deposit());
+    let instruction = deposit_instruction(&ring, Some(0), &ring_deposit());
     reaches_verification(ring.send(instruction, &[]));
 }
 

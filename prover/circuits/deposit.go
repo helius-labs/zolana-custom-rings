@@ -9,6 +9,7 @@ import (
 	"github.com/consensys/gnark/std/rangecheck"
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
@@ -20,6 +21,8 @@ import (
 // 2. Every blinding is Poseidon(CRDB, BlindingSecret), domain separated from every SPP output blinding.
 // 3. An anonymous ring's deposit names the Ed25519 key behind each owner, any other deposit names none.
 // 4. Under key escrow every owner's record lies under MemberRegistryRoot and escrows the key the owner's nullifier key and ciphertext hash name.
+// 5. Under a nonzero PolicyHash every active asset rule of its table holds for each deposited asset's record under MemberRegistryRoot.
+// 6. An active asset rule over a curator list refuses the deposit, the proof opens no curator root.
 
 const (
 	MaxDeposits = 8
@@ -44,6 +47,11 @@ type DepositCircuit struct {
 	MemberRegistryRoot frontend.Variable
 	CtHashes           []frontend.Variable
 	Members            []registry.QuadRecordOpening
+	PolicyHash         frontend.Variable
+	// Each asset is SPP's asset field of its deposit's group.
+	Assets  []frontend.Variable
+	Amounts []frontend.Variable
+	policy.DepositAssets
 }
 
 var DepositCapacities = []int{1, 2, 4, 8}
@@ -52,11 +60,14 @@ func NewDepositCircuit(capacity int) (*DepositCircuit, error) {
 	if !slices.Contains(DepositCapacities, capacity) {
 		return nil, fmt.Errorf("deposit: unsupported capacity %d", capacity)
 	}
-	return &DepositCircuit{Capacity: capacity, OwnerPkHashes: make([]frontend.Variable, capacity), OwnerKeys: make([][32]frontend.Variable, capacity), NullifierPks: make([]frontend.Variable, capacity), BlindingSecrets: make([]frontend.Variable, capacity), CtHashes: make([]frontend.Variable, capacity), Members: make([]registry.QuadRecordOpening, capacity)}, nil
+	return &DepositCircuit{
+		Capacity: capacity, OwnerPkHashes: make([]frontend.Variable, capacity), OwnerKeys: make([][32]frontend.Variable, capacity), NullifierPks: make([]frontend.Variable, capacity), BlindingSecrets: make([]frontend.Variable, capacity), CtHashes: make([]frontend.Variable, capacity), Members: make([]registry.QuadRecordOpening, capacity),
+		Assets: make([]frontend.Variable, capacity), Amounts: make([]frontend.Variable, capacity), DepositAssets: policy.NewDepositAssets(capacity),
+	}, nil
 }
 
 func (c *DepositCircuit) Define(api frontend.API) error {
-	if !slices.Contains(DepositCapacities, c.Capacity) || len(c.OwnerPkHashes) != c.Capacity || len(c.OwnerKeys) != c.Capacity || len(c.NullifierPks) != c.Capacity || len(c.BlindingSecrets) != c.Capacity || len(c.CtHashes) != c.Capacity || len(c.Members) != c.Capacity {
+	if !slices.Contains(DepositCapacities, c.Capacity) || len(c.OwnerPkHashes) != c.Capacity || len(c.OwnerKeys) != c.Capacity || len(c.NullifierPks) != c.Capacity || len(c.BlindingSecrets) != c.Capacity || len(c.CtHashes) != c.Capacity || len(c.Members) != c.Capacity || len(c.Assets) != c.Capacity || len(c.Amounts) != c.Capacity || len(c.AssetRecords) != c.Capacity {
 		return fmt.Errorf("deposit: capacity/witness mismatch")
 	}
 	// 1. Count selects 1..8 occupied slots, DepositPublicInput::hash builds both flags as 0 or 1.
@@ -64,10 +75,11 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 	rc := rangecheck.New(api)
 	commitments := make([]frontend.Variable, c.Capacity)
 	var plaintext []frontend.Variable
+	deposits := make([]policy.DepositSlot, c.Capacity)
 	for i := range commitments {
 		active := count.Active[i]
-		// 2. A padding slot carries no owner, key or blinding secret, the plaintext past Count stays fixed.
-		for _, value := range []frontend.Variable{c.OwnerPkHashes[i], c.NullifierPks[i], c.BlindingSecrets[i]} {
+		// 2. A padding slot carries no owner, key, blinding secret, asset or amount, the plaintext past Count stays fixed.
+		for _, value := range []frontend.Variable{c.OwnerPkHashes[i], c.NullifierPks[i], c.BlindingSecrets[i], c.Assets[i], c.Amounts[i]} {
 			abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, active), V: value})
 		}
 		// 3. Under escrow the owner's record exists and escrows Poseidon(nullifier_pk, ct_hash).
@@ -88,8 +100,11 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 		// 6. The canonical field encodings keep one plaintext per opening.
 		ownerBytes, blindingBytes := ringgadget.FieldToBytesBEWith(api, rc, owner), ringgadget.FieldToBytesBEWith(api, rc, blinding)
 		plaintext = slices.Concat(plaintext, ownerBytes[:], blindingBytes[:], c.OwnerKeys[i][:])
+		deposits[i] = policy.DepositSlot{Owner: c.OwnerPkHashes[i], Asset: c.Assets[i], Amount: c.Amounts[i], Active: active}
 	}
-	// 7. The statement binds each commitment SPP receives to the ciphertext the auditor opens, the cipher bounds its bytes.
+	// 7. On a policy ring every deposited asset meets the asset rules under the bound root.
+	c.DepositAssets.Assert(api, rc, c.PolicyHash, c.MemberRegistryRoot, deposits)
+	// 8. The statement binds each commitment SPP receives to the ciphertext the auditor opens, the cipher bounds its bytes.
 	sealed := shared.Envelope{Plaintext: plaintext, EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: shared.DepositEncInfo}.Seal(api)
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain(api, c.statement(api, count, commitments, sealed)))
 	return nil
@@ -106,5 +121,13 @@ func (c *DepositCircuit) statement(api frontend.API, count ringgadget.Count, com
 	for i := len(commitments); i < MaxDeposits; i++ {
 		chain = append(chain, 0, 0)
 	}
-	return slices.Concat(chain, sealed.Auditor, sealed.Eph, []frontend.Variable{c.KeyEscrow, c.MemberRegistryRoot})
+	chain = slices.Concat(chain, sealed.Auditor, sealed.Eph, []frontend.Variable{c.KeyEscrow, c.MemberRegistryRoot, c.PolicyHash})
+	for i := range MaxDeposits {
+		if i < len(c.Assets) {
+			chain = append(chain, c.Assets[i], c.Amounts[i])
+		} else {
+			chain = append(chain, 0, 0)
+		}
+	}
+	return chain
 }

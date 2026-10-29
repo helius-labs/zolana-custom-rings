@@ -92,8 +92,8 @@
       "source": "release"
     },
     "custom_ring_deposit_1.key": {
-      "sha256": "10e13f59fe80e4072c4a0a80e16b44b78895a82918ff4a8e155c7bc0577dc0a8",
-      "size": 21695854,
+      "sha256": "ff690eece1a141805b42c24c1a2027ca5393a6c3a6d5bbcc1245c78c346d6586",
+      "size": 25044620,
       "source": "release"
     },
     "custom_ring_deposit_2.key": {

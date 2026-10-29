@@ -1,7 +1,8 @@
 use custom_ring_interface::{
-    key_catalog::RingCircuit, storage::Revision, tag, AuditedDepositPrefix, CustomRingError, CustomRingProof,
-    DepositContext, DepositPublicInput, RingDepositAuditCapsule, MAX_RING_DEPOSIT_AUDIT_SLOTS,
-    RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN, VIEWING_PUBKEY_TAG,
+    key_catalog::RingCircuit, storage::Revision, tag, AuditedDepositPrefix, CustomRingError,
+    CustomRingProof, DepositContext, DepositPublicInput, DepositRegistry, DepositedAsset,
+    RingDepositAuditCapsule, MAX_RING_DEPOSIT_AUDIT_SLOTS, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN,
+    TAGGED_X25519_KEY_LEN, VIEWING_PUBKEY_TAG,
 };
 use pinocchio::{Address, ProgramResult};
 use spr_interface::instruction::instruction_data::deposit::RingDepositIxDataRef;
@@ -37,7 +38,8 @@ pub(crate) struct DepositVerification<'a> {
     pub tree: &'a Address,
     pub auditor_pubkey: &'a [u8; TAGGED_X25519_KEY_LEN],
     pub anonymous: bool,
-    pub member_registry_root: Option<&'a [u8; 32]>,
+    pub registry: Option<DepositRegistry<'a>>,
+    pub assets: &'a [DepositedAsset],
     pub audited: &'a AuditedDeposit<'a>,
     pub deposit: &'a RingDepositIxDataRef<'a>,
 }
@@ -79,9 +81,10 @@ impl DepositVerification<'_> {
             anonymous: self.anonymous,
             owner_utxo_hashes: &owners[..count],
             ciphertexts: &ciphertexts[..count],
+            assets: self.assets,
             auditor_pk: self.auditor_pubkey,
             eph_pk: &eph_pk,
-            member_registry_root: self.member_registry_root,
+            registry: self.registry,
         }
         .hash()
         .map_err(CustomRingError::from)?;

@@ -1,7 +1,8 @@
 use custom_ring_interface::{
-    cosign::CoSignDemand, merge_ring_instruction_data, CoSignScope, CustomRingError,
-    CustomRingMergeIxDataRef, RingMode, RING_DEPOSIT_DEPOSITOR_INDEX,
-    RING_DEPOSIT_RING_CONFIG_INDEX, RING_MERGE_PAYER_INDEX, RING_MERGE_RING_CONFIG_INDEX,
+    cosign::CoSignDemand, merge_ring_instruction_data, ring_deposit_assets, CoSignScope,
+    CustomRingError, CustomRingMergeIxDataRef, DepositRegistry, RingMode,
+    RING_DEPOSIT_DEPOSITOR_INDEX, RING_DEPOSIT_RING_CONFIG_INDEX, RING_MERGE_PAYER_INDEX,
+    RING_MERGE_RING_CONFIG_INDEX,
 };
 use pinocchio::{
     error::ProgramError,
@@ -106,17 +107,27 @@ pub fn process_audited_deposit_ix(
     let mut iter = AccountIterator::new(accounts);
     let config = Box::new(*load_config(program_id, iter.next_account("config")?)?);
     let mode = config.mode()?;
-    // 2. Only a registry-mode ring binds its own root, its outputs escrow keys.
-    let registry_root = match mode {
-        RingMode::ConfidentialEscrow => Some(
-            load_policy(program_id, iter.next_account("policy")?)?
-                .own_root(audited.own_revision, Clock::get()?.slot)?,
-        ),
-        _ if audited.own_revision.value() != 0 => {
+    let key_escrow = mode == RingMode::ConfidentialEscrow;
+    // 2. An escrow or policy ring binds its own root, a policy ring also its policy.
+    let loaded = match key_escrow || config.has_policy() {
+        true => Some(load_policy(program_id, iter.next_account("policy")?)?),
+        false if audited.own_revision.value() != 0 => {
             return Err(CustomRingError::UnexpectedMemberRegistryRoot.into())
         }
-        _ => None,
+        false => None,
     };
+    let own_root = match &loaded {
+        Some(policy) => Some(policy.own_root(audited.own_revision, Clock::get()?.slot)?),
+        None => None,
+    };
+    let registry = loaded
+        .as_ref()
+        .zip(own_root.as_ref())
+        .map(|(policy, own_root)| DepositRegistry {
+            own_root,
+            key_escrow,
+            policy_hash: policy.written_policy_hash(),
+        });
     // 3. A co-signer scoped to deposits signs.
     let demand = CoSignDemand {
         approval_required: false,
@@ -147,16 +158,22 @@ pub fn process_audited_deposit_ix(
         RingAuth::derive(program_id)?.check_slot(spp_accounts, RING_DEPOSIT_RING_CONFIG_INDEX)?;
     check_funding_signer(spp_accounts, RING_DEPOSIT_DEPOSITOR_INDEX)?;
 
-    // 6. The proof binds the SPP data and target tree, the auditor opens every output.
+    // 6. The proof binds the SPP data, target tree and assets, the auditor opens every output.
     let tree = spp_accounts
         .first()
         .ok_or(ProgramError::NotEnoughAccountKeys)?;
+    let assets = ring_deposit_assets(&deposit, |index| {
+        spp_accounts
+            .get(index)
+            .map(|account| account.address().to_bytes())
+    })?;
     DepositVerification {
         program_id,
         tree: tree.address(),
         auditor_pubkey: &config.auditor_pubkey,
         anonymous,
-        member_registry_root: registry_root.as_ref(),
+        registry,
+        assets: &assets,
         audited: &audited,
         deposit: &deposit,
     }

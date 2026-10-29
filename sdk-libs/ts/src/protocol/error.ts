@@ -247,6 +247,8 @@ export const RingProgramError = Object.freeze({
   invalidRingPolicy: 8300,
   ringPolicyAlreadyExists: 8301,
   invalidAssetLimits: 8390,
+  depositMintAccountMissing: 8410,
+  depositAssetIndexUnknown: 8411,
 } as const);
 
 export type RingProgramErrorName = keyof typeof RingProgramError;

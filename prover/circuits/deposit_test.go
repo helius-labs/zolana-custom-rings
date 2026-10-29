@@ -11,6 +11,7 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringdeposit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringkey"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringpolicy"
 )
 
 func solveDeposit(c *circuits.DepositCircuit) error {
@@ -74,6 +75,15 @@ func TestDepositRefusals(t *testing.T) {
 			ringtest.RequireRefused(t, solveDeposit(d.Circuit), tt.frames...)
 		})
 	}
+}
+
+// A policy requiring the allow list admits a listed asset and refuses one off it.
+func TestDepositScreensEachAssetOnItsRecord(t *testing.T) {
+	if err := solveDeposit(ringdeposit.BuildScreened(t, 2, ringdeposit.Allowlisted(ringpolicy.AssetA)).Circuit); err != nil {
+		t.Fatalf("listed asset refused: %v", err)
+	}
+	unlisted := ringdeposit.BuildScreened(t, 2, ringdeposit.Allowlisted(ringpolicy.AssetB)).Circuit
+	ringtest.RequireRefused(t, solveDeposit(unlisted), "policy.paymentScreen.assert", "policy.DepositAssets.Assert")
 }
 
 func TestDepositKey(t *testing.T) {

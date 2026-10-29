@@ -421,15 +421,25 @@ mod tests {
             anonymous: false,
             owner_utxo_hashes: &owners,
             ciphertexts: &sealed.ciphertexts,
+            assets: &[
+                custom_ring_interface::DepositedAsset {
+                    asset: word(5),
+                    amount: 7,
+                },
+                custom_ring_interface::DepositedAsset {
+                    asset: word(6),
+                    amount: 8,
+                },
+            ],
             auditor_pk: auditor.pubkey().as_bytes(),
             eph_pk: sealed.ephemeral_pk.as_bytes(),
-            member_registry_root: None,
+            registry: None,
         }
         .hash()
         .unwrap();
         assert_eq!(
             hex::encode(public_hash),
-            "0313e323a3870bacb7042d78648a0d01d5f5b4ddfa56ee3024bcd26207ebe4f3"
+            "10e19c9868fa518ed2799983f62d30b1b6463c57bd721b93e0c60eec1f9e17e4"
         );
     }
 

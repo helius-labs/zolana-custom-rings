@@ -178,7 +178,7 @@ const _: () = assert!(CustomRingProof::SIZE == 192);
 pub struct AuditedDepositPrefix {
     pub tag: u8,
     pub proof: CustomRingProof,
-    /// Zero unless the ring escrows nullifier keys.
+    /// Zero off an escrow or policy ring.
     pub own_revision: Revision,
 }
 

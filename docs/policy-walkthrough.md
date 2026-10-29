@@ -77,23 +77,23 @@ Rules read only the authority lists: Allow, Block, Frozen, Reader and Approval. 
 
 ### Evaluation
 
-**Evaluation** applies each active rule to each of its subjects. All rules must pass. The lists within a rule join with logical **OR**: a rule holds when the subject is on one of its present lists or off one of its absent lists (`prover/circuits/policy/rules.go:83`).
+**Evaluation** applies each active rule to each of its subjects. All rules must pass. The lists within a rule join with logical **OR**: a rule holds when the subject is on one of its present lists or off one of its absent lists (`prover/circuits/policy/rules.go:101`).
 
-A **payment** is a live output or a withdrawal (`prover/circuits/policy/member.go:70`). The evaluation circuit computes three values per rule and payment (`prover/circuits/policy/rules.go:36`):
+A **payment** is a live output or a withdrawal (`prover/circuits/policy/member.go:70`). The evaluation circuit computes three values per rule and payment (`prover/circuits/policy/rules.go:55`):
 
 - **enabled**: the rule is active, it screens this kind of subject, and the payment is live. An owner rule also needs a nonzero owner.
 - **refused**: no list of the rule admits the subject.
 - **exempt**: the rule's amount guard covers the subject's payments.
 
-The proof requires `exempt` wherever `enabled` and `refused` are both set (`prover/circuits/policy/rules.go:44`). A sender rule has no guard, so the sender must never be refused (`prover/circuits/policy/rules.go:33`).
+The proof requires `exempt` wherever `enabled` and `refused` are both set (`prover/circuits/policy/rules.go:63`). A sender rule has no guard, so the sender must never be refused (`prover/circuits/policy/rules.go:24`).
 
-The guards (`program-libs/policy/src/rule_table/mod.rs:192`, `prover/circuits/policy/rules.go:22`):
+The guards (`program-libs/policy/src/rule_table/mod.rs:192`, `prover/circuits/policy/rules.go:43`):
 
 - `Always`: no exemption.
 - `AboveAmount(t)`: an owner subject is exempt when its live payments sum to at most `t`, and every payment of the transfer then carries one asset. An asset subject is exempt when the payments of that asset sum to at most `t`.
-- `AboveAmountByAsset`: output-owner rules only. The bound is the `threshold` of the payment asset's own record. An owner is exempt when its payments in the payment's asset sum to at most that threshold. A payment in a mint with a zero threshold fails the proof (`prover/circuits/policy/rules.go:39`).
+- `AboveAmountByAsset`: output-owner rules only. The bound is the `threshold` of the payment asset's own record. An owner is exempt when its payments in the payment's asset sum to at most that threshold. A payment in a mint with a zero threshold fails the proof (`prover/circuits/policy/rules.go:58`).
 
-Comparisons are inclusive. A deposit is no payment, so it never counts toward a guard total (`prover/circuits/policy/rules.go:59`).
+Comparisons are inclusive. A deposit is no payment, so it never counts toward a guard total (`prover/circuits/policy/rules.go:77`).
 
 ### Opening
 
@@ -118,7 +118,7 @@ The policy circuit proves no separate fact per list. Each subject resolves **one
 
 The proving key's output and withdrawal slot counts fix the entries. The sender takes one, each output and withdrawal slot an owner and an asset entry, and each public asset slot an own-registry entry (`prover/circuits/policy/policy.go:69`). The same counts fix each pool's capacity (`prover/circuits/policy/pooled_policy.go:61`). An asset entry resolves for every live payment, whatever the rules, because it carries the asset's mint settings (`prover/circuits/policy/subjects.go:47`). A public asset entry opens each nonzero public asset for the outflow bound (`prover/circuits/policy/outflow.go:45`).
 
-Each rule, see `prover/circuits/policy/rules.go:31`, selects a subject: sender, output owner, or asset.
+Each rule, see `prover/circuits/policy/rules.go:22`, selects a subject: sender, output owner, or asset.
 
 ### Masks and alternatives
 
@@ -202,10 +202,10 @@ Alice's curator record answers Block. Approval cannot override Frozen because bo
 The circuit binds three things (`prover/circuits/policy/member.go:56`):
 
 1. **Subjects to the transaction**: outputs reopen `private_tx_hash`, SPP's blinded hash over the spent note hashes and the output hashes, which the SPP proof binds (`prover/circuits/policy/transaction.go:45`). Withdrawals hash to `withdrawal_hash`, which the program rebuilds from the settlement accounts (`prover/circuits/policy/withdrawals.go:35`, `programs/custom-ring/src/instructions/transact/verify.rs:66`). The sender is the statement's `sender`, which the program supplies: the sole owner signer identity, or on the anonymous rail the sender commitment the circuit opens to the hidden sender (`programs/custom-ring/src/instructions/transact/accounts.rs:118`, `prover/circuits/policy/member.go:84`). On the delegate rail the circuit takes it from the reopened inputs (`prover/circuits/policy/delegate.go:75`).
-2. **Rules to the ring**: the table and the source map hash to the `policy_hash` the program reads from the registry (`prover/circuits/policy/table.go:58`, `program-libs/interface/src/instructions/transact.rs:832`).
+2. **Rules to the ring**: the table and the source map hash to the `policy_hash` the program reads from the registry (`prover/circuits/policy/table.go:60`, `program-libs/interface/src/instructions/transact.rs:832`).
 3. **Openings to the registries**: every pool folds to `own_root` or `curator_root`, which the program reads by index (`program-libs/interface/src/instructions/transact.rs:833`, `programs/custom-ring/src/instructions/transact/accounts.rs:266`).
 
-It then requires every enabled rule to pass and every outflow limit to hold. The program validates the table at write time, and the circuit trusts that validation (`program-libs/interface/src/accounts/state.rs:425`, `prover/circuits/policy/table.go:55`). The program then verifies the proof and only then CPIs SPP (`programs/custom-ring/src/instructions/transact/processor.rs:58`). [Transact](spec.md#20-transact)
+It then requires every enabled rule to pass and every outflow limit to hold. The program validates the table at write time, and the circuit trusts that validation (`program-libs/interface/src/accounts/state.rs:425`, `prover/circuits/policy/table.go:57`). The program then verifies the proof and only then CPIs SPP (`programs/custom-ring/src/instructions/transact/processor.rs:58`). [Transact](spec.md#20-transact)
 
 <aside>
 
@@ -234,7 +234,7 @@ GRACE_SLOTS = 750
 4. **Record pool**: `prover/circuits/policy/record_pool.go:39`
     - Understand why a statement such as "Alice is not blocked" must be proven from the record tree. One pool per registry serves every subject, and `prover/circuits/registry/shared_path.go:46` folds the pool to the root.
 5. **Rule evaluation**: `prover/circuits/policy/rules.go:16`
-    - See how `enabled`, `refused` and `exempt` combine per payment, with the row split in `prover/circuits/policy/table.go:111` and the list bits in `prover/circuits/policy/subjects.go:38`. Every rule must pass.
+    - See how `enabled`, `refused` and `exempt` combine per payment, with the row split in `prover/circuits/policy/table.go:118` and the list bits in `prover/circuits/policy/subjects.go:38`. Every rule must pass.
 6. **Outflow limits**: `prover/circuits/policy/outflow.go:18`
     - The bound runs once for each live output's asset and each nonzero public asset, with the `cap` and `cosign_above` of that asset's own record. `others` sums the asset over live outputs, except ring outputs to the sender. `net` is the asset's signed public net, a deposit positive and a withdrawal negative. See how `outflow = others - net` is bounded and how `approval_required` is set, the bit that makes the program demand the co-signer.
 7. **On-chain verification**: `programs/custom-ring/src/instructions/transact/verify.rs:54`
@@ -246,7 +246,7 @@ GRACE_SLOTS = 750
 
 **"Rules screen input owners and input amounts."** No. The sender is one identity per transfer, and the policy proof of the confidential and anonymous rails does not open the inputs. The delegate key alone reopens inputs, and only to prove they share one source member (`prover/circuits/policy/delegate.go:75`).
 
-**"A guard sums outputs plus public amounts."** No. A guard sums live outputs and withdrawals, by owner, by asset, or by owner and asset. Deposits never count (`prover/circuits/policy/rules.go:59`, `prover/circuits/policy/member.go:70`). Public nets enter only the outflow limit (`prover/circuits/policy/outflow.go:31`).
+**"A guard sums outputs plus public amounts."** No. A guard sums live outputs and withdrawals, by owner, by asset, or by owner and asset. Deposits never count (`prover/circuits/policy/rules.go:77`, `prover/circuits/policy/member.go:70`). Public nets enter only the outflow limit (`prover/circuits/policy/outflow.go:31`).
 
 **"The table lists the limited mints."** No. The table holds rules only. Each asset's own record holds its threshold, cap and co-sign bound, and the proof resolves the record of every payment asset and every public asset (`prover/circuits/policy/subjects.go:47`, `prover/circuits/policy/outflow.go:45`). A mint without settings opens as absent and reads zeros.
 

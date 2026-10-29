@@ -231,6 +231,13 @@ export interface DepositProofRequest {
   readonly auditorPk: Bytes32;
   readonly keyEscrow: boolean;
   readonly memberRegistryRoot: Bytes32;
+  readonly policyHash: Bytes32;
+  /** SPP's asset field of each deposit's group. */
+  readonly assets: readonly Bytes32[];
+  readonly amounts: readonly Bytes32[];
+  /** Absent without a written policy, `assetRecords` then opens nothing. */
+  readonly table?: PolicyTableProofInputs;
+  readonly assetRecords: readonly (RecordOpening | undefined)[];
 }
 
 /** Go `MergeParams`. */
@@ -445,6 +452,15 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
         auditorPk: hexBytes(request.auditorPk, 32, "auditorPk"),
         keyEscrow: flag(request.keyEscrow),
         memberRegistryRoot: field(request.memberRegistryRoot, "memberRegistryRoot"),
+        policyHash: field(request.policyHash, "policyHash"),
+        assets: fields(request.assets, depositCapacity(request.count), "assets"),
+        amounts: fields(request.amounts, depositCapacity(request.count), "amounts"),
+        ...(request.table === undefined ? {} : { table: tableJson(request.table) }),
+        assetRecords: sized(
+          request.assetRecords,
+          depositCapacity(request.count),
+          "assetRecords",
+        ).map((opening, i) => memberOpeningJson(opening, `assetRecords[${i}]`)),
       };
     case "merge":
       return {
@@ -574,12 +590,7 @@ function policyJson(policy: PolicyProofInputs, circuit: PolicyKeyCircuit): Json 
     curatorRoot: field(policy.curatorRoot, "curatorRoot"),
     publicAssets: fields(policy.publicAssets, N_PUBLIC_SLOTS, "publicAssets"),
     publicAmounts: fields(policy.publicAmounts, N_PUBLIC_SLOTS, "publicAmounts"),
-    sources: sized(policy.sources, RING_SOURCE_SLOTS, "sources").map((source, i) => ({
-      listId: integer(source.listId, `sources[${i}].listId`, 0, U8_MAX),
-      registry: field(source.registry, `sources[${i}].registry`),
-    })),
-    policyLen: integer(policy.policyLen, "policyLen", 0, RING_RULE_SLOTS),
-    rules: fields(policy.rules, RING_RULE_SLOTS, "rules"),
+    ...tableJson(policy),
     addressChain: field(policy.addressChain, "addressChain"),
     privateTxBlinding: field(policy.privateTxBlinding, "privateTxBlinding"),
     outputs: policy.outputs.map((output, i) => ({
@@ -608,6 +619,17 @@ function policyJson(policy: PolicyProofInputs, circuit: PolicyKeyCircuit): Json 
       circuit.family === "memberPolicy" ? N_PUBLIC_SLOTS : 0,
       "publicAssetEntries",
     ).map((index, i) => integer(index, `publicAssetEntries[${i}]`, 0, capacity.own - 1)),
+  };
+}
+
+function tableJson(table: PolicyTableProofInputs): Json {
+  return {
+    sources: sized(table.sources, RING_SOURCE_SLOTS, "sources").map((source, i) => ({
+      listId: integer(source.listId, `sources[${i}].listId`, 0, U8_MAX),
+      registry: field(source.registry, `sources[${i}].registry`),
+    })),
+    policyLen: integer(table.policyLen, "policyLen", 0, RING_RULE_SLOTS),
+    rules: fields(table.rules, RING_RULE_SLOTS, "rules"),
   };
 }
 

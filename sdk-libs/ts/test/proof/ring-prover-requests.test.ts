@@ -13,6 +13,7 @@ import {
   type DeliveredSlotProofInputs,
   type PolicyProofInputs,
   type PolicySubjectEntry,
+  type PolicyTableProofInputs,
   type RingProofRequest,
   type RingSlotOpening,
 } from "../../src/rpc/prover/ring.js";
@@ -212,6 +213,17 @@ function memberOpening(value: unknown, member: Bytes32): RecordOpening | undefin
   };
 }
 
+function table(item: Json): PolicyTableProofInputs {
+  return {
+    sources: list(item["sources"]).map((value) => {
+      const source = record(value);
+      return { listId: count(source["listId"]), registry: field(source["registry"]) };
+    }),
+    policyLen: count(item["policyLen"]),
+    rules: fields(item["rules"]),
+  };
+}
+
 function entry(value: unknown): PolicySubjectEntry {
   const item = record(value);
   const [curator, ...rest] = list(item["curator"]);
@@ -320,12 +332,7 @@ function policy(item: Json): PolicyProofInputs {
     curatorRoot: field(item["curatorRoot"]),
     publicAssets: fields(item["publicAssets"]),
     publicAmounts: fields(item["publicAmounts"]),
-    sources: list(item["sources"]).map((value) => {
-      const source = record(value);
-      return { listId: count(source["listId"]), registry: field(source["registry"]) };
-    }),
-    policyLen: count(item["policyLen"]),
-    rules: fields(item["rules"]),
+    ...table(item),
     publicAssetEntries: list(item["publicAssetEntries"]).map(count),
     addressChain: field(item["addressChain"]),
     privateTxBlinding: field(item["privateTxBlinding"]),
@@ -474,6 +481,13 @@ function request(item: Json): RingProofRequest {
       auditorPk: bytes<Bytes32>(item["auditorPk"], 32),
       keyEscrow: flag(item["keyEscrow"]),
       memberRegistryRoot: field(item["memberRegistryRoot"]),
+      policyHash: field(item["policyHash"]),
+      assets: fields(item["assets"]),
+      amounts: fields(item["amounts"]),
+      ...(item["table"] === undefined ? {} : { table: table(record(item["table"])) }),
+      assetRecords: list(item["assetRecords"]).map((opening, i) =>
+        memberOpening(opening, fields(item["assets"])[i] ?? ZERO),
+      ),
     };
   }
   if (circuitType.startsWith("custom-ring-merge-v3-")) {

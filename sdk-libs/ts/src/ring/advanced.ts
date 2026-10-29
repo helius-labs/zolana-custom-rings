@@ -164,7 +164,7 @@ export type {
   RegisterKeyStatement,
 } from "../protocol/proof/statement.js";
 export { depositStatementElements } from "../proof/deposit-audit.js";
-export type { DepositStatement } from "../proof/deposit-audit.js";
+export type { DepositedAsset, DepositRegistry, DepositStatement } from "../proof/deposit-audit.js";
 export type { EncodedRuleTable } from "../protocol/codec/ring-codecs.js";
 
 export {

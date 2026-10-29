@@ -533,6 +533,7 @@ impl RingOperation<'_> {
                     InstructionTag::AuditedDeposit,
                     BoundState {
                         roots: proven.root.into_iter().collect(),
+                        policy: proven.policy,
                         ..BoundState::default()
                     },
                 )

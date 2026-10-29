@@ -493,9 +493,17 @@ describe("ring-statements.json", () => {
       anonymous: deposit.anonymous,
       ownerUtxoHashes: deposit.owner_utxo_hashes.map(field),
       ciphertexts: deposit.ciphertexts.map((value) => bytes<Bytes96>(value, 96)),
+      assets: deposit.assets.map((asset, slot) => ({
+        asset: field(asset),
+        amount: BigInt(deposit.amounts[slot] ?? 0),
+      })),
       auditorPk: bytes<Bytes33>(deposit.auditor_pubkey, 33),
       ephPk: bytes<Bytes33>(deposit.eph_pk, 33),
-      memberRegistryRoot: field(deposit.member_registry_root),
+      registry: {
+        ownRoot: field(deposit.member_registry_root),
+        keyEscrow: deposit.key_escrow,
+        policyHash: field(deposit.policy_hash),
+      },
     });
     expect(hexes(elements)).toEqual(deposit.elements);
     expect(hex(hashChain(elements))).toBe(deposit.public_input_hash);

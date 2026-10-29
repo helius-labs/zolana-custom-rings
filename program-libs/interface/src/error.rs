@@ -159,6 +159,8 @@ ring_errors! {
     MirrorNotSynced = 8305 => "the root mirror holds no roots of the registry the policy names",
     MirrorRootExpired = 8306 => "the revision names no unexpired root of the mirror",
     InvalidAssetLimits = 8390 => "a window cap and its window are not set together",
+    DepositMintAccountMissing = 8410 => "an spl deposit group has no mint account",
+    DepositAssetIndexUnknown = 8411 => "a deposit entry names no asset group",
 }
 
 impl From<CustomRingError> for ProgramError {

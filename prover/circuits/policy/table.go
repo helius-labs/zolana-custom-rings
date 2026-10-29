@@ -47,6 +47,7 @@ type ruleFields struct {
 	admitWeight                [NSources]frontend.Variable
 	onOwner, onAsset, onSender frontend.Variable
 	scalarGuard, assetGuard    frontend.Variable
+	listBits, altBits          []frontend.Variable
 }
 
 // ruleParts mirrors Row in program-libs/policy/src/rule_table/mod.rs, read from the low byte of the big-endian field.
@@ -54,16 +55,21 @@ var ruleParts = [...]struct{ shift, width uint }{{0, 8}, {8, 8}, {16, 8}, {24, 8
 
 // decode binds the table to policy_hash, the program validated it at write time (EncodedRuleTable::validate).
 func (t Table) decode(api frontend.API, rc frontend.Rangechecker, policyHash frontend.Variable) tableView {
-	// 1. The rules read the table the program hashed at its last policy write.
+	// The rules read the table the program hashed at its last policy write.
 	api.AssertIsEqual(policyHash, t.hash(api))
-	// 2. Each count selects its active rows, a count past its capacity selects none and fails.
+	return t.view(api, rc)
+}
+
+// view decodes the table, the caller binds it to policy_hash.
+func (t Table) view(api frontend.API, rc frontend.Rangechecker) tableView {
+	// 1. Each count selects its active rows, a count past its capacity selects none and fails.
 	d := tableView{
 		ruleActive:  ringgadget.SelectCount(api, t.PolicyLen, 0, NRules+1).Active,
 		sources:     t.readSources(api),
 		assetRules:  0,
 		scalarOwner: 0,
 	}
-	// 3. Every rule decodes once, the flags later steps gate on fold over the active rules.
+	// 2. Every rule decodes once, the flags later steps gate on fold over the active rules.
 	for i, packed := range t.Rules {
 		rule := decodeRule(api, rc, packed)
 		d.rules[i] = rule
@@ -136,6 +142,8 @@ func decodeRule(api frontend.API, rc frontend.Rangechecker, packed frontend.Vari
 		onSender:    is(subject, SubjectSender),
 		scalarGuard: is(guard, GuardAboveAmount),
 		assetGuard:  is(guard, GuardAboveAmountByAsset),
+		listBits:    listBits,
+		altBits:     altBits,
 	}
 	// 5. A list of a present mask admits a subject on it, a list of an absent or the alternative mask a subject off it.
 	present := is(mode, ModePresent)

@@ -124,6 +124,8 @@ pinned_codes! {
     MirrorNotSynced = 8305,
     MirrorRootExpired = 8306,
     InvalidAssetLimits = 8390,
+    DepositMintAccountMissing = 8410,
+    DepositAssetIndexUnknown = 8411,
 }
 
 #[test]
