@@ -12,7 +12,7 @@ use spr_program::instruction::DepositBuildError;
 use spr_transaction::TransactionError;
 use spr_tree::TreeError;
 use thiserror::Error;
-use zolana_ring_client::{AnonymousError, RingIndexerError, RingRpcError};
+use zolana_ring_client::{rpc::RecordUpdateError, AnonymousError, RingIndexerError, RingRpcError};
 use zolana_ring_keys::RingKeyError;
 use zolana_ring_member_registry::RecordTreeError;
 use zolana_ring_policy::{
@@ -103,6 +103,14 @@ pub enum RingError {
     DuplicateListWrite { member: Member },
     #[error("the write changes no list")]
     EmptyListWrite,
+    #[error(transparent)]
+    RecordUpdate(#[from] RecordUpdateError),
+    #[error("the record update needs the signature of {expected}")]
+    RecordUpdateSigner { expected: Address },
+    #[error("the escrow registration names another member")]
+    EscrowMemberMismatch,
+    #[error("ring rpc answered another update id")]
+    RecordUpdateIdMismatch,
     #[error("the {writer:?} writer may not write the list {list:?}")]
     ListNotWritable { list: ListId, writer: Writer },
     #[error("{writes} authority writes take {batches} batches beside {pending} pending, prove each batch after the one before lands")]

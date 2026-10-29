@@ -75,10 +75,13 @@ pub use crate::{
         Rail, RailKind, RingPayment, RingSender, RingTransfer,
     },
     records::{
-        AuthorityListWrite, MemberListWrite, MemberRecords, ProvenRecordWrite, RecordApplication,
+        AuthorityListWrite, AuthorityRecordUpdate, MemberListWrite, MemberRecords,
+        ProvenRecordWrite, RecordApplication, RecordUpdateService, RecordUpdateTarget,
+        WalletRecordUpdate,
     },
     register_key::{
-        EscrowedRecipients, KeyEscrowAuthority, ProvenKeyRegistration, RegisterKey, SealedEscrow,
+        EscrowedRecipients, KeyEscrowAuthority, KeyRegistration, ProvenKeyRegistration,
+        RegisterKey, SealedEscrow,
     },
     select::{select_merge_where, select_spend_where},
     storage::{InitializeStorage, SyncRoots, UpdateStorage, UpdateStorageAuthority},
