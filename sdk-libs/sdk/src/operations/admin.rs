@@ -90,7 +90,7 @@ pub struct SetCoSigner {
     pub scope: CoSignScope,
 }
 
-/// Runs under the upgrade authority, the delegate signs and is permanent.
+/// The delegate signs and is permanent.
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SetDelegate {
@@ -227,13 +227,11 @@ impl SetCoSigner {
 impl SetDelegate {
     pub fn instruction(self) -> Instruction {
         let ring = self.ring;
-        let mut accounts = vec![
-            AccountMeta::new_readonly(self.authority, true),
-            AccountMeta::new(ring.config_pda(), false),
+        let mut accounts = ring.config_write_metas(self.authority);
+        accounts.extend([
             AccountMeta::new_readonly(self.delegate, true),
             AccountMeta::new_readonly(ring.registry_pda(), false),
-        ];
-        accounts.extend(ring.upgrade_metas());
+        ]);
         ring.ix(accounts, vec![tag::SET_DELEGATE])
     }
 }

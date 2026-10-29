@@ -240,8 +240,8 @@ fails.
 Co-signing is a program check. Delegation and the outflow limits live in the
 ring statements, the delegate rail under its own keys.
 
-**Actors.** The upgrade authority creates the config and sets the delegate. The
-config authority writes the policy and the authority lists and re-points
+**Actors.** The upgrade authority creates the config. The config authority sets
+the delegate, writes the policy and the authority lists and re-points
 sources. It grants and revokes readers, sets the co-signer and the insert fee
 and pauses the ring. A member writes its own `RingViewing` and `Recovery` bits
 and registers its key. The auditor holds the X25519 key fixed at `CreateConfig`
@@ -263,7 +263,7 @@ hide behind a small deposit. The proof-bound approval bit demands the same
 signer whatever the scope. A transfer refuses a co-signer that is one of its
 owner signers or its delegate.
 
-**Delegation** exposes the SPP authority rail behind a delegate. The upgrade
+**Delegation** exposes the SPP authority rail behind a delegate. The config
 authority and the delegate both sign `SetDelegate`, once, and no instruction
 replaces it. `SetDelegate` needs a policy ring with a member registry and
 refuses an anonymous ring, which hides the owner a delegate would sign for. A

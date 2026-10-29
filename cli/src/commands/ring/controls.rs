@@ -14,9 +14,7 @@ use spr_keypair::X25519Keypair;
 
 use crate::{
     config::{Base58Address, CoSignClass, CoSignerSpec},
-    file,
-    fund::MIN_AUTHORITY_BALANCE,
-    keys, line, policy,
+    file, keys, line, policy,
     records::NO_MEMBER_REGISTRY,
     ui::{self, icon},
     CoSignerCommand, Context, DelegateCommand, InsertFeeCommand, ReaderCommand, AUDITOR_KEY_FILE,
@@ -238,14 +236,13 @@ pub fn delegate(ctx: &Context, command: DelegateCommand) -> Result<()> {
             ring_auditor_key(ctx, Path::new(AUDITOR_KEY_FILE))?;
             ctx.block(ctx.ring.registry(ctx.chain()))?
                 .context(NO_MEMBER_REGISTRY)?;
-            let authority = ctx.config.upgrade_authority()?;
-            ctx.fund(authority.pubkey(), MIN_AUTHORITY_BALANCE)?;
+            let authority = ctx.funded_authority()?;
             let set = SetDelegate {
                 ring: ctx.ring,
                 authority: authority.pubkey(),
                 delegate: delegate.pubkey(),
             };
-            ctx.send(&[&authority, &delegate], &[set.instruction()])?;
+            ctx.send(&[authority, &delegate], &[set.instruction()])?;
             line("delegate", format_args!("{} set", delegate.pubkey()));
             ui::warn("every later transfer escrows its output keys");
         }

@@ -1,6 +1,6 @@
 # Custom rings
 
-A custom ring is a Solana program that governs its notes in the zolana shielded pool (SPP). SPP moves a ring note only under the ring program's `ring_auth` signature. The ring program signs after it verifies an audit proof of the move. On a policy ring it also verifies a policy proof over the rule table and the member registry. Owners fund the ring by audited deposits and pay each other inside it. They leave it by an exit to the default ring or by a public withdrawal, while SPP has the ring activated and not paused. Owners keep their spending keys and sign every transfer, except a delegate move on a `ConfidentialEscrow` ring. The upgrade authority deploys and creates the ring, and an upgrade can replace every check. The config authority sets the policy, the lists and the controls. The auditor reads every transfer. An optional co-signer approves the operations its scope or an outflow limit names. A `Confidential` or `ConfidentialEscrow` ring is confidential. Amounts, assets and blindings are private, but the sender and the recipient's viewing key are public. An `Anonymous` ring also hides the sender and the recipient from chain observers. That holds only under the conditions of [Anonymity breaks when its conditions fail](#anonymity-breaks-when-its-conditions-fail). The first three are that the payer does not link to the sender, the transfer spends no default-ring note, and no exit or withdrawal pays a key linked to the sender.
+A custom ring is a Solana program that governs its notes in the zolana shielded pool (SPP). SPP moves a ring note only under the ring program's `ring_auth` signature. The ring program signs after it verifies an audit proof of the move. On a policy ring it also verifies a policy proof over the rule table and the member registry. Owners fund the ring by audited deposits and pay each other inside it. They leave it by an exit to the default ring or by a public withdrawal, while SPP has the ring activated and not paused. Owners keep their spending keys and sign every transfer, except a delegate move on a `ConfidentialEscrow` ring. The upgrade authority deploys and creates the ring, and an upgrade can replace every check. The config authority sets the policy, the lists, the controls and the delegate. The auditor reads every transfer. An optional co-signer approves the operations its scope or an outflow limit names. A `Confidential` or `ConfidentialEscrow` ring is confidential. Amounts, assets and blindings are private, but the sender and the recipient's viewing key are public. An `Anonymous` ring also hides the sender and the recipient from chain observers. That holds only under the conditions of [Anonymity breaks when its conditions fail](#anonymity-breaks-when-its-conditions-fail). The first three are that the payer does not link to the sender, the transfer spends no default-ring note, and no exit or withdrawal pays a key linked to the sender.
 
 ## Glossary
 
@@ -51,8 +51,8 @@ A custom ring is a Solana program that governs its notes in the zolana shielded 
 | Ring address | Payment address | The recipient's shielded address and the ring program id, shared off chain. A `zolana:` payment request adds a request view tag. |
 | View tag | 32 bytes | The owner tag of an anonymous ring output, a zolana [view tag](../zolana/docs/spec.md#view-tags) or a random tag on a dummy. No proof derives it. |
 | First payment | Ring output | A payment to a recipient the sender holds no shared tags with. It takes the recipient's request tag or bootstrap tag, as the caller chooses. |
-| Upgrade authority | Key | The Loader v3 upgrade authority of the ring program. Signs `CreateConfig` and `SetDelegate`. |
-| Config authority | Key | `RingProgramConfig.authority`. Sets the policy, authority lists, mint settings, readers, co-signer, insert fee and pause. Receives the insert fee. |
+| Upgrade authority | Key | The Loader v3 upgrade authority of the ring program. Signs `CreateConfig`. |
+| Config authority | Key | `RingProgramConfig.authority`. Sets the policy, authority lists, mint settings, readers, co-signer, insert fee, pause and delegate. Receives the insert fee. |
 | Owner | Wallet (client) | Holds ring notes and their spending keys. Writes its member lists and registers its nullifier key. The sender of a transfer is its owner. |
 | Payer | Key | SPP account `0`. Pays rent and fees. On the anonymous rail it is the only SPP signer. A relayer can be the payer. |
 | Funder | Key | Signs a deposit leg or an `AuditedDeposit` and pays its tokens. |
@@ -78,7 +78,7 @@ A custom ring is a Solana program that governs its notes in the zolana shielded 
 5. **Transfer.** The sender proves the SPP proof, the audit proof and on a policy ring the policy proof, and submits `Transact`. The program rebuilds both ring statements, verifies the proofs and invokes SPP as `ring_auth`. On a confidential ring the owner signs the transaction. On an anonymous ring the hidden owner signs inside the SPP proof and only the payer signs the transaction.
 6. **Leave.** A transfer pays an exit or withdraws a public leg. The rules screen exit owners and withdrawal owners as output owners. A delegate move can do neither.
 7. **Merge.** On an anonymous ring an owner merges up to 24 notes of one asset into one note with `Merge`, with a disclosure proof to the auditor. The merge proves the owner's nullifier secret and carries no owner signature. A merge on a confidential ring fails.
-8. **Delegate.** The upgrade authority and the delegate sign `SetDelegate` on a confidential policy ring, which sets the mode to `ConfidentialEscrow`. SPP governance enables the ring's authority rail. The auditor opens an escrowed member's nullifier secret for the delegate, and the delegate moves that member's notes to escrowed members with `DelegateTransact`.
+8. **Delegate.** The config authority and the delegate sign `SetDelegate` on a confidential policy ring, which sets the mode to `ConfidentialEscrow`. SPP governance enables the ring's authority rail. The auditor opens an escrowed member's nullifier secret for the delegate, and the delegate moves that member's notes to escrowed members with `DelegateTransact`.
 9. **Audit.** The auditor opens every transfer, deposit and merge from its auditor message. The config authority grants readers with `GrantReadAccess`, and Ring RPC serves them the openings. A revoked reader keeps what it already read.
 10. **Govern.** The config authority repins the policy, writes mint settings, sets the co-signer, the insert fee and the pause, and hands the config to a new authority. A repin refuses every proof over the old table. A floor raise refuses every proof under an older own root, and the sender proves again. A repin and a mint-setting write are separate instructions, so a transfer between them proves under the new table and the old settings.
 
@@ -432,7 +432,7 @@ Only `AuthorityWriteRecords` writes mint settings. One write replaces all four v
 | 11 | `SetCoSigner` | `27` | Sets the co-signer and its scope. | Config authority signs |
 | 12 | `ClearCoSigner` | `21` | Removes the co-signer. | Config authority signs |
 | 13 | `SetInsertFee` | `42` | Sets the insert fee. | Config authority signs |
-| 14 | `SetDelegate` | `24` | Sets the delegate and turns the ring to `ConfidentialEscrow`. | Upgrade authority and delegate sign |
+| 14 | `SetDelegate` | `24` | Sets the delegate and turns the ring to `ConfidentialEscrow`. | Config authority and delegate sign |
 | | **Records** | | | |
 | 15 | `WriteRecords` | `39` | Queues a write of the signer's member lists. | Owner signs |
 | 16 | `RegisterKey` | `29` | Queues the signer's escrow key, proven sealed to the auditor. | Owner signs |
@@ -717,18 +717,16 @@ Tag `24`. Sets the delegate and the `ConfidentialEscrow` mode on a confidential 
 
 **Accounts**
 
-1. `authority`: the upgrade authority. Signer.
+1. `authority`: the config authority. Signer.
 2. `config`: writable.
 3. `delegate`: signer.
 4. `registry`.
-5. `program`.
-6. `program_data`.
 
 **Instruction data**
 
 Empty.
 
-The program checks, in order, the upgrade authority, that no delegate exists (`DelegateAlreadySet`), that the ring is not anonymous (`AnonymousRingRefused`), the policy tier (`DelegateRequiresPolicy`), and that the registry loads (`InvalidMemberRegistry`). It writes `delegate` and `mode = ConfidentialEscrow`.
+The program checks, in order, the config authority, that no delegate exists (`DelegateAlreadySet`), that the ring is not anonymous (`AnonymousRingRefused`), the policy tier (`DelegateRequiresPolicy`), and that the registry loads (`InvalidMemberRegistry`). It writes `delegate` and `mode = ConfidentialEscrow`.
 
 From this point every transfer sets the key escrow layout bit, and every deposited note and every transfer output, exits included, needs an owner whose record escrows the note's nullifier key. SPP governance must also enable the ring's authority rail before `DelegateTransact` runs.
 
