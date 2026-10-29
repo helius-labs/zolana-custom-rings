@@ -76,7 +76,7 @@ type TaggedRecipient = Readonly<{
 }>;
 
 export type RingDepositClient = DepositClient &
-  Pick<RingRecordReader, "getRingMemberRecord"> &
+  Pick<RingRecordReader, "getStorageMemberOpenings"> &
   RingProver;
 
 export interface RingDepositParams {
@@ -99,7 +99,7 @@ export interface RingDepositParams {
 /** A proven deposit with the registry root its proof binds. */
 export interface ProvenRingDeposit {
   readonly instruction: Instruction;
-  /** The registry root an escrowing ring's proof binds by history slot. */
+  /** The own root an escrowing ring's proof binds by revision. */
   readonly roots?: readonly BoundRoot[];
 }
 
@@ -242,7 +242,7 @@ export class PreparedRingDeposit {
           ownerCommitments: [commitment],
           capsules: [this.#capsule],
           auditorPublicKey: this.#auditor,
-          ...(escrow === undefined ? {} : { memberRegistryRoot: escrow.root }),
+          ...(escrow === undefined ? {} : { memberRegistryRoot: escrow.root.root }),
         }),
         contextHash: this.#contextHash,
         count: 1,
@@ -256,7 +256,7 @@ export class PreparedRingDeposit {
         ephSk: this.#ephemeralSecret,
         auditorPk: this.#auditor.u(),
         keyEscrow: escrow !== undefined,
-        memberRegistryRoot: escrow?.root ?? ZERO_32,
+        memberRegistryRoot: escrow?.root.root ?? ZERO_32,
       };
       const proof = await client.proveRing(request, context);
       return Object.freeze({
@@ -266,20 +266,10 @@ export class PreparedRingDeposit {
           depositor: this.#depositor,
           deposits: [this.#deposit],
           proof,
-          ...(escrow === undefined ? {} : { registryRootIndex: escrow.index }),
+          ...(escrow === undefined ? {} : { ownRevision: escrow.root.revision }),
           ...(this.#cosigner === undefined ? {} : { cosigner: this.#cosigner }),
         }),
-        ...(escrow === undefined
-          ? {}
-          : {
-              roots: Object.freeze([
-                Object.freeze({
-                  ringProgramId: this.#ringProgramId,
-                  rootIndex: escrow.index,
-                  root: escrow.root,
-                }),
-              ]),
-            }),
+        ...(escrow === undefined ? {} : { roots: Object.freeze([escrow.root]) }),
       });
     } catch (cause) {
       throw wrapRingError("RING_BUILD_DEPOSIT", cause);

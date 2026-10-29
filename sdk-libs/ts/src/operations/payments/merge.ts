@@ -57,11 +57,7 @@ import {
 } from "@heliuslabs/zolana/transaction";
 import type { PreparedMerge, Wallet } from "@heliuslabs/zolana/transaction";
 import type { RingMergeClient, RingSecretProver } from "../../rpc/ports.js";
-import {
-  ringAuthAddress,
-  ringConfigAddress,
-  ringMemberRegistryAddress,
-} from "../../protocol/pda/index.js";
+import { ringAuthAddress, ringConfigAddress, ringPolicyAddress } from "../../protocol/pda/index.js";
 
 import { checkSignersHideOwner } from "./anonymous.js";
 import { fetchRingProgramConfig } from "../../protocol/membership/config.js";
@@ -131,8 +127,8 @@ export function createRingMergeSubmission(
 }
 
 /**
- * `MERGE ‖ registry_root_index ‖ output_ring_data_hash ‖ disclosure? ‖ body` with the body's
- * `proof.b` compressed, the accounts `[config, registry?, co_signer?]` ahead of SPP's merge list.
+ * `MERGE ‖ own_revision ‖ output_ring_data_hash ‖ disclosure? ‖ body` with the body's
+ * `proof.b` compressed, the accounts `[config, policy?, co_signer?]` ahead of SPP's merge list.
  */
 export async function ringMergeInstruction(
   input: Readonly<{
@@ -146,14 +142,14 @@ export async function ringMergeInstruction(
     cosigner?: SignerAccount;
   }> &
     (
-      | Readonly<{ registryRootIndex: number; disclosure?: undefined }>
-      /** An anonymous ring reads no registry, its disclosure proves the owner instead. */
-      | Readonly<{ disclosure: RingMergeDisclosure; registryRootIndex?: undefined }>
+      | Readonly<{ ownRevision: bigint; disclosure?: undefined }>
+      /** An anonymous ring reads no records, its disclosure proves the owner instead. */
+      | Readonly<{ disclosure: RingMergeDisclosure; ownRevision?: undefined }>
     ),
 ): Promise<Instruction> {
-  const [config, registry, auth, nullifiers] = await Promise.all([
+  const [config, policy, auth, nullifiers] = await Promise.all([
     ringConfigAddress(input.ringProgramId),
-    input.disclosure === undefined ? ringMemberRegistryAddress(input.ringProgramId) : undefined,
+    input.disclosure === undefined ? ringPolicyAddress(input.ringProgramId) : undefined,
     ringAuthAddress(input.ringProgramId),
     Promise.all(input.data.nullifiers.map((value) => nullifierPdaAddress(input.inputTree, value))),
   ]);
@@ -162,7 +158,7 @@ export async function ringMergeInstruction(
     writeRingMergeDisclosure(
       new Writer()
         .u8(InstructionTag.ringMergeTransact, "instructionTag")
-        .u8(input.registryRootIndex ?? 0, "registryRootIndex")
+        .u64(input.ownRevision ?? 0n, "ownRevision")
         .bytes(input.outputRingDataHash, 32, "outputRingDataHash"),
       input.disclosure,
     )
@@ -172,7 +168,7 @@ export async function ringMergeInstruction(
       .finish(),
     [
       meta(config, false, false),
-      ...(registry === undefined ? [] : [meta(registry, false, false)]),
+      ...(policy === undefined ? [] : [meta(policy, false, false)]),
       ...(input.cosigner === undefined ? [] : [meta(input.cosigner, true, false)]),
       meta(input.inputTree, false, true),
       meta(input.outputTree, false, true),

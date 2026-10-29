@@ -430,7 +430,7 @@ describe("confirmedRingWithdrawals", () => {
       interfaceTransfers: transfers,
       policy: {
         proof: new Uint8Array(192),
-        ownRootIndex: 0,
+        ownRevision: 0n,
         splWithdrawalOwners: [addressBytes(DEPOSITOR) as Bytes32],
       },
     };

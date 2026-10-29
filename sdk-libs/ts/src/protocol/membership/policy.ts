@@ -505,7 +505,9 @@ export interface PinnedPolicy {
 }
 
 /** Mirrors Rust `PinnedPolicy::of`, `RING_POLICY_HASH_MISMATCH` unless the stored table reproduces the hash. */
-export function pinnedPolicy(registry: RingMemberRegistry): PinnedPolicy {
+export function pinnedPolicy(
+  registry: Pick<RingMemberRegistry, "policyHash" | "sources" | "rules" | "generation">,
+): PinnedPolicy {
   if (equalBytes(registry.policyHash, ZERO_32))
     throw new RingError("RING_POLICY_NOT_SET", { details: { generation: registry.generation } });
   const sources = policySourceOwners(registry.sources);

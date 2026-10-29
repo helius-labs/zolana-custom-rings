@@ -65,4 +65,9 @@ export type {
   RingSubmissionPending,
   RingSubmissionStatus,
   RingSubmissionTransport,
+  StorageMemberOpenings,
+  StorageOpeningsRequest,
+  StorageRecordPool,
+  StorageRecordPoolRequest,
+  StorageRoot,
 } from "../rpc/ports.js";

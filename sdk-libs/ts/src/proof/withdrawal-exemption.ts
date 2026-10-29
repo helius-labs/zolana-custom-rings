@@ -1,14 +1,14 @@
 import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
 import { hashChain4, bigIntBytes, ZERO_32 } from "@heliuslabs/zolana/internal";
 import type { RingProgramConfig } from "../protocol/codec/ring-codecs.js";
-import { fetchRingMemberRegistry } from "../protocol/membership/config.js";
+import { fetchRingPolicy } from "../protocol/membership/config.js";
 import { memberOfAsset } from "../protocol/membership/policy.js";
 import { RingError } from "../protocol/error.js";
 import { domainField, RingDomain } from "../crypto/derivation/ring-domain.js";
-import { readMemberOpenings } from "../rpc/registered-record.js";
+import { ownRoot, readMemberOpenings, type BoundRoot } from "../rpc/registered-record.js";
 import type { WithdrawalExemptionProofRequest } from "../rpc/prover/ring.js";
 import { N_PUBLIC_SLOTS } from "../protocol/transaction/spp.js";
-import { currentRoot, type BoundRoot, type PolicyReadClient } from "./policy-proof.js";
+import type { PolicyReadClient } from "./policy-proof.js";
 import { checkRingCoSigner, type CoSignDemand } from "./cosign.js";
 
 export interface WithdrawalExemption {
@@ -41,23 +41,16 @@ export async function readWithdrawalExemption(
   let root = input.own;
   if (root === undefined) {
     try {
-      root = currentRoot(
-        ringProgramId,
-        await fetchRingMemberRegistry(client, ringProgramId, context),
-      );
+      root = ownRoot(ringProgramId, await fetchRingPolicy(client, ringProgramId, context));
     } catch (error) {
-      if (error instanceof RingError && error.code === "RING_MEMBER_REGISTRY_MISSING")
-        return undefined;
+      if (error instanceof RingError && error.code === "RING_POLICY_MISSING") return undefined;
       throw error;
     }
   }
   const assets = demand.withdrawals.map((row) => memberOfAsset(row.mint) as Bytes32);
   const amounts = demand.withdrawals.map((row) => bigIntBytes(row.amount, 32) as Bytes32);
   if (assets.length > N_PUBLIC_SLOTS) throw new RingError("RING_MEMBER_REGISTRY_INVALID");
-  const reads = await readMemberOpenings(
-    { client, ringProgramId, root: root.root, members: assets },
-    context,
-  );
+  const reads = await readMemberOpenings({ client, root, members: assets }, context);
   if (
     reads.some(
       (read, i) =>

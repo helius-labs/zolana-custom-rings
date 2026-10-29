@@ -20,6 +20,7 @@ import {
   ringAuthAddress,
   ringConfigAddress,
   ringMemberRegistryAddress,
+  ringPolicyAddress,
   ringRecordQueueAddress,
 } from "../../protocol/pda/index.js";
 import { isSmallOrder } from "../../crypto/keys/x25519.js";
@@ -172,6 +173,17 @@ export async function createMemberRegistryInstruction(
       meta(SYSTEM_PROGRAM, false, false),
     ],
   );
+}
+
+/** Rust `SyncRoots`, permissionless, `registry` is the ring's records or its curator. */
+export async function syncRootsInstruction(
+  input: Readonly<{ ringProgramId: Address; registry: Address }>,
+): Promise<Instruction> {
+  const policy = await ringPolicyAddress(input.ringProgramId);
+  return ringInstruction(input.ringProgramId, Uint8Array.of(RingInstructionTag.syncRoots), [
+    meta(policy, false, true),
+    meta(input.registry, false, false),
+  ]);
 }
 
 /** Rust `CustomRing::set_authority`, both keys sign so a mistyped address cannot strand the config. */

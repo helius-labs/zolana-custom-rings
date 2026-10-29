@@ -20,11 +20,7 @@ import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import { SppProofInputs, createExternalData } from "@heliuslabs/zolana/transaction";
 import type { ProofOutputUtxo } from "@heliuslabs/zolana/transaction";
 import { CUSTOM_RING_PROOF_LENGTH } from "../../protocol/proof/custom-ring-proof.js";
-import {
-  ringAuthAddress,
-  ringConfigAddress,
-  ringMemberRegistryAddress,
-} from "../../protocol/pda/index.js";
+import { ringAuthAddress, ringConfigAddress, ringPolicyAddress } from "../../protocol/pda/index.js";
 import type { AuditLayout } from "../../protocol/codec/ring-disclosure-layout.js";
 import { ringIdField, senderCommitment } from "../../crypto/derivation/ring-stream.js";
 
@@ -72,7 +68,7 @@ import type { ViewingHistory } from "../../state/viewing-history.js";
 /** The client a ring transfer reads the ring and proves with, every rail adds its SPP prover. */
 export type RingProvingClient = TreeContext &
   Pick<ChainReader, "getAccount"> &
-  Pick<RingRecordReader, "getRingMemberOpenings" | "getRingRecordPool"> &
+  Pick<RingRecordReader, "getStorageMemberOpenings" | "getStorageRecordPool"> &
   RingProver;
 
 /** What the anonymous rail adds to a staged transfer, Rust `AnonymousSpend`. */
@@ -118,7 +114,6 @@ export interface RingTransactAccounts {
   readonly outputTree: Address;
   readonly ownerSigners: readonly Address[];
   readonly withdrawal?: TransactWithdrawal;
-  readonly curator?: Address;
   /** Signs when the config demands it. */
   readonly coSigner?: Address;
   readonly delegate?: Address;
@@ -126,7 +121,7 @@ export interface RingTransactAccounts {
 
 /** Every value a transfer's proofs bind that the chain can move before it lands, Rust `BoundState`. */
 export interface RingBoundState {
-  /** The registry roots the proofs bind by history slot, the own registry first. */
+  /** The mirrored roots the proofs bind by revision, the own root first. */
   readonly roots?: readonly BoundRoot[];
   readonly policy?: BoundPolicy;
 }
@@ -141,7 +136,7 @@ export class ProvenRingTransfer {
   /** The co-signer the config demands, it signs the transaction. */
   readonly coSigner?: Address;
   readonly approvalRequired: boolean;
-  /** The registry roots the policy proof binds, a submission proves again once one leaves the history. */
+  /** The mirrored roots the proofs bind, a submission proves again once one leaves the mirror. */
   readonly roots: readonly BoundRoot[];
   readonly policy?: BoundPolicy;
   /** The anonymous sender's viewing history past the transfer's tags, stored before it is sent. */
@@ -306,7 +301,6 @@ async function assembleStagedTransfer<T>(
       outputTree: treeAddress(proofInputs.outputTreeId),
       ownerSigners: staged.ownerSigners,
       ...(staged.withdrawal === undefined ? {} : { withdrawal: staged.withdrawal }),
-      ...(policy?.curator === undefined ? {} : { curator: policy.curator.registry }),
       ...(coSigner === undefined ? {} : { coSigner }),
       ...(spend.delegate === undefined ? {} : { delegate: spend.delegate }),
     });
@@ -477,9 +471,9 @@ export async function ringTransactInstruction(
   data: RingTransactData,
 ): Promise<Instruction> {
   const spp = ringSppInputs(data);
-  const [config, registry, ringAuth] = await Promise.all([
+  const [config, policy, ringAuth] = await Promise.all([
     ringConfigAddress(ringProgramId),
-    ringMemberRegistryAddress(ringProgramId),
+    ringPolicyAddress(ringProgramId),
     ringAuthAddress(ringProgramId),
   ]);
   const sppAccounts = await ringTransactAccounts({
@@ -496,8 +490,7 @@ export async function ringTransactInstruction(
   });
   const prefix: AccountMeta[] = [meta(config, false, false)];
   if (data.policy !== undefined || data.withdrawalExemption !== undefined)
-    prefix.push(meta(registry, false, false));
-  if (accounts.curator !== undefined) prefix.push(meta(accounts.curator, false, false));
+    prefix.push(meta(policy, false, false));
   if (accounts.coSigner !== undefined) prefix.push(meta(accounts.coSigner, true, false));
   if (accounts.delegate !== undefined) prefix.push(meta(accounts.delegate, true, false));
   const encoded = RingTransactData.encode(data);
@@ -573,11 +566,11 @@ function previewData(
       : {
           policy: {
             proof: new Uint8Array(CUSTOM_RING_PROOF_LENGTH),
-            ownRootIndex: input.policy.inputs.own.rootIndex,
+            ownRevision: input.policy.inputs.own.revision,
             splWithdrawalOwners: input.policy.inputs.splWithdrawalOwners,
             ...(input.policy.inputs.curator === undefined
               ? {}
-              : { curatorRootIndex: input.policy.inputs.curator.root.rootIndex }),
+              : { curatorRevision: input.policy.inputs.curator.root.revision }),
             ...(input.policy.senderCommitment === undefined
               ? {}
               : { senderCommitment: input.policy.senderCommitment }),
@@ -588,7 +581,7 @@ function previewData(
       : {
           withdrawalExemption: {
             proof: new Uint8Array(CUSTOM_RING_PROOF_LENGTH),
-            rootIndex: input.withdrawalExemption.root.rootIndex,
+            revision: input.withdrawalExemption.root.revision,
           },
         }),
     approvalRequired: input.approvalRequired,

@@ -61,6 +61,7 @@ import {
   ringAuthAddress,
   ringConfigPda,
   ringMemberRegistryPda,
+  ringPolicyPda,
 } from "../../../src/protocol/pda/index.js";
 import {
   RING_COSIGN_TRANSFERS,
@@ -582,7 +583,7 @@ describe("ring merge", () => {
     );
   });
 
-  it("compresses proof b and places the registry and the co-signer ahead of SPP's accounts", async () => {
+  it("compresses proof b and places the ring policy and the co-signer ahead of SPP's accounts", async () => {
     const inputs = [input(3n), input(5n)];
     const data = provenMerge(merge(inputs).prepare(), g2Point());
     const cosigner = ShieldedKeypair.generate().shieldedAddress().solanaAddress();
@@ -593,24 +594,24 @@ describe("ring merge", () => {
       payer: owner.shieldedAddress().solanaAddress(),
       cosigner,
       outputRingDataHash: field(4),
-      registryRootIndex: 11,
+      ownRevision: 11n,
       data,
     });
     const bytes = instruction.data ?? new Uint8Array();
     expect(instruction.programAddress).toBe(RING);
     expect(bytes[0]).toBe(InstructionTag.ringMergeTransact);
-    expect(bytes[1]).toBe(11);
-    expect(bytes.slice(2, 34)).toEqual(field(4));
-    expect(bytes[34]).toBe(0);
-    const body = bytes.slice(35);
+    expect(bytes.slice(1, 9)).toEqual(Uint8Array.of(11, 0, 0, 0, 0, 0, 0, 0));
+    expect(bytes.slice(9, 41)).toEqual(field(4));
+    expect(bytes[41]).toBe(0);
+    const body = bytes.slice(42);
     expect(body).toEqual(compactBody(data));
     expect(body.length).toBe(encodeMergeTransactInstructionData(data).length - 64);
     expect(decompressG2(body.slice(40, 104) as Bytes64)).toEqual(data.proof.b);
     const [config] = await ringConfigPda(RING);
-    const [registry] = await ringMemberRegistryPda(RING);
+    const [policy] = await ringPolicyPda(RING);
     expect(instruction.accounts?.slice(0, 3)).toEqual([
       { address: config, role: AccountRole.READONLY },
-      { address: registry, role: AccountRole.READONLY },
+      { address: policy, role: AccountRole.READONLY },
       { address: cosigner, role: AccountRole.READONLY_SIGNER },
     ]);
     expect(instruction.accounts?.[5]).toEqual({
@@ -624,7 +625,7 @@ describe("ring merge", () => {
       outputTree: treeAddress(7),
       payer: owner.shieldedAddress().solanaAddress(),
       outputRingDataHash: field(4),
-      registryRootIndex: 11,
+      ownRevision: 11n,
       data,
     });
     expect(without.accounts?.slice(2)).toEqual(instruction.accounts?.slice(3));
@@ -682,17 +683,17 @@ describe("anonymous ring merge", () => {
 
       const data = ringInstruction(transaction);
       expect(data[0]).toBe(InstructionTag.ringMergeTransact);
-      expect(data[1]).toBe(0);
+      expect(data.slice(1, 9)).toEqual(new Uint8Array(8));
       const [config] = await ringConfigPda(RING);
       expect(ringAccounts(transaction).slice(0, 2)).toEqual([config, treeAddress(7)]);
-      const disclosure = readRingMergeDisclosure(new Reader(data.slice(34)));
+      const disclosure = readRingMergeDisclosure(new Reader(data.slice(41)));
       if (disclosure === undefined) throw new Error("no disclosure");
       expect(disclosure.proof).toEqual(new Uint8Array(192));
       expect(disclosure.fields).toHaveLength(mergeDisclosureFieldCount(8));
       const prepared = proveMerge.mock.calls[0]?.[0].prepared;
       if (prepared === undefined) throw new Error("no merge");
       const spp = provenMerge(prepared);
-      expect(data.slice(34 + 1 + 192 + 33 + 32 + 1 + 32 * 13)).toEqual(compactBody(spp));
+      expect(data.slice(41 + 1 + 192 + 33 + 32 + 1 + 32 * 13)).toEqual(compactBody(spp));
       expect(
         ringMergeAnonymousPublicInputHash({
           partyIdentities: request.partyIdentities,

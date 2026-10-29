@@ -27,8 +27,9 @@ import {
   type PendingWalletSubmission,
 } from "@heliuslabs/zolana/transaction";
 import type { RingSubmissionStatus, RingSubmissionTransport } from "../../rpc/ports.js";
-import { fetchRingMemberRegistry } from "../../protocol/membership/config.js";
-import { RingError, RingProgramError } from "../../protocol/error.js";
+import { fetchRingPolicy } from "../../protocol/membership/config.js";
+import { rootMirror } from "../../protocol/codec/ring-codecs.js";
+import { RingError, RingProgramError, StorageProgramError } from "../../protocol/error.js";
 import type { RingBoundState } from "./pipeline.js";
 import type { ViewingHistory } from "../../state/viewing-history.js";
 
@@ -81,6 +82,7 @@ const STALE_PROOF_CODES: ReadonlySet<number> = new Set([
   RingProgramError.curatorRootStale,
   RingProgramError.rootIndexEmpty,
   RingProgramError.authorityBatchTooLarge,
+  StorageProgramError.rootExpired,
 ]);
 const NO_RESERVATION: ReservationHold = Object.freeze({ release() {}, extend() {} });
 
@@ -212,13 +214,18 @@ export class RingTransactionSubmission {
     const chain = this.#registry;
     if (chain === undefined) return false;
     for (const bound of roots) {
-      const registry = await fetchRingMemberRegistry(chain, bound.ringProgramId, context);
-      const held = registry.history[bound.rootIndex];
-      if (held === undefined || !equalBytes(held.root, bound.root)) return true;
+      const mirror = rootMirror(
+        await fetchRingPolicy(chain, bound.ringProgramId, context),
+        bound.mirror,
+      );
+      const held = mirror.roots.some(
+        (root) => root?.revision === bound.revision && equalBytes(root.hash, bound.root),
+      );
+      if (mirror.registry !== bound.registry || !held) return true;
     }
     if (policy === undefined) return false;
-    const registry = await fetchRingMemberRegistry(chain, policy.ringProgramId, context);
-    return !equalBytes(registry.policyHash, policy.policyHash);
+    const ringPolicy = await fetchRingPolicy(chain, policy.ringProgramId, context);
+    return !equalBytes(ringPolicy.policyHash, policy.policyHash);
   }
 
   async #settleFailed(): Promise<void> {

@@ -72,6 +72,29 @@ export interface RingRecordPoolRequest {
   readonly openings: number;
 }
 
+/** A root a `StorageRegistry` history holds, named by the revision the ring program reads. */
+export interface StorageRoot {
+  readonly root: Bytes32;
+  readonly revision: bigint;
+  readonly nextIndex: number;
+}
+
+/** At most `MAX_RING_MEMBER_BATCH` members of one `StorageRegistry`, all under `expectedRoot`. */
+export interface StorageOpeningsRequest {
+  readonly registry: Address;
+  readonly members: readonly Bytes32[];
+  readonly expectedRoot: Bytes32;
+}
+
+export interface StorageRecordPoolRequest extends StorageOpeningsRequest {
+  readonly openings: number;
+}
+
+export type StorageMemberOpenings = Omit<RingMemberOpenings, "root"> &
+  Readonly<{ root: StorageRoot }>;
+
+export type StorageRecordPool = Omit<RingRecordPool, "root"> & Readonly<{ root: StorageRoot }>;
+
 /** A leaf the indexer served, with the key its member escrowed. */
 export type RingServedRecord = Readonly<{
   record: MemberRecord;
@@ -182,6 +205,14 @@ export interface RingRecordReader {
     request: RingRecordPoolRequest,
     context?: RequestContext,
   ): Promise<RingRecordPool>;
+  getStorageMemberOpenings(
+    request: StorageOpeningsRequest,
+    context?: RequestContext,
+  ): Promise<StorageMemberOpenings>;
+  getStorageRecordPool(
+    request: StorageRecordPoolRequest,
+    context?: RequestContext,
+  ): Promise<StorageRecordPool>;
   getRingRecordQueue(
     request: Readonly<{ ringProgramId: Address }>,
     context?: RequestContext,

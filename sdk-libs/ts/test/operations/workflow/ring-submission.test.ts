@@ -17,9 +17,9 @@ import {
   RingTransactionSubmission,
   type RingSubmissionAttempt,
 } from "../../../src/operations/workflow/submission.js";
-import { ringMemberRegistryPda } from "../../../src/protocol/pda/index.js";
+import { ringPolicyPda } from "../../../src/protocol/pda/index.js";
 import { BLOCKHASH, kitReads } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
-import { memberRegistryData, ownedAccount } from "../../helpers/ring-accounts.js";
+import { ownedAccount, ringPolicyData } from "../../helpers/ring-accounts.js";
 
 const HASH = new Uint8Array(32) as Bytes32;
 const MEMO = address("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
@@ -29,22 +29,43 @@ const STALE_ROOT: RingSubmissionStatus = {
   customCode: RingProgramError.rootBelowFloor,
 };
 
-/** A registry whose history slot 3 holds `root`. */
-async function registryAccount(ringProgramId: Address, root: Bytes32, policyHash?: Bytes32) {
-  const [, bump] = await ringMemberRegistryPda(ringProgramId);
-  const history = Array.from({ length: 32 }, (_, slot) =>
-    slot === 3 ? { root, applied: 0n, slot: 0n } : undefined,
-  );
+const OWN_REGISTRY = address("Stor111111111111111111111111111111111111111");
+const CURATOR_REGISTRY = address("Cura111111111111111111111111111111111111111");
+
+/** A ring policy whose mirrors hold `own` and `curator` at revision 3. */
+async function policyAccount(
+  ringProgramId: Address,
+  roots: Readonly<{ own: Bytes32; curator?: Bytes32 }>,
+  policyHash?: Bytes32,
+) {
+  const [, bump] = await ringPolicyPda(ringProgramId);
+  const mirror = (registry: Address, hash: Bytes32) => ({
+    registry,
+    roots: [{ hash, revision: 3n, expiresAt: 0n }],
+  });
   return ownedAccount(
     ringProgramId,
-    memberRegistryData({
+    ringPolicyData({
       bump,
-      history,
-      historyCursor: 3,
-      nextIndex: 40,
+      records: OWN_REGISTRY,
+      ownRoots: mirror(OWN_REGISTRY, roots.own),
+      ...(roots.curator === undefined
+        ? {}
+        : { curatorRoots: mirror(CURATOR_REGISTRY, roots.curator) }),
       ...(policyHash === undefined ? {} : { policyHash }),
     }),
   );
+}
+
+/** A root the attempt bound at revision 3 of `mirror`. */
+function bound(ringProgramId: Address, mirror: "own" | "curator", root: Bytes32) {
+  return {
+    ringProgramId,
+    mirror,
+    registry: mirror === "own" ? OWN_REGISTRY : CURATOR_REGISTRY,
+    revision: 3n,
+    root,
+  };
 }
 
 const PROOF_REJECTED: RingSubmissionStatus = {
@@ -235,15 +256,15 @@ describe("ring submission ownership", () => {
     expect(rejected.build).toHaveBeenCalledTimes(1);
   });
 
-  it("rebuilds a rejected proof only when its registry slot holds another root", async () => {
+  it("rebuilds a rejected proof only when its mirror holds another root at the revision", async () => {
     const ringProgramId = address("Ring111111111111111111111111111111111111111");
-    const bound = new Uint8Array(32).fill(7) as Bytes32;
+    const root = new Uint8Array(32).fill(7) as Bytes32;
     for (const [held, attempts] of [
       [new Uint8Array(32).fill(8) as Bytes32, 3],
-      [bound, 1],
+      [root, 1],
     ] as const) {
-      const f = await fixture([{ ringProgramId, rootIndex: 3, root: bound }]);
-      const account = await registryAccount(ringProgramId, held);
+      const f = await fixture([bound(ringProgramId, "own", root)]);
+      const account = await policyAccount(ringProgramId, { own: held });
       const registry = { getAccount: vi.fn(async () => account) };
       const submission = new RingTransactionSubmission({
         first: await f.build(),
@@ -277,7 +298,7 @@ describe("ring submission ownership", () => {
         ...(await f.build()),
         policy: { ringProgramId, policyHash: bound },
       }));
-      const account = await registryAccount(ringProgramId, HASH, held);
+      const account = await policyAccount(ringProgramId, { own: HASH }, held);
       const registry = { getAccount: vi.fn(async () => account) };
       const submission = new RingTransactionSubmission({
         first: await build(),
@@ -294,33 +315,26 @@ describe("ring submission ownership", () => {
     }
   });
 
-  it("rebuilds on curator rollover and keeps a failed curator read pending", async () => {
+  it("rebuilds on curator rollover and keeps a failed policy read pending", async () => {
     const ringProgramId = address("Ring111111111111111111111111111111111111111");
-    const curatorProgram = MEMO;
-    const [ownAddress] = await ringMemberRegistryPda(ringProgramId);
-    const [curator] = await ringMemberRegistryPda(curatorProgram);
-    const bound = new Uint8Array(32).fill(7) as Bytes32;
+    const [policy] = await ringPolicyPda(ringProgramId);
+    const root = new Uint8Array(32).fill(7) as Bytes32;
     const replaced = new Uint8Array(32).fill(8) as Bytes32;
     for (const [held, expectedAttempts] of [
-      [bound, 1],
+      [root, 1],
       [replaced, 3],
     ] as const) {
-      const roots = [
-        { ringProgramId, rootIndex: 3, root: bound },
-        { ringProgramId: curatorProgram, rootIndex: 3, root: bound },
-      ];
-      const f = await fixture(roots);
-      const [own, foreign] = await Promise.all([
-        registryAccount(ringProgramId, bound),
-        registryAccount(curatorProgram, held),
+      const f = await fixture([
+        bound(ringProgramId, "own", root),
+        bound(ringProgramId, "curator", root),
       ]);
+      const account = await policyAccount(ringProgramId, { own: root, curator: held });
       let missing = true;
       const registry = {
-        getAccount: vi.fn(async (account: typeof ownAddress) => {
-          if (account === curator && missing)
-            throw new ClientError("CLIENT_RPC", { details: { reason: "unavailable" } });
-          expect(account === ownAddress || account === curator).toBe(true);
-          return account === ownAddress ? own : foreign;
+        getAccount: vi.fn(async (address: Address) => {
+          if (missing) throw new ClientError("CLIENT_RPC", { details: { reason: "unavailable" } });
+          expect(address).toBe(policy);
+          return account;
         }),
       };
       const submission = new RingTransactionSubmission({

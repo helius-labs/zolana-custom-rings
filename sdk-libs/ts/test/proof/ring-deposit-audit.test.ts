@@ -3,7 +3,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { AccountRole, address, getAddressDecoder, type Address, type Signature } from "@solana/kit";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-import { type RingMemberRecordResult } from "../../src/rpc/ports.js";
 import {
   BN254_SCALAR_ORDER,
   hashBytes,
@@ -29,9 +28,9 @@ import {
 } from "@heliuslabs/zolana/keypair";
 import { SOL_MINT, ownerUtxoHash } from "@heliuslabs/zolana/transaction";
 import { LocalRingKeys } from "../../src/state/ring-keys.js";
-import type { RingMemberProofRequest } from "../../src/rpc/ports.js";
+import type { StorageMemberOpenings, StorageOpeningsRequest } from "../../src/rpc/ports.js";
 import type { RingProofRequest } from "../../src/rpc/prover/ring.js";
-import { ringConfigPda, ringMemberRegistryPda } from "../../src/protocol/pda/index.js";
+import { ringConfigPda, ringPolicyPda } from "../../src/protocol/pda/index.js";
 import { depositBlinding } from "../../src/crypto/derivation/ring-domain.js";
 import {
   RING_COSIGN_DEPOSITS,
@@ -64,11 +63,7 @@ import { ListId, recordBit } from "../../src/protocol/membership/policy.js";
 import { BLOCKHASH } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { confirmedDepositTransaction } from "../helpers/confirmed-deposits.js";
 import { recordTree, type FixtureRecord } from "../helpers/member-registry.js";
-import {
-  memberRegistryData,
-  ownedAccount,
-  ringProgramConfigData,
-} from "../helpers/ring-accounts.js";
+import { ringPolicyData, ownedAccount, ringProgramConfigData } from "../helpers/ring-accounts.js";
 import { type RingKeys } from "../../src/state/ring-keys.js";
 import {
   TransferTagging,
@@ -81,6 +76,8 @@ const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 const TREE = treeAddress(0);
 const PAYER = address("4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T");
 const CONTEXT = Object.freeze({ slot: 1n, blockTime: 1n });
+const RECORDS = address("Stor111111111111111111111111111111111111111");
+const RECORDS_REVISION = 3n;
 function field(value: bigint): Bytes32 {
   return bigIntToBytes(value) as Bytes32;
 }
@@ -369,17 +366,17 @@ describe("audited deposit instruction", () => {
       const escrowed = await ringDepositInstruction({
         ...input,
         proof,
-        registryRootIndex: 5,
+        ownRevision: 5n,
         cosigner: RING,
       });
       const [config] = await ringConfigPda(RING);
-      const [registry] = await ringMemberRegistryPda(RING);
+      const [registry] = await ringPolicyPda(RING);
       expect(plain.data?.[0]).toBe(31);
       expect(plain.data?.slice(1, 193)).toEqual(proof);
-      expect(plain.data?.[193]).toBe(0);
-      expect(plain.data?.[194]).toBe(InstructionTag.ringDeposit);
-      expect(escrowed.data?.[193]).toBe(5);
-      expect(escrowed.data?.slice(194)).toEqual(plain.data?.slice(194));
+      expect(plain.data?.slice(193, 201)).toEqual(new Uint8Array(8));
+      expect(plain.data?.[201]).toBe(InstructionTag.ringDeposit);
+      expect(escrowed.data?.slice(193, 201)).toEqual(Uint8Array.of(5, 0, 0, 0, 0, 0, 0, 0));
+      expect(escrowed.data?.slice(201)).toEqual(plain.data?.slice(201));
       expect(plain.accounts?.slice(0, 1)).toEqual([
         { address: config, role: AccountRole.READONLY },
       ]);
@@ -422,7 +419,7 @@ describe("ring deposit builder", () => {
   ) {
     const records = recordTree(input.members ?? []);
     const [config, configBump] = await ringConfigPda(RING);
-    const [registry, registryBump] = await ringMemberRegistryPda(RING);
+    const [policy, policyBump] = await ringPolicyPda(RING);
     const requests: RingProofRequest[] = [];
     const proveRing = vi.fn(async (request: RingProofRequest) => {
       requests.push(request);
@@ -445,23 +442,26 @@ describe("ring deposit builder", () => {
               ...(input.coSigner === undefined ? {} : { coSigner: input.coSigner }),
             }),
           );
-        if (account === registry)
+        if (account === policy)
           return ownedAccount(
             RING,
-            memberRegistryData({
-              bump: registryBump,
-              history: [{ root: records.root, applied: 0n, slot: 0n }],
-              nextIndex: records.nextIndex,
+            ringPolicyData({
+              bump: policyBump,
+              records: RECORDS,
+              ownRoots: {
+                registry: RECORDS,
+                roots: [{ hash: records.root, revision: RECORDS_REVISION, expiresAt: 0n }],
+              },
             }),
           );
         return undefined;
       },
-      getRingMemberRecord: async (request: RingMemberProofRequest) =>
+      getStorageMemberOpenings: async (request: StorageOpeningsRequest) =>
         ({
           context: CONTEXT,
-          root: { root: records.root, rootIndex: 0, applied: 0n, nextIndex: records.nextIndex },
-          opening: records.opening(request.member),
-        }) satisfies RingMemberRecordResult,
+          root: { root: records.root, revision: RECORDS_REVISION, nextIndex: records.nextIndex },
+          openings: request.members.map((member) => records.opening(member)),
+        }) satisfies StorageMemberOpenings,
       proveRing,
     };
     return { client, requests, proveRing };
@@ -551,17 +551,23 @@ describe("ring deposit builder", () => {
       expect(request.memberRegistryRoot).toEqual(recordTree([escrowedMember(recipient)]).root);
       expect(request.blindingSecrets).toHaveLength(1);
       expect(proven.roots).toEqual([
-        { ringProgramId: RING, rootIndex: 0, root: recordTree([escrowedMember(recipient)]).root },
+        {
+          ringProgramId: RING,
+          mirror: "own",
+          registry: RECORDS,
+          revision: RECORDS_REVISION,
+          root: recordTree([escrowedMember(recipient)]).root,
+        },
       ]);
       const data = proven.instruction.data ?? new Uint8Array();
-      expect(data[193]).toBe(0);
-      const [registry] = await ringMemberRegistryPda(RING);
+      expect(data.slice(193, 201)).toEqual(Uint8Array.of(3, 0, 0, 0, 0, 0, 0, 0));
+      const [registry] = await ringPolicyPda(RING);
       expect(proven.instruction.accounts?.[1]).toEqual({
         address: registry,
         role: AccountRole.READONLY,
       });
       // The recipient opens its note from the ciphertext behind the capsule.
-      const spp = data.slice(194);
+      const spp = data.slice(201);
       expect(spp[0]).toBe(InstructionTag.ringDeposit);
       expect(prepared.utxo.blinding).toEqual(
         depositBlinding(request.blindingSecrets[0] ?? field(0n)),
@@ -615,11 +621,11 @@ describe("ring deposit builder", () => {
       expect(request.ownerKeys?.[0]).toEqual(owner.signingPublicKey().ed25519());
       expect(request.members.every((member) => member === undefined)).toBe(true);
       expect(proven.roots).toBeUndefined();
-      const [registry] = await ringMemberRegistryPda(RING);
+      const [registry] = await ringPolicyPda(RING);
       expect(proven.instruction.accounts?.map((account) => account.address)).not.toContain(
         registry,
       );
-      const spp = (proven.instruction.data ?? new Uint8Array()).slice(194);
+      const spp = (proven.instruction.data ?? new Uint8Array()).slice(201);
       const [lowest, next, stored] = tags.map(hex);
       expect(hex(spp)).toContain(stored);
       expect(hex(spp)).not.toContain(lowest);

@@ -30,13 +30,13 @@ import {
   approveRingUnattended,
   type RingApprovalRequest,
 } from "../../../src/protocol/transaction/intent.js";
-import { ringConfigAddress, ringMemberRegistryAddress } from "../../../src/protocol/pda/index.js";
+import { ringConfigAddress, ringPolicyAddress } from "../../../src/protocol/pda/index.js";
 import { ringIdField } from "../../../src/crypto/derivation/ring-stream.js";
 import {
   RING_COSIGN_DEPOSITS,
   RING_COSIGN_TRANSFERS,
   RING_COSIGN_WITHDRAWALS,
-  decodeRingMemberRegistry,
+  decodeRingPolicy,
 } from "../../../src/protocol/codec/ring-codecs.js";
 import { escrowKeyHash } from "../../../src/protocol/membership/member-opening.js";
 import { checkEscrowedRecipients, readMemberRecords } from "../../../src/rpc/registered-record.js";
@@ -78,9 +78,19 @@ import {
   ringFixture,
   small,
   walletKeys,
+  CURATOR_REVISION,
+  OWN_REVISION,
+  hex,
   type Fixture,
   type RingFixtureOptions,
 } from "../../helpers/ring-pipeline.js";
+import { CUSTOM_RING_PROOF_LENGTH } from "../../../src/protocol/codec/ring-codecs.js";
+
+function u64Hex(value: bigint): string {
+  const bytes = new Uint8Array(8);
+  new DataView(bytes.buffer).setBigUint64(0, value, true);
+  return hex(bytes);
+}
 import {
   publicAmountFields,
   publicSlots,
@@ -143,13 +153,11 @@ function escrowed(owners: readonly ShieldedKeypair[]): FixtureRecord[] {
   });
 }
 
-async function registryOf(fixture: Fixture) {
-  const account = fixture.accounts.get(await ringMemberRegistryAddress(fixture.ringProgramId));
-  if (account === undefined) throw new Error("no registry");
-  return {
-    address: await ringMemberRegistryAddress(fixture.ringProgramId),
-    ...decodeRingMemberRegistry(account.data),
-  };
+async function policyOf(fixture: Fixture) {
+  const address = await ringPolicyAddress(fixture.ringProgramId);
+  const account = fixture.accounts.get(address);
+  if (account === undefined) throw new Error("no ring policy");
+  return { address, ...decodeRingPolicy(account.data) };
 }
 
 function readonly(address: Address) {
@@ -432,18 +440,24 @@ describe("policy ring", () => {
     expect(proven.approvalRequired).toBe(true);
     expect(proven.coSigner).toBe(coSigner);
     expect(data.approvalRequired).toBe(true);
-    expect(data.policy?.curatorRootIndex).toBe(0);
-    const registry = await registryOf(fixture);
+    expect(data.policy?.ownRevision).toBe(OWN_REVISION);
+    expect(data.policy?.curatorRevision).toBe(CURATOR_REVISION);
+    // Both revisions follow the policy proof as u64 little endian.
+    const revisions = 1 + 3 + 2 * CUSTOM_RING_PROOF_LENGTH;
+    expect(hex(instruction.data?.subarray(revisions, revisions + 16) ?? new Uint8Array())).toBe(
+      `${u64Hex(OWN_REVISION)}${u64Hex(CURATOR_REVISION)}`,
+    );
+    const ringPolicy = await policyOf(fixture);
     expect(proven.policy).toEqual({
       ringProgramId: fixture.ringProgramId,
-      policyHash: registry.policyHash,
+      policyHash: ringPolicy.policyHash,
     });
     if (fixture.curatorRegistry === undefined || fixture.curatorTree === undefined)
       throw new Error("no curator");
     await checkAccounts(instruction, {
       fixture,
       data,
-      prefix: [readonly(registry.address), readonly(fixture.curatorRegistry), signer(coSigner)],
+      prefix: [readonly(ringPolicy.address), signer(coSigner)],
       payer: fixture.authority,
       ownerSigners: [sender.shieldedAddress().solanaAddress()],
     });
@@ -454,7 +468,7 @@ describe("policy ring", () => {
         withdrawalHash: policyWithdrawalHash([]),
         key: { kind: "member", anonymous: false },
         privateTxHash: data.privateTxHash,
-        policyHash: registry.policyHash,
+        policyHash: ringPolicy.policyHash,
         ringId: ringIdField(fixture.ringProgramId),
         approvalRequired: true,
         keyEscrow: false,
@@ -468,6 +482,36 @@ describe("policy ring", () => {
     checkAudit(fixture, data, { kind: "deliveredAudit" });
     checkDisclosure(fixture, call, data, sender.shieldedAddress());
     checkRingBlindings(call, data);
+  });
+
+  it("refuses an opening under a root the policy mirror does not hold before any proof", async () => {
+    const sender = ShieldedKeypair.generate();
+    const recipient = ShieldedKeypair.generate();
+    const fixture = await curatedRing([sender, recipient]);
+    const served = (revision: bigint): Fixture["client"] => ({
+      ...fixture.client,
+      getStorageRecordPool: async (request) => {
+        const pool = await fixture.client.getStorageRecordPool(request);
+        return request.registry === fixture.curatorRegistry
+          ? { ...pool, root: { ...pool.root, revision } }
+          : pool;
+      },
+    });
+    const transfer = transferTo(fixture, sender, [recipient]);
+    const rail = (client: Fixture["client"]) =>
+      CustomRingTransfer.new({
+        ringProgramId: fixture.ringProgramId,
+        keys: walletKeys(sender),
+        transfer,
+        assets,
+      }).prove(client);
+
+    // The indexer's next curator revision is not yet synced into the mirror.
+    await expect(rail(served(CURATOR_REVISION + 1n))).rejects.toThrow(
+      ringError("RING_ROOT_NOT_MIRRORED", { reason: "pool", registry: fixture.curatorRegistry }),
+    );
+    expect(fixture.ringRequests).toHaveLength(0);
+    expect(fixture.sppCalls).toHaveLength(0);
   });
 
   it("refuses an output owner off the required list before any proof, naming the rule and its slot", async () => {
@@ -580,7 +624,7 @@ describe("policy ring", () => {
     if (policy?.kind !== "memberPolicy") throw new Error("no policy proof");
     expect(policy.keyEscrow).toBe(true);
     expect(policy.outputs.map((output) => output.ctHash !== undefined)).toEqual([true, true]);
-    expect(data.policy?.curatorRootIndex).toBeUndefined();
+    expect(data.policy?.curatorRevision).toBeUndefined();
 
     const unregistered = await ringFixture({
       mode: "confidentialEscrow",
@@ -676,11 +720,11 @@ describe("delegate rail", () => {
 
     expect(call.circuit.kind).toBe("ringAuthority");
     expect(data.outputs.every((output) => output.kind === "delivered")).toBe(true);
-    const registry = await registryOf(fixture);
+    const ringPolicy = await policyOf(fixture);
     await checkAccounts(instruction, {
       fixture,
       data,
-      prefix: [readonly(registry.address), signer(delegate)],
+      prefix: [readonly(ringPolicy.address), signer(delegate)],
       payer: fixture.authority,
     });
     const policy = fixture.ringRequests.find((request) => request.kind === "delegatePolicy");
@@ -691,7 +735,7 @@ describe("delegate rail", () => {
         withdrawalHash: policyWithdrawalHash([]),
         key: { kind: "delegate" },
         privateTxHash: data.privateTxHash,
-        policyHash: registry.policyHash,
+        policyHash: ringPolicy.policyHash,
         ringId: ringIdField(fixture.ringProgramId),
         approvalRequired: false,
         keyEscrow: true,
@@ -918,9 +962,9 @@ describe("delegate move builder", () => {
           if (address === config) reads.config += 1;
           return fixture.client.getAccount(address);
         },
-        getRingRecordPool: async (request) => {
+        getStorageRecordPool: async (request) => {
           reads.openings += 1;
-          return fixture.client.getRingRecordPool(request);
+          return fixture.client.getStorageRecordPool(request);
         },
         getLatestBlockhash: async () => BLOCKHASH,
         ...kitReads({ solanaRpc: { getProgramAccounts: () => ({ send: async () => [] }) } }),

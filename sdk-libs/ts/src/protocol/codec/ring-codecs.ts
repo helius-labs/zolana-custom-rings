@@ -85,6 +85,38 @@ export interface RingMemberRegistry {
   readonly generationSlot: bigint;
 }
 
+/** Rust `Root` as a mirror copied it. */
+export interface StorageRegistryRoot {
+  readonly hash: Bytes32;
+  readonly revision: bigint;
+  /** Zero on the current root. */
+  readonly expiresAt: bigint;
+}
+
+/** Rust `RootMirror`, newest first, `undefined` where the registry held no root. */
+export interface RootMirror {
+  /** Absent before the first `SyncRoots`. */
+  readonly registry?: Address;
+  readonly roots: readonly (StorageRegistryRoot | undefined)[];
+}
+
+/** Rust `RingPolicy`, the ring's table and the storage roots its transfers bind. */
+export interface RingPolicy {
+  readonly bump: number;
+  /** The ring's own `StorageRegistry`. */
+  readonly records: Address;
+  /** Zero before the first policy write. */
+  readonly policyHash: Bytes32;
+  readonly sources: readonly RingSourceSlot[];
+  readonly rules: EncodedRuleTable;
+  readonly generation: number;
+  readonly generationSlot: bigint;
+  readonly ownRoots: RootMirror;
+  readonly curatorRoots: RootMirror;
+}
+
+export type RootMirrorKind = "own" | "curator";
+
 /** Rust `QueueCheckpoint`, `chain(p)` and the slot `p` was queued at. */
 export interface RingQueueCheckpoint {
   readonly chain: Bytes32;
@@ -124,6 +156,8 @@ export const MEMBER_REGISTRY_DISCRIMINATOR = 11;
 export const MEMBER_REGISTRY_SIZE = 2388;
 export const RECORD_QUEUE_DISCRIMINATOR = 12;
 export const RECORD_QUEUE_SIZE = 698;
+export const RING_POLICY_DISCRIMINATOR = 13;
+export const RING_POLICY_SIZE = 3991;
 
 /** Mirrors Rust `CustomRingConfig::new` over `RingProgramConfig::valid`. */
 export function decodeRingProgramConfig(data: Uint8Array): RingProgramConfig {
@@ -193,16 +227,7 @@ export function decodeRingMemberRegistry(data: Uint8Array): RingMemberRegistry {
     const slot = reader.u64("history.slot");
     return equalBytes(root, ZERO_32) ? undefined : Object.freeze({ root, applied, slot });
   });
-  const policyHash = reader.bytes(32, "policyHash") as Bytes32;
-  const sources = Array.from({ length: RING_SOURCE_SLOTS }, () =>
-    Object.freeze({
-      listId: reader.u8("source.listId"),
-      registry: encodeBase58(reader.bytes(32, "source.registry")),
-    }),
-  );
-  const rules = readEncodedRuleTable(reader);
-  const generation = reader.u32("generation");
-  const generationSlot = reader.u64("generationSlot");
+  const policy = readPolicyFields(reader, "RING_MEMBER_REGISTRY_INVALID");
   reader.done();
   if (historyCursor >= MEMBER_REGISTRY_ROOT_HISTORY || BigInt(nextIndex) > MEMBER_REGISTRY_CAPACITY)
     throw new RingError("RING_MEMBER_REGISTRY_INVALID", {
@@ -216,12 +241,24 @@ export function decodeRingMemberRegistry(data: Uint8Array): RingMemberRegistry {
     priorFloor,
     floorSlot,
     history: Object.freeze(history),
-    policyHash,
-    sources: Object.freeze(sources),
-    rules,
-    generation,
-    generationSlot,
+    ...policy,
   });
+}
+
+/** Mirrors Rust `RingPolicy::from_data`, every rule row past its count zero. */
+export function decodeRingPolicy(data: Uint8Array): RingPolicy {
+  const reader = accountReader(data, {
+    discriminator: RING_POLICY_DISCRIMINATOR,
+    size: RING_POLICY_SIZE,
+    code: "RING_POLICY_INVALID",
+  });
+  const bump = reader.u8("bump");
+  const records = encodeBase58(reader.bytes(32, "records"));
+  const policy = readPolicyFields(reader, "RING_POLICY_INVALID");
+  const ownRoots = readRootMirror(reader);
+  const curatorRoots = readRootMirror(reader);
+  reader.done();
+  return Object.freeze({ bump, records, ...policy, ownRoots, curatorRoots });
 }
 
 /** Mirrors Rust `RecordQueue::valid`. */
@@ -288,8 +325,40 @@ export function registryCurrentRoot(registry: RingMemberRegistry): RingRootEntry
 }
 
 /** Rust `MemberRegistry::curator`, the one curator registry the sources name. */
-export function registryCurator(registry: RingMemberRegistry): Address | undefined {
+export function registryCurator(
+  registry: Pick<RingMemberRegistry, "sources">,
+): Address | undefined {
   return registry.sources.find((source) => !isZeroAddress(source.registry))?.registry;
+}
+
+export function rootMirror(policy: RingPolicy, kind: RootMirrorKind): RootMirror {
+  return kind === "own" ? policy.ownRoots : policy.curatorRoots;
+}
+
+/** Rust `RootMirror::root`, the current root or a retired one before its expiry. */
+export function mirrorRoot(mirror: RootMirror, revision: bigint, slot: bigint): Bytes32 {
+  const current = mirror.roots[0]?.revision;
+  const root = mirror.roots.find(
+    (entry) =>
+      entry !== undefined &&
+      entry.revision === revision &&
+      (revision === current || slot < entry.expiresAt),
+  );
+  if (root === undefined)
+    throw new RingError("RING_ROOT_NOT_MIRRORED", {
+      details: { registry: mirror.registry, revision: revision.toString() },
+    });
+  return root.hash;
+}
+
+/** The newest root `SyncRoots` copied from `registry`, refused when the mirror holds another registry. */
+export function mirrorCurrentRoot(mirror: RootMirror, registry: Address): StorageRegistryRoot {
+  const current = mirror.roots[0];
+  if (mirror.registry !== registry || current === undefined)
+    throw new RingError("RING_ROOT_NOT_MIRRORED", {
+      details: { registry, mirrored: mirror.registry },
+    });
+  return current;
 }
 
 /** Rust `RecordQueue::pending`. */
@@ -339,7 +408,7 @@ function accountReader(
   account: Readonly<{
     discriminator: number;
     size: number;
-    code: "RING_CONFIG_INVALID" | "RING_MEMBER_REGISTRY_INVALID" | "RING_RECORD_QUEUE_INVALID";
+    code: AccountInvalidCode;
   }>,
 ): Reader {
   if (data.length !== account.size || data[0] !== account.discriminator)
@@ -367,23 +436,58 @@ function validScope(scope: number): boolean {
   return scope !== 0 && (scope & ~RING_COSIGN_SCOPE_MASK) === 0;
 }
 
+type AccountInvalidCode =
+  | "RING_CONFIG_INVALID"
+  | "RING_MEMBER_REGISTRY_INVALID"
+  | "RING_RECORD_QUEUE_INVALID"
+  | "RING_POLICY_INVALID";
+
+/** Laid out alike in `MemberRegistry` and `RingPolicy`. */
+function readPolicyFields(reader: Reader, code: AccountInvalidCode) {
+  const policyHash = reader.bytes(32, "policyHash") as Bytes32;
+  const sources = Array.from({ length: RING_SOURCE_SLOTS }, () =>
+    Object.freeze({
+      listId: reader.u8("source.listId"),
+      registry: encodeBase58(reader.bytes(32, "source.registry")),
+    }),
+  );
+  const rules = readEncodedRuleTable(reader, code);
+  const generation = reader.u32("generation");
+  const generationSlot = reader.u64("generationSlot");
+  return { policyHash, sources: Object.freeze(sources), rules, generation, generationSlot };
+}
+
+function readRootMirror(reader: Reader): RootMirror {
+  const registry = reader.bytes(32, "mirror.registry");
+  const roots = Array.from({ length: MEMBER_REGISTRY_ROOT_HISTORY }, () => {
+    const hash = reader.bytes(32, "mirror.root") as Bytes32;
+    const revision = reader.u64("mirror.revision");
+    const expiresAt = reader.u64("mirror.expiresAt");
+    return equalBytes(hash, ZERO_32) ? undefined : Object.freeze({ hash, revision, expiresAt });
+  });
+  return Object.freeze({
+    ...(equalBytes(registry, ZERO_32) ? {} : { registry: encodeBase58(registry) }),
+    roots: Object.freeze(roots),
+  });
+}
+
 /** Mirrors Rust `EncodedRuleTable::decode`, every slot past a count zero. */
-function readEncodedRuleTable(reader: Reader): EncodedRuleTable {
-  const rules = countedRows(reader, RING_RULE_SLOTS, "rules");
+function readEncodedRuleTable(reader: Reader, code: AccountInvalidCode): EncodedRuleTable {
+  const rules = countedRows(reader, RING_RULE_SLOTS, "rules", code);
   return Object.freeze({ rules });
 }
 
-function countedRows(reader: Reader, slots: number, field: string): readonly Bytes32[] {
+function countedRows(
+  reader: Reader,
+  slots: number,
+  field: string,
+  code: AccountInvalidCode,
+): readonly Bytes32[] {
   const count = reader.u8(`${field}.count`);
-  if (count > slots)
-    throw new RingError("RING_MEMBER_REGISTRY_INVALID", {
-      details: { field, count },
-    });
+  if (count > slots) throw new RingError(code, { details: { field, count } });
   const rows = Array.from({ length: slots }, () => reader.bytes(32, field) as Bytes32);
   if (rows.slice(count).some((row) => !equalBytes(row, ZERO_32)))
-    throw new RingError("RING_MEMBER_REGISTRY_INVALID", {
-      details: { field, padding: true },
-    });
+    throw new RingError(code, { details: { field, padding: true } });
   return Object.freeze(rows.slice(0, count));
 }
 
