@@ -42,6 +42,8 @@ pub enum RingRpcError {
     StateUnavailable,
     #[error("audit service is busy")]
     Busy,
+    #[error("service store failed because {0}")]
+    Store(#[from] sea_orm::DbErr),
 }
 
 impl From<RingIndexerError> for RingRpcError {
@@ -129,6 +131,10 @@ impl From<RingRpcError> for ErrorObjectOwned {
             }
             StateUnavailable => {
                 error!("audit service state is unavailable");
+                (ErrorCode::InternalError, "audit service is unavailable")
+            }
+            Store(inner) => {
+                error!("service store failed {}", redacted(inner));
                 (ErrorCode::InternalError, "audit service is unavailable")
             }
         };

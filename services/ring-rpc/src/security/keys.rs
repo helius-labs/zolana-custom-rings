@@ -9,6 +9,8 @@ use crate::{config::RootSecret, error::RingRpcError};
 /// The auditor and service domains must stay distinct.
 const DERIVATION_INFO: &[u8] = b"zolana/ring-auditor/v1";
 const SERVICE_KEY_INFO: &[u8] = b"zolana/ring-rpc-service/v1";
+/// Keys the encrypted grant rows, apart from every auditor and service key.
+pub const GRANT_ROW_KEY_INFO: &[u8] = b"zolana/ring-rpc-grant-rows/v1";
 /// Part of the pinned derivation info of every registered auditor key.
 const DERIVATION_SUFFIX: &[u8] = &[0];
 
