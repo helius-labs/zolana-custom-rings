@@ -21,8 +21,7 @@ import (
 // 2. Every blinding is Poseidon(CRDB, BlindingSecret), domain separated from every SPP output blinding.
 // 3. An anonymous ring's deposit names the Ed25519 key behind each owner, any other deposit names none.
 // 4. Under key escrow every owner's record lies under MemberRegistryRoot and escrows the key the owner's nullifier key and ciphertext hash name.
-// 5. Under a nonzero PolicyHash every active asset rule of its table holds for each deposited asset's record under MemberRegistryRoot.
-// 6. An active asset rule over a curator list refuses the deposit, the proof opens no curator root.
+// 5. Under a nonzero PolicyHash every active asset rule of its table holds for each deposited asset on the lists its records under MemberRegistryRoot and CuratorRoot carry.
 
 const (
 	MaxDeposits = 8
@@ -67,7 +66,7 @@ func NewDepositCircuit(capacity int) (*DepositCircuit, error) {
 }
 
 func (c *DepositCircuit) Define(api frontend.API) error {
-	if !slices.Contains(DepositCapacities, c.Capacity) || len(c.OwnerPkHashes) != c.Capacity || len(c.OwnerKeys) != c.Capacity || len(c.NullifierPks) != c.Capacity || len(c.BlindingSecrets) != c.Capacity || len(c.CtHashes) != c.Capacity || len(c.Members) != c.Capacity || len(c.Assets) != c.Capacity || len(c.Amounts) != c.Capacity || len(c.AssetRecords) != c.Capacity {
+	if !slices.Contains(DepositCapacities, c.Capacity) || len(c.OwnerPkHashes) != c.Capacity || len(c.OwnerKeys) != c.Capacity || len(c.NullifierPks) != c.Capacity || len(c.BlindingSecrets) != c.Capacity || len(c.CtHashes) != c.Capacity || len(c.Members) != c.Capacity || len(c.Assets) != c.Capacity || len(c.Amounts) != c.Capacity || len(c.AssetRecords) != c.Capacity || len(c.CuratorAssetRecords) != c.Capacity {
 		return fmt.Errorf("deposit: capacity/witness mismatch")
 	}
 	// 1. Count selects 1..8 occupied slots, DepositPublicInput::hash builds both flags as 0 or 1.
@@ -102,7 +101,7 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 		plaintext = slices.Concat(plaintext, ownerBytes[:], blindingBytes[:], c.OwnerKeys[i][:])
 		deposits[i] = policy.DepositSlot{Owner: c.OwnerPkHashes[i], Asset: c.Assets[i], Amount: c.Amounts[i], Active: active}
 	}
-	// 7. On a policy ring every deposited asset meets the asset rules under the bound root.
+	// 7. On a policy ring every deposited asset meets the asset rules under the bound roots.
 	c.DepositAssets.Assert(api, rc, c.PolicyHash, c.MemberRegistryRoot, deposits)
 	// 8. The statement binds each commitment SPP receives to the ciphertext the auditor opens, the cipher bounds its bytes.
 	sealed := shared.Envelope{Plaintext: plaintext, EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: shared.DepositEncInfo}.Seal(api)
@@ -121,7 +120,7 @@ func (c *DepositCircuit) statement(api frontend.API, count ringgadget.Count, com
 	for i := len(commitments); i < MaxDeposits; i++ {
 		chain = append(chain, 0, 0)
 	}
-	chain = slices.Concat(chain, sealed.Auditor, sealed.Eph, []frontend.Variable{c.KeyEscrow, c.MemberRegistryRoot, c.PolicyHash})
+	chain = slices.Concat(chain, sealed.Auditor, sealed.Eph, []frontend.Variable{c.KeyEscrow, c.MemberRegistryRoot, c.CuratorRoot, c.PolicyHash})
 	for i := range MaxDeposits {
 		if i < len(c.Assets) {
 			chain = append(chain, c.Assets[i], c.Amounts[i])

@@ -18,6 +18,7 @@ type depositStatementCircuit struct {
 	Anonymous          frontend.Variable
 	KeyEscrow          frontend.Variable
 	MemberRegistryRoot frontend.Variable
+	CuratorRoot        frontend.Variable
 	PolicyHash         frontend.Variable
 	Assets             [MaxDeposits]frontend.Variable
 	Amounts            [MaxDeposits]frontend.Variable
@@ -32,6 +33,7 @@ func (c *depositStatementCircuit) Define(api frontend.API) error {
 		ContextHash: c.ContextHash, Count: c.Count, Anonymous: c.Anonymous, KeyEscrow: c.KeyEscrow, MemberRegistryRoot: c.MemberRegistryRoot,
 		PolicyHash: c.PolicyHash, Assets: c.Assets[:], Amounts: c.Amounts[:],
 	}
+	circuit.CuratorRoot = c.CuratorRoot
 	sealed := shared.Sealed{
 		Auditor:    gadget.PackBytesBE(api, c.AuditorPubkey[:]),
 		Eph:        gadget.PackBytesBE(api, c.EphPk[:]),
@@ -56,6 +58,7 @@ func TestDepositStatementMatchesRustVector(t *testing.T) {
 			Amounts            []uint64 `json:"amounts"`
 			KeyEscrow          bool     `json:"key_escrow"`
 			MemberRegistryRoot *string  `json:"member_registry_root"`
+			CuratorRoot        *string  `json:"curator_root"`
 			PolicyHash         *string  `json:"policy_hash"`
 			PublicInputHash    string   `json:"public_input_hash"`
 		} `json:"deposit"`
@@ -67,10 +70,13 @@ func TestDepositStatementMatchesRustVector(t *testing.T) {
 	}
 	witness := &depositStatementCircuit{
 		PublicInputHash: ringtest.VectorField(t, v.PublicInputHash), ContextHash: ringtest.VectorField(t, v.ContextHash),
-		Count: len(v.OwnerUtxoHashes), Anonymous: ringtest.Bit(v.Anonymous), KeyEscrow: ringtest.Bit(v.KeyEscrow), MemberRegistryRoot: 0, PolicyHash: 0,
+		Count: len(v.OwnerUtxoHashes), Anonymous: ringtest.Bit(v.Anonymous), KeyEscrow: ringtest.Bit(v.KeyEscrow), MemberRegistryRoot: 0, CuratorRoot: 0, PolicyHash: 0,
 	}
 	if v.MemberRegistryRoot != nil {
 		witness.MemberRegistryRoot = ringtest.VectorField(t, *v.MemberRegistryRoot)
+	}
+	if v.CuratorRoot != nil {
+		witness.CuratorRoot = ringtest.VectorField(t, *v.CuratorRoot)
 	}
 	if v.PolicyHash != nil {
 		witness.PolicyHash = ringtest.VectorField(t, *v.PolicyHash)
