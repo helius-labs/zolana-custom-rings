@@ -1,7 +1,7 @@
 use solana_program_error::ProgramError;
 use spr_hasher::HasherError;
 use thiserror::Error;
-use zolana_ring_policy::{PolicyTableError, RuleTableError, SourceMapError};
+use zolana_ring_policy::{AssetLimitsError, PolicyTableError, RuleTableError, SourceMapError};
 
 macro_rules! ring_errors {
     ($($variant:ident = $code:literal => $message:literal,)*) => {
@@ -151,6 +151,7 @@ ring_errors! {
     CoSignerRecordAlreadyExists = 8261 => "co-signer record already exists",
     InvalidRingPolicy = 8300 => "ring policy account is invalid",
     RingPolicyAlreadyExists = 8301 => "ring policy already exists",
+    InvalidAssetLimits = 8390 => "a window cap and its window are not set together",
 }
 
 impl From<CustomRingError> for ProgramError {
@@ -171,6 +172,12 @@ impl From<RuleTableError> for CustomRingError {
             RuleTableError::MemberWrittenList => Self::MemberWrittenListRule,
             _ => Self::InvalidPolicyRules,
         }
+    }
+}
+
+impl From<AssetLimitsError> for CustomRingError {
+    fn from(_: AssetLimitsError) -> Self {
+        Self::InvalidAssetLimits
     }
 }
 

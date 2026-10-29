@@ -62,13 +62,14 @@ The recipient rebuilds the slot secret from `X25519(u_sk, tx_viewing_u)`, the au
 | Value | Encoding |
 |---|---|
 | Member range | `1 <= member <= q - 2`, as big-endian bytes |
-| Record | `Poseidon(member, next, right_align(lists as u64 BE), escrow_key, mint_policy, right_align(withdrawal_threshold as u64 BE))` |
+| Record | `Poseidon(member, next, right_align(lists as u64 BE), escrow_key, mint_policy, right_align(withdrawal_threshold as u64 BE), limits_0, limits_1)` |
 | Mint policy field | `threshold * 2^128 + cap * 2^64 + cosign_above`, each a u64 |
-| Sentinel | `(0, q - 1, 0, 0, 0, 0)` at leaf `0` |
+| Asset limit fields | `limits_0 = sender_cap * 2^128 + sender_window_slots * 2^64 + volume_cap`, `limits_1 = volume_window_slots * 2^128 + deposit_cap * 2^64 + withdrawal_cap`, each a u64 |
+| Sentinel | `(0, q - 1, 0, 0, 0, 0, 0, 0)` at leaf `0` |
 | Escrow key | `Poseidon(nullifier_pk, hash_bytes(ciphertext))`, the 32-byte sealed secret |
 | Tree node | `Poseidon(c_0, c_1, c_2, c_3)`, height 10, the leaf index as 20 bits |
-| Queue entry | `Poseidon(CRQW, member, right_align(mask), right_align(value), escrow_key, mint_policy_write, right_align(withdrawal_threshold))` |
-| Mint policy write | `0` when the write keeps the mint settings, else `2^192 + mint policy field`. `withdrawal_threshold` is `0` when the write keeps them. |
+| Queue entry | `Poseidon(CRQW, member, right_align(mask), right_align(value), escrow_key, mint_policy_write, right_align(withdrawal_threshold), limits_0, limits_1)` |
+| Mint policy write | `0` when the write keeps the mint settings, else `2^192 + mint policy field`. `withdrawal_threshold` and both asset limit fields are `0` when the write keeps them. |
 | Queue chain | `chain(-1) = 0`, `chain(p) = Poseidon(chain(p - 1), entry_p)` |
 
 `policy_hash` is in [EncodedRuleTable](../../spec.md#encodedruletable).

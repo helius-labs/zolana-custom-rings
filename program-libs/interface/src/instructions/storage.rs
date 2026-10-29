@@ -3,7 +3,7 @@ use zolana_ring_policy::ListSet;
 
 use crate::{
     error::CustomRingError,
-    instruction::{list_and_mint_entry, write_count},
+    instruction::{list_and_mint_entry, mint_policy_write, write_count, MintPolicyWrite},
     member_registry::QueueEntry,
     storage::{RegistryId, Revision},
     ApplyRecordsIxData, WriteRecordsIxData,
@@ -41,7 +41,7 @@ pub struct StorageWriteData {
     pub member: [u8; 32],
     pub lists: WriteRecordsIxData,
     /// [`mint_policy_write`](crate::mint_policy_write) of the replacement settings.
-    pub mint_policy: [u8; 33],
+    pub mint_policy: MintPolicyWrite,
     /// Nonzero only on an escrow write, the [`EscrowKey::hash`](crate::EscrowKey::hash).
     pub escrow_key: [u8; 32],
 }
@@ -84,7 +84,9 @@ impl StorageWriteData {
                 ListSet::STORAGE_WRITES,
             );
         }
-        if self.lists != WriteRecordsIxData::default() || self.mint_policy != [0; 33] {
+        if self.lists != WriteRecordsIxData::default()
+            || self.mint_policy != mint_policy_write(None)
+        {
             return Err(CustomRingError::InvalidInstructionData);
         }
         QueueEntry::escrow_hash(self.member, self.escrow_key)
@@ -126,4 +128,4 @@ impl<'a> StorageUpdateIxData<'a> {
 const _: () = assert!(core::mem::align_of::<InitializeIxData>() == 1);
 const _: () = assert!(InitializeIxData::SIZE == 40);
 const _: () = assert!(core::mem::align_of::<StorageWriteData>() == 1);
-const _: () = assert!(StorageWriteData::SIZE == 113);
+const _: () = assert!(StorageWriteData::SIZE == 161);

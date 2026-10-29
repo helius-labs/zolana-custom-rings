@@ -1,8 +1,8 @@
-//! Shared nonzero mint settings, including full u64 values and records beyond eight.
+//! Shared nonzero mint settings and asset limits, including full u64 values and records beyond eight.
 use custom_ring_interface::QueueEntry;
 use spr_hasher::primitives::right_align;
 use zolana_ring_member_registry::{MemberRegistryTree, RecordTree};
-use zolana_ring_policy::MintPolicy;
+use zolana_ring_policy::{AssetLimits, MintPolicy};
 
 const VECTOR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -19,6 +19,14 @@ fn vector() -> serde_json::Value {
             cap: amount,
             cosign_above: amount,
             withdrawal_threshold: amount,
+            limits: AssetLimits {
+                sender_cap: amount - 1,
+                sender_window_slots: amount - 2,
+                volume_cap: amount - 3,
+                volume_window_slots: amount - 4,
+                deposit_cap: amount - 5,
+                withdrawal_cap: amount - 6,
+            },
         };
         assert_eq!(MintPolicy::from_bytes(policy.bytes()), policy);
         let member = right_align(&mint.to_be_bytes());
@@ -30,7 +38,7 @@ fn vector() -> serde_json::Value {
             mint_policy: Some(policy),
         };
         tree.apply([0; 32], &[entry]).unwrap();
-        rows.push(serde_json::json!({"member": hex::encode(member), "amount": amount.to_string(), "field": hex::encode(policy.field()), "wire": hex::encode(policy.bytes()), "entry_hash": hex::encode(entry.hash().unwrap())}));
+        rows.push(serde_json::json!({"member": hex::encode(member), "amount": amount.to_string(), "field": hex::encode(policy.field()), "wire": hex::encode(policy.bytes()), "limits": policy.limits.fields().map(hex::encode), "entry_hash": hex::encode(entry.hash().unwrap())}));
     }
     serde_json::json!({"rows": rows, "root": hex::encode(tree.root().unwrap())})
 }

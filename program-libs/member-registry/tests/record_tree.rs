@@ -396,6 +396,11 @@ fn mint_settings_survive_relinks_list_and_key_writes_and_clear_explicitly() {
         cap: 20,
         cosign_above: 15,
         withdrawal_threshold: u64::MAX,
+        limits: zolana_ring_policy::AssetLimits {
+            sender_cap: 30,
+            sender_window_slots: 40,
+            ..Default::default()
+        },
     };
     tree.apply(
         [0; 32],

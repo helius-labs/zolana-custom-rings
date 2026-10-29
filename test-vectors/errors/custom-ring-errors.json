@@ -100,5 +100,6 @@
   "InvalidCoSignerRecord": 8260,
   "CoSignerRecordAlreadyExists": 8261,
   "InvalidRingPolicy": 8300,
-  "RingPolicyAlreadyExists": 8301
+  "RingPolicyAlreadyExists": 8301,
+  "InvalidAssetLimits": 8390
 }

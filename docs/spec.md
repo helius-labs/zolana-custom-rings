@@ -28,8 +28,8 @@ A custom ring is a Solana program that governs its notes in the zolana shielded 
 | Shape | `n_in × n_out` | The input and output slot counts of an SPP transfer, one of `SPP_SUPPORTED_SHAPES`. |
 | Member | Field element | A value in `[1, q - 2]` that names an owner, `solana_owner_identity(key)`, or an asset, `hash_bytes(mint)`. |
 | List | Record bit | One of 8 named bits of a record. A list has no effect beyond the rules that read it. |
-| Record | Tree leaf | `Poseidon(member, next, lists, escrow_key, mint_policy, withdrawal_threshold)`. One per member, sorted by member through `next`. |
-| Mint settings | Record fields | `threshold`, `cap`, `cosign_above` and `withdrawal_threshold`, each a u64, in the record of an asset member. Only the config authority writes them. [Mint settings](#mint-settings) gives the effect of each value, zero included. |
+| Record | Tree leaf | `Poseidon(member, next, lists, escrow_key, mint_policy, withdrawal_threshold, limits_0, limits_1)`. One per member, sorted by member through `next`. |
+| Mint settings | Record fields | `threshold`, `cap`, `cosign_above`, `withdrawal_threshold` and the six asset limits, each a u64, in the record of an asset member. Only the config authority writes them. [Mint settings](#mint-settings) gives the effect of each value, zero included. |
 | Member registry | Account and tree | The `MemberRegistry` account holds the last 32 roots of the record tree, the floor and the policy. Record contents live in instruction data and the ring indexer. |
 | Own root, curator root | Root | A root of the ring's own member registry, or of its curator's, named by its history index. |
 | Record queue | Account | The `RecordQueue` account holds pending record writes as a hash chain. An apply proof moves them into the tree. |
@@ -164,7 +164,7 @@ In every mode:
 | Reserved discriminators | `1`, `3` to `9` | Unused. `0` marks an empty account. |
 | `ROOT_HISTORY` | `32` | Roots a member registry keeps. |
 | `QUAD_ARITY`, `QUAD_HEIGHT` | `4`, `10` | Shape of the record tree, `2^20` leaves. |
-| `MEMBER_REGISTRY_EMPTY_ROOT` | `0771d415ec42a482ed0169394bd583c89f08f5377bb20a45b240f7d241cd9841` | Root of a tree that holds only the sentinel, 32 bytes big endian. |
+| `MEMBER_REGISTRY_EMPTY_ROOT` | `053b2136ce0e6cffb89cb76c7a81b6d7e1bd424159ff4579f284a7e5f198956d` | Root of a tree that holds only the sentinel, 32 bytes big endian. |
 | `QUEUE_CAPACITY`, `APPLY_BATCH` | `16` | Pending writes a queue holds and an apply proof takes. |
 | `MEMBER_QUEUE_LIMIT` | `8` | Pending writes at which member writes stop. 8 queue positions stay free for the authority. |
 | `AUTHORITY_RESERVED_LEAVES` | `2^16` | Last leaves only authority writes fill, so member writes cannot use up the leaves an authority write needs. |
@@ -327,8 +327,9 @@ pub struct RecordQueue {
 
 ```rust
 fn entry_hash(e: &QueueEntry) -> Field {
+    let p = e.mint_policy.unwrap_or_default();
     Poseidon(field("CRQW"), e.member, right_align(e.mask), right_align(e.value), e.escrow_key,
-        mint_policy_write(e), right_align(e.mint_policy.unwrap_or_default().withdrawal_threshold))
+        mint_policy_write(e), right_align(p.withdrawal_threshold), limits(p)[0], limits(p)[1])
 }
 // 0 when the entry keeps the settings, else 2^192 + pack(policy). See Mint settings.
 fn mint_policy_write(e: &QueueEntry) -> Field {
@@ -364,10 +365,11 @@ SPP owns the `RingConfig` at `ring_auth`, 69 bytes: authority, program id, the a
 A record lists one member's lists and holds its escrow key and its mint settings. Records are public: every write names its member, its bits and its mint settings in instruction data, and the ring indexer serves every record with its path.
 
 ```rust
-/// Leaf of the 4-ary record tree. Leaf 0 is the sentinel `(0, q - 1, 0, 0, 0, 0)`.
+/// Leaf of the 4-ary record tree. Leaf 0 is the sentinel `(0, q - 1, 0, 0, 0, 0, 0, 0)`.
 fn record_hash(r: &MemberRecord) -> Field {
     Poseidon(r.member, r.next, right_align(r.lists), r.escrow_key,
-        pack(r.mint_policy), right_align(r.mint_policy.withdrawal_threshold))
+        pack(r.mint_policy), right_align(r.mint_policy.withdrawal_threshold),
+        limits(r.mint_policy)[0], limits(r.mint_policy)[1])
 }
 /// Set once by `RegisterKey`. A second registration keeps the first key.
 fn escrow_key(nullifier_pk: Field, ciphertext: &[u8; 32]) -> Field {
@@ -402,15 +404,27 @@ An asset member's record holds the ring's settings for that mint, each a u64:
 | `cap` | Policy proof, outflow | The outflow of one transfer in the mint is at most `cap`. Zero is no cap. |
 | `cosign_above` | Policy proof, outflow | An outflow above it sets `approval_required`. Zero is no bound. |
 | `withdrawal_threshold` | Withdrawal exemption proof | A gross withdrawal at or below it needs no withdrawal-scoped co-signer. Zero exempts nothing. |
+| `sender_cap`, `sender_window_slots` | Ring RPC co-signer | The amount of the mint one sender may move in a window of that many slots. Zero is no cap. |
+| `volume_cap`, `volume_window_slots` | Ring RPC co-signer | The amount of the mint all senders together may move in a window of that many slots. Zero is no cap. |
+| `deposit_cap` | Ring RPC co-signer | The largest public deposit of the mint in one co-signed transaction. Zero is no cap. |
+| `withdrawal_cap` | Ring RPC co-signer | The largest public withdrawal of the mint in one co-signed transaction. Zero is no cap. |
+
+No proof bounds an amount by the six asset limits. They enter the leaf, so the indexer serves them under a root the program holds, and Ring RPC enforces them before it co-signs. A window cap and its window are both zero or both nonzero, and a write that sets only one of them fails with `InvalidAssetLimits`.
 
 ```rust
 /// Below 2^192, with threshold at bits 128..192, cap at 64..128 and cosign_above at 0..64.
 fn pack(p: MintPolicy) -> Field {
     (p.threshold << 128) + (p.cap << 64) + p.cosign_above
 }
+/// Two fields below 2^192, each three limits in table order with the first at bits 128..192.
+fn limits(p: MintPolicy) -> [Field; 2] {
+    let l = p.limits;
+    [(l.sender_cap << 128) + (l.sender_window_slots << 64) + l.volume_cap,
+        (l.volume_window_slots << 128) + (l.deposit_cap << 64) + l.withdrawal_cap]
+}
 ```
 
-Only `AuthorityWriteRecords` writes mint settings. One write replaces all four values, and an all-zero value clears them. A write without a replacement keeps them, and so do member writes and key registrations. A record with nonzero mint settings counts as nonempty, so a settings write to an absent asset inserts its record. The policy proof and the withdrawal exemption proof read mint settings from the ring's own registry only, also when a curator serves the lists. A mint has no settings until the authority writes them, and the only bound on the number of configured mints is the record tree's capacity.
+Only `AuthorityWriteRecords` writes mint settings. One write replaces all ten values, and an all-zero value clears them. A write without a replacement keeps them, and so do member writes and key registrations. A record with nonzero mint settings counts as nonempty, so a settings write to an absent asset inserts its record. The policy proof and the withdrawal exemption proof read mint settings from the ring's own registry only, also when a curator serves the lists. A mint has no settings until the authority writes them, and the only bound on the number of configured mints is the record tree's capacity.
 
 ## Instructions
 
@@ -856,16 +870,16 @@ Tag `40`. Writes up to 16 authority list changes or mint-setting replacements an
 
 **Instruction data**
 
-`count: u8`, then `count` × `RecordWriteData` of 81 bytes each, then `ApplyRecordsIxData`.
+`count: u8`, then `count` × `RecordWriteData` of 129 bytes each, then `ApplyRecordsIxData`.
 
 ```rust
 struct RecordWriteData {
     member: [u8; 32],
     /// u64 little endian each. All zero when the write changes no list.
     lists: { mask: [u8; 8], value: [u8; 8] },
-    /// `0` then 32 zero bytes keeps the mint settings. `1` then
-    /// threshold, cap, cosign_above, withdrawal_threshold as u64 big endian replaces them.
-    mint_policy: [u8; 33],
+    /// `0` then 80 zero bytes keeps the mint settings. `1` then threshold, cap, cosign_above,
+    /// withdrawal_threshold and the six asset limits in table order as u64 big endian replaces them.
+    mint_policy: [u8; 81],
 }
 ```
 
@@ -1291,7 +1305,7 @@ A registered nullifier key cannot change. A delegate and the `ConfidentialEscrow
 
 ### Rings of another layout need a migration
 
-The program, the SDKs, the ring indexer and the proving keys accept only the 150-byte config, the 2388-byte registry, the six-field record leaf, the seven-field queue entry and policy table version 12. A ring whose accounts or record tree use another layout fails these checks, and its records do not open under these circuits. Its operator migrates the accounts and the record tree before the program upgrade. No ring instruction performs that migration, and a reindex of the ring's instructions does not rebuild its on-chain roots.
+The program, the SDKs, the ring indexer and the proving keys accept only the 150-byte config, the 2388-byte registry, the eight-field record leaf, the nine-field queue entry and policy table version 12. A ring whose accounts or record tree use another layout fails these checks, and its records do not open under these circuits. Its operator migrates the accounts and the record tree before the program upgrade. No ring instruction performs that migration, and a reindex of the ring's instructions does not rebuild its on-chain roots.
 
 ### The auditor reads everything
 
