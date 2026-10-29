@@ -507,7 +507,6 @@ impl Relay {
     }
 }
 
-/// Owns the decoded payload, its secrets zeroize once the co-signer decides.
 struct ProvenStep {
     relay_id: RelayId,
     payload: RelayPayload,

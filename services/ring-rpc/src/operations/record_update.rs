@@ -218,10 +218,10 @@ impl RecordUpdateCheck<'_> {
 
 impl<'a> BatchPlan<'a> {
     /// Urgent updates go at once ahead of graced ones on other records, graced ones once full, aged or blocking an urgent one.
-    pub fn decide(self) -> Option<PlannedBatch<'a>> {
-        let urgent = self.urgent();
+    pub fn decide(self) -> Result<Option<PlannedBatch<'a>>, RecordUpdateRefusal> {
+        let urgent = self.urgent()?;
         if !urgent.is_empty() {
-            return Some(PlannedBatch { updates: urgent });
+            return Ok(Some(PlannedBatch { updates: urgent }));
         }
         let graced = within_batch(self.queue.iter().take_while(|update| !update.urgent));
         let carried: usize = graced.iter().map(|update| update.writes.len()).sum();
@@ -234,23 +234,21 @@ impl<'a> BatchPlan<'a> {
         let aged = self.queue.first().is_some_and(|oldest| {
             self.slot >= oldest.queued_slot.saturating_add(BATCH_WINDOW_SLOTS)
         });
-        (!graced.is_empty() && (full || blocking || aged))
-            .then_some(PlannedBatch { updates: graced })
+        Ok((!graced.is_empty() && (full || blocking || aged))
+            .then_some(PlannedBatch { updates: graced }))
     }
 
     /// Stops at an urgent update sharing a record with an earlier graced one, each record keeps its write order.
-    fn urgent(&self) -> Vec<&'a QueuedUpdate> {
+    fn urgent(&self) -> Result<Vec<&'a QueuedUpdate>, RecordUpdateRefusal> {
         let mut graced_members = Vec::new();
         let mut urgent = Vec::new();
         for update in self.queue {
-            let Ok(members) = update
+            let members = update
                 .writes
                 .iter()
                 .map(StorageWriteData::member)
                 .collect::<Result<Vec<_>, _>>()
-            else {
-                break;
-            };
+                .map_err(invalid_entry)?;
             if !update.urgent {
                 graced_members.extend(members);
             } else if members.iter().any(|member| graced_members.contains(member)) {
@@ -259,7 +257,7 @@ impl<'a> BatchPlan<'a> {
                 urgent.push(update);
             }
         }
-        within_batch(urgent)
+        Ok(within_batch(urgent))
     }
 }
 

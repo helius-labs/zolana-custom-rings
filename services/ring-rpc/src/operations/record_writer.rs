@@ -202,7 +202,7 @@ impl RecordWriter {
                 live.push(update);
             }
         }
-        let Some(plan) = (BatchPlan { queue: &live, slot }).decide() else {
+        let Some(plan) = (BatchPlan { queue: &live, slot }).decide()? else {
             return Ok(());
         };
         let batch = plan.updates.as_slice();

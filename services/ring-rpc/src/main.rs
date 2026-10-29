@@ -27,7 +27,6 @@ struct Relayed {
     merge: MergeParts,
 }
 
-/// The managed merge pays through the relay's fee payer.
 struct MergeParts {
     submit: Arc<dyn RelaySubmit>,
     builder: Arc<dyn MergeBuilder>,
