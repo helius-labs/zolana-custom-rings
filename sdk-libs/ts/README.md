@@ -36,14 +36,14 @@ const client = await createCustomRingClient({ solanaRpcUrl });
 await syncRingWallet({ client, wallet, keys });
 ```
 
-Ring projection errors, such as a key registry the indexer has not caught up
-with, are `RingError` codes. The flows retry the transient ones.
+Ring projection errors, such as a storage registry the indexer has not caught
+up with, are `RingError` codes. The flows retry the transient ones.
 
 ## Custom Rings
 
 Besides the permissionless default Ring, regulated entities can create custom Rings.
 Custom Rings are simple Solana programs for compliance and policy control. Each Ring deploys its own program. It has a program
-upgrade authority, a protocol authority, and an auditor key. The default Ring does not have an auditor key.
+upgrade authority, a config authority, and an auditor key. The default Ring does not have an auditor key.
 
 The auditor key lives in a Ring RPC. The Ring authority grants view access.
 Helius can host that RPC; the authority can host it itself. The forester is
@@ -51,8 +51,8 @@ shared with the default Ring.
 
 A Ring is confidential or anonymous, and an anonymous Ring spends
 through the Ring RPC relay. A Ring is audit-only or carries a
-policy, a rule table over lists of members whose addresses the Ring claims in
-its address tree. The tier is fixed when the Ring config is created.
+policy, a rule table over the list bits of the member records in the Ring's
+storage registry. The tier is fixed when the Ring config is created.
 
 Set a Ring up in this order.
 
@@ -116,17 +116,16 @@ A deploy that fails after its buffer exists names the buffer in the
 `RING_DEPLOY_PROGRAM` error details. Pass the same buffer keypair again to
 resume, or reclaim its rent with `closeBufferInstruction`.
 
-The deploy path is tested on Agave 4.0.2. The shipped Ring binaries are
+The deploy path is tested on Agave 4.2. The shipped Ring binaries are
 SBPF v0 and do not load on Agave 4.1.2.
 
 Passkey access to Ring audit traces uses `P256ReaderKey`.
 
-The live ring controls test is described in
-[test/e2e/RING-CONTROLS.md](test/e2e/RING-CONTROLS.md).
-
 ## Entry points
 
-`@heliuslabs/zolana-custom-rings` exports the whole surface.
+`@heliuslabs/zolana-custom-rings` exports the wallet and operator surface, and
+`@heliuslabs/zolana-custom-rings/advanced` adds the codecs, statements and
+registry proofs the Ring circuits bind.
 `@heliuslabs/zolana-custom-rings/client` narrows it to the Ring prover
 requests, the client ports and `CustomRingClient`, and
 `@heliuslabs/zolana-custom-rings/keypair` to the auditor envelope helpers.
