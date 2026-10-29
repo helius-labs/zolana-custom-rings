@@ -359,7 +359,7 @@ export type {
 export {
   mergeDisclosureFieldCount,
   openRingMergeDisclosure,
-  ringMergeAnonymousPublicInputHash,
+  ringMergePublicInputHash,
 } from "../crypto/audit/merge-disclosure.js";
 export type { RingMergeDisclosure, RingMergeOpening } from "../crypto/audit/merge-disclosure.js";
 export { recoverRingMemberNotes } from "../operations/workflow/recover.js";

@@ -9,12 +9,11 @@ export {
   ringProvingKey,
 } from "../protocol/proof/proving-keys.js";
 export type { RingKeyCircuit } from "../protocol/proof/proving-keys.js";
-export { ANONYMOUS_MERGE_WIDTHS } from "../protocol/codec/ring-disclosure-layout.js";
+export { MERGE_WIDTHS } from "../protocol/codec/ring-disclosure-layout.js";
 export { RING_RULE_SLOTS, RING_SOURCE_SLOTS } from "../rpc/prover/types.js";
 export type { PresentRecordOpening } from "../rpc/prover/types.js";
 export type {
   AnonymousAuditProofRequest,
-  AnonymousMergeProofRequest,
   AnonymousSlotProofInputs,
   ApplyRecordsProofRequest,
   AuditEnvelopeProofInputs,
@@ -23,6 +22,7 @@ export type {
   DeliveredSlotProofInputs,
   DepositProofRequest,
   MemberPolicyProofRequest,
+  MergeProofRequest,
   MergeInputOpening,
   OutflowLimitProofInput,
   PolicyOutputOpening,

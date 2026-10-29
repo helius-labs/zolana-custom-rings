@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import type { Address } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
 
-import vector from "../../../../../test-vectors/merge/ring-merge-anonymous.json" with { type: "json" };
+import vector from "../../../../../test-vectors/merge/ring-merge.json" with { type: "json" };
 import { type RingMemberPage, type RingMemberPageRequest } from "../../../src/rpc/ports.js";
 import {
   fieldAdd,
@@ -340,7 +340,7 @@ describe("auditRingMerges", () => {
   });
 });
 
-describe("openDisclosedMerge (test-vectors/merge/ring-merge-anonymous.json)", () => {
+describe("openDisclosedMerge (test-vectors/merge/ring-merge.json)", () => {
   const hex = <T extends Uint8Array>(value: string, length: number): T => {
     const decoded = Uint8Array.from(Buffer.from(value.replace(/^0x/u, ""), "hex"));
     if (decoded.length !== length) throw new RangeError(`expected ${String(length)} bytes`);
