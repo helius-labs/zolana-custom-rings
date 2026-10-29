@@ -6,10 +6,7 @@ use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signature::Signature;
 use solana_signer::Signer;
-use spr_indexer_api::Hash;
 use tokio::sync::Mutex;
-use zolana_ring_client::{MemberOpeningRead, StorageTip};
-use zolana_ring_indexer::rpc::GetStorageMemberOpeningsRequest;
 use zolana_ring_policy::{AssetLimits, Member};
 
 use crate::{
@@ -199,7 +196,7 @@ impl<S: TransactionSource> AssetLimitSource for MirroredLimits<S> {
             return Ok(Vec::new());
         }
         let source = &self.0.source;
-        let StorageTip { registry, root, .. } = match source.records_root(ring).await? {
+        let tip = match source.records_root(ring).await? {
             RecordsTip::NoPolicy => return Ok(vec![AssetLimits::EMPTY; assets.len()]),
             RecordsTip::Unsynced => return Err(CoSignError::LimitsUnavailable.into()),
             RecordsTip::Mirrored(tip) => tip,
@@ -210,27 +207,18 @@ impl<S: TransactionSource> AssetLimitSource for MirroredLimits<S> {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| CoSignError::LimitsUnavailable)?;
         let response = source
-            .storage_member_openings(GetStorageMemberOpeningsRequest {
-                registry: registry.into(),
-                members: members.iter().copied().map(Hash).collect(),
-                expected_root: Hash(root),
-            })
+            .storage_member_openings(tip.openings_request(&members))
             .await?;
-        if response.openings.len() != members.len() {
-            return Err(RingRpcError::InvalidIndexerResponse);
-        }
-        response
-            .openings
+        Ok(tip
+            .verify_openings(&response, &members)
+            .map_err(|_| RingRpcError::InvalidIndexerResponse)?
             .iter()
-            .zip(&members)
-            .map(|(view, member)| {
-                let opening = MemberOpeningRead::verify(view, &root, member)
-                    .map_err(|_| RingRpcError::InvalidIndexerResponse)?;
-                Ok(opening
+            .map(|opening| {
+                opening
                     .record()
-                    .map_or(AssetLimits::EMPTY, |record| record.mint_policy.limits))
+                    .map_or(AssetLimits::EMPTY, |record| record.mint_policy.limits)
             })
-            .collect()
+            .collect())
     }
 }
 
