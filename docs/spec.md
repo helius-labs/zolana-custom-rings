@@ -64,7 +64,7 @@ A custom ring is a Solana program that governs its notes in the zolana shielded 
 | Insert fee | Lamports | What a member write or key registration pays the config authority. The authority's own writes pay nothing. |
 | Delegate | Key | Set once on a policy ring, which turns the ring to `ConfidentialEscrow`. Moves escrowed members' notes inside the ring. |
 | Auditor | Key holder | Holds the X25519 auditor key in Ring RPC or a local file. Opens every transfer, deposit, merge and escrowed key. |
-| Reader | Ed25519 or P-256 key | Holds a read access record. Reads audited history from Ring RPC. |
+| Reader | Ed25519 or P-256 key | Holds a ring-wide or wallet grant in the ring's storage tree, or a wallet grant in the Ring RPC database. Reads audited history from Ring RPC. |
 | SPP governance | Key | The SPP ring creation authority. Activates rings and enables the authority rail. |
 | Ring indexer | Server | Projects every member registry from Solana blocks and serves record openings. Forwards every other call to Photon. |
 | Ring prover | Server | The zolana prover with the ring circuits registered as extensions. Proves from a full client witness. |
@@ -82,7 +82,7 @@ A custom ring is a Solana program that governs its notes in the zolana shielded 
 6. **Leave.** A transfer pays an exit or withdraws a public leg. The rules screen exit owners and withdrawal owners as output owners. A delegate move can do neither.
 7. **Merge.** An owner merges up to 24 notes of one asset into one note with `Merge`, with a disclosure proof to the auditor. The merge proves the owner's nullifier secret and carries no owner signature. On a `ConfidentialEscrow` ring the proof also opens the owner's escrow record.
 8. **Delegate.** The config authority and the delegate sign `SetDelegate` on a confidential policy ring, which sets the mode to `ConfidentialEscrow`. SPP governance enables the ring's authority rail. The auditor opens an escrowed member's nullifier secret for the delegate, and the delegate moves that member's notes to escrowed members with `DelegateTransact`.
-9. **Audit.** The auditor opens every transfer, deposit and merge from its auditor message. The config authority grants readers with `GrantReadAccess`, and Ring RPC serves them the openings. A revoked reader keeps what it already read.
+9. **Audit.** The auditor opens every transfer, deposit and merge from its auditor message. The authority of the ring's storage tree writes ring-wide and wallet grants to its `reader` list. A wallet also grants readers of its own rows through Ring RPC, and Ring RPC serves every granted reader the openings. A revoked reader keeps what it already read.
 10. **Govern.** The config authority repins the policy, writes mint settings, sets the co-signer, the insert fee and the pause, and hands the config to a new authority. A repin refuses every proof over the old table. A records update reaches transfers at the next `SyncRoots`, and a sender whose root left the mirror proves again. A repin and a mint-setting write are separate instructions, so a transfer between them proves under the new table and the old settings.
 
 ### Properties
@@ -151,7 +151,7 @@ On deposits, merges and delegate moves:
 
 In every mode:
 
-26. The auditor opens every output, every exit's asset and amount, every deposit and merge, and every escrowed nullifier secret. Ring RPC serves every opening, blindings included, to every reader, with no scope or expiry. It serves no nullifier secret. A revoked reader keeps what it read.
+26. The auditor opens every output, every exit's asset and amount, every deposit and merge, and every escrowed nullifier secret. Ring RPC serves every opening, blindings included, to every ring-wide reader, and to a wallet reader the rows of its wallet, with no expiry. It serves no nullifier secret. A revoked reader keeps what it read.
 27. A recipient opens its body with its viewing key and finds the asset by trial. On the anonymous rail the body names the sender's viewing key, and no proof checks it.
 28. The co-signer and the relayer see chain data only. No ring code hands them plaintext.
 29. The ring indexer sees the members a client opens. It learns a policy transfer's sender, recipients and assets before the transfer lands, and it sees authority writes before they land. Photon pairs each spent leaf with its nullifier and sees the tags of one stream of a viewing key grouped per request. The ring prover receives the full witness. [Services](#services) gives the details.
@@ -399,7 +399,7 @@ A member write needs `pending < MEMBER_QUEUE_LIMIT` (`QueueFull`) and `next_inde
 
 ### ReadAccessRecord
 
-One per reader at `[b"reader", sha256(reader)]`. `GrantReadAccess` creates it, `RevokeReadAccess` closes it, and no other ring instruction reads it. Ring RPC reads it before it serves a reader.
+One per reader at `[b"reader", sha256(reader)]`. `GrantReadAccess` creates it, `RevokeReadAccess` closes it, and no other ring instruction reads it. Ring RPC does not read it.
 
 ```rust
 pub struct ReadAccessRecord {
@@ -754,7 +754,7 @@ struct ReaderIxData { reader: [u8; 34] }
 
 The program checks the reader key (`InvalidReaderKey`), the system program, the config authority, the canonical address (`InvalidReadAccessRecord`) and that the record is empty (`ReadAccessRecordAlreadyExists`).
 
-A grant has no scope and no expiry. Ring RPC serves the reader the ring's whole audited history.
+A grant has no scope and no expiry. Ring RPC does not read the record.
 
 #### 10. RevokeReadAccess
 
@@ -764,7 +764,7 @@ Tag `5`. Same as `GrantReadAccess`, with these parts replaced:
 - Checks: the config authority, the record loads, its stored reader equals the data, and `rent_recipient` is not the record (`InvalidReadAccessRecord`). The program does not check the reader key format or derive the address again.
 - Effect: the record closes into `rent_recipient`.
 
-Ring RPC sees the revocation at `confirmed` and does not recheck a read in progress. A revoked reader keeps every opening it read.
+A revoked reader keeps every opening it read.
 
 #### 11. SetCoSigner
 
@@ -1398,7 +1398,10 @@ Holds the auditor key and serves audited history to readers.
 
 - It runs with one local key for one ring, or derives a key per ring from a root secret with HKDF-SHA256 over the cluster genesis hash and the ring program address. It binds to loopback unless told otherwise.
 - `createAuditorKey` releases the auditor public key to the ring's config authority, or before the config to the upgrade authority, with an Ed25519 signature of the service key over the cluster, ring, key and the request nonce. The program does not check this signature. The operator CLI checks it against the pinned service key, or accepts any key under `--trust-ring-rpc` when none is pinned.
-- `getDecryptedTransactions`, `getAuditedMerges` and `getAuditedUtxos` serve a reader that signs a request with its Ed25519 key or a WebAuthn P-256 passkey, within 60 seconds of the service clock, with a fresh nonce. The service requires the ring config to name its key and the reader to hold a read access record.
+- `getDecryptedTransactions`, `getAuditedMerges` and `getAuditedUtxos` serve a reader that signs a request with its Ed25519 key or a WebAuthn P-256 passkey, within 60 seconds of the service clock, with a fresh nonce. The service requires the ring config to name its key and the reader to hold a grant.
+- A ring-wide grant is the `reader` list on the reader's own record in the ring's storage tree, keyed by the owner identity of an Ed25519 reader or the `hash_bytes` of a passkey's tagged key. A wallet grant is the `reader` list on the record `Poseidon(CRWG, wallet identity, reader identity)`. The service opens the reader's record, and the wallet grant record when a read names a wallet, through the indexer and checks each against the newest own root the ring policy mirrors. A revocation applies at the next synced root.
+- A read that names a wallet serves only the rows where that wallet is the sender, a signer or an output owner, the merges and notes it owns, and no skipped rows. A ring-wide grant covers every wallet, a wallet grant only its own.
+- With its optional database the service also stores wallet grants. `setReaderGrant` takes the wallet's Ed25519 signature over the ring, reader and action, with the timestamp and nonce rules of a read. A row is sealed with AES-256-GCM under a key HKDF-SHA256 derives from the service key source, and it keeps in plaintext only its insert order and a keyed hash of the reader key. The newest signed row for a wallet and reader holds.
 - `ringDeposits`, `ringStatus` and `health` need no signature.
 - Every audited row is bound to the confirmed SPP event the service rebuilds from Solana `getTransaction`. Photon is trusted for completeness only. A row Photon omits, or labels with no ring, never reaches a reader, and no client detects the gap.
 
@@ -1528,4 +1531,4 @@ The program, the SDKs, the ring indexer and the proving keys accept only the 120
 
 ### The auditor reads everything
 
-The auditor key opens every note, every anonymous sender and every escrowed nullifier secret. Ring RPC serves every opening to every reader with a grant, and a grant has no scope or expiry. A leaked auditor key exposes the ring's whole history, and on a `ConfidentialEscrow` ring it also lets its holder compute every escrowed member's nullifiers.
+The auditor key opens every note, every anonymous sender and every escrowed nullifier secret. Ring RPC serves every opening to every ring-wide reader, and a grant has no expiry. A leaked auditor key exposes the ring's whole history, and on a `ConfidentialEscrow` ring it also lets its holder compute every escrowed member's nullifiers.

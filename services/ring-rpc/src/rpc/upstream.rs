@@ -1,7 +1,7 @@
 use std::{future::Future, time::Duration};
 
 use async_trait::async_trait;
-use custom_ring_interface::{ReadAccessRecord, RingAccount, RingMode, RingProgramConfig};
+use custom_ring_interface::{RingAccount, RingMode, RingPolicy, RingProgramConfig};
 use solana_account::Account;
 use solana_address::Address;
 use solana_commitment_config::CommitmentConfig;
@@ -27,11 +27,12 @@ use spr_transaction::{AssetRegistry, Mint, SOL_MINT};
 use std::num::NonZeroUsize;
 use zolana_ring_client::{
     program_data, ring_deposits_in, AsyncRingIndexer, AuditError, ConfirmedEventKind, MergeAudit,
-    MergeAuditPage, ReaderKey, RingIndexerError, RingOrigin, TransactionOrigin,
+    MergeAuditPage, RingIndexerError, RingOrigin, TransactionOrigin,
 };
 use zolana_ring_indexer::rpc::{
     GetRingMemberOpeningsRequest, GetRingMemberOpeningsResponse, GetRingMemberRecordsRequest,
     GetRingMemberRecordsResponse, GetRingRecordQueueRequest, GetRingRecordQueueResponse,
+    GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse,
 };
 use zolana_ring_transaction::RingAssets;
 
@@ -97,10 +98,16 @@ pub trait TransactionSource: Send + Sync {
         ring: Address,
     ) -> impl Future<Output = Result<GetRingRecordQueueResponse, RingIndexerError>> + Send;
 
-    fn reader_granted(
+    /// `None` without a ring policy or before its own mirror is synced.
+    fn records_root(
         &self,
-        request: ReaderGrant,
-    ) -> impl Future<Output = Result<bool, ClientError>> + Send;
+        ring: Address,
+    ) -> impl Future<Output = Result<Option<RecordsRoot>, ClientError>> + Send;
+
+    fn storage_member_openings(
+        &self,
+        request: GetStorageMemberOpeningsRequest,
+    ) -> impl Future<Output = Result<GetStorageMemberOpeningsResponse, RingIndexerError>> + Send;
 
     /// `None` for a program that is immutable or not deployed.
     fn upgrade_authority(
@@ -166,11 +173,11 @@ impl From<DepositHistory> for RingDepositsResponse {
     }
 }
 
-#[derive(Clone, Copy)]
-#[must_use]
-pub struct ReaderGrant {
-    pub ring: Address,
-    pub reader: ReaderKey,
+/// The newest root of the ring's own `StorageRegistry` as its policy mirrors it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecordsRoot {
+    pub registry: Address,
+    pub root: [u8; 32],
 }
 
 #[derive(Clone, Copy)]
@@ -498,13 +505,24 @@ impl TransactionSource for ChainSource {
             .filter(|key| *key != Address::default()))
     }
 
-    async fn reader_granted(&self, request: ReaderGrant) -> Result<bool, ClientError> {
-        let address = request.reader.record_address(&request.ring);
-        let Some(account) = self.rpc.get_account(address).await? else {
-            return Ok(false);
+    async fn records_root(&self, ring: Address) -> Result<Option<RecordsRoot>, ClientError> {
+        let (address, bump) = Address::find_program_address(&[RingPolicy::SEED], &ring);
+        let Some(account) = self.owned_account(address, ring).await? else {
+            return Ok(None);
         };
-        check_reader(&account, request)?;
-        Ok(true)
+        CanonicalAccount {
+            account: &account,
+            ring,
+            bump,
+        }
+        .records_root()
+    }
+
+    async fn storage_member_openings(
+        &self,
+        request: GetStorageMemberOpeningsRequest,
+    ) -> Result<GetStorageMemberOpeningsResponse, RingIndexerError> {
+        self.indexer.get_storage_member_openings(request).await
     }
 
     async fn health(&self) -> Result<(), ClientError> {
@@ -609,7 +627,7 @@ impl<O: TransactionOrigin> ConfirmedDepositRecords<'_, O> {
 }
 
 const INVALID_CONFIG: &str = "custom ring config account is invalid";
-const INVALID_READER: &str = "custom ring reader account is invalid";
+const INVALID_POLICY: &str = "custom ring policy account is invalid";
 
 /// `bump` is the canonical bump of the address `account` was read from.
 #[derive(Clone, Copy)]
@@ -636,22 +654,24 @@ impl CanonicalAccount<'_> {
             mode: config.mode().map_err(|_| invalid())?,
         })
     }
-}
 
-fn check_reader(account: &Account, grant: ReaderGrant) -> Result<(), ClientError> {
-    let invalid = || ClientError::Rpc(INVALID_READER.to_owned());
-    let reader = grant.reader.to_bytes();
-    let seed_hash = ReadAccessRecord::seed_hash(&reader).map_err(|_| invalid())?;
-    let seeds: &[&[u8]] = &[ReadAccessRecord::SEED, &seed_hash];
-    let bump = Address::find_program_address(seeds, &grant.ring).1;
-    let record: ReadAccessRecord = CanonicalAccount {
-        account,
-        ring: grant.ring,
-        bump,
+    fn records_root(self) -> Result<Option<RecordsRoot>, ClientError> {
+        let policy: RingPolicy = self
+            .decode()
+            .ok_or_else(|| ClientError::Rpc(INVALID_POLICY.to_owned()))?;
+        let mirror = &policy.own_roots;
+        if mirror.registry != policy.records {
+            return Ok(None);
+        }
+        // The newest revision holds at every slot.
+        Ok(mirror
+            .root(mirror.roots[0].revision, 0)
+            .ok()
+            .map(|root| RecordsRoot {
+                registry: policy.records,
+                root,
+            }))
     }
-    .decode()
-    .ok_or_else(invalid)?;
-    (record.reader == reader).then_some(()).ok_or_else(invalid)
 }
 
 #[cfg(test)]
@@ -661,9 +681,7 @@ mod origin_fixture;
 #[cfg(test)]
 mod tests {
     use bytemuck::{bytes_of, Pod, Zeroable};
-    use custom_ring_interface::{CONFIG_PDA_SEED, READ_ACCESS_RECORD, RING_PROGRAM_CONFIG};
-    use solana_keypair::Keypair;
-    use solana_signer::Signer;
+    use custom_ring_interface::{CONFIG_PDA_SEED, RING_PROGRAM_CONFIG};
 
     use super::*;
 
@@ -774,54 +792,6 @@ mod tests {
         for invalid_key in [[2; 33], [0; 33]] {
             let invalid = config_account(ring, invalid_key, bump);
             assert!(configuration(&invalid, bump).is_err());
-        }
-    }
-
-    fn reader_account(ring: Address, reader: ReaderKey, bump: u8) -> Account {
-        let mut record = ReadAccessRecord::zeroed();
-        record.discriminator = READ_ACCESS_RECORD;
-        record.reader = reader.to_bytes();
-        record.bump = bump;
-        account(ring, &record)
-    }
-
-    #[test]
-    fn reader_accounts_bind_both_reader_schemes() {
-        let ring = Address::new_from_array([9; 32]);
-        let readers = [
-            ReaderKey::ed25519(Keypair::new().pubkey()).expect("Ed25519 reader"),
-            ReaderKey::p256(
-                zolana_ring_client::P256ReaderKey::from_bytes(
-                    hex::decode(
-                        "036b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296",
-                    )
-                    .unwrap()
-                    .try_into()
-                    .unwrap(),
-                )
-                .unwrap(),
-            )
-            .expect("P256 reader"),
-        ];
-        for reader in readers {
-            let grant = ReaderGrant { ring, reader };
-            let bump = Address::find_program_address(
-                &[
-                    ReadAccessRecord::SEED,
-                    &ReadAccessRecord::seed_hash(&reader.to_bytes()).expect("seed"),
-                ],
-                &ring,
-            )
-            .1;
-            let valid = reader_account(ring, reader, bump);
-            assert!(check_reader(&valid, grant).is_ok());
-
-            let mut wrong_reader = valid.clone();
-            wrong_reader.data[1] ^= 1;
-            let wrong_bump = reader_account(ring, reader, bump.wrapping_add(1));
-            for invalid in [&wrong_reader, &wrong_bump] {
-                assert!(check_reader(invalid, grant).is_err());
-            }
         }
     }
 

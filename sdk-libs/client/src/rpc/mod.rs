@@ -25,10 +25,12 @@ use zolana_secret_file::{
 };
 
 mod merge_settings;
+mod reader_grant;
 mod record_update;
 mod relay;
 
 pub use merge_settings::*;
+pub use reader_grant::*;
 pub use record_update::*;
 pub use relay::*;
 
@@ -52,6 +54,7 @@ pub const GET_RELAY_STATUS: &str = "getRelayStatus";
 pub const SUBMIT_RECORD_UPDATE: &str = "submitRecordUpdate";
 pub const GET_RECORD_UPDATE_STATUS: &str = "getRecordUpdateStatus";
 pub const SET_MERGE_SETTINGS: &str = "setMergeSettings";
+pub const SET_READER_GRANT: &str = "setReaderGrant";
 /// The most UTXO hashes one `getAuditedUtxos` request names.
 pub const AUDITED_UTXOS_LIMIT: usize = 100;
 pub const AUDIT_CURSOR_LIMIT: usize = 256;
@@ -247,6 +250,9 @@ pub struct GetDecryptedTransactionsRequest {
     pub cursor: Option<Base64String>,
     #[serde(default)]
     pub limit: Option<Limit>,
+    /// Narrows the read to one wallet's rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wallet: Option<SerializablePubkey>,
     pub auth: ReadAuth,
 }
 
@@ -265,6 +271,9 @@ pub struct GetAuditedUtxosRequest {
     pub ring_program_id: Option<SerializablePubkey>,
     /// UTXO hashes with their tree id, `1..=AUDITED_UTXOS_LIMIT` of them.
     pub utxo_hashes: Vec<Hash>,
+    /// Narrows the read to one wallet's notes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wallet: Option<SerializablePubkey>,
     pub auth: ReadAuth,
 }
 
@@ -669,6 +678,7 @@ pub struct ReadAttestation {
     pub target: ReadTarget,
     pub cursor: Option<Base64String>,
     pub limit: Option<Limit>,
+    pub wallet: Option<Address>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -682,6 +692,7 @@ pub struct AuditedUtxosAttestation {
     pub target: ReadTarget,
     /// sha256 of the requested hashes, concatenated in request order.
     pub utxo_hashes: [u8; 32],
+    pub wallet: Option<Address>,
 }
 
 /// The service's statement of the auditor key it holds, bound to the request it answers.
@@ -1078,6 +1089,7 @@ impl PagedRead {
             target,
             cursor: None,
             limit: None,
+            wallet: None,
         })
     }
 }
@@ -1097,12 +1109,13 @@ impl Attestation for ReadAttestation {
     fn message(&self, timestamp: u64, nonce: &[u8; 32]) -> Vec<u8> {
         let cursor = self.cursor.as_ref().map_or(&[][..], |cursor| &cursor.0);
         format!(
-            "{READ_DOMAIN}\nmethod: {}\n{}\ntimestamp: {timestamp}\nnonce: {}\nlimit: {}\ncursor: {}",
+            "{READ_DOMAIN}\nmethod: {}\n{}\ntimestamp: {timestamp}\nnonce: {}\nlimit: {}\ncursor: {}{}",
             self.read.method(),
             self.target.lines(),
             base64(nonce),
             self.limit.as_ref().map_or(0, Limit::value),
             base64(cursor),
+            wallet_line(self.wallet),
         )
         .into_bytes()
     }
@@ -1129,6 +1142,7 @@ impl AuditedUtxosAttestation {
         Self {
             target,
             utxo_hashes: digest.finalize().into(),
+            wallet: None,
         }
     }
 }
@@ -1136,10 +1150,11 @@ impl AuditedUtxosAttestation {
 impl Attestation for AuditedUtxosAttestation {
     fn message(&self, timestamp: u64, nonce: &[u8; 32]) -> Vec<u8> {
         format!(
-            "{AUDITED_UTXOS_DOMAIN}\n{}\ntimestamp: {timestamp}\nnonce: {}\nutxos: {}",
+            "{AUDITED_UTXOS_DOMAIN}\n{}\ntimestamp: {timestamp}\nnonce: {}\nutxos: {}{}",
             self.target.lines(),
             base64(nonce),
             base64(&self.utxo_hashes),
+            wallet_line(self.wallet),
         )
         .into_bytes()
     }
@@ -1203,6 +1218,11 @@ impl ReadRequest {
         Ok(self)
     }
 
+    pub fn with_wallet(mut self, wallet: Address) -> Self {
+        self.attestation.wallet = Some(wallet);
+        self
+    }
+
     pub fn sign<S: ReadSigner + ?Sized>(
         self,
         signer: &S,
@@ -1212,12 +1232,14 @@ impl ReadRequest {
             target,
             cursor,
             limit,
+            wallet,
             ..
         } = self.attestation;
         Ok(GetDecryptedTransactionsRequest {
             ring_program_id: Some(target.ring.to_bytes().into()),
             cursor,
             limit,
+            wallet: wallet.map(Into::into),
             auth,
         })
     }
@@ -1231,12 +1253,18 @@ impl AuditedUtxosRequest {
         }
     }
 
+    pub fn with_wallet(mut self, wallet: Address) -> Self {
+        self.signed.attestation.wallet = Some(wallet);
+        self
+    }
+
     pub fn sign<S: ReadSigner + ?Sized>(
         self,
         signer: &S,
     ) -> Result<GetAuditedUtxosRequest, ReadBuildError> {
         Ok(GetAuditedUtxosRequest {
             ring_program_id: Some(self.signed.attestation.target.ring.to_bytes().into()),
+            wallet: self.signed.attestation.wallet.map(Into::into),
             auth: self.signed.read_auth(signer)?,
             utxo_hashes: self.utxo_hashes,
         })
@@ -1405,6 +1433,11 @@ pub fn public_key_path(secret: &Path) -> Result<PathBuf, KeyFileError> {
 fn base64(bytes: &[u8]) -> String {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+/// Empty for a ring-wide read, its attestation keeps the bytes the TypeScript twin signs.
+fn wallet_line(wallet: Option<Address>) -> String {
+    wallet.map_or_else(String::new, |wallet| format!("\nwallet: {wallet}"))
 }
 
 #[cfg(test)]

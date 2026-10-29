@@ -31,9 +31,9 @@ use zolana_ring_client::rpc::{
     CreateAuditorKeyRequest, CreateAuditorKeyResponse, GetAuditedUtxosRequest,
     GetDecryptedTransactionsRequest, GetRecordUpdateStatusRequest, HealthResponse, PagedRead,
     RingDepositsRequest, RingDepositsResponse, RingState, RingStatusRequest, RingStatusResponse,
-    SubmitRecordUpdateRequest, CREATE_AUDITOR_KEY, GET_AUDITED_MERGES, GET_AUDITED_UTXOS,
-    GET_DECRYPTED_TRANSACTIONS, GET_RECORD_UPDATE_STATUS, HEALTH, RING_DEPOSITS, RING_STATUS,
-    SUBMIT_RECORD_UPDATE,
+    SetReaderGrantRequest, SubmitRecordUpdateRequest, CREATE_AUDITOR_KEY, GET_AUDITED_MERGES,
+    GET_AUDITED_UTXOS, GET_DECRYPTED_TRANSACTIONS, GET_RECORD_UPDATE_STATUS, HEALTH, RING_DEPOSITS,
+    RING_STATUS, SET_READER_GRANT, SUBMIT_RECORD_UPDATE,
 };
 
 use crate::{
@@ -216,6 +216,7 @@ pub fn rpc_module<S: TransactionSource + 'static>(
                     read: PagedRead::DecryptedTransactions,
                     auth,
                     page: &page,
+                    wallet: request.wallet.map(|wallet| wallet.0),
                 })
                 .await?;
             // Decrypting holds a read slot, the authentication slot is free again.
@@ -236,6 +237,7 @@ pub fn rpc_module<S: TransactionSource + 'static>(
                     read: PagedRead::AuditedMerges,
                     auth: &request.auth,
                     page: &page,
+                    wallet: request.wallet.map(|wallet| wallet.0),
                 })
                 .await?;
             drop(authentication);
@@ -266,6 +268,15 @@ pub fn rpc_module<S: TransactionSource + 'static>(
         |hub, request: GetRecordUpdateStatusRequest| async move {
             hub.admit(Lane::Public)?;
             hub.record_writer()?.status(request).await
+        },
+    )?;
+    method(
+        &mut module,
+        SET_READER_GRANT,
+        |hub, request: SetReaderGrantRequest| async move {
+            let _authentication = hub.admit(Lane::Authentication)?;
+            let service = hub.service(Some(request.ring.0))?;
+            service.set_reader_grant(&request).await
         },
     )?;
     Ok(module)
@@ -376,7 +387,7 @@ mod tests {
         },
         origins::OriginPolicy,
         upstream::{
-            DepositHistory, MergeAuditRequest, ReaderGrant, RingConfiguration, RingHistoryPage,
+            DepositHistory, MergeAuditRequest, RecordsRoot, RingConfiguration, RingHistoryPage,
             TransactionPage,
         },
     };
@@ -470,8 +481,16 @@ mod tests {
             Err(ClientError::Rpc("unused source".to_owned()).into())
         }
 
-        async fn reader_granted(&self, _request: ReaderGrant) -> Result<bool, ClientError> {
-            Ok(false)
+        async fn records_root(&self, _ring: Address) -> Result<Option<RecordsRoot>, ClientError> {
+            Ok(None)
+        }
+
+        async fn storage_member_openings(
+            &self,
+            _request: zolana_ring_indexer::rpc::GetStorageMemberOpeningsRequest,
+        ) -> Result<zolana_ring_indexer::rpc::GetStorageMemberOpeningsResponse, RingIndexerError>
+        {
+            Err(ClientError::Rpc("unused source".to_owned()).into())
         }
 
         async fn upgrade_authority(

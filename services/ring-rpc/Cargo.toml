@@ -12,6 +12,7 @@ name = "ring-rpc"
 path = "src/main.rs"
 
 [dependencies]
+aes-gcm = { workspace = true }
 async-trait = { workspace = true }
 custom-ring-interface = { workspace = true }
 custom-ring-sdk = { workspace = true }

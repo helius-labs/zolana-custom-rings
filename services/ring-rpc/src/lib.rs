@@ -9,6 +9,10 @@ mod cosign;
 #[path = "storage/database.rs"]
 mod database;
 mod error;
+#[path = "storage/grant_rows.rs"]
+mod grant_rows;
+#[path = "security/grants.rs"]
+mod grants;
 #[path = "operations/hub.rs"]
 mod hub;
 #[path = "security/keys.rs"]
@@ -53,7 +57,7 @@ pub use cosign::{
     RefusingCoSigner,
 };
 pub use database::Store;
-pub use error::RingRpcError;
+pub use error::{GrantRefusal, RingRpcError};
 pub use hub::{Clock, Hub, HubBuilder, NotReady};
 pub use keys::GRANT_ROW_KEY_INFO;
 pub use migration::Migrator;
@@ -64,7 +68,7 @@ pub use relay_submit::{CollectedSignature, RelaySubmit, RelayTransaction};
 pub use server::{rpc_module, run_server, BindPolicy, ServerError, ServerOptions};
 pub use storage_chain::{LatestBlockhash, LiveStorageChain, StorageChain, TransactionOutcome};
 pub use upstream::{
-    ChainSource, DepositHistory, DepositPage, MergeAuditRequest, ReaderGrant, RingConfiguration,
+    ChainSource, DepositHistory, DepositPage, MergeAuditRequest, RecordsRoot, RingConfiguration,
     RingHistoryPage, TransactionPage, TransactionSource, Upstreams,
 };
 pub use utxos::UTXO_BACKFILL_INTERVAL;

@@ -174,7 +174,8 @@ impl Records {
         let store = Store::open("sqlite::memory:", 1).await.expect("store");
         let hub = Hub::builder(fixture.source(), GENESIS)
             .with_origins(origins())
-            .with_record_writer(store, chain.clone())
+            .with_store(store)
+            .with_storage_chain(chain.clone())
             .local(RING, fixture.auditor.clone())
             .expect("hub");
         let writer = hub.record_writer().expect("writer").clone();

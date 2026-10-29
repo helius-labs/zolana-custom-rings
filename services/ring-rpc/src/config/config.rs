@@ -77,8 +77,8 @@ pub struct ServeArgs {
     pub upstream_timeout_secs: NonZeroU64,
     #[arg(long, env = "RING_RPC_ALLOW_SHARED_KEY_FILE")]
     pub allow_shared_key_file: bool,
-    /// A `postgres://` or `sqlite://` URL, set to serve record updates.
-    #[arg(long, env = "RING_RPC_STORE_URL", requires = "prover_url")]
+    /// `postgres://` or `sqlite://` URL of the service store.
+    #[arg(long, env = "RING_RPC_STORE_URL")]
     pub store_url: Option<String>,
     /// Serves the ring apply keys the record writer proves with.
     #[arg(long, env = "RING_RPC_PROVER_URL")]
@@ -86,6 +86,9 @@ pub struct ServeArgs {
     /// Serve plain HTTP on a public address and accept plain HTTP origins, test deployments only.
     #[arg(long, env = "RING_RPC_INSECURE_PUBLIC_BIND")]
     pub insecure_public_bind: bool,
+    /// Keep wallet reader grants encrypted in the service store.
+    #[arg(long, env = "RING_RPC_ENCRYPTED_READER_GRANTS", requires = "store_url")]
+    pub encrypted_reader_grants: bool,
 }
 
 #[derive(Debug, Args)]

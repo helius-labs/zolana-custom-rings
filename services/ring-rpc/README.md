@@ -1,6 +1,6 @@
 # Ring RPC
 
-Ring RPC holds an auditor viewing key and opens custom ring transfer outputs. It reads ring transactions from Photon and checks ring access accounts on Solana.
+Ring RPC holds an auditor viewing key and opens custom ring transfer outputs. It reads ring transactions from Photon and checks reader grants in the ring's storage tree.
 
 ## Keys
 
@@ -36,6 +36,7 @@ All wire fields use camel case.
 | `getDecryptedTransactions` | Ring, page, and read authorization | Decrypted transaction page |
 | `getAuditedMerges` | Ring, page, and read authorization | Hash-checked merge openings and unresolved outputs |
 | `getAuditedUtxos` | Ring, 1 to 100 UTXO hashes, and read authorization | `utxos`, in request order, the opening of each hash the service opened, `null` for any other |
+| `setReaderGrant` | Ring, wallet, reader, `grant` or `revoke`, timestamp, nonce and the wallet's signature | The action the service holds for the wallet and reader |
 
 `ringDeposits` walks ring history backwards from the newest signature. A deposit publishes its asset and amount, so the method needs no auditor key and no read authorization. Its `limit` counts signatures examined rather than deposits found, so a page can hold no deposits and still have history behind it. The default limit is 50 and the service clamps it to 200.
 
@@ -45,7 +46,15 @@ The read authorization contains a canonical reader key, Unix timestamp, random n
 
 The authority authorization contains the authority address, the cluster genesis hash, Unix timestamp, random nonce, and a raw Ed25519 signature over the attestation bytes. Both authorizations share the timestamp skew and the per-ring nonce set.
 
-Only a canonical read access record grants access. The config authority has no implicit access. The onchain auditor public key must match the auditor key held by Ring RPC.
+The onchain auditor public key must match the auditor key held by Ring RPC.
+
+## Reader grants
+
+A reader holds its grant in the ring's own storage tree, the `StorageRegistry` its ring policy names. The service opens the reader's records through the indexer and checks each opening against the newest root the policy mirrors. A ring-wide grant is the `Reader` list on the reader's own record. That record belongs to the owner identity of an Ed25519 reader, or to the `hash_bytes` of a passkey's tagged key. A wallet grant is the `Reader` list on the record `Member::wallet_grant(wallet, reader)`. The config authority has no implicit access, and the service reads no `ReadAccessRecord` account. A ring with no policy, or whose policy mirrors no root of its own registry, refuses every read with `-32130`.
+
+A read that names a `wallet` returns only the rows where that wallet is the sender, a signer or an output owner, the merges it owns and the notes it owns, and no skipped rows. A ring-wide grant covers every wallet, a wallet grant only its own wallet. The wallet joins the signed attestation as a last `wallet:` line, and a read without one signs no such line.
+
+With `--encrypted-reader-grants` and `--store-url` the service also keeps wallet grants in its own database. `setReaderGrant` takes the wallet's raw Ed25519 signature over `zolana/ring-rpc-reader-grant/v1`, the cluster, service, ring, wallet, reader, action, timestamp and nonce, under the skew and nonce set of a read. Each accepted call appends one row, sealed with AES-256-GCM under a key HKDF-SHA256 derives with `zolana/ring-rpc-grant-rows/v1` from the auditor key in local mode or the root secret in derived mode. Beside its insert id, a row keeps in plaintext only the HMAC-SHA256 of the reader key under the same derivation, also the associated data. The row with the latest signed timestamp holds, the later write on a tie. Without the store `setReaderGrant` answers `-32131`. Write access to the database can drop a revocation row, so protect it like the service key.
 
 Allowed WebAuthn origins need an explicit RP ID. The RP ID can be the origin host or a valid parent domain. Cross origin assertions are rejected.
 

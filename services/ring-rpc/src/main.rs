@@ -78,15 +78,17 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     }
     let mut builder = Hub::builder(source, genesis_hash).with_origins(origin_policy.build()?);
     if let Some(store_url) = &args.store_url {
-        let prover_url = args
-            .prover_url
-            .as_deref()
-            .context("--store-url needs --prover-url")?;
         let store = Store::open(store_url, STORE_CONNECTIONS)
             .await
             .context("opening the service store")?;
+        builder = builder.with_store(store);
+    }
+    if let Some(prover_url) = &args.prover_url {
         let chain = LiveStorageChain::connect(upstreams, prover_url)?;
-        builder = builder.with_record_writer(store, Arc::new(chain));
+        builder = builder.with_storage_chain(Arc::new(chain));
+    }
+    if args.encrypted_reader_grants {
+        builder = builder.with_encrypted_grants();
     }
     let hub = match (&args.auditor_key_file, &args.root_secret_file) {
         (Some(path), None) => {

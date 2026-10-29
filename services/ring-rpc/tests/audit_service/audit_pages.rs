@@ -14,6 +14,7 @@ async fn granted_reader_opens_audited_transfers_and_reports_the_rest() {
             read: PagedRead::DecryptedTransactions,
             auth: &request,
             page: &page,
+            wallet: None,
         })
         .await
         .expect("read");
@@ -83,6 +84,7 @@ async fn a_terminal_indexer_page_has_no_next_audit_cursor() {
             read: PagedRead::DecryptedTransactions,
             auth: &request,
             page: &page,
+            wallet: None,
         })
         .await
         .expect("read");
@@ -107,6 +109,7 @@ async fn events_in_one_signature_keep_distinct_ordinals() {
             read: PagedRead::DecryptedTransactions,
             auth: &request,
             page: &page,
+            wallet: None,
         })
         .await
         .expect("read");
@@ -263,6 +266,7 @@ async fn rows_outside_the_ring_are_dropped() {
             read: PagedRead::DecryptedTransactions,
             auth: &request,
             page: &page,
+            wallet: None,
         })
         .await
         .expect("read");
@@ -289,6 +293,7 @@ async fn origin_cache_separates_event_ordinals_in_one_transaction() {
             read: PagedRead::DecryptedTransactions,
             auth: &request,
             page: &page,
+            wallet: None,
         })
         .await
         .expect("read");
@@ -313,6 +318,7 @@ async fn missing_event_index_fails_closed() {
                 read: PagedRead::DecryptedTransactions,
                 auth: &request,
                 page: &page,
+                wallet: None,
             })
             .await,
         Err(RingRpcError::InvalidIndexerResponse)
@@ -333,6 +339,7 @@ async fn unknown_origins_fail_the_page() {
                 read: PagedRead::DecryptedTransactions,
                 auth: &request,
                 page: &page,
+                wallet: None,
             })
             .await,
         Err(RingRpcError::Origin(AuditError::Unavailable { .. }))
@@ -353,6 +360,7 @@ async fn accepted_nonces_are_single_use() {
             read: PagedRead::DecryptedTransactions,
             auth: &request,
             page: &page,
+            wallet: None,
         })
         .await
         .is_ok());
@@ -362,6 +370,7 @@ async fn accepted_nonces_are_single_use() {
                 read: PagedRead::DecryptedTransactions,
                 auth: &request,
                 page: &page,
+                wallet: None,
             })
             .await,
         Err(RingRpcError::Unauthorized(Unauthorized::Replay))
@@ -372,6 +381,7 @@ async fn accepted_nonces_are_single_use() {
             read: PagedRead::DecryptedTransactions,
             auth: &distinct,
             page: &page,
+            wallet: None,
         })
         .await
         .is_ok());
@@ -393,6 +403,7 @@ async fn indexer_pages_must_match_the_attested_bounds() {
                 read: PagedRead::DecryptedTransactions,
                 auth: &request,
                 page: &page(),
+                wallet: None,
             })
             .await,
         Err(RingRpcError::InvalidIndexerResponse)
@@ -409,6 +420,7 @@ async fn indexer_pages_must_match_the_attested_bounds() {
                     read: PagedRead::DecryptedTransactions,
                     auth: &request,
                     page: &page(),
+                    wallet: None,
                 })
                 .await,
             Err(RingRpcError::InvalidIndexerResponse)
@@ -429,6 +441,7 @@ async fn indexer_pages_must_match_the_attested_bounds() {
                     read: PagedRead::DecryptedTransactions,
                     auth: &request,
                     page: &page(),
+                    wallet: None,
                 })
                 .await,
             Err(RingRpcError::InvalidIndexerResponse)
@@ -445,6 +458,7 @@ async fn indexer_pages_must_match_the_attested_bounds() {
                 read: PagedRead::DecryptedTransactions,
                 auth: &request,
                 page: &page(),
+                wallet: None,
             })
             .await,
         Err(RingRpcError::InvalidIndexerResponse)
@@ -465,7 +479,8 @@ async fn indexer_pages_must_match_the_attested_bounds() {
             .read(AuditRead {
                 read: PagedRead::DecryptedTransactions,
                 auth: &request,
-                page: &repeated_page
+                page: &repeated_page,
+                wallet: None,
             })
             .await,
         Err(RingRpcError::InvalidIndexerResponse)
@@ -482,6 +497,7 @@ async fn indexer_pages_must_match_the_attested_bounds() {
                 read: PagedRead::DecryptedTransactions,
                 auth: &request,
                 page: &page(),
+                wallet: None,
             })
             .await,
         Err(RingRpcError::InvalidIndexerResponse)
@@ -634,6 +650,7 @@ async fn two_rings_read_only_their_own_transactions() {
                 read: PagedRead::DecryptedTransactions,
                 auth: &request,
                 page: &page,
+                wallet: None,
             })
             .await
             .expect("read");
@@ -670,6 +687,7 @@ async fn an_indexer_forgery_is_reported_without_hiding_other_verified_outputs() 
             read: PagedRead::DecryptedTransactions,
             auth: &auth(&delegate()),
             page: &page(),
+            wallet: None,
         })
         .await
         .unwrap();

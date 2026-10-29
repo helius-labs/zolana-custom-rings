@@ -3,7 +3,8 @@ use sea_orm_migration::MigratorTrait;
 
 use crate::{error::RingRpcError, migration::Migrator};
 
-/// Migrated when opened.
+/// Migrated when opened, clones share one pool.
+#[derive(Clone)]
 pub struct Store {
     db: DatabaseConnection,
 }
