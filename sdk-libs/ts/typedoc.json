@@ -30,7 +30,7 @@
     "invalidLink": true,
     "notDocumented": false
   },
-  "intentionallyNotExported": ["AccountReader"],
+  "intentionallyNotExported": ["AccountReader", "Base64String", "Hash"],
   "treatWarningsAsErrors": true,
   "githubPages": true,
   "navigationLinks": {

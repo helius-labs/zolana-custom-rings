@@ -269,9 +269,11 @@ export type {
   RelayIntent,
   RelayOperation,
   RelayQuote,
+  RelayQuoteRequest,
   RelayStatus,
   RelayStep,
   SetReaderGrantRequest,
+  SubmitRelayRequest,
   TokenAccountSetup,
 } from "../protocol/ring-rpc/ring-rpc-types.js";
 export { ProvenRingTransfer, ringTransactInstruction } from "../operations/workflow/pipeline.js";
