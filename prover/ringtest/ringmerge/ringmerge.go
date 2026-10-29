@@ -1,4 +1,4 @@
-// Package ringmerge is the host twin of the anonymous ring merge circuit for the Go tests.
+// Package ringmerge is the host twin of the ring merge circuit for the Go tests.
 package ringmerge
 
 import (
@@ -13,6 +13,7 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 	mergeshared "github.com/helius-labs/zolana/prover/server/circuits/spp_merge/shared"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/protocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
@@ -25,8 +26,11 @@ const (
 )
 
 type Statement struct {
-	Keys           ringaudit.Keys
-	Circuit        *circuits.AnonymousMergeCircuit
+	Keys    ringaudit.Keys
+	Circuit *circuits.MergeCircuit
+	// Registry holds the owner's escrow record on an escrowed merge, nil otherwise.
+	Registry       *ringregistry.Registry
+	CtHash         *big.Int
 	ownerKey       [32]byte
 	OwnerPkHash    *big.Int
 	NullifierPk    *big.Int
@@ -46,10 +50,21 @@ type Statement struct {
 	Fields []*big.Int
 }
 
-// Build is a two-input merge padded to width slots under the default audit keys.
+// Build is a two-input merge padded to width slots under the default audit keys, on a ring without key escrow.
 func Build(t testing.TB, width int) *Statement {
 	t.Helper()
-	s := &Statement{Keys: ringaudit.DefaultKeys(t), secret: big.NewInt(19)}
+	return build(t, width, false)
+}
+
+// BuildEscrowed is Build on a key escrow ring, the owner's record escrows the nullifier key the merge spends under.
+func BuildEscrowed(t testing.TB, width int) *Statement {
+	t.Helper()
+	return build(t, width, true)
+}
+
+func build(t testing.TB, width int, escrow bool) *Statement {
+	t.Helper()
+	s := &Statement{Keys: ringaudit.DefaultKeys(t), secret: big.NewInt(19), CtHash: big.NewInt(0)}
 	for i := range s.Salt {
 		s.Salt[i] = byte(0x50 + i)
 	}
@@ -62,13 +77,23 @@ func Build(t testing.TB, width int) *Statement {
 	for i := range s.ownerKey {
 		s.ownerKey[i] = byte(0xa0 + i)
 	}
-	c, err := circuits.NewAnonymousMergeCircuit(width)
+	c, err := circuits.NewMergeCircuit(width)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.Circuit = c
 	s.OwnerPkHash = ringtest.MustSolanaPkField(t, s.ownerKey)
 	s.NullifierPk = spptest.MustNullifierPk(t, s.secret)
+	c.KeyEscrow, c.MemberRegistryRoot, c.CtHash, c.Member = 0, 0, 0, ringregistry.UnreadRecordWires()
+	if escrow {
+		s.Registry, s.CtHash = ringregistry.New(t), big.NewInt(0xc7)
+		s.Registry.Apply(t, ringregistry.Entry{
+			Member: s.OwnerPkHash, Mask: big.NewInt(ringregistry.EscrowBit), Value: big.NewInt(ringregistry.EscrowBit),
+			EscrowKey: ringregistry.EscrowKey(t, s.NullifierPk, s.CtHash),
+		})
+		c.KeyEscrow, c.MemberRegistryRoot, c.CtHash = 1, s.Registry.Root(), s.CtHash
+		c.Member = s.Registry.Opening(s.OwnerPkHash).RecordWires()
+	}
 	ownerHash := spptest.MustOwnerHash(t, s.OwnerPkHash, s.NullifierPk)
 	asset := ringtest.AssetField(t, s.Mint)
 	ringProgramID := big.NewInt(0x5a0e)
@@ -155,7 +180,7 @@ func (s *Statement) saltField() *big.Int {
 	return new(big.Int).SetBytes(s.Salt[:])
 }
 
-// Elements mirrors MergeAnonymousPublicInput::elements.
+// Elements mirrors MergePublicInput::elements.
 func (s *Statement) Elements(t testing.TB) []*big.Int {
 	t.Helper()
 	sealed := s.Keys.Seal(t, s.DisclosureKey[:], shared.MergeEncInfo)
@@ -163,6 +188,7 @@ func (s *Statement) Elements(t testing.TB) []*big.Int {
 		big.NewInt(shared.MergeStatementDomain), s.PrivateTxHash, s.OutputHash, s.FirstNf, ringtest.AsBigInt(s.Circuit.RingProgramID),
 		sealed.AuditorLo, sealed.AuditorHi, sealed.EphLo, sealed.EphHi, sealed.CiphertextHash, s.saltField(), spptest.MustHashChain4(t, s.Fields),
 		ringtest.AsBigInt(s.Circuit.PartyIdentities[0]), ringtest.AsBigInt(s.Circuit.PartyIdentities[1]), ringtest.AsBigInt(s.Circuit.PartyIdentities[2]),
+		ringtest.AsBigInt(s.Circuit.KeyEscrow), ringtest.AsBigInt(s.Circuit.MemberRegistryRoot),
 	}
 }
 

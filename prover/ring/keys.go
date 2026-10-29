@@ -25,7 +25,7 @@ const (
 	ApplyRecords
 	RegisterKey
 	Deposit
-	AnonymousMerge
+	Merge
 	WithdrawalExemption
 )
 
@@ -87,7 +87,7 @@ func keys() []Key {
 		add(Deposit, capacity, 0)
 	}
 	for _, width := range circuits.MergeWidths {
-		add(AnonymousMerge, width, 0)
+		add(Merge, width, 0)
 	}
 	return keys
 }
@@ -129,8 +129,8 @@ func (k Key) circuitType() common.CircuitType {
 		return named("register-key")
 	case Deposit:
 		return named("deposit-%d", k.Inputs)
-	case AnonymousMerge:
-		return named("merge-anonymous-v2-%d", k.Inputs)
+	case Merge:
+		return named("merge-v3-%d", k.Inputs)
 	}
 	panic(fmt.Sprintf("ring: unknown ring family %d", k.Family))
 }
