@@ -22,7 +22,8 @@ localnet-ring-indexer-url := env_var_or_default("ZOLANA_LOCALNET_RING_INDEXER_UR
 localnet-prover-url := env_var_or_default("ZOLANA_PROVER_URL", "http://127.0.0.1:" + localnet-prover-port)
 photon-bin := env_var_or_default("ZOLANA_PHOTON_BIN", "target/debug/photon")
 export RING_INDEXER_BIN := env_var_or_default("RING_INDEXER_BIN", justfile_directory() / "target/debug/ring-indexer")
-spp-keys-dir := env_var_or_default("ZOLANA_SPP_KEYS_DIR", "zolana/prover/server/proving-keys")
+# join keeps an absolute ZOLANA_SPP_KEYS_DIR as given.
+spp-keys-dir := join(justfile_directory(), env_var_or_default("ZOLANA_SPP_KEYS_DIR", "zolana/prover/server/proving-keys"))
 ring-keys-lock := "prover/ring/proving-keys.lock"
 custom-ring-keys := `python3 -c "import json;print(' '.join(sorted(json.load(open('prover/ring/proving-keys.lock'))['keys'])))"`
 
@@ -134,7 +135,7 @@ test-custom-ring-validator filter="all()" *args: fetch-custom-ring-keys build-pr
     eval "$program_ids"
     : "${SHIELDED_POOL_PROGRAM_ID:?xtask did not emit SHIELDED_POOL_PROGRAM_ID}"
     export SHIELDED_POOL_PROGRAM_ID
-    bash tools/test-ring-controls.sh ring -E '{{filter}}' {{args}}
+    ZOLANA_SPP_KEYS_DIR="{{spp-keys-dir}}" bash tools/test-ring-controls.sh ring -E '{{filter}}' {{args}}
 
 # Two-ring shared policy source lifecycle on a local validator.
 test-custom-ring-shared: (_custom-ring-suite "shared_sources")
@@ -152,7 +153,7 @@ _custom-ring-suite test: fetch-custom-ring-keys build-prover-server build-progra
     eval "$program_ids"
     : "${SHIELDED_POOL_PROGRAM_ID:?xtask did not emit SHIELDED_POOL_PROGRAM_ID}"
     export SHIELDED_POOL_PROGRAM_ID
-    bash tools/test-ring-controls.sh {{test}}
+    ZOLANA_SPP_KEYS_DIR="{{spp-keys-dir}}" bash tools/test-ring-controls.sh {{test}}
 
 # === Keys ===
 
@@ -215,7 +216,7 @@ check-custom-ring-keys: fetch-custom-ring-keys build-prover-server
         module="${key#custom_ring_}"
         module="${module%.key}_verifying_key.rs"
         target/prover-server export-vk --keys-file "{{spp-keys-dir}}/$key" --output "$export_dir/$key.vkbin" >/dev/null
-        cargo run -q --manifest-path zolana/Cargo.toml -p xtask -- bsb22-vk "$export_dir/$key.vkbin" "$PWD/{{spp-keys-dir}}/$key" "$export_dir" "$module" >/dev/null
+        cargo run -q --manifest-path zolana/Cargo.toml -p xtask -- bsb22-vk "$export_dir/$key.vkbin" "{{spp-keys-dir}}/$key" "$export_dir" "$module" >/dev/null
         rustfmt --config-path rustfmt.toml "$export_dir/$module"
         relative="$(python3 -c 'import sys; from tools.ring_key_layout import verifier_relative_path; print(verifier_relative_path(sys.argv[1]))' "$module")"
         cp "program-libs/interface/src/verifying_keys/$relative" "$export_dir/committed-$module"
@@ -240,10 +241,8 @@ ring-localnet: check-custom-ring-keys build-programs zolana::build-cli build-pho
     mkdir -p "$workdir"
     photon_bin="{{photon-bin}}"
     [[ "$photon_bin" = /* ]] || photon_bin="$PWD/$photon_bin"
-    keys_dir="{{spp-keys-dir}}"
-    [[ "$keys_dir" = /* ]] || keys_dir="$PWD/$keys_dir"
     export ZOLANA_PHOTON_BIN="$photon_bin"
-    export ZOLANA_PROVER_KEYS_DIR="$keys_dir"
+    export ZOLANA_PROVER_KEYS_DIR="{{spp-keys-dir}}"
     for port in {{localnet-rpc-port}} {{localnet-photon-port}} {{localnet-prover-port}} {{localnet-ring-indexer-port}}; do
       lsof -ti "tcp:$port" 2>/dev/null | xargs kill -9 2>/dev/null || true
     done
@@ -288,14 +287,12 @@ ring-devnet-services rpc_url: check-custom-ring-keys build-prover-server build-p
     mkdir -p "$workdir"
     photon_bin="{{photon-bin}}"
     [[ "$photon_bin" = /* ]] || photon_bin="$PWD/$photon_bin"
-    keys_dir="{{spp-keys-dir}}"
-    [[ "$keys_dir" = /* ]] || keys_dir="$PWD/$keys_dir"
     lsof -ti "tcp:{{localnet-photon-port}}" 2>/dev/null | xargs kill -9 2>/dev/null || true
     lsof -ti "tcp:{{localnet-prover-port}}" 2>/dev/null | xargs kill -9 2>/dev/null || true
     sleep 1
     nohup "$photon_bin" --rpc-url "{{rpc_url}}" --port {{localnet-photon-port}} --start-slot latest \
       > "$workdir/photon.log" 2>&1 &
-    nohup target/prover-server start --keys-dir "$keys_dir" \
+    nohup target/prover-server start --keys-dir "{{spp-keys-dir}}" \
       --prover-address 0.0.0.0:{{localnet-prover-port}} --auto-download=true \
       ${ZOLANA_PROVER_REDIS_URL:+--redis-url "$ZOLANA_PROVER_REDIS_URL"} \
       > "$workdir/prover.log" 2>&1 &
@@ -415,9 +412,7 @@ _test-ts-live test-script *args: build-ring-program _spp-programs build-photon b
     [[ "$registry_so" = /* ]] || registry_so="$PWD/$registry_so"
     # Surfpool gives empty slots synthetic hashes, only the fixture keeps ring blocks linked across the jump.
     export ZOLANA_RING_SURFPOOL_FIXTURE=1
-    keys_dir="{{spp-keys-dir}}"
-    [[ "$keys_dir" = /* ]] || keys_dir="$PWD/$keys_dir"
-    export ZOLANA_PROVER_KEYS_DIR="$keys_dir"
+    export ZOLANA_PROVER_KEYS_DIR="{{spp-keys-dir}}"
     cleanup
     sleep 2
 
