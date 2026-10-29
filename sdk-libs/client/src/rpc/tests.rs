@@ -56,6 +56,7 @@ fn read_attestation_is_stable() {
         target: target(),
         cursor: Some(vec![1, 2, 3].into()),
         limit: Some(Limit::new(5).expect("in range")),
+        wallet: None,
     }
     .message(1_700_000_000, &[4; 32]);
     assert_eq!(
@@ -83,6 +84,7 @@ fn a_signed_read_names_its_method_and_target_and_draws_its_own_nonce() {
             target,
             cursor: None,
             limit: None,
+            wallet: None,
         }
         .message(1_700_000_000, &nonce)
     };
@@ -491,6 +493,7 @@ fn a_signed_read_carries_the_reader_and_the_bounds_it_signed() {
         target: target(),
         cursor: request.cursor.clone(),
         limit: request.limit.clone(),
+        wallet: None,
     }
     .message(
         1_700_000_000,

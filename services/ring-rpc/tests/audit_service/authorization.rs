@@ -15,6 +15,7 @@ async fn only_granted_readers_with_the_configured_auditor_key_can_read() {
                 read: PagedRead::DecryptedTransactions,
                 auth: &request,
                 page: &page,
+                wallet: None,
             })
             .await
             .is_ok());
@@ -28,6 +29,7 @@ async fn only_granted_readers_with_the_configured_auditor_key_can_read() {
                     read: PagedRead::DecryptedTransactions,
                     auth: &request,
                     page: &page,
+                    wallet: None,
                 })
                 .await,
             Err(RingRpcError::Unauthorized(Unauthorized::NotGranted))
@@ -51,6 +53,7 @@ async fn only_granted_readers_with_the_configured_auditor_key_can_read() {
                 read: PagedRead::DecryptedTransactions,
                 auth: &request,
                 page: &page,
+                wallet: None,
             })
             .await,
         Err(RingRpcError::Unauthorized(Unauthorized::AuditorKeyMismatch))
@@ -257,6 +260,7 @@ async fn a_ring_registered_with_another_auditor_stays_closed() {
                 read: PagedRead::DecryptedTransactions,
                 auth: &request,
                 page: &page,
+                wallet: None,
             })
             .await,
         Err(RingRpcError::Unauthorized(Unauthorized::AuditorKeyMismatch))
@@ -367,6 +371,7 @@ async fn a_read_signed_for_another_method_cluster_or_service_is_refused() {
                     read: PagedRead::DecryptedTransactions,
                     auth,
                     page: &page,
+                    wallet: None,
                 })
                 .await,
             Err(RingRpcError::Unauthorized(Unauthorized::BadSignature))
@@ -378,6 +383,7 @@ async fn a_read_signed_for_another_method_cluster_or_service_is_refused() {
             read: PagedRead::DecryptedTransactions,
             auth: &valid,
             page: &page,
+            wallet: None,
         })
         .await
         .expect("read");

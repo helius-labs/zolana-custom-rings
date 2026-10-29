@@ -23,7 +23,10 @@ use crate::{
     audit::{AuditService, AuditServiceInit, ASSET_REFRESH_INTERVAL},
     authorize::Unauthorized,
     config::RootSecret,
+    database::Store,
     error::{redacted, RingRpcError},
+    grant_rows::{GrantRowKey, GrantRows},
+    grants::{GrantQuery, GrantSource, ReadScope, TreeGrants},
     keys::{service_keypair, AuditorKeyDerivation, KeySource},
     limits::{
         PublicRequest, RequestRate, MAX_CONCURRENT_AUTHENTICATIONS, MAX_CONCURRENT_DEPOSIT_SCANS,
@@ -103,6 +106,7 @@ pub struct HubBuilder<S> {
     assets: Option<RingAssets>,
     origins: Origins,
     clock: Clock,
+    grant_store: Option<Store>,
 }
 
 pub(crate) struct Shared<S> {
@@ -119,6 +123,7 @@ pub(crate) struct Shared<S> {
     readiness: AsyncMutex<ReadinessCache>,
     /// One per ring an authorized read or the backfill opened.
     stores: Mutex<HashMap<Address, Arc<AuditStore>>>,
+    pub(crate) grant_rows: Option<GrantRows>,
 }
 
 struct AssetCache {
@@ -151,6 +156,21 @@ impl<S> Shared<S> {
 }
 
 impl<S: TransactionSource> Shared<S> {
+    pub(crate) async fn read_scope(&self, query: GrantQuery) -> Result<ReadScope, RingRpcError> {
+        let tree = TreeGrants {
+            source: &self.source,
+        };
+        let granted = tree.grants(query).await?
+            || match &self.grant_rows {
+                Some(rows) => rows.grants(query).await?,
+                None => false,
+            };
+        if !granted {
+            return Err(Unauthorized::NotGranted.into());
+        }
+        ReadScope::new(query.wallet)
+    }
+
     pub(crate) async fn cached_assets(&self) -> RingAssets {
         self.assets.lock().await.registry.clone()
     }
@@ -191,6 +211,7 @@ impl<S: TransactionSource> Hub<S> {
             assets: None,
             origins: Origins::default(),
             clock: Clock::System,
+            grant_store: None,
         }
     }
 
@@ -402,17 +423,31 @@ impl<S: TransactionSource> HubBuilder<S> {
         self
     }
 
+    /// Keeps wallet grants in `store`, sealed under a key the service secret derives.
+    #[must_use = "use the updated builder"]
+    pub fn with_grant_store(mut self, store: Store) -> Self {
+        self.grant_store = Some(store);
+        self
+    }
+
     pub fn local(self, ring: Address, auditor: X25519Keypair) -> Result<Hub<S>, RingRpcError> {
-        let signer = service_keypair(auditor.secret_bytes().as_slice())?;
-        self.build(signer, KeySource::Local { ring, auditor })
+        self.build(KeySource::Local { ring, auditor })
     }
 
     pub fn derived(self, root: RootSecret) -> Result<Hub<S>, RingRpcError> {
-        let signer = service_keypair(root.as_bytes())?;
-        self.build(signer, KeySource::Derived(root))
+        self.build(KeySource::Derived(root))
     }
 
-    fn build(self, signer: Keypair, keys: KeySource) -> Result<Hub<S>, RingRpcError> {
+    fn build(self, keys: KeySource) -> Result<Hub<S>, RingRpcError> {
+        let secret = keys.service_secret();
+        let signer = service_keypair(secret.as_slice())?;
+        let grant_rows = match self.grant_store {
+            Some(store) => Some(GrantRows::new(
+                store,
+                GrantRowKey::derive(secret.as_slice())?,
+            )),
+            None => None,
+        };
         let assets = match self.assets {
             Some(assets) => assets,
             None => RingAssets::new([])?,
@@ -442,6 +477,7 @@ impl<S: TransactionSource> HubBuilder<S> {
                 in_flight: None,
             }),
             stores: Mutex::new(HashMap::new()),
+            grant_rows,
         };
         Ok(Hub {
             signer,

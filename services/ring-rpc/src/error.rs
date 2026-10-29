@@ -9,6 +9,7 @@ use zolana_ring_client::{
     rpc::{KeyFileError, AUDITED_UTXOS_LIMIT},
     AuditError, RingIndexerError, RingRpcError as RingRefusal,
 };
+use zolana_ring_policy::MemberError;
 
 use crate::authorize::Unauthorized;
 
@@ -44,6 +45,27 @@ pub enum RingRpcError {
     Busy,
     #[error("service store failed because {0}")]
     Store(#[from] sea_orm::DbErr),
+    #[error(transparent)]
+    Grant(#[from] GrantRefusal),
+    #[error("grant identity failed because {0}")]
+    Member(#[from] MemberError),
+    #[error("stored grant row does not open under the service key")]
+    InvalidGrantRow,
+}
+
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+#[repr(i32)]
+pub enum GrantRefusal {
+    #[error("ring mirrors no root of its own records")]
+    RecordsUnsynced = -32130,
+    #[error("service stores no wallet grants")]
+    GrantStoreDisabled = -32131,
+}
+
+impl GrantRefusal {
+    pub const fn code(self) -> i32 {
+        self as i32
+    }
 }
 
 impl From<RingIndexerError> for RingRpcError {
@@ -100,6 +122,9 @@ impl From<RingRpcError> for ErrorObjectOwned {
                     None::<()>,
                 );
             }
+            Grant(refusal) => {
+                return ErrorObjectOwned::owned(refusal.code(), refusal.to_string(), None::<()>);
+            }
             Busy => (ErrorCode::ServerIsBusy, "audit service is busy"),
             Upstream(inner) => {
                 error!("upstream request failed {}", redacted(inner));
@@ -137,6 +162,14 @@ impl From<RingRpcError> for ErrorObjectOwned {
                 error!("service store failed {}", redacted(inner));
                 (ErrorCode::InternalError, "audit service is unavailable")
             }
+            Member(inner) => {
+                error!("grant identity failed {inner}");
+                (ErrorCode::InternalError, "audit service is unavailable")
+            }
+            InvalidGrantRow => {
+                error!("stored grant row does not open under the service key");
+                (ErrorCode::InternalError, "audit service is unavailable")
+            }
         };
         ErrorObjectOwned::owned(code.code(), message, None::<()>)
     }
@@ -154,6 +187,21 @@ mod tests {
         let logged = redacted(&RingRpcError::Upstream(upstream));
         assert!(!logged.contains("f00dcafe"), "{logged}");
         assert!(logged.contains("api-key="), "{logged}");
+    }
+
+    #[test]
+    fn grant_refusal_codes_are_stable() {
+        use GrantRefusal::*;
+        for refusal in [RecordsUnsynced, GrantStoreDisabled] {
+            let code = match refusal {
+                RecordsUnsynced => -32130,
+                GrantStoreDisabled => -32131,
+            };
+            assert_eq!(
+                ErrorObjectOwned::from(RingRpcError::Grant(refusal)).code(),
+                code
+            );
+        }
     }
 
     #[test]

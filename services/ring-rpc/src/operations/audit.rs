@@ -15,10 +15,12 @@ use zolana_ring_client::{
         AuditedUtxosAttestation, AuditedUtxosPage, AuditorKeyStatement, AuthorityAuth,
         ConfirmedAudit, DecryptedTransaction, DecryptedTransactionsPage, GetAuditedMergesResponse,
         GetAuditedUtxosRequest, GetAuditedUtxosResponse, GetDecryptedTransactionsResponse,
-        PagedRead, ReadAttestation, ReadAuth, ReadTarget, RingChainStatus, SkippedReason,
+        PagedRead, ReadAttestation, ReadAuth, ReadTarget, ReaderGrantAction,
+        ReaderGrantAttestation, RingChainStatus, SetReaderGrantRequest, SkippedReason,
         SkippedTransaction, AUDIT_PAGE_LIMIT,
     },
-    AuditError, AuditedTransaction, CreatedUtxos, MergeAuditPage, RingOrigin, TransactionAudit,
+    AuditError, AuditedTransaction, CreatedUtxos, MergeAuditPage, ReaderKey, RingOrigin,
+    TransactionAudit,
 };
 use zolana_ring_indexer::rpc::{
     GetRingMemberOpeningsRequest, GetRingMemberRecordsRequest, RingMemberOpening,
@@ -28,14 +30,14 @@ use zolana_ring_policy::Member;
 use zolana_ring_transaction::RingAssets;
 
 use crate::{
-    authorize::{AuthorityCheck, AuthorityClaim, ReadCheck, ReadClaim, Unauthorized},
-    error::{redacted, RingRpcError},
+    authorize::{AuthorityCheck, AuthorityClaim, ReadCheck, ReadClaim, Unauthorized, WalletCheck},
+    error::{redacted, GrantRefusal, RingRpcError},
+    grant_rows::{GrantPair, GrantRow},
+    grants::{GrantQuery, ReadScope},
     hub::Shared,
     limits::ReaderPermit,
     replay::ReplayCheck,
-    upstream::{
-        MergeAuditRequest, ReaderGrant, RingHistoryPage, TransactionPage, TransactionSource,
-    },
+    upstream::{MergeAuditRequest, RingHistoryPage, TransactionPage, TransactionSource},
     utxos::{AuditStore, CreatedIn, EscrowRoot, EscrowedOwner, MAX_BACKFILL_PAGES},
 };
 
@@ -70,6 +72,7 @@ struct Grant<'a, S> {
     timestamp: u64,
     /// The config read at authorization names the rail its frames parse under.
     mode: RingMode,
+    scope: ReadScope,
     _reader: ReaderPermit<'a>,
 }
 
@@ -88,6 +91,8 @@ pub struct AuditRead<'a> {
     pub read: PagedRead,
     pub auth: &'a ReadAuth,
     pub page: &'a Page,
+    /// Narrows the read to one wallet's rows.
+    pub wallet: Option<Address>,
 }
 
 #[derive(Clone, Copy)]
@@ -234,9 +239,12 @@ impl<S: TransactionSource> AuditService<S> {
             target: self.read_target(),
             cursor: request.page.cursor.clone(),
             limit: request.page.attested_limit.clone(),
+            wallet: request.wallet,
         };
         Ok(AuthorizedRead {
-            grant: self.grant(request.auth, &attestation).await?,
+            grant: self
+                .grant(request.auth, &attestation, request.wallet)
+                .await?,
             page: request.page,
         })
     }
@@ -249,9 +257,13 @@ impl<S: TransactionSource> AuditService<S> {
         if !utxo_hashes_in_bounds(&request.utxo_hashes) {
             return Err(RingRpcError::InvalidUtxoRequest);
         }
-        let attestation = AuditedUtxosAttestation::new(self.read_target(), &request.utxo_hashes);
+        let wallet = request.wallet.map(|wallet| wallet.0);
+        let attestation = AuditedUtxosAttestation {
+            wallet,
+            ..AuditedUtxosAttestation::new(self.read_target(), &request.utxo_hashes)
+        };
         Ok(AuthorizedUtxos {
-            grant: self.grant(&request.auth, &attestation).await?,
+            grant: self.grant(&request.auth, &attestation, wallet).await?,
             utxo_hashes: &request.utxo_hashes,
         })
     }
@@ -260,6 +272,7 @@ impl<S: TransactionSource> AuditService<S> {
         &'a self,
         auth: &ReadAuth,
         attestation: &impl Attestation,
+        wallet: Option<Address>,
     ) -> Result<Grant<'a, S>, RingRpcError> {
         let ReadClaim { reader, nonce } = ReadCheck {
             auth,
@@ -277,20 +290,70 @@ impl<S: TransactionSource> AuditService<S> {
         if config.auditor_pubkey != self.auditor.pubkey() {
             return Err(Unauthorized::AuditorKeyMismatch.into());
         }
-        let grant = ReaderGrant {
-            ring: self.ring,
-            reader,
-        };
-        if !source.reader_granted(grant).await? {
-            return Err(Unauthorized::NotGranted.into());
-        }
+        let scope = self
+            .shared
+            .read_scope(GrantQuery {
+                ring: self.ring,
+                reader,
+                wallet,
+            })
+            .await?;
         Ok(Grant {
             service: self,
             nonce,
             timestamp: auth.timestamp,
             mode: config.mode,
+            scope,
             _reader: permit,
         })
+    }
+
+    /// Returns the action the store holds for the pair after the write.
+    pub async fn set_reader_grant(
+        &self,
+        request: &SetReaderGrantRequest,
+    ) -> Result<ReaderGrantAction, RingRpcError> {
+        let rows = self
+            .shared
+            .grant_rows
+            .as_ref()
+            .ok_or(GrantRefusal::GrantStoreDisabled)?;
+        let reader = <[u8; 34]>::try_from(request.reader.0.as_slice())
+            .ok()
+            .and_then(|tagged| ReaderKey::from_bytes(tagged).ok())
+            .ok_or(Unauthorized::UnknownReaderKey)?;
+        let wallet = request.wallet.0;
+        let attestation = ReaderGrantAttestation {
+            target: self.read_target(),
+            wallet,
+            reader,
+            action: request.action,
+        };
+        let nonce = WalletCheck {
+            wallet,
+            timestamp: request.timestamp,
+            nonce: &request.nonce,
+            signature: &request.signature,
+            attestation: &attestation,
+            now: self.shared.clock.now()?,
+        }
+        .decide()?;
+        self.shared.replay.accept(ReplayCheck {
+            ring: self.ring,
+            nonce,
+            timestamp: request.timestamp,
+            now: self.shared.clock.now()?,
+        })?;
+        rows.write(GrantRow {
+            pair: GrantPair {
+                ring: self.ring,
+                wallet,
+                reader,
+            },
+            action: request.action,
+            timestamp: request.timestamp,
+        })
+        .await
     }
 
     /// Opens the ring's transfers, audited deposits and anonymous merges from the store's resume point.
@@ -623,9 +686,11 @@ impl<S: TransactionSource> AuthorizedRead<'_, S> {
     pub(crate) async fn execute(self) -> Result<GetDecryptedTransactionsResponse, RingRpcError> {
         let service = self.grant.service;
         self.grant.spend()?;
-        service
+        let mut response = service
             .decrypted_transactions(self.page, self.grant.mode)
-            .await
+            .await?;
+        self.grant.scope.transactions(&mut response.value);
+        Ok(response)
     }
 
     pub(crate) async fn execute_merges(self) -> Result<GetAuditedMergesResponse, RingRpcError> {
@@ -647,7 +712,9 @@ impl<S: TransactionSource> AuthorizedRead<'_, S> {
                 error => error.into(),
             })?;
         validate_merge_page(&page, self.page)?;
-        Ok(page.into())
+        let mut response = GetAuditedMergesResponse::from(page);
+        self.grant.scope.merges(&mut response.value);
+        Ok(response)
     }
 }
 
@@ -663,7 +730,7 @@ impl<S: TransactionSource> AuthorizedUtxos<'_, S> {
                 utxos: self
                     .utxo_hashes
                     .iter()
-                    .map(|hash| store.view(hash))
+                    .map(|hash| self.grant.scope.utxo(store.view(hash)))
                     .collect(),
             },
         })

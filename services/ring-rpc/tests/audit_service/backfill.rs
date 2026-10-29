@@ -365,6 +365,7 @@ async fn confirmed_deposit_and_merge_tag_collisions_do_not_poison_an_audit_page(
             read: PagedRead::DecryptedTransactions,
             auth: &auth(&delegate()),
             page: &page(),
+            wallet: None,
         })
         .await
         .unwrap();
@@ -426,6 +427,7 @@ async fn recipient_bodies_cannot_poison_an_audit_page_or_trigger_registry_refres
             read: PagedRead::DecryptedTransactions,
             auth: &auth(&delegate()),
             page: &page(),
+            wallet: None,
         })
         .await
         .unwrap();
@@ -474,11 +476,13 @@ async fn unknown_assets_share_refresh_and_back_off_after_failure() {
             read: PagedRead::DecryptedTransactions,
             auth: &ed25519,
             page: &page,
+            wallet: None,
         }),
         service.read(AuditRead {
             read: PagedRead::DecryptedTransactions,
             auth: &p256,
             page: &page,
+            wallet: None,
         })
     );
     let mint = |response: &GetDecryptedTransactionsResponse| {
@@ -502,6 +506,7 @@ async fn unknown_assets_share_refresh_and_back_off_after_failure() {
                 read: PagedRead::DecryptedTransactions,
                 auth: &auth(signer),
                 page: &page,
+                wallet: None,
             })
             .await
             .unwrap();
@@ -522,6 +527,7 @@ async fn unknown_assets_share_refresh_and_back_off_after_failure() {
             read: PagedRead::DecryptedTransactions,
             auth: &first,
             page: &page,
+            wallet: None,
         })
     )
     .await
@@ -532,6 +538,7 @@ async fn unknown_assets_share_refresh_and_back_off_after_failure() {
             read: PagedRead::DecryptedTransactions,
             auth: &second,
             page: &page,
+            wallet: None,
         })
         .await
         .unwrap();

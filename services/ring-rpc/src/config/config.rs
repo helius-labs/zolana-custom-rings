@@ -26,7 +26,7 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    Serve(ServeArgs),
+    Serve(Box<ServeArgs>),
     Keygen(KeygenArgs),
 }
 
@@ -80,6 +80,16 @@ pub struct ServeArgs {
     /// Serve plain HTTP on a public address and accept plain HTTP origins, test deployments only.
     #[arg(long, env = "RING_RPC_INSECURE_PUBLIC_BIND")]
     pub insecure_public_bind: bool,
+    /// `postgres://` or `sqlite://` URL of the service store.
+    #[arg(long, env = "RING_RPC_DATABASE_URL")]
+    pub database_url: Option<String>,
+    /// Keep wallet reader grants encrypted in the service store.
+    #[arg(
+        long,
+        env = "RING_RPC_ENCRYPTED_READER_GRANTS",
+        requires = "database_url"
+    )]
+    pub encrypted_reader_grants: bool,
 }
 
 #[derive(Debug, Args)]

@@ -9,7 +9,7 @@ use zolana_ring_client::{
 };
 use zolana_ring_rpc::{
     read_root_secret, run_server, write_root_secret, ChainSource, Cli, Command, Hub, KeyKind,
-    KeygenArgs, OriginPolicy, ServeArgs, ServerOptions, TransactionSource, Upstreams,
+    KeygenArgs, OriginPolicy, ServeArgs, ServerOptions, Store, TransactionSource, Upstreams,
     UTXO_BACKFILL_INTERVAL,
 };
 
@@ -22,7 +22,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
     match Cli::parse().command {
-        Command::Serve(args) => serve(args).await,
+        Command::Serve(args) => serve(*args).await,
         Command::Keygen(args) => keygen(args),
     }
 }
@@ -72,7 +72,13 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     if let Some(relying_party_id) = args.webauthn_rp_id {
         origin_policy = origin_policy.with_relying_party_id(relying_party_id);
     }
-    let builder = Hub::builder(source, genesis_hash).with_origins(origin_policy.build()?);
+    let mut builder = Hub::builder(source, genesis_hash).with_origins(origin_policy.build()?);
+    if let (true, Some(url)) = (args.encrypted_reader_grants, &args.database_url) {
+        let store = Store::open(url, args.max_connections.get())
+            .await
+            .context("opening the service store")?;
+        builder = builder.with_grant_store(store);
+    }
     let hub = match (&args.auditor_key_file, &args.root_secret_file) {
         (Some(path), None) => {
             let ring = args

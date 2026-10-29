@@ -22,6 +22,16 @@ pub(crate) enum KeySource {
     Derived(RootSecret),
 }
 
+impl KeySource {
+    /// Every service-wide key derives from it.
+    pub(crate) fn service_secret(&self) -> Zeroizing<[u8; 32]> {
+        match self {
+            Self::Local { auditor, .. } => auditor.secret_bytes(),
+            Self::Derived(root) => Zeroizing::new(*root.as_bytes()),
+        }
+    }
+}
+
 /// The cluster and ring bind each auditor key.
 #[must_use]
 pub(crate) struct AuditorKeyDerivation<'a> {

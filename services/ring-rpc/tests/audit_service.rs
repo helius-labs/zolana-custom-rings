@@ -11,11 +11,14 @@ mod authorization;
 mod backfill;
 #[path = "audit_service/deposits.rs"]
 mod deposits;
+#[path = "audit_service/reader_grants.rs"]
+mod reader_grants;
 #[path = "../../../sdk-libs/client/tests/common/transfer.rs"]
 pub mod transfer;
 
 use custom_ring_interface::{
-    encode_ring_confidential_delivered_output, EscrowKey, RingMode, DELIVERED_AUDIT_CAPACITIES,
+    encode_ring_confidential_delivered_output, EscrowKey, QueueEntry, RingMode,
+    DELIVERED_AUDIT_CAPACITIES,
 };
 use spr_keypair::{X25519Keypair, X25519Pubkey};
 use std::{
@@ -27,8 +30,8 @@ use std::{
     },
     time::Duration,
 };
-use zolana_ring_member_registry::{MemberRecord, MemberRegistryTree, RecordTree};
-use zolana_ring_policy::Member;
+use zolana_ring_member_registry::{MemberRecord, MemberRegistryTree, RecordOpening, RecordTree};
+use zolana_ring_policy::{ListId, Member};
 
 use p256::ecdsa::signature::hazmat::PrehashSigner;
 use sha2::Digest;
@@ -48,11 +51,12 @@ use zolana_ring_client::{
         DecryptedTransaction, DecryptedWithdrawal, DepositRecord, GetAuditedMergesResponse,
         GetAuditedUtxosRequest, GetAuditedUtxosResponse, GetDecryptedTransactionsRequest,
         GetDecryptedTransactionsResponse, HealthResponse, KeyMode, PagedRead, ReadAttestation,
-        ReadAuth, ReadBuildError, ReadSignature, ReadSigner, ReadTarget, RegistryRoot,
-        RegistryStatus, RingActivation, RingChainStatus, RingDepositsRequest, RingDepositsResponse,
-        RingState, RingStatusRequest, RingStatusResponse, SkippedReason, WebAuthnAssertion,
-        AUDITED_UTXOS_LIMIT, CREATE_AUDITOR_KEY, GET_AUDITED_MERGES, GET_AUDITED_UTXOS,
-        GET_DECRYPTED_TRANSACTIONS, HEALTH, RING_DEPOSITS, RING_STATUS,
+        ReadAuth, ReadBuildError, ReadSignature, ReadSigner, ReadTarget, ReaderGrantAction,
+        ReaderGrantAttestation, ReaderGrantRequest, RegistryRoot, RegistryStatus, RingActivation,
+        RingChainStatus, RingDepositsRequest, RingDepositsResponse, RingState, RingStatusRequest,
+        RingStatusResponse, SkippedReason, WebAuthnAssertion, AUDITED_UTXOS_LIMIT,
+        CREATE_AUDITOR_KEY, GET_AUDITED_MERGES, GET_AUDITED_UTXOS, GET_DECRYPTED_TRANSACTIONS,
+        HEALTH, RING_DEPOSITS, RING_STATUS, SET_READER_GRANT,
     },
     seal_deposits, AnonymousInputs, AuditDisclosure, AuditError, ConfirmedDeposit, DepositOpening,
     MergeAuditPage, MergeAuditResult, OutputPayloadErrorKind, ReaderKey, RingOrigin,
@@ -61,15 +65,16 @@ use zolana_ring_client::{
 use zolana_ring_client::{P256ReaderKey, RingIndexerError};
 use zolana_ring_indexer::rpc::{
     GetRingMemberOpeningsRequest, GetRingMemberOpeningsResponse, GetRingMemberRecordsRequest,
-    GetRingMemberRecordsResponse, GetRingRecordQueueResponse, RingIndexedMemberRecordView,
-    RingMemberOpening, RingMemberRecordView, RingQueueEntryView, RingRecordPathView,
-    RingRegistryRootView,
+    GetRingMemberRecordsResponse, GetRingRecordQueueResponse, GetStorageMemberOpeningsRequest,
+    GetStorageMemberOpeningsResponse, RingIndexedMemberRecordView, RingMemberOpening,
+    RingMemberRecordView, RingQueueEntryView, RingRecordPathView, RingRegistryRootView,
+    StorageRootView,
 };
 use zolana_ring_rpc::{
     rpc_module, AuditRead, AuditService, Clock, DepositHistory, DepositPage, Hub,
-    MergeAuditRequest, OriginPolicy, Origins, Page, ReadCheck, ReaderGrant, RingConfiguration,
-    RingHistoryPage, RingRpcError, RootSecret, TransactionPage, TransactionSource, Unauthorized,
-    AUTH_SKEW,
+    MergeAuditRequest, OriginPolicy, Origins, Page, ReadCheck, RecordsRoot, RingConfiguration,
+    RingHistoryPage, RingRpcError, RootSecret, Store, TransactionPage, TransactionSource,
+    Unauthorized, AUTH_SKEW,
 };
 use zolana_ring_transaction::{RingAssets, RingDeliveredBody};
 
@@ -93,6 +98,8 @@ const TOKEN_ACCOUNT: Address = Address::new_from_array([9; 32]);
 const MINT: Address = Address::new_from_array([10; 32]);
 const SPL_WITHDRAWN: u64 = 75;
 const ORIGIN: &str = "http://localhost:3000";
+/// Every fixture ring's own `StorageRegistry`.
+const RECORDS: Address = Address::new_from_array([11; 32]);
 const USER_PRESENT_AND_VERIFIED: u8 = 0x05;
 
 fn authority() -> Keypair {
@@ -261,6 +268,7 @@ fn decide_now(auth: &ReadAuth, origins: &Origins) -> Result<ReaderKey, Unauthori
         target: target(RING),
         cursor: None,
         limit: None,
+        wallet: None,
     };
     ReadCheck {
         auth,
@@ -356,7 +364,8 @@ struct StaticSource {
     chain: HashMap<Address, RingChainStatus>,
     /// Per auditor view tag, empty when every read shares `transactions`.
     by_tag: HashMap<[u8; 32], Vec<ShieldedTransaction>>,
-    granted: HashSet<ReaderKey>,
+    /// The ring's own storage tree, rewritten while a hub serves it.
+    records: Records,
     /// Per program, absent when immutable or not deployed.
     upgrade_authorities: HashMap<Address, Address>,
     healthy: bool,
@@ -663,12 +672,36 @@ impl TransactionSource for StaticSource {
         })
     }
 
-    fn reader_granted(
+    async fn records_root(&self, _ring: Address) -> Result<Option<RecordsRoot>, ClientError> {
+        Ok(Some(RecordsRoot {
+            registry: RECORDS,
+            root: self.records.root(),
+        }))
+    }
+
+    async fn storage_member_openings(
         &self,
-        request: ReaderGrant,
-    ) -> impl Future<Output = Result<bool, ClientError>> + Send {
-        let granted = self.granted.contains(&request.reader);
-        async move { Ok(granted) }
+        request: GetStorageMemberOpeningsRequest,
+    ) -> Result<GetStorageMemberOpeningsResponse, RingIndexerError> {
+        assert_eq!(request.registry.0, RECORDS);
+        let root = self.records.root();
+        assert_eq!(request.expected_root.0, root);
+        Ok(GetStorageMemberOpeningsResponse {
+            context: spr_indexer_api::Context {
+                block_time: 0,
+                slot: 99,
+            },
+            root: StorageRootView {
+                root: Hash(root),
+                revision: 0,
+                next_index: 0,
+            },
+            openings: request
+                .members
+                .iter()
+                .map(|member| self.records.opening(&member.0))
+                .collect(),
+        })
     }
 
     fn upgrade_authority(
@@ -900,9 +933,9 @@ impl Fixture {
             )]),
             chain: HashMap::new(),
             by_tag: HashMap::new(),
-            granted: HashSet::from([
-                ReaderKey::ed25519(delegate().pubkey()).expect("delegate reader"),
-                ReaderKey::p256(Passkey::new(46).pubkey()).expect("passkey reader"),
+            records: Records::listing(&[
+                reader_member(ReaderKey::ed25519(delegate().pubkey()).expect("delegate reader")),
+                reader_member(ReaderKey::p256(Passkey::new(46).pubkey()).expect("passkey reader")),
             ]),
             upgrade_authorities: HashMap::from([(RING, deployer().pubkey())]),
             healthy: true,
@@ -952,6 +985,7 @@ impl Fixture {
                 read: PagedRead::DecryptedTransactions,
                 auth: &auth(&delegate()),
                 page: &page(),
+                wallet: None,
             })
             .await
             .expect("read")
@@ -1091,6 +1125,7 @@ async fn read_at(
             read: PagedRead::DecryptedTransactions,
             auth: &request.auth,
             page: &page,
+            wallet: None,
         })
         .await
         .expect("read")
@@ -1167,6 +1202,73 @@ fn audited_deposit(
     };
     let bindings = ring_event_origin_in(&[group], 0, RING).unwrap().deposits;
     (deposit, bindings)
+}
+
+fn reader_member(reader: ReaderKey) -> Member {
+    reader.member().expect("reader member")
+}
+
+/// Shared by every clone of the source.
+#[derive(Clone)]
+struct Records(Arc<Mutex<MemberRegistryTree>>);
+
+impl Records {
+    fn listing(readers: &[Member]) -> Self {
+        let records = Self(Arc::new(Mutex::new(
+            MemberRegistryTree::new().expect("record tree"),
+        )));
+        for reader in readers {
+            records.list_reader(*reader, true);
+        }
+        records
+    }
+
+    /// The source mirrors the new root at once, as after `SyncRoots`.
+    fn list_reader(&self, member: Member, listed: bool) {
+        let bit = ListId::Reader.record_bit();
+        let entry = QueueEntry {
+            member: *member.as_bytes(),
+            mask: bit,
+            value: if listed { bit } else { 0 },
+            escrow_key: [0; 32],
+            mint_policy: None,
+        };
+        self.0
+            .lock()
+            .unwrap()
+            .apply([0; 32], &[entry])
+            .expect("record write");
+    }
+
+    fn root(&self) -> [u8; 32] {
+        self.0.lock().unwrap().root().expect("root")
+    }
+
+    fn opening(&self, member: &[u8; 32]) -> RingMemberOpening {
+        let (present, record, path) = match self.0.lock().unwrap().opening(member).expect("opening")
+        {
+            RecordOpening::Present { record, path } => (true, record, path),
+            RecordOpening::Absent { low, path } => (false, low, path),
+        };
+        RingMemberOpening {
+            present,
+            record: RingMemberRecordView {
+                mint_policy: record.mint_policy,
+                member: Hash(record.member),
+                next: Hash(record.next),
+                lists: record.lists,
+                escrow_key: Hash(record.escrow_key),
+                owner_pubkey: None,
+                nullifier_pk: None,
+                eph_pk: None,
+                ciphertext: None,
+            },
+            path: RingRecordPathView {
+                index: path.index,
+                siblings: path.siblings.iter().map(|level| level.map(Hash)).collect(),
+            },
+        }
+    }
 }
 
 /// Each owner's record escrowing its nullifier key under one registry root.
