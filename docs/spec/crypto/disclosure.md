@@ -52,7 +52,7 @@ A delivered ring output's amount and blinding are in its body, not in the disclo
 
 ## Merge disclosure
 
-An anonymous merge seals a fresh 32-byte disclosure key under `CRING/mrg1` and masks its fields with:
+A merge seals a fresh 32-byte disclosure key under `CRING/mrg1` and masks its fields with:
 
 ```text
 seed  = Poseidon(CR_MD, PackBytesBE(disclosure_key), right_align(salt))

@@ -345,5 +345,4 @@ own spends. Each known counterparty that sends nothing adds `TAG_GAP` tags to
 every sync, and no limit applies to the counterparties a viewing key learns.
 Ring traffic does not add to it.
 
-An anonymous merge spends fewer notes than a confidential one. See
-[the limits](../README.md#limits).
+A merge spends at most 24 notes.

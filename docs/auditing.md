@@ -85,17 +85,17 @@ Under key escrow the proof also shows each deposited owner's escrow record.
 ## Merges
 
 A merge consolidates notes of one owner, one asset and one ring into one
-output, and SPP proves that value and owner stay unchanged. On a confidential
-ring the merge proof opens the owner's member record and shows that it
-escrows the nullifier key the inputs spend under. The output ciphertext is
-keyed by that nullifier secret, and the merge names no owner. The auditor
-opens each escrowed key of the registry and tries it on the output until one
-opens it. An owner without a registered key cannot merge.
+output, and SPP proves that value and owner stay unchanged. Every ring merge
+carries a disclosure proof that encrypts the merged note to the auditor. It
+covers the owner key, the nullifier key, the mint, the amount, the output
+blinding and every input UTXO hash, and the merge names no owner on chain.
 
-On an anonymous ring a separate disclosure proof encrypts the merged note to
-the auditor. It covers the owner key, the nullifier key, the mint, the amount,
-the output blinding and every input UTXO hash. That proof opens no member
-record, because an anonymous ring escrows no key.
+On a `ConfidentialEscrow` ring the same proof opens the owner's member record
+under a root the registry holds and shows that the record escrows the
+nullifier key the inputs spend under. The merged output stays under that key,
+so the auditor reads its secret from the owner's `RegisterKey` instruction. An
+owner without a registered key cannot merge on such a ring. A ring without key
+escrow, an anonymous ring included, opens no record.
 
 ## Reading a ring
 

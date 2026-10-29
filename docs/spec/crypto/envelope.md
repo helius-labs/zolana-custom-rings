@@ -54,7 +54,7 @@ The cipher carries no authentication tag. Integrity comes from `hash_bytes(ciphe
 | Delivered body | audit stream, slot secret | `fe32(blinding) \|\| u64be(amount)`, 40 bytes | `hash_bytes(body)` per slot |
 | Register key | `CRING/nfk1` | the 32-byte nullifier secret, first byte zero | `hash_bytes(ciphertext)` |
 | Deposit | `CRING/dep1` | per note `fe32(owner_hash) \|\| fe32(blinding) \|\| owner_key`, 96 bytes, one stream for the batch | `hash_bytes` of each 96-byte slot |
-| Anonymous merge | `CRING/mrg1` | the 32-byte disclosure key of [Merge disclosure](disclosure.md#merge-disclosure) | `hash_bytes(ciphertext)` |
+| Merge | `CRING/mrg1` | the 32-byte disclosure key of [Merge disclosure](disclosure.md#merge-disclosure) | `hash_bytes(ciphertext)` |
 
 The deposit owner key is the Ed25519 key on an anonymous ring and 32 zero bytes otherwise.
 
