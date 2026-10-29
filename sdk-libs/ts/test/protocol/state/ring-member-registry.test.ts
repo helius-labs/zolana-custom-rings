@@ -22,6 +22,7 @@ import type { RingProofRequest } from "../../../src/rpc/prover/ring.js";
 import {
   ringConfigPda,
   ringMemberRegistryPda,
+  ringPolicyPda,
   ringRecordQueuePda,
 } from "../../../src/protocol/pda/index.js";
 import {
@@ -50,6 +51,7 @@ import {
   memberRegistryData,
   ownedAccount,
   recordQueueData,
+  ringPolicyData,
   ringProgramConfigData,
 } from "../../helpers/ring-accounts.js";
 
@@ -65,6 +67,8 @@ const KEY_HASH = hex("1c73c14786dd7354525c98368bca8dbc5f836e957c45f552f377c84e26
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 const AUTHORITY = address("4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T");
 const PAYER = address("3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3");
+const RECORDS = address("6NxnStrvfxkDAnWHyvc6SVXkZvBKtpHS3Bd9WfCSgUSv");
+const REVISION = 2n;
 const PROOF = Uint8Array.from({ length: 192 }, (_, index) => 255 - index);
 const AUDITOR = X25519Keypair.fromBytes(AUDITOR_SK);
 
@@ -95,11 +99,13 @@ async function ring(
   }> = {},
 ) {
   const tree = recordTree(members);
-  const [[config, configBump], [registry, registryBump], [queue, queueBump]] = await Promise.all([
-    ringConfigPda(RING),
-    ringMemberRegistryPda(RING),
-    ringRecordQueuePda(RING),
-  ]);
+  const [[config, configBump], [registry, registryBump], [queue, queueBump], [policy, policyBump]] =
+    await Promise.all([
+      ringConfigPda(RING),
+      ringMemberRegistryPda(RING),
+      ringRecordQueuePda(RING),
+      ringPolicyPda(RING),
+    ]);
   const accounts = new Map<Address, RpcAccount>([
     [
       config,
@@ -127,6 +133,20 @@ async function ring(
       ),
     ],
     [
+      policy,
+      ownedAccount(
+        RING,
+        ringPolicyData({
+          bump: policyBump,
+          records: RECORDS,
+          ownRoots: {
+            registry: RECORDS,
+            roots: [{ hash: tree.root, revision: REVISION, expiresAt: 0n }],
+          },
+        }),
+      ),
+    ],
+    [
       queue,
       ownedAccount(
         RING,
@@ -146,12 +166,20 @@ async function ring(
       openings: request.members.map((member) => options.opening ?? tree.opening(member)),
     }),
   );
+  const getStorageMemberOpenings = vi.fn<RingRecordReader["getStorageMemberOpenings"]>(
+    async (request) => ({
+      context: { slot: 1n, blockTime: 1n },
+      root: { root: request.expectedRoot, revision: REVISION, nextIndex: tree.nextIndex },
+      openings: request.members.map((member) => options.opening ?? tree.opening(member)),
+    }),
+  );
   return {
     tree,
     accounts: { config, registry, queue },
     client: {
       getAccount: async (account: Address) => accounts.get(account),
       getRingMemberOpenings,
+      getStorageMemberOpenings,
     },
   };
 }

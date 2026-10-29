@@ -72,7 +72,7 @@ export interface RegisteredRecord {
 }
 
 /** Members' records under the ring's newest own root, in member order, Rust `MemberRecords::read`. */
-export function readMemberRecords(
+export async function readMemberRecords(
   input: Readonly<{
     client: RingRecordReadClient;
     ringProgramId: Address;
@@ -80,17 +80,27 @@ export function readMemberRecords(
   }>,
   context?: RequestContext,
 ): Promise<readonly MemberOpeningRead[]> {
+  return (await readOwnRecords(input, context)).reads;
+}
+
+/** @internal `readMemberRecords` with the root the reads verify under. */
+export function readOwnRecords(
+  input: Readonly<{
+    client: RingRecordReadClient;
+    ringProgramId: Address;
+    members: readonly Bytes32[];
+  }>,
+  context?: RequestContext,
+): Promise<Readonly<{ root: BoundRoot; reads: readonly MemberOpeningRead[] }>> {
   return waitForProjection(
     async (attempt) => {
       const policy = await fetchRingPolicy(input.client, input.ringProgramId, attempt);
-      return readMemberOpenings(
-        {
-          client: input.client,
-          root: ownRoot(input.ringProgramId, policy),
-          members: input.members,
-        },
+      const root = ownRoot(input.ringProgramId, policy);
+      const reads = await readMemberOpenings(
+        { client: input.client, root, members: input.members },
         attempt,
       );
+      return { root, reads };
     },
     MEMBER_REGISTRY_PROJECTION_ERRORS,
     context,

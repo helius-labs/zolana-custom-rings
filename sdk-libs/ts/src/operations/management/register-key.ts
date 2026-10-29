@@ -50,7 +50,11 @@ import type { MemberOpeningRead } from "../../protocol/membership/member-opening
 import { memberOfTag } from "../../protocol/membership/policy.js";
 import { MEMBER_REGISTRY_PROJECTION_ERRORS } from "../../rpc/projection.js";
 import { feeAccounts, writeMaxFee } from "./record-writes.js";
-import { readNewest } from "../../rpc/registered-record.js";
+import {
+  readNewest,
+  readOwnRecords,
+  type RingRecordReadClient,
+} from "../../rpc/registered-record.js";
 import type { EscrowEntry } from "./record-updates.js";
 import { registerKeyStatementHash } from "../../protocol/proof/statement.js";
 
@@ -271,9 +275,9 @@ export class KeyRegistration {
   }
 }
 
-export type RingSealedKeyClient = RingKeyRegistrationClient;
+export type RingSealedKeyClient = RingRecordReadClient;
 
-/** A member's record under the chain's current root, escrowing `sealed`. */
+/** A member's record under the ring's newest own root, escrowing `sealed`. */
 export interface RingSealedKeyEntry {
   readonly member: Bytes32;
   readonly root: Bytes32;
@@ -287,13 +291,19 @@ export async function fetchRingSealedKey(
   input: Readonly<{ client: RingSealedKeyClient; ringProgramId: Address; member: Bytes32 }>,
   context?: RequestContext,
 ): Promise<RingSealedKeyEntry> {
-  const { root, read } = await readRecord(input.client, input.ringProgramId, input.member, context);
+  const { root, reads } = await readOwnRecords(
+    { client: input.client, ringProgramId: input.ringProgramId, members: [input.member] },
+    context,
+  );
+  const [read] = reads;
+  if (read === undefined)
+    throw new RingError("RING_MEMBER_REGISTRY_INVALID", { details: { reason: "openings" } });
   const served = read.opening.sealedKey;
   const escrowed = served === undefined ? undefined : read.escrowed(served.nullifierPk);
   if (escrowed === undefined) throw new RingError("RING_KEY_NOT_REGISTERED");
   return Object.freeze({
     member: input.member,
-    root,
+    root: root.root,
     record: escrowed.record,
     path: escrowed.path,
     sealed: escrowed.sealed,

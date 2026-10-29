@@ -20,6 +20,7 @@ import {
   getRingRecordPoolMethod,
   getRingRecordQueueMethod,
   getStorageMemberOpeningsMethod,
+  getStorageMemberRecordsMethod,
   getStorageRecordPoolMethod,
 } from "./indexer-methods.js";
 import type {
@@ -56,7 +57,9 @@ import type {
   RingRegistryState,
   RingServedRecord,
   StorageMemberOpenings,
+  StorageMemberPage,
   StorageOpeningsRequest,
+  StoragePageRequest,
   StorageRecordPool,
   StorageRecordPoolRequest,
   StorageRoot,
@@ -218,6 +221,38 @@ export class RingIndexer implements RingRecordReader {
       return Object.freeze({
         ...servedOpenings(response, wire, method),
         root: storageRoot(response.root),
+      });
+    } catch (cause) {
+      throw ringIndexerError(cause, method);
+    }
+  }
+
+  async getStorageMemberRecords(
+    request: StoragePageRequest,
+    context?: RequestContext,
+  ): Promise<StorageMemberPage> {
+    const method = "getStorageMemberRecords";
+    try {
+      const wire = {
+        registry: request.registry,
+        expectedRoot: hash(request.expectedRoot),
+        startIndex: BigInt(request.startIndex),
+        limit: request.limit,
+      };
+      const response = await this.#api.call(getStorageMemberRecordsMethod, wire, context);
+      if (response.root.root !== wire.expectedRoot)
+        throw new ClientError("CLIENT_INVALID_RPC_RESPONSE", {
+          details: { method, path: "$.root" },
+        });
+      return Object.freeze({
+        context: response.context,
+        root: storageRoot(response.root),
+        records: Object.freeze(
+          response.records.map((entry, index) =>
+            servedRecord(entry, method, `records[${String(index)}]`),
+          ),
+        ),
+        nextLeafIndex: response.nextLeafIndex === null ? undefined : Number(response.nextLeafIndex),
       });
     } catch (cause) {
       throw ringIndexerError(cause, method);

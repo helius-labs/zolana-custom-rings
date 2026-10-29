@@ -35,6 +35,8 @@ import type {
   StorageApplyProofInputsResponse,
   StorageMemberOpeningsRequest,
   StorageMemberOpeningsResponse,
+  StorageMemberPageResponse,
+  StorageMemberRecordsRequest,
   StorageRecordPoolRequest,
   StorageRecordPoolResponse,
   StorageRootView,
@@ -112,6 +114,16 @@ export function encodeRingMemberRecordsRequest(value: RingMemberRecordsRequest):
       MEMBER_REGISTRY_CAPACITY,
     ),
     startIndex: toWireInteger(value.startIndex, "startIndex", 1n, value.expectedNextIndex),
+    limit: toWireInteger(BigInt(value.limit), "limit", 1n, BigInt(MAX_RING_MEMBER_BATCH)),
+  };
+}
+
+/** Rust `GetStorageMemberRecordsRequest`. */
+export function encodeStorageMemberRecordsRequest(value: StorageMemberRecordsRequest): WireObject {
+  return {
+    registry: checkedAddress(value.registry, "registry"),
+    expectedRoot: checkedHash(value.expectedRoot, "expectedRoot"),
+    startIndex: toWireInteger(value.startIndex, "startIndex", 1n, MEMBER_REGISTRY_CAPACITY),
     limit: toWireInteger(BigInt(value.limit), "limit", 1n, BigInt(MAX_RING_MEMBER_BATCH)),
   };
 }
@@ -341,8 +353,20 @@ function decodeRecordPool<Root>(value: unknown, root: (value: unknown, path: str
 
 /** The `getRingMemberRecords` response. */
 export function decodeRingMemberPage(value: unknown): RingMemberPageResponse {
+  return decodeMemberPage(value, registryRoot);
+}
+
+/** Rust `GetStorageMemberRecordsResponse`. */
+export function decodeStorageMemberPage(value: unknown): StorageMemberPageResponse {
+  return decodeMemberPage(value, storageRoot);
+}
+
+function decodeMemberPage<Root extends Readonly<{ nextIndex: bigint }>>(
+  value: unknown,
+  decodeRoot: (value: unknown, path: string) => Root,
+) {
   const row = object(value, "$", ["context", "root", "records", "nextLeafIndex"]);
-  const root = registryRoot(row["root"], "root");
+  const root = decodeRoot(row["root"], "root");
   const records = array(row["records"], "records", (entry, path) => {
     const item = object(entry, path, ["record", "path"]);
     return {
