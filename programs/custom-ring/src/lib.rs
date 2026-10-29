@@ -41,12 +41,6 @@ pub fn process_instruction(
         }
         // SPP proves that owner, asset, value and ring ownership stay unchanged.
         InstructionTag::Merge => process_merge_ix(program_id, accounts, ix_data),
-        InstructionTag::GrantReadAccess => {
-            process_grant_read_access_ix(program_id, accounts, ix_data)
-        }
-        InstructionTag::RevokeReadAccess => {
-            process_revoke_read_access_ix(program_id, accounts, ix_data)
-        }
         InstructionTag::SetAuthority => process_set_authority_ix(program_id, accounts, ix_data),
         InstructionTag::CreatePolicy => process_create_policy_ix(program_id, accounts, ix_data),
         InstructionTag::SetPolicySource => {
@@ -59,16 +53,6 @@ pub fn process_instruction(
         InstructionTag::SetCoSigner => process_set_cosigner_ix(program_id, accounts, ix_data),
         InstructionTag::ClearCoSigner => process_clear_cosigner_ix(program_id, accounts, ix_data),
         InstructionTag::SetDelegate => process_set_delegate_ix(program_id, accounts, ix_data),
-        InstructionTag::CreateMemberRegistry => {
-            process_create_member_registry_ix(program_id, accounts, ix_data)
-        }
-        InstructionTag::RegisterKey => process_register_key_ix(program_id, accounts, ix_data),
-        InstructionTag::WriteRecords => process_write_records_ix(program_id, accounts, ix_data),
-        InstructionTag::AuthorityWriteRecords => {
-            process_authority_write_records_ix(program_id, accounts, ix_data)
-        }
-        InstructionTag::ApplyRecords => process_apply_records_ix(program_id, accounts, ix_data),
-        InstructionTag::SetInsertFee => process_set_insert_fee_ix(program_id, accounts, ix_data),
         InstructionTag::SyncRoots => process_sync_roots_ix(program_id, accounts, ix_data),
     }
 }

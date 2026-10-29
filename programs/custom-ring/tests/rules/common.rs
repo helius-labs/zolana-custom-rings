@@ -1,24 +1,21 @@
-use bytemuck::{Pod, Zeroable};
+use bytemuck::Pod;
 use custom_ring_interface::{
     compute_unit_limit,
     storage::{Revision, Root, StorageRegistry},
-    tag, ApplyRecordsIxData, AuthorityWriteRecordsIxData, CreateConfigIxData, CreatePolicyIxData,
-    CustomRingError, InstructionTag, MemberWriteIxData, PolicyTableIxData, RecordWriteData,
-    RegisterKeyIxData, RingKind, SetCoSignerRecordIxData, SourceSpec, WriteRecordsIxData,
-    CONFIG_PDA_SEED, CO_SIGNER_PDA_SEED, MEMBER_REGISTRY_PDA_SEED, RECORD_QUEUE_PDA_SEED,
-    RING_POLICY_PDA_SEED, STORAGE_PROGRAM_ID,
+    tag, CreateConfigIxData, CreatePolicyIxData, CustomRingError, InstructionTag,
+    PolicyTableIxData, RingKind, SetCoSignerRecordIxData, SourceSpec, CONFIG_PDA_SEED,
+    CO_SIGNER_PDA_SEED, RING_POLICY_PDA_SEED, STORAGE_PROGRAM_ID,
 };
 use litesvm::LiteSVM;
 use solana_account::Account;
 use solana_address::Address;
-use solana_bn254::compression::prelude::{alt_bn128_g1_decompress_be, alt_bn128_g2_decompress_be};
+use solana_bn254::compression::prelude::alt_bn128_g2_decompress_be;
 use solana_instruction::{error::InstructionError, AccountMeta, Instruction};
 use solana_keypair::{Keypair, Signer};
 use solana_loader_v3_interface::state::UpgradeableLoaderState;
 use solana_message::{v1, VersionedMessage};
 use solana_transaction::versioned::VersionedTransaction;
 use solana_transaction_error::TransactionError;
-use spr_hasher::primitives::right_align;
 use spr_interface::{BPF_LOADER_UPGRADEABLE_ID, RING_AUTH_PDA_SEED};
 use zolana_ring_policy::{ListId, Member, OutflowLimit, Rule, RuleTable, Subject};
 
@@ -38,14 +35,6 @@ pub fn pda(seed: &[u8]) -> Address {
 
 pub fn config_pda() -> Address {
     pda(CONFIG_PDA_SEED)
-}
-
-pub fn registry_pda() -> Address {
-    pda(MEMBER_REGISTRY_PDA_SEED)
-}
-
-pub fn queue_pda() -> Address {
-    pda(RECORD_QUEUE_PDA_SEED)
 }
 
 pub fn policy_pda() -> Address {
@@ -94,7 +83,7 @@ pub struct Ring {
 }
 
 impl Ring {
-    /// A deployed ring whose config, registry and policy came through their instructions.
+    /// A deployed ring whose config and policy came through their instructions.
     pub fn new(setup: Setup) -> Self {
         let mut svm = LiteSVM::new();
         svm.add_program(PROGRAM, &program_bytes())
@@ -123,11 +112,6 @@ impl Ring {
         within_budget(
             InstructionTag::CreateConfig,
             ring.send(config, &[&authority]),
-        );
-        let registry = create_member_registry(&ring.payer.pubkey(), &authority.pubkey());
-        within_budget(
-            InstructionTag::CreateMemberRegistry,
-            ring.send(registry, &[&authority]),
         );
         let limits = match setup {
             Setup::LimitedPolicy => vec![OutflowLimit::of(
@@ -197,14 +181,6 @@ impl Ring {
         *bytemuck::from_bytes(&account.data)
     }
 
-    pub fn lamports(&self, address: &Address) -> u64 {
-        self.svm.get_balance(address).unwrap_or_default()
-    }
-
-    pub fn rent_exempt_minimum(&self, len: usize) -> u64 {
-        self.svm.minimum_balance_for_rent_exemption(len)
-    }
-
     /// Replaces a program account's data, the state a sequence of instructions would reach.
     pub fn write<T: Pod>(&mut self, address: &Address, value: &T) {
         self.store(*address, PROGRAM, bytemuck::bytes_of(value).to_vec());
@@ -221,24 +197,6 @@ impl Ring {
         self.svm
             .set_account(address, account)
             .expect("store the account");
-    }
-
-    pub fn fund(&mut self, address: &Address) {
-        self.svm.airdrop(address, SOL).expect("fund the account");
-    }
-
-    /// Leaves `address` an empty system account.
-    pub fn drain(&mut self, address: &Address) {
-        self.svm
-            .set_account(*address, Account::default())
-            .expect("drain the account");
-    }
-
-    pub fn fee(&self) -> Fee {
-        Fee {
-            payer: self.payer.pubkey(),
-            recipient: self.authority.pubkey(),
-        }
     }
 
     /// An executable account at `address`, for refusals that precede any CPI into it.
@@ -280,10 +238,6 @@ pub fn on_curve_g2() -> [u8; 128] {
         .unwrap()
         .try_into()
         .unwrap()
-}
-
-pub fn off_curve_g1() -> [u8; 32] {
-    off_curve(|point| alt_bn128_g1_decompress_be(point).is_ok())
 }
 
 pub fn off_curve_g2() -> [u8; 64] {
@@ -411,20 +365,6 @@ pub fn create_config(
             AccountMeta::new_readonly(program_data(), false),
         ],
         tagged(tag::CREATE_CONFIG, &wincode::serialize(&data).unwrap()),
-    )
-}
-
-pub fn create_member_registry(payer: &Address, authority: &Address) -> Instruction {
-    instruction(
-        vec![
-            AccountMeta::new(*payer, true),
-            AccountMeta::new_readonly(*authority, true),
-            AccountMeta::new_readonly(config_pda(), false),
-            AccountMeta::new(registry_pda(), false),
-            AccountMeta::new(queue_pda(), false),
-            AccountMeta::new_readonly(SYSTEM, false),
-        ],
-        vec![tag::CREATE_MEMBER_REGISTRY],
     )
 }
 
@@ -606,88 +546,6 @@ pub fn set_co_signer(ring: &mut Ring, co_signer: &Address, scope: u8) {
     }
     .instruction();
     ring.send(set, &[&authority]).expect("set the co-signer");
-}
-
-#[derive(Clone, Copy)]
-pub struct Fee {
-    pub payer: Address,
-    pub recipient: Address,
-}
-
-fn record_write(tag: u8, signer: &Address, fee: Option<Fee>, body: &[u8]) -> Instruction {
-    let mut accounts = vec![
-        AccountMeta::new_readonly(*signer, true),
-        AccountMeta::new_readonly(config_pda(), false),
-        AccountMeta::new_readonly(registry_pda(), false),
-        AccountMeta::new(queue_pda(), false),
-    ];
-    if let Some(fee) = fee {
-        accounts.extend([
-            AccountMeta::new(fee.payer, true),
-            AccountMeta::new(fee.recipient, false),
-            AccountMeta::new_readonly(SYSTEM, false),
-        ]);
-    }
-    instruction(accounts, tagged(tag, body))
-}
-
-/// A member write accepting any insert fee.
-pub fn write_records(member: &Address, lists: WriteRecordsIxData, fee: Option<Fee>) -> Instruction {
-    let data = MemberWriteIxData {
-        lists,
-        max_fee: u64::MAX.to_le_bytes(),
-    };
-    member_write(member, &data, fee)
-}
-
-pub fn member_write(member: &Address, data: &MemberWriteIxData, fee: Option<Fee>) -> Instruction {
-    record_write(tag::WRITE_RECORDS, member, fee, bytemuck::bytes_of(data))
-}
-
-pub fn register_key(member: &Address, data: &RegisterKeyIxData, fee: Option<Fee>) -> Instruction {
-    record_write(tag::REGISTER_KEY, member, fee, bytemuck::bytes_of(data))
-}
-
-/// Accepts any insert fee.
-pub fn key_registration() -> RegisterKeyIxData {
-    RegisterKeyIxData {
-        proof: Zeroable::zeroed(),
-        nullifier_pk: right_align(&[4]),
-        eph_u: [5; 32],
-        ciphertext: [6; 32],
-        max_fee: u64::MAX.to_le_bytes(),
-    }
-}
-
-pub fn authority_write_records(
-    authority: &Address,
-    writes: &[RecordWriteData],
-    apply: &ApplyRecordsIxData,
-) -> Instruction {
-    instruction(
-        vec![
-            AccountMeta::new_readonly(*authority, true),
-            AccountMeta::new_readonly(config_pda(), false),
-            AccountMeta::new(registry_pda(), false),
-            AccountMeta::new(queue_pda(), false),
-        ],
-        tagged(
-            tag::AUTHORITY_WRITE_RECORDS,
-            &AuthorityWriteRecordsIxData { writes, apply }
-                .encode()
-                .expect("one to sixteen writes"),
-        ),
-    )
-}
-
-pub fn apply_records(apply: &ApplyRecordsIxData) -> Instruction {
-    instruction(
-        vec![
-            AccountMeta::new(registry_pda(), false),
-            AccountMeta::new(queue_pda(), false),
-        ],
-        tagged(tag::APPLY_RECORDS, bytemuck::bytes_of(apply)),
-    )
 }
 
 pub fn transact(tag: u8, accounts: Vec<AccountMeta>, data: Vec<u8>) -> Instruction {

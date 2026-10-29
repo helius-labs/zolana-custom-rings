@@ -1,7 +1,7 @@
 use custom_ring_interface::{
     anonymous_exit_destination, cosign::CoSignRequirement, storage::StorageRegistry, CoSigner,
-    CustomRingError, MemberRegistry, RecordQueue, RingAccount, RingPolicy, RingProgramConfig,
-    SettlementAccount, TokenAccountState, STORAGE_PROGRAM_ID,
+    CustomRingError, RingAccount, RingPolicy, RingProgramConfig, SettlementAccount,
+    TokenAccountState, STORAGE_PROGRAM_ID,
 };
 use pinocchio::{
     account::{Ref, RefMut},
@@ -78,22 +78,6 @@ fn check_authority(config: &RingProgramConfig, authority: &AccountView) -> Progr
 }
 
 #[inline(always)]
-pub fn load_registry<'a>(
-    program_id: &Address,
-    account: &'a AccountView,
-) -> Result<Ref<'a, MemberRegistry>, ProgramError> {
-    load(program_id, account)
-}
-
-#[inline(always)]
-pub fn load_registry_mut<'a>(
-    program_id: &Address,
-    account: &'a mut AccountView,
-) -> Result<RefMut<'a, MemberRegistry>, ProgramError> {
-    load_mut(program_id, account)
-}
-
-#[inline(always)]
 pub fn load_policy<'a>(
     program_id: &Address,
     account: &'a AccountView,
@@ -119,14 +103,6 @@ pub fn load_storage_registry(
     }
     let data = account.try_borrow().map_err(|_| invalid)?;
     Ref::filter_map(data, StorageRegistry::from_data).map_err(|_| invalid.into())
-}
-
-#[inline(always)]
-pub fn load_queue_mut<'a>(
-    program_id: &Address,
-    account: &'a mut AccountView,
-) -> Result<RefMut<'a, RecordQueue>, ProgramError> {
-    load_mut(program_id, account)
 }
 
 /// The shielded pool by address, its account position differs per forwarded layout.

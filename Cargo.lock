@@ -1526,7 +1526,6 @@ dependencies = [
  "solana-account 4.3.2",
  "solana-address 2.6.1",
  "solana-bn254",
- "solana-curve25519 4.0.1",
  "solana-instruction",
  "solana-keypair",
  "solana-loader-v3-interface 8.0.1",

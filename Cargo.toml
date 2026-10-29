@@ -109,7 +109,6 @@ solana-commitment-config = "3.1"
 solana-compute-budget = "3.1"
 solana-compute-budget-interface = "3.0"
 solana-cpi = "3.1"
-solana-curve25519 = "4.0"
 solana-epoch-info = "3.1"
 # Pin solana-hash to 4.5.0: the agave 4.2 graph (agave-feature-set,
 # solana-message, solana-transaction) is built against 4.5.x; letting it float

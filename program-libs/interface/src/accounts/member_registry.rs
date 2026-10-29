@@ -1,4 +1,4 @@
-//! Record tree constants and the queued record writes the program chains, the tree
+//! Record tree constants and the record writes an apply proof chains, the tree
 //! lives in `zolana-ring-member-registry`.
 
 use spr_hasher::{
@@ -14,16 +14,7 @@ pub const QUAD_HEIGHT: usize = 10;
 pub const MEMBER_REGISTRY_CAPACITY: u64 = 1 << (2 * QUAD_HEIGHT);
 /// Writes the larger apply key proves.
 pub const APPLY_BATCH: usize = 16;
-/// Member writes pending at once, the rest of a batch is the authority's reserve.
-pub const MEMBER_QUEUE_LIMIT: u64 = 8;
-/// The last leaves, kept for authority writes once members fill the rest.
-pub const AUTHORITY_RESERVED_LEAVES: u64 = 1 << 16;
-/// The insert fee of a new ring, enough to open an empty authority account.
-pub const DEFAULT_INSERT_FEE: u64 = 1_000_000;
-pub const QUEUE_CAPACITY: usize = APPLY_BATCH;
-/// Slots before anyone applies a partial queue, and between two permissionless applications.
-pub const APPLY_DELAY_SLOTS: u64 = 150;
-/// Slots a curator root below the floor stays admissible after the floor rose.
+/// Slots the ring's records keep an outgoing root readable.
 pub const GRACE_SLOTS: u64 = 750;
 
 /// `q - 1`, the sentinel's next, every member sorts strictly below it.
@@ -38,8 +29,6 @@ pub const MEMBER_REGISTRY_EMPTY_ROOT: [u8; 32] = [
     0x00, 0xc0, 0xb0, 0x7d, 0x78, 0x02, 0x4d, 0x98, 0x5b, 0x99, 0x5b, 0xd9, 0xdb, 0x52, 0x5f, 0x32,
     0x9d, 0x0b, 0xfb, 0x28, 0x5f, 0x75, 0xcc, 0x22, 0x2f, 0x90, 0x0d, 0x8f, 0x6f, 0xaf, 0x51, 0x30,
 ];
-
-const _: () = assert!(QUEUE_CAPACITY as u64 == 2 * MEMBER_QUEUE_LIMIT);
 
 /// The sentinel `(0, q - 1)` brackets every member in `[1, q - 2]` strictly.
 pub fn check_member(member: &[u8; 32]) -> Result<(), CustomRingError> {

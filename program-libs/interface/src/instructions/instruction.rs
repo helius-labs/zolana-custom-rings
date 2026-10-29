@@ -7,20 +7,8 @@ use crate::{
     error::CustomRingError,
     member_registry::{check_member, QueueEntry, APPLY_BATCH},
     storage::Revision,
-    ReaderKeyBytes, AUDIT_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
+    TAGGED_X25519_KEY_LEN,
 };
-
-/// Account slots of the record instructions the indexer reads.
-pub mod accounts {
-    /// The member of `WriteRecords` and `RegisterKey`, the authority of `AuthorityWriteRecords`.
-    pub const RECORD_WRITE_SIGNER: usize = 0;
-    pub const RECORD_WRITE_REGISTRY: usize = 2;
-    pub const RECORD_WRITE_QUEUE: usize = 3;
-    pub const APPLY_RECORDS_REGISTRY: usize = 0;
-    pub const APPLY_RECORDS_QUEUE: usize = 1;
-    pub const CREATE_MEMBER_REGISTRY_REGISTRY: usize = 3;
-    pub const CREATE_MEMBER_REGISTRY_QUEUE: usize = 4;
-}
 
 macro_rules! instruction_tags {
     ($($(#[$doc:meta])* $variant:ident = $tag:ident: $value:expr => $units:expr,)*) => {
@@ -68,8 +56,7 @@ instruction_tags! {
     /// Always refused, deposits go through `AuditedDeposit`.
     Deposit = DEPOSIT: spr_interface::instruction::tag::RING_DEPOSIT => 200_000,
     Merge = MERGE: spr_interface::instruction::tag::RING_MERGE_TRANSACT => PROOF_UNITS,
-    GrantReadAccess = GRANT_READ_ACCESS: 4 => ACCOUNT_UNITS,
-    RevokeReadAccess = REVOKE_READ_ACCESS: 5 => ACCOUNT_UNITS,
+    // Tags 4 and 5 are retired, never reuse them.
     SetAuthority = SET_AUTHORITY: 6 => ACCOUNT_UNITS,
     CreatePolicy = CREATE_POLICY: 7 => POLICY_UNITS,
     // Tags 8 and 9 are retired, never reuse them.
@@ -84,15 +71,9 @@ instruction_tags! {
     /// Tag 3 data over the SPP authority rail, signed by the delegate.
     LegacyDelegateTransact = LEGACY_DELEGATE_TRANSACT: 25 => PROOF_UNITS,
     DelegateTransact = DELEGATE_TRANSACT: 44 => PROOF_UNITS,
-    CreateMemberRegistry = CREATE_MEMBER_REGISTRY: 28 => ACCOUNT_UNITS,
-    RegisterKey = REGISTER_KEY: 29 => PROOF_UNITS,
-    // Tag 30 is retired, never reuse it.
+    // Tags 28 to 30 are retired, never reuse them.
     AuditedDeposit = AUDITED_DEPOSIT: 31 => PROOF_UNITS,
-    // Tags 32 to 38 are retired, never reuse them.
-    WriteRecords = WRITE_RECORDS: 39 => ACCOUNT_UNITS,
-    AuthorityWriteRecords = AUTHORITY_WRITE_RECORDS: 40 => PROOF_UNITS,
-    ApplyRecords = APPLY_RECORDS: 41 => PROOF_UNITS,
-    SetInsertFee = SET_INSERT_FEE: 42 => ACCOUNT_UNITS,
+    // Tags 32 to 42 are retired, never reuse them.
     /// Permissionless and without data, the registry account picks the mirror.
     SyncRoots = SYNC_ROOTS: 48 => ACCOUNT_UNITS,
 }
@@ -126,11 +107,6 @@ pub struct CreateConfigIxData {
     /// Auditor X25519 public key as `0x04 || canonical little-endian u`.
     pub auditor_pubkey: [u8; TAGGED_X25519_KEY_LEN],
     pub kind: RingKind,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
-pub struct ReaderIxData {
-    pub reader: ReaderKeyBytes,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
@@ -230,16 +206,7 @@ pub struct WriteRecordsIxData {
     pub value: [u8; 8],
 }
 
-/// Tag 39, a member's write of its own lists.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
-#[repr(C)]
-pub struct MemberWriteIxData {
-    pub lists: WriteRecordsIxData,
-    /// Little endian, a higher insert fee refuses the write.
-    pub max_fee: [u8; 8],
-}
-
-/// One authority write inside `AuthorityWriteRecords`.
+/// One record write inside a storage update.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
 pub struct RecordWriteData {
@@ -255,38 +222,13 @@ impl Default for RecordWriteData {
     }
 }
 
-/// Tag 41, the proof that applies every pending write.
+/// The proof that applies a storage update's writes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
 pub struct ApplyRecordsIxData {
     pub proof: CustomRingProof,
     pub new_root: [u8; 32],
     pub new_next_index: [u8; 4],
-}
-
-/// Tag 40, `count u8 || count writes || ApplyRecordsIxData`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AuthorityWriteRecordsIxData<'a> {
-    pub writes: &'a [RecordWriteData],
-    pub apply: &'a ApplyRecordsIxData,
-}
-
-/// Tag 29, the proof that seals the member's nullifier secret to the auditor.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
-#[repr(C)]
-pub struct RegisterKeyIxData {
-    pub proof: CustomRingProof,
-    pub nullifier_pk: [u8; 32],
-    pub eph_u: [u8; 32],
-    pub ciphertext: [u8; AUDIT_CIPHERTEXT_LEN],
-    /// Little endian, a higher insert fee refuses the registration.
-    pub max_fee: [u8; 8],
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
-#[repr(C)]
-pub struct SetInsertFeeIxData {
-    pub fee: [u8; 8],
 }
 
 macro_rules! fixed_ix_data {
@@ -304,26 +246,7 @@ macro_rules! fixed_ix_data {
     )*};
 }
 
-fixed_ix_data!(
-    AuditedDepositPrefix,
-    WriteRecordsIxData,
-    MemberWriteIxData,
-    ApplyRecordsIxData,
-    RegisterKeyIxData,
-    SetInsertFeeIxData
-);
-
-impl MemberWriteIxData {
-    pub const fn max_fee(&self) -> u64 {
-        u64::from_le_bytes(self.max_fee)
-    }
-}
-
-impl RegisterKeyIxData {
-    pub const fn max_fee(&self) -> u64 {
-        u64::from_le_bytes(self.max_fee)
-    }
-}
+fixed_ix_data!(AuditedDepositPrefix, WriteRecordsIxData, ApplyRecordsIxData);
 
 impl WriteRecordsIxData {
     pub const fn new(write: ListWrite) -> Self {
@@ -429,39 +352,6 @@ impl ApplyRecordsIxData {
     }
 }
 
-impl SetInsertFeeIxData {
-    pub const fn fee(&self) -> u64 {
-        u64::from_le_bytes(self.fee)
-    }
-}
-
-impl<'a> AuthorityWriteRecordsIxData<'a> {
-    pub fn parse(data: &'a [u8]) -> Result<Self, CustomRingError> {
-        let (count, rest) = data
-            .split_first()
-            .ok_or(CustomRingError::InvalidInstructionData)?;
-        let count = write_count(usize::from(*count))?;
-        let (writes, apply) = rest
-            .split_at_checked(usize::from(count) * RecordWriteData::SIZE)
-            .ok_or(CustomRingError::InvalidInstructionData)?;
-        Ok(Self {
-            writes: bytemuck::try_cast_slice(writes)
-                .map_err(|_| CustomRingError::InvalidInstructionData)?,
-            apply: ApplyRecordsIxData::parse(apply)?,
-        })
-    }
-
-    pub fn encode(&self) -> Result<Vec<u8>, CustomRingError> {
-        let count = write_count(self.writes.len())?;
-        Ok([
-            &[count][..],
-            bytemuck::cast_slice(self.writes),
-            bytemuck::bytes_of(self.apply),
-        ]
-        .concat())
-    }
-}
-
 /// One to `APPLY_BATCH` writes, `AuthorityBatchTooLarge` past it.
 pub(crate) fn write_count(count: usize) -> Result<u8, CustomRingError> {
     match count {
@@ -472,11 +362,9 @@ pub(crate) fn write_count(count: usize) -> Result<u8, CustomRingError> {
 }
 
 const _: () = assert!(WriteRecordsIxData::SIZE == 16);
-const _: () = assert!(MemberWriteIxData::SIZE == 24);
 const _: () = assert!(core::mem::align_of::<RecordWriteData>() == 1);
 const _: () = assert!(RecordWriteData::SIZE == 145);
 const _: () = assert!(ApplyRecordsIxData::SIZE == 228);
-const _: () = assert!(RegisterKeyIxData::SIZE == 296);
 const _: () = assert!(APPLY_BATCH <= u8::MAX as usize);
 
 #[cfg(test)]

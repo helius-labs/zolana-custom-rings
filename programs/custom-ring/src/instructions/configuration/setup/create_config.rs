@@ -1,7 +1,6 @@
 use bytemuck::Zeroable;
 use custom_ring_interface::{
-    CreateConfigIxData, CustomRingError, RingMode, RingProgramConfig, DEFAULT_INSERT_FEE,
-    RING_PROGRAM_CONFIG,
+    CreateConfigIxData, CustomRingError, RingMode, RingProgramConfig, RING_PROGRAM_CONFIG,
 };
 use pinocchio::{
     sysvars::{clock::Clock, Sysvar},
@@ -67,7 +66,7 @@ pub fn process_create_config_ix(
         } else {
             RingMode::Confidential
         } as u8,
-        insert_fee: DEFAULT_INSERT_FEE.to_le_bytes(),
+
         created_slot: Clock::get()?.slot.to_le_bytes(),
         ..RingProgramConfig::zeroed()
     })

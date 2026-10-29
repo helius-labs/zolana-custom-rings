@@ -30,9 +30,7 @@ ring_errors! {
     UnsupportedCircuit = 8113 => "circuit selector is not supported by the ring",
     UnauthorizedInitializer = 8114 => "authority is not the program upgrade authority",
     TooManyAccounts = 8115 => "forwarded account list exceeds the CPI account limit",
-    ReadAccessRecordAlreadyExists = 8116 => "read access record already exists",
-    InvalidReadAccessRecord = 8117 => "read access record account is invalid",
-    InvalidReaderKey = 8118 => "reader key cannot authorize reads",
+    // 8116 to 8118 retired.
     // 8119 retired.
     // 8120 to 8122 retired.
     // 8123 retired.
@@ -63,9 +61,9 @@ ring_errors! {
     // 8154 to 8156 retired.
     ApprovalWithoutCoSigner = 8157 => "dual control needs a configured co-signer",
     // 8158 and 8159 retired.
-    InvalidMemberRegistry = 8160 => "member registry account is invalid",
+    // 8160 retired.
     // 8161 and 8162 retired.
-    MemberRegistryAlreadyExists = 8163 => "member registry already exists",
+    // 8163 retired.
     // 8164 retired.
     DepositAuditRequired = 8165 => "verified deposit disclosure required",
     InvalidDepositDisclosure = 8166 => "invalid deposit disclosure",
@@ -90,26 +88,22 @@ ring_errors! {
     RingTransactLength = 8200 => "the compact transact data length disagrees with its flags and shape",
     RingShapeUnkeyed = 8201 => "no audit key or SPP rail key serves the shape on the rail",
     FlagNotAllowed = 8202 => "a transact flag the ring mode or policy forbids",
-    RootBelowFloor = 8203 => "the member registry root is older than the floor",
-    CuratorRootStale = 8204 => "the curator root is outside its floor and grace window",
-    RootIndexEmpty = 8205 => "the root history slot holds no root",
+    // 8203 to 8205 retired.
     // 8206 and 8207 retired.
     OwnerSignerCount = 8208 => "a policy transfer takes exactly one owner signer",
     MemberOutOfRange = 8209 => "the member lies outside the record range",
     ListBitNotWritable = 8210 => "the signer may not write a masked list bit",
     ValueOutsideMask = 8211 => "the list value leaves its mask or the mask is zero",
-    QueueFull = 8212 => "the record queue holds the member limit",
+    // 8212 retired.
     // 8213 retired.
     AuthorityBatchTooLarge = 8214 => "pending and authority writes exceed one batch",
-    ApplyNotDue = 8215 => "the record queue is empty or neither full nor aged",
-    FeeRecipient = 8216 => "the insert fee account is not the config authority",
+    // 8215 and 8216 retired.
     PolicyNotSet = 8217 => "the policy ring has no policy yet",
     InvalidSppProofPoint = 8218 => "the compressed SPP proof point does not decompress",
-    InvalidRecordQueue = 8219 => "record queue account is invalid",
+    // 8219 retired.
     ZeroDisclosureField = 8220 => "a published disclosure field is zero",
     PolicyAlreadySet = 8221 => "the policy ring already has a policy",
-    AuthorityLeafReserve = 8222 => "a member write would enter the leaves reserved for the authority",
-    ApplyTooSoon = 8223 => "a permissionless application lands inside the delay of the previous one",
+    // 8222 and 8223 retired.
     DataFreeBodyLength = 8224 => "an exit payload is not a data-free scheme 3 body",
     ZeroPublicLegAmount = 8225 => "a public leg moves no amount",
     TooManyPublicAssets = 8226 => "the public legs name more assets than the public slots",
@@ -121,9 +115,7 @@ ring_errors! {
     // 8232 retired.
     MemberWrittenListRule = 8233 => "a policy rule reads a list its members write",
     RingAuthOutOfSlot = 8234 => "the ring authority PDA sits outside its SPP slot",
-    InsertFeeAboveMax = 8235 => "the insert fee exceeds the writer's maximum",
-    InsertFeeBelowRent = 8236 =>
-        "a nonzero insert fee is below the rent-exempt minimum of an empty account",
+    // 8235 and 8236 retired.
     CoSignerIsDelegate = 8237 => "dual control needs a co-signer other than the delegate",
     InvalidRingProofPoint = 8238 => "a ring proof point does not decompress",
     ThresholdsWithoutWithdrawals = 8239 => "co-signer thresholds need the withdrawal scope",

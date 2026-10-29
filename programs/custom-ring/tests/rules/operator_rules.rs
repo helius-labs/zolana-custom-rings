@@ -1,24 +1,21 @@
-//! Config, policy and read access writes and their declared budgets.
+//! Config and policy writes and their declared budgets.
 
 use custom_ring_interface::{
-    tag, CoSignScope, CoSigner, CreateConfigIxData, CustomRingError, InstructionTag,
-    ReadAccessRecord, ReaderIxData, RingKind, RingMode, RingPolicy, RingProgramConfig,
-    SetPausedIxData, SetPolicySourceIxData, WriteRecordsIxData, DEFAULT_INSERT_FEE,
-    READER_KEY_P256, READ_ACCESS_RECORD_PDA_SEED,
+    tag, CoSignScope, CoSigner, CreateConfigIxData, CustomRingError, InstructionTag, RingKind,
+    RingMode, RingPolicy, RingProgramConfig, SetPausedIxData, SetPolicySourceIxData,
 };
 use solana_address::Address;
 use solana_instruction::{error::InstructionError, AccountMeta, Instruction};
 use solana_keypair::{Keypair, Signer};
 use solana_transaction_error::TransactionError;
 use spr_account_checks::AccountError;
-use zolana_ring_policy::{ListChange, ListId, ListSet};
+use zolana_ring_policy::ListId;
 
 use crate::common::{
     allow_list_table, auditor_pubkey, co_signer_record, config_pda, config_write, create_config,
-    create_member_registry, create_policy, list_table, policy_pda, policy_write, program_data_of,
-    queue_pda, refused, refused_with, ring_auth, set_co_signer, set_delegate, within_budget,
-    write_records, ClearCoSignerIx, Fee, Ring, Sent, SetCoSignerIx, Setup, PROGRAM, RECORDS,
-    SYSTEM,
+    create_policy, list_table, policy_pda, policy_write, program_data_of, refused, refused_with,
+    ring_auth, set_co_signer, set_delegate, within_budget, ClearCoSignerIx, Ring, Sent,
+    SetCoSignerIx, Setup, PROGRAM, RECORDS, SYSTEM,
 };
 use crate::transact_rules::SPP;
 
@@ -33,12 +30,8 @@ fn only_the_upgrade_authority_creates_a_config_for_a_usable_auditor_key() {
     let config: RingProgramConfig = ring.read(&config_pda());
     assert_eq!(config.authority, ring.authority.pubkey());
     assert_eq!(
-        (
-            config.co_signers.covered(),
-            config.delegate(),
-            config.insert_fee()
-        ),
-        (None, None, DEFAULT_INSERT_FEE)
+        (config.co_signers.covered(), config.delegate()),
+        (None, None)
     );
 
     let mut fresh = Ring::new(Setup::AuditOnly);
@@ -422,9 +415,6 @@ fn every_authority_write_refuses_a_stranger() {
             ),
             0,
         ),
-        (grant(&ring), 1),
-        (revoke(&ring, Keypair::new().pubkey()), 0),
-        (create_member_registry(&ring.payer.pubkey(), &authority), 1),
         (init_spp_ring_config(&ring), 1),
     ];
     let unauthorized = TransactionError::InstructionError(
@@ -448,49 +438,6 @@ fn every_authority_write_refuses_a_stranger() {
         .map(|(tag, _)| (*tag, Err(unauthorized.clone())))
         .collect();
     assert_eq!(refusals, expected);
-}
-
-fn reader() -> [u8; 34] {
-    let mut reader = [0u8; 34];
-    reader[0] = READER_KEY_P256;
-    reader[1] = 0x02;
-    reader[2..].fill(9);
-    reader
-}
-
-fn read_access(tag: u8, accounts: Vec<AccountMeta>) -> Instruction {
-    let mut data = vec![tag];
-    data.extend(wincode::serialize(&ReaderIxData { reader: reader() }).unwrap());
-    Instruction {
-        program_id: PROGRAM,
-        accounts,
-        data,
-    }
-}
-
-fn record_pda() -> Address {
-    let seed = ReadAccessRecord::seed_hash(&reader()).unwrap();
-    Address::find_program_address(&[READ_ACCESS_RECORD_PDA_SEED, &seed], &PROGRAM).0
-}
-
-#[test]
-fn read_access_is_granted_and_revoked_by_the_authority() {
-    let mut ring = Ring::new(Setup::AuditOnly);
-    let granted = grant(&ring);
-    within_budget(
-        InstructionTag::GrantReadAccess,
-        authority_send(&mut ring, granted),
-    );
-    assert_eq!(
-        ring.read::<ReadAccessRecord>(&record_pda()).reader,
-        reader()
-    );
-    let revoked = revoke(&ring, Keypair::new().pubkey());
-    within_budget(
-        InstructionTag::RevokeReadAccess,
-        authority_send(&mut ring, revoked),
-    );
-    assert_eq!(ring.lamports(&record_pda()), 0);
 }
 
 #[test]
@@ -534,36 +481,6 @@ fn the_authority_moves_only_to_a_cosigning_successor() {
 }
 
 #[test]
-fn a_reader_key_that_cannot_authorize_reads_is_refused() {
-    let mut ring = Ring::new(Setup::AuditOnly);
-    let (payer, authority) = (ring.payer.pubkey(), ring.authority.pubkey());
-    let mut uncompressed = reader();
-    uncompressed[1] = 0x04;
-    let mut data = vec![tag::GRANT_READ_ACCESS];
-    data.extend(
-        wincode::serialize(&ReaderIxData {
-            reader: uncompressed,
-        })
-        .unwrap(),
-    );
-    let grant = Instruction {
-        program_id: PROGRAM,
-        accounts: vec![
-            AccountMeta::new(payer, true),
-            AccountMeta::new_readonly(authority, true),
-            AccountMeta::new_readonly(config_pda(), false),
-            AccountMeta::new(record_pda(), false),
-            AccountMeta::new_readonly(SYSTEM, false),
-        ],
-        data,
-    };
-    refused(
-        authority_send(&mut ring, grant),
-        CustomRingError::InvalidReaderKey,
-    );
-}
-
-#[test]
 fn retired_and_unknown_tags_are_refused() {
     let mut ring = Ring::new(Setup::AuditOnly);
     let instruction = |data: Vec<u8>| Instruction {
@@ -575,7 +492,24 @@ fn retired_and_unknown_tags_are_refused() {
         ring.send(instruction(vec![tag::DEPOSIT]), &[]),
         CustomRingError::DepositAuditRequired,
     );
-    for unknown in [8, 9, 22, 23, 26, 30, 32, 33, 38, u8::MAX] {
+    for unknown in [
+        4,
+        5,
+        8,
+        9,
+        22,
+        23,
+        26,
+        28,
+        29,
+        30,
+        32,
+        33,
+        38,
+        39,
+        42,
+        u8::MAX,
+    ] {
         refused(
             ring.send(instruction(vec![unknown]), &[]),
             CustomRingError::InvalidInstructionData,
@@ -584,7 +518,7 @@ fn retired_and_unknown_tags_are_refused() {
 }
 
 #[test]
-fn operator_and_record_instructions_fit_their_declared_budgets() {
+fn operator_instructions_fit_their_declared_budgets() {
     let mut ring = Ring::new(Setup::Policy);
     let authority = ring.authority.pubkey();
     let payer = ring.payer.pubkey();
@@ -611,43 +545,6 @@ fn operator_and_record_instructions_fit_their_declared_budgets() {
                 scope: 4,
             }
             .instruction(),
-        ),
-    );
-    within_budget(
-        InstructionTag::SetInsertFee,
-        authority_send(
-            &mut ring,
-            config_write(
-                tag::SET_INSERT_FEE,
-                &authority,
-                &[],
-                &(2 * DEFAULT_INSERT_FEE).to_le_bytes(),
-            ),
-        ),
-    );
-    let member = Keypair::new();
-    let payer = Keypair::new();
-    ring.fund(&payer.pubkey());
-    let lists = WriteRecordsIxData::new(
-        ListChange {
-            set: ListSet::single(ListId::RingViewing),
-            clear: ListSet::EMPTY,
-        }
-        .check()
-        .unwrap(),
-    );
-    within_budget(
-        InstructionTag::WriteRecords,
-        ring.send(
-            write_records(
-                &member.pubkey(),
-                lists,
-                Some(Fee {
-                    payer: payer.pubkey(),
-                    recipient: authority,
-                }),
-            ),
-            &[&member, &payer],
         ),
     );
 }
@@ -704,54 +601,6 @@ fn each_ring_kind_fixes_its_policy_flag_and_mode() {
     );
 }
 
-fn grant(ring: &Ring) -> Instruction {
-    read_access(
-        tag::GRANT_READ_ACCESS,
-        vec![
-            AccountMeta::new(ring.payer.pubkey(), true),
-            AccountMeta::new_readonly(ring.authority.pubkey(), true),
-            AccountMeta::new_readonly(config_pda(), false),
-            AccountMeta::new(record_pda(), false),
-            AccountMeta::new_readonly(SYSTEM, false),
-        ],
-    )
-}
-
-fn revoke(ring: &Ring, rent_recipient: Address) -> Instruction {
-    read_access(
-        tag::REVOKE_READ_ACCESS,
-        vec![
-            AccountMeta::new_readonly(ring.authority.pubkey(), true),
-            AccountMeta::new_readonly(config_pda(), false),
-            AccountMeta::new(record_pda(), false),
-            AccountMeta::new(rent_recipient, false),
-        ],
-    )
-}
-
-#[test]
-fn a_reader_holds_one_record_revoked_only_under_its_own_key() {
-    let mut ring = Ring::new(Setup::AuditOnly);
-    let first = grant(&ring);
-    authority_send(&mut ring, first).expect("grant the reader");
-    let second = grant(&ring);
-    refused(
-        authority_send(&mut ring, second),
-        CustomRingError::ReadAccessRecordAlreadyExists,
-    );
-    let mut other_reader = revoke(&ring, Keypair::new().pubkey());
-    *other_reader.data.last_mut().unwrap() ^= 1;
-    refused(
-        authority_send(&mut ring, other_reader),
-        CustomRingError::InvalidReadAccessRecord,
-    );
-    let into_itself = revoke(&ring, record_pda());
-    refused(
-        authority_send(&mut ring, into_itself),
-        CustomRingError::InvalidReadAccessRecord,
-    );
-}
-
 #[test]
 fn a_source_write_names_a_known_list() {
     let mut ring = Ring::new(Setup::Policy);
@@ -792,15 +641,15 @@ fn a_table_write_decodes_and_counts_its_generation_on_the_policy() {
         ),
         CustomRingError::InvalidPolicyRules,
     );
-    let mut queue_as_policy = policy_write(
+    let mut config_as_policy = policy_write(
         tag::SET_POLICY_RULES,
         &authority,
         allow_list_table(Vec::new()),
         &[],
     );
-    queue_as_policy.accounts[2] = AccountMeta::new(queue_pda(), false);
+    config_as_policy.accounts[2] = AccountMeta::new(config_pda(), false);
     refused(
-        authority_send(&mut ring, queue_as_policy),
+        authority_send(&mut ring, config_as_policy),
         CustomRingError::InvalidRingPolicy,
     );
     let mut policy: RingPolicy = ring.read(&policy_pda());
@@ -868,14 +717,14 @@ fn a_config_with_an_unknown_mode_reads_as_uninitialized() {
     config.mode = 3;
     ring.write(&config_pda(), &config);
     let authority = ring.authority.pubkey();
-    let fee = config_write(
-        tag::SET_INSERT_FEE,
+    let rules = policy_write(
+        tag::SET_POLICY_RULES,
         &authority,
+        allow_list_table(Vec::new()),
         &[],
-        &DEFAULT_INSERT_FEE.to_le_bytes(),
     );
     refused(
-        authority_send(&mut ring, fee),
+        authority_send(&mut ring, rules),
         CustomRingError::ConfigNotInitialized,
     );
 }
