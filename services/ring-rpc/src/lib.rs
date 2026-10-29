@@ -94,7 +94,10 @@ pub use managed_merge::{
 };
 pub use migration::Migrator;
 pub use origins::{OriginError, OriginPolicy, OriginTransport, Origins};
-pub use record_update::{RecordUpdateRefusal, BATCH_WINDOW_SLOTS, MAX_BATCH_ATTEMPTS};
+pub use record_update::{
+    RecordUpdateRefusal, BATCH_WINDOW_SLOTS, MAX_BATCH_ATTEMPTS, MAX_ENROLMENT_WINDOW_SLOTS,
+    MAX_PENDING_ENROLMENTS,
+};
 pub use record_writer::{RecordWriter, RECORD_FLUSH_INTERVAL};
 pub use relay::{
     Relay, RelayError, RelayParts, RelayPayload, ServedRings, QUOTE_SLOTS, RELAY_TRACK_INTERVAL,

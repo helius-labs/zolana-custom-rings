@@ -1,4 +1,4 @@
-//! Record updates refuse a forged escrow proof and a second escrow key, send only a block entry as an immediate update, and hold an enrolment for its allow entry.
+//! Record updates refuse a forged escrow proof, a second escrow key and an enrolment past its window or the ring's pending cap, send only a block entry as an immediate update, and hold an enrolment for its allow entry.
 
 use std::sync::atomic::AtomicU64;
 
@@ -25,10 +25,10 @@ use zolana_ring_indexer::rpc::{
     RingRecordWriteView,
 };
 use zolana_ring_member_registry::ApplyProofInputs;
-use zolana_ring_policy::{ListId, MintPolicy};
+use zolana_ring_policy::{ListId, Member, MintPolicy};
 use zolana_ring_rpc::{
     LatestBlockhash, RecordUpdateRefusal, RecordWriter, StorageChain, Store, Subscriber,
-    TransactionOutcome, BATCH_WINDOW_SLOTS,
+    TransactionOutcome, BATCH_WINDOW_SLOTS, MAX_ENROLMENT_WINDOW_SLOTS, MAX_PENDING_ENROLMENTS,
 };
 
 use super::*;
@@ -648,4 +648,49 @@ async fn a_wallet_enrolment_awaits_the_config_authority_then_lands_with_its_allo
         records.status(&enrolment).await,
         RecordUpdateStatus::Applied { .. }
     ));
+}
+
+#[tokio::test]
+async fn an_enrolment_past_its_window_or_the_rings_pending_cap_is_refused() {
+    let records = Records::new().await;
+    records.serves_own(ListId::Allow);
+    let viewing = ListId::RingViewing.record_bit();
+    let enrol = |valid_until_slot: u64| {
+        let wallet = Keypair::new();
+        let member = Member::owner_tag(wallet.pubkey().as_array()).expect("member");
+        signed_update(
+            &wallet,
+            RecordUpdate {
+                genesis_hash: Hash(GENESIS),
+                ring: RING.into(),
+                entries: vec![RecordUpdateEntry::Write(RingListWriteView {
+                    mint_policy: None,
+                    member: Hash(*member.as_bytes()),
+                    mask: viewing,
+                    value: viewing,
+                })],
+                valid_until_slot,
+                awaited_lists: ListId::Allow.record_bit(),
+            },
+        )
+    };
+
+    assert_eq!(
+        refusal(
+            records
+                .submit(enrol(NOW + MAX_ENROLMENT_WINDOW_SLOTS + 1))
+                .await
+        ),
+        RecordUpdateRefusal::EnrolmentWindow.code()
+    );
+    for _ in 0..MAX_PENDING_ENROLMENTS {
+        records
+            .submit(enrol(NOW + MAX_ENROLMENT_WINDOW_SLOTS))
+            .await
+            .expect("awaiting");
+    }
+    assert_eq!(
+        refusal(records.submit(enrol(NOW + 1_000)).await),
+        RecordUpdateRefusal::EnrolmentsFull.code()
+    );
 }

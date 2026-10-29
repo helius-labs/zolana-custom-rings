@@ -131,6 +131,13 @@ impl RecordWriter {
         }
         .check()?;
         let _queueing = self.submits.lock().await;
+        if queue.contains(&update.id.0 .0).await? {
+            return Ok(SubmitRecordUpdateResponse {
+                update_id: update.id,
+            });
+        }
+        // An expired enrolment holds no pending slot and joins no approval.
+        queue.expire_awaiting(request.registry.0, slot).await?;
         self.check_escrows(&update, &policy).await?;
         let approves = EnrolmentApproval {
             update: &update,
