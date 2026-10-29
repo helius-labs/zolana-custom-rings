@@ -576,35 +576,35 @@
     }
   },
   "custom-ring-deposit-1": {
-    "statement": "0x0bcf3aa5e30bc939fd310bc406072a9ae6ea23f16e7dad6afeb3112864a4817c",
+    "statement": "0x1c57d2f91c2a00441ae16035ffc0c09ffa27c47af670774153b4770995d16d9b",
     "proof": {
       "ar": [
-        "0x1d37917edf46ef7c499bb84baacd8f90a4cd074a9c286a685e650fe16b2d2eb8",
-        "0x146691edb2038e16d4b6c9b35fb209bf669f7d9d5b8b9a5ad1e1961a7b6041dc"
+        "0x1752c3cea046dfcbf4fba2c81aa0b704d949445f3b6d4c7c34a51eae8a286709",
+        "0x21fe3d99e3d7d0da25e80f39367504dfebb1b71f20a4d451461ae917db9f2b71"
       ],
       "bs": [
         [
-          "0x21d3ac151878f2a7a35738af75f450f1f46bfcc00aaae15b1f2d9a62ddb51a10",
-          "0x299dce446ce4aae04e03fdea58c58072635554d43d4b1a07580d2f0609a29c72"
+          "0x260716e5f6a8215158e1897f0e714ee8974b875e948d4722badb306f7b35e29e",
+          "0x214ce083a5533596185b7170b4ef850cc5c393c9b9f6eeba0ca5b4b0cd198755"
         ],
         [
-          "0x0fcb373329ea003692442e8951015facbfe7637ce39cb6331ead710a80659c2a",
-          "0x23e4defd8523e7a96cd8ecc83f7ce8393ca432edd15813e4fd5942f4ecf41a3c"
+          "0x0fd508d6512a9d5b641ac350fa94279019b9f28b4a3240e1bb2cc6c86a56d572",
+          "0x0fbc094950bc59a8855d1d39a2c239936146092e2e8b0319a8e471828706bb20"
         ]
       ],
       "krs": [
-        "0x12afbc9c3b928a13ff5b0371d5b0b2127e28117b002272c16e78eecf45ee104c",
-        "0x221cbe8ba083ba509120e2570ce0ae379e0cfbc7ee8b0f6ad175650d13553a9e"
+        "0x0b43cd7dc8c8e08947239fee3d063a6c9c98302085dddfaed4c232410f0aeab8",
+        "0x16e07533a0facb042ca14b4c17526bbb00b78fe0af6b2d7040ad45743d6a447d"
       ],
       "proofCommitment": [
-        "0x234339a0f298bd3b85afe8117f0663bbee1e069bb3d20ff7d33c3649761287ef",
-        "0x2be4c82dcb5d476d2a97ec75968d6299aa73539c91a38d5dcb635a81035c2d2a"
+        "0x25fb3ec253cc3ed0d9f7c5867d52e6d70c13273051eb4377d8da7599d9fd2649",
+        "0x12a2b4f7eaa6af4a1044b4c787cae0d3d08af32bb5a406b27c669a612f2846f9"
       ],
       "proofCommitmentPok": [
-        "0x14cb6a48d9cdd093f72d2bfa739efb660636bc6651a45b77f83df63e18c01389",
-        "0x161689b25e125fce588580707a502ff974937a708baf3fca1a4da9b8683b306b"
+        "0x20c565b9cef9c7cd79f1d5ab6c6528da558deb8e1f52f48fe7ee1b1ba79ed5ed",
+        "0x10214fddd2b8cbb9e301df54e373976d314c212c0589b99caea8f5b860baae59"
       ],
-      "provingKeySha256": "10e13f59fe80e4072c4a0a80e16b44b78895a82918ff4a8e155c7bc0577dc0a8"
+      "provingKeySha256": "ff690eece1a141805b42c24c1a2027ca5393a6c3a6d5bbcc1245c78c346d6586"
     }
   },
   "custom-ring-deposit-2": {
