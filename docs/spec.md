@@ -1163,9 +1163,23 @@ Holds the auditor key and serves audited history to readers.
 - `createAuditorKey` releases the auditor public key to the ring's config authority, or before the config to the upgrade authority, with an Ed25519 signature of the service key over the cluster, ring, key and the request nonce. The program does not check this signature. The operator CLI checks it against the pinned service key, or accepts any key under `--trust-ring-rpc` when none is pinned.
 - `getDecryptedTransactions`, `getAuditedMerges` and `getAuditedUtxos` serve a reader that signs a request with its Ed25519 key or a WebAuthn P-256 passkey, within 60 seconds of the service clock, with a fresh nonce. The service requires the ring config to name its key and the reader to hold a read access record.
 - `ringDeposits`, `ringStatus` and `health` need no signature.
+- A `LimitedCoSigner` signs a transaction only under the [co-signer limits](#co-signer-limits).
 - Every audited row is bound to the confirmed SPP event the service rebuilds from Solana `getTransaction`. Photon is trusted for completeness only. A row Photon omits, or labels with no ring, never reaches a reader, and no client detects the gap.
 
 A reader receives each output's owner key, nullifier key, asset, amount and blinding, the recipient `u` on the delivered rails, and on the anonymous rail the view tag, the hidden sender and every input's opening. It receives no nullifier secret. Pages carry no signature, so a faulty service can serve a false opening to a reader that does not rebuild the commitment. `getAuditedUtxos` answers are checked by both SDKs against their requested hashes. Nonces and rate windows live in memory, so one key runs in one process.
+
+#### Co-signer limits
+
+Each asset's record in the ring's own storage registry holds `AssetLimits`, six u64 values. Ring RPC reads them under the registry's newest root before it co-signs, and checks every opening against that root. A ring without a `RingPolicy` account has no limits. A zero cap is no cap.
+
+| Limit | Bounds, per asset |
+|---|---|
+| `sender_cap` over `sender_window_slots` | What one sender transfers and withdraws |
+| `volume_cap` over `volume_window_slots` | What the ring transfers, deposits and withdraws |
+| `deposit_cap` over `volume_window_slots` | What the ring deposits |
+| `withdrawal_cap` over `volume_window_slots` | What the ring withdraws |
+
+A window counts every reservation less than its length in slots before the current slot. A zero window counts the checked transaction alone. A co-signature reserves the transaction's flows under its own signature, in the database transaction that read the window. `settle` with a confirmation keeps the reservation, and a failure, an expiry included, deletes it unless it was confirmed. A transaction never settled counts until its window passes. The same message signed again returns the same signature and reserves nothing more. The co-signer key derives from the auditor key or the root secret with HKDF-SHA256 under `zolana/ring-rpc-co-signer/v1`.
 
 ### Ring prover
 
@@ -1245,15 +1259,15 @@ A recipient body names `sender_pubkey`, and no proof checks it, so a body can at
 
 ### Outflow limits bound one transfer
 
-An outflow limit applies per transfer, per mint and per signing key. It keeps no counter and no window. The real-world controls map as follows:
+An outflow limit applies per transfer, per mint and per signing key. It keeps no counter and no window. Only the [co-signer limits](#co-signer-limits) count across transactions, and only on transactions that demand the co-signer. The real-world controls map as follows:
 
 | Control | Enforced |
 |---|---|
 | Cap per transfer and mint | Yes, `outflow <= cap`. |
 | Dual control above an amount per transfer | Yes, the co-signer signs when `outflow > cosign_above`, and the transfer publishes the approval bit. |
-| Cap per customer per day | No. Several transfers each pass alone. |
+| Cap per customer per day | Only on co-signed transactions, by `sender_cap` over `sender_window_slots`. A transfer that demands no co-signer passes alone. |
 | Cap per person across keys | No. Each signing key is its own sender. |
-| Deposit and withdrawal volume per window | No. Only the co-signer's per-transfer withdrawal thresholds apply. |
+| Deposit and withdrawal volume per window | Only on co-signed transactions, by `deposit_cap` and `withdrawal_cap` over `volume_window_slots`. Ring RPC counts them, no proof does. |
 
 A deposit leg in the same transfer lowers the outflow of its mint, and its funder is not screened. A deposit leg above what the transfer pays away in a limited mint fails the proof, so a sender deposits to itself with `AuditedDeposit`. An exit counts as outflow, also to the sender. A mint whose record holds a zero `cap` and a zero `cosign_above` is unbounded. The delegate rail runs no outflow check.
 

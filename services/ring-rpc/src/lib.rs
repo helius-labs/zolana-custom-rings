@@ -6,6 +6,10 @@ mod authorize;
 mod config;
 #[path = "operations/cosign.rs"]
 mod cosign;
+#[path = "operations/cosign_limits.rs"]
+mod cosign_limits;
+#[path = "storage/cosign_usage.rs"]
+mod cosign_usage;
 #[path = "storage/database.rs"]
 mod database;
 mod error;
@@ -41,9 +45,13 @@ pub use config::{
     RootSecretError, ServeArgs,
 };
 pub use cosign::{
-    AssetFlow, CoSignDecision, CoSignRefusal, CoSignRequest, CoSignSettlement, CoSigner,
-    RefusingCoSigner,
+    AssetFlow, CoSignDecision, CoSignError, CoSignRefusal, CoSignRequest, CoSignSettlement,
+    CoSigner, RefusingCoSigner,
 };
+pub use cosign_limits::{
+    AssetCheck, AssetLimitSource, LimitDecision, LimitedCoSigner, LimitedCoSignerInit, WindowUsage,
+};
+pub use cosign_usage::Reservation;
 pub use database::Store;
 pub use error::RingRpcError;
 pub use hub::{Clock, Hub, HubBuilder, NotReady};

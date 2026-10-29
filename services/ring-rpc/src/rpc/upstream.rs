@@ -1,7 +1,10 @@
 use std::{future::Future, time::Duration};
 
 use async_trait::async_trait;
-use custom_ring_interface::{ReadAccessRecord, RingAccount, RingMode, RingProgramConfig};
+use custom_ring_interface::{
+    storage::StorageRegistry, ReadAccessRecord, RingAccount, RingMode, RingPolicy,
+    RingProgramConfig, STORAGE_PROGRAM_ID,
+};
 use solana_account::Account;
 use solana_address::Address;
 use solana_commitment_config::CommitmentConfig;
@@ -17,6 +20,7 @@ use spr_client::{
     GetShieldedTransactionsByTagsResponse, IndexedShieldedTransaction, IndexerRpcConfig,
     RingHistoryOptions,
 };
+use spr_indexer_api::Hash;
 use spr_interface::{
     pda,
     state::{discriminator::SPL_ASSET_REGISTRY, SplAssetRegistry},
@@ -26,18 +30,23 @@ use spr_keypair::X25519Pubkey;
 use spr_transaction::{AssetRegistry, Mint, SOL_MINT};
 use std::num::NonZeroUsize;
 use zolana_ring_client::{
-    program_data, ring_deposits_in, AsyncRingIndexer, AuditError, ConfirmedEventKind, MergeAudit,
-    MergeAuditPage, ReaderKey, RingIndexerError, RingOrigin, TransactionOrigin,
+    program_data, ring_deposits_in, AsyncRingIndexer, AuditError, ConfirmedEventKind,
+    MemberOpeningRead, MergeAudit, MergeAuditPage, ReaderKey, RingIndexerError, RingOrigin,
+    TransactionOrigin,
 };
 use zolana_ring_indexer::rpc::{
     GetRingMemberOpeningsRequest, GetRingMemberOpeningsResponse, GetRingMemberRecordsRequest,
     GetRingMemberRecordsResponse, GetRingRecordQueueRequest, GetRingRecordQueueResponse,
+    GetStorageMemberOpeningsRequest,
 };
+use zolana_ring_policy::{AssetLimits, Member};
 use zolana_ring_transaction::RingAssets;
 
 use zolana_ring_client::rpc::{DepositRecord, RingChainStatus, RingDepositsResponse};
 
-use crate::audit::Page;
+use crate::{
+    audit::Page, cosign::CoSignError, cosign_limits::AssetLimitSource, error::RingRpcError,
+};
 
 const MAX_MERGE_MEMBER_PAGES: NonZeroUsize = NonZeroUsize::new(100).unwrap();
 const MAX_MERGE_CANDIDATE_ATTEMPTS: NonZeroUsize = NonZeroUsize::new(100_000).unwrap();
@@ -333,6 +342,66 @@ impl ChainSource {
             .get_account(address)
             .await?
             .filter(|account| account.owner == owner))
+    }
+}
+
+impl AssetLimitSource for ChainSource {
+    async fn current_slot(&self) -> Result<u64, RingRpcError> {
+        Ok(self.rpc.get_slot().await?)
+    }
+
+    /// Read under the newest root of the ring's own registry.
+    async fn asset_limits(
+        &self,
+        ring: Address,
+        assets: &[Address],
+    ) -> Result<Vec<AssetLimits>, RingRpcError> {
+        let unavailable = || RingRpcError::from(CoSignError::LimitsUnavailable);
+        let (policy_address, _) = Address::find_program_address(&[RingPolicy::SEED], &ring);
+        let Some(policy) = self.owned_account(policy_address, ring).await? else {
+            return Ok(vec![AssetLimits::default(); assets.len()]);
+        };
+        let registry = RingPolicy::from_data(&policy.data)
+            .ok_or_else(unavailable)?
+            .records;
+        let registry_account = self
+            .owned_account(registry, STORAGE_PROGRAM_ID)
+            .await?
+            .ok_or_else(unavailable)?;
+        let root = StorageRegistry::from_data(&registry_account.data)
+            .ok_or_else(unavailable)?
+            .roots[0]
+            .hash;
+        let members = assets
+            .iter()
+            .map(|asset| Member::asset(asset).map(|member| *member.as_bytes()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| unavailable())?;
+        let response = self
+            .indexer
+            .get_storage_member_openings(GetStorageMemberOpeningsRequest {
+                registry: registry.into(),
+                members: members.iter().copied().map(Hash).collect(),
+                expected_root: Hash(root),
+            })
+            .await?;
+        if response.openings.len() != members.len() {
+            return Err(RingRpcError::InvalidIndexerResponse);
+        }
+        response
+            .openings
+            .iter()
+            .zip(&members)
+            .map(|(view, member)| {
+                let opening = MemberOpeningRead::verify(view, &root, member)
+                    .map_err(|_| RingRpcError::InvalidIndexerResponse)?;
+                // A present record fails closed, the record codec carries no limits.
+                match opening.record() {
+                    None => Ok(AssetLimits::default()),
+                    Some(_) => Err(unavailable()),
+                }
+            })
+            .collect()
     }
 }
 

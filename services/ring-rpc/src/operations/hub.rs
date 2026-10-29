@@ -24,7 +24,7 @@ use crate::{
     authorize::Unauthorized,
     config::RootSecret,
     error::{redacted, RingRpcError},
-    keys::{service_keypair, AuditorKeyDerivation, KeySource},
+    keys::{co_signer_keypair, service_keypair, AuditorKeyDerivation, KeySource},
     limits::{
         PublicRequest, RequestRate, MAX_CONCURRENT_AUTHENTICATIONS, MAX_CONCURRENT_DEPOSIT_SCANS,
         MAX_CONCURRENT_READS,
@@ -224,6 +224,15 @@ impl<S: TransactionSource> Hub<S> {
 
     pub fn service_pubkey(&self) -> Address {
         self.signer.pubkey()
+    }
+
+    pub fn co_signer_keypair(&self) -> Result<Keypair, RingRpcError> {
+        match &self.keys {
+            KeySource::Local { auditor, .. } => {
+                co_signer_keypair(auditor.secret_bytes().as_slice())
+            }
+            KeySource::Derived(root) => co_signer_keypair(root.as_bytes()),
+        }
     }
 
     pub(crate) fn sign_attestation(&self, attestation: &[u8]) -> Signature {

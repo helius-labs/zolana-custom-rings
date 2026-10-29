@@ -3,6 +3,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use clap::Parser;
 use log::info;
+use solana_signer::Signer;
 use zolana_ring_client::{
     auditor_view_tag,
     rpc::{public_key_path, read_auditor_key, write_auditor_key, KeyMode},
@@ -91,6 +92,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     };
     let hub = Arc::new(hub);
     info!("service pubkey {}", hub.service_pubkey());
+    info!("co-signer pubkey {}", hub.co_signer_keypair()?.pubkey());
     match (hub.mode(), hub.local_view_tag()) {
         (KeyMode::Local, Some(tag)) => info!(
             "ring-rpc listening on {}:{} for auditor tag {}",

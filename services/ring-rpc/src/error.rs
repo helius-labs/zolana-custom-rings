@@ -10,7 +10,7 @@ use zolana_ring_client::{
     AuditError, RingIndexerError, RingRpcError as RingRefusal,
 };
 
-use crate::authorize::Unauthorized;
+use crate::{authorize::Unauthorized, cosign::CoSignError};
 
 #[derive(Debug, Error)]
 pub enum RingRpcError {
@@ -44,6 +44,8 @@ pub enum RingRpcError {
     Busy,
     #[error("service store failed because {0}")]
     Store(#[from] sea_orm::DbErr),
+    #[error(transparent)]
+    CoSign(#[from] CoSignError),
 }
 
 impl From<RingIndexerError> for RingRpcError {
@@ -137,6 +139,7 @@ impl From<RingRpcError> for ErrorObjectOwned {
                 error!("service store failed {}", redacted(inner));
                 (ErrorCode::InternalError, "audit service is unavailable")
             }
+            CoSign(inner) => return (*inner).into(),
         };
         ErrorObjectOwned::owned(code.code(), message, None::<()>)
     }
