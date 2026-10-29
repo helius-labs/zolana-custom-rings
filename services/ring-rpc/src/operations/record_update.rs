@@ -2,8 +2,8 @@ use custom_ring_interface::{
     key_catalog::RingCircuit,
     storage::{Revision, StorageRegistry},
     storage_instruction::{StorageWriteData, UpdateMode},
-    verifying_key, CustomRingProof, QueueEntry, RegisterKeyStatement, RingPolicy, RingProof,
-    APPLY_BATCH, AUDIT_CIPHERTEXT_LEN, ROOT_HISTORY,
+    verifying_key, CustomRingProof, QueueEntry, RegisterKeyStatement, RingMode, RingPolicy,
+    RingProof, APPLY_BATCH, AUDIT_CIPHERTEXT_LEN, ROOT_HISTORY,
 };
 use solana_address::Address;
 use spr_indexer_api::Hash;
@@ -11,7 +11,7 @@ use spr_keypair::X25519Pubkey;
 use thiserror::Error;
 use zolana_ring_client::{
     rpc::{EscrowRegistration, RecordUpdateEntry, RecordUpdateId, SubmitRecordUpdateRequest},
-    storage_apply_proof_inputs,
+    storage_apply_proof_inputs, MemberOpeningRead,
 };
 use zolana_ring_indexer::rpc::GetStorageApplyProofInputsResponse;
 use zolana_ring_member_registry::{ApplyProofInputs, RecordWriteProofInput};
@@ -21,9 +21,11 @@ use crate::{error::RingRpcError, upstream::RingConfiguration};
 
 /// Slots a graced update waits for more writes before it goes out short.
 pub const BATCH_WINDOW_SLOTS: u64 = 40;
+/// Failed or expired batches an update rides in before it turns refused.
+pub const MAX_BATCH_ATTEMPTS: u64 = 3;
 const REVOKING_SETS: u64 = ListSet::of(&[ListId::Block, ListId::Frozen]).record_bits();
-const REVOKING_CLEARS: u64 =
-    ListSet::of(&[ListId::Allow, ListId::Approval, ListId::Reader]).record_bits();
+// A graced reader revocation stops reads at once, grants open under the newest mirrored root.
+const REVOKING_CLEARS: u64 = ListSet::of(&[ListId::Allow, ListId::Approval]).record_bits();
 
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 #[repr(i32)]
@@ -48,9 +50,18 @@ pub enum RecordUpdateRefusal {
     EscrowProof = -32148,
     #[error("record update is unknown")]
     UnknownUpdate = -32149,
+    #[error("record update names another cluster")]
+    WrongCluster = -32190,
+    #[error("anonymous ring takes no escrow key")]
+    EscrowOnAnonymousRing = -32191,
+    #[error("member already holds or awaits an escrow key")]
+    EscrowRegistered = -32192,
+    #[error("record update batch failed on every attempt")]
+    BatchFailed = -32193,
 }
 
 pub(crate) struct UpdateContext<'a> {
+    pub genesis_hash: &'a [u8; 32],
     pub config: &'a RingConfiguration,
     pub policy: &'a RingPolicy,
     pub registry: &'a StorageRegistry,
@@ -87,12 +98,19 @@ pub(crate) struct BatchPlan<'a> {
     pub slot: u64,
 }
 
+/// Every update urgent or every update graced, in submit order.
 #[must_use]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PlannedBatch {
-    pub updates: usize,
-    /// Some queued update revokes or writes a mint.
-    pub urgent: bool,
+pub(crate) struct PlannedBatch<'a> {
+    pub updates: Vec<&'a QueuedUpdate>,
+}
+
+/// `records[i]` opens `registering[i]` under the newest mirrored root.
+#[must_use]
+pub(crate) struct EscrowUniqueness<'a> {
+    pub registering: &'a [[u8; 32]],
+    pub records: &'a [MemberOpeningRead],
+    /// Queued and submitted writes of the registry.
+    pub pending: &'a [StorageWriteData],
 }
 
 #[must_use]
@@ -112,7 +130,6 @@ pub(crate) struct ModeDecision<'a> {
     pub inputs: &'a ApplyProofInputs,
     pub registry: &'a StorageRegistry,
     pub slot: u64,
-    pub urgent: bool,
 }
 
 /// The config authority also writes its own wallet records.
@@ -141,7 +158,10 @@ impl RecordUpdateCheck<'_> {
         if !(1..=APPLY_BATCH).contains(&entries.len()) {
             return Err(RecordUpdateRefusal::EntryCount);
         }
-        // 1. The signature binds the ring, the registry and the ordered entries.
+        if request.update.genesis_hash.0 != *context.genesis_hash {
+            return Err(RecordUpdateRefusal::WrongCluster);
+        }
+        // 1. The signature binds the cluster, the ring, the registry and the ordered entries.
         let hash = request
             .statement()
             .and_then(|statement| Ok(statement.hash()?))
@@ -166,6 +186,9 @@ impl RecordUpdateCheck<'_> {
                 return Err(RecordUpdateRefusal::Unauthorized);
             }
             if let RecordUpdateEntry::Escrow(registration) = entry {
+                if context.config.mode == RingMode::Anonymous {
+                    return Err(RecordUpdateRefusal::EscrowOnAnonymousRing);
+                }
                 EscrowProof {
                     registration,
                     auditor: &context.config.auditor_pubkey,
@@ -193,27 +216,67 @@ impl RecordUpdateCheck<'_> {
     }
 }
 
-impl BatchPlan<'_> {
-    /// The longest submit order prefix one `Update` carries, once it is full, aged or urgent.
-    pub fn decide(self) -> Option<PlannedBatch> {
-        let updates = self
-            .queue
-            .iter()
-            .scan(0, |writes, update| {
-                *writes += update.writes.len();
-                (*writes <= APPLY_BATCH).then_some(())
-            })
-            .count();
-        let carried: usize = self.queue[..updates]
-            .iter()
-            .map(|update| update.writes.len())
-            .sum();
-        let urgent = self.queue.iter().any(|update| update.urgent);
-        let full = updates < self.queue.len() || carried == APPLY_BATCH;
+impl<'a> BatchPlan<'a> {
+    /// Urgent updates go at once ahead of graced ones on other records, graced ones once full, aged or blocking an urgent one.
+    pub fn decide(self) -> Option<PlannedBatch<'a>> {
+        let urgent = self.urgent();
+        if !urgent.is_empty() {
+            return Some(PlannedBatch { updates: urgent });
+        }
+        let graced = within_batch(self.queue.iter().take_while(|update| !update.urgent));
+        let carried: usize = graced.iter().map(|update| update.writes.len()).sum();
+        let full = carried == APPLY_BATCH
+            || self
+                .queue
+                .get(graced.len())
+                .is_some_and(|next| !next.urgent);
+        let blocking = self.queue.iter().any(|update| update.urgent);
         let aged = self.queue.first().is_some_and(|oldest| {
             self.slot >= oldest.queued_slot.saturating_add(BATCH_WINDOW_SLOTS)
         });
-        (updates > 0 && (urgent || full || aged)).then_some(PlannedBatch { updates, urgent })
+        (!graced.is_empty() && (full || blocking || aged))
+            .then_some(PlannedBatch { updates: graced })
+    }
+
+    /// Stops at an urgent update sharing a record with an earlier graced one, each record keeps its write order.
+    fn urgent(&self) -> Vec<&'a QueuedUpdate> {
+        let mut graced_members = Vec::new();
+        let mut urgent = Vec::new();
+        for update in self.queue {
+            let Ok(members) = update
+                .writes
+                .iter()
+                .map(StorageWriteData::member)
+                .collect::<Result<Vec<_>, _>>()
+            else {
+                break;
+            };
+            if !update.urgent {
+                graced_members.extend(members);
+            } else if members.iter().any(|member| graced_members.contains(member)) {
+                break;
+            } else {
+                urgent.push(update);
+            }
+        }
+        within_batch(urgent)
+    }
+}
+
+impl EscrowUniqueness<'_> {
+    pub fn check(self) -> Result<(), RecordUpdateRefusal> {
+        let recorded = self.records.iter().any(|read| {
+            read.record()
+                .is_some_and(|record| record.escrow_key != [0; 32])
+        });
+        let mut seen = escrowed_members(self.pending)?;
+        for member in self.registering {
+            if recorded || seen.contains(member) {
+                return Err(RecordUpdateRefusal::EscrowRegistered);
+            }
+            seen.push(*member);
+        }
+        Ok(())
     }
 }
 
@@ -249,10 +312,7 @@ impl ModeDecision<'_> {
         }
         // A graced update over an unexpired oldest root fails on chain.
         let history_full = self.slot < self.registry.roots[ROOT_HISTORY - 1].expires_at();
-        if !history_full {
-            return Some(UpdateMode::Graced);
-        }
-        self.urgent.then_some(UpdateMode::Immediate)
+        (!history_full).then_some(UpdateMode::Graced)
     }
 }
 
@@ -314,6 +374,30 @@ impl EscrowProof<'_> {
         .verify()
         .map_err(|_| RecordUpdateRefusal::EscrowProof)
     }
+}
+
+pub(crate) fn escrowed_members(
+    writes: &[StorageWriteData],
+) -> Result<Vec<[u8; 32]>, RecordUpdateRefusal> {
+    writes
+        .iter()
+        .filter_map(|write| match write {
+            StorageWriteData::Escrow(escrow) => Some(escrow.member().map_err(invalid_entry)),
+            StorageWriteData::Record(_) => None,
+        })
+        .collect()
+}
+
+/// The longest prefix one `Update` carries without splitting an update.
+fn within_batch<'a>(updates: impl IntoIterator<Item = &'a QueuedUpdate>) -> Vec<&'a QueuedUpdate> {
+    let mut writes = 0;
+    updates
+        .into_iter()
+        .take_while(|update| {
+            writes += update.writes.len();
+            writes <= APPLY_BATCH
+        })
+        .collect()
 }
 
 fn lists_within(mask: u64, lists: ListSet) -> bool {

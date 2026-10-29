@@ -98,6 +98,8 @@ export type ReaderAccess = "granted" | "revoked";
 
 /** Rust `RecordUpdate`, the signed content. */
 export interface RecordUpdate {
+  /** The writer refuses another cluster's genesis hash. */
+  readonly genesisHash: Hash;
   readonly ring: Address;
   readonly entries: readonly RecordUpdateEntry[];
   readonly validUntilSlot: bigint;

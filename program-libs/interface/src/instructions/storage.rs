@@ -101,6 +101,13 @@ impl StorageWriteData {
         }
     }
 
+    pub fn member(&self) -> Result<[u8; 32], CustomRingError> {
+        match self {
+            Self::Record(write) => Ok(write.member),
+            Self::Escrow(write) => write.member(),
+        }
+    }
+
     pub fn encode_all(writes: &[Self]) -> Vec<u8> {
         let mut out = Vec::new();
         for write in writes {

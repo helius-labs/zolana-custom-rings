@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { createKeyPairSignerFromPrivateKeyBytes, getBase58Decoder } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
-import type { Address } from "@heliuslabs/zolana/interface";
+import type { Address, Bytes32 } from "@heliuslabs/zolana/interface";
 import { addressBytes, indexerScalars } from "@heliuslabs/zolana/internal";
 import { WalletRecordUpdate } from "../../../src/operations/management/record-updates.js";
 import { listWrite } from "../../../src/operations/management/record-writes.js";
@@ -27,6 +27,7 @@ describe("submitRecordUpdate", () => {
     ) as { wire: string; updateId: string };
     const wallet = await createKeyPairSignerFromPrivateKeyBytes(new Uint8Array(32).fill(7));
     const signed = await new WalletRecordUpdate({
+      genesisHash: new Uint8Array(32).fill(3) as Bytes32,
       ringProgramId: filled(1),
       registry: filled(2),
       wallet: wallet.address,

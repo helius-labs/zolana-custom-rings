@@ -154,6 +154,7 @@ export function encodeSubmitRecordUpdateRequest(value: SubmitRecordUpdateRequest
   return {
     registry: checkedAddress(value.registry, "registry"),
     update: {
+      genesisHash: checkedHash(value.update.genesisHash, "update.genesisHash"),
       ring: checkedAddress(value.update.ring, "update.ring"),
       entries: value.update.entries.map((entry, index) =>
         encodeRecordUpdateEntry(entry, `update.entries[${String(index)}]`),

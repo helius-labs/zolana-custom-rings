@@ -89,7 +89,7 @@ pub use managed_merge::{
 };
 pub use migration::Migrator;
 pub use origins::{OriginError, OriginPolicy, OriginTransport, Origins};
-pub use record_update::{RecordUpdateRefusal, BATCH_WINDOW_SLOTS};
+pub use record_update::{RecordUpdateRefusal, BATCH_WINDOW_SLOTS, MAX_BATCH_ATTEMPTS};
 pub use record_writer::{RecordWriter, RECORD_FLUSH_INTERVAL};
 pub use relay::{Relay, RelayError, RelayParts, ServedRings, QUOTE_SLOTS, RELAY_TRACK_INTERVAL};
 pub use relay_chain::{ChainOutcome, FeePayerSubmit, RelayChain, SolanaRelayChain};
@@ -99,6 +99,6 @@ pub use server::{relay_module, rpc_module, run_server, BindPolicy, ServerError, 
 pub use storage_chain::{LatestBlockhash, LiveStorageChain, StorageChain, TransactionOutcome};
 pub use upstream::{
     ChainSource, DepositHistory, DepositPage, MergeAuditRequest, RingConfiguration,
-    RingHistoryPage, TransactionPage, TransactionSource, Upstreams,
+    RingHistoryPage, Subscriber, TransactionPage, TransactionSource, Upstreams,
 };
 pub use utxos::UTXO_BACKFILL_INTERVAL;

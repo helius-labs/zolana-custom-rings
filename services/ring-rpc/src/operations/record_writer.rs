@@ -1,29 +1,38 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use custom_ring_interface::{
-    storage::StorageRegistry, storage_instruction::StorageUpdateIxData, RingAccount, RingPolicy,
-    STORAGE_PROGRAM_ID,
+    storage::{Root, StorageRegistry},
+    storage_instruction::StorageUpdateIxData,
+    RingAccount, RingPolicy, ROOT_HISTORY, STORAGE_PROGRAM_ID,
 };
 use custom_ring_sdk::{CustomRing, SyncRoots, UpdateStorage};
 use log::warn;
 use sea_orm::DbErr;
 use solana_address::Address;
+use solana_instruction::Instruction;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
 use spr_client::{compile_message, sign_transaction, ComputeBudgetConfig};
 use spr_indexer_api::Hash;
-use zolana_ring_client::rpc::{
-    GetRecordUpdateStatusRequest, RecordUpdateStatus, SubmitRecordUpdateRequest,
-    SubmitRecordUpdateResponse,
+use zolana_ring_client::{
+    rpc::{
+        GetRecordUpdateStatusRequest, RecordUpdateStatus, SubmitRecordUpdateRequest,
+        SubmitRecordUpdateResponse,
+    },
+    StorageTip,
 };
 use zolana_ring_indexer::rpc::{GetStorageApplyProofInputsRequest, StorageWriteView};
 
 use crate::{
     database::Store,
-    error::{redacted, RingRpcError},
+    error::{redacted, GrantRefusal, RingRpcError},
     record_update::{
-        ApplyInputsCheck, BatchPlan, ModeDecision, QueuedUpdate, RecordUpdateCheck,
-        RecordUpdateRefusal, UpdateContext,
+        escrowed_members, ApplyInputsCheck, BatchPlan, CheckedUpdate, EscrowUniqueness,
+        ModeDecision, QueuedUpdate, RecordUpdateCheck, RecordUpdateRefusal, UpdateContext,
     },
     storage_chain::{StorageChain, TransactionOutcome},
     update_queue::{BatchOutcome, NewBatch, NewUpdate, OpenBatch, UpdateQueue},
@@ -32,23 +41,48 @@ use crate::{
 pub const RECORD_FLUSH_INTERVAL: Duration = Duration::from_secs(2);
 /// The apply proof pairing and the root sync fit under the transaction ceiling.
 const UPDATE_COMPUTE_UNITS: u32 = 1_400_000;
+const SYNC_COMPUTE_UNITS: u32 = 200_000;
+/// Subscriber `SyncRoots` instructions one transaction carries under the account limit.
+const SYNCS_PER_TRANSACTION: usize = 16;
 
 /// The one writer of every registry its authority key holds.
 pub struct RecordWriter {
     store: Store,
     chain: Arc<dyn StorageChain>,
     authority: Keypair,
+    genesis_hash: [u8; 32],
+    watched: Vec<Address>,
+    /// Each registry's roots every subscriber mirrored at the last check.
+    synced: Mutex<HashMap<Address, [Root; ROOT_HISTORY]>>,
+    /// Holds the escrow check and the insert of one update together.
+    submits: tokio::sync::Mutex<()>,
+}
+
+#[must_use]
+pub(crate) struct WriterParts {
+    pub store: Store,
+    pub chain: Arc<dyn StorageChain>,
+    pub authority: Keypair,
+    pub genesis_hash: [u8; 32],
+    /// Curator registries whose subscribers the writer syncs.
+    pub watched: Vec<Address>,
+}
+
+impl WriterParts {
+    pub fn writer(self) -> RecordWriter {
+        RecordWriter {
+            store: self.store,
+            chain: self.chain,
+            authority: self.authority,
+            genesis_hash: self.genesis_hash,
+            watched: self.watched,
+            synced: Mutex::default(),
+            submits: tokio::sync::Mutex::default(),
+        }
+    }
 }
 
 impl RecordWriter {
-    pub(crate) fn new(store: Store, chain: Arc<dyn StorageChain>, authority: Keypair) -> Self {
-        Self {
-            store,
-            chain,
-            authority,
-        }
-    }
-
     pub fn authority(&self) -> Address {
         self.authority.pubkey()
     }
@@ -81,6 +115,7 @@ impl RecordWriter {
         let update = RecordUpdateCheck {
             request: &request,
             context: UpdateContext {
+                genesis_hash: &self.genesis_hash,
                 config: &config,
                 policy: &policy,
                 registry: &registry,
@@ -89,6 +124,8 @@ impl RecordWriter {
             },
         }
         .check()?;
+        let _queueing = self.submits.lock().await;
+        self.check_escrows(&update, &policy).await?;
         queue
             .insert(NewUpdate {
                 request: &request,
@@ -132,6 +169,18 @@ impl RecordWriter {
                 );
             }
         }
+        let mut curated = self.queue().applied_registries().await?;
+        curated.extend_from_slice(&self.watched);
+        curated.sort_unstable();
+        curated.dedup();
+        for registry in curated {
+            if let Err(error) = self.sync_subscribers(registry).await {
+                warn!(
+                    "subscriber sync of registry {registry} failed because {}",
+                    redacted(&error)
+                );
+            }
+        }
         Ok(())
     }
 
@@ -156,7 +205,7 @@ impl RecordWriter {
         let Some(plan) = (BatchPlan { queue: &live, slot }).decide() else {
             return Ok(());
         };
-        let batch = &live[..plan.updates];
+        let batch = plan.updates.as_slice();
         // 3. The proof starts at the registry's current root and covers the batch in order.
         let writes: Vec<_> = batch
             .iter()
@@ -197,7 +246,6 @@ impl RecordWriter {
             inputs: &checked.inputs,
             registry: &state,
             slot,
-            urgent: plan.urgent,
         })
         .decide() else {
             return Ok(());
@@ -262,6 +310,86 @@ impl RecordWriter {
         Ok(self.queue().settle(batch.id, outcome).await?)
     }
 
+    /// Refuses an escrow key for a member whose record or pending update holds one.
+    async fn check_escrows(
+        &self,
+        update: &CheckedUpdate,
+        policy: &RingPolicy,
+    ) -> Result<(), RingRpcError> {
+        let registering = escrowed_members(&update.writes)?;
+        if registering.is_empty() {
+            return Ok(());
+        }
+        let records = StorageTip::mirrored(policy).ok_or(GrantRefusal::RecordsUnsynced)?;
+        let response = self
+            .chain
+            .member_openings(records.openings_request(&registering))
+            .await?;
+        let pending = self.queue().pending_writes(records.registry).await?;
+        Ok(EscrowUniqueness {
+            registering: &registering,
+            records: &records
+                .verify_openings(&response, &registering)
+                .map_err(|_| RingRpcError::InvalidIndexerResponse)?,
+            pending: &pending,
+        }
+        .check()?)
+    }
+
+    /// Sends `SyncRoots` to every subscriber whose curator mirror differs from the registry roots.
+    async fn sync_subscribers(&self, registry: Address) -> Result<(), RingRpcError> {
+        let Some(state) = self.registry(registry).await? else {
+            return Ok(());
+        };
+        if self.synced_roots(registry) == Some(state.roots) {
+            return Ok(());
+        }
+        let stale: Vec<_> = self
+            .chain
+            .subscribers(registry)
+            .await?
+            .into_iter()
+            .filter(|subscriber| {
+                subscriber.curator_roots.registry != registry
+                    || subscriber.curator_roots.roots != state.roots
+            })
+            .map(|subscriber| subscriber.ring)
+            .collect();
+        // The cache holds only roots every subscriber mirrors, a lost sync retries next pass.
+        if stale.is_empty() {
+            self.synced
+                .lock()
+                .map_err(|_| RingRpcError::StateUnavailable)?
+                .insert(registry, state.roots);
+        }
+        for rings in stale.chunks(SYNCS_PER_TRANSACTION) {
+            let instructions: Vec<Instruction> = rings
+                .iter()
+                .map(|ring| {
+                    SyncRoots {
+                        ring: CustomRing::new(*ring),
+                        registry,
+                    }
+                    .instruction()
+                })
+                .collect();
+            let latest = self.chain.latest_blockhash().await?;
+            let message = compile_message(
+                &self.authority(),
+                &instructions,
+                latest.blockhash,
+                ComputeBudgetConfig::new(SYNC_COMPUTE_UNITS),
+            )?;
+            let transaction = sign_transaction(message, &[&self.authority])?;
+            self.chain.send(&transaction).await?;
+        }
+        Ok(())
+    }
+
+    fn synced_roots(&self, registry: Address) -> Option<[Root; ROOT_HISTORY]> {
+        self.synced.lock().ok()?.get(&registry).copied()
+    }
+
     async fn policy(&self, ring: Address) -> Result<RingPolicy, RingRpcError> {
         let account = self
             .chain
@@ -287,7 +415,7 @@ impl RecordWriter {
 }
 
 /// Each ring once, in first use order.
-fn rings(batch: &[QueuedUpdate]) -> Vec<Address> {
+fn rings(batch: &[&QueuedUpdate]) -> Vec<Address> {
     let mut rings = Vec::new();
     for update in batch {
         if !rings.contains(&update.ring) {

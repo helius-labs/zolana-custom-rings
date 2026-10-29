@@ -6,10 +6,12 @@ use custom_ring_interface::{
 };
 use solana_address::Address;
 use spr_hasher::{primitives::hash_bytes, HasherError};
+use spr_indexer_api::Hash;
 use spr_keypair::X25519Pubkey;
 use zolana_ring_indexer::rpc::{
     GetRingApplyProofInputsResponse, GetRingMemberRecordsResponse,
-    GetStorageApplyProofInputsResponse, GetStorageMemberRecordsResponse,
+    GetStorageApplyProofInputsResponse, GetStorageMemberOpeningsRequest,
+    GetStorageMemberOpeningsResponse, GetStorageMemberRecordsResponse,
     GetStorageRecordPoolResponse, RingMemberOpening, RingMemberRecordView, RingRecordPathView,
     RingRecordWriteView, MAX_RING_MEMBER_PAGE_LIMIT,
 };
@@ -206,6 +208,31 @@ impl StorageTip {
             root: newest.hash,
             revision: newest.revision.value(),
         })
+    }
+
+    pub fn openings_request(&self, members: &[[u8; 32]]) -> GetStorageMemberOpeningsRequest {
+        GetStorageMemberOpeningsRequest {
+            registry: self.registry.into(),
+            members: members.iter().copied().map(Hash).collect(),
+            expected_root: Hash(self.root),
+        }
+    }
+
+    /// `members[i]` opened under the tip root, else the indexer response is invalid.
+    pub fn verify_openings(
+        &self,
+        response: &GetStorageMemberOpeningsResponse,
+        members: &[[u8; 32]],
+    ) -> Result<Vec<MemberOpeningRead>, AuditError> {
+        if response.openings.len() != members.len() {
+            return Err(AuditError::InvalidMemberRegistry);
+        }
+        response
+            .openings
+            .iter()
+            .zip(members)
+            .map(|(view, member)| MemberOpeningRead::verify(view, &self.root, member))
+            .collect()
     }
 
     /// `None` after the last page, refused unless the page holds every record from `start_index`.

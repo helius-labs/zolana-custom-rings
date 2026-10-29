@@ -1,13 +1,10 @@
 use std::future::Future;
 
 use solana_address::Address;
-use spr_indexer_api::Hash;
 use zolana_ring_client::{
-    records::MemberOpeningRead,
     rpc::{AuditedMergesPage, AuditedUtxoView, DecryptedTransaction, DecryptedTransactionsPage},
     ReaderKey,
 };
-use zolana_ring_indexer::rpc::GetStorageMemberOpeningsRequest;
 use zolana_ring_policy::{ListId, Member};
 
 use crate::{
@@ -118,21 +115,12 @@ impl<S: TransactionSource> GrantSource for TreeGrants<'_, S> {
             .ok_or(GrantRefusal::RecordsUnsynced)?;
         let response = self
             .source
-            .storage_member_openings(GetStorageMemberOpeningsRequest {
-                registry: records.registry.into(),
-                members: members.iter().copied().map(Hash).collect(),
-                expected_root: Hash(records.root),
-            })
+            .storage_member_openings(records.openings_request(&members))
             .await?;
-        if response.openings.len() != members.len() {
-            return Err(RingRpcError::InvalidIndexerResponse);
-        }
-        let mut listed = false;
-        for (member, opening) in members.iter().zip(&response.openings) {
-            let read = MemberOpeningRead::verify(opening, &records.root, member)
-                .map_err(|_| RingRpcError::InvalidIndexerResponse)?;
-            listed |= read.listed(ListId::Reader);
-        }
-        Ok(listed)
+        Ok(records
+            .verify_openings(&response, &members)
+            .map_err(|_| RingRpcError::InvalidIndexerResponse)?
+            .iter()
+            .any(|read| read.listed(ListId::Reader)))
     }
 }

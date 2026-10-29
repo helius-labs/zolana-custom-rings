@@ -3,6 +3,7 @@ use sea_orm_migration::prelude::*;
 mod cosign_m20261029_000001_usage;
 mod grants;
 mod merge_0001_settings;
+mod records2_000001_attempts;
 mod records_000001_queue;
 mod relay_000001_relays;
 
@@ -17,6 +18,7 @@ impl MigratorTrait for Migrator {
             Box::new(relay_000001_relays::Migration),
             Box::new(cosign_m20261029_000001_usage::Migration),
             Box::new(merge_0001_settings::Migration),
+            Box::new(records2_000001_attempts::Migration),
         ]
     }
 }

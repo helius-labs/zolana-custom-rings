@@ -6,7 +6,7 @@ use solana_address::Address;
 use solana_signature::Signature;
 use zolana_ring_client::rpc::{RecordUpdateStatus, SubmitRecordUpdateRequest};
 
-use crate::record_update::{CheckedUpdate, QueuedUpdate};
+use crate::record_update::{CheckedUpdate, QueuedUpdate, RecordUpdateRefusal, MAX_BATCH_ATTEMPTS};
 
 const QUEUED: &str = "queued";
 const SUBMITTED: &str = "submitted";
@@ -40,13 +40,13 @@ pub(crate) struct NewBatch<'a> {
     /// The registry revision the `Update` names.
     pub revision: u64,
     pub last_valid_block_height: u64,
-    pub updates: &'a [QueuedUpdate],
+    pub updates: &'a [&'a QueuedUpdate],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BatchOutcome {
     Applied,
-    /// The transaction failed or can no longer land, its updates queue again.
+    /// The transaction failed or can no longer land, its updates queue again until `MAX_BATCH_ATTEMPTS`.
     Requeued,
 }
 
@@ -121,6 +121,25 @@ impl<'a> UpdateQueue<'a> {
             .collect()
     }
 
+    pub async fn applied_registries(&self) -> Result<Vec<Address>, DbErr> {
+        let sql = "SELECT DISTINCT registry FROM records_batches WHERE status=$1";
+        self.query_all(sql, vec![APPLIED.into()])
+            .await?
+            .iter()
+            .map(|row| address(row, "registry"))
+            .collect()
+    }
+
+    pub async fn pending_writes(&self, registry: Address) -> Result<Vec<StorageWriteData>, DbErr> {
+        let sql = "SELECT writes FROM records_updates WHERE registry=$1 AND status IN ($2,$3)";
+        let values = vec![bytes(registry.as_array()), QUEUED.into(), SUBMITTED.into()];
+        let mut writes = Vec::new();
+        for row in self.query_all(sql, values).await? {
+            writes.extend(stored_writes(&row)?);
+        }
+        Ok(writes)
+    }
+
     pub async fn open_batch(&self, registry: Address) -> Result<Option<OpenBatch>, DbErr> {
         let sql = "SELECT id, signature, last_valid_block_height FROM records_batches \
                    WHERE registry=$1 AND status=$2";
@@ -144,11 +163,10 @@ impl<'a> UpdateQueue<'a> {
             .await?
             .iter()
             .map(|row| {
-                let writes = row.try_get::<Vec<u8>>("", "writes")?;
                 Ok(QueuedUpdate {
                     id: column_bytes(row, "id")?,
                     ring: address(row, "ring")?,
-                    writes: StorageWriteData::parse_all(&writes).map_err(|_| corrupt("writes"))?,
+                    writes: stored_writes(row)?,
                     urgent: row.try_get("", "urgent")?,
                     queued_slot: unsigned(row, "queued_slot")?,
                     valid_until_slot: unsigned(row, "valid_until_slot")?,
@@ -200,9 +218,9 @@ impl<'a> UpdateQueue<'a> {
     }
 
     pub async fn settle(&self, batch: i64, outcome: BatchOutcome) -> Result<(), DbErr> {
-        let (batch_status, update_status, kept) = match outcome {
-            BatchOutcome::Applied => (APPLIED, APPLIED, Some(batch)),
-            BatchOutcome::Requeued => (FAILED, QUEUED, None),
+        let batch_status = match outcome {
+            BatchOutcome::Applied => APPLIED,
+            BatchOutcome::Requeued => FAILED,
         };
         let transaction = self.db.begin().await?;
         let sql = "UPDATE records_batches SET status=$1 WHERE id=$2";
@@ -213,11 +231,34 @@ impl<'a> UpdateQueue<'a> {
                 vec![batch_status.into(), batch.into()],
             ))
             .await?;
-        let sql = "UPDATE records_updates SET status=$1, batch=$2 WHERE batch=$3";
-        let values = vec![update_status.into(), kept.into(), batch.into()];
-        transaction
-            .execute(statement(&transaction, sql, values))
-            .await?;
+        let updates = match outcome {
+            BatchOutcome::Applied => vec![(
+                "UPDATE records_updates SET status=$1 WHERE batch=$2",
+                vec![APPLIED.into(), batch.into()],
+            )],
+            BatchOutcome::Requeued => vec![
+                (
+                    "UPDATE records_updates SET status=$1, reason=$2, batch=NULL, \
+                     attempts=attempts+1 WHERE batch=$3 AND attempts+1>=$4",
+                    vec![
+                        REFUSED.into(),
+                        RecordUpdateRefusal::BatchFailed.to_string().into(),
+                        batch.into(),
+                        integer(MAX_BATCH_ATTEMPTS)?,
+                    ],
+                ),
+                (
+                    "UPDATE records_updates SET status=$1, batch=NULL, attempts=attempts+1 \
+                     WHERE batch=$2",
+                    vec![QUEUED.into(), batch.into()],
+                ),
+            ],
+        };
+        for (sql, values) in updates {
+            transaction
+                .execute(statement(&transaction, sql, values))
+                .await?;
+        }
         transaction.commit().await
     }
 
@@ -253,6 +294,11 @@ fn column_bytes(row: &QueryResult, column: &str) -> Result<[u8; 32], DbErr> {
     row.try_get::<Vec<u8>>("", column)?
         .try_into()
         .map_err(|_| corrupt(column))
+}
+
+fn stored_writes(row: &QueryResult) -> Result<Vec<StorageWriteData>, DbErr> {
+    StorageWriteData::parse_all(&row.try_get::<Vec<u8>>("", "writes")?)
+        .map_err(|_| corrupt("writes"))
 }
 
 fn address(row: &QueryResult, column: &str) -> Result<Address, DbErr> {
