@@ -706,15 +706,17 @@ fn relay_status(state: &RelayState) -> Result<RelayStatus, RingRpcError> {
     })
 }
 
-/// One flow per asset, a payment to another owner counts as transferred.
+/// One flow per asset, every live output but a ring output to the sender counts as transferred.
 fn asset_flows(proof_inputs: &RelayProofInputs) -> Vec<AssetFlow> {
     let mut flows: Vec<AssetFlow> = Vec::new();
     let sender = &proof_inputs.sender.signing_pubkey;
     for output in &proof_inputs.outputs {
-        if output
-            .owner_address
-            .is_some_and(|owner| owner.signing_pubkey != *sender)
-        {
+        let Some(owner) = &output.owner_address else {
+            continue;
+        };
+        let change = owner.signing_pubkey == *sender
+            && output.ring_program_id == Some(proof_inputs.ring_program_id);
+        if !change {
             let flow = flow(&mut flows, output.asset.asset);
             flow.transferred = flow.transferred.saturating_add(output.amount);
         }
