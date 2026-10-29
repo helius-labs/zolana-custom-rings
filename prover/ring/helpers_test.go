@@ -42,12 +42,20 @@ type unviewed interface {
 	request() any
 }
 
+// interfaceOf is nil on an unexported embedded view, the struct case of unfill fills its fields.
+func interfaceOf(v reflect.Value) any {
+	if !v.CanInterface() {
+		return nil
+	}
+	return v.Interface()
+}
+
 func unfill(dst, src reflect.Value, path string) []error {
 	if dst.Kind() == reflect.Pointer {
 		dst.Set(reflect.New(dst.Type().Elem()))
 		return unfill(dst.Elem(), src, path)
 	}
-	if v, ok := dst.Interface().(viewed); ok {
+	if v, ok := interfaceOf(dst).(viewed); ok {
 		view := reflect.New(reflect.TypeOf(v.view())).Elem()
 		errs := unfill(view, src, path)
 		dst.Set(reflect.ValueOf(view.Interface().(unviewed).request()))
@@ -115,24 +123,30 @@ func (v quadPath) flat() []Field {
 	return flat
 }
 
+func (v bodyView) opening(path quadPath) RecordOpening {
+	return RecordOpening{Next: v.Next, Lists: v.Lists, EscrowKey: v.EscrowKey, MintPolicy: v.MintPolicy, WithdrawalThreshold: v.WithdrawalThreshold, AssetLimits: v.AssetLimits, Index: path.Index, Path: path.flat()}
+}
+
 func (v recordView) request() any {
-	return RecordOpening{Next: v.Next, Lists: v.Lists, EscrowKey: v.EscrowKey, MintPolicy: v.MintPolicy, WithdrawalThreshold: v.WithdrawalThreshold, AssetLimits: v.AssetLimits, Index: v.Path.Index, Path: v.Path.flat()}
+	return v.opening(v.Path)
 }
 
 func (v memberView) request() any {
+	low := v.Low
 	return MemberOpening{
 		Present:       v.Present,
-		RecordOpening: RecordOpening{Next: v.Next, Lists: v.Lists, EscrowKey: v.EscrowKey, MintPolicy: v.MintPolicy, WithdrawalThreshold: v.WithdrawalThreshold, AssetLimits: v.AssetLimits, Index: v.Path.Index, Path: v.Path.flat()},
-		LowMember:     v.LowMember, LowNext: v.LowNext, LowLists: v.LowLists, LowEscrow: v.LowEscrow, LowMintPolicy: v.LowMintPolicy, LowWithdrawalThreshold: v.LowWithdrawalThreshold, LowAssetLimits: v.LowAssetLimits,
+		RecordOpening: v.opening(v.Path),
+		LowMember:     low.Member, LowNext: low.Next, LowLists: low.Lists, LowEscrow: low.EscrowKey, LowMintPolicy: low.MintPolicy, LowWithdrawalThreshold: low.WithdrawalThreshold, LowAssetLimits: low.AssetLimits,
 	}
 }
 
 func (v writeView) request() any {
+	old, low := v.Old, v.Low
 	return RecordWrite{
-		Entry: v.Entry, Exists: v.Exists, OldNext: v.OldNext, OldLists: v.OldLists, OldEscrow: v.OldEscrow, OldMintPolicy: v.OldMintPolicy, OldWithdrawalThreshold: v.OldWithdrawalThreshold, OldAssetLimits: v.OldAssetLimits,
+		Entry: v.Entry, Exists: v.Exists, OldNext: old.Next, OldLists: old.Lists, OldEscrow: old.EscrowKey, OldMintPolicy: old.MintPolicy, OldWithdrawalThreshold: old.WithdrawalThreshold, OldAssetLimits: old.AssetLimits,
 		Index: v.Slot.Index, Path: v.Slot.flat(),
-		LowMember: v.LowMember, LowNext: v.LowNext, LowLists: v.LowLists, LowEscrow: v.LowEscrow, LowMintPolicy: v.LowMintPolicy, LowWithdrawalThreshold: v.LowWithdrawalThreshold, LowAssetLimits: v.LowAssetLimits,
-		LowIndex: v.Low.Index, LowPath: v.Low.flat(),
+		LowMember: low.Member, LowNext: low.Next, LowLists: low.Lists, LowEscrow: low.EscrowKey, LowMintPolicy: low.MintPolicy, LowWithdrawalThreshold: low.WithdrawalThreshold, LowAssetLimits: low.AssetLimits,
+		LowIndex: v.LowSlot.Index, LowPath: v.LowSlot.flat(),
 	}
 }
 

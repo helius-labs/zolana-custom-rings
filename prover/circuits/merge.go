@@ -1,7 +1,7 @@
 package circuits
 
 import (
-	"fmt"
+	"errors"
 	"slices"
 
 	"github.com/consensys/gnark/frontend"
@@ -66,18 +66,15 @@ type MergeCircuit struct {
 var MergeWidths = []int{8, 24}
 
 func NewMergeCircuit(width int) (*MergeCircuit, error) {
-	if !slices.Contains(MergeWidths, width) {
-		return nil, fmt.Errorf("merge: unsupported input count %d, want one of %v", width, MergeWidths)
+	if err := shared.ValidateWidth("merge", width, MergeWidths); err != nil {
+		return nil, err
 	}
 	return &MergeCircuit{NumInputs: width, Inputs: make([]MergeInput, width)}, nil
 }
 
 func (c *MergeCircuit) Define(api frontend.API) error {
-	if !slices.Contains(MergeWidths, c.NumInputs) {
-		return fmt.Errorf("merge: unsupported input count %d, want one of %v", c.NumInputs, MergeWidths)
-	}
-	if len(c.Inputs) != c.NumInputs {
-		return fmt.Errorf("merge: input count mismatch: got %d want %d", len(c.Inputs), c.NumInputs)
+	if err := errors.Join(shared.ValidateWidth("merge", c.NumInputs, MergeWidths), transaction.ValidateLength("input", len(c.Inputs), c.NumInputs)); err != nil {
+		return err
 	}
 	// 1. One owner from the disclosed key and the secret's nullifier key, one asset whose 31 and 1 byte chunks open to one mint.
 	ownerPkHash := gadget.SolanaOwnerIdentity(api, c.OwnerKey)
@@ -87,7 +84,7 @@ func (c *MergeCircuit) Define(api frontend.API) error {
 	nullifierPk := gadget.PoseidonHash(api, []frontend.Variable{c.NullifierSecret})
 	ownerHash := gadget.PoseidonHash(api, []frontend.Variable{ownerPkHash, nullifierPk})
 	asset := gadget.HashChain(api, c.MintChunks[:])
-	mint := slices.Concat(gadget.BitsToBytesBE(api, api.ToBinary(c.MintChunks[0], 31*8)), gadget.BitsToBytesBE(api, api.ToBinary(c.MintChunks[1], 8)))
+	mint := slices.Concat(ringgadget.UintBytesBE(api, c.MintChunks[0], 31), ringgadget.UintBytesBE(api, c.MintChunks[1], 1))
 	// 2. Under key escrow the owner's record lies under the registry root and escrows the nullifier key the output stays under.
 	api.AssertIsBoolean(c.KeyEscrow)
 	c.Member.AssertPresent(api, c.KeyEscrow, c.MemberRegistryRoot, ownerPkHash)
@@ -125,7 +122,7 @@ func (c *MergeCircuit) Define(api frontend.API) error {
 		}
 	}
 	// 4. The output is the SPP merge output, the 64-bit sum under the owner with the TMOB blinding.
-	amount := gadget.BitsToBytesBE(api, api.ToBinary(sum, 64))
+	amount := ringgadget.UintBytesBE(api, sum, 8)
 	outputBlinding := mergeshared.MergeOutputBlinding(api, c.NullifierSecret, firstNullifier)
 	outputHash := transaction.UtxoHashCircuit(api, transaction.UtxoCircuitFields{
 		Domain: mergeshared.UtxoDomain, Owner: ownerHash, Asset: asset, Amount: sum,
@@ -148,7 +145,7 @@ func (c *MergeCircuit) Define(api frontend.API) error {
 		plaintext = append(plaintext, hashBytes[:]...)
 	}
 	fields := shared.PackDisclosure(api, plaintext)
-	pad := shared.DisclosurePad(api, shared.MergeDisclosureDomain, [2]frontend.Variable(gadget.PackBytesBEWith(api, ringgadget.BoundedBytes{}, c.DisclosureKey[:])), c.Salt, len(fields))
+	pad := shared.DisclosurePad(api, shared.MergeDisclosureDomain, [2]frontend.Variable(shared.PackBounded(api, c.DisclosureKey[:])), c.Salt, len(fields))
 	for i := range fields {
 		fields[i] = api.Add(fields[i], pad[i])
 	}
@@ -164,9 +161,8 @@ func (c *MergeCircuit) Define(api frontend.API) error {
 func (c *MergeCircuit) statement(api frontend.API, sealed shared.Sealed, fields []frontend.Variable) []frontend.Variable {
 	return slices.Concat(
 		[]frontend.Variable{shared.MergeStatementDomain, c.PrivateTxHash, c.OutputUtxoHash, c.FirstNullifier, c.RingProgramID},
-		sealed.Auditor,
-		sealed.Eph,
-		[]frontend.Variable{gadget.HashBoundedBytes(api, sealed.Ciphertext), c.Salt, gadget.HashChain4(api, fields)},
+		sealed.StatementFields(api),
+		[]frontend.Variable{c.Salt, gadget.HashChain4(api, fields)},
 		c.PartyIdentities[:],
 		[]frontend.Variable{c.KeyEscrow, c.MemberRegistryRoot},
 	)

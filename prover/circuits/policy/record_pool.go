@@ -1,19 +1,102 @@
 package policy
 
 import (
+	"fmt"
 	"math/big"
 
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/std/rangecheck"
 	"github.com/helius-labs/zolana/prover/server/circuits/crypto/lookup"
+	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
+	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
+	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
 type PoolSubject struct {
 	Member      frontend.Variable
 	RecordIndex frontend.Variable
+}
+
+type RecordPoolShape struct {
+	Own, Curator                 int
+	OwnSubjects, CuratorSubjects int
+}
+
+type PoolEntry struct {
+	Own     frontend.Variable
+	Curator []frontend.Variable
+}
+
+func newPoolEntry(ownOnly bool) PoolEntry {
+	entry := PoolEntry{}
+	if !ownOnly {
+		entry.Curator = make([]frontend.Variable, 1)
+	}
+	return entry
+}
+
+func (s RecordPoolShape) validate(limits RecordPoolShape) error {
+	if err := validatePoolCapacity(s.Own, s.OwnSubjects, limits.Own); err != nil {
+		return err
+	}
+	if limits.Curator == 0 {
+		if s.Curator != 0 || s.CuratorSubjects != 0 {
+			return fmt.Errorf("policy own pool has curator capacity")
+		}
+		return nil
+	}
+	return validatePoolCapacity(s.Curator, s.CuratorSubjects, limits.Curator)
+}
+
+func validatePoolCapacity(records, subjects, maximum int) error {
+	for _, capacity := range []int{records, subjects} {
+		if capacity < 1 || capacity > maximum {
+			return fmt.Errorf("policy pool capacity is invalid")
+		}
+	}
+	return nil
+}
+
+func (e PoolEntry) validate(ownOnly bool) error {
+	expected := 1
+	if ownOnly {
+		expected = 0
+	}
+	if len(e.Curator) != expected {
+		return fmt.Errorf("policy curator reference shape is invalid")
+	}
+	return nil
+}
+
+func (p *PolicyInputs) recordCapacity(publicAssets int) RecordPoolShape {
+	outputs, withdrawals := len(p.Outputs), len(p.Withdrawals)
+	// Withdrawals settle through SPP public slots, so their assets are among at most NPublicSlots.
+	withdrawalAssets := min(withdrawals, transaction.NPublicSlots)
+	distinct := 1 + outputs + withdrawals + outputs
+	limits := RecordPoolShape{Own: distinct + max(withdrawalAssets, publicAssets)}
+	if !p.OwnOnly {
+		limits.Curator = distinct + withdrawalAssets
+	}
+	return limits
+}
+
+func (s RecordPoolShape) withDefaults(limits RecordPoolShape) RecordPoolShape {
+	if s.Own == 0 {
+		s.Own = limits.Own
+	}
+	if s.Curator == 0 {
+		s.Curator = limits.Curator
+	}
+	if s.OwnSubjects == 0 {
+		s.OwnSubjects = s.Own
+	}
+	if s.CuratorSubjects == 0 {
+		s.CuratorSubjects = s.Curator
+	}
+	return s
 }
 
 type recordQuery struct {
@@ -75,7 +158,7 @@ func decodeMintPolicy(api frontend.API, packed frontend.Variable) mintPolicyWire
 
 func (p pooledTable) lookup(api frontend.API, query recordQuery) []frontend.Variable {
 	api.AssertIsBoolean(query.active)
-	api.AssertIsEqual(api.Mul(query.active, api.Sub(1, p.active)), 0)
+	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: query.active, V: api.Sub(1, p.active)})
 	return p.table.Lookup(query.index)
 }
 
@@ -121,6 +204,6 @@ func openSubjectPool(api frontend.API, records recordPool, subjects []PoolSubjec
 
 func (p subjectPool) resolve(api frontend.API, query recordQuery) pooledRecord {
 	row := p.lookup(api, query)
-	api.AssertIsEqual(api.Mul(query.active, api.Sub(row[0], query.member)), 0)
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: query.active, A: row[0], B: query.member})
 	return pooledRecordAt(row[1:]).gated(api, query.active)
 }

@@ -28,6 +28,10 @@ type Sealed struct {
 	Auditor, Eph, Ciphertext []frontend.Variable
 }
 
+func (s Sealed) StatementFields(api frontend.API) []frontend.Variable {
+	return append(slices.Concat(s.Auditor, s.Eph), gadget.HashBoundedBytes(api, s.Ciphertext))
+}
+
 type keySchedule func(secret frontend.Variable) ([32]frontend.Variable, [12]frontend.Variable)
 
 // Seal encrypts under the verifiable-encryption key schedule of Info.

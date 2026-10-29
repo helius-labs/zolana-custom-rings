@@ -2,6 +2,8 @@ package policy
 
 import (
 	"github.com/consensys/gnark/frontend"
+	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
+
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
@@ -19,11 +21,11 @@ func (p *PolicyInputs) openWithdrawals(api frontend.API, rc frontend.Rangechecke
 		active := count.Active[i]
 		rc.Check(w.Amount, 64)
 		// A live leg is one the program builds, a nonzero amount of a nonzero asset as the rules assume of a live UTXO.
-		api.AssertIsEqual(api.Mul(active, api.IsZero(w.Amount)), 0)
-		api.AssertIsEqual(api.Mul(active, api.IsZero(w.Asset)), 0)
+		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: active, V: api.IsZero(w.Amount)})
+		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: active, V: api.IsZero(w.Asset)})
 		// An inactive leg is zero, the zero padding paddedWithdrawalHash reads.
 		for _, v := range []frontend.Variable{w.Owner, w.Asset, w.Amount} {
-			api.AssertIsEqual(api.Mul(api.Sub(1, active), v), 0)
+			abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, active), V: v})
 		}
 		fields = append(fields, w.Owner, w.Asset, w.Amount)
 		payments[i] = utxoView{ownerPkHash: w.Owner, asset: w.Asset, amount: w.Amount, utxo: active}

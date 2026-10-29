@@ -3,7 +3,10 @@ package policy
 import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/std/rangecheck"
+	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
+
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
@@ -24,8 +27,8 @@ func (c *WithdrawalExemptionCircuit) Define(api frontend.API) error {
 	fields := []frontend.Variable{shared.WithdrawalExemptionDomain, c.Root}
 	for i, asset := range c.Assets {
 		amount := c.Amounts[i]
-		active := api.Sub(1, api.IsZero(asset))
-		api.AssertIsEqual(api.Mul(api.Sub(1, active), amount), 0)
+		active := ringgadget.IsNonZero(api, asset)
+		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, active), V: amount})
 		_, _, _, threshold := c.Entries[i].Resolve(api, active, c.Root, asset)
 		rc.Check(amount, 64)
 		rc.Check(threshold, 64)

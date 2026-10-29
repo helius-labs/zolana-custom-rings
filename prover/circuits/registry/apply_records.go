@@ -1,9 +1,8 @@
 package registry
 
 import (
-	"fmt"
+	"errors"
 	"math/big"
-	"slices"
 
 	"github.com/consensys/gnark/frontend"
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
@@ -11,6 +10,7 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
+	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
 // Properties:
@@ -43,23 +43,12 @@ func (e QueueEntry) Hash(api frontend.API) frontend.Variable {
 
 // RecordWrite's Slot opens the member's leaf, or the empty leaf an insert takes.
 type RecordWrite struct {
-	Entry                  QueueEntry
-	Exists                 frontend.Variable
-	OldNext                frontend.Variable
-	OldLists               frontend.Variable
-	OldEscrow              frontend.Variable
-	OldMintPolicy          frontend.Variable
-	OldWithdrawalThreshold frontend.Variable
-	OldAssetLimits         [LimitFields]frontend.Variable
-	Slot                   QuadPath
-	LowMember              frontend.Variable
-	LowNext                frontend.Variable
-	LowLists               frontend.Variable
-	LowEscrow              frontend.Variable
-	LowMintPolicy          frontend.Variable
-	LowWithdrawalThreshold frontend.Variable
-	LowAssetLimits         [LimitFields]frontend.Variable
-	Low                    QuadPath
+	Entry   QueueEntry
+	Exists  frontend.Variable
+	Old     RecordBody
+	Slot    QuadPath
+	Low     Record
+	LowSlot QuadPath
 }
 
 type ApplyRecordsCircuit struct {
@@ -82,18 +71,15 @@ type registryState struct {
 }
 
 func NewApplyRecordsCircuit(writes int) (*ApplyRecordsCircuit, error) {
-	if !slices.Contains(ApplyWidths, writes) {
-		return nil, fmt.Errorf("registry: unsupported write capacity %d, want one of %v", writes, ApplyWidths)
+	if err := shared.ValidateWidth("registry", writes, ApplyWidths); err != nil {
+		return nil, err
 	}
 	return &ApplyRecordsCircuit{NumWrites: writes, Writes: make([]RecordWrite, writes)}, nil
 }
 
 func (c *ApplyRecordsCircuit) Define(api frontend.API) error {
-	if !slices.Contains(ApplyWidths, c.NumWrites) {
-		return fmt.Errorf("registry: unsupported write capacity %d, want one of %v", c.NumWrites, ApplyWidths)
-	}
-	if len(c.Writes) != c.NumWrites {
-		return fmt.Errorf("registry: write count mismatch: got %d want %d", len(c.Writes), c.NumWrites)
+	if err := errors.Join(shared.ValidateWidth("registry", c.NumWrites, ApplyWidths), transaction.ValidateLength("write", len(c.Writes), c.NumWrites)); err != nil {
+		return err
 	}
 	// 1. Count selects a prefix of one write up to the capacity, the writes past it act on nothing.
 	count := ringgadget.SelectCount(api, c.Count, 1, c.NumWrites)
@@ -113,47 +99,39 @@ func (c *ApplyRecordsCircuit) Define(api frontend.API) error {
 // apply moves s by w while active is set, an unset active leaves it.
 func (w RecordWrite) apply(api frontend.API, active frontend.Variable, s registryState) registryState {
 	// 1. List bits outside the mask keep their old value, the program keeps the chained Value inside the mask.
-	lists := api.Add(keptLists(api, w.OldLists, w.Entry.Mask), w.Entry.Value)
+	updated := RecordBody{Next: w.Old.Next, Lists: api.Add(keptLists(api, w.Old.Lists, w.Entry.Mask), w.Entry.Value)}
 	// 2. A registered escrow key is final, a later key leaves it.
-	escrow := api.Select(api.IsZero(w.OldEscrow), w.Entry.EscrowKey, w.OldEscrow)
+	updated.EscrowKey = api.Select(api.IsZero(w.Old.EscrowKey), w.Entry.EscrowKey, w.Old.EscrowKey)
 	// The 193 bit decomposition range-checks the entry.
 	policyBits := api.ToBinary(w.Entry.MintPolicy, 193)
-	mintPolicy := api.Select(policyBits[192], api.FromBinary(policyBits[:192]...), w.OldMintPolicy)
-	withdrawalThreshold := api.Select(policyBits[192], w.Entry.WithdrawalThreshold, w.OldWithdrawalThreshold)
-	var limits [LimitFields]frontend.Variable
-	for i := range limits {
-		limits[i] = api.Select(policyBits[192], w.Entry.AssetLimits[i], w.OldAssetLimits[i])
+	updated.MintPolicy = api.Select(policyBits[192], api.FromBinary(policyBits[:192]...), w.Old.MintPolicy)
+	updated.WithdrawalThreshold = api.Select(policyBits[192], w.Entry.WithdrawalThreshold, w.Old.WithdrawalThreshold)
+	for i := range updated.AssetLimits {
+		updated.AssetLimits[i] = api.Select(policyBits[192], w.Entry.AssetLimits[i], w.Old.AssetLimits[i])
 	}
 	// 3. An absent member has empty old fields and lies strictly inside its low record's link under the running root, a link no present member falls inside.
 	api.AssertIsBoolean(w.Exists)
 	absent := api.Mul(active, api.Sub(1, w.Exists))
-	ringgadget.AssertOrderedWhen(api, absent, w.LowMember, w.Entry.Member, w.LowNext)
-	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: absent, V: w.OldLists})
-	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: absent, V: w.OldEscrow})
-	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: absent, V: w.OldMintPolicy})
-	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: absent, V: w.OldWithdrawalThreshold})
-	for _, old := range w.OldAssetLimits {
-		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: absent, V: old})
-	}
-	low := Record{Member: w.LowMember, Next: w.LowNext, Lists: w.LowLists, EscrowKey: w.LowEscrow, MintPolicy: w.LowMintPolicy, WithdrawalThreshold: w.LowWithdrawalThreshold, AssetLimits: w.LowAssetLimits}
-	relinked := low
+	ringgadget.AssertOrderedWhen(api, absent, w.Low.Member, w.Entry.Member, w.Low.Next)
+	w.Old.assertEmptyWhen(api, absent)
+	relinked := w.Low
 	relinked.Next = w.Entry.Member
-	lowRoot, relinkedRoot := w.Low.Update(api, low.Hash(api), relinked.Hash(api))
+	lowRoot, relinkedRoot := w.LowSlot.Update(api, w.Low.Hash(api), relinked.Hash(api))
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: absent, A: lowRoot, B: s.root})
 	// 4. Only a nonempty new record is inserted, an empty one leaves the member absent.
-	nonzero := []frontend.Variable{ringgadget.IsNonZero(api, lists), ringgadget.IsNonZero(api, escrow), ringgadget.IsNonZero(api, mintPolicy), ringgadget.IsNonZero(api, withdrawalThreshold)}
-	for _, limit := range limits {
-		nonzero = append(nonzero, ringgadget.IsNonZero(api, limit))
+	var nonzero []frontend.Variable
+	for _, field := range updated.contents() {
+		nonzero = append(nonzero, ringgadget.IsNonZero(api, field))
 	}
 	insert := api.Mul(absent, ringgadget.IsAny(api, nonzero...))
 	update := api.Mul(active, w.Exists)
 	// 5. An insert relinks the low record to the member and takes the empty leaf at the next index, linking on to the low record's old next.
 	linked := api.Select(insert, relinkedRoot, s.root)
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: insert, A: w.Slot.Index, B: s.next})
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: insert, A: w.OldNext, B: w.LowNext})
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: insert, A: w.Old.Next, B: w.Low.Next})
 	// 6. An update or insert replaces the slot's old leaf under the running root, an insert's old leaf is the empty leaf 0.
-	before := api.Select(w.Exists, Record{Member: w.Entry.Member, Next: w.OldNext, Lists: w.OldLists, EscrowKey: w.OldEscrow, MintPolicy: w.OldMintPolicy, WithdrawalThreshold: w.OldWithdrawalThreshold, AssetLimits: w.OldAssetLimits}.Hash(api), 0)
-	after := Record{Member: w.Entry.Member, Next: w.OldNext, Lists: lists, EscrowKey: escrow, MintPolicy: mintPolicy, WithdrawalThreshold: withdrawalThreshold, AssetLimits: limits}.Hash(api)
+	before := api.Select(w.Exists, Record{Member: w.Entry.Member, RecordBody: w.Old}.Hash(api), 0)
+	after := Record{Member: w.Entry.Member, RecordBody: updated}.Hash(api)
 	opened, written := w.Slot.Update(api, before, after)
 	changes := api.Add(insert, update)
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: changes, A: opened, B: linked})

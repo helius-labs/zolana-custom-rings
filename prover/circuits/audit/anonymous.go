@@ -118,7 +118,7 @@ func (c *AnonymousAuditCircuit) Define(api frontend.API) error {
 	api.AssertIsEqual(c.PrivateTxHash, transaction.PrivateTxHashCircuit(api, spent.hashes, outputHashes, nil, c.PrivateTxBlinding))
 	// 6. The commitment is 0 on an audit-only transfer or opens to the sender the inputs prove, the policy proof reads it.
 	commitment := shared.SenderCommitment(api, senderPkHash, c.PrivateTxBlinding)
-	api.AssertIsEqual(api.Mul(c.SenderCommitment, api.Sub(c.SenderCommitment, commitment)), 0)
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: c.SenderCommitment, A: c.SenderCommitment, B: commitment})
 	// 7. Only the holder of tx_viewing_sk opens the disclosure of every output and spent UTXO.
 	statement := c.statement(api, envelope, gadget.HashChain4(api, hashes), c.disclosure(api, envelope, layout, nullifierPks, slotBytes, spent))
 	// 8. The one public input commits the statement the program rebuilds.
@@ -142,7 +142,7 @@ func (c *AnonymousAuditCircuit) openSlot(api frontend.API, rc frontend.Rangechec
 	assertOwnerKey(api, slot, o.Output, o.OwnerKey)
 	// 3. be32 is the one asset encoding below q, the decomposition bounds a live amount below 2^64.
 	asset := ringgadget.FieldToBytesBEWith(api, rc, api.Mul(slot.live, o.Output.Asset))
-	amount := uintBytes(api, api.Mul(slot.live, o.Output.Amount), 8)
+	amount := ringgadget.UintBytesBE(api, api.Mul(slot.live, o.Output.Amount), 8)
 	return anonymousSlot{outputSlot: slot, bytes: slices.Concat(masked(api, slot.ring, o.OwnerKey[:]), asset[:], amount)}
 }
 
@@ -178,7 +178,7 @@ func (c *AnonymousAuditCircuit) spend(api frontend.API, rc frontend.Rangechecker
 		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: opened.Utxo, A: input.NullifierPk, B: c.Inputs[0].NullifierPk})
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: opened.Utxo, V: input.DataHash})
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: opened.Utxo, V: input.RingDataHash})
-		spent.amounts = append(spent.amounts, uintBytes(api, api.Mul(opened.Utxo, input.Amount), 8)...)
+		spent.amounts = append(spent.amounts, ringgadget.UintBytesBE(api, api.Mul(opened.Utxo, input.Amount), 8)...)
 		openings = append(openings, []frontend.Variable{api.Mul(opened.Utxo, input.Asset), api.Mul(opened.Utxo, input.Blinding)})
 	}
 	if c.Shape.FullOpenings {
