@@ -182,7 +182,7 @@ zolana-ring insert-fee set 0
 
 ### TypeScript
 
-`@heliuslabs/zolana-custom-rings` pins its `@heliuslabs/zolana` peer to one version. The examples come from the live tests. `requiredEnv`, `signSendAndConfirm`, `sendInstruction`, `currentSlot` and `ringReadTarget` are test helpers, and `sender`, `member`, `recipient` and `actor` are test wallets with `signer`, `keypair`, `wallet` and `keys`.
+`@heliuslabs/zolana-custom-rings` pins its `@heliuslabs/zolana` peer to one version. A wallet deposits, transfers and merges through Ring RPC and reads no Merkle path and no record. `requiredEnv`, `signSendAndConfirm`, `sendInstruction`, `currentSlot` and `ringReadTarget` are test helpers, and `sender`, `member`, `recipient` and `actor` are test wallets with `signer`, `keypair`, `wallet` and `keys`.
 
 ```ts
 const client = await createCustomRingClient({
@@ -192,19 +192,22 @@ const client = await createCustomRingClient({
   tree: address(requiredEnv("ZOLANA_TREE")),
 });
 const config = await fetchRingProgramConfig(client, ringProgramId);
+const ringRpc = new RingRpc(requiredEnv("RING_RPC_URL"), { allowInsecureHttp: true });
 ```
 
-Deposit. Every deposit carries its audit proof.
+Deposit. Ring RPC proves the deposit with its audit proof and returns the message the depositor signs.
 
 ```ts
-const deposit = await buildRingDepositTransaction({
+const deposit = await PreparedRingDeposit.prepareRelay({
   client,
   ringProgramId,
-  feePayer: sender.signer.address,
+  depositor: sender.signer,
   recipient: { kind: "confidential", address: sender.keypair.shieldedAddress() },
   amount: DEPOSIT,
+  quote: await ringRpc.getRelayQuote({ ring: ringProgramId, operation: "deposit" }),
 });
-await signSendAndConfirm(client, deposit, [sender.signer]);
+const sent = await deposit.relay.send(ringRpc);
+if (sent.step === "signMessage") await sent.sign(ringRpc, sender.signer);
 ```
 
 Register the member's nullifier key on a key-escrow ring, then apply the queue:
@@ -233,22 +236,26 @@ try {
 
 `new RecordApplication(ringProgramId).prove(client)` proves the application once the queue is due.
 
-Transfer on a confidential ring:
+Transfer on a confidential ring. The sender signs the message hash inside the proof, and Ring RPC pays, co-signs and sends.
 
 ```ts
-const transfer = await buildRingTransferTransaction({
+const transfer = await prepareRingTransferRelay({
   client,
   ringProgramId,
   wallet: sender.wallet,
   keys: sender.keys,
-  feePayer: sender.signer.address,
   recipient: recipient.keypair.shieldedAddress(),
   amount: PAYMENT,
+  confidential: {
+    quote: await ringRpc.getRelayQuote({ ring: ringProgramId, operation: "confidential" }),
+    nullifierKey: sender.keypair.nullifierKey(),
+    signer: messageSignerSpendSigner(sender.signer),
+  },
 });
-const signature = await signSendAndConfirm(client, transfer, [sender.signer]);
+const relayId = submittedRelay(await transfer.relay.send(ringRpc));
 ```
 
-`buildRingExitTransaction` pays the default ring and `buildRingWithdrawalTransaction` withdraws to a token account. Every ring spend takes a `cosigner`. `createRingTransferSubmission` re-proves on a stale root.
+`prepareRingExitRelay` pays the default ring and `prepareRingWithdrawalRelay` withdraws to a Solana account. `RingRpc.getRelayStatus(relayId)` follows the relay. `prepareRingMergeRelay` merges the sender's notes.
 
 Sync confidential ring notes into the wallet:
 
@@ -264,7 +271,6 @@ await syncRingWallet({
 Read audited history from Ring RPC after `grantReadAccessInstruction` names the reader:
 
 ```ts
-const ringRpc = new RingRpc(requiredEnv("RING_RPC_URL"), { allowInsecureHttp: true });
 const target = await ringReadTarget(ringRpc, ringProgramId);
 const ringView = await ringRpc.getDecryptedTransactions({
   target,

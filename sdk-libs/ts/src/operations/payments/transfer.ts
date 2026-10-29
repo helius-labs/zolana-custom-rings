@@ -56,7 +56,8 @@ import {
   type PreparedRingRelay,
   type RingTransferApproval,
 } from "./transfer-rails.js";
-import type { RelayQuote } from "../../protocol/ring-rpc/ring-rpc-types.js";
+import type { RelayQuote, TokenAccountSetup } from "../../protocol/ring-rpc/ring-rpc-types.js";
+import type { PreparedRelay } from "../../rpc/relay.js";
 import {
   provenWithinTransaction,
   ringIntentMismatch,
@@ -74,13 +75,18 @@ import type { FirstContact, ViewingHistory } from "../../state/viewing-history.j
 
 export type RingTransferClient = CustomRingTransferClient & BlockhashProvider;
 
-/** The hidden owner's relay through Ring RPC, the only spend of an anonymous ring. */
-export interface AnonymousRingSpend {
+/** The owner signs the message hash inside the proof. */
+export interface RingRelaySpend {
   /** Names the fee payer the transfer pays from. */
   readonly quote: RelayQuote;
   /** Ring RPC proves with it and so links every spend of the owner. */
   readonly nullifierKey: NullifierKey;
+  /** Must hold the sender's signing key. */
   readonly signer: AnonymousSpendSigner;
+}
+
+/** The only spend of an anonymous ring. */
+export interface AnonymousRingSpend extends RingRelaySpend {
   /** Store `PreparedRingRelay.viewingHistory` in its place before `relay.send`. */
   readonly history: ViewingHistory;
   /** The tag a payment to a `RingAddress` takes until the pair is known, chosen by the caller. */
@@ -106,12 +112,23 @@ export interface RingSpendParams {
   readonly priorityFeeLamports?: bigint;
 }
 
+/** `anonymous` on an anonymous ring, `confidential` on any other. */
+export type RingRelayRail =
+  | Readonly<{ anonymous: AnonymousRingSpend; confidential?: never }>
+  | Readonly<{ confidential: RingRelaySpend; anonymous?: never }>;
+
 /** Ring RPC pays and co-signs a relayed spend. */
-export type RingRelaySpendParams<P extends RingSpendParams = RingSpendParams> = Omit<
-  P,
-  "feePayer" | "cosigner" | "priorityFeeLamports"
-> &
-  Readonly<{ anonymous: AnonymousRingSpend }>;
+export type RingRelaySpendParams<
+  P extends RingSpendParams = RingSpendParams,
+  R extends RingRelayRail = RingRelayRail,
+> = Omit<P, "feePayer" | "cosigner" | "priorityFeeLamports"> & R;
+
+export type PreparedSpendRelay<R extends RingRelayRail> =
+  R extends Readonly<{
+    anonymous: AnonymousRingSpend;
+  }>
+    ? PreparedRingRelay
+    : Readonly<{ relay: PreparedRelay }>;
 
 export interface RingTransferTransactionParams extends RingSpendParams {
   /** A ring address or payment request on an anonymous ring, a shielded address or a registered owner on any other. */
@@ -232,35 +249,35 @@ export function createRingWithdrawalSubmission(
 }
 
 /** Ring RPC reads the paths and records, proves and sends. */
-export function prepareRingTransferRelay(
-  input: RingRelaySpendParams<RingTransferTransactionParams>,
+export function prepareRingTransferRelay<R extends RingRelayRail>(
+  input: RingRelaySpendParams<RingTransferTransactionParams, R>,
   context?: RequestContext,
-): Promise<PreparedRingRelay> {
+): Promise<PreparedSpendRelay<R>> {
   return relayRingSpend({ params: input, strategy: sendStrategy(input, "ring") }, context);
 }
 
-export function prepareRingExitRelay(
-  input: RingRelaySpendParams<RingExitTransactionParams>,
+export function prepareRingExitRelay<R extends RingRelayRail>(
+  input: RingRelaySpendParams<RingExitTransactionParams, R>,
   context?: RequestContext,
-): Promise<PreparedRingRelay> {
+): Promise<PreparedSpendRelay<R>> {
   return relayRingSpend({ params: input, strategy: sendStrategy(input, "default") }, context);
 }
 
-export function prepareRingEntryRelay(
-  input: RingRelaySpendParams<RingEntryTransactionParams>,
+export function prepareRingEntryRelay<R extends RingRelayRail>(
+  input: RingRelaySpendParams<RingEntryTransactionParams, R>,
   context?: RequestContext,
-): Promise<PreparedRingRelay> {
+): Promise<PreparedSpendRelay<R>> {
   return relayRingSpend({ params: input, strategy: entryStrategy(input) }, context);
 }
 
-export function prepareRingWithdrawalRelay(
-  input: RingRelaySpendParams<RingWithdrawalTransactionParams>,
+export function prepareRingWithdrawalRelay<R extends RingRelayRail>(
+  input: RingRelaySpendParams<RingWithdrawalTransactionParams, R>,
   context?: RequestContext,
-): Promise<PreparedRingRelay> {
+): Promise<PreparedSpendRelay<R>> {
   return relayRingSpend(
     {
       params: input,
-      strategy: withdrawalStrategy({ ...input, feePayer: input.anonymous.quote.feePayer }),
+      strategy: withdrawalStrategy({ ...input, feePayer: relaySpend(input).quote.feePayer }),
     },
     context,
   );
@@ -454,6 +471,9 @@ function withdrawalStrategy(params: WithdrawalParams): RingSpendStrategy<
         summary: `public withdrawal of ${String(params.amount)} ${assetLabel(asset)} from ring ${params.ringProgramId} to ${params.recipient}`,
         withdrawal: resolved.settlement.accounts,
         setupInstructions: resolved.setupInstructions,
+        ...(resolved.setupInstructions.length === 0
+          ? {}
+          : { tokenAccountSetup: [{ owner: params.recipient, mint: asset }] }),
       };
     },
   };
@@ -464,6 +484,8 @@ interface RingSpendPlan {
   readonly summary: string;
   readonly withdrawal?: TransactWithdrawal;
   readonly setupInstructions?: readonly Instruction[];
+  /** The accounts Ring RPC creates in place of `setupInstructions`. */
+  readonly tokenAccountSetup?: readonly TokenAccountSetup[];
 }
 
 interface RingSpendStrategy<R> {
@@ -523,7 +545,7 @@ async function buildRingSpend<R>(
         feePayer: params.feePayer,
         strategy,
         retry,
-        anonymousRing: false,
+        route: "direct",
         ...(params.cosigner === undefined ? {} : { coSigner: signerAddress(params.cosigner) }),
       },
       context,
@@ -570,45 +592,76 @@ async function buildRingSpend<R>(
 }
 
 /** The relayed terminal, the notes stay leased until the wallet syncs their spend. */
-async function relayRingSpend<R>(
+async function relayRingSpend<S, R extends RingRelayRail>(
   input: Readonly<{
-    params: SpendBase & Readonly<{ anonymous: AnonymousRingSpend }>;
-    strategy: RingSpendStrategy<R>;
+    params: SpendBase & R;
+    strategy: RingSpendStrategy<S>;
   }>,
   context: RequestContext | undefined,
-): Promise<PreparedRingRelay> {
+): Promise<PreparedSpendRelay<R>> {
   const { params, strategy } = input;
+  const spend = relaySpend(params);
   const { anonymous } = params;
   const retry: RingSubmissionBuildState = {};
   try {
     const staged = await stageRingSpend(
-      { params, feePayer: anonymous.quote.feePayer, strategy, retry, anonymousRing: true },
+      {
+        params,
+        feePayer: spend.quote.feePayer,
+        strategy,
+        retry,
+        route: anonymous === undefined ? "confidentialRelay" : "anonymousRelay",
+      },
       context,
     );
     const { plan, owner } = staged;
-    // Ring RPC sends the one ring instruction, a setup instruction has no carrier.
-    if ((plan.setupInstructions?.length ?? 0) > 0)
-      throw new RingError("RING_RELAY_PROOF_INPUTS", { details: { reason: "setupInstructions" } });
+    const relayInput = {
+      quote: spend.quote,
+      nullifierKey: spend.nullifierKey,
+      notes: staged.selected,
+      ...(plan.tokenAccountSetup === undefined
+        ? {}
+        : { tokenAccountSetup: plan.tokenAccountSetup }),
+    };
+    const approval: RingTransferApproval = {
+      transaction: {},
+      approve: ({ prepared }) =>
+        approveSpend({ params, feePayer: spend.quote.feePayer, plan, owner, prepared }),
+    };
+    // `R` holds `anonymous` exactly when the spend returns a viewing history.
+    if (anonymous === undefined)
+      return Object.freeze({
+        relay: await staged.rail
+          .withInProofOwner(spend.signer)
+          .prepareRelayApproved(params.client, relayInput, approval, context),
+      }) as PreparedSpendRelay<R>;
     let transfer = staged.rail.withAnonymousSigner(anonymous.signer, anonymous.history);
     if (staged.anonymousPayment !== undefined)
       transfer = transfer.withPayment(staged.anonymousPayment);
     if (anonymous.exitTokenOwner !== undefined)
       transfer = transfer.withExitTokenOwner(anonymous.exitTokenOwner);
-    return await transfer.prepareRelayApproved(
+    return (await transfer.prepareRelayApproved(
       params.client,
-      { quote: anonymous.quote, nullifierKey: anonymous.nullifierKey, notes: staged.selected },
-      {
-        transaction: {},
-        approve: ({ prepared }) =>
-          approveSpend({ params, feePayer: anonymous.quote.feePayer, plan, owner, prepared }),
-      },
+      relayInput,
+      approval,
       context,
-    );
+    )) as PreparedSpendRelay<R>;
   } catch (cause) {
     if (retry.reservation !== undefined) params.wallet._releaseReservation(retry.reservation.id);
     throw wrapRingError(strategy.errorCode, cause);
   }
 }
+
+function relaySpend(rail: RingRelayRail): RingRelaySpend {
+  return rail.anonymous === undefined ? rail.confidential : rail.anonymous;
+}
+
+/** Each route's refusal on a ring whose mode it does not serve. */
+const MODE_REFUSALS = Object.freeze({
+  direct: "RING_ANONYMOUS_RELAY_REQUIRED",
+  anonymousRelay: "RING_NOT_ANONYMOUS",
+  confidentialRelay: "RING_ANONYMOUS_SIGNER_REQUIRED",
+} as const);
 
 /** `retry` keeps the reservation for the caller to release. */
 async function stageRingSpend<R>(
@@ -617,12 +670,13 @@ async function stageRingSpend<R>(
     feePayer: Address;
     strategy: RingSpendStrategy<R>;
     retry: RingSubmissionBuildState;
-    anonymousRing: boolean;
+    route: keyof typeof MODE_REFUSALS;
     coSigner?: Address;
   }>,
   context: RequestContext | undefined,
 ): Promise<StagedSpend> {
-  const { params, strategy, retry, anonymousRing } = input;
+  const { params, strategy, retry, route } = input;
+  const anonymousRing = route === "anonymousRelay";
   await initializePoseidon();
   const asset = params.asset ?? SOL_MINT;
   const owner = params.keys.address();
@@ -632,10 +686,10 @@ async function stageRingSpend<R>(
     resolveRingOutputTree(params.client, params.outputTree, context),
   ]);
   if (anonymousRing !== (config.mode === "anonymous"))
-    throw new RingError(anonymousRing ? "RING_NOT_ANONYMOUS" : "RING_ANONYMOUS_RELAY_REQUIRED", {
+    throw new RingError(MODE_REFUSALS[route], {
       details: {
         ringProgramId: params.ringProgramId,
-        ...(anonymousRing ? {} : { use: strategy.relay }),
+        ...(route === "direct" ? { use: strategy.relay } : {}),
       },
     });
   if (retry.entries !== undefined) checkRetainedEntries(params.wallet, retry.entries);

@@ -197,7 +197,6 @@ export type {
 export {
   PreparedRingDeposit,
   RING_DEPOSIT_COMPUTE_UNIT_LIMIT,
-  buildRingDepositTransaction,
 } from "../operations/payments/deposit.js";
 export type {
   PreparedRingDepositRelay,
@@ -321,14 +320,6 @@ export type {
 } from "../operations/workflow/pipeline.js";
 export type { BoundPolicy, BoundRoot } from "../proof/policy-proof.js";
 export {
-  buildRingEntryTransaction,
-  buildRingExitTransaction,
-  buildRingTransferTransaction,
-  buildRingWithdrawalTransaction,
-  createRingEntrySubmission,
-  createRingExitSubmission,
-  createRingTransferSubmission,
-  createRingWithdrawalSubmission,
   prepareRingEntryRelay,
   prepareRingExitRelay,
   prepareRingTransferRelay,
@@ -336,6 +327,9 @@ export {
 } from "../operations/payments/transfer.js";
 export type {
   AnonymousRingSpend,
+  PreparedSpendRelay,
+  RingRelayRail,
+  RingRelaySpend,
   RingRelaySpendParams,
   RingEntryTransactionParams,
   RingExitTransactionParams,
@@ -359,15 +353,10 @@ export type {
 export {
   MAX_RING_MERGE_INPUTS,
   RING_MERGE_COMPUTE_UNIT_LIMIT,
-  buildRingMergeTransaction,
-  createRingMergeSubmission,
   prepareRingMergeRelay,
   ringMergeInstruction,
 } from "../operations/payments/merge.js";
-export type {
-  RingMergeRelayParams,
-  RingMergeTransactionParams,
-} from "../operations/payments/merge.js";
+export type { RingMergeRelayParams } from "../operations/payments/merge.js";
 export type { RingMergeClient } from "../rpc/ports.js";
 export {
   RingTransactionSubmission,

@@ -152,10 +152,29 @@ export class CustomRingTransfer {
   }
 
   /** Rust `prepare_relay`, the in-proof owner signs the message hash, the wallet reads no Merkle path and no record. */
-  async prepareRelay(
+  prepareRelay(
     client: Pick<RingProvingClient, "getAccount">,
     input: RingRelayInput,
     context?: RequestContext,
+  ): Promise<PreparedRelay> {
+    return this.#prepareRelay(client, input, undefined, context);
+  }
+
+  /** @internal */
+  prepareRelayApproved(
+    client: Pick<RingProvingClient, "getAccount">,
+    input: RingRelayInput,
+    approval: RingTransferApproval,
+    context?: RequestContext,
+  ): Promise<PreparedRelay> {
+    return this.#prepareRelay(client, input, approval, context);
+  }
+
+  async #prepareRelay(
+    client: Pick<RingProvingClient, "getAccount">,
+    input: RingRelayInput,
+    approval: RingTransferApproval | undefined,
+    context: RequestContext | undefined,
   ): Promise<PreparedRelay> {
     const { ringProgramId, keys } = this.#input;
     const signer = this.#inProofOwner;
@@ -167,6 +186,7 @@ export class CustomRingTransfer {
         throw new RingError("RING_RELAY_PAYER_MISMATCH", {
           details: { payer: prepared.payer, feePayer: quote.feePayer },
         });
+      await approval?.approve({ prepared, coSigner: undefined });
       const sealed = sealStagedTransfer({
         ringProgramId,
         config,
@@ -199,6 +219,9 @@ export class CustomRingTransfer {
             operation: "confidential",
             proofInputs: base64.decode(payload) as RelayIntent["proofInputs"],
             ownerSignature: base58.decode(ownerSignature) as Signature,
+            ...(input.tokenAccountSetup === undefined
+              ? {}
+              : { tokenAccountSetup: input.tokenAccountSetup }),
           },
         });
       } finally {

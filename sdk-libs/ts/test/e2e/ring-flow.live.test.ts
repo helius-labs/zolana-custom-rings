@@ -20,10 +20,6 @@ import { ListId } from "../../src/ring/advanced.js";
 import {
   RingError,
   RingRpc,
-  buildRingDepositTransaction,
-  buildRingExitTransaction,
-  buildRingTransferTransaction,
-  buildRingWithdrawalTransaction,
   fetchReaderGrant,
   fetchRingProgramConfig,
   grantReadAccessInstruction,
@@ -33,6 +29,12 @@ import {
   type RingReadSigner,
   type RingReadTarget,
 } from "../../src/ring/index.js";
+import { buildRingDepositTransaction } from "../../src/operations/payments/deposit.js";
+import {
+  buildRingExitTransaction,
+  buildRingTransferTransaction,
+  buildRingWithdrawalTransaction,
+} from "../../src/operations/payments/transfer.js";
 import {
   airdrop,
   enrolInAllow,
