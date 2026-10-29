@@ -102,6 +102,7 @@ import { checkTransactionFits } from "../../src/operations/workflow/compile.js";
 import { ringOutputBlinding, openRingDelivery } from "../../src/crypto/derivation/blinding.js";
 import { LocalRingKeys, ringWalletKeys, type RingKeys } from "../../src/state/ring-keys.js";
 import { x25519FromU } from "../../src/crypto/keys/x25519.js";
+import { notImplemented } from "./clients.js";
 
 export const TREE_ID = DEFAULT_TREE_ID;
 export const TREE = treeAddress(TREE_ID);
@@ -367,6 +368,7 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
     },
     proveRingTransact: async (proofInputs: SppProofInputs, ring: Address, keys: ProofAuthority) =>
       pinnedRail(spp(proofInputs, { kind: "ring", ring }, keys)),
+    proveRingConfidentialEddsaTransact: notImplemented("proveRingConfidentialEddsaTransact"),
     proveRingAuthorityTransact: async (
       proofInputs: SppProofInputs,
       ring: Address,

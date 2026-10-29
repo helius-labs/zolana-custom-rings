@@ -290,15 +290,12 @@ export class PreparedRingDeposit {
         cosigner: undefined,
         tree: params.tree ?? params.client.tree,
       });
-      // A deposit approves as a ring entry with no default funding.
       const intent: TransactionIntent = {
-        kind: "ringTransfer",
+        kind: "ringDeposit",
         ringProgramId: params.ringProgramId,
         asset: sealing.asset,
         amount: params.amount,
         recipient: prepared.#recipient,
-        boundary: "entry",
-        defaultFunding: 0n,
       };
       const approval = await (params.approve ?? approveUnattended)({
         solanaPublicKey: signerAddress(params.depositor),

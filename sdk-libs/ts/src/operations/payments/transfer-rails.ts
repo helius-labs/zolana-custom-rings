@@ -6,10 +6,7 @@ import {
   ownerSignerAddresses,
   prepareRingAuthorityTransfer,
 } from "@heliuslabs/zolana/internal";
-import type {
-  AnonymousRingTransactProver,
-  InProofOwnerRingTransactProver,
-} from "../../rpc/ports.js";
+import type { AnonymousRingTransactProver } from "../../rpc/ports.js";
 import type { ProofAuthority, Prover, WalletKeys } from "@heliuslabs/zolana/client";
 import { type Shape, InstructionTag } from "@heliuslabs/zolana/interface";
 import type {
@@ -76,8 +73,7 @@ export interface RingTransferApproval {
 }
 
 export type CustomRingTransferClient = RingProvingClient &
-  Pick<Prover, "proveRingTransact"> &
-  Partial<InProofOwnerRingTransactProver>;
+  Pick<Prover, "proveRingTransact" | "proveRingConfidentialEddsaTransact">;
 
 export type AnonymousTransferClient = RingProvingClient & AnonymousRingTransactProver;
 
@@ -137,7 +133,6 @@ export class CustomRingTransfer {
     });
   }
 
-  /** An in-proof owner transfer proves through `proveInProofOwnerRingTransact`. */
   prove(client: CustomRingTransferClient, context?: RequestContext): Promise<ProvenRingTransfer> {
     return this.#prove(client, undefined, context);
   }
@@ -273,19 +268,17 @@ export class CustomRingTransfer {
             proveContext,
           ),
       };
-    const prover = client.proveInProofOwnerRingTransact?.bind(client);
-    if (prover === undefined) throw new RingError("RING_IN_PROOF_OWNER_PROVER_REQUIRED");
     return {
       rail: "confidential",
       inProofOwner: owner,
       prove: async (inputs, _coSigner, proveContext) =>
-        prover(
+        client.proveRingConfidentialEddsaTransact(
           {
             proofInputs: inputs,
             ringProgramId,
             owner: {
-              publicKey: owner,
-              signature: await signer.sign(inputs.messageHash(), proveContext),
+              ownerPublicKey: owner,
+              ownerSignature: await signer.sign(inputs.messageHash(), proveContext),
             },
             keys,
             config: { outputTree: client },

@@ -40,8 +40,6 @@ export type {
   AnonymousRingTransactProofInput,
   AnonymousRingTransactProver,
   HiddenOwnerAuthorization,
-  InProofOwnerRingTransactProofInput,
-  InProofOwnerRingTransactProver,
   ProvenAnonymousRingTransact,
   RingMemberOpening,
   RingMergeClient,

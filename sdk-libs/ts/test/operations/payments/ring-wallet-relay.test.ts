@@ -192,7 +192,14 @@ describe("wallet relay", () => {
     });
 
     expect(approvals).toMatchObject([
-      { intent: { kind: "ringTransfer", boundary: "entry", amount: 5n, recipient } },
+      {
+        intent: {
+          kind: "ringDeposit",
+          ringProgramId: fixture.ringProgramId,
+          amount: 5n,
+          recipient,
+        },
+      },
     ]);
     expect(await network.send(prepared.relay)).toEqual(["prepareRelay"]);
   });

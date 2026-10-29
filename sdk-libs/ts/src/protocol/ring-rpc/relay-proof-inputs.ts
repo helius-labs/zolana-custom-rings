@@ -3,15 +3,17 @@ import {
   BLINDING_LENGTH,
   Reader,
   SALT_LENGTH,
-  SHIELDED_PUBLIC_KEY_LENGTH,
+  SHIELDED_ADDRESS_LENGTH,
   Writer,
   X25519_PUBLIC_KEY_LENGTH,
   addressBytes,
-  decodeData,
+  byteVector,
   encodeBase58,
   encodeData,
   equalBytes,
+  readData,
   splInterfaceWithBump,
+  writeTransactOutput,
 } from "@heliuslabs/zolana/internal";
 import {
   TransactWithdrawal,
@@ -35,7 +37,6 @@ import {
   createExternalData,
   createProofOutput,
   type AssetRegistry,
-  type Data,
   type ExternalData,
   type ProofOutputUtxo,
   type SettlementTransfer,
@@ -43,9 +44,6 @@ import {
 
 import { AnonymousPlan } from "../../operations/payments/output-rail.js";
 import { RingError } from "../error.js";
-
-/** Rust `SHIELDED_ADDRESS_LEN`. */
-const SHIELDED_ADDRESS_LENGTH = SHIELDED_PUBLIC_KEY_LENGTH + 32 + X25519_PUBLIC_KEY_LENGTH;
 
 /** Rust `RelayRail`. */
 export type RelayRail =
@@ -324,7 +322,7 @@ function writeExternalData(
   writer.u8(external.messages.length, "messages.length");
   for (const message of external.messages) {
     writer.bytes(message.viewTag, 32, "message.viewTag");
-    u16Bytes(writer, message.data, "message.data");
+    byteVector(writer, message.data, "message.data");
   }
 }
 
@@ -363,21 +361,6 @@ function writeWithdrawal(
     .bytes(addressBytes(withdrawal.tokenProgram), 32, "withdrawal.tokenProgram");
 }
 
-function writeTransactOutput(writer: Writer, output: TransactOutput): void {
-  writer.bytes(output.utxoHash, 32, "output.utxoHash");
-  writeOwnerTag(writer, output.ownerTag);
-  writer.option(output.data, (out, data) => u16Bytes(out, data, "output.data"));
-}
-
-function writeOwnerTag(writer: Writer, tag: OwnerTag): void {
-  if (tag.kind === "inline") writer.u8(0, "ownerTag").bytes(tag.value, 32, "ownerTag.value");
-  else writer.u8(1, "ownerTag").u8(tag.index, "ownerTag.index");
-}
-
-function u16Bytes(writer: Writer, bytes: Uint8Array, name: string): void {
-  writer.u16(bytes.length, `${name}.length`).bytes(bytes, undefined, name);
-}
-
 function optionalHash(writer: Writer, hash: Bytes32 | undefined, name: string): void {
   writer.option(hash, (out, value) => out.bytes(value, 32, name));
 }
@@ -393,20 +376,6 @@ function refused(reason: string, index?: number): RingError {
 }
 
 class WireReader extends Reader {
-  readonly #input: Uint8Array;
-  #consumed = 0;
-
-  constructor(input: Uint8Array) {
-    super(input);
-    this.#input = input;
-  }
-
-  override bytes(length: number, name: string): Uint8Array {
-    const value = super.bytes(length, name);
-    this.#consumed += length;
-    return value;
-  }
-
   hash(name: string): Bytes32 {
     return this.bytes(32, name) as Bytes32;
   }
@@ -415,23 +384,12 @@ class WireReader extends Reader {
     return encodeBase58(this.bytes(32, name));
   }
 
-  list<T>(name: string, read: () => T): T[] {
-    return Array.from({ length: this.u8(`${name}.length`) }, read);
-  }
-
-  u16Bytes(name: string): Uint8Array {
+  byteVector(name: string): Uint8Array {
     return this.bytes(this.u16(`${name}.length`), name);
   }
 
-  /** zolana `Data` frames each record by a tag and a u16 length. */
-  data(name: string): Data {
-    const start = this.#consumed;
-    const records = this.u8(`${name}.records`);
-    for (let index = 0; index < records; index += 1) {
-      this.u8(`${name}.tag`);
-      this.u16Bytes(name);
-    }
-    return decodeData(this.#input.subarray(start, this.#consumed));
+  list<T>(name: string, read: () => T): T[] {
+    return Array.from({ length: this.u8(`${name}.length`) }, read);
   }
 }
 
@@ -487,7 +445,7 @@ function readInput(
   const ringProgramId = reader.option("input.ringProgramId", () =>
     reader.address("input.ringProgramId"),
   );
-  const data = reader.data("input.data");
+  const data = readData(reader, "input.data");
   const dataHash = reader.option("input.dataHash", () => reader.hash("input.dataHash"));
   const ringDataHash = reader.option("input.ringDataHash", () => reader.hash("input.ringDataHash"));
   const treeId = reader.u16("input.treeId");
@@ -531,7 +489,7 @@ function readOutput(reader: WireReader): ProofOutputUtxo {
     ShieldedAddress.fromBytes(reader.bytes(SHIELDED_ADDRESS_LENGTH, "output.ownerAddress")),
   );
   const ownerTag = reader.option("output.ownerTag", () => reader.hash("output.ownerTag"));
-  const data = reader.data("output.data");
+  const data = readData(reader, "output.data");
   const compact = reader.bool("output.compact");
   return createProofOutput({
     asset,
@@ -564,13 +522,13 @@ function readExternalData(reader: WireReader): Readonly<{
   const outputs = reader.list("outputs", (): TransactOutput => {
     const utxoHash = reader.hash("output.utxoHash");
     const ownerTag = readOwnerTag(reader);
-    const data = reader.option("output.data", () => reader.u16Bytes("output.data"));
+    const data = reader.option("output.data", () => reader.byteVector("output.data"));
     return { utxoHash, ownerTag, ...(data === undefined ? {} : { data }) };
   });
   const resolvedOwnerTags = reader.list("resolvedOwnerTags", () => reader.hash("resolvedOwnerTag"));
   const messages = reader.list("messages", () => ({
     viewTag: reader.hash("message.viewTag"),
-    data: reader.u16Bytes("message.data"),
+    data: reader.byteVector("message.data"),
   }));
   return {
     fields: {

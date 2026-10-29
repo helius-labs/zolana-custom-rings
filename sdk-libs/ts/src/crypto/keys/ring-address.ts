@@ -11,7 +11,7 @@ import {
   type Address,
 } from "@solana/kit";
 
-import { concatBytes, U64_MAX } from "@heliuslabs/zolana/internal";
+import { SHIELDED_ADDRESS_LENGTH, concatBytes, U64_MAX } from "@heliuslabs/zolana/internal";
 import { ShieldedAddress, type ViewTag } from "@heliuslabs/zolana/keypair";
 
 import { checkedCounter, RingKeyError } from "../error.js";
@@ -28,8 +28,6 @@ export const RING_ADDRESS_CHECKSUM_DOMAIN = "zolana/ring-addr/v3";
 
 export const RING_PAYMENT_SCHEME = "zolana:";
 
-/** Rust `SHIELDED_ADDRESS_LEN`, signing key, nullifier key and tagged viewing key. */
-const SHIELDED_ADDRESS_LENGTH = 34 + 32 + 33;
 const CHECKSUM_LENGTH = 4;
 /** `version ‖ recipient ‖ ring_program_id`. */
 const BODY_LENGTH = 1 + SHIELDED_ADDRESS_LENGTH + 32;

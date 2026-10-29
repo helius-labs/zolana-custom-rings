@@ -20,8 +20,10 @@ version `peerDependencies` names, the two share the protocol layouts.
 `createZolanaClient` and returns a `CustomRingClient`. It is a `ZolanaClient`
 that also proves the Ring circuits and reads the Ring projections of the
 indexer, over the same attested prover session. `checkRingProvingKeys()`
-compares the prover's Ring keys with the keys the package pins, run it before
-the first Ring proof.
+refuses a prover that does not serve a pinned Ring key or serves another
+digest. Run it before the first Ring proof. A Helius mainnet or devnet RPC URL
+selects the pinned Nitro Enclave prover of that cluster when `proverUrl` is
+omitted.
 
 `syncRingWallet` runs `syncWallet`, then opens the confidential Ring notes and
 Ring deposits it skips into the wallet. Keys that are also `RingKeys` open

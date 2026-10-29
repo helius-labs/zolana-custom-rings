@@ -659,7 +659,7 @@ describe("policy ring", () => {
           ...(fixture.coSigner === undefined ? {} : { coSigner: fixture.coSigner }),
         })
           .withInProofOwner(signingKeySpendSigner(signing))
-          .prove({ ...fixture.client, proveInProofOwnerRingTransact: unreachableProver }),
+          .prove({ ...fixture.client, proveRingConfidentialEddsaTransact: unreachableProver }),
       ).rejects.toThrow(ringError("RING_TRANSFER_TOO_WIDE", { inputs, outputs }));
       expect(fixture.ringRequests).toHaveLength(0);
       expect(fixture.sppCalls).toHaveLength(0);
