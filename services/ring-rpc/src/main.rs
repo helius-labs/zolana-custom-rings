@@ -9,9 +9,12 @@ use zolana_ring_client::{
 };
 use zolana_ring_rpc::{
     read_root_secret, run_server, write_root_secret, ChainSource, Cli, Command, Hub, KeyKind,
-    KeygenArgs, OriginPolicy, ServeArgs, ServerOptions, TransactionSource, Upstreams,
-    UTXO_BACKFILL_INTERVAL,
+    KeygenArgs, LiveStorageChain, OriginPolicy, ServeArgs, ServerOptions, Store, TransactionSource,
+    Upstreams, RECORD_FLUSH_INTERVAL, UTXO_BACKFILL_INTERVAL,
 };
+
+/// One flush at a time, the rest serve submits and status reads.
+const STORE_CONNECTIONS: u32 = 4;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -22,7 +25,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
     match Cli::parse().command {
-        Command::Serve(args) => serve(args).await,
+        Command::Serve(args) => serve(*args).await,
         Command::Keygen(args) => keygen(args),
     }
 }
@@ -50,11 +53,12 @@ fn keygen(args: KeygenArgs) -> anyhow::Result<()> {
 }
 
 async fn serve(args: ServeArgs) -> anyhow::Result<()> {
-    let source = ChainSource::connect(Upstreams {
+    let upstreams = Upstreams {
         indexer_url: &args.indexer_url,
         rpc_url: &args.rpc_url,
         timeout: args.upstream_timeout(),
-    })?;
+    };
+    let source = ChainSource::connect(upstreams)?;
     let genesis_hash = source
         .genesis_hash()
         .await
@@ -72,7 +76,18 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     if let Some(relying_party_id) = args.webauthn_rp_id {
         origin_policy = origin_policy.with_relying_party_id(relying_party_id);
     }
-    let builder = Hub::builder(source, genesis_hash).with_origins(origin_policy.build()?);
+    let mut builder = Hub::builder(source, genesis_hash).with_origins(origin_policy.build()?);
+    if let Some(store_url) = &args.store_url {
+        let prover_url = args
+            .prover_url
+            .as_deref()
+            .context("--store-url needs --prover-url")?;
+        let store = Store::open(store_url, STORE_CONNECTIONS)
+            .await
+            .context("opening the service store")?;
+        let chain = LiveStorageChain::connect(upstreams, prover_url)?;
+        builder = builder.with_record_writer(store, Arc::new(chain));
+    }
     let hub = match (&args.auditor_key_file, &args.root_secret_file) {
         (Some(path), None) => {
             let ring = args
@@ -104,6 +119,10 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         ),
     }
     tokio::spawn(hub.clone().run_utxo_backfill(UTXO_BACKFILL_INTERVAL));
+    if let Ok(writer) = hub.record_writer() {
+        info!("storage authority {}", writer.authority());
+        tokio::spawn(writer.clone().run(RECORD_FLUSH_INTERVAL));
+    }
     let handle = run_server(hub, options).await?;
     tokio::signal::ctrl_c().await?;
     info!("stopping");

@@ -53,7 +53,7 @@ Accepted nonces are held in process memory for the timestamp window. Run one pro
 
 ## Relay, record updates and merge settings
 
-`zolana_ring_client::rpc` defines these methods and the TypeScript SDK mirrors them in `protocol/ring-rpc`. This service does not answer them.
+`zolana_ring_client::rpc` defines these methods and the TypeScript SDK mirrors them in `protocol/ring-rpc`. The service answers the record update methods through its [record writer](#record-writer).
 
 | Method | Request | Result |
 | --- | --- | --- |
@@ -67,9 +67,36 @@ Accepted nonces are held in process memory for the timestamp window. Run one pro
 
 The relay operation is `anonymous`, `confidential`, `delegate` or `deposit`. The quote names the fee payer the relay signs with and the last slot it takes the request. On the anonymous and confidential rails the intent carries the owner's Ed25519 signature over `SppProofInputs::message_hash`, and `prepareRelay` answers `submitted`. On the delegate and deposit rails it answers `signMessage`, and the wallet signs the returned message for `submitRelay`. The proof inputs carry no Merkle path and no record opening, the service reads those. `relayId` is the SHA-256 of the domain `zolana/ring-rpc-relay/v1` and the request's JSON as the service serializes it, so a retried request names the same relay.
 
-A record update names a ring, its entries and `validUntilSlot`. An entry is a `write` of masked lists with optional mint settings, or an `escrow` registration with its register key proof. The signer signs the 32 bytes of `Poseidon(CRRU, hash_bytes(ring), hash_bytes(registry), entries_hash, validUntilSlot)`, where `entries_hash` folds `queue_chain` over the entries from a zero start. That hash is the `updateId`. The statement binds no cluster, so a registry address that exists on two clusters accepts the update on both until `validUntilSlot`.
+A record update names a ring, its entries and `validUntilSlot`. An entry is a `write` of masked lists with optional mint settings, an `escrow` registration with its register key proof, or a `walletGrant` that sets or clears the `reader` list of the record `Member::wallet_grant(wallet, reader)` keys. The signer signs the 32 bytes of `Poseidon(CRRU, hash_bytes(ring), hash_bytes(registry), entries_hash, validUntilSlot)`, where `entries_hash` folds `queue_chain` over the entries from a zero start. That hash is the `updateId`. The statement binds no cluster, so a registry address that exists on two clusters accepts the update on both until `validUntilSlot`.
 
 Merge settings name a mint, a target note count and a minimum average amount. The owner signs them under `zolana/ring-rpc-merge-settings/v1` with the cluster, service, ring, timestamp and nonce of a read authorization.
+
+## Record writer
+
+`--store-url` with `--prover-url` turns the record writer on. The store takes a `postgres://` or `sqlite://` URL, and the prover must serve the ring apply keys.
+
+The writer signs every storage update with its storage authority key. The key derives from the auditor key file or the root secret under its own domain, apart from the service key, and the service logs its address at start. A registry the writer serves names the key as its authority, and the ring policy account names the registry as its records.
+
+`submitRecordUpdate` checks the signature over the update statement, `validUntilSlot` against the current slot, and the registry against the ring. A wallet writes the `ring-viewing` and `recovery` lists of its own record, its own escrow registration and its own wallet grants. The ring config authority writes the `allow`, `block`, `frozen`, `reader` and `approval` lists and the mint settings of any record. An escrow registration names the signer's owner identity. The writer verifies its register key proof with the committed `RegisterKey` verifying key, over the statement the `RegisterKey` instruction builds with the auditor key of the ring config. An update refused at submit is never stored. A resubmitted update returns its first `updateId`.
+
+Updates queue in submit order for each registry. One `Update` carries at most 16 writes and never splits an update. A revoking update goes out at once as `UpdateImmediate` and retires every earlier root. It sets `block` or `frozen`, clears `allow`, `approval` or `reader`, or restricts a mint setting, where a zero cap or co-sign bound is off. A mint settings write that does not restrict also goes out at once, as a graced `Update`. The rest go out as a graced `Update` once a batch is full or its oldest update waited `BATCH_WINDOW_SLOTS`. A graced update waits while the oldest retired root is unexpired, and goes out as `UpdateImmediate` when a queued update revokes or writes mint settings. Each transaction also carries `SyncRoots` for every ring in the batch, so each ring policy account mirrors the new root in the same transaction.
+
+The apply proof starts at the registry's current root from `getStorageApplyProofInputs`. The writer drops inputs at another revision or root, or for other writes, and retries on its next pass. It stores the batch and its signature before it sends the transaction, and one registry has at most one open batch. A restart settles that batch by its signature. A confirmed batch is applied, a failed one queues again, and an unknown one queues again once its blockhash can no longer land. An update still queued after `validUntilSlot` turns `refused`. Run one writer for each storage authority key.
+
+The leaf commits only the hash of an escrow envelope. The ephemeral key and ciphertext stay in the stored request.
+
+| Code | Refusal |
+| --- | --- |
+| -32140 | The service runs no record writer |
+| -32141 | The update carries no entry or more than 16 |
+| -32142 | An entry does not encode |
+| -32143 | The signature does not verify |
+| -32144 | The current slot is past `validUntilSlot` |
+| -32145 | The ring has no config |
+| -32146 | The registry is not the ring records under the writer authority |
+| -32147 | The signer may not write an entry |
+| -32148 | An escrow registration proof does not verify |
+| -32149 | `getRecordUpdateStatus` names no stored update |
 
 ## Audit result
 

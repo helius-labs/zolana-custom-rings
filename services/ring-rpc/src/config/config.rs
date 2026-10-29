@@ -26,7 +26,7 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    Serve(ServeArgs),
+    Serve(Box<ServeArgs>),
     Keygen(KeygenArgs),
 }
 
@@ -77,6 +77,12 @@ pub struct ServeArgs {
     pub upstream_timeout_secs: NonZeroU64,
     #[arg(long, env = "RING_RPC_ALLOW_SHARED_KEY_FILE")]
     pub allow_shared_key_file: bool,
+    /// A `postgres://` or `sqlite://` URL, set to serve record updates.
+    #[arg(long, env = "RING_RPC_STORE_URL", requires = "prover_url")]
+    pub store_url: Option<String>,
+    /// Serves the ring apply keys the record writer proves with.
+    #[arg(long, env = "RING_RPC_PROVER_URL")]
+    pub prover_url: Option<String>,
     /// Serve plain HTTP on a public address and accept plain HTTP origins, test deployments only.
     #[arg(long, env = "RING_RPC_INSECURE_PUBLIC_BIND")]
     pub insecure_public_bind: bool,

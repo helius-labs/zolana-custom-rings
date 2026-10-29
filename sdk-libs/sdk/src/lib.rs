@@ -84,7 +84,9 @@ pub use crate::{
         EscrowedRecipients, KeyEscrowAuthority, ProvenKeyRegistration, RegisterKey, SealedEscrow,
     },
     select::{select_merge_where, select_spend_where},
-    storage::{InitializeStorage, SyncRoots, UpdateStorage, UpdateStorageAuthority},
+    storage::{
+        InitializeStorage, StorageApplyProof, SyncRoots, UpdateStorage, UpdateStorageAuthority,
+    },
     submission::{RingOperation, RingSubmission, SettledSubmission, SubmissionStatus},
     trees::tree_id,
 };

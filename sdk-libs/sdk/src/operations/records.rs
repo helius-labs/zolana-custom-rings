@@ -2,7 +2,7 @@
 
 use custom_ring_interface::SYSTEM_PROGRAM_ID;
 use custom_ring_interface::{
-    key_catalog::RingCircuit, mint_policy_write, queue_chain, tag, ApplyRecordsIxData,
+    mint_policy_write, queue_chain, tag, ApplyRecordsIxData,
     AuthorityWriteRecordsIxData, CustomRingError, MemberRegistry, MemberWriteIxData, QueueEntry,
     RecordQueue, RecordWriteData, WriteRecordsIxData, APPLY_BATCH,
 };
@@ -25,11 +25,8 @@ use zolana_ring_policy::{ListWrite, Member, Writer};
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
-    projection::retry_projection_lag,
-    prover::{to_instruction_proof, RingRequest},
-    request::{ApplyRecords, RecordOpeningRequest, RecordWrite},
-    submission::BoundRoot,
-    CustomRing, CustomRingConfig, RingError,
+    projection::retry_projection_lag, request::RecordOpeningRequest, submission::BoundRoot,
+    CustomRing, CustomRingConfig, RingError, StorageApplyProof,
 };
 
 /// Members' records under the newest synced root of the ring's records.
@@ -507,38 +504,11 @@ impl Application {
         &self,
         client: &RingClient<R, I>,
     ) -> Result<ApplyRecordsIxData, RingError> {
-        let statement = self.inputs.statement()?;
-        let circuit = RingCircuit::apply_records(statement.count);
-        let RingCircuit::ApplyRecords { writes: batch } = circuit else {
-            return Err(RingError::UnpinnedProvingKey(circuit));
-        };
-        let public_input_hash = statement.hash()?;
-        let mut writes: Vec<Option<RecordWrite>> = self
-            .inputs
-            .writes
-            .iter()
-            .map(|write| Some(write.into()))
-            .collect();
-        writes.resize(usize::from(batch), None);
-        let body = ApplyRecords {
-            public_input_hash,
-            old_root: statement.old_root,
-            new_root: statement.new_root,
-            old_next_index: statement.old_next_index,
-            new_next_index: statement.new_next_index,
-            chain_start: statement.chain_start,
-            chain_end: statement.chain_end,
-            count: u8::try_from(statement.count).map_err(|_| RingError::RecordProjectionStale)?,
-            writes,
-        };
-        let proof = RingRequest::new(circuit, &body)?
-            .prove(client, public_input_hash)
-            .await?;
-        Ok(ApplyRecordsIxData {
-            proof: to_instruction_proof(proof)?,
-            new_root: statement.new_root,
-            new_next_index: statement.new_next_index.to_le_bytes(),
-        })
+        StorageApplyProof {
+            inputs: &self.inputs,
+        }
+        .prove(client)
+        .await
     }
 }
 

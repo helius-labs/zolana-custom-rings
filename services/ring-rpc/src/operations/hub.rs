@@ -12,6 +12,7 @@ use spr_client::ClientError;
 use spr_keypair::X25519Keypair;
 use thiserror::Error;
 use tokio::sync::{watch, Mutex as AsyncMutex, Semaphore, SemaphorePermit};
+use zeroize::Zeroizing;
 use zolana_ring_client::{
     auditor_view_tag,
     rpc::{unix_now, KeyMode},
@@ -23,14 +24,18 @@ use crate::{
     audit::{AuditService, AuditServiceInit, ASSET_REFRESH_INTERVAL},
     authorize::Unauthorized,
     config::RootSecret,
+    database::Store,
     error::{redacted, RingRpcError},
-    keys::{service_keypair, AuditorKeyDerivation, KeySource},
+    keys::{service_keypair, storage_authority_keypair, AuditorKeyDerivation, KeySource},
     limits::{
         PublicRequest, RequestRate, MAX_CONCURRENT_AUTHENTICATIONS, MAX_CONCURRENT_DEPOSIT_SCANS,
         MAX_CONCURRENT_READS,
     },
     origins::Origins,
+    record_update::RecordUpdateRefusal,
+    record_writer::RecordWriter,
     replay::ReplayGuard,
+    storage_chain::StorageChain,
     upstream::{DepositHistory, DepositPage, TransactionSource},
     utxos::AuditStore,
 };
@@ -41,6 +46,7 @@ pub struct Hub<S> {
     signer: Keypair,
     shared: Arc<Shared<S>>,
     keys: KeySource,
+    writer: Option<Arc<RecordWriter>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,6 +109,12 @@ pub struct HubBuilder<S> {
     assets: Option<RingAssets>,
     origins: Origins,
     clock: Clock,
+    records: Option<RecordBackends>,
+}
+
+struct RecordBackends {
+    store: Store,
+    chain: Arc<dyn StorageChain>,
 }
 
 pub(crate) struct Shared<S> {
@@ -191,6 +203,7 @@ impl<S: TransactionSource> Hub<S> {
             assets: None,
             origins: Origins::default(),
             clock: Clock::System,
+            records: None,
         }
     }
 
@@ -224,6 +237,12 @@ impl<S: TransactionSource> Hub<S> {
 
     pub fn service_pubkey(&self) -> Address {
         self.signer.pubkey()
+    }
+
+    pub fn record_writer(&self) -> Result<&Arc<RecordWriter>, RingRpcError> {
+        self.writer
+            .as_ref()
+            .ok_or_else(|| RecordUpdateRefusal::Disabled.into())
     }
 
     pub(crate) fn sign_attestation(&self, attestation: &[u8]) -> Signature {
@@ -402,17 +421,35 @@ impl<S: TransactionSource> HubBuilder<S> {
         self
     }
 
+    /// The writer signs with a storage authority key derived beside the service key.
+    #[must_use = "use the updated builder"]
+    pub fn with_record_writer(mut self, store: Store, chain: Arc<dyn StorageChain>) -> Self {
+        self.records = Some(RecordBackends { store, chain });
+        self
+    }
+
     pub fn local(self, ring: Address, auditor: X25519Keypair) -> Result<Hub<S>, RingRpcError> {
-        let signer = service_keypair(auditor.secret_bytes().as_slice())?;
-        self.build(signer, KeySource::Local { ring, auditor })
+        let secret = auditor.secret_bytes();
+        self.build(secret.as_slice(), KeySource::Local { ring, auditor })
     }
 
     pub fn derived(self, root: RootSecret) -> Result<Hub<S>, RingRpcError> {
-        let signer = service_keypair(root.as_bytes())?;
-        self.build(signer, KeySource::Derived(root))
+        let secret = Zeroizing::new(*root.as_bytes());
+        self.build(secret.as_slice(), KeySource::Derived(root))
     }
 
-    fn build(self, signer: Keypair, keys: KeySource) -> Result<Hub<S>, RingRpcError> {
+    fn build(self, secret: &[u8], keys: KeySource) -> Result<Hub<S>, RingRpcError> {
+        let signer = service_keypair(secret)?;
+        let writer = self
+            .records
+            .map(|RecordBackends { store, chain }| {
+                Ok::<_, RingRpcError>(Arc::new(RecordWriter::new(
+                    store,
+                    chain,
+                    storage_authority_keypair(secret)?,
+                )))
+            })
+            .transpose()?;
         let assets = match self.assets {
             Some(assets) => assets,
             None => RingAssets::new([])?,
@@ -447,6 +484,7 @@ impl<S: TransactionSource> HubBuilder<S> {
             signer,
             shared: Arc::new(shared),
             keys,
+            writer,
         })
     }
 }
