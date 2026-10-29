@@ -116,7 +116,10 @@ impl StorageChain for LiveStorageChain {
         &self,
         inputs: &ApplyProofInputs,
     ) -> Result<ApplyRecordsIxData, RingRpcError> {
-        Ok(StorageApplyProof { inputs }.prove(&self.client).await?)
+        StorageApplyProof { inputs }
+            .prove(&self.client)
+            .await
+            .map_err(|error| RingRpcError::StorageUpdate(error.into()))
     }
 
     async fn latest_blockhash(&self) -> Result<LatestBlockhash, RingRpcError> {

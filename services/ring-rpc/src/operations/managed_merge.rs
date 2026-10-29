@@ -22,7 +22,7 @@ use zolana_ring_transaction::RingAssets;
 use crate::{
     audit::AuditService,
     authorize::WalletCheck,
-    cosign::{CoSignDecision, CoSignRequest, CoSigner},
+    cosign::{CoSignDecision, CoSignPolicy, CoSignRequest},
     error::{redacted, RingRpcError},
     hub::Hub,
     merge_settings::{MergeSettingsBook, SignedMergeSettings, WalletMergeSettings},
@@ -64,14 +64,14 @@ pub trait MergeBuilder: Send + Sync {
 pub struct ManagedMergeInit<S> {
     pub hub: Arc<Hub<S>>,
     pub builder: Arc<dyn MergeBuilder>,
-    pub co_signer: Arc<dyn CoSigner>,
+    pub co_signer: Arc<dyn CoSignPolicy>,
     pub relay: Arc<dyn RelaySubmit>,
 }
 
 pub struct ManagedMerge<S> {
     hub: Arc<Hub<S>>,
     builder: Arc<dyn MergeBuilder>,
-    co_signer: Arc<dyn CoSigner>,
+    co_signer: Arc<dyn CoSignPolicy>,
     relay: Arc<dyn RelaySubmit>,
     /// Nullifiers of sent merges, held back for the life of the process.
     pending: Mutex<HashSet<[u8; 32]>>,
@@ -246,7 +246,8 @@ impl<S: TransactionSource> ManagedMerge<S> {
                 .decide(&CoSignRequest {
                     ring,
                     message: built.message.clone(),
-                    sender: Member::owner_tag(&owner_key).map_err(RingError::from)?,
+                    sender: Member::owner_tag(&owner_key)
+                        .map_err(|error| RingRpcError::MergeBuild(RingError::from(error).into()))?,
                     demand: CoSignDemand::transact(false, &[]),
                     flows: Vec::new(),
                 })
@@ -344,7 +345,8 @@ mod tests {
     };
     use zolana_ring_indexer::rpc::{
         GetRingMemberOpeningsRequest, GetRingMemberOpeningsResponse, GetRingMemberRecordsRequest,
-        GetRingMemberRecordsResponse, GetRingRecordQueueResponse,
+        GetRingMemberRecordsResponse, GetRingRecordQueueResponse, GetStorageMemberOpeningsRequest,
+        GetStorageMemberOpeningsResponse,
     };
 
     use super::*;
@@ -352,7 +354,7 @@ mod tests {
         cosign::RefusingCoSigner,
         database::Store,
         upstream::{
-            DepositHistory, DepositPage, MergeAuditRequest, ReaderGrant, RingConfiguration,
+            DepositHistory, DepositPage, MergeAuditRequest, RecordsRoot, RingConfiguration,
             RingHistoryPage, TransactionPage,
         },
         utxos::{CreatedIn, EscrowRoot, EscrowedOwner},
@@ -440,8 +442,15 @@ mod tests {
             Ok(unused()?)
         }
 
-        async fn reader_granted(&self, _request: ReaderGrant) -> Result<bool, ClientError> {
+        async fn records_root(&self, _ring: Address) -> Result<Option<RecordsRoot>, ClientError> {
             unused()
+        }
+
+        async fn storage_member_openings(
+            &self,
+            _request: GetStorageMemberOpeningsRequest,
+        ) -> Result<GetStorageMemberOpeningsResponse, RingIndexerError> {
+            Ok(unused()?)
         }
 
         async fn upgrade_authority(
@@ -490,6 +499,10 @@ mod tests {
 
     #[async_trait]
     impl RelaySubmit for RecordingRelay {
+        fn fee_payer(&self) -> Address {
+            Address::new_from_array([5; 32])
+        }
+
         async fn submit(&self, _transaction: RelayTransaction) -> Result<Signature, RingRpcError> {
             *self.sent.lock().expect("sent") += 1;
             Ok(Signature::from([9; 64]))

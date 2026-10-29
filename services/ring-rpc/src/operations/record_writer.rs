@@ -214,7 +214,8 @@ impl RecordWriter {
                 apply: &apply,
             },
         }
-        .instruction()?];
+        .instruction()
+        .map_err(|error| RingRpcError::StorageUpdate(error.into()))?];
         for ring in rings(batch) {
             instructions.push(
                 SyncRoots {

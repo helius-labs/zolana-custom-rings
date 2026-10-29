@@ -18,6 +18,8 @@ use crate::{
 pub struct RingSdkMergeBuilder<R, I> {
     pub client: RingClient<R, I>,
     pub payer: Address,
+    /// Read only when a `CoSigner` record covers transfers.
+    pub co_signer: Option<Address>,
 }
 
 #[async_trait]
@@ -27,7 +29,9 @@ where
     I: RingIndexerBackend + Send + Sync,
 {
     async fn build(&self, merge: OwnerMerge<'_>) -> Result<BuiltMerge, RingRpcError> {
-        Ok(self.prove(merge).await?)
+        self.prove(merge)
+            .await
+            .map_err(|error| RingRpcError::MergeBuild(error.into()))
     }
 }
 
@@ -58,6 +62,7 @@ impl<R: AsyncRpc, I: RingIndexerBackend> RingSdkMergeBuilder<R, I> {
                     nullifier_key: merge.nullifier_key.clone(),
                     input_tree: tree,
                     output_tree: tree,
+                    co_signer: self.co_signer,
                 },
                 self.payer,
                 &self.client,
