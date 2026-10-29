@@ -45,3 +45,32 @@ describe("submitRecordUpdate", () => {
     expect(() => verifyRecordUpdate(extended)).toThrow();
   });
 });
+
+describe("enrolment", () => {
+  it("signs an enrolment byte for byte as the Rust vector and binds its awaited lists", async () => {
+    const vector = JSON.parse(
+      readFileSync(
+        new URL("../../../../../test-vectors/rpc/enrolment_update.json", import.meta.url),
+        "utf8",
+      ),
+    ) as { wire: string; updateId: string };
+    const wallet = await createKeyPairSignerFromPrivateKeyBytes(new Uint8Array(32).fill(7));
+    const signed = await new WalletRecordUpdate({
+      genesisHash: new Uint8Array(32).fill(3) as Bytes32,
+      ringProgramId: filled(1),
+      registry: filled(2),
+      wallet: wallet.address,
+      validUntilSlot: 4242n,
+    })
+      .withLists(listWrite({ set: [ListId.ringViewing] }))
+      .awaitingAuthority([ListId.allow])
+      .sign(wallet);
+    expect(JSON.stringify(encodeSubmitRecordUpdateRequest(signed))).toBe(vector.wire);
+    expect(verifyRecordUpdate(signed)).toEqual(
+      indexerScalars.hashBytes(vector.updateId as Parameters<typeof indexerScalars.hashBytes>[0]),
+    );
+    // An enrolment signature never verifies as a plain update.
+    const plain = { ...signed, update: { ...signed.update, awaitedLists: 0n } };
+    expect(() => verifyRecordUpdate(plain)).toThrow();
+  });
+});

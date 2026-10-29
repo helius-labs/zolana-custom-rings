@@ -989,3 +989,116 @@ fn a_signed_authority_transfer_matches_the_shared_vector() {
     .expect("sign");
     assert_eq!(serde_json::to_string(&signed).expect("json"), vector.wire);
 }
+
+/// The TypeScript signer writes the same wire bytes.
+#[test]
+fn a_signed_enrolment_verifies_from_the_shared_vector() {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Vector {
+        wire: String,
+        update_id: RecordUpdateId,
+    }
+    let vector: Vector = serde_json::from_str(include_str!(
+        "../../../../test-vectors/rpc/enrolment_update.json"
+    ))
+    .expect("vector");
+    let wallet = Keypair::new_from_array([7; 32]);
+    let identity = Hash(
+        *zolana_ring_policy::Member::owner_tag(wallet.pubkey().as_array())
+            .expect("wallet")
+            .as_bytes(),
+    );
+    let bit = zolana_ring_policy::ListId::RingViewing.record_bit();
+    let signed = RecordUpdate {
+        genesis_hash: Hash([3; 32]),
+        ring: Address::new_from_array([1; 32]).into(),
+        entries: vec![RecordUpdateEntry::Write(
+            zolana_ring_indexer::rpc::RingListWriteView {
+                mint_policy: None,
+                member: identity,
+                mask: bit,
+                value: bit,
+            },
+        )],
+        valid_until_slot: 4242,
+        awaited_lists: zolana_ring_policy::ListId::Allow.record_bit(),
+    }
+    .sign(Address::new_from_array([2; 32]), &wallet)
+    .expect("sign");
+    assert_eq!(serde_json::to_string(&signed).expect("json"), vector.wire);
+    let read: SubmitRecordUpdateRequest = serde_json::from_str(&vector.wire).expect("read");
+    assert_eq!(read.verify(), Ok(vector.update_id));
+    // An enrolment signature never verifies as a plain update.
+    let mut plain = read;
+    plain.update.awaited_lists = 0;
+    assert_eq!(plain.verify(), Err(RecordUpdateError::Signature));
+}
+
+/// The TypeScript signers write the same messages and wire bytes.
+#[test]
+fn the_enrolment_requests_match_the_shared_vector() {
+    #[derive(Deserialize)]
+    struct Signed {
+        message: String,
+        wire: String,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Refuse {
+        update_id: RecordUpdateId,
+        message: String,
+        wire: String,
+    }
+    #[derive(Deserialize)]
+    struct Vector {
+        list: Signed,
+        refuse: Refuse,
+    }
+    let vector: Vector = serde_json::from_str(include_str!(
+        "../../../../test-vectors/rpc/enrolment_attestation.json"
+    ))
+    .expect("vector");
+    let authority = Keypair::new_from_array([8; 32]);
+    let list = EnrolmentAttestation {
+        target: target(),
+        authority: authority.pubkey(),
+        action: ListEnrolments,
+    };
+    let refuse = EnrolmentAttestation {
+        target: target(),
+        authority: authority.pubkey(),
+        action: RefuseEnrolment(vector.refuse.update_id.clone()),
+    };
+    let message = |bytes: Vec<u8>| String::from_utf8(bytes).expect("utf8");
+    assert_eq!(
+        message(list.message(1_700_000_000, &[4; 32])),
+        vector.list.message
+    );
+    assert_eq!(
+        message(refuse.message(1_700_000_000, &[4; 32])),
+        vector.refuse.message
+    );
+    let list = SignedRequest {
+        attestation: list,
+        timestamp: Some(1_700_000_000),
+        nonce: [4; 32],
+    }
+    .sign(&authority)
+    .expect("sign list");
+    let refuse = SignedRequest {
+        attestation: refuse,
+        timestamp: Some(1_700_000_000),
+        nonce: [4; 32],
+    }
+    .sign(&authority)
+    .expect("sign refusal");
+    assert_eq!(
+        serde_json::to_string(&list).expect("json"),
+        vector.list.wire
+    );
+    assert_eq!(
+        serde_json::to_string(&refuse).expect("json"),
+        vector.refuse.wire
+    );
+}

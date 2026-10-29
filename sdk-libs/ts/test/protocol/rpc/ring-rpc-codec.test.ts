@@ -7,12 +7,18 @@ import type { Address, Bytes32, Signature } from "@heliuslabs/zolana/interface";
 import type { indexerTypes } from "@heliuslabs/zolana/internal";
 import { ShieldedKeypair, SigningKey } from "@heliuslabs/zolana/keypair";
 import {
+  encodeGetPendingEnrolmentsRequest,
   encodePrepareAuthorityTransferRequest,
   encodePrepareRelayRequest,
+  encodeRefuseEnrolmentRequest,
 } from "../../../src/protocol/ring-rpc/ring-rpc-codec.js";
 import {
   RingAuthorityTransferRequest,
   authorityTransferAttestation,
+  enrolmentAttestation,
+  signPendingEnrolmentsRequest,
+  signRefuseEnrolmentRequest,
+  type RingEnrolmentAction,
 } from "../../../src/rpc/ring-rpc.js";
 
 const base58 = getBase58Decoder();
@@ -82,5 +88,48 @@ describe("prepareAuthorityTransfer", () => {
       .sign(delegate)
       .finally(() => nonce.mockRestore());
     expect(JSON.stringify(encodePrepareAuthorityTransferRequest(signed))).toBe(vector.wire);
+  });
+});
+
+describe("enrolment requests", () => {
+  it("signs the config authority's list and refusal byte for byte as the Rust vector", async () => {
+    type Signed = { message: string; wire: string };
+    const vector = JSON.parse(
+      readFileSync(
+        new URL("../../../../../test-vectors/rpc/enrolment_attestation.json", import.meta.url),
+        "utf8",
+      ),
+    ) as { list: Signed; refuse: Signed & { updateId: indexerTypes.Hash } };
+    const authority = await createKeyPairSignerFromPrivateKeyBytes(new Uint8Array(32).fill(8));
+    const target = {
+      cluster: new Uint8Array(32).fill(1) as Bytes32,
+      service: filled(2, 32) as Address,
+      ringProgramId: filled(7, 32) as Address,
+    };
+    const { updateId } = vector.refuse;
+    const message = (action: RingEnrolmentAction) =>
+      new TextDecoder().decode(
+        enrolmentAttestation({
+          target,
+          authority: authority.address,
+          action,
+          timestamp: 1_700_000_000n,
+          nonce: new Uint8Array(32).fill(4) as Bytes32,
+        }),
+      );
+    expect(message({ kind: "list" })).toBe(vector.list.message);
+    expect(message({ kind: "refuse", updateId })).toBe(vector.refuse.message);
+    const nonce = vi.spyOn(globalThis.crypto, "getRandomValues").mockImplementation((array) => {
+      (array as Uint8Array).fill(4);
+      return array;
+    });
+    try {
+      const list = await signPendingEnrolmentsRequest(target, authority, 1_700_000_000n);
+      const refuse = await signRefuseEnrolmentRequest(target, authority, updateId, 1_700_000_000n);
+      expect(JSON.stringify(encodeGetPendingEnrolmentsRequest(list))).toBe(vector.list.wire);
+      expect(JSON.stringify(encodeRefuseEnrolmentRequest(refuse))).toBe(vector.refuse.wire);
+    } finally {
+      nonce.mockRestore();
+    }
   });
 });
