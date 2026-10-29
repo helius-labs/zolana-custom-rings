@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Context as _, Result};
-use custom_ring_sdk::SetAuthority;
+use custom_ring_sdk::UpdateAuthority;
 use solana_address::Address;
 use solana_loader_v3_interface::instruction as loader;
 use solana_signer::Signer;
@@ -42,14 +42,14 @@ pub fn run(ctx: &Context, command: AuthorityCommand) -> Result<()> {
             let path = expand_tilde(&ctx.path(&new_authority_keypair))?;
             let new_authority = solana_keypair::read_keypair_file(&path)
                 .map_err(|_| anyhow!("cannot read the new authority keypair {}", path.display()))?;
-            let hand_over = SetAuthority {
+            let hand_over = UpdateAuthority {
                 ring: ctx.ring,
                 authority: authority.pubkey(),
                 new_authority: new_authority.pubkey(),
             }
             .instruction();
             ctx.send(&[authority, &new_authority], &[hand_over])
-                .context("sending set_authority failed")?;
+                .context("sending update_authority failed")?;
             println!(
                 "ring config authority of {program} is now {}, set config_authority_keypair in {} to {}",
                 new_authority.pubkey(),

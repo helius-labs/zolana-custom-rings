@@ -66,8 +66,7 @@ ring_errors! {
     InvalidMemberRegistry = 8160 => "member registry account is invalid",
     // 8161 and 8162 retired.
     MemberRegistryAlreadyExists = 8163 => "member registry already exists",
-    // 8164 retired.
-    DepositAuditRequired = 8165 => "verified deposit disclosure required",
+    // 8164 and 8165 retired.
     InvalidDepositDisclosure = 8166 => "invalid deposit disclosure",
     // 8167 retired.
     // 8168 and 8169 retired.

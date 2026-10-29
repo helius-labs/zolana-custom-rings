@@ -90,7 +90,7 @@ pub enum RingError {
     UnsyncedRoots { registry: Address },
     #[error("the ring has no record queue")]
     MissingRecordQueue,
-    #[error("the ring is not registered with the shielded pool, run InitSppRingConfig")]
+    #[error("the ring is not registered with the shielded pool, run Initialize")]
     RingNotRegistered,
     #[error("the shielded pool has not activated the ring, governance runs set_ring_activation")]
     RingNotActivated,

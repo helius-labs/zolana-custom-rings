@@ -1,11 +1,13 @@
 use custom_ring_interface::{
-    key_catalog::RingCircuit, storage::Revision, tag, AuditedDepositPrefix, CustomRingError,
-    CustomRingProof, DepositContext, DepositPublicInput, DepositRegistry, DepositedAsset,
+    key_catalog::RingCircuit, storage::Revision, tag, CustomRingError, CustomRingProof,
+    DepositContext, DepositPrefix, DepositPublicInput, DepositRegistry, DepositedAsset,
     RingDepositAuditCapsule, MAX_RING_DEPOSIT_AUDIT_SLOTS, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN,
     TAGGED_X25519_KEY_LEN, VIEWING_PUBKEY_TAG,
 };
 use pinocchio::{Address, ProgramResult};
-use spr_interface::instruction::instruction_data::deposit::RingDepositIxDataRef;
+use spr_interface::instruction::{
+    instruction_data::deposit::RingDepositIxDataRef, tag::RING_DEPOSIT,
+};
 
 use crate::instructions::verifier::{ring_key, RingProof};
 
@@ -19,10 +21,10 @@ pub(crate) struct AuditedDeposit<'a> {
 impl<'a> AuditedDeposit<'a> {
     pub fn parse(data: &'a [u8]) -> Result<Self, CustomRingError> {
         let (prefix, spp_data) = data
-            .split_at_checked(AuditedDepositPrefix::SIZE)
+            .split_at_checked(DepositPrefix::SIZE)
             .ok_or(CustomRingError::InvalidInstructionData)?;
-        let prefix = AuditedDepositPrefix::parse(prefix)?;
-        if prefix.tag != tag::AUDITED_DEPOSIT || spp_data.first() != Some(&tag::DEPOSIT) {
+        let prefix = DepositPrefix::parse(prefix)?;
+        if prefix.tag != tag::DEPOSIT || spp_data.first() != Some(&RING_DEPOSIT) {
             return Err(CustomRingError::InvalidAuditedDeposit);
         }
         Ok(Self {

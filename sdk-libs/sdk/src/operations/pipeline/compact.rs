@@ -313,8 +313,8 @@ impl TransactAccounts {
         );
         accounts.extend(spp);
         let mut bytes = vec![match parts.rail {
-            RingRail::Delegate => tag::DELEGATE_TRANSACT,
-            RingRail::Confidential | RingRail::Anonymous => tag::TRANSACT,
+            RingRail::Delegate => tag::AUTHORITY_TRANSFER,
+            RingRail::Confidential | RingRail::Anonymous => tag::TRANSFER,
         }];
         bytes.extend(data.encode()?);
         Ok(Instruction {

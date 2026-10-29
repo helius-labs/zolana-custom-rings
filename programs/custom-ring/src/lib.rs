@@ -24,21 +24,15 @@ pub fn process_instruction(
     let ix_tag = InstructionTag::try_from(*ix_tag)?;
 
     match ix_tag {
-        InstructionTag::CreateConfig => process_create_config_ix(program_id, accounts, ix_data),
-        InstructionTag::InitSppRingConfig => {
-            process_init_spp_ring_config_ix(program_id, accounts, ix_data)
-        }
-        InstructionTag::Transact | InstructionTag::DelegateTransact => {
-            process_transact_ix(program_id, accounts, ix_data, ix_tag)
+        InstructionTag::Initialize => process_initialize_ix(program_id, accounts, ix_data),
+        InstructionTag::Transfer | InstructionTag::AuthorityTransfer => {
+            process_transfer_ix(program_id, accounts, ix_data, ix_tag)
         }
         InstructionTag::LegacyTransact | InstructionTag::LegacyDelegateTransact => {
             Err(CustomRingError::InvalidInstructionData.into())
         }
-        InstructionTag::Deposit => Err(CustomRingError::DepositAuditRequired.into()),
-        // The audited prefix layout starts at the tag byte.
-        InstructionTag::AuditedDeposit => {
-            process_audited_deposit_ix(program_id, accounts, instruction_data)
-        }
+        // The deposit prefix layout starts at the tag byte.
+        InstructionTag::Deposit => process_deposit_ix(program_id, accounts, instruction_data),
         // SPP proves that owner, asset, value and ring ownership stay unchanged.
         InstructionTag::Merge => process_merge_ix(program_id, accounts, ix_data),
         InstructionTag::GrantReadAccess => {
@@ -47,15 +41,11 @@ pub fn process_instruction(
         InstructionTag::RevokeReadAccess => {
             process_revoke_read_access_ix(program_id, accounts, ix_data)
         }
-        InstructionTag::SetAuthority => process_set_authority_ix(program_id, accounts, ix_data),
-        InstructionTag::CreatePolicy => process_create_policy_ix(program_id, accounts, ix_data),
-        InstructionTag::SetPolicySource => {
-            process_set_policy_source_ix(program_id, accounts, ix_data)
+        InstructionTag::UpdateAuthority => {
+            process_update_authority_ix(program_id, accounts, ix_data)
         }
+        InstructionTag::UpdatePolicy => process_update_policy_ix(program_id, accounts, ix_data),
         InstructionTag::SetPaused => process_set_paused_ix(program_id, accounts, ix_data),
-        InstructionTag::SetPolicyRules => {
-            process_set_policy_rules_ix(program_id, accounts, ix_data)
-        }
         InstructionTag::SetCoSigner => process_set_cosigner_ix(program_id, accounts, ix_data),
         InstructionTag::ClearCoSigner => process_clear_cosigner_ix(program_id, accounts, ix_data),
         InstructionTag::SetDelegate => process_set_delegate_ix(program_id, accounts, ix_data),

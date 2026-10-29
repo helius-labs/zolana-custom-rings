@@ -2,11 +2,11 @@ use bytemuck::{Pod, Zeroable};
 use custom_ring_interface::{
     compute_unit_limit,
     storage::{Revision, Root, StorageRegistry},
-    tag, ApplyRecordsIxData, AuthorityWriteRecordsIxData, CreateConfigIxData, CreatePolicyIxData,
-    CustomRingError, InstructionTag, MemberWriteIxData, PolicyTableIxData, RecordWriteData,
-    RegisterKeyIxData, RingKind, SetCoSignerRecordIxData, SourceSpec, WriteRecordsIxData,
-    CONFIG_PDA_SEED, CO_SIGNER_PDA_SEED, MEMBER_REGISTRY_PDA_SEED, RECORD_QUEUE_PDA_SEED,
-    RING_POLICY_PDA_SEED, STORAGE_PROGRAM_ID,
+    tag, ApplyRecordsIxData, AuthorityWriteRecordsIxData, CustomRingError, InitializeIxData,
+    InstructionTag, MemberWriteIxData, PolicyBindingIxData, PolicyTableIxData, RecordWriteData,
+    RegisterKeyIxData, RingKind, SetCoSignerRecordIxData, SourceSpec, UpdatePolicyIxData,
+    WriteRecordsIxData, CONFIG_PDA_SEED, CO_SIGNER_PDA_SEED, MEMBER_REGISTRY_PDA_SEED,
+    RECORD_QUEUE_PDA_SEED, RING_POLICY_PDA_SEED, STORAGE_PROGRAM_ID,
 };
 use litesvm::LiteSVM;
 use solana_account::Account;
@@ -19,7 +19,11 @@ use solana_message::{v1, VersionedMessage};
 use solana_transaction::versioned::VersionedTransaction;
 use solana_transaction_error::TransactionError;
 use spr_hasher::primitives::right_align;
-use spr_interface::{BPF_LOADER_UPGRADEABLE_ID, RING_AUTH_PDA_SEED};
+use spr_interface::{
+    pda::protocol_config,
+    state::{discriminator::PROTOCOL_CONFIG, ProtocolConfig},
+    BPF_LOADER_UPGRADEABLE_ID, RING_AUTH_PDA_SEED, SHIELDED_POOL_PROGRAM_ID,
+};
 use zolana_ring_policy::{ListId, Member, OutflowLimit, Rule, RuleTable, Subject};
 
 /// Any address serves as the ring program.
@@ -28,8 +32,9 @@ pub const SYSTEM: Address = Address::new_from_array([0; 32]);
 /// The ring's own `StorageRegistry`, written in place of a storage program `Update`.
 pub const RECORDS: Address = Address::new_from_array([0x5a; 32]);
 const LOADER: Address = Address::new_from_array(BPF_LOADER_UPGRADEABLE_ID);
+const SHIELDED_POOL: Address = Address::new_from_array(SHIELDED_POOL_PROGRAM_ID);
 const SOL: u64 = 1_000_000_000;
-const UNITS: u32 = compute_unit_limit(InstructionTag::Transact);
+const UNITS: u32 = compute_unit_limit(InstructionTag::Transfer);
 const LOADED_ACCOUNTS_DATA: u32 = 64 * 1024 * 1024;
 
 pub fn pda(seed: &[u8]) -> Address {
@@ -94,11 +99,13 @@ pub struct Ring {
 }
 
 impl Ring {
-    /// A deployed ring whose config, registry and policy came through their instructions.
+    /// A deployed ring whose config, policy, SPP registration and registry came through their instructions.
     pub fn new(setup: Setup) -> Self {
         let mut svm = LiteSVM::new();
         svm.add_program(PROGRAM, &program_bytes())
             .expect("load the ring program");
+        svm.add_program(SHIELDED_POOL, &shielded_pool_bytes())
+            .expect("load the shielded pool");
         let payer = Keypair::new();
         let authority = Keypair::new();
         for wallet in [&payer, &authority] {
@@ -110,25 +117,17 @@ impl Ring {
             payer,
             authority,
         };
+        let protocol = ProtocolConfig {
+            discriminator: PROTOCOL_CONFIG,
+            ..Zeroable::zeroed()
+        };
+        ring.store(
+            protocol_config(),
+            SHIELDED_POOL,
+            bytemuck::bytes_of(&protocol).to_vec(),
+        );
         let authority = ring.authority.insecure_clone();
         ring.set_upgrade_authority(&PROGRAM, &authority.pubkey());
-        let config = create_config(
-            &ring.payer.pubkey(),
-            &authority.pubkey(),
-            CreateConfigIxData {
-                auditor_pubkey: auditor_pubkey(),
-                kind: setup.kind(),
-            },
-        );
-        within_budget(
-            InstructionTag::CreateConfig,
-            ring.send(config, &[&authority]),
-        );
-        let registry = create_member_registry(&ring.payer.pubkey(), &authority.pubkey());
-        within_budget(
-            InstructionTag::CreateMemberRegistry,
-            ring.send(registry, &[&authority]),
-        );
         let limits = match setup {
             Setup::LimitedPolicy => vec![OutflowLimit::of(
                 &Member::asset(&Address::new_from_array([7; 32])).expect("asset member"),
@@ -144,10 +143,28 @@ impl Ring {
                 rules: Vec::new(),
             },
         };
-        let policy = create_policy(&ring.payer.pubkey(), &authority.pubkey(), table, &[]);
+        let initialize = InitializeIx {
+            payer: ring.payer.pubkey(),
+            authority: authority.pubkey(),
+            data: InitializeIxData {
+                auditor_pubkey: auditor_pubkey(),
+                kind: setup.kind(),
+                policy: Some(PolicyBindingIxData {
+                    storage_authority: Address::default(),
+                    table,
+                }),
+            },
+            curators: &[],
+        }
+        .instruction();
         within_budget(
-            InstructionTag::CreatePolicy,
-            ring.send(policy, &[&authority]),
+            InstructionTag::Initialize,
+            ring.send(initialize, &[&authority]),
+        );
+        let registry = create_member_registry(&ring.payer.pubkey(), &authority.pubkey());
+        within_budget(
+            InstructionTag::CreateMemberRegistry,
+            ring.send(registry, &[&authority]),
         );
         within_budget(
             InstructionTag::SyncRoots,
@@ -252,7 +269,7 @@ impl Ring {
         self.svm.warp_to_slot(slot);
     }
 
-    /// litesvm deploys with no upgrade authority, `CreateConfig` needs one.
+    /// litesvm deploys with no upgrade authority, `Initialize` needs one.
     pub fn set_upgrade_authority(&mut self, program: &Address, authority: &Address) {
         let program_data = program_data_of(program);
         let mut account = self
@@ -308,6 +325,18 @@ fn program_bytes() -> Vec<u8> {
         .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/deploy").into());
     let path = format!("{dir}/custom_ring_program.so");
     std::fs::read(&path).unwrap_or_else(|_| panic!("build the ring program into {path}"))
+}
+
+/// `ZOLANA_SPP_PROGRAM_SO` when set, else the zolana deploy directory.
+fn shielded_pool_bytes() -> Vec<u8> {
+    let path = std::env::var("ZOLANA_SPP_PROGRAM_SO").unwrap_or_else(|_| {
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../zolana/target/deploy/shielded_pool_program.so"
+        )
+        .into()
+    });
+    std::fs::read(&path).unwrap_or_else(|_| panic!("build the shielded pool into {path}"))
 }
 
 pub fn auditor_pubkey() -> [u8; 33] {
@@ -396,22 +425,43 @@ fn tagged(tag: u8, body: &[u8]) -> Vec<u8> {
     [&[tag][..], body].concat()
 }
 
-pub fn create_config(
-    payer: &Address,
-    authority: &Address,
-    data: CreateConfigIxData,
-) -> Instruction {
-    instruction(
-        vec![
-            AccountMeta::new(*payer, true),
-            AccountMeta::new_readonly(*authority, true),
+/// `Initialize`, the policy accounts follow the SPP program only with a policy.
+pub struct InitializeIx<'a> {
+    pub payer: Address,
+    pub authority: Address,
+    pub data: InitializeIxData,
+    pub curators: &'a [Address],
+}
+
+impl InitializeIx<'_> {
+    pub fn instruction(self) -> Instruction {
+        let mut accounts = vec![
+            AccountMeta::new(self.payer, true),
+            AccountMeta::new_readonly(self.authority, true),
             AccountMeta::new(config_pda(), false),
             AccountMeta::new_readonly(SYSTEM, false),
             AccountMeta::new_readonly(PROGRAM, false),
             AccountMeta::new_readonly(program_data(), false),
-        ],
-        tagged(tag::CREATE_CONFIG, &wincode::serialize(&data).unwrap()),
-    )
+            AccountMeta::new_readonly(protocol_config(), false),
+            AccountMeta::new(ring_auth(), false),
+            AccountMeta::new_readonly(SHIELDED_POOL, false),
+        ];
+        if self.data.policy.is_some() {
+            accounts.extend([
+                AccountMeta::new(policy_pda(), false),
+                AccountMeta::new_readonly(RECORDS, false),
+            ]);
+            accounts.extend(
+                self.curators
+                    .iter()
+                    .map(|curator| AccountMeta::new_readonly(*curator, false)),
+            );
+        }
+        instruction(
+            accounts,
+            tagged(tag::INITIALIZE, &wincode::serialize(&self.data).unwrap()),
+        )
+    }
 }
 
 pub fn create_member_registry(payer: &Address, authority: &Address) -> Instruction {
@@ -428,49 +478,6 @@ pub fn create_member_registry(payer: &Address, authority: &Address) -> Instructi
     )
 }
 
-/// The policy over `RECORDS`, curators follow the system program.
-pub fn create_policy(
-    payer: &Address,
-    authority: &Address,
-    table: PolicyTableIxData,
-    curators: &[Address],
-) -> Instruction {
-    create_policy_with(
-        payer,
-        authority,
-        &CreatePolicyIxData {
-            storage_authority: Address::default(),
-            table,
-        },
-        curators,
-    )
-}
-
-pub fn create_policy_with(
-    payer: &Address,
-    authority: &Address,
-    data: &CreatePolicyIxData,
-    curators: &[Address],
-) -> Instruction {
-    let mut accounts = vec![
-        AccountMeta::new(*payer, true),
-        AccountMeta::new_readonly(*authority, true),
-        AccountMeta::new_readonly(config_pda(), false),
-        AccountMeta::new(policy_pda(), false),
-        AccountMeta::new_readonly(RECORDS, false),
-        AccountMeta::new_readonly(SYSTEM, false),
-    ];
-    accounts.extend(
-        curators
-            .iter()
-            .map(|curator| AccountMeta::new_readonly(*curator, false)),
-    );
-    instruction(
-        accounts,
-        tagged(tag::CREATE_POLICY, &wincode::serialize(data).unwrap()),
-    )
-}
-
 pub fn sync_roots(registry: &Address) -> Instruction {
     instruction(
         vec![
@@ -481,24 +488,43 @@ pub fn sync_roots(registry: &Address) -> Instruction {
     )
 }
 
-/// `SetPolicyRules` or `SetPolicySource`, curators follow the policy.
-pub fn policy_write(
-    tag: u8,
-    authority: &Address,
-    table: PolicyTableIxData,
-    curators: &[Address],
-) -> Instruction {
-    let mut accounts = vec![
-        AccountMeta::new_readonly(*authority, true),
-        AccountMeta::new_readonly(config_pda(), false),
-        AccountMeta::new(policy_pda(), false),
-    ];
-    accounts.extend(
-        curators
-            .iter()
-            .map(|curator| AccountMeta::new_readonly(*curator, false)),
-    );
-    instruction(accounts, tagged(tag, &wincode::serialize(&table).unwrap()))
+/// `UpdatePolicy`, the trailing accounts follow the policy.
+pub struct UpdatePolicyIx<'a> {
+    pub authority: Address,
+    pub update: UpdatePolicyIxData,
+    pub trailing: &'a [Address],
+}
+
+impl UpdatePolicyIx<'_> {
+    pub fn instruction(self) -> Instruction {
+        let mut accounts = vec![
+            AccountMeta::new_readonly(self.authority, true),
+            AccountMeta::new_readonly(config_pda(), false),
+            AccountMeta::new(policy_pda(), false),
+        ];
+        accounts.extend(
+            self.trailing
+                .iter()
+                .map(|account| AccountMeta::new_readonly(*account, false)),
+        );
+        instruction(
+            accounts,
+            tagged(
+                tag::UPDATE_POLICY,
+                &wincode::serialize(&self.update).unwrap(),
+            ),
+        )
+    }
+}
+
+/// A rules update without curators.
+pub fn rules_write(authority: &Address, table: PolicyTableIxData) -> Instruction {
+    UpdatePolicyIx {
+        authority: *authority,
+        update: UpdatePolicyIxData::Rules(table),
+        trailing: &[],
+    }
+    .instruction()
 }
 
 pub fn config_write(

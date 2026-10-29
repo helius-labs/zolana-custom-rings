@@ -6,8 +6,8 @@ use custom_ring_interface::{
     CustomRingError, ListRegistry, RecordQueue, APPLY_DELAY_SLOTS, MEMBER_QUEUE_LIMIT,
 };
 use custom_ring_sdk::{
-    AuthorityRecordUpdate, MemberRecords, RecordApplication, RingError, RingMode, SetSourceOwner,
-    SourceOwner, SyncRoots, WalletRecordUpdate,
+    AuthorityRecordUpdate, MemberRecords, PolicyUpdate, RecordApplication, RingError, RingMode,
+    SourceOwner, SyncRoots, UpdatePolicy, WalletRecordUpdate,
 };
 use solana_address::Address;
 use solana_keypair::Keypair;
@@ -289,11 +289,10 @@ fn set_source(ctx: &Context, list_id: ListId, source: SourceOwner) -> Result<()>
     let outcome = if account.registry_for(list_id) == Some(expected_registry(source)) {
         "already present"
     } else {
-        let point = SetSourceOwner {
+        let point = UpdatePolicy {
             ring: ctx.ring,
             authority: authority.pubkey(),
-            list_id,
-            source,
+            update: PolicyUpdate::Source { list_id, source },
         }
         .instruction()?;
         let mut instructions = vec![point];

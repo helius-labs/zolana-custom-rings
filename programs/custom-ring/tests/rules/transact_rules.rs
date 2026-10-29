@@ -241,7 +241,7 @@ pub fn confidential(
     let spp = spp_list(&ring.payer.pubkey(), data, &payer_owner(ring));
     send(
         ring,
-        tag::TRANSACT,
+        tag::TRANSFER,
         prefix,
         data.encode().unwrap(),
         spp,
@@ -278,7 +278,7 @@ fn trailing_or_missing_bytes_disagree_with_the_shape() {
         refused(
             send(
                 &mut ring,
-                tag::TRANSACT,
+                tag::TRANSFER,
                 Vec::new(),
                 bytes,
                 spp.clone(),
@@ -298,7 +298,7 @@ fn flags_follow_the_rings_mode_and_policy() {
     bytes[transact_flag::BYTE] |= 1 << 4;
     let spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(&ring));
     refused(
-        send(&mut ring, tag::TRANSACT, Vec::new(), bytes, spp, &[]),
+        send(&mut ring, tag::TRANSFER, Vec::new(), bytes, spp, &[]),
         CustomRingError::FlagNotAllowed,
     );
     refused(
@@ -330,7 +330,7 @@ fn a_policy_transfer_takes_exactly_one_owner_signer() {
     refused(
         send(
             &mut ring,
-            tag::TRANSACT,
+            tag::TRANSFER,
             vec![policy_meta()],
             data.encode().unwrap(),
             spp,
@@ -342,7 +342,7 @@ fn a_policy_transfer_takes_exactly_one_owner_signer() {
     let spp = spp_list(&ring.payer.pubkey(), &data, &repeated);
     reaches_verification(send(
         &mut ring,
-        tag::TRANSACT,
+        tag::TRANSFER,
         vec![policy_meta()],
         data.encode().unwrap(),
         spp,
@@ -352,7 +352,7 @@ fn a_policy_transfer_takes_exactly_one_owner_signer() {
     refused(
         send(
             &mut ring,
-            tag::TRANSACT,
+            tag::TRANSFER,
             vec![policy_meta()],
             data.encode().unwrap(),
             spp,
@@ -372,7 +372,7 @@ fn every_confidential_owner_slot_signs() {
     refused(
         send(
             &mut ring,
-            tag::TRANSACT,
+            tag::TRANSFER,
             Vec::new(),
             data.encode().unwrap(),
             spp,
@@ -396,7 +396,7 @@ fn an_anonymous_transfer_takes_no_signer_but_the_payer() {
     refused(
         send(
             &mut ring,
-            tag::TRANSACT,
+            tag::TRANSFER,
             Vec::new(),
             data.encode().unwrap(),
             spp,
@@ -467,7 +467,7 @@ fn a_default_ring_spend_takes_the_entry_key_up_to_eight_inputs() {
     let spp = spp_list(&ring.payer.pubkey(), &data, &[]);
     reaches_verification(send(
         &mut ring,
-        tag::TRANSACT,
+        tag::TRANSFER,
         Vec::new(),
         data.encode().unwrap(),
         spp,
@@ -479,7 +479,7 @@ fn a_default_ring_spend_takes_the_entry_key_up_to_eight_inputs() {
     let mut bytes = wide.encode().unwrap();
     reaches_verification(send(
         &mut ring,
-        tag::TRANSACT,
+        tag::TRANSFER,
         Vec::new(),
         bytes.clone(),
         spp.clone(),
@@ -487,7 +487,7 @@ fn a_default_ring_spend_takes_the_entry_key_up_to_eight_inputs() {
     ));
     bytes[input_flag::BYTE] |= input_flag::FULL_OPENINGS;
     refused(
-        send(&mut ring, tag::TRANSACT, Vec::new(), bytes, spp, &[]),
+        send(&mut ring, tag::TRANSFER, Vec::new(), bytes, spp, &[]),
         CustomRingError::RingShapeUnkeyed,
     );
 }
@@ -518,7 +518,7 @@ fn the_vector_transfers_without_public_legs_reach_their_keys() {
     let spp = spp_list(&audit_only.payer.pubkey(), &data, &payer_owner(&audit_only));
     reaches_verification(send(
         &mut audit_only,
-        tag::TRANSACT,
+        tag::TRANSFER,
         Vec::new(),
         bytes.clone(),
         spp,
@@ -539,7 +539,7 @@ fn the_vector_transfers_without_public_legs_reach_their_keys() {
     let spp = spp_list(&anonymous.payer.pubkey(), data, &[]);
     reaches_verification(send(
         &mut anonymous,
-        tag::TRANSACT,
+        tag::TRANSFER,
         Vec::new(),
         bytes.clone(),
         spp,
@@ -588,7 +588,7 @@ fn a_demanded_co_signer_signs_with_the_configured_key() {
     refused(
         send(
             &mut ring,
-            tag::TRANSACT,
+            tag::TRANSFER,
             CoSignerSlot::own(co_signer.pubkey()).unsigned(),
             data.encode().unwrap(),
             spp.clone(),
@@ -600,7 +600,7 @@ fn a_demanded_co_signer_signs_with_the_configured_key() {
     refused(
         send(
             &mut ring,
-            tag::TRANSACT,
+            tag::TRANSFER,
             CoSignerSlot {
                 record_of: co_signer.pubkey(),
                 signer: other.pubkey(),
@@ -615,7 +615,7 @@ fn a_demanded_co_signer_signs_with_the_configured_key() {
     refused(
         send(
             &mut ring,
-            tag::TRANSACT,
+            tag::TRANSFER,
             CoSignerSlot::own(other.pubkey()).signed(),
             data.encode().unwrap(),
             spp.clone(),
@@ -625,7 +625,7 @@ fn a_demanded_co_signer_signs_with_the_configured_key() {
     );
     reaches_verification(send(
         &mut ring,
-        tag::TRANSACT,
+        tag::TRANSFER,
         CoSignerSlot::own(co_signer.pubkey()).signed(),
         data.encode().unwrap(),
         spp,
@@ -641,7 +641,7 @@ fn co_signed_transfer(ring: &mut Ring, co_signer: &Keypair) -> Sent {
     let slot = CoSignerSlot::own(co_signer.pubkey()).signed();
     send(
         ring,
-        tag::TRANSACT,
+        tag::TRANSFER,
         slot.to_vec(),
         data.encode().unwrap(),
         spp,
@@ -707,7 +707,7 @@ fn withdraw_with_exemption(
     }
     send(
         ring,
-        tag::TRANSACT,
+        tag::TRANSFER,
         prefix,
         data.encode().unwrap(),
         spp,
@@ -791,7 +791,7 @@ fn an_approval_co_signed_by_its_own_owner_is_refused() {
         prefix.extend(CoSignerSlot::own(co_signer.pubkey()).signed());
         send(
             ring,
-            tag::TRANSACT,
+            tag::TRANSFER,
             prefix,
             data.encode().unwrap(),
             spp,
@@ -826,7 +826,7 @@ fn settle(ring: &mut Ring, transfers: Vec<InterfaceTransfer>, funder: &AccountMe
     }
     send(
         ring,
-        tag::TRANSACT,
+        tag::TRANSFER,
         Vec::new(),
         data.encode().unwrap(),
         spp,
@@ -907,7 +907,7 @@ fn public_legs_fit_the_account_list_and_the_leg_cap() {
     refused(
         send(
             &mut ring,
-            tag::TRANSACT,
+            tag::TRANSFER,
             Vec::new(),
             data.encode().unwrap(),
             spp,
@@ -923,7 +923,7 @@ fn public_legs_fit_the_account_list_and_the_leg_cap() {
     refused(
         send(
             &mut ring,
-            tag::TRANSACT,
+            tag::TRANSFER,
             Vec::new(),
             data.encode().unwrap(),
             spp,
@@ -950,7 +950,7 @@ fn the_forwarded_list_holds_the_ring_pda_and_a_signing_payer() {
         refused(
             send(
                 &mut ring,
-                tag::TRANSACT,
+                tag::TRANSFER,
                 Vec::new(),
                 data.encode().unwrap(),
                 spp,
@@ -974,7 +974,7 @@ fn a_second_ring_pda_in_the_forwarded_list_is_refused() {
     refused(
         send(
             &mut ring,
-            tag::TRANSACT,
+            tag::TRANSFER,
             Vec::new(),
             data.encode().unwrap(),
             spp,
@@ -1001,7 +1001,7 @@ fn only_the_configured_delegate_moves_and_settles_no_public_leg() {
     refused(
         send(
             &mut ring,
-            tag::DELEGATE_TRANSACT,
+            tag::AUTHORITY_TRANSFER,
             prefix(&other),
             data.encode().unwrap(),
             spp.clone(),
@@ -1012,7 +1012,7 @@ fn only_the_configured_delegate_moves_and_settles_no_public_leg() {
     refused(
         send(
             &mut ring,
-            tag::DELEGATE_TRANSACT,
+            tag::AUTHORITY_TRANSFER,
             vec![
                 policy_meta(),
                 AccountMeta::new_readonly(delegate.pubkey(), false),
@@ -1025,7 +1025,7 @@ fn only_the_configured_delegate_moves_and_settles_no_public_leg() {
     );
     reaches_verification(send(
         &mut ring,
-        tag::DELEGATE_TRANSACT,
+        tag::AUTHORITY_TRANSFER,
         prefix(&delegate),
         data.encode().unwrap(),
         spp.clone(),
@@ -1040,7 +1040,7 @@ fn only_the_configured_delegate_moves_and_settles_no_public_leg() {
     refused(
         send(
             &mut ring,
-            tag::DELEGATE_TRANSACT,
+            tag::AUTHORITY_TRANSFER,
             prefix(&delegate),
             data.encode().unwrap(),
             settled,
@@ -1054,7 +1054,7 @@ fn only_the_configured_delegate_moves_and_settles_no_public_leg() {
     refused(
         send(
             &mut audit_only,
-            tag::DELEGATE_TRANSACT,
+            tag::AUTHORITY_TRANSFER,
             prefix(&delegate),
             data.encode().unwrap(),
             spp,
@@ -1077,7 +1077,7 @@ fn a_delegate_move_co_signed_by_the_delegate_is_refused() {
         prefix.push(AccountMeta::new_readonly(delegate.pubkey(), true));
         send(
             ring,
-            tag::DELEGATE_TRANSACT,
+            tag::AUTHORITY_TRANSFER,
             prefix,
             data.encode().unwrap(),
             spp.clone(),
@@ -1103,7 +1103,7 @@ fn delegate_move(
     let spp = spp_list(&ring.payer.pubkey(), data, &[]);
     send(
         ring,
-        tag::DELEGATE_TRANSACT,
+        tag::AUTHORITY_TRANSFER,
         vec![
             policy_meta(),
             AccountMeta::new_readonly(delegate.pubkey(), true),
@@ -1183,7 +1183,7 @@ fn anonymous_exit(
     spp.extend(settlements);
     send(
         ring,
-        tag::TRANSACT,
+        tag::TRANSFER,
         Vec::new(),
         data.encode().unwrap(),
         spp,
@@ -1283,7 +1283,7 @@ fn policy_spl_metadata_must_match_the_live_token_owner() {
     ]);
     reaches_verification(send(
         &mut ring,
-        tag::TRANSACT,
+        tag::TRANSFER,
         vec![policy_meta()],
         data.encode().unwrap(),
         spp.clone(),
@@ -1294,7 +1294,7 @@ fn policy_spl_metadata_must_match_the_live_token_owner() {
     refused(
         send(
             &mut ring,
-            tag::TRANSACT,
+            tag::TRANSFER,
             vec![policy_meta()],
             data.encode().unwrap(),
             spp,

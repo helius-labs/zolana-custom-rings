@@ -19,7 +19,7 @@ fn a_relayer_pays_a_policy_transfer_its_owner_signs_in_the_proof() {
     let spp = spp_list(&ring.payer.pubkey(), &data, &[]);
     reaches_verification(send(
         &mut ring,
-        tag::TRANSACT,
+        tag::TRANSFER,
         vec![policy_meta()],
         data.encode().unwrap(),
         spp,
@@ -38,7 +38,7 @@ fn an_owner_signer_beside_the_in_proof_owner_is_refused() {
     refused(
         send(
             &mut ring,
-            tag::TRANSACT,
+            tag::TRANSFER,
             vec![policy_meta()],
             data.encode().unwrap(),
             spp,

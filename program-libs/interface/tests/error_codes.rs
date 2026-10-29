@@ -51,7 +51,6 @@ pinned_codes! {
     ApprovalWithoutCoSigner = 8157,
     InvalidMemberRegistry = 8160,
     MemberRegistryAlreadyExists = 8163,
-    DepositAuditRequired = 8165,
     InvalidDepositDisclosure = 8166,
     DelegateRequiresPolicy = 8170,
     MissingFundingSigner = 8173,

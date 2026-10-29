@@ -58,9 +58,9 @@ pub use crate::{
         RegistryStatus, RingRegistration, RingStatus,
     },
     admin::{
-        ClearCoSigner, CreateConfig, CreateMemberRegistry, GrantReader, InitSppRingConfig,
-        PolicyRecords, PolicyRules, RevokeReader, SetAuthority, SetCoSigner, SetDelegate,
-        SetSourceOwner, SourceOwner,
+        ClearCoSigner, CreateMemberRegistry, GrantReader, InitialPolicy, Initialize, PolicyRecords,
+        PolicyTable, PolicyUpdate, RevokeReader, SetCoSigner, SetDelegate, SourceOwner,
+        UpdateAuthority, UpdatePolicy,
     },
     client::{RingClient, RingIndexerBackend},
     deposit::{

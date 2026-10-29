@@ -13,7 +13,9 @@ pub use render::render;
 
 use anyhow::{ensure, Context as _, Result};
 use custom_ring_interface::{ListRegistry, RingPolicy};
-use custom_ring_sdk::{CustomRing, PinnedPolicy, PolicyRules, SyncRoots};
+use custom_ring_sdk::{
+    CustomRing, PinnedPolicy, PolicyTable, PolicyUpdate, SyncRoots, UpdatePolicy,
+};
 use solana_address::Address;
 use solana_signer::Signer;
 use zolana_ring_policy::RuleTable;
@@ -229,13 +231,15 @@ fn set(ctx: &Context, yes: bool) -> Result<()> {
     )?;
     let authority = ctx.funded_authority()?;
     let shared_sources = curator_sources(ctx, &compiled.shared_sources)?;
-    let replace = PolicyRules {
+    let replace = UpdatePolicy {
         ring: ctx.ring,
         authority: authority.pubkey(),
-        rules: &compiled.rules,
-        shared_sources: &shared_sources,
+        update: PolicyUpdate::Rules(PolicyTable {
+            rules: &compiled.rules,
+            shared_sources: &shared_sources,
+        }),
     }
-    .replace()?;
+    .instruction()?;
     let mut instructions = vec![replace];
     instructions.extend(curator_syncs(ctx.ring, &shared_sources));
     ctx.send(&[authority], &instructions)?;

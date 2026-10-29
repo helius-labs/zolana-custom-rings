@@ -2,9 +2,9 @@
 
 use custom_ring_interface::SYSTEM_PROGRAM_ID;
 use custom_ring_interface::{
-    compute_unit_limit, tag, CoSignScope, CreateConfigIxData, CreatePolicyIxData, InstructionTag,
-    PolicyTableIxData, ReaderIxData, RingKind, SetCoSignerRecordIxData, SetInsertFeeIxData,
-    SetPausedIxData, SetPolicySourceIxData, SourceSpec,
+    compute_unit_limit, tag, CoSignScope, InitializeIxData, InstructionTag, PolicyBindingIxData,
+    PolicySourceIxData, PolicyTableIxData, ReaderIxData, RingKind, SetCoSignerRecordIxData,
+    SetInsertFeeIxData, SetPausedIxData, SourceSpec, UpdatePolicyIxData,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -15,7 +15,7 @@ use wincode::{config::DefaultConfig, SchemaWrite};
 use zolana_ring_client::ReaderKey;
 use zolana_ring_policy::{ListId, ListSet, Rule, RuleTable, SourceMap};
 
-use crate::{submission::check_transaction_size, CustomRing, CustomRingConfig, RingError};
+use crate::{submission::check_transaction_size, CustomRing, RingError};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SourceOwner {
@@ -24,25 +24,25 @@ pub enum SourceOwner {
     Curator(Address),
 }
 
-/// The upgrade authority signs and becomes the ring authority.
+/// The upgrade authority signs and becomes the ring authority, SPP registers the ring in the same instruction.
 #[must_use]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CreateConfig {
+#[derive(Clone, Copy, Debug)]
+pub struct Initialize<'a> {
     pub ring: CustomRing,
     pub payer: Address,
     pub authority: Address,
     pub auditor_pubkey: X25519Pubkey,
     pub kind: RingKind,
+    /// Required on a policy ring, an audit-only ring takes it for its withdrawal exemptions.
+    pub policy: Option<InitialPolicy<'a>>,
 }
 
-/// The program builds SPP's registration from the config, a policy ring after its policy.
+/// An audit-only ring takes an empty table.
 #[must_use]
 #[derive(Clone, Copy, Debug)]
-pub struct InitSppRingConfig<'a> {
-    pub ring: CustomRing,
-    pub payer: Address,
-    pub authority: Address,
-    pub config: &'a CustomRingConfig,
+pub struct InitialPolicy<'a> {
+    pub records: PolicyRecords,
+    pub table: PolicyTable<'a>,
 }
 
 /// The record queue is created beside the registry and its sentinel.
@@ -76,7 +76,7 @@ pub struct RevokeReader {
 /// Both keys sign, a mistyped address cannot strand the config.
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SetAuthority {
+pub struct UpdateAuthority {
     pub ring: CustomRing,
     pub authority: Address,
     pub new_authority: Address,
@@ -112,20 +112,30 @@ pub struct SetDelegate {
 }
 
 #[must_use]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SetSourceOwner {
+#[derive(Clone, Copy, Debug)]
+pub struct UpdatePolicy<'a> {
     pub ring: CustomRing,
     pub authority: Address,
-    pub list_id: ListId,
-    pub source: SourceOwner,
+    pub update: PolicyUpdate<'a>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum PolicyUpdate<'a> {
+    /// Replaces the pinned table and the complete source map.
+    Rules(PolicyTable<'a>),
+    /// Re-points one referenced list, the rows stay.
+    Source {
+        list_id: ListId,
+        source: SourceOwner,
+    },
+    /// Own lists read the new records once `SyncRoots` mirrors them.
+    Records(PolicyRecords),
 }
 
 /// A referenced list not shared reads the ring's own records.
 #[must_use]
 #[derive(Clone, Copy, Debug)]
-pub struct PolicyRules<'a> {
-    pub ring: CustomRing,
-    pub authority: Address,
+pub struct PolicyTable<'a> {
     pub rules: &'a RuleTable,
     /// Each list's curator `StorageRegistry`.
     pub shared_sources: &'a [(ListId, Address)],
@@ -134,7 +144,6 @@ pub struct PolicyRules<'a> {
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PolicyRecords {
-    pub payer: Address,
     pub records: Address,
     /// The records may answer to it beside the config authority.
     pub storage_authority: Address,
@@ -145,42 +154,50 @@ struct TablePayload {
     curators: Vec<AccountMeta>,
 }
 
-impl CreateConfig {
+impl Initialize<'_> {
     pub fn instruction(self) -> Result<Instruction, RingError> {
-        let data = tagged(
-            tag::CREATE_CONFIG,
-            &CreateConfigIxData {
-                auditor_pubkey: *self.auditor_pubkey.as_bytes(),
-                kind: self.kind,
-            },
-        )?;
-        let mut accounts = vec![
-            AccountMeta::new(self.payer, true),
-            AccountMeta::new_readonly(self.authority, true),
-            AccountMeta::new(self.ring.config_pda(), false),
-            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
-        ];
-        accounts.extend(self.ring.upgrade_metas());
-        Ok(self.ring.ix(accounts, data))
-    }
-}
-
-impl InitSppRingConfig<'_> {
-    pub fn instruction(self) -> Instruction {
         let ring = self.ring;
         let mut accounts = vec![
             AccountMeta::new(self.payer, true),
             AccountMeta::new_readonly(self.authority, true),
-            AccountMeta::new_readonly(ring.config_pda(), false),
+            AccountMeta::new(ring.config_pda(), false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+        ];
+        accounts.extend(ring.upgrade_metas());
+        accounts.extend([
             AccountMeta::new_readonly(pda::protocol_config(), false),
             AccountMeta::new(ring.ring_auth_pda(), false),
-            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
             AccountMeta::new_readonly(pda::shielded_pool_program_id(), false),
-        ];
-        if self.config.has_policy {
-            accounts.push(AccountMeta::new_readonly(ring.policy_pda(), false));
+        ]);
+        let policy = match self.policy {
+            Some(InitialPolicy { records, table }) => {
+                let TablePayload { data, curators } = table.payload()?;
+                accounts.extend([
+                    AccountMeta::new(ring.policy_pda(), false),
+                    AccountMeta::new_readonly(records.records, false),
+                ]);
+                accounts.extend(curators);
+                Some(PolicyBindingIxData {
+                    storage_authority: records.storage_authority,
+                    table: data,
+                })
+            }
+            None => None,
+        };
+        let data = tagged(
+            tag::INITIALIZE,
+            &InitializeIxData {
+                auditor_pubkey: *self.auditor_pubkey.as_bytes(),
+                kind: self.kind,
+                policy,
+            },
+        )?;
+        SizedInstruction {
+            payer: &self.payer,
+            instruction_tag: InstructionTag::Initialize,
+            instruction: ring.ix(accounts, data),
         }
-        ring.ix(accounts, vec![tag::INIT_SPP_RING_CONFIG])
+        .check()
     }
 }
 
@@ -226,14 +243,14 @@ impl RevokeReader {
     }
 }
 
-impl SetAuthority {
+impl UpdateAuthority {
     pub fn instruction(self) -> Instruction {
         let accounts = vec![
             AccountMeta::new_readonly(self.authority, true),
             AccountMeta::new_readonly(self.new_authority, true),
             AccountMeta::new(self.ring.config_pda(), false),
         ];
-        self.ring.ix(accounts, vec![tag::SET_AUTHORITY])
+        self.ring.ix(accounts, vec![tag::UPDATE_AUTHORITY])
     }
 }
 
@@ -281,64 +298,48 @@ impl SetDelegate {
     }
 }
 
-impl SetSourceOwner {
+impl UpdatePolicy<'_> {
     pub fn instruction(self) -> Result<Instruction, RingError> {
         let ring = self.ring;
         let mut accounts = ring.policy_write_metas(self.authority);
-        if let SourceOwner::Curator(curator) = self.source {
-            accounts.push(AccountMeta::new_readonly(curator, false));
+        let update = match self.update {
+            PolicyUpdate::Rules(table) => {
+                let TablePayload { data, curators } = table.payload()?;
+                accounts.extend(curators);
+                UpdatePolicyIxData::Rules(data)
+            }
+            PolicyUpdate::Source { list_id, source } => {
+                if let SourceOwner::Curator(curator) = source {
+                    accounts.push(AccountMeta::new_readonly(curator, false));
+                }
+                UpdatePolicyIxData::Source(PolicySourceIxData {
+                    list_id: list_id as u8,
+                    source: u8::from(matches!(source, SourceOwner::Curator(_))),
+                })
+            }
+            PolicyUpdate::Records(records) => {
+                accounts.push(AccountMeta::new_readonly(records.records, false));
+                UpdatePolicyIxData::Records {
+                    storage_authority: records.storage_authority,
+                }
+            }
+        };
+        let data = tagged(tag::UPDATE_POLICY, &update)?;
+        SizedInstruction {
+            payer: &self.authority,
+            instruction_tag: InstructionTag::UpdatePolicy,
+            instruction: ring.ix(accounts, data),
         }
-        let data = tagged(
-            tag::SET_POLICY_SOURCE,
-            &SetPolicySourceIxData {
-                list_id: self.list_id as u8,
-                source: u8::from(matches!(self.source, SourceOwner::Curator(_))),
-            },
-        )?;
-        Ok(ring.ix(accounts, data))
+        .check()
     }
 }
 
-impl PolicyRules<'_> {
-    /// Creates the ring policy over `records` and pins the table, an audit-only ring takes an empty one.
-    pub fn create(self, records: PolicyRecords) -> Result<Instruction, RingError> {
-        let ring = self.ring;
-        let TablePayload { data, curators } = self.table()?;
-        let mut accounts = vec![
-            AccountMeta::new(records.payer, true),
-            AccountMeta::new_readonly(self.authority, true),
-            AccountMeta::new_readonly(ring.config_pda(), false),
-            AccountMeta::new(ring.policy_pda(), false),
-            AccountMeta::new_readonly(records.records, false),
-            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
-        ];
-        accounts.extend(curators);
-        let data = tagged(
-            tag::CREATE_POLICY,
-            &CreatePolicyIxData {
-                storage_authority: records.storage_authority,
-                table: data,
-            },
-        )?;
-        self.sized(InstructionTag::CreatePolicy, ring.ix(accounts, data))
-    }
-
-    /// Replaces the pinned table and the complete source map.
-    pub fn replace(self) -> Result<Instruction, RingError> {
-        let ring = self.ring;
-        let TablePayload { data, curators } = self.table()?;
-        let mut accounts = ring.policy_write_metas(self.authority);
-        accounts.extend(curators);
-        let data = tagged(tag::SET_POLICY_RULES, &data)?;
-        self.sized(InstructionTag::SetPolicyRules, ring.ix(accounts, data))
-    }
-
+impl PolicyTable<'_> {
     /// Curator registries follow in first-use order.
-    fn table(&self) -> Result<TablePayload, RingError> {
+    fn payload(&self) -> Result<TablePayload, RingError> {
         let Self {
             rules,
             shared_sources,
-            ..
         } = *self;
         let referenced = rules.referenced();
         let mut named = ListSet::EMPTY;
@@ -386,19 +387,6 @@ impl PolicyRules<'_> {
                 .map(|curator| AccountMeta::new_readonly(*curator, false))
                 .collect(),
         })
-    }
-
-    fn sized(
-        &self,
-        instruction_tag: InstructionTag,
-        instruction: Instruction,
-    ) -> Result<Instruction, RingError> {
-        check_transaction_size(
-            &self.authority,
-            &instruction,
-            ComputeBudgetConfig::new(compute_unit_limit(instruction_tag)),
-        )?;
-        Ok(instruction)
     }
 }
 
@@ -462,6 +450,24 @@ impl CustomRing {
             AccountMeta::new_readonly(self.config_pda(), false),
             AccountMeta::new(self.policy_pda(), false),
         ]
+    }
+}
+
+#[must_use]
+struct SizedInstruction<'a> {
+    payer: &'a Address,
+    instruction_tag: InstructionTag,
+    instruction: Instruction,
+}
+
+impl SizedInstruction<'_> {
+    fn check(self) -> Result<Instruction, RingError> {
+        check_transaction_size(
+            self.payer,
+            &self.instruction,
+            ComputeBudgetConfig::new(compute_unit_limit(self.instruction_tag)),
+        )?;
+        Ok(self.instruction)
     }
 }
 

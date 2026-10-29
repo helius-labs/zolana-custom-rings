@@ -232,15 +232,16 @@ fn auditor_key_is_released_only_to_the_ring_authority() -> Result<()> {
     //    the deployer hands it over.
     rpc.create_and_send_transaction(
         &[
-            custom_ring_sdk::CreateConfig {
+            custom_ring_sdk::Initialize {
                 ring,
                 payer: env.payer.pubkey(),
                 authority: env.payer.pubkey(),
                 auditor_pubkey: service.auditor_pubkey(),
-                kind: custom_ring_sdk::RingKind::Policy,
+                kind: custom_ring_sdk::RingKind::AuditOnly,
+                policy: None,
             }
             .instruction()?,
-            custom_ring_sdk::SetAuthority {
+            custom_ring_sdk::UpdateAuthority {
                 ring,
                 authority: env.payer.pubkey(),
                 new_authority: config_authority.pubkey(),
