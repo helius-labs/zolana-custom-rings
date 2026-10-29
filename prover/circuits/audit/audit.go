@@ -2,6 +2,8 @@
 package audit
 
 import (
+	"slices"
+
 	"github.com/consensys/gnark/frontend"
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
@@ -70,8 +72,7 @@ type auditEnvelope struct {
 	packedTxViewingSk [2]frontend.Variable
 	salt              frontend.Variable
 	outputSeed        frontend.Variable
-	sealed            shared.Sealed
-	sealedHash        frontend.Variable
+	sealedFields      []frontend.Variable
 }
 
 type outputSlot struct {
@@ -98,16 +99,22 @@ func (w AuditWires) sealEnvelope(api frontend.API, rc frontend.Rangechecker) aud
 		packedTxViewingSk: packedTxViewingSk,
 		salt:              salt,
 		outputSeed:        transaction.DeriveOutputBlindingSeed(api, w.FirstNullifier, shared.BlindingSeed(api, packedTxViewingSk, salt)),
-		sealed:            sealed,
-		// The cipher's byte tables bound every ciphertext byte.
-		sealedHash: gadget.HashBoundedBytes(api, sealed.Ciphertext),
+		sealedFields:      sealed.StatementFields(api),
 	}
 }
 
-func classify(api frontend.API, o shared.UtxoWires, opened shared.OpenedUtxo, live frontend.Variable) outputSlot {
+// openOutput classifies every UTXO of an output slot as a ring output or an exit.
+func openOutput(api frontend.API, o shared.UtxoWires) outputSlot {
+	opened := o.Open(api)
 	// SPP holds every UTXO's ring id to 0 or the ring's on the same output hashes, AssertRingMemberOrFree in spp_transaction/shared/ring.go.
-	ring := api.Mul(live, ringgadget.IsNonZero(api, o.RingProgramID))
-	return outputSlot{OpenedUtxo: opened, live: live, ring: ring, exit: api.Sub(live, ring)}
+	ring := api.Mul(opened.Utxo, ringgadget.IsNonZero(api, o.RingProgramID))
+	// No UTXO carries a data hash, the recipient never learns one.
+	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: opened.Utxo, V: o.DataHash})
+	return outputSlot{OpenedUtxo: opened, live: opened.Utxo, ring: ring, exit: api.Sub(opened.Utxo, ring)}
+}
+
+func assertOwnerKey(api frontend.API, slot outputSlot, o shared.UtxoWires, key [32]frontend.Variable) {
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: slot.ring, A: o.OwnerPkHash, B: gadget.SolanaOwnerIdentity(api, key)})
 }
 
 // assertBlinding pins a live UTXO's blinding to SPP's TXOB blinding over the seed tx_viewing_sk fixes.
@@ -120,10 +127,11 @@ func (w AuditWires) assertBlinding(api frontend.API, e auditEnvelope, o shared.U
 //
 //	CRAU, n0, ring_id, txpk0, txpk1, aud0, aud1, eph0, eph1, sealed_hash, salt, layout
 func (e auditEnvelope) statementHead(w AuditWires) []frontend.Variable {
-	return []frontend.Variable{
-		shared.AuditStatementDomain, w.FirstNullifier, w.RingProgramID, e.txPk[0], e.txPk[1],
-		e.sealed.Auditor[0], e.sealed.Auditor[1], e.sealed.Eph[0], e.sealed.Eph[1], e.sealedHash, e.salt, w.Layout,
-	}
+	return slices.Concat(
+		[]frontend.Variable{shared.AuditStatementDomain, w.FirstNullifier, w.RingProgramID, e.txPk[0], e.txPk[1]},
+		e.sealedFields,
+		[]frontend.Variable{e.salt, w.Layout},
+	)
 }
 
 // AssertClamped pins the RFC 7748 clamped encoding, the one byte string per X25519 key.
@@ -142,11 +150,6 @@ func AssertClamped(api frontend.API, secret [32]frontend.Variable) {
 // TaggedPubkey is 0x04 ‖ u of the clamped secret, the generator gadget bounds every secret byte.
 func TaggedPubkey(api frontend.API, secret [32]frontend.Variable) []frontend.Variable {
 	return shared.Tagged(x25519.ScalarMulGenerator(api, secret))
-}
-
-// uintBytes is the big-endian encoding of an unsigned value below 2^(8n), a larger value fails the decomposition.
-func uintBytes(api frontend.API, value frontend.Variable, n int) []frontend.Variable {
-	return gadget.BitsToBytesBE(api, api.ToBinary(value, 8*n))
 }
 
 func masked(api frontend.API, flag frontend.Variable, bytes []frontend.Variable) []frontend.Variable {

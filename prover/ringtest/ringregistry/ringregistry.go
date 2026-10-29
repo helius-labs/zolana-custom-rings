@@ -43,7 +43,11 @@ func (r Record) Hash(t testing.TB) *big.Int {
 }
 
 func (r Record) Wires() registry.Record {
-	return registry.Record{Member: copied(r.Member), Next: copied(r.Next), Lists: copied(r.Lists), EscrowKey: copied(r.EscrowKey), MintPolicy: copied(r.MintPolicy), WithdrawalThreshold: copied(r.WithdrawalThreshold), AssetLimits: r.AssetLimits.Wires()}
+	return registry.Record{Member: copied(r.Member), RecordBody: r.BodyWires()}
+}
+
+func (r Record) BodyWires() registry.RecordBody {
+	return registry.RecordBody{Next: copied(r.Next), Lists: copied(r.Lists), EscrowKey: copied(r.EscrowKey), MintPolicy: copied(r.MintPolicy), WithdrawalThreshold: copied(r.WithdrawalThreshold), AssetLimits: r.AssetLimits.Wires()}
 }
 
 func VectorLimits(t testing.TB, fields []ringtest.Hex) Limits {
@@ -109,21 +113,18 @@ type Opening struct {
 
 // Wires zeroes the unused half.
 func (o Opening) Wires() registry.QuadOpening {
-	zero := Limits{}.Wires()
-	w := registry.QuadOpening{Present: 0, Next: 0, Lists: 0, EscrowKey: 0, MintPolicy: 0, LowMintPolicy: 0, WithdrawalThreshold: 0, LowWithdrawalThreshold: 0, AssetLimits: zero, LowAssetLimits: zero, LowMember: 0, LowNext: 0, LowLists: 0, LowEscrow: 0, Path: o.Path.Wires()}
-	r := o.Record
+	w := registry.QuadOpening{Present: 0, RecordBody: Record{}.BodyWires(), Low: Record{}.Wires(), Path: o.Path.Wires()}
 	if o.Present {
-		w.Present, w.Next, w.Lists, w.EscrowKey, w.MintPolicy, w.WithdrawalThreshold, w.AssetLimits = 1, copied(r.Next), copied(r.Lists), copied(r.EscrowKey), copied(r.MintPolicy), copied(r.WithdrawalThreshold), r.AssetLimits.Wires()
+		w.Present, w.RecordBody = 1, o.Record.BodyWires()
 		return w
 	}
-	w.LowMember, w.LowNext, w.LowLists, w.LowEscrow, w.LowMintPolicy, w.LowWithdrawalThreshold, w.LowAssetLimits = copied(r.Member), copied(r.Next), copied(r.Lists), copied(r.EscrowKey), copied(r.MintPolicy), copied(r.WithdrawalThreshold), r.AssetLimits.Wires()
+	w.Low = o.Record.Wires()
 	return w
 }
 
 // RecordWires expects a present member.
 func (o Opening) RecordWires() registry.QuadRecordOpening {
-	r := o.Record
-	return registry.QuadRecordOpening{Next: copied(r.Next), Lists: copied(r.Lists), EscrowKey: copied(r.EscrowKey), MintPolicy: copied(r.MintPolicy), WithdrawalThreshold: copied(r.WithdrawalThreshold), AssetLimits: r.AssetLimits.Wires(), Path: o.Path.Wires()}
+	return registry.QuadRecordOpening{RecordBody: o.Record.BodyWires(), Path: o.Path.Wires()}
 }
 
 // UnreadRecordWires is the zero opening a proof assigns where it reads no record.

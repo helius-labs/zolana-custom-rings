@@ -67,23 +67,15 @@ func writeWires(w ringregistry.Write) registry.RecordWrite {
 		exists = 1
 	}
 	return registry.RecordWrite{
-		Entry:                  registry.QueueEntry{Member: e.Member, Mask: e.Mask, Value: e.Value, EscrowKey: e.EscrowKey, MintPolicy: policyValue(e.MintPolicy), WithdrawalThreshold: policyValue(e.WithdrawalThreshold), AssetLimits: e.AssetLimits.Wires()},
-		Exists:                 exists,
-		OldNext:                w.OldNext,
-		OldLists:               w.OldLists,
-		OldEscrow:              w.OldEscrow,
-		OldMintPolicy:          policyValue(w.OldMintPolicy),
-		OldWithdrawalThreshold: policyValue(w.OldWithdrawalThreshold),
-		OldAssetLimits:         w.OldAssetLimits.Wires(),
-		Slot:                   w.Slot.Wires(),
-		LowMember:              w.Low.Member,
-		LowNext:                w.Low.Next,
-		LowLists:               w.Low.Lists,
-		LowEscrow:              w.Low.EscrowKey,
-		LowMintPolicy:          policyValue(w.Low.MintPolicy),
-		LowWithdrawalThreshold: policyValue(w.Low.WithdrawalThreshold),
-		LowAssetLimits:         w.Low.AssetLimits.Wires(),
-		Low:                    w.LowPath.Wires(),
+		Entry:  registry.QueueEntry{Member: e.Member, Mask: e.Mask, Value: e.Value, EscrowKey: e.EscrowKey, MintPolicy: policyValue(e.MintPolicy), WithdrawalThreshold: policyValue(e.WithdrawalThreshold), AssetLimits: e.AssetLimits.Wires()},
+		Exists: exists,
+		Old: registry.RecordBody{
+			Next: w.OldNext, Lists: w.OldLists, EscrowKey: w.OldEscrow, MintPolicy: policyValue(w.OldMintPolicy),
+			WithdrawalThreshold: policyValue(w.OldWithdrawalThreshold), AssetLimits: w.OldAssetLimits.Wires(),
+		},
+		Slot:    w.Slot.Wires(),
+		Low:     w.Low.Wires(),
+		LowSlot: w.LowPath.Wires(),
 	}
 }
 
@@ -175,8 +167,8 @@ func TestApplyRecordsRefusals(t *testing.T) {
 			// carol's record opens under the old root, its link starts above 0x20.
 			opening := seeded(t).Opening(big.NewInt(0x30))
 			w := &b.circuit.Writes[0]
-			w.LowMember, w.LowNext, w.LowLists, w.LowEscrow = opening.Record.Member, opening.Record.Next, opening.Record.Lists, opening.Record.EscrowKey
-			w.Low = opening.Path.Wires()
+			w.Low.Member, w.Low.Next, w.Low.Lists, w.Low.EscrowKey = opening.Record.Member, opening.Record.Next, opening.Record.Lists, opening.Record.EscrowKey
+			w.LowSlot = opening.Path.Wires()
 		}, bracket},
 		{"a present member inserted again through the record linking to it", seeded, 1, []ringregistry.Entry{entry(0x10, ringregistry.BlockBit, ringregistry.BlockBit, 0)}, func(t *testing.T, b *batch) {
 			// The sentinel links to alice, so its relink changes nothing and a second alice record follows.
@@ -199,21 +191,21 @@ func TestApplyRecordsRefusals(t *testing.T) {
 		{"an old list bit on an absent member", seeded, 1, []ringregistry.Entry{entry(0x20, ringregistry.BlockBit, ringregistry.BlockBit, 0)}, func(t *testing.T, b *batch) {
 			listed := seeded(t)
 			listed.Apply(t, entry(0x20, ringregistry.AllowBit|ringregistry.BlockBit, ringregistry.AllowBit|ringregistry.BlockBit, 0))
-			b.circuit.Writes[0].OldLists = big.NewInt(ringregistry.AllowBit)
+			b.circuit.Writes[0].Old.Lists = big.NewInt(ringregistry.AllowBit)
 			b.circuit.NewRoot = listed.Root()
 			b.bind(t)
 		}, empty},
 		{"an insert carrying an escrow key the queue never held", seeded, 1, []ringregistry.Entry{insert}, func(t *testing.T, b *batch) {
 			keyed := seeded(t)
 			keyed.Apply(t, entry(0x20, ringregistry.AllowBit, ringregistry.AllowBit, 0x99))
-			b.circuit.Writes[0].OldEscrow = big.NewInt(0x99)
+			b.circuit.Writes[0].Old.EscrowKey = big.NewInt(0x99)
 			b.circuit.NewRoot = keyed.Root()
 			b.bind(t)
 		}, empty},
 		{"an insert linking past the low record's next", seeded, 1, []ringregistry.Entry{insert}, func(t *testing.T, b *batch) {
 			w := b.writes[0]
 			w.OldNext = big.NewInt(0x40)
-			b.circuit.Writes[0].OldNext = w.OldNext
+			b.circuit.Writes[0].Old.Next = w.OldNext
 			b.circuit.NewRoot = w.Slot.Root(t, newRecord(w, ringregistry.AllowBit).Hash(t))
 			b.bind(t)
 		}, gate},
@@ -228,7 +220,7 @@ func TestApplyRecordsRefusals(t *testing.T) {
 			// alice holds allow, the forged witness says she held nothing.
 			w := b.writes[0]
 			w.OldLists = big.NewInt(0)
-			b.circuit.Writes[0].OldLists = w.OldLists
+			b.circuit.Writes[0].Old.Lists = w.OldLists
 			b.circuit.NewRoot = w.Slot.Root(t, newRecord(w, ringregistry.BlockBit).Hash(t))
 			b.bind(t)
 		}, gate},

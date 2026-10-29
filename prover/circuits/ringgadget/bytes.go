@@ -3,6 +3,8 @@ package ringgadget
 
 import (
 	"github.com/consensys/gnark/frontend"
+
+	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
 const byteBits = 8
@@ -12,7 +14,15 @@ type BoundedBytes struct{}
 
 func (BoundedBytes) Check(frontend.Variable, int) {}
 
-func IsConstantZero(api frontend.API, v frontend.Variable) bool {
-	value, ok := api.Compiler().ConstantValue(v)
-	return ok && value.Sign() == 0
+// UintBytesBE fails the decomposition for a value at or above 2^(8n).
+func UintBytesBE(api frontend.API, value frontend.Variable, n int) []frontend.Variable {
+	return gadget.BitsToBytesBE(api, api.ToBinary(value, byteBits*n))
+}
+
+func ConstBytes(s string) []frontend.Variable {
+	out := make([]frontend.Variable, len(s))
+	for i := range s {
+		out[i] = s[i]
+	}
+	return out
 }

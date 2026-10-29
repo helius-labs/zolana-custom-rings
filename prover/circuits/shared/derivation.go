@@ -3,6 +3,7 @@ package shared
 
 import (
 	"github.com/consensys/gnark/frontend"
+	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
@@ -96,4 +97,12 @@ func SenderCommitment(api frontend.API, senderPkHash, privateTxBlinding frontend
 // DepositBlinding is Poseidon(CRDB, blindingSecret), domain separated from every SPP output blinding.
 func DepositBlinding(api frontend.API, blindingSecret frontend.Variable) frontend.Variable {
 	return gadget.PoseidonHash(api, []frontend.Variable{DepositBlindingDomain, blindingSecret})
+}
+
+// AssertAnonymousParties separates the hidden owner from the public identities
+// reconstructed by the verifier. Zero denotes an absent optional party.
+func AssertAnonymousParties(api frontend.API, owner frontend.Variable, parties [3]frontend.Variable) {
+	for _, party := range parties {
+		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: party, V: api.IsZero(api.Sub(owner, party))})
+	}
 }

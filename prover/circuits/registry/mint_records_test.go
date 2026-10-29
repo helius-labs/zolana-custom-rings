@@ -57,7 +57,7 @@ func TestMintRecordsMatchRustAndPreserveSettings(t *testing.T) {
 	if got.WithdrawalThreshold.Sign() != 0 || got.MintPolicy.Sign() != 0 || !got.AssetLimits.IsZero() || got.EscrowKey.Uint64() != 99 || got.Lists.Uint64() != 129 {
 		t.Fatal("clearing changed other fields")
 	}
-	b.circuit.Writes[0].OldWithdrawalThreshold = 901
+	b.circuit.Writes[0].Old.WithdrawalThreshold = 901
 	if solve(t, b.circuit) == nil {
 		t.Fatal("forged old threshold admitted")
 	}

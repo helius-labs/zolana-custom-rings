@@ -2,7 +2,10 @@
 package registry
 
 import (
+	"slices"
+
 	"github.com/consensys/gnark/frontend"
+	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
@@ -21,7 +24,11 @@ const (
 
 // The empty leaf is 0, and the sentinel (0, q-1, 0, 0, 0, 0, 0, 0) at index 0 brackets every member in [1, q-2].
 type Record struct {
-	Member              frontend.Variable
+	Member frontend.Variable
+	RecordBody
+}
+
+type RecordBody struct {
 	Next                frontend.Variable
 	Lists               frontend.Variable
 	EscrowKey           frontend.Variable
@@ -31,7 +38,32 @@ type Record struct {
 }
 
 func (r Record) Hash(api frontend.API) frontend.Variable {
-	return gadget.PoseidonHash(api, append([]frontend.Variable{r.Member, r.Next, r.Lists, r.EscrowKey, r.MintPolicy, r.WithdrawalThreshold}, r.AssetLimits[:]...))
+	return gadget.PoseidonHash(api, slices.Concat([]frontend.Variable{r.Member, r.Next}, r.contents()))
+}
+
+// contents keeps the record hash order.
+func (b RecordBody) contents() []frontend.Variable {
+	return append([]frontend.Variable{b.Lists, b.EscrowKey, b.MintPolicy, b.WithdrawalThreshold}, b.AssetLimits[:]...)
+}
+
+func (b RecordBody) selectWhen(api frontend.API, cond frontend.Variable, other RecordBody) RecordBody {
+	selected := RecordBody{
+		Next:                api.Select(cond, b.Next, other.Next),
+		Lists:               api.Select(cond, b.Lists, other.Lists),
+		EscrowKey:           api.Select(cond, b.EscrowKey, other.EscrowKey),
+		MintPolicy:          api.Select(cond, b.MintPolicy, other.MintPolicy),
+		WithdrawalThreshold: api.Select(cond, b.WithdrawalThreshold, other.WithdrawalThreshold),
+	}
+	for i := range selected.AssetLimits {
+		selected.AssetLimits[i] = api.Select(cond, b.AssetLimits[i], other.AssetLimits[i])
+	}
+	return selected
+}
+
+func (b RecordBody) assertEmptyWhen(api frontend.API, cond frontend.Variable) {
+	for _, field := range b.contents() {
+		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: cond, V: field})
+	}
 }
 
 // EscrowKey is the record field RegisterKey fills, mirrored by EscrowKey::hash in program-libs/interface/src/accounts/member_registry.rs.
@@ -61,6 +93,14 @@ func (p QuadPath) digits(api frontend.API) []frontend.Variable {
 
 func (p QuadPath) fold(api frontend.API, digits []frontend.Variable, leaf frontend.Variable) frontend.Variable {
 	return foldQuadPath(api, p.Siblings[:], digits, leaf)
+}
+
+func foldQuadPath(api frontend.API, siblings [][Arity - 1]frontend.Variable, bits []frontend.Variable, leaf frontend.Variable) frontend.Variable {
+	node := leaf
+	for level, siblings := range siblings {
+		node = gadget.PoseidonHash(api, quadChildren(api, node, siblings, bits[2*level], bits[2*level+1]))
+	}
+	return node
 }
 
 func quadChildren(api frontend.API, node frontend.Variable, siblings [Arity - 1]frontend.Variable, b0, b1 frontend.Variable) []frontend.Variable {

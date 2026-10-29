@@ -74,6 +74,6 @@ BN254 constraints of selected policy keys, from
 | Delegate, 2x2 | 30,640 | 48,530 |
 | Delegate, 4x4 | 51,437 | 82,395 |
 
-Apply 16 records takes 246,444, deposit 8 takes 223,168 and the withdrawal
-exemption takes 12,300. Adding configured mints increases registry storage,
+Apply 16 records takes 246,444, deposit 8 takes 223,264 and the withdrawal
+exemption takes 12,318. Adding configured mints increases registry storage,
 not these circuit sizes.

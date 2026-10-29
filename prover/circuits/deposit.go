@@ -2,7 +2,7 @@
 package circuits
 
 import (
-	"fmt"
+	"errors"
 	"slices"
 
 	"github.com/consensys/gnark/frontend"
@@ -14,6 +14,7 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
+	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
 // Properties:
@@ -56,8 +57,8 @@ type DepositCircuit struct {
 var DepositCapacities = []int{1, 2, 4, 8}
 
 func NewDepositCircuit(capacity int) (*DepositCircuit, error) {
-	if !slices.Contains(DepositCapacities, capacity) {
-		return nil, fmt.Errorf("deposit: unsupported capacity %d", capacity)
+	if err := shared.ValidateWidth("deposit", capacity, DepositCapacities); err != nil {
+		return nil, err
 	}
 	return &DepositCircuit{
 		Capacity: capacity, OwnerPkHashes: make([]frontend.Variable, capacity), OwnerKeys: make([][32]frontend.Variable, capacity), NullifierPks: make([]frontend.Variable, capacity), BlindingSecrets: make([]frontend.Variable, capacity), CtHashes: make([]frontend.Variable, capacity), Members: make([]registry.QuadRecordOpening, capacity),
@@ -66,8 +67,20 @@ func NewDepositCircuit(capacity int) (*DepositCircuit, error) {
 }
 
 func (c *DepositCircuit) Define(api frontend.API) error {
-	if !slices.Contains(DepositCapacities, c.Capacity) || len(c.OwnerPkHashes) != c.Capacity || len(c.OwnerKeys) != c.Capacity || len(c.NullifierPks) != c.Capacity || len(c.BlindingSecrets) != c.Capacity || len(c.CtHashes) != c.Capacity || len(c.Members) != c.Capacity || len(c.Assets) != c.Capacity || len(c.Amounts) != c.Capacity || len(c.AssetRecords) != c.Capacity || len(c.CuratorAssetRecords) != c.Capacity {
-		return fmt.Errorf("deposit: capacity/witness mismatch")
+	if err := errors.Join(
+		shared.ValidateWidth("deposit", c.Capacity, DepositCapacities),
+		transaction.ValidateLength("owner", len(c.OwnerPkHashes), c.Capacity),
+		transaction.ValidateLength("owner key", len(c.OwnerKeys), c.Capacity),
+		transaction.ValidateLength("nullifier key", len(c.NullifierPks), c.Capacity),
+		transaction.ValidateLength("blinding secret", len(c.BlindingSecrets), c.Capacity),
+		transaction.ValidateLength("ciphertext hash", len(c.CtHashes), c.Capacity),
+		transaction.ValidateLength("member", len(c.Members), c.Capacity),
+		transaction.ValidateLength("asset", len(c.Assets), c.Capacity),
+		transaction.ValidateLength("amount", len(c.Amounts), c.Capacity),
+		transaction.ValidateLength("asset record", len(c.AssetRecords), c.Capacity),
+		transaction.ValidateLength("curator asset record", len(c.CuratorAssetRecords), c.Capacity),
+	); err != nil {
+		return err
 	}
 	// 1. Count selects 1..8 occupied slots, DepositPublicInput::hash builds both flags as 0 or 1.
 	count := ringgadget.SelectCount(api, c.Count, 1, c.Capacity)

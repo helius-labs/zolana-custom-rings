@@ -3,7 +3,6 @@ package registry
 import (
 	"github.com/consensys/gnark/frontend"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
@@ -25,7 +24,7 @@ type RegisterKeyCircuit struct {
 func (c *RegisterKeyCircuit) Define(api frontend.API) error {
 	// 1. A zero lead byte keeps the secret below q, the envelope's cipher bounds the other 31 bytes.
 	api.AssertIsEqual(c.NullifierSecret[0], 0)
-	nullifierPk := gadget.PoseidonHash(api, gadget.PackBytesBEWith(api, ringgadget.BoundedBytes{}, c.NullifierSecret[1:]))
+	nullifierPk := gadget.PoseidonHash(api, shared.PackBounded(api, c.NullifierSecret[1:]))
 	// 2. The envelope seals the same 32 bytes to the auditor, its cipher bounds every ciphertext byte.
 	sealed := shared.Envelope{Plaintext: c.NullifierSecret[:], EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: shared.NfKeyEncInfo}.Seal(api)
 	// 3. The statement names the member and the envelope the program reads from the instruction.
@@ -35,8 +34,5 @@ func (c *RegisterKeyCircuit) Define(api frontend.API) error {
 
 // statement mirrors RegisterKeyStatement::elements in program-libs/interface/src/proof/statement.rs.
 func (c *RegisterKeyCircuit) statement(api frontend.API, nullifierPk frontend.Variable, sealed shared.Sealed) []frontend.Variable {
-	return []frontend.Variable{
-		shared.RegisterKeyDomain, c.Member, nullifierPk, sealed.Auditor[0], sealed.Auditor[1], sealed.Eph[0], sealed.Eph[1],
-		gadget.HashBoundedBytes(api, sealed.Ciphertext),
-	}
+	return append([]frontend.Variable{shared.RegisterKeyDomain, c.Member, nullifierPk}, sealed.StatementFields(api)...)
 }
