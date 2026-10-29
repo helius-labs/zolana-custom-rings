@@ -54,7 +54,7 @@ pub use crate::{
         RegistryStatus, RingRegistration, RingStatus,
     },
     admin::{
-        CreateConfig, CreateMemberRegistry, GrantReader, InitSppRingConfig, PolicyRules,
+        CreateConfig, CreateMemberRegistry, GrantReader, InitSppRingConfig, PolicyRecords, PolicyRules,
         RevokeReader, SetAuthority, SetCoSigner, SetDelegate, SetSourceOwner, SourceOwner,
     },
     client::{RingClient, RingIndexerBackend},

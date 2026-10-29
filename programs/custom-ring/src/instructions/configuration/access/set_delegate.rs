@@ -4,7 +4,7 @@ use spr_account_checks::AccountIterator;
 
 use crate::instructions::{
     instruction_runtime::no_data,
-    loader::{load_mut, load_registry, UpgradeAuthorityCheck},
+    loader::{load_mut, load_policy, UpgradeAuthorityCheck},
 };
 
 /// Only the upgrade authority appoints the delegate.
@@ -19,7 +19,7 @@ pub fn process_set_delegate_ix(
     let authority = iter.next_signer("authority")?;
     let config = iter.next_mut("config")?;
     let delegate = iter.next_signer("delegate")?;
-    let registry = iter.next_account("registry")?;
+    let policy = iter.next_account("policy")?;
     let program = iter.next_account("program")?;
     let program_data = iter.next_account("program_data")?;
 
@@ -43,8 +43,8 @@ pub fn process_set_delegate_ix(
     if !config.has_policy() {
         return Err(CustomRingError::DelegateRequiresPolicy.into());
     }
-    // 4. `ConfidentialEscrow` mode escrows every output nullifier key in the member registry.
-    load_registry(program_id, registry)?;
+    // 4. `ConfidentialEscrow` mode escrows every output nullifier key in the policy's records.
+    load_policy(program_id, policy)?;
     config.delegate = *delegate.address();
     config.mode = RingMode::ConfidentialEscrow as u8;
     Ok(())

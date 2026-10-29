@@ -7,7 +7,7 @@ use solana_address::Address;
 use spr_hasher::{primitives::hash_bytes, HasherError};
 use spr_keypair::X25519Pubkey;
 use zolana_ring_indexer::rpc::{
-    GetRingApplyProofInputsResponse, GetRingMemberRecordsResponse, GetRingRecordPoolResponse,
+    GetRingApplyProofInputsResponse, GetRingMemberRecordsResponse, GetStorageRecordPoolResponse,
     RingMemberOpening, RingMemberRecordView, RingRecordPathView, RingRecordWriteView,
     MAX_RING_MEMBER_PAGE_LIMIT,
 };
@@ -64,7 +64,7 @@ pub struct RecordPoolRead {
 /// One pool read of distinct `members` under `root`, its canopy sized for `openings` paths.
 #[must_use]
 pub struct RecordPoolCheck<'a> {
-    pub response: &'a GetRingRecordPoolResponse,
+    pub response: &'a GetStorageRecordPoolResponse,
     pub root: &'a [u8; 32],
     pub members: &'a [[u8; 32]],
     pub openings: usize,

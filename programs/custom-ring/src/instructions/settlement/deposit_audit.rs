@@ -1,5 +1,5 @@
 use custom_ring_interface::{
-    key_catalog::RingCircuit, tag, AuditedDepositPrefix, CustomRingError, CustomRingProof,
+    key_catalog::RingCircuit, storage::Revision, tag, AuditedDepositPrefix, CustomRingError, CustomRingProof,
     DepositContext, DepositPublicInput, RingDepositAuditCapsule, MAX_RING_DEPOSIT_AUDIT_SLOTS,
     RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN, VIEWING_PUBKEY_TAG,
 };
@@ -10,7 +10,7 @@ use crate::instructions::verifier::{ring_key, RingProof};
 
 pub(crate) struct AuditedDeposit<'a> {
     pub proof: CustomRingProof,
-    pub registry_root_index: u8,
+    pub own_revision: Revision,
     pub spp_data: &'a [u8],
 }
 
@@ -25,7 +25,7 @@ impl<'a> AuditedDeposit<'a> {
         }
         Ok(Self {
             proof: prefix.proof,
-            registry_root_index: prefix.registry_root_index,
+            own_revision: prefix.own_revision,
             spp_data,
         })
     }

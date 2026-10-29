@@ -2,7 +2,9 @@
 
 use std::time::Duration;
 
-use custom_ring_interface::{compute_unit_limit, CustomRingError, InstructionTag, MemberRegistry};
+use custom_ring_interface::{
+    compute_unit_limit, storage::Revision, CustomRingError, InstructionTag, RingPolicy, RootMirror,
+};
 use solana_address::Address;
 use solana_commitment_config::CommitmentLevel;
 use solana_instruction::Instruction;
@@ -109,34 +111,72 @@ operations! {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Mirror {
+    Own,
+    Curator,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct BoundRoot {
     pub ring: CustomRing,
-    /// The history slot the statement names.
-    pub index: u8,
+    pub mirror: Mirror,
+    /// The `StorageRegistry` the indexer serves the records of.
+    pub registry: Address,
+    pub revision: Revision,
     pub root: [u8; 32],
 }
 
 impl BoundRoot {
-    pub(crate) fn registry(ring: CustomRing, index: u8, root: [u8; 32]) -> Self {
-        Self { ring, index, root }
+    /// The newest root of the records mirror.
+    pub(crate) fn own(ring: CustomRing, policy: &RingPolicy) -> Result<Self, RingError> {
+        Self::mirrored(ring, Mirror::Own, &policy.records, &policy.own_roots)
     }
 
-    /// The newest root, never below the floor when read.
-    pub(crate) fn current(ring: CustomRing, registry: &MemberRegistry) -> Self {
-        Self::registry(ring, registry.history_cursor, registry.current_root())
+    /// The newest root of the curator mirror, `None` without a curator source.
+    pub(crate) fn curator(ring: CustomRing, policy: &RingPolicy) -> Result<Option<Self>, RingError> {
+        policy
+            .curator()
+            .map(|curator| Self::mirrored(ring, Mirror::Curator, &curator, &policy.curator_roots))
+            .transpose()
     }
 
     pub(crate) async fn newest(
         ring: CustomRing,
         rpc: &(impl AsyncRpc + ?Sized),
     ) -> Result<Self, RingError> {
-        Ok(Self::current(ring, &*ring.require_registry(rpc).await?))
+        Self::own(ring, &*ring.require_policy(rpc).await?)
     }
 
-    /// `true` once the history wraps over the slot, the program then reads another root.
+    fn mirrored(
+        ring: CustomRing,
+        mirror: Mirror,
+        registry: &Address,
+        roots: &RootMirror,
+    ) -> Result<Self, RingError> {
+        let newest = roots.roots[0];
+        if roots.registry != *registry || newest.hash == [0; 32] {
+            return Err(RingError::UnsyncedRoots {
+                registry: *registry,
+            });
+        }
+        Ok(Self {
+            ring,
+            mirror,
+            registry: *registry,
+            revision: newest.revision,
+            root: newest.hash,
+        })
+    }
+
+    /// `true` once the mirror no longer serves the root at its revision.
     async fn replaced(self, client: &(impl AsyncRpc + ?Sized)) -> Result<bool, RingError> {
-        let registry = self.ring.require_registry(client).await?;
-        Ok(registry.history[usize::from(self.index)].root != self.root)
+        let policy = self.ring.require_policy(client).await?;
+        let slot = client.get_slot().await?;
+        let served = match self.mirror {
+            Mirror::Own => policy.own_root(self.revision, slot),
+            Mirror::Curator => policy.curator_root(self.revision, slot),
+        };
+        Ok(served != Ok(self.root))
     }
 }
 
@@ -168,9 +208,8 @@ impl BoundState {
             return self.moved(client).await;
         }
         Ok([
-            CustomRingError::RootBelowFloor,
-            CustomRingError::CuratorRootStale,
-            CustomRingError::RootIndexEmpty,
+            CustomRingError::MirrorRootExpired,
+            CustomRingError::MirrorNotSynced,
             CustomRingError::AuthorityBatchTooLarge,
         ]
         .into_iter()
@@ -184,7 +223,7 @@ impl BoundState {
             }
         }
         if let Some(policy) = self.policy {
-            if policy.ring.require_registry(client).await?.policy_hash != policy.hash {
+            if policy.ring.require_policy(client).await?.policy_hash != policy.hash {
                 return Ok(true);
             }
         }

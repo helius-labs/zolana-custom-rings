@@ -6,6 +6,7 @@ use zolana_ring_policy::{ListSet, ListWrite, MintPolicy, Writer};
 use crate::{
     error::CustomRingError,
     member_registry::{check_member, QueueEntry, APPLY_BATCH},
+    storage::Revision,
     ReaderKeyBytes, AUDIT_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
 };
 
@@ -189,14 +190,14 @@ impl CustomRingProof {
 
 const _: () = assert!(CustomRingProof::SIZE == 192);
 
-/// `tag || proof || registry_root_index`, then the SPP deposit instruction unchanged.
+/// `tag || proof || own_revision`, then the SPP deposit instruction unchanged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
 pub struct AuditedDepositPrefix {
     pub tag: u8,
     pub proof: CustomRingProof,
-    /// The registry history slot of the bound root, zero unless the ring escrows nullifier keys.
-    pub registry_root_index: u8,
+    /// Zero unless the ring escrows nullifier keys.
+    pub own_revision: Revision,
 }
 
 /// Compressed Groth16 points, `b` decompresses to SPP's raw 128 bytes.
@@ -208,7 +209,7 @@ pub struct PlainGroth16Proof {
     pub proof_c: [u8; 32],
 }
 
-/// `source` 0 names the ring's own registry, `k` the `k`-th trailing curator registry.
+/// `source` 0 names the ring's own records, `k` the `k`-th trailing curator registry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
 pub struct SourceSpec {
     pub list_id: u8,
@@ -224,7 +225,14 @@ pub struct PolicyTableIxData {
     pub rules: Vec<[u8; 32]>,
 }
 
-/// `source` 0 is the ring's own registry, 1 the single trailing curator member registry.
+#[derive(Clone, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
+pub struct CreatePolicyIxData {
+    /// The records registry may answer to it beside the config authority.
+    pub storage_authority: Address,
+    pub table: PolicyTableIxData,
+}
+
+/// `source` 0 is the ring's own records, 1 the single trailing curator `StorageRegistry`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
 pub struct SetPolicySourceIxData {
     pub list_id: u8,

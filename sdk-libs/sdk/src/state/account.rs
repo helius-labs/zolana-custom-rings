@@ -86,6 +86,7 @@ pub struct RingStatus {
     pub config: CustomRingConfig,
     pub registration: Option<RingRegistration>,
     pub registry: Option<RegistryStatus>,
+    pub policy: Option<Box<RingPolicy>>,
     pub queue: Option<QueueStatus>,
 }
 
@@ -200,6 +201,20 @@ impl CustomRing {
             .ok_or(RingError::MissingMemberRegistry)
     }
 
+    pub async fn policy(
+        self,
+        rpc: &(impl AsyncRpc + ?Sized),
+    ) -> Result<Option<Box<RingPolicy>>, RingError> {
+        Ok(self.read::<RingPolicy>(rpc).await?.map(Box::new))
+    }
+
+    pub async fn require_policy(
+        self,
+        rpc: &(impl AsyncRpc + ?Sized),
+    ) -> Result<Box<RingPolicy>, RingError> {
+        self.policy(rpc).await?.ok_or(RingError::MissingRingPolicy)
+    }
+
     pub async fn queue(
         self,
         rpc: &(impl AsyncRpc + ?Sized),
@@ -222,7 +237,7 @@ impl CustomRing {
         if !self.require_config(rpc).await?.has_policy {
             return Ok(None);
         }
-        PinnedPolicy::of(&*self.require_registry(rpc).await?).map(Some)
+        PinnedPolicy::of(&*self.require_policy(rpc).await?).map(Some)
     }
 
     pub async fn access_record(
@@ -277,6 +292,7 @@ impl CustomRing {
             config,
             registration: self.registration(rpc).await?,
             registry: registry.map(RegistryStatus::of),
+            policy: self.policy(rpc).await?,
             queue: queue.map(|queue| QueueStatus {
                 head: queue.head(),
                 tail: queue.tail(),
@@ -353,10 +369,10 @@ impl RegistryStatus {
 
 impl PinnedPolicy {
     /// The stored table and sources, refused unless they reproduce the pinned hash.
-    pub fn of(registry: &MemberRegistry) -> Result<Self, RingError> {
-        let policy_hash = *registry.policy_hash()?;
-        let sources = registry.source_map()?;
-        let table = registry.rule_table()?;
+    pub fn of(policy: &RingPolicy) -> Result<Self, RingError> {
+        let policy_hash = *policy.policy_hash()?;
+        let sources = policy.source_map()?;
+        let table = policy.rule_table()?;
         if table.hash(&sources)? != policy_hash {
             return Err(RingError::HashMismatch);
         }
@@ -364,7 +380,7 @@ impl PinnedPolicy {
             table,
             sources,
             policy_hash,
-            curator: registry.curator(),
+            curator: policy.curator(),
         })
     }
 

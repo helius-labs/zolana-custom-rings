@@ -2,12 +2,13 @@
 
 use std::fmt::Display;
 
-use anyhow::{bail, ensure, Result};
-use custom_ring_interface::{queue_chain, CustomRingError, QueueEntry, RecordQueue};
+use anyhow::{bail, ensure, Context as _, Result};
+use custom_ring_interface::{queue_chain, CustomRingError, QueueEntry, RecordQueue, RingPolicy};
 use custom_ring_sdk::{CustomRing, CustomRingConfig, MemberRecords, RecordApplication, RingError};
 use solana_address::Address;
 use solana_signer::Signer;
 use spr_client::{BlockingIndexer, BlockingRpc, Rpc};
+use spr_indexer_api::Hash;
 use zolana_ring_client::{records::MemberOpeningRead, RingIndexer};
 use zolana_ring_indexer::rpc::{GetRingRecordQueueRequest, GetRingRecordQueueResponse};
 use zolana_ring_member_registry::MemberRecord;
@@ -17,6 +18,8 @@ use crate::{transact::SENDER_FEE_BUDGET, wait_for, Context, Landing, Probe, Zola
 
 pub const NO_MEMBER_REGISTRY: &str =
     "the ring has no member registry, its authority must run `zolana-ring init` first";
+pub const NO_RING_POLICY: &str =
+    "the ring has no ring policy, its authority must run `zolana-ring init` first";
 
 #[must_use]
 pub struct Queued {
@@ -51,6 +54,46 @@ pub(crate) fn read_one<R: BlockingRpc, I: BlockingIndexer + RingIndexer>(
     Ok(read)
 }
 
+/// `members` under the newest mirrored root of the curator registry.
+pub(crate) fn read_curator(
+    ctx: &Context,
+    policy: &RingPolicy,
+    members: &[Member],
+) -> Result<Vec<MemberOpeningRead>> {
+    use zolana_ring_indexer::rpc::{GetStorageMemberOpeningsRequest, MAX_RING_MEMBER_PAGE_LIMIT};
+    let registry = policy.curator().context("the policy names no curator")?;
+    let newest = policy.curator_roots.roots[0];
+    ensure!(
+        policy.curator_roots.registry == registry && newest.hash != [0; 32],
+        "the policy mirrors no roots of curator registry {registry}, run `SyncRoots` for it"
+    );
+    let mut reads = Vec::with_capacity(members.len());
+    for chunk in members.chunks(MAX_RING_MEMBER_PAGE_LIMIT as usize) {
+        let response = ctx
+            .zolana
+            .indexer()
+            .get_storage_member_openings(GetStorageMemberOpeningsRequest {
+                registry: registry.into(),
+                members: chunk.iter().map(|member| Hash(*member.as_bytes())).collect(),
+                expected_root: Hash(newest.hash),
+            })?;
+        ensure!(
+            response.openings.len() == chunk.len(),
+            "the indexer served {} openings for {} members",
+            response.openings.len(),
+            chunk.len()
+        );
+        for (member, opening) in chunk.iter().zip(&response.openings) {
+            reads.push(MemberOpeningRead::verify(
+                opening,
+                &newest.hash,
+                member.as_bytes(),
+            )?);
+        }
+    }
+    Ok(reads)
+}
+
 /// Read again under the newest root while the projection lags the chain.
 pub(crate) fn patiently<T>(
     label: impl Display,
@@ -60,6 +103,7 @@ pub(crate) fn patiently<T>(
         Ok(value) => Ok(Probe::Ready(value)),
         Err(error) if error.is_projection_lag() => Ok(Probe::Retry(error.into())),
         Err(RingError::MissingMemberRegistry) => bail!(NO_MEMBER_REGISTRY),
+        Err(RingError::MissingRingPolicy) => bail!(NO_RING_POLICY),
         Err(error) => Err(error.into()),
     })
 }
@@ -187,7 +231,10 @@ pub(crate) fn queue(zolana: &Zolana, ring: CustomRing) -> Result<RecordQueue> {
 pub(crate) mod fixtures {
     use std::sync::atomic::{AtomicU8, Ordering};
 
-    use custom_ring_interface::{AppliedAt, MemberRegistry, QueueEntry};
+    use custom_ring_interface::{
+        storage::{Revision, StorageRegistry},
+        QueueEntry, RingPolicy,
+    };
     use custom_ring_sdk::CustomRing;
     use solana_account::Account;
     use solana_address::Address;
@@ -197,8 +244,8 @@ pub(crate) mod fixtures {
     use spr_indexer_api::{Base64String, Context as Page, Hash};
     use zolana_ring_client::SealedNullifierKey;
     use zolana_ring_indexer::rpc::{
-        GetRingMemberOpeningsResponse, RingMemberOpening, RingMemberRecordView, RingRecordPathView,
-        RingRegistryRootView,
+        GetStorageMemberOpeningsResponse, RingMemberOpening, RingMemberRecordView,
+        RingRecordPathView, StorageRootView,
     };
     use zolana_ring_member_registry::{MemberRegistryTree, RecordOpening, RecordStore, RecordTree};
 
@@ -207,6 +254,9 @@ pub(crate) mod fixtures {
     pub(crate) fn ring() -> CustomRing {
         CustomRing::new(Address::new_from_array([9; 32]))
     }
+
+    /// The ring's records `StorageRegistry`.
+    pub(crate) const RECORDS: Address = Address::new_from_array([0x5a; 32]);
 
     pub(crate) fn tree(entries: &[QueueEntry]) -> MemberRegistryTree {
         let mut tree = MemberRegistryTree::new().unwrap();
@@ -222,18 +272,17 @@ pub(crate) mod fixtures {
     }
 
     impl IndexerAnswer<'_> {
-        pub(crate) fn openings(self) -> GetRingMemberOpeningsResponse {
+        pub(crate) fn openings(self) -> GetStorageMemberOpeningsResponse {
             let (present, record, path) = match self.tree.opening(self.member).unwrap() {
                 RecordOpening::Present { record, path } => (true, record, path),
                 RecordOpening::Absent { low, path } => (false, low, path),
             };
             let sealed = self.sealed.filter(|_| present);
-            GetRingMemberOpeningsResponse {
+            GetStorageMemberOpeningsResponse {
                 context: Page::default(),
-                root: RingRegistryRootView {
+                root: StorageRootView {
                     root: Hash(self.tree.root().unwrap()),
-                    root_index: 1,
-                    applied: 0,
+                    revision: 1,
                     next_index: self.tree.next_index().unwrap(),
                 },
                 openings: vec![RingMemberOpening {
@@ -258,14 +307,14 @@ pub(crate) mod fixtures {
         }
     }
 
-    /// Serves the registry account, every read after the first under `advanced` when set.
-    pub(crate) struct RegistryRpc {
+    /// Serves the ring policy synced to `tree`, every read after the first to `advanced` when set.
+    pub(crate) struct PolicyRpc {
         reads: AtomicU8,
         tree: MemberRegistryTree,
         advanced: Option<MemberRegistryTree>,
     }
 
-    impl RegistryRpc {
+    impl PolicyRpc {
         pub(crate) fn of(tree: MemberRegistryTree) -> Self {
             Self {
                 reads: AtomicU8::new(0),
@@ -286,27 +335,24 @@ pub(crate) mod fixtures {
         }
     }
 
-    impl Rpc for RegistryRpc {
+    impl Rpc for PolicyRpc {
         fn get_account(&self, address: Address) -> Result<Option<Account>, ClientError> {
             let (expected, bump) =
-                Address::find_program_address(&[MemberRegistry::SEED], &ring().program_id());
+                Address::find_program_address(&[RingPolicy::SEED], &ring().program_id());
             assert_eq!(address, expected);
             let reads = self.reads.fetch_add(1, Ordering::Relaxed);
             let tree = match &self.advanced {
                 Some(advanced) if reads > 0 => advanced,
                 _ => &self.tree,
             };
-            let mut registry = MemberRegistry::new(bump, 0);
-            registry.push_root(
-                tree.root().unwrap(),
-                AppliedAt {
-                    applied: 0,
-                    slot: 0,
-                },
-            );
+            let mut records = StorageRegistry::new(Address::default(), 0);
+            records.roots[0].hash = tree.root().unwrap();
+            records.roots[0].revision = Revision::from(u64::from(reads) + 1);
+            let mut policy = RingPolicy::new(bump, RECORDS);
+            policy.sync(&RECORDS, &records).unwrap();
             Ok(Some(Account {
                 lamports: 1,
-                data: bytemuck::bytes_of(&registry).to_vec(),
+                data: bytemuck::bytes_of(&*policy).to_vec(),
                 owner: ring().program_id(),
                 executable: false,
                 rent_epoch: 0,
@@ -315,9 +361,9 @@ pub(crate) mod fixtures {
     }
 
     pub(crate) fn zolana<I: Rpc + WitnessReader + Send + Sync + 'static>(
-        rpc: RegistryRpc,
+        rpc: PolicyRpc,
         indexer: I,
-    ) -> Zolana<RegistryRpc, I> {
+    ) -> Zolana<PolicyRpc, I> {
         ZolanaServices {
             rpc,
             indexer,

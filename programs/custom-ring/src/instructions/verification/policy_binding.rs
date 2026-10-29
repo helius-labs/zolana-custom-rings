@@ -3,7 +3,7 @@ use custom_ring_interface::{CustomRingError, PolicyTableIxData, SourceSlot, N_SO
 use pinocchio::{error::ProgramError, AccountView, Address};
 use zolana_ring_policy::{EncodedRuleTable, ListId, ListSet, TableParts};
 
-use crate::instructions::loader::load_curator_registry;
+use crate::instructions::loader::load_storage_registry;
 
 pub(crate) struct BoundTable {
     pub rules: EncodedRuleTable,
@@ -12,7 +12,7 @@ pub(crate) struct BoundTable {
 
 #[must_use]
 pub(crate) struct TableBinding<'a> {
-    pub program_id: &'a Address,
+    pub records: &'a Address,
     pub table: &'a PolicyTableIxData,
     pub curators: &'a [AccountView],
 }
@@ -50,7 +50,7 @@ impl TableBinding<'_> {
                         .get(usize::from(n) - 1)
                         .ok_or(CustomRingError::InvalidSource)?;
                     if !loaded.contains(curator.address()) {
-                        loaded.push(curator_source(self.program_id, curator)?);
+                        loaded.push(curator_source(self.records, curator)?);
                     }
                     *curator.address()
                 }
@@ -64,14 +64,14 @@ impl TableBinding<'_> {
     }
 }
 
-/// A curator source names another ring's registry, the own registry keeps its hard floor.
+/// A curator source names a registry of any authority other than the ring's records.
 pub(crate) fn curator_source(
-    program_id: &Address,
+    records: &Address,
     curator: &AccountView,
 ) -> Result<Address, ProgramError> {
-    if curator.owned_by(program_id) {
+    if curator.address() == records {
         return Err(CustomRingError::InvalidSource.into());
     }
-    load_curator_registry(curator)?;
+    load_storage_registry(curator)?;
     Ok(*curator.address())
 }

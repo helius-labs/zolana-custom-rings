@@ -1,7 +1,8 @@
 use bytemuck::Zeroable;
 use custom_ring_interface::{
     queue_chain, AppliedAt, ApplyRecordsIxData, CustomRingError, MemberRegistry,
-    PendingApplication, QueueEntry, RecordQueue, RingAccount, RingProgramConfig, SourceSlot,
+    PendingApplication, QueueEntry, RecordQueue, RingAccount, RingPolicy, RingProgramConfig,
+    SourceSlot,
     WriteRecordsIxData, APPLY_DELAY_SLOTS, AUTHORITY_RESERVED_LEAVES, GRACE_SLOTS,
     MEMBER_QUEUE_LIMIT, MEMBER_REGISTRY_CAPACITY, MEMBER_REGISTRY_EMPTY_ROOT, N_SOURCE_SLOTS,
     QUEUE_CAPACITY, RING_PROGRAM_CONFIG,
@@ -136,7 +137,6 @@ fn a_fresh_registry_binds_the_sentinel_root_at_slot_zero() {
     assert_eq!(registry.next_index(), 1);
     assert_eq!(registry.own_root(1), Err(CustomRingError::RootIndexEmpty));
     assert_eq!(registry.own_root(32), Err(CustomRingError::RootIndexEmpty));
-    assert_eq!(registry.policy_hash(), Err(CustomRingError::PolicyNotSet));
 }
 
 #[test]
@@ -334,26 +334,27 @@ fn an_application_moves_the_head_past_every_pending_write() {
 
 #[test]
 fn a_policy_write_validates_and_repins_the_table() {
-    let mut registry = MemberRegistry::new(254, 0);
+    let mut policy = RingPolicy::new(254, Address::default());
+    assert_eq!(policy.policy_hash(), Err(CustomRingError::PolicyNotSet));
     let mut sources = [SourceSlot::zeroed(); N_SOURCE_SLOTS];
     let table = RuleTable::builder()
         .rule(Rule::require(Subject::OutputOwner, ListId::Allow))
         .build()
         .encode();
     assert_eq!(
-        registry.set_policy(sources, table, 3),
+        policy.set_policy(sources, table, 3),
         Err(CustomRingError::InvalidSource)
     );
     sources[ListId::Allow.slot()].list_id = ListId::Allow as u8;
-    registry.set_policy(sources, table, 3).unwrap();
-    let hash = *registry.policy_hash().unwrap();
-    assert_eq!(hash, table.hash(&registry.source_map().unwrap()).unwrap());
-    assert_eq!((registry.generation(), registry.generation_slot()), (1, 3));
+    policy.set_policy(sources, table, 3).unwrap();
+    let hash = *policy.policy_hash().unwrap();
+    assert_eq!(hash, table.hash(&policy.source_map().unwrap()).unwrap());
+    assert_eq!((policy.generation(), policy.generation_slot()), (1, 3));
     let mut padded = table;
     padded.rules[1][0] = 1;
     assert_eq!(
-        registry.set_policy(sources, padded, 4),
+        policy.set_policy(sources, padded, 4),
         Err(CustomRingError::InvalidPolicyRules)
     );
-    assert_eq!(registry.policy_hash(), Ok(&hash));
+    assert_eq!(policy.policy_hash(), Ok(&hash));
 }

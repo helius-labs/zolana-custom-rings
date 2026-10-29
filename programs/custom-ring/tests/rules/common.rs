@@ -1,9 +1,12 @@
 use bytemuck::{Pod, Zeroable};
 use custom_ring_interface::{
-    compute_unit_limit, tag, AppliedAt, ApplyRecordsIxData, AuthorityWriteRecordsIxData,
-    CreateConfigIxData, CustomRingError, InstructionTag, MemberRegistry, MemberWriteIxData,
-    PolicyTableIxData, RecordWriteData, RegisterKeyIxData, RingKind, SetCoSignerIxData, SourceSpec,
+    compute_unit_limit,
+    storage::{Revision, Root, StorageRegistry},
+    tag, ApplyRecordsIxData, AuthorityWriteRecordsIxData, CreateConfigIxData,
+    CreatePolicyIxData, CustomRingError, InstructionTag, MemberWriteIxData, PolicyTableIxData,
+    RecordWriteData, RegisterKeyIxData, RingKind, SetCoSignerIxData, SourceSpec,
     WriteRecordsIxData, CONFIG_PDA_SEED, MEMBER_REGISTRY_PDA_SEED, RECORD_QUEUE_PDA_SEED,
+    RING_POLICY_PDA_SEED, STORAGE_PROGRAM_ID,
 };
 use litesvm::LiteSVM;
 use solana_account::Account;
@@ -22,6 +25,8 @@ use zolana_ring_policy::{ListId, Member, OutflowLimit, Rule, RuleTable, Subject}
 /// Any address serves as the ring program.
 pub const PROGRAM: Address = Address::new_from_array([0x52; 32]);
 pub const SYSTEM: Address = Address::new_from_array([0; 32]);
+/// The ring's own `StorageRegistry`, written in place of a storage program `Update`.
+pub const RECORDS: Address = Address::new_from_array([0x5a; 32]);
 const LOADER: Address = Address::new_from_array(BPF_LOADER_UPGRADEABLE_ID);
 const SOL: u64 = 1_000_000_000;
 const UNITS: u32 = compute_unit_limit(InstructionTag::Transact);
@@ -41,6 +46,10 @@ pub fn registry_pda() -> Address {
 
 pub fn queue_pda() -> Address {
     pda(RECORD_QUEUE_PDA_SEED)
+}
+
+pub fn policy_pda() -> Address {
+    pda(RING_POLICY_PDA_SEED)
 }
 
 pub fn ring_auth() -> Address {
@@ -127,19 +136,32 @@ impl Ring {
             .with_cosign_above(1_000)],
             _ => Vec::new(),
         };
-        if setup.kind().has_policy() {
-            let policy = policy_write(
-                tag::CREATE_POLICY,
-                &authority.pubkey(),
-                allow_list_table(limits),
-                &[],
-            );
-            within_budget(
-                InstructionTag::CreatePolicy,
-                ring.send(policy, &[&authority]),
-            );
-        }
+        ring.store_registry(RECORDS, &authority.pubkey(), &[root(0, [0x0e; 32])]);
+        let table = match setup.kind().has_policy() {
+            true => allow_list_table(limits),
+            false => PolicyTableIxData {
+                sources: Vec::new(),
+                rules: Vec::new(),
+            },
+        };
+        let policy = create_policy(&ring.payer.pubkey(), &authority.pubkey(), table, &[]);
+        within_budget(
+            InstructionTag::CreatePolicy,
+            ring.send(policy, &[&authority]),
+        );
+        within_budget(InstructionTag::SyncRoots, ring.send(sync_roots(&RECORDS), &[]));
         ring
+    }
+
+    /// A `StorageRegistry` of `authority` holding `roots` newest first.
+    pub fn store_registry(&mut self, address: Address, authority: &Address, roots: &[Root]) {
+        let mut registry = StorageRegistry::new(*authority, 0);
+        registry.roots[..roots.len()].copy_from_slice(roots);
+        self.store(
+            address,
+            STORAGE_PROGRAM_ID,
+            bytemuck::bytes_of(&registry).to_vec(),
+        );
     }
 
     pub fn send(&mut self, instruction: Instruction, signers: &[&Keypair]) -> Sent {
@@ -330,12 +352,17 @@ pub fn within_budget(tag: InstructionTag, sent: Sent) -> u64 {
     units
 }
 
-/// History slot 1 applied at `applied` under `floor`.
-pub fn floored(base: &MemberRegistry, applied: u64, floor: u64) -> MemberRegistry {
-    let mut registry = *base;
-    registry.push_root([0x0f; 32], AppliedAt { applied, slot: 10 });
-    registry.floor = floor.to_le_bytes();
-    registry
+/// Valid only while it is the newest root.
+pub fn root(revision: u64, hash: [u8; 32]) -> Root {
+    retired(revision, hash, 0)
+}
+
+pub fn retired(revision: u64, hash: [u8; 32], expires_at: u64) -> Root {
+    Root {
+        hash,
+        revision: Revision::from(revision),
+        expires_at: expires_at.to_le_bytes(),
+    }
 }
 
 /// Only a ring proof check raises either code, every earlier check passed.
@@ -398,7 +425,60 @@ pub fn create_member_registry(payer: &Address, authority: &Address) -> Instructi
     )
 }
 
-/// `CreatePolicy` or `SetPolicyRules`, curators follow the registry.
+/// The policy over `RECORDS`, curators follow the system program.
+pub fn create_policy(
+    payer: &Address,
+    authority: &Address,
+    table: PolicyTableIxData,
+    curators: &[Address],
+) -> Instruction {
+    create_policy_with(
+        payer,
+        authority,
+        &CreatePolicyIxData {
+            storage_authority: Address::default(),
+            table,
+        },
+        curators,
+    )
+}
+
+pub fn create_policy_with(
+    payer: &Address,
+    authority: &Address,
+    data: &CreatePolicyIxData,
+    curators: &[Address],
+) -> Instruction {
+    let mut accounts = vec![
+        AccountMeta::new(*payer, true),
+        AccountMeta::new_readonly(*authority, true),
+        AccountMeta::new_readonly(config_pda(), false),
+        AccountMeta::new(policy_pda(), false),
+        AccountMeta::new_readonly(RECORDS, false),
+        AccountMeta::new_readonly(SYSTEM, false),
+    ];
+    accounts.extend(
+        curators
+            .iter()
+            .map(|curator| AccountMeta::new_readonly(*curator, false)),
+    );
+    instruction(
+        accounts,
+        tagged(tag::CREATE_POLICY, &wincode::serialize(data).unwrap()),
+    )
+}
+
+pub fn sync_roots(registry: &Address) -> Instruction {
+    instruction(
+        vec![
+            AccountMeta::new(policy_pda(), false),
+            AccountMeta::new_readonly(*registry, false),
+        ],
+        vec![tag::SYNC_ROOTS],
+    )
+}
+
+/// `SetPolicyRules` or `SetPolicySource`, curators follow the policy.
 pub fn policy_write(
     tag: u8,
     authority: &Address,
@@ -408,7 +488,7 @@ pub fn policy_write(
     let mut accounts = vec![
         AccountMeta::new_readonly(*authority, true),
         AccountMeta::new_readonly(config_pda(), false),
-        AccountMeta::new(registry_pda(), false),
+        AccountMeta::new(policy_pda(), false),
     ];
     accounts.extend(
         curators
@@ -543,7 +623,7 @@ pub fn set_delegate(authority: &Address, delegate: &Address) -> Instruction {
         authority,
         &[
             AccountMeta::new_readonly(*delegate, true),
-            AccountMeta::new_readonly(registry_pda(), false),
+            AccountMeta::new_readonly(policy_pda(), false),
             AccountMeta::new_readonly(PROGRAM, false),
             AccountMeta::new_readonly(program_data(), false),
         ],

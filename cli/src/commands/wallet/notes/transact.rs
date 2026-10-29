@@ -863,7 +863,7 @@ impl AllowEnrolment<'_> {
         if !pinned.policy.table.referenced().contains(ListId::Allow) {
             return Ok(());
         }
-        if let Some(ListRegistry::Curator(registry)) = pinned.registry.registry_for(ListId::Allow) {
+        if let Some(ListRegistry::Curator(registry)) = pinned.account.registry_for(ListId::Allow) {
             line("allow", format_args!("curated by {registry}"));
             return Ok(());
         }

@@ -413,11 +413,8 @@ impl<'a> Pipeline<'a> {
             output_tree: trees.output,
             owner_signers,
             interface_transfer_accounts,
-            registry: (config.has_policy || withdrawal_exemption.is_some())
-                .then(|| self.ring.registry_pda()),
-            curator: policy
-                .as_ref()
-                .and_then(|policy| policy.curator.map(|curator| curator.address)),
+            policy: (config.has_policy || withdrawal_exemption.is_some())
+                .then(|| self.ring.policy_pda()),
             co_signer,
             delegate,
         };
@@ -429,14 +426,14 @@ impl<'a> Pipeline<'a> {
         parts.withdrawal_exemption = withdrawal_exemption.as_ref().map(|exemption| {
             custom_ring_interface::WithdrawalExemptionProof {
                 proof: zeroed_proof(),
-                root_index: exemption.root.index,
+                own_revision: exemption.root.revision,
             }
         });
         parts.policy = policy.as_ref().map(|policy| OwnedPolicyProof {
             spl_withdrawal_owners: policy.spl_withdrawal_owners.clone(),
             proof: zeroed_proof(),
-            own_root_index: policy.own.index,
-            curator_root_index: policy.curator.map(|curator| curator.root.index),
+            own_revision: policy.own.revision,
+            curator_revision: policy.curator.map(|curator| curator.revision),
             sender_commitment,
         });
         if anonymous.is_some() {
@@ -569,7 +566,7 @@ impl Unwitnessed<'_> {
                 .policy
                 .iter()
                 .flat_map(|policy| {
-                    core::iter::once(policy.own).chain(policy.curator.map(|curator| curator.root))
+                    core::iter::once(policy.own).chain(policy.curator)
                 })
                 .chain(
                     frame

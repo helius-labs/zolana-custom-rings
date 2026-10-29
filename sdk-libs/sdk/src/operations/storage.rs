@@ -2,7 +2,7 @@ use custom_ring_interface::{
     storage::{RegistryId, StorageRegistry},
     storage_instruction::{tag, InitializeIxData, StorageUpdateIxData, UpdateMode},
     tag::SYNC_ROOTS,
-    STORAGE_PROGRAM_ID, SYSTEM_PROGRAM_ID,
+    GRACE_SLOTS, STORAGE_PROGRAM_ID, SYSTEM_PROGRAM_ID,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -45,6 +45,16 @@ pub struct SyncRoots {
 }
 
 impl InitializeStorage {
+    /// The ring's records, keyed by the ring program id under the creator who pays.
+    pub fn records(ring: CustomRing, creator: Address) -> Self {
+        Self {
+            payer: creator,
+            creator,
+            registry_id: RegistryId(ring.program_id().to_bytes()),
+            grace_slots: GRACE_SLOTS,
+        }
+    }
+
     pub fn registry(&self) -> Address {
         StorageRegistry::find_address(&self.creator, &self.registry_id).0
     }

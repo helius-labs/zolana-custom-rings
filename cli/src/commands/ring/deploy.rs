@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::{bail, ensure, Context as _, Result};
-use custom_ring_interface::{MemberRegistry, RingAccount, RingProgramConfig, VIEWING_PUBKEY_TAG};
+use custom_ring_interface::{RingAccount, RingPolicy, RingProgramConfig, VIEWING_PUBKEY_TAG};
 use sha2::{Digest, Sha256};
 use solana_account::Account;
 use solana_address::Address;
@@ -96,8 +96,8 @@ impl ProgramUpload<'_> {
                 }
                 let ring_config = ctx.rpc().get_account(ctx.ring.config_pda())?;
                 ensure_ring_config_compatible(program, ring_config.as_ref())?;
-                let registry = ctx.rpc().get_account(ctx.ring.registry_pda())?;
-                ensure_registry_compatible(program, registry.as_ref())?;
+                let policy = ctx.rpc().get_account(ctx.ring.policy_pda())?;
+                ensure_policy_compatible(program, policy.as_ref())?;
             }
             None => {
                 let found = file::read_keypair(program_keypair)
@@ -255,22 +255,22 @@ fn ensure_ring_config_compatible(program: Address, account: Option<&Account>) ->
     Ok(())
 }
 
-/// The current schema must decode the registry and reproduce its pinned policy hash.
-fn ensure_registry_compatible(program: Address, registry: Option<&Account>) -> Result<()> {
-    let Some(account) = registry.filter(|account| account.owner == program) else {
+/// The current schema must decode the ring policy and reproduce its pinned policy hash.
+fn ensure_policy_compatible(program: Address, policy: Option<&Account>) -> Result<()> {
+    let Some(account) = policy.filter(|account| account.owner == program) else {
         return Ok(());
     };
     ensure!(
-        account.data.len() == MemberRegistry::SIZE,
-        "program {program} keeps a member registry of {} bytes, the release needs {}, deploy a fresh ring",
+        account.data.len() == RingPolicy::SIZE,
+        "program {program} keeps a ring policy of {} bytes, the release needs {}, deploy a fresh ring",
         account.data.len(),
-        MemberRegistry::SIZE
+        RingPolicy::SIZE
     );
-    let compatible = MemberRegistry::from_data(&account.data)
-        .is_some_and(|registry| Pinned::of(Box::new(*registry)).is_ok());
+    let compatible = RingPolicy::from_data(&account.data)
+        .is_some_and(|policy| Pinned::of(Box::new(*policy)).is_ok());
     ensure!(
         compatible,
-        "program {program} has an incompatible member registry or policy commitment, deploy a fresh ring"
+        "program {program} has an incompatible ring policy or policy commitment, deploy a fresh ring"
     );
     Ok(())
 }
@@ -481,7 +481,7 @@ mod tests {
     }
 
     #[test]
-    fn an_incompatible_member_registry_refuses_the_upgrade() {
+    fn an_incompatible_ring_policy_refuses_the_upgrade() {
         use custom_ring_interface::N_SOURCE_SLOTS;
         let program = Address::from([7u8; 32]);
         let foreign = Address::from([9u8; 32]);
@@ -490,10 +490,10 @@ mod tests {
             data: data.to_vec(),
             ..Default::default()
         };
-        assert!(ensure_registry_compatible(program, None).is_ok());
-        let mut registry = MemberRegistry::new(0, 0);
-        let audit_only = account(program, bytemuck::bytes_of(&registry));
-        assert!(ensure_registry_compatible(program, Some(&audit_only)).is_ok());
+        assert!(ensure_policy_compatible(program, None).is_ok());
+        let mut registry = RingPolicy::new(0, Address::default());
+        let audit_only = account(program, bytemuck::bytes_of(&*registry));
+        assert!(ensure_policy_compatible(program, Some(&audit_only)).is_ok());
         let rules = zolana_ring_policy::RuleTable::builder().build();
         registry
             .set_policy(
@@ -502,24 +502,24 @@ mod tests {
                 0,
             )
             .unwrap();
-        let pinned = account(program, bytemuck::bytes_of(&registry));
-        assert!(ensure_registry_compatible(program, Some(&pinned)).is_ok());
-        let short = [0; MemberRegistry::SIZE - 1];
-        assert!(ensure_registry_compatible(program, Some(&account(foreign, &short))).is_ok());
-        let refused = ensure_registry_compatible(program, Some(&account(program, &short)))
+        let pinned = account(program, bytemuck::bytes_of(&*registry));
+        assert!(ensure_policy_compatible(program, Some(&pinned)).is_ok());
+        let short = [0; RingPolicy::SIZE - 1];
+        assert!(ensure_policy_compatible(program, Some(&account(foreign, &short))).is_ok());
+        let refused = ensure_policy_compatible(program, Some(&account(program, &short)))
             .expect_err("short");
         assert!(refused.to_string().contains(&format!(
             "of {} bytes, the release needs {}",
-            MemberRegistry::SIZE - 1,
-            MemberRegistry::SIZE
+            RingPolicy::SIZE - 1,
+            RingPolicy::SIZE
         )));
         registry.policy_hash[0] ^= 1;
-        let drifted = ensure_registry_compatible(
+        let drifted = ensure_policy_compatible(
             program,
-            Some(&account(program, bytemuck::bytes_of(&registry))),
+            Some(&account(program, bytemuck::bytes_of(&*registry))),
         )
         .expect_err("drifted");
-        assert!(drifted.to_string().contains("incompatible member registry"));
+        assert!(drifted.to_string().contains("incompatible ring policy"));
     }
 
     #[test]

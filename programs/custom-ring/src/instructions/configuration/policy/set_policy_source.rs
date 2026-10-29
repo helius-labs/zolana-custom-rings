@@ -8,7 +8,7 @@ use zolana_ring_policy::ListId;
 
 use crate::instructions::{
     instruction_runtime::parse,
-    loader::{load_authorized_config, load_registry_mut},
+    loader::{load_authorized_config, load_policy_mut},
     policy_binding::curator_source,
 };
 
@@ -22,20 +22,20 @@ pub fn process_set_policy_source_ix(
     let mut iter = AccountIterator::new(accounts);
     let authority = iter.next_signer("authority")?;
     let config = iter.next_account("config")?;
-    let registry = iter.next_mut("registry")?;
+    let policy = iter.next_mut("policy")?;
     let curators = iter.remaining_unchecked()?;
 
-    // 1. The authority moves one list to its own registry or one curator.
+    // 1. The authority moves one list to its own records or one curator.
     load_authorized_config(program_id, config, authority)?;
     let list_id = ListId::try_from(ix.list_id).map_err(|_| CustomRingError::InvalidListId)?;
+    let mut policy = load_policy_mut(program_id, policy)?;
     let source = match (ix.source, curators) {
         (0, []) => Address::default(),
-        (1, [curator]) => curator_source(program_id, curator)?,
+        (1, [curator]) => curator_source(&policy.records, curator)?,
         _ => return Err(CustomRingError::InvalidSource.into()),
     };
     // 2. Only a list the rules reference has a source.
-    let mut registry = load_registry_mut(program_id, registry)?;
-    let mut sources = registry.sources;
+    let mut sources = policy.sources;
     if sources[list_id.slot()].list_id == 0 {
         return Err(CustomRingError::InvalidSource.into());
     }
@@ -44,7 +44,7 @@ pub fn process_set_policy_source_ix(
         registry: source,
     };
     // 3. The rehashed source map refuses a second distinct curator.
-    let rules = registry.rules;
-    registry.set_policy(sources, rules, Clock::get()?.slot)?;
+    let rules = policy.rules;
+    policy.set_policy(sources, rules, Clock::get()?.slot)?;
     Ok(())
 }

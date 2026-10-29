@@ -4,7 +4,7 @@ use spr_interface::instruction::{encode_instruction, tag, CreateRingConfigData};
 
 use crate::instructions::{
     instruction_runtime::{no_data, RingAuth},
-    loader::{load_authorized_config, load_registry, validate_spp_program},
+    loader::{load_authorized_config, load_policy, validate_spp_program},
 };
 
 /// Creates SPP's `RingConfig` at `ring_auth`, the one point where SPP checks the ring's identity.
@@ -28,7 +28,7 @@ pub fn process_init_spp_ring_config_ix(
     let has_policy = load_authorized_config(program_id, config, authority)?.has_policy();
     validate_spp_program(core::slice::from_ref(spp_program))?;
     if has_policy {
-        load_registry(program_id, iter.next_account("registry")?)?.policy_hash()?;
+        load_policy(program_id, iter.next_account("policy")?)?.policy_hash()?;
     }
     // 2. The program signs as the ring PDA.
     let placed = RingAuth::derive(program_id)?.check_account(ring_auth)?;

@@ -8,9 +8,11 @@ use std::{
 use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
 use custom_ring_interface::{
+    storage::{Revision, StorageRegistry},
     AppliedAt, CoSignScope, EscrowKey, MemberRegistry, QueueEntry, RecordQueue, RingMode,
-    RingProgramConfig, SourceSlot, CONFIG_PDA_SEED, DEFAULT_INSERT_FEE, MEMBER_REGISTRY_PDA_SEED,
-    N_SOURCE_SLOTS, RECORD_QUEUE_PDA_SEED, RING_PROGRAM_CONFIG,
+    RingPolicy, RingProgramConfig, SourceSlot, CONFIG_PDA_SEED, DEFAULT_INSERT_FEE,
+    MEMBER_REGISTRY_PDA_SEED, N_SOURCE_SLOTS, RECORD_QUEUE_PDA_SEED, RING_POLICY_PDA_SEED,
+    RING_PROGRAM_CONFIG,
 };
 use solana_account::Account;
 use solana_address::Address;
@@ -34,9 +36,9 @@ use spr_transaction::{utxo::SppProofInputUtxo, Data, Mint, Utxo, WalletUtxo};
 use spr_tree::{TreeAccount, UTXO_TREE_HEIGHT};
 use zolana_ring_client::{AsyncRingIndexer, RingIndexerError, ViewingHistory};
 use zolana_ring_indexer::rpc::{
-    GetRingMemberOpeningsRequest, GetRingMemberOpeningsResponse, GetRingRecordPoolRequest,
-    GetRingRecordPoolResponse, RingIndexedMemberRecordView, RingMemberOpening,
-    RingMemberRecordView, RingRecordPathView, RingRegistryRootView,
+    GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse,
+    GetStorageRecordPoolRequest, GetStorageRecordPoolResponse, RingIndexedMemberRecordView,
+    RingMemberOpening, RingMemberRecordView, RingRecordPathView, StorageRootView,
 };
 use zolana_ring_member_registry::{
     Canopy, MemberRecord, MemberRegistryTree, RecordOpening, RecordTree,
@@ -47,6 +49,9 @@ use crate::client::RingClient;
 use crate::{trees::PoolTree, CustomRing, REDACTED};
 
 pub(crate) const SLOT: u64 = 2_359_301;
+/// The ring's own `StorageRegistry`, mirrored at `REVISION`.
+pub(crate) const RECORDS: Address = Address::new_from_array([0x5a; 32]);
+pub(crate) const REVISION: u64 = 1;
 pub(crate) const TREE_ID: u16 = 0;
 
 pub(crate) fn program() -> Address {
@@ -294,14 +299,16 @@ impl Chain {
         self.with(tree.address, tree_account(tree))
     }
 
-    /// The ring's own registry pinning `rules`, every list read from it.
+    /// The ring policy pinning `rules`, every list read from the ring's records.
     pub(crate) fn with_registry(self, registry: Registry, rules: &RuleTable) -> Self {
-        let account = registry.account(rules);
+        let member_registry = registry.account();
+        let policy = registry.policy(rules);
         Self {
             registry: Some(Arc::new(registry)),
             ..self
         }
-        .with(ring().registry_pda(), account)
+        .with(ring().registry_pda(), member_registry)
+        .with(ring().policy_pda(), policy)
     }
 
     pub(crate) fn with_queue(
@@ -408,17 +415,18 @@ impl AsyncRpc for Chain {
 
 #[async_trait]
 impl AsyncRingIndexer for Chain {
-    async fn get_ring_member_openings(
+    async fn get_storage_member_openings(
         &self,
-        request: GetRingMemberOpeningsRequest,
-    ) -> Result<GetRingMemberOpeningsResponse, RingIndexerError> {
+        request: GetStorageMemberOpeningsRequest,
+    ) -> Result<GetStorageMemberOpeningsResponse, RingIndexerError> {
         let registry = self
             .registry
             .as_ref()
+            .filter(|_| request.registry == RECORDS.into())
             .ok_or(ClientError::UnsupportedRpcMethod(
-                "get_ring_member_openings",
+                "get_storage_member_openings",
             ))?;
-        Ok(GetRingMemberOpeningsResponse {
+        Ok(GetStorageMemberOpeningsResponse {
             context: spr_indexer_api::Context {
                 block_time: 0,
                 slot: SLOT,
@@ -432,14 +440,15 @@ impl AsyncRingIndexer for Chain {
         })
     }
 
-    async fn get_ring_record_pool(
+    async fn get_storage_record_pool(
         &self,
-        request: GetRingRecordPoolRequest,
-    ) -> Result<GetRingRecordPoolResponse, RingIndexerError> {
+        request: GetStorageRecordPoolRequest,
+    ) -> Result<GetStorageRecordPoolResponse, RingIndexerError> {
         let registry = self
             .registry
             .as_ref()
-            .ok_or(ClientError::UnsupportedRpcMethod("get_ring_record_pool"))?;
+            .filter(|_| request.registry == RECORDS.into())
+            .ok_or(ClientError::UnsupportedRpcMethod("get_storage_record_pool"))?;
         let members: Vec<[u8; 32]> = request.members.iter().map(|member| member.0).collect();
         let pool = registry
             .tree
@@ -448,7 +457,7 @@ impl AsyncRingIndexer for Chain {
                 Canopy::covering(request.openings as usize).unwrap(),
             )
             .unwrap();
-        Ok(GetRingRecordPoolResponse {
+        Ok(GetStorageRecordPoolResponse {
             context: spr_indexer_api::Context {
                 block_time: 0,
                 slot: SLOT,
@@ -581,7 +590,8 @@ impl Registry {
         self.tree.root().unwrap()
     }
 
-    fn account(&self, rules: &RuleTable) -> Account {
+    /// The queue's record writes still apply to the member registry.
+    fn account(&self) -> Account {
         let bump = Address::find_program_address(&[MEMBER_REGISTRY_PDA_SEED], &program()).1;
         let mut registry = MemberRegistry::new(bump, SLOT);
         registry.push_root(
@@ -591,19 +601,29 @@ impl Registry {
                 slot: SLOT,
             },
         );
+        account(program(), &registry)
+    }
+
+    /// `rules` over the records, synced at `REVISION`.
+    fn policy(&self, rules: &RuleTable) -> Account {
+        let bump = Address::find_program_address(&[RING_POLICY_PDA_SEED], &program()).1;
+        let mut policy = RingPolicy::new(bump, RECORDS);
+        let mut records = StorageRegistry::new(authority(), 0);
+        records.roots[0].hash = self.root();
+        records.roots[0].revision = Revision::from(REVISION);
+        policy.sync(&RECORDS, &records).unwrap();
         let mut sources = [SourceSlot::zeroed(); N_SOURCE_SLOTS];
         for list in rules.referenced().iter() {
             sources[list.slot()].list_id = list as u8;
         }
-        registry.set_policy(sources, rules.encode(), SLOT).unwrap();
-        account(program(), &registry)
+        policy.set_policy(sources, rules.encode(), SLOT).unwrap();
+        account(program(), &*policy)
     }
 
-    fn root_view(&self) -> RingRegistryRootView {
-        RingRegistryRootView {
+    fn root_view(&self) -> StorageRootView {
+        StorageRootView {
             root: Hash(self.root()),
-            root_index: 1,
-            applied: 0,
+            revision: REVISION,
             next_index: self.tree.records().len() as u64,
         }
     }

@@ -130,7 +130,7 @@ impl RegisterKey<'_> {
             .await?
             .admit_member_write(&registry)?;
         let read = MemberRead {
-            root: BoundRoot::current(self.ring, &registry),
+            root: BoundRoot::newest(self.ring, client.zolana()).await?,
             member: identity,
         }
         .read(client.zolana())

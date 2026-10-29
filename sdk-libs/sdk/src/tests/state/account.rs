@@ -4,7 +4,7 @@ use super::support::{account, keypair, program, ring, Chain, Registry, RingSetti
 use crate::{PinnedPolicy, RingError};
 
 #[tokio::test]
-async fn the_status_carries_the_pinned_registry() {
+async fn the_status_carries_the_pinned_policy() {
     let member = keypair(1);
     let client = Chain::ring(RingSettings {
         has_policy: true,
@@ -13,7 +13,7 @@ async fn the_status_carries_the_pinned_registry() {
     .with_registry(Registry::new(&[(&member, 1)]), &super::pipeline_rules())
     .client();
     let status = ring().status(client.zolana()).await.unwrap();
-    let pinned = PinnedPolicy::of(status.registry.unwrap().account()).unwrap();
+    let pinned = PinnedPolicy::of(&status.policy.unwrap()).unwrap();
     assert_eq!(pinned.table, super::pipeline_rules());
 }
 

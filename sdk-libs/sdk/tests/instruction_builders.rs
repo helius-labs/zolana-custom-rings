@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use curve25519_dalek::constants::{ED25519_BASEPOINT_POINT, EIGHT_TORSION};
 use custom_ring_interface::{
-    CreateConfigIxData, CustomRingMergeIxData, CustomRingMergeIxDataRef, MemberWriteIxData,
+    CreateConfigIxData, CreatePolicyIxData, CustomRingMergeIxData, CustomRingMergeIxDataRef, MemberWriteIxData,
     MergeDisclosure, PolicyTableIxData, ReadAccessRecord, ReaderIxData, RingMode,
     RingProgramConfig, SetCoSignerIxData, SetInsertFeeIxData, SetPausedIxData,
     SetPolicySourceIxData, SourceSpec, AUDIT_CIPHERTEXT_LEN, DEFAULT_INSERT_FEE,
@@ -11,7 +11,8 @@ use custom_ring_interface::{
 };
 use custom_ring_sdk::{
     tag, CoSignScope, CreateConfig, CreateMemberRegistry, CustomRing, CustomRingConfig,
-    CustomRingMergeInstruction, GrantReader, InitSppRingConfig, MemberListWrite, PolicyRules,
+    CustomRingMergeInstruction, GrantReader, InitSppRingConfig, MemberListWrite, PolicyRecords,
+    PolicyRules,
     RevokeReader, RingError, RingKind, SetAuthority, SetCoSigner, SetDelegate, SetSourceOwner,
     SourceOwner,
 };
@@ -76,7 +77,7 @@ fn reader() -> ReaderKey {
     ReaderKey::ed25519(Address::new_from_array(key)).unwrap()
 }
 
-fn policy<'a>(rules: &'a RuleTable, shared_sources: &'a [(ListId, CustomRing)]) -> PolicyRules<'a> {
+fn policy<'a>(rules: &'a RuleTable, shared_sources: &'a [(ListId, Address)]) -> PolicyRules<'a> {
     PolicyRules {
         ring: ring(),
         authority: authority(),
@@ -195,7 +196,7 @@ async fn init_spp_ring_config_appends_the_registry_only_on_a_policy_ring() {
         policy.accounts,
         [
             accounts,
-            vec![AccountMeta::new_readonly(ring().registry_pda(), false)]
+            vec![AccountMeta::new_readonly(ring().policy_pda(), false)]
         ]
         .concat()
     );
@@ -381,7 +382,7 @@ fn set_insert_fee_writes_the_fee_into_the_config() {
 }
 
 #[test]
-fn set_delegate_runs_under_the_upgrade_authority_and_the_delegate_beside_the_registry() {
+fn set_delegate_runs_under_the_upgrade_authority_and_the_delegate_beside_the_policy() {
     let delegate = Address::new_from_array([34; 32]);
     let instruction = SetDelegate {
         ring: ring(),
@@ -395,7 +396,7 @@ fn set_delegate_runs_under_the_upgrade_authority_and_the_delegate_beside_the_reg
             AccountMeta::new_readonly(authority(), true),
             AccountMeta::new(ring().config_pda(), false),
             AccountMeta::new_readonly(delegate, true),
-            AccountMeta::new_readonly(ring().registry_pda(), false),
+            AccountMeta::new_readonly(ring().policy_pda(), false),
             AccountMeta::new_readonly(program(), false),
             AccountMeta::new_readonly(program_data(), false),
         ]
@@ -408,15 +409,15 @@ fn a_policy_source_names_a_curator_registry_only_when_shared() {
     let policy_write = vec![
         AccountMeta::new_readonly(authority(), true),
         AccountMeta::new_readonly(ring().config_pda(), false),
-        AccountMeta::new(ring().registry_pda(), false),
+        AccountMeta::new(ring().policy_pda(), false),
     ];
-    let curator = CustomRing::new(Address::new_from_array([35; 32]));
+    let curator = Address::new_from_array([35; 32]);
     for (owner, source, curators) in [
         (SourceOwner::Own, 0, vec![]),
         (
-            SourceOwner::Shared(curator),
+            SourceOwner::Curator(curator),
             1,
-            vec![AccountMeta::new_readonly(curator.registry_pda(), false)],
+            vec![AccountMeta::new_readonly(curator, false)],
         ),
     ] {
         let instruction = SetSourceOwner {
@@ -450,7 +451,7 @@ fn a_policy_table_names_its_curator_once_and_reproduces_the_pinned_table() {
         .rule(Rule::forbid(Subject::Sender, ListId::Block))
         .rule(Rule::forbid(Subject::OutputOwner, ListId::Frozen))
         .build();
-    let curator = CustomRing::new(Address::new_from_array([36; 32]));
+    let curator = Address::new_from_array([36; 32]);
     let shared = [(ListId::Frozen, curator), (ListId::Allow, curator)];
     let table = PolicyRules {
         ring: ring(),
@@ -458,22 +459,41 @@ fn a_policy_table_names_its_curator_once_and_reproduces_the_pinned_table() {
         rules: &rules,
         shared_sources: &shared,
     };
-    for (instruction, ix_tag) in [
-        (table.create().unwrap(), tag::CREATE_POLICY),
-        (table.replace().unwrap(), tag::SET_POLICY_RULES),
-    ] {
-        assert_eq!(
-            instruction.accounts,
-            vec![
-                AccountMeta::new_readonly(authority(), true),
-                AccountMeta::new_readonly(ring().config_pda(), false),
-                AccountMeta::new(ring().registry_pda(), false),
-                AccountMeta::new_readonly(curator.registry_pda(), false),
-            ]
-        );
-        let (found, body) = split(&instruction);
-        assert_eq!(found, ix_tag);
-        let table: PolicyTableIxData = parse(body);
+    let records = PolicyRecords {
+        payer: payer(),
+        records: Address::new_from_array([37; 32]),
+        storage_authority: Address::new_from_array([38; 32]),
+    };
+    let create = table.create(records).unwrap();
+    assert_eq!(
+        create.accounts,
+        vec![
+            AccountMeta::new(payer(), true),
+            AccountMeta::new_readonly(authority(), true),
+            AccountMeta::new_readonly(ring().config_pda(), false),
+            AccountMeta::new(ring().policy_pda(), false),
+            AccountMeta::new_readonly(records.records, false),
+            AccountMeta::new_readonly(SYSTEM, false),
+            AccountMeta::new_readonly(curator, false),
+        ]
+    );
+    let (found, body) = split(&create);
+    assert_eq!(found, tag::CREATE_POLICY);
+    let created: CreatePolicyIxData = parse(body);
+    assert_eq!(created.storage_authority, records.storage_authority);
+    let replace = table.replace().unwrap();
+    assert_eq!(
+        replace.accounts,
+        vec![
+            AccountMeta::new_readonly(authority(), true),
+            AccountMeta::new_readonly(ring().config_pda(), false),
+            AccountMeta::new(ring().policy_pda(), false),
+            AccountMeta::new_readonly(curator, false),
+        ]
+    );
+    let (found, body) = split(&replace);
+    assert_eq!(found, tag::SET_POLICY_RULES);
+    for table in [created.table, parse::<PolicyTableIxData>(body)] {
         assert_eq!(
             table.sources,
             [(ListId::Allow, 1), (ListId::Block, 0), (ListId::Frozen, 1)].map(
@@ -493,9 +513,9 @@ fn a_shared_source_for_a_list_no_rule_reads_is_refused() {
     let rules = RuleTable::builder()
         .rule(Rule::require(Subject::Sender, ListId::Allow))
         .build();
-    let curator = CustomRing::new(Address::new_from_array([37; 32]));
+    let curator = Address::new_from_array([37; 32]);
     assert!(matches!(
-        policy(&rules, &[(ListId::Reader, curator)]).create(),
+        policy(&rules, &[(ListId::Reader, curator)]).replace(),
         Err(RingError::UnreferencedList(ListId::Reader))
     ));
 }
@@ -506,7 +526,7 @@ fn a_rule_over_a_list_members_write_is_refused_before_the_transaction() {
         .rule(Rule::require(Subject::Sender, ListId::RingViewing))
         .build();
     assert!(matches!(
-        policy(&rules, &[]).create(),
+        policy(&rules, &[]).replace(),
         Err(RingError::PolicyTable(PolicyTableError::Table(
             RuleTableError::MemberWrittenList
         )))
@@ -627,7 +647,7 @@ fn an_anonymous_merge_names_no_registry() {
         payer: payer(),
         co_signer: None,
         data: CustomRingMergeIxData {
-            registry_root_index: 0,
+            own_revision: Default::default(),
             output_ring_data_hash: [0; 32],
             disclosure: Some(MergeDisclosure {
                 proof: bytemuck::Zeroable::zeroed(),
@@ -651,10 +671,10 @@ fn an_anonymous_merge_names_no_registry() {
 }
 
 #[test]
-fn a_merge_names_the_config_the_registry_and_the_co_signer_ahead_of_spp() {
+fn a_merge_names_the_config_the_policy_and_the_co_signer_ahead_of_spp() {
     let (input_tree, output_tree) = (pda::tree(1), pda::tree(2));
     let data = CustomRingMergeIxData {
-        registry_root_index: 3,
+        own_revision: 3.into(),
         output_ring_data_hash: [9; 32],
         disclosure: None,
         merge: MergeTransactIxData {
@@ -695,7 +715,7 @@ fn a_merge_names_the_config_the_registry_and_the_co_signer_ahead_of_spp() {
         .unwrap();
         let mut prefix = vec![
             AccountMeta::new_readonly(ring().config_pda(), false),
-            AccountMeta::new_readonly(ring().registry_pda(), false),
+            AccountMeta::new_readonly(ring().policy_pda(), false),
         ];
         prefix.extend(co_signer.map(|co_signer| AccountMeta::new_readonly(co_signer, true)));
         assert_eq!(
@@ -707,7 +727,7 @@ fn a_merge_names_the_config_the_registry_and_the_co_signer_ahead_of_spp() {
         let parsed = CustomRingMergeIxDataRef::from_bytes(body).unwrap();
         assert_eq!(
             (
-                parsed.registry_root_index,
+                parsed.own_revision.value(),
                 *parsed.output_ring_data_hash,
                 parsed.disclosure
             ),
@@ -721,10 +741,10 @@ fn a_list_shared_twice_is_refused() {
     let rules = RuleTable::builder()
         .rule(Rule::require(Subject::Sender, ListId::Allow))
         .build();
-    let first = CustomRing::new(Address::new_from_array([38; 32]));
-    let second = CustomRing::new(Address::new_from_array([39; 32]));
+    let first = Address::new_from_array([38; 32]);
+    let second = Address::new_from_array([39; 32]);
     assert!(matches!(
-        policy(&rules, &[(ListId::Allow, first), (ListId::Allow, second)]).create(),
+        policy(&rules, &[(ListId::Allow, first), (ListId::Allow, second)]).replace(),
         Err(RingError::DuplicateSharedSource(ListId::Allow))
     ));
 }

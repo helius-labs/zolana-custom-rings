@@ -1,13 +1,13 @@
 //! `list`, the member records of the ring's registry and where each list reads them.
 
-use anyhow::{bail, ensure, Context as _, Result};
+use anyhow::{bail, Context as _, Result};
 use clap::{builder::PossibleValue, Args, ValueEnum};
 use custom_ring_interface::{
     CustomRingError, ListRegistry, RecordQueue, APPLY_DELAY_SLOTS, MEMBER_QUEUE_LIMIT,
 };
 use custom_ring_sdk::{
     AuthorityListWrite, CustomRing, MemberListWrite, MemberRecords, RecordApplication, RingError,
-    RingMode, SetSourceOwner, SourceOwner,
+    RingMode, SetSourceOwner, SourceOwner, SyncRoots,
 };
 use solana_address::Address;
 use solana_keypair::Keypair;
@@ -85,10 +85,12 @@ pub fn run(ctx: &Context, command: ListCommand) -> Result<()> {
             own,
         } => {
             let source = match curator.filter(|_| !own) {
-                Some(curator) => SourceOwner::Shared(
-                    Catalogue::load(ctx.catalogue.as_deref())?
-                        .resolve(ctx.config.target, &curator)?,
-                ),
+                Some(curator) => {
+                    let curator = Catalogue::load(ctx.catalogue.as_deref())?
+                        .resolve(ctx.config.target, &curator)?;
+                    check_curator(ctx, curator, list_id.id())?;
+                    SourceOwner::Curator(policy::curator_records(ctx, curator)?)
+                }
                 None => SourceOwner::Own,
             };
             set_source(ctx, list_id.id(), source)
@@ -252,21 +254,24 @@ impl EntryArgs {
     fn show(self, ctx: &Context) -> Result<()> {
         let list_id = self.list_id.id();
         let subjects = self.members.subjects()?;
-        let (ring, source) = match policy::pinned(ctx)?.registry.registry_for(list_id) {
-            Some(ListRegistry::Curator(registry)) => (
-                curator_ring(ctx, registry)?,
-                format!("curator registry {registry}"),
-            ),
-            _ => (ctx.ring, "own registry".to_owned()),
-        };
         let members: Vec<Member> = subjects.iter().map(|subject| subject.member).collect();
-        let reads = records::read(
-            &ctx.zolana,
-            MemberRecords {
-                ring,
-                members: &members,
-            },
-        )?;
+        let pinned = policy::pinned(ctx)?;
+        let (source, reads) = match pinned.account.registry_for(list_id) {
+            Some(ListRegistry::Curator(registry)) => (
+                format!("curator registry {registry}"),
+                records::read_curator(ctx, &pinned.account, &members)?,
+            ),
+            _ => (
+                format!("own records {}", pinned.account.records),
+                records::read(
+                    &ctx.zolana,
+                    MemberRecords {
+                        ring: ctx.ring,
+                        members: &members,
+                    },
+                )?,
+            ),
+        };
         line("source", source);
         for (subject, read) in subjects.iter().zip(&reads) {
             line(
@@ -289,7 +294,7 @@ impl ListUpdate<'_> {
     pub(crate) fn send(self, ctx: &Context) -> Result<Vec<&'static str>> {
         let list_id = self.list_id;
         if let Some(ListRegistry::Curator(registry)) =
-            policy::pinned(ctx)?.registry.registry_for(list_id)
+            policy::pinned(ctx)?.account.registry_for(list_id)
         {
             bail!(
                 "the {} list reads curator registry {registry}, write it on the curator ring",
@@ -352,36 +357,18 @@ impl ListWrites<'_> {
     }
 }
 
-/// A policy source names the curator by its registry account.
-fn curator_ring(ctx: &Context, registry: Address) -> Result<CustomRing> {
-    let account = ctx
-        .rpc()
-        .get_account(registry)?
-        .with_context(|| format!("curator registry {registry} does not exist"))?;
-    let curator = CustomRing::new(account.owner);
-    ensure!(
-        curator.registry_pda() == registry,
-        "{registry} is not the member registry of {}",
-        account.owner
-    );
-    Ok(curator)
-}
-
 /// The registry a source names, as the policy stores it.
 pub(crate) fn expected_registry(source: SourceOwner) -> ListRegistry {
     match source {
         SourceOwner::Own => ListRegistry::Own,
-        SourceOwner::Shared(curator) => ListRegistry::Curator(curator.registry_pda()),
+        SourceOwner::Curator(registry) => ListRegistry::Curator(registry),
     }
 }
 
 fn set_source(ctx: &Context, list_id: ListId, source: SourceOwner) -> Result<()> {
-    let Pinned { registry, .. } = policy::pinned(ctx)?;
-    if let SourceOwner::Shared(curator) = source {
-        check_curator(ctx, curator, list_id)?;
-    }
+    let Pinned { account, .. } = policy::pinned(ctx)?;
     let authority = ctx.funded_authority()?;
-    let outcome = if registry.registry_for(list_id) == Some(expected_registry(source)) {
+    let outcome = if account.registry_for(list_id) == Some(expected_registry(source)) {
         "already present"
     } else {
         let point = SetSourceOwner {
@@ -391,25 +378,27 @@ fn set_source(ctx: &Context, list_id: ListId, source: SourceOwner) -> Result<()>
             source,
         }
         .instruction()?;
-        ctx.send(&[authority], &[point])?;
+        let mut instructions = vec![point];
+        if let SourceOwner::Curator(registry) = source {
+            instructions.push(SyncRoots { ring: ctx.ring, registry }.instruction());
+        }
+        ctx.send(&[authority], &instructions)?;
         "created"
     };
     let registry = policy::pinned(ctx)?
-        .registry
+        .account
         .registry_for(list_id)
         .with_context(|| format!("the policy does not reference the {} list", list_id.name()))?;
     let (glyph, reads) = match source {
-        SourceOwner::Own => (icon::LISTS, "its own registry".to_owned()),
-        SourceOwner::Shared(curator) => {
-            (icon::CURATOR, format!("curator {}", curator.program_id()))
-        }
+        SourceOwner::Own => (icon::LISTS, "its own records".to_owned()),
+        SourceOwner::Curator(registry) => (icon::CURATOR, format!("curator registry {registry}")),
     };
     ui::heading(glyph, &format!("the {} list reads {reads}", list_id.name()));
     line("source", outcome);
     line(
         "registry",
         match registry {
-            ListRegistry::Own => ctx.ring.registry_pda(),
+            ListRegistry::Own => account.records,
             ListRegistry::Curator(registry) => registry,
         },
     );
@@ -633,11 +622,11 @@ mod tests {
 
     #[test]
     fn a_source_names_the_registry_account() {
-        let curator = CustomRing::new(Address::new_from_array([4; 32]));
+        let curator = Address::new_from_array([4; 32]);
         assert_eq!(expected_registry(SourceOwner::Own), ListRegistry::Own);
         assert_eq!(
-            expected_registry(SourceOwner::Shared(curator)),
-            ListRegistry::Curator(curator.registry_pda())
+            expected_registry(SourceOwner::Curator(curator)),
+            ListRegistry::Curator(curator)
         );
     }
 }

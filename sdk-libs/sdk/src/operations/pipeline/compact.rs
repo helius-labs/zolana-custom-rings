@@ -1,6 +1,7 @@
 //! The compact transact data a proven transfer owns, and its instruction.
 
 use custom_ring_interface::{
+    storage::Revision,
     tag, AnonymousProofData, CustomRingProof, InputTrees, PlainGroth16Proof, PolicyProof,
     RingOutput, RingProgramConfig, RingRail, RingTransactData, SenderBundle, AUDIT_CIPHERTEXT_LEN,
     RING_DELIVERED_BODY_LEN,
@@ -105,8 +106,8 @@ impl OwnedOutput {
 pub(crate) struct OwnedPolicyProof {
     pub spl_withdrawal_owners: Vec<[u8; 32]>,
     pub proof: CustomRingProof,
-    pub own_root_index: u8,
-    pub curator_root_index: Option<u8>,
+    pub own_revision: Revision,
+    pub curator_revision: Option<Revision>,
     pub sender_commitment: Option<[u8; 32]>,
 }
 
@@ -155,8 +156,8 @@ impl TransactParts {
             policy: self.policy.as_ref().map(|policy| PolicyProof {
                 spl_withdrawal_owners: &policy.spl_withdrawal_owners,
                 proof: &policy.proof,
-                own_root_index: policy.own_root_index,
-                curator_root_index: policy.curator_root_index,
+                own_revision: policy.own_revision,
+                curator_revision: policy.curator_revision,
                 sender_commitment: policy.sender_commitment.as_ref(),
             }),
             withdrawal_exemption: self.withdrawal_exemption.as_ref(),
@@ -194,9 +195,8 @@ pub(crate) struct TransactAccounts {
     /// Only the confidential rail names owner signers.
     pub owner_signers: Vec<Address>,
     pub interface_transfer_accounts: Vec<TransactInterfaceTransferAccounts>,
-    /// Set exactly on a policy ring.
-    pub registry: Option<Address>,
-    pub curator: Option<Address>,
+    /// On a policy ring, and on any ring with a withdrawal exemption.
+    pub policy: Option<Address>,
     pub co_signer: Option<Address>,
     pub delegate: Option<Address>,
 }
@@ -240,12 +240,8 @@ impl TransactAccounts {
         };
         let mut accounts = vec![AccountMeta::new_readonly(ring.config_pda(), false)];
         accounts.extend(
-            self.registry
-                .map(|registry| AccountMeta::new_readonly(registry, false)),
-        );
-        accounts.extend(
-            self.curator
-                .map(|curator| AccountMeta::new_readonly(curator, false)),
+            self.policy
+                .map(|policy| AccountMeta::new_readonly(policy, false)),
         );
         accounts.extend(
             self.co_signer

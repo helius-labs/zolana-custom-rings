@@ -2,9 +2,9 @@
 
 use custom_ring_interface::{
     funder_account_position, input_flag, key_catalog::RingCircuit, shape_flag, tag, transact_flag,
-    AnonymousProofData, AppliedAt, CustomRingError, CustomRingProof, InputTrees, MemberRegistry,
+    AnonymousProofData, CustomRingError, CustomRingProof, InputTrees,
     PlainGroth16Proof, PolicyProof, RingOutput, RingProgramConfig, RingRail, RingTransactData,
-    SenderBundle, GRACE_SLOTS, MEMBER_REGISTRY_PDA_SEED, RING_TRANSACT_RING_CONFIG_INDEX,
+    RingPolicy, SenderBundle, RING_TRANSACT_RING_CONFIG_INDEX,
     TRANSACT_PAYER_INDEX,
 };
 use solana_address::Address;
@@ -18,8 +18,8 @@ use spr_interface::{
 };
 
 use crate::common::{
-    allow_list_table, config_pda, delegate_ring, floored, off_curve_g2, on_curve_g2, policy_write,
-    reaches_verification, refused, registry_pda, ring_auth, set_co_signer, transact, Ring, Sent,
+    config_pda, delegate_ring, off_curve_g2, on_curve_g2, policy_pda,
+    reaches_verification, refused, ring_auth, set_co_signer, transact, Ring, Sent,
     Setup, SYSTEM,
 };
 
@@ -85,8 +85,8 @@ impl Fixture {
             policy: policy.then(|| PolicyProof {
                 spl_withdrawal_owners: &[],
                 proof: &self.proofs[1],
-                own_root_index: 0,
-                curator_root_index: None,
+                own_revision: Default::default(),
+                curator_revision: None,
                 sender_commitment: (rail == RingRail::Anonymous).then_some(&self.fields[3]),
             }),
             approval_required: false,
@@ -186,8 +186,8 @@ pub fn send(
     ring.send(transact(instruction_tag, accounts, bytes), signers)
 }
 
-pub fn registry_meta() -> AccountMeta {
-    AccountMeta::new_readonly(registry_pda(), false)
+pub fn policy_meta() -> AccountMeta {
+    AccountMeta::new_readonly(policy_pda(), false)
 }
 
 /// The payer repeated as the one owner signer, the lean confidential set.
@@ -196,7 +196,7 @@ fn payer_owner(ring: &Ring) -> Vec<AccountMeta> {
 }
 
 /// A confidential transfer from the payer, `prefix` after the config.
-fn confidential(ring: &mut Ring, prefix: Vec<AccountMeta>, data: &RingTransactData<'_>) -> Sent {
+pub fn confidential(ring: &mut Ring, prefix: Vec<AccountMeta>, data: &RingTransactData<'_>) -> Sent {
     let spp = spp_list(&ring.payer.pubkey(), data, &payer_owner(ring));
     send(
         ring,
@@ -220,7 +220,7 @@ fn a_confidential_transfer_passing_every_check_reaches_the_audit_key() {
     let mut ring = Ring::new(Setup::Policy);
     reaches_verification(confidential(
         &mut ring,
-        vec![registry_meta()],
+        vec![policy_meta()],
         &fixture.transfer(RingRail::Confidential, 2, 2, true),
     ));
 }
@@ -270,7 +270,7 @@ fn flags_follow_the_rings_mode_and_policy() {
     );
     let mut policy_ring = Ring::new(Setup::Policy);
     refused(
-        confidential(&mut policy_ring, vec![registry_meta()], &data),
+        confidential(&mut policy_ring, vec![policy_meta()], &data),
         CustomRingError::MissingPolicyProof,
     );
 }
@@ -290,7 +290,7 @@ fn a_policy_transfer_takes_exactly_one_owner_signer() {
         send(
             &mut ring,
             tag::TRANSACT,
-            vec![registry_meta()],
+            vec![policy_meta()],
             data.encode().unwrap(),
             spp,
             &[&second],
@@ -302,7 +302,7 @@ fn a_policy_transfer_takes_exactly_one_owner_signer() {
     reaches_verification(send(
         &mut ring,
         tag::TRANSACT,
-        vec![registry_meta()],
+        vec![policy_meta()],
         data.encode().unwrap(),
         spp,
         &[],
@@ -312,7 +312,7 @@ fn a_policy_transfer_takes_exactly_one_owner_signer() {
         send(
             &mut ring,
             tag::TRANSACT,
-            vec![registry_meta()],
+            vec![policy_meta()],
             data.encode().unwrap(),
             spp,
             &[],
@@ -402,20 +402,20 @@ fn a_key_escrow_bit_off_the_ring_mode_is_refused() {
     data.key_escrow = true;
     fixture.disclose(&mut data);
     refused(
-        confidential(&mut ring, vec![registry_meta()], &data),
+        confidential(&mut ring, vec![policy_meta()], &data),
         CustomRingError::FlagNotAllowed,
     );
 
     let mut registry_ring = delegate_ring(&Keypair::new());
     reaches_verification(confidential(
         &mut registry_ring,
-        vec![registry_meta()],
+        vec![policy_meta()],
         &data,
     ));
     data.key_escrow = false;
     fixture.disclose(&mut data);
     refused(
-        confidential(&mut registry_ring, vec![registry_meta()], &data),
+        confidential(&mut registry_ring, vec![policy_meta()], &data),
         CustomRingError::FlagNotAllowed,
     );
 }
@@ -524,176 +524,20 @@ fn the_vector_transfers_without_public_legs_reach_their_keys() {
 }
 
 #[test]
-fn an_own_root_one_write_below_the_floor_is_refused() {
-    let fixture = Fixture::new();
-    let mut ring = Ring::new(Setup::Policy);
-    let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
-    data.policy = data.policy.map(|policy| PolicyProof {
-        own_root_index: 1,
-        ..policy
-    });
-    let base: MemberRegistry = ring.read(&registry_pda());
-    ring.write(&registry_pda(), &floored(&base, 4, 5));
-    refused(
-        confidential(&mut ring, vec![registry_meta()], &data),
-        CustomRingError::RootBelowFloor,
-    );
-    ring.write(&registry_pda(), &floored(&base, 5, 5));
-    reaches_verification(confidential(&mut ring, vec![registry_meta()], &data));
-}
-
-#[test]
 fn a_policy_ring_without_a_table_refuses_transfers() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::Policy);
-    let mut registry: MemberRegistry = ring.read(&registry_pda());
-    registry.policy_hash = [0; 32];
-    ring.write(&registry_pda(), &registry);
+    let mut policy: RingPolicy = ring.read(&policy_pda());
+    policy.policy_hash = [0; 32];
+    ring.write(&policy_pda(), &policy);
     refused(
         confidential(
             &mut ring,
-            vec![registry_meta()],
+            vec![policy_meta()],
             &fixture.transfer(RingRail::Confidential, 2, 2, true),
         ),
         CustomRingError::PolicyNotSet,
     );
-}
-
-/// A curator registry of another ring program, history slot 1 applied at position 4.
-struct Curator {
-    address: Address,
-}
-
-#[derive(Clone, Copy, Default)]
-struct Floor {
-    floor: u64,
-    prior_floor: u64,
-    floor_slot: u64,
-}
-
-impl Curator {
-    const PROGRAM: Address = Address::new_from_array([0x63; 32]);
-
-    fn install(ring: &mut Ring, floor: Floor) -> Self {
-        Self::install_under(ring, Self::PROGRAM, floor)
-    }
-
-    fn install_under(ring: &mut Ring, program: Address, floor: Floor) -> Self {
-        let (address, bump) = Address::find_program_address(&[MEMBER_REGISTRY_PDA_SEED], &program);
-        let mut registry = MemberRegistry::new(bump, 0);
-        registry.push_root(
-            field(8),
-            AppliedAt {
-                applied: 4,
-                slot: 10,
-            },
-        );
-        registry.floor = floor.floor.to_le_bytes();
-        registry.prior_floor = floor.prior_floor.to_le_bytes();
-        registry.floor_slot = floor.floor_slot.to_le_bytes();
-        ring.store(address, program, bytemuck::bytes_of(&registry).to_vec());
-        Self { address }
-    }
-
-    /// Sources the ring's allow list from the curator.
-    fn source(&self, ring: &mut Ring) {
-        let mut table = allow_list_table(Vec::new());
-        table.sources[0].source = 1;
-        let authority = ring.authority.insecure_clone();
-        ring.send(
-            policy_write(
-                tag::SET_POLICY_RULES,
-                &authority.pubkey(),
-                table,
-                &[self.address],
-            ),
-            &[&authority],
-        )
-        .expect("source the allow list from the curator");
-    }
-
-    fn transfer(&self, ring: &mut Ring, data: &RingTransactData<'_>) -> Sent {
-        confidential(
-            ring,
-            vec![
-                registry_meta(),
-                AccountMeta::new_readonly(self.address, false),
-            ],
-            data,
-        )
-    }
-}
-
-fn curator_transfer(fixture: &Fixture) -> RingTransactData<'_> {
-    let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
-    data.policy = data.policy.map(|policy| PolicyProof {
-        curator_root_index: Some(1),
-        ..policy
-    });
-    data
-}
-
-#[test]
-fn a_curator_root_below_the_floor_lives_only_through_the_grace_window() {
-    let fixture = Fixture::new();
-    let data = curator_transfer(&fixture);
-    let raised_at = 1_000;
-    let mut ring = Ring::new(Setup::Policy);
-    let curator = Curator::install(
-        &mut ring,
-        Floor {
-            floor: 5,
-            prior_floor: 3,
-            floor_slot: raised_at,
-        },
-    );
-    curator.source(&mut ring);
-    ring.warp(raised_at + GRACE_SLOTS - 1);
-    reaches_verification(curator.transfer(&mut ring, &data));
-    ring.warp(raised_at + GRACE_SLOTS);
-    refused(
-        curator.transfer(&mut ring, &data),
-        CustomRingError::CuratorRootStale,
-    );
-}
-
-#[test]
-fn a_second_floor_raise_refuses_roots_below_the_first() {
-    let fixture = Fixture::new();
-    let raised_at = 1_000;
-    let mut ring = Ring::new(Setup::Policy);
-    let curator = Curator::install(
-        &mut ring,
-        Floor {
-            floor: 6,
-            prior_floor: 5,
-            floor_slot: raised_at,
-        },
-    );
-    curator.source(&mut ring);
-    ring.warp(raised_at);
-    refused(
-        curator.transfer(&mut ring, &curator_transfer(&fixture)),
-        CustomRingError::CuratorRootStale,
-    );
-}
-
-#[test]
-fn the_curator_account_must_be_the_sourced_registry() {
-    let fixture = Fixture::new();
-    let mut ring = Ring::new(Setup::Policy);
-    let curator = Curator::install(&mut ring, Floor::default());
-    curator.source(&mut ring);
-    let impostor = Curator::install_under(
-        &mut ring,
-        Address::new_from_array([0x64; 32]),
-        Floor::default(),
-    );
-    refused(
-        impostor.transfer(&mut ring, &curator_transfer(&fixture)),
-        CustomRingError::InvalidCuratorRegistry,
-    );
-    reaches_verification(curator.transfer(&mut ring, &curator_transfer(&fixture)));
 }
 
 #[test]
@@ -827,12 +671,12 @@ fn the_approval_flag_requires_the_co_signer() {
     data.approval_required = true;
     let mut ring = Ring::new(Setup::Policy);
     refused(
-        confidential(&mut ring, vec![registry_meta()], &data),
+        confidential(&mut ring, vec![policy_meta()], &data),
         CustomRingError::ApprovalWithoutCoSigner,
     );
     let mut limited = Ring::new(Setup::LimitedPolicy);
     refused(
-        confidential(&mut limited, vec![registry_meta()], &data),
+        confidential(&mut limited, vec![policy_meta()], &data),
         CustomRingError::ApprovalWithoutCoSigner,
     );
 }
@@ -846,7 +690,7 @@ fn an_approval_co_signed_by_its_own_owner_is_refused() {
     let co_signed = |ring: &mut Ring, co_signer: &Keypair| {
         let spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(ring));
         let prefix = vec![
-            registry_meta(),
+            policy_meta(),
             AccountMeta::new_readonly(co_signer.pubkey(), true),
         ];
         send(
@@ -1022,21 +866,6 @@ fn the_forwarded_list_holds_the_ring_pda_and_a_signing_payer() {
 }
 
 #[test]
-fn an_own_root_index_past_the_written_history_is_refused() {
-    let fixture = Fixture::new();
-    let mut ring = Ring::new(Setup::Policy);
-    let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
-    data.policy = data.policy.map(|policy| PolicyProof {
-        own_root_index: 3,
-        ..policy
-    });
-    refused(
-        confidential(&mut ring, vec![registry_meta()], &data),
-        CustomRingError::RootIndexEmpty,
-    );
-}
-
-#[test]
 fn a_second_ring_pda_in_the_forwarded_list_is_refused() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::Anonymous);
@@ -1067,7 +896,7 @@ fn only_the_configured_delegate_moves_and_settles_no_public_leg() {
     let mut data = fixture.transfer(RingRail::Delegate, 2, 2, true);
     let prefix = |signer: &Keypair| {
         vec![
-            registry_meta(),
+            policy_meta(),
             AccountMeta::new_readonly(signer.pubkey(), true),
         ]
     };
@@ -1089,7 +918,7 @@ fn only_the_configured_delegate_moves_and_settles_no_public_leg() {
             &mut ring,
             tag::DELEGATE_TRANSACT,
             vec![
-                registry_meta(),
+                policy_meta(),
                 AccountMeta::new_readonly(delegate.pubkey(), false),
             ],
             data.encode().unwrap(),
@@ -1148,7 +977,7 @@ fn a_delegate_move_co_signed_by_the_delegate_is_refused() {
     let spp = spp_list(&ring.payer.pubkey(), &data, &[]);
     let co_signed = |ring: &mut Ring, co_signer: &Keypair| {
         let prefix = vec![
-            registry_meta(),
+            policy_meta(),
             AccountMeta::new_readonly(co_signer.pubkey(), true),
             AccountMeta::new_readonly(delegate.pubkey(), true),
         ];
@@ -1182,7 +1011,7 @@ fn delegate_move(
         ring,
         tag::DELEGATE_TRANSACT,
         vec![
-            registry_meta(),
+            policy_meta(),
             AccountMeta::new_readonly(delegate.pubkey(), true),
         ],
         bytes,
@@ -1234,7 +1063,7 @@ fn a_config_of_another_owner_is_refused() {
     let config: RingProgramConfig = ring.read(&config_pda());
     ring.store(
         config_pda(),
-        Curator::PROGRAM,
+        Address::new_from_array([0x63; 32]),
         bytemuck::bytes_of(&config).to_vec(),
     );
     refused(
@@ -1361,7 +1190,7 @@ fn policy_spl_metadata_must_match_the_live_token_owner() {
     reaches_verification(send(
         &mut ring,
         tag::TRANSACT,
-        vec![registry_meta()],
+        vec![policy_meta()],
         data.encode().unwrap(),
         spp.clone(),
         &[],
@@ -1372,7 +1201,7 @@ fn policy_spl_metadata_must_match_the_live_token_owner() {
         send(
             &mut ring,
             tag::TRANSACT,
-            vec![registry_meta()],
+            vec![policy_meta()],
             data.encode().unwrap(),
             spp,
             &[],
@@ -1382,34 +1211,31 @@ fn policy_spl_metadata_must_match_the_live_token_owner() {
 }
 
 #[test]
-fn withdrawal_exemptions_must_prove_under_the_own_floor() {
+fn withdrawal_exemptions_must_prove_under_a_mirrored_own_root() {
     use bytemuck::Zeroable;
-    use custom_ring_interface::WithdrawalExemptionProof;
+    use custom_ring_interface::{storage::Revision, WithdrawalExemptionProof};
     let mut ring = Ring::new(Setup::AuditOnly);
     set_co_signer(&mut ring, &Keypair::new().pubkey(), 4);
-    let base: MemberRegistry = ring.read(&registry_pda());
-    let exemption = WithdrawalExemptionProof {
+    let exemption = |revision: u64| WithdrawalExemptionProof {
         proof: custom_ring_interface::CustomRingProof::zeroed(),
-        root_index: 1,
+        own_revision: Revision::from(revision),
     };
-    ring.write(&registry_pda(), &floored(&base, 4, 5));
     refused(
         withdraw_with_exemption(
             &mut ring,
             &[60, 60],
-            vec![registry_meta()],
+            vec![policy_meta()],
             &[],
-            Some(&exemption),
+            Some(&exemption(1)),
         ),
-        CustomRingError::RootBelowFloor,
+        CustomRingError::MirrorRootExpired,
     );
-    ring.write(&registry_pda(), &floored(&base, 5, 5));
-    // A matching root index alone cannot waive the signature; the proof is checked.
+    // A mirrored revision alone cannot waive the signature, the proof is checked.
     reaches_verification(withdraw_with_exemption(
         &mut ring,
         &[60, 60],
-        vec![registry_meta()],
+        vec![policy_meta()],
         &[],
-        Some(&exemption),
+        Some(&exemption(0)),
     ));
 }

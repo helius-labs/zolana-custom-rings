@@ -224,7 +224,7 @@ impl PreparedCustomRingMerge {
             co_signer,
             bound,
             data: CustomRingMergeIxData {
-                registry_root_index: bound.map_or(0, |bound| bound.index),
+                own_revision: bound.map_or_else(Default::default, |bound| bound.revision),
                 output_ring_data_hash: data.output_ring_data_hash,
                 disclosure,
                 merge: data.merge,
@@ -297,7 +297,7 @@ impl RingMergeOperation {
             payer,
             co_signer: merge_co_signer(config)?,
             data: CustomRingMergeIxData {
-                registry_root_index: 0,
+                own_revision: Default::default(),
                 output_ring_data_hash: merge.inner.output_utxo.ring_data_hash.unwrap_or_default(),
                 disclosure,
                 merge: MergeTransactIxData {
@@ -326,7 +326,7 @@ impl RingMergeOperation {
     }
 }
 
-/// `[config, registry?, co-signer?]` ahead of SPP's merge list, no registry on an anonymous ring.
+/// `[config, policy?, co-signer?]` ahead of SPP's merge list, no policy on an anonymous ring.
 #[must_use]
 pub struct CustomRingMergeInstruction {
     pub ring: CustomRing,
@@ -358,7 +358,7 @@ impl CustomRingMergeInstruction {
         instruction.data = data;
         let mut prefix = vec![AccountMeta::new_readonly(self.ring.config_pda(), false)];
         if self.data.disclosure.is_none() {
-            prefix.push(AccountMeta::new_readonly(self.ring.registry_pda(), false));
+            prefix.push(AccountMeta::new_readonly(self.ring.policy_pda(), false));
         }
         prefix.extend(
             self.co_signer

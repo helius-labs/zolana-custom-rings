@@ -17,7 +17,7 @@ use zolana_ring_client::{
     AsyncRingIndexer,
 };
 use zolana_ring_indexer::rpc::{
-    GetRingApplyProofInputsRequest, GetRingMemberOpeningsRequest, GetRingRecordPoolRequest,
+    GetRingApplyProofInputsRequest, GetStorageMemberOpeningsRequest, GetStorageRecordPoolRequest,
     RingListWriteView, MAX_RING_MEMBER_PAGE_LIMIT,
 };
 use zolana_ring_member_registry::ApplyProofInputs;
@@ -32,7 +32,7 @@ use crate::{
     CustomRing, CustomRingConfig, RingError,
 };
 
-/// Members' records under the registry's current root.
+/// Members' records under the newest synced root of the ring's records.
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MemberRecords<'a> {
@@ -70,12 +70,12 @@ impl RecordReads<'_> {
         self,
         rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
     ) -> Result<Vec<MemberOpeningRead>, RingError> {
-        let BoundRoot { ring, root, .. } = self.root;
+        let BoundRoot { registry, root, .. } = self.root;
         let mut reads = Vec::with_capacity(self.members.len());
         for chunk in self.members.chunks(MAX_RING_MEMBER_PAGE_LIMIT as usize) {
             let response = rpc
-                .get_ring_member_openings(GetRingMemberOpeningsRequest {
-                    ring_program_id: ring.program_id().into(),
+                .get_storage_member_openings(GetStorageMemberOpeningsRequest {
+                    registry: registry.into(),
                     members: chunk.iter().copied().map(Hash).collect(),
                     expected_root: Hash(root),
                 })
@@ -103,10 +103,10 @@ impl PoolRead<'_> {
         self,
         rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
     ) -> Result<RecordPoolRead, RingError> {
-        let BoundRoot { ring, root, .. } = self.root;
+        let BoundRoot { registry, root, .. } = self.root;
         let response = rpc
-            .get_ring_record_pool(GetRingRecordPoolRequest {
-                ring_program_id: ring.program_id().into(),
+            .get_storage_record_pool(GetStorageRecordPoolRequest {
+                registry: registry.into(),
                 members: self.members.iter().copied().map(Hash).collect(),
                 expected_root: Hash(root),
                 openings: self.openings as u64,
