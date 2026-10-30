@@ -37,6 +37,7 @@ use crate::{
     projection::retry_projection_lag,
     prover::{to_instruction_proof, RingRequest},
     records::{EscrowOpening, EscrowRead, MemberRead},
+    relay_message::{ExpectedDeposit, ExpectedMessage},
     request::{self, DepositRequest, MemberOpening, PolicyTable, RecordOpeningRequest},
     submission::{BoundPolicy, BoundRoot},
     CustomRing, CustomRingConfig, PinnedPolicy, PreparedRelay, RingError, RingSubmission,
@@ -236,7 +237,20 @@ impl RingDeposit<'_> {
     ) -> Result<PreparedRelay, RingError> {
         let SealedDeposit { note, .. } = self.seal(rpc).await?;
         let depositor = self.payer.pubkey();
-        note.owner.check_signers([depositor, quote.fee_payer.0])?;
+        let fee_payer = quote.fee_payer.0;
+        note.owner.check_signers([depositor, fee_payer])?;
+        let expected = ExpectedDeposit {
+            ring: self.ring,
+            fee_payer,
+            depositor,
+            spp: spr_program::instruction::RingDeposit {
+                tree: self.tree,
+                depositor,
+                ring_program_id: self.ring.program_id(),
+                deposits: vec![note.deposit.clone()],
+            }
+            .instruction()?,
+        };
         let proof_inputs = RelayDepositInputs {
             ring_program_id: self.ring.program_id(),
             tree: self.tree,
@@ -256,7 +270,8 @@ impl RingDeposit<'_> {
             intent: RelayIntent::Deposit {
                 proof_inputs: ProofInputBytes::new(proof_inputs),
             },
-        }))
+        })
+        .expecting(ExpectedMessage::Deposit(expected)))
     }
 
     async fn seal(&self, rpc: &(impl AsyncRpc + ?Sized)) -> Result<SealedDeposit, RingError> {

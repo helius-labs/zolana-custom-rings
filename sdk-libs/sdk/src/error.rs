@@ -264,8 +264,8 @@ pub enum RingError {
     RelayIdMismatch,
     #[error("the relay asks the hidden owner for a public signature")]
     RelayAskedOwnerSignature,
-    #[error("the relay message is not a v1 message the signer signs")]
-    RelayMessageInvalid,
+    #[error("the relay message is refused because {0}")]
+    RelayMessage(#[from] crate::MessageMismatch),
     #[error("{signature} failed with {error}")]
     Rejected {
         signature: Signature,
