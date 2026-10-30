@@ -59,7 +59,7 @@
     "vitest": "^5.0.0"
   },
   "peerDependencies": {
-    "@heliuslabs/zolana": "0.5.1-alpha",
+    "@heliuslabs/zolana": "0.7.0-alpha",
     "@solana/kit": "^8.3.0"
   },
   "engines": {
