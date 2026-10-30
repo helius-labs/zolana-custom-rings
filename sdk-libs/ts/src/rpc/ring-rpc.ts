@@ -840,6 +840,8 @@ export interface DecryptedRingTransaction {
   /** One per published nullifier of an anonymous ring. */
   readonly inputs: readonly AuditedInput[];
   readonly nullifiers: readonly Bytes32[];
+  /** The input owners of a confidential transfer, by owner signature or in proof. */
+  readonly spenders: readonly Address[];
   /** Required signers, fee payer first. */
   readonly signers: readonly Address[];
   /** Empty when nothing left the ring. */
@@ -883,7 +885,7 @@ export interface DecryptedRingTransactionsPage {
   readonly cursor?: Uint8Array;
 }
 
-/** Mirrors Rust `WalletView`, only an anonymous ring discloses its sender. */
+/** Mirrors Rust `WalletView`, the sender is the anonymous sender or a confidential spender. */
 export type RingWalletView =
   | {
       readonly role: "sender";
@@ -1224,7 +1226,7 @@ export class RingRpc {
     return this.readSigned(await request.sign(input.signer), context);
   }
 
-  /** The wallet's own part of each transaction, a transaction signer alone sees nothing. */
+  /** The wallet's own part of each transaction it spends in or receives an output in. */
   async getWalletActivity(
     input: Readonly<{
       target: RingReadTarget;
@@ -1702,6 +1704,13 @@ function decodeTransaction(wire: Record<string, unknown>): DecryptedRingTransact
     ...(sender === undefined ? {} : { sender }),
     inputs: Object.freeze(inputs),
     nullifiers: Object.freeze(nullifiers),
+    spenders: Object.freeze(
+      absent(wire["spenders"])
+        ? []
+        : list(wire["spenders"], "spenders").map((key, index) =>
+            address(key, `spenders[${index}]`),
+          ),
+    ),
     signers: Object.freeze(
       list(wire["signers"], "signers").map((key, index) => address(key, `signers[${index}]`)),
     ),

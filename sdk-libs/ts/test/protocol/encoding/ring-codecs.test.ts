@@ -1209,6 +1209,7 @@ describe("ring read request", () => {
     expect(item.sender).toBeUndefined();
     expect(item.inputs).toEqual([]);
     expect(item.nullifiers).toEqual([filled(12, 32)]);
+    expect(item.spenders).toEqual([addressOf(13)]);
     expect(item.signers).toEqual([addressOf(13)]);
     expect(item.withdrawals).toEqual([
       { recipient: addressOf(10), asset: addressOf(4), amount: 5n },
