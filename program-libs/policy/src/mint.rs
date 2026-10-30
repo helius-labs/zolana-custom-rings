@@ -15,7 +15,7 @@ pub struct MintPolicy {
     pub cosign_above: u64,
     /// Public withdrawal totals at or below this amount need no withdrawal-scoped co-signature.
     pub withdrawal_threshold: u64,
-    /// Co-signer limits, no proof bounds an amount by them.
+    /// Ring RPC checks them only on operations it co-signs.
     pub limits: AssetLimits,
 }
 

@@ -21,11 +21,14 @@ A ring bounds what moves with three mechanisms: co-signer approval in the ring p
 
 - Each asset's record holds a sender cap, a volume cap, a deposit cap and a withdrawal cap, each with its own window in slots. A zero cap is no cap.
 - The sender cap counts what one sender transfers and withdraws. The volume cap counts what the ring transfers, deposits and withdraws.
+- Ring RPC checks them when it decides whether to co-sign, and the program checks only the co-signature.
 - Ring RPC reserves flows at signing and fails closed, see [Flow 9](../spec.md#9-co-signer-limits-configuration). Its store serializes admission, so no allowance is granted twice.
 
 ## What passes them
 
 - Window limits apply only to operations that demand a co-signer and that Ring RPC co-signs.
+- The limits bind every operation of a class, such as transfers, only when Ring RPC is the one co-signer that covers that class.
+- With no co-signer for its classes, a transfer below the co-sign bound never counts.
 - A co-signer key outside Ring RPC whose scope covers the demanded classes signs with no window limit.
 - Each signing key is its own sender, so one person with many keys passes a sender cap once per key.
 - Outflow limits and amount guards sum one transfer. A payment split across transfers passes each part.

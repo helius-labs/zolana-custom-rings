@@ -65,7 +65,7 @@ Pausing stops all activity in the ring until it's resumed: deposits, transfers, 
 
 ### 2.2. Permanent delegate
 
-A permanent delegate is a key that can move an escrowed member's funds to another escrowed member within the ring. The admin and the delegate set it once, on a confidential policy ring. From then on, the owner of every new note must escrow its key. The delegate cannot pay out of the ring. SPP governance must enable the ring's authority rail before the first move. The rules still screen the moved member as the sender, so a blocked or frozen member's funds do not move (open question 7).
+A permanent delegate is a key that can move an escrowed member's funds to another escrowed member within the ring. The admin and the delegate set it once, on a confidential policy ring. From then on, the owner of every new note must escrow its key. The delegate cannot pay out of the ring. SPP governance must enable the ring's authority rail before the first move. The rules still screen the moved member as the sender, so a blocked or frozen member's funds do not move (open question 6).
 
 ### 2.3. Co-signer approval
 
@@ -92,7 +92,7 @@ Ring RPC co-signs only within limits the policy authority writes to each asset's
 2. **Volume limit:** what the ring transfers, takes in and pays out of the asset within a window.
 3. **Deposit and withdrawal limits:** what the ring takes in and pays out in public deposits and withdrawals, each with its own window.
 
-Ring RPC enforces these limits only on the operations it co-signs. Differs from the PR 15 draft: limits are set per asset, not per co-signer (open question 1).
+These limits bind only the operations the ring requires co-signing for. Ring RPC enforces them when it decides whether to co-sign, and the ring program checks only that the co-signer signed. Enforcement at co-signing follows the PR 15 draft's Flow 9 and trust assumption 3. A limit binds every operation of a class, for example Transfers, only when Ring RPC is the one co-signer that covers that class. Otherwise a transfer below the co-sign bound, or one that another co-signer signs, can pass uncounted. The per-transfer cap and co-sign bound of 1.5 hold either way. Differs from the PR 15 draft: limits are set per asset, not per co-signer (open question 1).
 
 ## Components and ownership
 
@@ -142,12 +142,12 @@ Ring RPC keeps one key file per role. The auditor key opens ring activity. The s
 
 1. **Storage authority:** trusted for every record. The tree proof verifies the update, not the record. A write the authority signs directly skips every Ring RPC check, the wallet's signature and the escrow proof included.
 2. **Policy authority:** trusted to set policy rules, lists, limits and ring-wide grants. Each other role is trusted for its own control.
-3. **Ring RPC:** trusted to protect the auditor key and every proof input a wallet hands it. It is trusted to enforce reader grants and co-signer limits, and to write records as signed. One Ring RPC deployment serves a ring, and its processes share one store.
+3. **Ring RPC:** trusted to protect the auditor key and every proof input a wallet hands it. It is trusted to enforce reader grants and co-signer limits, and to write records as signed. One Ring RPC process serves a ring.
 4. **Curator:** a ring trusts the authority of its one curator tree.
 5. **Delegate:** trusted to move escrowed members' funds within the ring under the configured controls.
 6. **Upgrade authority:** trusted to create the ring and to deploy upgrades that keep the program's guarantees. An upgrade can replace every check.
 7. **Key generator:** the ring proving keys come from a single-party setup. Whoever ran it could forge every ring proof.
-8. **Revocation timing:** a revocation binds on chain the moment the storage update that writes it applies. A transaction that passed Ring RPC or a relayer before then fails on chain. Ring RPC writes every list revocation as an immediate update, and a curator's revocation binds as fast as its authority writes it.
+8. **Revocation timing:** a revocation binds on chain the moment the storage update that writes it applies. A transaction that passed Ring RPC or a relayer before then fails on chain. Ring RPC writes every revocation the rules read as an immediate update, and a curator's revocation binds as fast as its authority writes it.
 9. **Limits:** Ring RPC enforces co-signer limits only on what it co-signs. A co-signer outside Ring RPC enforces none.
 10. **Photon and chain RPC:** Photon is trusted for complete history, the chain RPC for confirmed contents.
 11. **SPP governance:** trusted to activate the ring when SPP does not activate it at creation, and to enable its authority rail.
@@ -245,7 +245,7 @@ A deposit moves SOL or tokens from a wallet's public balance into up to 8 ring n
    2. Pays fees and submits the deposit to the **Ring Program**.
    3. Follows the deposit to confirmation. The recipient's **Wallet** finds its notes by view tag.
 
-On a confidential ring the sealed opening names the owner only by a hash of its identity and nullifier key. The **Auditor** names that owner only with a nullifier key it already holds (open question 5).
+On every ring the sealed opening names each note's owner key, and the deposit proof binds that key to the note's owner commitment.
 
 ## 4. Transfer
 
@@ -320,9 +320,9 @@ The **Policy authority** grants and revokes **Reader** access across the ring. A
 3. **Reader:** signs a read request with its wallet key or passkey.
 4. **Ring RPC:** verifies the signature and an active grant, then returns the permitted activity.
    1. A ring-wide grant covers every wallet.
-   2. Wallet scope admits the sender of an anonymous transfer and the owner of an output, and returns only that wallet's view.
-   3. On a confidential ring the sender sees only the outputs it owns (open question 13).
-   4. Signers and fee payers never admit.
+   2. Wallet scope admits the sender of an anonymous transfer, a confidential spender and the owner of an output, and returns only that wallet's view.
+   3. A confidential spender is an owner signer or the in-proof owner, and it sees every output, payload error and withdrawal of its transfer.
+   4. Signing or paying the fee alone admits no wallet.
 
 A revoked reader keeps what it already read.
 
@@ -340,7 +340,7 @@ The **Policy authority** configures the limits applied by the **Co-signer** that
    3. Keeps the reservation at confirmation and frees it on failure or expiry.
    4. Refuses to co-sign when it cannot read the limits.
 
-The **Ring Program** checks the required co-signer signature. [Co-signing](design/co-signing.md)
+The **Ring Program** checks only the required co-signer signature, never the limits. A limit binds only the operations the ring requires co-signing for. [Co-signing](design/co-signing.md)
 
 ## Instructions
 
@@ -367,7 +367,7 @@ The **Ring Program** checks the required co-signer signature. [Co-signing](desig
 
 ## Design decisions
 
-1. Records live in Storage program trees, and the ring account binds their addresses. Every root reader takes the registry accounts and reads their roots live, so a revocation binds on chain the moment storage applies it. Differs from the PR 15 draft, whose question 3.1 syncs roots into the policy account for one account per transfer (open question 12).
+1. Records live in Storage program trees, and the ring account binds their addresses. Every root reader takes the registry accounts and reads their roots live, so a revocation binds on chain the moment storage applies it. Differs from the PR 15 draft, whose question 3.1 syncs roots into the policy account for one account per transfer (open question 11).
 2. The Storage program verifies the tree update only, and Ring RPC checks signatures and escrow proofs off chain. Update proofs stay small, as the draft's notes 5 and 6 ask.
 3. An escrow write publishes the owner key, the nullifier key and the sealed secret beside the record. The auditor and Ring RPC recover an escrowed secret from chain data.
 4. An escrow key fills once. No later write can redirect a member's escrow.
@@ -390,8 +390,8 @@ The **Ring Program** checks the required co-signer signature. [Co-signing](desig
 21. Every ring merge carries a disclosure proof. The auditor opens every merge.
 22. A deployment keeps reader grants in one store. Every read checks one source of truth.
 23. A passkey reader's record is keyed by a hash of its tagged key. Ed25519 and passkey readers share one record space.
-24. Wallet scope admits the anonymous sender and the owner of an output. A key that only signs or pays is no party to the transfer.
-25. One Ring RPC deployment serves a ring, and its processes share one store. The store serializes co-sign admission and keeps spent replay nonces, so no allowance is granted twice.
+24. Wallet scope admits the anonymous sender, a confidential spender and the owner of an output. A key that only signs or pays is no party to the transfer.
+25. One Ring RPC process serves a ring. Its store serializes co-sign admission and keeps spent replay nonces across a restart, so no allowance is granted twice and no nonce is accepted twice.
 26. No instruction migrates an older ring layout. Rings are created fresh, and the repository forbids compatibility shims.
 27. `Initialize` creates the ring account, binds the records and registers the ring with SPP in one instruction. No half-created ring exists.
 28. Ring RPC creates the ring's records tree under its storage authority, and `Initialize` binds it. The ring then trusts for its records the one writer that checks every record update.
@@ -409,12 +409,10 @@ The **Ring Program** checks the required co-signer signature. [Co-signing](desig
 2. Ring RPC pays fees and token account rent with no charge. Which fees does the policy authority set, and who charges the relay fee?
 3. SPP reads an output's encryption scheme byte as its exit marker. Should SPP carry an explicit exit marker in the output data instead?
 4. Today one co-signer must cover every demanded class. Should co-signers with split scopes approve one operation together?
-5. Should a confidential deposit seal the owner key to the auditor, as an anonymous deposit does?
-6. Does this scope fit the two-week audit, and what moves out if it does not?
-7. Should the delegate move a blocked or frozen member's funds?
-8. A ring reads lists from one curator. Is one enough?
-9. Third-party ZK programs settle through plain SPP transfers and cannot touch ring notes. Should the ring program offer a hook for allowlisted programs?
-10. Do you need relayed 16-way confidential payouts in one transaction? A relayed one needs SPP to publish less per output.
-11. An escrow key cannot change once set. Should a wallet be able to rotate it?
-12. Roots are read live from the storage registries, so a transfer passes the ring account plus one or two registry accounts. Do you accept this over your question 3.1, which syncs roots into the policy account?
-13. On a confidential ring a wallet-scoped read shows the sender only the outputs it owns. Should wallet scope also admit the confidential sender the program binds?
+5. Does this scope fit the two-week audit, and what moves out if it does not?
+6. Should the delegate move a blocked or frozen member's funds?
+7. A ring reads lists from one curator. Is one enough?
+8. Third-party ZK programs settle through plain SPP transfers and cannot touch ring notes. Should the ring program offer a hook for allowlisted programs?
+9. Do you need relayed 16-way confidential payouts in one transaction? A relayed one needs SPP to publish less per output.
+10. An escrow key cannot change once set. Should a wallet be able to rotate it?
+11. Roots are read live from the storage registries, so a policy transfer passes the ring account plus one or two registry accounts. Do you accept this over your question 3.1, which syncs roots into the policy account?

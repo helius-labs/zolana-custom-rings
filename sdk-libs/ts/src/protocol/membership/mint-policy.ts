@@ -2,7 +2,7 @@ import { bigIntBytes, bytesToBigInt, equalBytes } from "@heliuslabs/zolana/inter
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import { RingError } from "../error.js";
 
-/** Rust `AssetLimits`, co-signer limits no proof bounds an amount by. */
+/** Rust `AssetLimits`, Ring RPC checks them only on operations it co-signs. */
 export interface AssetLimits {
   readonly senderCap: bigint;
   readonly senderWindowSlots: bigint;

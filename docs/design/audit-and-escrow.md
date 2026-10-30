@@ -12,8 +12,8 @@ The auditor holds one viewing key for the ring's life. That key opens every oper
 
 ## Deposits and merges
 
-- A deposit seals each new note's owner hash and blinding to the auditor. On an anonymous ring it also seals the owner key.
-- On a confidential ring the owner hash commits to the owner identity and the nullifier key, and no owner key is sealed. The auditor names the owner only with a nullifier key it already holds, such as an escrowed one.
+- A deposit seals each new note's owner hash, blinding and owner key to the auditor.
+- On every ring the proof binds the sealed owner key to the owner identity the owner hash commits to, so the auditor names each owner.
 - A merge seals a disclosure key to the auditor. The proof opens the owner, the mint, the total, the output blinding and each input's hash under it.
 
 ## Key escrow

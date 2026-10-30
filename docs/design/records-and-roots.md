@@ -33,4 +33,4 @@ A ring's lists, escrow keys, mint settings and tree grants are records in a Stor
 
 - Every root the program reads is the registry's current state, so no copy can lag a revocation.
 - A forged root needs a forged registry.
-- A transaction passes one or two registry accounts beside the ring account.
+- An operation that reads a root passes one or two registry accounts beside the ring account.
