@@ -27,8 +27,8 @@ use zolana_ring_client::rpc::{
 };
 use zolana_ring_rpc::{
     run_server, BindPolicy, ChainSource, ClientLimits, Hub, LiveStorageChain, ManagedMerge,
-    RelayServices, RelayServicesInit, ServedRings, ServerOptions, Store, TransactionSource,
-    Upstreams, STORE_CONNECTIONS,
+    RelayServices, RelayServicesInit, ServedRings, ServerOptions, ServiceIdentity, Store,
+    TransactionSource, Upstreams, STORE_CONNECTIONS,
 };
 
 use crate::shared::{prover_url, TestEnv, ACTOR_AIRDROP};
@@ -135,9 +135,14 @@ impl RingRpcSpec<'_> {
             .map_err(|e| anyhow!("genesis hash {e:?}"))?;
         let storage_chain = LiveStorageChain::connect(upstreams, &prover_url())
             .map_err(|e| anyhow!("storage chain {e:?}"))?;
-        let mut builder = Hub::builder(source, genesis_hash)
+        let identity = ServiceIdentity {
+            genesis_hash,
+            service: Keypair::new(),
+        };
+        let mut builder = Hub::builder(source, identity)
             .with_store(store)
-            .with_storage_chain(Arc::new(storage_chain));
+            .with_storage_chain(Arc::new(storage_chain), Keypair::new())
+            .with_co_signer(Keypair::new());
         if let Some(services) = relay {
             builder = builder.with_relay_services(services);
         }

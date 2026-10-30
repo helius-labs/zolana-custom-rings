@@ -482,6 +482,7 @@ mod tests {
     };
 
     use solana_address::Address;
+    use solana_keypair::Keypair;
     use solana_signature::Signature;
     use spr_client::{ClientError, GetShieldedTransactionsByTagsResponse};
     use spr_keypair::X25519Keypair;
@@ -500,6 +501,7 @@ mod tests {
         client_rate::{BucketRate, ClientRates, RateLimit, NETWORK_CLIENTS},
         config::RootSecret,
         error::RingRpcError,
+        hub::ServiceIdentity,
         limits::{
             MAX_CONCURRENT_AUTHENTICATIONS, MAX_CONCURRENT_DEPOSIT_SCANS, MAX_CONCURRENT_READS,
             MAX_REQUEST_UNITS_PER_SECOND,
@@ -644,7 +646,7 @@ mod tests {
             delegate: None,
         });
         Arc::new(
-            Hub::builder(source, TEST_GENESIS)
+            Hub::builder(source, identity(TEST_GENESIS))
                 .with_origins(origins)
                 .local(SERVED_RING, auditor)
                 .expect("hub"),
@@ -653,10 +655,17 @@ mod tests {
 
     fn derived_hub(source: TestSource, genesis: [u8; 32]) -> Arc<Hub<TestSource>> {
         Arc::new(
-            Hub::builder(source, genesis)
+            Hub::builder(source, identity(genesis))
                 .derived(RootSecret::from_bytes([5; 32]).expect("root"))
                 .expect("hub"),
         )
+    }
+
+    fn identity(genesis_hash: [u8; 32]) -> ServiceIdentity {
+        ServiceIdentity {
+            genesis_hash,
+            service: Keypair::new(),
+        }
     }
 
     fn source() -> TestSource {

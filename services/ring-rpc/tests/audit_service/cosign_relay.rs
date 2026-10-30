@@ -45,16 +45,13 @@ impl CappedRelay {
                 ..MintPolicy::EMPTY
             },
         );
-        let co_signer = fixture
-            .hub(fixture.source())
-            .co_signer_keypair()
-            .expect("co-signer")
-            .pubkey();
+        let co_signer = co_signer_key().pubkey();
         let chain = Arc::new(RecordingChain::default());
         let store = Store::open("sqlite::memory:", 1).await.expect("store");
-        let hub = Hub::builder(source, GENESIS)
+        let hub = Hub::builder(source, identity(GENESIS))
             .with_origins(origins())
             .with_store(store.clone())
+            .with_co_signer(co_signer_key())
             .with_relay(RelayParts {
                 store,
                 prover: Arc::new(RecordingProver {

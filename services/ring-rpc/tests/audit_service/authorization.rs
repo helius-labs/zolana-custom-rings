@@ -234,7 +234,7 @@ async fn a_ring_registered_with_another_auditor_stays_closed() {
             delegate: None,
         },
     )]);
-    let hub = Hub::builder(source, GENESIS)
+    let hub = Hub::builder(source, identity(GENESIS))
         .with_origins(origins())
         .derived(RootSecret::from_bytes([7; 32]).expect("root"))
         .expect("hub");
@@ -282,12 +282,12 @@ async fn derived_keys_are_ring_and_cluster_specific() {
     source
         .upgrade_authorities
         .insert(ring_a, deployer().pubkey());
-    let hub = Hub::builder(source, genesis_hash)
+    let hub = Hub::builder(source, identity(genesis_hash))
         .derived(root)
         .expect("hub");
     let key_a = hub.service(Some(ring_a)).expect("ring a").auditor_pubkey();
     let key_b = hub.service(Some(ring_b)).expect("ring b").auditor_pubkey();
-    let other_genesis = Hub::builder(fixture.source(), [10; 32])
+    let other_genesis = Hub::builder(fixture.source(), identity([10; 32]))
         .derived(RootSecret::from_bytes(root_bytes).expect("root"))
         .expect("hub");
     assert_ne!(
@@ -298,15 +298,11 @@ async fn derived_keys_are_ring_and_cluster_specific() {
         key_a
     );
     assert_eq!(
-        hub.service_pubkey().to_string(),
-        "FQ7ZZ4DEkoubT5Ca9BzzbgXDTmjKdRh6a3snGfPjpEZT"
-    );
-    assert_eq!(
         hex::encode(key_a.as_bytes()),
         "046ac65f6fa828249939ac012a53b665c474fadedc018f71010fb7fcf4b5585248"
     );
     assert_ne!(key_a, key_b);
-    let second = Hub::builder(fixture.source(), genesis_hash)
+    let second = Hub::builder(fixture.source(), identity(genesis_hash))
         .derived(derivation_root)
         .expect("hub");
     assert_eq!(

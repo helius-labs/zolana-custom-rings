@@ -22,17 +22,14 @@ use zolana_ring_transaction::RingAssets;
 use crate::{
     audit::{AuditService, AuditServiceInit, ASSET_REFRESH_INTERVAL},
     authorize::Unauthorized,
-    config::{ReaderGrantStore, RootSecret},
+    config::{GrantRowsSecret, ReaderGrantStore, RootSecret},
     cosign::{CoSignPolicy, RefusingCoSigner},
     cosign_limits::{LimitedCoSignerInit, MirroredLimits},
     database::Store,
     error::{redacted, RingRpcError},
     grant_rows::{GrantRowKey, GrantRows},
     grants::{GrantQuery, GrantSource, Grants, ReadScope, TreeGrants},
-    keys::{
-        co_signer_keypair, service_keypair, storage_authority_keypair, AuditorKeyDerivation,
-        KeySource,
-    },
+    keys::{AuditorKeyDerivation, KeySource},
     limits::{
         PublicRequest, RequestRate, MAX_CONCURRENT_AUTHENTICATIONS, MAX_CONCURRENT_DEPOSIT_SCANS,
         MAX_CONCURRENT_READS,
@@ -115,17 +112,25 @@ pub(crate) enum Lane {
     Read,
 }
 
+/// Every read and auditor key attestation binds both.
+pub struct ServiceIdentity {
+    pub genesis_hash: [u8; 32],
+    pub service: Keypair,
+}
+
 #[must_use]
 pub struct HubBuilder<S> {
     source: S,
-    genesis_hash: [u8; 32],
+    identity: ServiceIdentity,
     assets: Option<RingAssets>,
     origins: Origins,
     clock: Clock,
     store: Option<Store>,
-    storage_chain: Option<Arc<dyn StorageChain>>,
+    storage: Option<(Arc<dyn StorageChain>, Keypair)>,
     watched_registries: Vec<Address>,
     reader_grants: ReaderGrantStore,
+    grant_rows: Option<GrantRowsSecret>,
+    co_signer: Option<Keypair>,
     relay: Option<RelayParts>,
     merge: Option<MergeParts>,
 }
@@ -252,17 +257,19 @@ impl<S: TransactionSource> Shared<S> {
 }
 
 impl<S: TransactionSource> Hub<S> {
-    pub fn builder(source: S, genesis_hash: [u8; 32]) -> HubBuilder<S> {
+    pub fn builder(source: S, identity: ServiceIdentity) -> HubBuilder<S> {
         HubBuilder {
             source,
-            genesis_hash,
+            identity,
             assets: None,
             origins: Origins::default(),
             clock: Clock::System,
             store: None,
-            storage_chain: None,
+            storage: None,
             watched_registries: Vec::new(),
             reader_grants: ReaderGrantStore::Tree,
+            grant_rows: None,
+            co_signer: None,
             relay: None,
             merge: None,
         }
@@ -304,10 +311,6 @@ impl<S: TransactionSource> Hub<S> {
         self.writer
             .as_ref()
             .ok_or_else(|| RecordUpdateRefusal::Disabled.into())
-    }
-
-    pub fn co_signer_keypair(&self) -> Result<Keypair, RingRpcError> {
-        co_signer_keypair(self.keys.service_secret().as_slice())
     }
 
     /// Signs under the asset record limits with a store, refuses without one.
@@ -530,10 +533,10 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
         self
     }
 
-    /// The writer signs with a storage authority key derived beside the service key.
+    /// The record writer runs only beside a store.
     #[must_use = "use the updated builder"]
-    pub fn with_storage_chain(mut self, chain: Arc<dyn StorageChain>) -> Self {
-        self.storage_chain = Some(chain);
+    pub fn with_storage_chain(mut self, chain: Arc<dyn StorageChain>, authority: Keypair) -> Self {
+        self.storage = Some((chain, authority));
         self
     }
 
@@ -544,10 +547,23 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
         self
     }
 
-    /// `Database` seals grant rows under a key the service secret derives, and needs a store.
+    /// `Database` needs a store and a grant rows key.
     #[must_use = "use the updated builder"]
     pub fn with_reader_grants(mut self, store: ReaderGrantStore) -> Self {
         self.reader_grants = store;
+        self
+    }
+
+    #[must_use = "use the updated builder"]
+    pub fn with_grant_rows_key(mut self, secret: GrantRowsSecret) -> Self {
+        self.grant_rows = Some(secret);
+        self
+    }
+
+    /// Without a store the hub refuses every co-signature.
+    #[must_use = "use the updated builder"]
+    pub fn with_co_signer(mut self, signer: Keypair) -> Self {
+        self.co_signer = Some(signer);
         self
     }
 
@@ -573,19 +589,21 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
     }
 
     fn build(self, keys: KeySource) -> Result<Hub<S>, RingRpcError> {
-        let secret = keys.service_secret();
-        let signer = service_keypair(secret.as_slice())?;
+        let ServiceIdentity {
+            genesis_hash,
+            service: signer,
+        } = self.identity;
         let writer = self
             .store
             .clone()
-            .zip(self.storage_chain)
-            .map(|(store, chain)| {
-                Ok::<_, RingRpcError>(Arc::new(
+            .zip(self.storage)
+            .map(|(store, (chain, authority))| {
+                Arc::new(
                     WriterParts {
                         store,
                         chain,
-                        authority: storage_authority_keypair(secret.as_slice())?,
-                        genesis_hash: self.genesis_hash,
+                        authority,
+                        genesis_hash,
                         watched: self.watched_registries,
                         rings: match &keys {
                             KeySource::Local { ring, .. } => ServedRings::One(*ring),
@@ -594,14 +612,18 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
                         reader_grants: self.reader_grants,
                     }
                     .writer(),
-                ))
-            })
-            .transpose()?;
+                )
+            });
         let grants = match self.reader_grants {
             ReaderGrantStore::Tree => Grants::Tree,
             ReaderGrantStore::Database => Grants::Database(Box::new(GrantRows::new(
                 self.store.clone().ok_or(RingRpcError::GrantStoreMissing)?,
-                GrantRowKey::derive(secret.as_slice())?,
+                GrantRowKey::derive(
+                    self.grant_rows
+                        .as_ref()
+                        .ok_or(RingRpcError::GrantRowsKeyMissing)?
+                        .as_bytes(),
+                )?,
             ))),
         };
         let assets = match self.assets {
@@ -611,7 +633,7 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
         let lane = |count| (RequestRate::default(), Some(Semaphore::new(count)));
         let shared = Shared {
             source: self.source,
-            genesis_hash: self.genesis_hash,
+            genesis_hash,
             service: signer.pubkey(),
             clock: self.clock,
             assets: AsyncMutex::new(AssetCache {
@@ -637,10 +659,10 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
             database: self.store.clone(),
         };
         let shared = Arc::new(shared);
-        let co_signer: Arc<dyn CoSignPolicy> = match self.store {
-            Some(store) => Arc::new(
+        let co_signer: Arc<dyn CoSignPolicy> = match self.store.zip(self.co_signer) {
+            Some((store, signer)) => Arc::new(
                 LimitedCoSignerInit {
-                    signer: co_signer_keypair(secret.as_slice())?,
+                    signer,
                     limits: MirroredLimits(shared.clone()),
                     store: Arc::new(store),
                 }

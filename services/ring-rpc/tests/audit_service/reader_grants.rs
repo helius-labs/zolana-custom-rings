@@ -38,10 +38,11 @@ async fn ring_read(
 async fn database_hub(fixture: &Fixture, source: StaticSource) -> Arc<Hub<StaticSource>> {
     let store = Store::open("sqlite::memory:", 1).await.expect("store");
     Arc::new(
-        Hub::builder(source, GENESIS)
+        Hub::builder(source, identity(GENESIS))
             .with_origins(origins())
             .with_store(store)
             .with_reader_grants(ReaderGrantStore::Database)
+            .with_grant_rows_key(grant_rows_key())
             .local(RING, fixture.auditor.clone())
             .expect("hub"),
     )

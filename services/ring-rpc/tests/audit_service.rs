@@ -33,7 +33,7 @@ use std::{
     future::Future,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc, LazyLock, Mutex,
+        Arc, Mutex,
     },
     time::Duration,
 };
@@ -76,10 +76,10 @@ use zolana_ring_indexer::rpc::{
     RingMemberOpening, RingMemberRecordView, RingRecordPathView, StorageRootView,
 };
 use zolana_ring_rpc::{
-    rpc_module, AuditRead, AuditService, Clock, DepositHistory, DepositPage, Hub,
+    rpc_module, AuditRead, AuditService, Clock, DepositHistory, DepositPage, GrantRowsSecret, Hub,
     MergeAuditRequest, OriginPolicy, Origins, Page, ReadCheck, ReaderGrantStore, RecordsTip,
-    RingConfiguration, RingHistoryPage, RingRpcError, RootSecret, Store, TransactionPage,
-    TransactionSource, Unauthorized, AUTH_SKEW,
+    RingConfiguration, RingHistoryPage, RingRpcError, RootSecret, ServiceIdentity, Store,
+    TransactionPage, TransactionSource, Unauthorized, AUTH_SKEW,
 };
 use zolana_ring_transaction::{RingAssets, RingDeliveredBody};
 
@@ -121,6 +121,29 @@ fn deployer() -> Keypair {
 
 fn stranger() -> Keypair {
     Keypair::new_from_array([43; 32])
+}
+
+fn service_key() -> Keypair {
+    Keypair::new_from_array([46; 32])
+}
+
+fn storage_authority() -> Keypair {
+    Keypair::new_from_array([48; 32])
+}
+
+fn co_signer_key() -> Keypair {
+    Keypair::new_from_array([49; 32])
+}
+
+fn grant_rows_key() -> GrantRowsSecret {
+    GrantRowsSecret::from_bytes([50; 32])
+}
+
+fn identity(genesis_hash: [u8; 32]) -> ServiceIdentity {
+    ServiceIdentity {
+        genesis_hash,
+        service: service_key(),
+    }
 }
 
 struct Passkey {
@@ -237,16 +260,10 @@ fn origins() -> Origins {
         .expect("origins")
 }
 
-/// Fixture hubs share one auditor key and so one service key.
-static FIXTURE_SERVICE: LazyLock<Address> = LazyLock::new(|| {
-    let fixture = Fixture::new();
-    fixture.hub(fixture.source()).service_pubkey()
-});
-
 fn target(ring: Address) -> ReadTarget {
     ReadTarget {
         cluster: GENESIS,
-        service: *FIXTURE_SERVICE,
+        service: service_key().pubkey(),
         ring,
     }
 }
@@ -912,14 +929,14 @@ impl Fixture {
     }
 
     fn hub(&self, source: StaticSource) -> Hub<StaticSource> {
-        Hub::builder(source, GENESIS)
+        Hub::builder(source, identity(GENESIS))
             .with_origins(origins())
             .local(RING, self.auditor.clone())
             .expect("hub")
     }
 
     fn hub_at(&self, source: StaticSource, now: u64) -> Hub<StaticSource> {
-        Hub::builder(source, GENESIS)
+        Hub::builder(source, identity(GENESIS))
             .with_origins(origins())
             .with_clock(Clock::Fixed(now))
             .local(RING, self.auditor.clone())

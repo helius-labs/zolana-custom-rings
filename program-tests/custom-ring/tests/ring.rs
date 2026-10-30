@@ -128,7 +128,8 @@ use zolana_ring_client::{
 use zolana_ring_keys::{RingAddress, RingPaymentRequest};
 use zolana_ring_policy::{ListId, Member, Rule, RuleTable, Subject};
 use zolana_ring_rpc::{
-    ChainSource, Hub, RingRpcError, RootSecret, TransactionSource, Unauthorized, Upstreams,
+    ChainSource, Hub, RingRpcError, RootSecret, ServiceIdentity, TransactionSource, Unauthorized,
+    Upstreams,
 };
 
 /// Lamports moved by the two transaction-shape probes. Small enough that the

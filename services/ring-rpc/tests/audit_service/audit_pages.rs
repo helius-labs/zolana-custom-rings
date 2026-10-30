@@ -566,7 +566,7 @@ async fn rpc_wire_uses_camel_case_and_rejects_another_local_ring() {
 async fn two_rings_read_only_their_own_transactions() {
     let fixture = Fixture::new();
     let hub_of = |source: StaticSource| {
-        Hub::builder(source, GENESIS)
+        Hub::builder(source, identity(GENESIS))
             .with_origins(origins())
             .derived(RootSecret::from_bytes([7; 32]).expect("root"))
             .expect("hub")

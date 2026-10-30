@@ -80,8 +80,9 @@ pub use authorize::{ReadCheck, ReadClaim, Unauthorized, AUTH_SKEW};
 pub use client_identity::{ApiKeyDigest, ApiKeyDigestError, ClientIdentityPolicy};
 pub use client_rate::{BucketRate, ClientLimitArgs, ClientLimits, ClientRates, RateLimit};
 pub use config::{
-    read_fee_payer, read_root_secret, write_fee_payer, write_root_secret, Cli, Command, KeyKind,
-    KeygenArgs, ReaderGrantStore, RootSecret, RootSecretError, ServeArgs,
+    read_root_secret, write_grant_rows_secret, write_keypair, write_root_secret, Cli, Command,
+    GrantRowsSecret, KeyKind, KeygenArgs, ReaderGrantStore, RootSecret, RootSecretError, ServeArgs,
+    ServeKeyError, ServeKeys,
 };
 pub use cosign::{
     AssetFlow, CoSignDecision, CoSignError, CoSignPolicy, CoSignRefusal, CoSignRequest,
@@ -94,8 +95,8 @@ pub use cosign_usage::Reservation;
 pub use database::{Store, STORE_CONNECTIONS};
 pub use error::{GrantRefusal, RingRpcError};
 pub use escrow_merge::RingSdkMergeBuilder;
-pub use hub::{Clock, Hub, HubBuilder, NotReady};
-pub use keys::GRANT_ROW_KEY_INFO;
+pub use hub::{Clock, Hub, HubBuilder, NotReady, ServiceIdentity};
+pub use keys::{KeySource, GRANT_ROW_KEY_INFO};
 pub use managed_merge::{
     BuiltMerge, ManagedMerge, ManagedMergeInit, MergeBuilder, MergeTarget, OwnerMerge,
     MANAGED_MERGE_INTERVAL,

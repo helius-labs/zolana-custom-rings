@@ -111,7 +111,7 @@ async fn ring_status_reports_the_state_of_each_ring() {
         },
     )]);
     let hub = Arc::new(
-        Hub::builder(source, GENESIS)
+        Hub::builder(source, identity(GENESIS))
             .with_origins(origins())
             .derived(RootSecret::from_bytes([7; 32]).expect("root"))
             .expect("hub"),
@@ -146,7 +146,7 @@ async fn ring_status_reports_the_state_of_each_ring() {
         ),
     ]);
     let module = rpc_module(Arc::new(
-        Hub::builder(source, GENESIS)
+        Hub::builder(source, identity(GENESIS))
             .with_origins(origins())
             .derived(RootSecret::from_bytes([7; 32]).expect("root"))
             .expect("hub"),

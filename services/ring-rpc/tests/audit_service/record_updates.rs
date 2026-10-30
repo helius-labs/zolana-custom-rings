@@ -227,11 +227,12 @@ impl RecordsSetup<'_> {
             records: super::Records::listing(&[]),
         });
         let store = Store::open("sqlite::memory:", 1).await.expect("store");
-        let hub = Hub::builder(self.source, GENESIS)
+        let hub = Hub::builder(self.source, identity(GENESIS))
             .with_origins(origins())
             .with_store(store)
-            .with_storage_chain(chain.clone())
+            .with_storage_chain(chain.clone(), storage_authority())
             .with_reader_grants(self.reader_grants)
+            .with_grant_rows_key(grant_rows_key())
             .local(RING, self.fixture.auditor.clone())
             .expect("hub");
         let writer = hub.record_writer().expect("writer").clone();

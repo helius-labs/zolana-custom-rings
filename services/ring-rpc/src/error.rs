@@ -58,10 +58,12 @@ pub enum RingRpcError {
     Grant(#[from] GrantRefusal),
     #[error("grant identity failed because {0}")]
     Member(#[from] MemberError),
-    #[error("stored grant row does not open under the service key")]
+    #[error("stored grant row does not open under the grant rows key")]
     InvalidGrantRow,
     #[error("database reader grants need a service store")]
     GrantStoreMissing,
+    #[error("database reader grants need a grant rows key")]
+    GrantRowsKeyMissing,
     #[error(transparent)]
     Relay(#[from] RelayError),
     #[error(transparent)]
@@ -210,7 +212,7 @@ impl From<RingRpcError> for ErrorObjectOwned {
                 error!("grant identity failed {inner}");
                 (ErrorCode::InternalError, "audit service is unavailable")
             }
-            InvalidGrantRow | GrantStoreMissing => {
+            InvalidGrantRow | GrantStoreMissing | GrantRowsKeyMissing => {
                 error!("{failure}");
                 (ErrorCode::InternalError, "audit service is unavailable")
             }
