@@ -1,4 +1,4 @@
-//! Serves a wallet reader its own part of each transaction and refuses it outside its wallet or after its only grant is revoked, in the tree or the database.
+//! Serves a wallet reader its own part of each transaction, refuses it outside its wallet and refuses a reader whose only grant is revoked, in the tree or the database.
 
 use super::*;
 use custom_ring_interface::{InProofOwner, RingOutput, RingRail, RingTransactData};
