@@ -5,7 +5,7 @@
 // Read first. Read before registry/opening.go, registry/shared_path.go,
 // registry/apply_records.go.
 
-// Package registry proves a ring's member registry, a 4-ary Poseidon tree whose records form one list sorted by member, and the writes the ring program queues and applies to it.
+// Package registry proves a ring's member registry, a 4-ary Poseidon tree whose records form one list sorted by member, and the writes a storage `Update` or `UpdateImmediate` carries to it.
 package registry
 
 import (
