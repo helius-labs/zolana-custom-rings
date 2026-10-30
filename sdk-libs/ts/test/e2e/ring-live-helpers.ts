@@ -236,11 +236,15 @@ export function auditedRingAmounts(
     .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 }
 
+export function ringKeys(actor: Actor) {
+  return ringWalletKeys(actor.keys, LocalRingKeys.fromKeypair(actor.keypair));
+}
+
 export async function sync(client: CustomRingClient, actor: Actor): Promise<void> {
   await syncRingWallet({
     client,
     wallet: actor.wallet,
-    keys: ringWalletKeys(actor.keys, LocalRingKeys.fromKeypair(actor.keypair)),
+    keys: ringKeys(actor),
     config: { requireSlot: await currentSlot(client) },
   });
 }
