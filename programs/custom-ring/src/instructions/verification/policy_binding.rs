@@ -64,26 +64,6 @@ impl TableBinding<'_> {
     }
 }
 
-/// The records answer to the policy authority or to the storage authority it names.
-#[must_use]
-pub(crate) struct RecordsBinding<'a> {
-    pub records: &'a AccountView,
-    pub policy_authority: &'a Address,
-    pub storage_authority: &'a Address,
-}
-
-impl RecordsBinding<'_> {
-    pub fn check(self) -> Result<(), ProgramError> {
-        let records_authority = load_storage_registry(self.records)?.authority;
-        if records_authority != *self.policy_authority
-            && records_authority != *self.storage_authority
-        {
-            return Err(CustomRingError::StorageAuthorityMismatch.into());
-        }
-        Ok(())
-    }
-}
-
 /// A curator source names a registry of any authority other than the ring's records.
 pub(crate) fn curator_source(
     records: &Address,

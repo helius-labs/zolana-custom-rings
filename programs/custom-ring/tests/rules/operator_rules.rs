@@ -71,7 +71,6 @@ fn policy_config(ring: &Ring) -> InitializeIxData {
         kind: RingKind::Policy,
         roles: ring.roles.addresses(),
         policy: Some(PolicyBindingIxData {
-            storage_authority: Address::default(),
             table: allow_list_table(Vec::new()),
         }),
     }
@@ -443,9 +442,7 @@ const ROLE_WRITES: [RoleWrite; 8] = [
         instruction: |_, signer, _| {
             UpdatePolicyIx {
                 authority: *signer,
-                update: UpdatePolicyIxData::Records {
-                    storage_authority: *signer,
-                },
+                update: UpdatePolicyIxData::Records,
                 trailing: &[RECORDS],
             }
             .instruction()

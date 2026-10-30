@@ -175,10 +175,7 @@ impl Ring {
                 auditor_pubkey: auditor_pubkey(),
                 kind: setup.kind(),
                 roles: ring.roles.addresses(),
-                policy: Some(PolicyBindingIxData {
-                    storage_authority: Address::default(),
-                    table,
-                }),
+                policy: Some(PolicyBindingIxData { table }),
             },
             curators: &[],
         }

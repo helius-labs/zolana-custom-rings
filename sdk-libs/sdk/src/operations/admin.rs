@@ -41,7 +41,7 @@ pub struct Initialize<'a> {
 #[must_use]
 #[derive(Clone, Copy, Debug)]
 pub struct InitialPolicy<'a> {
-    pub records: PolicyRecords,
+    pub records: Address,
     pub table: PolicyTable<'a>,
 }
 
@@ -102,7 +102,7 @@ pub enum PolicyUpdate<'a> {
         source: SourceOwner,
     },
     /// Own lists read the new records once `SyncRoots` mirrors them.
-    Records(PolicyRecords),
+    Records(Address),
 }
 
 /// A referenced list not shared reads the ring's own records.
@@ -112,14 +112,6 @@ pub struct PolicyTable<'a> {
     pub rules: &'a RuleTable,
     /// Each list's curator `StorageRegistry`.
     pub shared_sources: &'a [(ListId, Address)],
-}
-
-#[must_use]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PolicyRecords {
-    pub records: Address,
-    /// The records may answer to it beside the policy authority.
-    pub storage_authority: Address,
 }
 
 struct TablePayload {
@@ -145,12 +137,9 @@ impl Initialize<'_> {
         let policy = match self.policy {
             Some(InitialPolicy { records, table }) => {
                 let TablePayload { data, curators } = table.payload()?;
-                accounts.push(AccountMeta::new_readonly(records.records, false));
+                accounts.push(AccountMeta::new_readonly(records, false));
                 accounts.extend(curators);
-                Some(PolicyBindingIxData {
-                    storage_authority: records.storage_authority,
-                    table: data,
-                })
+                Some(PolicyBindingIxData { table: data })
             }
             None => None,
         };
@@ -248,10 +237,8 @@ impl UpdatePolicy<'_> {
                 })
             }
             PolicyUpdate::Records(records) => {
-                accounts.push(AccountMeta::new_readonly(records.records, false));
-                UpdatePolicyIxData::Records {
-                    storage_authority: records.storage_authority,
-                }
+                accounts.push(AccountMeta::new_readonly(records, false));
+                UpdatePolicyIxData::Records
             }
         };
         let data = tagged(tag::UPDATE_POLICY, &update)?;

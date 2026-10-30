@@ -8,8 +8,8 @@ use custom_ring_interface::{
 };
 use custom_ring_sdk::{
     tag, ClearCoSigner, CoSignScope, CustomRing, CustomRingMergeInstruction, InitialPolicy,
-    Initialize, PolicyRecords, PolicyTable, PolicyUpdate, RingError, RingKind, SetCoSigner,
-    SetDelegate, SourceOwner, UpdateAuthority, UpdatePolicy,
+    Initialize, PolicyTable, PolicyUpdate, RingError, RingKind, SetCoSigner, SetDelegate,
+    SourceOwner, UpdateAuthority, UpdatePolicy,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -146,10 +146,7 @@ fn initialize_runs_under_the_upgrade_authority_and_appends_the_records_only_with
         .rule(Rule::require(Subject::Sender, ListId::Allow))
         .build();
     let curator = Address::new_from_array([36; 32]);
-    let records = PolicyRecords {
-        records: Address::new_from_array([37; 32]),
-        storage_authority: Address::new_from_array([38; 32]),
-    };
+    let records = Address::new_from_array([37; 32]);
     let with_policy = initialize(
         RingKind::Policy,
         Some(InitialPolicy {
@@ -165,18 +162,14 @@ fn initialize_runs_under_the_upgrade_authority_and_appends_the_records_only_with
         [
             accounts,
             vec![
-                AccountMeta::new_readonly(records.records, false),
+                AccountMeta::new_readonly(records, false),
                 AccountMeta::new_readonly(curator, false),
             ]
         ]
         .concat()
     );
     let (_, body) = split(&with_policy);
-    let PolicyBindingIxData {
-        storage_authority,
-        table,
-    } = parse::<InitializeIxData>(body).policy.unwrap();
-    assert_eq!(storage_authority, records.storage_authority);
+    let PolicyBindingIxData { table } = parse::<InitializeIxData>(body).policy.unwrap();
     assert_eq!(
         table.sources,
         [SourceSpec {
@@ -357,11 +350,8 @@ fn a_policy_source_names_a_curator_registry_only_when_shared() {
 }
 
 #[test]
-fn a_records_rebind_names_the_new_registry_and_its_storage_authority() {
-    let records = PolicyRecords {
-        records: Address::new_from_array([39; 32]),
-        storage_authority: Address::new_from_array([38; 32]),
-    };
+fn a_records_rebind_names_the_new_registry() {
+    let records = Address::new_from_array([39; 32]);
     let instruction = UpdatePolicy {
         ring: ring(),
         authority: authority(),
@@ -373,7 +363,7 @@ fn a_records_rebind_names_the_new_registry_and_its_storage_authority() {
         instruction.accounts,
         [
             policy_write(),
-            vec![AccountMeta::new_readonly(records.records, false)]
+            vec![AccountMeta::new_readonly(records, false)]
         ]
         .concat()
     );
@@ -381,9 +371,7 @@ fn a_records_rebind_names_the_new_registry_and_its_storage_authority() {
     assert_eq!(ix_tag, tag::UPDATE_POLICY);
     assert_eq!(
         parse::<UpdatePolicyIxData>(body),
-        UpdatePolicyIxData::Records {
-            storage_authority: records.storage_authority,
-        }
+        UpdatePolicyIxData::Records
     );
 }
 

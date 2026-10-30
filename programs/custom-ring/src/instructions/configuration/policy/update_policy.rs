@@ -11,8 +11,8 @@ use zolana_ring_policy::ListId;
 
 use crate::instructions::{
     instruction_runtime::parse,
-    loader::RoleHolder,
-    policy_binding::{curator_source, RecordsBinding, TableBinding},
+    loader::{load_storage_registry, RoleHolder},
+    policy_binding::{curator_source, TableBinding},
 };
 
 #[inline(never)]
@@ -43,9 +43,7 @@ pub fn process_update_policy_ix(
     match ix {
         UpdatePolicyIxData::Rules(table) => write.replace_rules(&table),
         UpdatePolicyIxData::Source(source) => write.move_source(source),
-        UpdatePolicyIxData::Records { storage_authority } => {
-            write.rebind_records(&storage_authority)
-        }
+        UpdatePolicyIxData::Records => write.rebind_records(),
     }
 }
 
@@ -97,16 +95,11 @@ impl PolicyWrite<'_> {
     }
 
     #[inline(never)]
-    fn rebind_records(self, storage_authority: &Address) -> ProgramResult {
+    fn rebind_records(self) -> ProgramResult {
         let [records] = self.trailing else {
             return Err(CustomRingError::InvalidStorageRegistry.into());
         };
-        RecordsBinding {
-            records,
-            policy_authority: &self.policy.roles.policy,
-            storage_authority,
-        }
-        .check()?;
+        load_storage_registry(records)?;
         self.policy.rebind_records(*records.address(), self.slot)?;
         Ok(())
     }
