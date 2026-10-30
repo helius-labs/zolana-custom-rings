@@ -125,16 +125,18 @@ export async function createRing(client: CustomRingClient, ring: FreshRing): Pro
     binary: RingProgramBinary.parse(new Uint8Array(await readFile(requiredEnv("RING_PROGRAM_SO")))),
   });
   const { auditor } = ring;
-  const auditorPublicKey =
-    "releasedBy" in auditor
-      ? (
-          await auditor.releasedBy.createAuditorKey({
-            ringProgramId,
-            genesisHash: (await ringReadTarget(auditor.releasedBy, ringProgramId)).cluster,
-            authority,
-          })
-        ).auditorPublicKey
-      : auditor;
+  const released = async (ringRpc: RingRpc): Promise<X25519PublicKey> => {
+    // The local service's own health answer is the key this test pins.
+    const target = await ringReadTarget(ringRpc, ringProgramId);
+    const key = await ringRpc.createAuditorKey({
+      ringProgramId,
+      genesisHash: target.cluster,
+      authority,
+      servicePublicKey: target.service,
+    });
+    return key.auditorPublicKey;
+  };
+  const auditorPublicKey = "releasedBy" in auditor ? await released(auditor.releasedBy) : auditor;
   const fresh = async () => (await generateKeyPairSigner()).address;
   // A policy binds a records registry the storage program created beforehand.
   await sendInstruction(

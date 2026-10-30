@@ -4,6 +4,7 @@ import {
   generateKeyPairSigner,
   getAddressDecoder,
   getBase58Decoder,
+  type Address,
   type MessagePartialSigner,
 } from "@solana/kit";
 import { readFileSync } from "node:fs";
@@ -566,7 +567,10 @@ describe("signed ring request validation", () => {
     async (_name, overrides, code) => {
       const { rpc, fetch } = offlineRpc();
       await expect(
-        Reflect.apply(rpc.createAuditorKeySigned, rpc, [{ ...signedAuditorKey(), ...overrides }]),
+        Reflect.apply(rpc.createAuditorKeySigned, rpc, [
+          { ...signedAuditorKey(), ...overrides },
+          PAYER,
+        ]),
       ).rejects.toMatchObject({ code });
       expect(fetch).not.toHaveBeenCalled();
     },
@@ -586,7 +590,9 @@ describe("signed ring request validation", () => {
     await expect(Reflect.apply(rpc.readSigned, rpc, [null])).rejects.toMatchObject({
       code: "RING_RPC",
     });
-    await expect(Reflect.apply(rpc.createAuditorKeySigned, rpc, [null])).rejects.toMatchObject({
+    await expect(
+      Reflect.apply(rpc.createAuditorKeySigned, rpc, [null, PAYER]),
+    ).rejects.toMatchObject({
       code: "RING_RPC",
     });
     expect(fetch).not.toHaveBeenCalled();
@@ -598,7 +604,7 @@ describe("signed ring request validation", () => {
       Reflect.apply(rpc.readSigned, rpc, [Object.create(signedRead())]),
     ).rejects.toMatchObject({ code: "RING_RPC" });
     await expect(
-      Reflect.apply(rpc.createAuditorKeySigned, rpc, [Object.create(signedAuditorKey())]),
+      Reflect.apply(rpc.createAuditorKeySigned, rpc, [Object.create(signedAuditorKey()), PAYER]),
     ).rejects.toMatchObject({ code: "RING_RPC" });
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -1478,15 +1484,17 @@ describe("ring read request", () => {
   const servicePublicKey = getAddressDecoder().decode(ed25519.getPublicKey(serviceSecret));
   const auditor = X25519Keypair.fromBytes(new Uint8Array(32).fill(9)).publicKey();
   const genesisHash = filled(4, 32) as Bytes32;
-  const auditorKeyResult = (signature: Uint8Array) => ({
+  const auditorKeyResult = (signature: Uint8Array, service: Address = servicePublicKey) => ({
     ringProgramId: RING,
     auditorPubkey: Buffer.from(auditor.toBytes()).toString("base64"),
     auditorViewTag: getAddressDecoder().decode(auditor.u()),
-    servicePubkey: servicePublicKey,
+    servicePubkey: service,
     signature: getBase58Decoder().decode(signature),
   });
   /** A ring rpc whose statement covers the cluster and nonce of each request it answers. */
-  const statementFetch = (): {
+  const statementFetch = (
+    secret: Uint8Array = serviceSecret,
+  ): {
     fetch: typeof globalThis.fetch;
     bodies: Record<string, unknown>[];
   } => {
@@ -1505,7 +1513,10 @@ describe("ring read request", () => {
         JSON.stringify({
           jsonrpc: "2.0",
           id: 1,
-          result: auditorKeyResult(ed25519.sign(statement, serviceSecret)),
+          result: auditorKeyResult(
+            ed25519.sign(statement, secret),
+            getAddressDecoder().decode(ed25519.getPublicKey(secret)),
+          ),
         }),
         JSON_HEADERS,
       );
@@ -1575,7 +1586,7 @@ describe("ring read request", () => {
     const key = await new RingRpc("http://ring.example", {
       fetch: statementFetch().fetch,
       allowInsecureHttp: true,
-    }).createAuditorKey({ ringProgramId: RING, genesisHash, authority });
+    }).createAuditorKey({ ringProgramId: RING, genesisHash, authority, servicePublicKey });
     expect(key.auditorPublicKey.equals(auditor)).toBe(true);
     expect(key.auditorViewTag).toEqual(auditor.u());
     expect(key.servicePublicKey).toBe(servicePublicKey);
@@ -1584,13 +1595,25 @@ describe("ring read request", () => {
       new RingRpc("http://ring.example", {
         fetch: capturingFetch(auditorKeyResult(filled(1, 64))).fetch,
         allowInsecureHttp: true,
-      }).createAuditorKey({ ringProgramId: RING, genesisHash, authority }),
+      }).createAuditorKey({ ringProgramId: RING, genesisHash, authority, servicePublicKey }),
     ).rejects.toMatchObject({ code: "RING_RPC" });
     await expect(
       new RingRpc("http://ring.example", {
         fetch: capturingFetch(auditorKeyResult(ed25519.sign(otherRequest, serviceSecret))).fetch,
         allowInsecureHttp: true,
-      }).createAuditorKey({ ringProgramId: RING, genesisHash, authority }),
+      }).createAuditorKey({ ringProgramId: RING, genesisHash, authority, servicePublicKey }),
+    ).rejects.toMatchObject({ code: "RING_RPC" });
+  });
+
+  it("refuses an auditor key attested under a service key the caller did not pin", async () => {
+    const authority = await generateKeyPairSigner();
+    const answered = new RingRpc("http://ring.example", {
+      fetch: statementFetch(filled(8, 32)).fetch,
+      allowInsecureHttp: true,
+    });
+
+    await expect(
+      answered.createAuditorKey({ ringProgramId: RING, genesisHash, authority, servicePublicKey }),
     ).rejects.toMatchObject({ code: "RING_RPC" });
   });
 
@@ -1604,6 +1627,7 @@ describe("ring read request", () => {
       ringProgramId: RING,
       genesisHash,
       authority,
+      servicePublicKey,
       timestamp: 1_700_000_000n,
     });
 
