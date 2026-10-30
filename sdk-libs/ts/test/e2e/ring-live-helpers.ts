@@ -157,7 +157,6 @@ export async function createRing(client: CustomRingClient, ring: FreshRing): Pro
         : {
             policy: {
               records: address(requiredEnv("RING_RECORDS_REGISTRY")),
-              storageAuthority: authority.address,
               table,
             },
           }),

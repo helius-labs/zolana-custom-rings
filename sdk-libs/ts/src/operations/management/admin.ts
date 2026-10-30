@@ -124,7 +124,6 @@ export async function initializeRingInstruction(
   const { policy } = input;
   writer.bool(policy !== undefined, "policy");
   if (policy !== undefined) {
-    writer.bytes(addressBytes(policy.storageAuthority, "storageAuthority"), 32, "storageAuthority");
     const curators = writePolicyTable(writer, policy);
     accounts.push(
       meta(policy.records, false, false),
@@ -276,16 +275,14 @@ export interface RingPolicyTableInput {
   readonly sharedSources?: readonly RingSharedSource[];
 }
 
-/** `records` answers to the policy role or to `storageAuthority`. */
 export interface RingInitialPolicy extends RingPolicyTableInput {
   readonly records: Address;
-  readonly storageAuthority: Address;
 }
 
 export type RingPolicyUpdate =
   | (Readonly<{ kind: "rules" }> & RingPolicyTableInput)
   | Readonly<{ kind: "source"; listId: ListId; source: RingPolicySourceOwner }>
-  | Readonly<{ kind: "records"; records: Address; storageAuthority: Address }>;
+  | Readonly<{ kind: "records"; records: Address }>;
 
 const POLICY_UPDATE_VARIANT = Object.freeze({ rules: 0, source: 1, records: 2 } as const);
 
@@ -326,11 +323,6 @@ function policyUpdateBody(writer: Writer, update: RingPolicyUpdate): readonly Ad
       return [update.source.registry];
     }
     case "records":
-      writer.bytes(
-        addressBytes(update.storageAuthority, "storageAuthority"),
-        32,
-        "storageAuthority",
-      );
       return [update.records];
   }
 }
