@@ -18,11 +18,8 @@ import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import type { MemberRecord, QuadPath } from "../../protocol/membership/member-registry.js";
 import { auditSharedSecret } from "../../crypto/audit/audit.js";
 
-import {
-  checkedCustomRingProof,
-  type RingProgramConfig,
-} from "../../protocol/codec/ring-codecs.js";
-import { fetchRingProgramConfig } from "../../protocol/membership/config.js";
+import { checkedCustomRingProof, type RingPolicy } from "../../protocol/codec/ring-codecs.js";
+import { fetchRingPolicy } from "../../protocol/membership/config.js";
 import { RingError, wrapRingError } from "../../protocol/error.js";
 import { memberOfTag } from "../../protocol/membership/policy.js";
 import { readOwnRecords, type RingRecordReadClient } from "../../rpc/registered-record.js";
@@ -145,7 +142,7 @@ export class KeyRegistration {
     context?: RequestContext,
   ): Promise<EscrowEntry> {
     try {
-      const config = await fetchRingProgramConfig(client, this.#ringProgramId, context);
+      const config = await fetchRingPolicy(client, this.#ringProgramId, context);
       const member = memberOfTag(addressBytes(this.#member.solanaAddress(), "member"));
       const proven = await escrowProver({
         config,
@@ -276,7 +273,7 @@ function escrowProver({
   member,
   authority,
 }: Readonly<{
-  config: RingProgramConfig;
+  config: RingPolicy;
   member: ShieldedAddress;
   authority: KeyEscrowAuthority;
 }>): (identity: Bytes32, context: RequestContext | undefined) => Promise<ProvenEscrow> {

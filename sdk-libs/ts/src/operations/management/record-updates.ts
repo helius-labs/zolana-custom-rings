@@ -78,7 +78,7 @@ export class WalletRecordUpdate {
     return this.#with(escrow);
   }
 
-  /** Rust `WalletRecordUpdate::awaiting_authority`, held until the config authority sets every list. */
+  /** Rust `WalletRecordUpdate::awaiting_authority`, held until the policy authority sets every list. */
   awaitingAuthority(lists: readonly ListId[]): WalletRecordUpdate {
     if (lists.length === 0 || lists.some((list) => !ENROLMENT_LISTS.includes(list)))
       throw invalid("EnrolmentLists");
@@ -108,7 +108,7 @@ export class WalletRecordUpdate {
   }
 }
 
-/** Rust `AuthorityRecordUpdate`, signed by the config authority, a write may name any record. */
+/** Rust `AuthorityRecordUpdate`, signed by the policy authority, a write may name any record. */
 export class AuthorityRecordUpdate {
   readonly #target: RecordUpdateTarget;
   readonly #authority: Address;
@@ -148,7 +148,7 @@ export class AuthorityRecordUpdate {
     return this.#entries;
   }
 
-  /** The writer refuses a signer other than the config authority. */
+  /** The writer refuses a signer other than the policy authority. */
   async sign(authority: MessagePartialSigner): Promise<SubmitRecordUpdateRequest> {
     if (authority.address !== this.#authority) throw invalid("Signer");
     return signEntries(this.#target, this.#entries, authority);

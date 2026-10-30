@@ -15,7 +15,7 @@ import {
   type RingSharedSource,
 } from "./admin.js";
 import { registryCurator } from "../../protocol/codec/ring-codecs.js";
-import { fetchRingPolicy, fetchRingProgramConfig } from "../../protocol/membership/config.js";
+import { fetchRingPolicy } from "../../protocol/membership/config.js";
 import { RingError, wrapRingError } from "../../protocol/error.js";
 
 export type RingPolicyAdminClient = BlockhashProvider & Pick<ChainReader, "getAccount">;
@@ -23,7 +23,7 @@ export type RingPolicyAdminClient = BlockhashProvider & Pick<ChainReader, "getAc
 interface RingPolicyAdminParams {
   readonly client: RingPolicyAdminClient;
   readonly ringProgramId: Address;
-  /** The config authority, also the fee payer. */
+  /** The policy authority, also the fee payer. */
   readonly authority: Address;
   readonly computeUnitLimit?: number;
   readonly priorityFeeLamports?: bigint;
@@ -79,7 +79,7 @@ async function checkTier(
   params: RingPolicyAdminParams,
   context: RequestContext | undefined,
 ): Promise<void> {
-  const config = await fetchRingProgramConfig(params.client, params.ringProgramId, context);
+  const config = await fetchRingPolicy(params.client, params.ringProgramId, context);
   if (!config.hasPolicy)
     throw new RingError("RING_POLICY_TIER_MISMATCH", {
       details: { ringProgramId: params.ringProgramId },

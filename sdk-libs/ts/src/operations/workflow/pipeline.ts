@@ -27,12 +27,7 @@ import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import { SppProofInputs, createExternalData } from "@heliuslabs/zolana/transaction";
 import type { ProofOutputUtxo } from "@heliuslabs/zolana/transaction";
 import { CUSTOM_RING_PROOF_LENGTH } from "../../protocol/proof/custom-ring-proof.js";
-import {
-  ringAuthAddress,
-  ringCoSignerMetas,
-  ringConfigAddress,
-  ringPolicyAddress,
-} from "../../protocol/pda/index.js";
+import { ringAuthAddress, ringCoSignerMetas, ringPolicyAddress } from "../../protocol/pda/index.js";
 import type { AuditLayout } from "../../protocol/codec/ring-disclosure-layout.js";
 import { ringIdField, senderCommitment } from "../../crypto/derivation/ring-stream.js";
 
@@ -43,7 +38,7 @@ import {
   sealedAuditMessage,
   type SealedAudit,
 } from "../../proof/audit-proof.js";
-import type { RingProgramConfig } from "../../protocol/codec/ring-codecs.js";
+import type { RingPolicy } from "../../protocol/codec/ring-codecs.js";
 import {
   readWithdrawalExemption,
   type WithdrawalExemption,
@@ -207,7 +202,7 @@ export interface RingTransactionFrame {
 export type StagedTransferInput = Readonly<{
   client: RingProvingClient;
   ringProgramId: Address;
-  config: RingProgramConfig;
+  config: RingPolicy;
   staged: StagedTransfer;
   /** Read only when the ring demands a co-signer, its record must cover the demand. */
   coSigner?: Address;
@@ -242,7 +237,7 @@ export interface SealedTransfer {
 export function sealStagedTransfer(
   input: Readonly<{
     ringProgramId: Address;
-    config: RingProgramConfig;
+    config: RingPolicy;
     staged: Omit<StagedTransfer, "spend"> & Readonly<{ spend: Pick<RailSpend, "rail"> }>;
   }>,
 ): SealedTransfer {
@@ -543,8 +538,7 @@ export async function ringTransactInstruction(
   data: RingTransactData,
 ): Promise<Instruction> {
   const spp = ringSppInputs(data);
-  const [config, policy, ringAuth] = await Promise.all([
-    ringConfigAddress(ringProgramId),
+  const [ring, ringAuth] = await Promise.all([
     ringPolicyAddress(ringProgramId),
     ringAuthAddress(ringProgramId),
   ]);
@@ -560,9 +554,7 @@ export async function ringTransactInstruction(
       : {}),
     ...(accounts.withdrawal === undefined ? {} : { withdrawal: accounts.withdrawal }),
   });
-  const prefix: AccountMeta[] = [meta(config, false, false)];
-  if (data.policy !== undefined || data.withdrawalExemption !== undefined)
-    prefix.push(meta(policy, false, false));
+  const prefix: AccountMeta[] = [meta(ring, false, false)];
   if (accounts.coSigner !== undefined)
     prefix.push(...(await ringCoSignerMetas(ringProgramId, accounts.coSigner)));
   if (accounts.delegate !== undefined) prefix.push(meta(accounts.delegate, true, false));

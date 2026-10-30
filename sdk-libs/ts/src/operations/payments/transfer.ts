@@ -47,7 +47,7 @@ import { RingAddress, RingPaymentRequest } from "../../crypto/keys/ring-address.
 
 import { RingInstructionTag, ringComputeUnitLimit } from "../management/admin.js";
 import { carriesNoData, type AnonymousPayment, type AnonymousSpendSigner } from "./anonymous.js";
-import { fetchRingProgramConfig } from "../../protocol/membership/config.js";
+import { fetchRingPolicy } from "../../protocol/membership/config.js";
 import { RingError, wrapRingError } from "../../protocol/error.js";
 import { boundState } from "../workflow/pipeline.js";
 import {
@@ -675,7 +675,7 @@ async function stageRingSpend<R>(
   const owner = params.keys.address();
   const [resolved, config, outputTree] = await Promise.all([
     strategy.resolve(context),
-    fetchRingProgramConfig(params.client, params.ringProgramId, context),
+    fetchRingPolicy(params.client, params.ringProgramId, context),
     resolveRingOutputTree(params.client, params.outputTree, context),
   ]);
   if (anonymousRing !== (config.mode === "anonymous"))

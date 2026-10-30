@@ -164,7 +164,7 @@ export interface RefuseEnrolmentRequest {
   readonly auth: ConfigAuthorityAuth;
 }
 
-/** Rust `CreateRecordsRegistryRequest`, signed by the config authority or, while no config exists, the upgrade authority. */
+/** Rust `CreateRecordsRegistryRequest`, signed by the policy authority or, before `Initialize`, the upgrade authority. */
 export interface CreateRecordsRegistryRequest {
   readonly ring: Address;
   readonly auth: ConfigAuthorityAuth;
@@ -194,7 +194,7 @@ export interface PendingEnrolment {
 /** Rust `ReaderGrantAction`. */
 export type ReaderGrantAction = "grant" | "revoke";
 
-/** Rust `SetReaderGrantRequest`, signed by `wallet` or, without one, by the ring config authority. */
+/** Rust `SetReaderGrantRequest`, signed by `wallet` or, without one, by the ring's policy authority. */
 export interface SetReaderGrantRequest {
   readonly ring: Address;
   readonly wallet?: Address;

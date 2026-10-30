@@ -63,15 +63,10 @@ import { encodeRelayMergeInputs } from "../../protocol/ring-rpc/relay-proof-inpu
 import type { RelayIntent, RelayQuote } from "../../protocol/ring-rpc/ring-rpc-types.js";
 import { PreparedRelay } from "../../rpc/relay.js";
 import type { RingMergeClient, RingSecretProver } from "../../rpc/ports.js";
-import {
-  ringAuthAddress,
-  ringCoSignerMetas,
-  ringConfigAddress,
-  ringPolicyAddress,
-} from "../../protocol/pda/index.js";
+import { ringAuthAddress, ringCoSignerMetas, ringPolicyAddress } from "../../protocol/pda/index.js";
 
 import { checkSignersHideOwner } from "./anonymous.js";
-import { fetchRingProgramConfig } from "../../protocol/membership/config.js";
+import { fetchRingPolicy } from "../../protocol/membership/config.js";
 import { TRANSFER_DEMAND, resolveRingCoSigner } from "../../proof/cosign.js";
 import { RingError, wrapRingError } from "../../protocol/error.js";
 import {
@@ -209,7 +204,7 @@ export function createRingMergeSubmission(
 
 /**
  * `MERGE ‖ own_revision ‖ output_ring_data_hash ‖ disclosure ‖ body` with the body's
- * `proof.b` compressed, the accounts `[config, policy?, co-signer record and signer?]` ahead of SPP's merge list.
+ * `proof.b` compressed, the accounts `[ring, co-signer record and signer?]` ahead of SPP's merge list.
  */
 export async function ringMergeInstruction(
   input: Readonly<{
@@ -220,15 +215,14 @@ export async function ringMergeInstruction(
     data: MergeTransactInstructionData;
     outputRingDataHash: Bytes32;
     disclosure: RingMergeDisclosure;
-    /** Key escrow rings only, the policy account then follows the config. */
+    /** Key escrow rings only. */
     ownRevision?: bigint;
     /** The supplied co-signer when a record covers transfers. */
     cosigner?: SignerAccount;
   }>,
 ): Promise<Instruction> {
-  const [config, policy, auth, nullifiers, cosigner] = await Promise.all([
-    ringConfigAddress(input.ringProgramId),
-    input.ownRevision === undefined ? undefined : ringPolicyAddress(input.ringProgramId),
+  const [ring, auth, nullifiers, cosigner] = await Promise.all([
+    ringPolicyAddress(input.ringProgramId),
     ringAuthAddress(input.ringProgramId),
     Promise.all(input.data.nullifiers.map((value) => nullifierPdaAddress(input.inputTree, value))),
     input.cosigner === undefined ? [] : ringCoSignerMetas(input.ringProgramId, input.cosigner),
@@ -247,8 +241,7 @@ export async function ringMergeInstruction(
       .bytes(body.subarray(MERGE_B_OFFSET + 128))
       .finish(),
     [
-      meta(config, false, false),
-      ...(policy === undefined ? [] : [meta(policy, false, false)]),
+      meta(ring, false, false),
       ...cosigner,
       meta(input.inputTree, false, true),
       meta(input.outputTree, false, true),
@@ -272,7 +265,7 @@ async function buildRingMerge(
     checkKeysIdentity(params.keys, params.wallet.identity);
     const maxInputs = mergeWidth(params.maxInputs);
     const [config, outputTree] = await Promise.all([
-      fetchRingProgramConfig(params.client, params.ringProgramId, context),
+      fetchRingPolicy(params.client, params.ringProgramId, context),
       resolveRingOutputTree(params.client, params.outputTree, context),
     ]);
     const demanded = await resolveRingCoSigner(

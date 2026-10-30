@@ -12,7 +12,7 @@ import {
   type RingPolicy,
   type RootMirrorKind,
 } from "../protocol/codec/ring-codecs.js";
-import { fetchRingPolicy, fetchRingProgramConfig } from "../protocol/membership/config.js";
+import { fetchRingPolicy } from "../protocol/membership/config.js";
 import { RingError } from "../protocol/error.js";
 import {
   MemberOpeningRead,
@@ -111,7 +111,7 @@ export async function checkEscrowedRecipients(
   }>,
   context?: RequestContext,
 ): Promise<void> {
-  const config = await fetchRingProgramConfig(input.client, input.ringProgramId, context);
+  const config = await fetchRingPolicy(input.client, input.ringProgramId, context);
   if (config.mode !== "confidentialEscrow") return;
   const owners = input.recipients.map((recipient) =>
     recipient.signingPublicKey.ownerProofInputHash(),

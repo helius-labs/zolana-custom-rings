@@ -1558,12 +1558,7 @@ describe("anonymous rail on a policy ring", () => {
     await checkAccounts(instruction, {
       fixture,
       data,
-      prefix: [
-        {
-          address: await ringPolicyAddress(fixture.ringProgramId),
-          role: AccountRole.READONLY,
-        },
-      ],
+      prefix: [],
       payer: fixture.authority,
     });
   });
@@ -1604,10 +1599,6 @@ describe("anonymous rail on a policy ring", () => {
       fixture,
       data,
       prefix: [
-        {
-          address: await ringPolicyAddress(fixture.ringProgramId),
-          role: AccountRole.READONLY,
-        },
         {
           address: await ringCoSignerAddress(fixture.ringProgramId, coSigner),
           role: AccountRole.READONLY,

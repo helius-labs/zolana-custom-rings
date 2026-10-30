@@ -92,7 +92,7 @@ describe("public package surface", () => {
       import("../../../src/ring-advanced.js"),
     ]);
     for (const name of [
-      "ringConfigAddress",
+      "ringPolicyAddress",
       "initializeRingInstruction",
       "ringTransactInstruction",
       "CustomRingTransfer",

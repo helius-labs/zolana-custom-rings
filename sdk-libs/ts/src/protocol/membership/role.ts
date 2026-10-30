@@ -1,29 +1,30 @@
 import type { ChainReader, RpcAccount } from "@heliuslabs/zolana/client";
 import type { Address, RequestContext } from "@heliuslabs/zolana";
 
-import { decodeRingProgramConfig } from "../codec/ring-codecs.js";
-import { ringConfigAddress } from "../pda/index.js";
+import { decodeRingPolicy, RING_ROLES, type RingAuthorityRole } from "../codec/ring-codecs.js";
+import { ringPolicyAddress } from "../pda/index.js";
 import { RingError } from "../error.js";
 import { readerKeyEquals, type ReaderKey } from "../../operations/management/reader-access.js";
 
 type AccountReader = Pick<ChainReader, "getMultipleAccounts">;
 
-export type RingRole = "authority" | "participant only";
+export type RingRole = RingAuthorityRole | "participant only";
 
-/** What a ring's config says about one key. */
+/** At most one role, the program keeps the role keys distinct. */
 export async function ringRole(
   input: Readonly<{ rpc: AccountReader; ring: Address; reader: ReaderKey }>,
   context?: RequestContext,
 ): Promise<RingRole> {
-  const config = await ringConfigAddress(input.ring);
-  const [configAccount] = await input.rpc.getMultipleAccounts([config], context);
-  const configData = owned(configAccount, input.ring);
-  if (configData === undefined) {
+  const address = await ringPolicyAddress(input.ring);
+  const [account] = await input.rpc.getMultipleAccounts([address], context);
+  const data = owned(account, input.ring);
+  if (data === undefined) {
     throw new RingError("RING_CONFIG_INVALID", { details: { reason: "ring has no config" } });
   }
-  return readerKeyEquals(decodeRingProgramConfig(configData).authority, input.reader)
-    ? "authority"
-    : "participant only";
+  const { roles } = decodeRingPolicy(data);
+  return (
+    RING_ROLES.find((role) => readerKeyEquals(roles[role], input.reader)) ?? "participant only"
+  );
 }
 
 /** An account another program owns says nothing about this ring. */

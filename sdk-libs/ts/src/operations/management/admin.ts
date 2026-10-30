@@ -16,12 +16,17 @@ import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import {
   ringAuthAddress,
   ringCoSignerAddress,
-  ringConfigAddress,
   ringPolicyAddress,
 } from "../../protocol/pda/index.js";
 import { isSmallOrder } from "../../crypto/keys/x25519.js";
 
-import { RING_COSIGN_SCOPE_MASK } from "../../protocol/codec/ring-codecs.js";
+import {
+  RING_COSIGN_SCOPE_MASK,
+  RING_ROLE_BYTES,
+  RING_ROLES,
+  type RingAuthorityRole,
+  type RingRoles,
+} from "../../protocol/codec/ring-codecs.js";
 import { ringProgramDataAddress } from "../../protocol/membership/config.js";
 import { RingInstructionTag } from "../../protocol/transaction/instruction-tag.js";
 import { RingError } from "../../protocol/error.js";
@@ -78,7 +83,7 @@ function ringKindByte(kind: RingKind): number {
   return RING_KIND_BYTES[kind];
 }
 
-/** Rust `Initialize`, the upgrade authority signs and becomes the ring authority, the pool registers the ring in the same instruction. */
+/** Rust `Initialize`, the upgrade authority signs and names the four roles, the pool registers the ring in the same instruction. */
 export async function initializeRingInstruction(
   input: Readonly<{
     ringProgramId: Address;
@@ -86,14 +91,16 @@ export async function initializeRingInstruction(
     authority: SignerAccount;
     auditorPublicKey: X25519PublicKey;
     kind: RingKind;
+    roles: RingRoles;
     /** Required on a policy ring, an audit-only ring takes it for its withdrawal exemptions. */
     policy?: RingInitialPolicy;
   }>,
 ): Promise<Instruction> {
   if (isSmallOrder(input.auditorPublicKey))
     throw new RingError("RING_CONFIG_INVALID", { details: { reason: "InvalidAuditorPubkey" } });
-  const [config, programData, protocolConfig, ringAuth] = await Promise.all([
-    ringConfigAddress(input.ringProgramId),
+  checkRoles(input.roles);
+  const [ring, programData, protocolConfig, ringAuth] = await Promise.all([
+    ringPolicyAddress(input.ringProgramId),
     ringProgramDataAddress(input.ringProgramId),
     protocolConfigAddress(),
     ringAuthAddress(input.ringProgramId),
@@ -102,10 +109,11 @@ export async function initializeRingInstruction(
     .u8(RingInstructionTag.initialize, "tag")
     .bytes(input.auditorPublicKey.toBytes(), 33, "auditorPubkey")
     .u8(ringKindByte(input.kind), "kind");
+  for (const role of RING_ROLES) writer.bytes(addressBytes(input.roles[role], role), 32, role);
   const accounts: AccountMeta[] = [
     meta(input.payer, true, true),
     meta(input.authority, true, false),
-    meta(config, false, true),
+    meta(ring, false, true),
     meta(SYSTEM_PROGRAM, false, false),
     meta(input.ringProgramId, false, false),
     meta(programData, false, false),
@@ -118,9 +126,7 @@ export async function initializeRingInstruction(
   if (policy !== undefined) {
     writer.bytes(addressBytes(policy.storageAuthority, "storageAuthority"), 32, "storageAuthority");
     const curators = writePolicyTable(writer, policy);
-    const policyAddress = await ringPolicyAddress(input.ringProgramId);
     accounts.push(
-      meta(policyAddress, false, true),
       meta(policy.records, false, false),
       ...curators.map((registry) => meta(registry, false, false)),
     );
@@ -141,23 +147,28 @@ export async function syncRootsInstruction(
   ]);
 }
 
-/** Rust `UpdateAuthority`, both keys sign so a mistyped address cannot strand the config. */
+/** Rust `UpdateAuthority`, the admin and the new key sign so a mistyped address cannot strand the role. */
 export async function updateRingAuthorityInstruction(
   input: Readonly<{
     ringProgramId: Address;
+    /** The admin. */
     authority: SignerAccount;
+    role: RingAuthorityRole;
     newAuthority: SignerAccount;
   }>,
 ): Promise<Instruction> {
-  const config = await ringConfigAddress(input.ringProgramId);
-  return ringInstruction(input.ringProgramId, Uint8Array.of(RingInstructionTag.updateAuthority), [
+  if (!Object.hasOwn(RING_ROLE_BYTES, input.role))
+    throw new RingError("RING_CONFIG_INVALID", { details: { reason: "role", role: input.role } });
+  const ring = await ringPolicyAddress(input.ringProgramId);
+  const data = Uint8Array.of(RingInstructionTag.updateAuthority, RING_ROLE_BYTES[input.role]);
+  return ringInstruction(input.ringProgramId, data, [
     meta(input.authority, true, false),
     meta(input.newAuthority, true, false),
-    meta(config, false, true),
+    meta(ring, false, true),
   ]);
 }
 
-/** Rust `CustomRing::set_paused`. */
+/** Rust `CustomRing::set_paused`, the pauser signs. */
 export async function setRingPausedInstruction(
   input: Readonly<{
     ringProgramId: Address;
@@ -165,8 +176,8 @@ export async function setRingPausedInstruction(
     paused: boolean;
   }>,
 ): Promise<Instruction> {
-  const [config, ringAuth] = await Promise.all([
-    ringConfigAddress(input.ringProgramId),
+  const [ring, ringAuth] = await Promise.all([
+    ringPolicyAddress(input.ringProgramId),
     ringAuthAddress(input.ringProgramId),
   ]);
   const data = new Writer()
@@ -175,13 +186,13 @@ export async function setRingPausedInstruction(
     .finish();
   return ringInstruction(input.ringProgramId, data, [
     meta(input.authority, true, false),
-    meta(config, false, false),
+    meta(ring, false, false),
     meta(ringAuth, false, true),
     meta(SHIELDED_POOL_PROGRAM_ID, false, false),
   ]);
 }
 
-/** Rust `SetCoSigner`, creates the signer's record or rescopes it. */
+/** Rust `SetCoSigner`, the co-signer admin creates the signer's record or rescopes it. */
 export async function setRingCoSignerInstruction(
   input: Readonly<{
     ringProgramId: Address;
@@ -193,8 +204,8 @@ export async function setRingCoSignerInstruction(
   }>,
 ): Promise<Instruction> {
   checkCoSigner(input.signer, input.scope);
-  const [config, record] = await Promise.all([
-    ringConfigAddress(input.ringProgramId),
+  const [ring, record] = await Promise.all([
+    ringPolicyAddress(input.ringProgramId),
     ringCoSignerAddress(input.ringProgramId, input.signer),
   ]);
   const data = new Writer()
@@ -205,13 +216,13 @@ export async function setRingCoSignerInstruction(
   return ringInstruction(input.ringProgramId, data, [
     meta(input.payer, true, true),
     meta(input.authority, true, false),
-    meta(config, false, true),
+    meta(ring, false, true),
     meta(record, false, true),
     meta(SYSTEM_PROGRAM, false, false),
   ]);
 }
 
-/** Rust `ClearCoSigner`, the record's rent goes to `rentRecipient`. */
+/** Rust `ClearCoSigner`, the co-signer admin signs and the record's rent goes to `rentRecipient`. */
 export async function clearRingCoSignerInstruction(
   input: Readonly<{
     ringProgramId: Address;
@@ -220,19 +231,19 @@ export async function clearRingCoSignerInstruction(
     rentRecipient: Address;
   }>,
 ): Promise<Instruction> {
-  const [config, record] = await Promise.all([
-    ringConfigAddress(input.ringProgramId),
+  const [ring, record] = await Promise.all([
+    ringPolicyAddress(input.ringProgramId),
     ringCoSignerAddress(input.ringProgramId, input.signer),
   ]);
   return ringInstruction(input.ringProgramId, Uint8Array.of(RingInstructionTag.clearCoSigner), [
     meta(input.authority, true, false),
-    meta(config, false, true),
+    meta(ring, false, true),
     meta(record, false, true),
     meta(input.rentRecipient, false, true),
   ]);
 }
 
-/** Rust `CustomRing::set_delegate`, the config authority and the delegate sign, permanent and it turns key escrow on. */
+/** Rust `CustomRing::set_delegate`, the admin and the delegate sign, permanent and it turns key escrow on. */
 export async function setRingDelegateInstruction(
   input: Readonly<{
     ringProgramId: Address;
@@ -240,15 +251,11 @@ export async function setRingDelegateInstruction(
     delegate: SignerAccount;
   }>,
 ): Promise<Instruction> {
-  const [config, policy] = await Promise.all([
-    ringConfigAddress(input.ringProgramId),
-    ringPolicyAddress(input.ringProgramId),
-  ]);
+  const ring = await ringPolicyAddress(input.ringProgramId);
   return ringInstruction(input.ringProgramId, Uint8Array.of(RingInstructionTag.setDelegate), [
     meta(input.authority, true, false),
-    meta(config, false, true),
+    meta(ring, false, true),
     meta(input.delegate, true, false),
-    meta(policy, false, false),
   ]);
 }
 
@@ -269,7 +276,7 @@ export interface RingPolicyTableInput {
   readonly sharedSources?: readonly RingSharedSource[];
 }
 
-/** `records` answers to the config authority or to `storageAuthority`. */
+/** `records` answers to the policy role or to `storageAuthority`. */
 export interface RingInitialPolicy extends RingPolicyTableInput {
   readonly records: Address;
   readonly storageAuthority: Address;
@@ -282,7 +289,7 @@ export type RingPolicyUpdate =
 
 const POLICY_UPDATE_VARIANT = Object.freeze({ rules: 0, source: 1, records: 2 } as const);
 
-/** Rust `UpdatePolicy`, own lists read rebound records once `syncRootsInstruction` mirrors them. */
+/** Rust `UpdatePolicy`, the policy role signs and own lists read rebound records once `syncRootsInstruction` mirrors them. */
 export async function updateRingPolicyInstruction(
   input: Readonly<{
     ringProgramId: Address;
@@ -328,16 +335,12 @@ function policyUpdateBody(writer: Writer, update: RingPolicyUpdate): readonly Ad
   }
 }
 
-/** `UpdatePolicy` writes the policy under a read-only config. */
 async function policyWriteMetas(
   ringProgramId: Address,
   authority: SignerAccount,
 ): Promise<readonly AccountMeta[]> {
-  const [config, policy] = await Promise.all([
-    ringConfigAddress(ringProgramId),
-    ringPolicyAddress(ringProgramId),
-  ]);
-  return [meta(authority, true, false), meta(config, false, false), meta(policy, false, true)];
+  const ring = await ringPolicyAddress(ringProgramId);
+  return [meta(authority, true, false), meta(ring, false, true)];
 }
 
 /** Rust `PolicyTable::payload`, returns the curator registries in first-use order. */
@@ -374,6 +377,17 @@ function checkFits(payer: SignerAccount, instruction: Instruction, computeUnitLi
     instructions: [instruction],
     computeUnitLimit,
   });
+}
+
+/** Mirrors Rust `RingRoles::check`, every key nonzero and distinct. */
+function checkRoles(roles: RingRoles): void {
+  const keys = RING_ROLES.map((role) => roles[role]);
+  const reason = keys.some((key) => equalBytes(addressBytes(key, "role"), ZERO_32))
+    ? "ZeroRoleKey"
+    : new Set(keys).size !== keys.length
+      ? "DuplicateRoleKey"
+      : undefined;
+  if (reason !== undefined) throw new RingError("RING_CONFIG_INVALID", { details: { reason } });
 }
 
 /** Mirrors the program's `SetCoSigner` refusals before the authority signs. */

@@ -61,7 +61,6 @@ import type { RingProofRequest } from "../../../src/rpc/prover/ring.js";
 import {
   ringAuthAddress,
   ringCoSignerAddress,
-  ringConfigPda,
   ringPolicyPda,
 } from "../../../src/protocol/pda/index.js";
 import {
@@ -87,12 +86,7 @@ import { ListId, recordBit } from "../../../src/protocol/membership/policy.js";
 import { BLOCKHASH } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { stateTree } from "../../helpers/state-tree.js";
 import { recordTree, type FixtureRecord } from "../../helpers/member-registry.js";
-import {
-  ownedAccount,
-  ringCoSignerAccount,
-  ringPolicyData,
-  ringProgramConfigData,
-} from "../../helpers/ring-accounts.js";
+import { ownedAccount, ringCoSignerAccount, ringPolicyData } from "../../helpers/ring-accounts.js";
 import { decompressG2 } from "../../../src/protocol/codec/codecs.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
@@ -313,7 +307,6 @@ async function ringMergeParams({
   coSigner?: RingCoSigner;
 }>) {
   const tree = recordTree([ownerRecord(escrow)]);
-  const [config, configBump] = await ringConfigPda(RING);
   const [policy, policyBump] = await ringPolicyPda(RING);
   return {
     client: {
@@ -325,23 +318,14 @@ async function ringMergeParams({
           const [record, stored] = await ringCoSignerAccount(RING, coSigner);
           if (account === record) return stored;
         }
-        if (account === config)
-          return ownedAccount(
-            RING,
-            ringProgramConfigData({
-              authority: RING,
-              auditorPublicKey: mergeAuditor.publicKey().toBytes(),
-              bump: configBump,
-              hasPolicy: false,
-              mode,
-              ...(coSigner === undefined ? {} : { coSigner }),
-            }),
-          );
         if (account === policy)
           return ownedAccount(
             RING,
             ringPolicyData({
               bump: policyBump,
+              auditorPublicKey: mergeAuditor.publicKey().toBytes(),
+              mode,
+              ...(coSigner === undefined ? {} : { coSigner }),
               records: RECORDS,
               ownRoots: {
                 registry: RECORDS,
@@ -425,9 +409,8 @@ describe("ring merge", () => {
       expect(request.member?.record.escrowKey).toEqual(ownerRecord("own").escrowKey);
       const data = ringInstruction(transaction);
       expect(data.slice(1, 9)).toEqual(Uint8Array.of(Number(OWN_REVISION), 0, 0, 0, 0, 0, 0, 0));
-      const [config] = await ringConfigPda(RING);
-      const [policy] = await ringPolicyPda(RING);
-      expect(ringAccounts(transaction).slice(0, 3)).toEqual([config, policy, treeAddress(7)]);
+      const [ring] = await ringPolicyPda(RING);
+      expect(ringAccounts(transaction).slice(0, 2)).toEqual([ring, treeAddress(7)]);
     } finally {
       local.destroy();
     }
@@ -492,8 +475,8 @@ describe("ring merge", () => {
       expect(request).not.toHaveProperty("member");
       const data = ringInstruction(transaction);
       expect(data[1]).toBe(0);
-      const [config] = await ringConfigPda(RING);
-      expect(ringAccounts(transaction).slice(0, 2)).toEqual([config, treeAddress(7)]);
+      const [ring] = await ringPolicyPda(RING);
+      expect(ringAccounts(transaction).slice(0, 2)).toEqual([ring, treeAddress(7)]);
     } finally {
       local.destroy();
     }
@@ -701,19 +684,17 @@ describe("ring merge", () => {
     expect(body).toEqual(compactBody(data));
     expect(body.length).toBe(encodeMergeTransactInstructionData(data).length - 64);
     expect(decompressG2(body.slice(40, 104) as Bytes64)).toEqual(data.proof.b);
-    const [config] = await ringConfigPda(RING);
-    const [policy] = await ringPolicyPda(RING);
-    expect(instruction.accounts?.slice(0, 4)).toEqual([
-      { address: config, role: AccountRole.READONLY },
-      { address: policy, role: AccountRole.READONLY },
+    const [ring] = await ringPolicyPda(RING);
+    expect(instruction.accounts?.slice(0, 3)).toEqual([
+      { address: ring, role: AccountRole.READONLY },
       { address: await ringCoSignerAddress(RING, cosigner), role: AccountRole.READONLY },
       { address: cosigner, role: AccountRole.READONLY_SIGNER },
     ]);
-    expect(instruction.accounts?.[6]).toEqual({
+    expect(instruction.accounts?.[5]).toEqual({
       address: await ringAuthAddress(RING),
       role: AccountRole.READONLY,
     });
-    expect(instruction.accounts).toHaveLength(10 + inputs.length);
+    expect(instruction.accounts).toHaveLength(9 + inputs.length);
     const without = await ringMergeInstruction({
       ringProgramId: RING,
       inputTree: treeAddress(7),
@@ -724,7 +705,7 @@ describe("ring merge", () => {
       disclosure,
       data,
     });
-    expect(without.accounts?.slice(2)).toEqual(instruction.accounts?.slice(4));
+    expect(without.accounts?.slice(1)).toEqual(instruction.accounts?.slice(3));
     const plain = await ringMergeInstruction({
       ringProgramId: RING,
       inputTree: treeAddress(7),
@@ -735,7 +716,7 @@ describe("ring merge", () => {
       data,
     });
     expect(plain.data?.[1]).toBe(0);
-    expect(plain.accounts?.slice(1)).toEqual(instruction.accounts?.slice(4));
+    expect(plain.accounts?.slice(1)).toEqual(instruction.accounts?.slice(3));
   });
 
   it("binds ring identity and destination into approval", () => {
@@ -791,8 +772,8 @@ describe("anonymous ring merge", () => {
       const data = ringInstruction(transaction);
       expect(data[0]).toBe(InstructionTag.ringMergeTransact);
       expect(data.slice(1, 9)).toEqual(new Uint8Array(8));
-      const [config] = await ringConfigPda(RING);
-      expect(ringAccounts(transaction).slice(0, 2)).toEqual([config, treeAddress(7)]);
+      const [ring] = await ringPolicyPda(RING);
+      expect(ringAccounts(transaction).slice(0, 2)).toEqual([ring, treeAddress(7)]);
       const disclosure = readRingMergeDisclosure(new Reader(data.slice(41)));
       expect(disclosure.proof).toEqual(new Uint8Array(192));
       expect(disclosure.fields).toHaveLength(mergeDisclosureFieldCount(8));

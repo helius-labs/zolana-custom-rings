@@ -2,9 +2,9 @@ import { address, blockhash, type Address } from "@solana/kit";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { RpcAccount } from "@heliuslabs/zolana/client";
+import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import { initializePoseidon } from "@heliuslabs/zolana";
-import { X25519Keypair } from "@heliuslabs/zolana/keypair";
-import { ringConfigPda, ringPolicyPda } from "../../../src/protocol/pda/index.js";
+import { ringPolicyPda } from "../../../src/protocol/pda/index.js";
 import type { RingSourceSlot } from "../../../src/protocol/codec/ring-codecs.js";
 import {
   LIST_IDS,
@@ -14,12 +14,7 @@ import {
 } from "../../../src/protocol/membership/policy.js";
 import { buildRingUpdatePolicyTransaction } from "../../../src/operations/management/policy-admin.js";
 import type { RingPolicySourceOwner } from "../../../src/operations/management/admin.js";
-import {
-  ZERO_ADDRESS,
-  ownedAccount,
-  ringPolicyData,
-  ringProgramConfigData,
-} from "../../helpers/ring-accounts.js";
+import { ZERO_ADDRESS, ownedAccount, ringPolicyData } from "../../helpers/ring-accounts.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 const CURATOR_A = address("CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8");
@@ -45,19 +40,6 @@ beforeAll(initializePoseidon);
 /** The ring's policy reads allow from its own records and block from curator A. */
 async function chain(input: Readonly<{ hasPolicy?: boolean }> = {}) {
   const accounts = new Map<Address, RpcAccount>();
-  const [config, configBump] = await ringConfigPda(RING);
-  accounts.set(
-    config,
-    ownedAccount(
-      RING,
-      ringProgramConfigData({
-        authority: AUTHORITY,
-        auditorPublicKey: X25519Keypair.generate().publicKey().toBytes(),
-        bump: configBump,
-        hasPolicy: input.hasPolicy ?? true,
-      }),
-    ),
-  );
   const sources: RingSourceSlot[] = LIST_IDS.map((listId) =>
     listId === ListId.allow
       ? { listId, registry: ZERO_ADDRESS }
@@ -68,7 +50,16 @@ async function chain(input: Readonly<{ hasPolicy?: boolean }> = {}) {
   const [policy, policyBump] = await ringPolicyPda(RING);
   accounts.set(
     policy,
-    ownedAccount(RING, ringPolicyData({ bump: policyBump, records: RECORDS, sources })),
+    ownedAccount(
+      RING,
+      ringPolicyData({
+        bump: policyBump,
+        roles: { policy: AUTHORITY },
+        records: RECORDS,
+        sources,
+        ...(input.hasPolicy === false ? {} : { policyHash: new Uint8Array(32).fill(1) as Bytes32 }),
+      }),
+    ),
   );
   accounts.set(CURATOR_A, ownedAccount(STORAGE, new Uint8Array(1)));
   return {

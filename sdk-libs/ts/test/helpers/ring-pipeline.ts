@@ -53,12 +53,7 @@ import {
   Utxo,
 } from "@heliuslabs/zolana/transaction";
 import type { RingProofRequest } from "../../src/rpc/prover/ring.js";
-import {
-  ringAuthAddress,
-  ringConfigAddress,
-  ringConfigPda,
-  ringPolicyPda,
-} from "../../src/protocol/pda/index.js";
+import { ringAuthAddress, ringPolicyAddress, ringPolicyPda } from "../../src/protocol/pda/index.js";
 import { openTransactionViewingSecret } from "../../src/crypto/audit/audit.js";
 import { openRingDisclosure, type RingDisclosure } from "../../src/crypto/audit/ring-disclosure.js";
 import { ringIdField } from "../../src/crypto/derivation/ring-stream.js";
@@ -94,7 +89,6 @@ import {
   ownedAccount,
   ringCoSignerAccount,
   ringPolicyData,
-  ringProgramConfigData,
   sppRingRegistration,
 } from "./ring-accounts.js";
 import { settlementAccounts } from "../../src/protocol/transaction/spp.js";
@@ -193,23 +187,6 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
   const authority = randomAddress();
   const accounts = new Map<Address, RpcAccount>();
   const ownTree = recordTree(options.records ?? []);
-  const hasPolicy = options.table !== undefined;
-  const [configAddress, configBump] = await ringConfigPda(ringProgramId);
-  accounts.set(
-    configAddress,
-    ownedAccount(
-      ringProgramId,
-      ringProgramConfigData({
-        authority,
-        auditorPublicKey: auditor.publicKey().toBytes(),
-        bump: configBump,
-        hasPolicy,
-        mode: options.mode ?? "confidential",
-        ...(options.coSigner === undefined ? {} : { coSigner: options.coSigner }),
-        ...(options.delegate === undefined ? {} : { delegate: options.delegate }),
-      }),
-    ),
-  );
   const [ringAuth, registration] = await sppRingRegistration({
     authority,
     ringProgramId,
@@ -231,6 +208,14 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
     curatorTree = recordTree(options.curator.records);
     trees.set(curatorRegistry, { tree: curatorTree, revision: CURATOR_REVISION });
   }
+  const config = {
+    roles: { admin: authority },
+    auditorPublicKey: auditor.publicKey().toBytes(),
+    mode: options.mode ?? "confidential",
+    ...(options.coSigner === undefined ? {} : { coSigner: options.coSigner }),
+    ...(options.delegate === undefined ? {} : { delegate: options.delegate }),
+  } as const;
+  const [ringAddress, ringBump] = await ringPolicyPda(ringProgramId);
   if (options.table !== undefined || options.records !== undefined) {
     const table = options.table ?? buildRuleTable({ rules: [] });
     const referenced = referencedLists(table.rules);
@@ -246,18 +231,22 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
           }
         : { listId: 0, registry: ZERO_ADDRESS },
     );
-    const [address, bump] = await ringPolicyPda(ringProgramId);
     accounts.set(
-      address,
+      ringAddress,
       ownedAccount(
         ringProgramId,
         ringPolicyData({
-          bump,
+          bump: ringBump,
+          ...config,
           records: ownRegistry,
-          policyHash: policyTableHash(table, policySourceOwners(sources)),
-          sources,
-          table,
-          generation: 1,
+          ...(options.table === undefined
+            ? {}
+            : {
+                policyHash: policyTableHash(table, policySourceOwners(sources)),
+                sources,
+                table,
+                generation: 1,
+              }),
           ownRoots: {
             registry: ownRegistry,
             roots: [{ hash: ownTree.root, revision: OWN_REVISION, expiresAt: 0n }],
@@ -272,6 +261,11 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
               }),
         }),
       ),
+    );
+  } else {
+    accounts.set(
+      ringAddress,
+      ownedAccount(ringProgramId, ringPolicyData({ bump: ringBump, ...config })),
     );
   }
   const slot = options.slot ?? 1n;
@@ -501,7 +495,7 @@ export async function checkAccounts(
   expected: Readonly<{
     fixture: Fixture;
     data: RingTransactData;
-    /** After the config, the policy, co-signer, delegate and anchor tree in order. */
+    /** After the ring account, the co-signer, delegate and anchor tree in order. */
     prefix: readonly AccountEntry[];
     payer: Address;
     ownerSigners?: readonly Address[];
@@ -517,7 +511,7 @@ export async function checkAccounts(
   expect(
     instruction.accounts?.map((account) => ({ address: account.address, role: account.role })),
   ).toEqual([
-    readonly(await ringConfigAddress(fixture.ringProgramId)),
+    readonly(await ringPolicyAddress(fixture.ringProgramId)),
     ...expected.prefix,
     { address: expected.payer, role: AccountRole.WRITABLE_SIGNER },
     writable(TREE),

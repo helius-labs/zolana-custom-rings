@@ -43,8 +43,8 @@ import type { DepositProofRequest, PolicyTableProofInputs } from "../../rpc/prov
 import { depositBlinding } from "../../crypto/derivation/ring-domain.js";
 
 import { checkSignersHideOwner } from "./anonymous.js";
-import type { RingPolicy, RingProgramConfig } from "../../protocol/codec/ring-codecs.js";
-import { fetchRingProgramConfig } from "../../protocol/membership/config.js";
+import type { RingPolicy } from "../../protocol/codec/ring-codecs.js";
+import { fetchRingPolicy } from "../../protocol/membership/config.js";
 import { DEPOSIT_DEMAND, resolveRingCoSigner } from "../../proof/cosign.js";
 import { type RingDepositCapsule } from "../../protocol/codec/deposit-capsule.js";
 import {
@@ -65,7 +65,6 @@ import {
   type BoundRoot,
 } from "../../rpc/registered-record.js";
 import { MEMBER_REGISTRY_PROJECTION_ERRORS } from "../../rpc/projection.js";
-import { fetchRingPolicy } from "../../protocol/membership/config.js";
 import { ownerEscrowed, type EscrowedRecord } from "../../protocol/membership/member-opening.js";
 import type { RecordOpening } from "../../protocol/membership/member-registry.js";
 import { pinnedPolicy, policyTableProofInputs } from "../../protocol/membership/policy.js";
@@ -148,7 +147,7 @@ type DepositSealingParams = Omit<
   }>;
 
 type DepositSealing = Readonly<{
-  config: RingProgramConfig;
+  config: RingPolicy;
   recipient: TaggedRecipient;
   ownerKey: Bytes32 | undefined;
   asset: Address;
@@ -621,7 +620,7 @@ async function depositSealing(
   context: RequestContext | undefined,
 ): Promise<DepositSealing> {
   await initializePoseidon();
-  const config = await fetchRingProgramConfig(params.client, params.ringProgramId, context);
+  const config = await fetchRingPolicy(params.client, params.ringProgramId, context);
   const anonymous = config.mode === "anonymous";
   const recipient = await depositRecipient(params, anonymous, context);
   const asset = params.asset ?? SOL_MINT;

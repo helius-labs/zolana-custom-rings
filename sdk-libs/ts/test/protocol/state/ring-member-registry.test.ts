@@ -17,7 +17,7 @@ import {
   SigningKey,
   X25519Keypair,
 } from "@heliuslabs/zolana/keypair";
-import { ringConfigPda, ringPolicyPda } from "../../../src/protocol/pda/index.js";
+import { ringPolicyPda } from "../../../src/protocol/pda/index.js";
 import type { RingMode } from "../../../src/protocol/codec/ring-codecs.js";
 import {
   MEMBER_REGISTRY_EMPTY_ROOT,
@@ -32,11 +32,7 @@ import {
   sealNullifierKeyWith,
 } from "../../../src/operations/management/register-key.js";
 import { recordTree, type FixtureRecord } from "../../helpers/member-registry.js";
-import {
-  ownedAccount,
-  ringPolicyData,
-  ringProgramConfigData,
-} from "../../helpers/ring-accounts.js";
+import { ownedAccount, ringPolicyData } from "../../helpers/ring-accounts.js";
 
 // sdk-libs/client/src/crypto/encryption/mod.rs `the_sealed_key_and_its_escrow_key_match_the_pinned_vector`.
 const AUDITOR_SK = hex("01323130373635343b3a39383f3e3d3c23222120272625242b2a29282f2e2d2c");
@@ -74,30 +70,18 @@ async function ring(
   options: Readonly<{ mode?: RingMode; opening?: RingMemberOpening }> = {},
 ) {
   const tree = recordTree(members);
-  const [[config, configBump], [policy, policyBump]] = await Promise.all([
-    ringConfigPda(RING),
-    ringPolicyPda(RING),
-  ]);
+  const [policy, policyBump] = await ringPolicyPda(RING);
   const accounts = new Map<Address, RpcAccount>([
-    [
-      config,
-      ownedAccount(
-        RING,
-        ringProgramConfigData({
-          authority: AUTHORITY,
-          auditorPublicKey: AUDITOR.publicKey().toBytes(),
-          bump: configBump,
-          hasPolicy: true,
-          mode: options.mode ?? "confidentialEscrow",
-        }),
-      ),
-    ],
     [
       policy,
       ownedAccount(
         RING,
         ringPolicyData({
           bump: policyBump,
+          roles: { policy: AUTHORITY },
+          auditorPublicKey: AUDITOR.publicKey().toBytes(),
+          mode: options.mode ?? "confidentialEscrow",
+          policyHash: new Uint8Array(32).fill(1) as Bytes32,
           records: RECORDS,
           ownRoots: {
             registry: RECORDS,
