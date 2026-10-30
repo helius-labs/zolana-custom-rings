@@ -4,6 +4,7 @@ package ring
 import (
 	_ "embed"
 	"fmt"
+	"slices"
 
 	"github.com/consensys/gnark/frontend"
 
@@ -28,16 +29,14 @@ func init() {
 
 func (k Key) extension() common.ExtensionCircuit {
 	switch k.Family {
-	case PackedAudit:
-		return bind[PackedAuditParams](k, audit.NewPackedAuditCircuit, k.Outputs)
 	case DeliveredAudit:
 		return bind[DeliveredAuditParams](k, audit.NewDeliveredAuditCircuit, k.Outputs)
 	case AnonymousAudit, AnonymousEntryAudit:
 		return bind[AnonymousAuditParams](k, audit.NewAnonymousAuditCircuit, k.anonymousShape())
 	case MemberPolicy:
-		return bind[MemberPolicyParams](k, policy.NewMemberPolicyCircuitWith, policy.MemberShape{Outputs: k.Outputs, Withdrawals: k.Withdrawals, OwnOnly: k.OwnOnly})
+		return bindPolicy[MemberPolicyParams](k, policy.NewMemberPolicyCircuit, policy.MemberShape{Outputs: k.Outputs, Withdrawals: k.Withdrawals, OwnOnly: k.OwnOnly})
 	case DelegatePolicy:
-		return bind[DelegatePolicyParams](k, policy.NewDelegatePolicyCircuitWith, policy.DelegateShape{Shape: transaction.Shape{NInputs: k.Inputs, NOutputs: k.Outputs}, OwnOnly: k.OwnOnly})
+		return bindPolicy[DelegatePolicyParams](k, policy.NewDelegatePolicyCircuit, policy.DelegateShape{Shape: transaction.Shape{NInputs: k.Inputs, NOutputs: k.Outputs}, OwnOnly: k.OwnOnly})
 	case ApplyRecords:
 		return bind[ApplyRecordsParams](k, registry.NewApplyRecordsCircuit, k.Inputs)
 	case WithdrawalExemption:
@@ -69,6 +68,26 @@ func bind[P headed, S any, C frontend.Circuit](k Key, constructor func(S) (C, er
 	}
 }
 
+type pooledCircuit interface {
+	frontend.Circuit
+	RecordPools() policy.RecordPoolShape
+}
+
+type pooledParams interface {
+	headed
+	pooled() PolicyParams
+}
+
+// bindPolicy refuses a pool index outside the key's pools before assignment.
+func bindPolicy[P pooledParams, S any, C pooledCircuit](k Key, constructor func(S) (C, error), shape S) common.ExtensionCircuit {
+	extension := bind[P](k, constructor, shape)
+	plain := extension.Request
+	extension.Request = func() common.ExtensionRequest {
+		return &policyRequest[P]{request: plain().(*request[P]), pools: extension.Circuit().(C).RecordPools()}
+	}
+	return extension
+}
+
 func unsized[C any](struct{}) (*C, error) {
 	return new(C), nil
 }
@@ -86,6 +105,73 @@ func (r *request[P]) UnmarshalJSON(data []byte) error {
 	}
 	if got := r.params.head().CircuitType; got != r.circuit {
 		return fmt.Errorf("custom-ring: a %s request on the %s key", got, r.circuit)
+	}
+	return nil
+}
+
+type policyRequest[P pooledParams] struct {
+	*request[P]
+	pools policy.RecordPoolShape
+}
+
+func (r *policyRequest[P]) Assignment() (frontend.Circuit, error) {
+	if err := r.params.pooled().validateIndices(r.pools); err != nil {
+		return nil, err
+	}
+	return r.request.Assignment()
+}
+
+func (p PolicyParams) pooled() PolicyParams { return p }
+
+func (p PolicyParams) validateIndices(pools policy.RecordPoolShape) error {
+	if err := validatePoolIndices(p.OwnSubjects, p.OwnProof, pools.Own); err != nil {
+		return err
+	}
+	if err := validatePoolIndices(p.CuratorSubjects, p.CuratorProof, pools.Curator); err != nil {
+		return err
+	}
+	for _, entry := range slices.Concat([]PooledEntry{p.SenderEntry}, p.OwnerEntries, p.AssetEntries) {
+		if err := entry.validateIndices(pools); err != nil {
+			return err
+		}
+	}
+	for _, index := range p.PublicAssetEntries {
+		if err := poolIndex("public asset subject", index, pools.OwnSubjects); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validatePoolIndices(subjects []PooledSubject, proof SharedRegistryProof, records int) error {
+	for _, subject := range subjects {
+		if err := poolIndex("record", subject.RecordIndex, records); err != nil {
+			return err
+		}
+	}
+	for _, path := range proof.Paths {
+		if path.Index >= registry.Capacity {
+			return fmt.Errorf("policy path index is outside the registry")
+		}
+	}
+	return nil
+}
+
+func (e PooledEntry) validateIndices(pools policy.RecordPoolShape) error {
+	if err := poolIndex("own subject", e.Own, pools.OwnSubjects); err != nil {
+		return err
+	}
+	for _, index := range e.Curator {
+		if err := poolIndex("curator subject", index, pools.CuratorSubjects); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func poolIndex(name string, index uint32, size int) error {
+	if uint64(index) >= uint64(size) {
+		return fmt.Errorf("policy %s index is outside the pool", name)
 	}
 	return nil
 }

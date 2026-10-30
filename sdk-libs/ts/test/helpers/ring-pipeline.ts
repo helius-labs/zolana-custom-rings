@@ -1,21 +1,17 @@
 import { bn254 } from "@noble/curves/bn254.js";
-import {
-  AccountRole,
-  getAddressDecoder,
-  signature,
-  type Address,
-  type Instruction,
-} from "@solana/kit";
+import { AccountRole, getAddressDecoder, type Address, type Instruction } from "@solana/kit";
 import { expect } from "vitest";
 
-import { type RingMemberOpenings, type RingRecordReader } from "../../src/rpc/ports.js";
+import {
+  type RingMemberOpenings,
+  type RingRecordPool,
+  type RingRecordReader,
+} from "../../src/rpc/ports.js";
 import type {
   ChainReader,
   ProofAuthority,
   ProofService,
   ProvenRingTransact,
-  GetByTagsRequest,
-  GetMerkleProofsResponse,
   RpcAccount,
 } from "@heliuslabs/zolana/client";
 import type {
@@ -37,11 +33,10 @@ import {
 import { LocalKeys } from "@heliuslabs/zolana/client";
 import {
   SHIELDED_POOL_PROGRAM_ID,
-  UTXO_ROOT_HISTORY_OFFSET,
   DEFAULT_TREE_ID,
   TRANSACTION_SIZE_LIMIT,
 } from "@heliuslabs/zolana/interface";
-import type { Bytes16, Bytes32, Bytes128, TransactProof } from "@heliuslabs/zolana/interface";
+import type { Bytes32, Bytes128, TransactProof } from "@heliuslabs/zolana/interface";
 import {
   randomBlinding,
   ViewingKey,
@@ -66,7 +61,7 @@ import {
 } from "../../src/protocol/pda/index.js";
 import { openTransactionViewingSecret } from "../../src/crypto/audit/audit.js";
 import { openRingDisclosure, type RingDisclosure } from "../../src/crypto/audit/ring-disclosure.js";
-import { ringIdField, ringTagField } from "../../src/crypto/derivation/ring-stream.js";
+import { ringIdField } from "../../src/crypto/derivation/ring-stream.js";
 import { RingInstructionTag, ringComputeUnitLimit } from "../../src/operations/management/admin.js";
 import type {
   RingCoSigner,
@@ -94,9 +89,7 @@ import {
   matchesPage,
   transactionsPage,
 } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
-import { stateTreeAt, type StateTree } from "./state-tree.js";
 import { recordTree, type FixtureRecord } from "./member-registry.js";
-import { treeAccount } from "../../../../zolana/sdk-libs/ts/test/helpers/tree-account.js";
 import {
   memberRegistryData,
   ownedAccount,
@@ -105,14 +98,8 @@ import {
 } from "./ring-accounts.js";
 import { settlementAccounts } from "../../src/protocol/transaction/spp.js";
 import { checkTransactionFits } from "../../src/operations/workflow/compile.js";
-import { decodeRingPacked, readRingOutput } from "../../src/protocol/transaction/output.js";
 import { ringOutputBlinding, openRingDelivery } from "../../src/crypto/derivation/blinding.js";
-import {
-  LocalRingKeys,
-  ringWalletKeys,
-  type RingKeys,
-  type RingRecipientKey,
-} from "../../src/state/ring-keys.js";
+import { LocalRingKeys, ringWalletKeys, type RingKeys } from "../../src/state/ring-keys.js";
 import { x25519FromU } from "../../src/crypto/keys/x25519.js";
 
 export const TREE_ID = DEFAULT_TREE_ID;
@@ -192,20 +179,6 @@ function pinnedRail(
   const { circuit } = proven.data;
   if (circuit.kind === "anonymousRingEddsa") throw new Error("anonymous selector on a pinned rail");
   return { ...proven, data: { ...proven.data, circuit } };
-}
-
-/** The root history slot every anchor tree holds its root in. */
-export const ANCHOR_ROOT_INDEX = 3;
-
-/** An SPP tree whose UTXO root history holds `root` at `ANCHOR_ROOT_INDEX`. */
-export function anchorTreeAccount(root: Bytes32): RpcAccount {
-  const data = treeAccount({
-    stateCursor: ANCHOR_ROOT_INDEX,
-    written: ANCHOR_ROOT_INDEX + 1,
-    nullifierCursor: 0n,
-  });
-  data.set(root, UTXO_ROOT_HISTORY_OFFSET + ANCHOR_ROOT_INDEX * 32);
-  return ownedAccount(SHIELDED_POOL_PROGRAM_ID, data);
 }
 
 /** A ring the chain, Photon and the prover serve from memory, every proof request recorded. */
@@ -298,28 +271,33 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
   const context = Object.freeze({ slot, blockTime: 0n });
   const ringRequests: RingProofRequest[] = [];
   const sppCalls: SppCall[] = [];
-  // Hex of every view tag an earlier transaction published.
-  const publishedTags = new Set<string>();
-  const leaves = new Map<string, bigint>();
-  const placed = new Map<Address, Map<number, Uint8Array>>();
-  const anchorAccounts = new Map<Address, RpcAccount>();
-  const anchorTree = (tree: Address): StateTree => stateTreeAt(placed.get(tree) ?? new Map());
-  const merkleRequests: Readonly<{ tree: Address; leaves: readonly Bytes32[] }>[] = [];
   let proofs = 0;
-  const reader: Pick<ChainReader, "getAccount"> & Pick<RingRecordReader, "getRingMemberOpenings"> =
-    {
-      getAccount: async (address) => accounts.get(address),
-      getRingMemberOpenings: async (request): Promise<RingMemberOpenings> => {
-        const tree = trees.get(request.ringProgramId);
-        if (tree === undefined || hex(tree.root) !== hex(request.expectedRoot))
-          throw new Error("openings under an unknown root");
-        return {
-          context,
-          root: { root: tree.root, rootIndex: 0, applied: 0n, nextIndex: tree.nextIndex },
-          openings: request.members.map((member) => tree.opening(member)),
-        };
-      },
-    };
+  const treeAt = (ringProgramId: Address, expectedRoot: Bytes32) => {
+    const tree = trees.get(ringProgramId);
+    if (tree === undefined || hex(tree.root) !== hex(expectedRoot))
+      throw new Error("openings under an unknown root");
+    return tree;
+  };
+  const reader: Pick<ChainReader, "getAccount"> &
+    Pick<RingRecordReader, "getRingMemberOpenings" | "getRingRecordPool"> = {
+    getAccount: async (address) => accounts.get(address),
+    getRingMemberOpenings: async (request): Promise<RingMemberOpenings> => {
+      const tree = treeAt(request.ringProgramId, request.expectedRoot);
+      return {
+        context,
+        root: { root: tree.root, rootIndex: 0, applied: 0n, nextIndex: tree.nextIndex },
+        openings: request.members.map((member) => tree.opening(member)),
+      };
+    },
+    getRingRecordPool: async (request): Promise<RingRecordPool> => {
+      const tree = treeAt(request.ringProgramId, request.expectedRoot);
+      return {
+        context,
+        root: { root: tree.root, rootIndex: 0, applied: 0n, nextIndex: tree.nextIndex },
+        ...tree.pool(request.members, request.openings),
+      };
+    },
+  };
   const spp = (
     proofInputs: SppProofInputs,
     circuit: SppCircuit,
@@ -376,7 +354,6 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
     tree: TREE,
     treeId: TREE_ID,
     ...reader,
-    getSlot: async () => slot,
     proveRing: async (request: RingProofRequest): Promise<Uint8Array> => {
       ringRequests.push(structuredClone(request));
       proofs += 1;
@@ -400,56 +377,9 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
         },
         input.keys,
       ),
-    getShieldedTransactionsByTags: async (request: GetByTagsRequest) => {
-      const outputSlots = request.tags
-        .filter((tag) => publishedTags.has(hex(tag)))
-        .map((tag, leafIndex) => ({
-          viewTag: tag,
-          outputContext: { hash: tag, tree: TREE, treeId: TREE_ID, leafIndex: BigInt(leafIndex) },
-          payload: new Uint8Array(),
-        }));
-      return transactionsPage(
-        outputSlots.length === 0
-          ? {}
-          : {
-              transactions: [
-                {
-                  slot,
-                  txSignature: PUBLISHED_SIGNATURE,
-                  outputSlots,
-                  messages: [],
-                  nullifiers: [],
-                  proofless: false,
-                },
-              ],
-            },
-      );
-    },
+    getShieldedTransactionsByTags: async () => transactionsPage(),
     getShieldedTransactionsByNullifiers: async () => transactionsPage(),
     getEncryptedUtxosByTags: async () => matchesPage(),
-    getMerkleProofs: async (
-      tree: Address,
-      requested: readonly Bytes32[],
-    ): Promise<GetMerkleProofsResponse> => {
-      merkleRequests.push({ tree, leaves: [...requested] });
-      const state = anchorTree(tree);
-      return {
-        context,
-        proofs: requested.map((leaf) => {
-          const leafIndex = leaves.get(`${tree}:${hex(leaf)}`);
-          if (leafIndex === undefined) throw new Error("no path for a leaf the tree never held");
-          return {
-            leaf,
-            merkleContext: { treeType: 3, tree },
-            path: state.path(Number(leafIndex)),
-            leafIndex,
-            root: state.root,
-            rootSeq: slot,
-            rootIndex: ANCHOR_ROOT_INDEX,
-          };
-        }),
-      };
-    },
   };
   return {
     ringProgramId,
@@ -461,23 +391,7 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
     client,
     ringRequests,
     sppCalls,
-    merkleRequests,
     ownTree,
-    /** The tag streams find these anonymous tags used. */
-    publishTags(tags: readonly Bytes16[]): void {
-      for (const tag of tags) publishedTags.add(hex(ringTagField(tag)));
-    },
-    /** Photon serves a path for `hash` at `leafIndex` of `tree`, the tree holds its root unless a test replaced it. */
-    placeLeaf(tree: Address, hash: Bytes32, leafIndex: bigint): void {
-      leaves.set(`${tree}:${hex(hash)}`, leafIndex);
-      const held = placed.get(tree) ?? new Map<number, Uint8Array>();
-      placed.set(tree, held.set(Number(leafIndex), hash));
-      if (accounts.has(tree) && accounts.get(tree) !== anchorAccounts.get(tree)) return;
-      const account = anchorTreeAccount(anchorTree(tree).root);
-      accounts.set(tree, account);
-      anchorAccounts.set(tree, account);
-    },
-    anchorTree,
     ...(curatorRing === undefined ? {} : { curatorRing }),
     ...(curatorRegistry === undefined ? {} : { curatorRegistry }),
     ...(curatorTree === undefined ? {} : { curatorTree }),
@@ -485,8 +399,6 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
 }
 
 export type Fixture = Awaited<ReturnType<typeof ringFixture>>;
-
-const PUBLISHED_SIGNATURE = signature("1".repeat(64));
 
 /** Never consulted, every proof here is a stub. */
 export const PROOF_SERVICE: ProofService = {
@@ -632,7 +544,7 @@ export function checkRingBlindings(call: SppCall, data: RingTransactData): void 
 export function checkAudit(
   fixture: Fixture,
   data: RingTransactData,
-  binding: Readonly<{ kind: RingProofRequest["kind"]; epoch?: bigint; firstContactRoot?: Bytes32 }>,
+  binding: Readonly<{ kind: RingProofRequest["kind"] }>,
 ): void {
   const audit = fixture.ringRequests.find((request) => request.kind.endsWith("Audit"));
   expect(audit?.kind).toBe(binding.kind);
@@ -641,8 +553,6 @@ export function checkAudit(
       ringAuditStatement(data, {
         ringId: ringIdField(fixture.ringProgramId),
         auditorPubkey: fixture.auditor.publicKey().toBytes(),
-        epoch: binding.epoch ?? 0n,
-        firstContactRoot: binding.firstContactRoot ?? (new Uint8Array(32) as Bytes32),
         keyEscrow: fixture.keyEscrow,
         partyIdentities:
           audit?.kind === "anonymousAudit"
@@ -688,41 +598,24 @@ export function checkDisclosure(
     exits.includes(true) ? call.proofInputs.outputBlindingSeed() : undefined,
   );
   const escrowed = disclosure.kind !== "anonymous" && disclosure.layout.keyEscrow;
-  const published = call.proofInputs.outputs.filter((output) => !output.isCompact());
+  const published = call.proofInputs.outputs;
   expect(disclosure.outputs).toHaveLength(published.length);
   disclosure.outputs.forEach((opened, index) => {
     const output = itemAt(published, index);
     const owner = output.ownerAddress;
     if (owner === undefined) {
-      expect(opened).toEqual(disclosure.kind === "packed" ? undefined : { kind: "dummy" });
+      expect(opened).toEqual({ kind: "dummy" });
       return;
     }
     const exit = exits[index] === true;
     const nullifierPk = escrowed ? undefined : owner.nullifierPublicKey;
     const ownerKey = owner.signingPublicKey.confidentialViewTag();
     const asset = assetField(output.asset);
-    if (disclosure.kind === "packed")
-      expect(opened).toEqual({
-        ownerKey,
-        nullifierPk,
-        asset,
-        amount: output.amount,
-        dataHash: output.dataHash ?? new Uint8Array(32),
-        ringDataHash: output.ringDataHash ?? new Uint8Array(32),
-      });
-    else if (exit)
-      expect(opened).toEqual({ kind: "exit", nullifierPk, asset, amount: output.amount });
+    if (exit) expect(opened).toEqual({ kind: "exit", nullifierPk, asset, amount: output.amount });
     else if (disclosure.kind === "delivered")
       expect(opened).toEqual({ kind: "ring", nullifierPk, ownerKey });
-    else if (hex(owner.toBytes()) === hex(sender.toBytes()))
-      expect(opened).toMatchObject({ kind: "ring", nullifierPk, ownerKey });
     else
-      expect(opened).toEqual({
-        kind: "ring",
-        nullifierPk,
-        ownerKey,
-        recipientU: owner.viewingPublicKey.u(),
-      });
+      expect(opened).toEqual({ kind: "ring", nullifierPk, ownerKey, asset, amount: output.amount });
   });
   if (disclosure.kind === "anonymous") {
     const spent = call.proofInputs.inputUtxos.filter((input) => !input.isCompact());
@@ -758,40 +651,15 @@ export function checkDisclosure(
   return disclosure;
 }
 
-/** A packed slot opens under the recipient's viewing key as scheme 11. */
-export function openPacked(
-  recipient: ShieldedKeypair,
-  call: SppCall,
-  data: RingTransactData,
-  slotIndex: number,
-) {
-  const slot = call.proofInputs.externalData.outputs[slotIndex];
-  const frame = readRingOutput(slot?.data ?? new Uint8Array());
-  expect(frame.scheme).toBe(11);
-  const viewing = recipient.viewingKey();
-  try {
-    return decodeRingPacked(
-      viewing.decryptUtxo(
-        frame.body.subarray(33),
-        X25519PublicKey.fromBytes(call.data.txViewingPk),
-        data.salt,
-        slotIndex,
-      ),
-    );
-  } finally {
-    viewing.destroy();
-  }
-}
-
 /**
- * A delivered or anonymous slot opens to the committed note under the slot secret the recipient's
- * keys answer, `undefined` for another recipient's slot.
+ * A delivered slot opens to the committed note under the slot secret the recipient's keys answer,
+ * `undefined` for another recipient's slot.
  */
 export async function openDelivered(
   input: Readonly<{
     fixture: Fixture;
     keys: RingKeys;
-    recipient: RingRecipientKey;
+    recipient: X25519PublicKey;
     call: SppCall;
     data: RingTransactData;
     slotIndex: number;
@@ -801,7 +669,7 @@ export async function openDelivered(
   const firstNullifier = RingTransactData.firstNullifier(data);
   const [slotSecret] = await input.keys.ringDeliverySecrets([
     {
-      recipient: input.recipient,
+      viewingPublicKey: input.recipient,
       txViewingPublicKey: X25519PublicKey.fromBytes(call.data.txViewingPk),
       salt: data.salt,
       outputIndex: slotIndex,
@@ -809,14 +677,10 @@ export async function openDelivered(
     },
   ]);
   const wire = data.outputs[slotIndex];
-  if (slotSecret === undefined || (wire?.kind !== "delivered" && wire?.kind !== "anonymous"))
-    throw new Error("no delivered slot");
+  if (slotSecret === undefined || wire?.kind !== "delivered") throw new Error("no delivered slot");
   const owner = input.keys.address();
   return openRingDelivery(
-    {
-      ring: input.fixture.ringProgramId,
-      ...(wire.kind === "anonymous" ? { tag: wire.tag } : {}),
-    },
+    { ring: input.fixture.ringProgramId },
     {
       body: wire.body,
       slotSecret,

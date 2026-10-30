@@ -1,18 +1,10 @@
 import type { ChainReader, TreeContext } from "@heliuslabs/zolana/client";
-import { decodeTreeId, treeAddress, equalBytes } from "@heliuslabs/zolana/internal";
+import { decodeTreeId, treeAddress } from "@heliuslabs/zolana/internal";
 import { SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana/interface";
-import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
+import type { Address, RequestContext } from "@heliuslabs/zolana/interface";
 import type { TreeId } from "@heliuslabs/zolana/transaction";
 import { RingError } from "../error.js";
 import type { OutputContext } from "@heliuslabs/zolana/transaction";
-import { decodeTreePaused, decodeUtxoRoot } from "../codec/codecs.js";
-
-/** The first-contact root an anonymous audit proof binds, Rust `BoundAnchor`. */
-export interface BoundAnchor {
-  readonly tree: Address;
-  readonly rootIndex: number;
-  readonly root: Bytes32;
-}
 
 export async function resolveRingOutputTree(
   client: TreeContext & Pick<ChainReader, "getAccount">,
@@ -56,18 +48,6 @@ export function ringTreeIdResolver(
     }
     return id;
   };
-}
-
-/** Rust `BoundAnchor::holds`, the program reads the root at the index of an unpaused tree. */
-export async function anchorState(
-  client: Pick<ChainReader, "getAccount">,
-  anchor: BoundAnchor,
-  context: RequestContext | undefined,
-): Promise<"holds" | "moved" | "paused"> {
-  const data = await treeData(client, anchor.tree, context);
-  if (decodeTreePaused(data)) return "paused";
-  const held = decodeUtxoRoot(data, anchor.rootIndex);
-  return held !== undefined && equalBytes(held, anchor.root) ? "holds" : "moved";
 }
 
 async function readTreeId(

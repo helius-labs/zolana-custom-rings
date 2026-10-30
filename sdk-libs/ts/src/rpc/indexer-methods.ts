@@ -6,6 +6,7 @@ import {
   decodeRingMemberOpening,
   decodeRingMemberOpenings,
   decodeRingMemberPage,
+  decodeRingRecordPool,
   decodeRingRecordQueue,
   decodeRingRegistryState,
   encodeRingApplyProofInputsRequest,
@@ -13,6 +14,7 @@ import {
   encodeRingMemberProofRequest,
   encodeRingMemberRecordsRequest,
   encodeRingMemberRegistryRootRequest,
+  encodeRingRecordPoolRequest,
 } from "../protocol/indexer/indexer-codec.js";
 import type {
   RingApplyProofInputsRequest,
@@ -23,6 +25,8 @@ import type {
   RingMemberPageResponse,
   RingMemberProofRequest,
   RingMemberRecordsRequest,
+  RingRecordPoolRequest,
+  RingRecordPoolResponse,
   RingRecordQueueResponse,
   RingRegistryStateResponse,
 } from "../protocol/indexer/indexer-types.js";
@@ -59,6 +63,14 @@ export const getRingMemberOpeningsMethod: MethodDescriptor<
   name: "getRingMemberOpenings",
   encodeRequest: encodeRingMemberOpeningsRequest,
   decodeResponse: decodeRingMemberOpenings,
+};
+export const getRingRecordPoolMethod: MethodDescriptor<
+  RingRecordPoolRequest,
+  RingRecordPoolResponse
+> = {
+  name: "getRingRecordPool",
+  encodeRequest: encodeRingRecordPoolRequest,
+  decodeResponse: decodeRingRecordPool,
 };
 export const getRingRecordQueueMethod: MethodDescriptor<
   Readonly<{ ringProgramId: Address }>,

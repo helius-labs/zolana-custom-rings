@@ -5,8 +5,8 @@ use custom_ring_interface::{
     TRANSACT_PAYER_INDEX,
 };
 use pinocchio::{error::ProgramError, AccountView, Address};
-use zolana_hasher::primitives::solana_owner_identity;
-use zolana_interface::instruction::instruction_data::settlement_accounts;
+use spr_hasher::primitives::solana_owner_identity;
+use spr_interface::instruction::instruction_data::settlement_accounts;
 
 use crate::instructions::{
     instruction_runtime::{PlacedRingAuth, RingAuth},
@@ -226,14 +226,6 @@ impl<'a> TransactCheck<'a> {
             RailSigner::Payer => SignerSlot::Payer,
             RailSigner::Delegate(expected) => SignerSlot::Delegate(next.slot(expected)),
         };
-        // The first-contact tree sits in the prefix only when the data names its slot.
-        if self
-            .data
-            .anchor
-            .is_some_and(|anchor| usize::from(anchor.tree) == next.0)
-        {
-            next.0 += 1;
-        }
         Prefix {
             curator,
             co_signer,

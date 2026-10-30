@@ -4,8 +4,8 @@ use custom_ring_interface::{
     RING_DEPOSIT_RING_CONFIG_INDEX, RING_MERGE_PAYER_INDEX, RING_MERGE_RING_CONFIG_INDEX,
 };
 use pinocchio::{error::ProgramError, AccountView, Address, ProgramResult};
-use zolana_account_checks::AccountIterator;
-use zolana_interface::instruction::instruction_data::deposit::RingDepositIxDataRef;
+use spr_account_checks::AccountIterator;
+use spr_interface::instruction::instruction_data::deposit::RingDepositIxDataRef;
 
 use crate::instructions::{
     deposit_audit::{AuditedDeposit, DepositVerification},

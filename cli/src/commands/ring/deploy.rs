@@ -19,7 +19,7 @@ use solana_sbpf::elf_parser::{
     Elf64,
 };
 use solana_signer::Signer;
-use zolana_client::Rpc;
+use spr_client::Rpc;
 use zolana_ring_client::ProgramData;
 
 use crate::{
@@ -323,7 +323,7 @@ fn deployed_bytes(program_data: &[u8], so_len: usize) -> Option<&[u8]> {
 mod tests {
     use std::cell::Cell;
 
-    use zolana_client::ClientError;
+    use spr_client::ClientError;
 
     use super::*;
 

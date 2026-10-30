@@ -4,8 +4,8 @@ use std::{collections::BTreeSet, str::FromStr};
 
 use anyhow::{bail, Result};
 use solana_address::Address;
-use zolana_client::SolanaRpc;
-use zolana_transaction::SOL_MINT;
+use spr_client::SolanaRpc;
+use spr_transaction::SOL_MINT;
 
 use crate::{
     catalogue::{discover, Catalogue},

@@ -2,37 +2,27 @@
 
 use custom_ring_interface::{
     anonymous_exit::{AnonymousExitDestination, TokenAccountControl, TokenAccountState},
-    stream::{tag_epoch, SlotSecret},
     CustomRingError, RingMode, RingRail,
 };
 use solana_account::Account;
 use solana_address::Address;
-use zolana_client::{
-    rpc::STATE_TREE_HEIGHT, AsyncRpc, ClientError, IndexerRpcConfig, MerkleProof,
-    RingHistoryOptions, Shape,
-};
-use zolana_hasher::{
-    primitives::{hash_bytes, right_align},
-    Hasher, Poseidon,
-};
-use zolana_interface::{
-    pda, tree_slot::tree_id_field, SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID,
-};
-use zolana_keypair::{Curve, NullifierKey, PublicKey, SigningKey};
-pub use zolana_ring_client::ANCHOR_DECOYS;
-use zolana_ring_client::{
-    AnonymousRingState, PairAnchor, PaymentStream, SentFirstContact, TagAllocation,
-};
-use zolana_ring_keys::RingAddress;
-use zolana_ring_transaction::{
-    AnonymousSlots, RingDelivery, RingOutputRail, StreamPayment, StreamPosition,
-};
-use zolana_transaction::{
-    instructions::transact::{ConfidentialTransaction, SettlementTransfer, SppProofInputs},
+use spr_client::{AsyncRpc, Shape};
+use spr_interface::{pda, SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID};
+use spr_keypair::{Curve, NullifierKey, PublicKey, ShieldedAddress, SigningKey};
+use spr_transaction::{
+    instructions::transact::{
+        ConfidentialTransaction, SettlementTransfer, SppProofInputs, SppProofOutputUtxo,
+    },
     Mint, WalletUtxo,
 };
+use zolana_ring_client::{
+    FirstContact, PaymentRecipient, TransferTagging, TransferTags, ViewingHistory,
+};
+use zolana_ring_keys::{RingAddress, RingPaymentRequest};
+use zolana_ring_transaction::{RingDelivery, RingOutputRail};
 
 use super::{
+    canonical_shape,
     owner::{CustomRingTransferInput, Owner},
     pad_under_rail, sealed,
     selection::{payment_total, widest, Candidate, Funding},
@@ -42,15 +32,15 @@ use super::{
 };
 use crate::{
     client::{RingClient, RingIndexerBackend},
-    request::Anchor,
-    trees::BoundAnchor,
-    CustomRing, CustomRingConfig, RingError, REDACTED,
+    CustomRing, CustomRingConfig, RingError,
 };
 
-/// The stream is picked when the transfer is proven.
+/// The tag follows the spec view tag selection over the sender's viewing history.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AnonymousPayment {
     pub to: RingAddress,
+    /// Paid until the pair is known.
+    pub first_contact: FirstContact,
     pub asset: Mint,
     pub amount: u64,
 }
@@ -58,7 +48,28 @@ pub struct AnonymousPayment {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RingPayment {
     pub to: RingAddress,
+    pub first_contact: FirstContact,
     pub amount: u64,
+}
+
+impl RingPayment {
+    /// Under the recipient's bootstrap tag until the pair is known.
+    pub fn bootstrap(to: RingAddress, amount: u64) -> Self {
+        Self {
+            to,
+            first_contact: FirstContact::Bootstrap,
+            amount,
+        }
+    }
+
+    /// The request's amount when it names one.
+    pub fn to_request(request: &RingPaymentRequest, amount: u64) -> Self {
+        Self {
+            to: request.address.clone(),
+            first_contact: FirstContact::Request(request.request_view_tag),
+            amount: request.amount.unwrap_or(amount),
+        }
+    }
 }
 
 #[must_use = "select the inputs of the move"]
@@ -67,7 +78,7 @@ pub struct AnonymousMove<'a> {
     pub sender: &'a dyn RingSender,
     pub nullifier_key: &'a NullifierKey,
     pub signer: &'a SigningKey,
-    pub state: &'a AnonymousRingState,
+    pub history: &'a ViewingHistory,
     pub payer: Address,
     /// The sender's UTXOs on any tree.
     pub utxos: &'a [WalletUtxo],
@@ -88,11 +99,10 @@ pub enum EntrySpend {
 pub struct Anonymous<'a> {
     pub(super) owner: Owner<'a>,
     pub(super) signer: &'a SigningKey,
-    state: &'a AnonymousRingState,
-    /// Keyed by the output slot each payment created.
-    payments: Vec<(u32, AnonymousPayment)>,
+    history: &'a ViewingHistory,
+    /// In declared order, the order of their ring outputs.
+    payments: Vec<AnonymousPayment>,
     exit_token_owner: Option<Address>,
-    tag_rng: fn() -> Box<dyn rand_core::CryptoRng + Send>,
 }
 
 pub type AnonymousTransfer<'a> = RingTransfer<Anonymous<'a>>;
@@ -110,17 +120,16 @@ impl<'a> RingTransfer<Owner<'a>> {
     pub fn with_anonymous_signer(
         self,
         signer: &'a SigningKey,
-        state: &'a AnonymousRingState,
+        history: &'a ViewingHistory,
     ) -> RingTransfer<Anonymous<'a>> {
         RingTransfer {
             ring: self.ring,
             rail: Anonymous {
                 owner: self.rail,
                 signer,
-                state,
+                history,
                 payments: Vec::new(),
                 exit_token_owner: None,
-                tag_rng: os_tag_rng,
             },
         }
     }
@@ -135,24 +144,20 @@ impl RingTransfer<Anonymous<'_>> {
                 ring: self.ring.program_id(),
             });
         }
-        let transaction = &mut self.rail.owner.transaction;
-        // Padding never reorders a slot, the tag follows the output it was built with.
-        let slot = u32::try_from(transaction.outputs().len())
-            .map_err(|_| zolana_transaction::TransactionError::TooManyOutputs)?;
-        transaction.transfer_with_ring(
+        self.rail.owner.transaction.transfer_with_ring(
             &payment.to.recipient,
             payment.asset,
             payment.amount,
             Some(payment.to.ring_program_id),
         )?;
-        self.rail.payments.push((slot, payment));
+        self.rail.payments.push(payment);
         Ok(self)
     }
 
     /// Unset, staging pads to the smallest supported shape.
     pub fn with_shape(mut self, shape: Shape) -> Result<Self, RingError> {
         if !shape.is_supported() {
-            return Err(zolana_transaction::TransactionError::UnsupportedShape {
+            return Err(spr_transaction::TransactionError::UnsupportedShape {
                 n_in: shape.n_inputs(),
                 n_out: shape.n_outputs(),
             }
@@ -169,14 +174,9 @@ impl RingTransfer<Anonymous<'_>> {
         self
     }
 
-    #[cfg(test)]
-    #[must_use = "use the updated transfer"]
-    pub(crate) fn with_tag_rng(
-        mut self,
-        tag_rng: fn() -> Box<dyn rand_core::CryptoRng + Send>,
-    ) -> Self {
-        self.rail.tag_rng = tag_rng;
-        self
+    /// The sender's viewing history past the transfer's tags, stored before it is sent.
+    pub fn viewing_history(&self) -> Result<ViewingHistory, RingError> {
+        Ok(self.rail.tags()?.history)
     }
 
     pub(crate) fn check_public_signers(
@@ -242,7 +242,12 @@ impl<'a> AnonymousMove<'a> {
         key: AnonymousKey,
         candidate: &Candidate,
     ) -> Result<AnonymousTransfer<'a>, RingError> {
-        let shape = candidate
+        // Output 0 is always the sender change, a zero one when nothing returns.
+        let with_change = Candidate {
+            change: true,
+            ..candidate.clone()
+        };
+        let shape = with_change
             .shape(self.payments.len(), |shape| key.serves(shape))
             .ok_or(RingError::ShapeUnkeyed {
                 rail: RingRail::Anonymous,
@@ -258,12 +263,13 @@ impl<'a> AnonymousMove<'a> {
             nullifier_key: Some(self.nullifier_key),
             transaction,
         })
-        .with_anonymous_signer(self.signer, self.state);
+        .with_anonymous_signer(self.signer, self.history);
         self.payments
             .iter()
             .try_fold(transfer, |transfer, payment| {
                 transfer.with_payment(AnonymousPayment {
                     to: payment.to.clone(),
+                    first_contact: payment.first_contact,
                     asset: self.asset,
                     amount: payment.amount,
                 })
@@ -291,57 +297,6 @@ impl AnonymousKey {
     }
 }
 
-#[derive(Clone, Debug)]
-pub(super) struct AnchorWitness {
-    pub bound: BoundAnchor,
-    pub request: Anchor,
-}
-
-struct PinnedProofs<'a> {
-    pair: &'a PairAnchor,
-    tree: Address,
-    proofs: Vec<MerkleProof>,
-}
-
-impl PinnedProofs<'_> {
-    /// Every pinned leaf proves under the anchor's root, a fault on any leaf fails alike.
-    fn anchor(self) -> Result<MerkleProof, RingError> {
-        let PinnedProofs { pair, tree, proofs } = self;
-        let refused = || leaves_refused(&pair.contact, tree);
-        let checked = pair
-            .leaves
-            .iter()
-            .map(|leaf| {
-                proofs
-                    .iter()
-                    .find(|proof| proof.leaf == *leaf)
-                    .filter(|proof| proof_opens(proof, leaf, &tree))
-                    .ok_or_else(refused)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let anchor = checked
-            .iter()
-            .find(|proof| {
-                proof.leaf == pair.contact.utxo_hash && proof.leaf_index == pair.contact.leaf_index
-            })
-            .ok_or_else(refused)?;
-        if checked
-            .iter()
-            .any(|proof| proof.root != anchor.root || proof.root_index != anchor.root_index)
-        {
-            return Err(refused());
-        }
-        Ok((*anchor).clone())
-    }
-}
-
-fn leaves_refused(contact: &SentFirstContact, tree: Address) -> RingError {
-    RingError::FirstContactLeavesRefused {
-        tree,
-        recipient: contact.recipient,
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct HiddenOwner(pub Address);
 
@@ -349,144 +304,11 @@ pub(crate) struct AnonymousSpend<'a> {
     pub party_identities: [[u8; 32]; 3],
     pub token_owner: Option<Address>,
     signer: &'a SigningKey,
-    ring: Address,
-    staged_slot: u64,
-    pub epoch: u64,
-    pair: Option<PairAnchor>,
-    pub first_contacts: Vec<PendingFirstContact>,
-}
-
-/// The leaf index is known only after confirmation.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct PendingFirstContact {
-    pub recipient: zolana_keypair::X25519Pubkey,
-    pub tree_id: u16,
-    pub utxo_hash: [u8; 32],
-    pub slot_secret: [u8; 32],
-    pub blinding: [u8; 32],
-    pub epoch: u64,
-    pub index: custom_ring_interface::stream::TagIndex,
-    pub asset: Address,
-    pub amount: u64,
-}
-
-impl core::fmt::Debug for PendingFirstContact {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let Self {
-            recipient: _,
-            tree_id,
-            utxo_hash: _,
-            slot_secret: _,
-            blinding: _,
-            epoch,
-            index,
-            asset,
-            amount,
-        } = self;
-        f.debug_struct("PendingFirstContact")
-            .field("recipient", &REDACTED)
-            .field("tree_id", tree_id)
-            .field("utxo_hash", &REDACTED)
-            .field("slot_secret", &REDACTED)
-            .field("blinding", &REDACTED)
-            .field("epoch", epoch)
-            .field("index", index)
-            .field("asset", asset)
-            .field("amount", amount)
-            .finish()
-    }
-}
-
-impl PendingFirstContact {
-    pub fn confirm(self, leaf_index: u64) -> SentFirstContact {
-        SentFirstContact {
-            recipient: self.recipient,
-            tree_id: self.tree_id,
-            leaf_index,
-            utxo_hash: self.utxo_hash,
-            slot_secret: self.slot_secret,
-            blinding: self.blinding,
-            epoch: self.epoch,
-            index: self.index,
-            asset: self.asset,
-            amount: self.amount,
-        }
-    }
+    /// Past the transfer's tags.
+    pub history: ViewingHistory,
 }
 
 impl AnonymousSpend<'_> {
-    pub(super) fn anchor_tree(&self) -> Option<Address> {
-        self.pair
-            .as_ref()
-            .map(|pair| pda::tree(pair.contact.tree_id))
-    }
-
-    /// `None` without a pair payment, else the path under a root the program reads.
-    pub(super) async fn anchor<R: AsyncRpc + ?Sized>(
-        &self,
-        client: &R,
-    ) -> Result<Option<AnchorWitness>, RingError> {
-        let Some(pair) = &self.pair else {
-            return Ok(None);
-        };
-        let contact = &pair.contact;
-        let tree = pda::tree(contact.tree_id);
-        // Every pinned leaf predates the staging slot.
-        let staged = Some(IndexerRpcConfig::at_slot(self.staged_slot));
-        let proofs = match client
-            .get_merkle_proofs(tree, pair.leaves.to_vec(), staged)
-            .await
-        {
-            Err(ClientError::Indexer(_)) => {
-                // An error names no slot, a ring history read proves the indexer reached it.
-                client
-                    .get_shielded_transactions_by_ring(
-                        RingHistoryOptions {
-                            ring_program_id: self.ring,
-                            cursor: None,
-                            limit: Some(1),
-                        },
-                        staged,
-                    )
-                    .await?;
-                match client
-                    .get_merkle_proofs(tree, pair.leaves.to_vec(), staged)
-                    .await
-                {
-                    Err(ClientError::Indexer(_)) => return Err(leaves_refused(contact, tree)),
-                    answer => answer?.proofs,
-                }
-            }
-            answer => answer?.proofs,
-        };
-        let proof = PinnedProofs { pair, tree, proofs }.anchor()?;
-        let bound = BoundAnchor {
-            tree,
-            root_index: proof.root_index,
-            root: proof.root,
-        };
-        if !bound.holds(client).await? {
-            return Err(RingError::FirstContactRootStale {
-                tree,
-                root_index: proof.root_index,
-            });
-        }
-        Ok(Some(AnchorWitness {
-            bound,
-            request: Anchor {
-                tree_id: tree_id_field(contact.tree_id),
-                asset: hash_bytes(contact.asset.as_array())?,
-                amount: right_align(&contact.amount.to_be_bytes()),
-                slot_secret: contact.slot_secret,
-                blinding: contact.blinding,
-                epoch: contact.epoch,
-                index: contact.index.get(),
-                path_index: contact.leaf_index,
-                path: proof.path,
-            },
-        }))
-    }
-
     pub(super) fn hidden(&self) -> HiddenSpend<'_> {
         HiddenSpend { owner: self.signer }
     }
@@ -509,6 +331,24 @@ impl HiddenOwner {
 }
 
 impl Anonymous<'_> {
+    /// The spec view tag selection over the stored history, the same on every attempt.
+    fn tags(&self) -> Result<TransferTags, RingError> {
+        let recipients: Vec<PaymentRecipient> = self
+            .payments
+            .iter()
+            .map(|payment| PaymentRecipient {
+                viewing_pubkey: payment.to.recipient.viewing_pubkey,
+                first_contact: payment.first_contact,
+            })
+            .collect();
+        Ok(TransferTagging {
+            keys: self.owner.sender,
+            history: self.history,
+            recipients: &recipients,
+        }
+        .plan()?)
+    }
+
     pub(super) async fn stage<R: AsyncRpc + ?Sized>(
         &self,
         ring: CustomRing,
@@ -555,43 +395,23 @@ impl Anonymous<'_> {
             exit_destination: destination.as_ref().map(Address::as_array),
         }
         .identities()?;
-        // Tags bind slots, the slot order is fixed before any stream is read.
-        let transaction = self.owner.transaction.clone();
-        let shape = self.owner.shape(&sender)?;
-        let staged_slot = client.get_slot().await?;
-        let epoch = tag_epoch(staged_slot);
+        let tags = self.tags()?;
+        let transaction = SenderChange {
+            shape: self.owner.shape,
+            sender: &sender,
+            ring: ring.program_id(),
+        }
+        .ensure(self.owner.transaction.clone())?;
+        let shape = match self.owner.shape {
+            Some(shape) => shape,
+            None => canonical_shape(&transaction, &sender)?,
+        };
         let first_nullifier = *transaction.first_nullifier();
         let tx_viewing_key = transaction_key(keys, first_nullifier)?;
-        let issued: Vec<u32> = self
-            .state
-            .issued()
-            .iter()
-            .map(|issued| issued.index)
-            .collect();
-        let mut slots = AnonymousSlots::new(keys.ring_change_key(&ring.program_id())?)
-            .with_ring_address_keys(keys.ring_address_keys(&ring.program_id(), &issued)?);
-        let mut allocation = TagAllocation::new(self.state, epoch);
-        let mut rng = (self.tag_rng)();
-        let mut pair = None;
-        for (slot, payment) in &self.payments {
-            let tag = allocation.allocate(&payment.to, &mut *rng)?;
-            let position = match tag.stream {
-                PaymentStream::Inbox => StreamPosition::Inbox(tag.index),
-                PaymentStream::Pair(anchor) => {
-                    pair = Some(*anchor);
-                    StreamPosition::Pair(tag.index)
-                }
-            };
-            slots = slots.with_payment(
-                *slot,
-                StreamPayment {
-                    recipient: payment.to.recipient.viewing_pubkey,
-                    tag: tag.tag,
-                    position,
-                },
-            )?;
-        }
-        let rail = RingOutputRail::new(tx_viewing_key, RingDelivery::Anonymous(Box::new(slots)));
+        let rail = RingOutputRail::new(
+            tx_viewing_key,
+            RingDelivery::Anonymous(Box::new(tags.anonymous_plan())),
+        );
         let transaction = pad_under_rail(transaction, &rail, shape, &sender)?;
         let proof_inputs = rail.encrypt(transaction, &sender)?;
         check_anonymous_slots(&proof_inputs)?;
@@ -604,13 +424,6 @@ impl Anonymous<'_> {
         }
         check_entry_inputs(&proof_inputs)?;
         check_audit_key(&proof_inputs)?;
-        let first_contacts = InboxPayments {
-            rail: &rail,
-            inputs: &proof_inputs,
-            first_nullifier: &first_nullifier,
-            epoch,
-        }
-        .first_contacts()?;
         Ok(Staged {
             proof_inputs,
             rail,
@@ -624,54 +437,9 @@ impl Anonymous<'_> {
                 party_identities,
                 token_owner,
                 signer: self.signer,
-                ring: ring.program_id(),
-                staged_slot,
-                epoch,
-                pair,
-                first_contacts,
+                history: tags.history,
             })),
         })
-    }
-}
-
-struct InboxPayments<'a> {
-    rail: &'a RingOutputRail,
-    inputs: &'a SppProofInputs,
-    first_nullifier: &'a [u8; 32],
-    epoch: u64,
-}
-
-impl InboxPayments<'_> {
-    fn first_contacts(self) -> Result<Vec<PendingFirstContact>, RingError> {
-        let RingDelivery::Anonymous(slots) = self.rail.delivery() else {
-            return Ok(Vec::new());
-        };
-        let mut contacts = Vec::new();
-        for (slot, output) in (0u32..).zip(&self.inputs.output_utxos) {
-            let Some(StreamPayment {
-                recipient,
-                position: StreamPosition::Inbox(index),
-                ..
-            }) = slots.payment(slot)
-            else {
-                continue;
-            };
-            let secret: SlotSecret =
-                self.rail
-                    .slot_secret(&recipient, self.first_nullifier, slot)?;
-            contacts.push(PendingFirstContact {
-                recipient,
-                tree_id: self.inputs.output_tree_id,
-                utxo_hash: output.hash(self.inputs.output_tree_id)?,
-                slot_secret: *secret.as_bytes(),
-                blinding: output.blinding,
-                epoch: self.epoch,
-                index,
-                asset: output.asset.asset,
-                amount: output.amount,
-            });
-        }
-        Ok(contacts)
     }
 }
 
@@ -742,10 +510,6 @@ fn carries_no_data(hashes: [Option<[u8; 32]>; 2]) -> bool {
     hashes
         .iter()
         .all(|hash| hash.is_none_or(|hash| hash == [0; 32]))
-}
-
-fn os_tag_rng() -> Box<dyn rand_core::CryptoRng + Send> {
-    Box::new(rand_core::UnwrapErr(rand_core::OsRng))
 }
 
 struct AnonymousExits<'a> {
@@ -923,25 +687,36 @@ fn exit_refused(refusal: CustomRingError, destination: Address) -> RingError {
     }
 }
 
-/// A path off the tree height or a leaf index past it opens no leaf.
-fn proof_opens(proof: &MerkleProof, leaf: &[u8; 32], tree: &Address) -> bool {
-    proof.leaf == *leaf
-        && proof.merkle_context.tree == *tree
-        && proof.path.len() == STATE_TREE_HEIGHT
-        && proof.leaf_index >> STATE_TREE_HEIGHT == 0
-        && path_root(proof).is_ok_and(|root| root == proof.root)
+/// A zero SOL change leads a transfer that returns nothing.
+struct SenderChange<'a> {
+    shape: Option<Shape>,
+    sender: &'a ShieldedAddress,
+    ring: Address,
 }
 
-/// Bit `i` of `leaf_index` puts the node right of sibling `i`, each parent `Poseidon(left, right)`.
-pub(super) fn path_root(proof: &MerkleProof) -> Result<[u8; 32], zolana_hasher::HasherError> {
-    let mut node = proof.leaf;
-    let mut position = proof.leaf_index;
-    for sibling in &proof.path {
-        node = match position % 2 {
-            0 => Poseidon::hashv(&[&node, sibling])?,
-            _ => Poseidon::hashv(&[sibling, &node])?,
+impl SenderChange<'_> {
+    fn ensure(
+        self,
+        mut transaction: ConfidentialTransaction,
+    ) -> Result<ConfidentialTransaction, RingError> {
+        let declared = transaction.outputs().len();
+        let mut probe = transaction.clone();
+        let shape = match self.shape {
+            Some(shape) => shape,
+            None => canonical_shape(&probe, self.sender)?,
         };
-        position /= 2;
+        probe.pad_utxos(shape, self.sender)?;
+        let returns = probe.outputs()[declared..]
+            .iter()
+            .any(|output| output.owner_address == Some(*self.sender));
+        if !returns {
+            transaction.add_output_utxo(SppProofOutputUtxo {
+                owner_address: Some(*self.sender),
+                asset: Mint::SOL,
+                ring_program_id: Some(self.ring),
+                ..Default::default()
+            })?;
+        }
+        Ok(transaction)
     }
-    Ok(node)
 }

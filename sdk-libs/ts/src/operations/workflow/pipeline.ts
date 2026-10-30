@@ -19,7 +19,6 @@ import type { ProvenAnonymousRingTransact } from "../../rpc/ports.js";
 import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import { SppProofInputs, createExternalData } from "@heliuslabs/zolana/transaction";
 import type { ProofOutputUtxo } from "@heliuslabs/zolana/transaction";
-import type { FirstContactAnchor } from "../../rpc/prover/ring.js";
 import { CUSTOM_RING_PROOF_LENGTH } from "../../protocol/proof/custom-ring-proof.js";
 import {
   ringAuthAddress,
@@ -27,14 +26,13 @@ import {
   ringMemberRegistryAddress,
 } from "../../protocol/pda/index.js";
 import type { AuditLayout } from "../../protocol/codec/ring-disclosure-layout.js";
-import { ringIdField, senderCommitment, tagEpoch } from "../../crypto/derivation/ring-stream.js";
+import { ringIdField, senderCommitment } from "../../crypto/derivation/ring-stream.js";
 
 import { RingInstructionTag, ringComputeUnitLimit } from "../management/admin.js";
 import {
   auditProofRequest,
   sealAudit,
   sealedAuditMessage,
-  type AnonymousAuditValues,
   type SealedAudit,
 } from "../../proof/audit-proof.js";
 import type { RingProgramConfig } from "../../protocol/codec/ring-codecs.js";
@@ -56,13 +54,12 @@ import { auditStatementHash, ringAuditStatement } from "../../protocol/proof/sta
 import {
   PLAIN_GROTH16_PROOF_LENGTH,
   RingTransactData,
-  isDataFreeOutput,
   ringDisclosureLayout,
   ringSppInputs,
   type InputTrees,
   type RingRail,
+  type SenderBundle,
 } from "../../protocol/transaction/transact.js";
-import type { BoundAnchor } from "../../protocol/membership/trees.js";
 import {
   publicSlots,
   type PublicSlots,
@@ -70,36 +67,20 @@ import {
   settlementAccounts,
 } from "../../protocol/transaction/spp.js";
 import { checkTransactionFits } from "./compile.js";
-import { type SentFirstContact } from "../../state/anonymous-state.js";
+import type { ViewingHistory } from "../../state/viewing-history.js";
 
 /** The client a ring transfer reads the ring and proves with, every rail adds its SPP prover. */
 export type RingProvingClient = TreeContext &
   Pick<ChainReader, "getAccount"> &
-  Pick<RingRecordReader, "getRingMemberOpenings"> &
+  Pick<RingRecordReader, "getRingMemberOpenings" | "getRingRecordPool"> &
   RingProver;
-
-/** The first contact a pair payment proves, its path among the decoys of its tree. */
-export interface AnchorWitness extends BoundAnchor {
-  readonly request: FirstContactAnchor;
-}
-
-/** Read only once the transfer is approved. */
-export interface PendingAnchor {
-  readonly tree: Address;
-  read(context: RequestContext | undefined): Promise<AnchorWitness>;
-}
-
-/** An inbox payment's first contact, the leaf it lands at known only after confirmation, Rust `PendingFirstContact`. */
-export type PendingFirstContact = Omit<SentFirstContact, "leafIndex">;
 
 /** What the anonymous rail adds to a staged transfer, Rust `AnonymousSpend`. */
 export interface AnonymousSpendValues {
   readonly tokenOwner?: Address;
   readonly partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
-  readonly epoch: bigint;
-  readonly anchor?: PendingAnchor;
-  /** The inbox payments, each becomes its address's newest first contact once it lands. */
-  readonly firstContacts: readonly PendingFirstContact[];
+  /** Past the transfer's tags. */
+  readonly viewingHistory: ViewingHistory;
 }
 
 /** How the SPP proof authorizes the spends of one rail, Rust `Spend`. */
@@ -141,21 +122,13 @@ export interface RingTransactAccounts {
   /** Signs when the config demands it. */
   readonly coSigner?: Address;
   readonly delegate?: Address;
-  /** The first-contact tree of a pair-anchored anonymous payment. */
-  readonly anchorTree?: Address;
 }
-
-/** Rust `RING_TRANSACT_ACCOUNT_PREFIX_LEN`, `payer, output tree, SPP, system, ring auth`. */
-const RING_TRANSACT_ACCOUNT_PREFIX_LEN = 5;
 
 /** Every value a transfer's proofs bind that the chain can move before it lands, Rust `BoundState`. */
 export interface RingBoundState {
   /** The registry roots the proofs bind by history slot, the own registry first. */
   readonly roots?: readonly BoundRoot[];
   readonly policy?: BoundPolicy;
-  readonly anchor?: BoundAnchor;
-  /** The epoch an anonymous transfer's audit proof binds. */
-  readonly epoch?: bigint;
 }
 
 /** A proven transfer, its compact data, accounts and the chain values its proofs bind, Rust `ProvenRingTransfer`. */
@@ -171,14 +144,11 @@ export class ProvenRingTransfer {
   /** The registry roots the policy proof binds, a submission proves again once one leaves the history. */
   readonly roots: readonly BoundRoot[];
   readonly policy?: BoundPolicy;
-  readonly anchor?: BoundAnchor;
-  /** The anonymous statement's epoch. */
-  readonly epoch?: bigint;
-  /** Each inbox payment, recorded as its address's newest first contact once the transfer lands. */
-  readonly firstContacts: readonly PendingFirstContact[];
+  /** The anonymous sender's viewing history past the transfer's tags, stored before it is sent. */
+  readonly viewingHistory?: ViewingHistory;
 
   /** @internal */
-  constructor(fields: Omit<ProvenRingTransfer, "instruction" | "instructionAt">) {
+  constructor(fields: Omit<ProvenRingTransfer, "instruction">) {
     this.ringProgramId = fields.ringProgramId;
     this.data = fields.data;
     this.accounts = fields.accounts;
@@ -187,29 +157,12 @@ export class ProvenRingTransfer {
     this.approvalRequired = fields.approvalRequired;
     this.roots = fields.roots;
     if (fields.policy !== undefined) this.policy = fields.policy;
-    if (fields.anchor !== undefined) this.anchor = fields.anchor;
-    if (fields.epoch !== undefined) this.epoch = fields.epoch;
-    this.firstContacts = fields.firstContacts;
+    if (fields.viewingHistory !== undefined) this.viewingHistory = fields.viewingHistory;
     Object.freeze(this);
   }
 
-  /** The instruction landing in the proof's own epoch. */
   instruction(): Promise<Instruction> {
     return ringTransactInstruction(this.ringProgramId, this.accounts, this.data);
-  }
-
-  /** For a transaction sent at `slot`, an anonymous transfer one epoch late names the epoch before the landing slot's. */
-  async instructionAt(slot: bigint): Promise<Instruction> {
-    if (this.epoch === undefined) return this.instruction();
-    const current = tagEpoch(slot);
-    if (current !== this.epoch && current !== this.epoch + 1n)
-      throw new RingError("RING_EPOCH_PASSED", {
-        details: { proofEpoch: this.epoch.toString(), currentEpoch: current.toString() },
-      });
-    return ringTransactInstruction(this.ringProgramId, this.accounts, {
-      ...this.data,
-      previousEpoch: current !== this.epoch,
-    });
   }
 }
 
@@ -272,10 +225,10 @@ async function assembleStagedTransfer<T>(
   const shape = staged.proofInputs.checkShape();
   const publishedInputs = staged.proofInputs.inputUtxos.filter((spent) => !spent.isCompact());
   const published = rail.publishedSlots(staged.proofInputs, sender);
+  const senderBundle = rail.publishedSender(staged.proofInputs);
   const audit: AuditLayout = Object.freeze({
     exits: published.some((slot) => slot.wire.kind === "exit"),
     keyEscrow: config.keyEscrow,
-    dataFree: published.every((slot) => isDataFreeOutput(slot.wire)),
     // A default-ring input takes the entry key, every commitment key refuses ring id zero.
     fullOpenings: ringRail === "anonymous" && spendsDefaultRing(staged.proofInputs),
   });
@@ -356,7 +309,6 @@ async function assembleStagedTransfer<T>(
       ...(policy?.curator === undefined ? {} : { curator: policy.curator.registry }),
       ...(coSigner === undefined ? {} : { coSigner }),
       ...(spend.delegate === undefined ? {} : { delegate: spend.delegate }),
-      ...(anonymous?.anchor === undefined ? {} : { anchorTree: anonymous.anchor.tree }),
     });
     const ringId = ringIdField(ringProgramId);
     const preview = previewData({
@@ -365,6 +317,7 @@ async function assembleStagedTransfer<T>(
       audit,
       proofInputs,
       published,
+      ...(senderBundle === undefined ? {} : { sender: senderBundle }),
       txViewingU: rail.txViewingKey.publicKey().u(),
       ephemeralU: sealed.ephemeralPublicKey.u(),
       sealed: sealed.sealed,
@@ -373,23 +326,6 @@ async function assembleStagedTransfer<T>(
       approvalRequired,
       ...(policy === undefined ? {} : { policy: { inputs: policy, senderCommitment: commitment } }),
       ...(withdrawalExemption === undefined ? {} : { withdrawalExemption }),
-      ...(anonymous === undefined
-        ? {}
-        : {
-            anonymous:
-              anonymous.anchor === undefined
-                ? {}
-                : // The path's root index is read after approval, its width is fixed.
-                  {
-                    anchor: {
-                      tree: anchorSlot(
-                        accounts,
-                        config.hasPolicy || withdrawalExemption !== undefined,
-                      ),
-                      rootIndex: 0,
-                    },
-                  },
-          }),
     });
     // The program's expansion must reproduce the external data the SPP proof binds.
     if (
@@ -445,14 +381,7 @@ async function proveAssembled(
   const anonymous = spend.anonymous;
   const { proofInputs, policy, coSigner, privateTxHash, commitment, ringId } = assembled;
   const auditor = config.auditorPublicKey;
-  const anchor = await anonymous?.anchor?.read(context);
-  const preview =
-    anchor === undefined || assembled.preview.anchor === undefined
-      ? assembled.preview
-      : Object.freeze({
-          ...assembled.preview,
-          anchor: Object.freeze({ ...assembled.preview.anchor, rootIndex: anchor.rootIndex }),
-        });
+  const { preview } = assembled;
   const policyRequest =
     policy === undefined
       ? undefined
@@ -478,21 +407,17 @@ async function proveAssembled(
         partyIdentities: anonymous?.partyIdentities ?? [zeroField(), zeroField(), zeroField()],
         ringId,
         auditorPubkey: auditor.toBytes(),
-        epoch: anonymous?.epoch ?? 0n,
-        firstContactRoot: anchor?.root ?? zeroField(),
         keyEscrow: config.keyEscrow,
       }),
     ),
     ...(anonymous === undefined
       ? {}
       : {
-          anonymous: anonymousAuditValues({
+          anonymous: Object.freeze({
             partyIdentities: anonymous.partyIdentities,
             privateTxHash,
             privateTxBlinding: assembled.privateTxBlinding,
-            senderCommitment: commitment,
-            epoch: anonymous.epoch,
-            anchor,
+            senderCommitment: commitment ?? zeroField(),
           }),
         }),
   });
@@ -541,17 +466,7 @@ async function proveAssembled(
     ...(policy === undefined
       ? {}
       : { policy: Object.freeze({ ringProgramId, policyHash: policy.pinned.policyHash }) }),
-    ...(anchor === undefined
-      ? {}
-      : {
-          anchor: Object.freeze({
-            tree: anchor.tree,
-            rootIndex: anchor.rootIndex,
-            root: anchor.root,
-          }),
-        }),
-    ...(anonymous === undefined ? {} : { epoch: anonymous.epoch }),
-    firstContacts: anonymous?.firstContacts ?? [],
+    ...(anonymous === undefined ? {} : { viewingHistory: anonymous.viewingHistory }),
   });
 }
 
@@ -585,10 +500,6 @@ export async function ringTransactInstruction(
   if (accounts.curator !== undefined) prefix.push(meta(accounts.curator, false, false));
   if (accounts.coSigner !== undefined) prefix.push(meta(accounts.coSigner, true, false));
   if (accounts.delegate !== undefined) prefix.push(meta(accounts.delegate, true, false));
-  if (data.anchor !== undefined && data.anchor.tree === prefix.length) {
-    if (accounts.anchorTree === undefined) throw new RingError("RING_ANCHOR_INVALID");
-    prefix.push(meta(accounts.anchorTree, false, false));
-  }
   const encoded = RingTransactData.encode(data);
   const bytes = new Uint8Array(1 + encoded.length);
   bytes[0] = transactTag(data.rail);
@@ -600,22 +511,7 @@ export async function ringTransactInstruction(
   });
 }
 
-/** The account the anchor's tree slot names, a tree of SPP's list or the prefix slot after the delegate, Rust `anchor_slot`. */
-function anchorSlot(accounts: RingTransactAccounts, hasPolicy: boolean): number {
-  const prefix =
-    1 +
-    Number(hasPolicy) +
-    Number(accounts.curator !== undefined) +
-    Number(accounts.coSigner !== undefined) +
-    Number(accounts.delegate !== undefined);
-  const tree = accounts.anchorTree;
-  if (tree === undefined) throw new RingError("RING_ANCHOR_INVALID");
-  if (tree === accounts.outputTree) return prefix + 1;
-  const input = accounts.inputTrees.indexOf(tree);
-  return input < 0 ? prefix : prefix + RING_TRANSACT_ACCOUNT_PREFIX_LEN + input;
-}
-
-/** The auditor message joins the external data, the expiry the compact data carries as a u32. */
+/** The auditor message joins the external data last, the expiry the compact data carries as a u32. */
 function withAuditorMessage(
   proofInputs: SppProofInputs,
   message: Readonly<{ viewTag: Bytes32; data: Uint8Array }>,
@@ -629,13 +525,11 @@ function withAuditorMessage(
       instructionDiscriminator: external.instructionDiscriminator,
       expiryUnixTs: U32_MAX,
       interfaceTransfers: external.interfaceTransfers,
-      ...(external.dataHash === undefined ? {} : { dataHash: external.dataHash }),
-      ...(external.ringDataHash === undefined ? {} : { ringDataHash: external.ringDataHash }),
       txViewingPublicKey: external.txViewingPublicKey,
       salt: external.salt,
       outputs: external.outputs,
       resolvedOwnerTags: external.resolvedOwnerTags,
-      messages: [message],
+      messages: [...external.messages, message],
     }),
     blindingSeed: proofInputs.blindingSeed,
     outputTreeId: proofInputs.outputTreeId,
@@ -650,6 +544,7 @@ function previewData(
     audit: AuditLayout;
     proofInputs: SppProofInputs;
     published: readonly Readonly<{ wire: RingTransactData["outputs"][number] }>[];
+    sender?: SenderBundle;
     txViewingU: Bytes32;
     ephemeralU: Bytes32;
     sealed: Bytes32;
@@ -658,7 +553,6 @@ function previewData(
     approvalRequired: boolean;
     policy?: Readonly<{ inputs: PolicyInputs; senderCommitment: Bytes32 | undefined }>;
     withdrawalExemption?: WithdrawalExemption;
-    anonymous?: Readonly<{ anchor?: Readonly<{ tree: number; rootIndex: number }> }>;
   }>,
 ): RingTransactData {
   const external = input.proofInputs.externalData;
@@ -698,18 +592,14 @@ function previewData(
           },
         }),
     approvalRequired: input.approvalRequired,
-    previousEpoch: false,
-    ...(input.anonymous?.anchor === undefined ? {} : { anchor: input.anonymous.anchor }),
     expiryUnixTs: Number(U32_MAX),
     txViewingU: input.txViewingU,
     salt: external.salt,
     interfaceTransfers: external.interfaceTransfers.map(interfaceTransferOf),
-    ...(external.dataHash === undefined ? {} : { dataHash: external.dataHash }),
-    ...(external.ringDataHash === undefined ? {} : { ringDataHash: external.ringDataHash }),
-    dataFree: input.audit.dataFree,
     keyEscrow: input.audit.keyEscrow,
     fullOpenings: input.audit.fullOpenings,
     outputs: Object.freeze(outputs),
+    ...(input.sender === undefined ? {} : { sender: input.sender }),
     ephU: input.ephemeralU,
     sealed: input.sealed,
     disclosure: input.disclosure,
@@ -805,27 +695,6 @@ function provenData(
   });
 }
 
-function anonymousAuditValues(
-  input: Readonly<{
-    privateTxHash: Bytes32;
-    privateTxBlinding: Bytes32;
-    senderCommitment: Bytes32 | undefined;
-    partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
-    epoch: bigint;
-    anchor: AnchorWitness | undefined;
-  }>,
-): AnonymousAuditValues {
-  return Object.freeze({
-    privateTxHash: input.privateTxHash,
-    privateTxBlinding: input.privateTxBlinding,
-    senderCommitment: input.senderCommitment ?? zeroField(),
-    partyIdentities: input.partyIdentities,
-    epoch: input.epoch,
-    firstContactRoot: input.anchor?.root ?? zeroField(),
-    ...(input.anchor === undefined ? {} : { anchor: input.anchor.request }),
-  });
-}
-
 export function spendsDefaultRing(proofInputs: SppProofInputs): boolean {
   return proofInputs.inputUtxos.some(
     (spent) => !spent.isCompact() && !spent.isDummy() && spent.utxo.ringProgramId === undefined,
@@ -867,8 +736,6 @@ export function boundState(proven: ProvenRingTransfer): RingBoundState {
   return Object.freeze({
     ...(proven.roots.length === 0 ? {} : { roots: proven.roots }),
     ...(proven.policy === undefined ? {} : { policy: proven.policy }),
-    ...(proven.anchor === undefined ? {} : { anchor: proven.anchor }),
-    ...(proven.epoch === undefined ? {} : { epoch: proven.epoch }),
   });
 }
 

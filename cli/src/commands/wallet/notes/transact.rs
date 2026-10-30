@@ -7,17 +7,21 @@ use custom_ring_interface::{cosign::CoSignDemand, AnonymousSpend, RingProgramCon
 use custom_ring_sdk::{
     select_spend_where, shape_keyed, AnonymousMove, AnonymousPayment, CoSignScope,
     CustomRingConfig, CustomRingTransfer, CustomRingTransferInput, DepositAsset, DepositRecipient,
-    EntrySpend, EscrowedRecipients, ListRegistry, PendingFirstContact, RingDeposit,
-    RingDepositReceipt, RingMode, RingPayment,
+    EntrySpend, EscrowedRecipients, ListRegistry, RingDeposit, RingDepositReceipt, RingMode,
+    RingPayment,
 };
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signature::Signature;
 use solana_signer::Signer;
-use zolana_event_parser::indexed_events_from_instruction_groups;
-use zolana_interface::{pda, SHIELDED_POOL_PROGRAM_ID};
-use zolana_keypair::{shielded::ShieldedAddress, PublicKey, ShieldedKeypair};
-use zolana_ring_client::AnonymousRingState;
+use spr_interface::pda;
+use spr_keypair::{shielded::ShieldedAddress, PublicKey, ShieldedKeypair};
+use spr_transaction::{
+    instructions::transact::{
+        canonical_shape, ConfidentialTransaction, Shape, MAX_SPEND_INPUTS, SPP_SUPPORTED_SHAPES,
+    },
+    SpendableDecryptionResult, WalletUtxo, SOL_MINT,
+};
 use zolana_ring_client::{
     rpc::{DecryptedOutputKind, ReadTarget},
     ReaderKey,
@@ -25,15 +29,9 @@ use zolana_ring_client::{
 use zolana_ring_keys::{ring_address::RING_PAYMENT_SCHEME, RingAddress, RingPaymentRequest};
 use zolana_ring_policy::{ListId, Member, OutflowLimit};
 use zolana_ring_transaction::RingAssets;
-use zolana_transaction::{
-    instructions::transact::{
-        canonical_shape, ConfidentialTransaction, Shape, MAX_SPEND_INPUTS, SPP_SUPPORTED_SHAPES,
-    },
-    SpendableDecryptionResult, WalletUtxo, SOL_MINT,
-};
 
 use crate::{
-    address, assets,
+    assets,
     audit::OpenedSlot,
     file,
     fund::TopUp,
@@ -44,9 +42,9 @@ use crate::{
     merge::carries_no_data,
     policy, records,
     ui::{self, icon},
-    wallet::{AnonymousRingStore, WalletScan},
-    Context, CosignerArg, DepositArgs, Landed, TransactArgs, TransferArgs, Trust,
-    DEFAULT_TRANSACT_AMOUNT, SENDER_KEYPAIR_FILE,
+    wallet::WalletScan,
+    Context, CosignerArg, DepositArgs, TransactArgs, TransferArgs, Trust, DEFAULT_TRANSACT_AMOUNT,
+    SENDER_KEYPAIR_FILE,
 };
 
 /// Covers the sender's registrations and fees.
@@ -71,7 +69,10 @@ named_enum! {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Recipient {
     Shielded(ShieldedAddress),
+    /// Paid under the request tag until the pair is known.
     Ring(Box<RingPaymentRequest>),
+    /// A bare ring address, paid under the bootstrap tag until the pair is known.
+    Address(Box<RingAddress>),
 }
 
 pub(crate) struct CoSigner {
@@ -105,7 +106,7 @@ struct Payment<T> {
 enum Payees {
     Confidential(Vec<Payment<ShieldedAddress>>),
     Anonymous {
-        ring: Vec<Payment<RingAddress>>,
+        ring: Vec<RingPayment>,
         default_ring: Vec<Payment<ShieldedAddress>>,
         entry: EntrySpend,
     },
@@ -184,22 +185,16 @@ struct Sent {
     transact: Signature,
 }
 
-#[must_use]
-struct FirstContacts<'a> {
-    store: &'a AnonymousRingStore,
-    signature: Signature,
-    pending: &'a [PendingFirstContact],
-}
-
 pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
     let config = ctx.ring_config()?;
     let program = ctx.ring.program_id();
     let sender = ShieldedKeypair::from_keypair(&ctx.sender()?)?;
     let recipient = ShieldedKeypair::new_ed25519()?;
     let to = match config.mode {
-        RingMode::Anonymous => Recipient::Ring(Box::new(RingPaymentRequest::new(
-            address::ring_address(&recipient, program, 0)?,
-        ))),
+        RingMode::Anonymous => Recipient::Address(Box::new(RingAddress {
+            recipient: recipient.shielded_address()?,
+            ring_program_id: program,
+        })),
         RingMode::Confidential | RingMode::ConfidentialEscrow => {
             Recipient::Shielded(recipient.shielded_address()?)
         }
@@ -393,9 +388,16 @@ impl FromStr for Recipient {
                 .map(|request| Self::Ring(Box::new(request)))
                 .map_err(|error: zolana_ring_keys::RingKeyError| error.to_string());
         }
-        text.parse()
-            .map(Self::Shielded)
-            .map_err(|_| format!("{text} is neither a shielded address nor a `zolana:` request"))
+        if let Ok(address) = text.parse() {
+            return Ok(Self::Shielded(address));
+        }
+        RingAddress::from_base58(text)
+            .map(|address| Self::Address(Box::new(address)))
+            .map_err(|_| {
+                format!(
+                    "{text} is neither a shielded address, a ring address nor a `zolana:` request"
+                )
+            })
     }
 }
 
@@ -477,7 +479,7 @@ impl<'a> PaymentPlan<'a> {
             .iter()
             .filter_map(|recipient| match recipient {
                 Recipient::Ring(request) => Some(request),
-                Recipient::Shielded(_) => None,
+                Recipient::Shielded(_) | Recipient::Address(_) => None,
             });
         let requested_mint = requests.clone().find_map(|request| request.mint);
         let mint = self.mint.or(requested_mint).unwrap_or(SOL_MINT);
@@ -504,17 +506,14 @@ impl<'a> PaymentPlan<'a> {
                 for recipient in self.recipients {
                     match recipient {
                         Recipient::Ring(request) => {
-                            let to = &request.address;
-                            ensure!(
-                                to.ring_program_id == ring,
-                                "the address pays ring {}, the transfer runs in {ring}",
-                                to.ring_program_id
-                            );
-                            ring_payees.push(Payment {
-                                to: to.clone(),
-                                amount: amount(request.amount)?,
-                            });
+                            in_ring(&request.address, ring)?;
+                            ring_payees
+                                .push(RingPayment::to_request(request, amount(request.amount)?));
                         }
+                        Recipient::Address(address) => ring_payees.push(RingPayment::bootstrap(
+                            in_ring(address, ring)?,
+                            amount(None)?,
+                        )),
                         Recipient::Shielded(address) if self.default_ring => {
                             default_ring.push(Payment {
                                 to: *address,
@@ -550,7 +549,7 @@ impl<'a> PaymentPlan<'a> {
                                 to: *address,
                                 amount: amount(None)?,
                             }),
-                            Recipient::Ring(_) => bail!(
+                            Recipient::Ring(_) | Recipient::Address(_) => bail!(
                                 "a `zolana:` address pays an anonymous ring, ring {ring} is confidential"
                             ),
                         })
@@ -894,14 +893,15 @@ impl AllowEnrolment<'_> {
 
 impl Deposit<'_> {
     fn send(self, ctx: &Context) -> Result<RingDepositReceipt> {
-        let state = match self.config.mode {
-            RingMode::Anonymous => Some(ctx.anonymous_ring_store(self.sender, self.config).load()?),
+        let store = ctx.anonymous_wallet_store(self.sender);
+        let history = match self.config.mode {
+            RingMode::Anonymous => Some(store.load()?),
             RingMode::Confidential | RingMode::ConfidentialEscrow => None,
         };
-        let recipient = match &state {
-            Some(state) => DepositRecipient::Anonymous {
+        let recipient = match &history {
+            Some(history) => DepositRecipient::Anonymous {
                 keys: self.sender,
-                state,
+                history,
             },
             None => DepositRecipient::Confidential(self.sender.shielded_address()?),
         };
@@ -914,6 +914,10 @@ impl Deposit<'_> {
             amount: self.amount,
             cosigner: self.cosigner,
         };
+        // Stored before it is sent, a sync reads every sender tag the deposit may take.
+        if let (Some(history), Some(advanced)) = (&history, deposit.viewing_history()?) {
+            store.commit(history, advanced)?;
+        }
         Ok(ctx.block(deposit.send(ctx.ring_client()))?)
     }
 }
@@ -1060,93 +1064,60 @@ impl Transfer<'_> {
                 default_ring,
                 entry,
             } => {
-                let store = ctx.anonymous_ring_store(self.sender, self.config);
+                let store = ctx.anonymous_wallet_store(self.sender);
+                let history = store.load()?;
                 let mint = self.assets.registry().mint(&self.payments.mint)?;
                 // The hidden owner never signs in public, the payer funds its spend.
-                let land = |state: &AnonymousRingState| -> Result<Landed> {
-                    let transfer = match self.payments.sdk_selects() {
-                        true => {
-                            let select = AnonymousMove {
-                                ring: ctx.ring,
-                                sender: self.sender,
-                                nullifier_key: &self.sender.nullifier_key,
-                                signer: &self.sender.signing_key,
-                                state,
-                                payer: self.payer.pubkey(),
-                                utxos: &inputs,
-                                asset: mint,
-                                payments: payees
-                                    .iter()
-                                    .map(|payment| RingPayment {
-                                        to: payment.to.clone(),
-                                        amount: payment.amount,
-                                    })
-                                    .collect(),
-                                entry: *entry,
-                            };
-                            ctx.block(select.select(ctx.ring_client()))?
-                        }
-                        false => {
-                            let mut transaction = transaction(inputs.clone(), self.payer.pubkey())?;
-                            for payment in default_ring {
-                                transaction.transfer_with_ring(
-                                    &payment.to,
-                                    mint,
-                                    payment.amount,
-                                    None,
-                                )?;
-                            }
-                            let mut transfer = CustomRingTransfer::new(CustomRingTransferInput {
-                                ring: ctx.ring,
-                                sender: self.sender,
-                                nullifier_key: Some(&self.sender.nullifier_key),
-                                transaction,
-                            })
-                            .with_anonymous_signer(&self.sender.signing_key, state);
-                            for payment in payees {
-                                transfer = transfer.with_payment(AnonymousPayment {
-                                    to: payment.to.clone(),
-                                    asset: mint,
-                                    amount: payment.amount,
-                                })?;
-                            }
-                            match shape {
-                                Some(shape) => transfer.with_shape(shape)?,
-                                None => transfer,
-                            }
-                        }
-                    };
-                    ctx.land(transfer, self.payer, self.cosigner.as_slice())
-                };
-                let mut landed = land(&store.load()?);
-                // A refusal retires the contact it names, at most once per payee.
-                let mut retries = payees.len();
-                while let Err(error) = landed {
-                    if retries == 0 {
-                        return Err(error);
+                let transfer = match self.payments.sdk_selects() {
+                    true => {
+                        let select = AnonymousMove {
+                            ring: ctx.ring,
+                            sender: self.sender,
+                            nullifier_key: &self.sender.nullifier_key,
+                            signer: &self.sender.signing_key,
+                            history: &history,
+                            payer: self.payer.pubkey(),
+                            utxos: &inputs,
+                            asset: mint,
+                            payments: payees.clone(),
+                            entry: *entry,
+                        };
+                        ctx.block(select.select(ctx.ring_client()))?
                     }
-                    retries -= 1;
-                    store.retire_refused_first_contact(error)?;
-                    ui::warn(
-                        "the indexer refuses the decoys of a first contact, the payment takes \
-                         the inbox stream and records a fresh first contact",
-                    );
-                    landed = land(&store.load()?);
-                }
-                let landed = landed?;
-                let signature = landed.signature;
-                let recorded = FirstContacts {
-                    store: &store,
-                    signature,
-                    pending: &landed.first_contacts,
-                }
-                .record(ctx);
-                if let Err(error) = recorded {
-                    ui::warn(format!(
-                        "payment {signature} landed, its first contacts stay unrecorded, {error:#}"
-                    ));
-                }
-                Ok(signature)
+                    false => {
+                        let mut transaction = transaction(inputs.clone(), self.payer.pubkey())?;
+                        for payment in default_ring {
+                            transaction.transfer_with_ring(
+                                &payment.to,
+                                mint,
+                                payment.amount,
+                                None,
+                            )?;
+                        }
+                        let mut transfer = CustomRingTransfer::new(CustomRingTransferInput {
+                            ring: ctx.ring,
+                            sender: self.sender,
+                            nullifier_key: Some(&self.sender.nullifier_key),
+                            transaction,
+                        })
+                        .with_anonymous_signer(&self.sender.signing_key, &history);
+                        for payment in payees {
+                            transfer = transfer.with_payment(AnonymousPayment {
+                                to: payment.to.clone(),
+                                first_contact: payment.first_contact,
+                                asset: mint,
+                                amount: payment.amount,
+                            })?;
+                        }
+                        match shape {
+                            Some(shape) => transfer.with_shape(shape)?,
+                            None => transfer,
+                        }
+                    }
+                };
+                // Stored before it is sent, a sync reads every tag the transfer may take.
+                store.commit(&history, transfer.viewing_history()?)?;
+                ctx.submit(transfer, self.payer, self.cosigner.as_slice())
             }
         }
     }
@@ -1184,49 +1155,14 @@ impl Spendable {
     }
 }
 
-impl FirstContacts<'_> {
-    /// The leaves come from the confirmed transaction over RPC, the indexer never learns the signature.
-    fn record(self, ctx: &Context) -> Result<()> {
-        if self.pending.is_empty() {
-            return Ok(());
-        }
-        let groups = ctx
-            .rpc()
-            .fetch_confirmed_instruction_groups(&self.signature)?;
-        let events = indexed_events_from_instruction_groups(
-            Address::new_from_array(SHIELDED_POOL_PROGRAM_ID),
-            &groups.groups,
-        );
-        let leaf = |utxo_hash: &[u8; 32]| {
-            events
-                .iter()
-                .filter_map(|event| event.decoded.as_ref().ok())
-                .find_map(|event| {
-                    let position = event
-                        .outputs
-                        .iter()
-                        .position(|output| output.utxo_hash == *utxo_hash)?;
-                    event
-                        .first_output_leaf_index
-                        .checked_add(u64::try_from(position).ok()?)
-                })
-        };
-        let confirmed = self
-            .pending
-            .iter()
-            .map(|contact| {
-                leaf(&contact.utxo_hash)
-                    .map(|leaf_index| contact.confirm(leaf_index))
-                    .context("the confirmed transaction holds no leaf of a first contact")
-            })
-            .collect::<Result<Vec<_>>>()?;
-        self.store.update(|state| {
-            for contact in confirmed {
-                state.record_first_contact(contact);
-            }
-            Ok(())
-        })
-    }
+/// A payment request or address of another ring is refused.
+fn in_ring(address: &RingAddress, ring: Address) -> Result<RingAddress> {
+    ensure!(
+        address.ring_program_id == ring,
+        "the address pays ring {}, the transfer runs in {ring}",
+        address.ring_program_id
+    );
+    Ok(address.clone())
 }
 
 /// A rerun deposits again, the error names what the sender already holds.
@@ -1345,7 +1281,8 @@ fn read_back(ctx: &Context, reader: &Keypair, signature: Signature) -> Result<()
 #[cfg(test)]
 mod tests {
     use bytemuck::Zeroable;
-    use zolana_keypair::SigningKey;
+    use custom_ring_sdk::FirstContact;
+    use spr_keypair::SigningKey;
 
     use super::*;
     use crate::tests::transfer_args;
@@ -1505,9 +1442,20 @@ mod tests {
         ShieldedKeypair::from_keypair(SigningKey::from_ed25519_bytes(&[seed; 32])).unwrap()
     }
 
+    fn ring_address(seed: u8, ring: Address) -> RingAddress {
+        RingAddress {
+            recipient: keypair(seed).shielded_address().unwrap(),
+            ring_program_id: ring,
+        }
+    }
+
+    fn ring_request(seed: u8, ring: Address) -> RingPaymentRequest {
+        let tag = keypair(seed).get_recipient_request_view_tag(0).unwrap();
+        RingPaymentRequest::new(ring_address(seed, ring), tag)
+    }
+
     fn request(seed: u8, ring: Address) -> Recipient {
-        let address = address::ring_address(&keypair(seed), ring, 0).unwrap();
-        Recipient::Ring(Box::new(RingPaymentRequest::new(address)))
+        Recipient::Ring(Box::new(ring_request(seed, ring)))
     }
 
     #[test]
@@ -1529,6 +1477,22 @@ mod tests {
             Payees::Anonymous { ref ring, ref default_ring, entry: EntrySpend::Refuse }
                 if ring.len() == 1 && default_ring.is_empty()
         ));
+        let bare = Recipient::Address(Box::new(ring_address(3, RING)));
+        let tagged = PaymentPlan::new(&[ring.clone(), bare])
+            .resolve(RingMode::Anonymous, RING)
+            .unwrap();
+        let Payees::Anonymous { ring: payees, .. } = tagged.payees else {
+            panic!("anonymous payees");
+        };
+        let tags: Vec<_> = payees.iter().map(|payment| payment.first_contact).collect();
+        assert_eq!(
+            tags,
+            [
+                FirstContact::Request(ring_request(2, RING).request_view_tag),
+                FirstContact::Bootstrap
+            ],
+            "a request pays its tag, a bare address the bootstrap tag"
+        );
         let refused =
             PaymentPlan::new(std::slice::from_ref(&shielded)).resolve(RingMode::Anonymous, RING);
         assert!(refusal(refused).contains("not shielded address"));
@@ -1568,8 +1532,7 @@ mod tests {
     #[test]
     fn a_flag_that_differs_from_a_requests_amount_or_mint_is_refused() {
         let mint = Address::new_from_array([7; 32]);
-        let mut asked =
-            RingPaymentRequest::new(address::ring_address(&keypair(2), RING, 0).unwrap());
+        let mut asked = ring_request(2, RING);
         asked.amount = Some(5);
         asked.mint = Some(mint);
         let recipients = [Recipient::Ring(Box::new(asked)), request(3, RING)];
@@ -1637,7 +1600,7 @@ mod tests {
     fn a_payment_to_the_senders_own_key_charges_no_outflow() {
         let sender = keypair(1);
         let mut own = sender.shielded_address().unwrap();
-        own.viewing_pubkey = zolana_keypair::ViewingKey::new().pubkey();
+        own.viewing_pubkey = spr_keypair::ViewingKey::new().pubkey();
         let other = keypair(2).shielded_address().unwrap();
         let payments = Payments {
             mint: SOL_MINT,
@@ -1670,17 +1633,11 @@ mod tests {
         assert!(confidential(None).fits(&deposits).is_ok());
         assert!(confidential(Some(4)).fits(&deposits).is_ok());
         assert!(confidential(Some(17)).fits(&deposits).is_err());
-        let to = address::ring_address(&keypair(2), RING, 0).unwrap();
+        let to = ring_address(2, RING);
         let anonymous = |count| Payments {
             mint: SOL_MINT,
             payees: Payees::Anonymous {
-                ring: vec![
-                    Payment {
-                        to: to.clone(),
-                        amount: 1
-                    };
-                    count
-                ],
+                ring: vec![RingPayment::bootstrap(to.clone(), 1); count],
                 default_ring: Vec::new(),
                 entry: EntrySpend::Refuse,
             },
@@ -1724,10 +1681,7 @@ mod tests {
             Payments {
                 mint: SOL_MINT,
                 payees: Payees::Anonymous {
-                    ring: vec![Payment {
-                        to: address::ring_address(&keypair(2), RING, 0).unwrap(),
-                        amount: self.amount,
-                    }],
+                    ring: vec![RingPayment::bootstrap(ring_address(2, RING), self.amount)],
                     default_ring: Vec::new(),
                     entry: self.entry,
                 },
@@ -1741,7 +1695,7 @@ mod tests {
         let ring = |amount| held_utxo(Some(RING), amount);
         let default = |amount| held_utxo(None, amount);
         let mut other_mint = ring(30);
-        other_mint.utxo.asset = zolana_transaction::Mint::new(Address::new_from_array([7; 32]), 7);
+        other_mint.utxo.asset = spr_transaction::Mint::new(Address::new_from_array([7; 32]), 7);
         let mut with_data = ring(30);
         with_data.data_hash = Some([1; 32]);
         let ring_short = scanned(vec![ring(3), default(7), other_mint, with_data]);
@@ -1809,11 +1763,11 @@ mod tests {
 
     #[test]
     fn an_anonymous_held_spend_stays_within_a_keyed_width() {
-        assert_eq!(Spendable::RingOnly.widest_anonymous(2), Some(32));
-        assert_eq!(Spendable::RingOnly.widest_anonymous(3), Some(24));
-        assert_eq!(Spendable::RingOnly.widest_anonymous(8), Some(16));
-        assert_eq!(Spendable::RingOnly.widest_anonymous(16), Some(1));
-        assert_eq!(Spendable::RingOnly.widest_anonymous(17), None);
+        assert_eq!(Spendable::RingOnly.widest_anonymous(2), Some(16));
+        assert_eq!(Spendable::RingOnly.widest_anonymous(4), Some(16));
+        assert_eq!(Spendable::RingOnly.widest_anonymous(5), Some(8));
+        assert_eq!(Spendable::RingOnly.widest_anonymous(8), Some(8));
+        assert_eq!(Spendable::RingOnly.widest_anonymous(9), None);
         for outputs in [2, 4, 8] {
             assert_eq!(
                 Spendable::DefaultRingOnly.widest_anonymous(outputs),
@@ -1838,7 +1792,7 @@ mod tests {
     }
 
     #[test]
-    fn a_recipient_parses_as_a_shielded_address_or_a_zolana_request() {
+    fn a_recipient_parses_as_a_shielded_address_a_ring_address_or_a_zolana_request() {
         let address = keypair(1).shielded_address().unwrap();
         assert_eq!(
             address.to_string().parse::<Recipient>(),
@@ -1851,10 +1805,15 @@ mod tests {
             expected.to_string().parse::<Recipient>(),
             Ok(Recipient::Ring(expected.clone()))
         );
+        let bare = ring_address(3, RING);
+        assert_eq!(
+            bare.to_base58().parse::<Recipient>(),
+            Ok(Recipient::Address(Box::new(bare)))
+        );
         assert!("zolana:not-an-address".parse::<Recipient>().is_err());
         assert!("not-an-address"
             .parse::<Recipient>()
             .unwrap_err()
-            .contains("neither a shielded address nor a `zolana:` request"));
+            .contains("neither a shielded address, a ring address nor a `zolana:` request"));
     }
 }

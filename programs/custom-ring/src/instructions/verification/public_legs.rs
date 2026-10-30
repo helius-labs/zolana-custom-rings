@@ -1,7 +1,7 @@
 use custom_ring_interface::CustomRingError;
 use custom_ring_interface::{settlement_mints, PublicLeg, PublicSlots};
 use pinocchio::AccountView;
-use zolana_interface::{
+use spr_interface::{
     error::ShieldedPoolError,
     instruction::{instruction_data::validate_interface_transfers, InterfaceTransfer},
 };

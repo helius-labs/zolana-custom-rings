@@ -23,7 +23,7 @@ for binary in "$ZOLANA_CLI_BIN" "$PROVER_BIN" "$SURFPOOL_BIN"; do
   [[ -x "$binary" ]] || { echo "Missing executable $binary" >&2; exit 1; }
 done
 for artifact in target/deploy/custom_ring_program zolana/target/deploy/shielded_pool_program \
-  zolana/target/deploy/zolana_user_registry zolana/target/deploy/squads_smart_account_program; do
+  zolana/target/deploy/spr_user_registry zolana/target/deploy/squads_smart_account_program; do
   [[ -s "$artifact.so" ]] || {
     echo "Build $artifact.so with the just localnet test recipe" >&2
     exit 1

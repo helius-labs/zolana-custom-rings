@@ -172,13 +172,7 @@ describe("createdRingUtxos", () => {
                 kind: "transfer",
                 transaction: event,
                 inputTreeIds: [],
-                layout: {
-                  kind: "packed",
-                  outputs: 2,
-                  exits: false,
-                  keyEscrow: false,
-                  dataFree: true,
-                },
+                layout: { kind: "delivered", outputs: 2, exits: false, keyEscrow: false },
               },
       };
       const scan = (page: Parameters<typeof transactionsPage>[0], maxPages?: number) =>

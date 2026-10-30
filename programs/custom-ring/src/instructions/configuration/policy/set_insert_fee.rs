@@ -3,7 +3,7 @@ use pinocchio::{
     sysvars::{rent::Rent, Sysvar},
     AccountView, Address, ProgramResult,
 };
-use zolana_account_checks::AccountIterator;
+use spr_account_checks::AccountIterator;
 
 use crate::instructions::loader::load_authorized_config_mut;
 

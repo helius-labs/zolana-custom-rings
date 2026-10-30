@@ -6,7 +6,6 @@ import {
   bigIntToBytes,
   bytesToBigInt,
   checkedBytes,
-  copyBytes,
   fail,
   mergePaddedInputCount,
   Reader,
@@ -16,12 +15,6 @@ import {
 import {
   CACHE_CAPACITY,
   MergeEncryptionScheme,
-  StateDiscriminator,
-  TREE_ACCOUNT_SIZE,
-  UTXO_ROOT_HISTORY_CAPACITY,
-  UTXO_ROOT_HISTORY_CAPACITY_OFFSET,
-  UTXO_ROOT_HISTORY_LEN_OFFSET,
-  UTXO_ROOT_HISTORY_OFFSET,
   type Bytes64,
   type InterfaceTransfer,
   type MergeOutputEncryption,
@@ -30,9 +23,6 @@ import {
 } from "@heliuslabs/zolana/interface";
 
 import { ClientError } from "@heliuslabs/zolana/client";
-
-/** Rust `PAUSED`, the tree state byte that refuses writes. */
-export const TREE_STATE_PAUSED = 2;
 
 const BN254_BASE_MODULUS = bn254.fields.Fp.ORDER;
 
@@ -126,49 +116,6 @@ export function readMergeData(reader: Reader): MergeTransactInstructionData {
     nullifierTreeRootIndex,
     ...(cacheSlot === undefined ? {} : { cacheSlot }),
   };
-}
-
-/** Mirrors Rust `TreeAccount::is_paused`. */
-export function decodeTreePaused(bytes: Uint8Array): boolean {
-  return treeAccountReader(bytes, 1, 2).u8("state") === TREE_STATE_PAUSED;
-}
-
-/** Mirrors Rust `root_by_index`, `undefined` for a slot the history holds no root in. */
-export function decodeUtxoRoot(bytes: Uint8Array, index: number): Bytes32 | undefined {
-  const reader = treeAccountReader(
-    bytes,
-    UTXO_ROOT_HISTORY_LEN_OFFSET,
-    UTXO_ROOT_HISTORY_CAPACITY_OFFSET + 2,
-  );
-  const written = reader.u16("rootHistoryLen");
-  const capacity = reader.u16("rootHistoryCapacity");
-  reader.done();
-  if (capacity !== UTXO_ROOT_HISTORY_CAPACITY) fail("INTERFACE_INVALID_ACCOUNT_DATA");
-  if (
-    !Number.isSafeInteger(index) ||
-    index < 0 ||
-    written === 0 ||
-    index >= capacity ||
-    (written < capacity && index >= written)
-  )
-    return undefined;
-  const start = UTXO_ROOT_HISTORY_OFFSET + index * 32;
-  const root = copyBytes(bytes.subarray(start, start + 32), 32, "utxoRoot") as Bytes32;
-  return root.every((byte) => byte === 0) ? undefined : root;
-}
-
-function treeAccountReader(bytes: Uint8Array, start: number, end: number): Reader {
-  if (bytes.length !== TREE_ACCOUNT_SIZE) {
-    fail("INTERFACE_INVALID_ACCOUNT_DATA", { expected: TREE_ACCOUNT_SIZE, actual: bytes.length });
-  }
-  const discriminator = bytes[0];
-  if (discriminator !== StateDiscriminator.treeAccount) {
-    fail("INTERFACE_INVALID_DISCRIMINATOR", {
-      expected: StateDiscriminator.treeAccount,
-      actual: discriminator,
-    });
-  }
-  return new Reader(bytes.subarray(start, end));
 }
 
 /** Rust `alt_bn128_g2_decompress_be`, the SPP proof `b` the ring program expands. */

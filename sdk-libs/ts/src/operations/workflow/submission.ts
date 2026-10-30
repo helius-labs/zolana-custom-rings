@@ -18,7 +18,7 @@ import {
   equalBytes,
   assertVersion1Transaction,
 } from "@heliuslabs/zolana/internal";
-import type { ChainReader, KitRpcAccess, SlotReader } from "@heliuslabs/zolana/client";
+import type { ChainReader, KitRpcAccess } from "@heliuslabs/zolana/client";
 import { savePersistedWallet, type WalletPersistence } from "@heliuslabs/zolana/wallet";
 import type { Bytes32, RequestContext, Transaction } from "@heliuslabs/zolana/interface";
 import {
@@ -27,11 +27,10 @@ import {
   type PendingWalletSubmission,
 } from "@heliuslabs/zolana/transaction";
 import type { RingSubmissionStatus, RingSubmissionTransport } from "../../rpc/ports.js";
-import { tagEpoch } from "../../crypto/derivation/ring-stream.js";
 import { fetchRingMemberRegistry } from "../../protocol/membership/config.js";
 import { RingError, RingProgramError } from "../../protocol/error.js";
-import type { PendingFirstContact, RingBoundState } from "./pipeline.js";
-import { anchorState } from "../../protocol/membership/trees.js";
+import type { RingBoundState } from "./pipeline.js";
+import type { ViewingHistory } from "../../state/viewing-history.js";
 
 /** Keeps the signed intent and validity bounds of one transaction attempt. */
 export interface RingSubmissionAttempt extends RingBoundState {
@@ -39,8 +38,8 @@ export interface RingSubmissionAttempt extends RingBoundState {
   readonly lastValidBlockHeight: bigint;
   readonly intentHash: Bytes32;
   readonly ringInstructionIndex: number;
-  /** Each inbox payment of an anonymous transfer, recorded with the leaf it lands at. */
-  readonly firstContacts?: readonly PendingFirstContact[];
+  /** The anonymous sender's viewing history past the attempt's tags, every attempt the same. */
+  readonly viewingHistory?: ViewingHistory;
 }
 
 export type RingSubmissionResult =
@@ -49,8 +48,6 @@ export type RingSubmissionResult =
       signature: Signature;
       slot: bigint;
       attempts: number;
-      /** Those of the attempt that landed, none for a reconciled submission. */
-      firstContacts: readonly PendingFirstContact[];
     }>
   | Readonly<{ kind: "unknown"; signature: Signature; attempts: number }>
   | Readonly<{
@@ -93,7 +90,6 @@ export class RingTransactionSubmission {
   readonly #build: RingSubmissionBuild;
   readonly #reservation: ReservationHold;
   readonly #registry: Pick<ChainReader, "getAccount"> | undefined;
-  readonly #clock: SlotReader | undefined;
   readonly #wallet: Wallet | undefined;
   readonly #id: string;
   readonly #utxoHashes: readonly Bytes32[];
@@ -110,10 +106,8 @@ export class RingTransactionSubmission {
       first: RingSubmissionAttempt;
       build: RingSubmissionBuild;
       reservation?: ReservationHold;
-      /** Reads the bound registries and anchor tree when a proof fails. */
+      /** Reads the bound registries when a proof fails. */
       registry?: Pick<ChainReader, "getAccount">;
-      /** Reads the slot when a proof of a bound epoch fails. */
-      clock?: SlotReader;
       wallet?: Wallet;
       reservationId?: string;
       utxoHashes?: readonly Bytes32[];
@@ -124,10 +118,14 @@ export class RingTransactionSubmission {
     this.#build = input.build;
     this.#reservation = input.reservation ?? NO_RESERVATION;
     this.#registry = input.registry;
-    this.#clock = input.clock;
     this.#wallet = input.wallet;
     this.#id = input.reservationId ?? bytesKey(crypto.getRandomValues(new Uint8Array(16)));
     this.#utxoHashes = (input.utxoHashes ?? []).map((hash) => new Uint8Array(hash) as Bytes32);
+  }
+
+  /** An anonymous sender stores it before the first `send`. */
+  get viewingHistory(): ViewingHistory | undefined {
+    return this.#attempt.viewingHistory;
   }
 
   /** @internal The reservation `build` records outlives every attempt. */
@@ -139,7 +137,6 @@ export class RingTransactionSubmission {
         context?: RequestContext,
       ) => Promise<RingSubmissionAttempt>;
       registry?: Pick<ChainReader, "getAccount">;
-      clock?: SlotReader;
     }>,
     context?: RequestContext,
   ): Promise<RingTransactionSubmission> {
@@ -157,7 +154,6 @@ export class RingTransactionSubmission {
       build,
       wallet: input.wallet,
       ...(input.registry === undefined ? {} : { registry: input.registry }),
-      ...(input.clock === undefined ? {} : { clock: input.clock }),
       ...(retry.reservation === undefined
         ? {}
         : {
@@ -212,24 +208,17 @@ export class RingTransactionSubmission {
 
   /** Rust `BoundState::moved`. */
   async #moved(context?: RequestContext): Promise<boolean> {
-    const { roots = [], policy, anchor, epoch } = this.#attempt;
+    const { roots = [], policy } = this.#attempt;
     const chain = this.#registry;
-    if (chain !== undefined) {
-      for (const bound of roots) {
-        const registry = await fetchRingMemberRegistry(chain, bound.ringProgramId, context);
-        const held = registry.history[bound.rootIndex];
-        if (held === undefined || !equalBytes(held.root, bound.root)) return true;
-      }
-      if (policy !== undefined) {
-        const registry = await fetchRingMemberRegistry(chain, policy.ringProgramId, context);
-        if (!equalBytes(registry.policyHash, policy.policyHash)) return true;
-      }
-      // A paused tree refuses every proof, proving again cannot land.
-      if (anchor !== undefined && (await anchorState(chain, anchor, context)) === "moved")
-        return true;
+    if (chain === undefined) return false;
+    for (const bound of roots) {
+      const registry = await fetchRingMemberRegistry(chain, bound.ringProgramId, context);
+      const held = registry.history[bound.rootIndex];
+      if (held === undefined || !equalBytes(held.root, bound.root)) return true;
     }
-    if (epoch === undefined || this.#clock === undefined) return false;
-    return tagEpoch(await this.#clock.getSlot(context)) > epoch;
+    if (policy === undefined) return false;
+    const registry = await fetchRingMemberRegistry(chain, policy.ringProgramId, context);
+    return !equalBytes(registry.policyHash, policy.policyHash);
   }
 
   async #settleFailed(): Promise<void> {
@@ -300,7 +289,6 @@ export class RingTransactionSubmission {
             signature,
             slot: status.slot,
             attempts: this.#attempts,
-            firstContacts: this.#attempt.firstContacts ?? [],
           };
         }
         const ringCode =
@@ -375,7 +363,6 @@ export async function reconcileRingSubmissions(
         signature: pending.signature,
         attempts: pending.attempts,
         slot: status.slot,
-        firstContacts: [],
       });
     } else {
       input.wallet._releaseReservation(pending.id);

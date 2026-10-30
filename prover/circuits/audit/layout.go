@@ -16,8 +16,8 @@ const (
 	LayoutExits = 1 << iota
 	// LayoutEscrow is the config's key escrow, the policy proof escrows every output nullifier key the disclosure leaves out.
 	LayoutEscrow
-	// LayoutDataFree is the frame's data-free shape bit, no published UTXO carries a data hash for the packed disclosure to open.
-	LayoutDataFree
+	// LayoutReserved is free in every key, the program sends it clear.
+	LayoutReserved
 	// LayoutFullOpenings is the anonymous entry layout, every spent UTXO opens in the disclosure.
 	LayoutFullOpenings
 )

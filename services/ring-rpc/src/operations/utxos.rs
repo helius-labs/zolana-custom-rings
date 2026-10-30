@@ -9,8 +9,8 @@ use std::{
 };
 
 use solana_signature::Signature;
+use spr_indexer_api::{Context, Hash};
 use tokio::sync::Mutex as AsyncMutex;
-use zolana_indexer_api::{Context, Hash};
 use zolana_ring_client::{
     rpc::AuditedUtxoView, CreatedUtxo, EscrowedKeys, KnownUtxo, KnownUtxoIndex,
 };

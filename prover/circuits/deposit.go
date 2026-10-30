@@ -17,7 +17,7 @@ import (
 
 // Properties:
 // 1. The first Count of 1..8 owner commitments open to (owner hash, blinding, owner key) AES-CTR encrypted to AuditorPk, the padding slots carry nothing.
-// 2. Every blinding is Poseidon(CRDB, BlindingSecret), so no deposit opens as the first contact of an anonymous pair stream.
+// 2. Every blinding is Poseidon(CRDB, BlindingSecret), domain separated from every SPP output blinding.
 // 3. An anonymous ring's deposit names the Ed25519 key behind each owner, any other deposit names none.
 // 4. Under key escrow every owner's record lies under MemberRegistryRoot and escrows the key the owner's nullifier key and ciphertext hash name.
 

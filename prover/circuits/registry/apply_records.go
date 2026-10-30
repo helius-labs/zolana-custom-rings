@@ -113,6 +113,7 @@ func (w RecordWrite) apply(api frontend.API, active frontend.Variable, s registr
 	lists := api.Add(keptLists(api, w.OldLists, w.Entry.Mask), w.Entry.Value)
 	// 2. A registered escrow key is final, a later key leaves it.
 	escrow := api.Select(api.IsZero(w.OldEscrow), w.Entry.EscrowKey, w.OldEscrow)
+	// The 193 bit decomposition range-checks the entry.
 	policyBits := api.ToBinary(w.Entry.MintPolicy, 193)
 	mintPolicy := api.Select(policyBits[192], api.FromBinary(policyBits[:192]...), w.OldMintPolicy)
 	withdrawalThreshold := api.Select(policyBits[192], w.Entry.WithdrawalThreshold, w.OldWithdrawalThreshold)

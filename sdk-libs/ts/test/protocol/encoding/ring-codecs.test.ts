@@ -1245,7 +1245,7 @@ describe("ring read request", () => {
           dataHash: filled(0x14, 32),
           ringDataHash: filled(0x15, 32),
         },
-        recipientU: filled(6, 32),
+        ownerTag: { kind: "recipient", u: filled(6, 32) },
       },
     });
     const exit = item.outputs[1]!.opening;
@@ -1264,7 +1264,7 @@ describe("ring read request", () => {
     const item = await readItem(rustItem("decrypted_anonymous_page.json"));
     expect(item.sender).toEqual({ ownerKey: filled(0x50, 32), nullifierPk: filled(0x51, 32) });
     const ring = item.outputs[0]!.opening;
-    expect(ring.kind === "ring" && ring.tag).toEqual(filled(0x31, 16));
+    expect(ring.kind === "ring" && ring.ownerTag).toEqual({ kind: "view", tag: filled(0x31, 32) });
     expect(item.inputs.map((input) => input.nullifier)).toEqual(item.nullifiers);
     expect(
       item.inputs.map(({ opening }) => (opening.kind === "opened" ? opening.ring : opening.kind)),
@@ -1304,8 +1304,13 @@ describe("ring read request", () => {
       "payloadErrors",
     ],
     [
-      "a ring output without its recipient key",
-      (item) => delete outputAt(item, 0)["recipientU"],
+      "a ring output without its view tag",
+      (item) => delete outputAt(item, 0)["tag"],
+      "outputs[0].kind",
+    ],
+    [
+      "a ring output with a view tag and a recipient key",
+      (item) => (outputAt(item, 0)["recipientU"] = addressOf(6)),
       "outputs[0].kind",
     ],
     [
@@ -1335,12 +1340,13 @@ describe("ring read request", () => {
       "inputs",
     ],
     [
-      "a tag field with a nonzero byte ahead of the tag",
-      (item) =>
-        (outputAt(item, 0)["tag"] = getAddressDecoder().decode(
-          Uint8Array.of(...filled(0, 15), 1, ...filled(0x31, 16)),
-        )),
-      "outputs[0].tag",
+      "an anonymous ring output under a recipient key",
+      (item) => {
+        const output = outputAt(item, 0);
+        delete output["tag"];
+        output["recipientU"] = addressOf(6);
+      },
+      "outputs.tag",
     ],
     [
       "an ambiguous input with an opening",

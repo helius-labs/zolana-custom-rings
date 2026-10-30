@@ -2,6 +2,7 @@ package ringpolicy
 
 import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
@@ -27,7 +28,7 @@ func Exemption(t testing.TB) *policy.WithdrawalExemptionCircuit {
 	return c
 }
 func BindExemption(t testing.TB, c *policy.WithdrawalExemptionCircuit) {
-	fields := []*big.Int{big.NewInt(0x43525758), ringtest.AsBigInt(c.Root)}
+	fields := []*big.Int{big.NewInt(shared.WithdrawalExemptionDomain), ringtest.AsBigInt(c.Root)}
 	for i := range c.Assets {
 		fields = append(fields, ringtest.AsBigInt(c.Assets[i]), ringtest.AsBigInt(c.Amounts[i]))
 	}

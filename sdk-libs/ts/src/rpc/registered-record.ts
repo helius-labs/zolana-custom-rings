@@ -9,7 +9,12 @@ import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import { registryCurrentRoot } from "../protocol/codec/ring-codecs.js";
 import { fetchRingMemberRegistry, fetchRingProgramConfig } from "../protocol/membership/config.js";
 import { RingError } from "../protocol/error.js";
-import { MemberOpeningRead, ownerEscrowed } from "../protocol/membership/member-opening.js";
+import {
+  MemberOpeningRead,
+  ownerEscrowed,
+  verifyRecordPool,
+} from "../protocol/membership/member-opening.js";
+import type { RecordPool } from "../protocol/membership/member-registry.js";
 import { MEMBER_REGISTRY_PROJECTION_ERRORS } from "./projection.js";
 
 export type RingRecordReadClient = Pick<ChainReader, "getAccount"> &
@@ -94,6 +99,53 @@ export async function readMemberOpenings(
   return reads;
 }
 
+/** A pool verified under its root, with every member's read in member order. */
+export interface RecordPoolRead {
+  /** Records and subjects repeat cyclically up to the pool capacity. */
+  readonly pool: RecordPool;
+  readonly reads: readonly MemberOpeningRead[];
+}
+
+/** `members` under `root` in one pool of `openings` records. */
+export async function readRecordPool(
+  input: Readonly<{
+    client: Pick<RingRecordReader, "getRingRecordPool">;
+    ringProgramId: Address;
+    root: Bytes32;
+    members: readonly Bytes32[];
+    openings: number;
+  }>,
+  context?: RequestContext,
+): Promise<RecordPoolRead> {
+  const { members, openings } = input;
+  if (members.length < 1 || members.length > openings)
+    throw new RingError("RING_MEMBER_REGISTRY_INVALID", { details: { reason: "poolCapacity" } });
+  const served = await input.client.getRingRecordPool(
+    { ringProgramId: input.ringProgramId, members, expectedRoot: input.root, openings },
+    context,
+  );
+  if (!equalBytes(served.root.root, input.root))
+    throw new RingError("RING_MEMBER_REGISTRY_INVALID", { details: { reason: "pool" } });
+  const reads = verifyRecordPool(served, input.root, members, openings);
+  const records = cyclic(served.records, openings);
+  return Object.freeze({
+    pool: Object.freeze({
+      records: Object.freeze(records.map(({ record }) => record)),
+      canopy: Object.freeze([...served.canopy]),
+      paths: Object.freeze(records.map(({ path }) => path)),
+      subjects: Object.freeze(
+        cyclic(
+          members.map((member, index) =>
+            Object.freeze({ member, recordIndex: served.subjects[index] ?? 0 }),
+          ),
+          openings,
+        ),
+      ),
+    }),
+    reads,
+  });
+}
+
 /** The indexer's opening checked against the chain's newest root, Rust `MemberMerge::read`. */
 export function readRegisteredRecord(
   input: Readonly<{
@@ -152,4 +204,8 @@ export async function readNewest(
   const { root } = registryCurrentRoot(registry);
   const reads = await readMemberOpenings({ ...input, root }, context);
   return { root, reads };
+}
+
+function cyclic<T>(values: readonly T[], length: number): readonly T[] {
+  return Array.from({ length }, (_, index) => values[index % values.length] as T);
 }

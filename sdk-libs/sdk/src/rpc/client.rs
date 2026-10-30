@@ -2,7 +2,7 @@
 
 use core::ops::Deref;
 
-use zolana_client::{
+use spr_client::{
     prover::{indexed::ProofDataSource, ProveRequest},
     AsyncIndexer, AsyncProverClient, AsyncZolanaClient, ClientError, Proof,
 };

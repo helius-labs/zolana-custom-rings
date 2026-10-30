@@ -1,11 +1,11 @@
 //! The `HashChain4` public input of the audit, policy, apply and register key proofs.
 
-use zolana_hasher::{
+use spr_hasher::{
     hash_chain::create_hash_chain_4_from_slice,
     primitives::{hash_bytes, pack_be, right_align},
     HasherError,
 };
-use zolana_interface::N_PUBLIC_SLOTS;
+use spr_interface::N_PUBLIC_SLOTS;
 
 use crate::{
     disclosure::AuditLayout, domain, tagged_x25519, transact::RingOutput, AUDIT_CIPHERTEXT_LEN,
@@ -54,16 +54,12 @@ impl AuditHead<'_> {
 pub struct AnonymousAudit<'a> {
     pub party_identities: &'a [[u8; 32]; 3],
     pub private_tx_hash: &'a [u8; 32],
-    pub epoch: u64,
-    /// Zero without a pair-anchored slot.
-    pub first_contact_root: &'a [u8; 32],
     /// Zero outside a policy ring.
     pub sender_commitment: &'a [u8; 32],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AuditKind<'a> {
-    Packed,
     Delivered,
     Anonymous(AnonymousAudit<'a>),
 }
@@ -86,7 +82,6 @@ impl AuditStatement<'_> {
         let output_chain = create_hash_chain_4_from_slice(&hashes)?;
         let disclosure_chain = create_hash_chain_4_from_slice(self.disclosure)?;
         match self.kind {
-            AuditKind::Packed => elements.extend([output_chain, disclosure_chain]),
             AuditKind::Delivered => {
                 let keys: Vec<[u8; 32]> = self
                     .outputs
@@ -101,15 +96,10 @@ impl AuditStatement<'_> {
                 ]);
             }
             AuditKind::Anonymous(anonymous) => {
-                let tags: Vec<[u8; 32]> = self.outputs.iter().map(RingOutput::tag_field).collect();
                 elements.extend([
                     output_chain,
-                    self.body_chain()?,
                     disclosure_chain,
                     *anonymous.private_tx_hash,
-                    create_hash_chain_4_from_slice(&tags)?,
-                    right_align(&anonymous.epoch.to_be_bytes()),
-                    *anonymous.first_contact_root,
                     *anonymous.sender_commitment,
                     anonymous.party_identities[0],
                     anonymous.party_identities[1],
@@ -183,7 +173,10 @@ impl PolicyStatement<'_> {
         for (asset, amount) in self.public_assets.iter().zip(self.public_amounts) {
             elements.extend([*asset, *amount]);
         }
-        elements.extend([right_align(&[2]), *self.withdrawal_hash]);
+        elements.extend([
+            right_align(&[domain::POLICY_STATEMENT_VERSION]),
+            *self.withdrawal_hash,
+        ]);
         elements
     }
 

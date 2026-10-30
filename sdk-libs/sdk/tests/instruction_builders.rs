@@ -18,17 +18,17 @@ use custom_ring_sdk::{
 use solana_account::Account;
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
-use wincode::{config::DefaultConfig, SchemaRead};
-use zolana_client::{AsyncRpc, ClientError};
-use zolana_hasher::primitives::solana_owner_identity;
-use zolana_interface::{
+use spr_client::{AsyncRpc, ClientError};
+use spr_hasher::primitives::solana_owner_identity;
+use spr_interface::{
     instruction::instruction_data::merge_transact::{
         MergeOutputEncryption, MergeProof, MergeTransactIxData,
     },
     pda, BPF_LOADER_UPGRADEABLE_ID,
 };
-use zolana_keypair::{SigningKey, X25519Keypair};
-use zolana_program::instruction::MergeRing;
+use spr_keypair::{SigningKey, X25519Keypair};
+use spr_program::instruction::MergeRing;
+use wincode::{config::DefaultConfig, SchemaRead};
 use zolana_ring_client::ReaderKey;
 use zolana_ring_policy::{
     ListChange, ListId, ListSet, PolicyTableError, Rule, RuleTable, RuleTableError, Subject,

@@ -1,6 +1,6 @@
 //! Shared nonzero mint settings, including full u64 values and records beyond eight.
 use custom_ring_interface::QueueEntry;
-use zolana_hasher::primitives::right_align;
+use spr_hasher::primitives::right_align;
 use zolana_ring_member_registry::{MemberRegistryTree, RecordTree};
 use zolana_ring_policy::MintPolicy;
 

@@ -8,7 +8,7 @@ use sea_orm::{Database, DatabaseConnection, TransactionTrait};
 use sea_orm_migration::MigratorTrait;
 use solana_address::Address;
 use solana_signature::Signature;
-use zolana_indexer_api::Hash;
+use spr_indexer_api::Hash;
 use zolana_ring_indexer::rpc::{GetRingMemberRecordRequest, GetRingMemberRecordsRequest};
 
 use crate::{

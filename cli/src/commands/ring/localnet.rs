@@ -133,7 +133,7 @@ fn bring_up_workspace(
             .args(["--photon-start-slot", "0", "--account-dir"])
             .arg(snapshots)
             .arg("--sbf-program")
-            .arg(zolana_interface::pda::shielded_pool_program_id().to_string())
+            .arg(spr_interface::pda::shielded_pool_program_id().to_string())
             .arg(workspace.shielded_pool_so()?)
             .args(["--", "--deactivate-feature", SBPF_V0_FEATURE]);
         ZOLANA

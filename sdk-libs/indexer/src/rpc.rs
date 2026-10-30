@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
+use spr_indexer_api::{Base64String, Context, Hash, RpcMethod, SerializablePubkey};
 use thiserror::Error;
-use zolana_indexer_api::{Base64String, Context, Hash, RpcMethod, SerializablePubkey};
 
 /// Pages and opening batches include one authentication path per record.
 pub const MAX_RING_MEMBER_PAGE_LIMIT: u64 = 100;
@@ -43,6 +43,7 @@ pub mod method {
     pub struct GetRingMemberRecord;
     pub struct GetRingMemberRecords;
     pub struct GetRingMemberOpenings;
+    pub struct GetRingRecordPool;
     pub struct GetRingMemberRegistryRoot;
     pub struct GetRingRecordQueue;
     pub struct GetRingApplyProofInputs;
@@ -63,6 +64,12 @@ pub mod method {
         const NAME: &'static str = "getRingMemberOpenings";
         type Request = GetRingMemberOpeningsRequest;
         type Response = GetRingMemberOpeningsResponse;
+    }
+
+    impl RpcMethod for GetRingRecordPool {
+        const NAME: &'static str = "getRingRecordPool";
+        type Request = GetRingRecordPoolRequest;
+        type Response = GetRingRecordPoolResponse;
     }
 
     impl RpcMethod for GetRingMemberRegistryRoot {
@@ -102,6 +109,17 @@ pub struct GetRingMemberOpeningsRequest {
     pub ring_program_id: SerializablePubkey,
     pub members: Vec<Hash>,
     pub expected_root: Hash,
+}
+
+/// Each member's record or low record under one root, a shared record opened once.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct GetRingRecordPoolRequest {
+    pub ring_program_id: SerializablePubkey,
+    pub members: Vec<Hash>,
+    pub expected_root: Hash,
+    /// At least `members.len()` and at most [`MAX_RING_MEMBER_PAGE_LIMIT`].
+    pub openings: u64,
 }
 
 /// Page real member leaves at one current, on-chain-checked registry root.
@@ -215,6 +233,20 @@ pub struct GetRingMemberOpeningsResponse {
     pub root: RingRegistryRootView,
     /// In request order.
     pub openings: Vec<RingMemberOpening>,
+}
+
+/// Each path stops below the canopy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct GetRingRecordPoolResponse {
+    pub context: Context,
+    pub root: RingRegistryRootView,
+    /// Distinct leaves in first use order.
+    pub records: Vec<RingIndexedMemberRecordView>,
+    /// The narrowest tree level at least `openings` nodes wide.
+    pub canopy: Vec<Hash>,
+    /// The `records` index opening each requested member, in request order.
+    pub subjects: Vec<u32>,
 }
 
 /// One contiguous member leaf and its authentication path at `root`.

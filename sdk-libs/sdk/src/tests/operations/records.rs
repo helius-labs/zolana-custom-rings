@@ -1,6 +1,6 @@
 use custom_ring_interface::{CustomRingError, QueueEntry, RingMode, APPLY_DELAY_SLOTS};
 use solana_address::Address;
-use zolana_client::ClientError;
+use spr_client::ClientError;
 use zolana_ring_policy::{ListChange, ListId, ListSet, ListWrite, Member, Writer};
 
 use super::support::{authority, ring, Chain, Registry, RingSettings, SLOT};

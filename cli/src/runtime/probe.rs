@@ -3,7 +3,7 @@
 use std::{io::Write, time::Duration};
 
 use anyhow::{Context as _, Result};
-use zolana_client::prover::redact_api_key;
+use spr_client::prover::redact_api_key;
 
 use crate::config::{redact_url, RingConfig};
 

@@ -1,15 +1,13 @@
 //! The slots a sealed ring transfer publishes, in the compact form the ring program expands.
 
 use custom_ring_interface::{
-    ring_anonymous_output_body, ring_confidential_delivered_output_body,
-    ring_confidential_packed_output_body, stream::RingTag, RingOutput,
+    anonymous_recipient_output_body, anonymous_sender_output_body,
+    ring_confidential_delivered_output_body, RingOutput, SenderBundle,
 };
-use zolana_event::confidential_encrypted_output_body;
-use zolana_interface::instruction::instruction_data::transact::{OwnerTag, TransactOutput};
-use zolana_keypair::{ShieldedAddress, X25519Pubkey};
-use zolana_transaction::{
-    instructions::transact::SppProofInputs, SppProofOutputUtxo, TransactionError,
-};
+use spr_event::confidential_encrypted_output_body;
+use spr_interface::instruction::instruction_data::transact::{OwnerTag, TransactOutput};
+use spr_keypair::ShieldedAddress;
+use spr_transaction::{instructions::transact::SppProofInputs, SppProofOutputUtxo};
 
 use crate::{AnonymousSlot, RingDelivery, RingOutputRail, RingRailError, Slot};
 
@@ -17,8 +15,6 @@ use crate::{AnonymousSlot, RingDelivery, RingOutputRail, RingRailError, Slot};
 pub struct PublishedSlot<'a> {
     pub output: &'a SppProofOutputUtxo,
     pub wire: RingOutput<'a>,
-    /// The key a delivered or anonymous ring output's body opens under.
-    pub recipient: Option<X25519Pubkey>,
     /// Set on the anonymous rail.
     pub anonymous: Option<AnonymousSlot>,
 }
@@ -30,82 +26,129 @@ impl RingOutputRail {
         inputs: &'a SppProofInputs,
         sender: &ShieldedAddress,
     ) -> Result<Vec<PublishedSlot<'a>>, RingRailError> {
-        let mut published = inputs.external_data.outputs.iter();
-        let mut slots = Vec::with_capacity(inputs.external_data.outputs.len());
-        for (index, output) in inputs.output_utxos.iter().enumerate() {
-            if output.is_compact() {
-                continue;
-            }
-            let framing = RingRailError::RingOutputFraming { slot_index: index };
-            let slot_index = u32::try_from(index).map_err(|_| TransactionError::TooManyOutputs)?;
-            let slot = self.slot(output, sender, slot_index)?;
-            let anonymous = match &self.delivery {
-                RingDelivery::Anonymous(plan) => Some(plan.slot(output, sender, slot_index)?),
-                RingDelivery::Packed | RingDelivery::Delivered => None,
-            };
-            let recipient = match (slot, &self.delivery) {
-                (
-                    Slot::Ring { recipient, .. },
-                    RingDelivery::Delivered | RingDelivery::Anonymous(_),
-                ) => Some(recipient),
-                _ => None,
-            };
-            slots.push(PublishedSlot {
-                output,
-                wire: self.wire(slot, published.next().ok_or(framing)?, index)?,
-                recipient,
-                anonymous,
+        let outputs = &inputs.output_utxos;
+        let published = &inputs.external_data.outputs;
+        if published.len() != outputs.len() {
+            return Err(RingRailError::RingOutputFraming {
+                slot_index: outputs.len().min(published.len()),
             });
         }
-        match published.next() {
-            Some(_) => Err(RingRailError::RingOutputFraming {
-                slot_index: inputs.output_utxos.len(),
-            }),
-            None => Ok(slots),
-        }
+        let anonymous = match &self.delivery {
+            RingDelivery::Anonymous(plan) => Some(plan.slots(outputs, sender)?),
+            RingDelivery::Delivered => None,
+        };
+        outputs
+            .iter()
+            .zip(published)
+            .enumerate()
+            .map(|(index, (output, published))| {
+                let anonymous = anonymous.as_ref().map(|slots| slots[index]);
+                let wire = match anonymous {
+                    Some(slot) => anonymous_wire(slot, published, index)?,
+                    None => self.delivered_wire(output, published, index)?,
+                };
+                if wire.transact_output()? != *published {
+                    return Err(RingRailError::RingOutputFraming { slot_index: index });
+                }
+                Ok(PublishedSlot {
+                    output,
+                    wire,
+                    anonymous,
+                })
+            })
+            .collect()
     }
 
-    /// The round trip through the program's expansion refuses any other framing.
-    fn wire<'a>(
+    /// The anonymous rail's sender bundle, the first message.
+    pub fn published_sender<'a>(
         &self,
-        slot: Slot,
+        inputs: &'a SppProofInputs,
+    ) -> Result<Option<SenderBundle<'a>>, RingRailError> {
+        let RingDelivery::Anonymous(plan) = &self.delivery else {
+            return Ok(None);
+        };
+        let message = inputs
+            .external_data
+            .messages
+            .first()
+            .ok_or(RingRailError::SenderBundleFraming)?;
+        let body = anonymous_sender_output_body(&message.data)
+            .filter(|_| message.view_tag == *plan.sender_tag())
+            .ok_or(RingRailError::SenderBundleFraming)?;
+        Ok(Some(SenderBundle {
+            tag: &message.view_tag,
+            body,
+        }))
+    }
+
+    fn delivered_wire<'a>(
+        &self,
+        output: &SppProofOutputUtxo,
         published: &'a TransactOutput,
         slot_index: usize,
     ) -> Result<RingOutput<'a>, RingRailError> {
         let framing = || RingRailError::RingOutputFraming { slot_index };
-        let OwnerTag::Inline(owner_tag) = &published.owner_tag else {
-            return Err(framing());
-        };
+        let (hash, owner_tag) = inline(published, slot_index)?;
         let data = published.data.as_deref().ok_or_else(framing)?;
-        let hash = &published.utxo_hash;
-        let wire = match (slot, &self.delivery) {
-            (Slot::Compact, _) => return Err(framing()),
-            (Slot::Exit, _) => RingOutput::Exit {
+        Ok(match self.slot(output, slot_index)? {
+            Slot::Exit => RingOutput::Exit {
                 hash,
                 owner_tag,
                 payload: confidential_encrypted_output_body(data).ok_or_else(framing)?,
             },
-            (_, RingDelivery::Packed) => RingOutput::Packed {
-                hash,
-                u: owner_tag,
-                ciphertext: ring_confidential_packed_output_body(data)
-                    .ok_or_else(framing)?
-                    .ciphertext,
-            },
-            (_, RingDelivery::Delivered) => RingOutput::Delivered {
+            Slot::Ring { .. } | Slot::Dummy => RingOutput::Delivered {
                 hash,
                 u: owner_tag,
                 body: ring_confidential_delivered_output_body(data).ok_or_else(framing)?,
             },
-            (_, RingDelivery::Anonymous(_)) => RingOutput::Anonymous {
-                hash,
-                tag: RingTag::from_owner_tag(owner_tag).ok_or_else(framing)?,
-                body: ring_anonymous_output_body(data).ok_or_else(framing)?,
-            },
-        };
-        if wire.transact_output() != *published {
-            return Err(framing());
-        }
-        Ok(wire)
+        })
+    }
+}
+
+/// The body kind and tag each anonymous slot publishes, any other is refused.
+fn anonymous_wire<'a>(
+    slot: AnonymousSlot,
+    published: &'a TransactOutput,
+    slot_index: usize,
+) -> Result<RingOutput<'a>, RingRailError> {
+    let framing = || RingRailError::RingOutputFraming { slot_index };
+    let (hash, owner_tag) = inline(published, slot_index)?;
+    let data = published.data.as_deref();
+    let Some(tag) = slot.tag() else {
+        return Ok(RingOutput::Exit {
+            hash,
+            owner_tag,
+            payload: data
+                .and_then(confidential_encrypted_output_body)
+                .ok_or_else(framing)?,
+        });
+    };
+    let body = match slot {
+        AnonymousSlot::Change { .. } => match data {
+            None => None,
+            Some(_) => return Err(framing()),
+        },
+        _ => Some(
+            data.and_then(anonymous_recipient_output_body)
+                .ok_or_else(framing)?,
+        ),
+    };
+    match tag == owner_tag {
+        true => Ok(RingOutput::Anonymous {
+            hash,
+            tag: owner_tag,
+            body,
+        }),
+        false => Err(framing()),
+    }
+}
+
+fn inline(
+    published: &TransactOutput,
+    slot_index: usize,
+) -> Result<(&[u8; 32], &[u8; 32]), RingRailError> {
+    match &published.owner_tag {
+        OwnerTag::Inline(owner_tag) => Ok((&published.utxo_hash, owner_tag)),
+        _ => Err(RingRailError::RingOutputFraming { slot_index }),
     }
 }

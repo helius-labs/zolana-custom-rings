@@ -8,9 +8,9 @@ use custom_ring_sdk::select_merge_where;
 use custom_ring_sdk::{CustomRingMerge, MergeProofInput, RingMergeOperation, RingMode};
 use solana_address::Address;
 use solana_signer::Signer;
-use zolana_interface::pda;
-use zolana_keypair::ShieldedKeypair;
-use zolana_transaction::{SpendableDecryptionResult, WalletUtxo, SOL_MINT};
+use spr_interface::pda;
+use spr_keypair::ShieldedKeypair;
+use spr_transaction::{SpendableDecryptionResult, WalletUtxo, SOL_MINT};
 
 use crate::{
     assets,
@@ -128,7 +128,7 @@ pub(crate) fn carries_no_data(entry: &WalletUtxo) -> bool {
 #[cfg(test)]
 mod tests {
     use solana_signature::Signature;
-    use zolana_transaction::{Data, DataRecord, Mint, Utxo};
+    use spr_transaction::{Data, DataRecord, Mint, Utxo};
 
     use super::*;
 

@@ -64,6 +64,32 @@ export interface RingMemberOpenings {
   readonly openings: readonly RingMemberOpening[];
 }
 
+/** At most `MAX_RING_MEMBER_BATCH` openings, `members` distinct and at most `openings`. */
+export interface RingRecordPoolRequest {
+  readonly ringProgramId: Address;
+  readonly members: readonly Bytes32[];
+  readonly expectedRoot: Bytes32;
+  readonly openings: number;
+}
+
+/** A leaf the indexer served, with the key its member escrowed. */
+export type RingServedRecord = Readonly<{
+  record: MemberRecord;
+  path: QuadPath;
+  sealedKey?: RingSealedKey;
+}>;
+
+/** Records under one root, unverified until `verifyRecordPool` checks them against it. */
+export interface RingRecordPool {
+  readonly context: Readonly<{ slot: bigint; blockTime: bigint }>;
+  readonly root: RingRegistryRoot;
+  /** Distinct leaves in first use order, each path cut at the canopy. */
+  readonly records: readonly RingServedRecord[];
+  readonly canopy: readonly Bytes32[];
+  /** `subjects[i]` indexes the record holding or bracketing member `i`. */
+  readonly subjects: readonly number[];
+}
+
 /** The record queue Photon projects, every pending write in queue order. */
 export interface RingQueueState {
   readonly context: Readonly<{ slot: bigint; blockTime: bigint }>;
@@ -107,11 +133,7 @@ export interface RingMemberPageRequest {
 export interface RingMemberPage {
   readonly context: Readonly<{ slot: bigint; blockTime: bigint }>;
   readonly root: RingRegistryRoot;
-  readonly records: readonly Readonly<{
-    record: MemberRecord;
-    path: QuadPath;
-    sealedKey?: RingSealedKey;
-  }>[];
+  readonly records: readonly RingServedRecord[];
   /** `undefined` on the last page. */
   readonly nextLeafIndex: number | undefined;
 }
@@ -156,6 +178,10 @@ export interface RingRecordReader {
     }>,
     context?: RequestContext,
   ): Promise<RingMemberOpenings>;
+  getRingRecordPool(
+    request: RingRecordPoolRequest,
+    context?: RequestContext,
+  ): Promise<RingRecordPool>;
   getRingRecordQueue(
     request: Readonly<{ ringProgramId: Address }>,
     context?: RequestContext,

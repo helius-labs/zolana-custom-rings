@@ -1,12 +1,12 @@
-//! A wallet of one anonymous ring, the default-ring scan and the ring's own streams kept in memory.
+//! A wallet on one anonymous ring, the default-ring scan and the anonymous streams kept in memory.
 
 use anyhow::Result;
 use solana_address::Address;
-use zolana_client::{IndexerRpcConfig, Rpc, UtxoScan};
-use zolana_keypair::ShieldedKeypair;
-use zolana_ring_client::{AnonymousRingState, AnonymousRingSync, RingConfidentialScan};
+use spr_client::{IndexerRpcConfig, Rpc, UtxoScan};
+use spr_keypair::ShieldedKeypair;
+use spr_transaction::{verify_owned, SpendableDecryptionResult, WalletUtxo};
+use zolana_ring_client::{AnonymousSync, RingConfidentialScan, ViewingHistory};
 use zolana_ring_transaction::RingAssets;
-use zolana_transaction::{verify_owned, SpendableDecryptionResult, WalletUtxo};
 
 use crate::shared::TestEnv;
 
@@ -14,55 +14,55 @@ pub struct RingWallet<'a> {
     keys: &'a ShieldedKeypair,
     assets: RingAssets,
     ring: Address,
-    pub state: AnonymousRingState,
+    pub history: ViewingHistory,
     kept: Vec<WalletUtxo>,
     spendable: SpendableDecryptionResult,
 }
 
 impl<'a> RingWallet<'a> {
-    pub fn new(keys: &'a ShieldedKeypair, assets: RingAssets, state: AnonymousRingState) -> Self {
+    /// A wallet that never paid or was paid, its history from the keypair's viewing key.
+    pub fn new(keys: &'a ShieldedKeypair, assets: RingAssets, ring: Address) -> Self {
         Self {
             keys,
-            ring: state.ring(),
+            ring,
             assets,
-            state,
+            history: ViewingHistory::new(keys.viewing_pubkey(), 0),
             kept: Vec::new(),
             spendable: SpendableDecryptionResult::default(),
         }
     }
 
-    /// Reads the default ring and every stream of the ring at the indexer's tip.
+    /// Reads the default ring and every anonymous stream from index 0 at the indexer's tip.
     pub fn sync(&mut self, env: &TestEnv) -> Result<()> {
         let config = IndexerRpcConfig::at_slot(env.client.rpc().get_slot()?);
         let owned = UtxoScan::new(self.keys, self.assets.registry())
-            .with_ring_deposit_payload(self.ring, zolana_ring_client::deposit_payload)
             .with_indexer_config(config)
             .fetch(env.client.indexer())?;
-        let slot = env.client.rpc().get_slot()?;
         let synced = env.client.block_on(async {
-            AnonymousRingSync::new(self.keys, &self.assets)
+            AnonymousSync::new(self.keys, &self.assets)
+                .with_full_rescan()
                 .with_indexer_config(config)
                 .with_deposit_payload(zolana_ring_client::deposit_payload)
-                .with_held_utxos(owned.history.utxos.iter().chain(&self.kept))
-                .with_default_ring_spends(owned.history.transactions.clone())
-                .fetch(env.client.as_async().indexer(), &self.state, slot)
+                .fetch(env.client.as_async().indexer(), &self.history)
                 .await
                 .map_err(anyhow::Error::from)
         })?;
-        let found = verify_owned(self.keys, &synced.decrypted)?.spendable();
-        let spent = &synced.decrypted.spent_nullifiers;
-        self.kept.retain(|utxo| !spent.contains(&utxo.nullifier));
-        for utxo in found.utxos() {
-            if !self
-                .kept
-                .iter()
-                .any(|kept| kept.utxo_hash == utxo.utxo_hash)
-            {
-                self.kept.push(utxo.clone());
-            }
-        }
-        // These fixtures register every asset. Unresolved trial decryptions are not owned notes.
-        self.state = synced.state;
+        // A sync reads every stream from index 0, its notes replace the kept ones.
+        let spent: Vec<[u8; 32]> = owned
+            .history
+            .transactions
+            .iter()
+            .flat_map(|tx| tx.nullifiers.iter().copied())
+            .collect();
+        self.kept = verify_owned(self.keys, &synced.decrypted)?
+            .spendable()
+            .utxos()
+            .filter(|utxo| {
+                utxo.utxo.ring_program_id == Some(self.ring) && !spent.contains(&utxo.nullifier)
+            })
+            .cloned()
+            .collect();
+        self.history = synced.history;
         let notes = env
             .client
             .block_on(async {

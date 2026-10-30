@@ -49,14 +49,6 @@ type AuditParams struct {
 	Layout         uint8 `json:"layout"`
 }
 
-type PackedAuditParams struct {
-	RequestHead
-	AuditParams
-	NOut      uint8     `json:"nOut"`
-	Outputs   []Opening `json:"outputs"`
-	OwnerKeys []Bytes   `json:"ownerKeys"`
-}
-
 type DeliveredOutput struct {
 	Output       Opening `json:"output"`
 	RecipientKey Bytes   `json:"recipientKey"`
@@ -70,29 +62,9 @@ type DeliveredAuditParams struct {
 	Outputs []DeliveredOutput `json:"outputs"`
 }
 
-type Stream struct {
-	Tag   Field `json:"tag"`
-	Inbox bool  `json:"inbox"`
-	Pair  bool  `json:"pair"`
-	Self  bool  `json:"self"`
-	Index uint8 `json:"index"`
-}
-
 type AnonymousOutput struct {
-	DeliveredOutput
-	Stream Stream `json:"stream"`
-}
-
-type Anchor struct {
-	TreeID     Field   `json:"treeId"`
-	Asset      Field   `json:"asset"`
-	Amount     Field   `json:"amount"`
-	SlotSecret Field   `json:"slotSecret"`
-	Blinding   Field   `json:"blinding"`
-	Epoch      uint64  `json:"epoch"`
-	Index      uint8   `json:"index"`
-	PathIndex  uint64  `json:"pathIndex"`
-	Path       []Field `json:"path"`
+	Output   Opening `json:"output"`
+	OwnerKey Bytes   `json:"ownerKey"`
 }
 
 type AnonymousAuditParams struct {
@@ -108,10 +80,6 @@ type AnonymousAuditParams struct {
 	// Inputs fill the input class, the slots past InputCount carry no UTXO.
 	Inputs           []Opening `json:"inputs"`
 	SenderCommitment Field     `json:"senderCommitment"`
-	Epoch            uint64    `json:"epoch"`
-	FirstContactRoot Field     `json:"firstContactRoot"`
-	// An absent anchor assigns zeros.
-	Anchor *Anchor `json:"anchor,omitempty"`
 }
 
 type Source struct {
@@ -155,18 +123,13 @@ type MemberOpening struct {
 	LowWithdrawalThreshold Field  `json:"lowWithdrawalThreshold"`
 }
 
-type Entry struct {
-	Own     *MemberOpening `json:"own"`
-	Curator *MemberOpening `json:"curator"`
-}
-
 type Withdrawal struct {
 	Owner  Field `json:"owner"`
 	Asset  Field `json:"asset"`
 	Amount Field `json:"amount"`
 }
 
-type PolicyParams struct {
+type PolicyInputsParams struct {
 	WithdrawalCount uint8        `json:"withdrawalCount"`
 	WithdrawalHash  Field        `json:"withdrawalHash"`
 	Withdrawals     []Withdrawal `json:"withdrawals"`
@@ -182,26 +145,74 @@ type PolicyParams struct {
 	PrivateTxBlinding Field           `json:"privateTxBlinding"`
 	Outputs           []OutputOpening `json:"outputs"`
 	SenderPkHash      Field           `json:"senderPkHash"`
-	SenderEntry       Entry           `json:"senderEntry"`
-	// OwnerEntries[o] and AssetEntries[o] open output o's owner and asset.
-	OwnerEntries       []Entry          `json:"ownerEntries"`
-	AssetEntries       []Entry          `json:"assetEntries"`
-	PublicAssetEntries []*MemberOpening `json:"publicAssetEntries"`
 }
 
-type MemberPolicyParams struct {
+type PooledRecord struct {
+	Member              Field  `json:"member"`
+	Next                Field  `json:"next"`
+	Lists               uint64 `json:"lists"`
+	EscrowKey           Field  `json:"escrowKey"`
+	MintPolicy          Field  `json:"mintPolicy"`
+	WithdrawalThreshold Field  `json:"withdrawalThreshold"`
+}
+
+type PooledSubject struct {
+	Member      Field  `json:"member"`
+	RecordIndex uint32 `json:"recordIndex"`
+}
+
+type PooledEntry struct {
+	Own     uint32   `json:"own"`
+	Curator []uint32 `json:"curator"`
+}
+
+type SharedRegistryPath struct {
+	Index    uint32    `json:"index"`
+	Siblings [][]Field `json:"siblings"`
+}
+
+type SharedRegistryProof struct {
+	Canopy []Field              `json:"canopy"`
+	Paths  []SharedRegistryPath `json:"paths"`
+}
+
+type PolicyParams struct {
+	PolicyInputsParams
+	OwnRecords      []PooledRecord      `json:"ownRecords"`
+	CuratorRecords  []PooledRecord      `json:"curatorRecords"`
+	OwnProof        SharedRegistryProof `json:"ownProof"`
+	CuratorProof    SharedRegistryProof `json:"curatorProof"`
+	OwnSubjects     []PooledSubject     `json:"ownSubjects"`
+	CuratorSubjects []PooledSubject     `json:"curatorSubjects"`
+	SenderEntry     PooledEntry         `json:"senderEntry"`
+	// OwnerEntries[o] and AssetEntries[o] index payment o's owner and asset subjects.
+	OwnerEntries []PooledEntry `json:"ownerEntries"`
+	AssetEntries []PooledEntry `json:"assetEntries"`
+	// PublicAssetEntries is empty on a delegate key.
+	PublicAssetEntries []uint32 `json:"publicAssetEntries"`
+}
+
+type MemberPolicyInputsParams struct {
 	RequestHead
 	Anonymous        bool  `json:"anonymous"`
 	ApprovalRequired bool  `json:"approvalRequired"`
 	KeyEscrow        bool  `json:"keyEscrow"`
 	Sender           Field `json:"sender"`
 	InputChain       Field `json:"inputChain"`
+}
+
+type MemberPolicyParams struct {
+	MemberPolicyInputsParams
 	PolicyParams
 }
 
-type DelegatePolicyParams struct {
+type DelegatePolicyInputsParams struct {
 	RequestHead
 	Inputs []Opening `json:"inputs"`
+}
+
+type DelegatePolicyParams struct {
+	DelegatePolicyInputsParams
 	PolicyParams
 }
 

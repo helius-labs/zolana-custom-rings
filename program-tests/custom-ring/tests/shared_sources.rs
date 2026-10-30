@@ -13,9 +13,9 @@ use custom_ring_test_validator::{
     shared::{send, RegisterRing, Tier},
 };
 use solana_signer::Signer;
-use zolana_keypair::X25519Keypair;
+use spr_keypair::X25519Keypair;
+use spr_transaction::Utxo;
 use zolana_ring_policy::ListId;
-use zolana_transaction::Utxo;
 
 #[test]
 fn a_curator_sourced_blocklist_governs_the_subscriber_ring() -> Result<()> {

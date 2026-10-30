@@ -18,11 +18,11 @@ use custom_ring_test_validator::{
     shared::{custom_ring_program_id, setup, RegisterRing, TestEnv, Tier, ACTOR_AIRDROP},
 };
 use solana_signer::Signer;
-use zolana_client::{IndexerRpcConfig, Rpc, UtxoScan};
-use zolana_keypair::{ShieldedKeypair, X25519Keypair};
-use zolana_ring_client::{AuditedTransaction, OutputOpening, RingScan};
+use spr_client::{IndexerRpcConfig, Rpc, UtxoScan};
+use spr_keypair::{ShieldedKeypair, X25519Keypair};
+use spr_transaction::Utxo;
+use zolana_ring_client::{AuditedTransaction, OutputOpening, RingConfidentialScan, RingScan};
 use zolana_ring_policy::{ListId, Member};
-use zolana_transaction::Utxo;
 
 /// `RELEASED` as `ring.toml` spells it.
 const RELEASED_TOML: &str = r#"[policy]
@@ -283,15 +283,26 @@ impl<'a> DemoRing<'a> {
     fn refused_transact(&self) -> Result<()> {
         let sender = self.project.demo_sender()?;
         let unspent = || -> Result<BTreeSet<[u8; 32]>> {
-            Ok(UtxoScan::new(&sender, &self.env.assets)
-                .with_ring_deposit_payload(
-                    self.ring.program_id(),
-                    zolana_ring_client::deposit_payload,
-                )
-                .with_indexer_config(IndexerRpcConfig::at_slot(self.env.client.rpc().get_slot()?))
-                .fetch(self.env.client.indexer())?
+            let config = IndexerRpcConfig::at_slot(self.env.client.rpc().get_slot()?);
+            let scan = UtxoScan::new(&sender, &self.env.assets)
+                .with_indexer_config(config)
+                .fetch(self.env.client.indexer())?;
+            let assets = self.env.ring_assets()?;
+            let ring_notes = self.env.client.block_on(async {
+                RingConfidentialScan::new(&sender, &assets)
+                    .with_indexer_config(config)
+                    .fetch(
+                        self.env.client.as_async().indexer(),
+                        &scan.history.transactions,
+                    )
+                    .await
+                    .map_err(anyhow::Error::from)
+            })?;
+            let ring_notes = ring_notes.owned.spendable();
+            Ok(scan
                 .spendable
                 .utxos()
+                .chain(ring_notes.utxos())
                 .map(|note| note.nullifier)
                 .collect())
         };

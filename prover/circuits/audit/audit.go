@@ -2,8 +2,6 @@
 package audit
 
 import (
-	"fmt"
-
 	"github.com/consensys/gnark/frontend"
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
@@ -37,18 +35,13 @@ func (s AnonymousAuditShape) senderKeyLen() int {
 
 // Audit key shapes, mirrored by the audit capacities and the anonymous classes of program-libs/interface/src/proof/disclosure.rs.
 var (
-	// PackedAuditCapacities leave confidential and delegate bodies unproven.
-	PackedAuditCapacities = [...]int{2, 4}
-	// DeliveredAuditCapacities prove every confidential body.
-	DeliveredAuditCapacities = [...]int{8, 16}
+	// DeliveredAuditCapacities prove every confidential and delegate body.
+	DeliveredAuditCapacities = [...]int{2, 4, 8, 16}
 	// AnonymousAuditShapes name spent notes by hash and prefix, a transfer takes the smallest class holding its published inputs.
 	AnonymousAuditShapes = [...]AnonymousAuditShape{
-		{InputClass: 4, Outputs: 2}, {InputClass: 8, Outputs: 2}, {InputClass: 12, Outputs: 2},
-		{InputClass: 16, Outputs: 2}, {InputClass: 24, Outputs: 2}, {InputClass: 32, Outputs: 2},
-		{InputClass: 4, Outputs: 4}, {InputClass: 8, Outputs: 4}, {InputClass: 12, Outputs: 4},
-		{InputClass: 16, Outputs: 4}, {InputClass: 24, Outputs: 4},
-		{InputClass: 4, Outputs: 8}, {InputClass: 8, Outputs: 8}, {InputClass: 12, Outputs: 8}, {InputClass: 16, Outputs: 8},
-		{InputClass: 1, Outputs: 16},
+		{InputClass: 4, Outputs: 2}, {InputClass: 16, Outputs: 2},
+		{InputClass: 4, Outputs: 4}, {InputClass: 16, Outputs: 4},
+		{InputClass: 4, Outputs: 8}, {InputClass: 8, Outputs: 8},
 	}
 	// AnonymousEntryShapes open every spent UTXO, the keys of a transfer that spends a default-ring note.
 	AnonymousEntryShapes = [...]AnonymousAuditShape{
@@ -162,11 +155,4 @@ func masked(api frontend.API, flag frontend.Variable, bytes []frontend.Variable)
 		out[i] = api.Mul(flag, b)
 	}
 	return out
-}
-
-func validateLength(name string, got, want int) error {
-	if got != want {
-		return fmt.Errorf("audit: %s count mismatch: got %d want %d", name, got, want)
-	}
-	return nil
 }

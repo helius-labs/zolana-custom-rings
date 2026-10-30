@@ -11,7 +11,7 @@ use sea_orm::{
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use solana_address::Address;
-use zolana_indexer_api::Hash;
+use spr_indexer_api::Hash;
 use zolana_ring_indexer::{
     records::{QueuedWrite, RegistryAccounts, SealedKey},
     tree::{IndexedRecord, MemberRecord, NodePosition},
@@ -724,7 +724,7 @@ mod account_image {
 
     use custom_ring_interface::RingAccount;
     use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
-    use zolana_indexer_api::Base64String;
+    use spr_indexer_api::Base64String;
 
     pub fn serialize<S: Serializer, A: Deref<Target = T>, T: RingAccount>(
         value: &A,

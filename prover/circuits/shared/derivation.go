@@ -4,11 +4,10 @@ package shared
 import (
 	"github.com/consensys/gnark/frontend"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
-// Ring domains, distinct ASCII tags mirrored by program-libs/interface/src/proof/domain.rs and sdk-libs/ts/src/crypto/ring-domain.ts.
+// Ring domains, distinct ASCII tags mirrored by program-libs/interface/src/proof/domain.rs and sdk-libs/ts/src/crypto/derivation/ring-domain.ts.
 const (
 	// AuditStatementDomain = "CRAU"
 	AuditStatementDomain = 0x43524155
@@ -16,16 +15,6 @@ const (
 	DeliveredSlotSecretDomain = 0x43524453
 	// BlindingSeedDomain = "CRBS"
 	BlindingSeedDomain = 0x43524253
-	// AnonymousRingDataDomain = "CRAT"
-	AnonymousRingDataDomain = 0x43524154
-	// InboxKeyDomain = "CRIK"
-	InboxKeyDomain = 0x4352494b
-	// InboxTagDomain = "CRIT"
-	InboxTagDomain = 0x43524954
-	// PairKeyDomain = "CRPK"
-	PairKeyDomain = 0x4352504b
-	// PairTagDomain = "CRPT"
-	PairTagDomain = 0x43525054
 	// SenderCommitmentDomain = "CRSC"
 	SenderCommitmentDomain = 0x43525343
 	// DisclosurePadDomain = "CROD"
@@ -46,9 +35,16 @@ const (
 	MergeStatementDomain = 0x43524d47
 	// DepositBlindingDomain = "CRDB"
 	DepositBlindingDomain = 0x43524442
+	// WithdrawalsDomain = "CRPW"
+	WithdrawalsDomain = 0x43525057
+	// WithdrawalExemptionDomain = "CRWX"
+	WithdrawalExemptionDomain = 0x43525758
 )
 
-// Envelope and merge pad domains, mirrored by sdk-libs/client/src/crypto/encryption/mod.rs, its merge_disclosure module and sdk-libs/ts/src/crypto/audit.ts.
+// PolicyStatementVersion binds the policy statement layout, mirrored by PolicyStatement::elements in program-libs/interface/src/proof/statement.rs.
+const PolicyStatementVersion = 3
+
+// Envelope and merge pad domains, mirrored by sdk-libs/client/src/crypto/encryption/mod.rs, its merge_disclosure module and sdk-libs/ts/src/crypto/audit/audit.ts.
 const (
 	// DomSepCRShared = "CR_S"
 	DomSepCRShared = 0x43525f53
@@ -64,21 +60,6 @@ const (
 	NfKeyEncInfo   = "CRING/nfk1"
 	DepositEncInfo = "CRING/dep1"
 	MergeEncInfo   = "CRING/mrg1"
-)
-
-// Tag stream bounds, mirrored by program-libs/interface/src/codec/stream.rs and sdk-libs/ts/src/crypto/ring-stream.ts.
-const (
-	// EpochSlots is the tag epoch length, the program takes slot / EpochSlots or the epoch before it.
-	EpochSlots = 1 << 18
-	// StreamIndexBits bounds inbox and pair indexes alike, one range check serves every slot.
-	StreamIndexBits = 6
-	JInbox          = 1 << StreamIndexBits
-	JPair           = 1 << StreamIndexBits
-	// PairEpochBits bounds the epochs a pair stream lives after its anchor.
-	PairEpochBits = 5
-	KPairEpochs   = 1 << PairEpochBits
-	// TagLen is the low128 width, the owner tag is 0^16 ‖ tag.
-	TagLen = 16
 )
 
 // BodyLen is be32(blinding) ‖ u64be(amount).
@@ -102,40 +83,9 @@ func (s DeliveredSlot) Secret(api frontend.API) frontend.Variable {
 	})
 }
 
-// InboxKey is Poseidon(CRIK, ringID, r0, r1), recipient = pack_be(0x04 ‖ u) of the address viewing key.
-func InboxKey(api frontend.API, ringID frontend.Variable, recipient [2]frontend.Variable) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{InboxKeyDomain, ringID, recipient[0], recipient[1]})
-}
-
-// InboxTagDigest is Poseidon(CRIT, inboxKey, epoch, index), the caller bounds index below JInbox.
-func InboxTagDigest(api frontend.API, inboxKey, epoch, index frontend.Variable) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{InboxTagDomain, inboxKey, epoch, index})
-}
-
-// PairKey is Poseidon(CRPK, firstContact), firstContact the delivered slot secret of the anchor.
-func PairKey(api frontend.API, firstContact frontend.Variable) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{PairKeyDomain, firstContact})
-}
-
-// PairTagDigest is Poseidon(CRPT, pairKey, epoch, index), the caller bounds index below JPair.
-func PairTagDigest(api frontend.API, pairKey, epoch, index frontend.Variable) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{PairTagDomain, pairKey, epoch, index})
-}
-
-// TagField is low128(value), one tag per field since SplitField refuses the split of value + q.
-func TagField(api frontend.API, rc frontend.Rangechecker, value frontend.Variable) frontend.Variable {
-	_, low := ringgadget.SplitField(api, rc, value, 8*TagLen)
-	return low
-}
-
 // BlindingSeed is SPP's blinding_seed Poseidon(CRBS, sk0, sk1, salt), every output blinding rebuilds from tx_viewing_sk.
 func BlindingSeed(api frontend.API, txViewingSk [2]frontend.Variable, salt frontend.Variable) frontend.Variable {
 	return gadget.PoseidonHash(api, []frontend.Variable{BlindingSeedDomain, txViewingSk[0], txViewingSk[1], salt})
-}
-
-// AnonymousRingData is Poseidon(CRAT, slotSecret, tag), the ring_data_hash an anchor reads a first contact's tag back from.
-func AnonymousRingData(api frontend.API, slotSecret, tag frontend.Variable) frontend.Variable {
-	return gadget.PoseidonHash(api, []frontend.Variable{AnonymousRingDataDomain, slotSecret, tag})
 }
 
 // SenderCommitment binds the anonymous audit and the member policy to one sender, private_tx_hash fixes the blinding both read.
@@ -143,7 +93,7 @@ func SenderCommitment(api frontend.API, senderPkHash, privateTxBlinding frontend
 	return gadget.PoseidonHash(api, []frontend.Variable{SenderCommitmentDomain, senderPkHash, privateTxBlinding})
 }
 
-// DepositBlinding is Poseidon(CRDB, blindingSecret), a deposit blinding no anchor opens as a first contact.
+// DepositBlinding is Poseidon(CRDB, blindingSecret), domain separated from every SPP output blinding.
 func DepositBlinding(api frontend.API, blindingSecret frontend.Variable) frontend.Variable {
 	return gadget.PoseidonHash(api, []frontend.Variable{DepositBlindingDomain, blindingSecret})
 }

@@ -2,9 +2,7 @@
 
 use std::time::Duration;
 
-use custom_ring_interface::{
-    compute_unit_limit, stream::tag_epoch, CustomRingError, InstructionTag, MemberRegistry,
-};
+use custom_ring_interface::{compute_unit_limit, CustomRingError, InstructionTag, MemberRegistry};
 use solana_address::Address;
 use solana_commitment_config::CommitmentLevel;
 use solana_instruction::Instruction;
@@ -14,16 +12,16 @@ use solana_signer::Signer;
 use solana_transaction::versioned::VersionedTransaction;
 use solana_transaction_error::TransactionError;
 use solana_transaction_status_client_types::{TransactionConfirmationStatus, TransactionStatus};
-use zolana_client::{
+use spr_client::{
     compile_message, sign_transaction, AsyncRpc, ClientError, ComputeBudgetConfig,
     RpcSendTransactionConfig,
 };
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
-    heap::boxed, records::BoundQueue, trees::BoundAnchor, AnonymousTransfer, AuthorityListWrite,
-    CustomRing, CustomRingTransfer, DelegateTransfer, PendingFirstContact, PreparedRingDeposit,
-    RecordApplication, RegisterKey, RingError, RingMergeOperation,
+    heap::boxed, records::BoundQueue, AnonymousTransfer, AuthorityListWrite, CustomRing,
+    CustomRingTransfer, DelegateTransfer, PreparedRingDeposit, RecordApplication, RegisterKey,
+    RingError, RingMergeOperation,
 };
 
 #[cfg(test)]
@@ -35,7 +33,7 @@ pub(crate) fn check_transaction_size(
     instruction: &Instruction,
     budget: ComputeBudgetConfig,
 ) -> Result<(), RingError> {
-    let size = zolana_client::transaction_size(payer, core::slice::from_ref(instruction), budget)?;
+    let size = spr_client::transaction_size(payer, core::slice::from_ref(instruction), budget)?;
     if size.bytes > solana_message::v1::MAX_TRANSACTION_SIZE {
         return Err(RingError::TransactionTooLarge {
             bytes: size.bytes,
@@ -67,8 +65,6 @@ pub enum SettledSubmission {
     Confirmed {
         signature: Signature,
         slot: u64,
-        /// Those of the attempt that landed.
-        first_contacts: Vec<PendingFirstContact>,
     },
     Failed {
         signature: Signature,
@@ -155,9 +151,7 @@ pub(crate) struct BoundPolicy {
 pub(crate) struct BoundState {
     pub roots: Vec<BoundRoot>,
     pub policy: Option<BoundPolicy>,
-    pub anchor: Option<BoundAnchor>,
     pub queue: Option<BoundQueue>,
-    pub epoch: Option<u64>,
 }
 
 impl BoundState {
@@ -183,7 +177,6 @@ impl BoundState {
         .any(|stale| code == stale as u32))
     }
 
-    /// `true` once a bound value moved or the epoch the proof binds passed.
     async fn moved(&self, client: &(impl AsyncRpc + ?Sized)) -> Result<bool, RingError> {
         for root in &self.roots {
             if root.replaced(client).await? {
@@ -192,11 +185,6 @@ impl BoundState {
         }
         if let Some(policy) = self.policy {
             if policy.ring.require_registry(client).await?.policy_hash != policy.hash {
-                return Ok(true);
-            }
-        }
-        if let Some(anchor) = self.anchor {
-            if !anchor.holds(client).await? {
                 return Ok(true);
             }
         }
@@ -210,11 +198,6 @@ impl BoundState {
                 return Ok(true);
             }
         }
-        if let Some(epoch) = self.epoch {
-            if tag_epoch(client.get_slot().await?) > epoch {
-                return Ok(true);
-            }
-        }
         Ok(false)
     }
 }
@@ -223,22 +206,11 @@ struct Proved {
     instruction: Instruction,
     budget: ComputeBudgetConfig,
     bound: BoundState,
-    first_contacts: Vec<PendingFirstContact>,
-}
-
-impl Proved {
-    fn with_first_contacts(self, first_contacts: Vec<PendingFirstContact>) -> Self {
-        Self {
-            first_contacts,
-            ..self
-        }
-    }
 }
 
 struct Attempt {
     transaction: VersionedTransaction,
     bound: BoundState,
-    first_contacts: Vec<PendingFirstContact>,
     last_valid_block_height: u64,
 }
 
@@ -328,7 +300,6 @@ impl<'a> RingSubmission<'a> {
                     let attempt = Attempt {
                         transaction,
                         bound: proved.bound,
-                        first_contacts: proved.first_contacts,
                         last_valid_block_height,
                     };
                     (attempt, failure)
@@ -374,15 +345,10 @@ impl<'a> RingSubmission<'a> {
     fn settle(&mut self, signature: Signature, outcome: Outcome) -> Option<SubmissionStatus> {
         let settled = match outcome {
             Outcome::Unknown => return Some(SubmissionStatus::Pending { signature }),
-            Outcome::Confirmed { slot } => SettledSubmission::Confirmed {
-                signature,
-                slot,
-                first_contacts: self
-                    .pending
-                    .take()
-                    .map(|attempt| attempt.first_contacts)
-                    .unwrap_or_default(),
-            },
+            Outcome::Confirmed { slot } => {
+                self.pending = None;
+                SettledSubmission::Confirmed { signature, slot }
+            }
             Outcome::Failed(error) => {
                 self.pending = None;
                 SettledSubmission::Failed { signature, error }
@@ -433,25 +399,28 @@ impl RingOperation<'_> {
             instruction,
             budget: ComputeBudgetConfig::new(compute_unit_limit(tag)),
             bound,
-            first_contacts: Vec::new(),
         };
         Ok(match self {
             Self::Transfer(transfer) => {
                 let proven = boxed(|| transfer.prove(client)).await?;
-                let instruction = proven.instruction_at(client.get_slot().await?)?;
-                proved(instruction, InstructionTag::Transact, proven.bound())
+                proved(
+                    proven.instruction()?,
+                    InstructionTag::Transact,
+                    proven.bound(),
+                )
             }
             Self::Anonymous(transfer) => {
                 let proven = boxed(|| transfer.prove(client)).await?;
-                let instruction = proven.instruction_at(client.get_slot().await?)?;
-                proved(instruction, InstructionTag::Transact, proven.bound())
-                    .with_first_contacts(proven.first_contacts)
+                proved(
+                    proven.instruction()?,
+                    InstructionTag::Transact,
+                    proven.bound(),
+                )
             }
             Self::Delegate(transfer) => {
                 let proven = boxed(|| transfer.prove(client)).await?;
-                let instruction = proven.instruction_at(client.get_slot().await?)?;
                 proved(
-                    instruction,
+                    proven.instruction()?,
                     InstructionTag::DelegateTransact,
                     proven.bound(),
                 )

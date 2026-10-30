@@ -15,7 +15,7 @@ bytemuck = { workspace = true }
 solana-address = { workspace = true }
 thiserror = { workspace = true }
 wincode = { workspace = true }
-zolana-hasher = { workspace = true }
+spr-hasher = { workspace = true }
 
 [dev-dependencies]
 hex = { workspace = true }

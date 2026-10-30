@@ -12,7 +12,7 @@ use solana_address::Address;
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_keypair::{Keypair, Signer};
-use zolana_interface::instruction::instruction_data::{
+use spr_interface::instruction::instruction_data::{
     deposit::{DepositAssetKind, EncryptedRingDepositData, RingDepositEntry, RingDepositIxData},
     merge_transact::{merge_circuit_width, MergeOutputEncryption, MergeProof, MergeTransactIxData},
 };

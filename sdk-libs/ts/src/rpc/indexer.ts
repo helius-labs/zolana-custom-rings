@@ -17,6 +17,7 @@ import {
   getRingMemberRecordMethod,
   getRingMemberRecordsMethod,
   getRingMemberRegistryRootMethod,
+  getRingRecordPoolMethod,
   getRingRecordQueueMethod,
 } from "./indexer-methods.js";
 import type {
@@ -25,11 +26,13 @@ import type {
   RingRecordPathView as WireRingRecordPathView,
   RingRegistryRootView as WireRingRegistryRootView,
 } from "../protocol/indexer/indexer-types.js";
-import type {
-  MemberRecord,
-  QuadPath,
-  QueueEntry,
-  RecordOpening,
+import {
+  QUAD_ARITY,
+  canopyLevels,
+  type MemberRecord,
+  type QuadPath,
+  type QueueEntry,
+  type RecordOpening,
 } from "../protocol/membership/member-registry.js";
 import type {
   RecordWrite,
@@ -41,9 +44,12 @@ import type {
   RingMemberProofRequest,
   RingMemberRecordResult,
   RingQueueState,
+  RingRecordPool,
+  RingRecordPoolRequest,
   RingRecordReader,
   RingRegistryRoot,
   RingRegistryState,
+  RingServedRecord,
 } from "./ports.js";
 import { RingError, type RingErrorCode } from "../protocol/error.js";
 
@@ -119,18 +125,9 @@ export class RingIndexer implements RingRecordReader {
         context: response.context,
         root: registryRoot(response.root),
         records: Object.freeze(
-          response.records.map((entry, index) => {
-            const opening = memberOpening(
-              { present: true, record: entry.record, path: entry.path },
-              method,
-              `records[${String(index)}]`,
-            );
-            return Object.freeze({
-              record: memberRecord(entry.record),
-              path: opening.path,
-              ...(opening.sealedKey === undefined ? {} : { sealedKey: opening.sealedKey }),
-            });
-          }),
+          response.records.map((entry, index) =>
+            servedRecord(entry, method, `records[${String(index)}]`),
+          ),
         ),
         nextLeafIndex: response.nextLeafIndex === null ? undefined : Number(response.nextLeafIndex),
       });
@@ -204,6 +201,47 @@ export class RingIndexer implements RingRecordReader {
             memberOpening(opening, method, `openings[${String(index)}]`),
           ),
         ),
+      });
+    } catch (cause) {
+      throw ringIndexerError(cause, method);
+    }
+  }
+
+  async getRingRecordPool(
+    request: RingRecordPoolRequest,
+    context?: RequestContext,
+  ): Promise<RingRecordPool> {
+    const method = "getRingRecordPool";
+    try {
+      const expectedRoot = hash(request.expectedRoot);
+      const response = await this.#api.call(
+        getRingRecordPoolMethod,
+        {
+          ringProgramId: request.ringProgramId,
+          members: request.members.map((member) => hash(member)),
+          expectedRoot,
+          openings: request.openings,
+        },
+        context,
+      );
+      if (
+        response.root.root !== expectedRoot ||
+        response.records.length < 1 ||
+        response.records.length > request.openings ||
+        response.canopy.length !== QUAD_ARITY ** canopyLevels(request.openings) ||
+        response.subjects.length !== request.members.length
+      )
+        throw new ClientError("CLIENT_INVALID_RPC_RESPONSE", { details: { method, path: "$" } });
+      return Object.freeze({
+        context: response.context,
+        root: registryRoot(response.root),
+        records: Object.freeze(
+          response.records.map((entry, index) =>
+            servedRecord(entry, method, `records[${String(index)}]`),
+          ),
+        ),
+        canopy: Object.freeze(response.canopy.map(hashBytes)),
+        subjects: Object.freeze([...response.subjects]),
       });
     } catch (cause) {
       throw ringIndexerError(cause, method);
@@ -370,6 +408,23 @@ function memberOpening(
     ? { kind: "present", record: memberRecord(record), path: recordPath(opening.path) }
     : { kind: "absent", low: memberRecord(record), path: recordPath(opening.path) };
   return Object.freeze({ ...opened, ...(sealedKey === undefined ? {} : { sealedKey }) });
+}
+
+function servedRecord(
+  entry: Readonly<{ record: WireRingMemberRecordView; path: WireRingRecordPathView }>,
+  method: string,
+  path: string,
+): RingServedRecord {
+  const opening = memberOpening(
+    { present: true, record: entry.record, path: entry.path },
+    method,
+    path,
+  );
+  return Object.freeze({
+    record: memberRecord(entry.record),
+    path: opening.path,
+    ...(opening.sealedKey === undefined ? {} : { sealedKey: opening.sealedKey }),
+  });
 }
 
 function decodeCiphertext(value: string, method: string, path: string): Bytes32 {

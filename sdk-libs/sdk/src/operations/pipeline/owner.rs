@@ -1,16 +1,16 @@
 //! The confidential rail.
 
 use custom_ring_interface::{CustomRingError, RingMode, RingRail};
-use zolana_client::{AsyncRpc, SettlementAccountValidation};
-use zolana_interface::shape::Shape;
-use zolana_keypair::{NullifierKey, ShieldedAddress};
-use zolana_program::instruction::TransactInterfaceTransferAccounts;
+use spr_client::{AsyncRpc, SettlementAccountValidation};
+use spr_interface::shape::Shape;
+use spr_keypair::{NullifierKey, ShieldedAddress};
+use spr_program::instruction::TransactInterfaceTransferAccounts;
+use spr_transaction::instructions::transact::ConfidentialTransaction;
 use zolana_ring_transaction::RingOutputRail;
-use zolana_transaction::instructions::transact::ConfidentialTransaction;
 
 use super::{
-    canonical_shape, packed_or_delivered, pad_under_rail, sealed, shape_keyed, transaction_key,
-    Rail, RailKind, RingSender, RingTransfer, Spend, Staged, TransferAuthority,
+    canonical_shape, delivered, pad_under_rail, sealed, shape_keyed, transaction_key, Rail,
+    RailKind, RingSender, RingTransfer, Spend, Staged, TransferAuthority,
 };
 use crate::{CustomRing, CustomRingConfig, RingError};
 
@@ -134,7 +134,7 @@ impl Owner<'_> {
         self.check_settlement_accounts()?;
         let shape = self.shape(&sender)?;
         let transaction = self.transaction.clone();
-        let delivery = packed_or_delivered(shape.n_outputs(), RingRail::Confidential)?;
+        let delivery = delivered(shape.n_outputs(), RingRail::Confidential)?;
         let first_nullifier = *transaction.first_nullifier();
         let rail = RingOutputRail::new(transaction_key(self.sender, first_nullifier)?, delivery);
         let transaction = pad_under_rail(transaction, &rail, shape, &sender)?;

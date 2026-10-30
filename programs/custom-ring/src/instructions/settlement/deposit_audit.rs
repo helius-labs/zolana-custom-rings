@@ -4,7 +4,7 @@ use custom_ring_interface::{
     RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN, VIEWING_PUBKEY_TAG,
 };
 use pinocchio::{Address, ProgramResult};
-use zolana_interface::instruction::instruction_data::deposit::RingDepositIxDataRef;
+use spr_interface::instruction::instruction_data::deposit::RingDepositIxDataRef;
 
 use crate::instructions::verifier::{ring_key, RingProof};
 
@@ -89,7 +89,9 @@ impl DepositVerification<'_> {
         RingProof {
             proof: &self.audited.proof,
             statement: public_input,
-            key: ring_key(RingCircuit::deposit(count as u8))?,
+            key: ring_key(RingCircuit::deposit(
+                u8::try_from(count).map_err(|_| invalid)?,
+            ))?,
         }
         .verify()
     }

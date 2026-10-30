@@ -1,22 +1,23 @@
 //! The SPP account positions the ring program reads, against the pinned SPP builders.
 
 use custom_ring_interface::{
-    RING_DEPOSIT_DEPOSITOR_INDEX, RING_DEPOSIT_RING_CONFIG_INDEX, RING_MERGE_PAYER_INDEX,
-    RING_MERGE_RING_CONFIG_INDEX, RING_TRANSACT_ACCOUNT_PREFIX_LEN,
+    amount_field, signed_amount, RING_DEPOSIT_DEPOSITOR_INDEX, RING_DEPOSIT_RING_CONFIG_INDEX,
+    RING_MERGE_PAYER_INDEX, RING_MERGE_RING_CONFIG_INDEX, RING_TRANSACT_ACCOUNT_PREFIX_LEN,
     RING_TRANSACT_RING_CONFIG_INDEX, SOL_ASSET_ADDRESS, SYSTEM_PROGRAM_ID, TRANSACT_PAYER_INDEX,
 };
 use solana_address::Address;
-use zolana_event::EncryptedRingDepositData;
-use zolana_instruction::instruction::{
+use spr_event::EncryptedRingDepositData;
+use spr_instruction::instruction::{
     DepositAsset, MergeRing, RingAssetDeposit, RingDeposit, RingTransact,
 };
-use zolana_interface::{
+use spr_interface::{
     instruction::{
         instruction_data::merge_transact::{MergeOutputEncryption, MergeProof},
-        CircuitId, MergeTransactIxData, TransactIxData, TransactProof,
+        CircuitId, InterfaceTransfer, MergeTransactIxData, TransactIxData, TransactProof,
     },
     pda, N_PUBLIC_SLOTS,
 };
+use spr_transaction::instructions::transact::signed_magnitude_to_field;
 
 const PAYER: Address = Address::new_from_array([1; 32]);
 const RING: Address = Address::new_from_array([2; 32]);
@@ -141,4 +142,38 @@ fn sol_and_the_system_program_keep_their_zero_addresses() {
         SYSTEM_PROGRAM_ID,
         solana_address::address!("11111111111111111111111111111111")
     );
+}
+
+#[test]
+fn public_amount_fields_match_the_spp_proof_inputs() {
+    let spl_interface_bump = 0;
+    for amount in [1, 7, u64::MAX] {
+        for (transfer, is_deposit) in [
+            (InterfaceTransfer::SolDeposit { amount }, true),
+            (InterfaceTransfer::SolWithdrawal { amount }, false),
+            (
+                InterfaceTransfer::SplDeposit {
+                    amount,
+                    spl_interface_bump,
+                },
+                true,
+            ),
+            (
+                InterfaceTransfer::SplWithdrawal {
+                    amount,
+                    spl_interface_bump,
+                },
+                false,
+            ),
+        ] {
+            assert_eq!(
+                amount_field(signed_amount(transfer)).unwrap(),
+                signed_magnitude_to_field(is_deposit, amount),
+                "{transfer:?}"
+            );
+        }
+    }
+    let beyond = i128::from(u64::MAX) + 1;
+    assert!(amount_field(beyond).is_err());
+    assert!(amount_field(-beyond).is_err());
 }

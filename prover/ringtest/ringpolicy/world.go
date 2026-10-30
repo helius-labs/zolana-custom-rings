@@ -46,6 +46,8 @@ type World struct {
 	Own, Curator                           map[int64]Record
 	Slots, Inputs                          []Slot
 	Public                                 []PublicSlot
+	// Records sizes the record pools, a zero capacity takes the key's maximum.
+	Records policy.RecordPoolShape
 }
 
 // Table is a policy table of ringregistry list bits, a list reads the curator registry when Curator holds its bit.

@@ -410,7 +410,7 @@ async fn recipient_bodies_cannot_poison_an_audit_page_or_trigger_registry_refres
     }
     .seal(&secret)
     .expect("delivered body");
-    unmatched.output_slots[2].payload = encode_ring_confidential_delivered_output(&body);
+    unmatched.output_slots[2].payload = encode_ring_confidential_delivered_output(&body).unwrap();
     let mut invalid_disclosure = delivered(10);
     // The first disclosure field, past the tagged ephemeral key and the sealed key.
     invalid_disclosure.messages[0].data[65] = 0xff;
@@ -445,7 +445,8 @@ async fn recipient_bodies_cannot_poison_an_audit_page_or_trigger_registry_refres
         response.value.skipped[0].reason,
         SkippedReason::InvalidAuditData
     );
-    assert_eq!(reads.load(Ordering::Relaxed), 0);
+    // One timed read at the page start.
+    assert_eq!(reads.load(Ordering::Relaxed), 1);
 }
 
 #[tokio::test]
@@ -455,12 +456,12 @@ async fn unknown_assets_share_refresh_and_back_off_after_failure() {
     let fixture = Fixture::new();
     let mut source = fixture.source().with_transactions(vec![Indexed {
         transfer: &ring_transfer(8),
-        outputs: &[paid(utxo(0xb8, asset, 13), fixture.recipient_u)],
+        outputs: &[Output::Exit(utxo(0xb8, asset, 13))],
         auditor: &fixture.auditor.pubkey(),
         signature: 8,
         frames: &fixture.frames,
     }
-    .packed()]);
+    .delivered()]);
     source.assets = Some(RingAssets::new([Mint::new(asset, ASSET_ID)]).expect("ring assets"));
     let unknown_transactions = source.transactions.clone();
     let reads = source.asset_reads.clone();
@@ -504,7 +505,7 @@ async fn unknown_assets_share_refresh_and_back_off_after_failure() {
             })
             .await
             .unwrap();
-        assert_eq!(response.value.items[0].outputs.len(), 1);
+        assert_eq!(response.value.items[0].outputs.len(), 2);
         assert_eq!(mint(&response), None);
         assert!(response.value.skipped.is_empty());
     }

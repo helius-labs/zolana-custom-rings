@@ -12,7 +12,7 @@ use custom_ring_interface::{
     key_catalog::RingCircuit,
     CustomRingProof,
 };
-use zolana_client::AsyncRpc;
+use spr_client::AsyncRpc;
 use zolana_ring_client::AsyncRingIndexer;
 
 pub(super) struct Exemption {

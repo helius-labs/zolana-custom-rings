@@ -6,8 +6,8 @@ use std::{
 };
 
 use solana_address::Address;
-use zolana_interface::MAX_INPUT_TREES;
-use zolana_transaction::{
+use spr_interface::MAX_INPUT_TREES;
+use spr_transaction::{
     instructions::{merge::MAX_MERGE_INPUTS, transact::MAX_SPEND_INPUTS},
     TransactionError, WalletUtxo,
 };

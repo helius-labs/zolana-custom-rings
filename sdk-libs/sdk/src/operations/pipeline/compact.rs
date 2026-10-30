@@ -1,15 +1,14 @@
 //! The compact transact data a proven transfer owns, and its instruction.
 
-use custom_ring_interface::RING_TRANSACT_ACCOUNT_PREFIX_LEN;
 use custom_ring_interface::{
-    stream::RingTag, tag, AnchorRoot, AnonymousProofData, CustomRingProof, InputTrees,
-    PlainGroth16Proof, PolicyProof, RingOutput, RingProgramConfig, RingRail, RingTransactData,
-    AUDIT_CIPHERTEXT_LEN, RING_DELIVERED_BODY_LEN,
+    tag, AnonymousProofData, CustomRingProof, InputTrees, PlainGroth16Proof, PolicyProof,
+    RingOutput, RingProgramConfig, RingRail, RingTransactData, SenderBundle, AUDIT_CIPHERTEXT_LEN,
+    RING_DELIVERED_BODY_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
-use zolana_interface::instruction::{InterfaceTransfer, TransactProof};
-use zolana_program::instruction::{
+use spr_interface::instruction::{InterfaceTransfer, TransactProof};
+use spr_program::instruction::{
     RingAuthorityTransact, RingTransact, TransactInterfaceTransferAccounts,
 };
 
@@ -17,11 +16,6 @@ use crate::{CustomRing, RingError};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum OwnedOutput {
-    Packed {
-        hash: [u8; 32],
-        u: [u8; 32],
-        ciphertext: Vec<u8>,
-    },
     Delivered {
         hash: [u8; 32],
         u: [u8; 32],
@@ -29,8 +23,8 @@ pub(crate) enum OwnedOutput {
     },
     Anonymous {
         hash: [u8; 32],
-        tag: RingTag,
-        body: [u8; RING_DELIVERED_BODY_LEN],
+        tag: [u8; 32],
+        body: Option<Vec<u8>>,
     },
     Exit {
         hash: [u8; 32],
@@ -39,18 +33,31 @@ pub(crate) enum OwnedOutput {
     },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OwnedSenderBundle {
+    pub tag: [u8; 32],
+    pub body: Vec<u8>,
+}
+
+impl OwnedSenderBundle {
+    pub fn of(sender: SenderBundle<'_>) -> Self {
+        Self {
+            tag: *sender.tag,
+            body: sender.body.to_vec(),
+        }
+    }
+
+    pub fn view(&self) -> SenderBundle<'_> {
+        SenderBundle {
+            tag: &self.tag,
+            body: &self.body,
+        }
+    }
+}
+
 impl OwnedOutput {
     pub fn of(output: RingOutput<'_>) -> Self {
         match output {
-            RingOutput::Packed {
-                hash,
-                u,
-                ciphertext,
-            } => Self::Packed {
-                hash: *hash,
-                u: *u,
-                ciphertext: ciphertext.to_vec(),
-            },
             RingOutput::Delivered { hash, u, body } => Self::Delivered {
                 hash: *hash,
                 u: *u,
@@ -58,8 +65,8 @@ impl OwnedOutput {
             },
             RingOutput::Anonymous { hash, tag, body } => Self::Anonymous {
                 hash: *hash,
-                tag,
-                body: *body,
+                tag: *tag,
+                body: body.map(<[u8]>::to_vec),
             },
             RingOutput::Exit {
                 hash,
@@ -75,20 +82,11 @@ impl OwnedOutput {
 
     pub fn view(&self) -> RingOutput<'_> {
         match self {
-            Self::Packed {
-                hash,
-                u,
-                ciphertext,
-            } => RingOutput::Packed {
-                hash,
-                u,
-                ciphertext,
-            },
             Self::Delivered { hash, u, body } => RingOutput::Delivered { hash, u, body },
             Self::Anonymous { hash, tag, body } => RingOutput::Anonymous {
                 hash,
-                tag: *tag,
-                body,
+                tag,
+                body: body.as_deref(),
             },
             Self::Exit {
                 hash,
@@ -129,18 +127,14 @@ pub(crate) struct TransactParts {
     pub policy: Option<OwnedPolicyProof>,
     pub withdrawal_exemption: Option<custom_ring_interface::WithdrawalExemptionProof>,
     pub approval_required: bool,
-    pub previous_epoch: bool,
-    pub anchor: Option<AnchorRoot>,
     pub expiry_unix_ts: u32,
     pub tx_viewing_u: [u8; 32],
     pub salt: [u8; 16],
     pub interface_transfers: Vec<InterfaceTransfer>,
-    pub data_hash: Option<[u8; 32]>,
-    pub ring_data_hash: Option<[u8; 32]>,
-    pub data_free: bool,
     pub key_escrow: bool,
     pub full_openings: bool,
     pub outputs: Vec<OwnedOutput>,
+    pub sender: Option<OwnedSenderBundle>,
     pub eph_u: [u8; 32],
     pub sealed: [u8; AUDIT_CIPHERTEXT_LEN],
     pub disclosure: Vec<[u8; 32]>,
@@ -167,18 +161,14 @@ impl TransactParts {
             }),
             withdrawal_exemption: self.withdrawal_exemption.as_ref(),
             approval_required: self.approval_required,
-            previous_epoch: self.previous_epoch,
-            anchor: self.anchor,
             expiry_unix_ts: self.expiry_unix_ts,
             tx_viewing_u: &self.tx_viewing_u,
             salt: &self.salt,
             interface_transfers: self.interface_transfers.clone(),
-            data_hash: self.data_hash.as_ref(),
-            ring_data_hash: self.ring_data_hash.as_ref(),
-            data_free: self.data_free,
             key_escrow: self.key_escrow,
             full_openings: self.full_openings,
             outputs: self.outputs.iter().map(OwnedOutput::view).collect(),
+            sender: self.sender.as_ref().map(OwnedSenderBundle::view),
             eph_u: &self.eph_u,
             sealed: &self.sealed,
             disclosure: &self.disclosure,
@@ -209,34 +199,9 @@ pub(crate) struct TransactAccounts {
     pub curator: Option<Address>,
     pub co_signer: Option<Address>,
     pub delegate: Option<Address>,
-    /// The first-contact tree of a pair-anchored anonymous payment.
-    pub anchor_tree: Option<Address>,
 }
 
 impl TransactAccounts {
-    /// The anchor tree's account index, in SPP's list or the prefix slot after the delegate.
-    pub fn anchor_slot(&self) -> Option<u8> {
-        let tree = self.anchor_tree?;
-        let prefix = 1
-            + usize::from(self.registry.is_some())
-            + usize::from(self.curator.is_some())
-            + usize::from(self.co_signer.is_some())
-            + usize::from(self.delegate.is_some());
-        u8::try_from(self.spp_slot(tree).map_or(prefix, |slot| prefix + slot)).ok()
-    }
-
-    /// `None` for a tree SPP's own account list does not name.
-    fn spp_slot(&self, tree: Address) -> Option<usize> {
-        match tree == self.output_tree {
-            true => Some(1),
-            false => self
-                .input_trees
-                .iter()
-                .position(|input| *input == tree)
-                .map(|index| RING_TRANSACT_ACCOUNT_PREFIX_LEN + index),
-        }
-    }
-
     /// The ring prefix, then SPP's own list, the data's tag by its rail.
     pub fn instruction(
         &self,
@@ -289,11 +254,6 @@ impl TransactAccounts {
         accounts.extend(
             self.delegate
                 .map(|delegate| AccountMeta::new_readonly(delegate, true)),
-        );
-        accounts.extend(
-            self.anchor_tree
-                .filter(|tree| self.spp_slot(*tree).is_none())
-                .map(|tree| AccountMeta::new_readonly(tree, false)),
         );
         accounts.extend(spp);
         let mut bytes = vec![match parts.rail {

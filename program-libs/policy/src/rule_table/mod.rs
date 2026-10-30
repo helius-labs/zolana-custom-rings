@@ -1,7 +1,7 @@
 use bytemuck::{Pod, Zeroable};
+use spr_hasher::{primitives::right_align, Hasher, HasherError, Poseidon};
 use thiserror::Error;
 use wincode::{SchemaRead, SchemaWrite};
-use zolana_hasher::{primitives::right_align, Hasher, HasherError, Poseidon};
 
 use crate::{field_u8, ListId, ListSet, Member};
 
@@ -664,7 +664,7 @@ impl EncodedRuleTable {
     }
 
     /// `acc = Poseidon(acc, fields[11c..11c + 11])` from `acc = 0`, mirror
-    /// `prover/server/custom_rings/circuits/policy`.
+    /// `prover/circuits/policy/table.go`.
     pub fn hash(&self, sources: &SourceMap) -> Result<[u8; 32], HasherError> {
         let fields = self.fields(sources);
         let mut acc = [0u8; 32];

@@ -1,27 +1,33 @@
 //! A child of `pipeline`, every rail stages and assembles through its private items.
 
-use std::collections::BTreeSet;
-
 use custom_ring_interface::{
-    stream::{tag_epoch, TagIndex, EPOCH_SLOTS},
-    CustomRingError, RingMode, RingRail, RingTransactData, SOL_ASSET_ADDRESS,
+    anonymous_recipient_output_body, anonymous_sender_output_body, CustomRingError, RingMode,
+    RingRail, RingTransactData,
 };
 use solana_address::Address;
 use spl_token_2022_interface::pod::{PodAccount, PodCOption};
-use zolana_client::ClientError;
-use zolana_interface::{pda, SPL_TOKEN_ACCOUNT_INITIALIZED, SPL_TOKEN_PROGRAM_ID};
-use zolana_keypair::ShieldedKeypair;
-use zolana_program::instruction::{TransactSolTransferAccounts, TransactSplWithdrawalAccounts};
-use zolana_ring_client::{AnonymousRingState, DecoyLeaf, SentFirstContact};
-use zolana_ring_keys::{Pairing, RingAddress};
-use zolana_ring_transaction::{RingDelivery, RingRailError, StreamPosition};
-use zolana_transaction::{
+use spr_client::ClientError;
+use spr_interface::{
+    instruction::instruction_data::transact::OwnerTag, pda, SPL_TOKEN_ACCOUNT_INITIALIZED,
+    SPL_TOKEN_PROGRAM_ID,
+};
+use spr_keypair::ShieldedKeypair;
+use spr_program::instruction::{TransactSolTransferAccounts, TransactSplWithdrawalAccounts};
+use spr_transaction::{
     instructions::transact::ConfidentialTransaction, AssetRegistry, Mint, WalletUtxo,
+};
+use zolana_ring_client::{FirstContact, StreamCounter, ViewingHistory};
+use zolana_ring_keys::RingAddress;
+use zolana_ring_transaction::{
+    listed_recipients, AnonymousTransferRecipientPlaintext, AnonymousTransferSenderPlaintext,
+    RingDelivery,
 };
 
 use super::*;
 use crate::client::RingClient;
-use crate::tests::support::{account, empty, ring, ring_utxo, Chain, RingSettings, SLOT, TREE_ID};
+use crate::tests::support::{
+    account, empty, history, ring, ring_utxo, Chain, RingSettings, TREE_ID,
+};
 
 fn anonymous() -> RingSettings {
     RingSettings::new(RingMode::Anonymous)
@@ -48,14 +54,16 @@ fn owner_transfer(
 }
 
 fn ring_address(owner: &ShieldedKeypair) -> RingAddress {
-    let mut state = AnonymousRingState::new(ring().program_id(), 0);
-    state.issue(0, Pairing::default()).unwrap();
-    state.address(owner, 0).unwrap().unwrap()
+    RingAddress {
+        recipient: owner.shielded_address().unwrap(),
+        ring_program_id: ring().program_id(),
+    }
 }
 
 fn payment(to: &RingAddress, amount: u64) -> AnonymousPayment {
     AnonymousPayment {
         to: to.clone(),
+        first_contact: FirstContact::Bootstrap,
         asset: Mint::SOL,
         amount,
     }
@@ -100,7 +108,7 @@ fn token_account(state: PodAccount) -> solana_account::Account {
 #[tokio::test]
 async fn an_anonymous_spl_exit_names_neither_the_hidden_owner_nor_a_second_key() {
     let sender = &crate::tests::support::keypair(1);
-    let state = &AnonymousRingState::new(ring().program_id(), 0);
+    let state = &history(sender);
     let hidden = Address::new_from_array(sender.signing_pubkey().as_ed25519().unwrap());
     let mint = Address::new_from_array([0x31; 32]);
     let stranger = Address::new_from_array([0x32; 32]);
@@ -201,7 +209,7 @@ async fn an_anonymous_spl_exit_names_neither_the_hidden_owner_nor_a_second_key()
 #[tokio::test]
 async fn an_anonymous_sol_exit_leaves_to_a_wallet_other_than_the_hidden_owner() {
     let sender = &crate::tests::support::keypair(1);
-    let state = &AnonymousRingState::new(ring().program_id(), 0);
+    let state = &history(sender);
     let hidden = Address::new_from_array(sender.signing_pubkey().as_ed25519().unwrap());
     let stage = |to: Address, named: Option<Address>, chain: Chain| {
         let mut transaction = ring_transaction(vec![ring_utxo(sender, Mint::SOL, 10, 0)]);
@@ -238,36 +246,10 @@ async fn an_anonymous_sol_exit_leaves_to_a_wallet_other_than_the_hidden_owner() 
     ));
 }
 
-/// A default-ring note under a ring address key would tie the address to the exit.
-#[tokio::test]
-async fn an_exit_to_a_ring_address_key_is_refused() {
-    let sender = &crate::tests::support::keypair(1);
-    let paid = ring_address(&crate::tests::support::keypair(2));
-    let mut state = AnonymousRingState::new(ring().program_id(), 0);
-    state.issue(0, Pairing::default()).unwrap();
-    let own = state.address(sender, 0).unwrap().unwrap();
-    for exit in [paid.recipient, own.recipient] {
-        let mut transaction = ring_transaction(vec![ring_utxo(sender, Mint::SOL, 10, 0)]);
-        transaction
-            .transfer_with_ring(&exit, Mint::SOL, 2, None)
-            .unwrap();
-        let transfer = owner_transfer(sender, transaction)
-            .with_anonymous_signer(&sender.signing_key, &state)
-            .with_payment(payment(&paid, 3))
-            .unwrap();
-        assert!(matches!(
-            stage_anonymous(&transfer, &Chain::ring(anonymous())).await,
-            Err(RingError::Rail(RingRailError::RingAddressExit {
-                slot_index: 0
-            }))
-        ));
-    }
-}
-
 #[test]
 fn a_payment_to_another_rings_address_is_refused() {
     let sender = &crate::tests::support::keypair(1);
-    let state = AnonymousRingState::new(ring().program_id(), 0);
+    let state = history(sender);
     let foreign = RingAddress {
         ring_program_id: Address::new_from_array([43; 32]),
         ..ring_address(&crate::tests::support::keypair(2))
@@ -282,619 +264,240 @@ fn a_payment_to_another_rings_address_is_refused() {
     ));
 }
 
+/// The published owner tag and recipient body of every slot, `None` on a change output.
+fn published<'s>(staged: &'s Staged<'_>) -> Vec<([u8; 32], Option<&'s [u8]>)> {
+    staged
+        .proof_inputs
+        .external_data
+        .outputs
+        .iter()
+        .map(|output| {
+            let OwnerTag::Inline(tag) = output.owner_tag else {
+                panic!("an anonymous slot is tagged inline, {:?}", output.owner_tag);
+            };
+            let body = output.data.as_deref().map(|data| {
+                anonymous_recipient_output_body(data).expect("a scheme 1 recipient body")
+            });
+            (tag, body)
+        })
+        .collect()
+}
+
+fn opened(
+    staged: &Staged<'_>,
+    reader: &ShieldedKeypair,
+    ciphertext: &[u8],
+    slot: usize,
+) -> Vec<u8> {
+    let external = &staged.proof_inputs.external_data;
+    reader
+        .viewing_key
+        .decrypt_utxo(
+            ciphertext,
+            &spr_keypair::X25519Pubkey::from_bytes(external.tx_viewing_pk).unwrap(),
+            external.salt,
+            slot as u32,
+        )
+        .unwrap()
+}
+
+fn payment_at(
+    staged: &Staged<'_>,
+    reader: &ShieldedKeypair,
+    position: usize,
+) -> AnonymousTransferRecipientPlaintext {
+    let body = published(staged)[position].1.expect("a recipient body");
+    AnonymousTransferRecipientPlaintext::deserialize(&opened(staged, reader, body, position))
+        .unwrap()
+}
+
+/// The sender bundle, the first message, opened under the sender's own viewing key.
+fn bundle(staged: &Staged<'_>, sender: &ShieldedKeypair) -> AnonymousTransferSenderPlaintext {
+    let external = &staged.proof_inputs.external_data;
+    let message = &external.messages[0];
+    assert_eq!(message.view_tag, published(staged)[0].0);
+    let body = anonymous_sender_output_body(&message.data).expect("a scheme 2 sender bundle");
+    let plaintext = opened(staged, sender, body, external.outputs.len());
+    AnonymousTransferSenderPlaintext::deserialize(&plaintext).unwrap()
+}
+
+/// Change leads with no body, SPL before SOL.
 #[tokio::test]
-async fn an_inbox_payment_becomes_the_senders_first_contact_once_it_lands() {
-    let sender = &crate::tests::support::keypair(1);
-    let paid = ring_address(&crate::tests::support::keypair(2));
-    let state = AnonymousRingState::new(ring().program_id(), 0);
-    let transaction = ring_transaction(vec![ring_utxo(sender, Mint::SOL, 10, 0)]);
+async fn an_anonymous_transfer_publishes_each_payment_and_the_sender_bundle() {
+    use crate::tests::support::keypair;
+    let sender = &keypair(1);
+    let bootstrap = keypair(2);
+    let requester = keypair(3);
+    let usdc = Mint::new(Address::new_from_array([0x31; 32]), 2);
+    let request = requester.get_recipient_request_view_tag(0).unwrap();
+    let state = history(sender);
+    let transaction = ring_transaction(vec![
+        ring_utxo(sender, usdc, 10, 0),
+        ring_utxo(sender, Mint::SOL, 10, 1),
+    ]);
     let transfer = owner_transfer(sender, transaction)
         .with_anonymous_signer(&sender.signing_key, &state)
-        .with_tag_rng(zero_tag_rng)
-        .with_payment(payment(&paid, 4))
-        .unwrap();
-    let assembled = transfer
-        .assemble(&Chain::ring(anonymous()).client())
-        .await
-        .unwrap();
-    let [contact] = assembled.first_contacts.as_slice() else {
-        panic!("one inbox payment, {:?}", assembled.first_contacts);
-    };
-    let outputs = &assembled.frame.proof_inputs.output_utxos;
-    let slot_index = outputs
-        .iter()
-        .position(|output| output.hash(TREE_ID).unwrap() == contact.utxo_hash)
-        .unwrap();
-    let output = &outputs[slot_index];
-    let first_nullifier = assembled.frame.proof_inputs.input_utxos[0].nullifier();
-    assert_eq!(
-        (contact.recipient, contact.index, contact.epoch),
-        (
-            paid.recipient.viewing_pubkey,
-            TagIndex::new(0).unwrap(),
-            tag_epoch(SLOT)
-        )
-    );
-    assert_eq!(contact.blinding, output.blinding);
-    assert_eq!(
-        contact.slot_secret,
-        *assembled
-            .frame
-            .rail
-            .slot_secret(
-                &paid.recipient.viewing_pubkey,
-                &first_nullifier,
-                u32::try_from(slot_index).unwrap(),
-            )
-            .unwrap()
-            .as_bytes()
-    );
-    let sent = contact.confirm(11);
-    assert_eq!((sent.leaf_index, sent.amount), (11, 4));
-    assert!(sent.is_live(contact.epoch));
-}
-
-#[test]
-fn a_pending_first_contact_prints_neither_its_slot_secret_nor_its_leaf() {
-    let contact = PendingFirstContact {
-        recipient: crate::tests::support::auditor().pubkey(),
-        tree_id: TREE_ID,
-        utxo_hash: [0xab; 32],
-        slot_secret: [0xab; 32],
-        blinding: [0xab; 32],
-        epoch: 3,
-        index: TagIndex::new(4).unwrap(),
-        asset: Address::new_from_array(SOL_ASSET_ADDRESS),
-        amount: 5,
-    };
-    let printed = format!("{contact:?}");
-    assert!(crate::tests::support::redacts(
-        &printed,
-        &["recipient", "utxo_hash", "slot_secret", "blinding"]
-    ));
-    assert!(!printed.contains("171, 171"));
-}
-
-/// `state` keeping `leaves` of tree 0 as decoys, the shape a scan leaves behind.
-fn with_decoys(state: &AnonymousRingState, leaves: &[DecoyLeaf]) -> AnonymousRingState {
-    let mut json: serde_json::Value = serde_json::from_str(&state.to_json()).unwrap();
-    json["decoys"] = serde_json::json!([{
-        "treeId": TREE_ID,
-        "leaves": leaves
-            .iter()
-            .map(|leaf| serde_json::json!({
-                "leafIndex": leaf.leaf_index,
-                "hash": hex::encode(leaf.hash),
-            }))
-            .collect::<Vec<_>>(),
-    }]);
-    AnonymousRingState::from_json(&json.to_string()).unwrap()
-}
-
-/// A sender's live first contact to `paid` beside more decoys than one anchor fetch takes.
-struct Paired {
-    contact: SentFirstContact,
-    decoys: Vec<DecoyLeaf>,
-    state: AnonymousRingState,
-}
-
-impl Paired {
-    fn new(paid: &RingAddress) -> Self {
-        let contact = SentFirstContact {
-            recipient: paid.recipient.viewing_pubkey,
-            tree_id: TREE_ID,
-            leaf_index: 11,
-            utxo_hash: [0x21; 32],
-            slot_secret: [0x22; 32],
-            blinding: [0x23; 32],
-            epoch: tag_epoch(SLOT) - 1,
-            index: TagIndex::new(3).unwrap(),
-            asset: Address::new_from_array(SOL_ASSET_ADDRESS),
-            amount: 4,
-        };
-        let mut state = AnonymousRingState::new(ring().program_id(), 0);
-        state.record_first_contact(contact);
-        let decoys: Vec<DecoyLeaf> = (1..=12u8)
-            .map(|seed| DecoyLeaf {
-                leaf_index: 20 + u64::from(seed),
-                hash: [seed; 32],
-            })
-            .collect();
-        let mut json: serde_json::Value =
-            serde_json::from_str(&with_decoys(&state, &decoys).to_json()).unwrap();
-        json["sent"][0]["decoys"] = decoys[..ANCHOR_DECOYS]
-            .iter()
-            .map(|leaf| hex::encode(leaf.hash))
-            .collect();
-        Self {
-            state: AnonymousRingState::from_json(&json.to_string()).unwrap(),
-            contact,
-            decoys,
-        }
-    }
-
-    /// The pinned decoys and the anchor.
-    fn pinned(&self) -> BTreeSet<[u8; 32]> {
-        self.decoys[..ANCHOR_DECOYS]
-            .iter()
-            .map(|leaf| leaf.hash)
-            .chain([self.contact.utxo_hash])
-            .collect()
-    }
-
-    fn chain(&self) -> Chain {
-        self.decoys.iter().fold(
-            Chain::ring(anonymous()).with_leaf(self.contact.utxo_hash, self.contact.leaf_index),
-            |chain, decoy| chain.with_leaf(decoy.hash, decoy.leaf_index),
-        )
-    }
-}
-
-#[tokio::test]
-async fn a_pair_payment_anchors_its_first_contact_among_seven_decoys() {
-    let sender = &crate::tests::support::keypair(1);
-    let paid = ring_address(&crate::tests::support::keypair(2));
-    let paired = Paired::new(&paid);
-    let (contact, chain) = (paired.contact, paired.chain());
-    let transaction = ring_transaction(vec![ring_utxo(sender, Mint::SOL, 10, 0)]);
-    let transfer = owner_transfer(sender, transaction)
-        .with_anonymous_signer(&sender.signing_key, &paired.state)
-        .with_payment(payment(&paid, 4))
-        .unwrap();
-    let staged = stage_anonymous(&transfer, &chain).await.unwrap();
-    let Spend::Anonymous(spend) = &staged.spend else {
-        unreachable!("an anonymous ring stages its rail");
-    };
-    assert!(chain.proof_requests.lock().unwrap().is_empty());
-    let anchor = spend.anchor(&chain).await.unwrap().unwrap();
-    let requests = chain.proof_requests.lock().unwrap().clone();
-    let [leaves] = requests.as_slice() else {
-        panic!("one anchor fetch, {requests:?}");
-    };
-    let distinct: BTreeSet<_> = leaves.iter().collect();
-    assert_eq!(
-        (leaves.len(), distinct.len()),
-        (ANCHOR_DECOYS + 1, ANCHOR_DECOYS + 1)
-    );
-    assert_eq!(
-        distinct.into_iter().copied().collect::<BTreeSet<_>>(),
-        paired.pinned()
-    );
-    assert_eq!(anchor.bound.tree, pda::tree(TREE_ID));
-    assert!(anchor.bound.holds(&chain).await.unwrap());
-    assert_eq!(
-        (
-            anchor.request.path_index,
-            anchor.request.slot_secret,
-            anchor.request.epoch
-        ),
-        (contact.leaf_index, contact.slot_secret, contact.epoch)
-    );
-    let RingDelivery::Anonymous(slots) = staged.rail.delivery() else {
-        unreachable!("an anonymous ring delivers to streams");
-    };
-    assert!(matches!(
-        slots.payment(0).map(|payment| payment.position),
-        Some(StreamPosition::Pair(_))
-    ));
-    assert!(spend.first_contacts.is_empty());
-}
-
-#[tokio::test]
-async fn an_anonymous_selection_reads_no_anchor_path() {
-    use crate::tests::support::{keypair, payer};
-    let sender = keypair(1);
-    let paid = ring_address(&keypair(2));
-    let paired = Paired::new(&paid);
-    let chain = paired.chain();
-    let client = chain.clone().client();
-    let utxos = [ring_utxo(&sender, Mint::SOL, 10, 0)];
-    let owner = MoveSender {
-        sender: &sender,
-        state: &paired.state,
-        payer: payer(),
-    };
-    let transfer = AnonymousMove {
-        signer: &sender.signing_key,
-        ..owner.anonymous_move(
-            &utxos,
-            vec![RingPayment {
-                to: paid.clone(),
-                amount: 4,
-            }],
-        )
-    }
-    .select(&client)
-    .await
-    .unwrap();
-    assert!(chain.proof_requests.lock().unwrap().is_empty());
-    transfer.assemble(&client).await.unwrap();
-    assert_eq!(chain.proof_requests.lock().unwrap().len(), 1);
-}
-
-/// A grown pool keeps the pin, the next read names the same leaves.
-#[tokio::test]
-async fn every_anchor_read_of_a_contact_names_the_same_leaves() {
-    let sender = &crate::tests::support::keypair(1);
-    let paid = ring_address(&crate::tests::support::keypair(2));
-    let paired = Paired::new(&paid);
-    let chain = paired.chain();
-    let grown: Vec<DecoyLeaf> = (0x40..0x60u8)
-        .map(|seed| DecoyLeaf {
-            leaf_index: u64::from(seed),
-            hash: [seed; 32],
+        .with_payment(AnonymousPayment {
+            asset: usdc,
+            ..payment(&ring_address(&bootstrap), 3)
         })
-        .chain(paired.decoys.iter().copied())
-        .collect();
-    let later = with_decoys(&paired.state, &grown);
-    for state in [&paired.state, &later] {
-        let transaction = ring_transaction(vec![ring_utxo(sender, Mint::SOL, 10, 0)]);
-        owner_transfer(sender, transaction)
-            .with_anonymous_signer(&sender.signing_key, state)
-            .with_payment(payment(&paid, 4))
-            .unwrap()
-            .assemble(&chain.clone().client())
-            .await
-            .unwrap();
-    }
-    let requests = chain.proof_requests.lock().unwrap().clone();
-    let [first, second] = requests.as_slice() else {
-        panic!("two anchor fetches, {requests:?}");
-    };
-    assert_eq!(first, second);
-    assert_eq!(
-        first.iter().copied().collect::<BTreeSet<_>>(),
-        paired.pinned()
-    );
-}
-
-/// Answers every proof request with the error its function makes.
-struct FailingIndexer(fn() -> ClientError);
-
-#[async_trait::async_trait]
-impl zolana_client::AsyncRpc for FailingIndexer {
-    async fn get_merkle_proofs(
-        &self,
-        _tree_account: Address,
-        _leaves: Vec<[u8; 32]>,
-        _config: Option<zolana_client::IndexerRpcConfig>,
-    ) -> Result<zolana_client::GetMerkleProofsResponse, ClientError> {
-        Err((self.0)())
-    }
-
-    async fn get_shielded_transactions_by_ring(
-        &self,
-        _options: zolana_client::RingHistoryOptions,
-        _config: Option<zolana_client::IndexerRpcConfig>,
-    ) -> Result<zolana_client::GetShieldedTransactionsByTagsResponse, ClientError> {
-        Ok(zolana_client::GetShieldedTransactionsByTagsResponse {
-            context: zolana_client::Context {
-                block_time: 0,
-                slot: SLOT,
-            },
-            output_tree_id: None,
-            transactions: Vec::new(),
-            next_cursor: None,
-            scanned_through: None,
-        })
-    }
-}
-
-#[tokio::test]
-async fn a_refused_pinned_leaf_names_the_first_contact_to_retire() {
-    let sender = &crate::tests::support::keypair(1);
-    let paid = ring_address(&crate::tests::support::keypair(2));
-    let paired = Paired::new(&paid);
-    let chain = paired.chain();
-    let transaction = ring_transaction(vec![ring_utxo(sender, Mint::SOL, 10, 0)]);
-    let transfer = owner_transfer(sender, transaction)
-        .with_anonymous_signer(&sender.signing_key, &paired.state)
-        .with_payment(payment(&paid, 4))
-        .unwrap();
-    let staged = stage_anonymous(&transfer, &chain).await.unwrap();
-    let Spend::Anonymous(spend) = &staged.spend else {
-        unreachable!("an anonymous ring stages its rail");
-    };
-    let refused = FailingIndexer(|| ClientError::Indexer("leaf not found".to_owned()));
-    assert!(matches!(
-        spend.anchor(&refused).await,
-        Err(RingError::FirstContactLeavesRefused { tree, recipient })
-            if tree == pda::tree(TREE_ID) && recipient == paired.contact.recipient
-    ));
-    let unavailable = FailingIndexer(|| ClientError::IndexerUnavailable("timeout".to_owned()));
-    assert!(matches!(
-        spend.anchor(&unavailable).await,
-        Err(RingError::Client(ClientError::IndexerUnavailable(_)))
-    ));
-}
-
-/// Answers proof reads with `proofs`, every other read with an empty page at `slot`.
-#[derive(Debug)]
-struct AnsweringIndexer {
-    proofs: serde_json::Value,
-    slot: u64,
-}
-
-impl zolana_api::HttpClient for AnsweringIndexer {
-    fn send<'a>(&'a self, request: zolana_api::HttpRequest) -> zolana_api::HttpFuture<'a> {
-        let answer = match request.url.ends_with("getMerkleProofs") {
-            true => self.proofs.clone(),
-            false => serde_json::json!({
-                "result": {
-                    "context": { "blockTime": 0, "slot": self.slot },
-                    "transactions": [],
-                    "nextCursor": null,
-                },
-            }),
-        };
-        let body = serde_json::to_vec(&answer).unwrap();
-        Box::pin(async move {
-            Ok(zolana_api::HttpResponse {
-                status: http::StatusCode::OK,
-                headers: http::HeaderMap::new(),
-                body,
-            })
-        })
-    }
-}
-
-async fn anchor_read(proofs: serde_json::Value, slot: u64) -> Result<(), RingError> {
-    let sender = &crate::tests::support::keypair(1);
-    let paid = ring_address(&crate::tests::support::keypair(2));
-    let paired = Paired::new(&paid);
-    let chain = paired.chain();
-    let transaction = ring_transaction(vec![ring_utxo(sender, Mint::SOL, 10, 0)]);
-    let transfer = owner_transfer(sender, transaction)
-        .with_anonymous_signer(&sender.signing_key, &paired.state)
-        .with_payment(payment(&paid, 4))
-        .unwrap();
-    let staged = stage_anonymous(&transfer, &chain).await.unwrap();
-    let Spend::Anonymous(spend) = &staged.spend else {
-        unreachable!("an anonymous ring stages its rail");
-    };
-    let indexer = zolana_client::AsyncZolanaIndexer::with_api(zolana_api::ZolanaApi::with_client(
-        "http://indexer.invalid",
-        AnsweringIndexer { proofs, slot },
-    ));
-    let answer = spend.anchor(&indexer).await.map(drop);
-    if let Err(RingError::FirstContactLeavesRefused { tree, recipient }) = &answer {
-        assert_eq!(
-            (*tree, *recipient),
-            (pda::tree(TREE_ID), paired.contact.recipient)
-        );
-    }
-    answer
-}
-
-#[tokio::test]
-async fn an_indexer_at_the_staging_slot_without_every_pinned_proof_retires_the_contact() {
-    let context = serde_json::json!({ "blockTime": 0, "slot": SLOT });
-    for proofs in [
-        serde_json::json!({ "result": { "context": context, "proofs": [] } }),
-        serde_json::json!({ "result": { "context": context, "proofs": [{ "leaf": 7 }] } }),
-        serde_json::json!({ "error": { "code": -32600, "message": "Record Not Found" } }),
-    ] {
-        assert!(matches!(
-            anchor_read(proofs, SLOT).await,
-            Err(RingError::FirstContactLeavesRefused { .. })
-        ));
-    }
-    let internal = serde_json::json!({ "error": { "code": -32603, "message": "Internal error" } });
-    assert!(matches!(
-        anchor_read(internal, SLOT).await,
-        Err(RingError::Client(ClientError::IndexerUnavailable(_)))
-    ));
-}
-
-#[tokio::test(start_paused = true)]
-async fn an_indexer_behind_the_staging_slot_keeps_the_first_contact() {
-    let missing = serde_json::json!({ "error": { "code": -32600, "message": "Record Not Found" } });
-    assert!(matches!(
-        anchor_read(missing, SLOT - 1).await,
-        Err(RingError::Client(ClientError::IndexerNotCaughtUp { .. }))
-    ));
-}
-
-#[derive(Clone, Copy, Debug)]
-enum ProofFault {
-    Withheld,
-    Path,
-    Root,
-    RootIndex,
-    LeafIndex,
-}
-
-struct FaultyProofs {
-    chain: Chain,
-    leaf: [u8; 32],
-    fault: ProofFault,
-}
-
-#[async_trait::async_trait]
-impl zolana_client::AsyncRpc for FaultyProofs {
-    async fn get_merkle_proofs(
-        &self,
-        tree_account: Address,
-        leaves: Vec<[u8; 32]>,
-        config: Option<zolana_client::IndexerRpcConfig>,
-    ) -> Result<zolana_client::GetMerkleProofsResponse, ClientError> {
-        let mut response =
-            zolana_client::AsyncRpc::get_merkle_proofs(&self.chain, tree_account, leaves, config)
-                .await?;
-        let at = response
-            .proofs
-            .iter()
-            .position(|proof| proof.leaf == self.leaf)
-            .unwrap();
-        match self.fault {
-            ProofFault::Withheld => drop(response.proofs.remove(at)),
-            ProofFault::Path => response.proofs[at].path[3][31] ^= 1,
-            ProofFault::Root => {
-                let proof = &mut response.proofs[at];
-                proof.path[3][31] ^= 1;
-                proof.root = anonymous::path_root(proof)?;
-            }
-            ProofFault::RootIndex => response.proofs[at].root_index ^= 1,
-            ProofFault::LeafIndex => response.proofs[at].leaf_index ^= 1,
-        }
-        Ok(response)
-    }
-}
-
-const PROOF_FAULTS: [ProofFault; 5] = [
-    ProofFault::Withheld,
-    ProofFault::Path,
-    ProofFault::Root,
-    ProofFault::RootIndex,
-    ProofFault::LeafIndex,
-];
-
-#[tokio::test]
-async fn a_fault_on_any_pinned_proof_refuses_the_read_as_one_on_the_anchor() {
-    let sender = &crate::tests::support::keypair(1);
-    let paid = ring_address(&crate::tests::support::keypair(2));
-    let paired = Paired::new(&paid);
-    let chain = paired.chain();
-    let transaction = ring_transaction(vec![ring_utxo(sender, Mint::SOL, 10, 0)]);
-    let transfer = owner_transfer(sender, transaction)
-        .with_anonymous_signer(&sender.signing_key, &paired.state)
-        .with_payment(payment(&paid, 4))
-        .unwrap();
-    let staged = stage_anonymous(&transfer, &chain).await.unwrap();
-    let Spend::Anonymous(spend) = &staged.spend else {
-        unreachable!("an anonymous ring stages its rail");
-    };
-    let pair = paired
-        .state
-        .pair_anchor(&paired.contact.recipient, paired.contact.epoch)
-        .unwrap();
-    for leaf in pair.leaves {
-        for fault in PROOF_FAULTS {
-            let faulty = FaultyProofs {
-                chain: paired.chain(),
-                leaf,
-                fault,
-            };
-            assert!(
-                matches!(
-                    spend.anchor(&faulty).await,
-                    Err(RingError::FirstContactLeavesRefused { tree, recipient })
-                        if tree == pda::tree(TREE_ID) && recipient == paired.contact.recipient
-                ),
-                "{fault:?} on {}",
-                hex::encode(leaf)
-            );
-        }
-    }
-}
-
-struct CatchingUpProofs {
-    chain: Chain,
-    refused: std::sync::atomic::AtomicBool,
-}
-
-#[async_trait::async_trait]
-impl zolana_client::AsyncRpc for CatchingUpProofs {
-    async fn get_account(
-        &self,
-        address: Address,
-    ) -> Result<Option<solana_account::Account>, ClientError> {
-        zolana_client::AsyncRpc::get_account(&self.chain, address).await
-    }
-
-    async fn get_merkle_proofs(
-        &self,
-        tree_account: Address,
-        leaves: Vec<[u8; 32]>,
-        config: Option<zolana_client::IndexerRpcConfig>,
-    ) -> Result<zolana_client::GetMerkleProofsResponse, ClientError> {
-        if !self
-            .refused
-            .swap(true, std::sync::atomic::Ordering::Relaxed)
-        {
-            return Err(ClientError::Indexer("Record Not Found".to_owned()));
-        }
-        zolana_client::AsyncRpc::get_merkle_proofs(&self.chain, tree_account, leaves, config).await
-    }
-
-    async fn get_shielded_transactions_by_ring(
-        &self,
-        _options: zolana_client::RingHistoryOptions,
-        _config: Option<zolana_client::IndexerRpcConfig>,
-    ) -> Result<zolana_client::GetShieldedTransactionsByTagsResponse, ClientError> {
-        Ok(zolana_client::GetShieldedTransactionsByTagsResponse {
-            context: zolana_client::Context {
-                block_time: 0,
-                slot: SLOT,
-            },
-            output_tree_id: None,
-            transactions: Vec::new(),
-            next_cursor: None,
-            scanned_through: None,
-        })
-    }
-}
-
-#[tokio::test]
-async fn an_indexer_that_catches_up_during_the_slot_check_keeps_the_first_contact() {
-    let sender = &crate::tests::support::keypair(1);
-    let paid = ring_address(&crate::tests::support::keypair(2));
-    let paired = Paired::new(&paid);
-    let transaction = ring_transaction(vec![ring_utxo(sender, Mint::SOL, 10, 0)]);
-    let transfer = owner_transfer(sender, transaction)
-        .with_anonymous_signer(&sender.signing_key, &paired.state)
-        .with_payment(payment(&paid, 4))
-        .unwrap();
-    let staged = stage_anonymous(&transfer, &paired.chain()).await.unwrap();
-    let Spend::Anonymous(spend) = &staged.spend else {
-        unreachable!("an anonymous ring stages its rail");
-    };
-    let late = CatchingUpProofs {
-        chain: paired.chain(),
-        refused: std::sync::atomic::AtomicBool::new(false),
-    };
-    assert!(spend.anchor(&late).await.unwrap().is_some());
-}
-
-/// The program reads the first-contact root from an unpaused tree, any other root fails the transfer.
-#[tokio::test]
-async fn a_first_contact_root_the_program_would_not_read_is_refused_before_proving() {
-    let sender = &crate::tests::support::keypair(1);
-    let paid = ring_address(&crate::tests::support::keypair(2));
-    let paired = Paired::new(&paid);
-    let transaction = ring_transaction(vec![ring_utxo(sender, Mint::SOL, 10, 0)]);
-    let transfer = owner_transfer(sender, transaction)
-        .with_anonymous_signer(&sender.signing_key, &paired.state)
-        .with_payment(payment(&paid, 4))
-        .unwrap();
-    let tree = pda::tree(TREE_ID);
-    let unsettled = paired.chain().with_unsettled_leaf([9; 32], 3);
-    assert!(matches!(
-        transfer.assemble(&unsettled.client()).await,
-        Err(RingError::FirstContactRootStale { tree: stale, root_index: 1 }) if stale == tree
-    ));
-    assert!(matches!(
-        transfer
-            .assemble(&paired.chain().with_paused_tree().client())
-            .await,
-        Err(RingError::Program(CustomRingError::FirstContactTreePaused))
-    ));
-}
-
-#[tokio::test]
-async fn a_leaf_keeps_an_earlier_pause_of_its_tree() {
-    let tree = pda::tree(TREE_ID);
-    let mut account = Chain::ring(anonymous())
-        .with_paused_tree()
-        .with_leaf([9; 32], 0)
-        .get_account(tree)
-        .await
         .unwrap()
+        .with_payment(AnonymousPayment {
+            first_contact: FirstContact::Request(request),
+            ..payment(&ring_address(&requester), 2)
+        })
+        .unwrap()
+        .with_shape(spr_client::Shape::IN2_OUT8)
         .unwrap();
-    let mut view =
-        zolana_tree::TreeAccount::from_bytes(&mut account.data, tree.to_bytes()).unwrap();
-    assert!(view.is_paused());
-    assert_eq!(view.utxo_tree().next_index(), 1);
+    let staged = stage_anonymous(&transfer, &Chain::ring(anonymous()))
+        .await
+        .unwrap();
+    let outputs = &staged.proof_inputs.output_utxos;
+    let sender_address = sender.shielded_address().unwrap();
+    assert_eq!(
+        outputs[..2]
+            .iter()
+            .map(|output| (output.owner_address, output.asset, output.amount))
+            .collect::<Vec<_>>(),
+        [
+            (Some(sender_address), usdc, 7),
+            (Some(sender_address), Mint::SOL, 8)
+        ]
+    );
+    let slots = published(&staged);
+    let sender_tag = sender.get_sender_view_tag(0).unwrap();
+    assert_eq!(slots[0].0, sender_tag);
+    assert_ne!(slots[1].0, sender_tag);
+    assert_eq!(slots[2].0, bootstrap.viewing_pubkey().u());
+    assert_eq!(slots[3].0, request);
+    assert!(slots[..2].iter().all(|(_, body)| body.is_none()));
+    assert!(slots[2..].iter().all(|(_, body)| body.is_some()));
+    for (tag, _) in &slots[3..] {
+        assert_eq!(tag[0], 0, "a request or dummy tag is zero-led");
+    }
+    let sent = bundle(&staged, sender);
+    assert_eq!(
+        (
+            sent.verified.spl_mint,
+            sent.verified.spl_amount,
+            sent.verified.sol_amount
+        ),
+        (usdc.asset, 7, 8)
+    );
+    assert_eq!(
+        sent.verified.recipient_viewing_pks.len(),
+        outputs.len() - 2,
+        "one entry per non-change output"
+    );
+    assert_eq!(
+        listed_recipients(&sent).copied().collect::<Vec<_>>(),
+        [bootstrap.viewing_pubkey(), requester.viewing_pubkey()]
+    );
+    let paid = payment_at(&staged, &bootstrap, 2);
+    assert_eq!(
+        (
+            paid.verified.owner_pubkey,
+            paid.verified.mint,
+            paid.verified.amount,
+            paid.unverified.sender_pubkey
+        ),
+        (
+            bootstrap.signing_pubkey(),
+            usdc.asset,
+            3,
+            sender.viewing_pubkey()
+        )
+    );
+}
+
+#[tokio::test]
+async fn a_transfer_returning_nothing_leads_with_a_zero_sol_change() {
+    use crate::tests::support::keypair;
+    let sender = &keypair(1);
+    let paid = ring_address(&keypair(2));
+    let state = history(sender);
+    let transfer = owner_transfer(
+        sender,
+        ring_transaction(vec![ring_utxo(sender, Mint::SOL, 10, 0)]),
+    )
+    .with_anonymous_signer(&sender.signing_key, &state)
+    .with_payment(payment(&paid, 10))
+    .unwrap();
+    let staged = stage_anonymous(&transfer, &Chain::ring(anonymous()))
+        .await
+        .unwrap();
+    let leading = &staged.proof_inputs.output_utxos[0];
+    assert_eq!(
+        (leading.owner_address, leading.asset, leading.amount),
+        (Some(sender.shielded_address().unwrap()), Mint::SOL, 0)
+    );
+    let sent = bundle(&staged, sender);
+    assert_eq!(
+        (sent.verified.sol_amount, listed_recipients(&sent).count()),
+        (0, 1)
+    );
+}
+
+/// A first payment pairs the recipient, the next one takes the shared tag at index 0.
+#[tokio::test]
+async fn a_known_recipient_takes_the_shared_tag_and_the_history_advances() {
+    use crate::tests::support::keypair;
+    let sender = &keypair(1);
+    let recipient = keypair(2);
+    let paid = ring_address(&recipient);
+    let pay = |state: &ViewingHistory| {
+        owner_transfer(
+            sender,
+            ring_transaction(vec![ring_utxo(sender, Mint::SOL, 10, 0)]),
+        )
+        .with_anonymous_signer(&sender.signing_key, state)
+        .with_payment(payment(&paid, 4))
+        .unwrap()
+        .viewing_history()
+        .unwrap()
+    };
+    let first = pay(&history(sender));
+    assert_eq!(first.current().tx_count(), 1);
+    assert_eq!(
+        first
+            .current()
+            .known_recipients()
+            .get(&recipient.viewing_pubkey())
+            .map(StreamCounter::next),
+        Some(0)
+    );
+    let transfer = owner_transfer(
+        sender,
+        ring_transaction(vec![ring_utxo(sender, Mint::SOL, 10, 0)]),
+    )
+    .with_anonymous_signer(&sender.signing_key, &first)
+    .with_payment(payment(&paid, 4))
+    .unwrap();
+    let staged = stage_anonymous(&transfer, &Chain::ring(anonymous()))
+        .await
+        .unwrap();
+    let slots = published(&staged);
+    assert_eq!(slots[0].0, sender.get_sender_view_tag(1).unwrap());
+    assert_eq!(
+        slots[1].0,
+        sender
+            .get_send_shared_view_tag(&recipient.viewing_pubkey(), 0)
+            .unwrap()
+    );
+    let Spend::Anonymous(spend) = staged.spend else {
+        panic!("an anonymous ring stages its rail");
+    };
+    let second = &spend.history;
+    assert_eq!(second, &pay(&first));
+    assert_eq!(second.current().tx_count(), 2);
+    assert_eq!(
+        second
+            .current()
+            .known_recipients()
+            .get(&recipient.viewing_pubkey())
+            .map(StreamCounter::next),
+        Some(1)
+    );
 }
 
 /// SPP publishes the hidden owner's key beside a default-ring spend, the preview sizes it.
@@ -902,15 +505,15 @@ async fn a_leaf_keeps_an_earlier_pause_of_its_tree() {
 async fn a_default_ring_spend_previews_the_hidden_owners_published_key() {
     let sender = &crate::tests::support::keypair(1);
     let paid = ring_address(&crate::tests::support::keypair(2));
-    let state = AnonymousRingState::new(ring().program_id(), 0);
+    let state = history(sender);
     let entry = crate::tests::support::wallet(
-        zolana_transaction::Utxo {
+        spr_transaction::Utxo {
             owner: sender.signing_pubkey(),
             asset: Mint::SOL,
             amount: 10,
-            blinding: zolana_keypair::random_blinding(),
+            blinding: spr_keypair::random_blinding(),
             ring_program_id: None,
-            data: zolana_transaction::Data::default(),
+            data: spr_transaction::Data::default(),
         },
         &sender.nullifier_key,
         TREE_ID,
@@ -934,7 +537,7 @@ async fn a_default_ring_spend_previews_the_hidden_owners_published_key() {
 
 struct MoveSender<'a> {
     sender: &'a ShieldedKeypair,
-    state: &'a AnonymousRingState,
+    state: &'a ViewingHistory,
     payer: Address,
 }
 
@@ -949,7 +552,7 @@ impl<'a> MoveSender<'a> {
             sender: self.sender,
             nullifier_key: &self.sender.nullifier_key,
             signer: &self.sender.signing_key,
-            state: self.state,
+            history: self.state,
             payer: self.payer,
             utxos,
             asset: Mint::SOL,
@@ -961,13 +564,13 @@ impl<'a> MoveSender<'a> {
 
 fn default_ring_utxo(owner: &ShieldedKeypair, amount: u64, leaf: u64) -> WalletUtxo {
     crate::tests::support::wallet(
-        zolana_transaction::Utxo {
+        spr_transaction::Utxo {
             owner: owner.signing_pubkey(),
             asset: Mint::SOL,
             amount,
-            blinding: zolana_keypair::random_blinding(),
+            blinding: spr_keypair::random_blinding(),
             ring_program_id: None,
-            data: zolana_transaction::Data::default(),
+            data: spr_transaction::Data::default(),
         },
         &owner.nullifier_key,
         TREE_ID,
@@ -975,13 +578,13 @@ fn default_ring_utxo(owner: &ShieldedKeypair, amount: u64, leaf: u64) -> WalletU
     )
 }
 
-/// Ordinary padding publishes the shape's inputs, 32 at 2 outputs is the widest keyed spend.
+/// Ordinary padding publishes the shape's inputs, 16 at 2 outputs is the widest keyed spend.
 #[tokio::test]
 async fn an_anonymous_move_takes_the_widest_keyed_spend_and_refuses_past_it() {
     use crate::tests::support::{keypair, payer};
     let sender = keypair(1);
     let paid = ring_address(&keypair(2));
-    let state = AnonymousRingState::new(ring().program_id(), 0);
+    let state = history(&sender);
     let client = Chain::ring(anonymous()).client();
     let utxos: Vec<WalletUtxo> = (0..36)
         .map(|leaf| ring_utxo(&sender, Mint::SOL, 1, leaf))
@@ -991,49 +594,33 @@ async fn an_anonymous_move_takes_the_widest_keyed_spend_and_refuses_past_it() {
         state: &state,
         payer: payer(),
     };
-    let pay = |amount| {
-        owner.anonymous_move(
-            &utxos,
-            vec![RingPayment {
-                to: paid.clone(),
-                amount,
-            }],
-        )
-    };
-    let widest = pay(32).select(&client).await.unwrap();
+    let pay =
+        |amount| owner.anonymous_move(&utxos, vec![RingPayment::bootstrap(paid.clone(), amount)]);
+    let widest = pay(16).select(&client).await.unwrap();
     let assembled = widest.assemble(&client).await.unwrap();
     assert_eq!(
         assembled.frame.proof_inputs.check_shape().unwrap(),
-        zolana_client::Shape::IN32_OUT2
+        spr_client::Shape::IN16_OUT2
     );
     assert!(matches!(
-        pay(33).select(&client).await,
+        pay(17).select(&client).await,
         Err(RingError::Unfunded {
-            amount: 33,
-            max_inputs: 32,
+            amount: 17,
+            max_inputs: 16,
             ..
         })
     ));
 }
 
-/// One payment without change pads to 2 outputs, a policy ring fits 24 inputs there and not 32.
+/// Five payments and the change pad to 8 outputs, an anonymous ring fits 5 inputs there and not 6.
 #[tokio::test]
 async fn an_anonymous_move_past_the_transaction_size_is_refused_before_proving() {
-    use crate::tests::support::{keypair, payer, Registry};
+    use crate::tests::support::{keypair, payer};
     let sender = keypair(1);
-    let recipients = [keypair(10)];
-    let owners: Vec<(&ShieldedKeypair, u64)> = core::iter::once(&sender)
-        .chain(&recipients)
-        .map(|owner| (owner, 1))
-        .collect();
-    let client = Chain::ring(RingSettings {
-        has_policy: true,
-        ..anonymous()
-    })
-    .with_registry(Registry::new(&owners), &crate::tests::pipeline_rules())
-    .client();
-    let state = AnonymousRingState::new(ring().program_id(), 0);
-    let utxos: Vec<WalletUtxo> = (0..32)
+    let recipients: Vec<ShieldedKeypair> = (10..15).map(keypair).collect();
+    let client = Chain::ring(anonymous()).client();
+    let state = history(&sender);
+    let utxos: Vec<WalletUtxo> = (0..8)
         .map(|leaf| ring_utxo(&sender, Mint::SOL, 1, leaf))
         .collect();
     let owner = MoveSender {
@@ -1041,19 +628,17 @@ async fn an_anonymous_move_past_the_transaction_size_is_refused_before_proving()
         state: &state,
         payer: payer(),
     };
-    let pay = |amount| {
+    let pay = |first: u64| {
         owner.anonymous_move(
             &utxos,
             recipients
                 .iter()
-                .map(|recipient| RingPayment {
-                    to: ring_address(recipient),
-                    amount,
-                })
+                .zip(core::iter::once(first).chain(core::iter::repeat(1)))
+                .map(|(recipient, amount)| RingPayment::bootstrap(ring_address(recipient), amount))
                 .collect(),
         )
     };
-    let fits = pay(24).select(&client).await.unwrap();
+    let fits = pay(1).select(&client).await.unwrap();
     assert_eq!(
         fits.assemble(&client)
             .await
@@ -1062,10 +647,10 @@ async fn an_anonymous_move_past_the_transaction_size_is_refused_before_proving()
             .proof_inputs
             .check_shape()
             .unwrap(),
-        zolana_client::Shape::IN24_OUT2
+        spr_client::Shape::IN5_OUT8
     );
     assert!(matches!(
-        pay(25).select(&client).await,
+        pay(2).select(&client).await,
         Err(RingError::TransactionTooLarge { bytes, limit }) if bytes > limit
     ));
 }
@@ -1076,7 +661,7 @@ async fn an_anonymous_move_spends_ring_utxos_before_an_entry() {
     use crate::tests::support::{keypair, payer};
     let sender = keypair(1);
     let paid = ring_address(&keypair(2));
-    let state = AnonymousRingState::new(ring().program_id(), 0);
+    let state = history(&sender);
     let chain = Chain::ring(anonymous()).client();
     let client = &chain;
     let mut utxos = vec![default_ring_utxo(&sender, 50, 10)];
@@ -1087,13 +672,8 @@ async fn an_anonymous_move_spends_ring_utxos_before_an_entry() {
         payer: payer(),
     };
     let spend = |amount| {
-        let anonymous_move = owner.anonymous_move(
-            &utxos,
-            vec![RingPayment {
-                to: paid.clone(),
-                amount,
-            }],
-        );
+        let anonymous_move =
+            owner.anonymous_move(&utxos, vec![RingPayment::bootstrap(paid.clone(), amount)]);
         async move {
             let transfer = anonymous_move.select(client).await.unwrap();
             transfer.assemble(client).await.unwrap()
@@ -1114,13 +694,7 @@ async fn an_anonymous_move_spends_ring_utxos_before_an_entry() {
     assert!(spend(30).await.frame.parts.full_openings);
     let refused = AnonymousMove {
         entry: EntrySpend::Refuse,
-        ..owner.anonymous_move(
-            &utxos,
-            vec![RingPayment {
-                to: paid.clone(),
-                amount: 30,
-            }],
-        )
+        ..owner.anonymous_move(&utxos, vec![RingPayment::bootstrap(paid.clone(), 30)])
     };
     assert!(matches!(
         refused.select(client).await,
@@ -1134,7 +708,7 @@ async fn an_anonymous_move_never_mixes_ring_and_default_ring_utxos() {
     use crate::tests::support::{keypair, payer};
     let sender = keypair(1);
     let paid = ring_address(&keypair(2));
-    let state = AnonymousRingState::new(ring().program_id(), 0);
+    let state = history(&sender);
     let mut utxos = vec![default_ring_utxo(&sender, 25, 10)];
     utxos.extend((0..4).map(|leaf| ring_utxo(&sender, Mint::SOL, 5, leaf)));
     let owner = MoveSender {
@@ -1143,13 +717,7 @@ async fn an_anonymous_move_never_mixes_ring_and_default_ring_utxos() {
         payer: payer(),
     };
     let selection = owner
-        .anonymous_move(
-            &utxos,
-            vec![RingPayment {
-                to: paid.clone(),
-                amount: 30,
-            }],
-        )
+        .anonymous_move(&utxos, vec![RingPayment::bootstrap(paid.clone(), 30)])
         .select(&Chain::ring(anonymous()).client())
         .await;
     assert!(matches!(
@@ -1163,7 +731,7 @@ async fn an_anonymous_move_never_mixes_ring_and_default_ring_utxos() {
 async fn an_anonymous_spend_of_ring_and_default_ring_utxos_is_refused_before_proving() {
     let sender = crate::tests::support::keypair(1);
     let paid = ring_address(&crate::tests::support::keypair(2));
-    let state = AnonymousRingState::new(ring().program_id(), 0);
+    let state = history(&sender);
     let mut utxos = vec![default_ring_utxo(&sender, 5, 10)];
     utxos.extend((0..8).map(|leaf| ring_utxo(&sender, Mint::SOL, 1, leaf)));
     let transaction = ring_transaction(utxos);
@@ -1181,7 +749,7 @@ async fn an_anonymous_spend_of_ring_and_default_ring_utxos_is_refused_before_pro
 async fn an_anonymous_transfer_reserving_an_address_is_refused_before_signing() {
     let sender = &crate::tests::support::keypair(1);
     let paid = ring_address(&crate::tests::support::keypair(2));
-    let state = AnonymousRingState::new(ring().program_id(), 0);
+    let state = history(sender);
     for note in [
         ring_utxo(sender, Mint::SOL, 10, 0),
         default_ring_utxo(sender, 10, 0),
@@ -1212,7 +780,7 @@ async fn an_entry_spend_of_a_utxo_carrying_data_is_refused_before_proving() {
     use crate::tests::support::{keypair, payer};
     let sender = keypair(1);
     let paid = ring_address(&keypair(2));
-    let state = AnonymousRingState::new(ring().program_id(), 0);
+    let state = history(&sender);
     let chain = Chain::ring(anonymous());
     let mut entry = default_ring_utxo(&sender, 50, 10);
     entry.data_hash = Some([7; 32]);
@@ -1239,13 +807,7 @@ async fn an_entry_spend_of_a_utxo_carrying_data_is_refused_before_proving() {
         payer: payer(),
     };
     let selection = owner
-        .anonymous_move(
-            &utxos,
-            vec![RingPayment {
-                to: paid.clone(),
-                amount: 4,
-            }],
-        )
+        .anonymous_move(&utxos, vec![RingPayment::bootstrap(paid.clone(), 4)])
         .select(&chain.client())
         .await;
     assert!(matches!(
@@ -1260,7 +822,7 @@ async fn an_anonymous_move_its_owner_would_pay_is_refused_before_proving() {
     use crate::tests::support::keypair;
     let sender = keypair(1);
     let paid = ring_address(&keypair(2));
-    let state = AnonymousRingState::new(ring().program_id(), 0);
+    let state = history(&sender);
     let utxos = [ring_utxo(&sender, Mint::SOL, 5, 0)];
     let owner = MoveSender {
         sender: &sender,
@@ -1268,13 +830,7 @@ async fn an_anonymous_move_its_owner_would_pay_is_refused_before_proving() {
         payer: HiddenOwner::of(&sender.signing_pubkey()).unwrap().0,
     };
     let selection = owner
-        .anonymous_move(
-            &utxos,
-            vec![RingPayment {
-                to: paid.clone(),
-                amount: 5,
-            }],
-        )
+        .anonymous_move(&utxos, vec![RingPayment::bootstrap(paid.clone(), 5)])
         .select(&Chain::ring(anonymous()).client())
         .await;
     assert!(matches!(
@@ -1290,7 +846,7 @@ async fn an_anonymous_transfer_its_owner_would_sign_in_public_is_refused_before_
     let sender = &crate::tests::support::keypair(1);
     let payer = crate::tests::support::keypair(9);
     let paid = ring_address(&crate::tests::support::keypair(2));
-    let state = AnonymousRingState::new(ring().program_id(), 0);
+    let state = history(sender);
     let client = Chain::ring(anonymous()).client();
     let unsigned: &[&(dyn Signer + Sync)] = &[];
     for (fee_payer, signers) in [
@@ -1312,50 +868,6 @@ async fn an_anonymous_transfer_its_owner_would_sign_in_public_is_refused_before_
             Err(RingError::AnonymousPublicSignerLinksOwner)
         ));
     }
-}
-
-#[tokio::test]
-async fn an_anonymous_transfer_lands_in_its_epoch_or_the_next_one() {
-    let sender = &crate::tests::support::keypair(1);
-    let paid = ring_address(&crate::tests::support::keypair(2));
-    let state = AnonymousRingState::new(ring().program_id(), 0);
-    let transaction = ring_transaction(vec![ring_utxo(sender, Mint::SOL, 10, 0)]);
-    let transfer = owner_transfer(sender, transaction)
-        .with_anonymous_signer(&sender.signing_key, &state)
-        .with_payment(payment(&paid, 4))
-        .unwrap();
-    let assembled = transfer
-        .assemble(&Chain::ring(anonymous()).client())
-        .await
-        .unwrap();
-    let epoch = assembled.epoch.unwrap();
-    let proven = ProvenRingTransfer {
-        ring: assembled.frame.ring,
-        config: assembled.config,
-        bound: assembled.bound,
-        tx_viewing_key: assembled.frame.rail.tx_viewing_key().clone(),
-        parts: assembled.frame.parts,
-        accounts: assembled.frame.accounts,
-        outputs: Vec::new(),
-        co_signer: None,
-        epoch: assembled.epoch,
-        first_contacts: Vec::new(),
-    };
-    let previous = |slot: u64| {
-        let instruction = proven.instruction_at(slot).unwrap();
-        RingTransactData::parse(&instruction.data[1..], RingRail::Anonymous)
-            .unwrap()
-            .data()
-            .previous_epoch
-    };
-    assert!(!previous((epoch - 1) * EPOCH_SLOTS));
-    assert!(!previous(epoch * EPOCH_SLOTS));
-    assert!(previous((epoch + 1) * EPOCH_SLOTS));
-    assert!(matches!(
-        proven.instruction_at((epoch + 2) * EPOCH_SLOTS),
-        Err(RingError::EpochPassed { proof_epoch, current_epoch })
-            if proof_epoch == epoch && current_epoch == epoch + 2
-    ));
 }
 
 #[tokio::test]
@@ -1452,7 +964,7 @@ fn an_unkeyed_shape_names_its_rail_in_words() {
 
 #[tokio::test]
 async fn a_delegate_move_pads_to_any_ring_authority_shape_it_is_given() {
-    use zolana_client::Shape;
+    use spr_client::Shape;
     let member = &crate::tests::support::keypair(1);
     let delegate = Address::new_from_array([0x44; 32]);
     let source = member.shielded_address().unwrap();
@@ -1488,14 +1000,16 @@ async fn a_delegate_move_pads_to_any_ring_authority_shape_it_is_given() {
     let automatic = transfer();
     let staged = automatic.rail.stage(ring(), &chain, &config).await.unwrap();
     assert_eq!(staged.proof_inputs.check_shape().unwrap(), Shape::IN2_OUT2);
+    assert!(matches!(staged.rail.delivery(), RingDelivery::Delivered));
     let shaped = transfer().with_shape(Shape::IN4_OUT4).unwrap();
     let staged = shaped.rail.stage(ring(), &chain, &config).await.unwrap();
     assert_eq!(staged.proof_inputs.check_shape().unwrap(), Shape::IN4_OUT4);
+    assert!(matches!(staged.rail.delivery(), RingDelivery::Delivered));
 }
 
 struct MoveFixture<'a> {
     member: &'a ShieldedKeypair,
-    recipient: zolana_keypair::ShieldedAddress,
+    recipient: spr_keypair::ShieldedAddress,
     delegate: Address,
     assets: &'a AssetRegistry,
 }
@@ -1533,7 +1047,7 @@ impl<'a> MoveFixture<'a> {
 async fn selected(
     transfer: DelegateTransfer<'_>,
     client: &RingClient<Chain, Chain>,
-) -> (zolana_client::Shape, u16) {
+) -> (spr_client::Shape, u16) {
     let assembled = transfer.assemble(client).await.unwrap();
     (
         assembled.frame.proof_inputs.check_shape().unwrap(),
@@ -1581,7 +1095,7 @@ async fn a_delegate_move_takes_the_fewest_utxos() {
     });
     assert_eq!(
         selected(lean.select(&client).await.unwrap(), &client).await,
-        (zolana_client::Shape::IN4_OUT4, TREE_ID)
+        (spr_client::Shape::IN4_OUT4, TREE_ID)
     );
     let short = fixture.delegate_move(MoveCase {
         utxos: &utxos,
@@ -1606,7 +1120,7 @@ async fn a_delegate_move_takes_the_fewest_utxos() {
         });
         assert_eq!(
             selected(wide.select(&client).await.unwrap(), &client).await,
-            (zolana_client::Shape::IN2_OUT2, 1)
+            (spr_client::Shape::IN2_OUT2, 1)
         );
     }
 }
@@ -1697,7 +1211,7 @@ async fn a_delegate_move_takes_a_change_slot_only_for_change() {
     };
     assert_eq!(
         selected(four(&exact).select(&client).await.unwrap(), &client).await,
-        (zolana_client::Shape::IN4_OUT4, TREE_ID)
+        (spr_client::Shape::IN4_OUT4, TREE_ID)
     );
     assert!(matches!(
         four(&over).select(&client).await,
@@ -1711,7 +1225,7 @@ struct DelegateCase<'a> {
     settings: RingSettings,
     delegate: Address,
     member: &'a ShieldedKeypair,
-    key: zolana_keypair::NullifierKey,
+    key: spr_keypair::NullifierKey,
     inputs: Vec<WalletUtxo>,
 }
 
@@ -1763,25 +1277,23 @@ fn nonzero(value: &serde_json::Value) -> bool {
         .any(|digit| digit != b'0')
 }
 
-/// Each output slot as the anonymous audit circuit reads it.
-fn slot_kinds(request: &serde_json::Value) -> Vec<&'static str> {
+/// Each output slot as the anonymous audit circuit reads it, change the slots `sender_key` owns.
+fn slot_kinds(request: &serde_json::Value, sender_key: &[u8; 32]) -> Vec<&'static str> {
+    let sender_key = format!("0x{}", hex::encode(sender_key));
     request["outputs"]
         .as_array()
         .unwrap()
         .iter()
         .map(|slot| {
             let opening = &slot["output"];
-            let stream = &slot["stream"];
             match (
                 nonzero(&opening["ownerPkHash"]),
                 nonzero(&opening["ringProgramId"]),
             ) {
                 (false, _) => "padding",
                 (true, false) => "exit",
-                (true, true) if stream["inbox"] == true => "inbox",
-                (true, true) if stream["pair"] == true => "pair",
-                (true, true) if stream["self"] == true => "change",
-                (true, true) => "ring",
+                (true, true) if slot["ownerKey"] == sender_key.as_str() => "change",
+                (true, true) => "payment",
             }
         })
         .collect()
@@ -1795,17 +1307,16 @@ async fn the_anonymous_audit_request_of_an_exit_a_payment_and_change_keeps_its_p
     let exit = crate::tests::support::keypair(3)
         .shielded_address()
         .unwrap();
-    let state = AnonymousRingState::new(ring().program_id(), 0);
+    let state = history(sender);
     let mut transaction = ring_transaction(vec![ring_utxo(sender, Mint::SOL, 10, 0)]);
     transaction
         .transfer_with_ring(&exit, Mint::SOL, 3, None)
         .unwrap();
     let transfer = owner_transfer(sender, transaction)
         .with_anonymous_signer(&sender.signing_key, &state)
-        .with_tag_rng(zero_tag_rng)
         .with_payment(payment(&paid, 4))
         .unwrap()
-        .with_shape(zolana_client::Shape::IN1_OUT4)
+        .with_shape(spr_client::Shape::IN1_OUT4)
         .unwrap();
     let assembled = transfer
         .assemble(&Chain::ring(anonymous()).client())
@@ -1816,7 +1327,11 @@ async fn the_anonymous_audit_request_of_an_exit_a_payment_and_change_keeps_its_p
         crate::prover::RequestBody::new(request.circuit, &request.body).unwrap(),
     )
     .unwrap();
-    assert_eq!(slot_kinds(&built), ["exit", "inbox", "change", "padding"]);
+    let sender_key = sender.signing_pubkey().as_ed25519().unwrap();
+    assert_eq!(
+        slot_kinds(&built, &sender_key),
+        ["change", "exit", "payment", "padding"]
+    );
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/custom-ring-audit-anonymous-exit.json");
     if std::env::var_os("UPDATE_PROVER_JSON").is_some() {
@@ -1825,7 +1340,10 @@ async fn the_anonymous_audit_request_of_an_exit_a_payment_and_change_keeps_its_p
     let pinned: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(request_layout(&built), request_layout(&pinned));
-    assert_eq!(slot_kinds(&pinned), slot_kinds(&built));
+    assert_eq!(
+        slot_kinds(&pinned, &sender_key),
+        slot_kinds(&built, &sender_key)
+    );
 }
 
 /// The program refuses dual control the owner would satisfy itself.
@@ -1907,7 +1425,7 @@ async fn an_anonymous_transfer_of_another_owners_utxo_is_refused_before_proving(
     let sender = &crate::tests::support::keypair(1);
     let other = &crate::tests::support::keypair(3);
     let paid = ring_address(&crate::tests::support::keypair(2));
-    let state = AnonymousRingState::new(ring().program_id(), 0);
+    let state = history(sender);
     let transaction = ring_transaction(vec![
         ring_utxo(sender, Mint::SOL, 10, 0),
         ring_utxo(other, Mint::SOL, 10, 1),
@@ -1982,6 +1500,73 @@ async fn a_recipient_the_rules_refuse_fails_before_proving() {
     ));
 }
 
+/// `UPDATE_PROVER_JSON=1` rewrites the shared pooled request Go solves and TS rebuilds.
+#[tokio::test]
+async fn the_member_policy_request_opens_each_subject_once_in_padded_pools() {
+    use crate::tests::support::{keypair, Registry};
+    let sender = keypair(1);
+    let recipient = keypair(2);
+    let settings = RingSettings {
+        has_policy: true,
+        ..RingSettings::new(RingMode::ConfidentialEscrow)
+    };
+    let client = Chain::ring(settings)
+        .with_registry(
+            Registry::new(&[(&sender, 1), (&recipient, 1)]),
+            &crate::tests::pipeline_rules(),
+        )
+        .client();
+    let mut transaction = ring_transaction(vec![ring_utxo(&sender, Mint::SOL, 10, 0)]);
+    transaction
+        .transfer_with_ring(
+            &recipient.shielded_address().unwrap(),
+            Mint::SOL,
+            3,
+            Some(ring().program_id()),
+        )
+        .unwrap();
+    let assembled = owner_transfer(&sender, transaction)
+        .assemble(&client)
+        .await
+        .unwrap();
+    let request = assembled.policy_request().unwrap().unwrap();
+    let built = serde_json::to_value(
+        crate::prover::RequestBody::new(request.circuit, &request.body).unwrap(),
+    )
+    .unwrap();
+    let subjects = |pool: &str| -> Vec<String> {
+        built[pool]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|subject| subject["member"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let own = subjects("ownSubjects");
+    // The sender, the recipient and the asset, cycled to the pool width.
+    assert_eq!(
+        own[..3]
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        3
+    );
+    assert!(own
+        .iter()
+        .enumerate()
+        .all(|(index, member)| *member == own[index % 3]));
+    assert_eq!(built["ownRecords"].as_array().unwrap().len(), own.len());
+    let name = built["circuitType"].as_str().unwrap();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(format!("tests/fixtures/{name}.json"));
+    if std::env::var_os("UPDATE_PROVER_JSON").is_some() {
+        std::fs::write(&path, serde_json::to_string_pretty(&built).unwrap() + "\n").unwrap();
+    }
+    let pinned: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(request_layout(&built), request_layout(&pinned));
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Measured {
     Confidential,
@@ -2005,7 +1590,7 @@ impl Measured {
         !matches!(self, Self::Confidential | Self::Anonymous)
     }
 
-    fn keyed(self, shape: zolana_client::Shape) -> bool {
+    fn keyed(self, shape: spr_client::Shape) -> bool {
         let rail = match self {
             Self::Confidential | Self::ConfidentialPolicy => RingRail::Confidential,
             Self::Anonymous | Self::AnonymousPolicy => RingRail::Anonymous,
@@ -2039,13 +1624,13 @@ const MEASURED_CO_SIGNER: (Address, custom_ring_interface::CoSignScope) = (
 #[derive(Clone, Copy)]
 struct Measure {
     rail: Measured,
-    shape: zolana_client::Shape,
+    shape: spr_client::Shape,
     payer: Payer,
     co_signer: Option<(Address, custom_ring_interface::CoSignScope)>,
 }
 
 impl Measure {
-    fn pinned(rail: Measured, shape: zolana_client::Shape) -> Self {
+    fn pinned(rail: Measured, shape: spr_client::Shape) -> Self {
         Self {
             rail,
             shape,
@@ -2093,7 +1678,7 @@ impl Measure {
             false => Chain::ring(settings),
         };
         let client = chain.client();
-        let state = AnonymousRingState::new(ring().program_id(), 0);
+        let state = history(&sender);
         let assets = AssetRegistry::default();
         let size = FrameSize {
             client: &client,
@@ -2154,7 +1739,7 @@ impl Measure {
 struct FrameSize<'c> {
     client: &'c RingClient<Chain, Chain>,
     rail: Measured,
-    shape: zolana_client::Shape,
+    shape: spr_client::Shape,
     payer: Address,
 }
 
@@ -2167,7 +1752,7 @@ impl FrameSize<'_> {
                     unwitnessed.frame.proof_inputs.check_shape().unwrap(),
                     self.shape
                 );
-                zolana_client::transaction_size(
+                spr_client::transaction_size(
                     &self.payer,
                     &[unwitnessed.instruction().unwrap()],
                     ComputeBudgetConfig::new(0),
@@ -2194,47 +1779,47 @@ const SIZE_PINS: [SizePin; 38] = [
     SizePin {
         n_in: 1,
         n_out: 2,
-        bytes: [Some(1472), Some(1731), Some(1388), Some(1743), None],
+        bytes: [Some(1357), Some(1616), Some(1668), Some(2023), None],
     },
     SizePin {
         n_in: 1,
         n_out: 4,
-        bytes: [Some(1954), Some(2149), Some(1756), Some(2111), None],
+        bytes: [Some(1693), Some(1888), Some(2370), Some(2725), None],
     },
     SizePin {
         n_in: 1,
         n_out: 8,
-        bytes: [Some(2365), Some(2432), Some(2492), Some(2847), None],
+        bytes: [Some(2365), Some(2432), Some(3742), Some(4097), None],
     },
     SizePin {
         n_in: 2,
         n_out: 2,
-        bytes: [Some(1537), Some(1796), Some(1485), Some(1840), Some(1796)],
+        bytes: [Some(1422), Some(1681), Some(1765), Some(2120), Some(1681)],
     },
     SizePin {
         n_in: 2,
         n_out: 4,
-        bytes: [Some(2019), Some(2214), Some(1853), Some(2208), None],
+        bytes: [Some(1758), Some(1953), Some(2467), Some(2822), None],
     },
     SizePin {
         n_in: 1,
         n_out: 16,
-        bytes: [Some(3710), Some(3521), Some(3997), Some(4352), None],
+        bytes: [Some(3710), Some(3521), None, None, None],
     },
     SizePin {
         n_in: 2,
         n_out: 8,
-        bytes: [Some(2430), Some(2497), Some(2589), Some(2944), None],
+        bytes: [Some(2430), Some(2497), Some(3839), Some(4194), None],
     },
     SizePin {
         n_in: 3,
         n_out: 2,
-        bytes: [Some(1602), Some(1861), Some(1550), Some(1905), None],
+        bytes: [Some(1487), Some(1746), Some(1830), Some(2185), None],
     },
     SizePin {
         n_in: 3,
         n_out: 4,
-        bytes: [Some(2084), Some(2279), Some(1918), Some(2273), None],
+        bytes: [Some(1823), Some(2018), Some(2532), Some(2887), None],
     },
     SizePin {
         n_in: 2,
@@ -2244,32 +1829,32 @@ const SIZE_PINS: [SizePin; 38] = [
     SizePin {
         n_in: 3,
         n_out: 8,
-        bytes: [Some(2495), Some(2562), Some(2654), Some(3009), None],
+        bytes: [Some(2495), Some(2562), Some(3904), Some(4259), None],
     },
     SizePin {
         n_in: 4,
         n_out: 2,
-        bytes: [Some(1667), Some(1926), Some(1647), Some(2002), None],
+        bytes: [Some(1552), Some(1811), Some(1927), Some(2282), None],
     },
     SizePin {
         n_in: 4,
         n_out: 4,
-        bytes: [Some(2149), Some(2344), Some(2015), Some(2370), Some(2344)],
+        bytes: [Some(1888), Some(2083), Some(2629), Some(2984), Some(2083)],
     },
     SizePin {
         n_in: 4,
         n_out: 8,
-        bytes: [Some(2560), Some(2627), Some(2751), Some(3106), None],
+        bytes: [Some(2560), Some(2627), Some(4001), Some(4356), None],
     },
     SizePin {
         n_in: 5,
         n_out: 2,
-        bytes: [Some(1732), Some(1991), Some(1712), Some(2067), None],
+        bytes: [Some(1617), Some(1876), Some(1992), Some(2347), None],
     },
     SizePin {
         n_in: 5,
         n_out: 4,
-        bytes: [Some(2214), Some(2409), Some(2080), Some(2435), None],
+        bytes: [Some(1953), Some(2148), Some(2694), Some(3049), None],
     },
     SizePin {
         n_in: 4,
@@ -2279,17 +1864,17 @@ const SIZE_PINS: [SizePin; 38] = [
     SizePin {
         n_in: 5,
         n_out: 8,
-        bytes: [Some(2625), Some(2692), Some(2816), Some(3171), None],
+        bytes: [Some(2625), Some(2692), Some(4066), Some(4421), None],
     },
     SizePin {
         n_in: 6,
         n_out: 2,
-        bytes: [Some(1797), Some(2056), Some(1809), Some(2164), None],
+        bytes: [Some(1682), Some(1941), Some(2089), Some(2444), None],
     },
     SizePin {
         n_in: 6,
         n_out: 4,
-        bytes: [Some(2279), Some(2474), Some(2177), Some(2532), None],
+        bytes: [Some(2018), Some(2213), Some(2791), Some(3146), None],
     },
     SizePin {
         n_in: 5,
@@ -2299,22 +1884,22 @@ const SIZE_PINS: [SizePin; 38] = [
     SizePin {
         n_in: 6,
         n_out: 8,
-        bytes: [Some(2690), Some(2757), Some(2913), Some(3268), None],
+        bytes: [Some(2690), Some(2757), Some(4163), Some(4518), None],
     },
     SizePin {
         n_in: 8,
         n_out: 2,
-        bytes: [Some(1927), Some(2186), Some(1971), Some(2326), None],
+        bytes: [Some(1812), Some(2071), Some(2251), Some(2606), None],
     },
     SizePin {
         n_in: 8,
         n_out: 4,
-        bytes: [Some(2409), Some(2604), Some(2339), Some(2694), None],
+        bytes: [Some(2148), Some(2343), Some(2953), Some(3308), None],
     },
     SizePin {
         n_in: 8,
         n_out: 8,
-        bytes: [Some(2820), Some(2887), Some(3075), Some(3430), None],
+        bytes: [Some(2820), Some(2887), Some(4325), Some(4680), None],
     },
     SizePin {
         n_in: 8,
@@ -2324,57 +1909,57 @@ const SIZE_PINS: [SizePin; 38] = [
     SizePin {
         n_in: 12,
         n_out: 2,
-        bytes: [Some(2187), Some(2446), Some(2295), Some(2650), None],
+        bytes: [Some(2072), Some(2331), Some(2575), Some(2930), None],
     },
     SizePin {
         n_in: 12,
         n_out: 4,
-        bytes: [Some(2669), Some(2864), Some(2663), Some(3018), None],
+        bytes: [Some(2408), Some(2603), Some(3277), Some(3632), None],
     },
     SizePin {
         n_in: 12,
         n_out: 8,
-        bytes: [Some(3080), Some(3147), Some(3399), Some(3754), None],
+        bytes: [Some(3080), Some(3147), None, None, None],
     },
     SizePin {
         n_in: 16,
         n_out: 2,
-        bytes: [Some(2447), Some(2706), Some(2619), Some(2974), None],
+        bytes: [Some(2332), Some(2591), Some(2899), Some(3254), None],
     },
     SizePin {
         n_in: 16,
         n_out: 4,
-        bytes: [Some(2929), Some(3124), Some(2987), Some(3342), None],
+        bytes: [Some(2668), Some(2863), Some(3601), Some(3956), None],
     },
     SizePin {
         n_in: 16,
         n_out: 8,
-        bytes: [Some(3340), Some(3407), Some(3723), Some(4078), None],
+        bytes: [Some(3340), Some(3407), None, None, None],
     },
     SizePin {
         n_in: 24,
         n_out: 2,
-        bytes: [Some(2967), Some(3226), Some(3267), Some(3622), None],
+        bytes: [Some(2852), Some(3111), None, None, None],
     },
     SizePin {
         n_in: 24,
         n_out: 4,
-        bytes: [Some(3449), Some(3644), Some(3635), Some(3990), None],
+        bytes: [Some(3188), Some(3383), None, None, None],
     },
     SizePin {
         n_in: 32,
         n_out: 2,
-        bytes: [Some(3487), Some(3746), Some(3915), Some(4270), None],
+        bytes: [Some(3372), Some(3631), None, None, None],
     },
     SizePin {
         n_in: 40,
         n_out: 2,
-        bytes: [Some(4007), Some(4266), None, None, None],
+        bytes: [Some(3892), Some(4151), None, None, None],
     },
     SizePin {
         n_in: 48,
         n_out: 2,
-        bytes: [Some(4527), Some(4786), None, None, None],
+        bytes: [Some(4412), Some(4671), None, None, None],
     },
     SizePin {
         n_in: 49,
@@ -2387,7 +1972,7 @@ const SIZE_PINS: [SizePin; 38] = [
 #[tokio::test]
 async fn every_transfer_shape_takes_its_pinned_transaction_size() {
     let mut measured = Vec::new();
-    for shape in zolana_client::SPP_SUPPORTED_SHAPES {
+    for shape in spr_client::SPP_SUPPORTED_SHAPES {
         let mut bytes = [None; Measured::COLUMNS.len()];
         for (rail, slot) in Measured::COLUMNS.into_iter().zip(&mut bytes) {
             if rail.keyed(shape) {
@@ -2416,7 +2001,7 @@ async fn a_confidential_ring_fits_its_widest_shapes_only_when_the_owner_pays() {
     };
     let audit_only = Measure {
         rail: Measured::Confidential,
-        shape: zolana_client::Shape::IN8_OUT16,
+        shape: spr_client::Shape::IN8_OUT16,
         payer: Payer::Owner,
         co_signer: None,
     };
@@ -2430,7 +2015,8 @@ async fn a_confidential_ring_fits_its_widest_shapes_only_when_the_owner_pays() {
     );
     let policy = Measure {
         rail: Measured::ConfidentialPolicy,
-        shape: zolana_client::Shape::IN40_OUT2,
+        shape: spr_client::Shape::IN40_OUT2,
+        co_signer: Some(MEASURED_CO_SIGNER),
         ..audit_only
     };
     assert!(fits(policy).await);
@@ -2441,98 +2027,6 @@ async fn a_confidential_ring_fits_its_widest_shapes_only_when_the_owner_pays() {
         })
         .await
     );
-    assert!(
-        !fits(Measure {
-            co_signer: Some(MEASURED_CO_SIGNER),
-            ..policy
-        })
-        .await
-    );
-}
-
-/// Outsider rows on every inbox tag of the epoch hold no payment back, no allocation reads them.
-#[tokio::test]
-async fn a_payment_stages_when_outsider_rows_fill_the_inbox_tags() {
-    use custom_ring_interface::stream::{InboxKey, J_INBOX};
-    use zolana_transaction::instructions::transact::{
-        OutputContext, OutputSlot, ShieldedTransaction,
-    };
-    let sender = &crate::tests::support::keypair(1);
-    let paid = ring_address(&crate::tests::support::keypair(2));
-    let epoch = tag_epoch(SLOT);
-    let inbox = InboxKey::derive(
-        &ring().ring_id().unwrap(),
-        paid.recipient.viewing_pubkey.as_bytes(),
-    )
-    .unwrap();
-    let full = ShieldedTransaction {
-        slot: SLOT,
-        tx_signature: Default::default(),
-        event_index: Some(0),
-        tx_viewing_pk: None,
-        salt: None,
-        output_slots: (0..J_INBOX)
-            .map(|index| OutputSlot {
-                view_tag: inbox
-                    .tag(epoch, TagIndex::new(index).unwrap())
-                    .unwrap()
-                    .field(),
-                output_context: OutputContext {
-                    hash: [index + 1; 32],
-                    tree_id: TREE_ID,
-                    leaf_index: u64::from(index),
-                },
-                payload: Vec::new(),
-            })
-            .collect(),
-        messages: Vec::new(),
-        nullifiers: Vec::new(),
-        proofless: false,
-        ring_config: None,
-        ring_program_id: Some(ring().program_id()),
-    };
-    let state = AnonymousRingState::new(ring().program_id(), 0);
-    let transfer = owner_transfer(
-        sender,
-        ring_transaction(vec![ring_utxo(sender, Mint::SOL, 10, 0)]),
-    )
-    .with_anonymous_signer(&sender.signing_key, &state)
-    .with_payment(payment(&paid, 4))
-    .unwrap();
-    let chain = Chain::ring(anonymous()).with_transaction(full);
-    let Spend::Anonymous(spend) = stage_anonymous(&transfer, &chain).await.unwrap().spend else {
-        panic!("an anonymous ring stages its rail");
-    };
-    let [contact] = spend.first_contacts.as_slice() else {
-        panic!("one inbox payment, {:?}", spend.first_contacts);
-    };
-    assert_eq!(
-        (contact.recipient, contact.epoch),
-        (paid.recipient.viewing_pubkey, epoch)
-    );
-}
-
-/// Draws zeros, each stream index is the lowest one the transaction left free.
-struct ZeroRng;
-
-impl rand_core::RngCore for ZeroRng {
-    fn next_u32(&mut self) -> u32 {
-        0
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        0
-    }
-
-    fn fill_bytes(&mut self, bytes: &mut [u8]) {
-        bytes.fill(0);
-    }
-}
-
-impl rand_core::CryptoRng for ZeroRng {}
-
-fn zero_tag_rng() -> Box<dyn rand_core::CryptoRng + Send> {
-    Box::new(ZeroRng)
 }
 
 /// The transfers scope demands the co-signer on every move.
@@ -2568,7 +2062,7 @@ async fn a_delegate_its_own_co_signer_is_refused_before_proving() {
         }],
     })
     .with_assets(&assets)
-    .with_shape(zolana_client::Shape::IN2_OUT2)
+    .with_shape(spr_client::Shape::IN2_OUT2)
     .unwrap();
     assert!(matches!(
         transfer.assemble(&client).await,
@@ -2580,7 +2074,7 @@ async fn a_delegate_its_own_co_signer_is_refused_before_proving() {
 async fn an_anonymous_deposit_leg_another_key_funds_is_refused_before_proving() {
     let sender = &crate::tests::support::keypair(1);
     let paid = ring_address(&crate::tests::support::keypair(2));
-    let state = AnonymousRingState::new(ring().program_id(), 0);
+    let state = history(sender);
     let stage = |funder: Address| {
         let mut transaction = ring_transaction(vec![ring_utxo(sender, Mint::SOL, 10, 0)]);
         transaction.deposit_sol(5, funder).unwrap();
@@ -2616,7 +2110,7 @@ fn a_payment_total_past_a_u64_is_refused() {
 async fn audit_only_withdrawal_exemptions_use_records_and_gross_totals() {
     use crate::tests::support::Registry;
     use custom_ring_interface::{CoSignScope, PublicLeg};
-    use zolana_interface::instruction::InterfaceTransfer;
+    use spr_interface::instruction::InterfaceTransfer;
     use zolana_ring_policy::{MintPolicy, RuleTable};
     let mut registry = Registry::new(&[]);
     for i in 1..=12 {

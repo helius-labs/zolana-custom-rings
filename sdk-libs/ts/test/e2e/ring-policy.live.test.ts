@@ -15,6 +15,7 @@ import {
   airdrop,
   enrolInAllow,
   freshActor,
+  indexedKeys,
   keypairSignerFromFile,
   requiredEnv,
   sync,
@@ -51,15 +52,17 @@ describe("ring policy", () => {
     }
     const transfer = async () => {
       await sync(client, sender);
-      return buildRingTransferTransaction({
-        client,
-        ringProgramId,
-        wallet: sender.wallet,
-        keys: sender.keys,
-        feePayer: sender.signer.address,
-        recipient: recipient.keypair.shieldedAddress(),
-        amount,
-      });
+      return indexedKeys(() =>
+        buildRingTransferTransaction({
+          client,
+          ringProgramId,
+          wallet: sender.wallet,
+          keys: sender.keys,
+          feePayer: sender.signer.address,
+          recipient: recipient.keypair.shieldedAddress(),
+          amount,
+        }),
+      );
     };
     // A rule the parties fail refuses the transfer before any proof.
     const refused = async () =>

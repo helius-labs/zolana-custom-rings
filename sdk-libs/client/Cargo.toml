@@ -9,7 +9,7 @@ repository.workspace = true
 [features]
 default = []
 solana-rpc = [
-    "zolana-client/solana-rpc",
+    "spr-client/solana-rpc",
     "dep:solana-commitment-config",
     "dep:solana-rpc-client-api",
     "dep:solana-transaction-status-client-types",
@@ -23,7 +23,6 @@ rpc = [
 ]
 
 [dependencies]
-rand_core = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true, optional = true }
 bytemuck = { workspace = true, optional = true }
@@ -46,21 +45,21 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 zeroize = { workspace = true }
 borsh = { workspace = true }
-zolana-api = { workspace = true }
-zolana-client = { workspace = true }
-zolana-event = { workspace = true }
-zolana-event-parser = { workspace = true }
-zolana-interface = { workspace = true }
-zolana-hasher = { workspace = true }
-zolana-indexer-api = { workspace = true }
-zolana-keypair = { workspace = true }
+spr-api = { workspace = true }
+spr-client = { workspace = true }
+spr-event = { workspace = true }
+spr-event-parser = { workspace = true }
+spr-interface = { workspace = true }
+spr-hasher = { workspace = true }
+spr-indexer-api = { workspace = true }
+spr-keypair = { workspace = true }
 zolana-ring-indexer = { workspace = true }
 zolana-ring-keys = { workspace = true }
 zolana-ring-member-registry = { workspace = true }
 zolana-ring-policy = { workspace = true }
 zolana-ring-transaction = { workspace = true }
 zolana-secret-file = { workspace = true, optional = true }
-zolana-transaction = { workspace = true }
+spr-transaction = { workspace = true }
 
 [dev-dependencies]
 http = { workspace = true }

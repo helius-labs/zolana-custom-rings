@@ -15,10 +15,10 @@ use custom_ring_test_validator::{
     shared::{send_expecting_rejection, ExpectRejection, TestEnv},
 };
 use solana_signer::Signer;
-use zolana_keypair::ShieldedKeypair;
-use zolana_program_test::Rejection;
+use spr_keypair::ShieldedKeypair;
+use spr_program_test::Rejection;
+use spr_transaction::Utxo;
 use zolana_ring_policy::ListId;
-use zolana_transaction::Utxo;
 
 /// A local ring rpc, `init` reads the auditor key file and contacts nothing.
 const RING_RPC: &str = "http://127.0.0.1:1";
@@ -259,7 +259,7 @@ fn block(literal: &str, rings: &CuratedRings) -> String {
 
 /// After `init` the project's config authority holds the config.
 fn init_subscriber(rings: &CuratedRings, policy: &str) -> Result<RingProject> {
-    let project = RingProject::create(&rings.env, &zolana_keypair::X25519Keypair::new().pubkey())?;
+    let project = RingProject::create(&rings.env, &spr_keypair::X25519Keypair::new().pubkey())?;
     project.write_config(RingToml {
         env: &rings.env,
         ring_rpc: RING_RPC,

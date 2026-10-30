@@ -605,7 +605,7 @@ function readEventLocation(
   };
 }
 
-/** Mirrors zolana_event_parser::reconstruct_general_event without trusting indexer fields. */
+/** Mirrors spr_event_parser::reconstruct_general_event without trusting indexer fields. */
 function readConfirmedEvent(
   source: OriginInstruction,
   emitted: OriginInstruction,

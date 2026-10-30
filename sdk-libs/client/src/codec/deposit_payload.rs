@@ -1,5 +1,5 @@
 use custom_ring_interface::RingDepositAuditCapsule;
-use zolana_transaction::error::TransactionError;
+use spr_transaction::error::TransactionError;
 
 /// The recipient's ciphertext inside a deposit's audit capsule, or `None` for
 /// a deposit published without one.
@@ -12,8 +12,8 @@ pub fn deposit_payload(bytes: &[u8]) -> Result<Option<&[u8]>, TransactionError> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zolana_keypair::ViewingKey;
-    use zolana_transaction::serialization::ring_deposit::RingDepositPlaintext;
+    use spr_keypair::ViewingKey;
+    use zolana_ring_transaction::RingDepositPlaintext;
 
     #[test]
     fn recipient_opens_plain_and_auditor_wrapped_ciphertexts() {

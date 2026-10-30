@@ -44,15 +44,6 @@ func compileAudit(t *testing.T, name string, circuit, honest frontend.Circuit) *
 	return c
 }
 
-func compilePacked(t *testing.T, capacity int) *compiledAudit {
-	t.Helper()
-	circuit, err := audit.NewPackedAuditCircuit(capacity)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return compileAudit(t, packedKeyName(capacity), circuit, ringaudit.NewPackedAudit(t, capacity).Circuit(t))
-}
-
 func compileDelivered(t *testing.T, capacity int) *compiledAudit {
 	t.Helper()
 	circuit, err := audit.NewDeliveredAuditCircuit(capacity)
@@ -69,10 +60,6 @@ func compileAnonymous(t *testing.T, shape audit.AnonymousAuditShape) *compiledAu
 		t.Fatal(err)
 	}
 	return compileAudit(t, anonymousKeyName(shape), circuit, ringaudit.NewAnonymousAudit(t, shape).Circuit(t))
-}
-
-func packedKeyName(capacity int) string {
-	return fmt.Sprintf("custom_ring_audit_packed_%d", capacity)
 }
 
 func deliveredKeyName(capacity int) string {

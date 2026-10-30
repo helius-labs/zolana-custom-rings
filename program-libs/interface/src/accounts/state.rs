@@ -2,7 +2,7 @@ use core::ops::BitOr;
 
 use bytemuck::{Pod, Zeroable};
 use solana_address::Address;
-use zolana_hasher::{sha256::Sha256, Hasher, HasherError};
+use spr_hasher::{sha256::Sha256, Hasher, HasherError};
 use zolana_ring_policy::{
     registry_field, EncodedRuleTable, ListId, PolicySource, RuleTable, SourceMap,
 };

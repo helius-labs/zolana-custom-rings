@@ -28,39 +28,19 @@ The **hidden owner** is the sender on the anonymous rail. Its Ed25519 signature 
 
 ### Ring address
 
-A **ring address** is the recipient's shielded address with a per-address viewing key `u`, the ring and the pairing rows. `u` is an X25519 public key, and only the recipient holds its secret. The wallet derives `u` from its viewing key, the ring and an address index. A pairing row `(mint, min_amount)` admits a first contact (below) of that mint at or above that amount, and the zero mint admits every asset. The address also carries the recipient's signing key, whose identity owns the recipient's notes. It is shared off chain and never published.
+A **ring address** is the recipient's shielded address and the ring program id. The shielded address carries the recipient's signing key, nullifier key and viewing key `u`. `u` is an X25519 public key, and only the recipient holds its secret. A **payment request** adds a request view tag the recipient minted. Both are shared off chain.
 
-### Payment tag
+### View tag
 
-A **payment tag** is 16 bytes. SPP publishes a 32-byte owner tag for each output. On a confidential ring it is the recipient's `u`. On an anonymous ring it is `0^16 || tag`, 16 zero bytes and then the payment tag. A recipient finds its notes by these tags.
+A **view tag** is the 32-byte owner tag SPP publishes for each output. On a confidential ring it is the recipient's `u`. On an anonymous ring it is one of zolana's [view tags](../zolana/docs/spec.md#view-tags), and a recipient finds its notes by asking the indexer for the tags it derives.
+- The **sender tag** `get_sender_view_tag(tx_count)` derives from the sender's own viewing secret. Output 0, the first change output, takes it. A second change output takes a dummy tag and opens from the sender bundle.
+- The **request tag** `get_recipient_request_view_tag(request_count)` derives from the recipient's viewing secret. The recipient puts it in a payment request.
+- The **bootstrap tag** is the recipient's `u`. Anyone who holds the address derives it.
+- A **shared tag** derives from the X25519 agreement of the sender's and the recipient's viewing keys and an index. Only the two holders derive it.
 
-### Inbox stream
+### First payment
 
-The **inbox stream** is the tags every holder of the address derives:
-```
-inbox_key = Poseidon(CRIK, ring_id, pack_be(0x04 || u))
-tag       = low128(Poseidon(CRIT, inbox_key, epoch, j)),  j < 64
-```
-
-`CRIK`, `CRIT`, `CRPK`, `CRPT` and `CRAT` are domain tags. `ring_id` is `hash_bytes` of the ring program id. `pack_be` splits bytes into field elements, `low128` takes the low 16 bytes, and `j` is the tag index. The recipient scans 64 tags per stream and epoch. [Hashing](spec/crypto/hashing.md#anonymous-streams)
-
-### First contact
-
-A **first contact** is a sender's inbox payment to an address whose pairing admits it. The sender draws a transaction viewing key per transfer and seals its secret `tx_viewing_sk` to the auditor. The slot secret `s1` of the payment hashes `X25519(tx_viewing_sk, u)` with the transaction's public key, `u`, the salt, the output index and the first nullifier. The sender knows `tx_viewing_sk`, the recipient computes the same X25519 value from the secret of `u`, and the auditor opens `tx_viewing_sk`. All three therefore know `s1`.
-
-### Pair stream
-
-The **pair stream** is the tags of one sender and one address after a first contact:
-```
-pair_key = Poseidon(CRPK, s1)
-tag      = low128(Poseidon(CRPT, pair_key, epoch, j)),  j < 64
-```
-
-Only the sender, the recipient and the auditor derive it, so other holders of the address cannot find later payments. It is valid from the first contact's epoch for `K_PAIR_EPOCHS` (32) epochs. The wallets also retire a pair 8 epochs after its last payment.
-
-### Epoch
-
-An **epoch** is `slot / 2^18`. The program binds the landing epoch, or the previous one when the frame sets `PREVIOUS_EPOCH`. That flag lets a transfer proven late in one epoch land in the next.
+A **first payment** is a payment to a recipient the sender's viewing history does not hold. It takes the recipient's request tag or its bootstrap tag, as the caller chooses. Its body names the sender's viewing key as `sender_pubkey`, so the recipient learns the pair, and both sides take the shared tags afterwards. No proof checks `sender_pubkey`.
 
 ### Party identities
 
@@ -70,40 +50,37 @@ The **party identities** are `solana_owner_identity` of three public keys, `0` w
 
 An **entry spend** spends default-ring notes, the SPP notes outside every ring. It publishes the hidden owner's identity as `default_owner_tag`, so it names its sender. It cannot also spend ring notes.
 
-### Decoys
-
-**Decoys** are 7 leaves of the tree that holds the first contact. A pair payment reads their Merkle proofs in one indexer request with the first contact's, in an order keyed by `s1`. The indexer therefore cannot tell which leaf is the first contact.
-
 ## Logic
 
 **The sender stays hidden.** The program refuses every SPP signer but the payer. The hidden owner signs inside SPP's proof. The audit proof shows the hidden owner differs from each party identity.
 
-**The recipient stays hidden.** Each tag derives from the recipient's address and the epoch. Each body is `AES-256-CTR(blinding || amount)` under a key derived from the slot secret, and the audit proof proves it for that `u`. Only the holder of the secret of `u` and the auditor open it. The auditor still opens every output.
+**The recipient stays hidden.** A request tag and a shared tag derive from viewing secrets an observer does not hold. Each body is sealed from the transaction viewing key to the recipient's viewing key at its output position, and no proof covers it. The auditor reads every output's owner key, asset and amount from the proven disclosure.
 
-**A first contact turns into a pair stream.** The ring data hash is a field SPP commits in each output note. The first contact's ring data hash is `Poseidon(CRAT, s1, 0^16 || tag)`. A later payment sets the `ANCHOR` frame flag and publishes the first contact's tree and root index. The program reads that root from the SPP tree as `first_contact_root`. The audit proof opens the first contact under it, as an inbox payment to the same address and owner, fewer than 32 epochs before.
+**A first payment turns into shared tags.** The recipient's sync opens the first payment, adds `sender_pubkey` to its known senders and reads that pair's shared tags from then on. The sender bundle lists the recipient's viewing key, so the sender recovers the pair from its own transfers.
 
 ### Example: Alice pays Bob twice
 
-Bob issues ring address `#3`, address index 3, with the default pairing, any asset at any amount, and gives it to Alice only. Alice pays from Alice's ring notes. A relayer, a third party that submits and pays for the transaction, is the payer.
+Bob mints a payment request and gives it to Alice. Alice pays from Alice's ring notes. A relayer, a third party that submits and pays for the transaction, is the payer.
 
 ```
-Payment 1, epoch E:      Inbox  tag = low128(Poseidon(CRIT, inbox_key_3, E, j1))
-Payment 2, epoch E + 5:  Pair   tag = low128(Poseidon(CRPT, pair_key, E + 5, j2))
-                         ANCHOR, tree and root index of payment 1
+Payment 1:  output 0, Alice's change   get_sender_view_tag(t) of Alice
+            output 1, Bob              Bob's request tag
+Payment 2:  output 0, Alice's change   get_sender_view_tag(t + 1) of Alice
+            output 1, Bob              get_send_shared_view_tag(Bob, 0) of Alice
 ```
 
 <aside>
 
-**Requirement:** the relayer and the Solana fee payer do not link to Alice **AND** address `#3` goes to Alice only.
+**Requirement:** the relayer and the Solana fee payer do not link to Alice **AND** Alice pays the request tag, not Bob's bootstrap tag.
 
 </aside>
 
-| Observer | Payment 1 (inbox) | Payment 2 (pair) |
+| Observer | Payment 1 (request tag) | Payment 2 (shared tag) |
 | --- | --- | --- |
-| Chain observer | The relayer, the epoch, a 16-byte tag, the body and the output hash. Not Alice, not Bob. | The same, plus `ANCHOR`, the tree and the root index. It learns a pair stream is in use and bounds the first contact in time. |
-| Any holder of address `#3` | Derives the 64 inbox tags of epoch `E`, sees that `#3` was paid, and reads Bob's signing key from the address. | Nothing. The pair tags need `s1`. |
-| Bob | Finds the tag, opens the body with the secret of `u` and records the pair key. Learns no sender key. | Finds the pair tag and links payment 2 to the sender of payment 1. |
-| Auditor or Ring RPC reader (Ring RPC holds the auditor key and serves openings to granted readers) | Alice as sender, Bob's owner key and `u`, the asset, the amount and Alice's spent notes. | The same. |
+| Chain observer | The relayer, every tag, every body's scheme and length, and the output hashes. Not Alice, not Bob. | The same. No tag links it to payment 1. |
+| Any holder of Bob's ring address | Bob's signing key and `u`. The request tag does not derive from them, so the holder cannot find payment 1. Under the bootstrap tag every observer would read Bob's `u` from the output. | Nothing. The shared tag needs Alice's or Bob's viewing secret. |
+| Bob | Finds the request tag, opens the body and reads Alice's viewing key as `sender_pubkey`. | Derives the shared tags of Alice's key and finds payment 2. |
+| Auditor or Ring RPC reader (Ring RPC holds the auditor key and serves openings to granted readers) | Alice as sender, Bob's owner key, the asset, the amount and Alice's spent notes. | The same. |
 
 ### Adding an exit, a withdrawal or a default-ring spend
 
@@ -119,43 +96,45 @@ Each leg puts one more key on chain. No check finds a `K` or a `D` that belongs 
 
 ## What the circuit proves
 
-The program rebuilds the anonymous audit statement, the public values the proof binds, from the frame, the clock, the SPP tree and the accounts. The circuit binds three things:
+The program rebuilds the anonymous audit statement, the public values the proof binds, from the frame and the accounts. The circuit binds three things:
 
 1. **The sender to the spent notes**: every spent note is the hidden owner's and reopens SPP's `private_tx_hash`, the blinded hash over the spent note hashes and the output hashes that SPP's proof binds. The hidden owner differs from the payer, the configured co-signer and the withdrawal destination.
-2. **Tags to streams**: each inbox or pair tag is `low128` of its stream digest at an index below 64. The ring data hash binds the slot secret and the tag.
+2. **Each output to the disclosure**: a ring output's owner is the identity of the owner key the disclosure opens, every live output's asset and amount are disclosed, every blinding derives from the sealed key, and no output carries data.
 3. **The auditor message to the transfer**: it seals `tx_viewing_sk` to the auditor, opens every output, and names every spent note by hash and 16-byte prefixes, or by full openings on an entry spend.
 
-Not proven: no layer checks an exit owner or a withdrawal destination for a link to the hidden owner. The tags of change and of dummy padding outputs are free. The tag index can repeat across transfers. No proof shows the output owner holds `u`.
+Not proven: no layer checks an exit owner or a withdrawal destination for a link to the hidden owner. No proof derives a view tag or opens a body, and none checks `sender_pubkey`. A wrong tag or a body sealed to the wrong key costs the recipient the note and gains the sender nothing, and the auditor still opens the output. A tag can repeat across transfers.
 
-See [Anonymity breaks when its conditions fail](spec.md#anonymity-breaks-when-its-conditions-fail), [Repeated payment tags link payments](spec.md#repeated-payment-tags-link-payments), [The anchor dates a first contact](spec.md#the-anchor-dates-a-first-contact), [Streams](spec/crypto/hashing.md#anonymous-streams) and [Disclosure](spec/crypto/disclosure.md).
+See [Anonymity breaks when its conditions fail](spec.md#anonymity-breaks-when-its-conditions-fail), [Repeated view tags link outputs](spec.md#repeated-view-tags-link-outputs), [A bootstrap payment names its recipient's viewing key](spec.md#a-bootstrap-payment-names-its-recipients-viewing-key), [The sender key in a body is unauthenticated](spec.md#the-sender-key-in-a-body-is-unauthenticated) and [Disclosure](spec/crypto/disclosure.md).
 
 <aside>
 
-**Important:** the payer and the Solana fee payer must not link to the hidden owner. Only the SPP payer is checked on chain, by the signer check and by its party identity. A sender draws each tag index from 64, so two transfers on one stream in one epoch publish equal tags with probability 1/64, and equal tags link them.
+**Important:** the payer and the Solana fee payer must not link to the hidden owner. Only the SPP payer is checked on chain, by the signer check and by its party identity. A payment under the bootstrap tag publishes its recipient's viewing key.
 
 </aside>
 
 ## Code reading guide
 
-1. **Rail selection**: `program-libs/interface/src/instructions/transact.rs:98`
+1. **Rail selection**: `program-libs/interface/src/instructions/transact.rs:93`
     - `RingRail::of` maps the tag and the mode to a rail, and `DelegateTransact` on `Anonymous` fails.
-2. **Payer-only signer**: `programs/custom-ring/src/instructions/transact/accounts.rs:118`
-    - Any other SPP signer fails with `InvalidAnonymousSigner`. Line 164 builds the party identities, and `programs/custom-ring/src/instructions/transact/processor.rs:45` binds the epoch and the first-contact root.
+2. **Payer-only signer**: `programs/custom-ring/src/instructions/transact/accounts.rs:124`
+    - Any other SPP signer fails with `InvalidAnonymousSigner`. Line 197 builds the party identities.
 3. **Withdrawal destination**: `program-libs/interface/src/instructions/anonymous_exit.rs:122`
     - Every withdrawal names one key. `identities` at line 175 hashes the three parties.
-4. **Streams**: `program-libs/interface/src/codec/stream.rs:114`
-    - `InboxKey::derive`, `PairKey::derive` at line 147 and `tag_epoch` at line 35.
-5. **Anonymous audit**: `prover/circuits/audit/anonymous.go:115`
-    - `anchor` at line 197, `assertTag` at line 238, `spend` at line 251. Line 192 leaves a change tag free.
+4. **Tag selection**: `sdk-libs/client/src/state/viewing_history.rs:221`
+    - `select` takes a known recipient's next shared tag or the caller's first-payment tag. `TransferTagging::plan` at line 380 takes the sender tag.
+5. **Anonymous audit**: `prover/circuits/audit/anonymous.go:89`
+    - `openSlot` at line 136 opens each output's owner key, asset and amount, and `spend` at line 150 binds the spent notes. No line derives a tag or opens a body.
 6. **Delivery**: `prover/circuits/audit/delivery.go:53`
-    - The body opens for `u`. Line 76 binds the owner to the disclosed owner key, and nothing binds `u` to it.
+    - On the delivered rails the body opens for `u`. Line 76 binds the owner to the disclosed owner key, and nothing binds `u` to it.
 7. **Parties**: `prover/circuits/shared/parties.go:7`
     - Each nonzero party identity differs from the hidden owner.
-8. **Wallet state**: `sdk-libs/client/src/operations/anonymous.rs:248`
-    - `TagAllocation::allocate` at line 1388 picks the stream, `draw` at line 1434 the index. `by_rank` at line 216 orders the decoys.
-9. **Ring address**: `sdk-libs/keys/src/ring_address.rs:97`
-    - `Pairing::admits` at line 84 decides which first contacts anchor a pair.
-10. **SPP hidden owner**: `zolana/prover/server/circuits/spp_transaction/custom/anonymous_eddsa.go:198` at `ff04c625c`
+8. **Output layout**: `sdk-libs/transaction/src/anonymous_rail.rs:76`
+    - `slots` gives output 0 the sender tag and a later change output a dummy tag, and refuses a transfer without change. `lead_change` at line 152 moves the change to the front. `AnonymousSeal::body` at line 194 seals each body at its output position. `sender_bundle` at line 230 lists one recipient key per output after the change and seals the bundle at the output count. An exit or a dummy takes the dummy key `0x04 || 0^32`.
+9. **Wallet sync**: `sdk-libs/client/src/operations/anonymous.rs:284`
+    - `entry` runs both phases, `stream` at line 317 resumes from the watermark, and `record_sent` at line 604 opens the wallet's sent payments.
+10. **Ring address**: `sdk-libs/keys/src/ring_address.rs:38`
+    - `RingPaymentRequest` at line 118 carries the request tag.
+11. **SPP hidden owner**: `zolana/prover/server/circuits/spp_transaction/custom/anonymous_eddsa.go:198` at `ff04c625c`
     - `ed25519.Verify` checks the owner's signature. In `AssertDefaultHiddenOwner` at `zolana/prover/server/circuits/spp_transaction/shared/signers.go:107`, line 126 publishes `default_owner_tag`, line 128 refuses an entry spend that also spends ring notes, and line 130 refuses an exit to the hidden owner on a ring spend.
 
 ### Notes
@@ -165,17 +144,16 @@ See [Anonymity breaks when its conditions fail](spec.md#anonymity-breaks-when-it
 1. The payer and the Solana fee payer do not link to the hidden owner.
 2. The transfer spends ring notes only.
 3. No exit or withdrawal pays a key linked to the owner.
-4. Each ring address goes to one sender and is never published.
+4. A first payment takes a request tag. A bootstrap payment publishes the recipient's viewing key.
 5. The wallet runs its own indexer or trusts it, and the prover runs locally or in an attested TEE.
-6. The anchor tree holds many anonymous outputs before the named root.
-7. The rules admit many owners. An allow rule bounds every sender and recipient to the public allow list.
-8. Public leg amounts and timing do not single out a spend.
+6. The rules admit many owners. An allow rule bounds every sender and recipient to the public allow list.
+7. Public leg amounts and timing do not single out a spend.
 
 [Anonymity breaks when its conditions fail](spec.md#anonymity-breaks-when-its-conditions-fail) gives each condition.
 
 **What each observer learns**
 
-1. Photon, the zolana SPP indexer: one address's inbox and pair tags per request, and the anchor with its 7 decoys in one request (`sdk-libs/client/src/operations/anonymous.rs:874`, `sdk-libs/sdk/src/operations/pipeline/anonymous.rs:437`).
-2. Ring indexer: every call it forwards to Photon, and on a policy ring the members a client opens (`services/ring-indexer/src/rpc/server/mod.rs:42`, `services/ring-indexer/src/rpc/api.rs:164`).
-3. Prover: the full witness, the hidden owner and every opening included (`prover/circuits/audit/anonymous.go:64`).
+1. Photon, the zolana SPP indexer: the tags of one stream of one viewing key per request, and the nullifiers of the wallet's ring notes (`sdk-libs/client/src/operations/anonymous.rs:317`, `sdk-libs/client/src/rpc/tags.rs:87`, `sdk-libs/client/src/operations/anonymous.rs:797`).
+2. Ring indexer: every call it forwards to Photon, and on a policy ring the members a client opens (`services/ring-indexer/src/rpc/server/mod.rs:43`, `services/ring-indexer/src/rpc/api.rs:164`).
+3. Prover: the full witness, the hidden owner and every opening included (`prover/circuits/audit/anonymous.go:43`).
 4. Ring RPC reader: what the auditor opens, once granted (`services/ring-rpc/src/operations/audit.rs:284`).

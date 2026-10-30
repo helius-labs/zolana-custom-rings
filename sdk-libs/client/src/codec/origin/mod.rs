@@ -5,16 +5,16 @@ use core::future::Future;
 use sha2::{Digest, Sha256};
 use solana_address::Address;
 use solana_signature::Signature;
-use zolana_event::{tag, GeneralEvent};
-use zolana_event_parser::{
+use spr_event::{tag, GeneralEvent};
+use spr_event_parser::{
     event_parent, reconstruct_general_event, InstructionGroup, ParsedInstruction,
 };
-use zolana_interface::{
+use spr_interface::{
     instruction::instruction_data::deposit::RingDepositIxData,
     instruction::{settlement_accounts, InterfaceTransfer, TransactIxDataRef},
     SHIELDED_POOL_CPI_AUTHORITY, SHIELDED_POOL_PROGRAM_ID, SOL_INTERFACE,
 };
-use zolana_transaction::{ShieldedTransaction, SOL_MINT};
+use spr_transaction::{ShieldedTransaction, SOL_MINT};
 
 use crate::AuditError;
 use custom_ring_interface::{
@@ -91,7 +91,7 @@ impl ConfirmedEvent {
             .first()
             .map(|slot| slot.output_context.tree_id)
             .filter(|tree_id| {
-                zolana_interface::pda::tree(*tree_id).to_bytes() == self.event.output_tree
+                spr_interface::pda::tree(*tree_id).to_bytes() == self.event.output_tree
             });
         self.event
             .inputs
@@ -127,7 +127,7 @@ impl ConfirmedEvent {
                     indexed.view_tag != confirmed.view_tag
                         || indexed.output_context.hash != confirmed.utxo_hash
                         || indexed.payload != confirmed.data
-                        || zolana_interface::pda::tree(indexed.output_context.tree_id).to_bytes()
+                        || spr_interface::pda::tree(indexed.output_context.tree_id).to_bytes()
                             != event.output_tree
                         || event.first_output_leaf_index.checked_add(index as u64)
                             != Some(indexed.output_context.leaf_index)
@@ -564,7 +564,7 @@ mod rpc {
         EncodedConfirmedTransactionWithStatusMeta, EncodedTransaction, UiMessage,
         UiTransactionEncoding,
     };
-    use zolana_client::{AsyncSolanaRpc, Blocking, ConfirmedInstructionGroups, SolanaRpc};
+    use spr_client::{AsyncSolanaRpc, Blocking, ConfirmedInstructionGroups, SolanaRpc};
 
     use super::{ring_event_origin_in, RingOrigin, TransactionOrigin};
     use crate::AuditError;

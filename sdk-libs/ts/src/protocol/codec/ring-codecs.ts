@@ -8,7 +8,6 @@ import {
   MEMBER_REGISTRY_CAPACITY,
   MEMBER_REGISTRY_ROOT_HISTORY,
 } from "../membership/member-registry.js";
-import { tagEpoch } from "../../crypto/derivation/ring-stream.js";
 
 import { RingError } from "../error.js";
 
@@ -31,8 +30,6 @@ export interface RingProgramConfig {
   readonly delegate?: Address;
   /** The slot `CreateConfig` ran in. */
   readonly createdSlot: bigint;
-  /** No stream of the ring holds an output before this epoch, a restore scans from it. */
-  readonly creationEpoch: bigint;
 }
 
 /** Rust `CustomRingCoSigner`, a mint without a threshold row always needs the co-signer. */
@@ -174,7 +171,6 @@ export function decodeRingProgramConfig(data: Uint8Array): RingProgramConfig {
         }),
     ...(equalBytes(delegate, ZERO_32) ? {} : { delegate: encodeBase58(delegate) }),
     createdSlot,
-    creationEpoch: tagEpoch(createdSlot),
   });
 }
 

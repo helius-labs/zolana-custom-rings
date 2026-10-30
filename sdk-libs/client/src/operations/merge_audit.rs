@@ -8,25 +8,25 @@ use std::{
 use custom_ring_interface::{EscrowKey, MemberRegistry, RingAccount, MEMBER_REGISTRY_CAPACITY};
 use solana_address::Address;
 use solana_signature::Signature;
-use zolana_client::{
+use spr_client::{
     AsyncRpc, GetShieldedTransactionsByTagsResponse, IndexerRpcConfig, ProofInputUtxo,
     RingHistoryOptions, ShieldedTransaction,
 };
-use zolana_event::{
+use spr_event::{
     merge_output::MERGE_OUTPUT_SALT_LEN, split_merge_output_body, OutputDataEncoding,
     MERGE_OUTPUT_BODY_LEN, MERGE_OUTPUT_SCHEME,
 };
-use zolana_hasher::{primitives::is_canonical_bn254_scalar_be, Hasher, Poseidon};
-use zolana_indexer_api::{Context, Hash, SerializablePubkey};
-use zolana_interface::instruction::instruction_data::merge_transact::merge_circuit_width;
-use zolana_keypair::{NullifierKey, X25519Keypair, X25519Pubkey};
-use zolana_ring_indexer::rpc::{GetRingMemberRecordsRequest, MAX_RING_MEMBER_PAGE_LIMIT};
-use zolana_ring_member_registry::{OpeningCheck, RecordOpening};
-use zolana_ring_policy::Member;
-use zolana_transaction::{
+use spr_hasher::{primitives::is_canonical_bn254_scalar_be, Hasher, Poseidon};
+use spr_indexer_api::{Context, Hash, SerializablePubkey};
+use spr_interface::instruction::instruction_data::merge_transact::merge_circuit_width;
+use spr_keypair::{NullifierKey, X25519Keypair, X25519Pubkey};
+use spr_transaction::{
     instructions::merge::{merge_output_blinding, merge_output_key, MergeOutputPlaintext},
     utxo::program_id_proof_input_hash,
 };
+use zolana_ring_indexer::rpc::{GetRingMemberRecordsRequest, MAX_RING_MEMBER_PAGE_LIMIT};
+use zolana_ring_member_registry::{OpeningCheck, RecordOpening};
+use zolana_ring_policy::Member;
 
 use crate::{
     encryption::{open_merge_disclosure, MergeOpening},
@@ -631,9 +631,9 @@ fn remember_merge(
 mod tests {
     use super::*;
     use custom_ring_interface::QueueEntry;
+    use spr_hasher::primitives::right_align;
+    use spr_indexer_api::Base64String;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use zolana_hasher::primitives::right_align;
-    use zolana_indexer_api::Base64String;
     use zolana_ring_indexer::rpc::{
         GetRingMemberRecordsResponse, RingIndexedMemberRecordView, RingMemberRecordView,
         RingRecordPathView, RingRegistryRootView,
@@ -663,7 +663,7 @@ mod tests {
         ) -> Result<GetRingMemberRecordsResponse, RingIndexerError> {
             self.requests.fetch_add(1, Ordering::Relaxed);
             if request.start_index != 1 {
-                return Err(zolana_client::ClientError::Indexer(
+                return Err(spr_client::ClientError::Indexer(
                     "unexpected second registry page".to_owned(),
                 )
                 .into());
@@ -830,9 +830,9 @@ mod tests {
             &self,
             _options: RingHistoryOptions,
             _config: Option<IndexerRpcConfig>,
-        ) -> Result<GetShieldedTransactionsByTagsResponse, zolana_client::ClientError> {
+        ) -> Result<GetShieldedTransactionsByTagsResponse, spr_client::ClientError> {
             Ok(GetShieldedTransactionsByTagsResponse {
-                context: zolana_client::Context {
+                context: spr_client::Context {
                     slot: 1,
                     block_time: 0,
                 },
@@ -912,20 +912,18 @@ mod tests {
                 event_index: Some(0),
                 tx_viewing_pk: None,
                 salt: None,
-                output_slots: vec![zolana_client::OutputSlot {
+                output_slots: vec![spr_client::OutputSlot {
                     view_tag: [0; 32],
-                    output_context: zolana_client::OutputContext {
+                    output_context: spr_client::OutputContext {
                         hash: self.commitment,
                         tree_id: 0,
                         leaf_index: 0,
                     },
-                    payload: zolana_event::encode_merge_output_data(
-                        zolana_event::MergeOutputDataRef {
-                            salt: &self.salt,
-                            ciphertext: &self.ciphertext,
-                            prefix: &[self.ring_data_hash],
-                        },
-                    ),
+                    payload: spr_event::encode_merge_output_data(spr_event::MergeOutputDataRef {
+                        salt: &self.salt,
+                        ciphertext: &self.ciphertext,
+                        prefix: &[self.ring_data_hash],
+                    }),
                 }],
                 messages: Vec::new(),
                 nullifiers: vec![self.first_nullifier; 8],

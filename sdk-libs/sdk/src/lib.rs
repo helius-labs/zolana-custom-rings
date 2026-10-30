@@ -43,7 +43,7 @@ pub use custom_ring_interface::{
     compute_unit_limit, tag, CoSignScope, CustomRingProof, InstructionTag, ListRegistry, RingKind,
     RingMode,
 };
-pub use zolana_program::instruction::{DepositAsset, DepositSplAccounts};
+pub use spr_program::instruction::{DepositAsset, DepositSplAccounts};
 
 pub use crate::prover::secret_json_body;
 pub use crate::{
@@ -69,8 +69,8 @@ pub use crate::{
     pipeline::{
         shape_keyed, Anonymous, AnonymousMove, AnonymousPayment, AnonymousTransfer,
         CustomRingTransfer, CustomRingTransferInput, DelegateMove, DelegateOutput, DelegatePayment,
-        DelegateTransfer, DelegateTransferInput, Delegated, EntrySpend, Owner, PendingFirstContact,
-        ProvenRingTransfer, Rail, RailKind, RingPayment, RingSender, RingTransfer, ANCHOR_DECOYS,
+        DelegateTransfer, DelegateTransferInput, Delegated, EntrySpend, Owner, ProvenRingTransfer,
+        Rail, RailKind, RingPayment, RingSender, RingTransfer,
     },
     records::{
         AuthorityListWrite, MemberListWrite, MemberRecords, ProvenRecordWrite, RecordApplication,
@@ -82,3 +82,4 @@ pub use crate::{
     submission::{RingOperation, RingSubmission, SettledSubmission, SubmissionStatus},
     trees::tree_id,
 };
+pub use zolana_ring_client::FirstContact;

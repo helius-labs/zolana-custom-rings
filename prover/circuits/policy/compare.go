@@ -18,7 +18,7 @@ type comparator struct {
 }
 
 // comparator bounds gross output/withdrawal sums and the existing public net, each leg bounded to u64.
-func (p *Policy) comparator(rc frontend.Rangechecker) comparator {
+func (p *PolicyInputs) comparator(rc frontend.Rangechecker) comparator {
 	return comparator{rc: rc, width: transaction.AmountBits + bits.Len(uint(len(p.Outputs)+len(p.Withdrawals)+1))}
 }
 

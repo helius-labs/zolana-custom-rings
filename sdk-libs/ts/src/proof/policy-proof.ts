@@ -1,5 +1,5 @@
 import { EMPTY_MINT_POLICY } from "../protocol/membership/mint-policy.js";
-import type { RecordOpening } from "../protocol/membership/member-registry.js";
+import type { RecordPool } from "../protocol/membership/member-registry.js";
 import {
   readPolicyWithdrawals,
   policyWithdrawalHash,
@@ -44,8 +44,9 @@ import {
   type RecordLists,
   type RuleRefusal,
 } from "../protocol/membership/policy.js";
-import { readMemberOpenings } from "../rpc/registered-record.js";
+import { readRecordPool } from "../rpc/registered-record.js";
 import { policyStatementHash, type PolicyKey } from "../protocol/proof/statement.js";
+import { policyPoolCapacity } from "../protocol/proof/proving-keys.js";
 import type { RingRail } from "../protocol/transaction/transact.js";
 import { publicAmountFields, type PublicSlots } from "../protocol/transaction/spp.js";
 
@@ -63,7 +64,7 @@ export interface BoundPolicy {
 }
 
 export type PolicyReadClient = Pick<ChainReader, "getAccount"> &
-  Pick<RingRecordReader, "getRingMemberOpenings">;
+  Pick<RingRecordReader, "getRingMemberOpenings" | "getRingRecordPool">;
 
 /** The ring's table, its roots and every subject's openings, read before the statement, Rust `PolicyInputs`. */
 export interface PolicyInputs {
@@ -71,12 +72,15 @@ export interface PolicyInputs {
   readonly splWithdrawalOwners: readonly Bytes32[];
   readonly pinned: PinnedPolicy;
   readonly own: BoundRoot;
-  /** The curator registry account and the root bound from it. */
-  readonly curator?: Readonly<{ registry: Address; root: BoundRoot }>;
+  readonly ownPool: RecordPool;
+  /** The curator registry account, the root bound from it and its pool. */
+  readonly curator?: Readonly<{ registry: Address; root: BoundRoot; pool: RecordPool }>;
   readonly senderEntry: PolicySubjectEntry;
+  /** Outputs then every withdrawal slot. */
   readonly ownerEntries: readonly PolicySubjectEntry[];
   readonly assetEntries: readonly PolicySubjectEntry[];
-  readonly publicAssetEntries: readonly (RecordOpening | undefined)[];
+  /** Empty on the delegate rail. */
+  readonly publicAssetEntries: readonly number[];
   /** The escrowed key ciphertext hash of every UTXO output's owner, under key escrow. */
   readonly ctHashes: readonly (Bytes32 | undefined)[];
   readonly approvalRequired: boolean;
@@ -114,15 +118,12 @@ export async function readPolicy(
   const pinned = pinnedPolicy(registry);
   const own = currentRoot(ringProgramId, registry);
   const curatorRegistry = pinned.curator;
-  const curator =
+  const curatorRoot =
     curatorRegistry === undefined
       ? undefined
       : await (async () => {
           const read = await fetchCuratorRegistry(client, curatorRegistry, context);
-          return {
-            registry: curatorRegistry,
-            root: currentRoot(read.ringProgramId, read.registry),
-          };
+          return currentRoot(read.ringProgramId, read.registry);
         })();
   const { withdrawals, splWithdrawalOwners } = await readPolicyWithdrawals(
     client,
@@ -137,27 +138,65 @@ export async function readPolicy(
   const assets = outputs.map((output) =>
     !output.isDummy() ? memberOfAsset(output.asset) : undefined,
   );
-  const members = uniqueMembers([
+  const memberRail = input.rail !== "delegate";
+  const publicAssets = memberRail
+    ? input.publicSlots.assets.filter((asset) => !equalBytes(asset, ZERO_32))
+    : [];
+  const withdrawalSlots = withdrawalCapacity(withdrawals.length);
+  const ownOnly = curatorRoot === undefined;
+  const capacity = policyPoolCapacity(
+    memberRail
+      ? { family: "memberPolicy", outputs: outputs.length, withdrawals: withdrawalSlots, ownOnly }
+      : {
+          family: "delegatePolicy",
+          inputs: proofInputs.inputUtxos.length,
+          outputs: outputs.length,
+          ownOnly,
+        },
+  );
+  // Rust builds the same subject order.
+  const curatorMembers = firstSeen([
     input.sender,
-    ...owners,
-    ...assets,
-    ...withdrawals.map((w) => w.owner),
-    ...withdrawals.map((w) => w.asset),
-    ...input.publicSlots.assets.filter((asset) => !equalBytes(asset, ZERO_32)),
+    ...outputs.flatMap((_, slotIndex) => [owners[slotIndex], assets[slotIndex]]),
+    ...withdrawals.flatMap((w) => [w.owner, w.asset]),
   ]);
-  const ownReads = await openingsByMember(client, own, members, context);
-  const curatorReads =
-    curator === undefined
+  const ownMembers = firstSeen([...curatorMembers, ...publicAssets]);
+  const ownPool = await readRecordPool(
+    { client, ringProgramId, root: own.root, members: ownMembers, openings: capacity.own },
+    context,
+  );
+  const curatorPool =
+    curatorRoot === undefined
       ? undefined
-      : await openingsByMember(client, curator.root, members, context);
+      : await readRecordPool(
+          {
+            client,
+            ringProgramId: curatorRoot.ringProgramId,
+            root: curatorRoot.root,
+            members: curatorMembers,
+            openings: capacity.curator,
+          },
+          context,
+        );
+  const ownReads = subjectReads(ownMembers, ownPool.reads);
+  const curatorReads =
+    curatorPool === undefined ? undefined : subjectReads(curatorMembers, curatorPool.reads);
   const reads = (member: Bytes32 | undefined) =>
     member === undefined
       ? { own: undefined, curator: undefined }
-      : { own: ownReads.get(bytesKey(member)), curator: curatorReads?.get(bytesKey(member)) };
-  const entry = (member: Bytes32 | undefined): PolicySubjectEntry => {
-    const { own, curator } = reads(member);
-    return { own: own?.opening, curator: curator?.opening };
-  };
+      : {
+          own: ownReads.get(bytesKey(member))?.read,
+          curator: curatorReads?.get(bytesKey(member))?.read,
+        };
+  const subject = (pool: SubjectReads, member: Bytes32 | undefined): number =>
+    member === undefined ? 0 : (pool.get(bytesKey(member))?.index ?? 0);
+  const entry = (member: Bytes32 | undefined): PolicySubjectEntry =>
+    curatorReads === undefined
+      ? { own: subject(ownReads, member) }
+      : { own: subject(ownReads, member), curator: subject(curatorReads, member) };
+  const padding = Array.from({ length: withdrawalSlots - withdrawals.length }, () =>
+    entry(undefined),
+  );
   const lists = (member: Bytes32 | undefined): RecordLists => {
     const { own, curator } = reads(member);
     return Object.freeze({
@@ -199,7 +238,7 @@ export async function readPolicy(
     const owner = owners[slotIndex];
     const address = output.ownerAddress;
     if (!keyEscrow || owner === undefined || address === undefined) return undefined;
-    return ownerEscrowed(owner, ownReads.get(bytesKey(owner)), address.nullifierPublicKey).ctHash;
+    return ownerEscrowed(owner, reads(owner).own, address.nullifierPublicKey).ctHash;
   });
   const approvalRequired =
     input.rail === "delegate"
@@ -209,10 +248,7 @@ export async function readPolicy(
           ringProgramId,
           proofInputs,
           publicSlots: input.publicSlots,
-          limits: uniqueMembers([
-            ...assets,
-            ...input.publicSlots.assets.filter((asset) => !equalBytes(asset, ZERO_32)),
-          ]).flatMap((asset) => {
+          limits: uniqueMembers([...assets, ...publicAssets]).flatMap((asset) => {
             const policy = mintPolicy(asset);
             return policy.cap === 0n && policy.cosignAbove === 0n
               ? []
@@ -230,14 +266,29 @@ export async function readPolicy(
     withdrawals,
     splWithdrawalOwners,
     own,
-    ...(curator === undefined ? {} : { curator }),
+    ownPool: ownPool.pool,
+    ...(curatorRegistry === undefined || curatorRoot === undefined || curatorPool === undefined
+      ? {}
+      : {
+          curator: Object.freeze({
+            registry: curatorRegistry,
+            root: curatorRoot,
+            pool: curatorPool.pool,
+          }),
+        }),
     senderEntry: entry(input.sender),
-    ownerEntries: Object.freeze([...owners.map(entry), ...withdrawals.map((w) => entry(w.owner))]),
-    assetEntries: Object.freeze([...assets.map(entry), ...withdrawals.map((w) => entry(w.asset))]),
+    ownerEntries: Object.freeze([
+      ...owners.map((owner) => entry(owner)),
+      ...withdrawals.map((w) => entry(w.owner)),
+      ...padding,
+    ]),
+    assetEntries: Object.freeze([
+      ...assets.map((asset) => entry(asset)),
+      ...withdrawals.map((w) => entry(w.asset)),
+      ...padding,
+    ]),
     publicAssetEntries: Object.freeze(
-      input.publicSlots.assets.map((asset) =>
-        equalBytes(asset, ZERO_32) ? undefined : entry(asset).own,
-      ),
+      memberRail ? input.publicSlots.assets.map((asset) => subject(ownReads, asset)) : [],
     ),
     ctHashes: Object.freeze(ctHashes),
     approvalRequired,
@@ -303,16 +354,12 @@ export function policyProofRequest(
       });
     }),
     senderPkHash: proving.senderPkHash,
+    ownPool: policy.ownPool,
+    ...(policy.curator === undefined ? {} : { curatorPool: policy.curator.pool }),
     senderEntry: policy.senderEntry,
+    ownerEntries: policy.ownerEntries,
+    assetEntries: policy.assetEntries,
     publicAssetEntries: policy.publicAssetEntries,
-    ownerEntries: [
-      ...policy.ownerEntries,
-      ...Array.from({ length: padding }, () => ({ own: undefined, curator: undefined })),
-    ],
-    assetEntries: [
-      ...policy.assetEntries,
-      ...Array.from({ length: padding }, () => ({ own: undefined, curator: undefined })),
-    ],
   };
   if (proving.rail === "delegate")
     return Object.freeze({
@@ -421,23 +468,27 @@ export function currentRoot(ringProgramId: Address, registry: RingMemberRegistry
   });
 }
 
-/** Every member's verified opening under `root`, keyed by member, Rust `RecordReads::read_keyed`. */
-async function openingsByMember(
-  client: PolicyReadClient,
-  root: BoundRoot,
+type SubjectReads = ReadonlyMap<string, Readonly<{ index: number; read: MemberOpeningRead }>>;
+
+/** Every subject's pool index and verified read, keyed by member. */
+function subjectReads(
   members: readonly Bytes32[],
-  context: RequestContext | undefined,
-): Promise<ReadonlyMap<string, MemberOpeningRead>> {
-  const reads = await readMemberOpenings(
-    { client, ringProgramId: root.ringProgramId, root: root.root, members },
-    context,
-  );
+  reads: readonly MemberOpeningRead[],
+): SubjectReads {
   return new Map(
     members.flatMap((member, index) => {
       const read = reads[index];
-      return read === undefined ? [] : [[bytesKey(member), read] as const];
+      return read === undefined ? [] : [[bytesKey(member), { index, read }] as const];
     }),
   );
+}
+
+/** Distinct members in first-seen order, padding dropped. */
+function firstSeen(members: readonly (Bytes32 | undefined)[]): readonly Bytes32[] {
+  const unique = new Map<string, Bytes32>();
+  for (const member of members)
+    if (member !== undefined && !unique.has(bytesKey(member))) unique.set(bytesKey(member), member);
+  return [...unique.values()];
 }
 
 /** Sorted by bytes like Rust's `BTreeSet`, padding and duplicates dropped. */

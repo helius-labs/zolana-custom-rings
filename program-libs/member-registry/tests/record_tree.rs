@@ -3,9 +3,9 @@ use std::collections::{BTreeMap, HashMap};
 use custom_ring_interface::{
     QueueEntry, FIELD_MAX, MEMBER_REGISTRY_CAPACITY, MEMBER_REGISTRY_EMPTY_ROOT,
 };
-use zolana_hasher::primitives::right_align;
+use spr_hasher::primitives::right_align;
 use zolana_ring_member_registry::{
-    quad_node, IndexedRecord, MemberRecord, MemberRegistryTree, NodePosition, OpeningCheck,
+    quad_node, Canopy, IndexedRecord, MemberRecord, MemberRegistryTree, NodePosition, OpeningCheck,
     QuadPath, RecordOpening, RecordStore, RecordTree, RecordTreeError, ZERO_SUBTREES,
 };
 use zolana_ring_policy::ListId;
@@ -180,6 +180,40 @@ fn openings_resolve_present_and_absent_members_under_their_root() {
         member: &four,
     };
     assert_eq!(stale.verify(), Err(RecordTreeError::RootMismatch));
+}
+
+#[test]
+fn a_record_pool_opens_each_record_once_and_refuses_a_forged_subject() {
+    let mut tree = MemberRegistryTree::new().unwrap();
+    tree.apply([0; 32], &[write(4, ALLOW, ALLOW), write(9, BLOCK, BLOCK)])
+        .unwrap();
+    let root = tree.root().unwrap();
+    let members = [9, 6, 4, 9].map(member);
+    let pool = tree
+        .record_pool(&members, Canopy::covering(4).unwrap())
+        .unwrap();
+    assert_eq!(pool.records.len(), 2);
+    assert_eq!(
+        pool.subjects
+            .iter()
+            .map(|subject| subject.record_index)
+            .collect::<Vec<_>>(),
+        [0, 1, 1, 0]
+    );
+    assert_eq!(pool.verify(&root), Ok(()));
+    let padded = pool.clone().padded(4).unwrap();
+    assert_eq!(padded.verify(&root), Ok(()));
+    assert_eq!(pool.clone().padded(5), Err(RecordTreeError::PoolShape));
+
+    let mut skipped = pool.clone();
+    skipped.subjects[1].record_index = 0;
+    assert_eq!(skipped.verify(&root), Err(RecordTreeError::NotBracketed));
+    let mut forged = pool.clone();
+    forged.records[1].lists = 0;
+    assert_eq!(forged.verify(&root), Err(RecordTreeError::RootMismatch));
+    let mut canopy = pool;
+    canopy.proof.canopy[3] = member(1);
+    assert_eq!(canopy.verify(&root), Err(RecordTreeError::RootMismatch));
 }
 
 #[test]

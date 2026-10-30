@@ -3,8 +3,8 @@
 use std::collections::BTreeSet;
 
 use solana_address::Address;
-use zolana_client::{AsyncRpc, Shape, SPP_SUPPORTED_SHAPES};
-use zolana_transaction::{TransactionError, WalletUtxo};
+use spr_client::{AsyncRpc, Shape, SPP_SUPPORTED_SHAPES};
+use spr_transaction::{TransactionError, WalletUtxo};
 
 use super::{Rail, RingTransfer};
 use crate::client::{RingClient, RingIndexerBackend};

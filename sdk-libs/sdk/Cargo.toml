@@ -5,15 +5,14 @@ edition.workspace = true
 publish = false
 
 [features]
-proofs = ["zolana-client/proofs"]
+proofs = ["spr-client/proofs"]
 
 [dependencies]
 async-trait = { workspace = true }
-zolana-event.workspace = true
+spr-event.workspace = true
 custom-ring-interface = { workspace = true }
 bytemuck = { workspace = true }
 futures = { workspace = true }
-rand_core = { workspace = true }
 solana-account = { workspace = true }
 solana-address = { workspace = true, features = ["curve25519"] }
 solana-instruction = { workspace = true }
@@ -31,25 +30,25 @@ tokio = { workspace = true, features = ["time"] }
 serde_json = { workspace = true }
 wincode = { workspace = true }
 zeroize = { workspace = true }
-zolana-api = { workspace = true }
-zolana-client = { workspace = true }
-zolana-interface = { workspace = true }
-zolana-program = { workspace = true }
-zolana-hasher = { workspace = true }
-zolana-indexer-api = { workspace = true }
-zolana-keypair = { workspace = true }
+spr-api = { workspace = true }
+spr-client = { workspace = true }
+spr-interface = { workspace = true }
+spr-program = { workspace = true }
+spr-hasher = { workspace = true }
+spr-indexer-api = { workspace = true }
+spr-keypair = { workspace = true }
 zolana-ring-client = { workspace = true }
 zolana-ring-indexer = { workspace = true }
 zolana-ring-keys = { workspace = true }
 zolana-ring-member-registry = { workspace = true }
 zolana-ring-policy = { workspace = true }
 zolana-ring-transaction = { workspace = true }
-zolana-transaction = { workspace = true }
-zolana-tree = { workspace = true }
+spr-transaction = { workspace = true }
+spr-tree = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
-zolana-client = { workspace = true, features = ["solana-rpc"] }
+spr-client = { workspace = true, features = ["solana-rpc"] }
 http = { workspace = true }
 curve25519-dalek = "4.1"
 hex = { workspace = true }

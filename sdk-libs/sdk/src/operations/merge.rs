@@ -7,25 +7,25 @@ use custom_ring_interface::{
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
-use zeroize::Zeroizing;
-use zolana_client::{AsyncRpc, AsyncWitnessReader, ClientError, MergeProver, ProofCompressed};
-use zolana_hasher::primitives::{pack_be, right_align};
-use zolana_interface::{
+use spr_client::{AsyncRpc, AsyncWitnessReader, ClientError, MergeProver, ProofCompressed};
+use spr_hasher::primitives::{pack_be, right_align};
+use spr_interface::{
     instruction::instruction_data::merge_transact::{
         MergeOutputEncryption, MergeProof, MergeTransactIxData,
     },
     instruction::tag::RING_MERGE_TRANSACT,
     tree_slot::tree_id_field,
 };
-use zolana_keypair::{NullifierKey, X25519Pubkey};
-use zolana_program::instruction::MergeRing;
-use zolana_ring_client::{MergeDisclosureEncryption, MergeOpening};
-use zolana_transaction::{
+use spr_keypair::{NullifierKey, X25519Pubkey};
+use spr_program::instruction::MergeRing;
+use spr_transaction::{
     error::TransactionError,
     instructions::merge::{MergeProofInputs, MergeTransaction},
     utxo::{ProofInputUtxo, SppProofInputUtxo},
     ShieldedKeys, SppProofOutputUtxo, WalletUtxo,
 };
+use zeroize::Zeroizing;
+use zolana_ring_client::{MergeDisclosureEncryption, MergeOpening};
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
@@ -36,7 +36,7 @@ use crate::{
     tree_id, CustomRing, CustomRingConfig, RingError,
 };
 
-pub use zolana_transaction::instructions::merge::MERGE_DEFAULT_INPUT_COUNT;
+pub use spr_transaction::instructions::merge::MERGE_DEFAULT_INPUT_COUNT;
 /// The most real inputs a ring merge forwards in one v1 transaction.
 pub const MAX_RING_MERGE_INPUTS: usize = 50;
 

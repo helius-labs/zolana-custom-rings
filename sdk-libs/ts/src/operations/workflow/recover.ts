@@ -417,7 +417,10 @@ export async function spendingTransactions(
 }
 
 /** The mint the registry knows, `undefined` for an absent or unregistered one. */
-function registeredMint(assets: AssetRegistry, mint: Address | undefined): Address | undefined {
+export function registeredMint(
+  assets: AssetRegistry,
+  mint: Address | undefined,
+): Address | undefined {
   if (mint === undefined) return undefined;
   try {
     assets.assetId(mint);

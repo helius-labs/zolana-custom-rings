@@ -3,16 +3,20 @@
 An anonymous ring is a custom ring whose config holds `RingMode::Anonymous`. A
 transfer of ring notes inside it hides the sender and the recipient, amount
 and asset of each ring output from a chain observer. The ring auditor reads all
-of them. Each ring
-output carries a tag and an encrypted body. The audit proof shows that
-each body encrypts the note's asset and amount to its recipient. It also shows
-that each payment's tag derives from its recipient's inbox stream or from a
-first contact to that recipient.
+of them. Each ring output carries a view tag and an encrypted body. The audit
+proof opens each ring output's owner key and each output's asset and amount to
+the auditor, and it checks neither the tag nor the body.
 
-The byte layouts and derivations this guide names are in
+The tags, the body encryption and the sync follow zolana's
+[View Tags](../zolana/docs/spec.md#view-tags),
+[AES Key derivation](../zolana/docs/spec.md#aes-key-derivation) and
+[First Time Sync Wallet](../zolana/docs/spec.md#first-time-sync-wallet). The
+ring SDKs take the view tag derivations and the scheme numbers from zolana and
+encode the plaintexts with their own codecs. The byte layouts are in
 [Ring Address](../sdk-libs/keys/src/ring_address.rs),
-[Ring outputs](../program-libs/interface/src/codec/anonymous_output.rs) and the
-[Ring Program Interface](../zolana/docs/spec.md#ring-program-interface).
+[anonymous plaintexts](../sdk-libs/transaction/src/anonymous_plaintext.rs),
+[ring deposits](../sdk-libs/transaction/src/ring_deposit.rs) and
+[Transact](spec.md#20-transact).
 
 ## Roles
 
@@ -21,13 +25,12 @@ address. The **hidden owner** is the sender of an anonymous spend. Its Ed25519
 key signs the spend inside the SPP proof.
 
 A recipient learns the asset, the amount and the blinding of each note it
-receives. A payment on a pair stream also tells the recipient that it comes
-from the sender of an earlier first contact. Beyond what the chain shows, the
-recipient learns no key of the sender.
+receives. The body also names the viewing key of its sender, and no proof
+checks that key.
 
 The **auditor** opens every transfer. It reads the hidden owner's key, every
-spent note, every recipient's owner key and address key, every amount and
-every asset. See [What the auditor reads](auditing.md#what-the-auditor-reads).
+spent note, every recipient's owner key, every amount and every asset. See
+[What the auditor reads](auditing.md#what-the-auditor-reads).
 
 The **payer** is the SPP payer account, and it signs the transaction. Among
 the SPP accounts the ring program accepts no other signer. Nothing on chain
@@ -37,15 +40,16 @@ TypeScript builders make the SPP payer the Solana fee payer, and Rust's
 
 The **indexer** serves outputs by exact tag, spends by nullifier and Merkle
 paths by leaf. It sees which tags, nullifiers and leaves a wallet asks for, and
-a wallet trusts it to return every match. A paged read fails when the indexer
-repeats a cursor. A wallet that needs unlinkability runs its own indexer.
+a sync asks for the tags of one stream together. A wallet trusts it to return
+every match. A paged read fails when the indexer repeats a cursor. A wallet
+that needs unlinkability runs its own indexer.
 
 A **chain observer** sees the ring, the shape, the payer, the Solana fee payer
-and the co-signer. It sees the Solana slot, every tag and every public deposit
-and withdrawal. It also sees whether a transfer pays on a pair stream and which
-state tree holds the first contact the pair stream anchors on. A transfer that
-spends default-ring notes publishes the hidden owner's key. An exit publishes
-its owner. No other output names its recipient to the observer.
+and the co-signer. It sees the Solana slot, every tag, the length of every
+body, and every public deposit and withdrawal. A bootstrap tag
+shows it the recipient's viewing key. A transfer that spends default-ring notes
+publishes the hidden owner's key. An exit publishes its owner. No other output
+names its recipient to the observer.
 
 ## Creating an anonymous ring
 
@@ -58,118 +62,104 @@ the ring hides.
 
 ## Addresses
 
-A **ring address** names one recipient inside one ring. Its viewing key is the
-wallet's **address key** for that ring and index. See
-[Ring Address](../sdk-libs/keys/src/ring_address.rs). Anyone who holds the address
-derives its inbox tags, so a wallet gives each sender its own address and
-never publishes one. Two addresses of one wallet share the signing and nullifier
-keys, so anyone who compares them sees one recipient.
+A **ring address** names one recipient inside one ring by its shielded address
+and the ring program id. See [Ring Address](../sdk-libs/keys/src/ring_address.rs).
+Every holder of the address learns the recipient's signing key and viewing key.
 
-A wallet issues indexes in order from 0. It records each index and its pairing
-in its `AnonymousRingState` and stores the state before a sender receives the
-address. A scan also reads the `ADDRESS_GAP` indexes past the highest issued
-one, and a payment found there adds its address to the state. A state holds at
-most `MAX_ISSUED_ADDRESSES` addresses, because every scan reads the inbox stream
-of each one.
+A **payment request** is the `zolana:` form of an address with a request view
+tag and an optional amount, mint and label. The recipient mints each request
+from its request counter with `ViewingHistory::request_tag` and stores the
+advanced history before it shares the request, so no two requests share a tag.
+The checksum covers the address alone, so a sender treats the rest of the
+request as a suggestion. `zolana-ring address` mints the next request of the
+CLI's sender keypair and prints it.
 
-The checksum of a payment request does not cover its query of amount, mint and
-label, so a sender treats the query as a suggestion. `zolana-ring address`
-issues the next index of the CLI's sender keypair and prints its payment
-request.
+## View tags
 
-## Tags and epochs
+Every anonymous ring output publishes a 32-byte view tag as its owner tag. The
+wallet takes it by [View Tag Selection](../zolana/docs/spec.md#view-tag-selection)
+over the counters of its viewing history.
 
-Solana slots are grouped in tag epochs of `EPOCH_SLOTS` slots. Every proven tag
-is one index of one stream in one epoch. An inbox stream holds `J_INBOX` indexes
-per epoch, and a pair stream holds `J_PAIR`. A wallet finds its payments by
-asking the indexer for the exact tags it derives, and its change through its own
-spends. It decrypts no output outside its own tags and spends.
+1. Output 0, the first change output, takes the transfer's sender tag, the
+   next `get_sender_view_tag(tx_count)`. A second change output takes a dummy
+   tag and opens from the sender bundle. A deposit to the wallet's own note
+   takes the next sender tag too.
+2. A payment to a known recipient takes the pair's next shared tag.
+3. A first payment takes the recipient's request tag or its bootstrap tag, the
+   recipient's `u`. The caller picks one per recipient with
+   `FirstContact::Request` or `FirstContact::Bootstrap`, and the SDK never
+   falls back from one to the other.
+4. A dummy takes `0x00` and 31 random bytes, laid out as a derived tag.
 
-The **inbox stream** of an address carries every payment that takes no pair
-stream. Its key derives from the ring id and the address key, so every holder
-of the address can derive it.
-
-A **first contact** is an inbox payment that anchors a pair stream. The secret
-of its slot keys a **pair stream** between that sender and that address. A
-first contact stays live until `K_PAIR_EPOCHS` epochs pass from its own epoch
-or `PAIR_IDLE_EPOCHS` epochs pass with no pair payment. Later payments of that
-sender can take its pair stream while it is live. A pair that is not live is
-dead at both ends, and its recipient stops scanning it. A pair tag reveals
-nothing to a holder of the address. Repeat payments therefore stay unlinkable
-to everyone but the two parties, the indexers they query, the auditor and its
-readers.
-
-A **change** slot pays the sender itself, under a random tag and to the
-sender's ring change key. A **padding** slot carries a random tag and random
-body bytes. Both random tags follow the distribution of proven tags.
+A first transfer payment makes the recipient known to the sender's history,
+and the recipient learns the sender from the body. Both then use the pair's
+shared tags.
 
 ## Sending
 
-Each payment names its recipient by a ring address. In Rust `with_payment`
-takes an `AnonymousPayment`, and the builder places each payment at its own
-output slot. A ring output to another owner without a payment fails before
-proving.
+Each payment names its recipient by a ring address and its first-payment tag.
+In Rust `with_payment` takes an `AnonymousPayment`, and `AnonymousMove` takes a
+`RingPayment` from `RingPayment::bootstrap` or `RingPayment::to_request`. A ring
+output to another owner without a payment fails before proving, and so does a
+recipient key that admits no X25519 agreement.
 
-The sender selects a stream and an index for each payment by the rules of
-[View Tag Selection](../zolana/docs/spec.md#view-tag-selection). Outputs that
-others publish under an inbox tag never stop a payment. After an inbox payment
-confirms, the sender records it as the address's newest first contact.
-
-A pair-tagged slot proves its first contact under a root the program reads from
-the root history of an SPP state tree. Both SDKs fetch the first contact's path
-in one request beside the paths of its decoys. The decoys are outputs of the
-same ring and tree in the [anonymous form](../program-libs/interface/src/codec/anonymous_output.rs)
-that the wallet's scans saw and pinned under those rules. Every read names the
-same leaves in the same order and does not mark the first contact.
-
-The transfer fails when the indexer refuses the read or does not prove every
-pinned leaf under one root. The error is `FirstContactLeavesRefused` in Rust
-and `RING_ANCHOR_INVALID`, reason `leaves`, in TypeScript. The wallet then
-retires the first contact with `retire_first_contact` or `retireFirstContact`,
-and the next payment to that address takes the inbox stream. The CLI retires it
-itself.
-
-A proof binds its epoch. A transaction lands in the proof's epoch, or in the
-next one when its instruction sets the previous-epoch flag. `instruction_at`
-in Rust and `instructionAt` in TypeScript set the flag from the slot they
-build at. Any other landing fails, and the submission of either SDK then
-proves again under a fresh salt. See
-[How a transfer settles](../README.md#how-a-transfer-settles).
+The counters advance when the wallet builds the transfer.
+`AnonymousTransfer::viewing_history` returns the history past the transfer's
+tags. Store it before the transfer is sent, or a later transfer reuses the
+tags. Every proving attempt of one transfer takes the same tags.
 
 ## What the proof covers
 
-For every ring output the audit proof shows that
+For every output the audit proof shows that
 
-1. the body encrypts the note's blinding and amount to a canonical X25519
-   recipient key,
-2. the body key derives from the transaction key, the recipient key, the salt,
-   the slot and the first nullifier,
-3. the note's blinding is SPP's output blinding under the seed the transaction
-   key and the salt fix, and the note carries no data,
-4. an inbox tag derives from the recipient key's inbox stream,
-5. a pair tag derives from a first contact to the same owner in the same ring,
-6. the note's ring data hash binds the slot secret and the published tag, and
-7. a change slot pays the hidden owner.
+1. a ring output's owner is the identity of the owner key the disclosure opens,
+2. every live output's amount lies below `2^64`, and the disclosure opens its
+   asset and amount,
+3. every blinding is SPP's output blinding under the seed the transaction key
+   and the salt fix, and
+4. no live output carries a data hash or ring data.
 
-The body names no asset. The recipient finds it by rebuilding the note's hash
-under every registered asset. An anchor accepts only the ring data form of an
-anonymous ring output. The ring program keeps the ring data hash of a deposit
-and a merge output on an anonymous ring zero, and refuses the packed form and
-the delegate rail there. A deposit, a merge output, a confidential output, an
-exit and a padding slot therefore never open as a first contact. The anchor also proves that the first contact
-took an inbox tag of the same address. A pair stream therefore starts from an
-output on its recipient's inbox stream.
+For the spend it shows that every spent note is the hidden owner's, that
+`private_tx_hash` reopens over the same notes, and that each party identity
+differs from the hidden owner. On a policy ring the sender commitment opens to
+the hidden owner.
 
-The proof does not show that anyone holds the keys of an address or that the
-address's pairing rows admit the first contact.
-[Threat](../README.md#threat) names the other choices no proof checks.
+The proof derives no view tag and opens no body. A wrong tag or a body sealed
+to the wrong key costs the recipient the note, as a payment to a wrong address
+does. It gains the sender nothing, because the sender's inputs are already
+spent, and the auditor still opens the output. The ring program keeps the ring
+data hash of a deposit and a merge output on an anonymous ring zero, and
+refuses the delegate rail there.
 
-## Uniform slots
+## Output layout
 
 Every output slot of an anonymous transfer is published, so the slot count
-shows only the shape. The ring program refuses a transfer with fewer slots
-than its shape. A payment, a change slot and a padding slot have the same
-form, a tag and a body. An exit is a default-ring output under its owner's tag.
+shows only the shape. The bodies are the scheme 1 recipient and scheme 2
+sender bundle plaintexts. An exit is a default-ring output under its owner's
+tag.
+
+1. Output 0 is the sender's change, a zero-amount note when nothing returns.
+   SPL change leads SOL change. A change output carries its tag and no body.
+2. The sender bundle, scheme 2, is the first SPP message, under the sender's
+   tag and sealed to the sender's own viewing key at the output count. It holds
+   the change amounts and mint, the seed every change blinding derives from,
+   and one recipient viewing key per output after the change, in output order.
+   An exit or a dummy takes the dummy key `0x04 || 0^32`. The zolana sender
+   bundle lists recipients only, so the dummy key is a custom-ring extension,
+   and a sync never adds it to the known recipients.
+3. A payment carries a scheme 1 body sealed to its recipient at its output
+   position, with the owner key, the mint, the amount, the sender's viewing
+   key, the blinding and the data.
+4. A dummy carries random bytes of a payment body's length.
+
+A reader keeps a note only when its rebuilt hash equals the published output
+hash. The change takes at most one SPL and one SOL output, and a zero change
+only alone, because a zero amount reads back as no output.
+
+The program checks only that the sender bundle is not empty. An empty body
+marks a change output, so an observer tells change from payments and dummies.
+A second change output takes a dummy tag, and its empty body still marks it as
+change.
 
 ## The anonymous SPP rail
 
@@ -194,10 +184,10 @@ notes alone unless the sender allows default-ring notes. Rust's `AnonymousMove`
 allows them with `EntrySpend::Allow`, and the CLI with
 `transfer --funding held --entry-spend allow`. A TypeScript transfer allows
 them with `inputs` of `"ring-or-default"` or `"default"`, and
-`buildRingEntryTransaction` spends them alone.
+`createRingEntrySubmission` spends them alone.
 
 `AnonymousSpendSigner` produces the signature, so the hidden owner's key can
-stay outside the process that proves. In Rust `zolana_keypair::SigningKey` and
+stay outside the process that proves. In Rust `spr_keypair::SigningKey` and
 `ed25519_dalek::SigningKey` implement it, and a hardware or remote signer
 implements it itself.
 
@@ -211,11 +201,17 @@ owner's associated token account.
 ## Deposits and merges
 
 A deposit into an anonymous ring discloses its owner key to the auditor. See
-[Deposits](auditing.md#deposits). Both SDKs credit the depositor's own keys,
-because the deposit tag derives from the credited wallet's viewing secret.
-The tag comes from the stored `deposit_next` of the wallet's ring state,
-`depositNext` in TypeScript, and the indexer does not choose it. Two deposits a
-wallet makes between two scans share one tag.
+[Deposits](auditing.md#deposits). A deposit to the depositor's own note takes
+its next sender tag, and a deposit to another member takes a tag by the
+selection above. In Rust `DepositRecipient::Anonymous` and
+`DepositRecipient::AnonymousPayment` name the two, and
+`RingDeposit::viewing_history` returns the history to store before the deposit
+is sent. In TypeScript `PreparedRingDeposit.viewingHistory` returns it, and
+`buildRingDepositTransaction` refuses an anonymous recipient. A deposit body
+names no sender, so a deposit pairs neither side, and the next payment to that
+recipient takes a first-payment tag again. The ring sync opens the scheme 8
+deposit body with Rust `DepositOpener` or TypeScript `openRingDeposit`. It
+keeps the note only when the note rebuilds the published hash.
 
 A merge consolidates notes of one owner without the owner's signature. See
 [Merges](auditing.md#merges).
@@ -230,86 +226,124 @@ records of the owner, of every output owner and of every output asset.
 
 ## Wallet sync
 
-A wallet keeps one `AnonymousRingState` per ring and stores it between scans.
-[First Time Sync Wallet](../zolana/docs/spec.md#first-time-sync-wallet) lists its
-fields, and the state is key material. `AnonymousRingSync` runs the
-anonymous-ring steps of that section, and those steps set the epochs each sync
-reads. A malformed body under a wallet's tag is skipped and never fails the
-sync.
+A wallet keeps one `ViewingHistory` and stores it as key material between
+syncs, because its counterparties link the wallet's payments. It holds one
+entry per retained viewing key, oldest first, with the fields
+[First Time Sync Wallet](../zolana/docs/spec.md#first-time-sync-wallet) lists.
+Each stream counter also keeps a watermark, the index the next sync resumes
+from. `AnonymousSync` runs the anonymous-ring steps of that section for every
+entry whose viewing key the wallet holds.
 
-A restore from seed starts a fresh state at `CustomRingConfig::creation_epoch`,
-the epoch of the slot the config records at creation. Both SDKs refuse a stored
-state of another version. A rescan from the creation epoch builds a new state
-without sent first contacts. Each address the rescan finds takes a pairing row
-that admits every payment.
+1. Each round reads the sender stream, the request stream and the shared
+   stream of every known counterparty, all their tags batched into indexer
+   requests of `TAGS_PER_REQUEST`. The first round also reads the bootstrap
+   tag. A stream's first round reads from its watermark to `TAG_GAP` indices
+   past its next index, each later round reads on with the gap doubled up to
+   `TAGS_PER_REQUEST`, and the stream stops after a round that finds nothing.
+2. Each matched recipient body opens at its output position and gives a note
+   and the viewing key of its sender. A matched sender bundle opens at the
+   output count and gives the wallet's change, and its recipients when the
+   wallet's own transaction key derives the published one. A matched deposit
+   gives its note. Each new key joins the known senders or the known
+   recipients.
+3. A counterparty learned in a round joins the next one.
+4. The spends of every found or held ring note mark it spent and find the ring
+   merges among them.
+
+A note counts only when it rebuilds the published hash under the mint its
+plaintext names. A body that fails to decode, names another owner or rebuilds
+no note is skipped and never fails the sync. `unmatched` lists the outputs whose
+body decoded as the wallet's and rebuilt no note.
+
+An index a sync passes unseen below the highest one it saw stays pending while
+it lies within `PENDING_RETENTION` of the watermark, and every later sync asks
+for it again. A transfer that lands after a later one is therefore still found.
+`with_full_rescan` reads every stream from index 0, for a wallet that keeps no
+notes between syncs.
+
+A sync that opens the wallet's change at output 0 also opens each listed payment
+with the transaction viewing key and reports it in `sent`. A payment is
+`SentCheck::Verified` when an address passed to `with_recipient_addresses`
+names its owner and viewing key and rebuilds the published hash. Otherwise it
+is `SentCheck::Unverified`, and its owner, amount and recipient are what the
+wallet's own body claims.
+
+A restore starts a new `ViewingHistory`, whose watermarks start at 0. The change
+bodies list every recipient the wallet paid and the recipient bodies name every
+sender, so its first sync rebuilds both maps. `ViewingHistory::from_json`
+refuses a stored history of another version. `with_rotated_key` appends a newer
+viewing key, a transfer runs from the current key only, and a sync still reads
+every earlier key the wallet holds.
 
 A wallet whose viewing secret is kept in a remote key holder syncs the same way.
-`ShieldedKeys::ring_address_keys` returns the address keys.
-`ring_delivery_secrets` returns the slot secret of each output paid to one of
-the wallet's addresses, and `ring_change_key` returns the change key. The
-viewing secret never leaves the key holder.
+`RingKeys::view_tags` derives the sender and request tags,
+`RingKeys::shared_view_tags` returns one pair domain per counterparty, and
+`ShieldedKeys` decrypts the bodies and derives the viewing keys of the wallet's
+own transactions. The viewing secret never leaves the key holder.
 
 ## Integration
 
 ### Rust wallet
 
-1. Start each ring's `AnonymousRingState` from `zolana-client` with
-   `AnonymousRingState::new(ring, config.creation_epoch())`, and store it with
+1. Start the wallet's `ViewingHistory` from `zolana-ring-client` with
+   `ViewingHistory::new(viewing_pubkey, created_at)`, and store it with
    `to_json` after every change.
-2. To receive, `issue` the next index with its pairing and store the state.
-   `address` then builds the `RingAddress`, and its `RingPaymentRequest` text
-   goes to the sender.
-3. To sync, build `AnonymousRingSync::new(keys, assets)`. Pass the wallet's
-   notes to `with_held_utxos`, and the change scan asks for the nullifiers of
-   this ring's notes among them. Pass the spends the default-ring sync read to
-   `with_default_ring_spends`. Call `fetch(indexer, state, slot)` and store
-   the state it returns.
+2. To receive, share the `RingAddress`, or a `RingPaymentRequest` with a tag
+   from `request_tag` once the history it returns is stored.
+3. To sync, build `AnonymousSync::new(keys, assets)`. Pass the wallet's notes
+   to `with_held_notes` and the addresses it pays to
+   `with_recipient_addresses`. Call `fetch(indexer, history)` and store the
+   history the scan returns.
 4. To pay, build a `CustomRingTransfer`, call `with_anonymous_signer` with the
-   hidden owner's signer and the state, and add one `with_payment` per
-   recipient. Submit it through `RingSubmission`.
-5. A confirmed submission returns the transfer's first contacts. Pass each
-   one's leaf index to `PendingFirstContact::confirm` and the result to
-   `record_first_contact`, then store the state.
+   hidden owner's signer and the history, and add one `with_payment` per
+   recipient. `AnonymousMove` selects the notes and the shape for a list of
+   `RingPayment`s. Store `viewing_history()` and submit through
+   `RingSubmission`.
 
 ### TypeScript wallet
 
-1. `issueRingAddress` from `@heliuslabs/zolana/wallet` records the next address
-   in the wallet and takes the config's `creationEpoch` the first time. The app
-   persists the wallet before it shares the address. `RingAddress`, `Pairing`
-   and `RingPaymentRequest` come from `@heliuslabs/zolana/keypair`.
-2. `syncWallet` scans anonymous rings when it gets `anonymousRings` with the
-   current slot. `start` names each ring with its config's `creationEpoch`
-   the first time. The keys implement `RingKeys`, and `LocalKeys` does.
-3. `createRingTransferSubmission` pays a `RingAddress` when it gets
-   `anonymous` with the spend signer and `wallet.anonymousRing(ring)`.
-   `signingKeySpendSigner` wraps an in-process key, and
-   `messageSignerSpendSigner` wraps a wallet adapter's message signer.
-   `buildRingTransferTransaction` builds the same transaction without the
-   first contacts.
-4. Its confirmed result carries `firstContacts`. Pass each one with its
-   landed leaf index to `recordFirstContacts`, then persist the wallet.
-5. The wallet snapshot stores every anonymous ring's state.
+1. Start the wallet's `ViewingHistory` from `@heliuslabs/zolana-custom-rings`
+   with `ViewingHistory.create(viewingPublicKey, createdAt)`, and store
+   `toJson()` after every change. The keys implement `RingKeys`, and
+   `LocalRingKeys` does.
+2. To receive, share the `RingAddress`, or a `RingPaymentRequest` with a tag
+   from `requestTag` once the history it returns is stored. Both come from
+   `@heliuslabs/zolana-custom-rings/keypair`.
+3. To sync, build `AnonymousSync.create(keys, assets)`, pass the wallet's notes
+   to `withHeldNotes` and the addresses it pays to `withRecipientAddresses`.
+   Call `fetch(indexer, history)` and store the scan's `history`.
+4. To pay, call `createRingTransferSubmission` with `anonymous` holding the
+   hidden owner's signer and the history. A `RingPaymentRequest` recipient
+   takes its request tag, and a bare `RingAddress` needs
+   `anonymous.firstContact`. Store the submission's `viewingHistory` before
+   the first `send`. Exits, entries and withdrawals go through
+   `createRingExitSubmission`, `createRingEntrySubmission` and
+   `createRingWithdrawalSubmission`. The plain `buildRing*Transaction`
+   builders return no history and refuse an anonymous ring with
+   `RING_ANONYMOUS_SUBMISSION_REQUIRED`.
 
 ## Limits
 
 Owners are Ed25519 keys. A ring output carries no data. An anonymous transfer
-carries no SPP address slot, because its audit
-proof rebuilds `private_tx_hash` with an empty address chain. The Rust SDK
-refuses such a slot before signing. The anonymous rail serves fewer shapes than
-the confidential rail, and a transfer that spends a default-ring note fewer
-still. See [the shapes](../README.md#shapes).
+carries no SPP address slot, because its audit proof rebuilds
+`private_tx_hash` with an empty address chain. The Rust SDK refuses such a slot
+before signing.
 
-Inbox tags are public to every holder of an address, so a holder counts the
-inbox payments the address receives per epoch. A first contact pairs only after
-the wallet's scans saw `ANCHOR_DECOYS` other anonymous outputs of its ring and
-tree. A sender on a quiet tree therefore keeps paying the inbox stream.
+The anonymous commitment keys serve 2 and 4 outputs up to 16 spent notes and 8
+outputs up to 8, and the entry key serves up to 8 default-ring notes at 2, 4
+and 8 outputs. See [the shapes](../README.md#shapes). Through a relayer, an
+8-output transfer that spends more than 5 notes, or any 8-output transfer on a
+policy ring with a co-signer, exceeds the transaction size limit and fails
+assembly with `TransactionTooLarge`. `every_transfer_shape_takes_its_pinned_transaction_size`
+pins the size of every shape.
 
-Scan cost grows with the epochs since the last scan, the issued addresses, the
-live pair streams and the wallet's own spends. Ring traffic does not add to it.
-A restore from seed reads every epoch since the ring's creation epoch.
+A first payment under the bootstrap tag publishes the recipient's viewing key.
+See [the limitation](spec.md#a-bootstrap-payment-names-its-recipients-viewing-key).
+
+Scan cost grows with the counterparties of each viewing key and the wallet's
+own spends. Each known counterparty that sends nothing adds `TAG_GAP` tags to
+every sync, and no limit applies to the counterparties a viewing key learns.
+Ring traffic does not add to it.
 
 An anonymous merge spends fewer notes than a confidential one. See
 [the limits](../README.md#limits).
-
-A pairing row cannot name SOL alone, because SOL's mint is the zero address
-and a zero mint admits every asset.

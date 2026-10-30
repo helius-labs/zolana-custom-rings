@@ -1,6 +1,6 @@
 use solana_program_error::ProgramError;
+use spr_hasher::HasherError;
 use thiserror::Error;
-use zolana_hasher::HasherError;
 use zolana_ring_policy::{PolicyTableError, RuleTableError, SourceMapError};
 
 macro_rules! ring_errors {
@@ -94,8 +94,7 @@ ring_errors! {
     RootBelowFloor = 8203 => "the member registry root is older than the floor",
     CuratorRootStale = 8204 => "the curator root is outside its floor and grace window",
     RootIndexEmpty = 8205 => "the root history slot holds no root",
-    EpochUnderflow = 8206 => "the previous epoch flag is set at epoch zero",
-    FirstContactRootMissing = 8207 => "the first-contact tree holds no root at the index",
+    // 8206 and 8207 retired.
     OwnerSignerCount = 8208 => "a policy transfer takes exactly one owner signer",
     MemberOutOfRange = 8209 => "the member lies outside the record range",
     ListBitNotWritable = 8210 => "the signer may not write a masked list bit",
@@ -112,7 +111,7 @@ ring_errors! {
     PolicyAlreadySet = 8221 => "the policy ring already has a policy",
     AuthorityLeafReserve = 8222 => "a member write would enter the leaves reserved for the authority",
     ApplyTooSoon = 8223 => "a permissionless application lands inside the delay of the previous one",
-    DataFreeBodyLength = 8224 => "a data-free transfer frames a packed or exit body of another length",
+    DataFreeBodyLength = 8224 => "an exit payload is not a data-free scheme 3 body",
     ZeroPublicLegAmount = 8225 => "a public leg moves no amount",
     TooManyPublicAssets = 8226 => "the public legs name more assets than the public slots",
     PublicAmountOverflow = 8227 => "the net public amount of an asset exceeds a u64 magnitude",
@@ -120,7 +119,7 @@ ring_errors! {
     MissingPolicyProof = 8229 => "a policy ring transfer carries no policy proof",
     UnexpectedPolicyProof = 8230 => "an audit-only ring transfer carries a policy proof",
     CoSignerIsOwner = 8231 => "dual control needs a co-signer other than the owner",
-    FirstContactTreePaused = 8232 => "the first-contact tree is paused",
+    // 8232 retired.
     MemberWrittenListRule = 8233 => "a policy rule reads a list its members write",
     RingAuthOutOfSlot = 8234 => "the ring authority PDA sits outside its SPP slot",
     InsertFeeAboveMax = 8235 => "the insert fee exceeds the writer's maximum",
@@ -146,6 +145,8 @@ ring_errors! {
     AnonymousExitTokenAccountInvalid = 8250 =>
         "an anonymous SPL withdrawal's destination is no initialized token program account",
     AnonymousRingDataNotZero = 8251 => "an anonymous ring deposit or merge output carries ring data",
+    AnonymousBodyLength = 8252 => "an anonymous ring body is empty or longer than u16::MAX",
+    OutputBodyLength = 8253 => "a ring output body exceeds the u32 length prefix",
 }
 
 impl From<CustomRingError> for ProgramError {

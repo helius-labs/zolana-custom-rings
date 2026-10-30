@@ -24,29 +24,23 @@ reveals no other field. The ring program refuses a disclosure with a zero field.
 
 ## What the auditor reads
 
-The rail, the output count and whether a spent note is a default-ring note
-select one of four disclosure layouts. In each one the auditor rebuilds the
+The rail and whether a spent note is a default-ring note select one of three
+disclosure layouts. In each one the auditor rebuilds the
 hash of every ring output and exit from what it reads. The proof shows that
 the rebuilt hash is the settled one.
 
-A **packed** disclosure serves the
-[packed form](../program-libs/interface/src/codec/output.rs) of the confidential and
-delegate rails. Per published output it carries the owner key, the nullifier
-key, the asset, the amount and the two data hashes. The auditor derives every
-ring output blinding from `tx_viewing_sk`, so no blinding is published.
-
-A **delivered** disclosure serves the delivered form of the same rails. Per
-output it carries the owner key and the nullifier key. The
+A **delivered** disclosure serves the confidential and delegate rails at every
+output count. Per output it carries the owner key and the nullifier key. The
 auditor reads the blinding and the amount of a ring output from its body. The proof
 shows that the body encrypts them to the recipient key the output publishes. The
 auditor opens the body with the X25519 agreement of `tx_viewing_sk` and that
 key, as the recipient does with its own secret, and finds the asset by
 rebuilding the output's hash under every registered asset.
 
-An **anonymous** disclosure serves the anonymous rail. Per ring output it adds
-the key the body is sealed to. That key is an address key or the sender's ring
-change key. The auditor again reads a ring output's blinding and amount from its
-body. The first spent note is disclosed as its UTXO hash and each later spent
+An **anonymous** disclosure serves the anonymous rail. Per output it carries
+the nullifier key, the owner key of a ring output, and the asset and amount of
+every live output. The auditor derives the blinding from `tx_viewing_sk` and
+opens no body. The first spent note is disclosed as its UTXO hash and each later spent
 note as the first 16 bytes of its hash. Every ring note is an output of an
 operation the ring audited, so the auditor already holds the opening of each
 spent note. The proof shows that the hidden owner owns every spent note. The
@@ -65,14 +59,13 @@ An exit to the default ring carries its owner in its public owner tag. Its
 disclosure slot carries its asset and amount. Its blinding derives from the
 output seed, the first disclosure field of a transfer with an exit.
 
-A transfer whose outputs carry no data drops the data hashes from a packed
-disclosure. The proof then shows that both data hashes of every output are
-zero. A delivered or anonymous output never carries data.
+No ring transfer output carries data. The proof shows that both data hashes of
+every output are zero.
 
 ## Escrowed nullifier keys
 
 A ring under key escrow does not disclose the output nullifier keys in the
-packed and delivered layouts. Its policy proof shows instead that each output
+delivered layout. Its policy proof shows instead that each output
 owner's member record escrows the nullifier key of that output. The auditor
 reads the key from the owner's `RegisterKey` instruction, which carries the
 nullifier key and its secret sealed to the auditor. With the secret the
@@ -128,8 +121,9 @@ earlier pages, to `RingScan::with_known_utxos` or to the `knownUtxos` of
 
 ## Limits
 
-The packed layout does not prove recipient delivery, and no layout proves an
-exit's payload. A sender can send such an output its recipient cannot decrypt,
+No layout proves an exit's payload. On the delivered rails no proof ties a ring
+output's recipient key to its owner, and on the anonymous rail no proof checks
+a tag or a body. A sender can send an output its owner cannot find or decrypt,
 while the auditor still reads it.
 
 The auditor holds no spending key. A delegate, a separate key, moves notes.

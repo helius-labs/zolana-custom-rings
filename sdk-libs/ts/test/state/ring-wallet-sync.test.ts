@@ -11,15 +11,10 @@ import {
   type Bytes32,
 } from "@heliuslabs/zolana";
 import { DEFAULT_TREE_ID } from "@heliuslabs/zolana/interface";
-import {
-  AssetRegistry,
-  SOL_ASSET_ID,
-  type IndexedShieldedTransaction,
-} from "@heliuslabs/zolana/transaction";
+import { AssetRegistry, type IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
 
 import {
   encodeRingOutput,
-  encryptRingPacked,
   RingScheme,
   sealDeliveredBody,
 } from "../../src/protocol/transaction/output.js";
@@ -77,31 +72,11 @@ function transaction(
   };
 }
 
-/** Scheme 11 under the recipient's viewing key, the body its asset id. */
-function packed(
+/** Scheme 10 under the sender's agreement with the recipient key, the body names no asset. */
+function delivered(
   recipient: ShieldedKeypair,
-  assetId = SOL_ASSET_ID,
   hash = note(recipient).hash,
 ): IndexedShieldedTransaction {
-  const txKey = ViewingKey.generate();
-  const viewing = recipient.shieldedAddress().viewingPublicKey;
-  const body = encryptRingPacked(
-    txKey,
-    viewing,
-    { assetId, amount: AMOUNT, blinding: blinding(), data: new Data() },
-    SALT,
-    0,
-  );
-  return transaction(
-    txKey,
-    viewing.u(),
-    hash,
-    encodeRingOutput(RingScheme.ringConfidentialPacked, body),
-  );
-}
-
-/** Scheme 10 under the sender's agreement with the recipient key, the body names no asset. */
-function delivered(recipient: ShieldedKeypair): IndexedShieldedTransaction {
   const txKey = ViewingKey.generate();
   const viewing = recipient.shieldedAddress().viewingPublicKey;
   const slotSecret = deliveredSlotSecret({
@@ -116,7 +91,7 @@ function delivered(recipient: ShieldedKeypair): IndexedShieldedTransaction {
   return transaction(
     txKey,
     viewing.u(),
-    note(recipient).hash,
+    hash,
     encodeRingOutput(RingScheme.ringConfidentialDelivered, body),
   );
 }
@@ -129,35 +104,6 @@ async function opened(
 }
 
 describe("openRingNotes", () => {
-  it("opens a packed note for its recipient alone", async () => {
-    const recipient = ShieldedKeypair.generate();
-    const tx = packed(recipient);
-    const notes = await opened(LocalShieldedKeys.fromKeypair(recipient), [tx]);
-    expect(notes.utxos.map((entry) => [entry.utxo.amount, entry.utxo.ringProgramId])).toEqual([
-      [AMOUNT, RING],
-    ]);
-    expect(notes.utxos[0]?.spent).toBe(false);
-    expect(notes.utxos[0]?.outputContext.tree).toBe(TREE);
-    const stranger = await opened(LocalShieldedKeys.fromKeypair(ShieldedKeypair.generate()), [tx]);
-    expect(stranger.utxos).toEqual([]);
-  });
-
-  it("reports a packed note's unregistered asset id and keeps no note", async () => {
-    const recipient = ShieldedKeypair.generate();
-    const notes = await opened(LocalShieldedKeys.fromKeypair(recipient), [packed(recipient, 77n)]);
-    expect(notes.utxos).toEqual([]);
-    expect(notes.unknownAssetIds).toEqual([77n]);
-  });
-
-  it("refuses a packed note whose published commitment differs", async () => {
-    const recipient = ShieldedKeypair.generate();
-    const forged = new Uint8Array(32).fill(1) as Bytes32;
-    const notes = await opened(LocalShieldedKeys.fromKeypair(recipient), [
-      packed(recipient, SOL_ASSET_ID, forged),
-    ]);
-    expect(notes.utxos).toEqual([]);
-  });
-
   it("opens a delivered note under ring keys by trial over the registered mints", async () => {
     const recipient = ShieldedKeypair.generate();
     const tx = delivered(recipient);
@@ -166,7 +112,21 @@ describe("openRingNotes", () => {
       [AMOUNT, SOL_MINT],
     ]);
     expect(notes.utxos[0]?.outputContext.hash).toEqual(note(recipient).hash);
+    expect(notes.utxos[0]?.outputContext.tree).toBe(TREE);
+    expect(notes.utxos[0]?.spent).toBe(false);
+    expect(notes.pending).toBe(0);
     const plain = await opened(LocalShieldedKeys.fromKeypair(recipient), [tx]);
     expect(plain.utxos).toEqual([]);
+    const stranger = await opened(LocalRingKeys.fromKeypair(ShieldedKeypair.generate()), [tx]);
+    expect(stranger).toEqual({ utxos: [], pending: 0 });
+  });
+
+  it("keeps no note and counts it pending when no registered mint rebuilds its commitment", async () => {
+    const recipient = ShieldedKeypair.generate();
+    const unregistered = new Uint8Array(32).fill(1) as Bytes32;
+    const notes = await opened(LocalRingKeys.fromKeypair(recipient), [
+      delivered(recipient, unregistered),
+    ]);
+    expect(notes).toEqual({ utxos: [], pending: 1 });
   });
 });

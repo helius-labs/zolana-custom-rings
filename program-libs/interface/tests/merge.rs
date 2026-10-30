@@ -9,7 +9,7 @@ use custom_ring_interface::{
     CustomRingProof, MergeDisclosure, PlainGroth16Proof,
 };
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
-use zolana_interface::instruction::instruction_data::merge_transact::{
+use spr_interface::instruction::instruction_data::merge_transact::{
     MergeOutputEncryption, MergeProof, MergeTransactIxData,
 };
 

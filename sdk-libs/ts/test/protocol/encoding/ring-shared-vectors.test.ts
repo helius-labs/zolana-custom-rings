@@ -21,7 +21,6 @@ import {
   anonymousAuditKey,
   anonymousKeyClass,
   disclosureFieldCount,
-  packedFields,
   deliveredFields,
   anonymousFields,
   type AnonymousAuditKey,
@@ -74,14 +73,15 @@ import {
   RingTransactData,
   ringRail,
   ringRailOf,
+  ringTransactOutput,
   type RingOutput,
   type RingRail,
 } from "../../../src/protocol/transaction/transact.js";
 import {
-  TAG_LEN,
-  ringTagField,
-  ringTagFromOwnerTag,
-} from "../../../src/crypto/derivation/ring-stream.js";
+  CONFIDENTIAL_DATA_FREE_BODY_LEN,
+  encodeRingOutput,
+  RingScheme,
+} from "../../../src/protocol/transaction/output.js";
 import {
   RING_AUTHORITY_MAX_INPUTS,
   RING_AUTHORITY_SHAPES,
@@ -364,8 +364,6 @@ describe("ring-statements.json", () => {
   const output = (vector: AuditCase["outputs"][number]): RingOutput => {
     const hash = field(vector.hash);
     switch (vector.kind) {
-      case "packed":
-        return { kind: "packed", hash, u: field(vector.u ?? ""), ciphertext: new Uint8Array() };
       case "delivered":
         return {
           kind: "delivered",
@@ -373,12 +371,13 @@ describe("ring-statements.json", () => {
           u: field(vector.u ?? ""),
           body: bytes(vector.body ?? "", 40),
         };
+      // The anonymous statement binds no tag and no body.
       case "anonymous":
         return {
           kind: "anonymous",
           hash,
-          tag: bytes<Bytes16>(vector.tag ?? "", 16),
-          body: bytes(vector.body ?? "", 40),
+          tag: new Uint8Array(32) as Bytes32,
+          body: Uint8Array.of(1),
         };
       default:
         return {
@@ -389,11 +388,10 @@ describe("ring-statements.json", () => {
         };
     }
   };
-  /** `exits | key_escrow << 1 | data_free << 2 | full_openings << 3`. */
+  /** `exits | key_escrow << 1 | full_openings << 3`. */
   const layout = (value: number): AuditLayout => ({
     exits: (value & 1) !== 0,
     keyEscrow: (value & 2) !== 0,
-    dataFree: (value & 4) !== 0,
     fullOpenings: (value & 8) !== 0,
   });
   const kind = (vector: AuditCase): AuditKind =>
@@ -406,11 +404,9 @@ describe("ring-statements.json", () => {
             Bytes32,
           ],
           privateTxHash: field(vector.private_tx_hash ?? ""),
-          epoch: BigInt(vector.epoch ?? 0),
-          firstContactRoot: field(vector.first_contact_root ?? ""),
           senderCommitment: field(vector.sender_commitment ?? ""),
         }
-      : { kind: vector.kind === "packed" ? "packed" : "delivered" };
+      : { kind: "delivered" };
 
   it("rebuilds every audit statement and its public input", () => {
     for (const vector of statements.audit) {
@@ -514,8 +510,19 @@ describe("ring-transact-expansion.json", () => {
     const compact = bytes(vector.compact);
     const data = RingTransactData.parse(compact, railOf(vector.rail));
     expect(hex(RingTransactData.encode(data))).toBe(vector.compact);
-    expect(hex(encodeRingTransactInstructionData(RingTransactData.expand(data, config)))).toBe(
-      vector.transact_ix_data,
+    const expanded = RingTransactData.expand(data, config);
+    expect(hex(encodeRingTransactInstructionData(expanded))).toBe(vector.transact_ix_data);
+    // The auditor message stays last.
+    expect(expanded.messages.at(-1)?.viewTag).toEqual(config.auditorPubkey.slice(1));
+    expect(expanded.messages.slice(0, -1)).toEqual(
+      data.sender === undefined
+        ? []
+        : [
+            {
+              viewTag: data.sender.tag,
+              data: encodeRingOutput(RingScheme.anonymousSender, data.sender.body),
+            },
+          ],
     );
     expect(hex(RingTransactData.sppInstructionData(data, config))).toBe(
       vector.spp_instruction_data,
@@ -563,31 +570,136 @@ describe("ring-transact-expansion.json", () => {
     expect(refused("confidential_delivered_audit_only", 1, () => 63)).toThrow(
       ringError("RingShapeUnkeyed"),
     );
-    expect(refused("confidential_delivered_audit_only", 0, (byte) => byte | (1 << 4))).toThrow(
-      ringError("FlagNotAllowed"),
-    );
+    for (const [at, bit] of [
+      [0, 4],
+      [0, 6],
+      [0, 7],
+      [1, 7],
+    ] as const)
+      expect(refused("confidential_delivered_audit_only", at, (byte) => byte | (1 << bit))).toThrow(
+        ringError("FlagNotAllowed"),
+      );
     const wide = SPP_SUPPORTED_SHAPES.findIndex(
       (shape) => shape.inputs > RING_AUTHORITY_MAX_INPUTS,
     );
     expect(refused("delegate_move", 1, () => wide)).toThrow(ringError("RingShapeUnkeyed"));
   });
 
-  it("frames a data-free packed slot at its fixed length and refuses another", () => {
-    const vector = expansion.cases.find((entry) => entry.name === "delegate_move");
-    if (vector === undefined) throw new Error("vector has no delegate move");
-    const data = RingTransactData.parse(bytes(vector.compact), railOf(vector.rail));
-    expect(data.dataFree).toBe(true);
-    const [first, ...rest] = data.outputs;
-    if (first?.kind !== "packed") throw new Error("delegate move without a packed slot");
-    expect(first.ciphertext).toHaveLength(49);
-    const longer = { ...first, ciphertext: Uint8Array.of(...first.ciphertext, 0) };
-    expect(() => RingTransactData.encode({ ...data, outputs: [longer, ...rest] })).toThrow(
-      ringError("DataFreeBodyLength"),
+  it("refuses the retired epoch and anchor bits on every rail", () => {
+    for (const vector of expansion.cases)
+      for (const bit of [3, 4]) {
+        const compact = bytes(vector.compact);
+        compact[0] = (compact[0] ?? 0) | (1 << bit);
+        expect(() => RingTransactData.parse(compact, railOf(vector.rail))).toThrow(
+          ringError("FlagNotAllowed"),
+        );
+      }
+  });
+
+  /** The anonymous policy frame, its first recipient slot and the offset of that slot's tag. */
+  const anonymousFrame = () => {
+    const vector = expansion.cases.find((entry) => entry.name === "anonymous_policy");
+    if (vector === undefined) throw new Error("vector has no anonymous policy transfer");
+    const compact = bytes(vector.compact);
+    const data = RingTransactData.parse(compact, "anonymous");
+    const at = data.outputs.findIndex(
+      (output) => output.kind === "anonymous" && output.body !== undefined,
     );
-    // The data-free flag moves the packed slot fields, the sealed disclosure no longer fits.
-    expect(() => RingTransactData.encode({ ...data, dataFree: false })).toThrow(
+    const first = data.outputs[at];
+    if (first?.kind !== "anonymous" || first.body === undefined || data.sender === undefined)
+      throw new Error("anonymous transfer without a recipient body or a sender bundle");
+    const offset = (tag: Bytes32, from = 0) =>
+      Array.from(compact.keys()).find(
+        (start) => start >= from && tag.every((byte, index) => compact[start + index] === byte),
+      );
+    const tag = offset(first.tag);
+    if (tag === undefined) throw new Error("the frame carries no tag");
+    const sender = offset(data.sender.tag, tag + 32 + 2 + first.body.length);
+    if (sender === undefined) throw new Error("the frame carries no sender bundle");
+    return { compact, data, at, first, body: first.body, tag, sender, bundle: data.sender };
+  };
+
+  it("frames a recipient body under scheme 1 and a change output with no data", () => {
+    const { data } = anonymousFrame();
+    expect(data.outputs[0]).toMatchObject({ kind: "anonymous" });
+    expect(data.outputs[0]).not.toHaveProperty("body");
+    for (const output of data.outputs) {
+      if (output.kind !== "anonymous") continue;
+      const published = ringTransactOutput(output);
+      expect(published.data).toEqual(
+        output.body === undefined
+          ? undefined
+          : encodeRingOutput(RingScheme.anonymousRecipient, output.body),
+      );
+      expect(published.ownerTag).toEqual({ kind: "inline", value: output.tag });
+    }
+  });
+
+  it("refuses an anonymous body length past the data", () => {
+    const { compact, body, tag } = anonymousFrame();
+    expect([compact[tag + 32], compact[tag + 33]]).toEqual([body.length & 0xff, body.length >> 8]);
+    const refused = compact.slice();
+    refused[tag + 32] = 0xff;
+    refused[tag + 33] = 0xff;
+    expect(() => RingTransactData.parse(refused, "anonymous")).toThrow(
       ringError("RingTransactLength"),
     );
+  });
+
+  it("refuses an empty sender bundle", () => {
+    const { compact, sender, bundle } = anonymousFrame();
+    const length = sender + 32;
+    expect([compact[length], compact[length + 1]]).toEqual([
+      bundle.body.length & 0xff,
+      bundle.body.length >> 8,
+    ]);
+    const refused = Uint8Array.of(
+      ...compact.subarray(0, length),
+      0,
+      0,
+      ...compact.subarray(length + 2 + bundle.body.length),
+    );
+    expect(() => RingTransactData.parse(refused, "anonymous")).toThrow(
+      ringError("AnonymousBodyLength"),
+    );
+  });
+
+  it("refuses an anonymous body the frame cannot carry at encoding", () => {
+    const { data, at, first, bundle } = anonymousFrame();
+    for (const body of [new Uint8Array(), new Uint8Array(0x10000)]) {
+      expect(() =>
+        RingTransactData.encode({ ...data, outputs: data.outputs.with(at, { ...first, body }) }),
+      ).toThrow(ringError("AnonymousBodyLength"));
+      expect(() => RingTransactData.encode({ ...data, sender: { ...bundle, body } })).toThrow(
+        ringError("AnonymousBodyLength"),
+      );
+    }
+  });
+
+  it("carries the sender bundle exactly on the anonymous rail", () => {
+    const { data, bundle } = anonymousFrame();
+    const { sender: _, ...withoutSender } = data;
+    expect(() => RingTransactData.encode(withoutSender)).toThrow(ringError("RingTransactLength"));
+    const vector = expansion.cases.find((entry) => entry.name === "confidential_delivered_policy");
+    if (vector === undefined) throw new Error("vector has no confidential policy transfer");
+    const confidential = RingTransactData.parse(bytes(vector.compact), "confidential");
+    expect(() => RingTransactData.encode({ ...confidential, sender: bundle })).toThrow(
+      ringError("RingTransactLength"),
+    );
+  });
+
+  it("frames an exit payload at its data-free length and refuses another", () => {
+    const vector = expansion.cases.find((entry) => entry.name === "confidential_delivered_policy");
+    if (vector === undefined) throw new Error("vector has no confidential policy transfer");
+    const data = RingTransactData.parse(bytes(vector.compact), railOf(vector.rail));
+    const at = data.outputs.findIndex((output) => output.kind === "exit");
+    const exit = data.outputs[at];
+    if (exit?.kind !== "exit") throw new Error("policy transfer without an exit");
+    expect(exit.payload).toHaveLength(CONFIDENTIAL_DATA_FREE_BODY_LEN);
+    const longer = { ...exit, payload: Uint8Array.of(...exit.payload, 0) };
+    expect(() =>
+      RingTransactData.encode({ ...data, outputs: data.outputs.with(at, longer) }),
+    ).toThrow(ringError("DataFreeBodyLength"));
   });
 
   it("refuses an SPP point off the curve at expansion", () => {
@@ -647,17 +759,6 @@ describe("ring rails", () => {
     expect(ringRailOf(delegateTransact, "confidential")).toBe("delegate");
     expect(() => ringRailOf(merge, "confidential")).toThrow(ringError("InvalidInstructionData"));
   });
-
-  it("reads the tag of an owner tag only behind sixteen zero bytes like Rust `RingTag::from_owner_tag`", () => {
-    const tag = new Uint8Array(TAG_LEN).fill(9) as Bytes16;
-    const ownerTag = ringTagField(tag);
-    expect(ringTagFromOwnerTag(ownerTag)).toEqual(tag);
-    for (let index = 0; index < 32 - TAG_LEN; index++) {
-      const marked = Uint8Array.from(ownerTag) as Bytes32;
-      marked[index] = 1;
-      expect(ringTagFromOwnerTag(marked)).toBeUndefined();
-    }
-  });
 });
 
 describe("disclosure packing", () => {
@@ -676,16 +777,6 @@ describe("disclosure packing", () => {
 
   it("counts the fields of every layout as the solved Go host disclosure the vector records", () => {
     const layouts = [
-      ...counts.packed.map((record) => ({
-        record,
-        layout: {
-          kind: "packed",
-          outputs: record.outputs,
-          exits: record.exits,
-          keyEscrow: record.key_escrow,
-          dataFree: record.data_free,
-        } as const,
-      })),
       ...counts.delivered.map((record) => ({
         record,
         layout: {
@@ -716,25 +807,21 @@ describe("disclosure packing", () => {
   });
 
   it("places every field the flags keep and skips every field they leave out", () => {
-    expect(packedFields({ outputs: 2, exits: true, keyEscrow: false, dataFree: false })).toEqual({
+    const pair = deliveredFields({ outputs: 2, exits: true, keyEscrow: false });
+    expect(pair).toEqual({
       seedOut: 0,
-      firstSlot: 1,
-      slotWidth: 6,
-      nullifierPk: 0,
-      asset: 1,
-      dataHashes: 2,
-      ownerAndAmount: 4,
-      fieldCount: 13,
-    });
-    expect(packedFields({ outputs: 2, exits: false, keyEscrow: true, dataFree: true })).toEqual({
-      seedOut: undefined,
-      firstSlot: 0,
-      slotWidth: 3,
-      nullifierPk: undefined,
-      asset: 0,
-      dataHashes: undefined,
-      ownerAndAmount: 1,
+      nullifierPks: { start: 1, end: 3 },
+      slots: { start: 3, end: 6 },
+      slotBytes: 40,
       fieldCount: 6,
+    });
+    const escrowed = deliveredFields({ outputs: 4, exits: false, keyEscrow: true });
+    expect(escrowed).toEqual({
+      seedOut: undefined,
+      nullifierPks: undefined,
+      slots: { start: 0, end: 5 },
+      slotBytes: 32,
+      fieldCount: 5,
     });
     const dense = deliveredFields({ outputs: 8, exits: false, keyEscrow: false });
     expect([dense.seedOut, dense.nullifierPks, dense.slots, dense.slotBytes]).toEqual([
@@ -748,7 +835,7 @@ describe("disclosure packing", () => {
       0,
       { start: 2, end: 4 },
       { start: 4, end: 10 },
-      160,
+      176,
     ]);
     expect(entry.inputs).toEqual({
       kind: "openings",
@@ -765,7 +852,7 @@ describe("disclosure packing", () => {
     expect([commitment.nullifierPks, commitment.slots, commitment.slotBytes]).toEqual([
       { start: 1, end: 3 },
       { start: 3, end: 8 },
-      128,
+      144,
     ]);
     expect(commitment.inputs).toEqual({
       kind: "commitments",
@@ -798,9 +885,9 @@ describe("disclosure packing", () => {
     expect(
       decode({ kind: "anonymous", key: { kind: "entry" }, inputs: 2, outputs: 16, exits: false }),
     ).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
-    expect(
-      decode({ kind: "packed", outputs: 5, exits: false, keyEscrow: false, dataFree: false }),
-    ).toThrow("KEYPAIR_DISCLOSURE_SHAPE");
+    expect(decode({ kind: "delivered", outputs: 3, exits: false, keyEscrow: false })).toThrow(
+      "KEYPAIR_DISCLOSURE_SHAPE",
+    );
   });
 });
 

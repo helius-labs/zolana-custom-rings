@@ -114,10 +114,22 @@ function anonymous(): Extract<RingDisclosure, { kind: "anonymous" }> {
     layout: { key: { kind: "entry" }, inputs: 2, outputs: 4, exits: true },
     seedOut: field(1),
     outputs: [
-      { kind: "ring", ownerKey: bytes(0xb5), nullifierPk: field(0x25), recipientU: bytes(0x15) },
+      {
+        kind: "ring",
+        ownerKey: bytes(0xb5),
+        nullifierPk: field(0x25),
+        asset: field(0x15),
+        amount: 70n,
+      },
       { kind: "exit", nullifierPk: field(0x26), asset: field(0x27), amount: 0n },
       { kind: "dummy" },
-      { kind: "ring", ownerKey: bytes(0xa1), nullifierPk: field(0x5a), recipientU: bytes(0x17) },
+      {
+        kind: "ring",
+        ownerKey: bytes(0xa1),
+        nullifierPk: field(0x5a),
+        asset: field(0x17),
+        amount: (1n << 64n) - 1n,
+      },
     ],
     inputs: {
       kind: "openings",
@@ -137,23 +149,19 @@ function commitments(): Extract<RingDisclosure, { kind: "anonymous" }> {
   };
 }
 
-function packed(): Extract<RingDisclosure, { kind: "packed" }> {
-  const opening = (byte: number) => ({
-    ownerKey: bytes(byte),
-    nullifierPk: field(byte),
-    asset: field(byte + 1),
-    amount: BigInt(byte),
-    dataHash: field(byte + 2),
-    ringDataHash: new Uint8Array(32) as Bytes32,
-  });
+/** The smallest delivered capacity, a ring output and an exit. */
+function pair(): Extract<RingDisclosure, { kind: "delivered" }> {
   return {
-    kind: "packed",
-    layout: { outputs: 3, exits: true, keyEscrow: false, dataFree: false },
+    kind: "delivered",
+    layout: { outputs: 2, exits: true, keyEscrow: false },
     seedOut: field(1),
-    outputs: [opening(0x30), undefined, opening(0x40)],
+    outputs: [
+      { kind: "ring", ownerKey: bytes(0x30), nullifierPk: field(0x30) },
+      { kind: "exit", nullifierPk: field(0x40), asset: field(0x41), amount: 64n },
+    ],
   };
 }
-const PACKED_EXITS = [false, false, true];
+const PAIR_EXITS = [false, true];
 
 function zeros(layout: DisclosureLayout): Bytes32[] {
   return Array.from({ length: disclosureFieldCount(layout) }, () => new Uint8Array(32) as Bytes32);
@@ -167,7 +175,7 @@ describe("ring disclosure codec", () => {
   });
 
   it.each([
-    ["packed", packed, PACKED_EXITS],
+    ["pair", pair, PAIR_EXITS],
     ["delivered", delivered, DELIVERED_EXITS],
     ["anonymous", anonymous, ANONYMOUS_EXITS],
     ["commitment", commitments, ANONYMOUS_EXITS],
@@ -342,7 +350,7 @@ describe("ring disclosure codec", () => {
   });
 
   it.each([
-    { kind: "packed", outputs: 2, exits: false, keyEscrow: false, dataFree: false },
+    { kind: "delivered", outputs: 2, exits: false, keyEscrow: false },
     { kind: "delivered", outputs: 8, exits: false, keyEscrow: false },
     {
       kind: "anonymous",
@@ -352,7 +360,7 @@ describe("ring disclosure codec", () => {
       exits: false,
     },
   ] as const satisfies readonly DisclosureLayout[])(
-    "refuses an exit its $kind layout does not flag",
+    "refuses an exit its $kind layout of $outputs outputs does not flag",
     (layout) => {
       const exits = Array.from({ length: layout.outputs }, (_, index) => index === 1);
 

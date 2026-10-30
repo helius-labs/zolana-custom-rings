@@ -15,8 +15,8 @@ use solana_loader_v3_interface::state::UpgradeableLoaderState;
 use solana_message::{v1, VersionedMessage};
 use solana_transaction::versioned::VersionedTransaction;
 use solana_transaction_error::TransactionError;
-use zolana_hasher::primitives::right_align;
-use zolana_interface::{BPF_LOADER_UPGRADEABLE_ID, RING_AUTH_PDA_SEED};
+use spr_hasher::primitives::right_align;
+use spr_interface::{BPF_LOADER_UPGRADEABLE_ID, RING_AUTH_PDA_SEED};
 use zolana_ring_policy::{ListId, Member, OutflowLimit, Rule, RuleTable, Subject};
 
 /// Any address serves as the ring program.

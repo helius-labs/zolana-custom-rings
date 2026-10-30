@@ -8,7 +8,7 @@ use custom_ring_sdk::{
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
-use zolana_keypair::X25519Pubkey;
+use spr_keypair::X25519Pubkey;
 use zolana_ring_client::rpc::{read_auditor_pubkey, write_auditor_pubkey};
 use zolana_ring_policy::ListId;
 
@@ -420,7 +420,7 @@ mod tests {
 
     #[test]
     fn a_config_wins_over_the_file_and_the_service() {
-        let pinned = zolana_keypair::X25519Keypair::new().pubkey();
+        let pinned = spr_keypair::X25519Keypair::new().pubkey();
         for file_present in [true, false] {
             for hosted_rpc in [true, false] {
                 for local_auditor in [true, false] {

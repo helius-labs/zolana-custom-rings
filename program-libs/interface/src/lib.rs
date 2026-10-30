@@ -30,6 +30,8 @@ pub mod member_registry;
 pub mod merge;
 #[path = "codec/output.rs"]
 pub mod output;
+#[path = "accounts/policy_store.rs"]
+pub mod policy_store;
 #[path = "proof/ring_keys.rs"]
 pub mod ring_keys;
 #[path = "codec/spp.rs"]
@@ -42,6 +44,8 @@ pub mod statement;
 pub mod stream;
 #[path = "instructions/transact.rs"]
 pub mod transact;
+#[path = "proof/verification.rs"]
+mod verification;
 #[path = "instructions/withdrawals.rs"]
 pub mod withdrawals;
 pub use withdrawals::*;
@@ -71,6 +75,7 @@ pub use spp::*;
 pub use state::*;
 pub use statement::*;
 pub use transact::*;
+pub use verification::RingProof;
 
 /// One-byte `0x04` scheme tag followed by a canonical X25519 u-coordinate.
 pub use output::RECIPIENT_KEY_LEN as TAGGED_X25519_KEY_LEN;

@@ -12,9 +12,13 @@ import (
 	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
-type DelegatePolicyCircuit struct {
+type DelegatePolicyValues struct {
 	PublicInputHash frontend.Variable `gnark:",public"`
 	Inputs          []shared.UtxoWires
+}
+
+type DelegatePolicyCircuit struct {
+	DelegatePolicyValues
 	Policy
 }
 
@@ -23,29 +27,31 @@ var delegateRail = railValues{approvalRequired: 0, keyEscrow: 1, sender: 0}
 type DelegateShape struct {
 	transaction.Shape
 	OwnOnly bool
+	Records RecordPoolShape
 }
 
-func NewDelegatePolicyCircuit(shape transaction.Shape) (*DelegatePolicyCircuit, error) {
-	return NewDelegatePolicyCircuitWith(DelegateShape{Shape: shape})
-}
-
-func NewDelegatePolicyCircuitWith(s DelegateShape) (*DelegatePolicyCircuit, error) {
-	shape := s.Shape
-
+func NewDelegatePolicyCircuit(shape DelegateShape) (*DelegatePolicyCircuit, error) {
 	if err := shape.Validate(); err != nil {
 		return nil, fmt.Errorf("policy: no delegate key, %w", err)
 	}
-	return &DelegatePolicyCircuit{Inputs: make([]shared.UtxoWires, shape.NInputs), Policy: newPolicy(shape.NOutputs, 0, s.OwnOnly)}, nil
+	p, err := newPolicy(newPolicyInputs(shape.NOutputs, 0, shape.OwnOnly), shape.Records, 0)
+	if err != nil {
+		return nil, err
+	}
+	return &DelegatePolicyCircuit{DelegatePolicyValues: DelegatePolicyValues{Inputs: make([]shared.UtxoWires, shape.NInputs)}, Policy: p}, nil
 }
 
 func (c *DelegatePolicyCircuit) Define(api frontend.API) error {
-	if err := c.validate(); err != nil {
+	if len(c.Inputs) == 0 {
+		return fmt.Errorf("policy: a delegate move reopens at least one input")
+	}
+	if err := c.validate(0); err != nil {
 		return err
 	}
 	rc := rangecheck.New(api)
 	cmp := c.comparator(rc)
 	// 1. The rules read the table under policy_hash.
-	t := c.Table.decode(api, rc, c.PolicyHash)
+	table := c.Table.decode(api, rc, c.PolicyHash)
 	c.assertOwnOnly(api)
 	// 2. The reopened inputs and the outputs open private_tx_hash.
 	inputs, inputChain := openInputs(api, c.Inputs)
@@ -54,22 +60,15 @@ func (c *DelegatePolicyCircuit) Define(api frontend.API) error {
 	sender := c.sender(api, inputs)
 	// 4. The sender and every UTXO output's subjects open under own_root, and under curator_root when a list is foreign.
 	payments := append(append([]utxoView{}, outputs...), c.openWithdrawals(api, rc)...)
-	s := c.resolveSubjects(api, t, sender, payments)
+	resolved := c.resolveSubjects(api, table, sender, payments)
 	// 5. Every enabled rule holds for its subjects.
-	c.assertRules(api, cmp, t, s, payments)
+	c.assertRules(api, cmp, table, resolved, payments)
 	// 6. The key fixes approval_required to 0, the program authorizes the configured delegate signer instead.
 	// 7. The key fixes key_escrow to 1, every output owner escrows the output's nullifier key.
-	c.assertEscrow(api, delegateRail.keyEscrow, s.owners, outputs)
+	c.assertEscrow(api, delegateRail.keyEscrow, resolved.owners, outputs)
 	// 8. The one public input is the statement the program rebuilds, its sender value is 0.
 	bindStatement(api, c.PublicInputHash, c.Statement())
 	return nil
-}
-
-func (c *DelegatePolicyCircuit) validate() error {
-	if len(c.Inputs) == 0 {
-		return fmt.Errorf("policy: a delegate move reopens at least one input")
-	}
-	return c.Policy.validate()
 }
 
 func (c *DelegatePolicyCircuit) sender(api frontend.API, inputs []utxoView) frontend.Variable {

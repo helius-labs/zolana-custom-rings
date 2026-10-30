@@ -129,12 +129,12 @@ async fn passkey_reader_opens_anonymous_spend_trace() {
         utxo: sol(0xa1, 900),
         blinding: field(0x60),
     };
-    let tag = RingTag::from_bytes([0x53; TAG_LEN]);
+    let tag = field(0x53);
     let outputs = [
         Output::Ring {
             utxo: sol(0xb5, 500),
             recipient_u: x25519_u(0x50),
-            tag: Some(RingTag::from_bytes([0x51; TAG_LEN])),
+            tag: Some(field(0x51)),
         },
         Output::Ring {
             utxo: sol(0xb6, 501),
@@ -183,7 +183,7 @@ async fn passkey_reader_opens_anonymous_spend_trace() {
     );
     assert_eq!(dummy.opening, None);
     assert_eq!(amounts(item), [500, 501]);
-    assert_eq!(item.outputs[1].tag, Some(Hash(tag.field())));
+    assert_eq!(item.outputs[1].tag, Some(Hash(tag)));
     assert!(item.payload_errors.is_empty());
     assert!(response.value.skipped.is_empty());
 }
@@ -199,15 +199,15 @@ async fn an_input_spending_a_utxo_the_page_opened_resolves_its_ring() {
         .read_anonymous(vec![utxos.paid.clone(), utxos.spent.clone()])
         .await;
     assert_eq!(input_ring(&page), opened);
-    // The entry disclosure opens no ring data, a CRAT ring output it spends stays open.
-    assert!(matches!(
+    // A ring output carries no ring data, the entry opening rebuilds the commitment the page opened.
+    assert_eq!(
         input_ring(
             &fixture
                 .read_anonymous(vec![utxos.paid.clone(), utxos.entry.clone()])
                 .await
         ),
-        Some(DecryptedInputRing::Unresolved { .. })
-    ));
+        opened
+    );
     // The entry key opens the input itself, only its ring stays open.
     assert!(matches!(
         input_ring(&fixture.read_anonymous(vec![utxos.entry.clone()]).await),
@@ -578,7 +578,7 @@ async fn two_rings_read_only_their_own_transactions() {
         signature: 11,
         frames: &fixture.frames,
     }
-    .packed();
+    .delivered();
     let audited_b = Indexed {
         transfer: &Transfer {
             ring: ring_b,
@@ -589,7 +589,7 @@ async fn two_rings_read_only_their_own_transactions() {
         signature: 12,
         frames: &fixture.frames,
     }
-    .packed();
+    .delivered();
     let mut source = fixture.source();
     source.origins = HashMap::from([
         ((audited_a.tx_signature, 0), true),

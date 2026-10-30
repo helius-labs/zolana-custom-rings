@@ -12,14 +12,11 @@ export {
   type RingKeyErrorCode,
 } from "../crypto/error.js";
 export {
-  MAX_PAIRING_ROWS,
-  MAX_RING_ADDRESS_PAYLOAD_LENGTH,
-  Pairing,
   RING_ADDRESS_CHECKSUM_DOMAIN,
+  RING_ADDRESS_PAYLOAD_LENGTH,
   RING_ADDRESS_VERSION,
   RING_PAYMENT_SCHEME,
   RingAddress,
   RingPaymentRequest,
-  type PairingRow,
   type RingPaymentRequestFields,
 } from "../crypto/keys/ring-address.js";

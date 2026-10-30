@@ -21,9 +21,9 @@ spl-token-2022-interface = { workspace = true }
 thiserror = { workspace = true }
 wincode = { workspace = true }
 zolana-ring-policy = { workspace = true }
-zolana-hasher = { workspace = true }
-zolana-interface = { workspace = true }
-zolana-event = { workspace = true }
+spr-hasher = { workspace = true }
+spr-interface = { workspace = true }
+spr-event = { workspace = true }
 
 [target.'cfg(not(target_os = "solana"))'.dependencies]
 solana-bn254 = { workspace = true }
@@ -36,6 +36,7 @@ check-cfg = ['cfg(target_os, values("solana"))']
 borsh = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-zolana-keypair = { workspace = true }
-zolana-instruction = { workspace = true }
+spr-keypair = { workspace = true }
+spr-instruction = { workspace = true }
+spr-transaction = { workspace = true }
 hex = { workspace = true }

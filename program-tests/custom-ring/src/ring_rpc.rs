@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{anyhow, Result};
 use solana_address::Address;
-use zolana_keypair::X25519Keypair;
+use spr_keypair::X25519Keypair;
 use zolana_ring_rpc::{
     run_server, BindPolicy, ChainSource, Hub, ServerOptions, TransactionSource, Upstreams,
 };

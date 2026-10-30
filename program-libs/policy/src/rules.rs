@@ -1,5 +1,5 @@
 //! The list rules one transfer meets before proving, mirror
-//! `prover/server/custom_rings/circuits/policy/rules.go` and `subjects.go`.
+//! `prover/circuits/policy/rules.go` and `subjects.go`.
 
 use core::fmt;
 

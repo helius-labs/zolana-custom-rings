@@ -5,11 +5,11 @@ use custom_ring_interface::{
     verifying_key, CustomRingProof, PlainGroth16Proof, PROVING_KEY_SHA256S,
 };
 use serde::Serialize;
-use zeroize::Zeroizing;
-use zolana_client::{
+use spr_client::{
     prover::{verify_proof_statement, ExpectedProvingKey, ProveRequest},
     AsyncRpc, ClientError, Proof, ProofCompressed,
 };
+use zeroize::Zeroizing;
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::RingError;

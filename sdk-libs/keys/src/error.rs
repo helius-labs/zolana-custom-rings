@@ -1,6 +1,6 @@
 use custom_ring_interface::stream::StreamError;
+use spr_keypair::KeypairError;
 use thiserror::Error;
-use zolana_keypair::KeypairError;
 
 #[derive(Debug, Error, PartialEq)]
 pub enum RingKeyError {
@@ -20,12 +20,14 @@ pub enum RingKeyError {
     UnknownRingAddressVersion(u8),
     #[error("ring address checksum mismatch")]
     InvalidRingAddressChecksum,
-    #[error("ring address names {0} pairing rows, at most 4 fit")]
-    InvalidRingAddressPairing(usize),
     #[error("unknown ring payment query key")]
     UnknownRingPaymentKey,
     #[error("duplicated ring payment query key")]
     DuplicateRingPaymentKey,
+    #[error("ring payment request names no request tag")]
+    MissingRingPaymentTag,
+    #[error("ring payment tag is not 32 lowercase hex bytes led by a zero byte")]
+    InvalidRingPaymentTag,
     #[error("ring payment amount is not a u64")]
     InvalidRingPaymentAmount,
     #[error("ring payment mint is not an address")]

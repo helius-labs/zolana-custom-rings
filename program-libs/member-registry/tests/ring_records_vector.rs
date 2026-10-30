@@ -5,7 +5,7 @@ use custom_ring_interface::{
     MEMBER_REGISTRY_EMPTY_ROOT,
 };
 use serde::{Deserialize, Serialize};
-use zolana_hasher::primitives::{hash_bytes, solana_owner_identity};
+use spr_hasher::primitives::{hash_bytes, solana_owner_identity};
 use zolana_ring_member_registry::{
     MemberRecord, MemberRegistryTree, OpeningCheck, QuadPath, RecordOpening, RecordTree,
     RecordWriteProofInput, ZERO_SUBTREES,

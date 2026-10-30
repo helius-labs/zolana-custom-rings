@@ -221,12 +221,12 @@ fails.
 
 1. The wallet reads the member registry and trusts the stored table and
    sources only after they reproduce `policy_hash`.
-2. It collects its members, the sender, every output's owner and, under an
-   asset rule, every output's asset.
-3. It reads their openings from the ring indexer under the newest own root and, with a
-   curator, the newest curator root. It checks every opening against the
-   root before it uses it. A lying indexer stalls proving but cannot steer
-   the answer.
+2. It collects its members, the sender, the owner and the asset of every
+   output and withdrawal, and every nonzero public asset.
+3. It reads them as one record pool per registry with `getRingRecordPool`,
+   under the newest own root and, with a curator, the newest curator root. It
+   checks every record and every bracket against the root before it uses it.
+   A lying indexer stalls proving but cannot steer the answer.
 4. It evaluates the table against the openings. A rule that fails for one
    subject refuses client-side with `PolicyRuleUnsatisfied`, before any proof
    request. The chain never learns of the refused transfer.

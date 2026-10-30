@@ -9,9 +9,11 @@ export {
 export type {
   ApplyProofInputs,
   MemberRecord,
+  PoolSubject,
   QuadPath,
   QueueEntry,
   RecordOpening,
+  RecordPool,
   RecordWriteProofInput,
 } from "./protocol/membership/member-registry.js";
 

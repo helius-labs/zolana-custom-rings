@@ -1,7 +1,7 @@
 use custom_ring_interface::SetPausedIxData;
 use pinocchio::{AccountView, Address, ProgramResult};
-use zolana_account_checks::AccountIterator;
-use zolana_interface::instruction::{encode_instruction, tag, UpdateRingConfigData};
+use spr_account_checks::AccountIterator;
+use spr_interface::instruction::{encode_instruction, tag, UpdateRingConfigData};
 
 use crate::instructions::{
     instruction_runtime::{parse, RingAuth},

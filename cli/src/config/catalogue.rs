@@ -7,8 +7,8 @@ use custom_ring_interface::{MemberRegistry, RingAccount};
 use custom_ring_sdk::{CustomRing, ListRegistry};
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
-use zolana_client::{ProgramAccountsFilter, Rpc, SolanaRpc};
-use zolana_interface::{
+use spr_client::{ProgramAccountsFilter, Rpc, SolanaRpc};
+use spr_interface::{
     pda,
     state::{discriminator::RING_CONFIG, RingConfig as SppRingConfig},
 };

@@ -10,7 +10,7 @@ def verifier_relative_path(module: str) -> Path:
         return Path("audit/entry") / file
     if name.startswith("audit_anonymous_"):
         outputs = name.split("_")[4]
-        if outputs not in {"2", "4", "8", "16"}:
+        if outputs not in {"2", "4", "8"}:
             raise ValueError(f"unknown anonymous audit shape: {module}")
         return Path("audit/anonymous") / f"outputs_{outputs}" / file
     if name.startswith("audit_"):

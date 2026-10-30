@@ -18,14 +18,15 @@ import (
 
 // Properties:
 // 1. tx_viewing_sk is clamped, its tagged public key and the envelope sealing it to the auditor are statement values.
-// 2. Every output slot is published and every ring output body opens for a canonical recipient key.
-// 3. Every exit discloses its full opening to the auditor and carries no output data, SeedOut opens the disclosure exactly when a UTXO exits.
-// 4. Every spent UTXO lies below the published input count, ahead of every dummy on a commitment key, and belongs to the hidden sender.
-// 5. A commitment key spends notes of the ring only and discloses spent UTXO 0's hash and the prefix of every other spent hash, an entry key opens every spent UTXO under one nullifier key with no data.
-// 6. An inbox tag derives from the recipient's inbox key, a pair tag from an anchored first contact to the same owner, a change or dummy tag is free.
-// 7. Every UTXO's blinding is SPP's TXOB blinding over the seed tx_viewing_sk fixes, a ring output's ring data binds its slot secret and published tag through CRAT.
-// 8. private_tx_hash reopens over the same slots, the sender commitment opens to the sender the inputs prove.
-// 9. The sender is spent UTXO 0's owner on a commitment key and the owner of SenderKey on an entry key.
+// 2. Every output slot is published, every UTXO is a ring output or an exit and carries no data hash and no ring data.
+// 3. A ring output's owner is the identity of the owner key the disclosure opens.
+// 4. Every UTXO's amount lies below 2^64, the disclosure opens every UTXO's asset and amount and leaves a dummy slot zero.
+// 5. Every exit discloses its full opening to the auditor, SeedOut opens the disclosure exactly when a UTXO exits.
+// 6. Every spent UTXO lies below the published input count, ahead of every dummy on a commitment key, and belongs to the hidden sender.
+// 7. A commitment key spends notes of the ring only and discloses spent UTXO 0's hash and the prefix of every other spent hash, an entry key opens every spent UTXO under one nullifier key with no data.
+// 8. Every UTXO's blinding is SPP's TXOB blinding over the seed tx_viewing_sk fixes.
+// 9. private_tx_hash reopens over the same slots, the sender commitment opens to the sender the inputs prove.
+// 10. The sender is spent UTXO 0's owner on a commitment key and the owner of SenderKey on an entry key.
 
 const (
 	// InputPrefixLen is the byte width of a spent hash's prefix on a commitment key.
@@ -35,30 +36,8 @@ const (
 )
 
 type AnonymousOutputWires struct {
-	DeliveryWires
-	Stream StreamWires
-}
-
-type StreamWires struct {
-	// Tag is low128 of the stream digest on an inbox or pair slot, free on any other slot.
-	Tag   frontend.Variable
-	Inbox frontend.Variable
-	Pair  frontend.Variable
-	Self  frontend.Variable
-	Index frontend.Variable
-}
-
-type AnchorWires struct {
-	TreeID frontend.Variable
-	Asset  frontend.Variable
-	Amount frontend.Variable
-	// SlotSecret is the first contact's CRDS slot secret, its recipient rebuilds it from its viewing key.
-	SlotSecret frontend.Variable
-	Blinding   frontend.Variable
-	Epoch      frontend.Variable
-	Index      frontend.Variable
-	PathIndex  frontend.Variable
-	Path       [transaction.StateTreeHeight]frontend.Variable
+	Output   shared.UtxoWires
+	OwnerKey [32]frontend.Variable
 }
 
 type AnonymousAuditCircuit struct {
@@ -75,19 +54,14 @@ type AnonymousAuditCircuit struct {
 	Inputs     []shared.UtxoWires
 	// SenderCommitment is 0 on an audit-only transfer and Poseidon(CRSC, sender_pk_hash, PrivateTxBlinding) under a policy.
 	SenderCommitment frontend.Variable
-	// Epoch is the tag epoch the program derives from the slot.
-	Epoch frontend.Variable
-	// FirstContactRoot is the state root the anchor opens under, 0 without a pair slot.
-	FirstContactRoot frontend.Variable
-	Anchor           AnchorWires
 	// Payer, configured co-signer and withdrawal owner; absent optional parties are zero.
 	PartyIdentities [3]frontend.Variable
 }
 
 type anonymousSlot struct {
-	delivery
-	inboxKey frontend.Variable
-	stream   StreamWires
+	outputSlot
+	// bytes is mask(ring, owner_key) ‖ be32(live * asset) ‖ u64be(live * amount), mirrored by ANONYMOUS_SLOT_BYTES in program-libs/interface/src/proof/disclosure.rs.
+	bytes []frontend.Variable
 }
 
 type spentInputs struct {
@@ -114,56 +88,40 @@ func NewAnonymousAuditCircuit(shape AnonymousAuditShape) (*AnonymousAuditCircuit
 
 func (c *AnonymousAuditCircuit) Define(api frontend.API) error {
 	if err := errors.Join(
-		validateLength("output", len(c.Outputs), c.Shape.Outputs),
-		validateLength("input", len(c.Inputs), c.Shape.InputClass),
-		validateLength("sender key byte", len(c.SenderKey), c.Shape.senderKeyLen()),
+		transaction.ValidateLength("output", len(c.Outputs), c.Shape.Outputs),
+		transaction.ValidateLength("input", len(c.Inputs), c.Shape.InputClass),
+		transaction.ValidateLength("sender key byte", len(c.SenderKey), c.Shape.senderKeyLen()),
 	); err != nil {
 		return err
 	}
 	rc := rangecheck.New(api)
 	// 1. The envelope seals tx_viewing_sk to the auditor and the layout flags fix the published fields.
 	envelope := c.sealEnvelope(api, rc)
-	// No anonymous output carries data, the data-free flag holds whatever the frame sets.
-	layout := decodeLayout(api, c.Layout, LayoutExits|LayoutDataFree, c.Shape.layout())
-	// 2. Every ring output body opens for its recipient and every slot takes its stream.
+	layout := decodeLayout(api, c.Layout, LayoutExits|LayoutReserved, c.Shape.layout())
 	senderPkHash := c.senderPkHash(api)
 	shared.AssertAnonymousParties(api, senderPkHash, c.PartyIdentities)
-	slots := make([]anonymousSlot, len(c.Outputs))
-	outputSlots := make([]outputSlot, len(c.Outputs))
+	// 2. Every output slot opens its owner key, asset and amount to the auditor.
+	slots := make([]outputSlot, len(c.Outputs))
+	var hashes, outputHashes, nullifierPks, slotBytes []frontend.Variable
 	for i, output := range c.Outputs {
-		slots[i] = c.deliverSlot(api, rc, envelope, output, senderPkHash, i)
-		outputSlots[i] = slots[i].outputSlot
+		s := c.openSlot(api, rc, envelope, output, i)
+		slots[i] = s.outputSlot
+		hashes, outputHashes = append(hashes, s.Hash), append(outputHashes, api.Mul(s.Utxo, s.Hash))
+		nullifierPks = append(nullifierPks, api.Mul(s.live, output.Output.NullifierPk))
+		slotBytes = append(slotBytes, s.bytes...)
 	}
 	// 3. SeedOut opens the disclosure exactly when an exit needs it.
-	layout.assertExits(api, outputSlots)
-	// 4. The anchor opens the first contact of the one pair slot.
-	pairTag := c.anchor(api, rc, slots)
-	var hashes, outputHashes, bodyHashes, tags, nullifierPks, slotBytes []frontend.Variable
-	for i, output := range c.Outputs {
-		s := slots[i]
-		// 5. A proven tag derives from its stream, every ring output's ring data binds its tag.
-		c.assertTag(api, rc, output, s, pairTag)
-		notExit := api.Sub(1, s.exit)
-		hashes, outputHashes = append(hashes, s.Hash), append(outputHashes, api.Mul(s.Utxo, s.Hash))
-		bodyHashes, tags = append(bodyHashes, s.bodyHash), append(tags, api.Mul(notExit, output.Stream.Tag))
-		nullifierPks = append(nullifierPks, api.Mul(s.live, output.Output.NullifierPk))
-		slotBytes = append(slotBytes, slotDisclosure(api, rc, output.DeliveryWires, s.delivery, output.RecipientKey[:])...)
-	}
-	// 6. Every spent UTXO is the sender's and published.
+	layout.assertExits(api, slots)
+	// 4. Every spent UTXO is the sender's and published.
 	spent := c.spend(api, rc, senderPkHash)
-	// 7. SPP's private transaction hash reopens over the same slots with no address input.
+	// 5. SPP's private transaction hash reopens over the same slots with no address input.
 	api.AssertIsEqual(c.PrivateTxHash, transaction.PrivateTxHashCircuit(api, spent.hashes, outputHashes, nil, c.PrivateTxBlinding))
-	// 8. The commitment is 0 on an audit-only transfer or opens to the sender the inputs prove, the policy proof reads it.
+	// 6. The commitment is 0 on an audit-only transfer or opens to the sender the inputs prove, the policy proof reads it.
 	commitment := shared.SenderCommitment(api, senderPkHash, c.PrivateTxBlinding)
 	api.AssertIsEqual(api.Mul(c.SenderCommitment, api.Sub(c.SenderCommitment, commitment)), 0)
-	// 9. Only the holder of tx_viewing_sk opens the disclosure of every output and spent UTXO.
-	statement := c.statement(api, envelope,
-		gadget.HashChain4(api, hashes),
-		gadget.HashChain4(api, bodyHashes),
-		c.disclosure(api, envelope, layout, nullifierPks, slotBytes, spent),
-		gadget.HashChain4(api, tags),
-	)
-	// 10. The one public input commits the statement the program rebuilds.
+	// 7. Only the holder of tx_viewing_sk opens the disclosure of every output and spent UTXO.
+	statement := c.statement(api, envelope, gadget.HashChain4(api, hashes), c.disclosure(api, envelope, layout, nullifierPks, slotBytes, spent))
+	// 8. The one public input commits the statement the program rebuilds.
 	api.AssertIsEqual(c.PublicInputHash, statement)
 	return nil
 }
@@ -175,76 +133,17 @@ func (c *AnonymousAuditCircuit) senderPkHash(api frontend.API) frontend.Variable
 	return c.Inputs[0].OwnerPkHash
 }
 
-func (c *AnonymousAuditCircuit) deliverSlot(api frontend.API, rc frontend.Rangechecker, e auditEnvelope, o AnonymousOutputWires, senderPkHash frontend.Variable, i int) anonymousSlot {
-	slot := openDelivered(api, o.DeliveryWires)
-	// 1. Every ring output body opens for the holder of its canonical recipient key.
-	d := c.deliver(api, rc, e, o.DeliveryWires, slot, recipientKey(api, slot, o.RecipientKey), i)
+func (c *AnonymousAuditCircuit) openSlot(api frontend.API, rc frontend.Rangechecker, e auditEnvelope, o AnonymousOutputWires, i int) anonymousSlot {
+	slot := openOutput(api, o.Output)
 	c.assertBlinding(api, e, o.Output, slot, i)
-	s := o.Stream
-	// 2. Each stream flag is a bit and a ring output takes exactly one stream, any other slot none.
-	api.AssertIsBoolean(s.Inbox)
-	api.AssertIsBoolean(s.Pair)
-	api.AssertIsBoolean(s.Self)
-	api.AssertIsEqual(api.Add(s.Inbox, s.Pair, s.Self), slot.ring)
-	// 3. Every stream position fits StreamIndexBits, the bound a recipient scans per stream and epoch.
-	rc.Check(s.Index, shared.StreamIndexBits)
-	// 4. A self slot is change of the hidden sender, its tag stays free.
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: s.Self, A: o.Output.OwnerPkHash, B: senderPkHash})
-	return anonymousSlot{delivery: d, inboxKey: shared.InboxKey(api, c.RingProgramID, d.recipient), stream: s}
-}
-
-// anchor proves the pair stream's key reached the recipient and returns the pair tag digest of the pair slot.
-func (c *AnonymousAuditCircuit) anchor(api frontend.API, rc frontend.Rangechecker, slots []anonymousSlot) frontend.Variable {
-	a := c.Anchor
-	// 1. The anchor reads the inbox key, owner and stream position of the pair slot.
-	var pairs, inboxKey, owner, index frontend.Variable = 0, 0, 0, 0
-	for _, s := range slots {
-		pairs = api.Add(pairs, s.stream.Pair)
-		inboxKey = api.Add(inboxKey, api.Mul(s.stream.Pair, s.inboxKey))
-		owner = api.Add(owner, api.Mul(s.stream.Pair, s.Owner))
-		index = api.Add(index, api.Mul(s.stream.Pair, s.stream.Index))
-	}
-	// At most one slot is pair tagged, the anchor opens one first contact.
-	api.AssertIsBoolean(pairs)
-	// 2. The first contact's tag is an inbox tag of the pair slot's key at a position of its stream.
-	firstTag := shared.TagField(api, rc, shared.InboxTagDigest(api, inboxKey, a.Epoch, a.Index))
-	rc.Check(api.Mul(pairs, a.Index), shared.StreamIndexBits)
-	// A pair stream lives KPairEpochs from its anchor and never before it.
-	rc.Check(api.Mul(pairs, api.Sub(c.Epoch, a.Epoch)), shared.PairEpochBits)
-	// 3. Only an inbox delivery to the same owner, or that owner's own change, carries the first contact's ring data.
-	firstContact := transaction.UtxoHashCircuit(api, transaction.UtxoCircuitFields{
-		Domain:        transaction.UtxoDomain,
-		Owner:         owner,
-		Asset:         a.Asset,
-		Amount:        a.Amount,
-		Blinding:      a.Blinding,
-		DataHash:      0,
-		RingDataHash:  shared.AnonymousRingData(api, a.SlotSecret, firstTag),
-		RingProgramID: c.RingProgramID,
-	}, a.TreeID)
-	// 4. The first contact is a leaf of the state tree the program names, without a pair slot the root stays free.
-	root := abstractor.Call(api, gadget.MerkleRootGadget{
-		Hash:   firstContact,
-		Index:  api.ToBinary(a.PathIndex, transaction.StateTreeHeight),
-		Path:   a.Path[:],
-		Height: transaction.StateTreeHeight,
-	})
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: pairs, A: root, B: c.FirstContactRoot})
-	// 5. The pair key derives from the first contact's slot secret, the recipient rebuilds it from its viewing key.
-	return shared.PairTagDigest(api, shared.PairKey(api, a.SlotSecret), c.Epoch, index)
-}
-
-// assertTag proves an inbox or pair slot's tag and binds every ring output's tag into its ring data.
-func (c *AnonymousAuditCircuit) assertTag(api frontend.API, rc frontend.Rangechecker, o AnonymousOutputWires, s anonymousSlot, pairTag frontend.Variable) {
-	digest := api.Add(
-		api.Mul(s.stream.Inbox, shared.InboxTagDigest(api, s.inboxKey, c.Epoch, s.stream.Index)),
-		api.Mul(s.stream.Pair, pairTag),
-	)
-	// 1. A proven tag is low128 of its stream digest, TagField refuses the split of digest + q.
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: api.Add(s.stream.Inbox, s.stream.Pair), A: s.stream.Tag, B: shared.TagField(api, rc, digest)})
-	// 2. The ring data binds the published tag, an anchor reads a first contact's tag back from it.
-	ringData := api.Mul(s.ring, shared.AnonymousRingData(api, s.secret, s.stream.Tag))
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: s.Utxo, A: o.Output.RingDataHash, B: ringData})
+	// 1. No UTXO carries ring data the auditor cannot open.
+	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: slot.Utxo, V: o.Output.RingDataHash})
+	// 2. The identity gadget bounds every owner key byte the disclosure packs.
+	assertOwnerKey(api, slot, o.Output, o.OwnerKey)
+	// 3. be32 is the one asset encoding below q, the decomposition bounds a live amount below 2^64.
+	asset := ringgadget.FieldToBytesBEWith(api, rc, api.Mul(slot.live, o.Output.Asset))
+	amount := uintBytes(api, api.Mul(slot.live, o.Output.Amount), 8)
+	return anonymousSlot{outputSlot: slot, bytes: slices.Concat(masked(api, slot.ring, o.OwnerKey[:]), asset[:], amount)}
 }
 
 // spend proves every spent UTXO is the hidden sender's and lies below the published count.
@@ -299,7 +198,7 @@ func (c *AnonymousAuditCircuit) spend(api frontend.API, rc frontend.Rangechecker
 //	sender nullifier_pk, nullifier_pk per output, pack_disclosure(sender_key ‖ slot bytes per output),
 //	pack_disclosure(u64be(amount) per input slot), asset and blinding per published input
 func (c *AnonymousAuditCircuit) disclosure(api frontend.API, e auditEnvelope, layout auditLayout, nullifierPks, slotBytes []frontend.Variable, spent spentInputs) frontend.Variable {
-	// SolanaOwnerIdentity bounds the sender key bytes, deliverSlot and slotDisclosure the slot bytes.
+	// SolanaOwnerIdentity bounds the sender key bytes, openSlot the slot bytes.
 	head := slices.Concat(nullifierPks, shared.PackDisclosure(api, slices.Concat(c.SenderKey, slotBytes)))
 	if c.Shape.FullOpenings {
 		// Input 0 is a UTXO, its key is the key of every spent UTXO.
@@ -312,10 +211,10 @@ func (c *AnonymousAuditCircuit) disclosure(api frontend.API, e auditEnvelope, la
 
 // statement is the anonymous audit preimage, mirrored by AuditStatement::elements under AuditKind::Anonymous in program-libs/interface/src/proof/statement.rs.
 //
-//	head ‖ output_chain, body_chain, disclosure_chain, private_tx_hash, tag_chain, epoch, first_contact_root, sender_commitment
-func (c *AnonymousAuditCircuit) statement(api frontend.API, e auditEnvelope, outputChain, bodyChain, disclosureChain, tagChain frontend.Variable) frontend.Variable {
+//	head ‖ output_chain, disclosure_chain, private_tx_hash, sender_commitment, party0, party1, party2
+func (c *AnonymousAuditCircuit) statement(api frontend.API, e auditEnvelope, outputChain, disclosureChain frontend.Variable) frontend.Variable {
 	return gadget.HashChain4(api, append(e.statementHead(c.AuditWires),
-		outputChain, bodyChain, disclosureChain, c.PrivateTxHash, tagChain, c.Epoch, c.FirstContactRoot, c.SenderCommitment,
+		outputChain, disclosureChain, c.PrivateTxHash, c.SenderCommitment,
 		c.PartyIdentities[0], c.PartyIdentities[1], c.PartyIdentities[2],
 	))
 }

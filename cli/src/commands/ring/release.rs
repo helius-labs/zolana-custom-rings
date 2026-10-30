@@ -124,21 +124,21 @@ mod tests {
     const FULL_LOCK: &str = r#"{
         "release_tag": "v1",
         "ring_program": {"asset": "custom-ring-program-v1.so", "size": 1, "sha256": "x"},
-        "audit_packed_2_key": {"asset": "custom-ring-audit-packed-2-key-v1.key", "size": 1, "sha256": "x"},
+        "audit_delivered_2_key": {"asset": "custom-ring-audit-delivered-2-key-v1.key", "size": 1, "sha256": "x"},
         "register_key": {"asset": "custom-ring-register-key-v1.key", "size": 1, "sha256": "x"}
     }"#;
 
     #[test]
     fn release_keys_must_be_complete_and_match_the_compiled_verifiers() {
-        let packed = RING_KEYS[0];
-        let file = packed.file_name();
+        let audit = RING_KEYS[0];
+        let file = audit.file_name();
         let pins = |hash: [u8; 32]| [(file.as_str(), hash)];
         let mut lock: serde_json::Value = serde_json::from_str(FULL_LOCK).unwrap();
-        lock[packed.section()]["sha256"] = serde_json::json!(hex::encode([5; 32]));
+        lock[audit.section()]["sha256"] = serde_json::json!(hex::encode([5; 32]));
         let release = RingRelease::parse(&lock.to_string()).unwrap();
         release.validate_keys(pins([5; 32])).unwrap();
         assert!(release.validate_keys(pins([6; 32])).is_err());
-        lock.as_object_mut().unwrap().remove(&packed.section());
+        lock.as_object_mut().unwrap().remove(&audit.section());
         let partial = RingRelease::parse(&lock.to_string()).unwrap();
         assert!(partial.validate_keys(pins([5; 32])).is_err());
         assert!(release
@@ -156,7 +156,7 @@ mod tests {
         );
         let key = release.key(RING_KEYS[0]).expect_err("no key").to_string();
         assert!(
-            key.contains("ships no key for custom-ring-audit-packed-2"),
+            key.contains("ships no key for custom-ring-audit-delivered-2"),
             "{key}"
         );
         assert_eq!(
@@ -188,7 +188,7 @@ mod tests {
         for missing in RING_KEYS.into_iter().filter(|key| {
             !matches!(
                 key.section().as_str(),
-                "audit_packed_2_key" | "register_key"
+                "audit_delivered_2_key" | "register_key"
             )
         }) {
             let error = partial.key(missing).expect_err("missing").to_string();

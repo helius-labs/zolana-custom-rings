@@ -1,10 +1,15 @@
 import { EMPTY_MINT_POLICY, type MintPolicy } from "../../src/protocol/membership/mint-policy.js";
-import { type RingMemberOpening, type RingSealedKey } from "../../src/rpc/ports.js";
+import {
+  type RingMemberOpening,
+  type RingSealedKey,
+  type RingServedRecord,
+} from "../../src/rpc/ports.js";
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import { ZERO_32, bytesToBigInt, poseidon } from "@heliuslabs/zolana/internal";
 import {
   QUAD_ARITY,
   QUAD_HEIGHT,
+  canopyLevels,
   type MemberRecord,
   type QuadPath,
 } from "../../src/protocol/membership/member-registry.js";
@@ -95,5 +100,31 @@ export function recordTree(records: readonly FixtureRecord[] = []) {
     if (low === undefined) throw new Error("member outside the fixture registry");
     return { kind: "absent", low, path: path(lowIndex) };
   };
-  return { root, nextIndex: rows.length, rows, path, opening };
+  /** The `getRingRecordPool` body, distinct leaves in first use order. */
+  const pool = (members: readonly Bytes32[], openings: number) => {
+    const levels = canopyLevels(openings);
+    const height = QUAD_HEIGHT - levels;
+    const records: RingServedRecord[] = [];
+    const subjects = members.map((member) => {
+      const { index, siblings } = opening(member).path;
+      const at = records.findIndex((served) => served.path.index === index);
+      if (at >= 0) return at;
+      const record = rows[index];
+      if (record === undefined) throw new Error("leaf outside the fixture registry");
+      // The seal belongs to the leaf, whichever subject reaches it first.
+      const sealed = index > 0 ? sorted[index - 1]?.sealed : undefined;
+      records.push({
+        record,
+        path: { index, siblings: siblings.slice(0, height) },
+        ...(sealed === undefined ? {} : { sealedKey: sealed }),
+      });
+      return records.length - 1;
+    });
+    const canopy = Array.from(
+      { length: QUAD_ARITY ** levels },
+      (_, node) => layers[height]?.get(node) ?? zeros[height] ?? ZERO_32,
+    );
+    return { records, canopy, subjects };
+  };
+  return { root, nextIndex: rows.length, rows, path, opening, pool };
 }

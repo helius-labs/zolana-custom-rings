@@ -1,5 +1,5 @@
+use spr_interface::instruction::{InterfaceTransfer, TreeContext};
 use wincode::{config::DefaultConfig, containers, len::FixIntLen, SchemaRead};
-use zolana_interface::instruction::{InterfaceTransfer, TreeContext};
 
 use crate::error::CustomRingError;
 
@@ -45,12 +45,6 @@ impl<'a> Bytes<'a> {
 
     pub(crate) fn fields(&mut self, count: usize) -> Result<&'a [[u8; 32]], CustomRingError> {
         Ok(self.take(count * 32)?.as_chunks::<32>().0)
-    }
-
-    /// `len u16 || bytes`.
-    pub(crate) fn sized(&mut self) -> Result<&'a [u8], CustomRingError> {
-        let len = self.u16()?;
-        self.take(usize::from(len))
     }
 
     /// `ceil(len / 8)` bytes, bit `i` at byte `i / 8` bit `i % 8`, no bit set past `len`.

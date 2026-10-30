@@ -23,24 +23,15 @@ indexer, over the same attested prover session. `checkRingProvingKeys()`
 compares the prover's Ring keys with the keys the package pins, run it before
 the first Ring proof.
 
-`syncRingWallet` runs `syncWallet`, then opens the confidential Ring notes it
-skips into the wallet. Keys that are also `RingKeys` open delivered notes too.
-An audited Ring deposit opens only through the Ring capsule decoder:
+`syncRingWallet` runs `syncWallet`, then opens the confidential Ring notes and
+Ring deposits it skips into the wallet. Keys that are also `RingKeys` open
+delivered notes too. An audited Ring deposit opens through its capsule:
 
 ```ts
-import {
-  createCustomRingClient,
-  customRingDepositPayload,
-  syncRingWallet,
-} from "@heliuslabs/zolana-custom-rings";
+import { createCustomRingClient, syncRingWallet } from "@heliuslabs/zolana-custom-rings";
 
 const client = await createCustomRingClient({ solanaRpcUrl });
-await syncRingWallet({
-  client,
-  wallet,
-  keys,
-  config: { depositPayloadDecoder: customRingDepositPayload },
-});
+await syncRingWallet({ client, wallet, keys });
 ```
 
 Ring projection errors, such as a key registry the indexer has not caught up

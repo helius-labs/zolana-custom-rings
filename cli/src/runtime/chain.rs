@@ -5,8 +5,8 @@ use std::future::Future;
 use custom_ring_sdk::RingClient;
 use solana_signature::Signature;
 use solana_transaction_error::TransactionError;
-use zolana_api::{BlockingInsideRuntime, BlockingRuntime};
-use zolana_client::{
+use spr_api::{BlockingInsideRuntime, BlockingRuntime};
+use spr_client::{
     AsyncProverClient, AsyncRpc, AsyncZolanaClient, Blocking, ClientError, IndexerPollConfig,
     SolanaRpc, ZolanaIndexer,
 };

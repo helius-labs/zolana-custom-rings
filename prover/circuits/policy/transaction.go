@@ -33,7 +33,7 @@ func openInputs(api frontend.API, wires []shared.UtxoWires) ([]utxoView, fronten
 }
 
 // openOutputs reopens every output and binds them, beside the rail's input chain, to private_tx_hash.
-func (p *Policy) openOutputs(api frontend.API, inputChain frontend.Variable) []utxoView {
+func (p *PolicyInputs) openOutputs(api frontend.API, inputChain frontend.Variable) []utxoView {
 	outputs := make([]utxoView, len(p.Outputs))
 	hashes := make([]frontend.Variable, len(p.Outputs))
 	for o, w := range p.Outputs {

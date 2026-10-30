@@ -11,12 +11,12 @@ use spl_token_2022_interface::{
     },
     pod::{PodAccount, PodMint},
 };
-use zolana_client::{fetch_spl_asset_registrations, Rpc, SolanaRpc};
-use zolana_interface::{
+use spr_client::{fetch_spl_asset_registrations, Rpc, SolanaRpc};
+use spr_interface::{
     pda, SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_ACCOUNT_INITIALIZED, SPL_TOKEN_PROGRAM_ID,
 };
+use spr_transaction::{AssetRegistry, SOL_MINT};
 use zolana_ring_transaction::RingAssets;
-use zolana_transaction::{AssetRegistry, SOL_MINT};
 
 pub struct ResolvedAsset {
     pub mint: Address,
@@ -145,7 +145,7 @@ fn deposit_fee_active(config: &TransferFeeConfig, epoch: u64) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use zolana_interface::{SPL_TOKEN_ACCOUNT_LEN, SPL_TOKEN_ACCOUNT_STATE_OFFSET};
+    use spr_interface::{SPL_TOKEN_ACCOUNT_LEN, SPL_TOKEN_ACCOUNT_STATE_OFFSET};
 
     use super::*;
 

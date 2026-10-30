@@ -1,51 +1,506 @@
 {
-  "release_tag": "v0.4.0-alpha",
+  "release_tag": "v0.6.0-alpha",
   "ring_program": {
-    "asset": "custom-ring-program-v0.4.0-alpha.so",
-    "size": 429304,
-    "sha256": "46a890a2b001a92baf269f161a7819e02e6de89d5dd0df873799615ffaa78c6e"
+    "asset": "custom-ring-program-v0.6.0-alpha.so",
+    "size": 508104,
+    "sha256": "55710e045885f75f7d9817fb18c2efc4193dce3132f75b484176c8594bfda483"
   },
-  "proving_key": {
-    "asset": "custom-ring-policy-key-v0.4.0-alpha.key",
-    "size": 180044527,
-    "sha256": "1ebc92edebf9f7e6e4c53194a8035e21b6785bee0e8c4e2f7422b1e44d1a72a1"
+  "audit_packed_2_key": {
+    "asset": "custom-ring-audit-packed-2-key-v0.6.0-alpha.key",
+    "size": 22751415,
+    "sha256": "72f5be6c0c05f3e20db1cb1cd5fa9cb597e20829fa1453644956ca63ba62441f"
   },
-  "audit_key": {
-    "asset": "custom-ring-base-key-v0.4.0-alpha.key",
-    "size": 66279562,
-    "sha256": "c4a6e3b31546317cf2448b9392dab5a3172caf5c90542230e70a7e17901d9f1f"
+  "audit_packed_4_key": {
+    "asset": "custom-ring-audit-packed-4-key-v0.6.0-alpha.key",
+    "size": 26013515,
+    "sha256": "524126d56f9e7ec9d9e8c57977a72a6b933186b184f716d4cff826de9da2d1c9"
   },
-  "delegate_policy_key": {
-    "asset": "custom-ring-delegate-policy-key-v0.4.0-alpha.key",
-    "size": 176832229,
-    "sha256": "296e64861dc2565b85a3567bd1c9ebba2757eefd08bfd10160d9fe248b86ac76"
+  "audit_delivered_8_key": {
+    "asset": "custom-ring-audit-delivered-8-key-v0.6.0-alpha.key",
+    "size": 129941456,
+    "sha256": "09856badc833f291d494a2e90c90333a19b88de7b0de92cf1ea3ec377b8aac57"
+  },
+  "audit_delivered_16_key": {
+    "asset": "custom-ring-audit-delivered-16-key-v0.6.0-alpha.key",
+    "size": 224949119,
+    "sha256": "d772c7121b3b513e751c49d4d2aaada7a1090ab00340241d3eafbfc5e070ad46"
+  },
+  "audit_anonymous_v2_4_2_key": {
+    "asset": "custom-ring-audit-anonymous-v2-4-2-key-v0.6.0-alpha.key",
+    "size": 52518763,
+    "sha256": "38fecfe14adca752197810d4553018d9f964239fc7ae8c17e1a27cccaf2dc66f"
+  },
+  "audit_anonymous_v2_8_2_key": {
+    "asset": "custom-ring-audit-anonymous-v2-8-2-key-v0.6.0-alpha.key",
+    "size": 54713356,
+    "sha256": "34d47063da54748a9b999667e6e922173e26a4d1a3b3144d25a040bf76c7378b"
+  },
+  "audit_anonymous_v2_12_2_key": {
+    "asset": "custom-ring-audit-anonymous-v2-12-2-key-v0.6.0-alpha.key",
+    "size": 61095383,
+    "sha256": "02b9bdad8ae28d02473e7d98809ca2a302d80f3a2d8b249617dc3857328e53f1"
+  },
+  "audit_anonymous_v2_16_2_key": {
+    "asset": "custom-ring-audit-anonymous-v2-16-2-key-v0.6.0-alpha.key",
+    "size": 63291403,
+    "sha256": "fbfea39b3429b9d4df0782a16d2bc28e4feb0960389404140b7fea5592acb534"
+  },
+  "audit_anonymous_v2_24_2_key": {
+    "asset": "custom-ring-audit-anonymous-v2-24-2-key-v0.6.0-alpha.key",
+    "size": 67678305,
+    "sha256": "a87ef205ae82c215d1e24b2f6dfeb704727407fb6c908eec76e5cff468c31e0c"
+  },
+  "audit_anonymous_v2_32_2_key": {
+    "asset": "custom-ring-audit-anonymous-v2-32-2-key-v0.6.0-alpha.key",
+    "size": 72063861,
+    "sha256": "feae73379c03ac598e4f45901ca3636a36e8f7b9e65a6f4f6f64c73bbd5a36a3"
+  },
+  "audit_anonymous_v2_4_4_key": {
+    "asset": "custom-ring-audit-anonymous-v2-4-4-key-v0.6.0-alpha.key",
+    "size": 81170425,
+    "sha256": "0329d85abbe5e6c978693b1f0bedc5cba9861c943477111d68087491ca04f621"
+  },
+  "audit_anonymous_v2_8_4_key": {
+    "asset": "custom-ring-audit-anonymous-v2-8-4-key-v0.6.0-alpha.key",
+    "size": 83360301,
+    "sha256": "fd3767c9dd9a9ee22ed00eb93ec6ddfe1a39f9e90c425dfb9ed5d5b0146bd983"
+  },
+  "audit_anonymous_v2_12_4_key": {
+    "asset": "custom-ring-audit-anonymous-v2-12-4-key-v0.6.0-alpha.key",
+    "size": 85554502,
+    "sha256": "031c906c069425ddcd0972608bb3b3a08b3215be53967330fb561d3356603193"
+  },
+  "audit_anonymous_v2_16_4_key": {
+    "asset": "custom-ring-audit-anonymous-v2-16-4-key-v0.6.0-alpha.key",
+    "size": 87744621,
+    "sha256": "8322a5954af188c8ca8b492760d3b1869286c3a8eff837c568a9cb2a40b9fa6f"
+  },
+  "audit_anonymous_v2_24_4_key": {
+    "asset": "custom-ring-audit-anonymous-v2-24-4-key-v0.6.0-alpha.key",
+    "size": 92131853,
+    "sha256": "dede173d45f5f5042ca1e13bd680d0fa9e138ce449fe2ef08586b12419fbf3d7"
+  },
+  "audit_anonymous_v2_4_8_key": {
+    "asset": "custom-ring-audit-anonymous-v2-4-8-key-v0.6.0-alpha.key",
+    "size": 139036090,
+    "sha256": "d74a2ced546e77c5a79f1b9811d5fd6b552e1e2b74e1f1b95ac252726220a8e6"
+  },
+  "audit_anonymous_v2_8_8_key": {
+    "asset": "custom-ring-audit-anonymous-v2-8-8-key-v0.6.0-alpha.key",
+    "size": 141234370,
+    "sha256": "17ccb5beabcdd0e24acb953f3f89ea9930f38c30d1c15301514bc76f4b581d08"
+  },
+  "audit_anonymous_v2_12_8_key": {
+    "asset": "custom-ring-audit-anonymous-v2-12-8-key-v0.6.0-alpha.key",
+    "size": 143416743,
+    "sha256": "64af01fb22343349821b101691f013d7f9130a306d4f7a8cc2ea7b3a600926f5"
+  },
+  "audit_anonymous_v2_16_8_key": {
+    "asset": "custom-ring-audit-anonymous-v2-16-8-key-v0.6.0-alpha.key",
+    "size": 145620402,
+    "sha256": "dfd5eebaf5af0c54ab18b46efbac149916a95b79fc0f39e2c5591990e0d1dfa9"
+  },
+  "audit_anonymous_v2_1_16_key": {
+    "asset": "custom-ring-audit-anonymous-v2-1-16-key-v0.6.0-alpha.key",
+    "size": 252540950,
+    "sha256": "81d2326e322f2e7c69f81f88ad455a74fdd57b6cda1666add17cc27f170eb91c"
+  },
+  "audit_anonymous_entry_v2_8_2_key": {
+    "asset": "custom-ring-audit-anonymous-entry-v2-8-2-key-v0.6.0-alpha.key",
+    "size": 61350756,
+    "sha256": "b3e9076cd34a399e61a820cbafe1dac03fc6376f32e8b4257672b0a83bd824f3"
+  },
+  "audit_anonymous_entry_v2_8_4_key": {
+    "asset": "custom-ring-audit-anonymous-entry-v2-8-4-key-v0.6.0-alpha.key",
+    "size": 85800497,
+    "sha256": "974f589d2ac4ab21df2d2287c34a4af836a7a3563297de44cfc9ba605aeb8fc6"
+  },
+  "audit_anonymous_entry_v2_8_8_key": {
+    "asset": "custom-ring-audit-anonymous-entry-v2-8-8-key-v0.6.0-alpha.key",
+    "size": 143674749,
+    "sha256": "882c762ba7efa6c98e07a32c193368759924b776d304dfaa7bf2a33688394018"
+  },
+  "policy_member_v2_2_w0_curator_key": {
+    "asset": "custom-ring-policy-member-v2-2-w0-curator-key-v0.6.0-alpha.key",
+    "size": 18961344,
+    "sha256": "c2523e31318afa7ccede8cd9d0c3ea9e3a59858c485ed272fb8366670e5afbd7"
+  },
+  "policy_member_v2_2_w0_own_key": {
+    "asset": "custom-ring-policy-member-v2-2-w0-own-key-v0.6.0-alpha.key",
+    "size": 13594448,
+    "sha256": "c3bc848c1b1cfe6167729e730c517475b8269914e92f84ccc592e24de9243abd"
+  },
+  "policy_member_v2_2_w1_curator_key": {
+    "asset": "custom-ring-policy-member-v2-2-w1-curator-key-v0.6.0-alpha.key",
+    "size": 25709343,
+    "sha256": "3e71dc42d20417fd2d470cf25be059fdff4b6b8d3565071a9b3cf7383d9a2964"
+  },
+  "policy_member_v2_2_w1_own_key": {
+    "asset": "custom-ring-policy-member-v2-2-w1-own-key-v0.6.0-alpha.key",
+    "size": 16102177,
+    "sha256": "2d770ffa489298c3a8400c55500b34f50c6f74b0b4d36621e8dde5cb837bce26"
+  },
+  "policy_member_v2_2_w2_curator_key": {
+    "asset": "custom-ring-policy-member-v2-2-w2-curator-key-v0.6.0-alpha.key",
+    "size": 30353063,
+    "sha256": "9b12757835637019e5a017c5c8ace38f04e3bd0d222bb35b1b80176f46a095e2"
+  },
+  "policy_member_v2_2_w2_own_key": {
+    "asset": "custom-ring-policy-member-v2-2-w2-own-key-v0.6.0-alpha.key",
+    "size": 18613565,
+    "sha256": "427a9a28cbf17fd29cac2f3d2a8d00b7f7007e10bb657d429b2778b7448afdc7"
+  },
+  "policy_member_v2_2_w4_curator_key": {
+    "asset": "custom-ring-policy-member-v2-2-w4-curator-key-v0.6.0-alpha.key",
+    "size": 39670065,
+    "sha256": "a850c55f86b6a4c5424ce17b29e00e145b635a8b4843bb9e43f6914c8392b8c9"
+  },
+  "policy_member_v2_2_w4_own_key": {
+    "asset": "custom-ring-policy-member-v2-2-w4-own-key-v0.6.0-alpha.key",
+    "size": 25747471,
+    "sha256": "db150e483a9bec45aa930aa223dfa417bef8e7ee1fdc13905e55241945d31f20"
+  },
+  "policy_member_v2_2_w8_curator_key": {
+    "asset": "custom-ring-policy-member-v2-2-w8-curator-key-v0.6.0-alpha.key",
+    "size": 62384452,
+    "sha256": "fa70042a86943ed02a86e081b360b66126cde27d92ead234083e0c34b3f220ec"
+  },
+  "policy_member_v2_2_w8_own_key": {
+    "asset": "custom-ring-policy-member-v2-2-w8-own-key-v0.6.0-alpha.key",
+    "size": 35831032,
+    "sha256": "13372b0672ecb735b109815a0ef49f0cbb85a254b525ccafdcb30b35f3f82f30"
+  },
+  "policy_member_v2_2_w16_curator_key": {
+    "asset": "custom-ring-policy-member-v2-2-w16-curator-key-v0.6.0-alpha.key",
+    "size": 107962043,
+    "sha256": "6c211831980bff433e3a74c9f1cfeebd369a0a520c00d53591bed6c3000e55bc"
+  },
+  "policy_member_v2_2_w16_own_key": {
+    "asset": "custom-ring-policy-member-v2-2-w16-own-key-v0.6.0-alpha.key",
+    "size": 60196749,
+    "sha256": "e48caf16291e86a2ad1f220c721ac7ec5518e3d4e45a71223d0f271fb2cec0a0"
+  },
+  "policy_member_v2_2_w32_curator_key": {
+    "asset": "custom-ring-policy-member-v2-2-w32-curator-key-v0.6.0-alpha.key",
+    "size": 199425926,
+    "sha256": "b866da15974205064da42a0d2b67a32a05f56dbe3903300f04c26bf1121db04a"
+  },
+  "policy_member_v2_2_w32_own_key": {
+    "asset": "custom-ring-policy-member-v2-2-w32-own-key-v0.6.0-alpha.key",
+    "size": 109308902,
+    "sha256": "83ffacb64b9426d68bd5556cf531d29e1edb4f4db79b21db0cdaa273d4c7cc9a"
+  },
+  "policy_member_v2_4_w0_curator_key": {
+    "asset": "custom-ring-policy-member-v2-4-w0-curator-key-v0.6.0-alpha.key",
+    "size": 30982657,
+    "sha256": "d9292e66b9c1017066a47388e5061aaa48efe2aa1571dc7c613ba593bd5d5a68"
+  },
+  "policy_member_v2_4_w0_own_key": {
+    "asset": "custom-ring-policy-member-v2-4-w0-own-key-v0.6.0-alpha.key",
+    "size": 19245301,
+    "sha256": "e23debc0530fc033118b9d481878f865f8d1b74209ba5ead257f3d1e0b4625df"
+  },
+  "policy_member_v2_4_w1_curator_key": {
+    "asset": "custom-ring-policy-member-v2-4-w1-curator-key-v0.6.0-alpha.key",
+    "size": 35640919,
+    "sha256": "d417fa37320dc3262aa25155629dffd04c6e5779d329d19876efcad6ef5a5f9e"
+  },
+  "policy_member_v2_4_w1_own_key": {
+    "asset": "custom-ring-policy-member-v2-4-w1-own-key-v0.6.0-alpha.key",
+    "size": 23860897,
+    "sha256": "66908fc94bd6382ea40ce64fa31a03f232c1852d0a11e14e617b12f2fe96dfb6"
+  },
+  "policy_member_v2_4_w2_curator_key": {
+    "asset": "custom-ring-policy-member-v2-4-w2-curator-key-v0.6.0-alpha.key",
+    "size": 40301421,
+    "sha256": "1434bab87be9fe474e0252ae09f9d05b3940c6d1b98e99ed45d9798c07a5b502"
+  },
+  "policy_member_v2_4_w2_own_key": {
+    "asset": "custom-ring-policy-member-v2-4-w2-own-key-v0.6.0-alpha.key",
+    "size": 26375731,
+    "sha256": "d1b93d59a0a021436ca693deab505c893a941935f88cd93b165fc7828616ecf4"
+  },
+  "policy_member_v2_4_w4_curator_key": {
+    "asset": "custom-ring-policy-member-v2-4-w4-curator-key-v0.6.0-alpha.key",
+    "size": 53760850,
+    "sha256": "d17f2d42172416ddb8865f527e4f0d48dfd40d8cb29bbe6381da965337ac48fd"
+  },
+  "policy_member_v2_4_w4_own_key": {
+    "asset": "custom-ring-policy-member-v2-4-w4-own-key-v0.6.0-alpha.key",
+    "size": 31405384,
+    "sha256": "9fef7a761c6f98917a72405beed8beef78be329474adecec156e7987247355df"
+  },
+  "policy_member_v2_4_w8_curator_key": {
+    "asset": "custom-ring-policy-member-v2-4-w8-curator-key-v0.6.0-alpha.key",
+    "size": 72294822,
+    "sha256": "419918935b41e10d51377b5d473aec6cac766a8d6cf65aa649b1550d302b8b4a"
+  },
+  "policy_member_v2_4_w8_own_key": {
+    "asset": "custom-ring-policy-member-v2-4-w8-own-key-v0.6.0-alpha.key",
+    "size": 45678775,
+    "sha256": "1a6ce3110341c752d55ec1ebfe8a9392212ba90f3ecd37b160d672d0425b157c"
+  },
+  "policy_member_v2_4_w16_curator_key": {
+    "asset": "custom-ring-policy-member-v2-4-w16-curator-key-v0.6.0-alpha.key",
+    "size": 117891698,
+    "sha256": "4d99450b4320574a866ff82b386449b95024633554caacff392b228a5913fbfe"
+  },
+  "policy_member_v2_4_w16_own_key": {
+    "asset": "custom-ring-policy-member-v2-4-w16-own-key-v0.6.0-alpha.key",
+    "size": 65875214,
+    "sha256": "f97010fe0ea38deeec8aa2d59b68a1846a26bdd8e311adf85529c9539015de5a"
+  },
+  "policy_member_v2_4_w32_curator_key": {
+    "asset": "custom-ring-policy-member-v2-4-w32-curator-key-v0.6.0-alpha.key",
+    "size": 209441010,
+    "sha256": "802e6338cdf7e2f44adc79827731ca1770e9e01a406d0915f3db6d367adfb3c4"
+  },
+  "policy_member_v2_4_w32_own_key": {
+    "asset": "custom-ring-policy-member-v2-4-w32-own-key-v0.6.0-alpha.key",
+    "size": 115058883,
+    "sha256": "229664e10a58390ac33e1e3678953fda8c2d9f9b26e75999b1d93158bd65275d"
+  },
+  "policy_member_v2_8_w0_curator_key": {
+    "asset": "custom-ring-policy-member-v2-8-w0-curator-key-v0.6.0-alpha.key",
+    "size": 55026748,
+    "sha256": "69eb8bd4d961b80966d57210fbe10ebf0e26134f47f38cdadf844fd04607b495"
+  },
+  "policy_member_v2_8_w0_own_key": {
+    "asset": "custom-ring-policy-member-v2-8-w0-own-key-v0.6.0-alpha.key",
+    "size": 32688202,
+    "sha256": "e2ac99f465c210fcafc658a1b33ae7aab6831ce86f187e337e8bc0fe60763b33"
+  },
+  "policy_member_v2_8_w1_curator_key": {
+    "asset": "custom-ring-policy-member-v2-8-w1-curator-key-v0.6.0-alpha.key",
+    "size": 59647820,
+    "sha256": "a30bc43c5646df42fdcaacd3e2c0b8f3313e50d3573e16f6451415eff9cf3c54"
+  },
+  "policy_member_v2_8_w1_own_key": {
+    "asset": "custom-ring-policy-member-v2-8-w1-own-key-v0.6.0-alpha.key",
+    "size": 35212279,
+    "sha256": "a297538e23a5652d553b7e5c2cc041ccca8ae45e3983323e0a2da36a371cbeb0"
+  },
+  "policy_member_v2_8_w2_curator_key": {
+    "asset": "custom-ring-policy-member-v2-8-w2-curator-key-v0.6.0-alpha.key",
+    "size": 64284576,
+    "sha256": "dc3706550607be732ff0039df34bac41f73aa899a5f0b56173255c538ad25d66"
+  },
+  "policy_member_v2_8_w2_own_key": {
+    "asset": "custom-ring-policy-member-v2-8-w2-own-key-v0.6.0-alpha.key",
+    "size": 37730064,
+    "sha256": "07e4e24c1fecaa404283d6455f6a8007743ed933b71e76d85bd17f0b2dc8cd64"
+  },
+  "policy_member_v2_8_w4_curator_key": {
+    "asset": "custom-ring-policy-member-v2-8-w4-curator-key-v0.6.0-alpha.key",
+    "size": 73561100,
+    "sha256": "0cb94f4e56f58559d02ba400aca95ea692bf145eacf9851a4a362dc80dfebf16"
+  },
+  "policy_member_v2_8_w4_own_key": {
+    "asset": "custom-ring-policy-member-v2-8-w4-own-key-v0.6.0-alpha.key",
+    "size": 46942547,
+    "sha256": "a2055400138006d066946646b5239444f2292524d997dadc8eb15daa196c4d3b"
+  },
+  "policy_member_v2_8_w8_curator_key": {
+    "asset": "custom-ring-policy-member-v2-8-w8-curator-key-v0.6.0-alpha.key",
+    "size": 100514196,
+    "sha256": "3beb0f7bbaf8533c1308a1e224b25072838f8416fe7b8433300f3fc61dbdd084"
+  },
+  "policy_member_v2_8_w8_own_key": {
+    "asset": "custom-ring-policy-member-v2-8-w8-own-key-v0.6.0-alpha.key",
+    "size": 57004472,
+    "sha256": "8dc3203c574006cfd16d4e33e7c9b0366edf05e990c7d4d61de56c4b4d66ea17"
+  },
+  "policy_member_v2_8_w16_curator_key": {
+    "asset": "custom-ring-policy-member-v2-8-w16-curator-key-v0.6.0-alpha.key",
+    "size": 137802072,
+    "sha256": "cc819ce8ade81b9f0e14350f4f2ba0347fb0e9aad7e0944f5ad0d57f4a2497c5"
+  },
+  "policy_member_v2_8_w16_own_key": {
+    "asset": "custom-ring-policy-member-v2-8-w16-own-key-v0.6.0-alpha.key",
+    "size": 77281541,
+    "sha256": "cb24c4f93002884401803bbefb27d9895244ae1434fcadf951525d9e1b5728ba"
+  },
+  "policy_member_v2_8_w32_curator_key": {
+    "asset": "custom-ring-policy-member-v2-8-w32-curator-key-v0.6.0-alpha.key",
+    "size": 229517103,
+    "sha256": "14e7502d754657eb34b4e9ffa2e5be61d5687713513c58998ce9085988e31287"
+  },
+  "policy_member_v2_8_w32_own_key": {
+    "asset": "custom-ring-policy-member-v2-8-w32-own-key-v0.6.0-alpha.key",
+    "size": 126626770,
+    "sha256": "1e2cc2f3c2aa963f201e99c35c3a2b292d6fa4be1b8871e00096e33eb432dc67"
+  },
+  "policy_member_v2_16_w0_curator_key": {
+    "asset": "custom-ring-policy-member-v2-16-w0-curator-key-v0.6.0-alpha.key",
+    "size": 103126035,
+    "sha256": "b48dc508d11587c69875fe2d11317df9d552cb5424eb45875c45100ee561671b"
+  },
+  "policy_member_v2_16_w0_own_key": {
+    "asset": "custom-ring-policy-member-v2-16-w0-own-key-v0.6.0-alpha.key",
+    "size": 59623399,
+    "sha256": "99415bf62d2e31c64676d8c2d3be0552d02097f4ec60fcbaf5e3801569f2ae15"
+  },
+  "policy_member_v2_16_w1_curator_key": {
+    "asset": "custom-ring-policy-member-v2-16-w1-curator-key-v0.6.0-alpha.key",
+    "size": 107771592,
+    "sha256": "11ea4055449fe3a49ef3ff924c38d3f3ec7f8e183a267030e8b87bb17a9169eb"
+  },
+  "policy_member_v2_16_w1_own_key": {
+    "asset": "custom-ring-policy-member-v2-16-w1-own-key-v0.6.0-alpha.key",
+    "size": 62133575,
+    "sha256": "98586dc5742be231e8d86464b47ca420574989fce1d4e672433f3dcb40ec48dd"
+  },
+  "policy_member_v2_16_w2_curator_key": {
+    "asset": "custom-ring-policy-member-v2-16-w2-curator-key-v0.6.0-alpha.key",
+    "size": 112417432,
+    "sha256": "dec85bfaed5e82e3ac9b236f0dba1352c3744b894b60ce9cb2cd9bee3a5efbce"
+  },
+  "policy_member_v2_16_w2_own_key": {
+    "asset": "custom-ring-policy-member-v2-16-w2-own-key-v0.6.0-alpha.key",
+    "size": 64658041,
+    "sha256": "892a402265c2d4ec9e0cb3692e4e23b54b342246a59c691c8c4fde7f209e77c3"
+  },
+  "policy_member_v2_16_w4_curator_key": {
+    "asset": "custom-ring-policy-member-v2-16-w4-curator-key-v0.6.0-alpha.key",
+    "size": 121723429,
+    "sha256": "e09b1a0168291153857dab950fe0b0370b2cb6c414e13c7422a3a6be3d5d5e75"
+  },
+  "policy_member_v2_16_w4_own_key": {
+    "asset": "custom-ring-policy-member-v2-16-w4-own-key-v0.6.0-alpha.key",
+    "size": 69698751,
+    "sha256": "373bf0aa171e2e47eba940c9955b492cb0b2ad427797b3a5b5a22a9a31a6758f"
+  },
+  "policy_member_v2_16_w8_curator_key": {
+    "asset": "custom-ring-policy-member-v2-16-w8-curator-key-v0.6.0-alpha.key",
+    "size": 140355761,
+    "sha256": "788c51311523e36c343cc34edda40a3bcac03c86aa630a8d03c929706eaf03dc"
+  },
+  "policy_member_v2_16_w8_own_key": {
+    "asset": "custom-ring-policy-member-v2-16-w8-own-key-v0.6.0-alpha.key",
+    "size": 79842981,
+    "sha256": "700706fd4b60c10cb4fc9fd793664cfc035e7174ef3cb3435ff6c8fda1548ac3"
+  },
+  "policy_member_v2_16_w16_curator_key": {
+    "asset": "custom-ring-policy-member-v2-16-w16-curator-key-v0.6.0-alpha.key",
+    "size": 194371848,
+    "sha256": "402e3e7c9cc6a7ef45508507fc089f49de6c6b7a42e34cb31e3e59e6b29d5d63"
+  },
+  "policy_member_v2_16_w16_own_key": {
+    "asset": "custom-ring-policy-member-v2-16-w16-own-key-v0.6.0-alpha.key",
+    "size": 108509825,
+    "sha256": "1613f7c83a404a7b4c213de5d9256bbcc508a73428eee3b755f8e1e5cb9b6d23"
+  },
+  "policy_member_v2_16_w32_curator_key": {
+    "asset": "custom-ring-policy-member-v2-16-w32-curator-key-v0.6.0-alpha.key",
+    "size": 269690881,
+    "sha256": "f0eebdce9e462e7a18ac19c22054d1c172b3e85eb1f9812581b3348e12bf6471"
+  },
+  "policy_member_v2_16_w32_own_key": {
+    "asset": "custom-ring-policy-member-v2-16-w32-own-key-v0.6.0-alpha.key",
+    "size": 149853227,
+    "sha256": "5743cd8d8e9c4ee512d589eced79e4a8b4f6031b610de4ea0360ace92948cc79"
+  },
+  "policy_delegate_v2_2x2_curator_key": {
+    "asset": "custom-ring-policy-delegate-v2-2x2-curator-key-v0.6.0-alpha.key",
+    "size": 16214950,
+    "sha256": "33ce7d75c64f7d3e36fcd2b062bf3de30bf2130056f23e8b06843f771e5f45fe"
+  },
+  "policy_delegate_v2_2x2_own_key": {
+    "asset": "custom-ring-policy-delegate-v2-2x2-own-key-v0.6.0-alpha.key",
+    "size": 9810829,
+    "sha256": "cb11df8f8baca969a0f381c11ecae3dce46bb0ecd1e934f94b40826bb39cf8cb"
+  },
+  "policy_delegate_v2_4x4_curator_key": {
+    "asset": "custom-ring-policy-delegate-v2-4x4-curator-key-v0.6.0-alpha.key",
+    "size": 29005266,
+    "sha256": "6dac297b28e677076c03e7b6240ee8e93410584bd8d9aa0818667553a55e7062"
+  },
+  "policy_delegate_v2_4x4_own_key": {
+    "asset": "custom-ring-policy-delegate-v2-4x4-own-key-v0.6.0-alpha.key",
+    "size": 17266266,
+    "sha256": "861a2877aceaa76847e00eceb152a4081a5806bb70d1d7d989bccbd0b2c8ae64"
+  },
+  "apply_records_1_key": {
+    "asset": "custom-ring-apply-records-1-key-v0.6.0-alpha.key",
+    "size": 4901089,
+    "sha256": "93b42a0b73215a5d240997895f7b2158f8ce4ca68e120f86e788498a76dab312"
+  },
+  "apply_records_2_key": {
+    "asset": "custom-ring-apply-records-2-key-v0.6.0-alpha.key",
+    "size": 9781869,
+    "sha256": "bc56094f853e7706003d81d83f43b2b9281a560a6cc8c430b0ed4d2400776cef"
+  },
+  "apply_records_4_key": {
+    "asset": "custom-ring-apply-records-4-key-v0.6.0-alpha.key",
+    "size": 19538356,
+    "sha256": "a94d5adcdc70c46615eb691fd5331ead3b5ae67191d1d5d19666badfbdfd0d2b"
+  },
+  "apply_records_8_key": {
+    "asset": "custom-ring-apply-records-8-key-v0.6.0-alpha.key",
+    "size": 39040021,
+    "sha256": "ddac9ce96b1040b3893b4f22967f2e04f541fb901869491a4960588edbda92c5"
+  },
+  "apply_records_16_key": {
+    "asset": "custom-ring-apply-records-16-key-v0.6.0-alpha.key",
+    "size": 78028964,
+    "sha256": "ec91e5dc71e4346ebf132d77dba14123bdc734c0f50e6e941598d271e48a6160"
   },
   "register_key": {
-    "asset": "custom-ring-register-key-v0.4.0-alpha.key",
-    "size": 68029648,
-    "sha256": "926bc02fe4d70f3d8163e190a572be82f8a0506e4ce734525fd3f92cf40c3357"
+    "asset": "custom-ring-register-key-v0.6.0-alpha.key",
+    "size": 17031964,
+    "sha256": "2cdd45b0ff4ed8b700bc67bec137955a3234bea7b0a227e3e39fb81af29a598b"
   },
-  "deposit_key": {
-    "asset": "custom-ring-deposit-key-v0.4.0-alpha.key",
-    "size": 213136902,
-    "sha256": "3a385a554a49c25d1eea8e3f5368874347ccb7c457512b5f0fe42ec519c498ad"
+  "withdrawal_exemption_key": {
+    "asset": "custom-ring-withdrawal-exemption-key-v0.6.0-alpha.key",
+    "size": 3852840,
+    "sha256": "b47f4c19172eea579d3a5bc848a0f9378655c3c6c80c4ee2d9d714d885d301fb"
+  },
+  "deposit_1_key": {
+    "asset": "custom-ring-deposit-1-key-v0.6.0-alpha.key",
+    "size": 21695854,
+    "sha256": "10e13f59fe80e4072c4a0a80e16b44b78895a82918ff4a8e155c7bc0577dc0a8"
+  },
+  "deposit_2_key": {
+    "asset": "custom-ring-deposit-2-key-v0.6.0-alpha.key",
+    "size": 27797474,
+    "sha256": "dce2b781641eeea34c93cbdc2252cbf41fd709b4aae03e2ebec6bb90af05960f"
+  },
+  "deposit_4_key": {
+    "asset": "custom-ring-deposit-4-key-v0.6.0-alpha.key",
+    "size": 35895122,
+    "sha256": "8e3506e4e8defbea9e0d7ed84387ad805a76619678f85d29e14e80dc3039fb84"
+  },
+  "deposit_8_key": {
+    "asset": "custom-ring-deposit-8-key-v0.6.0-alpha.key",
+    "size": 56233429,
+    "sha256": "9ec8c893887eb538bb35c8a7c307008bafe13b7333eb00c421ba197b68e84614"
+  },
+  "merge_anonymous_v2_8_key": {
+    "asset": "custom-ring-merge-anonymous-v2-8-key-v0.6.0-alpha.key",
+    "size": 22633255,
+    "sha256": "d235d3897ed3aef58e8d0ae06b8887b8691bed43bb962c167d9472fef4cfcc66"
+  },
+  "merge_anonymous_v2_24_key": {
+    "asset": "custom-ring-merge-anonymous-v2-24-key-v0.6.0-alpha.key",
+    "size": 32215568,
+    "sha256": "fc7707fd089d38038374385f6404d80de2b034f1f816e5d21779c58bcd90e697"
   },
   "binaries": [
     {
       "role": "ring_rpc",
       "os": "darwin",
       "arch": "arm64",
-      "asset": "ring-rpc-darwin-arm64-v0.4.0-alpha",
-      "size": 14474176,
-      "sha256": "5ea3c3e2cfb64958e7b2df14c8e4a54a43a2a964cde6f5d3febee830f213c4c4"
+      "asset": "ring-rpc-darwin-arm64-v0.6.0-alpha",
+      "size": 15672400,
+      "sha256": "47c91d93107045c67a9c4422f65fd413e6f520bb5f2be437a10a3d860b2fe928"
     },
     {
       "role": "ring_rpc",
       "os": "linux",
       "arch": "x64",
-      "asset": "ring-rpc-linux-x64-v0.4.0-alpha",
-      "size": 17823552,
-      "sha256": "bdebcc80000b6e9dac18455e7a963d7fcf5850ee33becc3ffc00ff75d30227b1"
+      "asset": "ring-rpc-linux-x64-v0.6.0-alpha",
+      "size": 19370144,
+      "sha256": "3c840969af14a4fe8bf6aa04069f6166f79e1388495dc76320a87c6ce7188e96"
     }
   ]
 }

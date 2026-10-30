@@ -4,9 +4,8 @@ Every ring proof has one public input. It is the fold of a statement the program
 
 | Statement | Fold | Elements | Verified by |
 |---|---|---|---|
-| Audit, packed | `HashChain4` | 14 | `Transact`, `DelegateTransact` |
-| Audit, delivered | `HashChain4` | 16 | `Transact` |
-| Audit, anonymous | `HashChain4` | 23 | `Transact` |
+| Audit, delivered | `HashChain4` | 16 | `Transact`, `DelegateTransact` |
+| Audit, anonymous | `HashChain4` | 19 | `Transact` |
 | Policy, member key | `HashChain4` | 18 | `Transact` |
 | Policy, delegate key | `HashChain4` | 17 | `DelegateTransact` |
 | Apply | `HashChain4` | 8 | `ApplyRecords`, `AuthorityWriteRecords` |
@@ -29,17 +28,16 @@ The head has 12 elements:
 | 7, 8 | `pack_be(0x04 \|\| eph_u)` | frame |
 | 9 | `hash_bytes(sealed)` | frame |
 | 10 | `right_align(salt)` | frame, SPP salt |
-| 11 | `right_align(layout)` | exits from the outputs, the other bits from the frame |
+| 11 | `right_align(layout)` | exits from the outputs, the other bits from the frame, bit value `4` clear |
 
 Then by layout:
 
-- Packed: `HashChain4(output hashes)`, `HashChain4(disclosure)`.
 - Delivered: `HashChain4(output hashes)`, `HashChain4(body hash per slot)`, `HashChain4(disclosure)`, `HashChain4(pack_be(u) per slot)`. A body hash is `hash_bytes(body)`, and an exit contributes `0` and two zero key fields.
-- Anonymous: `HashChain4(output hashes)`, `HashChain4(body hash per slot)`, `HashChain4(disclosure)`, `private_tx_hash`, `HashChain4(0^16 || tag per slot, 0 per exit)`, `right_align(epoch)`, `first_contact_root`, `sender_commitment`, `party_0`, `party_1`, `party_2`.
+- Anonymous: `HashChain4(output hashes)`, `HashChain4(disclosure)`, `private_tx_hash`, `sender_commitment`, `party_0`, `party_1`, `party_2`. No tag and no body enters it.
 
-The program supplies the epoch from `Clock::slot` and the first-contact root from the named SPP tree, `0` without `ANCHOR`. The sender commitment comes from the frame, `0` without a policy. The party identities are `solana_owner_identity` of the payer, the configured co-signer and the withdrawal destination, each `0` when absent.
+The sender commitment comes from the frame, `0` without a policy. The party identities are `solana_owner_identity` of the payer, the configured co-signer and the withdrawal destination, each `0` when absent.
 
-The packed and delivered statements carry no `private_tx_hash`. They bind the transfer through the first nullifier, the outputs, `tx_viewing_pk`, the salt and the auditor message. SPP's `external_data_hash` covers the outputs, `tx_viewing_pk`, the salt and the message, and the SPP proof binds the first nullifier as a public input.
+The delivered statement carries no `private_tx_hash`. They bind the transfer through the first nullifier, the outputs, `tx_viewing_pk`, the salt and the auditor message. SPP's `external_data_hash` covers the outputs, `tx_viewing_pk`, the salt and the message, and the SPP proof binds the first nullifier as a public input.
 
 ## Policy
 
@@ -49,7 +47,7 @@ The packed and delivered statements carry no `private_tx_hash`. They bind the tr
   approval_required, key_escrow,
   own_root, curator_root, sender,
   asset_0, amount_0, asset_1, amount_1, asset_2, amount_2,
-  2,                          // statement version
+  3,                          // POLICY_STATEMENT_VERSION
   withdrawal_hash ]
 ```
 

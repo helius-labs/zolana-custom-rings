@@ -30,8 +30,9 @@ fn cli_pays_an_anonymous_ring_address_end_to_end() -> Result<()> {
 
     // 1. Without a fee payer the cli refuses, it never charges the hidden owner or the authority.
     let recipient = ShieldedKeypair::new_ed25519()?;
-    let request =
-        RingPaymentRequest::new(ring_address(&recipient, ring.program_id(), 0)?).to_string();
+    let minted = ViewingHistory::new(recipient.viewing_pubkey(), 0).request_tag(&recipient)?;
+    let request = RingPaymentRequest::new(ring_address(&recipient, ring.program_id())?, minted.tag)
+        .to_string();
     let amount = PAIR_AMOUNT.to_string();
     let refused = project.output(&["transfer", &request, "--amount", &amount])?;
     assert!(
@@ -86,7 +87,8 @@ fn cli_pays_an_anonymous_ring_address_end_to_end() -> Result<()> {
     Ok(())
 }
 
-/// No public signer names an owner, the auditor opens the sender and every note.
+/// No public signer names an owner, the auditor opens the sender and every note, and each
+/// payment takes the spec view tag its pair has reached.
 #[test]
 fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
     let env = setup()?;
@@ -105,61 +107,75 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
     .send(&env.client)?;
     let config = env.run(ring.require_config(env.client.as_async()))?;
     assert_eq!(config.mode, RingMode::Anonymous);
-    let fresh_state = || AnonymousRingState::new(ring_program, config.creation_epoch());
+    let sender_keys = &env.sender.keypair;
+    let recipient_keys = &env.recipient.keypair;
 
-    // 1. The ring payer funds every spend and a separate source the deposits,
-    //    the owner's key signs nothing in public.
+    // 1. The ring payer funds every spend and a separate source the deposits, each deposit
+    //    takes the sender's next sender tag, the owner's key signs nothing in public.
     let payer = &env.payer;
     let deposit_source = env.funded_keypair()?;
     env.fund(deposit_source.pubkey(), RING_DEPOSIT_A + RING_DEPOSIT_B)?;
+    let mut sender_history = ViewingHistory::new(sender_keys.viewing_pubkey(), 0);
     let mut spendable = Vec::with_capacity(2);
-    let deposit_state = fresh_state();
     for amount in [RING_DEPOSIT_A, RING_DEPOSIT_B] {
         let deposit = RingDeposit {
             ring,
             payer: &deposit_source,
             recipient: DepositRecipient::Anonymous {
-                keys: &env.sender.keypair,
-                state: &deposit_state,
+                keys: sender_keys,
+                history: &sender_history,
             },
             tree: env.tree,
             asset: DepositAsset::Sol,
             amount,
             cosigner: None,
         };
+        let next = deposit
+            .viewing_history()?
+            .context("an anonymous deposit advances its history")?;
         let RingDepositReceipt { signature, utxo } =
             env.run(deposit.send_with_fee_payer(env.client.ring_client(), payer))?;
         custom_ring_cli::wait_for_indexed_transaction(&env.client, signature)?;
+        sender_history = next;
         spendable.push(utxo);
     }
+    assert_eq!(sender_history.current().tx_count(), 2);
 
-    // 2. The first payment to the recipient's address takes its inbox stream.
+    // 2. The first payment to the recipient's address takes its bootstrap tag.
     let inputs = spendable
         .into_iter()
-        .map(|utxo| indexed_note(utxo, &env.sender.keypair, &env, env.tree))
+        .map(|utxo| indexed_note(utxo, sender_keys, &env, env.tree))
         .collect::<Result<Vec<_>, _>>()?;
-    let mut sender_ring = fresh_state();
-    let mut recipient_ring = fresh_state();
     let transfer = AnonymousPayment {
         ring,
-        sender: &env.sender.keypair,
-        state: &sender_ring,
+        sender: sender_keys,
+        history: &sender_history,
         payer,
         inputs,
-        to: ring_address(&env.recipient.keypair, ring_program, 0)?,
+        to: ring_address(recipient_keys, ring_program)?,
+        first_contact: FirstContact::Bootstrap,
         amount: RING_TRANSFER_AMOUNT,
     }
     .transfer()?;
     let proven = env.run(transfer.prove(env.client.ring_client()))?;
+    let advanced = proven
+        .viewing_history
+        .clone()
+        .context("an anonymous transfer advances its sender's history")?;
+    assert_eq!(advanced.current().tx_count(), 3);
     assert_eq!(
-        proven.first_contacts.len(),
-        1,
-        "an inbox payment is a first contact"
+        advanced
+            .current()
+            .known_recipients()
+            .get(&recipient_keys.viewing_pubkey())
+            .map(|counter| counter.next()),
+        Some(0),
+        "a bootstrap payment pairs the recipient"
     );
     let tx_viewing_pk = proven.tx_viewing_key.pubkey();
-    let instruction = proven.instruction_at(rpc.get_slot()?)?;
+    let instruction = proven.instruction()?;
     assert!(
-        !signers(&instruction).contains(&env.sender.keypair.pubkey()),
+        !signers(&instruction).contains(&sender_keys.pubkey()),
         "no transaction signer names the owner"
     );
 
@@ -208,7 +224,7 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
         auditor_tag,
     }
     .land(&env)?;
-    landed.record(&mut sender_ring)?;
+    sender_history = landed.history;
     let indexed = landed.indexed;
     assert_eq!(indexed.nullifiers.len(), 2, "both inputs spent");
     assert_eq!(
@@ -217,14 +233,24 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
         "the first nullifier fixes the transaction viewing key of every attempt"
     );
     assert!(
-        indexed.output_slots.iter().all(|slot| {
-            RingTag::from_owner_tag(&slot.view_tag).is_some()
-                && ring_anonymous_output_body(&slot.payload).is_some()
+        indexed.output_slots[0].payload.is_empty(),
+        "output 0 is the sender change and carries no body"
+    );
+    let (auditor_message, sender_bundle) = indexed.messages.split_last().unwrap();
+    assert_eq!(auditor_message.view_tag, auditor_tag);
+    assert!(
+        matches!(sender_bundle, [bundle] if anonymous_sender_output_body(&bundle.data).is_some()),
+        "the sender bundle is the only message before the auditor's"
+    );
+    assert!(
+        indexed.output_slots.iter().any(|slot| {
+            slot.view_tag == recipient_keys.viewing_pubkey().u()
+                && anonymous_recipient_output_body(&slot.payload).is_some()
         }),
-        "every anonymous output publishes a stream tag and an anonymous body"
+        "the payment publishes a recipient body under the bootstrap tag"
     );
 
-    // 4. The auditor opens the hidden sender, its inputs and both outputs.
+    // 4. The auditor reads the hidden sender, its inputs and every output's asset and amount.
     let audited = AuditLookup {
         ring: ring_program,
         scan: RingScan::new(ring_program, auditor_pk).with_mode(RingMode::Anonymous),
@@ -235,9 +261,17 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
     let mut amounts = ring_amounts(&audited)?;
     amounts.sort_unstable();
     assert_eq!(amounts, [RING_TRANSFER_AMOUNT, RING_CHANGE]);
+    assert!(
+        audited
+            .outputs
+            .iter()
+            .filter_map(|output| output.opening.utxo())
+            .all(|utxo| utxo.mint == Some(SOL_MINT)),
+        "the disclosure names every output's asset"
+    );
     assert_eq!(
         audited.sender.map(|sender| sender.owner_key),
-        Some(env.sender.keypair.signing_pubkey().as_ed25519()?),
+        Some(sender_keys.signing_pubkey().as_ed25519()?),
         "the auditor names the hidden sender"
     );
     let mut input_amounts: Vec<u64> = audited
@@ -248,38 +282,49 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
     input_amounts.sort_unstable();
     assert_eq!(input_amounts, [RING_DEPOSIT_B, RING_DEPOSIT_A]);
 
-    // 5. The recipient finds the inbox payment, its first contact anchors the sender's pair stream.
-    let mut recipient_wallet =
-        RingWallet::new(&env.recipient.keypair, env.ring_assets()?, fresh_state());
+    // 5. The recipient finds the bootstrap payment and learns the sender's viewing key.
+    let mut recipient_wallet = fresh_wallet(&env, recipient_keys, ring_program)?;
     recipient_wallet.sync(&env)?;
     assert_eq!(
         sorted_notes(recipient_wallet.unspent()),
         vec![(SOL_MINT, RING_TRANSFER_AMOUNT, Some(ring_program))]
     );
     assert_eq!(
-        recipient_wallet.state.received().len(),
+        recipient_wallet.history.current().known_senders().len(),
         1,
-        "the first contact anchors a pair stream"
+        "the bootstrap payment pairs the sender"
     );
 
-    // 6. The recipient pays the sender's first address and keeps its change.
+    // 6. The sender mints a payment request, the recipient pays it under the request tag.
+    let minted = sender_history.request_tag(sender_keys)?;
+    sender_history = minted.history;
+    let request = RingPaymentRequest::new(ring_address(sender_keys, ring_program)?, minted.tag);
     let transfer = AnonymousPayment {
         ring,
-        sender: &env.recipient.keypair,
-        state: &recipient_ring,
+        sender: recipient_keys,
+        history: &recipient_wallet.history,
         payer,
         inputs: vec![held_note(&recipient_wallet, &env, RING_TRANSFER_AMOUNT)?],
-        to: ring_address(&env.sender.keypair, ring_program, 0)?,
+        to: request.address.clone(),
+        first_contact: FirstContact::Request(request.request_view_tag),
         amount: SECOND_HOP_AMOUNT,
     }
     .transfer()?;
-    PaymentLanding {
+    let landed = PaymentLanding {
         transfer,
         payer,
         auditor_tag,
     }
-    .land(&env)?
-    .record(&mut recipient_ring)?;
+    .land(&env)?;
+    assert!(
+        landed
+            .indexed
+            .output_slots
+            .iter()
+            .any(|slot| slot.view_tag == request.request_view_tag),
+        "the payment publishes the request tag"
+    );
+    recipient_wallet.history = landed.history;
     recipient_wallet.sync(&env)?;
     assert_eq!(
         sorted_notes(recipient_wallet.unspent()),
@@ -288,82 +333,31 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
             RING_TRANSFER_AMOUNT - SECOND_HOP_AMOUNT,
             Some(ring_program)
         )],
-        "the recipient keeps the change of its spend"
+        "the recipient finds the change of its spend by its sender tag"
     );
 
-    // 7. A fresh wallet of the sender finds its deposits on the deposit stream,
-    //    its change from their spend and the payment on its first address.
-    let mut fresh_sender = RingWallet::new(&env.sender.keypair, env.ring_assets()?, fresh_state());
-    fresh_sender.sync(&env)?;
+    // 7. The sender pays the paired recipient under their first shared tag.
+    let mut sender_wallet = fresh_wallet(&env, sender_keys, ring_program)?;
+    sender_wallet.history = sender_history;
+    sender_wallet.sync(&env)?;
     assert_eq!(
-        sorted_notes(fresh_sender.unspent()),
+        sorted_notes(sender_wallet.unspent()),
         vec![
             (SOL_MINT, SECOND_HOP_AMOUNT, Some(ring_program)),
             (SOL_MINT, RING_CHANGE, Some(ring_program)),
-        ]
+        ],
+        "the sender finds its change and the request payment"
     );
-    assert_eq!(
-        fresh_sender.state.issued().len(),
-        1,
-        "a payment on index 0 issues it"
-    );
-
-    // 8. Pairing needs seven other sent leaves, discovered by the sender's scan.
-    let recipient_key = env.recipient.keypair.viewing_pubkey();
-    let decoy_recipient = ShieldedKeypair::new_ed25519()?;
-    let decoy_address = ring_address(&decoy_recipient, ring_program, 0)?;
-    let mut pair_wallet = RingWallet::new(&env.sender.keypair, env.ring_assets()?, sender_ring);
-    for _ in 0..32 {
-        pair_wallet.sync(&env)?;
-        let epoch = custom_ring_interface::stream::tag_epoch(rpc.get_slot()?);
-        if pair_wallet
-            .state
-            .pair_anchor(&recipient_key, epoch)
-            .is_some()
-        {
-            break;
-        }
-        let RingDepositReceipt { signature, utxo } = env.run(
-            RingDeposit {
-                ring,
-                payer,
-                recipient: DepositRecipient::Anonymous {
-                    keys: &env.sender.keypair,
-                    state: &pair_wallet.state,
-                },
-                tree: env.tree,
-                asset: DepositAsset::Sol,
-                amount: 1,
-                cosigner: None,
-            }
-            .send(env.client.ring_client()),
-        )?;
-        custom_ring_cli::wait_for_indexed_transaction(&env.client, signature)?;
-        PaymentLanding {
-            transfer: AnonymousPayment {
-                ring,
-                sender: &env.sender.keypair,
-                state: &pair_wallet.state,
-                payer,
-                inputs: vec![indexed_note(utxo, &env.sender.keypair, &env, env.tree)?],
-                to: decoy_address.clone(),
-                amount: 1,
-            }
-            .transfer()?,
-            payer,
-            auditor_tag,
-        }
-        .land(&env)?
-        .record(&mut pair_wallet.state)?;
-    }
-    let sender_ring = pair_wallet.state;
+    assert_eq!(sender_wallet.history.current().request_count(), 1);
+    let shared_tag = sender_keys.get_send_shared_view_tag(&recipient_keys.viewing_pubkey(), 0)?;
     let transfer = AnonymousPayment {
         ring,
-        sender: &env.sender.keypair,
-        state: &sender_ring,
+        sender: sender_keys,
+        history: &sender_wallet.history,
         payer,
-        inputs: vec![held_note(&fresh_sender, &env, RING_CHANGE)?],
-        to: ring_address(&env.recipient.keypair, ring_program, 0)?,
+        inputs: vec![held_note(&sender_wallet, &env, RING_CHANGE)?],
+        to: ring_address(recipient_keys, ring_program)?,
+        first_contact: FirstContact::Bootstrap,
         amount: PAIR_AMOUNT,
     }
     .transfer()?;
@@ -374,9 +368,14 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
     }
     .land(&env)?;
     assert!(
-        landed.first_contacts.is_empty(),
-        "a pair stream payment is no first contact"
+        landed
+            .indexed
+            .output_slots
+            .iter()
+            .any(|slot| slot.view_tag == shared_tag),
+        "a paired recipient takes the shared tag"
     );
+    sender_wallet.history = landed.history;
     recipient_wallet.sync(&env)?;
     assert_eq!(
         sorted_notes(recipient_wallet.unspent()),
@@ -388,7 +387,31 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
                 Some(ring_program)
             ),
         ],
-        "the recipient finds the pair stream payment"
+        "the recipient finds the shared tag payment"
+    );
+
+    // 8. A fresh wallet of the sender rebuilds its counters and counterparties from index 0.
+    let mut fresh_sender = fresh_wallet(&env, sender_keys, ring_program)?;
+    fresh_sender.sync(&env)?;
+    sender_wallet.sync(&env)?;
+    assert_eq!(
+        sorted_notes(fresh_sender.unspent()),
+        vec![
+            (SOL_MINT, SECOND_HOP_AMOUNT, Some(ring_program)),
+            (SOL_MINT, RING_CHANGE - PAIR_AMOUNT, Some(ring_program)),
+        ]
+    );
+    let (rebuilt, stored) = (
+        fresh_sender.history.current(),
+        sender_wallet.history.current(),
+    );
+    assert_eq!(rebuilt.tx_count(), stored.tx_count());
+    assert_eq!(rebuilt.request_count(), stored.request_count());
+    assert_eq!(rebuilt.known_recipients(), stored.known_recipients());
+    assert_eq!(
+        rebuilt.known_senders().len(),
+        1,
+        "the request payment pairs its sender"
     );
 
     // 9. The recipient merges both notes, a fresh wallet finds the merge from
@@ -397,19 +420,18 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
     let tree_id = env.tree_id(env.tree)?;
     let prepared = CustomRingMerge::new(ring, merged_inputs.clone(), None)?
         .with_output_tree_id(tree_id)
-        .encrypt(&env.recipient.keypair)?;
+        .encrypt(recipient_keys)?;
     let merged_hash = prepared.output().hash(tree_id)?;
     let merge = RingMergeOperation::new(
         prepared,
         MergeProofInput {
-            nullifier_key: env.recipient.keypair.nullifier_key.clone(),
+            nullifier_key: recipient_keys.nullifier_key.clone(),
             input_tree: env.tree,
             output_tree: env.tree,
         },
     );
     land(&env, merge, payer, &[])?;
-    let mut fresh_recipient =
-        RingWallet::new(&env.recipient.keypair, env.ring_assets()?, fresh_state());
+    let mut fresh_recipient = fresh_wallet(&env, recipient_keys, ring_program)?;
     fresh_recipient.sync(&env)?;
     for input in &merged_inputs {
         assert!(fresh_recipient.is_spent(input), "the merge spent its input");
@@ -428,25 +450,27 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
         .context("the merged note")?;
     let transfer = AnonymousPayment {
         ring,
-        sender: &env.recipient.keypair,
-        state: &recipient_ring,
+        sender: recipient_keys,
+        history: &fresh_recipient.history,
         payer,
         inputs: vec![indexed_note(
             merged.utxo.clone(),
-            &env.recipient.keypair,
+            recipient_keys,
             &env,
             env.tree,
         )?],
-        to: ring_address(&env.sender.keypair, ring_program, 0)?,
+        to: ring_address(sender_keys, ring_program)?,
+        first_contact: FirstContact::Bootstrap,
         amount: MERGED_SPEND,
     }
     .transfer()?;
-    PaymentLanding {
+    fresh_recipient.history = PaymentLanding {
         transfer,
         payer,
         auditor_tag,
     }
-    .land(&env)?;
+    .land(&env)?
+    .history;
     fresh_recipient.sync(&env)?;
     assert!(fresh_recipient.is_spent(&merged));
     Ok(())
@@ -487,15 +511,16 @@ fn an_anonymous_policy_ring_screens_its_hidden_sender() -> Result<()> {
     .next()
     .context("the hidden note")?;
     let input = indexed_note(deposited, sender, &env, env.tree)?;
-    let state = AnonymousRingState::new(ring_program, config.creation_epoch());
-    let to = ring_address(&env.recipient.keypair, ring_program, 0)?;
+    let history = ViewingHistory::new(sender.viewing_pubkey(), 0);
+    let to = ring_address(&env.recipient.keypair, ring_program)?;
     let payment = || AnonymousPayment {
         ring,
         sender,
-        state: &state,
+        history: &history,
         payer: &env.payer,
         inputs: vec![input.clone()],
         to: to.clone(),
+        first_contact: FirstContact::Bootstrap,
         amount: PAIR_AMOUNT,
     };
     let sender_member = owner_member(sender)?;
@@ -547,4 +572,12 @@ fn an_anonymous_policy_ring_screens_its_hidden_sender() -> Result<()> {
         "the auditor opens the screened owner"
     );
     Ok(())
+}
+
+fn fresh_wallet<'a>(
+    env: &TestEnv,
+    keys: &'a ShieldedKeypair,
+    ring: Address,
+) -> Result<RingWallet<'a>> {
+    Ok(RingWallet::new(keys, env.ring_assets()?, ring))
 }

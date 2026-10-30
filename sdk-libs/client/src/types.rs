@@ -1,18 +1,17 @@
 use core::fmt;
 
-use custom_ring_interface::stream::RingTag;
 #[cfg(feature = "rpc")]
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
 use solana_signature::Signature;
-use zolana_client::ProofInputUtxo;
-use zolana_hasher::{
+use spr_client::ProofInputUtxo;
+use spr_hasher::{
     primitives::{right_align, solana_owner_identity},
     Hasher, Poseidon,
 };
-use zolana_interface::tree_slot::tree_id_field;
-use zolana_keypair::X25519Pubkey;
-use zolana_transaction::{
+use spr_interface::tree_slot::tree_id_field;
+use spr_keypair::X25519Pubkey;
+use spr_transaction::{
     utxo::{program_id_proof_input_hash, UTXO_DOMAIN},
     OutputContext,
 };
@@ -46,13 +45,19 @@ pub struct AuditedOutput {
 pub enum OutputOpening {
     Ring {
         utxo: AuditedUtxo,
-        recipient_u: [u8; 32],
-        /// `None` outside the anonymous rail.
-        tag: Option<RingTag>,
+        owner_tag: RingOwnerTag,
     },
     /// A default-ring note, its owner the published owner tag.
     Exit(AuditedUtxo),
     Dummy,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RingOwnerTag {
+    /// The recipient key's u on the delivered rails.
+    Recipient([u8; 32]),
+    /// A view tag the anonymous proof leaves free.
+    View([u8; 32]),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

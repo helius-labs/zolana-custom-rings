@@ -3,7 +3,7 @@
 use custom_ring_interface::{
     AnonymousSpend, ANONYMOUS_AUDIT_CLASSES, ANONYMOUS_ENTRY_CLASS, ANONYMOUS_ENTRY_OUTPUTS,
 };
-use zolana_interface::shape::SPP_SUPPORTED_SHAPES;
+use spr_interface::shape::SPP_SUPPORTED_SHAPES;
 
 fn vector() -> serde_json::Value {
     serde_json::from_str(include_str!(

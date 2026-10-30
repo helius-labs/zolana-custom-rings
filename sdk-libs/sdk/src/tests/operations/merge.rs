@@ -1,8 +1,8 @@
 use custom_ring_interface::{CoSignScope, RingMode};
 use solana_signer::Signer;
-use zolana_interface::pda;
-use zolana_keypair::ShieldedKeypair;
-use zolana_transaction::Mint;
+use spr_interface::pda;
+use spr_keypair::ShieldedKeypair;
+use spr_transaction::Mint;
 
 use super::support::{keypair, ring, ring_utxo, Chain, RingSettings, TREE_ID};
 use crate::{
@@ -93,7 +93,7 @@ async fn an_anonymous_merge_its_owner_would_sign_in_public_is_refused_before_pro
 async fn the_widest_merge_fits_a_transaction_beside_its_co_signer() {
     use custom_ring_interface::{compute_unit_limit, InstructionTag};
     use solana_address::Address;
-    use zolana_client::ComputeBudgetConfig;
+    use spr_client::ComputeBudgetConfig;
     let owner = keypair(1);
     let utxos = (0..crate::MAX_RING_MERGE_INPUTS as u64)
         .map(|leaf| ring_utxo(&owner, Mint::SOL, 5, leaf))

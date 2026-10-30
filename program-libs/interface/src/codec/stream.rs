@@ -1,61 +1,22 @@
-//! Tag streams, slot secrets, ring secrets and the sender commitment of ring
-//! transfers, mirrored by the Go package `custom_rings/circuits/base`.
+//! Slot secrets and the sender commitment of ring transfers, mirrored by the
+//! Go package `prover/circuits/shared`.
 
-use thiserror::Error;
-use zolana_hasher::{
+use spr_hasher::{
     primitives::{is_canonical_bn254_scalar_be, pack_be, right_align},
     Hasher, HasherError, Poseidon,
 };
+use thiserror::Error;
 
 use crate::{domain, TAGGED_X25519_KEY_LEN, VIEWING_PUBKEY_TAG};
 
-/// The tag epoch length, the statement epoch is the landing slot's or the one before.
-pub const EPOCH_SLOTS: u64 = 1 << 18;
-/// A 6-bit index in the circuit.
-pub const J_INBOX: u8 = 64;
-/// One index range check serves both streams.
-pub const J_PAIR: u8 = J_INBOX;
-/// Epochs a pair stream lives after its anchor, a 5-bit difference in the circuit.
-pub const K_PAIR_EPOCHS: u64 = 32;
-/// `low128` bytes, the owner tag is `0^16 ‖ tag`.
-pub const TAG_LEN: usize = 16;
-
 #[derive(Debug, Error, PartialEq)]
 pub enum StreamError {
-    #[error("tag index {0} is outside its stream")]
-    IndexOutOfRange(u8),
     #[error("value is not a canonical field element")]
     NoncanonicalField,
     #[error("viewing key is not tagged 0x04")]
     UntaggedKey,
     #[error(transparent)]
     Hasher(#[from] HasherError),
-}
-
-pub const fn tag_epoch(slot: u64) -> u64 {
-    slot / EPOCH_SLOTS
-}
-
-/// Below `J_INBOX`, the only indexes a proof accepts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TagIndex(u8);
-
-impl TagIndex {
-    pub fn new(index: u8) -> Result<Self, StreamError> {
-        if index < J_INBOX {
-            Ok(Self(index))
-        } else {
-            Err(StreamError::IndexOutOfRange(index))
-        }
-    }
-
-    pub fn all() -> impl Iterator<Item = Self> {
-        (0..J_INBOX).map(Self)
-    }
-
-    pub const fn get(self) -> u8 {
-        self.0
-    }
 }
 
 /// Its secret is rebuilt by the recipient from `X25519(u_sk, tx_u)`.
@@ -90,7 +51,7 @@ impl DeliveredSlot<'_> {
     }
 }
 
-/// The root of a ring output's blinding, on a delivered rail also of its body key and pair key.
+/// The root of a delivered ring output's body key.
 #[derive(Clone)]
 pub struct SlotSecret([u8; 32]);
 
@@ -102,109 +63,6 @@ impl SlotSecret {
 
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
-    }
-}
-
-/// `Poseidon(CRIK, ring_id, pack_be(viewing_pk))`, public to anyone holding the ring address.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct InboxKey([u8; 32]);
-
-impl InboxKey {
-    /// `viewing_pk` is the per-address key `0x04 ‖ u` of a ring address.
-    pub fn derive(
-        ring_id: &[u8; 32],
-        viewing_pk: &[u8; TAGGED_X25519_KEY_LEN],
-    ) -> Result<Self, StreamError> {
-        let [r0, r1] = tagged_key_fields(viewing_pk)?;
-        Ok(Self(Poseidon::hashv(&[
-            &domain::field(domain::INBOX_KEY),
-            ring_id,
-            &r0,
-            &r1,
-        ])?))
-    }
-
-    /// `low128(Poseidon(CRIT, inbox_key, epoch, j))`.
-    pub fn tag(&self, epoch: u64, index: TagIndex) -> Result<RingTag, HasherError> {
-        Stream {
-            domain: domain::INBOX_TAG,
-            key: &self.0,
-        }
-        .tag(epoch, index)
-    }
-
-    pub const fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-}
-
-/// `Poseidon(CRPK, s1)`, a secret of the sender, the recipient and the auditor of the first contact.
-#[derive(Clone)]
-pub struct PairKey([u8; 32]);
-
-impl PairKey {
-    /// `first_contact` is the delivered slot secret of the anchor.
-    pub fn derive(first_contact: &SlotSecret) -> Result<Self, HasherError> {
-        Ok(Self(Poseidon::hashv(&[
-            &domain::field(domain::PAIR_KEY),
-            &first_contact.0,
-        ])?))
-    }
-
-    /// A pair key a wallet stored, every pair key is a Poseidon output.
-    pub fn from_bytes(bytes: [u8; 32]) -> Result<Self, StreamError> {
-        canonical(bytes).map(Self)
-    }
-
-    /// `low128(Poseidon(CRPT, pair_key, epoch, j))`, live `K_PAIR_EPOCHS` after the anchor.
-    pub fn tag(&self, epoch: u64, index: TagIndex) -> Result<RingTag, HasherError> {
-        Stream {
-            domain: domain::PAIR_TAG,
-            key: &self.0,
-        }
-        .tag(epoch, index)
-    }
-
-    pub const fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-}
-
-/// `low128` of a canonical field value.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct RingTag([u8; TAG_LEN]);
-
-impl RingTag {
-    /// The circuit reads `low128` of the reduced value, a non-canonical encoding is refused.
-    pub fn from_field(value: &[u8; 32]) -> Result<Self, StreamError> {
-        canonical(*value).map(|value| Self::low128(&value))
-    }
-
-    pub const fn from_bytes(bytes: [u8; TAG_LEN]) -> Self {
-        Self(bytes)
-    }
-
-    pub const fn as_bytes(&self) -> &[u8; TAG_LEN] {
-        &self.0
-    }
-
-    /// `0^16 ‖ tag`, the expanded owner tag and the field the statement chains.
-    pub fn field(&self) -> [u8; 32] {
-        right_align(&self.0)
-    }
-
-    /// `None` unless the first 16 bytes are zero, the one owner tag form of an anonymous slot.
-    pub fn from_owner_tag(owner_tag: &[u8; 32]) -> Option<Self> {
-        let (padding, tag) = owner_tag.split_at(32 - TAG_LEN);
-        padding
-            .iter()
-            .all(|byte| *byte == 0)
-            .then(|| Self(core::array::from_fn(|i| tag[i])))
-    }
-
-    /// Unchecked, a Poseidon output is below the modulus.
-    fn low128(value: &[u8; 32]) -> Self {
-        Self(core::array::from_fn(|i| value[32 - TAG_LEN + i]))
     }
 }
 
@@ -225,23 +83,6 @@ impl SenderCommitment {
     }
 }
 
-struct Stream<'a> {
-    domain: u32,
-    key: &'a [u8; 32],
-}
-
-impl Stream<'_> {
-    fn tag(self, epoch: u64, index: TagIndex) -> Result<RingTag, HasherError> {
-        let digest = Poseidon::hashv(&[
-            &domain::field(self.domain),
-            self.key,
-            &right_align(&epoch.to_be_bytes()),
-            &right_align(&[index.0]),
-        ])?;
-        Ok(RingTag::low128(&digest))
-    }
-}
-
 fn tagged_key_fields(key: &[u8; TAGGED_X25519_KEY_LEN]) -> Result<[[u8; 32]; 2], StreamError> {
     if key[0] != VIEWING_PUBKEY_TAG {
         return Err(StreamError::UntaggedKey);
@@ -259,56 +100,13 @@ fn canonical(value: [u8; 32]) -> Result<[u8; 32], StreamError> {
 
 #[cfg(test)]
 mod tests {
-    use zolana_hasher::primitives::BN254_SCALAR_MODULUS_BE;
-
     use super::*;
 
-    #[test]
-    fn tag_index_stops_at_the_stream_end() {
-        assert_eq!(
-            TagIndex::new(J_INBOX - 1).map(TagIndex::get),
-            Ok(J_INBOX - 1)
-        );
-        assert_eq!(
-            TagIndex::new(J_INBOX),
-            Err(StreamError::IndexOutOfRange(J_INBOX))
-        );
-        assert_eq!(TagIndex::all().last().map(TagIndex::get), Some(J_INBOX - 1));
-    }
-
-    #[test]
-    fn ring_tag_refuses_the_modulus() {
-        let mut below = BN254_SCALAR_MODULUS_BE;
-        below[31] -= 1;
-        assert!(RingTag::from_field(&below).is_ok());
-        assert_eq!(
-            RingTag::from_field(&BN254_SCALAR_MODULUS_BE),
-            Err(StreamError::NoncanonicalField)
-        );
-    }
-
-    /// The program writes the 16 zero bytes, an owner tag with any other prefix is no anonymous tag.
-    #[test]
-    fn an_owner_tag_opens_only_behind_sixteen_zero_bytes() {
-        let tag = RingTag::from_bytes([9; TAG_LEN]);
-        assert_eq!(RingTag::from_owner_tag(&tag.field()), Some(tag));
-        for index in 0..32 - TAG_LEN {
-            let mut marked = tag.field();
-            marked[index] = 1;
-            assert_eq!(RingTag::from_owner_tag(&marked), None);
-        }
-    }
-
-    /// A recipient deriving from a mistagged key would scan tags no sender proves.
     #[test]
     fn untagged_viewing_keys_are_refused() {
         let tagged = [VIEWING_PUBKEY_TAG; TAGGED_X25519_KEY_LEN];
         let mut untagged = tagged;
         untagged[0] = 0x02;
-        assert_eq!(
-            InboxKey::derive(&[0; 32], &untagged),
-            Err(StreamError::UntaggedKey)
-        );
         let slot = |recipient_viewing_pk| DeliveredSlot {
             agreement: &[1; 32],
             tx_viewing_pk: &tagged,

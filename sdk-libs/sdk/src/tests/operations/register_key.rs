@@ -15,7 +15,7 @@ fn escrowed() -> RingSettings {
 async fn a_key_registers_once_for_the_member_it_derives_on_a_confidential_ring() {
     let member = keypair(1);
     let registered = keypair(2);
-    let register = |chain: Chain, authority: &zolana_keypair::ShieldedKeypair| {
+    let register = |chain: Chain, authority: &spr_keypair::ShieldedKeypair| {
         let address = member.shielded_address().unwrap();
         let client = chain.client();
         let authority = authority.nullifier_key.clone();

@@ -7,11 +7,8 @@ import type { ProofOutputUtxo } from "@heliuslabs/zolana/transaction";
 import type {
   AnonymousAuditProofRequest,
   AnonymousSlotProofInputs,
-  AnonymousStreamPosition,
   DeliveredAuditProofRequest,
   DeliveredSlotProofInputs,
-  FirstContactAnchor,
-  PackedAuditProofRequest,
 } from "../rpc/prover/ring.js";
 import {
   anonymousKeyClass,
@@ -25,11 +22,9 @@ import {
   type AnonymousInputs,
   type AnonymousOutputOpening,
   type DeliveredOutputOpening,
-  type PackedOutputOpening,
   type RingDisclosure,
 } from "../crypto/audit/ring-disclosure.js";
 import { RING_DELIVERED_BODY_LEN } from "../protocol/transaction/output.js";
-import { ringTagField } from "../crypto/derivation/ring-stream.js";
 
 import { RingError } from "../protocol/error.js";
 import type { PublishedSlot, RingOutputRail } from "../operations/payments/output-rail.js";
@@ -55,10 +50,6 @@ export interface AnonymousAuditValues {
   readonly privateTxBlinding: Bytes32;
   /** Zero outside a policy ring. */
   readonly senderCommitment: Bytes32;
-  readonly epoch: bigint;
-  /** Zero without a pair-anchored slot. */
-  readonly firstContactRoot: Bytes32;
-  readonly anchor?: FirstContactAnchor;
 }
 
 /** The values a disclosure opens beside the published slots, Rust `AuditSeal::seal`. */
@@ -106,10 +97,7 @@ export function sealedAuditMessage(sealed: SealedAudit, auditor: X25519PublicKey
   );
 }
 
-export type AuditProofRequest =
-  | PackedAuditProofRequest
-  | DeliveredAuditProofRequest
-  | AnonymousAuditProofRequest;
+export type AuditProofRequest = DeliveredAuditProofRequest | AnonymousAuditProofRequest;
 
 /** The audit proof's request, one layout per rail, Rust `AuditProving::prove`. */
 export function auditProofRequest(
@@ -128,7 +116,6 @@ export function auditProofRequest(
 ): AuditProofRequest {
   const { sealed, proofInputs, published } = input;
   const tree = proofInputs.outputTreeId;
-  const capacity = proofInputs.outputs.length;
   const shared = {
     firstNullifier: proofInputs.firstNullifier(),
     ringId: input.ringId,
@@ -144,23 +131,6 @@ export function auditProofRequest(
     txViewingSk: input.rail.txViewingKey.secretBytes(),
   });
   switch (sealed.layout.kind) {
-    case "packed": {
-      const outputs = Array.from({ length: capacity }, (_, index) => {
-        const slot = published[index];
-        return slot === undefined ? EMPTY_RING_OPENING : ringOutputOpening(slot.output, tree);
-      });
-      const ownerKeys = Array.from({ length: capacity }, (_, index) => {
-        const output = published[index]?.output;
-        return output === undefined ? zeroField() : slotOwnerKey(output);
-      });
-      return Object.freeze({
-        kind: "packedAudit",
-        nOut: sealed.layout.outputs,
-        outputs,
-        ownerKeys,
-        ...envelope(),
-      });
-    }
     case "delivered": {
       const outputs = published.map((slot) => deliveredSlot(slot, tree));
       return Object.freeze({ kind: "deliveredAudit", outputs, ...envelope() });
@@ -189,9 +159,6 @@ export function auditProofRequest(
         ],
         senderCommitment: statement.senderCommitment,
         partyIdentities: statement.partyIdentities,
-        epoch: statement.epoch,
-        firstContactRoot: statement.firstContactRoot,
-        ...(statement.anchor === undefined ? {} : { anchor: statement.anchor }),
       };
       return Object.freeze({ kind: "anonymousAudit", ...slots, ...envelope() });
     }
@@ -211,13 +178,6 @@ function auditDisclosure(
   const { layout, published } = input;
   const disclosedSeed = layout.exits ? seedOut : undefined;
   switch (layout.kind) {
-    case "packed":
-      return {
-        kind: "packed",
-        layout,
-        seedOut: disclosedSeed,
-        outputs: published.map((slot) => packedOpening(slot, layout.keyEscrow)),
-      };
     case "delivered":
       return {
         kind: "delivered",
@@ -259,21 +219,6 @@ function anonymousInputs(
   };
 }
 
-/** `undefined` for a dummy, the nullifier key left to the owner's escrow record under key escrow. */
-function packedOpening(slot: PublishedSlot, keyEscrow: boolean): PackedOutputOpening | undefined {
-  const { output } = slot;
-  const owner = output.ownerAddress;
-  if (owner === undefined) return undefined;
-  return {
-    ownerKey: owner.signingPublicKey.confidentialViewTag(),
-    nullifierPk: keyEscrow ? undefined : owner.nullifierPublicKey,
-    asset: assetField(output.asset),
-    amount: output.amount,
-    dataHash: output.dataHash ?? zeroField(),
-    ringDataHash: output.ringDataHash ?? zeroField(),
-  };
-}
-
 function deliveredOpening(slot: PublishedSlot, keyEscrow: boolean): DeliveredOutputOpening {
   const { output } = slot;
   const owner = output.ownerAddress;
@@ -295,13 +240,12 @@ function anonymousOpening(slot: PublishedSlot): AnonymousOutputOpening {
       asset: assetField(output.asset),
       amount: output.amount,
     };
-  if (slot.recipient === undefined)
-    throw new RingError("RING_OUTPUT_FRAMING", { details: { slotIndex: slot.slotIndex } });
   return {
     kind: "ring",
     nullifierPk: owner.nullifierPublicKey,
     ownerKey: owner.signingPublicKey.confidentialViewTag(),
-    recipientU: slot.recipient.u(),
+    asset: assetField(output.asset),
+    amount: output.amount,
   };
 }
 
@@ -312,9 +256,7 @@ function deliveredSlot(slot: PublishedSlot, tree: number): DeliveredSlotProofInp
   const [recipientKey, body] =
     wire.kind === "delivered"
       ? [wire.u, wire.body]
-      : wire.kind === "anonymous"
-        ? [slot.recipient?.u() ?? zero, wire.body]
-        : [zero, new Uint8Array(RING_DELIVERED_BODY_LEN)];
+      : [zero, new Uint8Array(RING_DELIVERED_BODY_LEN)];
   const ring = !output.isDummy() && wire.kind !== "exit";
   return Object.freeze({
     output: ringOutputOpening(output, tree),
@@ -324,33 +266,12 @@ function deliveredSlot(slot: PublishedSlot, tree: number): DeliveredSlotProofInp
   });
 }
 
+/** An exit's owner key is masked out of the disclosure, a dummy names none. */
 function anonymousSlot(slot: PublishedSlot, tree: number): AnonymousSlotProofInputs {
-  return Object.freeze({ ...deliveredSlot(slot, tree), stream: streamPosition(slot) });
-}
-
-/** Rust `Stream`, a ring output takes exactly one of the inbox, pair and change streams. */
-function streamPosition(slot: PublishedSlot): AnonymousStreamPosition {
-  const anonymous = slot.anonymous;
-  const none = { tag: zeroField(), inbox: false, pair: false, self: false, index: 0 };
-  switch (anonymous?.kind) {
-    case "payment": {
-      const inbox = anonymous.payment.position.kind === "inbox";
-      return {
-        ...none,
-        tag: ringTagField(anonymous.payment.tag),
-        inbox,
-        pair: !inbox,
-        index: anonymous.payment.position.index,
-      };
-    }
-    case "change":
-      return { ...none, tag: ringTagField(anonymous.tag), self: true };
-    case "dummy":
-      return { ...none, tag: ringTagField(anonymous.tag) };
-    case "exit":
-    case undefined:
-      return none;
-  }
+  return Object.freeze({
+    output: ringOutputOpening(slot.output, tree),
+    ownerKey: slotOwnerKey(slot.output),
+  });
 }
 
 /** The owner's Solana key a slot discloses, zero for padding, Rust `slot_owner_key`. */

@@ -28,6 +28,7 @@ import type {
 import type { PreparedMerge } from "@heliuslabs/zolana/transaction";
 import type { AnonymousMergeProofRequest } from "../../rpc/prover/ring.js";
 import { ringIdField } from "../derivation/ring-stream.js";
+import { domainField, RingDomain } from "../derivation/ring-domain.js";
 import {
   auditSharedSecret,
   openMergeDisclosureFields,
@@ -45,7 +46,6 @@ import { RingError } from "../../protocol/error.js";
 const MERGE_DISCLOSURE_INFO = new TextEncoder().encode("CRING/mrg1");
 /** Owner key, nullifier pk, mint, amount and output blinding ahead of the input commitments. */
 const MERGE_DISCLOSURE_HEADER_LENGTH = 32 + 32 + 32 + 8 + 32;
-const MERGE_ANONYMOUS_DOMAIN = 0x43524d47n;
 
 /** Rust `merge_disclosure_field_count`. */
 export function mergeDisclosureFieldCount(width: number): number {
@@ -157,7 +157,7 @@ export function ringMergeAnonymousPublicInputHash(
   }>,
 ): Bytes32 {
   return hashChain([
-    bigIntBytes(MERGE_ANONYMOUS_DOMAIN) as Bytes32,
+    domainField(RingDomain.mergeStatement),
     input.privateTxHash,
     input.outputUtxoHash,
     input.firstNullifier,

@@ -11,6 +11,7 @@ import {
   type RingRail,
 } from "../../src/protocol/transaction/transact.js";
 import { RING_AUTHORITY_SHAPES } from "../../src/protocol/transaction/spp.js";
+import { RECIPIENT_BODY_LEN } from "../../src/protocol/codec/anonymous-body.js";
 
 function field(byte: number): Bytes32 {
   const value = new Uint8Array(32);
@@ -18,7 +19,7 @@ function field(byte: number): Bytes32 {
   return value as Bytes32;
 }
 
-/** A data-free exit-free frame of `inputs` and `outputs` the rail's audit key serves, no proof valid. */
+/** An exit-free frame of `inputs` and `outputs` the rail's audit key serves, no proof valid. */
 export function ringFrame(
   input: Readonly<{ rail: RingRail; inputs: number; outputs: number; fullOpenings?: boolean }>,
 ): RingTransactData {
@@ -29,7 +30,6 @@ export function ringFrame(
   const flags = {
     exits: false,
     keyEscrow: rail === "delegate",
-    dataFree: true,
     fullOpenings: input.fullOpenings ?? false,
   };
   const layout = ringDisclosureLayout({
@@ -45,14 +45,14 @@ export function ringFrame(
       ? {
           kind: "anonymous",
           hash: field(10 + index),
-          tag: new Uint8Array(16).fill(index + 1) as Bytes16,
-          body: new Uint8Array(40),
+          tag: field(index + 1),
+          ...(index === 0 ? {} : { body: new Uint8Array(RECIPIENT_BODY_LEN) }),
         }
       : {
-          kind: "packed",
+          kind: "delivered",
           hash: field(10 + index),
           u: field(40 + index),
-          ciphertext: new Uint8Array(49),
+          body: new Uint8Array(40),
         };
   return {
     rail,
@@ -60,15 +60,14 @@ export function ringFrame(
     nOut: shape.outputs,
     auditProof: new Uint8Array(CUSTOM_RING_PROOF_LENGTH),
     approvalRequired: false,
-    previousEpoch: false,
     expiryUnixTs: 0,
     txViewingU: field(1),
     salt: new Uint8Array(16).fill(3) as Bytes16,
     interfaceTransfers: [],
-    dataFree: flags.dataFree,
     keyEscrow: flags.keyEscrow,
     fullOpenings: flags.fullOpenings,
     outputs: Array.from({ length: outputs }, (_, index) => slot(index)),
+    ...(rail === "anonymous" ? { sender: { tag: field(1), body: new Uint8Array(150) } } : {}),
     ephU: field(2),
     sealed: field(3),
     disclosure: Array.from({ length: disclosureFieldCount(layout) }, (_, index) =>

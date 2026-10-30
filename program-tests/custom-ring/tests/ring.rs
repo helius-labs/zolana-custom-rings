@@ -18,8 +18,8 @@
 //! through a native async client, and lands the native proof (see [`AsyncHopParity`]).
 //!
 //! [`anonymous::an_anonymous_ring_hides_owners_and_preserves_auditor_access`] pays ring
-//! addresses on the inbox and pair streams, and fresh wallets find every payment,
-//! the change and a merge by exact tags.
+//! addresses under bootstrap, request and shared view tags, and fresh wallets find every
+//! payment, the change and a merge by exact tags.
 //!
 //! [`transfers::ring_value_leaves_and_enters_through_audited_transfers`] crosses the ring
 //! boundary in both directions under the auditor and pins that a note of
@@ -49,16 +49,16 @@ use std::{
 };
 
 use anyhow::{anyhow, ensure, Context, Result};
-use custom_ring_cli::{address::ring_address, wait_for, Landing, ModeName, Probe, Queued};
+use custom_ring_cli::{wait_for, Landing, ModeName, Probe, Queued};
 use custom_ring_interface::{
-    ring_anonymous_output_body, stream::RingTag, AnonymousProofData, CustomRingError, RingMode,
-    RingProgramConfig, RingRail, RingTransactData, CONFIG_PDA_SEED, DEFAULT_INSERT_FEE,
-    RING_PROGRAM_CONFIG,
+    anonymous_recipient_output_body, anonymous_sender_output_body, AnonymousProofData,
+    CustomRingError, RingMode, RingProgramConfig, RingRail, RingTransactData, CONFIG_PDA_SEED,
+    DEFAULT_INSERT_FEE, RING_PROGRAM_CONFIG,
 };
 use custom_ring_sdk::{
     compute_unit_limit, AnonymousTransfer, CoSignScope, CustomRing, CustomRingMerge,
     CustomRingTransfer, CustomRingTransferInput, DelegateOutput, DelegateTransfer,
-    DelegateTransferInput, DepositRecipient, InstructionTag, MergeProofInput, PendingFirstContact,
+    DelegateTransferInput, DepositRecipient, FirstContact, InstructionTag, MergeProofInput,
     ProvenRingTransfer, RegisterKey, RingClient, RingDeposit, RingDepositReceipt, RingError,
     RingMergeOperation, RingOperation, RingRegistration,
 };
@@ -81,12 +81,12 @@ use solana_keypair::Keypair;
 use solana_message::v1::MAX_TRANSACTION_SIZE;
 use solana_signature::Signature;
 use solana_signer::Signer;
-use zolana_client::{
+use spr_client::{
     compile_message, sign_transaction, AsyncProverClient, AsyncSolanaRpc, AsyncZolanaClient,
     AsyncZolanaIndexer, ComputeBudgetConfig, ProofDataSource, Rpc, ShieldedTransaction, SolanaRpc,
     ZolanaIndexer,
 };
-use zolana_interface::{
+use spr_interface::{
     error::ShieldedPoolError,
     pda,
     state::{
@@ -95,24 +95,14 @@ use zolana_interface::{
     },
     SHIELDED_POOL_PROGRAM_ID, ZERO_NULLIFIER_PUBKEY,
 };
-use zolana_keypair::{random_blinding, ShieldedAddress, ShieldedKeypair, X25519Keypair};
-use zolana_program::instruction::{
+use spr_keypair::{random_blinding, ShieldedAddress, ShieldedKeypair, X25519Keypair};
+use spr_program::instruction::{
     AssetDeposit, Deposit as SppDeposit, DepositAsset, DepositSplAccounts,
     TransactInterfaceTransferAccounts, TransactSplWithdrawalAccounts, UpdateRingConfig,
 };
-use zolana_program_test::Rejection;
-use zolana_ring_client::{
-    auditor_view_tag,
-    rpc::{write_auditor_key, CreateAuditorKeyRequest},
-    AnonymousRingState, AuditedTransaction, OutputOpening, RingRecovery, RingScan, SourceMember,
-};
-use zolana_ring_keys::{RingAddress, RingPaymentRequest};
-use zolana_ring_policy::{ListId, Member, Rule, RuleTable, Subject};
-use zolana_ring_rpc::{
-    ChainSource, Hub, RingRpcError, RootSecret, TransactionSource, Unauthorized, Upstreams,
-};
-use zolana_test_utils::wallet::Wallet;
-use zolana_test_utils::{
+use spr_program_test::Rejection;
+use spr_test_utils::wallet::Wallet;
+use spr_test_utils::{
     localnet::isolated_temp_path,
     smart_account,
     spl::{create_token_account, mint_to},
@@ -121,13 +111,23 @@ use zolana_test_utils::{
         token_amount, wait_for_indexed_transaction, wait_for_merkle_proof,
     },
 };
-use zolana_transaction::{
+use spr_transaction::{
     decrypt_spendable,
     instructions::transact::{canonical_shape, ConfidentialTransaction, SppProofOutputUtxo},
     AssetRegistry, Data, Mint, Utxo, WalletUtxo, SOL_ASSET_ID, SOL_MINT,
 };
-use zolana_tree::TreeAccount;
-use zolana_user_registry_interface::user_registry_program_id;
+use spr_tree::TreeAccount;
+use spr_user_registry_interface::user_registry_program_id;
+use zolana_ring_client::{
+    auditor_view_tag,
+    rpc::{write_auditor_key, CreateAuditorKeyRequest},
+    AuditedTransaction, OutputOpening, RingRecovery, RingScan, SourceMember, ViewingHistory,
+};
+use zolana_ring_keys::{RingAddress, RingPaymentRequest};
+use zolana_ring_policy::{ListId, Member, Rule, RuleTable, Subject};
+use zolana_ring_rpc::{
+    ChainSource, Hub, RingRpcError, RootSecret, TransactionSource, Unauthorized, Upstreams,
+};
 
 /// Lamports moved by the two transaction-shape probes. Small enough that the
 /// payer's airdrop covers both plus fees.
@@ -223,7 +223,7 @@ fn cli_merge_fragments(amounts: &[u64]) -> Result<()> {
         "{empty_text}"
     );
     let sender = project.demo_sender()?;
-    let state = AnonymousRingState::new(ring.program_id(), 0);
+    let mut history = ViewingHistory::new(sender.viewing_pubkey(), 0);
 
     for &amount in amounts {
         let deposit = RingDeposit {
@@ -231,15 +231,19 @@ fn cli_merge_fragments(amounts: &[u64]) -> Result<()> {
             payer: &env.payer,
             recipient: DepositRecipient::Anonymous {
                 keys: &sender,
-                state: &state,
+                history: &history,
             },
             tree,
             asset: DepositAsset::Sol,
             amount,
             cosigner: None,
         };
+        let next = deposit
+            .viewing_history()?
+            .context("an anonymous deposit advances its history")?;
         let receipt = env.run(deposit.send(env.client.ring_client()))?;
         custom_ring_cli::wait_for_indexed_transaction(&env.client, receipt.signature)?;
+        history = next;
     }
 
     let output = project.run(&[
@@ -257,7 +261,7 @@ fn cli_merge_fragments(amounts: &[u64]) -> Result<()> {
         assert!(output.contains(&line), "{line} in\n{output}");
     }
 
-    let mut wallet = RingWallet::new(&sender, env.ring_assets()?, state);
+    let mut wallet = RingWallet::new(&sender, env.ring_assets()?, ring.program_id());
     wallet.sync(&env)?;
     let mut actual: Vec<_> = wallet.unspent().map(|note| note.utxo.amount).collect();
     let mut expected = amounts[merged_count..].to_vec();
@@ -368,13 +372,12 @@ fn land<'a>(
     payer: &(dyn Signer + Sync),
     signers: &[&(dyn Signer + Sync)],
 ) -> Result<Signature> {
-    let landed = Landing {
+    Landing {
         operation: operation.into(),
         payer,
         signers,
     }
-    .settle(&env.client)?;
-    Ok(landed.signature)
+    .settle(&env.client)
 }
 
 /// The write waits in the record queue until `Queued::apply`.
@@ -444,14 +447,7 @@ impl Note<'_> {
             data: Data::default(),
         };
         if self.ring_program_id == Some(FOREIGN_RING) {
-            return zolana_test_utils::utxo::wallet(
-                utxo,
-                &self.owner.nullifier_key,
-                0,
-                0,
-                None,
-                None,
-            );
+            return spr_test_utils::utxo::wallet(utxo, &self.owner.nullifier_key, 0, 0, None, None);
         }
         indexed_note(utxo, self.owner, env, env.tree)
     }
@@ -763,11 +759,12 @@ impl AuditLookup<'_> {
 struct AnonymousPayment<'a> {
     ring: CustomRing,
     sender: &'a ShieldedKeypair,
-    /// The sender's side of the ring, a recorded first contact picks the pair stream.
-    state: &'a AnonymousRingState,
+    /// The sender's counterparties pick the payment's tag.
+    history: &'a ViewingHistory,
     payer: &'a Keypair,
     inputs: Vec<WalletUtxo>,
     to: RingAddress,
+    first_contact: FirstContact,
     amount: u64,
 }
 
@@ -785,9 +782,10 @@ impl<'a> AnonymousPayment<'a> {
             nullifier_key: Some(&self.sender.nullifier_key),
             transaction,
         })
-        .with_anonymous_signer(&self.sender.signing_key, self.state)
+        .with_anonymous_signer(&self.sender.signing_key, self.history)
         .with_payment(custom_ring_sdk::AnonymousPayment {
             to: self.to,
+            first_contact: self.first_contact,
             asset: Mint::SOL,
             amount: self.amount,
         })?
@@ -803,12 +801,14 @@ struct PaymentLanding<'a> {
 
 struct LandedPayment {
     indexed: ShieldedTransaction,
-    first_contacts: Vec<PendingFirstContact>,
+    /// The sender's history past the payment's tags, stored before it was sent.
+    history: ViewingHistory,
 }
 
 impl PaymentLanding<'_> {
     fn land(self, env: &TestEnv) -> Result<LandedPayment> {
-        let landed = Landing {
+        let history = self.transfer.viewing_history()?;
+        let signature = Landing {
             operation: self.transfer.into(),
             payer: self.payer,
             signers: &[],
@@ -818,27 +818,19 @@ impl PaymentLanding<'_> {
             indexed: wait_for_indexed_transaction(
                 env.client.indexer(),
                 self.auditor_tag,
-                landed.signature,
+                signature,
             ),
-            first_contacts: landed.first_contacts,
+            history,
         })
     }
 }
 
-impl LandedPayment {
-    /// Each first contact confirmed at the leaf the indexer reports for it.
-    fn record(&self, state: &mut AnonymousRingState) -> Result<()> {
-        for pending in &self.first_contacts {
-            let slot = self
-                .indexed
-                .output_slots
-                .iter()
-                .find(|slot| slot.output_context.hash == pending.utxo_hash)
-                .context("the first contact's output")?;
-            state.record_first_contact(pending.confirm(slot.output_context.leaf_index));
-        }
-        Ok(())
-    }
+/// The wallet's spec identity on `ring`, its own viewing key the recipient key.
+fn ring_address(owner: &ShieldedKeypair, ring: Address) -> Result<RingAddress> {
+    Ok(RingAddress {
+        recipient: owner.shielded_address()?,
+        ring_program_id: ring,
+    })
 }
 
 fn unspent_utxo(wallet: &Wallet, amount: u64) -> Result<Utxo> {
@@ -899,7 +891,7 @@ fn indexed_note(
     let tree_id = env.tree_id(tree)?;
     let hash = utxo.hash(&owner.nullifier_key.pubkey()?, &[0; 32], &[0; 32], tree_id)?;
     let state = wait_for_merkle_proof(env.client.indexer(), tree, hash);
-    zolana_test_utils::utxo::wallet(
+    spr_test_utils::utxo::wallet(
         utxo,
         &owner.nullifier_key,
         tree_id,

@@ -5,6 +5,7 @@ import type { ChainReader } from "@heliuslabs/zolana/client";
 import { assetField, type SettlementTransfer } from "@heliuslabs/zolana/transaction";
 import { splDestination } from "../operations/payments/anonymous.js";
 import { RingError } from "../protocol/error.js";
+import { domainField, RingDomain } from "../crypto/derivation/ring-domain.js";
 
 export interface PolicyWithdrawal {
   readonly owner: Bytes32;
@@ -13,7 +14,7 @@ export interface PolicyWithdrawal {
 }
 export function policyWithdrawalHash(legs: readonly PolicyWithdrawal[]): Bytes32 {
   return hashChain4([
-    bigIntBytes(0x43525057n) as Bytes32,
+    domainField(RingDomain.withdrawals),
     bigIntBytes(BigInt(legs.length)) as Bytes32,
     ...legs.flatMap((w) => [w.owner, w.asset, bigIntBytes(w.amount) as Bytes32]),
   ]) as Bytes32;

@@ -28,6 +28,28 @@ export interface QuadPath {
   readonly siblings: readonly (readonly Bytes32[])[];
 }
 
+/** The least `levels` with `4^levels >= openings`, at most `QUAD_HEIGHT`. */
+export function canopyLevels(openings: number): number {
+  let levels = 0;
+  while (levels < QUAD_HEIGHT && QUAD_ARITY ** levels < openings) levels += 1;
+  return levels;
+}
+
+/** Go `PooledSubject`, `recordIndex` the record holding or bracketing `member`. */
+export interface PoolSubject {
+  readonly member: Bytes32;
+  readonly recordIndex: number;
+}
+
+/** Go `PooledRecord` rows, their `SharedRegistryProof` and the `PooledSubject` rows they open. */
+export interface RecordPool {
+  readonly records: readonly MemberRecord[];
+  readonly canopy: readonly Bytes32[];
+  /** `paths[i]` opens `records[i]` up to the canopy, leaf level first. */
+  readonly paths: readonly QuadPath[];
+  readonly subjects: readonly PoolSubject[];
+}
+
 /** A member under one root, its record or the low record bracketing it. */
 export type RecordOpening =
   | Readonly<{ kind: "present"; record: MemberRecord; path: QuadPath }>

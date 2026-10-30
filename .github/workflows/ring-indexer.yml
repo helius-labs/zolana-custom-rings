@@ -68,6 +68,7 @@ jobs:
         with:
           install-just: "false"
           shared-key: ring-indexer
+          install-go: "false"
           private-libs-token: ${{ secrets.PRIVATE_LIBS_TOKEN }}
       # The ignored test migrates the Postgres service both ways.
       - name: Run ring indexer tests on SQLite and Postgres

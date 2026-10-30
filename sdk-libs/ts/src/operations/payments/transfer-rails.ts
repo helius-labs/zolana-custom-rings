@@ -1,37 +1,20 @@
 /** The three rails of a ring transfer, Rust `RingTransfer<Owner>`, `<Anonymous>` and `<Delegated>`. */
-import {
-  equalBytes,
-  ownerSignerAddresses,
-  randomBytes,
-  prepareRingAuthorityTransfer,
-} from "@heliuslabs/zolana/internal";
+import { ownerSignerAddresses, prepareRingAuthorityTransfer } from "@heliuslabs/zolana/internal";
 import type { AnonymousRingTransactProver } from "../../rpc/ports.js";
-import type {
-  ProofAuthority,
-  ProofReader,
-  Prover,
-  SlotReader,
-  WalletKeys,
-} from "@heliuslabs/zolana/client";
+import type { ProofAuthority, Prover, WalletKeys } from "@heliuslabs/zolana/client";
 import { type Shape, InstructionTag } from "@heliuslabs/zolana/interface";
 import type { Address, RequestContext, TransactWithdrawal } from "@heliuslabs/zolana/interface";
 import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import { ViewingKey } from "@heliuslabs/zolana/keypair";
 import type { AssetRegistry, ProofInputUtxo } from "@heliuslabs/zolana/transaction";
 import { type ConfidentialTransfer, type PreparedTransfer } from "@heliuslabs/zolana/transaction";
-import {
-  DELIVERED_AUDIT_CAPACITIES,
-  PACKED_AUDIT_CAPACITIES,
-} from "../../protocol/codec/ring-disclosure-layout.js";
-import { tagEpoch } from "../../crypto/derivation/ring-stream.js";
+import { DELIVERED_AUDIT_CAPACITIES } from "../../protocol/codec/ring-disclosure-layout.js";
 
 import {
   anonymousExitTokenOwner,
   checkAnonymousSigner,
   checkAnonymousSlots,
   checkEntryInputs,
-  pendingAnchor,
-  pendingFirstContacts,
   type AnonymousPayment,
   type AnonymousSpendSigner,
 } from "./anonymous.js";
@@ -47,10 +30,13 @@ import {
   type StagedTransfer,
   type StagedTransferInput,
 } from "../workflow/pipeline.js";
-import { AnonymousSlots, RingOutputRail, type RingDelivery } from "./output-rail.js";
+import { AnonymousPlan, RingOutputRail, type RingDelivery } from "./output-rail.js";
 import { isRingKeys, type RingKeys } from "../../state/ring-keys.js";
-import type { AnonymousRingState, PairAnchor } from "../../state/anonymous-state.js";
-import { TagAllocation } from "../../state/anonymous.js";
+import {
+  TransferTagging,
+  type TransferTags,
+  type ViewingHistory,
+} from "../../state/viewing-history.js";
 
 /** @internal */
 export interface RingTransferApproval {
@@ -63,10 +49,7 @@ export interface RingTransferApproval {
 
 export type CustomRingTransferClient = RingProvingClient & Pick<Prover, "proveRingTransact">;
 
-export type AnonymousTransferClient = RingProvingClient &
-  SlotReader &
-  Pick<ProofReader, "getMerkleProofs"> &
-  AnonymousRingTransactProver;
+export type AnonymousTransferClient = RingProvingClient & AnonymousRingTransactProver;
 
 export type DelegateTransferClient = RingProvingClient & Pick<Prover, "proveRingAuthorityTransact">;
 
@@ -102,12 +85,12 @@ export class CustomRingTransfer {
   }
 
   /** The hidden Ed25519 owner an anonymous ring proves, it must be the sender's signing key. */
-  withAnonymousSigner(signer: AnonymousSpendSigner, state: AnonymousRingState): AnonymousTransfer {
+  withAnonymousSigner(signer: AnonymousSpendSigner, history: ViewingHistory): AnonymousTransfer {
     return AnonymousTransfer.of({
       owner: this.#input,
       ...(this.#withdrawal === undefined ? {} : { withdrawal: this.#withdrawal }),
       signer,
-      state,
+      history,
     });
   }
 
@@ -191,22 +174,20 @@ export class AnonymousTransfer {
   readonly #owner: CustomRingTransferInput;
   readonly #withdrawal: TransactWithdrawal | undefined;
   readonly #signer: AnonymousSpendSigner;
-  readonly #state: AnonymousRingState;
-  /** Each payment and its position among the transfer's sends. */
+  readonly #history: ViewingHistory;
+  /** In declared order, the order of their ring outputs. */
   readonly #payments: readonly AnonymousPayment[];
   readonly #shape: Shape | undefined;
   readonly #exitTokenOwner: Address | undefined;
-  readonly #tagRandom: (length: number) => Uint8Array;
 
   private constructor(fields: AnonymousFields) {
     this.#owner = fields.owner;
     this.#withdrawal = fields.withdrawal;
     this.#signer = fields.signer;
-    this.#state = fields.state;
+    this.#history = fields.history;
     this.#payments = fields.payments;
     this.#shape = fields.shape;
     this.#exitTokenOwner = fields.exitTokenOwner;
-    this.#tagRandom = fields.tagRandom;
     Object.freeze(this);
   }
 
@@ -216,18 +197,17 @@ export class AnonymousTransfer {
       owner: CustomRingTransferInput;
       withdrawal?: TransactWithdrawal;
       signer: AnonymousSpendSigner;
-      state: AnonymousRingState;
+      history: ViewingHistory;
     }>,
   ): AnonymousTransfer {
     return new AnonymousTransfer({
       owner: input.owner,
       withdrawal: input.withdrawal,
       signer: input.signer,
-      state: input.state,
+      history: input.history,
       payments: Object.freeze([]),
       shape: undefined,
       exitTokenOwner: undefined,
-      tagRandom: randomBytes,
     });
   }
 
@@ -260,9 +240,11 @@ export class AnonymousTransfer {
     return new AnonymousTransfer({ ...this.#fields(), exitTokenOwner: owner });
   }
 
-  /** @internal */
-  withTagRandom(tagRandom: (length: number) => Uint8Array): AnonymousTransfer {
-    return new AnonymousTransfer({ ...this.#fields(), tagRandom });
+  /** The sender's viewing history past the transfer's tags, stored before it is sent. */
+  async viewingHistory(context?: RequestContext): Promise<ViewingHistory> {
+    const keys = this.#owner.keys;
+    if (!isRingKeys(keys)) throw new RingError("RING_KEYS_REQUIRED");
+    return (await this.#tags(keys, context)).history;
   }
 
   prove(client: AnonymousTransferClient, context?: RequestContext): Promise<ProvenRingTransfer> {
@@ -315,14 +297,15 @@ export class AnonymousTransfer {
       config.coSigner?.signer,
       destination,
     );
-    // Tags bind slots, the slot order is fixed before any stream is read.
-    const stagedSlot = await client.getSlot(context);
-    const epoch = tagEpoch(stagedSlot);
-    const plan = await this.#plan({ keys, prepared, epoch }, context);
+    const tags = await this.#tags(keys, context);
+    const plan = tags.payments.reduce(
+      (planned, tag) => planned.withPayment(tag.payment),
+      AnonymousPlan.create(tags.senderTag),
+    );
     const rail = new RingOutputRail(
       await transactionKey(keys, sender, prepared, context),
       prepared.firstNullifier,
-      { kind: "anonymous", slots: plan.slots },
+      { kind: "anonymous", plan },
     );
     try {
       const proofInputs = rail.encrypt({
@@ -363,16 +346,7 @@ export class AnonymousTransfer {
           anonymous: {
             ...(exitTokenOwner === undefined ? {} : { tokenOwner: exitTokenOwner }),
             partyIdentities,
-            epoch,
-            ...(plan.anchor === undefined
-              ? {}
-              : { anchor: pendingAnchor({ client, anchor: plan.anchor, stagedSlot }) }),
-            firstContacts: pendingFirstContacts({
-              rail,
-              proofInputs,
-              payments: plan.payments,
-              epoch,
-            }),
+            viewingHistory: tags.history,
           },
         },
       };
@@ -385,47 +359,16 @@ export class AnonymousTransfer {
     }
   }
 
-  /**
-   * Every payment takes the tag its recipient's stream allocates in `epoch`, the one pair payment
-   * names its anchor, Rust `Anonymous::stage`.
-   */
-  async #plan(
-    input: Readonly<{
-      keys: RingKeys;
-      prepared: PreparedTransfer;
-      epoch: bigint;
-    }>,
-    context: RequestContext | undefined,
-  ): Promise<
-    Readonly<{
-      slots: AnonymousSlots;
-      payments: ReadonlyMap<number, AnonymousPayment>;
-      anchor?: PairAnchor;
-    }>
-  > {
-    const { keys, prepared } = input;
-    const ring = this.#owner.ringProgramId;
-    const issued = this.#state.issued.map((address) => address.index);
-    const [changeKey, addressKeys] = await Promise.all([
-      keys.ringChangeKey(ring, context),
-      keys.ringAddressKeys(ring, issued, context),
-    ]);
-    let slots = AnonymousSlots.create(changeKey, prepared.shape.outputs).withRingAddressKeys(
-      addressKeys,
-    );
-    const payments = paymentSlots(prepared, this.#payments);
-    const allocation = new TagAllocation(this.#state, input.epoch);
-    let anchor: PairAnchor | undefined;
-    for (const [slotIndex, payment] of payments) {
-      const tag = allocation.allocate(payment.to, this.#tagRandom);
-      if (tag.stream.kind === "pair") anchor = tag.stream.anchor;
-      slots = slots.withPayment(slotIndex, {
-        recipient: payment.to.recipient.viewingPublicKey,
-        tag: tag.tag,
-        position: { kind: tag.stream.kind, index: tag.index },
-      });
-    }
-    return Object.freeze({ slots, payments, ...(anchor === undefined ? {} : { anchor }) });
+  /** The spec view tag selection over the stored history, the same on every attempt. */
+  #tags(keys: RingKeys, context: RequestContext | undefined): Promise<TransferTags> {
+    return new TransferTagging({
+      keys,
+      history: this.#history,
+      recipients: this.#payments.map((payment) => ({
+        viewingPublicKey: payment.to.recipient.viewingPublicKey,
+        firstContact: payment.firstContact,
+      })),
+    }).plan(context);
   }
 
   #fields(): AnonymousFields {
@@ -433,11 +376,10 @@ export class AnonymousTransfer {
       owner: this.#owner,
       withdrawal: this.#withdrawal,
       signer: this.#signer,
-      state: this.#state,
+      history: this.#history,
       payments: this.#payments,
       shape: this.#shape,
       exitTokenOwner: this.#exitTokenOwner,
-      tagRandom: this.#tagRandom,
     };
   }
 }
@@ -446,11 +388,10 @@ interface AnonymousFields {
   readonly owner: CustomRingTransferInput;
   readonly withdrawal: TransactWithdrawal | undefined;
   readonly signer: AnonymousSpendSigner;
-  readonly state: AnonymousRingState;
+  readonly history: ViewingHistory;
   readonly payments: readonly AnonymousPayment[];
   readonly shape: Shape | undefined;
   readonly exitTokenOwner: Address | undefined;
-  readonly tagRandom: (length: number) => Uint8Array;
 }
 
 /** One output of a delegate move, inside the ring. */
@@ -604,9 +545,7 @@ async function activeConfig(
   return config;
 }
 
-/** Up to four outputs pack their ciphertexts, eight and sixteen deliver proven bodies. */
 function confidentialDelivery(shape: Shape, rail: "confidential" | "delegate"): RingDelivery {
-  if (PACKED_AUDIT_CAPACITIES.includes(shape.outputs)) return { kind: "packed" };
   if (DELIVERED_AUDIT_CAPACITIES.includes(shape.outputs)) return { kind: "delivered" };
   throw new RingError("RING_TRANSACT_DATA_INVALID", {
     details: { reason: "RingShapeUnkeyed", rail },
@@ -647,29 +586,4 @@ function checkWithdrawalAccounts(
             withdrawal.mint === leg.mint &&
             withdrawal.recipientTokenAccount === leg.tokenAccount);
   if (!matches) throw new RingError("RING_SETTLEMENT_ACCOUNTS_INVALID");
-}
-
-/** `prepare` keeps every send after the sender's outputs and in order. */
-function paymentSlots(
-  prepared: PreparedTransfer,
-  payments: readonly AnonymousPayment[],
-): ReadonlyMap<number, AnonymousPayment> {
-  const slots = new Map<number, AnonymousPayment>();
-  let next = prepared.senderOutputCount;
-  for (const payment of payments) {
-    const wanted = payment.to.recipient.toBytes();
-    const slotIndex = prepared.outputs.findIndex(
-      (output, index) =>
-        index >= next &&
-        output.ringProgramId === payment.to.ringProgramId &&
-        output.asset === payment.asset &&
-        output.amount === payment.amount &&
-        output.ownerAddress !== undefined &&
-        equalBytes(output.ownerAddress.toBytes(), wanted),
-    );
-    if (slotIndex < 0) throw new RingError("RING_PAYMENT_SLOT", { details: { slotIndex: next } });
-    slots.set(slotIndex, payment);
-    next = slotIndex + 1;
-  }
-  return slots;
 }

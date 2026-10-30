@@ -1,8 +1,8 @@
-//! Mirrors zolana-client's private paging rules, a cursor the read already followed fails it.
+//! Mirrors spr-client's private paging rules, a cursor the read already followed fails it.
 
 use std::collections::HashSet;
 
-use zolana_client::ClientError;
+use spr_client::ClientError;
 
 pub(crate) const PAGE_LIMIT: u32 = 1_000;
 

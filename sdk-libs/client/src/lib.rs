@@ -45,18 +45,22 @@ mod scan;
 #[path = "rpc/tags.rs"]
 pub mod tags;
 mod types;
+#[path = "state/viewing_history.rs"]
+pub mod viewing_history;
 
 pub(crate) const REDACTED: &str = "<redacted>";
 
 pub use crate::anonymous::{
-    AnonymousRingScan, AnonymousRingState, AnonymousRingSync, AnonymousRingUtxo, AnonymousStream,
-    DecoyLeaf, IssuedAddress, PairAnchor, PaymentStream, PaymentTag, ReceivedAnchor,
-    SentFirstContact, TagAllocation, ADDRESS_GAP, ANCHOR_DECOYS, ANONYMOUS_RING_STATE_VERSION,
-    DECOYS_PER_TREE, DEPOSIT_GAP, MAX_FETCH_EPOCHS, MAX_ISSUED_ADDRESSES, PAIR_IDLE_EPOCHS,
+    AnonymousRingUtxo, AnonymousScan, AnonymousStream, AnonymousSync, SentCheck, SentPayment,
 };
 #[cfg(feature = "solana-rpc")]
 pub use crate::origin::{confirmed_origin, ORIGIN_TRANSACTION_CONFIG};
-pub use crate::tags::{IndexerReads, TagWindow, DEFAULT_TAG_WINDOW, TAGS_PER_REQUEST};
+pub use crate::tags::{IndexerReads, TagWindow, TAGS_PER_REQUEST};
+pub use crate::viewing_history::{
+    AdvancedTag, FirstContact, PaymentRecipient, PaymentTag, StreamCounter, TagSelection,
+    TransferTagging, TransferTags, ViewingHistory, ViewingKeyEntry, PENDING_RETENTION, TAG_GAP,
+    VIEWING_HISTORY_VERSION,
+};
 pub use crate::{
     confidential::{open_ring_confidential, RingConfidentialNotes, RingConfidentialScan},
     created::{CreatedUtxoPage, CreatedUtxoScan, CreatedUtxos},
@@ -65,8 +69,8 @@ pub use crate::{
     deposit_payload::deposit_payload,
     disclosure::{
         AnonymousDisclosure, AnonymousInputOpening, AnonymousInputs, AnonymousOutputOpening,
-        AuditDisclosure, AuditEnvelope, DeliveredOutputOpening, DisclosurePad, PackedOutputOpening,
-        PublishedOutputs, SealedAuditEnvelope,
+        AuditDisclosure, AuditEnvelope, DeliveredOutputOpening, DisclosurePad, PublishedOutputs,
+        SealedAuditEnvelope,
     },
     encryption::{
         auditor_view_tag, open_deposit, open_merge_disclosure, seal_deposits, DepositEncryption,
@@ -86,33 +90,36 @@ pub use crate::{
     reader::{
         Ed25519ReaderKey, P256ReaderKey, ReaderKey, ReaderKeyError, READ_ACCESS_RECORD_PDA_SEED,
     },
-    records::{apply_proof_inputs, member_record, quad_path, MemberOpeningRead, RegistryTip},
+    records::{
+        apply_proof_inputs, member_record, quad_path, MemberOpeningRead, RecordPoolCheck,
+        RecordPoolRead, RegistryTip,
+    },
     recover::{MemberRecovery, RecoveredNotes, RingRecovery, SourceMember},
     scan::{AuditedPage, RingScan, RingScanPage, ScanPage},
     types::{
         AuditedInput, AuditedInputOpening, AuditedOutput, AuditedSender, AuditedTransaction,
         AuditedUtxo, CreatedUtxo, InputOpening, InputRing, KnownUtxo, OutputOpening,
-        OutputPayloadError, OutputPayloadErrorKind, UtxoOwner,
+        OutputPayloadError, OutputPayloadErrorKind, RingOwnerTag, UtxoOwner,
     },
 };
 pub use program_data::{program_data, ProgramData, PROGRAM_DATA_METADATA_LEN};
 pub use zolana_ring_indexer::rpc::RingRpcError;
 
 /// The answer to a one-item request, a holder that answers more or less is refused.
-pub fn exactly_one<T>(answers: Vec<T>) -> Result<T, zolana_transaction::TransactionError> {
+pub fn exactly_one<T>(answers: Vec<T>) -> Result<T, spr_transaction::TransactionError> {
     let got = answers.len();
     <[T; 1]>::try_from(answers)
         .map(|[answer]| answer)
-        .map_err(|_| zolana_transaction::TransactionError::IncompleteDerivation { got, want: 1 })
+        .map_err(|_| spr_transaction::TransactionError::IncompleteDerivation { got, want: 1 })
 }
 
 /// One answer per request, a holder that answers more or less is refused.
 pub(crate) fn exactly_one_each<T>(
     answers: Vec<T>,
     want: usize,
-) -> Result<Vec<T>, zolana_transaction::TransactionError> {
+) -> Result<Vec<T>, spr_transaction::TransactionError> {
     match answers.len() {
         got if got == want => Ok(answers),
-        got => Err(zolana_transaction::TransactionError::IncompleteDerivation { got, want }),
+        got => Err(spr_transaction::TransactionError::IncompleteDerivation { got, want }),
     }
 }

@@ -4,14 +4,16 @@ use custom_ring_interface::{
     EscrowKey, QueueEntry, AUDIT_CIPHERTEXT_LEN, QUAD_ARITY, QUAD_HEIGHT, TAGGED_X25519_KEY_LEN,
 };
 use solana_address::Address;
-use zolana_hasher::{primitives::hash_bytes, HasherError};
-use zolana_keypair::X25519Pubkey;
+use spr_hasher::{primitives::hash_bytes, HasherError};
+use spr_keypair::X25519Pubkey;
 use zolana_ring_indexer::rpc::{
-    GetRingApplyProofInputsResponse, GetRingMemberRecordsResponse, RingMemberOpening,
-    RingMemberRecordView, RingRecordPathView, RingRecordWriteView, MAX_RING_MEMBER_PAGE_LIMIT,
+    GetRingApplyProofInputsResponse, GetRingMemberRecordsResponse, GetRingRecordPoolResponse,
+    RingMemberOpening, RingMemberRecordView, RingRecordPathView, RingRecordWriteView,
+    MAX_RING_MEMBER_PAGE_LIMIT,
 };
 use zolana_ring_member_registry::{
-    ApplyProofInputs, MemberRecord, OpeningCheck, QuadPath, RecordOpening, RecordWriteProofInput,
+    ApplyProofInputs, Canopy, MemberRecord, OpeningCheck, PoolSubject, QuadPath, RecordOpening,
+    RecordPool, RecordWriteProofInput, SharedPath, SharedProof,
 };
 use zolana_ring_policy::ListId;
 
@@ -47,7 +49,118 @@ pub struct EscrowedRecord<'a> {
 impl EscrowedRecord<'_> {
     /// What the escrow key binds beside the nullifier key.
     pub fn ct_hash(&self) -> Result<[u8; 32], HasherError> {
-        hash_bytes(&self.sealed.ciphertext)
+        ct_hash(self.sealed)
+    }
+}
+
+/// Every record of a pool read under one root, each subject's own or the low record bracketing it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct RecordPoolRead {
+    pool: RecordPool,
+    /// `sealed[i]` is the key `pool.records[i]` sealed to the auditor.
+    sealed: Vec<Option<SealedNullifierKey>>,
+}
+
+/// One pool read of distinct `members` under `root`, its canopy sized for `openings` paths.
+#[must_use]
+pub struct RecordPoolCheck<'a> {
+    pub response: &'a GetRingRecordPoolResponse,
+    pub root: &'a [u8; 32],
+    pub members: &'a [[u8; 32]],
+    pub openings: usize,
+}
+
+impl RecordPoolCheck<'_> {
+    pub fn verify(self) -> Result<RecordPoolRead, AuditError> {
+        let response = self.response;
+        let invalid = |_| AuditError::InvalidMemberRegistry;
+        let canopy = Canopy::covering(self.openings).map_err(invalid)?;
+        if response.root.root.0 != *self.root
+            || response.canopy.len() != canopy.width()
+            || response.subjects.len() != self.members.len()
+        {
+            return Err(AuditError::InvalidMemberRegistry);
+        }
+        let pool = RecordPool {
+            records: response
+                .records
+                .iter()
+                .map(|row| member_record(&row.record))
+                .collect(),
+            proof: SharedProof {
+                canopy: response.canopy.iter().map(|node| node.0).collect(),
+                paths: response
+                    .records
+                    .iter()
+                    .map(|row| SharedPath {
+                        index: row.path.index,
+                        siblings: row
+                            .path
+                            .siblings
+                            .iter()
+                            .map(|level| level.clone().map(|sibling| sibling.0))
+                            .collect(),
+                    })
+                    .collect(),
+            },
+            subjects: self
+                .members
+                .iter()
+                .zip(&response.subjects)
+                .map(|(member, record_index)| PoolSubject {
+                    member: *member,
+                    record_index: *record_index,
+                })
+                .collect(),
+        };
+        pool.verify(self.root).map_err(invalid)?;
+        let sealed = response
+            .records
+            .iter()
+            .map(|row| sealed_key(&row.record))
+            .collect::<Result<_, _>>()?;
+        Ok(RecordPoolRead { pool, sealed })
+    }
+}
+
+impl RecordPoolRead {
+    pub fn pool(&self) -> &RecordPool {
+        &self.pool
+    }
+
+    /// The member's record, `None` for an absent member or one outside the pool.
+    pub fn record(&self, member: &[u8; 32]) -> Option<&MemberRecord> {
+        self.position(member)
+            .and_then(|index| self.pool.records.get(index))
+            .filter(|record| record.member == *member)
+    }
+
+    /// The ciphertext hash the member's escrow key binds beside `nullifier_pk`, `None` when it binds none.
+    pub fn escrowed_ct_hash(
+        &self,
+        member: &[u8; 32],
+        nullifier_pk: &[u8; 32],
+    ) -> Result<Option<[u8; 32]>, AuditError> {
+        let Some(index) = self.position(member) else {
+            return Ok(None);
+        };
+        let (Some(record), Some(Some(sealed))) =
+            (self.pool.records.get(index), self.sealed.get(index))
+        else {
+            return Ok(None);
+        };
+        match record.member == *member && escrow_binds(record, sealed, nullifier_pk)? {
+            true => Ok(Some(ct_hash(sealed)?)),
+            false => Ok(None),
+        }
+    }
+
+    fn position(&self, member: &[u8; 32]) -> Option<usize> {
+        self.pool
+            .subjects
+            .iter()
+            .find(|subject| subject.member == *member)
+            .map(|subject| subject.record_index as usize)
     }
 }
 
@@ -129,17 +242,30 @@ impl MemberOpeningRead {
         else {
             return Ok(None);
         };
-        let escrow_key = EscrowKey {
-            nullifier_pk,
-            ciphertext: &sealed.ciphertext,
-        }
-        .hash()?;
-        Ok((escrow_key == record.escrow_key).then_some(EscrowedRecord {
+        let binds = escrow_binds(record, sealed, nullifier_pk)?;
+        Ok(binds.then_some(EscrowedRecord {
             record,
             path,
             sealed,
         }))
     }
+}
+
+fn escrow_binds(
+    record: &MemberRecord,
+    sealed: &SealedNullifierKey,
+    nullifier_pk: &[u8; 32],
+) -> Result<bool, AuditError> {
+    let escrow_key = EscrowKey {
+        nullifier_pk,
+        ciphertext: &sealed.ciphertext,
+    }
+    .hash()?;
+    Ok(escrow_key == record.escrow_key)
+}
+
+fn ct_hash(sealed: &SealedNullifierKey) -> Result<[u8; 32], HasherError> {
+    hash_bytes(&sealed.ciphertext)
 }
 
 /// Ten levels of three siblings, leaf level first.

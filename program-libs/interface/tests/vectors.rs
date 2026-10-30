@@ -1,50 +1,39 @@
-//! Pins `test-vectors/wallet/ring-tags.json` and `test-vectors/wallet/ring-secrets.json` for the Go circuits and the TS SDK.
+//! Pins `test-vectors/wallet/ring-secrets.json` for the Go circuits and the TS SDK.
 
 use std::collections::BTreeSet;
 
-use custom_ring_interface::blinding::{anonymous_ring_data, ring_blinding_seed};
+use custom_ring_interface::blinding::ring_blinding_seed;
 use custom_ring_interface::{
     domain,
-    stream::{
-        tag_epoch, DeliveredSlot, InboxKey, PairKey, RingTag, SenderCommitment, SlotSecret,
-        TagIndex, EPOCH_SLOTS, J_INBOX, J_PAIR, K_PAIR_EPOCHS, TAG_LEN,
-    },
-    RING_DELIVERED_BODY_LEN,
+    stream::{DeliveredSlot, SenderCommitment, SlotSecret},
 };
 use serde_json::{json, Value};
-use zolana_hasher::primitives::{hash_bytes, solana_owner_identity, BN254_SCALAR_MODULUS_BE};
-use zolana_instruction::derivation::{
+use spr_hasher::primitives::solana_owner_identity;
+use spr_instruction::derivation::{
     derive_output_blinding_seed, derive_private_tx_blinding, derive_transact_output_blinding,
     DOMAIN_PRIVATE_TX_BLINDING_V1, DOMAIN_TRANSACT_OUTPUT_BLINDING_SEED_V1,
     DOMAIN_TRANSACT_OUTPUT_BLINDING_V1,
 };
-use zolana_keypair::X25519Keypair;
+use spr_keypair::X25519Keypair;
 
-const RING_TAGS_JSON: &str = include_str!("../../../test-vectors/wallet/ring-tags.json");
 const RING_SECRETS_JSON: &str = include_str!("../../../test-vectors/wallet/ring-secrets.json");
 
-/// The epoch the anonymous outputs of the secrets vector are tagged in.
-const TAG_EPOCH: u64 = 6_734;
 const OUTPUT_INDEXES: [u32; 3] = [0, 1, 15];
 
 #[test]
 fn ring_derivation_vectors() {
-    let scenario = Scenario::new();
-    assert_eq!(committed(RING_TAGS_JSON), scenario.tag_vectors());
-    assert_eq!(committed(RING_SECRETS_JSON), scenario.secret_vectors());
+    assert_eq!(
+        committed(RING_SECRETS_JSON),
+        Scenario::new().secret_vectors()
+    );
 }
 
 #[test]
 fn domains_are_their_ascii_tags() {
-    let table: [(u32, &[u8; 4]); 17] = [
+    let table: [(u32, &[u8; 4]); 15] = [
         (domain::AUDIT_STATEMENT, b"CRAU"),
         (domain::DELIVERED_SLOT_SECRET, b"CRDS"),
         (domain::BLINDING_SEED, b"CRBS"),
-        (domain::ANONYMOUS_RING_DATA, b"CRAT"),
-        (domain::INBOX_KEY, b"CRIK"),
-        (domain::INBOX_TAG, b"CRIT"),
-        (domain::PAIR_KEY, b"CRPK"),
-        (domain::PAIR_TAG, b"CRPT"),
         (domain::SENDER_COMMITMENT, b"CRSC"),
         (domain::DISCLOSURE_PAD, b"CROD"),
         (domain::POLICY_STATEMENT, b"CRPO"),
@@ -53,6 +42,9 @@ fn domains_are_their_ascii_tags() {
         (domain::APPLY_RECORDS, b"CRAP"),
         (domain::REGISTER_KEY, b"CRRG"),
         (domain::DEPOSIT_BLINDING, b"CRDB"),
+        (domain::DEPOSIT_STATEMENT, b"CRDP"),
+        (domain::MERGE_STATEMENT, b"CRMG"),
+        (domain::WITHDRAWALS, b"CRPW"),
         (domain::WITHDRAWAL_EXEMPTION, b"CRWX"),
     ];
     for (value, ascii) in table {
@@ -73,13 +65,6 @@ fn domains_are_their_ascii_tags() {
 }
 
 #[test]
-#[ignore = "regenerates test-vectors/wallet/ring-tags.json, run with --nocapture and commit the output"]
-fn print_ring_tag_vectors() {
-    let vectors = Scenario::new().tag_vectors();
-    println!("{}", serde_json::to_string_pretty(&vectors).expect("json"));
-}
-
-#[test]
 #[ignore = "regenerates test-vectors/wallet/ring-secrets.json, run with --nocapture and commit the output"]
 fn print_ring_secret_vectors() {
     let vectors = Scenario::new().secret_vectors();
@@ -87,7 +72,6 @@ fn print_ring_secret_vectors() {
 }
 
 struct Scenario {
-    ring_program_id: [u8; 32],
     tx_viewing_secret: [u8; 32],
     recipient_viewing_secret: [u8; 32],
     salt: [u8; 16],
@@ -102,7 +86,6 @@ impl Scenario {
         tx_viewing_secret[0] &= 248;
         tx_viewing_secret[31] = (tx_viewing_secret[31] & 127) | 64;
         Self {
-            ring_program_id: pattern(0xa1),
             tx_viewing_secret,
             recipient_viewing_secret: pattern(0x5c),
             salt: pattern(0x3e),
@@ -112,88 +95,7 @@ impl Scenario {
         }
     }
 
-    fn tag_vectors(&self) -> Value {
-        let inbox_key = self.inbox_key();
-        let first_contact = self.delivered_secret(0);
-        let pair_key = PairKey::derive(&first_contact).expect("pair key");
-        let inbox_tags: Vec<Value> = [(0, 0), (TAG_EPOCH, 17), (tag_epoch(u64::MAX), J_INBOX - 1)]
-            .into_iter()
-            .map(|(epoch, index)| {
-                let index = TagIndex::new(index).expect("index");
-                tag_entry(
-                    epoch,
-                    index,
-                    inbox_key.tag(epoch, index).expect("inbox tag"),
-                )
-            })
-            .collect();
-        let pair_tags: Vec<Value> = [(TAG_EPOCH, 0), (TAG_EPOCH + K_PAIR_EPOCHS - 1, J_PAIR - 1)]
-            .into_iter()
-            .map(|(epoch, index)| {
-                let index = TagIndex::new(index).expect("index");
-                tag_entry(epoch, index, pair_key.tag(epoch, index).expect("pair tag"))
-            })
-            .collect();
-        let mut below_modulus = BN254_SCALAR_MODULUS_BE;
-        below_modulus[31] -= 1;
-        let mut two_pow_128 = [0; 32];
-        two_pow_128[32 - TAG_LEN - 1] = 1;
-        let mut below_two_pow_128 = [0; 32];
-        below_two_pow_128[32 - TAG_LEN..].fill(0xff);
-        let low128: Vec<Value> = [
-            [0; 32],
-            below_two_pow_128,
-            two_pow_128,
-            below_modulus,
-            *inbox_key.as_bytes(),
-        ]
-        .iter()
-        .map(|value| {
-            let tag = RingTag::from_field(value).expect("canonical");
-            json!({ "value": hex::encode(value), "tag": hex::encode(tag.as_bytes()) })
-        })
-        .collect();
-        let epochs: Vec<Value> = [
-            0,
-            EPOCH_SLOTS - 1,
-            EPOCH_SLOTS,
-            TAG_EPOCH * EPOCH_SLOTS + 12_345,
-            u64::MAX,
-        ]
-        .into_iter()
-        .map(|slot| json!({ "slot": slot.to_string(), "epoch": tag_epoch(slot) }))
-        .collect();
-        json!({
-            "description": "Ring tag streams. ring_id = hash_bytes(ring_program_id), \
-                inbox_key = Poseidon(CRIK, ring_id, pack_be(viewing_pk)), an inbox tag is \
-                low128(Poseidon(CRIT, inbox_key, epoch, index)), pair_key = Poseidon(CRPK, \
-                first_contact_secret), a pair tag is low128(Poseidon(CRPT, pair_key, epoch, \
-                index)). low128 is the low 16 bytes of a canonical field, the owner tag is \
-                0^16 || tag, epoch = slot / epoch_slots. Produced by \
-                program-libs/interface/tests/vectors.rs print_ring_tag_vectors.",
-            "constants": {
-                "epoch_slots": EPOCH_SLOTS,
-                "j_inbox": J_INBOX,
-                "j_pair": J_PAIR,
-                "k_pair_epochs": K_PAIR_EPOCHS,
-                "tag_len": TAG_LEN,
-                "body_len": RING_DELIVERED_BODY_LEN,
-            },
-            "ring_program_id": hex::encode(self.ring_program_id),
-            "ring_id": hex::encode(self.ring_id()),
-            "viewing_pk": hex::encode(self.recipient_viewing_pk()),
-            "inbox_key": hex::encode(inbox_key.as_bytes()),
-            "inbox_tags": inbox_tags,
-            "first_contact_secret": hex::encode(first_contact.as_bytes()),
-            "pair_key": hex::encode(pair_key.as_bytes()),
-            "pair_tags": pair_tags,
-            "low128": low128,
-            "epochs": epochs,
-        })
-    }
-
     fn secret_vectors(&self) -> Value {
-        let inbox_key = self.inbox_key();
         let blinding_seed = self.blinding_seed();
         let output_blinding_seed =
             derive_output_blinding_seed(&self.first_nullifier, &blinding_seed)
@@ -202,10 +104,6 @@ impl Scenario {
             .into_iter()
             .map(|output_index| {
                 let delivered = self.delivered_secret(output_index);
-                let index =
-                    TagIndex::new(u8::try_from(output_index).expect("index")).expect("index");
-                let tag = inbox_key.tag(TAG_EPOCH, index).expect("tag");
-                let ring_data = anonymous_ring_data(&delivered, &tag).expect("anonymous ring data");
                 let blinding = derive_transact_output_blinding(
                     &self.first_nullifier,
                     &output_blinding_seed,
@@ -215,8 +113,6 @@ impl Scenario {
                 json!({
                     "output_index": output_index,
                     "delivered_slot_secret": hex::encode(delivered.as_bytes()),
-                    "tag": hex::encode(tag.as_bytes()),
-                    "anonymous_ring_data": hex::encode(ring_data),
                     "blinding": hex::encode(blinding),
                 })
             })
@@ -239,10 +135,7 @@ impl Scenario {
                 output_blinding_seed = Poseidon(TXOS, first_nullifier, blinding_seed). A \
                 delivered slot secret is Poseidon(CRDS, pack_be(agreement), pack_be(tx_viewing_pk), \
                 pack_be(recipient_viewing_pk), salt, output_index, first_nullifier) with agreement \
-                = X25519(tx_viewing_secret, recipient_viewing_pk). An anonymous ring output's \
-                ring_data_hash is Poseidon(CRAT, delivered slot secret, 0^16 || tag) with tag the \
-                inbox tag of ring-tags.json at epoch 6734 and index output_index. The deposit \
-                blinding is Poseidon(CRDB, deposit_blinding_secret). The sender commitment is \
+                = X25519(tx_viewing_secret, recipient_viewing_pk). The deposit blinding is Poseidon(CRDB, deposit_blinding_secret). The sender commitment is \
                 Poseidon(CRSC, sender_pk_hash, private_tx_blinding) with sender_pk_hash = \
                 owner_identity(sender_key) and private_tx_blinding = Poseidon(TXPB, \
                 first_nullifier, blinding_seed). Produced by \
@@ -266,10 +159,6 @@ impl Scenario {
         })
     }
 
-    fn ring_id(&self) -> [u8; 32] {
-        hash_bytes(&self.ring_program_id).expect("ring id")
-    }
-
     fn tx_viewing_pk(&self) -> [u8; 33] {
         *X25519Keypair::from_bytes(&self.tx_viewing_secret)
             .pubkey()
@@ -289,10 +178,6 @@ impl Scenario {
             .expect("agreement")
     }
 
-    fn inbox_key(&self) -> InboxKey {
-        InboxKey::derive(&self.ring_id(), &self.recipient_viewing_pk()).expect("inbox key")
-    }
-
     fn delivered_secret(&self, output_index: u32) -> SlotSecret {
         DeliveredSlot {
             agreement: &self.agreement(),
@@ -309,10 +194,6 @@ impl Scenario {
     fn blinding_seed(&self) -> [u8; 32] {
         ring_blinding_seed(&self.tx_viewing_secret, &self.salt).expect("blinding seed")
     }
-}
-
-fn tag_entry(epoch: u64, index: TagIndex, tag: RingTag) -> Value {
-    json!({ "epoch": epoch, "index": index.get(), "tag": hex::encode(tag.as_bytes()) })
 }
 
 fn pattern<const N: usize>(seed: u8) -> [u8; N] {

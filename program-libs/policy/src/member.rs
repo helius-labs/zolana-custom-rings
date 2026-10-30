@@ -1,6 +1,6 @@
 use solana_address::Address;
+use spr_hasher::primitives::{hash_bytes, solana_owner_identity};
 use thiserror::Error;
-use zolana_hasher::primitives::{hash_bytes, solana_owner_identity};
 
 /// A list subject, the field element the transfer openings carry for it, never zero.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

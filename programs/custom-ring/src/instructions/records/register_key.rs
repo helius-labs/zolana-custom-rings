@@ -3,8 +3,8 @@ use custom_ring_interface::{
     RegisterKeyStatement, RingMode,
 };
 use pinocchio::{AccountView, Address, ProgramResult};
-use zolana_account_checks::AccountIterator;
-use zolana_hasher::primitives::solana_owner_identity;
+use spr_account_checks::AccountIterator;
+use spr_hasher::primitives::solana_owner_identity;
 
 use crate::instructions::{
     insert_fee::MemberWrite,

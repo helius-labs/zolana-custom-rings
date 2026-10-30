@@ -5,34 +5,33 @@ use custom_ring_interface::{
     RingOutput, RING_DELIVERED_BODY_LEN,
 };
 use serde::Serialize;
-use zeroize::Zeroizing;
-use zolana_client::AsyncRpc;
-use zolana_event::MessageData;
-use zolana_hasher::primitives::hash_bytes;
-use zolana_keypair::{ShieldedAddress, X25519Pubkey};
-use zolana_ring_client::{
-    AnonymousDisclosure, AnonymousInputOpening, AnonymousInputs, AnonymousOutputOpening,
-    AuditDisclosure, AuditEnvelope, DeliveredOutputOpening, DisclosurePad, PackedOutputOpening,
-};
-use zolana_ring_transaction::{AnonymousSlot, PublishedSlot, RingOutputRail, StreamPosition};
-use zolana_transaction::{
+use spr_client::AsyncRpc;
+use spr_event::MessageData;
+use spr_hasher::primitives::hash_bytes;
+use spr_keypair::{ShieldedAddress, X25519Pubkey};
+use spr_transaction::{
     derive_output_blinding_seed, instructions::transact::SppProofInputs, SppProofOutputUtxo,
     TransactionError,
 };
+use zeroize::Zeroizing;
+use zolana_ring_client::{
+    AnonymousDisclosure, AnonymousInputOpening, AnonymousInputs, AnonymousOutputOpening,
+    AuditDisclosure, AuditEnvelope, DeliveredOutputOpening, DisclosurePad,
+};
+use zolana_ring_transaction::{PublishedSlot, RingOutputRail};
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
     prover::{to_instruction_proof, RingRequest},
     request::{
-        owner_key, Anchor, AnonymousAudit, AnonymousOutput, AuditParams, DeliveredAudit,
-        DeliveredOutput, Opening, PackedAudit, Stream,
+        owner_key, AnonymousAudit, AnonymousOutput, AuditParams, DeliveredAudit, DeliveredOutput,
+        Opening,
     },
     RingError,
 };
 
 pub(crate) struct SealedAudit {
     pub layout: DisclosureLayout,
-    /// The statement's flags, the frame's data-free bit included.
     pub flags: AuditLayout,
     pub eph_u: [u8; 32],
     pub sealed: [u8; 32],
@@ -75,15 +74,6 @@ impl AuditSeal<'_> {
 
     fn disclosure(&self, seed_out: [u8; 32]) -> Result<AuditDisclosure, RingError> {
         Ok(match self.layout {
-            DisclosureLayout::Packed(layout) => AuditDisclosure::Packed {
-                layout,
-                seed_out: layout.exits.then_some(seed_out),
-                outputs: self
-                    .published
-                    .iter()
-                    .map(|slot| packed_opening(slot.output, layout.key_escrow))
-                    .collect::<Result<_, _>>()?,
-            },
             DisclosureLayout::Delivered(layout) => AuditDisclosure::Delivered {
                 layout,
                 seed_out: layout.exits.then_some(seed_out),
@@ -100,8 +90,7 @@ impl AuditSeal<'_> {
                     outputs: self
                         .published
                         .iter()
-                        .enumerate()
-                        .map(|(index, slot)| anonymous_opening(slot, index))
+                        .map(anonymous_opening)
                         .collect::<Result<_, _>>()?,
                     inputs: self.spent(layout.key)?,
                 })
@@ -171,8 +160,7 @@ pub(crate) struct AuditRequest {
 #[derive(Serialize)]
 #[serde(untagged)]
 pub(crate) enum AuditBody {
-    Packed(PackedAudit),
-    Delivered(DeliveredAudit),
+    Delivered(Box<DeliveredAudit>),
     Anonymous(Box<AnonymousAudit>),
 }
 
@@ -181,9 +169,6 @@ pub(crate) struct AnonymousStatement {
     pub private_tx_hash: [u8; 32],
     pub private_tx_blinding: [u8; 32],
     pub sender_commitment: [u8; 32],
-    pub epoch: u64,
-    pub first_contact_root: [u8; 32],
-    pub anchor: Option<Anchor>,
 }
 
 impl AuditProving<'_> {
@@ -219,23 +204,7 @@ impl AuditProving<'_> {
         };
         let tree = inputs.output_tree_id;
         let body = match (self.sealed.layout, self.anonymous) {
-            (DisclosureLayout::Packed(layout), _) => {
-                let mut openings = vec![Opening::default(); usize::from(n_out)];
-                let mut owner_keys = vec![[0; 32]; usize::from(n_out)];
-                for (index, slot) in self.published.iter().enumerate() {
-                    openings[index] = Opening::output(slot.output, tree)?;
-                    owner_keys[index] = slot_owner_key(slot.output)?;
-                }
-                AuditBody::Packed(PackedAudit {
-                    public_input_hash: self.public_input_hash,
-                    audit,
-                    n_out: u8::try_from(layout.outputs)
-                        .map_err(|_| TransactionError::TooManyOutputs)?,
-                    outputs: openings,
-                    owner_keys,
-                })
-            }
-            (DisclosureLayout::Delivered(_), _) => AuditBody::Delivered(DeliveredAudit {
+            (DisclosureLayout::Delivered(_), _) => AuditBody::Delivered(Box::new(DeliveredAudit {
                 public_input_hash: self.public_input_hash,
                 audit,
                 outputs: self
@@ -243,7 +212,7 @@ impl AuditProving<'_> {
                     .iter()
                     .map(|slot| delivered_output(slot, tree))
                     .collect::<Result<_, _>>()?,
-            }),
+            })),
             (DisclosureLayout::Anonymous(layout), Some(statement)) => {
                 let (class, count) = (layout.key.class(), layout.inputs);
                 let mut openings = inputs
@@ -275,9 +244,6 @@ impl AuditProving<'_> {
                     })?,
                     inputs: openings,
                     sender_commitment: statement.sender_commitment,
-                    epoch: statement.epoch,
-                    first_contact_root: statement.first_contact_root,
-                    anchor: statement.anchor.clone(),
                 }))
             }
             (DisclosureLayout::Anonymous(_), None) => {
@@ -298,23 +264,6 @@ fn slot_owner_key(output: &SppProofOutputUtxo) -> Result<[u8; 32], RingError> {
 
 fn disclosed_key(owner: &ShieldedAddress, key_escrow: bool) -> Option<[u8; 32]> {
     (!key_escrow).then_some(owner.nullifier_pubkey)
-}
-
-fn packed_opening(
-    output: &SppProofOutputUtxo,
-    key_escrow: bool,
-) -> Result<Option<PackedOutputOpening>, RingError> {
-    let Some(owner) = output.owner_address else {
-        return Ok(None);
-    };
-    Ok(Some(PackedOutputOpening {
-        owner_key: owner_key(&owner.signing_pubkey)?,
-        nullifier_pk: disclosed_key(&owner, key_escrow),
-        asset: hash_bytes(output.asset.asset.as_array())?,
-        amount: output.amount,
-        data_hash: output.data_hash.unwrap_or_default(),
-        ring_data_hash: output.ring_data_hash.unwrap_or_default(),
-    }))
 }
 
 fn delivered_opening(
@@ -338,26 +287,24 @@ fn delivered_opening(
     })
 }
 
-fn anonymous_opening(
-    slot: &PublishedSlot<'_>,
-    index: usize,
-) -> Result<AnonymousOutputOpening, RingError> {
+fn anonymous_opening(slot: &PublishedSlot<'_>) -> Result<AnonymousOutputOpening, RingError> {
     let output = slot.output;
     let Some(owner) = output.owner_address else {
         return Ok(AnonymousOutputOpening::Dummy);
     };
-    Ok(match (slot.wire.is_exit(), slot.recipient) {
-        (true, _) => AnonymousOutputOpening::Exit {
+    let asset = hash_bytes(output.asset.asset.as_array())?;
+    Ok(match slot.wire.is_exit() {
+        true => AnonymousOutputOpening::Exit {
             nullifier_pk: owner.nullifier_pubkey,
-            asset: hash_bytes(output.asset.asset.as_array())?,
+            asset,
             amount: output.amount,
         },
-        (false, Some(recipient)) => AnonymousOutputOpening::Ring {
+        false => AnonymousOutputOpening::Ring {
             owner_key: owner_key(&owner.signing_pubkey)?,
             nullifier_pk: owner.nullifier_pubkey,
-            recipient_u: recipient.u(),
+            asset,
+            amount: output.amount,
         },
-        (false, None) => return Err(RingError::UndeliveredRingOutput { slot: index }),
     })
 }
 
@@ -366,10 +313,7 @@ fn delivered_output(slot: &PublishedSlot<'_>, tree: u16) -> Result<DeliveredOutp
     let output = slot.output;
     let (recipient_key, body) = match slot.wire {
         RingOutput::Delivered { u, body, .. } => (*u, *body),
-        RingOutput::Anonymous { body, .. } => {
-            (slot.recipient.map(|key| key.u()).unwrap_or_default(), *body)
-        }
-        RingOutput::Exit { .. } | RingOutput::Packed { .. } => {
+        RingOutput::Anonymous { .. } | RingOutput::Exit { .. } => {
             ([0; 32], [0; RING_DELIVERED_BODY_LEN])
         }
     };
@@ -385,34 +329,11 @@ fn delivered_output(slot: &PublishedSlot<'_>, tree: u16) -> Result<DeliveredOutp
     })
 }
 
+/// An exit's owner key is masked out of the disclosure, a dummy names none.
 fn anonymous_output(slot: &PublishedSlot<'_>, tree: u16) -> Result<AnonymousOutput, RingError> {
-    let stream = match slot.anonymous {
-        Some(AnonymousSlot::Payment(payment)) => {
-            let (inbox, index) = match payment.position {
-                StreamPosition::Inbox(index) => (true, index),
-                StreamPosition::Pair(index) => (false, index),
-            };
-            Stream {
-                tag: payment.tag.field(),
-                inbox,
-                pair: !inbox,
-                change: false,
-                index: index.get(),
-            }
-        }
-        Some(AnonymousSlot::Change { tag }) => Stream {
-            tag: tag.field(),
-            change: true,
-            ..Stream::default()
-        },
-        Some(AnonymousSlot::Dummy { tag }) => Stream {
-            tag: tag.field(),
-            ..Stream::default()
-        },
-        Some(AnonymousSlot::Exit) | None => Stream::default(),
-    };
+    let output = slot.output;
     Ok(AnonymousOutput {
-        delivered: delivered_output(slot, tree)?,
-        stream,
+        output: Opening::output(output, tree)?,
+        owner_key: slot_owner_key(output)?,
     })
 }

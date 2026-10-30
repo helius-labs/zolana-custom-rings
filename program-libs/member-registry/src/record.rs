@@ -1,5 +1,5 @@
 use custom_ring_interface::{QueueEntry, FIELD_MAX};
-use zolana_hasher::{primitives::right_align, Hasher, HasherError, Poseidon};
+use spr_hasher::{primitives::right_align, Hasher, HasherError, Poseidon};
 use zolana_ring_policy::MintPolicy;
 
 use crate::RecordTreeError;

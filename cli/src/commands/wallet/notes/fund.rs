@@ -5,7 +5,7 @@ use anyhow::{bail, Result};
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
-use zolana_client::Rpc;
+use spr_client::Rpc;
 
 use crate::{
     ui::{self, line, Ask},
@@ -98,7 +98,7 @@ fn sol(lamports: u64) -> String {
 mod tests {
     use std::cell::Cell;
 
-    use zolana_client::ClientError;
+    use spr_client::ClientError;
 
     use super::*;
     use crate::ui::{Answer, Defaults, Scripted};

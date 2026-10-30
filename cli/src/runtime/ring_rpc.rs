@@ -4,8 +4,8 @@ use serde_json::json;
 use solana_address::Address;
 use solana_signature::Signature;
 use solana_signer::Signer;
-use zolana_indexer_api::{Base64String, Hash};
-use zolana_keypair::X25519Pubkey;
+use spr_indexer_api::{Base64String, Hash};
+use spr_keypair::X25519Pubkey;
 use zolana_ring_client::{
     auditor_view_tag,
     rpc::{
@@ -242,7 +242,7 @@ mod tests {
         time::Duration,
     };
 
-    use zolana_keypair::X25519Keypair;
+    use spr_keypair::X25519Keypair;
     use zolana_ring_client::rpc::{SkippedReason, SkippedTransaction};
 
     use super::*;

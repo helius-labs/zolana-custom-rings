@@ -1,9 +1,9 @@
 //! The outflow of one transfer per limit row, as the member policy key sums it.
 
 use solana_address::Address;
-use zolana_interface::N_PUBLIC_SLOTS;
+use spr_interface::N_PUBLIC_SLOTS;
+use spr_transaction::instructions::transact::SppProofOutputUtxo;
 use zolana_ring_policy::{Member, OutflowLimit};
-use zolana_transaction::instructions::transact::SppProofOutputUtxo;
 
 use crate::RingError;
 

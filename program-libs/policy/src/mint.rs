@@ -33,11 +33,13 @@ impl MintPolicy {
     }
 
     pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        let [threshold, cap, cosign_above, withdrawal_threshold] =
+            bytemuck::cast::<_, [[u8; 8]; 4]>(bytes).map(u64::from_be_bytes);
         Self {
-            threshold: u64::from_be_bytes(bytes[..8].try_into().unwrap()),
-            cap: u64::from_be_bytes(bytes[8..16].try_into().unwrap()),
-            cosign_above: u64::from_be_bytes(bytes[16..24].try_into().unwrap()),
-            withdrawal_threshold: u64::from_be_bytes(bytes[24..].try_into().unwrap()),
+            threshold,
+            cap,
+            cosign_above,
+            withdrawal_threshold,
         }
     }
 

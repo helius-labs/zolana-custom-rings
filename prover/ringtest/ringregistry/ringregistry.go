@@ -31,6 +31,10 @@ func (r Record) Hash(t testing.TB) *big.Int {
 	return ringtest.MustPoseidonHash(t, r.Member, r.Next, r.Lists, r.EscrowKey, copied(r.MintPolicy), copied(r.WithdrawalThreshold))
 }
 
+func (r Record) Wires() registry.Record {
+	return registry.Record{Member: copied(r.Member), Next: copied(r.Next), Lists: copied(r.Lists), EscrowKey: copied(r.EscrowKey), MintPolicy: copied(r.MintPolicy), WithdrawalThreshold: copied(r.WithdrawalThreshold)}
+}
+
 // EscrowKey mirrors registry.EscrowKey.
 func EscrowKey(t testing.TB, nullifierPk, ctHash *big.Int) *big.Int {
 	t.Helper()

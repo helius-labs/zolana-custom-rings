@@ -5,10 +5,10 @@ use custom_ring_interface::{
     RecordQueue, MEMBER_REGISTRY_CAPACITY,
 };
 use sea_orm::ConnectionTrait;
-use zolana_indexer_api::Hash;
+use spr_indexer_api::Hash;
 use zolana_ring_indexer::{
     records::{CanonicalAccounts, QueuedWrite, RecordAction, RecordChange, SealedKey},
-    tree::{node_keys, LoadedTree, MemberRead, MemberRecord, ReadRows, WrittenRows},
+    tree::{node_keys, Canopy, LoadedTree, MemberRead, MemberRecord, ReadRows, WrittenRows},
 };
 
 use crate::{
@@ -27,6 +27,7 @@ pub(crate) struct TreeRead<'r> {
     pub records: RecordRead,
     /// Empty leaves past `next_index` the read loads for new records.
     pub inserts: u64,
+    pub canopy: Option<Canopy>,
 }
 
 pub(crate) enum RecordRead {
@@ -42,6 +43,7 @@ impl<'r> TreeRead<'r> {
             root,
             records: RecordRead::Members(entries.iter().map(|entry| entry.member).collect()),
             inserts: entries.len() as u64,
+            canopy: None,
         }
     }
 
@@ -82,9 +84,9 @@ impl<'r> TreeRead<'r> {
         let next_index = self.root.next_index;
         let appended = next_index..(next_index + self.inserts).min(MEMBER_REGISTRY_CAPACITY);
         let leaves = stored.values().map(|record| record.record.index);
-        let nodes = store
-            .nodes(&node_keys(leaves.chain(appended))?, applied)
-            .await?;
+        let mut keys = node_keys(leaves.chain(appended))?;
+        keys.extend(self.canopy.into_iter().flat_map(Canopy::positions));
+        let nodes = store.nodes(&keys, applied).await?;
         let rows = ReadRows {
             next_index,
             reads,

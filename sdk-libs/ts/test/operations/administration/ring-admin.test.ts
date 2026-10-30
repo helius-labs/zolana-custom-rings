@@ -17,7 +17,6 @@ import {
   ringMemberRegistryAddress,
   ringRecordQueueAddress,
 } from "../../../src/protocol/pda/index.js";
-import { EPOCH_SLOTS } from "../../../src/crypto/derivation/ring-stream.js";
 import {
   RingInstructionTag,
   clearRingCoSignerInstruction,
@@ -210,12 +209,12 @@ describe("config account", () => {
       hasPolicy: false,
     });
 
-  it("reads the created slot after the delegate and the epoch a restore scans from", () => {
+  it("reads the created slot after the delegate", () => {
     const data = account();
-    const slot = 3n * EPOCH_SLOTS + 7n;
+    const slot = 3n * (1n << 18n) + 7n;
     data.set(u64le(slot), CREATED_SLOT_OFFSET);
     expect(data).toHaveLength(150);
-    expect(decodeRingProgramConfig(data)).toMatchObject({ createdSlot: slot, creationEpoch: 3n });
+    expect(decodeRingProgramConfig(data)).toMatchObject({ createdSlot: slot });
   });
 
   it("refuses the layout without a created slot and an unknown mode like Rust `InvalidRingMode`", () => {

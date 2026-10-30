@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use zolana_hasher::primitives::right_align;
+use spr_hasher::primitives::right_align;
 use zolana_ring_policy::{
     registry_field, ListId, ListSet, OutputSubjects, PolicySource, RecordLists, Rule, RuleRefusal,
     RuleTable, RuleTableBuilder, SourceMap, Subject, TableParts, TransferSubject, TransferSubjects,

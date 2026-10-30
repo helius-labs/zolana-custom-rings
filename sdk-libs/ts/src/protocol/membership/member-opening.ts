@@ -1,7 +1,11 @@
 import { EMPTY_MINT_POLICY, mintPolicyField, mintPolicyWriteField } from "./mint-policy.js";
 import { hexToBytes } from "@noble/hashes/utils.js";
 
-import { type RingMemberOpening, type RingSealedKey } from "../../rpc/ports.js";
+import {
+  type RingMemberOpening,
+  type RingSealedKey,
+  type RingServedRecord,
+} from "../../rpc/ports.js";
 import {
   BN254_SCALAR_ORDER,
   hashBytes,
@@ -19,6 +23,7 @@ import {
   MEMBER_REGISTRY_CAPACITY,
   QUAD_ARITY,
   QUAD_HEIGHT,
+  canopyLevels,
   type ApplyProofInputs,
   type MemberRecord,
   type QuadPath,
@@ -171,6 +176,71 @@ export function ownerEscrowed(
   if (escrowed === undefined)
     throw new RingError("RING_UNREGISTERED_OUTPUT_KEY", { details: { owner: bytesKey(owner) } });
   return escrowed;
+}
+
+/** Every member's read under `root`, each pool path folding through the canopy into `root`. */
+export function verifyRecordPool(
+  pool: Readonly<{
+    records: readonly RingServedRecord[];
+    canopy: readonly Bytes32[];
+    subjects: readonly number[];
+  }>,
+  root: Bytes32,
+  members: readonly Bytes32[],
+  openings: number,
+): readonly MemberOpeningRead[] {
+  const levels = canopyLevels(openings);
+  if (
+    pool.canopy.length !== QUAD_ARITY ** levels ||
+    pool.records.length < 1 ||
+    pool.records.length > openings ||
+    pool.subjects.length !== members.length
+  )
+    invalid("PoolShape");
+  const canopy = [pool.canopy.map((node) => checkedBytes<Bytes32>(node, 32, "canopy"))];
+  for (let level = 0; level < levels; level += 1) {
+    const below = canopy[level] ?? [];
+    canopy.push(
+      Array.from({ length: below.length / QUAD_ARITY }, (_, parent) =>
+        poseidon(below.slice(parent * QUAD_ARITY, (parent + 1) * QUAD_ARITY)),
+      ),
+    );
+  }
+  if (!equalBytes(canopy[levels]?.[0] ?? ZERO_32, root)) invalid("RootMismatch");
+  const height = QUAD_HEIGHT - levels;
+  const paths = pool.records.map(({ record, path }) => {
+    if (path.siblings.length !== height) invalid("PathHeight");
+    const full: QuadPath = {
+      index: path.index,
+      siblings: [
+        ...path.siblings,
+        ...canopy.slice(0, levels).map((nodes, level) => {
+          const node = path.index >>> (2 * (height + level));
+          const first = node - (node % QUAD_ARITY);
+          return nodes
+            .slice(first, first + QUAD_ARITY)
+            .filter((_, child) => first + child !== node);
+        }),
+      ],
+    };
+    if (!equalBytes(quadPathRoot(full, memberRecordHash(record)), root)) invalid("RootMismatch");
+    return full;
+  });
+  return members.map((member, subject) => {
+    const at = pool.subjects[subject];
+    const served = at === undefined ? undefined : pool.records[at];
+    const path = at === undefined ? undefined : paths[at];
+    if (served === undefined || path === undefined) invalid("SubjectIndex");
+    const opening: RingMemberOpening = equalBytes(served.record.member, member)
+      ? {
+          kind: "present",
+          record: served.record,
+          path,
+          ...(served.sealedKey === undefined ? {} : { sealedKey: served.sealedKey }),
+        }
+      : { kind: "absent", low: served.record, path };
+    return MemberOpeningRead.verify(opening, root, member);
+  });
 }
 
 /** `Poseidon(nullifier_pk, hash_bytes(ciphertext))`. */

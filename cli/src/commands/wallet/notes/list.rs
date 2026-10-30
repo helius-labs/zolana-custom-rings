@@ -12,7 +12,7 @@ use custom_ring_sdk::{
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
-use zolana_client::Rpc;
+use spr_client::Rpc;
 use zolana_ring_policy::{ListId, ListSet, ListWrite, ListWriteError, Member};
 
 use crate::{

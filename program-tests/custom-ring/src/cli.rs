@@ -10,9 +10,9 @@ use custom_ring_cli::{ListName, ModeName, SENDER_KEYPAIR_FILE};
 use custom_ring_sdk::CustomRing;
 use solana_address::Address;
 use solana_keypair::Keypair;
-use zolana_keypair::ShieldedKeypair;
+use spr_keypair::ShieldedKeypair;
+use spr_test_utils::localnet::isolated_temp_path;
 use zolana_ring_policy::ListId;
-use zolana_test_utils::localnet::isolated_temp_path;
 
 use crate::{
     policy::{owner_member, wait_for_list},
@@ -79,7 +79,7 @@ pub fn merged(output: &Output) -> String {
 
 impl RingProject {
     /// `keys/auditor.key.pub` holds `auditor`, the local key `init` pins.
-    pub fn create(env: &TestEnv, auditor: &zolana_keypair::X25519Pubkey) -> Result<Self> {
+    pub fn create(env: &TestEnv, auditor: &spr_keypair::X25519Pubkey) -> Result<Self> {
         let dir = PathBuf::from(isolated_temp_path("zolana-ring-cli"));
         let keys = dir.join("keys");
         std::fs::create_dir_all(&keys)?;

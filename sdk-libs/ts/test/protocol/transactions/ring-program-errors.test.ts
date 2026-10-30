@@ -5,16 +5,17 @@ import { describe, expect, it } from "vitest";
 import { RingProgramError } from "../../../src/protocol/error.js";
 
 describe("RingProgramError", () => {
-  it("names every code of the Rust `CustomRingError` and no retired one", () => {
-    const rust = readFileSync(
-      new URL("../../../../../program-libs/interface/src/error.rs", import.meta.url),
-      "utf8",
-    );
-    const codes = [...rust.matchAll(/^\s+([A-Z][A-Za-z0-9]*) = (\d+) =>/gmu)].map(
-      ([, name = "", code = ""]) => [`${name[0]?.toLowerCase()}${name.slice(1)}`, Number(code)],
-    );
-    expect(codes).toContainEqual(["insertFeeAboveMax", 8235]);
-    expect(Object.entries(RingProgramError)).toEqual(codes);
-    expect(Object.values(RingProgramError)).not.toContain(8154);
+  it("matches the shared Rust error code fixture exactly", () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        new URL("../../../../../test-vectors/errors/custom-ring-errors.json", import.meta.url),
+        "utf8",
+      ),
+    ) as Record<string, number>;
+    const expected = Object.entries(fixture).map(([name, code]) => [
+      `${name[0]?.toLowerCase()}${name.slice(1)}`,
+      code,
+    ]);
+    expect(Object.entries(RingProgramError)).toEqual(expected);
   });
 });

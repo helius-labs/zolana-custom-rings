@@ -1,45 +1,44 @@
 //! The anonymous half of `WalletScan` against an in-memory indexer.
 
-use std::{collections::HashSet, ops::Range, sync::Mutex};
+use std::sync::Mutex;
 
 use crate::ZolanaServices;
 use custom_ring_interface::{
-    blinding::ring_blinding_seed,
-    encode_ring_anonymous_output,
-    stream::{DeliveredSlot, InboxKey, RingTag, TagIndex, EPOCH_SLOTS, J_INBOX, TAG_LEN},
+    blinding::ring_blinding_seed, encode_anonymous_recipient_output, encode_anonymous_sender_output,
 };
+use solana_address::Address;
 use solana_signature::Signature;
-use zolana_client::{
+use spr_client::{
     rpc::GetShieldedTransactionsByNullifiersResponse, AsyncProverClient, ClientError,
     Context as Page, EncryptedUtxoMatch, GetEncryptedUtxosByTagsResponse,
     GetShieldedTransactionsByTagsResponse, OutputContext, OutputSlot, ShieldedTransaction,
     WitnessReader,
 };
-use zolana_keypair::ShieldedAddress;
-use zolana_ring_keys::{Pairing, RingViewingKey};
-use zolana_ring_policy::ring_id_field;
-use zolana_ring_transaction::{delivered_ring_data, RingDeliveredBody};
-use zolana_transaction::{
+use spr_event::MessageData;
+use spr_keypair::{viewing_key::ViewTag, ShieldedAddress};
+use spr_transaction::{
     serialization::proofless::{Proofless, ProoflessEncode},
-    utxo::blinding::{derive_output_blinding_seed, derive_transact_output_blinding},
+    utxo::blinding::derive_transact_output_blinding,
     AssetRegistry, Data, Mint, OwnerCx, Utxo, UtxoSerialization,
+};
+use zolana_ring_transaction::{
+    AnonymousTransferRecipientPlaintext, AnonymousTransferSenderPlaintext, OutputBlindings,
+    UnverifiedRecipientPlaintext, UnverifiedSenderPlaintext, VerifiedRecipientPlaintext,
+    VerifiedSenderPlaintext,
 };
 
 use super::{
-    fixtures::{keypair, Member, EPOCH, RING},
+    fixtures::{keypair, Member, RING},
     *,
 };
 
 const TREE: u16 = 2;
 const SALT: [u8; 16] = [7; 16];
+const SEED: [u8; 32] = [0x0b; 32];
 const CAUGHT_UP: Page = Page {
     block_time: 0,
     slot: u64::MAX,
 };
-
-fn slot_of(epoch: u64) -> u64 {
-    epoch * EPOCH_SLOTS + 17
-}
 
 /// Serves what the asked tags or nullifiers reach, in one page.
 #[derive(Default)]
@@ -55,20 +54,14 @@ struct DepositedUtxo {
     nullifier: [u8; 32],
 }
 
-struct Payment {
-    owner: ShieldedAddress,
-    recipient: X25519Pubkey,
-    tag: RingTag,
+/// One ring output under `tag`, sealed at slot 0 as the anonymous rail seals it.
+struct Sealed<'a> {
+    sender: &'a ShieldedKeypair,
+    owner: &'a ShieldedKeypair,
+    first_nullifier: [u8; 32],
+    tag: ViewTag,
     asset: Mint,
     amount: u64,
-}
-
-/// Each payment delivered as the anonymous rail delivers it.
-struct RingTransfer<'a> {
-    sender: &'a ShieldedKeypair,
-    nullifiers: Vec<[u8; 32]>,
-    payments: Vec<Payment>,
-    slot: u64,
     leaf: u64,
 }
 
@@ -127,98 +120,124 @@ impl Ledger {
         }
     }
 
-    /// The commitment of each payment, in payment order.
-    fn transfer(&mut self, transfer: RingTransfer<'_>) -> Vec<[u8; 32]> {
-        let first_nullifier = transfer.nullifiers[0];
-        let tx = transfer
+    /// A payment from `sealed.sender` to `sealed.owner`, its scheme 1 body at output 0.
+    fn payment(&mut self, sealed: Sealed<'_>) -> [u8; 32] {
+        let owner = sealed.owner.shielded_address().unwrap();
+        let tx = sealed
             .sender
             .viewing_key
-            .get_transaction_viewing_key(&first_nullifier)
+            .get_transaction_viewing_key(&sealed.first_nullifier)
             .unwrap();
-        let seed_out = derive_output_blinding_seed(
-            &first_nullifier,
-            &ring_blinding_seed(&tx.secret_bytes(), &SALT).unwrap(),
-        )
-        .unwrap();
-        let mut output_slots = Vec::new();
-        let mut hashes = Vec::new();
-        for (output_index, payment) in (0u32..).zip(&transfer.payments) {
-            let slot_secret = DeliveredSlot {
-                agreement: &tx.ecdh(&payment.recipient).unwrap(),
-                tx_viewing_pk: tx.pubkey().as_bytes(),
-                recipient_viewing_pk: payment.recipient.as_bytes(),
-                salt: &SALT,
-                output_index,
-                first_nullifier: &first_nullifier,
-            }
-            .secret()
-            .unwrap();
-            let blinding =
-                derive_transact_output_blinding(&first_nullifier, &seed_out, output_index).unwrap();
-            let ring_data_hash = delivered_ring_data(&slot_secret, Some(&payment.tag)).unwrap();
-            let hash = Utxo {
-                owner: payment.owner.signing_pubkey,
-                asset: payment.asset,
-                amount: payment.amount,
+        let blinding = derive_transact_output_blinding(&sealed.first_nullifier, &SEED, 0).unwrap();
+        let body = AnonymousTransferRecipientPlaintext {
+            verified: VerifiedRecipientPlaintext {
+                owner_pubkey: owner.signing_pubkey,
+                mint: sealed.asset.asset,
+                amount: sealed.amount,
+            },
+            unverified: UnverifiedRecipientPlaintext {
+                sender_pubkey: sealed.sender.viewing_pubkey(),
                 blinding,
-                ring_program_id: Some(RING),
                 data: Data::default(),
-            }
-            .hash(
-                &payment.owner.nullifier_pubkey,
-                &[0; 32],
-                &ring_data_hash,
-                TREE,
-            )
+            },
+        }
+        .serialize()
+        .unwrap();
+        let ciphertext = tx
+            .encrypt_slot(&owner.viewing_pubkey, &body, SALT, 0)
             .unwrap();
-            let body = RingDeliveredBody {
-                blinding,
-                amount: payment.amount,
-            }
-            .seal(&slot_secret)
+        let payload = encode_anonymous_recipient_output(&ciphertext).unwrap();
+        self.publish(&sealed, &owner, blinding, payload, Vec::new())
+    }
+
+    /// The sender's change at output 0 with no body, its bundle the first message.
+    fn change(&mut self, sealed: Sealed<'_>) -> [u8; 32] {
+        let owner = sealed.owner.shielded_address().unwrap();
+        let tx = sealed
+            .sender
+            .viewing_key
+            .get_transaction_viewing_key(&sealed.first_nullifier)
             .unwrap();
-            output_slots.push(OutputSlot {
-                view_tag: payment.tag.field(),
+        let seed = ring_blinding_seed(&tx.secret_bytes(), &SALT).unwrap();
+        let blindings = OutputBlindings::new(&sealed.first_nullifier, &seed).unwrap();
+        let blinding = blindings.at(0).unwrap();
+        let sol = sealed.asset == Mint::SOL;
+        let body = AnonymousTransferSenderPlaintext {
+            verified: VerifiedSenderPlaintext {
+                owner_pubkey: owner.signing_pubkey,
+                spl_mint: if sol {
+                    Default::default()
+                } else {
+                    sealed.asset.asset
+                },
+                spl_amount: if sol { 0 } else { sealed.amount },
+                sol_amount: if sol { sealed.amount } else { 0 },
+                recipient_viewing_pks: Vec::new(),
+            },
+            unverified: UnverifiedSenderPlaintext {
+                blinding_seed: *blindings.output_seed(),
+                spl_data: Data::default(),
+                sol_data: Data::default(),
+            },
+        }
+        .serialize()
+        .unwrap();
+        let ciphertext = tx
+            .encrypt_slot(&owner.viewing_pubkey, &body, SALT, 1)
+            .unwrap();
+        let bundle = MessageData {
+            view_tag: sealed.tag,
+            data: encode_anonymous_sender_output(&ciphertext).unwrap(),
+        };
+        self.publish(&sealed, &owner, blinding, Vec::new(), vec![bundle])
+    }
+
+    fn publish(
+        &mut self,
+        sealed: &Sealed<'_>,
+        owner: &ShieldedAddress,
+        blinding: [u8; 32],
+        payload: Vec<u8>,
+        messages: Vec<MessageData>,
+    ) -> [u8; 32] {
+        let hash = Utxo {
+            owner: owner.signing_pubkey,
+            asset: sealed.asset,
+            amount: sealed.amount,
+            blinding,
+            ring_program_id: Some(RING),
+            data: Data::default(),
+        }
+        .hash(&owner.nullifier_pubkey, &[0; 32], &[0; 32], TREE)
+        .unwrap();
+        let tx_viewing_pk = sealed
+            .sender
+            .viewing_key
+            .get_transaction_viewing_key(&sealed.first_nullifier)
+            .unwrap()
+            .pubkey();
+        self.transactions.push(ShieldedTransaction {
+            slot: 5,
+            tx_signature: Signature::from([sealed.leaf as u8 + 1; 64]),
+            event_index: Some(0),
+            tx_viewing_pk: Some(tx_viewing_pk),
+            salt: Some(SALT),
+            output_slots: vec![OutputSlot {
+                view_tag: sealed.tag,
                 output_context: OutputContext {
                     hash,
                     tree_id: TREE,
-                    leaf_index: transfer.leaf + u64::from(output_index),
+                    leaf_index: sealed.leaf,
                 },
-                payload: encode_ring_anonymous_output(&body),
-            });
-            hashes.push(hash);
-        }
-        self.transactions.push(ShieldedTransaction {
-            slot: transfer.slot,
-            tx_signature: Signature::from([transfer.leaf as u8 + 1; 64]),
-            event_index: Some(0),
-            tx_viewing_pk: Some(tx.pubkey()),
-            salt: Some(SALT),
-            output_slots,
-            messages: Vec::new(),
-            nullifiers: transfer.nullifiers,
+                payload,
+            }],
+            messages,
+            nullifiers: vec![sealed.first_nullifier],
             proofless: false,
             ring_config: None,
             ring_program_id: Some(RING),
         });
-        hashes
-    }
-
-    /// A first contact from another member to the wallet's address 0, landed in `epoch`.
-    fn inbox_payment(&mut self, wallet: &Member, epoch: u64) -> [u8; 32] {
-        self.transfer(RingTransfer {
-            sender: &keypair(2),
-            nullifiers: vec![[0x11; 32]],
-            payments: vec![Payment {
-                owner: wallet.keys.shielded_address().unwrap(),
-                recipient: wallet.address_key(),
-                tag: wallet.inbox_tag(epoch, 0),
-                asset: Mint::SOL,
-                amount: 70,
-            }],
-            slot: slot_of(epoch),
-            leaf: 10,
-        })[0]
+        hash
     }
 
     fn client(self) -> Zolana<NoRpc, Self> {
@@ -229,14 +248,6 @@ impl Ledger {
             ring_prover: AsyncProverClient::local(),
         }
         .connect()
-    }
-
-    fn queried_any(&self, tags: &HashSet<[u8; 32]>) -> bool {
-        self.queried
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|tag| tags.contains(tag))
     }
 }
 
@@ -317,38 +328,13 @@ struct NoRpc;
 impl Rpc for NoRpc {}
 
 impl Member {
-    fn address_key(&self) -> X25519Pubkey {
-        self.keys
-            .viewing_key
-            .ring_address_key(&RING, 0)
-            .unwrap()
-            .pubkey()
-    }
-
-    fn inbox_tag(&self, epoch: u64, index: u8) -> RingTag {
-        InboxKey::derive(
-            &ring_id_field(RING.as_array()).unwrap(),
-            self.address_key().as_bytes(),
-        )
-        .unwrap()
-        .tag(epoch, TagIndex::new(index).unwrap())
-        .unwrap()
-    }
-
-    fn inbox_tags(&self, epochs: Range<u64>) -> HashSet<[u8; 32]> {
-        epochs
-            .flat_map(|epoch| (0..J_INBOX).map(move |index| self.inbox_tag(epoch, index).field()))
-            .collect()
-    }
-
-    fn scan(&self, zolana: &Zolana<NoRpc, Ledger>, slot: u64) -> Vec<[u8; 32]> {
+    fn scan(&self, zolana: &Zolana<NoRpc, Ledger>) -> Vec<[u8; 32]> {
         let assets = RingAssets::new([]).unwrap();
         ScanAt {
             keys: &self.keys,
             assets: &assets,
             chain_assets: &|| Ok(RingAssets::new(zolana.indexer().mints.clone())?),
-            ring: RING,
-            slot,
+            slot: 9,
             store: Some(&self.store),
         }
         .fetch(zolana)
@@ -357,54 +343,63 @@ impl Member {
         .map(|utxo| utxo.utxo_hash)
         .collect()
     }
+
+    fn bootstrap_payment(&self, ledger: &mut Ledger, asset: Mint) -> [u8; 32] {
+        ledger.payment(Sealed {
+            sender: &keypair(2),
+            owner: &self.keys,
+            first_nullifier: [0x11; 32],
+            tag: self.keys.recipient_bootstrap_view_tag(),
+            asset,
+            amount: 70,
+            leaf: 10,
+        })
+    }
+}
+
+/// A canonical first nullifier distinct per `seed`.
+fn nullifier(seed: u8) -> [u8; 32] {
+    let mut value = [0x11; 32];
+    value[31] = seed;
+    value
 }
 
 #[test]
-fn an_anonymous_scan_adds_inbox_payments_and_the_change_of_a_default_ring_spend() {
+fn an_anonymous_scan_adds_payments_and_the_change_of_a_default_ring_spend() {
     let wallet = Member::new(1, "anonymous-scan");
-    wallet
-        .store
-        .update(|state| Ok(state.issue(0, Pairing::default())?))
-        .unwrap();
     let mut ledger = Ledger::default();
-    let paid = ledger.inbox_payment(&wallet, EPOCH);
+    let paid = wallet.bootstrap_payment(&mut ledger, Mint::SOL);
     let deposited = ledger.deposit(&wallet.keys, 40);
-    let change = ledger.transfer(RingTransfer {
+    let change = ledger.change(Sealed {
         sender: &wallet.keys,
-        nullifiers: vec![deposited.nullifier],
-        payments: vec![Payment {
-            owner: wallet.keys.shielded_address().unwrap(),
-            recipient: wallet
-                .keys
-                .viewing_key
-                .ring_change_key(&RING)
-                .unwrap()
-                .pubkey(),
-            tag: RingTag::from_bytes([0x5c; TAG_LEN]),
-            asset: Mint::SOL,
-            amount: 30,
-        }],
-        slot: slot_of(EPOCH + 1),
+        owner: &wallet.keys,
+        first_nullifier: deposited.nullifier,
+        tag: wallet.keys.get_sender_view_tag(0).unwrap(),
+        asset: Mint::SOL,
+        amount: 30,
         leaf: 20,
     });
-    let held = wallet.scan(&ledger.client(), slot_of(EPOCH + 2));
-    assert!(held.contains(&paid), "the inbox payment");
-    // Only the plain scan finds the deposit, its nullifier leads the sync to the change.
-    assert!(
-        held.contains(&change[0]),
-        "the change of the deposit's spend"
-    );
+    let held = wallet.scan(&ledger.client());
+    assert!(held.contains(&paid), "the bootstrap payment");
+    assert!(held.contains(&change), "the change of the deposit's spend");
     assert!(!held.contains(&deposited.hash), "the spent deposit");
     assert_eq!(held.len(), 2);
     let stored = wallet.store.load().unwrap();
-    let issued: Vec<u32> = stored.issued().iter().map(|issued| issued.index).collect();
-    assert_eq!(issued, [0]);
-    assert!(stored.scanned_epoch().is_some());
+    let current = stored.current();
+    assert_eq!(current.tx_count(), 1);
+    let pair = keypair(2).viewing_pubkey();
+    assert_eq!(
+        current
+            .known_senders()
+            .get(&pair)
+            .map(|counter| counter.next()),
+        Some(0)
+    );
 }
 
 #[test]
 fn a_note_in_a_mint_registered_after_the_registry_read_is_kept() {
-    let wallet = Member::new(1, "pending-mint");
+    let wallet = Member::new(1, "late-mint");
     let mint = Mint {
         asset: Address::new_from_array([0x6d; 32]),
         asset_id: 9,
@@ -413,60 +408,37 @@ fn a_note_in_a_mint_registered_after_the_registry_read_is_kept() {
         mints: vec![mint],
         ..Ledger::default()
     };
-    let paid = ledger.transfer(RingTransfer {
-        sender: &keypair(2),
-        nullifiers: vec![[0x11; 32]],
-        payments: vec![Payment {
-            owner: wallet.keys.shielded_address().unwrap(),
-            recipient: wallet.address_key(),
-            tag: wallet.inbox_tag(EPOCH, 0),
-            asset: mint,
-            amount: 70,
-        }],
-        slot: slot_of(EPOCH),
-        leaf: 10,
+    let paid = wallet.bootstrap_payment(&mut ledger, mint);
+    let zolana = ledger.client();
+    assert_eq!(wallet.scan(&zolana), [paid]);
+    assert_eq!(wallet.scan(&zolana), [paid], "a second scan");
+}
+
+#[test]
+fn a_restored_wallet_rebuilds_its_notes_and_counters_from_index_0() {
+    let wallet = Member::new(1, "restored-scan");
+    let mut ledger = Ledger::default();
+    let paid = wallet.bootstrap_payment(&mut ledger, Mint::SOL);
+    let change = ledger.change(Sealed {
+        sender: &wallet.keys,
+        owner: &wallet.keys,
+        first_nullifier: nullifier(3),
+        tag: wallet.keys.get_sender_view_tag(0).unwrap(),
+        asset: Mint::SOL,
+        amount: 5,
+        leaf: 30,
     });
     let zolana = ledger.client();
-    assert_eq!(wallet.scan(&zolana, slot_of(EPOCH + 9)), paid);
+    let first = wallet.scan(&zolana);
+    let synced = wallet.store.load().unwrap();
+    fs::remove_file(wallet.state_file()).unwrap();
+    let restored = wallet.scan(&zolana);
+    assert_eq!(first, restored);
+    assert!(restored.contains(&paid) && restored.contains(&change));
+    let rebuilt = wallet.store.load().unwrap();
+    assert_eq!(rebuilt.current().tx_count(), synced.current().tx_count());
     assert_eq!(
-        wallet.scan(&zolana, slot_of(EPOCH + 11)),
-        paid,
-        "the kept note"
+        rebuilt.current().known_senders(),
+        synced.current().known_senders()
     );
-}
-
-#[test]
-fn a_restored_wallet_scans_from_the_rings_creation_epoch() {
-    let wallet = Member::new(1, "restored-scan");
-    // A state written after the payment, as a restore on another machine leaves it.
-    let path = wallet.state_file();
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(&path, AnonymousRingState::new(RING, EPOCH + 5).to_json()).unwrap();
-    let mut ledger = Ledger::default();
-    let paid = ledger.inbox_payment(&wallet, EPOCH);
-    let held = wallet.scan(&ledger.client(), slot_of(EPOCH + 9));
-    assert_eq!(held, [paid]);
-    assert_eq!(wallet.store.load().unwrap().creation_epoch(), EPOCH);
-}
-
-#[test]
-fn a_second_scan_resumes_from_the_saved_epoch_and_keeps_its_utxos() {
-    let wallet = Member::new(1, "resumed-scan");
-    let mut ledger = Ledger::default();
-    let paid = ledger.inbox_payment(&wallet, EPOCH);
-    let zolana = ledger.client();
-    assert_eq!(wallet.scan(&zolana, slot_of(EPOCH + 9)), [paid]);
-    let scanned = wallet.store.load().unwrap().scanned_epoch().unwrap();
-    let early = wallet.inbox_tags(EPOCH..scanned - 2);
-    assert!(
-        zolana.indexer().queried_any(&early),
-        "a new store reads from the ring's creation"
-    );
-    zolana.indexer().queried.lock().unwrap().clear();
-    assert_eq!(
-        wallet.scan(&zolana, slot_of(EPOCH + 11)),
-        [paid],
-        "the kept note"
-    );
-    assert!(!zolana.indexer().queried_any(&early));
 }

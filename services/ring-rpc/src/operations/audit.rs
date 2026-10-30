@@ -3,9 +3,10 @@ use std::{collections::HashMap, num::NonZeroU32, sync::Arc, time::Duration};
 use custom_ring_interface::RingMode;
 use solana_address::Address;
 use solana_signature::Signature;
-use zolana_client::GetShieldedTransactionsByTagsResponse;
-use zolana_indexer_api::{Base64String, Hash, Limit};
-use zolana_keypair::{X25519Keypair, X25519Pubkey};
+use spr_client::GetShieldedTransactionsByTagsResponse;
+use spr_indexer_api::{Base64String, Hash, Limit};
+use spr_keypair::{X25519Keypair, X25519Pubkey};
+use spr_transaction::instructions::transact::canonical_shape;
 use zolana_ring_client::{
     auditor_view_tag,
     records::{MemberOpeningRead, RegistryTip},
@@ -25,7 +26,6 @@ use zolana_ring_indexer::rpc::{
 };
 use zolana_ring_policy::Member;
 use zolana_ring_transaction::RingAssets;
-use zolana_transaction::instructions::transact::canonical_shape;
 
 use crate::{
     authorize::{AuthorityCheck, AuthorityClaim, ReadCheck, ReadClaim, Unauthorized},
@@ -92,7 +92,7 @@ pub struct AuditRead<'a> {
 
 #[derive(Clone, Copy)]
 struct BoundTransaction<'a> {
-    transaction: &'a zolana_client::ShieldedTransaction,
+    transaction: &'a spr_client::ShieldedTransaction,
     origin: &'a RingOrigin,
     store: &'a AuditStore,
     mode: RingMode,
@@ -327,7 +327,7 @@ impl<S: TransactionSource> AuditService<S> {
                 response.next_cursor.clone(),
                 response.scanned_through.clone(),
             );
-            let context = zolana_indexer_api::Context {
+            let context = spr_indexer_api::Context {
                 block_time: response.context.block_time,
                 slot: response.context.slot,
             };
@@ -478,7 +478,7 @@ impl<S: TransactionSource> AuditService<S> {
             })
             .await?;
         validate_indexer_response(&response, page, self.view_tag)?;
-        let context = zolana_indexer_api::Context {
+        let context = spr_indexer_api::Context {
             block_time: response.context.block_time,
             slot: response.context.slot,
         };
@@ -509,8 +509,7 @@ impl<S: TransactionSource> AuditService<S> {
         store: &AuditStore,
     ) -> Result<AuditedRows, RingRpcError> {
         let source = &self.shared.source;
-        let mut assets = self.shared.cached_assets().await;
-        let mut refreshed = false;
+        let assets = self.shared.due_assets().await;
         let mut items = Vec::new();
         let mut skipped = Vec::new();
         let mut origins: HashMap<(Signature, u16), RingOrigin> = HashMap::new();
@@ -566,16 +565,8 @@ impl<S: TransactionSource> AuditService<S> {
                 store,
                 mode,
             };
-            let mut result = bound.and_then(|()| self.audit(audit, &assets));
-            let missing_asset = matches!(&result, Ok(opened) if opened.has_unknown_assets());
             // Missing mint preimages affect optional metadata, never verified disclosure.
-            if missing_asset && !refreshed {
-                refreshed = true;
-                if let Ok(updated) = self.shared.refresh_assets().await {
-                    assets = updated;
-                    result = self.audit(audit, &assets);
-                }
-            }
+            let result = bound.and_then(|()| self.audit(audit, &assets));
             match result {
                 Ok(opened) => {
                     store.record(
@@ -755,7 +746,7 @@ fn validate_indexer_response(
 
 #[cfg(test)]
 mod tests {
-    use zolana_indexer_api::Context;
+    use spr_indexer_api::Context;
     use zolana_ring_client::{MergeAuditResult, UnresolvedMerge};
 
     use super::*;

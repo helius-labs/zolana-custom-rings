@@ -1,12 +1,12 @@
 import type { Instruction } from "@solana/kit";
 
 import { type RingProver, type RingRecordReader } from "../../rpc/ports.js";
+import { encodeRingDepositPlaintext } from "../../protocol/codec/ring-deposit-plaintext.js";
 import {
   compileUnsignedTransaction,
   resolveDepositSettlement,
   signerAddress,
   ZERO_32,
-  encodeRingDepositPlaintext,
   resolveShieldedRecipient,
 } from "@heliuslabs/zolana/internal";
 import { initializePoseidon } from "@heliuslabs/zolana";
@@ -48,7 +48,8 @@ import { RingError, wrapRingError } from "../../protocol/error.js";
 import type { BoundRoot } from "../../proof/policy-proof.js";
 import { readRegisteredRecord } from "../../rpc/registered-record.js";
 import { type RingKeys } from "../../state/ring-keys.js";
-import { type AnonymousRingState } from "../../state/anonymous-state.js";
+import type { RingAddress } from "../../crypto/keys/ring-address.js";
+import type { FirstContact, ViewingHistory } from "../../state/viewing-history.js";
 
 /** Rust `compute_unit_limit(AuditedDeposit)`. */
 export const RING_DEPOSIT_COMPUTE_UNIT_LIMIT = 1_400_000;
@@ -57,13 +58,22 @@ export const RING_DEPOSIT_COMPUTE_UNIT_LIMIT = 1_400_000;
 export type RingDepositRecipient =
   /** A confidential ring member, found under its viewing key's tag. */
   | Readonly<{ kind: "confidential"; address: Address | ShieldedAddress }>
-  /** The depositor's own hidden identity on an anonymous ring, found on its deposit stream. */
+  /** The depositor's own hidden identity on an anonymous ring, under its next sender tag. */
+  | Readonly<{ kind: "anonymous"; keys: RingKeys; history: ViewingHistory }>
+  /** Another member of an anonymous ring, its tag by the selection over the depositor's history. */
   | Readonly<{
-      kind: "anonymous";
+      kind: "anonymousPayment";
       keys: RingKeys;
-      /** Its `depositNext` is the deposit's stream counter. */
-      state: AnonymousRingState;
+      history: ViewingHistory;
+      to: RingAddress;
+      firstContact: FirstContact;
     }>;
+
+type TaggedRecipient = Readonly<{
+  address: ShieldedAddress;
+  viewTag: Bytes32;
+  history?: ViewingHistory;
+}>;
 
 export type RingDepositClient = DepositClient &
   Pick<RingRecordReader, "getRingMemberRecord"> &
@@ -97,6 +107,8 @@ export interface ProvenRingDeposit {
 export class PreparedRingDeposit {
   /** The note the deposit creates. */
   readonly utxo: Utxo;
+  /** The depositor's viewing history past the deposit's tag, stored before it is sent. */
+  readonly viewingHistory?: ViewingHistory;
   readonly #ringProgramId: Address;
   readonly #tree: Address;
   readonly #depositor: SignerAccount;
@@ -115,6 +127,7 @@ export class PreparedRingDeposit {
 
   private constructor(state: {
     utxo: Utxo;
+    viewingHistory: ViewingHistory | undefined;
     ringProgramId: Address;
     tree: Address;
     depositor: SignerAccount;
@@ -131,6 +144,7 @@ export class PreparedRingDeposit {
     ephemeralSecret: Bytes32;
   }) {
     this.utxo = state.utxo;
+    if (state.viewingHistory !== undefined) this.viewingHistory = state.viewingHistory;
     this.#ringProgramId = state.ringProgramId;
     this.#tree = state.tree;
     this.#depositor = state.depositor;
@@ -285,7 +299,7 @@ export class PreparedRingDeposit {
       config: RingProgramConfig;
       depositor: SignerAccount;
       cosigner: SignerAccount | undefined;
-      recipient: Readonly<{ address: ShieldedAddress; viewTag: Bytes32 }>;
+      recipient: TaggedRecipient;
       ownerKey: Bytes32 | undefined;
       asset: Address;
       settlement: RingAssetDeposit["asset"];
@@ -351,6 +365,7 @@ export class PreparedRingDeposit {
           data: new Data(),
           ringProgramId: params.ringProgramId,
         }),
+        viewingHistory: recipient.history,
         ringProgramId: params.ringProgramId,
         tree: input.tree,
         depositor: input.depositor,
@@ -387,6 +402,11 @@ export async function buildRingDepositTransaction(
 ): Promise<Transaction> {
   const prepared = await PreparedRingDeposit.prepare(params, context);
   try {
+    // A plain build drops the history past its tag.
+    if (prepared.viewingHistory !== undefined)
+      throw new RingError("RING_ANONYMOUS_SUBMISSION_REQUIRED", {
+        details: { ringProgramId: params.ringProgramId, use: "PreparedRingDeposit" },
+      });
     const { instruction } = await prepared.prove(params.client, context);
     return await compileUnsignedTransaction({
       feePayer: params.feePayer,
@@ -406,7 +426,7 @@ async function depositRecipient(
   params: RingDepositParams,
   anonymous: boolean,
   context: RequestContext | undefined,
-): Promise<Readonly<{ address: ShieldedAddress; viewTag: Bytes32 }>> {
+): Promise<TaggedRecipient> {
   const recipient = params.recipient;
   if (recipient.kind === "confidential") {
     if (anonymous)
@@ -422,19 +442,33 @@ async function depositRecipient(
     return { address, viewTag: address.viewingPublicKey.u() };
   }
   if (!anonymous) throw new RingError("RING_NOT_ANONYMOUS", { details: { operation: "deposit" } });
-  if (recipient.state.ring !== params.ringProgramId)
-    throw new RingError("RING_FOREIGN_RING", {
-      details: { state: recipient.state.ring, ring: params.ringProgramId },
-    });
-  const address = recipient.keys.address();
+  const tagged = await anonymousRecipient(recipient, params.ringProgramId, context);
   // An anonymous ring spends only through the hidden Ed25519 proof.
-  if (address.signingPublicKey.signatureType() !== "ed25519")
+  if (tagged.address.signingPublicKey.signatureType() !== "ed25519")
     throw new RingError("RING_ANONYMOUS_RECIPIENT_CURVE");
-  const tags = await recipient.keys.senderViewTags([recipient.state.depositNext], context);
-  const [viewTag] = tags;
-  if (tags.length !== 1 || viewTag === undefined)
-    throw new RingError("RING_BUILD_DEPOSIT", {
-      details: { reason: "deposit tag count", expected: 1, actual: tags.length },
+  return tagged;
+}
+
+async function anonymousRecipient(
+  recipient: Exclude<RingDepositRecipient, { kind: "confidential" }>,
+  ringProgramId: Address,
+  context: RequestContext | undefined,
+): Promise<TaggedRecipient> {
+  if (recipient.kind === "anonymous") {
+    const { tag, history } = await recipient.history.senderTag(recipient.keys, context);
+    return { address: recipient.keys.address(), viewTag: tag, history };
+  }
+  if (recipient.to.ringProgramId !== ringProgramId)
+    throw new RingError("RING_FOREIGN_RING", {
+      details: { address: recipient.to.ringProgramId, ring: ringProgramId },
     });
-  return { address, viewTag };
+  const { tag, history } = await recipient.history.depositTag(
+    recipient.keys,
+    {
+      viewingPublicKey: recipient.to.recipient.viewingPublicKey,
+      firstContact: recipient.firstContact,
+    },
+    context,
+  );
+  return { address: recipient.to.recipient, viewTag: tag.payment.tag, history };
 }

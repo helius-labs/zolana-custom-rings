@@ -1,7 +1,6 @@
-use custom_ring_interface::stream::{RingTag, TAG_LEN};
 use solana_keypair::Keypair;
-use zolana_keypair::ViewingKey;
-use zolana_transaction::OutputContext;
+use spr_keypair::ViewingKey;
+use spr_transaction::OutputContext;
 
 use super::*;
 use crate::{
@@ -283,8 +282,7 @@ fn a_decrypted_page_keeps_its_wire_json() {
                 0,
                 OutputOpening::Ring {
                     utxo: utxo(0x10, Some(Address::new_from_array([4; 32]))),
-                    recipient_u: [6; 32],
-                    tag: None,
+                    owner_tag: RingOwnerTag::Recipient([6; 32]),
                 },
             ),
             output(1, OutputOpening::Exit(utxo(0x20, None))),
@@ -329,8 +327,7 @@ fn an_anonymous_decrypted_page_keeps_its_wire_json() {
                         ring_data_hash: [0; 32],
                         ..utxo(0x10, Some(Address::new_from_array([4; 32])))
                     },
-                    recipient_u: [6; 32],
-                    tag: Some(RingTag::from_bytes([0x31; TAG_LEN])),
+                    owner_tag: RingOwnerTag::View([0x31; 32]),
                 },
             ),
             output(1, OutputOpening::Exit(utxo(0x20, None))),
@@ -584,7 +581,7 @@ fn audited_utxos_are_used_only_when_they_rebuild_their_hashes() {
         owner: UtxoOwner::Keyed {
             nullifier_pk: small_field(5),
         },
-        asset: zolana_hasher::primitives::hash_bytes(mint.as_array()).unwrap(),
+        asset: spr_hasher::primitives::hash_bytes(mint.as_array()).unwrap(),
         mint: Some(mint),
         amount: 40,
         blinding: small_field(6),

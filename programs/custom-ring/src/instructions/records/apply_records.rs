@@ -5,7 +5,7 @@ use pinocchio::{
     sysvars::{clock::Clock, Sysvar},
     AccountView, Address, ProgramResult,
 };
-use zolana_account_checks::AccountIterator;
+use spr_account_checks::AccountIterator;
 
 use crate::instructions::{
     loader::{load_queue_mut, load_registry_mut},

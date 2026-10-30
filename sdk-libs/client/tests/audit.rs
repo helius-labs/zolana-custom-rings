@@ -17,33 +17,32 @@ use std::{
 };
 
 use custom_ring_interface::{
-    stream::{RingTag, TAG_LEN},
     DeliveredLayout, DisclosureLayout, InputPrefix, RingDepositAuditCapsule, RingMode,
 };
 use solana_address::Address;
 use solana_signature::Signature;
-use zolana_client::{
+use spr_client::{
     AsyncRpc, Context, GetShieldedTransactionsByTagsResponse, IndexerRpcConfig, ShieldedTransaction,
 };
-use zolana_event::{
+use spr_event::{
     encode_encrypted_ring_deposit_output, encode_merge_output_data, EncryptedRingDepositData,
     EncryptedRingDepositOutput, MergeOutputDataRef, MessageData,
 };
-use zolana_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
+use spr_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
+use spr_transaction::{owner_utxo_hash, Mint, OutputContext, OutputSlot};
 use zolana_ring_client::{
     auditor_view_tag, ring_event_origin_in, seal_deposits, AnonymousInputs, AuditDisclosure,
     AuditEnvelope, AuditError, AuditedInputOpening, AuditedTransaction, ConfirmedMergeDisclosure,
     CreatedUtxo, CreatedUtxoScan, CreatedUtxos, DepositOpening, InputOpening, InputRing, KnownUtxo,
     KnownUtxoIndex, KnownUtxos, MergeDisclosureEncryption, MergeOpening, OutputOpening,
-    OutputPayloadError, OutputPayloadErrorKind, RingOrigin, RingScan, TransactionAudit,
-    TransactionOrigin, UtxoOwner,
+    OutputPayloadError, OutputPayloadErrorKind, RingOrigin, RingOwnerTag, RingScan,
+    TransactionAudit, TransactionOrigin, UtxoOwner,
 };
 use zolana_ring_transaction::{RingAssets, RingDeliveredBody};
-use zolana_transaction::{owner_utxo_hash, Mint, OutputContext, OutputSlot};
 
 use transfer::{
-    audited_opening, auditor, data_free, field, input_opening, known_utxo, x25519_u, Frame, Output,
-    Placement, Publish, Rail, Slot, Transfer, UtxoFields,
+    audited_opening, auditor, field, input_opening, known_utxo, x25519_u, Frame, Output, Placement,
+    Publish, Rail, Slot, Transfer, UtxoFields,
 };
 
 const SOL: Address = Address::new_from_array([0; 32]);
@@ -170,7 +169,6 @@ fn publish(
         frame: transfer.frame(Frame {
             tx: &transaction,
             layout,
-            data_free: data_free(&outputs),
         }),
         transaction,
         outputs,
@@ -228,16 +226,14 @@ fn every_delivered_slot_opens_to_its_published_commitment() {
 
 #[test]
 fn a_key_escrow_transfer_opens_each_slot_under_its_owners_escrowed_key() {
-    for rail in [Rail::Packed, Rail::Delivered] {
-        let outputs = match rail {
-            Rail::Packed => vec![
-                delivered_outputs()[0],
-                Output::Exit(utxo(0xe5, SOL, 40)),
-                Output::Dummy,
-            ],
-            _ => delivered_outputs(),
-        };
-        let built = build_with(&Transfer::fixture(), rail, outputs, true);
+    let narrow = vec![
+        delivered_outputs()[0],
+        Output::Exit(utxo(0xe5, SOL, 40)),
+        Output::Dummy,
+        Output::Dummy,
+    ];
+    for outputs in [narrow, delivered_outputs()] {
+        let built = build_with(&Transfer::fixture(), Rail::Delivered, outputs, true);
         let mut escrowed: HashMap<[u8; 32], [u8; 32]> = built
             .outputs
             .iter()
@@ -288,7 +284,7 @@ fn prefixed_spend() -> PrefixedSpend {
         Output::Ring {
             utxo: utxo(0xb5, SOL, 50),
             recipient_u: x25519_u(0x50),
-            tag: Some(RingTag::from_bytes([0x51; TAG_LEN])),
+            tag: Some(field(0x51)),
         },
         Output::Dummy,
     ];
@@ -579,7 +575,7 @@ fn a_deposited_or_merged_ring_utxo_opens_as_a_commitment_input() {
         Output::Ring {
             utxo: utxo(0xb5, SOL, 50),
             recipient_u: x25519_u(0x50),
-            tag: Some(RingTag::from_bytes([0x51; TAG_LEN])),
+            tag: Some(field(0x51)),
         },
         Output::Dummy,
     ];
@@ -667,7 +663,7 @@ fn an_unreadable_anonymous_slot_is_reported_and_the_rest_opens() {
         Output::Ring {
             utxo: utxo(0xb5, SOL, 50),
             recipient_u: x25519_u(0x50),
-            tag: Some(RingTag::from_bytes([0x51; TAG_LEN])),
+            tag: Some(field(0x51)),
         },
         Output::Exit(utxo(0xe5, SOL, 20)),
     ];
@@ -689,9 +685,9 @@ struct RingHistory(Vec<Vec<ShieldedTransaction>>);
 impl AsyncRpc for RingHistory {
     async fn get_shielded_transactions_by_ring(
         &self,
-        options: zolana_client::RingHistoryOptions,
+        options: spr_client::RingHistoryOptions,
         _config: Option<IndexerRpcConfig>,
-    ) -> Result<GetShieldedTransactionsByTagsResponse, zolana_client::ClientError> {
+    ) -> Result<GetShieldedTransactionsByTagsResponse, spr_client::ClientError> {
         let index = options.cursor.map_or(0, |cursor| usize::from(cursor[0]));
         let last = index + 1 == self.0.len();
         Ok(GetShieldedTransactionsByTagsResponse {
@@ -795,7 +791,7 @@ fn a_body_sealed_to_another_recipient_is_flagged_on_its_slot() {
     .seal(&transfer.delivered_secret(&x25519_u(0x7f), 2))
     .unwrap();
     built.transaction.output_slots[2].payload =
-        custom_ring_interface::encode_ring_confidential_delivered_output(&foreign);
+        custom_ring_interface::encode_ring_confidential_delivered_output(&foreign).unwrap();
     let audited = audit(&built.transaction, built.layout).unwrap();
     assert_eq!(
         audited.payload_errors,
@@ -838,40 +834,12 @@ fn a_ring_slot_without_its_body_or_agreement_is_flagged() {
 }
 
 #[test]
-fn a_packed_ring_output_opens_without_its_recipient_ciphertext() {
-    let outputs = vec![
-        Output::Ring {
-            utxo: UtxoFields {
-                data_hash: field(0xd1),
-                ring_data_hash: field(0xd2),
-                ..utxo(0xb1, MINT, 9)
-            },
-            recipient_u: x25519_u(0x41),
-            tag: None,
-        },
-        Output::Exit(utxo(0xe2, MINT, 3)),
-        Output::Dummy,
-    ];
-    let mut built = build(&Transfer::fixture(), Rail::Packed, outputs);
-    built.transaction.output_slots[0].payload = vec![0xff];
-    let audited = audit(&built.transaction, built.layout).unwrap();
-    assert!(audited.payload_errors.is_empty());
-    for ((output, slot), audited) in built.outputs.iter().zip(&built.slots).zip(&audited.outputs) {
-        assert_eq!(audited.opening, audited_opening(output, slot));
-    }
-}
-
-#[test]
 fn an_unknown_asset_keeps_the_verified_opening() {
     let outputs = vec![
-        Output::Ring {
-            utxo: utxo(0xb1, MINT, 9),
-            recipient_u: x25519_u(0x41),
-            tag: None,
-        },
+        Output::Exit(utxo(0xe1, MINT, 9)),
         Output::Exit(utxo(0xe2, SOL, 3)),
     ];
-    let built = build(&Transfer::fixture(), Rail::Packed, outputs);
+    let built = build(&Transfer::fixture(), Rail::Delivered, outputs);
     let audited = TransactionAudit::new(&built.transaction, built.layout)
         .run(&auditor(), &RingAssets::new([]).unwrap())
         .unwrap();
@@ -911,12 +879,12 @@ fn anonymous_spend() -> (Transfer, Built, [Spend; 2]) {
         Output::Ring {
             utxo: utxo(0xb5, SOL, 50),
             recipient_u: x25519_u(0x50),
-            tag: Some(RingTag::from_bytes([0x51; TAG_LEN])),
+            tag: Some(field(0x51)),
         },
         Output::Ring {
             utxo: sender(MINT, 30),
             recipient_u: x25519_u(0x52),
-            tag: Some(RingTag::from_bytes([0x53; TAG_LEN])),
+            tag: Some(field(0x53)),
         },
     ];
     let built = build_anonymous(&transfer, outputs, &spent, Spending::Entry);
@@ -1002,15 +970,21 @@ fn an_anonymous_input_resolves_to_its_ring_or_the_default_ring() {
     ));
 }
 
+/// The proof leaves the tag free, the auditor opens the output from the disclosure alone.
 #[test]
-fn an_anonymous_ring_slot_publishes_its_tag_in_the_owner_tag() {
+fn an_anonymous_ring_slot_opens_under_any_published_tag() {
     let (_, mut built, _) = anonymous_spend();
-    built.transaction.output_slots[0].view_tag[0] = 1;
+    let tag = [0xfe; 32];
+    built.transaction.output_slots[0].view_tag = tag;
     let audited = audit(&built.transaction, built.layout).unwrap();
-    assert_eq!(
-        audited.payload_errors,
-        [slot_error(0, OutputPayloadErrorKind::Frame)]
-    );
+    assert!(audited.payload_errors.is_empty());
+    assert!(matches!(
+        audited.outputs[0].opening,
+        OutputOpening::Ring {
+            owner_tag: RingOwnerTag::View(opened),
+            ..
+        } if opened == tag
+    ));
 }
 
 #[test]
@@ -1132,7 +1106,7 @@ impl AsyncRpc for PagedIndexer {
         cursor: Option<Vec<u8>>,
         limit: Option<u32>,
         _config: Option<IndexerRpcConfig>,
-    ) -> Result<GetShieldedTransactionsByTagsResponse, zolana_client::ClientError> {
+    ) -> Result<GetShieldedTransactionsByTagsResponse, spr_client::ClientError> {
         assert_eq!(tags, vec![self.expected_tag]);
         self.requested.lock().unwrap().push(limit);
         let page_index = usize::from(*cursor.unwrap_or_default().first().unwrap_or(&0));
@@ -1204,28 +1178,31 @@ fn ring() -> Address {
     Transfer::fixture().ring
 }
 
-fn packed_transfer(seed: u8) -> Built {
-    let outputs = vec![Output::Ring {
-        utxo: utxo(
-            0xb0 + seed % 0x10,
-            [SOL, MINT][usize::from(seed % 2)],
-            u64::from(seed),
-        ),
-        recipient_u: x25519_u(seed),
-        tag: None,
-    }];
-    build(&transfer(seed), Rail::Packed, outputs)
+fn delivered_transfer(seed: u8) -> Built {
+    let outputs = vec![
+        Output::Ring {
+            utxo: utxo(
+                0xb0 + seed % 0x10,
+                [SOL, MINT][usize::from(seed % 2)],
+                u64::from(seed),
+            ),
+            recipient_u: x25519_u(seed),
+            tag: None,
+        },
+        Output::Dummy,
+    ];
+    build(&transfer(seed), Rail::Delivered, outputs)
 }
 
 #[tokio::test]
 async fn scan_walks_every_page_and_keeps_only_ring_transactions_tagged_for_the_auditor() {
     let auditor_pk = auditor().pubkey();
-    let first_built = packed_transfer(1);
-    let second_built = packed_transfer(2);
+    let first_built = delivered_transfer(1);
+    let second_built = delivered_transfer(2);
     let first = with_signature(first_built.transaction.clone(), 1);
     let second = with_signature(second_built.transaction.clone(), 2);
     // An output tag match must still be attributed before it can be excluded.
-    let mut output_tag_match = with_signature(packed_transfer(3).transaction, 3);
+    let mut output_tag_match = with_signature(delivered_transfer(3).transaction, 3);
     output_tag_match.messages.clear();
     output_tag_match.output_slots[0].view_tag = auditor_view_tag(&auditor_pk);
     let foreign_ring = with_signature(first.clone(), 4);
@@ -1309,7 +1286,7 @@ fn paid_and_spent() -> (Built, Built) {
         },
         blinding: field(0x65),
     };
-    let tag = |byte| Some(RingTag::from_bytes([byte; TAG_LEN]));
+    let tag = |byte| Some(field(byte));
     let paid = build_anonymous(
         &paying,
         vec![
@@ -1403,7 +1380,7 @@ async fn an_input_an_earlier_page_opened_resolves_through_the_known_utxos() {
 
 #[tokio::test]
 async fn a_confirmed_ring_match_without_mandatory_disclosure_is_incomplete() {
-    let mut tx = packed_transfer(1).transaction;
+    let mut tx = delivered_transfer(1).transaction;
     tx.messages.clear();
     let origin = KnownOrigins {
         ring: ring(),
@@ -1424,7 +1401,7 @@ async fn a_confirmed_ring_match_without_mandatory_disclosure_is_incomplete() {
 #[tokio::test]
 async fn scan_fails_when_an_origin_is_unavailable() {
     let auditor_pk = auditor().pubkey();
-    let indexer = indexer(&auditor_pk, vec![vec![packed_transfer(1).transaction]]);
+    let indexer = indexer(&auditor_pk, vec![vec![delivered_transfer(1).transaction]]);
     let origin = KnownOrigins {
         ring: ring(),
         origins: HashMap::new(),
@@ -1447,7 +1424,7 @@ fn paged_history(pages: u8) -> Vec<Vec<ShieldedTransaction>> {
     (0..pages)
         .map(|index| {
             vec![with_signature(
-                packed_transfer(index + 1).transaction,
+                delivered_transfer(index + 1).transaction,
                 index + 1,
             )]
         })

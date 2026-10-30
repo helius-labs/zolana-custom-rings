@@ -1,7 +1,7 @@
 //! Localnet bring-up shared by the custom-ring test binaries.
 //!
 //! Mirrors `sdk-tests/zk-program-swap/test/tests/shared.rs`. SOL settles
-//! through `zolana_interface::SOL_INTERFACE`, a system-owned PDA with a
+//! through `spr_interface::SOL_INTERFACE`, a system-owned PDA with a
 //! hardcoded address that no instruction has to create, and
 //! `AssetRegistry::default()` already carries SOL as asset id 1. The bring-up
 //! also registers one SPL mint, named USDC in the tests, under asset id 2,
@@ -25,36 +25,35 @@ use solana_instruction::Instruction;
 use solana_keypair::Keypair;
 use solana_signature::Signature;
 use solana_signer::Signer;
-use zolana_client::{
+use spr_client::{
     compile_message,
     prover::{indexed::ProofDataSource, SERVER_ADDRESS},
     sign_transaction, AsyncProverClient, ClientError, ComputeBudgetConfig, IndexerRequirement,
     ProverClient, ProverLaunch, Rpc, SolanaRpc, ZolanaIndexer,
 };
-use zolana_interface::{
+use spr_interface::{
     pda,
     state::{default_tree_fees, nullifier_tree_params, SplAssetCounter},
     SHIELDED_POOL_PROGRAM_ID,
 };
-use zolana_keypair::{ShieldedKeypair, X25519Pubkey};
-use zolana_program::instruction::CreateProtocolConfig;
-use zolana_program::instruction::SetRingActivation;
-use zolana_program_test::{
+use spr_keypair::{ShieldedKeypair, X25519Pubkey};
+use spr_program_test::{
     create_tree_instructions,
     localnet::{LocalnetPorts, LocalnetValidator, UpgradeableProgram},
 };
-use zolana_ring_client::{open_ring_confidential, MemberOpeningRead};
-use zolana_ring_policy::{ListId, Member, RuleTable};
-use zolana_ring_transaction::RingAssets;
-use zolana_test_utils::wallet::{KeypairWalletAuthority, Wallet, DEFAULT_TAG_WINDOW};
-use zolana_test_utils::{
+use spr_protocol_instructions::{CreateProtocolConfig, SetRingActivation};
+use spr_test_utils::wallet::{KeypairWalletAuthority, Wallet, DEFAULT_TAG_WINDOW};
+use spr_test_utils::{
     localnet::{isolated_temp_path, localnet_indexer_url, localnet_rpc_url, WorkspaceArtifacts},
     prover::spawn_workspace_prover,
     smart_account::{self, ProtocolSigners, StandardSigners},
     spl::{create_mint, RegisterSplAsset},
 };
-use zolana_transaction::{AssetRegistry, Mint, ShieldedTransaction};
-use zolana_user_registry_interface::user_registry_program_id;
+use spr_transaction::{AssetRegistry, Mint, ShieldedTransaction};
+use spr_user_registry_interface::user_registry_program_id;
+use zolana_ring_client::{MemberOpeningRead, RingConfidentialScan};
+use zolana_ring_policy::{ListId, Member, RuleTable};
+use zolana_ring_transaction::RingAssets;
 
 use crate::ring_indexer::RingIndexerLaunch;
 
@@ -228,7 +227,7 @@ impl std::ops::DerefMut for TestWallet {
     }
 }
 
-/// zolana's wallet sync, then the scheme 10 and 11 ring notes it skips.
+/// zolana's wallet sync, then the scheme 10 ring notes and ring deposits it skips.
 pub struct WalletSync<'a> {
     pub wallet: &'a mut Wallet,
     pub keys: &'a ShieldedKeypair,
@@ -241,7 +240,7 @@ impl WalletSync<'_> {
         let authority = KeypairWalletAuthority::new(Address::default(), self.keys);
         self.wallet
             .sync(&authority, self.transactions, 0, DEFAULT_TAG_WINDOW)?;
-        let notes = open_ring_confidential(self.keys, self.assets, self.transactions)?;
+        let notes = RingConfidentialScan::new(self.keys, self.assets).open(self.transactions)?;
         for utxo in notes.owned.utxos {
             if !self
                 .wallet
@@ -511,9 +510,7 @@ pub fn setup_with_extra_rings(extra_ring_programs: &[Address]) -> Result<TestEnv
         programs: vec![
             (
                 user_registry_program_id(),
-                artifacts
-                    .path("target/deploy/zolana_user_registry.so")
-                    .into(),
+                artifacts.path("target/deploy/spr_user_registry.so").into(),
             ),
             (
                 smart_account,
@@ -708,10 +705,6 @@ fn new_actor(rpc: &mut SolanaRpc, assets: &AssetRegistry) -> Result<TestWallet> 
         .map_err(|e| anyhow!("actor address failed {e:?}"))?;
     let wallet =
         Wallet::new(address, assets.clone()).map_err(|e| anyhow!("actor wallet failed {e:?}"))?;
-    let wallet = wallet.with_ring_deposit_payload(
-        custom_ring_program_id()?,
-        zolana_ring_client::deposit_payload,
-    );
     Ok(TestWallet { wallet, keypair })
 }
 

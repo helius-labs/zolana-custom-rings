@@ -1,7 +1,7 @@
 use solana_address::Address;
-use zolana_event::{tag, EncryptedRingDepositData};
-use zolana_event_parser::{InstructionGroup, ParsedInstruction};
-use zolana_interface::{
+use spr_event::{tag, EncryptedRingDepositData};
+use spr_event_parser::{InstructionGroup, ParsedInstruction};
+use spr_interface::{
     instruction::instruction_data::deposit::{
         DepositAssetKind, RingDepositEntry, RingDepositIxData,
     },
@@ -47,8 +47,8 @@ pub fn group(ring: Address, audited: bool, deposits: Vec<([u8; 32], Vec<u8>)>) -
                 pool,
                 Vec::new(),
                 [
-                    vec![tag::EMIT_EVENT, zolana_event::EventKind::Deposit as u8],
-                    borsh::to_vec(&zolana_event::GeneralEvent {
+                    vec![tag::EMIT_EVENT, spr_event::EventKind::Deposit as u8],
+                    borsh::to_vec(&spr_event::GeneralEvent {
                         inputs: Vec::new(),
                         outputs: Vec::new(),
                         messages: Vec::new(),

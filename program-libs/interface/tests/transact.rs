@@ -4,27 +4,26 @@ mod common;
 
 use bytemuck::Zeroable;
 use custom_ring_interface::{
-    input_flag, shape_flag,
-    stream::{RingTag, EPOCH_SLOTS, TAG_LEN},
-    transact_flag, AnchorRoot, AnonymousAuditKey, AnonymousLayout, AnonymousProofData, AppliedAt,
-    AuditBinding, AuditKind, CuratorRoot, CustomRingError, CustomRingProof, DeliveredLayout,
-    DisclosureLayout, InputTrees, InstructionTag, MemberRegistry, PackedLayout, ParsedTransact,
-    PlainGroth16Proof, PolicyBinding, PolicyProof, RailSigner, RingMode, RingOutput,
-    RingProgramConfig, RingRail, RingTransactData, Settlement, SourceSlot, N_SOURCE_SLOTS,
-    RING_PROGRAM_CONFIG,
+    encode_anonymous_recipient_output, encode_anonymous_sender_output,
+    ring_confidential_delivered_output_body, CONFIDENTIAL_DATA_FREE_BODY_LEN,
 };
 use custom_ring_interface::{
-    ring_confidential_delivered_output_body, ring_confidential_packed_output_body,
-    CONFIDENTIAL_DATA_FREE_BODY_LEN, RECIPIENT_KEY_LEN, RING_PACKED_DATA_FREE_BODY_LEN,
+    input_flag, shape_flag, transact_flag, AnonymousAuditKey, AnonymousLayout, AnonymousProofData,
+    AppliedAt, AuditBinding, AuditKind, CuratorRoot, CustomRingError, CustomRingProof,
+    DeliveredLayout, DisclosureLayout, InputTrees, InstructionTag, MemberRegistry, ParsedTransact,
+    PlainGroth16Proof, PolicyBinding, PolicyProof, RailSigner, RingMode, RingOutput,
+    RingProgramConfig, RingRail, RingTransactData, SenderBundle, Settlement, SourceSlot,
+    N_SOURCE_SLOTS, RING_PROGRAM_CONFIG,
 };
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
-use zolana_event::{
-    confidential_encrypted_output_body, ring_anonymous_encrypted_output_body, OutputDataEncoding,
-    CONFIDENTIAL_ENCRYPTED_SCHEME_TAG, RING_ANONYMOUS_ENCRYPTED_SCHEME_TAG,
+use spr_event::{
+    confidential_encrypted_output_body, OutputDataEncoding,
+    ANONYMOUS_RECIPIENT_ENCRYPTED_SCHEME_TAG, ANONYMOUS_SENDER_ENCRYPTED_SCHEME_TAG,
+    CONFIDENTIAL_ENCRYPTED_SCHEME_TAG,
 };
-use zolana_interface::{
+use spr_interface::{
     instruction::{InterfaceTransfer, OwnerTag, TreeContext},
     shape::{Shape, SPP_SUPPORTED_SHAPES},
 };
@@ -62,11 +61,10 @@ struct Fixture {
     fields: Vec<[u8; 32]>,
     bytes: [[u8; 32]; 24],
     bodies: [[u8; 40]; 8],
-    tags: [[u8; TAG_LEN]; 4],
-    ciphertext: Vec<u8>,
-    data_free_ciphertext: Vec<u8>,
+    tags: [[u8; 32]; 4],
+    recipient_body: Vec<u8>,
+    sender_body: Vec<u8>,
     payload: Vec<u8>,
-    data_free_payload: Vec<u8>,
     salt: [u8; 16],
 }
 
@@ -91,13 +89,10 @@ impl Fixture {
             fields: (0..64u8).map(field).collect(),
             bytes: core::array::from_fn(|i| [0x40 + i as u8; 32]),
             bodies: core::array::from_fn(|i| [0x80 + i as u8; 40]),
-            tags: core::array::from_fn(|i| [0xa0 + i as u8; TAG_LEN]),
-            ciphertext: (0..61).collect(),
-            data_free_ciphertext: (0..(RING_PACKED_DATA_FREE_BODY_LEN - RECIPIENT_KEY_LEN) as u8)
-                .map(|byte| byte ^ 0x33)
-                .collect(),
-            payload: (0..90).map(|byte: u8| byte ^ 0x5a).collect(),
-            data_free_payload: (0..CONFIDENTIAL_DATA_FREE_BODY_LEN as u8)
+            tags: core::array::from_fn(|i| [0xa0 + i as u8; 32]),
+            recipient_body: (0..120u8).map(|byte| byte ^ 0x5a).collect(),
+            sender_body: (0..90u8).map(|byte| byte ^ 0x2d).collect(),
+            payload: (0..CONFIDENTIAL_DATA_FREE_BODY_LEN as u8)
                 .map(|byte| byte ^ 0x66)
                 .collect(),
             salt: [0x5c; 16],
@@ -113,18 +108,14 @@ impl Fixture {
             audit_proof: &self.proofs[0],
             policy: None,
             approval_required: false,
-            previous_epoch: false,
-            anchor: None,
             expiry_unix_ts: 1_800_000_000,
             tx_viewing_u: &self.bytes[0],
             salt: &self.salt,
             interface_transfers: Vec::new(),
-            data_hash: None,
-            ring_data_hash: None,
-            data_free: false,
             key_escrow: false,
             full_openings: false,
             outputs: Vec::new(),
+            sender: None,
             eph_u: &self.bytes[1],
             sealed: &self.bytes[2],
             disclosure: &[],
@@ -136,14 +127,6 @@ impl Fixture {
                 utxo_tree_root_index: 11,
                 nullifier_tree_root_index: 12,
             }),
-        }
-    }
-
-    fn packed<'a>(&'a self, slot: usize, ciphertext: &'a [u8]) -> RingOutput<'a> {
-        RingOutput::Packed {
-            hash: &self.fields[10 + slot],
-            u: &self.bytes[3 + slot],
-            ciphertext,
         }
     }
 
@@ -161,7 +144,7 @@ impl Fixture {
         data
     }
 
-    fn confidential_packed(&self) -> RingTransactData<'_> {
+    fn confidential_policy(&self) -> RingTransactData<'_> {
         let mut data = self.base(RingRail::Confidential, 2, 2);
         data.key_escrow = true;
         data.policy = Some(PolicyProof {
@@ -179,12 +162,7 @@ impl Fixture {
                 spl_interface_bump: 254,
             },
         ];
-        data.data_hash = Some(&self.fields[2]);
-        data.ring_data_hash = Some(&self.fields[3]);
-        data.outputs = vec![
-            self.packed(0, &self.ciphertext),
-            self.exit(1, &self.payload),
-        ];
+        data.outputs = vec![self.delivered(0), self.exit(1, &self.payload)];
         data.input_trees = InputTrees::Two {
             first: TreeContext {
                 utxo_tree_root_index: 1,
@@ -201,10 +179,9 @@ impl Fixture {
 
     fn confidential_delivered(&self) -> RingTransactData<'_> {
         let mut data = self.base(RingRail::Confidential, 1, 8);
-        data.data_free = true;
         data.outputs = (0..8)
             .map(|slot| match slot {
-                3 | 6 => self.exit(slot, &self.data_free_payload),
+                3 | 6 => self.exit(slot, &self.payload),
                 _ => self.delivered(slot),
             })
             .collect();
@@ -220,19 +197,14 @@ impl Fixture {
             curator_root_index: None,
             sender_commitment: Some(&self.fields[4]),
         });
-        data.previous_epoch = true;
-        data.anchor = Some(AnchorRoot {
-            tree: 9,
-            root_index: 300,
-        });
         data.interface_transfers = vec![InterfaceTransfer::SolWithdrawal { amount: 9_999 }];
-        data.data_free = true;
         data.outputs = (0..4)
             .map(|slot| match slot {
-                2 => self.exit(slot, &self.data_free_payload),
+                2 => self.exit(slot, &self.payload),
                 _ => self.tagged(slot),
             })
             .collect();
+        data.sender = self.sender();
         data.anonymous = Some(AnonymousProofData {
             commitment: &self.bytes[20],
             commitment_pok: &self.bytes[21],
@@ -245,6 +217,7 @@ impl Fixture {
         let mut data = self.base(RingRail::Anonymous, 2, 2);
         data.full_openings = true;
         data.outputs = vec![self.tagged(0), self.exit(1, &self.payload)];
+        data.sender = self.sender();
         data.anonymous = Some(AnonymousProofData {
             commitment: &self.bytes[20],
             commitment_pok: &self.bytes[21],
@@ -257,11 +230,7 @@ impl Fixture {
         let mut data = self.base(RingRail::Delegate, 2, 2);
         data.key_escrow = true;
         data.policy = Some(self.delegate_policy());
-        data.data_free = true;
-        data.outputs = vec![
-            self.packed(0, &self.data_free_ciphertext),
-            self.packed(1, &self.data_free_ciphertext),
-        ];
+        data.outputs = vec![self.delivered(0), self.delivered(1)];
         self.with_disclosure(data)
     }
 
@@ -292,22 +261,30 @@ impl Fixture {
         }
     }
 
+    /// Slot 0 a change output, any other slot a recipient body.
     fn tagged(&self, slot: usize) -> RingOutput<'_> {
         RingOutput::Anonymous {
             hash: &self.fields[10 + slot],
-            tag: RingTag::from_bytes(self.tags[slot]),
-            body: &self.bodies[slot],
+            tag: &self.tags[slot],
+            body: (slot != 0).then_some(&self.recipient_body[..]),
         }
+    }
+
+    fn sender(&self) -> Option<SenderBundle<'_>> {
+        Some(SenderBundle {
+            tag: &self.tags[0],
+            body: &self.sender_body,
+        })
     }
 
     fn cases(&self) -> [(&'static str, RingTransactData<'_>); 5] {
         [
-            ("confidential_packed_policy", self.confidential_packed()),
+            ("confidential_delivered_policy", self.confidential_policy()),
             (
                 "confidential_delivered_audit_only",
                 self.confidential_delivered(),
             ),
-            ("anonymous_policy_previous_epoch_anchor", self.anonymous()),
+            ("anonymous_policy", self.anonymous()),
             ("anonymous_entry_audit_only", self.anonymous_entry()),
             ("delegate_move", self.delegate()),
         ]
@@ -369,13 +346,15 @@ fn compute_vectors() -> ExpansionVectors {
                       data) and the external data \
                       hash over the SPP tag, the data before private_tx_hash and two settlement \
                       accounts per leg. Byte 1 of the compact data indexes \
-                      SPP_SUPPORTED_SHAPES below the default owner tag flag (bit 6) and the \
-                      data-free flag (bit 7), under which packed ciphertexts take 49 bytes and \
-                      exit payloads 83 bytes without a u16 prefix. Byte 2 is the input count \
-                      below the key escrow flag (bit 6) and the anonymous entry key flag (bit \
-                      7), the expiry is a u32, delivered and anonymous rails publish no output \
-                      count, packed slots expand as scheme 11 and the random 16-byte salt follows \
-                      the transaction viewing key. Produced by \
+                      SPP_SUPPORTED_SHAPES below the default owner tag flag (bit 6), bit 7 refused. \
+                      Byte 2 is the input count below the key escrow flag (bit 6) and the \
+                      anonymous entry key flag (bit 7), the expiry is a u32, every rail \
+                      publishes all n_out slots with no output count, exit payloads take 83 \
+                      bytes without a u16 prefix, an anonymous slot is its hash, a 32-byte \
+                      owner tag, a u16 little-endian length and the scheme 1 body, empty on \
+                      a change output, the anonymous rail's scheme 2 sender bundle follows \
+                      the outputs as a 32-byte tag, a nonzero u16 length and the body, and \
+                      the random 16-byte salt follows the transaction viewing key. Produced by \
                       program-libs/interface/tests/transact.rs."
             .to_string(),
         auditor_pubkey: hex::encode(config.auditor_pubkey),
@@ -411,31 +390,45 @@ fn ring_transact_expansion_vector() {
         let spp = data.expand(&config).unwrap();
         assert_eq!(spp.proof.b, common::spp_b());
         assert_eq!(&spp.salt, data.salt, "{}", case.name);
-        assert_eq!(spp.messages[0].view_tag, config.auditor_pubkey[1..]);
+        let (auditor, sender) = spp.messages.split_last().unwrap();
+        assert_eq!(auditor.view_tag, config.auditor_pubkey[1..]);
+        let sender: Vec<_> = sender
+            .iter()
+            .map(|message| (message.view_tag, message.data.clone()))
+            .collect();
+        let expected: Vec<_> = data
+            .sender
+            .iter()
+            .map(|bundle| {
+                (
+                    *bundle.tag,
+                    encode_anonymous_sender_output(bundle.body).unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(sender, expected, "{}", case.name);
         for (output, slot) in spp.outputs.iter().zip(&data.outputs) {
-            let framed = output.data.as_deref().unwrap();
-            let body = match slot {
-                RingOutput::Packed { u, ciphertext, .. } => {
-                    let body = ring_confidential_packed_output_body(framed).unwrap();
-                    assert_eq!(body.key[0], 4, "{}", case.name);
+            match slot {
+                RingOutput::Delivered { .. } => assert!(output
+                    .data
+                    .as_deref()
+                    .and_then(ring_confidential_delivered_output_body)
+                    .is_some()),
+                RingOutput::Anonymous { tag, body, .. } => {
+                    assert_eq!(output.owner_tag, OwnerTag::Inline(**tag));
                     assert_eq!(
-                        (&body.key[1..], body.ciphertext),
-                        (&u[..], *ciphertext),
+                        output.data,
+                        body.map(|body| encode_anonymous_recipient_output(body).unwrap()),
                         "{}",
                         case.name
                     );
-                    Some(body.ciphertext)
                 }
-                RingOutput::Delivered { .. } => {
-                    ring_confidential_delivered_output_body(framed).map(|body| &body[..])
-                }
-                RingOutput::Anonymous { tag, .. } => {
-                    assert_eq!(output.owner_tag, OwnerTag::Inline(tag.field()));
-                    ring_anonymous_encrypted_output_body(framed)
-                }
-                RingOutput::Exit { .. } => confidential_encrypted_output_body(framed),
-            };
-            assert!(body.is_some(), "{} output framing", case.name);
+                RingOutput::Exit { .. } => assert!(output
+                    .data
+                    .as_deref()
+                    .and_then(confidential_encrypted_output_body)
+                    .is_some()),
+            }
         }
         let mut forwarded = vec![data.rail.spp_tag()];
         forwarded.extend(spp.serialize().unwrap());
@@ -459,24 +452,28 @@ fn anonymous_and_exit_slots_keep_the_borsh_framing_at_exact_capacity() {
         ))
         .unwrap()
     };
-    for (slot, scheme, payload) in [
+    for (data, scheme, payload) in [
         (
-            fixture.tagged(0),
-            RING_ANONYMOUS_ENCRYPTED_SCHEME_TAG,
-            &fixture.bodies[0][..],
+            fixture.tagged(1).transact_output().unwrap().data.unwrap(),
+            ANONYMOUS_RECIPIENT_ENCRYPTED_SCHEME_TAG,
+            &fixture.recipient_body[..],
         ),
         (
-            fixture.exit(1, &fixture.payload),
+            encode_anonymous_sender_output(&fixture.sender_body).unwrap(),
+            ANONYMOUS_SENDER_ENCRYPTED_SCHEME_TAG,
+            &fixture.sender_body[..],
+        ),
+        (
+            fixture
+                .exit(1, &fixture.payload)
+                .transact_output()
+                .unwrap()
+                .data
+                .unwrap(),
             CONFIDENTIAL_ENCRYPTED_SCHEME_TAG,
             &fixture.payload[..],
         ),
-        (
-            fixture.exit(2, &fixture.data_free_payload),
-            CONFIDENTIAL_ENCRYPTED_SCHEME_TAG,
-            &fixture.data_free_payload[..],
-        ),
     ] {
-        let data = slot.transact_output().data.unwrap();
         assert_eq!(data, borsh_framing(scheme, payload), "scheme {scheme}");
         assert_eq!(data.capacity(), data.len(), "scheme {scheme}");
     }
@@ -521,14 +518,14 @@ fn shape_index(n_in: usize, n_out: usize) -> u8 {
 #[test]
 fn counts_outside_the_keyed_shapes_are_refused() {
     let fixture = Fixture::new();
-    let packed = fixture.confidential_packed().encode().unwrap();
-    let mut unindexed = packed.clone();
+    let policy = fixture.confidential_policy().encode().unwrap();
+    let mut unindexed = policy.clone();
     unindexed[1] = SPP_SUPPORTED_SHAPES.len() as u8;
     assert_eq!(
         RingTransactData::parse(&unindexed, RingRail::Confidential),
         Err(CustomRingError::RingShapeUnkeyed)
     );
-    let mut excess = packed;
+    let mut excess = policy;
     excess[2] = excess[2] & !0b0011_1111 | 3;
     assert_eq!(
         RingTransactData::parse(&excess, RingRail::Confidential),
@@ -545,13 +542,13 @@ fn counts_outside_the_keyed_shapes_are_refused() {
 #[test]
 fn anonymous_header_flags_off_the_anonymous_rail_are_refused() {
     let fixture = Fixture::new();
-    let mut entry = fixture.confidential_packed().encode().unwrap();
+    let mut entry = fixture.confidential_policy().encode().unwrap();
     entry[input_flag::BYTE] |= input_flag::FULL_OPENINGS;
     assert_eq!(
         RingTransactData::parse(&entry, RingRail::Confidential),
         Err(CustomRingError::FlagNotAllowed)
     );
-    let mut owner_tag = fixture.confidential_packed().encode().unwrap();
+    let mut owner_tag = fixture.confidential_policy().encode().unwrap();
     owner_tag[shape_flag::BYTE] |= shape_flag::DEFAULT_OWNER_TAG;
     assert_eq!(
         RingTransactData::parse(&owner_tag, RingRail::Confidential),
@@ -562,12 +559,6 @@ fn anonymous_header_flags_off_the_anonymous_rail_are_refused() {
 #[test]
 fn flags_the_rail_forbids_are_refused() {
     let fixture = Fixture::new();
-    let mut anchored = fixture.confidential_delivered().encode().unwrap();
-    anchored[transact_flag::BYTE] |= transact_flag::ANCHOR;
-    assert_eq!(
-        RingTransactData::parse(&anchored, RingRail::Confidential),
-        Err(CustomRingError::FlagNotAllowed)
-    );
     let mut curator = fixture.confidential_delivered().encode().unwrap();
     curator[transact_flag::BYTE] |= transact_flag::CURATOR;
     assert_eq!(
@@ -576,7 +567,7 @@ fn flags_the_rail_forbids_are_refused() {
     );
     let mut exit = fixture.delegate();
     exit.rail = RingRail::Confidential;
-    exit.outputs[1] = fixture.exit(1, &fixture.data_free_payload);
+    exit.outputs[1] = fixture.exit(1, &fixture.payload);
     let compact = fixture.with_disclosure(exit).encode().unwrap();
     assert_eq!(
         RingTransactData::parse(&compact, RingRail::Delegate),
@@ -585,47 +576,184 @@ fn flags_the_rail_forbids_are_refused() {
 }
 
 #[test]
-fn a_data_free_packed_ciphertext_of_another_length_is_refused() {
+fn an_exit_payload_of_another_length_is_refused() {
     let fixture = Fixture::new();
-    let mut data = fixture.delegate();
-    data.outputs[1] = fixture.packed(1, &fixture.ciphertext);
-    assert_eq!(data.encode(), Err(CustomRingError::DataFreeBodyLength));
-}
-
-#[test]
-fn a_data_free_exit_payload_of_another_length_is_refused() {
-    let fixture = Fixture::new();
+    let long: Vec<u8> = (0..=CONFIDENTIAL_DATA_FREE_BODY_LEN as u8).collect();
     let mut data = fixture.confidential_delivered();
-    data.outputs[3] = fixture.exit(3, &fixture.payload);
+    data.outputs[3] = fixture.exit(3, &long);
     assert_eq!(data.encode(), Err(CustomRingError::DataFreeBodyLength));
 }
 
 #[test]
-fn the_data_free_flag_drops_the_body_prefixes_and_keeps_the_outputs() {
+fn the_reserved_frame_bits_are_refused() {
     let fixture = Fixture::new();
-    let mut prefixed = fixture.delegate();
-    prefixed.data_free = false;
-    let prefixed = fixture.with_disclosure(prefixed);
-    let data_free = fixture.delegate().encode().unwrap();
-    assert_eq!(
-        data_free[shape_flag::BYTE] & shape_flag::DATA_FREE,
-        shape_flag::DATA_FREE
-    );
-    let parsed = |compact: &[u8]| {
-        RingTransactData::parse(compact, RingRail::Delegate)
-            .unwrap()
-            .data()
-            .expand(&config())
-            .unwrap()
-            .outputs
+    for (byte, bit) in [
+        (transact_flag::BYTE, 1 << 6),
+        (transact_flag::BYTE, 1 << 7),
+        (shape_flag::BYTE, shape_flag::RESERVED),
+    ] {
+        let mut compact = fixture.delegate().encode().unwrap();
+        compact[byte] |= bit;
+        assert_eq!(
+            RingTransactData::parse(&compact, RingRail::Delegate),
+            Err(CustomRingError::FlagNotAllowed),
+            "byte {byte} bit {bit:#x}"
+        );
+    }
+}
+
+#[test]
+fn flag_bits_3_and_4_are_refused_on_every_rail() {
+    let fixture = Fixture::new();
+    for (name, data) in fixture.cases() {
+        for bit in [1 << 3, 1 << 4] {
+            assert_eq!(transact_flag::KNOWN & bit, 0);
+            let mut compact = data.encode().unwrap();
+            compact[transact_flag::BYTE] |= bit;
+            assert_eq!(
+                RingTransactData::parse(&compact, data.rail),
+                Err(CustomRingError::FlagNotAllowed),
+                "{name} bit {bit:#x}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_mixed_anonymous_output_set_round_trips_and_frames_each_body() {
+    let fixture = Fixture::new();
+    let data = fixture.anonymous();
+    let compact = data.encode().unwrap();
+    let parsed = RingTransactData::parse(&compact, RingRail::Anonymous)
+        .unwrap()
+        .into_data();
+    assert_eq!(parsed.outputs, data.outputs);
+    assert_eq!(parsed.sender, data.sender);
+    let framed = |scheme: u8, body: &[u8]| {
+        Some(
+            borsh::to_vec(&OutputDataEncoding::Encrypted(
+                [&[scheme][..], body].concat(),
+            ))
+            .unwrap(),
+        )
     };
-    assert_eq!(parsed(&prefixed.encode().unwrap()), parsed(&data_free));
+    let expected = [
+        (fixture.tags[0], None),
+        (
+            fixture.tags[1],
+            framed(
+                ANONYMOUS_RECIPIENT_ENCRYPTED_SCHEME_TAG,
+                &fixture.recipient_body,
+            ),
+        ),
+        (
+            fixture.bytes[14],
+            framed(CONFIDENTIAL_ENCRYPTED_SCHEME_TAG, &fixture.payload),
+        ),
+        (
+            fixture.tags[3],
+            framed(
+                ANONYMOUS_RECIPIENT_ENCRYPTED_SCHEME_TAG,
+                &fixture.recipient_body,
+            ),
+        ),
+    ];
+    for (slot, (output, (owner_tag, data))) in parsed.outputs.iter().zip(expected).enumerate() {
+        let spp = output.transact_output().unwrap();
+        assert_eq!(spp.utxo_hash, fixture.fields[10 + slot], "slot {slot}");
+        assert_eq!(spp.owner_tag, OwnerTag::Inline(owner_tag), "slot {slot}");
+        assert_eq!(spp.data, data, "slot {slot}");
+    }
+}
+
+/// The offset of the anonymous slot frame that publishes `tag`, past its hash.
+fn tag_offset(compact: &[u8], tag: &[u8; 32]) -> usize {
+    compact
+        .windows(32)
+        .position(|window| window == tag)
+        .expect("the frame carries the tag")
+}
+
+#[test]
+fn an_anonymous_body_length_past_the_data_is_refused() {
+    let fixture = Fixture::new();
+    let compact = fixture.anonymous().encode().unwrap();
+    let len = tag_offset(&compact, &fixture.tags[1]) + 32;
+    assert_eq!(
+        compact[len..len + 2],
+        u16::try_from(fixture.recipient_body.len())
+            .unwrap()
+            .to_le_bytes()
+    );
+    let mut refused = compact.clone();
+    refused[len..len + 2].copy_from_slice(&u16::MAX.to_le_bytes());
+    assert_eq!(
+        RingTransactData::parse(&refused, RingRail::Anonymous),
+        Err(CustomRingError::RingTransactLength),
+    );
+}
+
+#[test]
+fn an_empty_sender_bundle_is_refused() {
+    let fixture = Fixture::new();
+    let compact = fixture.anonymous().encode().unwrap();
+    let outputs_end =
+        tag_offset(&compact, &fixture.tags[3]) + 32 + 2 + fixture.recipient_body.len();
+    let len = outputs_end + 32;
+    assert_eq!(compact[outputs_end..len], fixture.tags[0]);
+    let mut refused = compact[..len].to_vec();
+    refused.extend_from_slice(&0u16.to_le_bytes());
+    refused.extend_from_slice(&compact[len + 2 + fixture.sender_body.len()..]);
+    assert_eq!(
+        RingTransactData::parse(&refused, RingRail::Anonymous),
+        Err(CustomRingError::AnonymousBodyLength),
+    );
+}
+
+#[test]
+fn an_anonymous_body_the_frame_cannot_carry_is_refused_at_encoding() {
+    let fixture = Fixture::new();
+    let oversized = vec![0x11; usize::from(u16::MAX) + 1];
+    for body in [&[][..], &oversized] {
+        let mut data = fixture.anonymous();
+        data.outputs[1] = RingOutput::Anonymous {
+            hash: &fixture.fields[11],
+            tag: &fixture.tags[1],
+            body: Some(body),
+        };
+        assert_eq!(
+            data.encode(),
+            Err(CustomRingError::AnonymousBodyLength),
+            "{} body bytes",
+            body.len()
+        );
+        let mut data = fixture.anonymous();
+        data.sender = Some(SenderBundle {
+            tag: &fixture.tags[0],
+            body,
+        });
+        assert_eq!(data.encode(), Err(CustomRingError::AnonymousBodyLength));
+    }
+}
+
+#[test]
+fn the_sender_bundle_is_present_exactly_on_the_anonymous_rail() {
+    let fixture = Fixture::new();
+    let mut anonymous = fixture.anonymous();
+    anonymous.sender = None;
+    assert_eq!(anonymous.encode(), Err(CustomRingError::RingTransactLength));
+    let mut confidential = fixture.confidential_policy();
+    confidential.sender = fixture.sender();
+    assert_eq!(
+        confidential.encode(),
+        Err(CustomRingError::RingTransactLength)
+    );
 }
 
 #[test]
 fn bitmap_bits_past_the_count_are_refused() {
     let fixture = Fixture::new();
-    let mut compact = fixture.confidential_packed().encode().unwrap();
+    let mut compact = fixture.confidential_policy().encode().unwrap();
     let tree_bitmap = compact.len() - 9;
     compact[tree_bitmap] |= 1 << 7;
     assert_eq!(
@@ -652,27 +780,16 @@ fn an_spp_point_off_the_curve_is_refused_at_expansion() {
 }
 
 #[test]
-fn the_previous_epoch_flag_needs_an_epoch_before() {
-    let fixture = Fixture::new();
-    let data = fixture.anonymous();
-    assert_eq!(
-        data.epoch(EPOCH_SLOTS - 1),
-        Err(CustomRingError::EpochUnderflow)
-    );
-    assert_eq!(data.epoch(2 * EPOCH_SLOTS), Ok(1));
-}
-
-#[test]
 fn the_policy_proof_follows_the_registry() {
     let fixture = Fixture::new();
-    let packed = fixture.confidential_packed();
+    let policy = fixture.confidential_policy();
     let mut registry = MemberRegistry::new(254, 0);
     assert_eq!(
-        packed.check_policy(None),
+        policy.check_policy(None),
         Err(CustomRingError::UnexpectedPolicyProof)
     );
     assert_eq!(
-        packed.check_policy(Some(&registry)),
+        policy.check_policy(Some(&registry)),
         Err(CustomRingError::FlagNotAllowed)
     );
     let mut sources = [SourceSlot::zeroed(); N_SOURCE_SLOTS];
@@ -681,7 +798,7 @@ fn the_policy_proof_follows_the_registry() {
         registry: Address::new_from_array([3; 32]),
     };
     registry.sources = sources;
-    let mut uncurated = packed.clone();
+    let mut uncurated = policy.clone();
     uncurated.policy = uncurated.policy.map(|policy| PolicyProof {
         spl_withdrawal_owners: &[],
         curator_root_index: None,
@@ -692,12 +809,12 @@ fn the_policy_proof_follows_the_registry() {
         Err(CustomRingError::FlagNotAllowed)
     );
     assert_eq!(
-        packed.check_policy(Some(&registry)),
+        policy.check_policy(Some(&registry)),
         Err(CustomRingError::PolicyNotSet)
     );
 
     assert_eq!(
-        packed.check_policy(Some(&registry)),
+        policy.check_policy(Some(&registry)),
         Err(CustomRingError::PolicyNotSet)
     );
     registry.policy_hash = [9; 32];
@@ -709,9 +826,9 @@ fn the_policy_proof_follows_the_registry() {
         registry.push_root([applied as u8; 32], at);
     }
     assert_eq!(
-        packed.check_policy(Some(&registry)),
+        policy.check_policy(Some(&registry)),
         Ok(Some(PolicyBinding {
-            proof: packed.policy.unwrap(),
+            proof: policy.policy.unwrap(),
             policy_hash: [9; 32],
             own_root: [7; 32],
             curator: Some(CuratorRoot {
@@ -736,12 +853,11 @@ fn the_policy_proof_follows_the_registry() {
 fn every_rail_reads_its_disclosure_layout() {
     let fixture = Fixture::new();
     assert_eq!(
-        fixture.confidential_packed().disclosure_layout(),
-        Ok(DisclosureLayout::Packed(PackedLayout {
+        fixture.confidential_policy().disclosure_layout(),
+        Ok(DisclosureLayout::Delivered(DeliveredLayout {
             outputs: 2,
             exits: true,
             key_escrow: true,
-            data_free: false,
         }))
     );
     assert_eq!(
@@ -831,23 +947,18 @@ fn the_audit_statement_reads_the_frame_salt_and_the_policy_sender() {
         party_identities: &[[0; 32]; 3],
         ring_id: &fixture.fields[60],
         auditor_pubkey: &config().auditor_pubkey,
-        epoch: 41,
-        first_contact_root: &fixture.fields[61],
         key_escrow: false,
     };
     let statement = parsed.audit_statement(binding).unwrap();
     assert_eq!(statement.head.first_nullifier, &data.nullifiers[0]);
     assert_eq!(statement.head.salt, data.salt);
-    assert_eq!(statement.head.layout.value(), 0b0101);
+    assert_eq!(statement.head.layout.value(), 0b0001);
     assert_eq!(statement.disclosure, data.disclosure);
     let AuditKind::Anonymous(anonymous) = statement.kind else {
         panic!("an anonymous rail binds the anonymous tail");
     };
     assert_eq!(anonymous.sender_commitment, &fixture.fields[4]);
-    assert_eq!(
-        (anonymous.epoch, anonymous.first_contact_root),
-        (41, &fixture.fields[61])
-    );
+    assert_eq!(anonymous.private_tx_hash, data.private_tx_hash);
     let delivered = ParsedTransact::new(fixture.confidential_delivered()).unwrap();
     assert_eq!(
         delivered.audit_statement(binding).unwrap().kind,
@@ -863,8 +974,6 @@ fn a_key_escrow_flag_off_the_ring_mode_is_refused() {
         party_identities: &[[0; 32]; 3],
         ring_id: &fixture.fields[60],
         auditor_pubkey: &config.auditor_pubkey,
-        epoch: 0,
-        first_contact_root: &fixture.fields[61],
         key_escrow,
     };
     let statement = |data: &RingTransactData<'_>, key_escrow| {
@@ -873,7 +982,7 @@ fn a_key_escrow_flag_off_the_ring_mode_is_refused() {
             .audit_statement(binding(key_escrow))
             .map(|statement| statement.head.layout.value())
     };
-    let escrowed = fixture.confidential_packed();
+    let escrowed = fixture.confidential_policy();
     assert_eq!(
         statement(&escrowed, false),
         Err(CustomRingError::FlagNotAllowed)
@@ -901,7 +1010,7 @@ fn a_key_escrow_flag_off_the_ring_mode_is_refused() {
 fn withdrawal_owner_metadata_is_required_in_transfer_order() {
     let fixture = Fixture::new();
     let owners = [[0x61; 32], [0x62; 32]];
-    let mut data = fixture.confidential_packed();
+    let mut data = fixture.confidential_policy();
     data.interface_transfers = vec![
         InterfaceTransfer::SplWithdrawal {
             amount: 7,

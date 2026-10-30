@@ -3,6 +3,7 @@ package policy
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/consensys/gnark/frontend"
 
@@ -20,7 +21,7 @@ import (
 // 5. On the member key every limit row's outflow is never negative and within its cap, and approval_required is set exactly when one passes its co-sign bound.
 // 6. Under key escrow every UTXO output's owner record escrows the output's nullifier key.
 
-type Policy struct {
+type PolicyInputs struct {
 	OwnOnly         bool `gnark:"-"`
 	WithdrawalCount frontend.Variable
 	WithdrawalHash  frontend.Variable
@@ -40,11 +41,20 @@ type Policy struct {
 	Outputs           []OutputWires
 	// Read on an anonymous ring and on the delegate key, free on a confidential ring.
 	SenderPkHash frontend.Variable
+}
 
-	SenderEntry        Entry
-	OwnerEntries       []Entry
-	AssetEntries       []Entry
-	PublicAssetEntries [transaction.NPublicSlots]registry.QuadOpening
+type Policy struct {
+	PolicyInputs
+	OwnRecords         []registry.Record
+	CuratorRecords     []registry.Record
+	OwnProof           registry.SharedQuadProof
+	CuratorProof       registry.SharedQuadProof
+	OwnSubjects        []PoolSubject
+	CuratorSubjects    []PoolSubject
+	SenderEntry        PoolEntry
+	OwnerEntries       []PoolEntry
+	AssetEntries       []PoolEntry
+	PublicAssetEntries []frontend.Variable
 }
 
 type railValues struct {
@@ -53,19 +63,70 @@ type railValues struct {
 	approvalRequired, keyEscrow, sender frontend.Variable
 }
 
-func newPolicy(outputs, withdrawals int, ownOnly bool) Policy {
-	p := Policy{OwnOnly: ownOnly, Outputs: make([]OutputWires, outputs), Withdrawals: make([]WithdrawalWires, withdrawals), OwnerEntries: make([]Entry, outputs+withdrawals), AssetEntries: make([]Entry, outputs+withdrawals)}
-	p.SenderEntry = newEntry(ownOnly)
-	for i := range p.OwnerEntries {
-		p.OwnerEntries[i], p.AssetEntries[i] = newEntry(ownOnly), newEntry(ownOnly)
-	}
-	return p
+func newPolicyInputs(outputs, withdrawals int, ownOnly bool) PolicyInputs {
+	return PolicyInputs{OwnOnly: ownOnly, Outputs: make([]OutputWires, outputs), Withdrawals: make([]WithdrawalWires, withdrawals)}
 }
 
-func (p *Policy) validate() error {
-	outputs, owners, assets := len(p.Outputs), len(p.OwnerEntries), len(p.AssetEntries)
-	if outputs == 0 || owners != outputs+len(p.Withdrawals) || assets != outputs+len(p.Withdrawals) {
-		return fmt.Errorf("policy: %d outputs need one owner and one asset entry each, got %d and %d", outputs, owners, assets)
+func newPolicy(inputs PolicyInputs, capacity RecordPoolShape, publicAssets int) (Policy, error) {
+	payments := len(inputs.Outputs) + len(inputs.Withdrawals)
+	limits := inputs.recordCapacity(publicAssets)
+	capacity = capacity.withDefaults(limits)
+	if err := capacity.validate(limits); err != nil {
+		return Policy{}, err
+	}
+	p := Policy{
+		PolicyInputs:       inputs,
+		OwnRecords:         make([]registry.Record, capacity.Own),
+		CuratorRecords:     make([]registry.Record, capacity.Curator),
+		OwnSubjects:        make([]PoolSubject, capacity.OwnSubjects),
+		CuratorSubjects:    make([]PoolSubject, capacity.CuratorSubjects),
+		SenderEntry:        newPoolEntry(inputs.OwnOnly),
+		OwnerEntries:       make([]PoolEntry, payments),
+		AssetEntries:       make([]PoolEntry, payments),
+		PublicAssetEntries: make([]frontend.Variable, publicAssets),
+	}
+	for i := range p.OwnerEntries {
+		p.OwnerEntries[i], p.AssetEntries[i] = newPoolEntry(inputs.OwnOnly), newPoolEntry(inputs.OwnOnly)
+	}
+	var err error
+	if p.OwnProof, err = registry.NewSharedQuadProof(capacity.Own); err != nil {
+		return Policy{}, err
+	}
+	if !inputs.OwnOnly {
+		if p.CuratorProof, err = registry.NewSharedQuadProof(capacity.Curator); err != nil {
+			return Policy{}, err
+		}
+	}
+	return p, nil
+}
+
+func (p *Policy) RecordPools() RecordPoolShape {
+	return RecordPoolShape{Own: len(p.OwnRecords), Curator: len(p.CuratorRecords), OwnSubjects: len(p.OwnSubjects), CuratorSubjects: len(p.CuratorSubjects)}
+}
+
+func (p *Policy) validate(publicAssets int) error {
+	payments := len(p.Outputs) + len(p.Withdrawals)
+	if len(p.Outputs) == 0 || len(p.OwnerEntries) != payments || len(p.AssetEntries) != payments {
+		return fmt.Errorf("policy requires owner and asset references for every payment")
+	}
+	if len(p.PublicAssetEntries) != publicAssets {
+		return fmt.Errorf("policy requires one public asset reference per public slot")
+	}
+	if err := p.RecordPools().validate(p.recordCapacity(publicAssets)); err != nil {
+		return err
+	}
+	if err := p.OwnProof.Validate(len(p.OwnRecords)); err != nil {
+		return err
+	}
+	if !p.OwnOnly {
+		if err := p.CuratorProof.Validate(len(p.CuratorRecords)); err != nil {
+			return err
+		}
+	}
+	for _, entry := range slices.Concat([]PoolEntry{p.SenderEntry}, p.OwnerEntries, p.AssetEntries) {
+		if err := entry.validate(p.OwnOnly); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -73,15 +134,15 @@ func (p *Policy) validate() error {
 // statement is the policy preimage, mirrored by PolicyStatement::elements in program-libs/interface/src/proof/statement.rs.
 //
 //	CRPO, private_tx_hash, policy_hash, ring_id, anonymous on the member key only, approval_required,
-//	key_escrow, own_root, curator_root, sender, asset_k and amount_k per public slot, version 2, withdrawal_hash
-func (p *Policy) statement(rail railValues) []frontend.Variable {
+//	key_escrow, own_root, curator_root, sender, asset_k and amount_k per public slot, version, withdrawal_hash
+func (p *PolicyInputs) statement(rail railValues) []frontend.Variable {
 	fields := []frontend.Variable{shared.PolicyStatementDomain, p.PrivateTxHash, p.PolicyHash, p.RingProgramID}
 	fields = append(fields, rail.anonymous...)
 	fields = append(fields, rail.approvalRequired, rail.keyEscrow, p.OwnRoot, p.CuratorRoot, rail.sender)
 	for k := range p.PublicAssets {
 		fields = append(fields, p.PublicAssets[k], p.PublicAmounts[k])
 	}
-	return append(fields, 2, p.WithdrawalHash)
+	return append(fields, shared.PolicyStatementVersion, p.WithdrawalHash)
 }
 
 func bindStatement(api frontend.API, publicInputHash frontend.Variable, statement []frontend.Variable) {

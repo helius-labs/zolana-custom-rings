@@ -1,16 +1,12 @@
-//! Delivered ring output bodies of schemes 9 and 10, `be32(blinding) ‖ u64be(amount)` under the
+//! Delivered ring output bodies of scheme 10, `be32(blinding) ‖ u64be(amount)` under the
 //! audit stream of a CRDS slot secret, mirrored by Go `prover/circuits/audit`.
 
-use custom_ring_interface::{
-    blinding::anonymous_ring_data,
-    stream::{RingTag, SlotSecret},
-    AUDIT_STREAM_INFO, RING_DELIVERED_BODY_LEN,
-};
+use custom_ring_interface::{stream::SlotSecret, AUDIT_STREAM_INFO, RING_DELIVERED_BODY_LEN};
 use solana_address::Address;
-use zolana_hasher::primitives::is_canonical_bn254_scalar_be;
-use zolana_keypair::{PublicKey, X25519Keypair, X25519Pubkey};
+use spr_hasher::primitives::is_canonical_bn254_scalar_be;
+use spr_keypair::{PublicKey, X25519Keypair, X25519Pubkey};
+use spr_transaction::{Blinding, Data, Mint, Utxo};
 use zolana_ring_keys::symmetric_apply_audit;
-use zolana_transaction::{Blinding, Data, Mint, Utxo};
 
 use crate::{RingAssets, RingRailError};
 
@@ -50,17 +46,6 @@ impl RingDeliveredBody {
     }
 }
 
-/// CRAT over the tag on an anonymous ring output, zero on a confidential one.
-pub fn delivered_ring_data(
-    slot_secret: &SlotSecret,
-    tag: Option<&RingTag>,
-) -> Result<[u8; 32], RingRailError> {
-    Ok(match tag {
-        Some(tag) => anonymous_ring_data(slot_secret, tag)?,
-        None => [0; 32],
-    })
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RingUtxoOwner<'a> {
     pub signing_pubkey: &'a PublicKey,
@@ -71,8 +56,6 @@ pub struct RingUtxoOwner<'a> {
 #[derive(Clone, Copy)]
 pub struct RingDeliveryOpening<'a> {
     pub ring: Address,
-    /// The published tag on an anonymous ring, `None` on a confidential one.
-    pub tag: Option<RingTag>,
     pub body: &'a [u8; RING_DELIVERED_BODY_LEN],
     pub slot_secret: &'a SlotSecret,
     pub owner: RingUtxoOwner<'a>,
@@ -88,7 +71,6 @@ pub struct RingDeliveredNote {
     pub nullifier_pubkey: [u8; 32],
     pub ring: Address,
     pub body: RingDeliveredBody,
-    pub ring_data_hash: [u8; 32],
     pub utxo_hash: [u8; 32],
     pub tree_id: u16,
 }
@@ -112,7 +94,6 @@ impl RingDeliveryOpening<'_> {
             nullifier_pubkey: *self.owner.nullifier_pubkey,
             ring: self.ring,
             body,
-            ring_data_hash: delivered_ring_data(self.slot_secret, self.tag.as_ref())?,
             utxo_hash: *self.commitment,
             tree_id: self.tree_id,
         };
@@ -125,12 +106,7 @@ impl RingDeliveredNote {
     pub fn resolve(&self, assets: &RingAssets) -> Result<Option<Mint>, RingRailError> {
         for mint in assets.mints() {
             let utxo = self.utxo(*mint);
-            let hash = utxo.hash(
-                &self.nullifier_pubkey,
-                &[0; 32],
-                &self.ring_data_hash,
-                self.tree_id,
-            )?;
+            let hash = utxo.hash(&self.nullifier_pubkey, &[0; 32], &[0; 32], self.tree_id)?;
             if hash == self.utxo_hash {
                 return Ok(Some(*mint));
             }

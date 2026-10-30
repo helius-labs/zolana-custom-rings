@@ -4,6 +4,7 @@ import type { RingProgramConfig } from "../protocol/codec/ring-codecs.js";
 import { fetchRingMemberRegistry } from "../protocol/membership/config.js";
 import { memberOfAsset } from "../protocol/membership/policy.js";
 import { RingError } from "../protocol/error.js";
+import { domainField, RingDomain } from "../crypto/derivation/ring-domain.js";
 import { readMemberOpenings } from "../rpc/registered-record.js";
 import type { WithdrawalExemptionProofRequest } from "../rpc/prover/ring.js";
 import { N_PUBLIC_SLOTS } from "../protocol/transaction/spp.js";
@@ -71,7 +72,7 @@ export async function readWithdrawalExemption(
     amounts.push(ZERO_32);
   }
   const fields = [
-    bigIntBytes(0x43525758n, 32) as Bytes32,
+    domainField(RingDomain.withdrawalExemption),
     root.root,
     ...assets.flatMap((asset, i) => [asset, amounts[i]!]),
   ];

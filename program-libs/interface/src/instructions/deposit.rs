@@ -1,4 +1,4 @@
-use zolana_hasher::{
+use spr_hasher::{
     hash_chain::create_hash_chain_from_slice,
     primitives::{hash_bytes, pack_be, right_align, PACK_BE_CHUNK_BYTES},
     HasherError,
@@ -64,7 +64,7 @@ impl DepositPublicInput<'_> {
         let [auditor_lo, auditor_hi] = pack_be(self.auditor_pk);
         let [ephemeral_lo, ephemeral_hi] = pack_be(self.eph_pk);
         let mut chain = [[0; 32]; DEPOSIT_PUBLIC_INPUT_ELEMENTS];
-        chain[0] = right_align(b"CRDP");
+        chain[0] = crate::domain::field(crate::domain::DEPOSIT_STATEMENT);
         chain[1] = *self.context_hash;
         chain[2] = right_align(&(count as u64).to_be_bytes());
         chain[3] = right_align(&[u8::from(self.anonymous)]);

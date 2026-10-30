@@ -5,36 +5,32 @@ mod origin_fixture;
 #[path = "common/transfer.rs"]
 pub mod transfer;
 
-use custom_ring_interface::{
-    stream::{RingTag, TAG_LEN},
-    RingDepositAuditCapsule, RingMode,
-};
+use custom_ring_interface::{RingDepositAuditCapsule, RingMode};
 use std::{cell::Cell, sync::Mutex};
 
 use solana_address::Address;
 use solana_signature::Signature;
-use zolana_client::{
+use spr_client::{
     rpc::GetShieldedTransactionsByNullifiersResponse, AsyncRpc, ClientError, Context,
     GetShieldedTransactionsByTagsResponse, IndexerRpcConfig,
 };
-use zolana_event::{
+use spr_event::{
     encode_encrypted_ring_deposit_output, encode_merge_output_data, EncryptedRingDepositOutput,
     MergeOutputDataRef,
 };
-use zolana_hasher::primitives::right_align;
-use zolana_keypair::{ShieldedAddress, ShieldedKeypair, ViewingKey, X25519Keypair};
+use spr_hasher::primitives::right_align;
+use spr_keypair::{ShieldedAddress, ShieldedKeypair, ViewingKey, X25519Keypair};
+use spr_transaction::{
+    instructions::merge::MergeTransaction, Data, DataRecord, Mint, OutputContext, OutputSlot,
+    ShieldedTransaction, SppProofOutputUtxo, Utxo, WalletUtxo, SOL_MINT,
+};
 use zolana_ring_client::{
     seal_deposits, AnonymousInputs, AuditError, DepositOpening, MemberRecovery, RecoveredNotes,
     RingOrigin, RingRecovery, SourceMember, TransactionOrigin,
 };
-use zolana_ring_transaction::RingAssets;
-use zolana_transaction::{
-    instructions::merge::MergeTransaction, serialization::ring_deposit::RingDepositPlaintext, Data,
-    DataRecord, Mint, OutputContext, OutputSlot, ShieldedTransaction, SppProofOutputUtxo, Utxo,
-    WalletUtxo, SOL_MINT,
-};
+use zolana_ring_transaction::{RingAssets, RingDepositPlaintext};
 
-use transfer::{data_free, field, x25519_u, Frame, Output, Publish, Rail, Transfer, UtxoFields};
+use transfer::{field, x25519_u, Frame, Output, Publish, Rail, Transfer, UtxoFields};
 
 const RING: Address = Address::new_from_array([42; 32]);
 const SALT: [u8; 16] = [7; 16];
@@ -145,7 +141,7 @@ impl Fixture {
         self.encrypt_beside(output, tree_id, Beside::Alone)
     }
 
-    /// A packed transfer of `output` to the member, its blinding the one the ring derives.
+    /// A delivered transfer of `output` to the member, its blinding the one the ring derives.
     fn encrypt_beside(
         &self,
         mut output: SppProofOutputUtxo,
@@ -174,14 +170,22 @@ impl Fixture {
             recipient_u: self.address.viewing_pubkey.u(),
             tag: None,
         };
-        let slot = transfer.slot(Rail::Packed, 0, &ring_output);
+        let slot = transfer.slot(Rail::Delivered, 0, &ring_output);
         output.blinding = slot.blinding;
         let mut held = self.held(&output, tree_id);
         held.tx_signature = signature;
         let mut published = slot.output;
         published.output_context = output_context(&held);
         let (outputs, slots, key_escrow) = match beside {
-            Beside::Alone => (vec![ring_output], vec![published], false),
+            Beside::Alone => {
+                let mut dummy = transfer.slot(Rail::Delivered, 1, &Output::Dummy).output;
+                dummy.output_context.leaf_index = held.leaf_index + 1;
+                (
+                    vec![ring_output, Output::Dummy],
+                    vec![published, dummy],
+                    false,
+                )
+            }
             Beside::EscrowedMember(other) => {
                 let other = Output::Ring {
                     utxo: UtxoFields {
@@ -192,12 +196,12 @@ impl Fixture {
                     recipient_u: x25519_u(0x77),
                     tag: None,
                 };
-                let mut paid = transfer.slot(Rail::Packed, 1, &other).output;
+                let mut paid = transfer.slot(Rail::Delivered, 1, &other).output;
                 paid.output_context.leaf_index = held.leaf_index + 1;
                 (vec![ring_output, other], vec![published, paid], true)
             }
         };
-        let disclosure = transfer.disclosure(Rail::Packed, &outputs, key_escrow);
+        let disclosure = transfer.disclosure(Rail::Delivered, &outputs, key_escrow);
         let mut transaction = transfer.publish(Publish {
             slots,
             disclosure: &disclosure,
@@ -208,7 +212,6 @@ impl Fixture {
         let frame = transfer.frame(Frame {
             tx: &transaction,
             layout: disclosure.layout(),
-            data_free: data_free(&outputs),
         });
         self.frames.lock().unwrap().push((signature, frame));
         (held, transaction)
@@ -272,7 +275,7 @@ impl Fixture {
             owner_key: (self.mode == RingMode::Anonymous).then(|| self.owner_key()),
         };
         let owner_utxo_hash =
-            zolana_transaction::owner_utxo_hash(&opening.owner_hash, &opening.blinding).unwrap();
+            spr_transaction::owner_utxo_hash(&opening.owner_hash, &opening.blinding).unwrap();
         let sealed = seal_deposits(&[opening], &self.auditor.pubkey()).unwrap();
         let mut encrypted = RingDepositPlaintext {
             blinding: held.utxo.blinding,
@@ -346,13 +349,12 @@ impl Fixture {
                     ..UtxoFields::default()
                 },
                 recipient_u: self.address.viewing_pubkey.u(),
-                tag: Some(RingTag::from_bytes([0x5c; TAG_LEN])),
+                tag: Some(field(0x5c)),
             },
             Output::Dummy,
         ];
         let slots = transfer.slots(Rail::Anonymous, &outputs);
         output.blinding = slots[0].blinding;
-        output.ring_data_hash = Some(slots[0].ring_data_hash);
         let mut held = self.held(&output, tree_id);
         held.tx_signature = signature;
         let mut published: Vec<OutputSlot> = slots.into_iter().map(|slot| slot.output).collect();
@@ -373,7 +375,6 @@ impl Fixture {
         let frame = transfer.frame(Frame {
             tx: &transaction,
             layout: disclosure.layout(),
-            data_free: data_free(&outputs),
         });
         self.frames.lock().unwrap().push((signature, frame));
         (held, transaction)
@@ -430,7 +431,7 @@ impl History {
 impl AsyncRpc for History {
     async fn get_shielded_transactions_by_ring(
         &self,
-        options: zolana_client::RingHistoryOptions,
+        options: spr_client::RingHistoryOptions,
         config: Option<IndexerRpcConfig>,
     ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
         self.read(config)?;
@@ -763,99 +764,6 @@ async fn a_merge_from_another_program_cannot_supply_recovery_outputs() {
 }
 
 #[tokio::test]
-async fn proof_bound_hash_metadata_is_recovered_without_a_caller_resolver() {
-    let fixture = Fixture::new();
-    let output = fixture
-        .output(9)
-        .with_ring_data(RING, vec![1, 2, 3], [4; 32])
-        .with_utxo_data(vec![5, 6], [7; 32]);
-    let (mut held, transaction) = fixture.encrypt(output, 7);
-    held.utxo.data = Data::default();
-    let history = History {
-        transactions: vec![transaction],
-        ..Default::default()
-    };
-    let recovered = fixture
-        .run(fixture.recovery(), &history)
-        .await
-        .expect("recover");
-    assert!(recovered.unopened.is_empty());
-    assert_eq!(recovered.utxos, vec![held]);
-}
-
-#[tokio::test]
-async fn recovery_uses_disclosed_ownership_even_when_recipient_delivery_is_unusable() {
-    for mutation in 0..3 {
-        let fixture = Fixture::new();
-        let (held, mut transaction) = fixture.encrypt(fixture.output(9), 7);
-        match mutation {
-            0 => *transaction.output_slots[0].payload.last_mut().unwrap() ^= 1,
-            1 => transaction.output_slots[0].view_tag = [0x5a; 32],
-            _ => transaction.output_slots[0].payload = vec![0xff],
-        }
-        let history = History {
-            transactions: vec![transaction],
-            ..Default::default()
-        };
-        let recovered = fixture.run(fixture.recovery(), &history).await.unwrap();
-        assert_eq!(recovered.utxos, vec![held]);
-        assert!(recovered.unopened.is_empty());
-    }
-}
-
-#[tokio::test]
-async fn an_unknown_disclosed_asset_is_unopened_until_its_utxo_is_confirmed_spent() {
-    let fixture = Fixture::new();
-    let mut output = fixture.output(9);
-    output.asset = Mint::new(Address::new_from_array([0x5a; 32]), 99);
-    let (held, transaction) = fixture.encrypt(output, 7);
-    let mut history = History {
-        transactions: vec![transaction.clone()],
-        ..Default::default()
-    };
-    let recovered = fixture.run(fixture.recovery(), &history).await.unwrap();
-    assert!(recovered.utxos.is_empty());
-    assert_eq!(recovered.unopened, vec![held.utxo_hash]);
-    let mut spend = transaction;
-    spend.tx_signature = fixture.signature();
-    spend.messages.clear();
-    spend.output_slots.clear();
-    spend.nullifiers = vec![held.nullifier];
-    history.transactions.push(spend);
-    let recovered = fixture.run(fixture.recovery(), &history).await.unwrap();
-    assert!(recovered.utxos.is_empty());
-    assert!(recovered.unopened.is_empty());
-}
-
-#[tokio::test]
-async fn spent_notes_with_missing_hash_metadata_do_not_block_live_recovery() {
-    let fixture = Fixture::new();
-    let (held, transaction) =
-        fixture.encrypt(fixture.output(9).with_ring_data_hash(RING, [4; 32]), 7);
-    let mut spend = transaction.clone();
-    spend.tx_signature = fixture.signature();
-    spend.messages.clear();
-    spend.output_slots.clear();
-    spend.nullifiers = vec![held.nullifier];
-    let history = History {
-        transactions: vec![transaction, spend],
-        ..Default::default()
-    };
-    let recovered = fixture
-        .run(fixture.recovery(), &history)
-        .await
-        .expect("recover");
-    assert!(recovered.utxos.is_empty());
-    assert!(recovered.unopened.is_empty());
-    assert!(history
-        .queried
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|query| query.contains(&held.nullifier)));
-}
-
-#[tokio::test]
 async fn direct_deposits_are_reported_separately_without_claiming_they_are_unspent() {
     let fixture = Fixture::new();
     let (held, mut transaction) = fixture.encrypt(fixture.output(9), 7);
@@ -865,7 +773,7 @@ async fn direct_deposits_are_reported_separately_without_claiming_they_are_unspe
     transaction.messages.clear();
     transaction.output_slots[0].view_tag = fixture.address.viewing_pubkey.u();
     let deposit = EncryptedRingDepositOutput {
-        owner_utxo_hash: zolana_transaction::owner_utxo_hash(
+        owner_utxo_hash: spr_transaction::owner_utxo_hash(
             &fixture.address.owner_hash().expect("owner"),
             &held.utxo.blinding,
         )
@@ -1061,7 +969,7 @@ async fn invalid_deposit_openings_remain_unknown_and_a_forged_owned_leaf_fails()
     let mut wrong_ciphertext = transaction;
     let slot = &mut wrong_ciphertext.output_slots[0];
     let mut output =
-        zolana_event_parser::decode_encrypted_ring_deposit_output_data(&slot.payload).unwrap();
+        spr_event_parser::decode_encrypted_ring_deposit_output_data(&slot.payload).unwrap();
     output.encrypted.ciphertext[50] ^= 1;
     slot.payload = encode_encrypted_ring_deposit_output(output);
     let history = History {
@@ -1103,7 +1011,7 @@ async fn indexed_owner_key_tampering_is_rejected_against_confirmed_deposit() {
     let (_, mut indexed) = fixture.deposit(fixture.output(9), 7);
     let slot = &mut indexed.output_slots[0];
     let mut output =
-        zolana_event_parser::decode_encrypted_ring_deposit_output_data(&slot.payload).unwrap();
+        spr_event_parser::decode_encrypted_ring_deposit_output_data(&slot.payload).unwrap();
     output.encrypted.ciphertext[42 + 64] ^= 1;
     slot.payload = encode_encrypted_ring_deposit_output(output);
     let commitment = indexed.output_slots[0].output_context.hash;
@@ -1212,9 +1120,9 @@ async fn unknown_merge_mints_remain_unresolved_and_still_follow_spends() {
     let mint = Mint::new(Address::new_from_array([71; 32]), 2);
     let mut output = fixture.output(4);
     output.asset = mint;
-    let (first, first_tx) = fixture.encrypt(output.clone(), 2);
+    let (first, first_tx) = fixture.deposit(output.clone(), 2);
     output.amount = 5;
-    let (second, _) = fixture.encrypt(output, 2);
+    let (second, _) = fixture.deposit(output, 2);
     let (merged, merge_tx) = fixture.merge(&[first, second], 7);
     let mut history = History {
         transactions: vec![first_tx, merge_tx.clone()],

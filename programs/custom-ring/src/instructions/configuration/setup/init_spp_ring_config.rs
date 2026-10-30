@@ -1,6 +1,6 @@
 use pinocchio::{AccountView, Address, ProgramResult};
-use zolana_account_checks::AccountIterator;
-use zolana_interface::instruction::{encode_instruction, tag, CreateRingConfigData};
+use spr_account_checks::AccountIterator;
+use spr_interface::instruction::{encode_instruction, tag, CreateRingConfigData};
 
 use crate::instructions::{
     instruction_runtime::{no_data, RingAuth},

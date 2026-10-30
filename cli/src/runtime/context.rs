@@ -33,11 +33,6 @@ pub enum Probe<T> {
     Retry(anyhow::Error),
 }
 
-pub struct Landed {
-    pub signature: Signature,
-    pub first_contacts: Vec<PendingFirstContact>,
-}
-
 #[must_use]
 pub struct Landing<'a> {
     pub operation: RingOperation<'a>,
@@ -86,7 +81,7 @@ impl ContextSetup {
 
 impl Landing<'_> {
     /// Resent until the cluster settles it, a stale root is proved again.
-    pub fn settle(self, zolana: &Zolana) -> Result<Landed> {
+    pub fn settle(self, zolana: &Zolana) -> Result<Signature> {
         let mut submission = RingSubmission::new(self.operation);
         let settled = zolana.block_on(submission.send_until_settled(
             zolana.ring_client(),
@@ -94,14 +89,7 @@ impl Landing<'_> {
             self.signers,
         ))?;
         match settled {
-            SettledSubmission::Confirmed {
-                signature,
-                first_contacts,
-                ..
-            } => Ok(Landed {
-                signature,
-                first_contacts,
-            }),
+            SettledSubmission::Confirmed { signature, .. } => Ok(signature),
             SettledSubmission::Failed { signature, error } => {
                 Err(RingError::Rejected { signature, error }.into())
             }
@@ -237,15 +225,6 @@ impl Context {
         payer: &(dyn Signer + Sync),
         signers: &[&(dyn Signer + Sync)],
     ) -> Result<Signature> {
-        Ok(self.land(operation, payer, signers)?.signature)
-    }
-
-    pub(crate) fn land<'a>(
-        &self,
-        operation: impl Into<RingOperation<'a>>,
-        payer: &(dyn Signer + Sync),
-        signers: &[&(dyn Signer + Sync)],
-    ) -> Result<Landed> {
         Landing {
             operation: operation.into(),
             payer,

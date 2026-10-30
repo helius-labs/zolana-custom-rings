@@ -1,0 +1,116 @@
+{
+  "description": "One anonymous transfer sealed by zolana-ring-transaction, change at output 0, a bootstrap payment, a shared payment and a dummy. The transaction viewing key derives from the sender's viewing key and first_nullifier, every recipient body is sealed to its reader at its output position under the salt, the change output carries no body, and the zolana scheme 2 sender bundle is sealed to the sender at the output count. Blindings are TXOB(first_nullifier, output_seed, position) with output_seed = TXOS(first_nullifier, blinding_seed), the bundle publishing output_seed. Bodies are the zolana anonymous plaintexts, verified fields then unverified ones, the bundle listing one key per output after the change and 0x04 || 0^32 for the dummy. The dummy body is fixed here, random on chain. Produced by sdk-libs/transaction/src/tests/anonymous_bodies.rs.",
+  "ring_program_id": "2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
+  "tree_id": 3,
+  "mints": [
+    {
+      "asset": "0909090909090909090909090909090909090909090909090909090909090909",
+      "asset_id": 2
+    }
+  ],
+  "salt": "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c",
+  "first_nullifier": "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+  "tx_viewing_pk": "040d78ad0524fb3766341215d5333160d860fa3f70d0a5aa3e519d68749bce1c3f",
+  "blinding_seed": "179f5be1e699dcdfa41dfae8a4a236281321a4bcb2753950203837abd5d1ecc4",
+  "sender": {
+    "ed25519_seed": "0101010101010101010101010101010101010101010101010101010101010101",
+    "viewing_secret": "00a7d91be308b226a76f42a59b09cc8af86d999244925bb489c802735c59304e",
+    "viewing_pubkey": "0484da9bedd212dd7aedecb0fa71a67074d100c6b42793d8acc08cbf40a5794654",
+    "owner_pubkey": "018a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c00",
+    "nullifier_pubkey": "070e3205f38ff4b34e8d5a6dc6937a1f99ea25f3bc45e403cdc8890bb8d62c9f"
+  },
+  "recipients": [
+    {
+      "ed25519_seed": "0202020202020202020202020202020202020202020202020202020202020202",
+      "viewing_secret": "1841133529f6f8ba341e96ff75b2651dcaa6a902b8210d4f2dd7ab16b5536161",
+      "viewing_pubkey": "04c6964c9c891df8f976eac5fb35ffea0c0638432c1cb983560bafc800ffcc2c44",
+      "owner_pubkey": "018139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b39400",
+      "nullifier_pubkey": "0e919de26f24ff72d271becdcc5e824211e89a56d77c2d27cb111e5ca4a5e939"
+    },
+    {
+      "ed25519_seed": "0303030303030303030303030303030303030303030303030303030303030303",
+      "viewing_secret": "401cdd9dc51b05ba2b36ab69eef2d584097093feebab99f4fab2318fd8223e7e",
+      "viewing_pubkey": "04cd38df94f3abeee72ece343e56d255b55d06a59ba3e57073a01310d7df4c9360",
+      "owner_pubkey": "01ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d100",
+      "nullifier_pubkey": "0859c8d76b11ae685d6e344cbad137e531a486d002c631a2aaee3b6d46729e72"
+    }
+  ],
+  "outputs": [
+    {
+      "position": 0,
+      "tag": "004a4ba74df666a75843a1a80a2e7653d0f5cc3327d0f8cac8f08e79ed50a10f",
+      "utxo_hash": "198de6acfb4be5ff5c4bcdf9579b8bc3bd61484c1a9a34bfffc7d9434cda9e94",
+      "ciphertext": null,
+      "opened": null
+    },
+    {
+      "position": 1,
+      "tag": "c6964c9c891df8f976eac5fb35ffea0c0638432c1cb983560bafc800ffcc2c44",
+      "utxo_hash": "0b27dc97ccbdd53a096d9204d36a7dea83fc0402df8d41ac9c0b5099c1b7d246",
+      "ciphertext": "6a5fddab0bcfa7814201da43150679515b0ede8e537336ccef2f92bc76a3f5d3d4a76fa3817889d1fe65db46ae49c410a4c71697329aafd309108480ba52ba480848e8ffc8c57998b185683e3f0717041e0ef64a2313471584361b5674aaa4c33bf51d0666f6b3fc9a9444d7c36ebab3c502e09ff9813bdfbc4eb190f7c1d517151df4922df1397507257090",
+      "opened": {
+        "sealed_to": "04c6964c9c891df8f976eac5fb35ffea0c0638432c1cb983560bafc800ffcc2c44",
+        "plaintext": "018139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b39400090909090909090909090909090909090909090909090909090909090909090914000000000000000484da9bedd212dd7aedecb0fa71a67074d100c6b42793d8acc08cbf40a5794654266e483c548ba4ed3d67268d2fa6d5459fef681b746899cf74b8e04786909f9100",
+        "owner_pubkey": "018139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b39400",
+        "sender_pubkey": "0484da9bedd212dd7aedecb0fa71a67074d100c6b42793d8acc08cbf40a5794654",
+        "mint": {
+          "asset": "0909090909090909090909090909090909090909090909090909090909090909",
+          "asset_id": 2
+        },
+        "amount": 20,
+        "blinding": "266e483c548ba4ed3d67268d2fa6d5459fef681b746899cf74b8e04786909f91",
+        "rebuilt_hash": "0b27dc97ccbdd53a096d9204d36a7dea83fc0402df8d41ac9c0b5099c1b7d246"
+      }
+    },
+    {
+      "position": 2,
+      "tag": "004e1ee25ceda2b0127b6cd0a923ce7fe3c823ad48317a19c9f1b725cf5b1c95",
+      "utxo_hash": "15ca8b75944412d053021f382893d7702e52a7c1594161add5e7bc78abefee17",
+      "ciphertext": "2fe890171cf69210f3d65305105e43456661b2882f54a747f43774e192229c88a1189f269d1b1cf8ba25b233d7459626a4bccfb1d23f65459d2d518ab0a9761cbb26c722ca21dfe928c4b28cec42a5cf2af2c8901d7bf9a7ab3cc1752b1797564b66e3dd4b96a1cf3d427dcbea2728a7c94017e4cccff61ef1aa3fb47dda9936c8a4f5c311f134b5c0ad4d55",
+      "opened": {
+        "sealed_to": "04cd38df94f3abeee72ece343e56d255b55d06a59ba3e57073a01310d7df4c9360",
+        "plaintext": "01ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d10000000000000000000000000000000000000000000000000000000000000000000a000000000000000484da9bedd212dd7aedecb0fa71a67074d100c6b42793d8acc08cbf40a5794654151eb35ded4b78cbdb49df13f2eca5b1f4a7f612dae089b8610ae96b1dad9db300",
+        "owner_pubkey": "01ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d100",
+        "sender_pubkey": "0484da9bedd212dd7aedecb0fa71a67074d100c6b42793d8acc08cbf40a5794654",
+        "mint": {
+          "asset": "0000000000000000000000000000000000000000000000000000000000000000",
+          "asset_id": 1
+        },
+        "amount": 10,
+        "blinding": "151eb35ded4b78cbdb49df13f2eca5b1f4a7f612dae089b8610ae96b1dad9db3",
+        "rebuilt_hash": "15ca8b75944412d053021f382893d7702e52a7c1594161add5e7bc78abefee17"
+      }
+    },
+    {
+      "position": 3,
+      "tag": "00d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7",
+      "utxo_hash": "0082c6f9b45f4c7070ea96b6b2c49507ab23ed849ca81c076891af5a7e285d99",
+      "ciphertext": "b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3",
+      "opened": null
+    }
+  ],
+  "sender_bundle": {
+    "tag": "004a4ba74df666a75843a1a80a2e7653d0f5cc3327d0f8cac8f08e79ed50a10f",
+    "slot_index": 4,
+    "ciphertext": "ccc66b0734be21a026a8d5397ac0104c25bbaa0e312f9a51e8070632bfce97c644da5dacf69e283dceca123aba75deb258f60035816f76b0b3fe4c0df30d58a7beb8be74b36473d8b2e9d60d91da9b2d0595f360d7ebf5fd36a31155a0b9db1c28e996c78f1cce6dbd9e4bfcca0eba63042dc212c0182a15548cd561f04e8b6d2347a1bcb3598a32dda7c18cc440e7473db54ab7455f05b558d6f1d8f0d99132b6110ac9aeab50d20e5f466559a04ed287d9cf7887c8d9159b8c92dd51b6bbfc810d21539cfc038010c45e15d25adb60cafe01422d743995",
+    "plaintext": "018a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c000000000000000000000000000000000000000000000000000000000000000000000000000000000046000000000000000304c6964c9c891df8f976eac5fb35ffea0c0638432c1cb983560bafc800ffcc2c4404cd38df94f3abeee72ece343e56d255b55d06a59ba3e57073a01310d7df4c93600400000000000000000000000000000000000000000000000000000000000000002b53d4d66cce6a604b4fe0de95fe71742a85eb28992830522bc695123636244a0000",
+    "recipient_viewing_pks": [
+      "04c6964c9c891df8f976eac5fb35ffea0c0638432c1cb983560bafc800ffcc2c44",
+      "04cd38df94f3abeee72ece343e56d255b55d06a59ba3e57073a01310d7df4c9360",
+      "040000000000000000000000000000000000000000000000000000000000000000"
+    ],
+    "output_seed": "2b53d4d66cce6a604b4fe0de95fe71742a85eb28992830522bc695123636244a",
+    "change": [
+      {
+        "position": 0,
+        "mint": {
+          "asset": "0000000000000000000000000000000000000000000000000000000000000000",
+          "asset_id": 1
+        },
+        "amount": 70,
+        "blinding": "220cfee1458d6c72d241f7ee3225988644b53b45d6ade850647b628e1036ab81",
+        "rebuilt_hash": "198de6acfb4be5ff5c4bcdf9579b8bc3bd61484c1a9a34bfffc7d9434cda9e94"
+      }
+    ]
+  }
+}

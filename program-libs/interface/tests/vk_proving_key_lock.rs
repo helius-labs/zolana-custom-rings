@@ -6,10 +6,9 @@ use std::collections::BTreeSet;
 use custom_ring_interface::{
     key_catalog::{RingCircuit, RING_KEYS},
     verifying_key, AnonymousLayout, AnonymousSpend, DisclosureLayout, RingRail,
-    ANONYMOUS_MERGE_WIDTHS, APPLY_BATCH, DELIVERED_AUDIT_CAPACITIES, PACKED_AUDIT_CAPACITIES,
-    PROVING_KEY_SHA256S,
+    ANONYMOUS_MERGE_WIDTHS, APPLY_BATCH, DELIVERED_AUDIT_CAPACITIES, PROVING_KEY_SHA256S,
 };
-use zolana_interface::shape::SPP_SUPPORTED_SHAPES;
+use spr_interface::shape::SPP_SUPPORTED_SHAPES;
 
 const LOCK: &str = include_str!("../../../prover/ring/proving-keys.lock");
 
@@ -59,9 +58,6 @@ fn selectable_circuits() -> BTreeSet<String> {
     for shape in SPP_SUPPORTED_SHAPES {
         let (n_in, n_out) = (shape.n_inputs(), shape.n_outputs());
         let outputs = n_out as u8;
-        if PACKED_AUDIT_CAPACITIES.contains(&n_out) {
-            circuits.push(RingCircuit::PackedAudit { outputs });
-        }
         if DELIVERED_AUDIT_CAPACITIES.contains(&n_out) {
             circuits.push(RingCircuit::DeliveredAudit { outputs });
         }

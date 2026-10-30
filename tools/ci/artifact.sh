@@ -9,11 +9,11 @@ common=(justfile tools/ci/artifact.sh)
 case "$name" in
   zolana_programs)
     inputs=(zolana)
-    paths=(zolana/target/deploy/shielded_pool_program.so zolana/target/deploy/zolana_user_registry.so)
+    paths=(zolana/target/deploy/shielded_pool_program.so zolana/target/deploy/spr_user_registry.so)
     ;;
   ring_program)
     inputs=(zolana Cargo.toml Cargo.lock rust-toolchain.toml .cargo programs program-libs)
-    paths=(target/deploy/custom_ring_program.so)
+    paths=(target/deploy/custom_ring_program.so target/deploy/policy_store_program.so)
     ;;
   zolana_tools)
     inputs=(zolana rust-toolchain.toml .cargo)

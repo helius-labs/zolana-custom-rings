@@ -1,44 +1,14 @@
 import { getAddressEncoder, type Address } from "@solana/kit";
 
-import {
-  hashBytes,
-  isCanonicalField,
-  rightAlign,
-  checkedBytes,
-  u64be,
-} from "@heliuslabs/zolana/internal";
+import { hashBytes, rightAlign, checkedBytes } from "@heliuslabs/zolana/internal";
 import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/keypair";
 import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import { packBytesBe } from "./hasher.js";
 
-import { checkedCounter, RingKeyError, u32Field } from "../error.js";
+import { u32Field } from "../error.js";
 import { RingDomain, domainHash } from "./ring-domain.js";
 
 const addressEncoder = getAddressEncoder();
-
-/** `epoch = slot / EPOCH_SLOTS`, the statement epoch the program derives. */
-export const EPOCH_SLOTS = 1n << 18n;
-/** A 6-bit index in the circuit. */
-export const J_INBOX = 64;
-/** One index range check serves both streams. */
-export const J_PAIR = J_INBOX;
-/** Epochs a pair stream lives after its anchor, a 5-bit difference in the circuit. */
-export const K_PAIR_EPOCHS = 32n;
-/** `low128` bytes, the owner tag is `0^16 ‖ tag`. */
-export const TAG_LEN = 16;
-
-/** Below `J_INBOX`, the only indexes a proof accepts. */
-export type TagIndex = number & { readonly __tagIndex: true };
-
-export function tagEpoch(slot: bigint): bigint {
-  return checkedCounter(slot, "slot") / EPOCH_SLOTS;
-}
-
-export function tagIndex(index: number): TagIndex {
-  if (!Number.isInteger(index) || index < 0 || index >= J_INBOX)
-    throw new RingKeyError("KEYPAIR_TAG_INDEX_OUT_OF_RANGE", { index, maximum: J_INBOX - 1 });
-  return index as TagIndex;
-}
 
 export type DeliveredSlot = Readonly<{
   /** `X25519(tx_sk, u)`. */
@@ -69,50 +39,6 @@ export function ringIdField(ring: Address): Bytes32 {
   return hashBytes(new Uint8Array(addressEncoder.encode(ring))) as Bytes32;
 }
 
-/** `Poseidon(CRIK, ring_id, pack_be(viewing_pk))`, public to anyone holding the ring address. */
-export function inboxKey(ringId: Bytes32, viewingKey: X25519PublicKey): Bytes32 {
-  return domainHash(RingDomain.inboxKey, [
-    checkedBytes<Bytes32>(ringId, 32, "ring id"),
-    ...packBytesBe(viewingKey.toBytes()),
-  ]);
-}
-
-/** `low128(Poseidon(CRIT, inbox_key, epoch, j))`. */
-export function inboxTag(key: Bytes32, epoch: bigint, index: TagIndex): Bytes16 {
-  return streamTag(RingDomain.inboxTag, key, epoch, index);
-}
-
-/** `Poseidon(CRPK, s1)`, a secret of the sender, the recipient and the auditor of the first contact. */
-export function pairKey(firstContactSecret: Bytes32): Bytes32 {
-  return domainHash(RingDomain.pairKey, [
-    checkedBytes<Bytes32>(firstContactSecret, 32, "first contact secret"),
-  ]);
-}
-
-/** `low128(Poseidon(CRPT, pair_key, epoch, j))`, live `K_PAIR_EPOCHS` after the anchor. */
-export function pairTag(key: Bytes32, epoch: bigint, index: TagIndex): Bytes16 {
-  return streamTag(RingDomain.pairTag, key, epoch, index);
-}
-
-/** The circuit reads `low128` of the reduced value, a non-canonical encoding is refused. */
-export function ringTag(field: Bytes32): Bytes16 {
-  const value = checkedBytes<Bytes32>(field, 32, "tag field");
-  if (!isCanonicalField(value))
-    throw new RingKeyError("KEYPAIR_NONCANONICAL_FIELD", { name: "tag" });
-  return low128(value);
-}
-
-/** `0^16 ‖ tag`, the expanded owner tag and the field the statement chains. */
-export function ringTagField(tag: Bytes16): Bytes32 {
-  return rightAlign(checkedBytes<Bytes16>(tag, TAG_LEN, "tag"));
-}
-
-/** `0^16 ‖ tag` is the one owner tag form of an anonymous slot, Rust `RingTag::from_owner_tag`. */
-export function ringTagFromOwnerTag(ownerTag: Bytes32): Bytes16 | undefined {
-  const value = checkedBytes<Bytes32>(ownerTag, 32, "owner tag");
-  return value.subarray(0, 32 - TAG_LEN).every((byte) => byte === 0) ? low128(value) : undefined;
-}
-
 /** `Poseidon(CRSC, sender_pk_hash, private_tx_blinding)`, binding the audit and policy proofs to one hidden sender. */
 export function senderCommitment(
   sender: Readonly<{ senderPkHash: Bytes32; privateTxBlinding: Bytes32 }>,
@@ -121,14 +47,6 @@ export function senderCommitment(
     checkedBytes<Bytes32>(sender.senderPkHash, 32, "sender pk hash"),
     checkedBytes<Bytes32>(sender.privateTxBlinding, 32, "private tx blinding"),
   ]);
-}
-
-function streamTag(domain: RingDomain, key: Bytes32, epoch: bigint, index: TagIndex): Bytes16 {
-  const position = [
-    rightAlign(u64be(checkedCounter(epoch, "epoch"))),
-    rightAlign(Uint8Array.of(tagIndex(index))),
-  ];
-  return low128(domainHash(domain, [checkedBytes<Bytes32>(key, 32, "stream key"), ...position]));
 }
 
 /** Packs a validated copy, the copy wiped once packed. */
@@ -150,8 +68,4 @@ function slotTail(
     u32Field(slot.outputIndex, "outputIndex"),
     checkedBytes<Bytes32>(slot.firstNullifier, 32, "first nullifier"),
   ];
-}
-
-function low128(value: Bytes32): Bytes16 {
-  return checkedBytes<Bytes16>(value.subarray(32 - TAG_LEN), TAG_LEN, "tag");
 }

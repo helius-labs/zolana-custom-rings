@@ -1,10 +1,10 @@
-use wincode::{containers, len::FixIntLen, SchemaRead, SchemaWrite};
-use zolana_hasher::{
+use spr_hasher::{
     hash_chain::{create_hash_chain_4_from_slice, create_hash_chain_from_slice},
     primitives::{hash_bytes, pack_be, pack_be_chunks, right_align},
     HasherError,
 };
-use zolana_interface::instruction::instruction_data::merge_transact::MergeTransactIxData;
+use spr_interface::instruction::instruction_data::merge_transact::MergeTransactIxData;
+use wincode::{containers, len::FixIntLen, SchemaRead, SchemaWrite};
 
 use crate::{
     bytes::Bytes, error::CustomRingError, CustomRingProof, AUDIT_CIPHERTEXT_LEN,
@@ -15,7 +15,6 @@ use crate::{
 pub const MERGE_DISCLOSURE_HEADER_LEN: usize = 32 + 32 + 32 + 8 + 32;
 pub const MERGE_DISCLOSURE_INFO: &[u8; 10] = b"CRING/mrg1";
 pub const MERGE_ANONYMOUS_PUBLIC_INPUT_ELEMENTS: usize = 15;
-const MERGE_ANONYMOUS_DOMAIN: &[u8; 4] = b"CRMG";
 
 /// SPP merge widths whose anonymous merge, disclosure and nullifier accounts fit one v1 transaction.
 pub const ANONYMOUS_MERGE_WIDTHS: [usize; 2] = [8, 24];
@@ -147,7 +146,7 @@ impl<'a> MergeDisclosureRef<'a> {
     }
 }
 
-/// The anonymous merge statement, `prover/server/custom_rings/circuits/merge/circuit.go`.
+/// The anonymous merge statement, `prover/circuits/merge.go`.
 pub struct MergeAnonymousPublicInput<'a> {
     pub party_identities: &'a [[u8; 32]; 3],
     pub private_tx_hash: &'a [u8; 32],
@@ -174,7 +173,7 @@ impl MergeAnonymousPublicInput<'_> {
         let [auditor_lo, auditor_hi] = pack_be(self.auditor_pk);
         let [eph_lo, eph_hi] = pack_be(self.eph_pk);
         Ok([
-            right_align(MERGE_ANONYMOUS_DOMAIN),
+            crate::domain::field(crate::domain::MERGE_STATEMENT),
             *self.private_tx_hash,
             *self.output_utxo_hash,
             *self.first_nullifier,

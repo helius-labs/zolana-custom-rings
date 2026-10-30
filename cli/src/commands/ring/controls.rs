@@ -9,8 +9,8 @@ use custom_ring_sdk::{
 };
 use solana_address::Address;
 use solana_signer::Signer;
-use zolana_client::Rpc;
-use zolana_keypair::X25519Keypair;
+use spr_client::Rpc;
+use spr_keypair::X25519Keypair;
 
 use crate::{
     config::{Base58Address, CoSignClass, CoSignerSpec},

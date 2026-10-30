@@ -1,6 +1,6 @@
 # Hashing
 
-Every commitment, tag and statement of a custom ring is a Poseidon hash over BN254. This file pins each encoding two implementations could choose differently. [Spec](../../spec.md)
+Every commitment and statement of a custom ring is a Poseidon hash over BN254. This file pins each encoding two implementations could choose differently. [Spec](../../spec.md)
 
 ## Poseidon
 
@@ -21,7 +21,6 @@ Every commitment, tag and statement of a custom ring is a Poseidon hash over BN2
 - `fe32(x)` is the canonical 32-byte big-endian encoding of the field element `x`. `u32be` and `u64be` are big-endian integers of 4 and 8 bytes.
 - A 33-byte tagged key `0x04 || u` packs to `[BE(bytes[0..31]), BE(bytes[31..33])]`. A 32-byte value packs to `[BE(bytes[0..31]), bytes[31]]`.
 - `pack_disclosure(b)` splits `b` into 31-byte chunks, each placed at byte 1 of a field and padded with zeros at the end. It differs from `PackBytesBE` only in a short last chunk.
-- `low128(v)` is the low 16 bytes of the canonical value `v`.
 
 ## Identities
 
@@ -49,20 +48,14 @@ Every commitment, tag and statement of a custom ring is a Poseidon hash over BN2
 
 `n0` is the transfer's first nullifier. The audit proof pins each live output's blinding. SPP derives every output blinding and `private_tx_blinding` from one seed, so one live output fixes the seed to `CRBS(tx_viewing_sk, salt)`, and the auditor derives both from the sealed key.
 
-## Anonymous streams
+## Slot secret and sender commitment
 
 | Value | Encoding |
 |---|---|
-| Epoch | `slot / 2^18`, the landing epoch or the one before |
-| Inbox key | `Poseidon(CRIK, ring_id, pack_be(0x04 \|\| u))`, `u` the address's viewing key |
-| Inbox tag | `low128(Poseidon(CRIT, inbox_key, epoch, j))`, `j < 64` |
-| Slot secret | `Poseidon(CRDS, pack_be(dh), pack_be(tx_viewing_pk), pack_be(0x04 \|\| u), right_align(salt), i, n0)`, `dh = X25519(tx_viewing_sk, u)`, 10 inputs |
-| Pair key | `Poseidon(CRPK, s_1)`, `s_1` the first contact's slot secret |
-| Pair tag | `low128(Poseidon(CRPT, pair_key, epoch, j))`, `j < 64`, from the first contact's epoch through the next `K_PAIR_EPOCHS - 1` epochs |
-| Ring data hash | `Poseidon(CRAT, slot_secret, 0^16 \|\| tag)` |
+| Delivered slot secret | `Poseidon(CRDS, pack_be(dh), pack_be(tx_viewing_pk), pack_be(0x04 \|\| u), right_align(salt), i, n0)`, `dh = X25519(tx_viewing_sk, u)`, 10 inputs |
 | Sender commitment | `Poseidon(CRSC, sender_pk_hash, private_tx_blinding)` |
 
-The owner tag of an anonymous output is `0^16 || tag`. A recipient and the sender rebuild the slot secret from the same `dh`, so both derive the pair key. The auditor derives it from the sealed transaction viewing secret.
+The recipient rebuilds the slot secret from `X25519(u_sk, tx_viewing_u)`, the auditor from the sealed transaction viewing secret. The anonymous rail hashes no tag and no body. Its view tags and body keys are zolana's [View Tags](../../../zolana/docs/spec.md#view-tags) and [AES Key derivation](../../../zolana/docs/spec.md#aes-key-derivation).
 
 ## Member registry
 
@@ -87,9 +80,6 @@ The owner tag of an anonymous output is `0^16 || tag`. A recipient and the sende
 | `CRAU` | `0x43524155` | audit statement |
 | `CRDS` | `0x43524453` | delivered slot secret |
 | `CRBS` | `0x43524253` | ring blinding seed |
-| `CRAT` | `0x43524154` | anonymous ring data hash |
-| `CRIK`, `CRIT` | `0x4352494b`, `0x43524954` | inbox key and tag |
-| `CRPK`, `CRPT` | `0x4352504b`, `0x43525054` | pair key and tag |
 | `CRSC` | `0x43525343` | sender commitment |
 | `CROD` | `0x43524f44` | disclosure pad |
 | `CRPO` | `0x4352504f` | policy statement |

@@ -26,7 +26,6 @@ export {
   DISCLOSURE_SENDER_KEY_BYTES,
   INPUT_PREFIX_BITS,
   INPUT_PREFIX_BYTES,
-  PACKED_AUDIT_CAPACITIES,
   anonymousAuditClass,
   anonymousAuditKey,
   anonymousFields,
@@ -35,7 +34,6 @@ export {
   deliveredFields,
   disclosureFieldCount,
   packedChunks,
-  packedFields,
 } from "../protocol/codec/ring-disclosure-layout.js";
 export type {
   AnonymousAuditKey,
@@ -48,8 +46,6 @@ export type {
   DeliveredLayout,
   DisclosureLayout,
   FieldRange,
-  PackedFields,
-  PackedLayout,
 } from "../protocol/codec/ring-disclosure-layout.js";
 export {
   anonymousCommitments,
@@ -68,38 +64,48 @@ export type {
   DeliveredOutputOpening,
   DisclosureKey,
   DummySlot,
-  PackedOutputOpening,
   PublishedOutputs,
   RingDisclosure,
 } from "../crypto/audit/ring-disclosure.js";
 export {
-  EPOCH_SLOTS,
-  J_INBOX,
-  J_PAIR,
-  K_PAIR_EPOCHS,
-  TAG_LEN,
   deliveredSlotSecret,
-  inboxKey,
-  inboxTag,
-  pairKey,
-  pairTag,
   ringIdField,
-  ringTag,
-  ringTagField,
-  ringTagFromOwnerTag,
   senderCommitment,
-  tagEpoch,
-  tagIndex,
 } from "../crypto/derivation/ring-stream.js";
-export type { DeliveredSlot, TagIndex } from "../crypto/derivation/ring-stream.js";
+export type { DeliveredSlot } from "../crypto/derivation/ring-stream.js";
 export {
   RING_DELIVERED_BODY_LEN,
+  anonymousRecipientOutputBody,
+  anonymousSenderOutputBody,
   openDeliveredBody,
+  RingScheme,
   sealDeliveredBody,
   type DeliveredBodyOpening,
 } from "../protocol/transaction/output.js";
 export {
-  anonymousRingData,
+  DUMMY_RECIPIENT_VIEWING_PK,
+  RECIPIENT_BODY_LEN,
+  isDummyRecipient,
+  listedRecipients,
+  openRecipient,
+  rebuilds,
+  senderChange,
+  type AnonymousOutput,
+} from "../protocol/codec/anonymous-body.js";
+export {
+  decodeAnonymousRecipient,
+  decodeAnonymousSender,
+  encodeAnonymousRecipient,
+  encodeAnonymousSender,
+  type AnonymousRecipientPlaintext,
+  type AnonymousSenderPlaintext,
+  type UnverifiedRecipientPlaintext,
+  type UnverifiedSenderPlaintext,
+  type VerifiedRecipientPlaintext,
+  type VerifiedSenderPlaintext,
+} from "../protocol/codec/anonymous-plaintext.js";
+export {
+  OutputBlindings,
   openRingDelivery,
   ringBlindingSeed,
   ringOutputBlinding,
@@ -112,10 +118,8 @@ export {
 export {
   PLAIN_GROTH16_PROOF_LENGTH,
   RingTransactData,
-  isDataFreeOutput,
   outputBodyHash,
   outputRecipientKeyFields,
-  outputTagField,
   ringDisclosureLayout,
   ringRail,
   ringRailOf,
@@ -130,13 +134,13 @@ export {
   type RingTransactInstructionData,
 } from "../protocol/proof/circuit.js";
 export type {
-  AnchorRoot,
   AnonymousProofData,
   InputTrees,
   PolicyProof,
   RingOutput,
   RingRail,
   RingTransactConfig,
+  SenderBundle,
 } from "../protocol/transaction/transact.js";
 export {
   applyRecordsStatementElements,

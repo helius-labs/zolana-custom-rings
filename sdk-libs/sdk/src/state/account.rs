@@ -1,14 +1,14 @@
 //! The ring's accounts as the chain holds them, every read checked against its canonical address.
 
 use custom_ring_interface::{
-    stream::tag_epoch, CoSignScope, MemberRegistry, ReadAccessRecord, RecordQueue, RingAccount,
-    RingMode, RingProgramConfig, ROOT_HISTORY,
+    CoSignScope, MemberRegistry, ReadAccessRecord, RecordQueue, RingAccount, RingMode,
+    RingProgramConfig, ROOT_HISTORY,
 };
 use solana_account::Account;
 use solana_address::Address;
-use zolana_client::AsyncRpc;
-use zolana_interface::{pda, state::RingConfig, BPF_LOADER_UPGRADEABLE_ID, RING_AUTH_PDA_SEED};
-use zolana_keypair::X25519Pubkey;
+use spr_client::AsyncRpc;
+use spr_interface::{pda, state::RingConfig, BPF_LOADER_UPGRADEABLE_ID, RING_AUTH_PDA_SEED};
+use spr_keypair::X25519Pubkey;
 use zolana_ring_client::ReaderKey;
 use zolana_ring_policy::{ring_id_field, RuleTable, SourceMap};
 
@@ -305,11 +305,6 @@ impl CustomRingConfig {
 
     pub fn account(&self) -> &RingProgramConfig {
         &self.account
-    }
-
-    /// No stream of the ring holds an output from an earlier epoch.
-    pub fn creation_epoch(&self) -> u64 {
-        tag_epoch(self.created_slot)
     }
 
     pub fn insert_fee_for(&self, writer: &Address) -> Option<u64> {

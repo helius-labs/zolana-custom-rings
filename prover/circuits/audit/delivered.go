@@ -10,6 +10,7 @@ import (
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
+	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
 // Properties:
@@ -36,20 +37,19 @@ func NewDeliveredAuditCircuit(capacity int) (*DeliveredAuditCircuit, error) {
 }
 
 func (c *DeliveredAuditCircuit) Define(api frontend.API) error {
-	if err := validateLength("output", len(c.Outputs), c.Capacity); err != nil {
+	if err := transaction.ValidateLength("output", len(c.Outputs), c.Capacity); err != nil {
 		return err
 	}
 	rc := rangecheck.New(api)
 	// 1. The envelope seals tx_viewing_sk to the auditor and the layout flags fix the published fields.
 	envelope := c.sealEnvelope(api, rc)
-	// No delivered UTXO carries data, the data-free flag holds whatever the frame sets.
-	layout := decodeLayout(api, c.Layout, LayoutExits|LayoutEscrow|LayoutDataFree, 0)
+	layout := decodeLayout(api, c.Layout, LayoutExits|LayoutEscrow|LayoutReserved, 0)
 	var hashes, bodyHashes, recipientKeys, nullifierPks []frontend.Variable
 	slots := make([]outputSlot, len(c.Outputs))
 	slotBytes := make([][]frontend.Variable, len(c.Outputs))
 	for i, output := range c.Outputs {
 		// 2. Every ring output body opens for the holder of its published recipient key.
-		slots[i] = openDelivered(api, output)
+		slots[i] = openOutput(api, output.Output)
 		d := c.deliver(api, rc, envelope, output, slots[i], recipientKey(api, slots[i], output.RecipientKey), i)
 		// 3. The auditor rebuilds every blinding from tx_viewing_sk, no UTXO carries ring data.
 		c.assertBlinding(api, envelope, output.Output, slots[i], i)

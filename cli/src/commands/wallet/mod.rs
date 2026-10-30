@@ -1,46 +1,36 @@
-//! A member's anonymous ring state between runs and the scans that read its notes.
+//! A member's anonymous viewing history between runs and the scans that read its notes.
 
 use std::{
-    collections::HashSet,
     fs, io,
     path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{anyhow, ensure, Context as _, Result};
+use anyhow::{ensure, Context as _, Result};
 use custom_ring_interface::RingMode;
-use custom_ring_sdk::{CustomRingConfig, RingError};
-use serde::Deserialize;
-use solana_address::Address;
-use zolana_client::{BlockingIndexer, BlockingRpc, IndexerRpcConfig, Rpc, UtxoScan};
-use zolana_keypair::{x25519::X25519_PUBKEY_LEN, ShieldedKeypair, X25519Pubkey};
-use zolana_ring_client::{
-    delivered::resolve_pending, AnonymousRingState, AnonymousRingSync, RingConfidentialScan,
-};
+use custom_ring_sdk::CustomRingConfig;
+use spr_client::{BlockingIndexer, BlockingRpc, IndexerRpcConfig, Rpc, UtxoScan};
+use spr_keypair::{ShieldedKeypair, X25519Pubkey};
+use spr_transaction::{verify_owned, SpendableDecryptionResult};
+use zolana_ring_client::{AnonymousSync, RingConfidentialScan, ViewingHistory};
 use zolana_ring_transaction::RingAssets;
 use zolana_secret_file::{create_new, Visibility};
-use zolana_transaction::{verify_owned, SpendableDecryptionResult, WalletUtxo};
 
 use crate::{file, Context, Zolana};
 
 /// Under the `keys/` that `new` writes into `.gitignore`.
 pub const ANONYMOUS_RING_DIR: &str = "keys/anonymous-ring";
 
-const STATE_V1: u32 = 1;
-
-pub struct AnonymousRingStore {
+/// One wallet's viewing history, shared by every anonymous ring it holds notes in.
+pub struct AnonymousWalletStore {
     path: PathBuf,
-    ring: Address,
     viewing_pubkey: X25519Pubkey,
-    /// The ring config's, where a store that kept no notes starts its scan.
-    creation_epoch: u64,
 }
 
 #[must_use]
 pub struct StoreLocation<'a> {
     pub dir: &'a Path,
-    pub ring: Address,
     pub keys: &'a ShieldedKeypair,
-    pub creation_epoch: u64,
 }
 
 #[must_use]
@@ -56,119 +46,74 @@ struct ScanAt<'a> {
     assets: &'a RingAssets,
     /// Read only when a found note's mint is missing from `assets`.
     chain_assets: &'a dyn Fn() -> Result<RingAssets>,
-    ring: Address,
     /// The indexer answers only after it holds the slot.
     slot: u64,
     /// Present on an anonymous ring.
-    store: Option<&'a AnonymousRingStore>,
+    store: Option<&'a AnonymousWalletStore>,
 }
 
-#[must_use]
-struct ScanOutcome<'a> {
-    state: AnonymousRingState,
-    found: &'a [WalletUtxo],
-    spent: &'a HashSet<[u8; 32]>,
-}
-
-/// The addresses and first contacts a state holds, what no scan can rebuild.
-struct Decisions<'a>(&'a AnonymousRingState);
-
-/// Held while a store's files change, any part file found under it is a crashed run's.
+/// Held while a store's file changes, any part file found under it is a crashed run's.
 #[must_use]
 struct StoreLock {
     _file: fs::File,
 }
 
-#[derive(Deserialize)]
-struct Versioned {
-    version: u32,
-}
-
-#[derive(Deserialize)]
-struct StateV1 {
-    viewing_pubkey: String,
-    issued_addresses: u32,
-}
-
 impl StoreLocation<'_> {
-    pub fn open(self) -> AnonymousRingStore {
+    pub fn open(self) -> AnonymousWalletStore {
         let viewing_pubkey = self.keys.viewing_pubkey();
-        AnonymousRingStore {
+        AnonymousWalletStore {
             path: self
                 .dir
                 .join(format!("{}.json", hex::encode(viewing_pubkey.as_bytes()))),
-            ring: self.ring,
             viewing_pubkey,
-            creation_epoch: self.creation_epoch,
         }
     }
 }
 
-impl AnonymousRingStore {
-    pub fn load(&self) -> Result<AnonymousRingState> {
+impl AnonymousWalletStore {
+    /// A wallet that never stored a history starts one at its current key.
+    pub fn load(&self) -> Result<ViewingHistory> {
         let text = match fs::read_to_string(&self.path) {
             Ok(text) => text,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return Ok(AnonymousRingState::new(self.ring, self.creation_epoch))
+                return Ok(ViewingHistory::new(self.viewing_pubkey, unix_now()?))
             }
             Err(error) => {
                 return Err(error).with_context(|| format!("cannot read {}", self.path.display()))
             }
         };
-        self.decode(&text)
-            .with_context(|| format!("cannot parse {}", self.path.display()))
+        let history = ViewingHistory::from_json(&text)
+            .with_context(|| format!("cannot parse {}", self.path.display()))?;
+        ensure!(
+            history.entry(&self.viewing_pubkey).is_some(),
+            "{} holds no entry of the wallet's viewing key",
+            self.path.display()
+        );
+        Ok(history)
     }
 
-    /// Applies `change` to the stored state, not to the copy a scan started from.
-    pub fn update<T>(
-        &self,
-        change: impl FnOnce(&mut AnonymousRingState) -> Result<T>,
-    ) -> Result<T> {
-        self.update_locked(|state, _| change(state))
-    }
-
-    /// Any error but a refused anchor read comes back as it was.
-    pub fn retire_refused_first_contact(&self, error: anyhow::Error) -> Result<()> {
-        let Some(&RingError::FirstContactLeavesRefused { recipient, .. }) =
-            error.downcast_ref::<RingError>()
-        else {
-            return Err(error);
-        };
-        self.update(|state| {
-            state.retire_first_contact(&recipient);
-            Ok(())
-        })
-    }
-
-    fn update_locked<T>(
-        &self,
-        change: impl FnOnce(&mut AnonymousRingState, &StoreLock) -> Result<T>,
-    ) -> Result<T> {
-        // Two runs replacing from one load would drop an issued index.
+    /// Applies `change` to the stored history under the store's lock.
+    pub fn update<T>(&self, change: impl FnOnce(&mut ViewingHistory) -> Result<T>) -> Result<T> {
         let lock = self.lock()?;
         let stored = self.load()?;
-        let mut state = stored.clone();
-        let outcome = change(&mut state, &lock)?;
-        if state != stored || !self.path.exists() {
-            lock.replace(&self.path, state.to_json())?;
+        let mut history = stored.clone();
+        let outcome = change(&mut history)?;
+        if history != stored || !self.path.exists() {
+            lock.replace(&self.path, history.to_json())?;
         }
         Ok(outcome)
     }
 
-    /// `None` until a scan keeps its notes.
-    fn kept_utxos(&self) -> Result<Option<Vec<WalletUtxo>>> {
-        let path = self.utxos_path();
-        match fs::read(&path) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .map(Some)
-                .with_context(|| format!("cannot parse {}", path.display())),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(error).with_context(|| format!("cannot read {}", path.display())),
-        }
-    }
-
-    fn utxos_path(&self) -> PathBuf {
-        self.path.with_extension("notes.json")
+    /// Stores `advanced` in place of `from`, refused once another run moved the history.
+    pub fn commit(&self, from: &ViewingHistory, advanced: ViewingHistory) -> Result<()> {
+        self.update(|stored| {
+            ensure!(
+                stored == from,
+                "the viewing history moved while the transfer was built, run it again"
+            );
+            *stored = advanced;
+            Ok(())
+        })
     }
 
     fn lock(&self) -> Result<StoreLock> {
@@ -186,42 +131,16 @@ impl AnonymousRingStore {
             .with_context(|| format!("cannot lock {}", path.display()))?;
         Ok(StoreLock { _file: lock })
     }
-
-    /// A version 1 store restarts at the ring's creation epoch.
-    fn decode(&self, text: &str) -> Result<AnonymousRingState> {
-        let Versioned { version } = serde_json::from_str(text)?;
-        if version != STATE_V1 {
-            let state = AnonymousRingState::from_json(text)?;
-            ensure!(
-                state.ring() == self.ring,
-                "the state belongs to ring {}",
-                state.ring()
-            );
-            return Ok(state);
-        }
-        let state: StateV1 = serde_json::from_str(text)?;
-        ensure!(
-            x25519_pubkey(&state.viewing_pubkey)? == self.viewing_pubkey,
-            "the state belongs to viewing key {}",
-            state.viewing_pubkey
-        );
-        Ok(AnonymousRingState::migrate_v1(
-            self.ring,
-            self.creation_epoch,
-            state.issued_addresses,
-        )?)
-    }
 }
 
 impl WalletScan<'_> {
     pub fn fetch(self, ctx: &Context) -> Result<SpendableDecryptionResult> {
         let store = (self.config.mode == RingMode::Anonymous)
-            .then(|| ctx.anonymous_ring_store(self.keys, self.config));
+            .then(|| ctx.anonymous_wallet_store(self.keys));
         ScanAt {
             keys: self.keys,
             assets: self.assets,
             chain_assets: &|| crate::assets::ring_assets(ctx.rpc()),
-            ring: ctx.ring.program_id(),
             slot: ctx.rpc().get_slot()?,
             store: store.as_ref(),
         }
@@ -230,7 +149,7 @@ impl WalletScan<'_> {
 }
 
 impl ScanAt<'_> {
-    /// Kept notes let a scan resume where the last stopped, without them it starts at the ring's creation.
+    /// The CLI keeps no notes, its anonymous sync reads every stream from index 0 under the store's lock.
     fn fetch<R: BlockingRpc, I: BlockingIndexer>(
         self,
         zolana: &Zolana<R, I>,
@@ -238,7 +157,6 @@ impl ScanAt<'_> {
         let (keys, assets) = (self.keys, self.assets);
         let config = IndexerRpcConfig::at_slot(self.slot);
         let owned = UtxoScan::new(keys, assets.registry())
-            .with_ring_deposit_payload(self.ring, zolana_ring_client::deposit_payload)
             .with_indexer_config(config)
             .fetch(zolana.indexer())?;
         let mut spendable = owned.spendable;
@@ -265,93 +183,60 @@ impl ScanAt<'_> {
             }
         }
         spendable.unknown_asset_ids.extend(notes.unknown_asset_ids);
+        spendable.unknown_mints.extend(notes.unknown_mints);
         let Some(store) = self.store else {
             return Ok(spendable);
         };
-        let stored = store.load()?;
-        let kept = store.kept_utxos()?;
-        let from = match kept {
-            Some(_) => stored,
-            None => {
-                let mut fresh = AnonymousRingState::new(stored.ring(), store.creation_epoch);
-                Decisions(&stored).onto(&mut fresh)?;
-                fresh
-            }
+        let sync = |assets: &RingAssets, history: &ViewingHistory| {
+            zolana.block_on(async {
+                AnonymousSync::new(keys, assets)
+                    .with_full_rescan()
+                    .with_indexer_config(config)
+                    .with_deposit_payload(zolana_ring_client::deposit_payload)
+                    .fetch(zolana.as_async().indexer(), history)
+                    .await
+                    .map_err(anyhow::Error::from)
+            })
         };
-        let kept = kept.unwrap_or_default();
-        let mut synced = zolana.block_on(async {
-            AnonymousRingSync::new(keys, assets)
-                .with_indexer_config(config)
-                .with_deposit_payload(zolana_ring_client::deposit_payload)
-                .with_held_utxos(owned.history.utxos.iter().chain(&kept))
-                .with_default_ring_spends(owned.history.transactions.clone())
-                .fetch(zolana.as_async().indexer(), &from, self.slot)
-                .await
-                .map_err(anyhow::Error::from)
+        let scan = store.update(|history| {
+            let mut scan = sync(assets, history)?;
+            // A note in a mint registered after the registry read opens under the chain's assets.
+            if !scan.unmatched.is_empty()
+                || !scan.decrypted.unknown_asset_ids.is_empty()
+                || !scan.decrypted.unknown_mints.is_empty()
+            {
+                scan = sync(&(self.chain_assets)()?, history)?;
+            }
+            *history = scan.history.clone();
+            Ok(scan)
         })?;
-        // The saved state moves past a pending note, no later scan reads it again.
-        if !synced.pending_assets.is_empty() {
-            resolve_pending(
-                keys,
-                &mut synced.decrypted,
-                &mut synced.pending_assets,
-                &(self.chain_assets)()?,
-            )?;
-        }
-        let found = verify_owned(keys, &synced.decrypted)?
+        let found = verify_owned(keys, &scan.decrypted)?
             .spendable()
             .with_transaction_keys(keys)?;
-        let utxos = ScanOutcome {
-            state: synced.state,
-            found: &found.utxos().cloned().collect::<Vec<_>>(),
-            spent: &synced.decrypted.spent_nullifiers,
+        let spent = &scan.decrypted.spent_nullifiers;
+        for balance in &mut spendable.balances.assets {
+            balance
+                .utxos
+                .retain(|held| !spent.contains(&held.nullifier));
+            balance.amount = balance
+                .utxos
+                .iter()
+                .fold(0, |sum, held| sum.saturating_add(held.utxo.amount));
         }
-        .record(store)?;
-        for utxo in utxos {
+        spendable
+            .utxos_with_data
+            .retain(|held| !spent.contains(&held.nullifier));
+        for utxo in found.utxos() {
             if !spendable
                 .utxos()
                 .any(|held| held.utxo_hash == utxo.utxo_hash)
             {
-                spendable.utxos_with_data.push(utxo);
+                spendable.utxos_with_data.push(utxo.clone());
             }
         }
         spendable.unknown_asset_ids.extend(found.unknown_asset_ids);
         spendable.unknown_mints.extend(found.unknown_mints);
         Ok(spendable)
-    }
-}
-
-impl ScanOutcome<'_> {
-    /// Under the store's lock the notes land before the state, a crash between leaves a scan that finds them again.
-    fn record(self, store: &AnonymousRingStore) -> Result<Vec<WalletUtxo>> {
-        let ScanOutcome {
-            mut state,
-            found,
-            spent,
-        } = self;
-        store.update_locked(|current, lock| {
-            let mut utxos = store.kept_utxos()?.unwrap_or_default();
-            utxos.retain(|utxo| !spent.contains(&utxo.nullifier));
-            for utxo in found {
-                if !utxos.iter().any(|kept| kept.utxo_hash == utxo.utxo_hash) {
-                    utxos.push(utxo.clone());
-                }
-            }
-            lock.replace(&store.utxos_path(), serde_json::to_vec(&utxos)?)?;
-            Decisions(current).onto(&mut state)?;
-            *current = state;
-            Ok(utxos)
-        })
-    }
-}
-
-impl Decisions<'_> {
-    fn onto(self, state: &mut AnonymousRingState) -> Result<()> {
-        for issued in self.0.issued() {
-            state.issue(issued.index, issued.pairing.clone())?;
-        }
-        state.keep_first_contacts(self.0);
-        Ok(())
     }
 }
 
@@ -371,36 +256,31 @@ impl StoreLock {
 }
 
 impl Context {
-    pub fn anonymous_ring_store(
-        &self,
-        keys: &ShieldedKeypair,
-        config: &CustomRingConfig,
-    ) -> AnonymousRingStore {
+    pub fn anonymous_wallet_store(&self, keys: &ShieldedKeypair) -> AnonymousWalletStore {
         StoreLocation {
             dir: &self.path(Path::new(ANONYMOUS_RING_DIR)),
-            ring: self.ring.program_id(),
             keys,
-            creation_epoch: config.creation_epoch(),
         }
         .open()
     }
 }
 
-fn x25519_pubkey(text: &str) -> Result<X25519Pubkey> {
-    let bytes: [u8; X25519_PUBKEY_LEN] = hex::decode(text)?
-        .try_into()
-        .map_err(|_| anyhow!("key {text} is not {X25519_PUBKEY_LEN} bytes"))?;
-    Ok(X25519Pubkey::from_bytes(bytes)?)
+fn unix_now() -> Result<i64> {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("the system clock is before the Unix epoch")?
+        .as_secs();
+    Ok(i64::try_from(seconds)?)
 }
 
 #[cfg(test)]
 pub(crate) mod fixtures {
-    use zolana_keypair::SigningKey;
+    use solana_address::Address;
+    use spr_keypair::SigningKey;
 
     use super::*;
 
     pub(crate) const RING: Address = Address::new_from_array([4; 32]);
-    pub(crate) const EPOCH: u64 = 3;
 
     pub(crate) fn keypair(seed: u8) -> ShieldedKeypair {
         ShieldedKeypair::from_keypair(SigningKey::from_ed25519_bytes(&[seed; 32])).unwrap()
@@ -409,7 +289,7 @@ pub(crate) mod fixtures {
     /// A keypair with a store no other test shares.
     pub(crate) struct Member {
         pub(crate) keys: ShieldedKeypair,
-        pub(crate) store: AnonymousRingStore,
+        pub(crate) store: AnonymousWalletStore,
         dir: PathBuf,
     }
 
@@ -421,9 +301,7 @@ pub(crate) mod fixtures {
             let _ = fs::remove_dir_all(&dir);
             let store = StoreLocation {
                 dir: &dir,
-                ring: RING,
                 keys: &keys,
-                creation_epoch: EPOCH,
             }
             .open();
             Self { keys, store, dir }
@@ -443,186 +321,73 @@ pub(crate) mod fixtures {
 
 #[cfg(test)]
 mod tests {
-    use custom_ring_interface::stream::TagIndex;
-    use zolana_ring_client::{AnonymousError, SentFirstContact, ANCHOR_DECOYS, PAIR_IDLE_EPOCHS};
-    use zolana_ring_keys::Pairing;
+    use zolana_ring_client::AnonymousError;
 
     use super::{
-        fixtures::{keypair, Member, EPOCH, RING},
+        fixtures::{keypair, Member},
         *,
     };
 
-    fn sent_contact() -> SentFirstContact {
-        SentFirstContact {
-            recipient: keypair(2).viewing_pubkey(),
-            tree_id: 0,
-            leaf_index: 10,
-            utxo_hash: [0x21; 32],
-            slot_secret: [0x22; 32],
-            blinding: [0x23; 32],
-            epoch: EPOCH,
-            index: TagIndex::new(0).unwrap(),
-            asset: Address::new_from_array([0x31; 32]),
-            amount: 4,
-        }
-    }
-
-    fn pinned(contact: SentFirstContact) -> AnonymousRingState {
-        let mut state = AnonymousRingState::new(RING, EPOCH);
-        state.record_first_contact(contact);
-        let mut json: serde_json::Value = serde_json::from_str(&state.to_json()).unwrap();
-        json["sent"][0]["decoys"] = (1u8..)
-            .take(ANCHOR_DECOYS)
-            .map(|seed| hex::encode([seed; 32]))
-            .collect();
-        json["sent"][0]["lastEpoch"] = (EPOCH + 5).into();
-        AnonymousRingState::from_json(&json.to_string()).unwrap()
-    }
-
-    fn v1(owner: &ShieldedKeypair, issued: u32) -> String {
-        format!(
-            r#"{{"version":1,"viewing_pubkey":"{}","issued_addresses":{issued},"known_counterparties":[]}}"#,
-            hex::encode(owner.viewing_pubkey().as_bytes())
-        )
-    }
-
     #[test]
-    fn a_new_store_starts_at_the_rings_creation_epoch_and_a_v1_store_keeps_its_addresses() {
-        let member = Member::new(1, "versions");
+    fn a_new_store_starts_a_history_at_the_wallets_viewing_key() {
+        let member = Member::new(1, "fresh");
         let fresh = member.store.load().unwrap();
-        assert_eq!(fresh, AnonymousRingState::new(RING, EPOCH));
-
-        let path = member.state_file();
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, v1(&member.keys, 3)).unwrap();
-        let migrated = member.store.load().unwrap();
+        assert_eq!(fresh.entries().len(), 1);
         assert_eq!(
-            migrated,
-            AnonymousRingState::migrate_v1(RING, EPOCH, 3).unwrap()
+            fresh.current().viewing_pubkey(),
+            member.keys.viewing_pubkey()
         );
-        assert_eq!(migrated.scanned_epoch(), None, "a migration rescans");
-        let indexes: Vec<u32> = migrated
-            .issued()
-            .iter()
-            .map(|issued| issued.index)
-            .collect();
-        assert_eq!(indexes, [0, 1, 2]);
+        assert_eq!(fresh.current().tx_count(), 0);
+        assert!(!member.state_file().exists(), "a load writes nothing");
     }
 
     #[test]
-    fn a_foreign_or_unknown_state_is_refused() {
+    fn a_foreign_or_older_store_is_refused() {
         let member = Member::new(1, "foreign");
         let path = member.state_file();
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, v1(&keypair(2), 3)).unwrap();
+        let other = ViewingHistory::new(keypair(2).viewing_pubkey(), 1);
+        fs::write(&path, other.to_json()).unwrap();
         assert!(member.store.load().is_err(), "another viewing key");
-        let other_ring = AnonymousRingState::new(Address::new_from_array([5; 32]), EPOCH);
-        fs::write(&path, other_ring.to_json()).unwrap();
-        assert!(member.store.load().is_err(), "another ring");
-        fs::write(
-            &path,
-            v1(&member.keys, 3).replace(r#""version":1"#, r#""version":9"#),
-        )
-        .unwrap();
+        fs::write(&path, r#"{"version":4,"ring":"x"}"#).unwrap();
         let refused = member.store.load().unwrap_err();
         assert!(matches!(
             refused.downcast_ref::<AnonymousError>(),
-            Some(AnonymousError::AnonymousRingStateVersion { version: 9 })
+            Some(AnonymousError::ViewingHistoryVersion { version: 4 })
         ));
     }
 
     #[test]
-    fn concurrent_updates_keep_every_issued_index() {
+    fn a_commit_lands_only_on_the_history_it_was_built_from() {
+        let member = Member::new(1, "commit");
+        let keys = &member.keys;
+        let loaded = member.store.load().unwrap();
+        let first = loaded.sender_tag(keys).unwrap().history;
+        member.store.commit(&loaded, first.clone()).unwrap();
+        assert_eq!(member.store.load().unwrap(), first);
+        let stale = loaded.sender_tag(keys).unwrap().history;
+        let refused = member.store.commit(&loaded, stale).unwrap_err();
+        assert!(refused.to_string().contains("moved"), "{refused}");
+        assert_eq!(member.store.load().unwrap().current().tx_count(), 1);
+    }
+
+    #[test]
+    fn concurrent_updates_keep_every_counter_step() {
         let member = Member::new(1, "concurrent");
-        let store = &member.store;
+        let (store, keys) = (&member.store, &member.keys);
         std::thread::scope(|scope| {
-            for index in 0..16 {
+            for _ in 0..16 {
                 scope.spawn(move || {
                     store
-                        .update(|state| Ok(state.issue(index, Pairing::default())?))
+                        .update(|history| {
+                            *history = history.request_tag(keys)?.history;
+                            Ok(())
+                        })
                         .unwrap()
                 });
             }
         });
-        assert_eq!(store.load().unwrap().issued().len(), 16);
-    }
-
-    #[test]
-    fn a_scan_result_keeps_the_addresses_and_pairing_issued_while_it_ran() {
-        let member = Member::new(1, "decisions");
-        member
-            .store
-            .update(|state| Ok(state.issue(0, Pairing::off())?))
-            .unwrap();
-        let mut scanned = AnonymousRingState::new(RING, EPOCH);
-        scanned.issue(0, Pairing::default()).unwrap();
-        scanned.issue(4, Pairing::default()).unwrap();
-        member
-            .store
-            .update(|current| {
-                Decisions(current).onto(&mut scanned)?;
-                *current = scanned;
-                Ok(())
-            })
-            .unwrap();
-        let stored = member.store.load().unwrap();
-        let issued: Vec<(u32, bool)> = stored
-            .issued()
-            .iter()
-            .map(|issued| (issued.index, issued.pairing.is_off()))
-            .collect();
-        assert_eq!(issued, [(0, true), (4, false)]);
-    }
-
-    #[test]
-    fn a_rebuilt_state_keeps_each_first_contacts_pin_and_last_pair_payment() {
-        let contact = sent_contact();
-        let stored = pinned(contact);
-        let late = EPOCH + PAIR_IDLE_EPOCHS + 2;
-        let mut fresh = AnonymousRingState::new(RING, EPOCH);
-        Decisions(&stored).onto(&mut fresh).unwrap();
-        assert!(stored.pair_anchor(&contact.recipient, late).is_some());
-        assert_eq!(
-            fresh.pair_anchor(&contact.recipient, late),
-            stored.pair_anchor(&contact.recipient, late)
-        );
-    }
-
-    #[test]
-    fn a_refused_anchor_read_retires_its_first_contact_and_a_running_scan_keeps_it_retired() {
-        let member = Member::new(1, "retire");
-        let contact = sent_contact();
-        member
-            .store
-            .update(|state| {
-                *state = pinned(contact);
-                Ok(())
-            })
-            .unwrap();
-        let other = member
-            .store
-            .retire_refused_first_contact(anyhow!("indexer down"))
-            .unwrap_err();
-        assert_eq!(other.to_string(), "indexer down");
-        let mut scanned = member.store.load().unwrap();
-        assert_eq!(scanned.sent().count(), 1);
-
-        let refused = anyhow::Error::from(RingError::FirstContactLeavesRefused {
-            tree: Address::new_from_array([9; 32]),
-            recipient: contact.recipient,
-        })
-        .context("landing the payment");
-        member.store.retire_refused_first_contact(refused).unwrap();
-        assert_eq!(member.store.load().unwrap().sent().count(), 0);
-        member
-            .store
-            .update(|current| {
-                Decisions(current).onto(&mut scanned)?;
-                *current = scanned;
-                Ok(())
-            })
-            .unwrap();
-        assert_eq!(member.store.load().unwrap().sent().count(), 0);
+        assert_eq!(store.load().unwrap().current().request_count(), 16);
     }
 
     #[test]

@@ -1,5 +1,5 @@
-use zolana_hasher::primitives::hash_bytes;
-use zolana_transaction::{AssetRegistry, Mint, TransactionError};
+use spr_hasher::primitives::hash_bytes;
+use spr_transaction::{AssetRegistry, Mint, TransactionError};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RingAssets {

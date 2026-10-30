@@ -2,7 +2,17 @@
 
 use borsh::BorshDeserialize;
 use solana_address::Address;
-use zolana_event::{EncryptedRingDepositOutput, OutputDataEncoding, ENCRYPTED_RING_DEPOSIT_SCHEME};
+use spr_event::{EncryptedRingDepositOutput, OutputDataEncoding, ENCRYPTED_RING_DEPOSIT_SCHEME};
+use spr_event_parser::decode_encrypted_ring_deposit_output_data;
+use spr_keypair::{ShieldedAddress, X25519Pubkey};
+use spr_transaction::{
+    AssetRegistry, DecryptLabel, DecryptRequest, DepositPayload, ShieldedKeys, ShieldedTransaction,
+    TransactionError, WalletUtxo,
+};
+use zeroize::Zeroizing;
+use zolana_ring_transaction::{is_contributory, RingDepositPlaintext};
+
+use crate::{exactly_one, AnonymousError};
 
 /// One deposit slot of a transaction.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,13 +50,136 @@ fn deposit_of(view_tag: &[u8; 32], payload: &[u8], ring: Address) -> Option<Ring
     })
 }
 
+pub(crate) struct DepositOpener<'a, K: ?Sized> {
+    pub keys: &'a K,
+    pub address: &'a ShieldedAddress,
+    pub assets: &'a AssetRegistry,
+    pub deposit_payload: DepositPayload,
+}
+
+pub(crate) struct DepositSlot<'a> {
+    pub deposit: &'a ShieldedTransaction,
+    pub position: usize,
+    pub viewing_pubkey: X25519Pubkey,
+}
+
+pub(crate) enum OpenedDeposit {
+    Note(Box<WalletUtxo>),
+    UnknownMint(Address),
+}
+
+impl<K: ShieldedKeys + ?Sized> DepositOpener<'_, K> {
+    /// Deposits of any ring among `transactions` under a held viewing key's tag, nullifiers unset.
+    pub(crate) fn open_held(
+        &self,
+        transactions: &[ShieldedTransaction],
+    ) -> Result<Vec<OpenedDeposit>, AnonymousError> {
+        let held = self.keys.viewing_public_keys();
+        let mut opened = Vec::new();
+        for deposit in transactions {
+            for (position, slot) in deposit.output_slots.iter().enumerate() {
+                let Some(&viewing_pubkey) = held.iter().find(|key| key.u() == slot.view_tag) else {
+                    continue;
+                };
+                opened.extend(self.open(DepositSlot {
+                    deposit,
+                    position,
+                    viewing_pubkey,
+                })?);
+            }
+        }
+        Ok(opened)
+    }
+
+    /// A deposit's published hash, not its decryption, proves it the owner's.
+    pub(crate) fn open(
+        &self,
+        slot: DepositSlot<'_>,
+    ) -> Result<Option<OpenedDeposit>, AnonymousError> {
+        let DepositSlot {
+            deposit,
+            position,
+            viewing_pubkey,
+        } = slot;
+        let slot = &deposit.output_slots[position];
+        let context = &slot.output_context;
+        let Ok(output) = decode_encrypted_ring_deposit_output_data(&slot.payload) else {
+            return Ok(None);
+        };
+        let Ok(tx_viewing_pubkey) = X25519Pubkey::from_bytes(output.encrypted.tx_viewing_pk) else {
+            return Ok(None);
+        };
+        if !is_contributory(&tx_viewing_pubkey) {
+            return Ok(None);
+        }
+        let ciphertext = match (self.deposit_payload)(&output.encrypted.ciphertext) {
+            Ok(wrapped) => wrapped.unwrap_or(&output.encrypted.ciphertext),
+            Err(_) => return Ok(None),
+        };
+        let request = DecryptRequest {
+            ciphertext,
+            viewing_pubkey,
+            tx_viewing_pubkey,
+            salt: output.encrypted.salt,
+            slot_index: 0,
+            label: DecryptLabel::RingDeposit,
+        };
+        let plaintext = Zeroizing::new(exactly_one(self.keys.decrypt(&[request])?)?);
+        let Ok(plaintext) = RingDepositPlaintext::deserialize(&plaintext) else {
+            return Ok(None);
+        };
+        let asset = match self.assets.mint(&Address::new_from_array(output.asset)) {
+            Ok(asset) => asset,
+            Err(TransactionError::UnknownMint(mint)) => {
+                return Ok(Some(OpenedDeposit::UnknownMint(mint)))
+            }
+            Err(_) => return Ok(None),
+        };
+        let utxo = plaintext.into_utxo(
+            self.address.signing_pubkey,
+            asset,
+            output.amount,
+            Address::new_from_array(output.ring_program_id),
+        );
+        let data_hash = output.data_hash.unwrap_or_default();
+        // Utxo data under a zero data hash is unbound.
+        if utxo.data.utxo_data().is_some() && data_hash == [0; 32] {
+            return Ok(None);
+        }
+        let rebuilt = utxo.hash(
+            &self.address.nullifier_pubkey,
+            &data_hash,
+            &output.ring_data_hash,
+            context.tree_id,
+        );
+        if !rebuilt.is_ok_and(|hash| hash == context.hash) {
+            return Ok(None);
+        }
+        Ok(Some(OpenedDeposit::Note(Box::new(WalletUtxo {
+            utxo,
+            nullifier_pubkey: self.address.nullifier_pubkey,
+            utxo_hash: context.hash,
+            nullifier: [0; 32],
+            tx_viewing_key: None,
+            data_hash: output.data_hash,
+            ring_data_hash: Some(output.ring_data_hash),
+            tree_id: context.tree_id,
+            leaf_index: context.leaf_index,
+            latest_tree_id: None,
+            slot: deposit.slot,
+            tx_signature: deposit.tx_signature,
+            slot_index: u32::try_from(position).map_err(|_| TransactionError::TooManyOutputs)?,
+        }))))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use custom_ring_interface::RingDepositAuditCapsule;
-    use zolana_keypair::ViewingKey;
+    use spr_keypair::ViewingKey;
 
     use crate::deposit_payload;
-    use zolana_transaction::serialization::ring_deposit::RingDepositPlaintext;
+    use zolana_ring_transaction::RingDepositPlaintext;
 
     #[test]
     fn recipient_opens_plain_and_auditor_wrapped_ciphertexts() {

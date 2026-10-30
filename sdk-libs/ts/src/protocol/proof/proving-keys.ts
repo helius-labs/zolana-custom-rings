@@ -9,15 +9,13 @@ import {
   ANONYMOUS_ENTRY_OUTPUTS,
   ANONYMOUS_MERGE_WIDTHS,
   DELIVERED_AUDIT_CAPACITIES,
-  PACKED_AUDIT_CAPACITIES,
 } from "../codec/ring-disclosure-layout.js";
-import { RING_AUTHORITY_SHAPES } from "../transaction/spp.js";
+import { N_PUBLIC_SLOTS, RING_AUTHORITY_SHAPES } from "../transaction/spp.js";
 
 export { RING_PROVING_KEY_SHA256S };
 
 /** A ring circuit by the shape its key serves, Rust `RingCircuit`. */
 export type RingKeyCircuit =
-  | Readonly<{ family: "packedAudit"; outputs: number }>
   | Readonly<{ family: "deliveredAudit"; outputs: number }>
   | Readonly<{ family: "anonymousAudit"; inputClass: number; outputs: number }>
   /** Opens every spent UTXO, the key of a transfer spending a default-ring note. */
@@ -30,6 +28,31 @@ export type RingKeyCircuit =
   | Readonly<{ family: "deposit"; capacity: number }>
   | Readonly<{ family: "anonymousMerge"; width: number }>;
 
+export type PolicyKeyCircuit = Extract<
+  RingKeyCircuit,
+  { family: "memberPolicy" | "delegatePolicy" }
+>;
+
+/** Record pool widths, each subject pool as wide. */
+export interface PolicyPoolCapacity {
+  readonly own: number;
+  /** Zero on the own-only key. */
+  readonly curator: number;
+}
+
+/** Go `PolicyInputs.recordCapacity` over deduplicated subjects. */
+export function policyPoolCapacity(circuit: PolicyKeyCircuit): PolicyPoolCapacity {
+  const member = circuit.family === "memberPolicy";
+  const withdrawals = member ? circuit.withdrawals : 0;
+  // Withdrawal assets settle through the public slots.
+  const withdrawalAssets = Math.min(withdrawals, N_PUBLIC_SLOTS);
+  const distinct = 1 + 2 * circuit.outputs + withdrawals;
+  return Object.freeze({
+    own: distinct + Math.max(withdrawalAssets, member ? N_PUBLIC_SLOTS : 0),
+    curator: circuit.ownOnly ? 0 : distinct + withdrawalAssets,
+  });
+}
+
 /** Rust `RING_KEYS`, every ring key in its order, `name` the circuit type the prover serves. */
 export const RING_KEYS: readonly Readonly<{
   circuit: RingKeyCircuit;
@@ -37,10 +60,6 @@ export const RING_KEYS: readonly Readonly<{
 }>[] = Object.freeze(
   (
     [
-      ...PACKED_AUDIT_CAPACITIES.map(
-        (outputs) =>
-          [{ family: "packedAudit", outputs }, `custom-ring-audit-packed-${outputs}`] as const,
-      ),
       ...DELIVERED_AUDIT_CAPACITIES.map(
         (outputs) =>
           [
@@ -70,7 +89,7 @@ export const RING_KEYS: readonly Readonly<{
             (ownOnly) =>
               [
                 { family: "memberPolicy", outputs, withdrawals, ownOnly },
-                `custom-ring-policy-member-v2-${outputs}-w${withdrawals}-${ownOnly ? "own" : "curator"}`,
+                `custom-ring-policy-member-v3-${outputs}-w${withdrawals}-${ownOnly ? "own" : "curator"}`,
               ] as const,
           ),
         ),
@@ -80,7 +99,7 @@ export const RING_KEYS: readonly Readonly<{
           (ownOnly) =>
             [
               { family: "delegatePolicy", inputs, outputs, ownOnly },
-              `custom-ring-policy-delegate-v2-${inputs}x${outputs}-${ownOnly ? "own" : "curator"}`,
+              `custom-ring-policy-delegate-v3-${inputs}x${outputs}-${ownOnly ? "own" : "curator"}`,
             ] as const,
         ),
       ),
@@ -129,7 +148,6 @@ function pinnedProvingKey(name: string, circuit: string): ExpectedProvingKey {
 
 function sameRingCircuit(left: RingKeyCircuit, right: RingKeyCircuit): boolean {
   switch (left.family) {
-    case "packedAudit":
     case "deliveredAudit":
       return right.family === left.family && right.outputs === left.outputs;
     case "memberPolicy":

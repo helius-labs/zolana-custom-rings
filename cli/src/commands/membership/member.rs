@@ -4,8 +4,8 @@ use anyhow::{ensure, Result};
 use custom_ring_sdk::{CustomRing, MemberRecords, RegisterKey, RingMode, RingOperation};
 use solana_keypair::Keypair;
 use solana_signer::Signer;
-use zolana_client::{BlockingIndexer, BlockingRpc};
-use zolana_keypair::ShieldedKeypair;
+use spr_client::{BlockingIndexer, BlockingRpc};
+use spr_keypair::ShieldedKeypair;
 use zolana_ring_client::RingIndexer;
 use zolana_ring_policy::Member;
 
@@ -182,8 +182,8 @@ mod tests {
 
     use custom_ring_interface::{EscrowKey, QueueEntry};
     use custom_ring_sdk::RingError;
-    use zolana_client::{ClientError, Rpc, WitnessReader};
-    use zolana_keypair::X25519Keypair;
+    use spr_client::{ClientError, Rpc, WitnessReader};
+    use spr_keypair::X25519Keypair;
     use zolana_ring_client::{AuditError, NullifierKeyEnvelope};
     use zolana_ring_client::{RingIndexer, RingIndexerError, RingRpcError};
     use zolana_ring_indexer::rpc::{

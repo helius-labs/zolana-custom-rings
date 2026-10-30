@@ -1,4 +1,3 @@
-import { customRingDepositPayload } from "../../src/protocol/transaction/deposit-payload.js";
 // Shared by the ring live suites, the harness ring pins the released rows.
 import { readFile } from "node:fs/promises";
 
@@ -55,8 +54,11 @@ import {
   ringComputeUnitLimit,
   ringWalletKeys,
   syncRingWallet,
+  createKitRingSubmissionTransport,
   type RingReadTarget,
+  type RingTransactionSubmission,
 } from "../../src/ring/index.js";
+import type { RingSubmissionTransport } from "../../src/rpc/ports.js";
 import { MEMBER_REGISTRY_PROJECTION_ERRORS } from "../../src/rpc/projection.js";
 import {
   currentSlot,
@@ -274,10 +276,7 @@ export async function sync(client: CustomRingClient, actor: Actor): Promise<void
     client,
     wallet: actor.wallet,
     keys: ringWalletKeys(actor.keys, LocalRingKeys.fromKeypair(actor.keypair)),
-    config: {
-      depositPayloadDecoder: customRingDepositPayload,
-      requireSlot: await currentSlot(client),
-    },
+    config: { requireSlot: await currentSlot(client) },
   });
 }
 
@@ -467,4 +466,26 @@ export async function enrolInAllow(
     ringComputeUnitLimit(RingInstructionTag.authorityWriteRecords),
   );
   for (const member of members) await awaitLists(client, ringProgramId, member, bit, true);
+}
+
+export async function settle(
+  submission: RingTransactionSubmission,
+  client: CustomRingClient,
+  signers: readonly KeyPairSigner[],
+) {
+  return settleWithTransport(submission, createKitRingSubmissionTransport(client, signers));
+}
+
+export async function settleWithTransport(
+  submission: RingTransactionSubmission,
+  transport: RingSubmissionTransport,
+) {
+  const deadline = Date.now() + 180_000;
+  for (;;) {
+    const result = await submission.send(transport);
+    if (result.kind === "confirmed") return result;
+    if (result.kind === "failed") throw new Error(`ring transaction failed (${result.signature})`);
+    if (Date.now() > deadline) throw new Error(`ring transaction unresolved (${result.signature})`);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
 }

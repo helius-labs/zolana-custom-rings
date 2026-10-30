@@ -18,15 +18,15 @@ pub use rule_table::{
 pub use rules::{OutputSubjects, RecordLists, RuleRefusal, TransferSubject, TransferSubjects};
 
 /// The ring id field a UTXO inside the ring carries.
-pub fn ring_id_field(program_id: &[u8; 32]) -> Result<[u8; 32], zolana_hasher::HasherError> {
-    zolana_hasher::primitives::hash_bytes(program_id)
+pub fn ring_id_field(program_id: &[u8; 32]) -> Result<[u8; 32], spr_hasher::HasherError> {
+    spr_hasher::primitives::hash_bytes(program_id)
 }
 
 /// The source slot field of a curator's member registry, an address can exceed the modulus.
-pub fn registry_field(registry: &[u8; 32]) -> Result<[u8; 32], zolana_hasher::HasherError> {
-    zolana_hasher::primitives::hash_bytes(registry)
+pub fn registry_field(registry: &[u8; 32]) -> Result<[u8; 32], spr_hasher::HasherError> {
+    spr_hasher::primitives::hash_bytes(registry)
 }
 
 pub(crate) fn field_u8(value: u8) -> [u8; 32] {
-    zolana_hasher::primitives::right_align(&[value])
+    spr_hasher::primitives::right_align(&[value])
 }

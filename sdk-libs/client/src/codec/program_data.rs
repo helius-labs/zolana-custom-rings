@@ -2,7 +2,7 @@
 
 use solana_account::Account;
 use solana_address::Address;
-use zolana_interface::BPF_LOADER_UPGRADEABLE_ID;
+use spr_interface::BPF_LOADER_UPGRADEABLE_ID;
 
 /// Tag, slot and optional authority, the bytes before the program.
 pub const PROGRAM_DATA_METADATA_LEN: usize = 45;

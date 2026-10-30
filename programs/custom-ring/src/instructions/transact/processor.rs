@@ -1,6 +1,4 @@
-use custom_ring_interface::{
-    CustomRingError, InstructionTag, RailSigner, RingRail, RingTransactData,
-};
+use custom_ring_interface::{CustomRingError, InstructionTag, RailSigner, RingTransactData};
 use pinocchio::{
     error::ProgramError,
     sysvars::{clock::Clock, Sysvar},
@@ -11,7 +9,7 @@ use super::{
     accounts::TransactCheck,
     verify::{escrows_keys, RingStatements},
 };
-use crate::instructions::loader::{load_config, load_spp_tree_root, validate_spp_program};
+use crate::instructions::loader::{load_config, validate_spp_program};
 
 #[inline(never)]
 pub fn process_transact_ix(
@@ -41,34 +39,18 @@ pub fn process_transact_ix(
         slot,
     }
     .validate(accounts)?;
-    // 5. An anonymous statement binds the landing epoch and the first-contact tree root.
-    let epoch = match data.rail {
-        RingRail::Anonymous => data.epoch(slot)?,
-        RingRail::Confidential | RingRail::Delegate => 0,
-    };
-    let first_contact_root = match data.anchor {
-        Some(anchor) => load_spp_tree_root(
-            accounts
-                .get_mut(usize::from(anchor.tree))
-                .ok_or(CustomRingError::FirstContactRootMissing)?,
-            anchor.root_index,
-        )?,
-        None => [0; 32],
-    };
-    // 6. A bad SPP proof point is refused before either pairing.
+    // 5. A bad SPP proof point is refused before either pairing.
     let spp_data = data.spp_instruction_data(&config)?;
-    // 7. The audit proof and the policy proof verify over values the program derives.
+    // 6. The audit proof and the policy proof verify over values the program derives.
     RingStatements {
         program_id,
         config: &config,
         transfer: &transfer,
         accounts: &validated,
-        epoch,
-        first_contact_root: &first_contact_root,
         key_escrow: escrows_keys(&config)?,
     }
     .verify()?;
-    // 8. SPP verifies its own proof over the expanded data the ring PDA signs.
+    // 7. SPP verifies its own proof over the expanded data the ring PDA signs.
     let spp = accounts
         .get(validated.spp..)
         .ok_or(ProgramError::NotEnoughAccountKeys)?;

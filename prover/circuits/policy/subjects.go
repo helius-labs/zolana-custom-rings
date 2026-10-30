@@ -5,63 +5,57 @@ import (
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
-
-type Entry struct {
-	Own     registry.QuadOpening
-	Curator []registry.QuadOpening
-}
 
 type subjectView struct {
 	// onList[i] is set when the subject is on list i+1 in the registry serving the list.
 	onList [NSources]frontend.Variable
 	// escrowKey is the own record's escrow key, zero for an absent member.
-	escrowKey  frontend.Variable
-	mintPolicy frontend.Variable
+	escrowKey frontend.Variable
 }
 
 type subjects struct {
 	sender         subjectView
 	owners, assets []subjectView
 	mintPolicies   []mintPolicyWires
+	publicAssets   []publicAsset
 }
 
-// resolveSubjects opens the sender, every UTXO output's owner and, under an asset rule, every UTXO output's asset.
-func (p *Policy) resolveSubjects(api frontend.API, t tableView, sender frontend.Variable, outputs []utxoView) subjects {
-	s := subjects{
-		sender:       p.resolve(api, t.sources, p.SenderEntry, 1, sender),
-		owners:       make([]subjectView, len(outputs)),
-		assets:       make([]subjectView, len(outputs)),
-		mintPolicies: make([]mintPolicyWires, len(outputs)),
-	}
-	for o, out := range outputs {
-		s.owners[o] = p.resolve(api, t.sources, p.OwnerEntries[o], out.utxo, out.ownerPkHash)
-		s.assets[o] = p.resolve(api, t.sources, p.AssetEntries[o], out.utxo, out.asset)
-		s.mintPolicies[o] = decodeMintPolicy(api, s.assets[o].mintPolicy)
-	}
-	return s
-}
-
-// resolve opens member in the own registry, and in the curator registry when a list is foreign, while cond holds.
-func (p *Policy) resolve(api frontend.API, sources sourceView, e Entry, cond, member frontend.Variable) subjectView {
-	// 1. The member's record, or the low record proving it absent, lies under own_root.
-	own, escrowKey, mintPolicy, _ := e.Own.Resolve(api, cond, p.OwnRoot, member)
-	// 2. The same holds under curator_root whenever a list reads from the curator registry.
-	var curator frontend.Variable = 0
+func (p *Policy) resolveSubjects(api frontend.API, table tableView, sender frontend.Variable, payments []utxoView) subjects {
+	own := openSubjectPool(api, openRecordPool(api, 1, p.OwnRoot, p.OwnRecords, p.OwnProof), p.OwnSubjects)
+	var curator subjectPool
 	if !p.OwnOnly {
-		curator, _, _, _ = e.Curator[0].Resolve(api, api.Mul(cond, sources.anyForeign), p.CuratorRoot, member)
+		curator = openSubjectPool(api, openRecordPool(api, table.sources.anyForeign, p.CuratorRoot, p.CuratorRecords, p.CuratorProof), p.CuratorSubjects)
 	}
-	// 3. A record's list bitmap splits bit per list, bit i marks list i+1.
-	ownBits, curatorBits := api.ToBinary(own, registry.ListBits), api.ToBinary(curator, registry.ListBits)
-	view := subjectView{escrowKey: escrowKey, mintPolicy: mintPolicy}
-	for i := range view.onList {
-		view.onList[i] = api.Select(sources.foreign[i], curatorBits[i], ownBits[i])
+	resolve := func(entry PoolEntry, active, member frontend.Variable) (subjectView, mintPolicyWires) {
+		record := own.resolve(api, recordQuery{active: active, member: member, index: entry.Own})
+		view := subjectView{onList: record.onList, escrowKey: record.escrowKey}
+		if !p.OwnOnly {
+			curated := curator.resolve(api, recordQuery{active: api.Mul(active, table.sources.anyForeign), member: member, index: entry.Curator[0]})
+			for i, on := range curated.onList {
+				view.onList[i] = api.Select(table.sources.foreign[i], on, record.onList[i])
+			}
+		}
+		return view, record.mintPolicy
 	}
-	return view
+	resolved := subjects{owners: make([]subjectView, len(payments)), assets: make([]subjectView, len(payments)), mintPolicies: make([]mintPolicyWires, len(payments))}
+	resolved.sender, _ = resolve(p.SenderEntry, 1, sender)
+	for i, pay := range payments {
+		resolved.owners[i], _ = resolve(p.OwnerEntries[i], pay.utxo, pay.ownerPkHash)
+		resolved.assets[i], resolved.mintPolicies[i] = resolve(p.AssetEntries[i], pay.utxo, pay.asset)
+	}
+	for k, index := range p.PublicAssetEntries {
+		asset := p.PublicAssets[k]
+		active := ringgadget.IsNonZero(api, asset)
+		record := own.resolve(api, recordQuery{active: active, member: asset, index: index})
+		resolved.publicAssets = append(resolved.publicAssets, publicAsset{asset: asset, active: active, policy: record.mintPolicy})
+	}
+	return resolved
 }
 
-func (p *Policy) assertEscrow(api frontend.API, keyEscrow frontend.Variable, owners []subjectView, outputs []utxoView) {
+func (p *PolicyInputs) assertEscrow(api frontend.API, keyEscrow frontend.Variable, owners []subjectView, outputs []utxoView) {
 	for o, out := range outputs {
 		escrowed := api.Mul(out.utxo, keyEscrow)
 		key := registry.EscrowKey(api, out.nullifierPk, p.Outputs[o].CtHash)
@@ -70,18 +64,11 @@ func (p *Policy) assertEscrow(api frontend.API, keyEscrow frontend.Variable, own
 	}
 }
 
-func newEntry(ownOnly bool) Entry {
-	e := Entry{}
-	if !ownOnly {
-		e.Curator = make([]registry.QuadOpening, 1)
-	}
-	return e
-}
-
-func (p *Policy) assertOwnOnly(api frontend.API) {
+func (p *PolicyInputs) assertOwnOnly(api frontend.API) {
 	if !p.OwnOnly {
 		return
 	}
+	// The own-only key reads every list from own_root, a curator source or root would be screened against the wrong registry.
 	api.AssertIsEqual(p.CuratorRoot, 0)
 	for _, source := range p.Sources {
 		api.AssertIsEqual(source.Registry, 0)

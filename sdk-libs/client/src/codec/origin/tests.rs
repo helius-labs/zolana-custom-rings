@@ -1,18 +1,18 @@
 use solana_address::Address;
 use solana_signature::Signature;
 use solana_transaction_status_client_types::EncodedConfirmedTransactionWithStatusMeta;
-use zolana_client::ClientError;
-use zolana_event::tag;
-use zolana_event_parser::{InstructionGroup, ParsedInstruction};
-use zolana_interface::{
+use spr_client::ClientError;
+use spr_event::tag;
+use spr_event_parser::{InstructionGroup, ParsedInstruction};
+use spr_interface::{
     instruction::{CircuitId, InterfaceTransfer, TransactIxData, TransactProof, TreeContext},
     SHIELDED_POOL_CPI_AUTHORITY, SHIELDED_POOL_PROGRAM_ID, SOL_INTERFACE,
 };
-use zolana_interface::{
+use spr_interface::{
     instruction::{InputUtxo, MessageData, OwnerTag, TransactOutput},
     verifying_keys::{AnonymousRingEddsaProofData, Bsb22Commitment, CacheAccess, CacheWrite},
 };
-use zolana_transaction::SOL_MINT;
+use spr_transaction::SOL_MINT;
 
 use super::*;
 
@@ -51,17 +51,17 @@ fn group(outer: Address, inner: &[(Address, u32)]) -> InstructionGroup {
 }
 
 fn event_data() -> String {
-    let event = zolana_event::TransactEvent {
-        input_trees: vec![zolana_event::InputTreeSequence {
-            tree: zolana_interface::pda::tree(0).to_bytes(),
+    let event = spr_event::TransactEvent {
+        input_trees: vec![spr_event::InputTreeSequence {
+            tree: spr_interface::pda::tree(0).to_bytes(),
             first_input_queue_seq: 0,
         }],
-        output_tree: zolana_interface::pda::tree(0).to_bytes(),
+        output_tree: spr_interface::pda::tree(0).to_bytes(),
         first_output_leaf_index: 0,
     };
     bs58::encode(
         [
-            vec![tag::EMIT_EVENT, zolana_event::EventKind::Transact as u8],
+            vec![tag::EMIT_EVENT, spr_event::EventKind::Transact as u8],
             borsh::to_vec(&event).unwrap(),
         ]
         .concat(),
@@ -743,10 +743,10 @@ fn ring_transfer_outer_tags_preserve_confirmed_ring_origin() {
 }
 
 fn confirmed_transfer_fixture() -> (InstructionGroup, ShieldedTransaction) {
-    use zolana_event::{encode_event_instruction, EventKind, InputTreeSequence, TransactEvent};
-    use zolana_transaction::{OutputContext, OutputSlot};
+    use spr_event::{encode_event_instruction, EventKind, InputTreeSequence, TransactEvent};
+    use spr_transaction::{OutputContext, OutputSlot};
 
-    let key = zolana_keypair::X25519Keypair::from_bytes(&[7; 32]).pubkey();
+    let key = spr_keypair::X25519Keypair::from_bytes(&[7; 32]).pubkey();
     let mut data = TransactIxData::deserialize(&ring_transact_bytes(Vec::new())[1..]).unwrap();
     data.tx_viewing_pk = *key.as_bytes();
     data.salt = [0; 16];
@@ -778,10 +778,10 @@ fn confirmed_transfer_fixture() -> (InstructionGroup, ShieldedTransaction) {
     }];
     let event = TransactEvent {
         input_trees: vec![InputTreeSequence {
-            tree: zolana_interface::pda::tree(1).to_bytes(),
+            tree: spr_interface::pda::tree(1).to_bytes(),
             first_input_queue_seq: 5,
         }],
-        output_tree: zolana_interface::pda::tree(3).to_bytes(),
+        output_tree: spr_interface::pda::tree(3).to_bytes(),
         first_output_leaf_index: 42,
     };
     let group = InstructionGroup {
@@ -933,11 +933,11 @@ fn check_event_wire_fixture(name: &str, group: InstructionGroup, mut indexed: Sh
 }
 
 fn confirmed_deposit_fixture() -> (InstructionGroup, ShieldedTransaction) {
-    use zolana_event::{
+    use spr_event::{
         encode_encrypted_ring_deposit_output, encode_event_instruction, EncryptedRingDepositData,
         EncryptedRingDepositOutput, EventKind, GeneralEvent, OutputUtxo, SplTransfer,
     };
-    use zolana_interface::instruction::instruction_data::deposit::{
+    use spr_interface::instruction::instruction_data::deposit::{
         DepositAssetKind, RingDepositEntry,
     };
     let (mut group, mut indexed) = confirmed_transfer_fixture();
@@ -948,7 +948,7 @@ fn confirmed_deposit_fixture() -> (InstructionGroup, ShieldedTransaction) {
     indexed.messages.clear();
     indexed.output_slots.truncate(1);
     let encrypted = EncryptedRingDepositData {
-        tx_viewing_pk: *zolana_keypair::X25519Keypair::from_bytes(&[7; 32])
+        tx_viewing_pk: *spr_keypair::X25519Keypair::from_bytes(&[7; 32])
             .pubkey()
             .as_bytes(),
         salt: [8; 16],
@@ -986,7 +986,7 @@ fn confirmed_deposit_fixture() -> (InstructionGroup, ShieldedTransaction) {
         tx_viewing_pk: [0; 33],
         salt: [0; 16],
         first_output_leaf_index: 42,
-        output_tree: zolana_interface::pda::tree(3).to_bytes(),
+        output_tree: spr_interface::pda::tree(3).to_bytes(),
         spl_transfers: vec![SplTransfer {
             is_deposit: true,
             amount: 123,
@@ -999,8 +999,8 @@ fn confirmed_deposit_fixture() -> (InstructionGroup, ShieldedTransaction) {
 }
 
 fn confirmed_merge_fixture() -> (InstructionGroup, ShieldedTransaction) {
-    use zolana_event::{encode_event_instruction, EventKind, InputTreeSequence, MergeEvent};
-    use zolana_interface::instruction::instruction_data::{
+    use spr_event::{encode_event_instruction, EventKind, InputTreeSequence, MergeEvent};
+    use spr_interface::instruction::instruction_data::{
         merge_ring::MergeRingIxData,
         merge_transact::{MergeOutputEncryption, MergeProof, MergeTransactIxData},
     };
@@ -1011,7 +1011,7 @@ fn confirmed_merge_fixture() -> (InstructionGroup, ShieldedTransaction) {
     indexed.output_slots.truncate(1);
     indexed.output_slots[0].view_tag = [20; 32];
     indexed.output_slots[0].payload =
-        zolana_event::encode_merge_output_data(zolana_event::MergeOutputDataRef {
+        spr_event::encode_merge_output_data(spr_event::MergeOutputDataRef {
             salt: &[7; 16],
             ciphertext: &[[0; 32]; 3],
             prefix: &[[13; 32]],
@@ -1035,10 +1035,10 @@ fn confirmed_merge_fixture() -> (InstructionGroup, ShieldedTransaction) {
     };
     let event = MergeEvent {
         input_trees: vec![InputTreeSequence {
-            tree: zolana_interface::pda::tree(1).to_bytes(),
+            tree: spr_interface::pda::tree(1).to_bytes(),
             first_input_queue_seq: 5,
         }],
-        output_tree: zolana_interface::pda::tree(3).to_bytes(),
+        output_tree: spr_interface::pda::tree(3).to_bytes(),
         output_leaf_index: 42,
         output_view_tag: [20; 32],
     };
@@ -1053,7 +1053,7 @@ fn an_anonymous_merge_binds_the_disclosure_its_ring_forwarded() {
     use custom_ring_interface::{
         CustomRingMergeIxData, CustomRingProof, MergeDisclosure, PlainGroth16Proof,
     };
-    use zolana_interface::instruction::instruction_data::merge_ring::MergeRingIxData;
+    use spr_interface::instruction::instruction_data::merge_ring::MergeRingIxData;
     let (mut group, _) = confirmed_merge_fixture();
     let spp = MergeRingIxData::deserialize(&group.inner[0].data[1..]).unwrap();
     let disclosure = MergeDisclosure {

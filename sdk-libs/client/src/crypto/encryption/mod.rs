@@ -5,12 +5,12 @@ use custom_ring_interface::{
     RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN, RING_DEPOSIT_AUDIT_INFO,
     RING_DEPOSIT_AUDIT_OWNER_KEY_OFFSET,
 };
-use zeroize::Zeroizing;
-use zolana_hasher::{
+use spr_hasher::{
     primitives::{pack_be, right_align},
     Hasher, Poseidon,
 };
-use zolana_keypair::{symmetric_apply, NullifierKey, X25519Keypair, X25519Pubkey};
+use spr_keypair::{symmetric_apply, NullifierKey, X25519Keypair, X25519Pubkey};
+use zeroize::Zeroizing;
 use zolana_ring_keys::symmetric_apply_audit;
 
 use crate::AuditError;
@@ -414,7 +414,7 @@ mod tests {
             "2cc6b9a5a2cb550702b5387ade744abee5e6eeb7c266415e59502e6f8acce56b"
         );
         let owners = openings.each_ref().map(|opening| {
-            zolana_transaction::owner_utxo_hash(&opening.owner_hash, &opening.blinding).unwrap()
+            spr_transaction::owner_utxo_hash(&opening.owner_hash, &opening.blinding).unwrap()
         });
         let public_hash = custom_ring_interface::DepositPublicInput {
             context_hash: &context_hash,
@@ -452,7 +452,7 @@ mod tests {
                 ciphertext,
                 recipient_ciphertext: &[],
             };
-            let owner = zolana_transaction::owner_utxo_hash(
+            let owner = spr_transaction::owner_utxo_hash(
                 &openings[index].owner_hash,
                 &openings[index].blinding,
             )

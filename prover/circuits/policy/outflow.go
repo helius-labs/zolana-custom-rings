@@ -8,14 +8,14 @@ import (
 
 type mintPolicyWires struct{ threshold, cap, cosignAbove frontend.Variable }
 
-func decodeMintPolicy(api frontend.API, packed frontend.Variable) mintPolicyWires {
-	bits := api.ToBinary(packed, 192)
-	return mintPolicyWires{api.FromBinary(bits[128:]...), api.FromBinary(bits[64:128]...), api.FromBinary(bits[:64]...)}
+type publicAsset struct {
+	asset, active frontend.Variable
+	policy        mintPolicyWires
 }
 
 // Every output and public asset opens its own record, including absence. The
 // transaction, rather than a sender-supplied list of limits, determines coverage.
-func (p *Policy) constrainOutflow(api frontend.API, cmp comparator, sender frontend.Variable, outputs []utxoView, policies []mintPolicyWires) frontend.Variable {
+func (p *PolicyInputs) constrainOutflow(api frontend.API, cmp comparator, sender frontend.Variable, outputs []utxoView, resolved subjects) frontend.Variable {
 	leaving := make([]frontend.Variable, len(outputs))
 	for o, out := range outputs {
 		change := api.Mul(api.IsZero(api.Sub(out.ownerPkHash, sender)), api.IsZero(api.Sub(out.ringProgramID, p.RingProgramID)))
@@ -27,10 +27,12 @@ func (p *Policy) constrainOutflow(api frontend.API, cmp comparator, sender front
 		for o, out := range outputs {
 			others = api.Add(others, api.Mul(api.IsZero(api.Sub(out.asset, asset)), leaving[o]))
 		}
+		// SPP's distinct u64 public slots keep net within u64 magnitude, the bound atMost needs.
 		for k, publicAsset := range p.PublicAssets {
 			net = api.Add(net, api.Mul(api.IsZero(api.Sub(publicAsset, asset)), p.PublicAmounts[k]))
 		}
 		limited := api.Mul(active, api.Or(ringgadget.IsNonZero(api, policy.cap), ringgadget.IsNonZero(api, policy.cosignAbove)))
+		// Only a limited asset needs a nonnegative outflow, an unlimited asset may take any public deposit.
 		transaction.AssertWhen(api, limited, cmp.atMost(api, net, others))
 		outflow := api.Sub(others, net)
 		transaction.AssertWhen(api, api.Mul(active, ringgadget.IsNonZero(api, policy.cap)), cmp.atMost(api, outflow, policy.cap))
@@ -38,12 +40,10 @@ func (p *Policy) constrainOutflow(api frontend.API, cmp comparator, sender front
 		approval = api.Or(approval, api.Mul(cosigned, api.Sub(1, cmp.atMost(api, outflow, policy.cosignAbove))))
 	}
 	for o, out := range outputs {
-		check(out.asset, out.utxo, policies[o])
+		check(out.asset, out.utxo, resolved.mintPolicies[o])
 	}
-	for k, asset := range p.PublicAssets {
-		active := ringgadget.IsNonZero(api, asset)
-		_, _, packed, _ := p.PublicAssetEntries[k].Resolve(api, active, p.OwnRoot, asset)
-		check(asset, active, decodeMintPolicy(api, packed))
+	for _, public := range resolved.publicAssets {
+		check(public.asset, public.active, public.policy)
 	}
 	return approval
 }

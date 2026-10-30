@@ -1,15 +1,15 @@
-//! Schemes 10 and 11 opened into a wallet by `open_ring_confidential`.
+//! Scheme 10 opened into a wallet by `open_ring_confidential`.
 
 use solana_address::Address;
 use solana_signature::Signature;
-use zolana_client::{OutputContext, OutputSlot, ShieldedTransaction};
-use zolana_interface::instruction::instruction_data::transact::OwnerTag;
-use zolana_keypair::{ShieldedAddress, ShieldedKeypair, SigningKey};
-use zolana_ring_client::open_ring_confidential;
-use zolana_ring_transaction::{RingAssets, RingDelivery, RingOutputRail};
-use zolana_transaction::{
+use spr_client::{OutputContext, OutputSlot, ShieldedTransaction};
+use spr_interface::instruction::instruction_data::transact::OwnerTag;
+use spr_keypair::{ShieldedAddress, ShieldedKeypair, SigningKey};
+use spr_transaction::{
     instructions::transact::ConfidentialTransaction, Data, Mint, Utxo, WalletUtxo,
 };
+use zolana_ring_client::open_ring_confidential;
+use zolana_ring_transaction::{RingAssets, RingDelivery, RingOutputRail};
 
 const RING: Address = Address::new_from_array([42; 32]);
 const TREE: u16 = 7;
@@ -129,18 +129,6 @@ fn held(owner: &ShieldedKeypair, transactions: &[ShieldedTransaction]) -> Vec<(u
 }
 
 #[test]
-fn a_packed_transfer_opens_for_its_recipient_and_its_change_for_the_sender() {
-    let (sender, recipient) = (keypair(1), keypair(2));
-    let tx = transfer(&sender, &recipient, RingDelivery::Packed);
-    assert_eq!(held(&recipient, std::slice::from_ref(&tx)), [(SENT, false)]);
-    assert_eq!(
-        held(&sender, std::slice::from_ref(&tx)),
-        [(HELD - SENT, false)]
-    );
-    assert!(held(&keypair(3), &[tx]).is_empty());
-}
-
-#[test]
 fn a_delivered_transfer_opens_for_its_recipient_by_trial_over_the_held_mints() {
     let (sender, recipient) = (keypair(1), keypair(2));
     let tx = transfer(&sender, &recipient, RingDelivery::Delivered);
@@ -155,7 +143,7 @@ fn a_delivered_transfer_opens_for_its_recipient_by_trial_over_the_held_mints() {
 #[test]
 fn a_note_reads_spent_once_a_scanned_transaction_spends_it() {
     let (sender, recipient) = (keypair(1), keypair(2));
-    let received = transfer(&sender, &recipient, RingDelivery::Packed);
+    let received = transfer(&sender, &recipient, RingDelivery::Delivered);
     let notes = open_ring_confidential(
         &recipient,
         &RingAssets::new([]).unwrap(),

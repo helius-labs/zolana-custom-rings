@@ -12,7 +12,8 @@ export {
   registerKeyStatementHash,
   ringRail,
   ringRailOf,
-  ringTagFromOwnerTag,
+  openRecipient,
+  OutputBlindings,
 } from "@heliuslabs/zolana-custom-rings/advanced";
 export type {
   AuditStatement,
@@ -42,6 +43,7 @@ export {
   createRingTransferSubmission,
   createRingWithdrawalSubmission,
   createRingExitSubmission,
+  createRingEntrySubmission,
   createKitRingSubmissionTransport,
   createMemberRegistryInstruction,
   fetchRingMemberRegistry,
@@ -105,3 +107,10 @@ export type {
 } from "@heliuslabs/zolana-custom-rings/advanced";
 export { RING_RULE_SLOTS } from "@heliuslabs/zolana-custom-rings/client";
 export { CustomRingClient, createCustomRingClient } from "@heliuslabs/zolana-custom-rings";
+export {
+  AnonymousSync,
+  TransferTagging,
+  ViewingHistory,
+  type AnonymousScan,
+  type FirstContact,
+} from "@heliuslabs/zolana-custom-rings";

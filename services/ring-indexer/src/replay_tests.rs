@@ -15,8 +15,8 @@ use jsonrpsee::{server::ServerHandle, types::ErrorObjectOwned};
 use sea_orm::{ConnectionTrait, DatabaseConnection};
 use serde_json::{json, Value};
 use solana_address::Address;
-use zolana_indexer_api::{Hash, SerializablePubkey};
-use zolana_interface::state::{discriminator::RING_CONFIG, RingConfig};
+use spr_indexer_api::{Hash, SerializablePubkey};
+use spr_interface::state::{discriminator::RING_CONFIG, RingConfig};
 use zolana_ring_indexer::{
     records::CanonicalAccounts,
     rpc::{
@@ -150,7 +150,7 @@ fn registry_accounts(state: &RegistryState) -> [(String, Value); 2] {
 
 fn activation(program: Address, active: bool) -> (String, Value) {
     let config = account(
-        zolana_interface::pda::shielded_pool_program_id(),
+        spr_interface::pda::shielded_pool_program_id(),
         bytemuck::bytes_of(&RingConfig {
             discriminator: RING_CONFIG,
             authority: Address::default(),
@@ -162,7 +162,7 @@ fn activation(program: Address, active: bool) -> (String, Value) {
         }),
     );
     (
-        zolana_interface::pda::ring_auth(&program).0.to_string(),
+        spr_interface::pda::ring_auth(&program).0.to_string(),
         config,
     )
 }

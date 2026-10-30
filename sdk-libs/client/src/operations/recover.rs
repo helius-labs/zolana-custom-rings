@@ -8,20 +8,20 @@ use std::{
 
 use custom_ring_interface::RingMode;
 use solana_address::Address;
-use zolana_client::{AsyncRpc, IndexerRpcConfig};
-use zolana_event::{
+use spr_client::{AsyncRpc, IndexerRpcConfig};
+use spr_event::{
     split_merge_output_body, EncryptedRingDepositOutput, OutputDataEncoding, MERGE_OUTPUT_SCHEME,
 };
-use zolana_event_parser::decode_encrypted_ring_deposit_output_data;
-use zolana_indexer_api::PAGE_LIMIT;
-use zolana_keypair::{NullifierKey, ShieldedAddress, X25519Keypair};
-use zolana_ring_transaction::RingAssets;
-use zolana_transaction::{
+use spr_event_parser::decode_encrypted_ring_deposit_output_data;
+use spr_indexer_api::PAGE_LIMIT;
+use spr_keypair::{NullifierKey, ShieldedAddress, X25519Keypair};
+use spr_transaction::{
     instructions::merge::{
         merge_circuit_width, merge_output_blinding, merge_output_key, MergeOutputPlaintext,
     },
     Data, OutputContext, OutputSlot, ShieldedTransaction, TransactionError, Utxo, WalletUtxo,
 };
+use zolana_ring_transaction::RingAssets;
 
 use crate::{
     created::{CreatedUtxos, DepositSlot},
@@ -153,7 +153,7 @@ impl SourceMember<'_> {
         Ok((held, commitment == context.hash))
     }
 
-    fn utxo(&self, asset: zolana_transaction::Mint, amount: u64, blinding: [u8; 32]) -> Utxo {
+    fn utxo(&self, asset: spr_transaction::Mint, amount: u64, blinding: [u8; 32]) -> Utxo {
         Utxo {
             owner: self.address.signing_pubkey,
             asset,
@@ -409,7 +409,7 @@ impl<'a> MemberRecovery<'a> {
                 let utxo = Utxo {
                     ring_program_id: Some(ring),
                     ..self.source.utxo(
-                        mint.unwrap_or_else(|| zolana_transaction::Mint::new(asset, 0)),
+                        mint.unwrap_or_else(|| spr_transaction::Mint::new(asset, 0)),
                         output.amount,
                         *opening.blinding,
                     )
@@ -615,7 +615,7 @@ fn merge_successor(
     };
     let utxo = plaintext.into_utxo(
         source.address.signing_pubkey,
-        zolana_transaction::Mint::new(plaintext.mint, 0),
+        spr_transaction::Mint::new(plaintext.mint, 0),
         merge_output_blinding(source.nullifier_key, first_nullifier)?,
         Some(ring),
     );

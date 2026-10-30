@@ -1,20 +1,18 @@
-use custom_ring_interface::{stream::EPOCH_SLOTS, RingMode};
+use custom_ring_interface::RingMode;
 
 use super::support::{account, keypair, program, ring, Chain, Registry, RingSettings};
 use crate::{PinnedPolicy, RingError};
 
 #[tokio::test]
-async fn the_status_carries_the_pinned_registry_and_the_creation_epoch() {
+async fn the_status_carries_the_pinned_registry() {
     let member = keypair(1);
     let client = Chain::ring(RingSettings {
         has_policy: true,
-        created_slot: 7 * EPOCH_SLOTS + 3,
         ..RingSettings::new(RingMode::ConfidentialEscrow)
     })
     .with_registry(Registry::new(&[(&member, 1)]), &super::pipeline_rules())
     .client();
     let status = ring().status(client.zolana()).await.unwrap();
-    assert_eq!(status.config.creation_epoch(), 7);
     let pinned = PinnedPolicy::of(status.registry.unwrap().account()).unwrap();
     assert_eq!(pinned.table, super::pipeline_rules());
 }

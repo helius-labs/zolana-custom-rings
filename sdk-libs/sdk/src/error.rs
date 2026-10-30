@@ -3,13 +3,15 @@ use custom_ring_interface::{
 };
 use solana_address::Address;
 use solana_signature::Signature;
+use spr_api::BlockingInsideRuntime;
+use spr_client::ClientError;
+use spr_hasher::HasherError;
+use spr_interface::error::ShieldedPoolError;
+use spr_keypair::KeypairError;
+use spr_program::instruction::DepositBuildError;
+use spr_transaction::TransactionError;
+use spr_tree::TreeError;
 use thiserror::Error;
-use zolana_api::BlockingInsideRuntime;
-use zolana_client::ClientError;
-use zolana_hasher::HasherError;
-use zolana_interface::error::ShieldedPoolError;
-use zolana_keypair::{KeypairError, X25519Pubkey};
-use zolana_program::instruction::DepositBuildError;
 use zolana_ring_client::{AnonymousError, RingIndexerError, RingRpcError};
 use zolana_ring_keys::RingKeyError;
 use zolana_ring_member_registry::RecordTreeError;
@@ -18,8 +20,6 @@ use zolana_ring_policy::{
     Writer,
 };
 use zolana_ring_transaction::RingRailError;
-use zolana_transaction::TransactionError;
-use zolana_tree::TreeError;
 
 #[derive(Debug, Error)]
 pub enum RingError {
@@ -141,19 +141,8 @@ pub enum RingError {
     },
     #[error("indexer returned an incomplete proof set")]
     IncompleteProofSet,
-    #[error("the indexer's root of first-contact tree {tree} at {root_index} is not the chain's")]
-    FirstContactRootStale { tree: Address, root_index: u16 },
-    #[error(
-        "the indexer gives no valid proof of the pinned leaves of first-contact tree {tree}, retire the first contact"
-    )]
-    FirstContactLeavesRefused {
-        tree: Address,
-        recipient: X25519Pubkey,
-    },
     #[error("the transfer needs a shape no {rail} key serves")]
     ShapeUnkeyed { rail: RingRail },
-    #[error("ring output {slot} names no key its body opens under")]
-    UndeliveredRingOutput { slot: usize },
     #[error("the policy refuses the transfer, {0}")]
     PolicyRuleUnsatisfied(#[from] RuleRefusal),
     #[error("transfer references another ring {0}")]
@@ -180,11 +169,6 @@ pub enum RingError {
     DepositAboveOutflow { asset: [u8; 32] },
     #[error("the compact transfer expands to external data the SPP proof does not bind")]
     ExternalDataMismatch,
-    #[error("the proof binds epoch {proof_epoch}, the chain is at epoch {current_epoch}")]
-    EpochPassed {
-        proof_epoch: u64,
-        current_epoch: u64,
-    },
     #[error("an anonymous merge of {width} slots does not fit a v1 transaction")]
     AnonymousMergeTooWide { width: usize },
     #[error("the ring is not anonymous, its owners sign in public")]
@@ -232,8 +216,6 @@ pub enum RingError {
     AnonymousRecipient,
     #[error("ring address {address} pays into ring {ring}, the transfer runs in another")]
     ForeignRingAddress { address: Address, ring: Address },
-    #[error("the anonymous ring state tracks ring {state}, the deposit pays ring {ring}")]
-    ForeignRingState { state: Address, ring: Address },
     #[error("merge inputs belong to another tree")]
     InputTreeMismatch,
     #[error("the member's nullifier key does not derive its address")]
@@ -272,7 +254,6 @@ impl RingError {
         matches!(
             self,
             Self::RecordProjectionStale
-                | Self::FirstContactRootStale { .. }
                 | Self::Client(ClientError::IndexerProofDataNotReady)
                 | Self::Indexer(
                     RingRpcError::RegistryOutOfSync

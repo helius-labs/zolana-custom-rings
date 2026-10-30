@@ -57,11 +57,7 @@ func (p QuadPath) digits(api frontend.API) []frontend.Variable {
 }
 
 func (p QuadPath) fold(api frontend.API, digits []frontend.Variable, leaf frontend.Variable) frontend.Variable {
-	node := leaf
-	for level, siblings := range p.Siblings {
-		node = gadget.PoseidonHash(api, quadChildren(api, node, siblings, digits[2*level], digits[2*level+1]))
-	}
-	return node
+	return foldQuadPath(api, p.Siblings[:], digits, leaf)
 }
 
 func quadChildren(api frontend.API, node frontend.Variable, siblings [Arity - 1]frontend.Variable, b0, b1 frontend.Variable) []frontend.Variable {

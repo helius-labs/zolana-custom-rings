@@ -27,11 +27,10 @@ pinocchio-system = { workspace = true }
 solana-loader-v3-interface = { workspace = true, features = ["serde"] }
 solana-curve25519 = { workspace = true }
 wincode = { workspace = true }
-zolana-account-checks = { workspace = true }
-zolana-hasher = { workspace = true }
-zolana-interface = { workspace = true, features = ["borsh"] }
+spr-account-checks = { workspace = true }
+spr-hasher = { workspace = true }
+spr-interface = { workspace = true, features = ["borsh"] }
 zolana-ring-policy = { workspace = true }
-zolana-tree = { workspace = true }
 
 [dev-dependencies]
 hex = { workspace = true }

@@ -2,7 +2,7 @@
 
 use custom_ring_interface::RingRail;
 use custom_ring_sdk::shape_keyed;
-use zolana_client::SPP_SUPPORTED_SHAPES;
+use spr_client::SPP_SUPPORTED_SHAPES;
 
 #[test]
 fn every_rail_keys_the_shapes_the_shared_vector_lists() {

@@ -41,10 +41,10 @@ func DeliveredAuditOf(t testing.TB, capacity int, exits ...int) DeliveredAudit {
 	return d
 }
 
-// NewConfidentialOutput delivers slot i to fixture recipient i mod 3 with no ring data.
+// NewConfidentialOutput delivers slot i to fixture recipient i mod 3.
 func (d DeliveredAudit) NewConfidentialOutput(t testing.TB, i int) DeliveredOutput {
 	t.Helper()
-	return d.NewRingOutput(t, Recipient(t, byte(i%3), i, 100+uint64(i)), func(*big.Int) *big.Int { return big.NewInt(0) })
+	return d.NewRingOutput(t, Recipient(t, byte(i%3), i, 100+uint64(i)))
 }
 
 func (d DeliveredAudit) Statement(t testing.TB) []*big.Int {

@@ -5,8 +5,8 @@ pub use custom_ring_interface::READ_ACCESS_RECORD_PDA_SEED;
 use custom_ring_interface::{READER_KEY_ED25519, READER_KEY_P256};
 use sha2::{Digest, Sha256};
 use solana_address::Address;
+use spr_keypair::{KeypairError, PublicKey};
 use thiserror::Error;
-use zolana_keypair::{KeypairError, PublicKey};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ReaderKey {

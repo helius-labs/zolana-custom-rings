@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 custom-ring-interface = { workspace = true }
 thiserror = { workspace = true }
-zolana-hasher = { workspace = true }
+spr-hasher = { workspace = true }
 zolana-ring-policy = { workspace = true }
 
 [dev-dependencies]

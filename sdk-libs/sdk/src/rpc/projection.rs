@@ -1,6 +1,6 @@
 use core::future::Future;
 
-use zolana_client::IndexerPollConfig;
+use spr_client::IndexerPollConfig;
 
 use crate::{heap::boxed, RingError};
 

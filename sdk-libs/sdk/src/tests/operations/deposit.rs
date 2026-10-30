@@ -1,13 +1,13 @@
 use custom_ring_interface::{CoSignScope, CustomRingError, RingMode};
 use solana_address::Address;
-use solana_signature::Signature;
-use zolana_client::{OutputContext, OutputSlot, ShieldedTransaction};
-use zolana_interface::pda;
-use zolana_ring_client::AnonymousRingState;
-use zolana_ring_keys::RingKeys;
+use spr_interface::pda;
+use zolana_ring_client::{FirstContact, PaymentRecipient, StreamCounter, TransferTagging};
+use zolana_ring_keys::RingAddress;
 
 use crate::{
-    tests::support::{keypair, owner_identity, ring, Chain, Registry, RingSettings, TREE_ID},
+    tests::support::{
+        history, keypair, owner_identity, ring, Chain, Registry, RingSettings, TREE_ID,
+    },
     DepositAsset, DepositRecipient, RingDeposit, RingError,
 };
 
@@ -33,10 +33,10 @@ async fn an_anonymous_ring_takes_deposits_only_for_the_depositors_hidden_owner()
     let anonymous = Chain::ring(RingSettings::new(RingMode::Anonymous));
     let confidential = Chain::ring(RingSettings::new(RingMode::Confidential));
     let address = member.shielded_address().unwrap();
-    let state = AnonymousRingState::new(ring().program_id(), 0);
+    let history = history(&member);
     let hidden = DepositRecipient::Anonymous {
         keys: &member,
-        state: &state,
+        history: &history,
     };
     assert!(matches!(
         deposit(&payer, DepositRecipient::Confidential(address))
@@ -143,71 +143,155 @@ async fn a_co_signer_outside_the_deposit_scope_does_not_sign() {
     }
 }
 
-/// An indexer that shows every counter of the first window taken moves no deposit tag.
-#[tokio::test]
-async fn a_deposit_takes_the_stored_counter_whatever_the_indexer_shows() {
-    let member = keypair(1);
-    let payer = keypair(9);
-    let first_window: Vec<u64> = (0..64).collect();
-    let chain = member
-        .sender_view_tags(&first_window)
-        .unwrap()
-        .into_iter()
-        .zip(0u8..)
-        .fold(
-            Chain::ring(RingSettings::new(RingMode::Anonymous)),
-            |chain, (view_tag, seed)| {
-                chain.with_transaction(ShieldedTransaction {
-                    slot: 1,
-                    tx_signature: Signature::from([seed; 64]),
-                    event_index: Some(0),
-                    tx_viewing_pk: None,
-                    salt: None,
-                    output_slots: vec![OutputSlot {
-                        view_tag,
-                        output_context: OutputContext {
-                            hash: [seed; 32],
-                            tree_id: TREE_ID,
-                            leaf_index: u64::from(seed),
-                        },
-                        payload: Vec::new(),
-                    }],
-                    messages: Vec::new(),
-                    nullifiers: Vec::new(),
-                    proofless: true,
-                    ring_config: None,
-                    ring_program_id: None,
-                })
-            },
-        );
-    let state = AnonymousRingState::new(ring().program_id(), 0);
-    let hidden = DepositRecipient::Anonymous {
-        keys: &member,
-        state: &state,
-    };
-    let prepared = deposit(&payer, hidden).prepare(&chain).await.unwrap();
-    let tag = member.sender_view_tags(&[state.deposit_next()]).unwrap()[0];
-    assert!(prepared
+fn publishes(prepared: &crate::PreparedRingDeposit, tag: &[u8; 32]) -> bool {
+    prepared
         .spp
         .data
         .windows(tag.len())
-        .any(|bytes| bytes == tag));
+        .any(|bytes| bytes == tag)
 }
 
 #[tokio::test]
-async fn a_deposit_refuses_the_state_of_another_ring() {
+async fn an_own_deposit_takes_the_sender_tag_at_tx_count_and_advances_it() {
+    let member = keypair(1);
+    let payer = keypair(9);
+    let chain = Chain::ring(RingSettings::new(RingMode::Anonymous));
+    let history = history(&member);
+    let hidden = deposit(
+        &payer,
+        DepositRecipient::Anonymous {
+            keys: &member,
+            history: &history,
+        },
+    );
+    let prepared = hidden.prepare(&chain).await.unwrap();
+    assert!(publishes(
+        &prepared,
+        &member.get_sender_view_tag(0).unwrap()
+    ));
+    let advanced = prepared.viewing_history().unwrap();
+    assert_eq!(advanced.current().tx_count(), 1);
+    assert_eq!(hidden.viewing_history().unwrap().as_ref(), Some(advanced));
+}
+
+#[tokio::test]
+async fn a_deposit_from_the_stored_history_takes_the_next_sender_tag() {
+    let member = keypair(1);
+    let payer = keypair(9);
+    let chain = Chain::ring(RingSettings::new(RingMode::Anonymous));
+    let history = history(&member);
+    let own = |history| {
+        deposit(
+            &payer,
+            DepositRecipient::Anonymous {
+                keys: &member,
+                history,
+            },
+        )
+    };
+    let stored = own(&history).viewing_history().unwrap().unwrap();
+    let next = own(&stored).prepare(&chain).await.unwrap();
+    assert!(publishes(&next, &member.get_sender_view_tag(1).unwrap()));
+    assert!(!publishes(&next, &member.get_sender_view_tag(0).unwrap()));
+    assert_eq!(next.viewing_history().unwrap().current().tx_count(), 2);
+}
+
+#[tokio::test]
+async fn a_deposit_to_another_member_takes_a_first_contact_tag_until_a_transfer_pairs() {
+    let member = keypair(1);
+    let recipient = keypair(2);
+    let payer = keypair(9);
+    let chain = Chain::ring(RingSettings::new(RingMode::Anonymous));
+    let to = RingAddress {
+        recipient: recipient.shielded_address().unwrap(),
+        ring_program_id: ring().program_id(),
+    };
+    let request = recipient.get_recipient_request_view_tag(0).unwrap();
+    let history = history(&member);
+    let paid = |history, first_contact| {
+        deposit(
+            &payer,
+            DepositRecipient::AnonymousPayment {
+                keys: &member,
+                history,
+                to: &to,
+                first_contact,
+            },
+        )
+    };
+    let bootstrap = paid(&history, FirstContact::Bootstrap)
+        .prepare(&chain)
+        .await
+        .unwrap();
+    assert!(publishes(&bootstrap, &recipient.viewing_pubkey().u()));
+    let requested = paid(&history, FirstContact::Request(request))
+        .prepare(&chain)
+        .await
+        .unwrap();
+    assert!(publishes(&requested, &request));
+    let unpaired = bootstrap.viewing_history().unwrap().clone();
+    assert_eq!(
+        unpaired.current().tx_count(),
+        0,
+        "a deposit spends no sender tag"
+    );
+    assert!(
+        unpaired.current().known_recipients().is_empty(),
+        "a deposit names no sender, so it pairs nothing"
+    );
+    let paired = TransferTagging {
+        keys: &member,
+        history: &unpaired,
+        recipients: &[PaymentRecipient {
+            viewing_pubkey: recipient.viewing_pubkey(),
+            first_contact: FirstContact::Bootstrap,
+        }],
+    }
+    .plan()
+    .unwrap()
+    .history;
+    let shared = paid(&paired, FirstContact::Request(request))
+        .prepare(&chain)
+        .await
+        .unwrap();
+    assert!(publishes(
+        &shared,
+        &member
+            .get_send_shared_view_tag(&recipient.viewing_pubkey(), 0)
+            .unwrap()
+    ));
+    assert_eq!(
+        shared
+            .viewing_history()
+            .unwrap()
+            .current()
+            .known_recipients()
+            .get(&recipient.viewing_pubkey())
+            .map(StreamCounter::next),
+        Some(1)
+    );
+}
+
+#[tokio::test]
+async fn a_deposit_refuses_an_address_of_another_ring() {
     let member = keypair(1);
     let payer = keypair(9);
     let chain = Chain::ring(RingSettings::new(RingMode::Anonymous));
     let other = Address::new_from_array([0x47; 32]);
-    let state = AnonymousRingState::new(other, 0);
-    let hidden = DepositRecipient::Anonymous {
+    let to = RingAddress {
+        recipient: keypair(2).shielded_address().unwrap(),
+        ring_program_id: other,
+    };
+    let history = history(&member);
+    let paid = DepositRecipient::AnonymousPayment {
         keys: &member,
-        state: &state,
+        history: &history,
+        to: &to,
+        first_contact: FirstContact::Bootstrap,
     };
     assert!(matches!(
-        deposit(&payer, hidden).prepare(&chain).await,
-        Err(RingError::ForeignRingState { state, ring: paid })
-            if state == other && paid == ring().program_id()
+        deposit(&payer, paid).prepare(&chain).await,
+        Err(RingError::ForeignRingAddress { address, ring: paid })
+            if address == other && paid == ring().program_id()
     ));
 }

@@ -1,8 +1,8 @@
 //! Synthetic trusted chain data, production rebuilds it from confirmed SPP instructions.
 
-use zolana_interface::event::{GeneralEvent, Input, OutputUtxo};
+use spr_interface::event::{GeneralEvent, Input, OutputUtxo};
+use spr_transaction::ShieldedTransaction;
 use zolana_ring_client::{ConfirmedEvent, ConfirmedEventKind};
-use zolana_transaction::ShieldedTransaction;
 
 pub fn event(transaction: &ShieldedTransaction) -> ConfirmedEvent {
     let kind = if transaction.proofless {
@@ -14,7 +14,7 @@ pub fn event(transaction: &ShieldedTransaction) -> ConfirmedEvent {
     };
     let first = transaction.output_slots.first();
     let output_tree = first.map_or([0; 32], |slot| {
-        zolana_interface::pda::tree(slot.output_context.tree_id).to_bytes()
+        spr_interface::pda::tree(slot.output_context.tree_id).to_bytes()
     });
     ConfirmedEvent::new(
         kind,

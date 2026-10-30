@@ -70,15 +70,15 @@ impl CoSignDemand {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WithdrawalExemptionStatement {
     pub root: [u8; 32],
-    pub assets: [[u8; 32]; zolana_interface::N_PUBLIC_SLOTS],
-    pub amounts: [[u8; 32]; zolana_interface::N_PUBLIC_SLOTS],
+    pub assets: [[u8; 32]; spr_interface::N_PUBLIC_SLOTS],
+    pub amounts: [[u8; 32]; spr_interface::N_PUBLIC_SLOTS],
 }
 impl WithdrawalExemptionStatement {
     pub fn new(root: [u8; 32], demand: &CoSignDemand) -> Result<Self, CustomRingError> {
         let mut result = Self {
             root,
-            assets: [[0; 32]; zolana_interface::N_PUBLIC_SLOTS],
-            amounts: [[0; 32]; zolana_interface::N_PUBLIC_SLOTS],
+            assets: [[0; 32]; spr_interface::N_PUBLIC_SLOTS],
+            amounts: [[0; 32]; spr_interface::N_PUBLIC_SLOTS],
         };
         if demand.withdrawals.len() > result.assets.len() {
             return Err(CustomRingError::InvalidInstructionData);
@@ -87,11 +87,11 @@ impl WithdrawalExemptionStatement {
             result.assets[i] = *zolana_ring_policy::Member::asset(mint)
                 .map_err(|_| CustomRingError::InvalidInstructionData)?
                 .as_bytes();
-            result.amounts[i] = zolana_hasher::primitives::right_align(&amount.to_be_bytes());
+            result.amounts[i] = spr_hasher::primitives::right_align(&amount.to_be_bytes());
         }
         Ok(result)
     }
-    pub fn hash(&self) -> Result<[u8; 32], zolana_hasher::HasherError> {
+    pub fn hash(&self) -> Result<[u8; 32], spr_hasher::HasherError> {
         let mut fields = vec![
             crate::domain::field(crate::domain::WITHDRAWAL_EXEMPTION),
             self.root,
@@ -99,7 +99,7 @@ impl WithdrawalExemptionStatement {
         for i in 0..self.assets.len() {
             fields.extend([self.assets[i], self.amounts[i]]);
         }
-        zolana_hasher::hash_chain::create_hash_chain_4_from_slice(&fields)
+        spr_hasher::hash_chain::create_hash_chain_4_from_slice(&fields)
     }
 }
 
@@ -107,7 +107,7 @@ impl WithdrawalExemptionStatement {
 mod tests {
     use super::*;
     use bytemuck::Zeroable;
-    use zolana_interface::instruction::InterfaceTransfer;
+    use spr_interface::instruction::InterfaceTransfer;
     #[test]
     fn exemption_waives_only_withdrawals_and_gross_totals_ignore_deposits() {
         let legs = [

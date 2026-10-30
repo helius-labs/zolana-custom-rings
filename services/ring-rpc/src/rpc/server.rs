@@ -22,10 +22,10 @@ use jsonrpsee::{
     RpcModule,
 };
 use serde::{de::DeserializeOwned, Serialize};
+use spr_rpc_http::MethodPathLayer;
 use thiserror::Error;
 use tower::Service;
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use zolana_rpc_http::MethodPathLayer;
 
 use zolana_ring_client::rpc::{
     CreateAuditorKeyRequest, CreateAuditorKeyResponse, GetAuditedUtxosRequest,
@@ -341,8 +341,8 @@ mod tests {
 
     use solana_address::Address;
     use solana_signature::Signature;
-    use zolana_client::{ClientError, GetShieldedTransactionsByTagsResponse};
-    use zolana_keypair::X25519Keypair;
+    use spr_client::{ClientError, GetShieldedTransactionsByTagsResponse};
+    use spr_keypair::X25519Keypair;
     use zolana_ring_client::RingIndexerError;
     use zolana_ring_client::{
         rpc::{KeyMode, RingChainStatus, DEPOSITS_PAGE_LIMIT},

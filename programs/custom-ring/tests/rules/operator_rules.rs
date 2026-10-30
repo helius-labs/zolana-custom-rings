@@ -1,7 +1,6 @@
 //! Config, policy and read access writes and their declared budgets.
 
 use custom_ring_interface::{
-    stream::{tag_epoch, EPOCH_SLOTS},
     tag, CreateConfigIxData, CustomRingError, InstructionTag, MemberRegistry, ReadAccessRecord,
     ReaderIxData, RingKind, RingMode, RingProgramConfig, SetCoSignerIxData, SetPausedIxData,
     SetPolicySourceIxData, WriteRecordsIxData, DEFAULT_INSERT_FEE, READER_KEY_P256,
@@ -11,7 +10,7 @@ use solana_address::Address;
 use solana_instruction::{error::InstructionError, AccountMeta, Instruction};
 use solana_keypair::{Keypair, Signer};
 use solana_transaction_error::TransactionError;
-use zolana_account_checks::AccountError;
+use spr_account_checks::AccountError;
 use zolana_ring_policy::{ListChange, ListId, ListSet};
 
 use crate::common::{
@@ -93,7 +92,7 @@ fn the_upgrade_authority_comes_from_the_ring_programs_own_program_data() {
 fn the_config_records_the_slot_it_was_created_in() {
     let mut ring = Ring::new(Setup::Anonymous);
     ring.store(config_pda(), SYSTEM, Vec::new());
-    let created = 3 * EPOCH_SLOTS + 7;
+    let created = 1_000_007;
     ring.warp(created);
     let (payer, authority) = (ring.payer.pubkey(), ring.authority.pubkey());
     let data = CreateConfigIxData {
@@ -104,7 +103,6 @@ fn the_config_records_the_slot_it_was_created_in() {
         .expect("the upgrade authority creates the config");
     let config: RingProgramConfig = ring.read(&config_pda());
     assert_eq!(config.created_slot(), created);
-    assert_eq!(tag_epoch(config.created_slot()), 3);
 }
 
 #[test]

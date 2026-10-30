@@ -48,8 +48,6 @@ func TestRingSecretsMatchTheRustVectors(t *testing.T) {
 		Outputs               []struct {
 			OutputIndex         int       `json:"output_index"`
 			DeliveredSlotSecret vectorHex `json:"delivered_slot_secret"`
-			Tag                 vectorHex `json:"tag"`
-			AnonymousRingData   vectorHex `json:"anonymous_ring_data"`
 			Blinding            vectorHex `json:"blinding"`
 		} `json:"outputs"`
 	}
@@ -70,7 +68,6 @@ func TestRingSecretsMatchTheRustVectors(t *testing.T) {
 	for _, o := range v.Outputs {
 		secret := ringprotocol.DeliveredSlotSecret(t, txViewingSk, recipient, salt, o.OutputIndex, firstNullifier)
 		equal("delivered slot secret", secret, o.DeliveredSlotSecret)
-		equal("anonymous ring data", ringprotocol.AnonymousRingData(t, o.DeliveredSlotSecret.int(), o.Tag.int()), o.AnonymousRingData)
 		equal("output blinding", ringprotocol.OutputBlinding(t, firstNullifier, v.OutputBlindingSeed.int(), o.OutputIndex), o.Blinding)
 	}
 	equal("sender pk hash", ringtest.MustSolanaPkField(t, [32]byte(v.SenderKey)), v.SenderPkHash)

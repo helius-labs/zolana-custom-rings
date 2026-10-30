@@ -1,16 +1,16 @@
 use custom_ring_interface::{RingMode, RingRail};
 use solana_address::Address;
-use zolana_client::AsyncRpc;
-use zolana_interface::shape::{Shape, RING_AUTHORITY_WIDTHS};
-use zolana_keypair::{NullifierKey, ShieldedAddress, ViewingKey};
-use zolana_ring_transaction::RingOutputRail;
-use zolana_transaction::{
+use spr_client::AsyncRpc;
+use spr_interface::shape::{Shape, RING_AUTHORITY_WIDTHS};
+use spr_keypair::{NullifierKey, ShieldedAddress, ViewingKey};
+use spr_transaction::{
     instructions::transact::{ConfidentialTransaction, SppProofOutputUtxo},
     AssetRegistry, WalletUtxo,
 };
+use zolana_ring_transaction::RingOutputRail;
 
 use super::{
-    canonical_shape, packed_or_delivered, pad_under_rail, sealed,
+    canonical_shape, delivered, pad_under_rail, sealed,
     selection::{payment_total, widest, Funding},
     shape_keyed, Rail, RailKind, RingTransfer, Spend, Staged, TransferAuthority,
 };
@@ -238,7 +238,7 @@ impl Delegated<'_> {
                     })?
             }
         };
-        let delivery = packed_or_delivered(shape.n_outputs(), RingRail::Delegate)?;
+        let delivery = delivered(shape.n_outputs(), RingRail::Delegate)?;
         // The delegate holds no viewing key of the member, a fresh transaction key seals the move.
         let rail = RingOutputRail::new(ViewingKey::new(), delivery);
         let transaction = pad_under_rail(transaction, &rail, shape, &self.source)?;

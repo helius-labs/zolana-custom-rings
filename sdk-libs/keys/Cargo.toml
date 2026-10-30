@@ -11,16 +11,15 @@ aes = { workspace = true }
 bs58 = { workspace = true }
 ctr = { workspace = true }
 custom-ring-interface = { workspace = true }
-hkdf = { workspace = true }
+hex = { workspace = true }
 percent-encoding = { workspace = true }
 sha2 = { workspace = true }
 solana-address = { workspace = true }
 thiserror = { workspace = true }
 zeroize = { workspace = true }
-zolana-hasher = { workspace = true }
-zolana-keypair = { workspace = true }
+spr-hasher = { workspace = true }
+spr-keypair = { workspace = true }
 
 [dev-dependencies]
-hex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -26,7 +26,7 @@ import type {
   Transaction,
   TransactWithdrawal,
 } from "@heliuslabs/zolana/interface";
-import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
+import { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import { SOL_MINT, ConfidentialTransfer } from "@heliuslabs/zolana/transaction";
 import type { AnonymousRingTransactProver } from "../../rpc/ports.js";
 import { extended } from "../workflow/extended.js";
@@ -41,7 +41,7 @@ import {
 import type { UtxoReservation } from "@heliuslabs/zolana/internal";
 import type { Wallet, WalletUtxo } from "@heliuslabs/zolana/transaction";
 import { anonymousAuditKey } from "../../protocol/codec/ring-disclosure-layout.js";
-import { RingAddress } from "../../crypto/keys/ring-address.js";
+import { RingAddress, RingPaymentRequest } from "../../crypto/keys/ring-address.js";
 
 import { RingInstructionTag, ringComputeUnitLimit } from "../management/admin.js";
 import { carriesNoData, type AnonymousPayment, type AnonymousSpendSigner } from "./anonymous.js";
@@ -67,7 +67,7 @@ import {
   type RingSubmissionBuildState,
 } from "../workflow/submission.js";
 import { resolveRingOutputTree } from "../../protocol/membership/trees.js";
-import { type AnonymousRingState } from "../../state/anonymous-state.js";
+import type { FirstContact, ViewingHistory } from "../../state/viewing-history.js";
 
 /** Both rails, the ring's mode picks one when the transfer is built. */
 /** `proveAnonymousRingTransact` is needed exactly on an anonymous ring. */
@@ -76,10 +76,13 @@ export type RingTransferClient = CustomRingTransferClient &
   Partial<AnonymousRingTransactProver> &
   BlockhashProvider;
 
-/** The hidden owner's signer and stream state, required exactly on an anonymous ring. */
+/** The hidden owner's signer and viewing history, required exactly on an anonymous ring. */
 export interface AnonymousRingSpend {
   readonly signer: AnonymousSpendSigner;
-  readonly state: AnonymousRingState;
+  /** Store `RingTransactionSubmission.viewingHistory` in its place before the first `send`. */
+  readonly history: ViewingHistory;
+  /** The tag a payment to a `RingAddress` takes until the pair is known, chosen by the caller. */
+  readonly firstContact?: FirstContact;
   /** A missing SPL exit token account must be the owner's associated token account. */
   readonly exitTokenOwner?: Address;
 }
@@ -103,8 +106,8 @@ export interface RingSpendParams {
 }
 
 export interface RingTransferTransactionParams extends RingSpendParams {
-  /** A ring address on an anonymous ring, a shielded address or a registered owner on any other. */
-  readonly recipient: Address | ShieldedAddress | RingAddress;
+  /** A ring address or payment request on an anonymous ring, a shielded address or a registered owner on any other. */
+  readonly recipient: Address | ShieldedAddress | RingAddress | RingPaymentRequest;
   /** `"default"` funds only from default UTXOs. `"ring-or-default"` mixes both pools, an anonymous ring funds from one pool alone. */
   readonly inputs?: "ring" | "ring-or-default" | "default";
 }
@@ -139,7 +142,6 @@ export function createRingTransferSubmission(
     {
       wallet: input.wallet,
       registry: input.client,
-      clock: input.client,
       build: (retry, buildContext) =>
         buildRingSend({ params: input, destination: "ring", retry }, buildContext),
     },
@@ -167,7 +169,6 @@ export function createRingExitSubmission(
     {
       wallet: input.wallet,
       registry: input.client,
-      clock: input.client,
       build: (retry, buildContext) =>
         buildRingSend({ params: input, destination: "default", retry }, buildContext),
     },
@@ -180,31 +181,21 @@ export async function buildRingEntryTransaction(
   input: RingEntryTransactionParams,
   context?: RequestContext,
 ): Promise<Transaction> {
-  const attempt = await buildRingSpend(
+  return (await buildRingEntry({ params: input, retry: {} }, context)).transaction;
+}
+
+export function createRingEntrySubmission(
+  input: RingEntryTransactionParams,
+  context?: RequestContext,
+): Promise<RingTransactionSubmission> {
+  return RingTransactionSubmission.fromBuilder(
     {
-      params: input,
-      retry: {},
-      strategy: {
-        errorCode: "RING_BUILD_ENTRY",
-        selection: "default",
-        resolve: () => Promise.resolve(undefined),
-        configure: ({ transfer, owner, asset }) => {
-          transfer.sendToRing(owner, asset, input.amount, input.ringProgramId);
-          return {
-            intent: {
-              kind: "ringEntry",
-              ringProgramId: input.ringProgramId,
-              asset,
-              amount: input.amount,
-            },
-            summary: `ring entry of ${String(input.amount)} ${assetLabel(asset)} into ring ${input.ringProgramId}`,
-          };
-        },
-      },
+      wallet: input.wallet,
+      registry: input.client,
+      build: (retry, buildContext) => buildRingEntry({ params: input, retry }, buildContext),
     },
     context,
   );
-  return attempt.transaction;
 }
 
 /**
@@ -226,7 +217,6 @@ export function createRingWithdrawalSubmission(
     {
       wallet: input.wallet,
       registry: input.client,
-      clock: input.client,
       build: (retry, buildContext) => buildRingWithdrawal({ params: input, retry }, buildContext),
     },
     context,
@@ -290,6 +280,8 @@ async function buildRingSend(
       retry: input.retry,
       strategy: {
         errorCode: "RING_BUILD_TRANSFER",
+        submission:
+          destination === "ring" ? "createRingTransferSubmission" : "createRingExitSubmission",
         selection,
         resolve: () => resolveSendRecipient(params, destination, context),
         configure: ({ transfer, resolved, selected, asset, payment }) => {
@@ -301,15 +293,15 @@ async function buildRingSend(
             defaultFunding === 0n
               ? ""
               : `, moves ${String(defaultFunding)} ${assetLabel(asset)} of default UTXOs into the ring`;
-          if (resolved instanceof RingAddress) {
-            payment(resolved, asset, params.amount);
+          if (!(resolved instanceof ShieldedAddress)) {
+            payment(resolved.to, resolved.firstContact, asset, params.amount);
             return {
               intent: {
                 kind: "ringAnonymousTransfer",
                 ringProgramId: params.ringProgramId,
                 asset,
                 amount: params.amount,
-                recipient: resolved,
+                recipient: resolved.to,
                 defaultFunding,
               },
               summary: `anonymous ring payment of ${String(params.amount)} ${assetLabel(asset)} in ring ${params.ringProgramId}${crossing}`,
@@ -338,6 +330,38 @@ async function buildRingSend(
   );
 }
 
+async function buildRingEntry(
+  input: Readonly<{ params: RingEntryTransactionParams; retry: RingSubmissionBuildState }>,
+  context: RequestContext | undefined,
+): Promise<RingSubmissionAttempt> {
+  const { params } = input;
+  return buildRingSpend(
+    {
+      params,
+      retry: input.retry,
+      strategy: {
+        errorCode: "RING_BUILD_ENTRY",
+        submission: "createRingEntrySubmission",
+        selection: "default",
+        resolve: () => Promise.resolve(undefined),
+        configure: ({ transfer, owner, asset }) => {
+          transfer.sendToRing(owner, asset, params.amount, params.ringProgramId);
+          return {
+            intent: {
+              kind: "ringEntry",
+              ringProgramId: params.ringProgramId,
+              asset,
+              amount: params.amount,
+            },
+            summary: `ring entry of ${String(params.amount)} ${assetLabel(asset)} into ring ${params.ringProgramId}`,
+          };
+        },
+      },
+    },
+    context,
+  );
+}
+
 async function buildRingWithdrawal(
   input: Readonly<{ params: RingWithdrawalTransactionParams; retry: RingSubmissionBuildState }>,
   context: RequestContext | undefined,
@@ -349,6 +373,7 @@ async function buildRingWithdrawal(
       retry: input.retry,
       strategy: {
         errorCode: "RING_BUILD_WITHDRAWAL",
+        submission: "createRingWithdrawalSubmission",
         selection: "ring",
         resolve: async () => {
           const asset = params.asset ?? SOL_MINT;
@@ -395,6 +420,12 @@ interface RingSpendPlan {
 
 interface RingSpendStrategy<R> {
   readonly errorCode: "RING_BUILD_ENTRY" | "RING_BUILD_TRANSFER" | "RING_BUILD_WITHDRAWAL";
+  /** The flow an anonymous ring builds through. */
+  readonly submission:
+    | "createRingEntrySubmission"
+    | "createRingExitSubmission"
+    | "createRingTransferSubmission"
+    | "createRingWithdrawalSubmission";
   readonly selection: "ring" | "ring-or-default" | "default";
   resolve(): Promise<R>;
   configure(
@@ -405,7 +436,12 @@ interface RingSpendStrategy<R> {
       asset: Address;
       owner: ShieldedAddress;
       /** Pays a ring address on the anonymous rail. */
-      payment: (to: RingAddress, asset: Address, amount: bigint) => void;
+      payment: (
+        to: RingAddress,
+        firstContact: FirstContact,
+        asset: Address,
+        amount: bigint,
+      ) => void;
     }>,
   ): RingSpendPlan;
 }
@@ -431,6 +467,11 @@ async function buildRingSpend<R>(
       resolveRingOutputTree(params.client, params.outputTree, context),
     ]);
     const anonymousRing = config.mode === "anonymous";
+    // A plain build drops the history past its tags.
+    if (anonymousRing && retry.lifetime !== "submission")
+      throw new RingError("RING_ANONYMOUS_SUBMISSION_REQUIRED", {
+        details: { ringProgramId: params.ringProgramId, use: strategy.submission },
+      });
     if (anonymousRing !== (params.anonymous !== undefined))
       throw new RingError(anonymousRing ? "RING_ANONYMOUS_SIGNER_REQUIRED" : "RING_NOT_ANONYMOUS", {
         details: { ringProgramId: params.ringProgramId },
@@ -473,12 +514,12 @@ async function buildRingSpend<R>(
       selected,
       asset,
       owner,
-      payment: (to, paidAsset, amount) => {
+      payment: (to, firstContact, paidAsset, amount) => {
         if (!anonymousRing || anonymousPayment !== undefined)
           throw new RingError("RING_NOT_ANONYMOUS", {
             details: { ringProgramId: params.ringProgramId },
           });
-        anonymousPayment = { to, asset: paidAsset, amount };
+        anonymousPayment = { to, firstContact, asset: paidAsset, amount };
       },
     });
     const planned = ringIntentHash(plan.intent);
@@ -512,7 +553,7 @@ async function buildRingSpend<R>(
         return withWithdrawal.proveApproved(params.client, approval, context);
       let anonymous = withWithdrawal.withAnonymousSigner(
         params.anonymous.signer,
-        params.anonymous.state,
+        params.anonymous.history,
       );
       if (anonymousPayment !== undefined) anonymous = anonymous.withPayment(anonymousPayment);
       if (params.anonymous.exitTokenOwner !== undefined)
@@ -520,9 +561,7 @@ async function buildRingSpend<R>(
       return anonymous.proveApproved(anonymousClient(params.client), approval, context);
     });
     const [instruction, lifetime] = await Promise.all([
-      proven.epoch === undefined
-        ? proven.instruction()
-        : params.client.getSlot(context).then((slot) => proven.instructionAt(slot)),
+      proven.instruction(),
       params.client.getLatestBlockhash(context),
     ]);
     const transaction = compileUnsignedTransaction({
@@ -538,7 +577,7 @@ async function buildRingSpend<R>(
       intentHash: planned,
       ringInstructionIndex: plan.setupInstructions?.length ?? 0,
       ...boundState(proven),
-      firstContacts: proven.firstContacts,
+      ...(proven.viewingHistory === undefined ? {} : { viewingHistory: proven.viewingHistory }),
     });
   } catch (cause) {
     if (reservation !== undefined) params.wallet._releaseReservation(reservation.id);
@@ -609,19 +648,22 @@ export function checkDemandedCoSigner(
     });
 }
 
-/** A ring address pays on the anonymous rail, any other recipient resolves to its shielded address. */
+type AnonymousRecipient = Readonly<{ to: RingAddress; firstContact: FirstContact }>;
+
+/** A ring address or request pays on the anonymous rail, any other recipient resolves to its shielded address. */
 async function resolveSendRecipient(
   params: RingTransferTransactionParams | RingExitTransactionParams,
   destination: "ring" | "default",
   context: RequestContext | undefined,
-): Promise<ShieldedAddress | RingAddress> {
+): Promise<ShieldedAddress | AnonymousRecipient> {
   const { recipient } = params;
-  if (recipient instanceof RingAddress) {
-    if (destination !== "ring" || recipient.ringProgramId !== params.ringProgramId)
+  if (recipient instanceof RingAddress || recipient instanceof RingPaymentRequest) {
+    const to = recipient instanceof RingAddress ? recipient : recipient.address;
+    if (destination !== "ring" || to.ringProgramId !== params.ringProgramId)
       throw new RingError("RING_FOREIGN_RING", {
-        details: { address: recipient.ringProgramId, ring: params.ringProgramId },
+        details: { address: to.ringProgramId, ring: params.ringProgramId },
       });
-    return recipient;
+    return Object.freeze({ to, firstContact: firstContactOf(params, recipient) });
   }
   return resolveShieldedRecipient(
     { rpc: params.client, recipient },
@@ -631,6 +673,24 @@ async function resolveSendRecipient(
       }),
     context,
   );
+}
+
+/** A request names its tag, amount and mint, a bare address takes the caller's explicit choice. */
+function firstContactOf(
+  params: RingSpendParams,
+  recipient: RingAddress | RingPaymentRequest,
+): FirstContact {
+  const chosen = params.anonymous?.firstContact;
+  if (recipient instanceof RingAddress) {
+    if (chosen === undefined) throw new RingError("RING_FIRST_CONTACT_REQUIRED");
+    return chosen;
+  }
+  const asset = params.asset ?? SOL_MINT;
+  if (chosen !== undefined) throw ringIntentMismatch("firstContact");
+  if (recipient.amount !== undefined && recipient.amount !== params.amount)
+    throw ringIntentMismatch("amount");
+  if (recipient.mint !== undefined && recipient.mint !== asset) throw ringIntentMismatch("asset");
+  return Object.freeze({ kind: "request", tag: recipient.requestViewTag });
 }
 
 function assetLabel(asset: Address): string {

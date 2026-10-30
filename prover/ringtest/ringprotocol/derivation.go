@@ -38,12 +38,6 @@ func BlindingSeed(t testing.TB, txViewingSk [32]byte, salt [16]byte) *big.Int {
 	return ringtest.MustPoseidonHash(t, big.NewInt(shared.BlindingSeedDomain), keyLo, keyHi, new(big.Int).SetBytes(salt[:]))
 }
 
-// AnonymousRingData mirrors shared.AnonymousRingData.
-func AnonymousRingData(t testing.TB, slotSecret, tag *big.Int) *big.Int {
-	t.Helper()
-	return ringtest.MustPoseidonHash(t, big.NewInt(shared.AnonymousRingDataDomain), slotSecret, tag)
-}
-
 // OutputBlinding is SPP's TXOB blinding of slot i under the output blinding seed.
 func OutputBlinding(t testing.TB, firstNullifier, seedOut *big.Int, i int) *big.Int {
 	t.Helper()
@@ -55,41 +49,6 @@ func OutputBlinding(t testing.TB, firstNullifier, seedOut *big.Int, i int) *big.
 func DepositBlinding(t testing.TB, blindingSecret *big.Int) *big.Int {
 	t.Helper()
 	return ringtest.MustPoseidonHash(t, big.NewInt(shared.DepositBlindingDomain), blindingSecret)
-}
-
-// InboxKey mirrors shared.InboxKey over pack_be(0x04 ‖ u).
-func InboxKey(t testing.TB, ringID *big.Int, u [32]byte) *big.Int {
-	t.Helper()
-	rLo, rHi := Pack33(Tagged(u[:]))
-	return ringtest.MustPoseidonHash(t, big.NewInt(shared.InboxKeyDomain), ringID, rLo, rHi)
-}
-
-// InboxTagDigest mirrors shared.InboxTagDigest.
-func InboxTagDigest(t testing.TB, inboxKey *big.Int, epoch, index uint64) *big.Int {
-	t.Helper()
-	return ringtest.MustPoseidonHash(t, big.NewInt(shared.InboxTagDomain), inboxKey, new(big.Int).SetUint64(epoch), new(big.Int).SetUint64(index))
-}
-
-func InboxTag(t testing.TB, inboxKey *big.Int, epoch, index uint64) *big.Int {
-	t.Helper()
-	return LowTag(InboxTagDigest(t, inboxKey, epoch, index))
-}
-
-// PairKey mirrors shared.PairKey.
-func PairKey(t testing.TB, firstContact *big.Int) *big.Int {
-	t.Helper()
-	return ringtest.MustPoseidonHash(t, big.NewInt(shared.PairKeyDomain), firstContact)
-}
-
-// PairTag is the low TagLen bytes of shared.PairTagDigest.
-func PairTag(t testing.TB, pairKey *big.Int, epoch, index uint64) *big.Int {
-	t.Helper()
-	return LowTag(ringtest.MustPoseidonHash(t, big.NewInt(shared.PairTagDomain), pairKey, new(big.Int).SetUint64(epoch), new(big.Int).SetUint64(index)))
-}
-
-// LowTag mirrors shared.TagField, the low TagLen bytes of a canonical field value.
-func LowTag(value *big.Int) *big.Int {
-	return new(big.Int).And(value, new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 8*shared.TagLen), big.NewInt(1)))
 }
 
 // SenderCommitment mirrors shared.SenderCommitment.

@@ -8,56 +8,27 @@ import {
 } from "@solana-program/token";
 import { isOffCurveAddress, type MessagePartialSigner } from "@solana/kit";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
 import {
-  ClientError,
-  DEFAULT_INDEXER_RPC_CONFIG,
-  attempts,
-  isClientError,
-  isRetryable,
-  pollUntil,
   ZERO_32,
   SYSTEM_PROGRAM,
   addressBytes,
   checkedAddress,
   encodeBase58,
   associatedTokenAddress,
-  treeAddress,
-  bigIntBytes,
-  rightAlign,
   equalBytes,
-  isCanonicalField,
-  poseidon,
 } from "@heliuslabs/zolana/internal";
-import type { ChainReader, ProofReader, RpcAccount } from "@heliuslabs/zolana/client";
-import {
-  SPL_TOKEN_2022_PROGRAM_ID,
-  SPL_TOKEN_PROGRAM_ID,
-  STATE_HEIGHT,
-  treeIdField,
-} from "@heliuslabs/zolana/interface";
+import type { ChainReader, RpcAccount } from "@heliuslabs/zolana/client";
+import { SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID } from "@heliuslabs/zolana/interface";
 import type { Address, Bytes32, Bytes64, RequestContext } from "@heliuslabs/zolana/interface";
 import { ShieldedPublicKey } from "@heliuslabs/zolana/keypair";
 import type { ShieldedAddress, SigningKey } from "@heliuslabs/zolana/keypair";
-import {
-  assetField,
-  type SettlementTransfer,
-  type SppProofInputs,
-} from "@heliuslabs/zolana/transaction";
+import type { SettlementTransfer, SppProofInputs } from "@heliuslabs/zolana/transaction";
 import type { RingAddress } from "../../crypto/keys/ring-address.js";
-export { ANCHOR_DECOYS } from "../../state/anonymous-state.js";
+import type { FirstContact } from "../../state/viewing-history.js";
 
-import { RingError, wrapRingError, type RingErrorCode } from "../../protocol/error.js";
-import {
-  spendsDefaultRing,
-  type AnchorWitness,
-  type PendingAnchor,
-  type PendingFirstContact,
-} from "../workflow/pipeline.js";
-import type { RingOutputRail } from "./output-rail.js";
+import { RingError, type RingErrorCode } from "../../protocol/error.js";
+import { spendsDefaultRing } from "../workflow/pipeline.js";
 import { signMessage } from "../../rpc/ring-rpc.js";
-import { anchorState } from "../../protocol/membership/trees.js";
-import { type PairAnchor } from "../../state/anonymous-state.js";
 
 /** The hidden owner's Ed25519 key, the signature lives inside the proof so the key may live in a wallet. Rust `AnonymousSpendSigner`. */
 export interface AnonymousSpendSigner {
@@ -66,9 +37,11 @@ export interface AnonymousSpendSigner {
   sign(message: Uint8Array, context?: RequestContext): Promise<Bytes64>;
 }
 
-/** An output paying a ring address, its stream picked when the transfer is proven, Rust `AnonymousPayment`. */
+/** An output paying a ring address, its tag by the spec view tag selection, Rust `AnonymousPayment`. */
 export interface AnonymousPayment {
   readonly to: RingAddress;
+  /** Paid until the pair is known. */
+  readonly firstContact: FirstContact;
   readonly asset: Address;
   readonly amount: bigint;
 }
@@ -189,149 +162,6 @@ export function carriesNoData(hashes: readonly (Bytes32 | undefined)[]): boolean
   return hashes.every((hash) => hash === undefined || equalBytes(hash, ZERO_32));
 }
 
-type AnchorClient = Pick<ProofReader, "getMerkleProofs"> & Pick<ChainReader, "getAccount">;
-
-export function pendingAnchor(
-  input: Readonly<{ client: AnchorClient; anchor: PairAnchor; stagedSlot: bigint }>,
-): PendingAnchor {
-  const tree = treeAddress(input.anchor.contact.treeId);
-  const pending: PendingAnchor = {
-    tree,
-    read: (context) => anchorWitness({ ...input, tree }, context),
-  };
-  return Object.freeze(pending);
-}
-
-/** The first contact's path at a root its tree holds, fetched beside its pinned decoys, Rust `AnonymousSpend::anchor`. */
-async function anchorWitness(
-  input: Readonly<{ client: AnchorClient; anchor: PairAnchor; stagedSlot: bigint; tree: Address }>,
-  context: RequestContext | undefined,
-): Promise<AnchorWitness> {
-  const { anchor: pair, stagedSlot, tree } = input;
-  const { contact, leaves } = pair;
-  await initializePoseidon();
-  const refused = (cause?: unknown): RingError =>
-    wrapRingError("RING_ANCHOR_INVALID", cause, {
-      reason: "leaves",
-      tree,
-      recipient: [...contact.recipient.toBytes()]
-        .map((byte) => byte.toString(16).padStart(2, "0"))
-        .join(""),
-    });
-  let latest = 0n;
-  // An indexer at or past the staging slot holds every pinned leaf, a missing one is refused.
-  const response = await pollUntil(
-    () => input.client.getMerkleProofs(tree, leaves, DEFAULT_INDEXER_RPC_CONFIG, context),
-    (answer) => {
-      latest = answer.context.slot;
-      return latest >= stagedSlot;
-    },
-    {
-      retryErrors: false,
-      ...(context === undefined ? {} : { context }),
-      onTimeout: (poll) =>
-        new ClientError("CLIENT_INDEXER_NOT_CAUGHT_UP", {
-          details: {
-            target: stagedSlot.toString(),
-            latest: latest.toString(),
-            attempts: attempts(poll),
-          },
-        }),
-    },
-  ).catch((cause: unknown) => {
-    if (
-      isClientError(cause) &&
-      (cause.code === "CLIENT_INVALID_RPC_RESPONSE" ||
-        (cause.code === "CLIENT_INDEXER" && !isRetryable(cause)))
-    )
-      throw refused(cause);
-    throw cause;
-  });
-  // A fault on any pinned leaf refuses the read alike.
-  const proofs = leaves.map((leaf) =>
-    response.proofs.find((candidate) => equalBytes(candidate.leaf, leaf)),
-  );
-  const proof = proofs.find(
-    (candidate) =>
-      candidate !== undefined &&
-      equalBytes(candidate.leaf, contact.utxoHash) &&
-      candidate.leafIndex === contact.leafIndex,
-  );
-  if (
-    proof === undefined ||
-    proofs.some(
-      (candidate) =>
-        candidate === undefined ||
-        candidate.merkleContext.tree !== tree ||
-        candidate.path.length !== STATE_HEIGHT ||
-        !stateProofReachesRoot(candidate) ||
-        !equalBytes(candidate.root, proof.root) ||
-        candidate.rootIndex !== proof.rootIndex,
-    )
-  )
-    throw refused();
-  const anchor = { tree, rootIndex: proof.rootIndex, root: proof.root };
-  switch (await anchorState(input.client, anchor, context)) {
-    case "paused":
-      throw new RingError("RING_ANCHOR_INVALID", { details: { reason: "paused", tree } });
-    case "moved":
-      throw new RingError("RING_ANCHOR_INVALID", {
-        details: { reason: "root", rootIndex: proof.rootIndex },
-      });
-    case "holds":
-      break;
-  }
-  return Object.freeze({
-    ...anchor,
-    request: Object.freeze({
-      treeId: treeIdField(contact.treeId),
-      asset: assetField(contact.asset),
-      amount: rightAlign(bigIntBytes(contact.amount, 8)),
-      slotSecret: contact.slotSecret,
-      blinding: contact.blinding,
-      epoch: contact.epoch,
-      index: contact.index,
-      pathIndex: contact.leafIndex,
-      path: proof.path,
-    }),
-  });
-}
-
-/** Every inbox payment of the transfer as the first contact it becomes, Rust `Anonymous::first_contacts`. */
-export function pendingFirstContacts(
-  input: Readonly<{
-    rail: RingOutputRail;
-    proofInputs: SppProofInputs;
-    payments: ReadonlyMap<number, AnonymousPayment>;
-    epoch: bigint;
-  }>,
-): readonly PendingFirstContact[] {
-  const { rail, proofInputs } = input;
-  if (rail.delivery.kind !== "anonymous") return Object.freeze([]);
-  const slots = rail.delivery.slots;
-  const contacts: PendingFirstContact[] = [];
-  for (const [slotIndex, payment] of input.payments) {
-    const planned = slots.payment(slotIndex);
-    if (planned === undefined || planned.position.kind !== "inbox") continue;
-    const output = proofInputs.outputs[slotIndex];
-    if (output === undefined) throw new RingError("RING_PAYMENT_SLOT", { details: { slotIndex } });
-    contacts.push(
-      Object.freeze({
-        recipient: planned.recipient,
-        treeId: proofInputs.outputTreeId,
-        utxoHash: output.hash(proofInputs.outputTreeId),
-        slotSecret: rail.slotSecret(planned.recipient, slotIndex),
-        blinding: output.blinding,
-        epoch: input.epoch,
-        index: planned.position.index,
-        asset: payment.asset,
-        amount: payment.amount,
-      }),
-    );
-  }
-  return Object.freeze(contacts);
-}
-
 async function checkSolExit(
   input: Readonly<{
     client: Pick<ChainReader, "getAccount">;
@@ -439,21 +269,4 @@ function tokenAccountControl(account: RpcAccount, mint: Address): TokenAccountCo
     data.subarray(offset, offset + 4).every((byte) => byte === 0),
   );
   return Object.freeze({ kind: sole ? "soleOwner" : "shared", owner: token.owner });
-}
-
-/** Rust `MerkleProof::path_root`, bit `i` of the leaf index puts the node right of sibling `i`. */
-function stateProofReachesRoot(
-  proof: Readonly<{ leaf: Bytes32; path: readonly Bytes32[]; root: Bytes32; leafIndex: bigint }>,
-): boolean {
-  // A bit past the path would give one path a second leaf index.
-  if (proof.leafIndex >> BigInt(STATE_HEIGHT) !== 0n) return false;
-  // Poseidon takes no value outside the field, such a path reaches no root.
-  if (![proof.leaf, ...proof.path].every((node) => isCanonicalField(node))) return false;
-  let node: Uint8Array = proof.leaf;
-  let position = proof.leafIndex;
-  for (const sibling of proof.path) {
-    node = (position & 1n) === 0n ? poseidon([node, sibling]) : poseidon([sibling, node]);
-    position >>= 1n;
-  }
-  return equalBytes(node, proof.root);
 }

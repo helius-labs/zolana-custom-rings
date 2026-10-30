@@ -3,7 +3,7 @@ use std::fmt::Write;
 use anyhow::Result;
 use custom_ring_sdk::{CustomRing, QueueStatus, RegistryStatus, RingError, RingMode};
 use solana_signer::Signer;
-use zolana_client::Rpc;
+use spr_client::Rpc;
 
 use crate::{
     config::{redact_text, redact_url, RingConfig, Target},

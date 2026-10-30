@@ -8,10 +8,10 @@ use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signature::Signature;
 use solana_signer::Signer;
+use spr_client::ClientError;
+use spr_keypair::X25519Keypair;
 use thiserror::Error;
 use tokio::sync::{watch, Mutex as AsyncMutex, Semaphore, SemaphorePermit};
-use zolana_client::ClientError;
-use zolana_keypair::X25519Keypair;
 use zolana_ring_client::{
     auditor_view_tag,
     rpc::{unix_now, KeyMode},
@@ -153,6 +153,14 @@ impl<S> Shared<S> {
 impl<S: TransactionSource> Shared<S> {
     pub(crate) async fn cached_assets(&self) -> RingAssets {
         self.assets.lock().await.registry.clone()
+    }
+
+    /// Delivered bodies name no mint, so a new mint arrives only through the interval refresh.
+    pub(crate) async fn due_assets(&self) -> RingAssets {
+        match self.refresh_assets().await {
+            Ok(assets) => assets,
+            Err(_) => self.cached_assets().await,
+        }
     }
 
     /// At most one registry read per interval, a failed one blocks retries until it ends.

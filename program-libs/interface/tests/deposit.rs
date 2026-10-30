@@ -2,7 +2,7 @@ use custom_ring_interface::{
     CustomRingProof, DepositContext, DepositPublicInput, PlainGroth16Proof,
     RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN as CT,
 };
-use zolana_hasher::HasherError;
+use spr_hasher::HasherError;
 
 #[test]
 fn context_binds_ring_tree_wire_and_wire_length() {

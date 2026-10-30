@@ -2,13 +2,13 @@ use std::{borrow::Cow, fmt::Display};
 
 use jsonrpsee::types::{error::ErrorCode, ErrorObjectOwned};
 use log::error;
+use spr_client::ClientError;
+use spr_transaction::TransactionError;
 use thiserror::Error;
-use zolana_client::ClientError;
 use zolana_ring_client::{
     rpc::{KeyFileError, AUDITED_UTXOS_LIMIT},
     AuditError, RingIndexerError, RingRpcError as RingRefusal,
 };
-use zolana_transaction::TransactionError;
 
 use crate::authorize::Unauthorized;
 
@@ -25,7 +25,7 @@ pub enum RingRpcError {
     #[error("request is unauthorized because {0}")]
     Unauthorized(#[from] Unauthorized),
     #[error("key derivation failed because {0}")]
-    Derivation(#[from] zolana_keypair::KeypairError),
+    Derivation(#[from] spr_keypair::KeypairError),
     #[error("auditor key is unusable because {0}")]
     AuditorKey(#[from] KeyFileError),
     #[error(transparent)]

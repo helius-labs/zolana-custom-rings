@@ -91,28 +91,36 @@ type DeliveredOutput struct {
 	Body         [shared.BodyLen]byte
 }
 
-// NewRingOutput delivers slot to its recipient key, its ring data over ringData of the CRDS secret.
-func (tr Transfer) NewRingOutput(t testing.TB, slot DeliverySlot, ringData func(slotSecret *big.Int) *big.Int) DeliveredOutput {
+// NewRingOutput delivers slot to its recipient key.
+func (tr Transfer) NewRingOutput(t testing.TB, slot DeliverySlot) DeliveredOutput {
 	t.Helper()
-	secret := tr.DeliveredSlotSecret(t, slot.RecipientKey, slot.Index)
-	blinding := tr.Blinding(t, slot.Index)
+	utxo := tr.ringUtxo(t, slot)
 	return DeliveredOutput{
-		Utxo: Utxo{
-			Domain: protocol.UtxoDomain, TreeID: OutputTreeID, OwnerPkHash: ringtest.MustSolanaPkField(t, slot.OwnerKey),
-			NullifierPk: slot.NullifierPk, Asset: ringtest.AssetField(t, slot.AssetAddress), Amount: slot.Amount,
-			Blinding: blinding, DataHash: big.NewInt(0), RingDataHash: ringData(secret), RingProgramID: tr.RingProgramID,
-		},
+		Utxo:         utxo,
 		RecipientKey: slot.RecipientKey,
 		OwnerKey:     slot.OwnerKey,
-		Body:         ringprotocol.SealBody(t, secret, blinding, slot.Amount),
+		Body:         ringprotocol.SealBody(t, tr.DeliveredSlotSecret(t, slot.RecipientKey, slot.Index), utxo.Blinding, slot.Amount),
 	}
 }
+
+// ringUtxo is slot's ring output under the TXOB blinding of its index, with no ring data.
+func (tr Transfer) ringUtxo(t testing.TB, slot DeliverySlot) Utxo {
+	t.Helper()
+	return Utxo{
+		Domain: protocol.UtxoDomain, TreeID: OutputTreeID, OwnerPkHash: ringtest.MustSolanaPkField(t, slot.OwnerKey),
+		NullifierPk: slot.NullifierPk, Asset: ringtest.AssetField(t, slot.AssetAddress), Amount: slot.Amount,
+		Blinding: tr.Blinding(t, slot.Index), DataHash: big.NewInt(0), RingDataHash: big.NewInt(0), RingProgramID: tr.RingProgramID,
+	}
+}
+
+// ExitOwnerKey owns every fixture exit.
+var ExitOwnerKey = ringtest.Repeat(0xe5)
 
 // NewExit leaves the ring for the default ring, its owner published by SPP.
 func (tr Transfer) NewExit(t testing.TB, i int) DeliveredOutput {
 	t.Helper()
 	return DeliveredOutput{Utxo: Utxo{
-		Domain: protocol.UtxoDomain, TreeID: OutputTreeID, OwnerPkHash: ringtest.MustSolanaPkField(t, ringtest.Repeat(0xe5)),
+		Domain: protocol.UtxoDomain, TreeID: OutputTreeID, OwnerPkHash: ringtest.MustSolanaPkField(t, ExitOwnerKey),
 		NullifierPk: spptest.MustNullifierPk(t, big.NewInt(23)), Asset: ringtest.AssetField(t, [32]byte{}), Amount: 40,
 		Blinding: tr.Blinding(t, i), DataHash: big.NewInt(0), RingDataHash: big.NewInt(0), RingProgramID: big.NewInt(0),
 	}}

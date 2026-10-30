@@ -2,7 +2,7 @@
 //! up, mirror `prover/server/circuits/records`.
 
 use custom_ring_interface::{MEMBER_REGISTRY_CAPACITY, QUAD_ARITY, QUAD_HEIGHT};
-use zolana_hasher::{Hasher, HasherError, Poseidon};
+use spr_hasher::{Hasher, HasherError, Poseidon};
 
 use crate::RecordTreeError;
 

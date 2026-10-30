@@ -22,22 +22,23 @@ solana-system-interface = { workspace = true }
 tokio = { workspace = true }
 # `serde` is what makes `Transaction`/`VersionedTransaction` serializable for the
 # RPC send path; declared here rather than inherited from another crate's features.
-zolana-client = { workspace = true, features = ["solana-rpc"] }
+spr-client = { workspace = true, features = ["solana-rpc"] }
 # `solana` pulls in the ring deposit instruction-data types (`RingAssetDeposit`,
 # `DepositAsset`) the lifecycle builds its deposits from.
-zolana-interface = { workspace = true }
-zolana-program = { workspace = true, features = ["protocol-instructions"] }
-zolana-keypair = { workspace = true }
-zolana-program-test = { workspace = true, features = ["localnet"] }
+spr-interface = { workspace = true }
+spr-program = { workspace = true }
+spr-protocol-instructions = { workspace = true }
+spr-keypair = { workspace = true }
+spr-program-test = { workspace = true, features = ["localnet"] }
 zolana-ring-client = { workspace = true, features = ["rpc", "solana-rpc"] }
 zolana-ring-keys = { workspace = true }
 zolana-ring-policy = { workspace = true }
 zolana-ring-rpc = { workspace = true }
 zolana-ring-transaction = { workspace = true }
-zolana-test-utils = { workspace = true }
-zolana-transaction = { workspace = true }
-zolana-tree = { workspace = true }
-zolana-user-registry-interface = { workspace = true, features = ["solana"] }
+spr-test-utils = { workspace = true }
+spr-transaction = { workspace = true }
+spr-tree = { workspace = true }
+spr-user-registry-interface = { workspace = true, features = ["solana"] }
 
 [dev-dependencies]
 serde_json = { workspace = true }

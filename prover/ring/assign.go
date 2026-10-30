@@ -33,12 +33,6 @@ func fill(dst, src reflect.Value, path string) []error {
 			src = reflect.ValueOf(v.view())
 		}
 	}
-	if dst.Type() == reflect.TypeFor[[]registry.QuadOpening]() && src.IsValid() {
-		if dst.Len() != 1 {
-			return []error{fmt.Errorf("%s: curator opening on an own-only key", path)}
-		}
-		return fill(dst.Index(0), src, path)
-	}
 	var errs []error
 	switch dst.Kind() {
 	case reflect.Struct:

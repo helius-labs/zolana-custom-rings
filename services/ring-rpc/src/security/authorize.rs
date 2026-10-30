@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use solana_address::Address;
 use solana_signature::Signature;
+use spr_indexer_api::Base64String;
 use thiserror::Error;
-use zolana_indexer_api::Base64String;
 use zolana_ring_client::{
     rpc::{Attestation, AuditorKeyAttestation, AuthorityAuth, ReadAuth, WebAuthnAssertion},
     ReaderKey,

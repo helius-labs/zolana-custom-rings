@@ -6,9 +6,9 @@ use std::{
 };
 
 use solana_signature::Signature;
-use zolana_keypair::viewing_key::ViewTag;
+use spr_keypair::viewing_key::ViewTag;
 
-use zolana_client::{
+use spr_client::{
     rpc::{
         Context, EncryptedUtxoMatch, GetEncryptedUtxosByTagsResponse,
         GetShieldedTransactionsByNullifiersResponse, GetShieldedTransactionsByTagsResponse,
@@ -18,22 +18,25 @@ use zolana_client::{
 
 use crate::paging::{PageCursor, PAGE_LIMIT};
 
-/// Indices probed per indexer query.
-pub const DEFAULT_TAG_WINDOW: u64 = 64;
-
 /// The indexer's cap on the tags or nullifiers one request names.
-pub const TAGS_PER_REQUEST: usize = zolana_indexer_api::PAGE_LIMIT as usize;
+pub const TAGS_PER_REQUEST: usize = spr_indexer_api::PAGE_LIMIT as usize;
 
 #[derive(Clone, Debug)]
-pub struct TagWindow {
-    by_tag: HashMap<ViewTag, u64>,
+pub struct TagWindow<K = u64> {
+    by_tag: HashMap<ViewTag, K>,
 }
 
 impl TagWindow {
-    /// `tags` in index order from `start`, a short list ends the window early.
+    /// `tags` in index order from `start`.
     pub fn new(start: u64, tags: impl IntoIterator<Item = ViewTag>) -> Self {
+        Self::indexed((start..).zip(tags))
+    }
+}
+
+impl<K: Copy> TagWindow<K> {
+    pub fn indexed(tags: impl IntoIterator<Item = (K, ViewTag)>) -> Self {
         Self {
-            by_tag: tags.into_iter().zip(indices(start)).collect(),
+            by_tag: tags.into_iter().map(|(index, tag)| (tag, index)).collect(),
         }
     }
 
@@ -41,7 +44,7 @@ impl TagWindow {
         self.by_tag.keys().copied().collect()
     }
 
-    pub fn index_of(&self, tag: &ViewTag) -> Option<u64> {
+    pub fn index_of(&self, tag: &ViewTag) -> Option<K> {
         self.by_tag.get(tag).copied()
     }
 }
@@ -74,7 +77,7 @@ impl<'a, I: AsyncRpc + ?Sized> IndexerReads<'a, I> {
         }
     }
 
-    /// No epoch past the returned slot's is complete, `None` before the first answer.
+    /// The lowest slot any answer reports persisted, `None` before the first answer.
     pub fn persisted_slot(&self) -> Option<u64> {
         self.persisted
     }
@@ -197,8 +200,4 @@ pages! {
     GetShieldedTransactionsByTagsResponse => ShieldedTransaction, transactions;
     GetShieldedTransactionsByNullifiersResponse => ShieldedTransaction, transactions;
     GetEncryptedUtxosByTagsResponse => EncryptedUtxoMatch, matches;
-}
-
-pub(crate) fn indices(start: u64) -> impl Iterator<Item = u64> {
-    start..=start.saturating_add(DEFAULT_TAG_WINDOW - 1)
 }

@@ -15,6 +15,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildRingEntryTransaction,
   buildRingTransferTransaction,
+  createRingEntrySubmission,
   selectRingInputs,
 } from "../../../src/operations/payments/transfer.js";
 import { ringTransferClient } from "../../helpers/clients.js";
@@ -22,7 +23,7 @@ import { ringProgramConfigData, sppRingRegistration } from "../../helpers/ring-a
 import { signingKeySpendSigner } from "../../../src/operations/payments/anonymous.js";
 import type { RingMode } from "../../../src/protocol/codec/ring-codecs.js";
 import { ringConfigPda } from "../../../src/protocol/pda/index.js";
-import { AnonymousRingState } from "../../../src/state/anonymous-state.js";
+import { ViewingHistory } from "../../../src/state/viewing-history.js";
 
 const TREE = treeAddress(0);
 const PAYER = address("4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi");
@@ -311,7 +312,6 @@ describe("ring approval summary", () => {
     });
     return ringTransferClient({
       tree: TREE,
-      getSlot: async () => 1n,
       getAccount: async (address: Address) =>
         address === config
           ? {
@@ -388,7 +388,7 @@ describe("ring approval summary", () => {
       Array.from({ length: 9 }, () => [1_000n, undefined] as const),
     );
     const { approve, requests } = recordingApproval();
-    const error: unknown = await buildRingEntryTransaction({
+    const error: unknown = await createRingEntrySubmission({
       client: await approvalClient(keypair, "anonymous"),
       ringProgramId: RING,
       wallet,
@@ -398,7 +398,7 @@ describe("ring approval summary", () => {
       amount,
       anonymous: {
         signer: signingKeySpendSigner(SigningKey.fromEd25519Bytes(filled(42))),
-        state: AnonymousRingState.create(RING, 0n),
+        history: ViewingHistory.create(keypair.shieldedAddress().viewingPublicKey, 0n),
       },
     }).catch((cause: unknown) => cause);
     return { error, requests };

@@ -1,7 +1,5 @@
 //! Registry records, read under a root and applied by a due application or an authority write.
 
-use std::collections::BTreeMap;
-
 use custom_ring_interface::SYSTEM_PROGRAM_ID;
 use custom_ring_interface::{
     key_catalog::RingCircuit, queue_chain, tag, ApplyRecordsIxData, AuthorityWriteRecordsIxData,
@@ -10,15 +8,17 @@ use custom_ring_interface::{
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
-use zolana_client::AsyncRpc;
-use zolana_indexer_api::Hash;
+use spr_client::AsyncRpc;
+use spr_indexer_api::Hash;
 use zolana_ring_client::{
-    records::{apply_proof_inputs, EscrowedRecord, MemberOpeningRead},
+    records::{
+        apply_proof_inputs, EscrowedRecord, MemberOpeningRead, RecordPoolCheck, RecordPoolRead,
+    },
     AsyncRingIndexer,
 };
 use zolana_ring_indexer::rpc::{
-    GetRingApplyProofInputsRequest, GetRingMemberOpeningsRequest, RingListWriteView,
-    MAX_RING_MEMBER_PAGE_LIMIT,
+    GetRingApplyProofInputsRequest, GetRingMemberOpeningsRequest, GetRingRecordPoolRequest,
+    RingListWriteView, MAX_RING_MEMBER_PAGE_LIMIT,
 };
 use zolana_ring_member_registry::ApplyProofInputs;
 use zolana_ring_policy::{ListWrite, Member, Writer};
@@ -60,8 +60,6 @@ impl MemberRecords<'_> {
     }
 }
 
-pub(crate) type OpeningsByMember = BTreeMap<[u8; 32], MemberOpeningRead>;
-
 pub(crate) struct RecordReads<'a> {
     pub root: BoundRoot,
     pub members: &'a [[u8; 32]],
@@ -91,13 +89,36 @@ impl RecordReads<'_> {
         }
         Ok(reads)
     }
+}
 
-    pub async fn read_keyed(
+/// Distinct members' records under a bound root, the canopy sized for `openings` paths.
+pub(crate) struct PoolRead<'a> {
+    pub root: BoundRoot,
+    pub members: &'a [[u8; 32]],
+    pub openings: usize,
+}
+
+impl PoolRead<'_> {
+    pub async fn read(
         self,
         rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
-    ) -> Result<OpeningsByMember, RingError> {
-        let members = self.members;
-        Ok(members.iter().copied().zip(self.read(rpc).await?).collect())
+    ) -> Result<RecordPoolRead, RingError> {
+        let BoundRoot { ring, root, .. } = self.root;
+        let response = rpc
+            .get_ring_record_pool(GetRingRecordPoolRequest {
+                ring_program_id: ring.program_id().into(),
+                members: self.members.iter().copied().map(Hash).collect(),
+                expected_root: Hash(root),
+                openings: self.openings as u64,
+            })
+            .await?;
+        Ok(RecordPoolCheck {
+            response: &response,
+            root: &root,
+            members: self.members,
+            openings: self.openings,
+        }
+        .verify()?)
     }
 }
 

@@ -8,10 +8,10 @@ use std::{
 
 use custom_ring_interface::RingMode;
 use solana_address::Address;
-use zolana_client::{AsyncRpc, ClientError, IndexerRpcConfig, RingHistoryOptions};
-use zolana_keypair::{X25519Keypair, X25519Pubkey};
+use spr_client::{AsyncRpc, ClientError, IndexerRpcConfig, RingHistoryOptions};
+use spr_keypair::{X25519Keypair, X25519Pubkey};
+use spr_transaction::ShieldedTransaction;
 use zolana_ring_transaction::RingAssets;
-use zolana_transaction::ShieldedTransaction;
 
 use crate::{
     decrypt::TransactionAudit,

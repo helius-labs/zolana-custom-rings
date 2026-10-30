@@ -73,7 +73,6 @@ import {
   itemAt,
   noteInput,
   openDelivered,
-  openPacked,
   randomAddress,
   ringError,
   ringFixture,
@@ -162,7 +161,7 @@ function signer(address: Address) {
 }
 
 describe("confidential rail", () => {
-  it("packs two outputs as scheme 11 under the ring secret of each slot", async () => {
+  it("delivers two outputs as proven bodies each owner opens to the committed note", async () => {
     const fixture = await ringFixture();
     const sender = ShieldedKeypair.generate();
     const recipient = ShieldedKeypair.generate();
@@ -170,8 +169,7 @@ describe("confidential rail", () => {
     const { instruction, data, call } = await expanded(fixture, proven, "confidential");
 
     expect([data.nIn, data.nOut]).toEqual([1, 2]);
-    expect(data.outputs.map((output) => output.kind)).toEqual(["packed", "packed"]);
-    expect(data.dataFree).toBe(true);
+    expect(data.outputs.map((output) => output.kind)).toEqual(["delivered", "delivered"]);
     expect(data.policy).toBeUndefined();
     await checkAccounts(instruction, {
       fixture,
@@ -181,13 +179,22 @@ describe("confidential rail", () => {
       ownerSigners: [sender.shieldedAddress().solanaAddress()],
     });
     expect(fixture.ringRequests).toHaveLength(1);
-    checkAudit(fixture, data, { kind: "packedAudit" });
+    checkAudit(fixture, data, { kind: "deliveredAudit" });
     checkDisclosure(fixture, call, data, sender.shieldedAddress());
     checkRingBlindings(call, data);
-    const opened = openPacked(recipient, call, data, 1);
-    expect(opened.amount).toBe(400n);
-    expect(opened.blinding).toEqual(call.proofInputs.outputs[1]?.blinding);
-    expect(openPacked(sender, call, data, 0).amount).toBe(9_600n);
+    const open = (owner: ShieldedKeypair, slotIndex: number) =>
+      openDelivered({
+        fixture,
+        keys: walletKeys(owner),
+        recipient: owner.viewingPublicKey(),
+        call,
+        data,
+        slotIndex,
+      });
+    const opened = await open(recipient, 1);
+    expect(opened?.utxo.amount).toBe(400n);
+    expect(opened?.utxo.blinding).toEqual(call.proofInputs.outputs[1]?.blinding);
+    expect((await open(sender, 0))?.utxo.amount).toBe(9_600n);
   });
 
   it("delivers eight outputs as proven bodies the recipient opens to the committed note", async () => {
@@ -206,7 +213,7 @@ describe("confidential rail", () => {
       openDelivered({
         fixture,
         keys: walletKeys(recipient),
-        recipient: { kind: "viewing", viewingPublicKey: recipient.viewingPublicKey() },
+        recipient: recipient.viewingPublicKey(),
         call,
         data,
         slotIndex: 3,
@@ -228,7 +235,7 @@ describe("confidential rail", () => {
     const proven = await prove(fixture, sender, transfer, TransactWithdrawal.sol({ recipient }));
     const { instruction, data, call } = await expanded(fixture, proven, "confidential");
 
-    expect(data.outputs.map((output) => output.kind)).toEqual(["packed", "exit"]);
+    expect(data.outputs.map((output) => output.kind)).toEqual(["delivered", "exit"]);
     expect(data.interfaceTransfers).toHaveLength(1);
     await checkAccounts(instruction, {
       fixture,
@@ -345,23 +352,15 @@ describe("confidential rail", () => {
     });
   });
 
-  it("publishes only the real slots of a compact transfer", async () => {
+  it("refuses compact output padding before any proof, every slot is published", async () => {
     const fixture = await ringFixture();
     const sender = ShieldedKeypair.generate();
     const recipients = [ShieldedKeypair.generate(), ShieldedKeypair.generate()];
-    const proven = await prove(
-      fixture,
-      sender,
-      transferTo(fixture, sender, recipients, { compact: true }),
-    );
-    const { data, call } = await expanded(fixture, proven, "confidential");
-
-    expect([data.nIn, data.nOut]).toEqual([1, 4]);
-    expect(data.outputs).toHaveLength(3);
-    expect(call.proofInputs.outputs[3]?.isCompact()).toBe(true);
-    checkAudit(fixture, data, { kind: "packedAudit" });
-    checkDisclosure(fixture, call, data, sender.shieldedAddress());
-    checkRingBlindings(call, data);
+    await expect(
+      prove(fixture, sender, transferTo(fixture, sender, recipients, { compact: true })),
+    ).rejects.toThrow(ringError("RING_DELIVERED_COMPACT_PADDING", { slotIndex: 3 }));
+    expect(fixture.ringRequests).toHaveLength(0);
+    expect(fixture.sppCalls).toHaveLength(0);
   });
 
   it("refuses an anonymous ring, a paused ring and a ring SPP never activated", async () => {
@@ -466,7 +465,7 @@ describe("policy ring", () => {
         publicAmounts: publicAmountFields(slots),
       }),
     );
-    checkAudit(fixture, data, { kind: "packedAudit" });
+    checkAudit(fixture, data, { kind: "deliveredAudit" });
     checkDisclosure(fixture, call, data, sender.shieldedAddress());
     checkRingBlindings(call, data);
   });
@@ -676,7 +675,7 @@ describe("delegate rail", () => {
     const { instruction, data, call } = await expanded(fixture, proven, "delegate");
 
     expect(call.circuit.kind).toBe("ringAuthority");
-    expect(data.outputs.every((output) => output.kind === "packed")).toBe(true);
+    expect(data.outputs.every((output) => output.kind === "delivered")).toBe(true);
     const registry = await registryOf(fixture);
     await checkAccounts(instruction, {
       fixture,
@@ -703,10 +702,18 @@ describe("delegate rail", () => {
         publicAmounts: publicAmountFields(slots),
       }),
     );
-    checkAudit(fixture, data, { kind: "packedAudit" });
+    checkAudit(fixture, data, { kind: "deliveredAudit" });
     checkDisclosure(fixture, call, data, source.shieldedAddress());
     checkRingBlindings(call, data);
-    expect(openPacked(recipient, call, data, 1).amount).toBe(100n);
+    const opened = await openDelivered({
+      fixture,
+      keys: walletKeys(recipient),
+      recipient: recipient.viewingPublicKey(),
+      call,
+      data,
+      slotIndex: 1,
+    });
+    expect(opened?.utxo.amount).toBe(100n);
   });
 
   it("takes the narrowest pinned authority shape holding a move and refuses a wider one", async () => {
@@ -911,9 +918,9 @@ describe("delegate move builder", () => {
           if (address === config) reads.config += 1;
           return fixture.client.getAccount(address);
         },
-        getRingMemberOpenings: async (request) => {
+        getRingRecordPool: async (request) => {
           reads.openings += 1;
-          return fixture.client.getRingMemberOpenings(request);
+          return fixture.client.getRingRecordPool(request);
         },
         getLatestBlockhash: async () => BLOCKHASH,
         ...kitReads({ solanaRpc: { getProgramAccounts: () => ({ send: async () => [] }) } }),
@@ -1084,9 +1091,11 @@ describe("audit seal", () => {
     try {
       expect(() =>
         sealAudit({
-          rail: new RingOutputRail(txViewingKey, proofInputs.firstNullifier(), { kind: "packed" }),
-          audit: { exits: false, keyEscrow: false, dataFree: true, fullOpenings: false },
-          layout: { kind: "packed", outputs: 1, exits: false, keyEscrow: false, dataFree: true },
+          rail: new RingOutputRail(txViewingKey, proofInputs.firstNullifier(), {
+            kind: "delivered",
+          }),
+          audit: { exits: false, keyEscrow: false, fullOpenings: false },
+          layout: { kind: "delivered", outputs: 2, exits: false, keyEscrow: false },
           published: [],
           proofInputs,
           sender: sender.shieldedAddress(),

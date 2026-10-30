@@ -2,17 +2,17 @@
 
 use custom_ring_interface::{
     domain, pack_disclosure, unpack_disclosure, AnonymousAuditKey, AnonymousInputFields,
-    AnonymousLayout, DeliveredLayout, DisclosureLayout, InputPrefix, PackedFields, PackedLayout,
-    ANONYMOUS_ENTRY_CLASS, ANONYMOUS_SLOT_BYTES, AUDIT_CIPHERTEXT_LEN, DELIVERED_SLOT_BYTES,
+    AnonymousLayout, DeliveredLayout, DisclosureLayout, InputPrefix, ANONYMOUS_ENTRY_CLASS,
+    ANONYMOUS_SLOT_BYTES, AUDIT_CIPHERTEXT_LEN, DELIVERED_SLOT_BYTES,
     DISCLOSURE_INPUT_AMOUNT_BYTES, DISCLOSURE_SENDER_KEY_BYTES,
 };
-use zeroize::Zeroizing;
-use zolana_hasher::{
-    primitives::{is_canonical_bn254_scalar_be, pack_be, pack_be_chunks, right_align},
+use spr_hasher::{
+    primitives::{is_canonical_bn254_scalar_be, pack_be, right_align},
     Hasher, Poseidon,
 };
-use zolana_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
-use zolana_transaction::field::{field_add, field_sub};
+use spr_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
+use spr_transaction::field::{field_add, field_sub};
+use zeroize::Zeroizing;
 
 use crate::{
     encryption::{open_stream, seal_stream, StreamSchedule},
@@ -25,7 +25,7 @@ const KEY_AND_AMOUNT_BYTES: usize = KEY_BYTES + AMOUNT_BYTES;
 const ZERO: [u8; 32] = [0; 32];
 
 const _: () = assert!(DELIVERED_SLOT_BYTES == KEY_AND_AMOUNT_BYTES);
-const _: () = assert!(ANONYMOUS_SLOT_BYTES == 2 * KEY_BYTES);
+const _: () = assert!(ANONYMOUS_SLOT_BYTES == 2 * KEY_BYTES + AMOUNT_BYTES);
 const _: () = assert!(DISCLOSURE_INPUT_AMOUNT_BYTES == AMOUNT_BYTES);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,19 +126,6 @@ impl DisclosurePad {
     }
 }
 
-/// One published packed slot, ring output or exit alike.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct PackedOutputOpening {
-    pub owner_key: [u8; 32],
-    /// `None` under key escrow, the owner's record escrows it.
-    pub nullifier_pk: Option<[u8; 32]>,
-    pub asset: [u8; 32],
-    pub amount: u64,
-    /// Zero on a data-free transfer.
-    pub data_hash: [u8; 32],
-    pub ring_data_hash: [u8; 32],
-}
-
 /// The body opens the rest of a ring output, an exit's owner is its owner tag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeliveredOutputOpening {
@@ -154,13 +141,14 @@ pub enum DeliveredOutputOpening {
     Dummy,
 }
 
-/// The published tag hides `recipient_u`, only the disclosure names it.
+/// The disclosure opens every live slot's asset and amount, the published body is unproven.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AnonymousOutputOpening {
     Ring {
         owner_key: [u8; 32],
         nullifier_pk: [u8; 32],
-        recipient_u: [u8; 32],
+        asset: [u8; 32],
+        amount: u64,
     },
     Exit {
         nullifier_pk: [u8; 32],
@@ -242,12 +230,6 @@ pub struct AnonymousDisclosure {
 /// `seed_out` is present exactly when an output exits.
 #[derive(Clone, PartialEq, Eq)]
 pub enum AuditDisclosure {
-    /// A `None` output is a dummy.
-    Packed {
-        layout: PackedLayout,
-        seed_out: Option<[u8; 32]>,
-        outputs: Vec<Option<PackedOutputOpening>>,
-    },
     Delivered {
         layout: DeliveredLayout,
         seed_out: Option<[u8; 32]>,
@@ -276,16 +258,6 @@ impl core::fmt::Debug for AnonymousDisclosure {
 impl core::fmt::Debug for AuditDisclosure {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Packed {
-                layout,
-                seed_out,
-                outputs,
-            } => f
-                .debug_struct("Packed")
-                .field("layout", layout)
-                .field("seed_out", &seed_out.map(|_| REDACTED))
-                .field("outputs", outputs)
-                .finish(),
             Self::Delivered {
                 layout,
                 seed_out,
@@ -312,7 +284,6 @@ pub struct PublishedOutputs<'a> {
 impl AuditDisclosure {
     pub fn layout(&self) -> DisclosureLayout {
         match self {
-            Self::Packed { layout, .. } => DisclosureLayout::Packed(*layout),
             Self::Delivered { layout, .. } => DisclosureLayout::Delivered(*layout),
             Self::Anonymous(disclosure) => DisclosureLayout::Anonymous(disclosure.layout),
         }
@@ -322,22 +293,6 @@ impl AuditDisclosure {
     pub fn fields(&self) -> Result<Vec<[u8; 32]>, AuditError> {
         let mut fields = vec![ZERO; self.layout().field_count()];
         match self {
-            Self::Packed {
-                layout,
-                seed_out,
-                outputs,
-            } => {
-                let at = layout.fields();
-                check_len(outputs.len(), layout.outputs)?;
-                place_seed_out(&mut fields, at.seed_out, *seed_out)?;
-                for (index, opening) in outputs.iter().enumerate() {
-                    let start = at.first_slot + index * at.slot_width;
-                    let slot = &mut fields[start..start + at.slot_width];
-                    if let Some(opening) = opening {
-                        opening.place(slot, &at)?;
-                    }
-                }
-            }
             Self::Delivered {
                 layout,
                 seed_out,
@@ -382,21 +337,6 @@ impl AuditDisclosure {
             .iter()
             .try_for_each(|field| canonical(*field).map(drop))?;
         Ok(match layout {
-            DisclosureLayout::Packed(layout) => {
-                check_len(exits.len(), layout.outputs)?;
-                let at = layout.fields();
-                let outputs = (0..layout.outputs)
-                    .map(|index| {
-                        let start = at.first_slot + index * at.slot_width;
-                        PackedOutputOpening::read(&fields[start..start + at.slot_width], &at)
-                    })
-                    .collect::<Result<_, _>>()?;
-                Self::Packed {
-                    layout,
-                    seed_out: at.seed_out.map(|index| fields[index]),
-                    outputs,
-                }
-            }
             DisclosureLayout::Delivered(layout) => {
                 check_len(exits.len(), layout.outputs)?;
                 let at = layout.fields();
@@ -429,57 +369,6 @@ impl AuditDisclosure {
                 Self::Anonymous(AnonymousDisclosure::read(layout, exits, fields)?)
             }
         })
-    }
-}
-
-impl PackedOutputOpening {
-    fn place(&self, slot: &mut [[u8; 32]], at: &PackedFields) -> Result<(), AuditError> {
-        match (at.nullifier_pk, self.nullifier_pk) {
-            (Some(offset), Some(nullifier_pk)) => slot[offset] = nullifier_pk,
-            (None, None) => {}
-            _ => return Err(AuditError::DisclosureLayout),
-        }
-        slot[at.asset] = self.asset;
-        match at.data_hashes {
-            Some(offset) => {
-                slot[offset] = self.data_hash;
-                slot[offset + 1] = self.ring_data_hash;
-            }
-            None if self.data_hash != ZERO || self.ring_data_hash != ZERO => {
-                return Err(AuditError::DisclosureLayout)
-            }
-            None => {}
-        }
-        let packed = pack_disclosure(&key_and_amount(&self.owner_key, self.amount));
-        slot[at.owner_and_amount..at.owner_and_amount + packed.len()].copy_from_slice(&packed);
-        Ok(())
-    }
-
-    fn read(slot: &[[u8; 32]], at: &PackedFields) -> Result<Option<Self>, AuditError> {
-        if slot.iter().all(|field| *field == ZERO) {
-            return Ok(None);
-        }
-        let (data_hash, ring_data_hash) = at
-            .data_hashes
-            .map_or((ZERO, ZERO), |offset| (slot[offset], slot[offset + 1]));
-        let packed = packed_bytes(
-            &slot[at.owner_and_amount..at.owner_and_amount + pack_be_chunks(KEY_AND_AMOUNT_BYTES)],
-            KEY_AND_AMOUNT_BYTES,
-        )?;
-        let (owner_key, amount) = split_key_and_amount(
-            packed
-                .as_slice()
-                .try_into()
-                .map_err(|_| AuditError::DisclosureLayout)?,
-        );
-        Ok(Some(Self {
-            owner_key,
-            nullifier_pk: at.nullifier_pk.map(|offset| slot[offset]),
-            asset: slot[at.asset],
-            amount,
-            data_hash,
-            ring_data_hash,
-        }))
     }
 }
 
@@ -549,45 +438,48 @@ impl AnonymousOutputOpening {
         }
     }
 
+    /// `mask(ring, owner_key) ‖ asset ‖ u64be(amount)`, a dummy all zero.
     fn slot_bytes(&self) -> Result<[u8; ANONYMOUS_SLOT_BYTES], AuditError> {
         let mut slot = [0; ANONYMOUS_SLOT_BYTES];
-        let (head, tail) = slot.split_at_mut(KEY_BYTES);
-        match self {
+        let (owner, rest) = slot.split_at_mut(KEY_BYTES);
+        let (asset_bytes, amount_bytes) = rest.split_at_mut(KEY_BYTES);
+        let (asset, amount) = match self {
             Self::Ring {
                 owner_key,
-                recipient_u,
+                asset,
+                amount,
                 ..
             } => {
-                head.copy_from_slice(owner_key);
-                tail.copy_from_slice(recipient_u);
+                owner.copy_from_slice(owner_key);
+                (asset, amount)
             }
-            Self::Exit { asset, amount, .. } => {
-                head.copy_from_slice(&canonical(*asset)?);
-                tail[..AMOUNT_BYTES].copy_from_slice(&amount.to_be_bytes());
-            }
-            Self::Dummy => {}
+            Self::Exit { asset, amount, .. } => (asset, amount),
+            Self::Dummy => return Ok(slot),
             Self::Unreadable => return Err(AuditError::DisclosureLayout),
-        }
+        };
+        asset_bytes.copy_from_slice(&canonical(*asset)?);
+        amount_bytes.copy_from_slice(&amount.to_be_bytes());
         Ok(slot)
     }
 
     fn read(nullifier_pk: [u8; 32], slot: &[u8; ANONYMOUS_SLOT_BYTES], exit: bool) -> Self {
-        let head: [u8; KEY_BYTES] = core::array::from_fn(|i| slot[i]);
-        let tail: [u8; KEY_BYTES] = core::array::from_fn(|i| slot[KEY_BYTES + i]);
-        let (amount, padding) = split_exit_tail(&tail);
+        let owner_key: [u8; KEY_BYTES] = core::array::from_fn(|i| slot[i]);
+        let asset: [u8; KEY_BYTES] = core::array::from_fn(|i| slot[KEY_BYTES + i]);
+        let amount = u64::from_be_bytes(core::array::from_fn(|i| slot[2 * KEY_BYTES + i]));
         let opening = match exit {
-            true => zero(&padding).and_then(|()| {
+            true => zero(&owner_key).and_then(|()| {
                 Ok(Self::Exit {
                     nullifier_pk,
-                    asset: canonical(head)?,
+                    asset: canonical(asset)?,
                     amount,
                 })
             }),
             false if nullifier_pk == ZERO => zero(slot).map(|()| Self::Dummy),
-            false => Ok(Self::Ring {
-                owner_key: head,
+            false => canonical(asset).map(|asset| Self::Ring {
+                owner_key,
                 nullifier_pk,
-                recipient_u: tail,
+                asset,
+                amount,
             }),
         };
         opening.unwrap_or(Self::Unreadable)
@@ -791,18 +683,6 @@ fn key_and_amount(key: &[u8; 32], amount: u64) -> [u8; KEY_AND_AMOUNT_BYTES] {
     head.copy_from_slice(key);
     tail.copy_from_slice(&amount.to_be_bytes());
     bytes
-}
-
-fn split_key_and_amount(bytes: &[u8; KEY_AND_AMOUNT_BYTES]) -> ([u8; KEY_BYTES], u64) {
-    let key = core::array::from_fn(|i| bytes[i]);
-    let amount = core::array::from_fn(|i| bytes[KEY_BYTES + i]);
-    (key, u64::from_be_bytes(amount))
-}
-
-fn split_exit_tail(tail: &[u8; KEY_BYTES]) -> (u64, [u8; KEY_BYTES - AMOUNT_BYTES]) {
-    let amount = core::array::from_fn(|i| tail[i]);
-    let padding = core::array::from_fn(|i| tail[AMOUNT_BYTES + i]);
-    (u64::from_be_bytes(amount), padding)
 }
 
 fn zero(bytes: &[u8]) -> Result<(), AuditError> {

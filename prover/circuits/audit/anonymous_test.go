@@ -2,6 +2,7 @@ package audit_test
 
 import (
 	"fmt"
+	"math"
 	"math/big"
 	"slices"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringkey"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
@@ -19,15 +21,24 @@ import (
 // entryShape is the cheapest entry key, its fixture spends a ring note and a default-ring note.
 var entryShape = audit.AnonymousEntryShapes[0]
 
-// Every slot kind on eight outputs, and an audit-only transfer with no pair slot.
-func TestAnonymousAuditSolvesEveryStream(t *testing.T) {
-	compileAnonymous(t, audit.AnonymousAuditShape{InputClass: 4, Outputs: 8})
-	c := compileAnonymous(t, audit.AnonymousAuditShape{InputClass: 4, Outputs: 2})
-	a := ringaudit.NewAnonymousAudit(t, audit.AnonymousAuditShape{InputClass: 4, Outputs: 2})
-	payee := ringaudit.Recipient(t, 0, 0, 70)
-	a.Outputs[0] = a.NewPayment(t, payee, inboxStream(t, a, payee, 0))
-	a.Anchor, a.SenderCommitment = nil, big.NewInt(0)
-	c.requireSolved(t, a.Circuit(t))
+// Every commitment and entry key solves its honest fixture under a policy and as an audit-only transfer.
+func TestAnonymousAuditSolvesEveryShape(t *testing.T) {
+	for _, shape := range slices.Concat(audit.AnonymousAuditShapes[:], audit.AnonymousEntryShapes[:]) {
+		t.Run(anonymousKeyName(shape), func(t *testing.T) {
+			c, ok := compiledAudits[anonymousKeyName(shape)]
+			if !ok {
+				circuit, err := audit.NewAnonymousAuditCircuit(shape)
+				if err != nil {
+					t.Fatal(err)
+				}
+				c = &compiledAudit{cs: ringkey.Compile(t, circuit)}
+			}
+			a := ringaudit.NewAnonymousAudit(t, shape)
+			c.requireSolved(t, a.Circuit(t))
+			a.SenderCommitment = big.NewInt(0)
+			c.requireSolved(t, a.Circuit(t))
+		})
+	}
 }
 
 // The entry key opens a ring note and a default-ring note, with and without an exit.
@@ -35,70 +46,38 @@ func TestAnonymousEntrySolvesBothLayouts(t *testing.T) {
 	c := compileAnonymous(t, entryShape)
 	a := ringaudit.NewAnonymousAudit(t, entryShape)
 	c.requireSolved(t, a.Circuit(t))
-	a.Outputs[1] = ringaudit.AnonymousOutput{DeliveredOutput: a.NewExit(t, 1), Stream: ringaudit.Stream{Tag: big.NewInt(0)}}
+	a.Outputs[1] = a.NewAnonymousExit(t, 1)
 	a.Layout.Exits = true
 	c.requireSolved(t, a.Circuit(t))
 }
 
-// Every published input count solves on a commitment key and on the entry key, the data-free flag either way.
+// Every published input count solves on a commitment key and on the entry key, the reserved flag either way.
 func TestAnonymousAuditSolvesEveryInputCount(t *testing.T) {
 	for _, shape := range []audit.AnonymousAuditShape{{InputClass: 4, Outputs: 2}, entryShape} {
 		c := compileAnonymous(t, shape)
 		for count := 1; count <= shape.InputClass; count++ {
 			t.Run(fmt.Sprintf("%s/%d", anonymousKeyName(shape), count), func(t *testing.T) {
 				a := ringaudit.NewAnonymousAudit(t, shape).AtInputCount(count)
-				a.Layout.DataFree = count%2 == 0
+				a.Layout.Reserved = count%2 == 0
 				c.requireSolved(t, a.Circuit(t))
 			})
 		}
 	}
 }
 
-// Each case changes one value of an honest transfer of a pair payment, an inbox payment, an exit and change in slots 0 to 3.
+// Each case changes one value of an honest transfer of two payments, an exit and change in slots 0 to 3.
 func TestAnonymousAuditRefusals(t *testing.T) {
 	shape := audit.AnonymousAuditShape{InputClass: 4, Outputs: 4}
 	c := compileAnonymous(t, shape)
-	payee := ringaudit.Recipient(t, 0, 0, 70)
-	inbox := ringaudit.Recipient(t, 1, 1, 31)
 	stranger := ringtest.Repeat(0xc3)
-	sum := func(x, y *big.Int) *big.Int { return new(big.Int).Mod(new(big.Int).Add(x, y), ecc.BN254.ScalarField()) }
 	for _, tc := range []struct {
 		name   string
 		mutate func(*ringaudit.AnonymousAudit)
 	}{
-		{"first contact with the zero ring data of a deposit", func(a *ringaudit.AnonymousAudit) {
-			a.Anchor.RingDataHash = big.NewInt(0)
-		}},
-		{"first tag a pair tag", func(a *ringaudit.AnonymousAudit) {
-			pairTag := ringprotocol.PairTag(t, ringprotocol.PairKey(t, a.Anchor.SlotSecret), a.Anchor.Epoch, a.Anchor.Index)
-			a.Anchor.RingDataHash = ringprotocol.AnonymousRingData(t, a.Anchor.SlotSecret, pairTag)
-		}},
-		{"first tag the inbox tag of another key", func(a *ringaudit.AnonymousAudit) {
-			otherTag := ringprotocol.InboxTag(t, ringprotocol.InboxKey(t, a.RingProgramID, inbox.RecipientKey), a.Anchor.Epoch, a.Anchor.Index)
-			a.Anchor.RingDataHash = ringprotocol.AnonymousRingData(t, a.Anchor.SlotSecret, otherTag)
-		}},
-		{"first contact of another owner", func(a *ringaudit.AnonymousAudit) {
-			a.Anchor.Owner = spptest.MustOwnerHash(t, ringtest.MustSolanaPkField(t, stranger), payee.NullifierPk)
-		}},
-		// The first contact opens under the sums the anchor takes over both pair slots, so only the one pair slot bound refuses.
-		{"two pair slots", func(a *ringaudit.AnonymousAudit) {
-			a.Outputs[1] = a.NewPayment(t, inbox, ringaudit.Stream{Pair: true, Index: 0, Tag: a.Outputs[0].Stream.Tag})
-			inboxKeys := sum(ringprotocol.InboxKey(t, a.RingProgramID, payee.RecipientKey), ringprotocol.InboxKey(t, a.RingProgramID, inbox.RecipientKey))
-			a.Anchor.Owner = sum(a.Outputs[0].Utxo.Owner(t), a.Outputs[1].Utxo.Owner(t))
-			firstTag := ringprotocol.InboxTag(t, inboxKeys, a.Anchor.Epoch, a.Anchor.Index)
-			a.Anchor.RingDataHash = ringprotocol.AnonymousRingData(t, a.Anchor.SlotSecret, firstTag)
-		}},
-		{"slot index 64", func(a *ringaudit.AnonymousAudit) {
-			a.Outputs[1] = a.NewPayment(t, inbox, inboxStream(t, *a, inbox, 64))
-		}},
-		{"anchor index 64", func(a *ringaudit.AnonymousAudit) { a.Anchor = a.NewAnchor(t, payee, a.Epoch-3, 64) }},
-		{"anchor epoch 32 back", func(a *ringaudit.AnonymousAudit) { a.Anchor = a.NewAnchor(t, payee, a.Epoch-32, 5) }},
-		{"anchor epoch ahead of the transfer", func(a *ringaudit.AnonymousAudit) { a.Anchor = a.NewAnchor(t, payee, a.Epoch+1, 5) }},
-		{"self slot owned by someone else", func(a *ringaudit.AnonymousAudit) {
-			change := a.Change(t, 3)
-			change.OwnerKey = stranger
-			a.Outputs[3] = a.NewPayment(t, change, a.Outputs[3].Stream)
-		}},
+		{"ring output with a ring data hash", func(a *ringaudit.AnonymousAudit) { a.Outputs[1].Utxo.RingDataHash = big.NewInt(5) }},
+		{"exit with a ring data hash", func(a *ringaudit.AnonymousAudit) { a.Outputs[2].Utxo.RingDataHash = big.NewInt(5) }},
+		{"ring output with a data hash", func(a *ringaudit.AnonymousAudit) { a.Outputs[1].Utxo.DataHash = big.NewInt(5) }},
+		{"owner key not the slot owner", func(a *ringaudit.AnonymousAudit) { a.Outputs[1].OwnerKey[0] ^= 1 }},
 		{"UTXO input at the input count", func(a *ringaudit.AnonymousAudit) { a.InputCount = 1 }},
 		{"input of another owner", func(a *ringaudit.AnonymousAudit) { a.Inputs[1].OwnerPkHash = ringtest.MustSolanaPkField(t, stranger) }},
 		{"input 0 a dummy", func(a *ringaudit.AnonymousAudit) { a.Inputs[0] = ringaudit.Dummy(3, big.NewInt(0x9000)) }},
@@ -106,26 +85,10 @@ func TestAnonymousAuditRefusals(t *testing.T) {
 		{"SeedOut omitted with an exit published", func(a *ringaudit.AnonymousAudit) { a.Layout.Exits = false }},
 		{"full openings on a commitment key", func(a *ringaudit.AnonymousAudit) { a.Layout.FullOpenings = true }},
 		{"escrow flag on an anonymous key", func(a *ringaudit.AnonymousAudit) { a.Layout.Escrow = true }},
-		{"body encrypting another amount", func(a *ringaudit.AnonymousAudit) {
-			a.Outputs[1].Body = ringprotocol.SealBody(t, a.DeliveredSlotSecret(t, inbox.RecipientKey, 1), a.Outputs[1].Utxo.Blinding, inbox.Amount+1)
-		}},
-		{"ring output blinding of another slot", func(a *ringaudit.AnonymousAudit) {
-			a.Outputs[1].Utxo.Blinding = a.Blinding(t, 0)
-			a.Outputs[1].Body = ringprotocol.SealBody(t, a.DeliveredSlotSecret(t, inbox.RecipientKey, 1), a.Outputs[1].Utxo.Blinding, inbox.Amount)
-		}},
+		{"ring output blinding of another slot", func(a *ringaudit.AnonymousAudit) { a.Outputs[1].Utxo.Blinding = a.Blinding(t, 0) }},
 		{"exit blinding off the CRBS seed", func(a *ringaudit.AnonymousAudit) { a.Outputs[2].Utxo.Blinding = big.NewInt(0x5ec) }},
-		{"recipient key given as its high-bit alias", func(a *ringaudit.AnonymousAudit) {
-			alias := inbox
-			alias.RecipientKey[31] |= 0x80
-			a.Outputs[1] = a.NewPayment(t, alias, inboxStream(t, *a, alias, 0))
-		}},
 		{"sender commitment of another sender", func(a *ringaudit.AnonymousAudit) {
 			a.SenderCommitment = ringprotocol.SenderCommitment(t, ringtest.MustSolanaPkField(t, stranger), a.PrivateTxBlinding)
-		}},
-		{"ring output on no stream", func(a *ringaudit.AnonymousAudit) { a.Outputs[1].Stream.Inbox = false }},
-		{"inbox tag of the previous epoch", func(a *ringaudit.AnonymousAudit) {
-			stale := ringprotocol.InboxTag(t, ringprotocol.InboxKey(t, a.RingProgramID, inbox.RecipientKey), a.Epoch-1, 0)
-			a.Outputs[1] = a.NewPayment(t, inbox, ringaudit.Stream{Inbox: true, Index: 0, Tag: stale})
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -134,15 +97,22 @@ func TestAnonymousAuditRefusals(t *testing.T) {
 			c.refuse(t, a.Circuit(t))
 		})
 	}
+}
 
-	// The tag of slot 1 is low128 of digest + q, the hint proposes that split and SplitField refuses it.
-	t.Run("tag given as its + q alias", func(t *testing.T) {
-		a := ringaudit.NewAnonymousAudit(t, shape)
-		digest := ringprotocol.InboxTagDigest(t, ringprotocol.InboxKey(t, a.RingProgramID, inbox.RecipientKey), a.Epoch, 0)
-		alias := new(big.Int).Add(digest, ecc.BN254.ScalarField())
-		a.Outputs[1] = a.NewPayment(t, inbox, ringaudit.Stream{Inbox: true, Index: 0, Tag: ringprotocol.LowTag(alias)})
-		c.refuse(t, a.Circuit(t), splitOf(t, digest, alias))
-	})
+// A live amount of 2^64 - 1 solves and 2^64 fails its decomposition, on a ring output and an exit alike.
+func TestAnonymousAmountsStayBelowTwoTo64(t *testing.T) {
+	shape := audit.AnonymousAuditShape{InputClass: 4, Outputs: 4}
+	c := compileAnonymous(t, shape)
+	for name, slot := range map[string]int{"ring output": 1, "exit": 2} {
+		t.Run(name, func(t *testing.T) {
+			a := ringaudit.NewAnonymousAudit(t, shape)
+			a.Outputs[slot].Utxo.Amount = math.MaxUint64
+			c.requireSolved(t, a.Circuit(t))
+			assignment := a.Circuit(t)
+			assignment.Outputs[slot].Output.Amount = new(big.Int).Lsh(big.NewInt(1), 64)
+			c.refuse(t, assignment)
+		})
+	}
 }
 
 // Dummies inside the count prove only behind every spent UTXO.
@@ -185,25 +155,18 @@ func TestAnonymousPrefixPairClosesWithAZeroHalf(t *testing.T) {
 	records := a.InputRecords(t)
 	last := len(records) - 1
 	records[last] = new(big.Int).Add(records[last], big.NewInt(1))
-	statement := ringaudit.AnonymousStatement(t, a.AuditHead(t, a.Layout), a.StatementOutputs(t), a.DisclosureOf(t, records), a.Tail(t))
+	statement := ringaudit.AnonymousStatement(t, a.AuditHead(t, a.Layout), a.StatementOutputs(t), a.DisclosureOf(t, a.SlotBytes(t), records), a.Tail(t))
 	c.refuseStatementOf(t, a.Circuit(t), statement)
 }
 
-// The widest class solves at both ends of its counts and across a pair boundary, the class of one input serves sixteen outputs.
-func TestAnonymousWideClassesSolve(t *testing.T) {
-	for _, tc := range []struct {
-		shape  audit.AnonymousAuditShape
-		counts []int
-	}{
-		{audit.AnonymousAuditShape{InputClass: 32, Outputs: 2}, []int{1, 2, 3, 31, 32}},
-		{audit.AnonymousAuditShape{InputClass: 1, Outputs: 16}, []int{1}},
-	} {
-		c := compileAnonymous(t, tc.shape)
-		for _, count := range tc.counts {
-			t.Run(fmt.Sprintf("%s/%d", anonymousKeyName(tc.shape), count), func(t *testing.T) {
-				c.requireSolved(t, ringaudit.NewAnonymousAudit(t, tc.shape).AtInputCount(count).Circuit(t))
-			})
-		}
+// The widest class solves at both ends of its counts and across a pair boundary.
+func TestAnonymousWideClassSolves(t *testing.T) {
+	shape := audit.AnonymousAuditShape{InputClass: 16, Outputs: 2}
+	c := compileAnonymous(t, shape)
+	for _, count := range []int{1, 2, 3, 15, 16} {
+		t.Run(fmt.Sprintf("%s/%d", anonymousKeyName(shape), count), func(t *testing.T) {
+			c.requireSolved(t, ringaudit.NewAnonymousAudit(t, shape).AtInputCount(count).Circuit(t))
+		})
 	}
 }
 
@@ -234,7 +197,7 @@ func TestAnonymousEntryRefusals(t *testing.T) {
 		{"input hashes on an entry key", func(a *ringaudit.AnonymousAudit) { a.Layout.FullOpenings = false }},
 		{"sender key of another owner", func(a *ringaudit.AnonymousAudit) {
 			a.SenderKey = ringtest.Repeat(0xc3)
-			a.Outputs[1] = a.NewPayment(t, a.Change(t, 1), a.Outputs[1].Stream)
+			a.Outputs[1] = a.NewPayment(t, a.Change(t, 1))
 			a.SenderCommitment = ringprotocol.SenderCommitment(t, a.SenderPkHash(t), a.PrivateTxBlinding)
 		}},
 	} {
@@ -276,21 +239,53 @@ func TestAnonymousEntryDisclosesEachOpening(t *testing.T) {
 	}
 }
 
-// An exit's asset, amount and nullifier key reach the auditor, a disclosure of another opening fails the statement.
-func TestAnonymousExitDisclosesItsOpening(t *testing.T) {
+// A ring output's owner key and every UTXO's asset, amount and nullifier key reach the auditor, a disclosure of another opening fails the statement.
+func TestAnonymousSlotsDiscloseTheirOpening(t *testing.T) {
 	shape := audit.AnonymousAuditShape{InputClass: 4, Outputs: 4}
 	c := compileAnonymous(t, shape)
-	for name, edit := range map[string]func(*ringaudit.Utxo){
-		"asset":         func(u *ringaudit.Utxo) { u.Asset = ringtest.AssetField(t, ringtest.Repeat(0x0b)) },
-		"amount":        func(u *ringaudit.Utxo) { u.Amount++ },
-		"nullifier key": func(u *ringaudit.Utxo) { u.NullifierPk = big.NewInt(0x1234) },
+	edits := map[string]func(*ringaudit.AnonymousOutput){
+		"asset":         func(o *ringaudit.AnonymousOutput) { o.Utxo.Asset = ringtest.AssetField(t, ringtest.Repeat(0x0b)) },
+		"amount":        func(o *ringaudit.AnonymousOutput) { o.Utxo.Amount++ },
+		"nullifier key": func(o *ringaudit.AnonymousOutput) { o.Utxo.NullifierPk = big.NewInt(0x1234) },
+		"owner key":     func(o *ringaudit.AnonymousOutput) { o.OwnerKey[0] ^= 1 },
+	}
+	for slotName, slot := range map[string]int{"ring output": 1, "exit": 2} {
+		for name, edit := range edits {
+			if slotName == "exit" && name == "owner key" {
+				continue
+			}
+			t.Run(slotName+"/"+name, func(t *testing.T) {
+				honest := ringaudit.NewAnonymousAudit(t, shape)
+				other := honest
+				other.Outputs = slices.Clone(honest.Outputs)
+				edit(&other.Outputs[slot])
+				refuseOtherDisclosure(t, c, honest, other)
+			})
+		}
+	}
+}
+
+// An exit discloses no owner key and a dummy slot only zeros, a disclosure of any other slot bytes fails the statement.
+func TestAnonymousMaskedSlotBytesStayZero(t *testing.T) {
+	shape := audit.AnonymousAuditShape{InputClass: 4, Outputs: 8}
+	c := compileAnonymous(t, shape)
+	const exit, dummy = 3, 6
+	for _, tc := range []struct {
+		name   string
+		tamper func(a ringaudit.AnonymousAudit, slots [][]byte)
+	}{
+		{"exit owner key", func(a ringaudit.AnonymousAudit, slots [][]byte) { copy(slots[exit], ringaudit.ExitOwnerKey[:]) }},
+		{"dummy owner key", func(a ringaudit.AnonymousAudit, slots [][]byte) { copy(slots[dummy], a.Outputs[dummy].OwnerKey[:]) }},
+		{"dummy asset", func(a ringaudit.AnonymousAudit, slots [][]byte) { slots[dummy][63] = 1 }},
+		{"dummy amount", func(a ringaudit.AnonymousAudit, slots [][]byte) { slots[dummy][71] = 1 }},
+		{"ring output without its owner key", func(a ringaudit.AnonymousAudit, slots [][]byte) { clear(slots[0][:32]) }},
 	} {
-		t.Run(name, func(t *testing.T) {
-			honest := ringaudit.NewAnonymousAudit(t, shape)
-			other := honest
-			other.Outputs = slices.Clone(honest.Outputs)
-			edit(&other.Outputs[2].Utxo)
-			refuseOtherDisclosure(t, c, honest, other)
+		t.Run(tc.name, func(t *testing.T) {
+			a := ringaudit.NewAnonymousAudit(t, shape)
+			slots := a.SlotBytes(t)
+			tc.tamper(a, slots)
+			statement := ringaudit.AnonymousStatement(t, a.AuditHead(t, a.Layout), a.StatementOutputs(t), a.DisclosureOf(t, slots, a.InputRecords(t)), a.Tail(t))
+			c.refuseStatementOf(t, a.Circuit(t), statement)
 		})
 	}
 }
@@ -300,12 +295,6 @@ func refuseOtherDisclosure(t *testing.T, c *compiledAudit, honest, other ringaud
 	t.Helper()
 	statement := ringaudit.AnonymousStatement(t, honest.AuditHead(t, honest.Layout), honest.StatementOutputs(t), other.Disclosure(t), honest.Tail(t))
 	c.refuseStatementOf(t, honest.Circuit(t), statement)
-}
-
-func inboxStream(t *testing.T, a ringaudit.AnonymousAudit, slot ringaudit.DeliverySlot, index uint64) ringaudit.Stream {
-	t.Helper()
-	tag := ringprotocol.InboxTag(t, ringprotocol.InboxKey(t, a.RingProgramID, slot.RecipientKey), a.Epoch, index)
-	return ringaudit.Stream{Inbox: true, Index: index, Tag: tag}
 }
 
 // Rebinding a forbidden party into a valid statement cannot bypass the circuit.

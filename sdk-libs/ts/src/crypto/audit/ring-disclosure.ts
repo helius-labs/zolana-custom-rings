@@ -20,38 +20,20 @@ import {
   DISCLOSURE_SENDER_KEY_BYTES,
   INPUT_PREFIX_BITS,
   INPUT_PREFIX_BYTES,
-  PACKED_AUDIT_CAPACITIES,
   anonymousFields,
   deliveredFields,
   disclosureFieldCount,
-  packedChunks,
-  packedFields,
   type AnonymousInputFields,
   type AnonymousLayout,
   type DeliveredLayout,
   type DisclosureLayout,
   type FieldRange,
-  type PackedFields,
-  type PackedLayout,
 } from "../../protocol/codec/ring-disclosure-layout.js";
 
 import { maskDisclosure, packDisclosure, unmaskDisclosure, unpackDisclosure } from "./audit.js";
 import { RingDomain } from "../derivation/ring-domain.js";
 
 export type DummySlot = Readonly<{ kind: "dummy" }>;
-
-/** One published packed slot, ring output or exit alike, Rust `PackedOutputOpening`. */
-export interface PackedOutputOpening {
-  readonly ownerKey: Bytes32;
-  /** `undefined` under key escrow, the owner's record escrows it. */
-  readonly nullifierPk: Bytes32 | undefined;
-  /** `hash_bytes(mint)`. */
-  readonly asset: Bytes32;
-  readonly amount: bigint;
-  /** Zero on a data-free transfer. */
-  readonly dataHash: Bytes32;
-  readonly ringDataHash: Bytes32;
-}
 
 /** The recipient rebuilds the rest of a ring output from its body, an exit's owner is its owner tag. */
 export type DeliveredOutputOpening =
@@ -60,9 +42,15 @@ export type DeliveredOutputOpening =
   | Readonly<{ kind: "exit"; nullifierPk: Bytes32 | undefined; asset: Bytes32; amount: bigint }>
   | DummySlot;
 
-/** The published tag hides `recipientU`, only the disclosure names it. */
+/** The disclosure opens every live slot's asset and amount, the published body is unproven. */
 export type AnonymousOutputOpening =
-  | Readonly<{ kind: "ring"; ownerKey: Bytes32; nullifierPk: Bytes32; recipientU: Bytes32 }>
+  | Readonly<{
+      kind: "ring";
+      ownerKey: Bytes32;
+      nullifierPk: Bytes32;
+      asset: Bytes32;
+      amount: bigint;
+    }>
   | Readonly<{ kind: "exit"; nullifierPk: Bytes32; asset: Bytes32; amount: bigint }>
   | DummySlot;
 
@@ -94,13 +82,6 @@ export type AnonymousInputs =
 
 /** The plaintext an audit proof publishes under the CROD pad, `seedOut` present exactly when an output exits. */
 export type RingDisclosure =
-  /** `undefined` for a dummy. */
-  | Readonly<{
-      kind: "packed";
-      layout: PackedLayout;
-      seedOut: Bytes32 | undefined;
-      outputs: readonly (PackedOutputOpening | undefined)[];
-    }>
   | Readonly<{
       kind: "delivered";
       layout: DeliveredLayout;
@@ -176,8 +157,6 @@ export function splitInputPrefixPair(
 
 export function disclosureLayout(disclosure: RingDisclosure): DisclosureLayout {
   switch (disclosure.kind) {
-    case "packed":
-      return checkedLayout({ kind: "packed", ...disclosure.layout });
     case "delivered":
       return checkedLayout({ kind: "delivered", ...disclosure.layout });
     case "anonymous":
@@ -236,16 +215,6 @@ export function disclosureFields(disclosure: RingDisclosure): Bytes32[] {
   );
   try {
     switch (disclosure.kind) {
-      case "packed": {
-        const at = packedFields(disclosure.layout);
-        checkCount(disclosure.outputs.length, disclosure.layout.outputs);
-        placeSeedOut(fields, at.seedOut, disclosure.seedOut);
-        disclosure.outputs.forEach((opening, index) => {
-          if (opening !== undefined)
-            placePacked(fields, at.firstSlot + index * at.slotWidth, at, opening);
-        });
-        break;
-      }
       case "delivered": {
         const at = deliveredFields(disclosure.layout);
         checkCount(disclosure.outputs.length, disclosure.layout.outputs);
@@ -287,20 +256,6 @@ export function decodeDisclosure(
   checkCount(exits.length, layout.outputs);
   if (!layout.exits && exits.includes(true)) throw shapeError("exits");
   switch (layout.kind) {
-    case "packed": {
-      const at = packedFields(layout);
-      return Object.freeze({
-        kind: "packed",
-        layout: packedLayout(layout),
-        seedOut: fieldAt(fields, at.seedOut),
-        outputs: Object.freeze(
-          exits.map((_, index) => {
-            const start = at.firstSlot + index * at.slotWidth;
-            return readPacked(fields.slice(start, start + at.slotWidth), at);
-          }),
-        ),
-      });
-    }
     case "delivered": {
       const at = deliveredFields(layout);
       const slots = unpackDisclosure(slice(fields, at.slots), at.slotBytes * layout.outputs);
@@ -330,8 +285,6 @@ export function decodeDisclosure(
 
 const KEY_BYTES = 32;
 const AMOUNT_BYTES = 8;
-const KEY_AND_AMOUNT_BYTES = KEY_BYTES + AMOUNT_BYTES;
-const OWNER_AND_AMOUNT_FIELDS = packedChunks(KEY_AND_AMOUNT_BYTES);
 const U64_MAX = 0xffff_ffff_ffff_ffffn;
 const DUMMY: DummySlot = Object.freeze({ kind: "dummy" });
 const PREFIX_SHIFT = BigInt(INPUT_PREFIX_BITS);
@@ -345,31 +298,19 @@ function checkedLayout<T extends DisclosureLayout>(layout: T): T {
   const valid =
     flags.every((flag) => typeof flag === "boolean") &&
     counted(layout.outputs) &&
-    (layout.kind === "packed"
-      ? typeof layout.dataFree === "boolean" &&
-        layout.outputs <= Math.max(...PACKED_AUDIT_CAPACITIES)
-      : layout.kind === "delivered"
-        ? DELIVERED_AUDIT_CAPACITIES.includes(layout.outputs)
-        : counted(layout.inputs) &&
-          (layout.key.kind === "entry"
-            ? ANONYMOUS_ENTRY_OUTPUTS.includes(layout.outputs) &&
-              layout.inputs <= ANONYMOUS_ENTRY_CLASS
-            : (ANONYMOUS_AUDIT_CLASSES.find(
-                (entry) => entry.outputs === layout.outputs,
-              )?.classes.includes(layout.key.class) ??
-                false) &&
-              layout.inputs <= layout.key.class));
+    (layout.kind === "delivered"
+      ? DELIVERED_AUDIT_CAPACITIES.includes(layout.outputs)
+      : counted(layout.inputs) &&
+        (layout.key.kind === "entry"
+          ? ANONYMOUS_ENTRY_OUTPUTS.includes(layout.outputs) &&
+            layout.inputs <= ANONYMOUS_ENTRY_CLASS
+          : (ANONYMOUS_AUDIT_CLASSES.find(
+              (entry) => entry.outputs === layout.outputs,
+            )?.classes.includes(layout.key.class) ??
+              false) &&
+            layout.inputs <= layout.key.class));
   if (!valid) throw shapeError("layout");
   return layout;
-}
-
-function packedLayout(layout: PackedLayout): PackedLayout {
-  return Object.freeze({
-    outputs: layout.outputs,
-    exits: layout.exits,
-    keyEscrow: layout.keyEscrow,
-    dataFree: layout.dataFree,
-  });
 }
 
 function deliveredLayout(layout: DeliveredLayout): DeliveredLayout {
@@ -387,54 +328,6 @@ function anonymousLayout(layout: AnonymousLayout): AnonymousLayout {
     outputs: layout.outputs,
     exits: layout.exits,
   });
-}
-
-function placePacked(
-  fields: Bytes32[],
-  start: number,
-  at: PackedFields,
-  opening: PackedOutputOpening,
-): void {
-  if ((at.nullifierPk === undefined) !== (opening.nullifierPk === undefined))
-    throw shapeError("nullifierPk");
-  if (at.nullifierPk !== undefined && opening.nullifierPk !== undefined)
-    fields[start + at.nullifierPk] = field(opening.nullifierPk, "nullifierPk");
-  fields[start + at.asset] = field(opening.asset, "asset");
-  if (at.dataHashes !== undefined) {
-    fields[start + at.dataHashes] = field(opening.dataHash, "dataHash");
-    fields[start + at.dataHashes + 1] = field(opening.ringDataHash, "ringDataHash");
-  } else if (!isZero(opening.dataHash) || !isZero(opening.ringDataHash))
-    throw shapeError("dataHash");
-  const first = start + at.ownerAndAmount;
-  place(
-    fields,
-    { start: first, end: first + OWNER_AND_AMOUNT_FIELDS },
-    packParts((parts) => {
-      parts.push(checkedBytes<Bytes32>(opening.ownerKey, 32, "ownerKey"));
-      parts.push(amountBytes(opening.amount));
-    }),
-  );
-}
-
-/** `undefined` for a dummy, every field of its slot zero. */
-function readPacked(slot: readonly Bytes32[], at: PackedFields): PackedOutputOpening | undefined {
-  if (slot.every(isZero)) return undefined;
-  const bytes = unpackDisclosure(
-    slot.slice(at.ownerAndAmount, at.ownerAndAmount + OWNER_AND_AMOUNT_FIELDS),
-    KEY_AND_AMOUNT_BYTES,
-  );
-  try {
-    return Object.freeze({
-      ownerKey: key(bytes, 0, "ownerKey"),
-      nullifierPk: at.nullifierPk === undefined ? undefined : slot[at.nullifierPk],
-      asset: required(slot[at.asset]),
-      amount: bytesToBigInt(bytes.subarray(KEY_BYTES)),
-      dataHash: at.dataHashes === undefined ? zero() : required(slot[at.dataHashes]),
-      ringDataHash: at.dataHashes === undefined ? zero() : required(slot[at.dataHashes + 1]),
-    });
-  } finally {
-    bytes.fill(0);
-  }
 }
 
 function deliveredNullifierPk(output: DeliveredOutputOpening): Bytes32 | undefined {
@@ -496,21 +389,19 @@ function anonymousNullifierPk(output: AnonymousOutputOpening): Bytes32 {
   return output.kind === "dummy" ? zero() : field(output.nullifierPk, "nullifierPk");
 }
 
-/** A ring slot `owner_key ‖ u`, an exit `asset ‖ u64be(amount) ‖ 0^24`. */
+/** `mask(ring, owner_key) ‖ fe32(asset) ‖ u64be(amount)`, a dummy all zero. */
 function pushAnonymousSlot(parts: Uint8Array[], output: AnonymousOutputOpening): void {
-  switch (output.kind) {
-    case "ring":
-      parts.push(checkedBytes<Bytes32>(output.ownerKey, 32, "ownerKey"));
-      parts.push(checkedBytes<Bytes32>(output.recipientU, 32, "recipientU"));
-      return;
-    case "exit":
-      parts.push(field(output.asset, "asset"));
-      parts.push(amountBytes(output.amount));
-      parts.push(new Uint8Array(ANONYMOUS_SLOT_BYTES - KEY_AND_AMOUNT_BYTES));
-      return;
-    case "dummy":
-      parts.push(new Uint8Array(ANONYMOUS_SLOT_BYTES));
+  if (output.kind === "dummy") {
+    parts.push(new Uint8Array(ANONYMOUS_SLOT_BYTES));
+    return;
   }
+  parts.push(
+    output.kind === "ring"
+      ? checkedBytes<Bytes32>(output.ownerKey, 32, "ownerKey")
+      : new Uint8Array(KEY_BYTES),
+  );
+  parts.push(field(output.asset, "asset"));
+  parts.push(amountBytes(output.amount));
 }
 
 function readAnonymousOutput(
@@ -518,16 +409,12 @@ function readAnonymousOutput(
   slot: Uint8Array,
   exit: boolean,
 ): AnonymousOutputOpening {
-  const head = key(slot, 0, "ownerKey");
-  const tail = slot.subarray(KEY_BYTES);
+  const ownerKey = key(slot, 0, "ownerKey");
+  const asset = key(slot, KEY_BYTES, "asset");
+  const amount = bytesToBigInt(slot.subarray(2 * KEY_BYTES, 2 * KEY_BYTES + AMOUNT_BYTES));
   if (exit) {
-    zeroBytes(tail.subarray(AMOUNT_BYTES));
-    return Object.freeze({
-      kind: "exit",
-      nullifierPk,
-      asset: field(head, "asset"),
-      amount: bytesToBigInt(tail.subarray(0, AMOUNT_BYTES)),
-    });
+    zeroBytes(ownerKey);
+    return Object.freeze({ kind: "exit", nullifierPk, asset: field(asset, "asset"), amount });
   }
   if (isZero(nullifierPk)) {
     zeroBytes(slot);
@@ -535,9 +422,10 @@ function readAnonymousOutput(
   }
   return Object.freeze({
     kind: "ring",
-    ownerKey: head,
+    ownerKey,
     nullifierPk,
-    recipientU: key(tail, 0, "recipientU"),
+    asset: field(asset, "asset"),
+    amount,
   });
 }
 

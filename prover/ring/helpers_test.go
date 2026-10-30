@@ -13,7 +13,6 @@ import (
 	"github.com/consensys/gnark/backend/groth16"
 	"github.com/consensys/gnark/backend/witness"
 	"github.com/consensys/gnark/frontend"
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 
 	"github.com/helius-labs/zolana/prover/server/prover/common"
 )
@@ -44,14 +43,6 @@ type unviewed interface {
 }
 
 func unfill(dst, src reflect.Value, path string) []error {
-	if src.Type() == reflect.TypeFor[[]registry.QuadOpening]() {
-		if src.Len() == 0 {
-			dst.SetZero()
-			return nil
-		}
-		return unfill(dst, src.Index(0), path)
-	}
-
 	if dst.Kind() == reflect.Pointer {
 		dst.Set(reflect.New(dst.Type().Elem()))
 		return unfill(dst.Elem(), src, path)

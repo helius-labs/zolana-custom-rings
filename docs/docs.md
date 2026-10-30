@@ -51,7 +51,7 @@ The operator runs the `zolana-ring` CLI from a `ring.toml`. Members pay through 
 | 16 | Delegate | Moves escrowed members' notes inside a key-escrow ring without their signature. |
 | 17 | Auditor key | The X25519 key every transfer's audit proof seals to. Ring RPC or a local file holds it. |
 | 18 | Reader | An Ed25519 key or a P-256 passkey with a read access record. Reads audited history from Ring RPC. |
-| 19 | Ring address | An anonymous-ring payment address. One per sender keeps the sender's payments apart. |
+| 19 | Ring address | An anonymous-ring payment address, the recipient's shielded address and the ring. A `zolana:` payment request adds the recipient's request tag. |
 | 20 | Ring indexer | Serves member records and forwards every other call to Photon. |
 | 21 | Ring RPC | Holds the auditor key and serves readers. |
 | 22 | Hidden owner | The sender on an anonymous ring. It signs inside the SPP proof, so its key stays off chain. |
@@ -257,10 +257,7 @@ await syncRingWallet({
   client,
   wallet: actor.wallet,
   keys: ringWalletKeys(actor.keys, LocalRingKeys.fromKeypair(actor.keypair)),
-  config: {
-    depositPayloadDecoder: customRingDepositPayload,
-    requireSlot: await currentSlot(client),
-  },
+  config: { requireSlot: await currentSlot(client) },
 });
 ```
 
@@ -342,7 +339,7 @@ let proven = env.run(transfer.prove(env.client.ring_client()))?;
 
 `proven.instruction()` builds the instruction, and `RingSubmission::new(op).send_until_settled` signs, sends and re-proves on a stale root. The zolana `ConfidentialTransaction` builds the outputs: `transfer_with_ring(.., None)` pays the default ring, `withdraw` and `withdraw_sol` add a public leg, and `with_interface_transfer_accounts` names its settlement accounts.
 
-Transfer on an anonymous ring. The recipient issues a ring address per sender, and the sender's state records its first contacts, the payments that start a pair stream ([Anonymity walkthrough](anonymity-walkthrough.md#first-contact)). The transaction names the relayer as payer:
+Transfer on an anonymous ring. The recipient shares its ring address or a payment request, and `first_contact` picks the bootstrap tag or the request tag until the pair is known ([Anonymity walkthrough](anonymity-walkthrough.md#first-payment)). The transaction names the relayer as payer:
 
 ```rust
 let transaction = ConfidentialTransaction::new_with_ring(
@@ -356,16 +353,17 @@ CustomRingTransfer::new(CustomRingTransferInput {
     nullifier_key: Some(&self.sender.nullifier_key),
     transaction,
 })
-.with_anonymous_signer(&self.sender.signing_key, self.state)
+.with_anonymous_signer(&self.sender.signing_key, self.history)
 .with_payment(custom_ring_sdk::AnonymousPayment {
     to: self.to,
+    first_contact: self.first_contact,
     asset: Mint::SOL,
     amount: self.amount,
 })?
 .with_shape(shape)?
 ```
 
-`proven.instruction_at(slot)` sets the previous-epoch flag when the transfer lands one epoch after its proof. After it lands, `state.record_first_contact(pending.confirm(leaf_index))` keeps the pair stream. `AnonymousRingSync::new(keys, &assets).fetch(indexer, &state, slot)` finds received notes.
+`transfer.viewing_history()` is the sender's history past the transfer's tags, stored before the transfer is sent. `AnonymousSync::new(keys, &assets).fetch(indexer, &history)` finds received notes and returns the raised history.
 
 Merge on an anonymous ring:
 
@@ -438,7 +436,7 @@ ring-rpc serve --port 8785 --indexer-url <ring indexer> --rpc-url <solana> \
 ## Limitations
 
 1. **Confidential rings name their parties:** the sender signs and each ring output publishes the recipient's viewing key, which the zolana user registry maps to its Solana key. Use an anonymous ring to hide them.
-2. **Anonymity needs a relayer and fresh addresses:** the payer and fee payer must not link to the owner, and each ring address goes to one sender. A default-ring spend, an exit or a withdrawal to a linked key ends the anonymity of that transfer.
+2. **Anonymity needs a relayer and request tags:** the payer and fee payer must not link to the owner, and a first payment under the bootstrap tag publishes the recipient's viewing key. A default-ring spend, an exit or a withdrawal to a linked key ends the anonymity of that transfer.
 3. **Outflow limits bound one transfer:** no limit counts across transfers, keys or time. A per-day cap per customer is not expressible.
 4. **Deposits and merges are not screened:** rules screen the sender and the outputs of each transfer. A key-escrow ring refuses a deposit to an owner without an escrowed key.
 5. **Confidential rings cannot merge:** join notes with a transfer to yourself.

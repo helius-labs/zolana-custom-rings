@@ -27,6 +27,8 @@ import type {
   RingMemberRecordResult,
   RingProver,
   RingQueueState,
+  RingRecordPool,
+  RingRecordPoolRequest,
   RingRecordReader,
   RingRegistryState,
 } from "./ports.js";
@@ -98,6 +100,13 @@ export class CustomRingClient extends ZolanaClient implements RingProver, RingRe
     context?: RequestContext,
   ): Promise<RingMemberOpenings> {
     return this.#ringIndexer.getRingMemberOpenings(request, context);
+  }
+
+  getRingRecordPool(
+    request: RingRecordPoolRequest,
+    context?: RequestContext,
+  ): Promise<RingRecordPool> {
+    return this.#ringIndexer.getRingRecordPool(request, context);
   }
 
   getRingRecordQueue(

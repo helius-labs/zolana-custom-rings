@@ -5,9 +5,9 @@ use custom_ring_interface::{
     ANONYMOUS_MERGE_WIDTHS, AUDIT_CIPHERTEXT_LEN, MERGE_DISCLOSURE_HEADER_LEN,
     MERGE_DISCLOSURE_INFO,
 };
+use spr_hasher::primitives::{right_align, PACK_BE_CHUNK_BYTES};
+use spr_keypair::{random_salt, X25519Keypair, X25519Pubkey};
 use zeroize::Zeroizing;
-use zolana_hasher::primitives::{right_align, PACK_BE_CHUNK_BYTES};
-use zolana_keypair::{random_salt, X25519Keypair, X25519Pubkey};
 
 use super::{open_stream, seal_stream, Result, StreamSchedule};
 use crate::{AuditError, DisclosurePad, REDACTED};

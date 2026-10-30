@@ -1,12 +1,11 @@
-use custom_ring_interface::CustomRingError;
 use futures::future::try_join_all;
 use solana_address::Address;
-use zolana_client::AsyncRpc;
-use zolana_interface::{
+use spr_client::AsyncRpc;
+use spr_interface::{
     pda, state::discriminator::TREE_ACCOUNT_DISCRIMINATOR, SHIELDED_POOL_PROGRAM_ID,
 };
-use zolana_transaction::utxo::SppProofInputUtxo;
-use zolana_tree::TreeAccount;
+use spr_transaction::utxo::SppProofInputUtxo;
+use spr_tree::TreeAccount;
 
 use crate::RingError;
 
@@ -29,13 +28,6 @@ pub(crate) struct SpendTrees {
     pub output: Address,
     /// SPP admits dummy inputs only when every input tree has headroom for its slots.
     pub allow_dummy_inputs: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct BoundAnchor {
-    pub tree: Address,
-    pub root_index: u16,
-    pub root: [u8; 32],
 }
 
 /// Every UTXO of the tree hashes under its raw id.
@@ -106,18 +98,6 @@ pub(crate) fn bind_trees(
         inputs: views.iter().map(|view| view.tree.address).collect(),
         output: output.tree.address,
     })
-}
-
-impl BoundAnchor {
-    /// The program reads the root at the index of an unpaused tree.
-    pub(crate) async fn holds(&self, rpc: &(impl AsyncRpc + ?Sized)) -> Result<bool, RingError> {
-        let mut data = tree_data(rpc, self.tree).await?;
-        let tree = TreeAccount::from_bytes(&mut data, self.tree.to_bytes())?;
-        if tree.is_paused() {
-            return Err(CustomRingError::FirstContactTreePaused.into());
-        }
-        Ok(tree.get_utxo_tree_root(self.root_index).ok() == Some(self.root))
-    }
 }
 
 async fn tree_data(rpc: &(impl AsyncRpc + ?Sized), address: Address) -> Result<Vec<u8>, RingError> {

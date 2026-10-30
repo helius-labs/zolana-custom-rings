@@ -8,7 +8,6 @@ import (
 	"github.com/consensys/gnark/frontend"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
-	circuitregistry "github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
@@ -33,13 +32,13 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 	t.Helper()
 	var b Witness
 	if w.Outputs != 0 {
-		c, err := policy.NewMemberPolicyCircuitWith(policy.MemberShape{Outputs: w.Outputs, Withdrawals: w.WithdrawalCapacity, OwnOnly: w.OwnOnly})
+		c, err := policy.NewMemberPolicyCircuit(policy.MemberShape{Outputs: w.Outputs, Withdrawals: w.WithdrawalCapacity, OwnOnly: w.OwnOnly, Records: w.Records})
 		if err != nil {
 			t.Fatal(err)
 		}
 		b.Member = c
 	} else {
-		c, err := policy.NewDelegatePolicyCircuitWith(policy.DelegateShape{Shape: w.Shape, OwnOnly: w.OwnOnly})
+		c, err := policy.NewDelegatePolicyCircuit(policy.DelegateShape{Shape: w.Shape, OwnOnly: w.OwnOnly, Records: w.Records})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -75,13 +74,6 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 		own.Apply(t, ringregistry.Entry{Member: assets[key], Mask: big.NewInt(0), Value: big.NewInt(0), EscrowKey: big.NewInt(0), MintPolicy: update})
 	}
 
-	entry := func(member int64) policy.Entry {
-		e := policy.Entry{Own: own.Opening(big.NewInt(member)).Wires()}
-		if !w.OwnOnly {
-			e.Curator = []circuitregistry.QuadOpening{curator.Opening(big.NewInt(member)).Wires()}
-		}
-		return e
-	}
 	p.Table = rows.Wires()
 	p.PolicyHash = TableHash(t, p.Table)
 	p.RingProgramID, p.OwnRoot, p.CuratorRoot = ringID, own.Root(), 0
@@ -94,24 +86,18 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 			p.PublicAssets[k], p.PublicAmounts[k] = w.Public[k].Asset, protocol.SignedToField(big.NewInt(w.Public[k].Amount))
 		}
 	}
-	for k, asset := range p.PublicAssets {
-		p.PublicAssetEntries[k] = own.Opening(ringtest.AsBigInt(asset)).Wires()
-	}
 	p.AddressChain, p.PrivateTxBlinding, p.SenderPkHash = 0, privateTxBlinding, w.Sender
-	p.SenderEntry = entry(w.Sender)
 	for o := range p.Outputs {
 		s := pick(w.Slots, o)
 		p.Outputs[o] = policy.OutputWires{UtxoWires: s.wires(0xb100 + int64(o)), CtHash: 0}
 		if s.Owner != 0 {
 			p.Outputs[o].CtHash = ctHash(s.Owner)
 		}
-		p.OwnerEntries[o], p.AssetEntries[o] = entry(s.Owner), entry(s.Asset)
 	}
 	p.WithdrawalCount = len(w.Withdrawals)
 	for i := range p.Withdrawals {
 		s := pick(w.Withdrawals, i)
 		p.Withdrawals[i] = policy.WithdrawalWires{Owner: s.Owner, Asset: s.Asset, Amount: s.Amount}
-		p.OwnerEntries[len(p.Outputs)+i], p.AssetEntries[len(p.Outputs)+i] = entry(s.Owner), entry(s.Asset)
 	}
 	if b.Delegate != nil {
 		for i := range b.Delegate.Inputs {
@@ -126,6 +112,7 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 			c.Sender = ringprotocol.SenderCommitment(t, big.NewInt(w.Sender), big.NewInt(privateTxBlinding))
 		}
 	}
+	b.pool(t, own, curator)
 	b.Rehash(t)
 	return b
 }
@@ -170,7 +157,7 @@ func (b Witness) Rehash(t testing.TB) {
 func (b Witness) Rebind(t testing.TB) {
 	t.Helper()
 	p := b.Policy()
-	fields := []*big.Int{big.NewInt(policy.WithdrawalDomain), ringtest.AsBigInt(p.WithdrawalCount)}
+	fields := []*big.Int{big.NewInt(shared.WithdrawalsDomain), ringtest.AsBigInt(p.WithdrawalCount)}
 	for _, w := range p.Withdrawals[:int(ringtest.AsBigInt(p.WithdrawalCount).Int64())] {
 		fields = append(fields, ringtest.AsBigInt(w.Owner), ringtest.AsBigInt(w.Asset), ringtest.AsBigInt(w.Amount))
 	}

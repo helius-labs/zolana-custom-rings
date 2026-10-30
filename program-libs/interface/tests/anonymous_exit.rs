@@ -4,8 +4,8 @@ use custom_ring_interface::{
 };
 use solana_address::Address;
 use spl_token_2022_interface::pod::{PodAccount, PodCOption};
-use zolana_hasher::primitives::solana_owner_identity;
-use zolana_interface::{
+use spr_hasher::primitives::solana_owner_identity;
+use spr_interface::{
     instruction::InterfaceTransfer, SPL_TOKEN_ACCOUNT_INITIALIZED, SPL_TOKEN_ACCOUNT_LEN,
     SPL_TOKEN_PROGRAM_ID,
 };

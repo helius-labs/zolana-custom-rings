@@ -45,7 +45,6 @@
     [1, 8],
     [2, 2],
     [2, 4],
-    [1, 16],
     [2, 8],
     [3, 2],
     [3, 4],
@@ -64,23 +63,17 @@
     [8, 8],
     [12, 2],
     [12, 4],
-    [12, 8],
     [16, 2],
-    [16, 4],
-    [16, 8],
-    [24, 2],
-    [24, 4],
-    [32, 2]
+    [16, 4]
   ],
   "ring_authority": [
     [2, 2],
     [4, 4]
   ],
   "anonymous_audit_classes": [
-    {"outputs": 2, "classes": [4, 8, 12, 16, 24, 32]},
-    {"outputs": 4, "classes": [4, 8, 12, 16, 24]},
-    {"outputs": 8, "classes": [4, 8, 12, 16]},
-    {"outputs": 16, "classes": [1]}
+    {"outputs": 2, "classes": [4, 16]},
+    {"outputs": 4, "classes": [4, 16]},
+    {"outputs": 8, "classes": [4, 8]}
   ],
   "anonymous_entry": {"class": 8, "outputs": [2, 4, 8]}
 }

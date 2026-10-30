@@ -4,14 +4,16 @@
 mod memory;
 mod path;
 mod record;
+mod record_pool;
 mod tree;
 
+use spr_hasher::HasherError;
 use thiserror::Error;
-use zolana_hasher::HasherError;
 
 pub use memory::MemberRegistryTree;
 pub use path::{quad_node, NodePosition, QuadPath, ZERO_SUBTREES};
 pub use record::MemberRecord;
+pub use record_pool::{Canopy, PoolSubject, RecordPool, SharedPath, SharedProof};
 pub use tree::{
     ApplyProofInputs, IndexedRecord, OpeningCheck, RecordOpening, RecordStore, RecordTree,
     RecordWriteProofInput,
@@ -43,6 +45,10 @@ pub enum RecordTreeError {
     MissingSentinel,
     #[error("a member holds two records")]
     DuplicateMember,
+    #[error("the record pool exceeds its capacity")]
+    PoolCapacity,
+    #[error("the record pool proof has the wrong shape")]
+    PoolShape,
 }
 
 impl From<HasherError> for RecordTreeError {

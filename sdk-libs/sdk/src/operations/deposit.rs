@@ -9,18 +9,18 @@ use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_signature::Signature;
 use solana_signer::Signer;
+use spr_client::{AsyncRpc, ClientError};
+use spr_interface::{pda, state::SplAssetRegistry, PROGRAM_ID_PUBKEY};
+use spr_keypair::{random_blinding, Curve, ShieldedAddress, X25519Pubkey};
+use spr_program::instruction::{DepositAsset, RingAssetDeposit};
+use spr_transaction::{owner_utxo_hash, Data, Mint, Utxo, SOL_ASSET_ID, SOL_MINT};
 use zeroize::Zeroizing;
-use zolana_client::{AsyncRpc, ClientError};
-use zolana_interface::{pda, state::SplAssetRegistry, PROGRAM_ID_PUBKEY};
-use zolana_keypair::{random_blinding, Curve, ShieldedAddress, X25519Pubkey};
-use zolana_program::instruction::{DepositAsset, RingAssetDeposit};
 use zolana_ring_client::{
-    exactly_one, seal_deposits, AnonymousRingState, AsyncRingIndexer, DepositEncryption,
-    DepositOpening,
+    seal_deposits, AdvancedTag, AsyncRingIndexer, DepositEncryption, DepositOpening, FirstContact,
+    PaymentRecipient, ViewingHistory,
 };
-use zolana_transaction::{
-    owner_utxo_hash, Data, Mint, RingDepositPlaintext, Utxo, SOL_ASSET_ID, SOL_MINT,
-};
+use zolana_ring_keys::RingAddress;
+use zolana_ring_transaction::RingDepositPlaintext;
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
@@ -41,12 +41,69 @@ mod tests;
 pub enum DepositRecipient<'a> {
     /// The member finds the note under its viewing key's tag.
     Confidential(ShieldedAddress),
-    /// The depositor's own hidden identity on an anonymous ring, found on its deposit stream.
+    /// The depositor's own hidden identity on an anonymous ring, under its next sender tag.
     Anonymous {
         keys: &'a dyn RingSender,
-        /// Its `deposit_next` is the deposit's stream counter.
-        state: &'a AnonymousRingState,
+        history: &'a ViewingHistory,
     },
+    /// Another member of an anonymous ring, its tag by the selection over the depositor's history.
+    AnonymousPayment {
+        keys: &'a dyn RingSender,
+        history: &'a ViewingHistory,
+        to: &'a RingAddress,
+        first_contact: FirstContact,
+    },
+}
+
+struct TaggedRecipient {
+    address: ShieldedAddress,
+    view_tag: [u8; 32],
+    history: Option<ViewingHistory>,
+}
+
+impl DepositRecipient<'_> {
+    fn tagged(&self, ring: CustomRing) -> Result<TaggedRecipient, RingError> {
+        Ok(match *self {
+            Self::Confidential(address) => TaggedRecipient {
+                address,
+                view_tag: address.viewing_pubkey.u(),
+                history: None,
+            },
+            Self::Anonymous { keys, history } => {
+                let AdvancedTag { tag, history } = history.sender_tag(keys)?;
+                TaggedRecipient {
+                    address: keys.address()?,
+                    view_tag: tag,
+                    history: Some(history),
+                }
+            }
+            Self::AnonymousPayment {
+                keys,
+                history,
+                to,
+                first_contact,
+            } => {
+                if to.ring_program_id != ring.program_id() {
+                    return Err(RingError::ForeignRingAddress {
+                        address: to.ring_program_id,
+                        ring: ring.program_id(),
+                    });
+                }
+                let AdvancedTag { tag, history } = history.deposit_tag(
+                    keys,
+                    &PaymentRecipient {
+                        viewing_pubkey: to.recipient.viewing_pubkey,
+                        first_contact,
+                    },
+                )?;
+                TaggedRecipient {
+                    address: to.recipient,
+                    view_tag: tag.payment.tag,
+                    history: Some(history),
+                }
+            }
+        })
+    }
 }
 
 #[must_use]
@@ -75,6 +132,7 @@ pub struct PreparedRingDeposit {
     cosigner: Option<Address>,
     utxo: Utxo,
     disclosure: DepositDisclosure,
+    viewing_history: Option<ViewingHistory>,
 }
 
 pub(crate) struct BoundDeposit {
@@ -103,6 +161,11 @@ struct EscrowedRecord {
 }
 
 impl RingDeposit<'_> {
+    /// The depositor's viewing history past the deposit's tag, stored before it is sent.
+    pub fn viewing_history(&self) -> Result<Option<ViewingHistory>, RingError> {
+        Ok(self.recipient.tagged(self.ring)?.history)
+    }
+
     /// Fixes the note, every proving attempt deposits the same one.
     pub async fn prepare(
         &self,
@@ -113,27 +176,17 @@ impl RingDeposit<'_> {
         let config = self.ring.require_config(rpc).await?;
         self.ring.require_active(rpc).await?;
         let anonymous = config.mode == RingMode::Anonymous;
-        let (address, view_tag) = match self.recipient {
-            DepositRecipient::Confidential(address) if !anonymous => {
-                (address, address.viewing_pubkey.u())
-            }
-            DepositRecipient::Anonymous { keys, state } if anonymous => {
-                if state.ring() != self.ring.program_id() {
-                    return Err(RingError::ForeignRingState {
-                        state: state.ring(),
-                        ring: self.ring.program_id(),
-                    });
-                }
-                (
-                    keys.address()?,
-                    exactly_one(keys.sender_view_tags(&[state.deposit_next()])?)?,
-                )
-            }
-            DepositRecipient::Confidential(_) => {
-                return Err(CustomRingError::AnonymousRingRefused.into())
-            }
-            DepositRecipient::Anonymous { .. } => return Err(RingError::NotAnonymousRing),
-        };
+        if anonymous == matches!(self.recipient, DepositRecipient::Confidential(_)) {
+            return Err(match anonymous {
+                true => CustomRingError::AnonymousRingRefused.into(),
+                false => RingError::NotAnonymousRing,
+            });
+        }
+        let TaggedRecipient {
+            address,
+            view_tag,
+            history: viewing_history,
+        } = self.recipient.tagged(self.ring)?;
         let owner_key = match anonymous {
             // An anonymous ring spends only through the hidden Ed25519 proof.
             true if address.signing_pubkey.curve()? != Curve::Ed25519 => {
@@ -181,7 +234,7 @@ impl RingDeposit<'_> {
         }
         .encode();
         // The proof binds the ring, the tree and the exact forwarded SPP bytes.
-        let spp = zolana_program::instruction::RingDeposit {
+        let spp = spr_program::instruction::RingDeposit {
             tree: self.tree,
             depositor: self.payer.pubkey(),
             ring_program_id: self.ring.program_id(),
@@ -225,6 +278,7 @@ impl RingDeposit<'_> {
                 escrow: config.mode == RingMode::ConfidentialEscrow,
             },
             spp,
+            viewing_history,
         })
     }
 
@@ -278,6 +332,10 @@ impl PreparedRingDeposit {
 
     pub fn utxo(&self) -> &Utxo {
         &self.utxo
+    }
+
+    pub fn viewing_history(&self) -> Option<&ViewingHistory> {
+        self.viewing_history.as_ref()
     }
 
     /// Each call binds the newest root, a raised floor needs only a new proof.

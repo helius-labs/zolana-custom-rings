@@ -1,9 +1,8 @@
 //! The pre-proof refusals an anonymous policy ring adds to the confidential rail.
 
 use custom_ring_interface::{
-    stream::EPOCH_SLOTS, tag, AnchorRoot, CustomRingError, RingRail, RingTransactData,
+    tag, CustomRingError, RingOutput, RingRail, RingTransactData, SenderBundle,
 };
-use solana_address::Address;
 use solana_instruction::AccountMeta;
 use solana_keypair::{Keypair, Signer};
 
@@ -12,7 +11,7 @@ use crate::{
     forward_rules::{
         deposit_instruction, merge_data, merge_disclosure, merge_instruction_with, ring_deposit,
     },
-    transact_rules::{registry_meta, send, spp_list, spp_tree, Fixture, SPP},
+    transact_rules::{registry_meta, send, spp_list, Fixture},
 };
 
 /// An anonymous policy transfer, `prefix` after the registry, the payer its only signer.
@@ -64,43 +63,65 @@ fn an_anonymous_policy_transfer_takes_no_signer_but_the_payer() {
     );
 }
 
+/// The audit proof binds no tag and no body.
 #[test]
-fn an_anonymous_policy_transfer_binds_an_epoch_at_or_after_zero() {
+fn an_anonymous_transfer_reaches_its_keys_under_any_tags_and_bodies() {
     let fixture = Fixture::new();
-    let mut ring = Ring::new(Setup::AnonymousPolicy);
-    let mut data = fixture.transfer(RingRail::Anonymous, 2, 2, true);
-    data.previous_epoch = true;
-    ring.warp(EPOCH_SLOTS - 1);
-    refused(
-        transfer(&mut ring, Vec::new(), &data),
-        CustomRingError::EpochUnderflow,
-    );
-    ring.warp(EPOCH_SLOTS);
-    reaches_verification(transfer(&mut ring, Vec::new(), &data));
+    let tags = [[0; 32], [0xff; 32]];
+    let body = [0x3c; 300];
+    for (setup, policy) in [(Setup::AnonymousPolicy, true), (Setup::Anonymous, false)] {
+        let mut ring = Ring::new(setup);
+        let mut data = fixture.transfer(RingRail::Anonymous, 2, 2, policy);
+        for (output, (tag, body)) in data
+            .outputs
+            .iter_mut()
+            .zip([(&tags[0], None), (&tags[1], Some(&body[..1]))])
+        {
+            let RingOutput::Anonymous { hash, .. } = *output else {
+                panic!("an anonymous transfer publishes anonymous slots");
+            };
+            *output = RingOutput::Anonymous { hash, tag, body };
+        }
+        data.sender = Some(SenderBundle {
+            tag: &tags[1],
+            body: &body,
+        });
+        let prefix = match policy {
+            true => vec![registry_meta()],
+            false => Vec::new(),
+        };
+        let spp = spp_list(&ring.payer.pubkey(), &data, &[]);
+        reaches_verification(send(
+            &mut ring,
+            tag::TRANSACT,
+            prefix,
+            data.encode().unwrap(),
+            spp,
+            &[],
+        ));
+    }
 }
 
+/// A change output carries no body, the sender bundle always one.
 #[test]
-fn an_anonymous_policy_first_contact_reads_a_live_spp_tree() {
+fn an_empty_sender_bundle_is_refused() {
     let fixture = Fixture::new();
-    let mut ring = Ring::new(Setup::AnonymousPolicy);
-    let mut data = fixture.transfer(RingRail::Anonymous, 2, 2, true);
-    let tree = Address::new_unique();
-    data.anchor = Some(AnchorRoot {
-        tree: 2,
-        root_index: 0,
-    });
-    let anchored = vec![AccountMeta::new_readonly(tree, false)];
+    let mut ring = Ring::new(Setup::Anonymous);
+    let data = fixture.transfer(RingRail::Anonymous, 2, 2, false);
+    let sender = data.sender.unwrap();
+    let mut compact = data.encode().unwrap();
+    let len = compact
+        .windows(32)
+        .position(|window| window == sender.tag)
+        .unwrap()
+        + 32;
+    compact[len..len + 2].copy_from_slice(&0u16.to_le_bytes());
+    compact.drain(len + 2..len + 2 + sender.body.len());
+    let spp = spp_list(&ring.payer.pubkey(), &data, &[]);
     refused(
-        transfer(&mut ring, anchored.clone(), &data),
-        CustomRingError::FirstContactRootMissing,
+        send(&mut ring, tag::TRANSACT, Vec::new(), compact, spp, &[]),
+        CustomRingError::AnonymousBodyLength,
     );
-    ring.store(tree, SPP, spp_tree(&tree, true));
-    refused(
-        transfer(&mut ring, anchored.clone(), &data),
-        CustomRingError::FirstContactTreePaused,
-    );
-    ring.store(tree, SPP, spp_tree(&tree, false));
-    reaches_verification(transfer(&mut ring, anchored, &data));
 }
 
 #[test]
@@ -202,7 +223,7 @@ fn an_anonymous_policy_deposit_names_no_recipient() {
 }
 
 #[test]
-fn an_anonymous_policy_ring_reads_no_packed_layout() {
+fn an_anonymous_policy_ring_refuses_a_confidential_transfer() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::AnonymousPolicy);
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
@@ -210,6 +231,6 @@ fn an_anonymous_policy_ring_reads_no_packed_layout() {
     let sent = transfer(&mut ring, Vec::new(), &data);
     assert!(
         sent.is_err(),
-        "a packed transfer reached an anonymous ring's keys"
+        "a confidential transfer reached an anonymous ring's keys"
     );
 }

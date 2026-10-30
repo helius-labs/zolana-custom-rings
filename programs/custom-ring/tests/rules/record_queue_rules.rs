@@ -9,8 +9,8 @@ use custom_ring_interface::{
 };
 use solana_instruction::{error::InstructionError, AccountMeta, Instruction};
 use solana_keypair::{Keypair, Signer};
-use zolana_account_checks::AccountError;
-use zolana_hasher::primitives::{right_align, solana_owner_identity};
+use spr_account_checks::AccountError;
+use spr_hasher::primitives::{right_align, solana_owner_identity};
 use zolana_ring_policy::{ListChange, ListId, ListSet, Writer};
 
 use crate::common::{

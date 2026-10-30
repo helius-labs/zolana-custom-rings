@@ -4,10 +4,10 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use custom_ring_interface::RingDepositAuditCapsule;
 use solana_address::Address;
-use zolana_client::{AsyncRpc, IndexerRpcConfig, ProofInputUtxo, ShieldedTransaction};
-use zolana_event::EncryptedRingDepositOutput;
-use zolana_hasher::primitives::hash_bytes;
-use zolana_keypair::X25519Keypair;
+use spr_client::{AsyncRpc, IndexerRpcConfig, ProofInputUtxo, ShieldedTransaction};
+use spr_event::EncryptedRingDepositOutput;
+use spr_hasher::primitives::hash_bytes;
+use spr_keypair::X25519Keypair;
 
 use crate::{
     encryption::{open_deposit, DepositOpening},

@@ -41,12 +41,11 @@ toml = { workspace = true }
 toml_edit = { workspace = true }
 zolana-cli-common = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
-zolana-api = { workspace = true }
-zolana-client = { workspace = true, features = ["solana-rpc"] }
-zolana-event-parser = { workspace = true }
-zolana-indexer-api = { workspace = true }
-zolana-interface = { workspace = true }
-zolana-keypair = { workspace = true }
+spr-api = { workspace = true }
+spr-client = { workspace = true, features = ["solana-rpc"] }
+spr-indexer-api = { workspace = true }
+spr-interface = { workspace = true }
+spr-keypair = { workspace = true }
 zolana-ring-client = { workspace = true, features = ["rpc", "solana-rpc"] }
 zolana-ring-indexer = { workspace = true }
 zolana-ring-keys = { workspace = true }
@@ -54,8 +53,8 @@ zolana-ring-member-registry = { workspace = true }
 zolana-ring-policy = { workspace = true }
 zolana-ring-transaction = { workspace = true }
 zolana-secret-file = { workspace = true }
-zolana-transaction = { workspace = true, features = ["serde"] }
+spr-transaction = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 solana-rpc-client-api = { workspace = true }
-zolana-event = { workspace = true }
+spr-event = { workspace = true }

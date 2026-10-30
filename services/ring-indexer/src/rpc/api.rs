@@ -8,27 +8,26 @@ use std::{
 
 use custom_ring_interface::{
     check_member, queue_chain, tagged_x25519, RecordWriteData, RootEntry, WriteRecordsIxData,
-    MEMBER_REGISTRY_CAPACITY,
+    MEMBER_REGISTRY_CAPACITY, QUAD_ARITY,
 };
 use sea_orm::{DatabaseConnection, DatabaseTransaction};
 use solana_address::Address;
 use solana_clock::DEFAULT_MS_PER_SLOT;
 use solana_transaction_status_client_types::TransactionDetails;
+use spr_indexer_api::{Base64String, Context as ApiContext, Hash, SerializablePubkey};
 use tokio::sync::Mutex as AsyncMutex;
-use zolana_indexer_api::{Base64String, Context as ApiContext, Hash, SerializablePubkey};
 use zolana_ring_indexer::{
     rpc::{
         GetRingApplyProofInputsRequest, GetRingApplyProofInputsResponse,
         GetRingMemberOpeningsRequest, GetRingMemberOpeningsResponse, GetRingMemberRecordRequest,
         GetRingMemberRecordResponse, GetRingMemberRecordsRequest, GetRingMemberRecordsResponse,
         GetRingMemberRegistryRootRequest, GetRingMemberRegistryRootResponse,
-        GetRingRecordQueueRequest, GetRingRecordQueueResponse, RingIndexedMemberRecordView,
-        RingMemberOpening, RingMemberRecordView, RingQueueEntryView, RingRecordPathView,
-        RingRecordWriteView, RingRegistryRootView, RingRootEntryView, MAX_RING_MEMBER_PAGE_LIMIT,
+        GetRingRecordPoolRequest, GetRingRecordPoolResponse, GetRingRecordQueueRequest,
+        GetRingRecordQueueResponse, RingIndexedMemberRecordView, RingMemberOpening,
+        RingMemberRecordView, RingQueueEntryView, RingRecordPathView, RingRecordWriteView,
+        RingRegistryRootView, RingRootEntryView, MAX_RING_MEMBER_PAGE_LIMIT,
     },
-    tree::{
-        MemberRecord, OpeningCheck, QuadPath, RecordOpening, RecordTree, RecordWriteProofInput,
-    },
+    tree::{Canopy, MemberRecord, OpeningCheck, RecordOpening, RecordTree, RecordWriteProofInput},
 };
 
 use crate::{
@@ -175,6 +174,25 @@ pub(crate) async fn member_openings(
         .await
 }
 
+pub(crate) async fn record_pool(
+    db: &DatabaseConnection,
+    chain: &impl ChainSource,
+    request: GetRingRecordPoolRequest,
+) -> Result<GetRingRecordPoolResponse, RingApiError> {
+    check_members(&request.members)?;
+    let members = request.members.len() as u64;
+    if request.openings < members || request.openings > MAX_RING_MEMBER_PAGE_LIMIT {
+        return Err(validation("invalid record pool openings"));
+    }
+    let canopy = Canopy::covering(request.openings as usize).map_err(validation)?;
+    Snapshot::open(db, &request.ring_program_id)
+        .await?
+        .at_root(&request.expected_root.0)
+        .await?
+        .pool(chain, &request.members, canopy)
+        .await
+}
+
 /// Contiguous, authenticated member leaves at the newest root.
 pub(crate) async fn member_records(
     db: &DatabaseConnection,
@@ -213,6 +231,7 @@ pub(crate) async fn member_records(
         root: &root,
         records: RecordRead::Leaves(rows),
         inserts: 0,
+        canopy: None,
     };
     let loaded = read.load(&store).await.map_err(internal)?;
     let records = members
@@ -246,13 +265,14 @@ pub(crate) async fn registry_root(
             root: &root,
             records: RecordRead::Members(BTreeSet::new()),
             inserts: 1,
+            canopy: None,
         };
         let loaded = read.load(&snapshot.store()).await.map_err(internal)?;
         let path = loaded.tree.path(root.next_index).map_err(internal)?;
         if path.root([0; 32]).map_err(internal)? != root.root {
             return Err(internal("the append path does not reach the newest root"));
         }
-        Some(path_view(&path))
+        Some(path_view(path.index, &path.siblings))
     } else {
         None
     };
@@ -507,18 +527,27 @@ impl Snapshot {
 }
 
 impl RootRead {
+    async fn load(
+        &self,
+        members: &[Hash],
+        canopy: Option<Canopy>,
+    ) -> Result<LoadedRegistry, RingApiError> {
+        let read = TreeRead {
+            root: &self.root,
+            records: RecordRead::Members(members.iter().map(|member| member.0).collect()),
+            inserts: 0,
+            canopy,
+        };
+        read.load(&self.snapshot.store()).await.map_err(internal)
+    }
+
     async fn openings(
         self,
         chain: &impl ChainSource,
         members: &[Hash],
     ) -> Result<GetRingMemberOpeningsResponse, RingApiError> {
+        let loaded = self.load(members, None).await?;
         let root = &self.root;
-        let read = TreeRead {
-            root,
-            records: RecordRead::Members(members.iter().map(|member| member.0).collect()),
-            inserts: 0,
-        };
-        let loaded = read.load(&self.snapshot.store()).await.map_err(internal)?;
         let openings = members
             .iter()
             .map(|member| loaded.opening(root, &member.0))
@@ -529,6 +558,53 @@ impl RootRead {
             context,
             root: root_view(root),
             openings,
+        })
+    }
+}
+
+impl RootRead {
+    async fn pool(
+        self,
+        chain: &impl ChainSource,
+        members: &[Hash],
+        canopy: Canopy,
+    ) -> Result<GetRingRecordPoolResponse, RingApiError> {
+        let loaded = self.load(members, Some(canopy)).await?;
+        let root = &self.root;
+        let members: Vec<[u8; 32]> = members.iter().map(|member| member.0).collect();
+        let pool = loaded
+            .tree
+            .record_pool(&members, canopy)
+            .map_err(internal)?;
+        pool.verify(&root.root)
+            .map_err(|error| internal(format!("member registry pool disagrees ({error})")))?;
+        let records = pool
+            .records
+            .iter()
+            .zip(&pool.proof.paths)
+            .map(|(record, path)| {
+                let stored = loaded
+                    .stored
+                    .get(&record.member)
+                    .ok_or_else(|| internal("pooled record was not loaded"))?;
+                Ok(RingIndexedMemberRecordView {
+                    record: record_view(stored),
+                    path: path_view(path.index, &path.siblings),
+                })
+            })
+            .collect::<Result<Vec<_>, RingApiError>>()?;
+        let served = Served::Root(root);
+        let context = self.snapshot.confirm(chain, served).await?.context;
+        Ok(GetRingRecordPoolResponse {
+            context,
+            root: root_view(root),
+            records,
+            canopy: pool.proof.canopy.into_iter().map(Hash).collect(),
+            subjects: pool
+                .subjects
+                .iter()
+                .map(|subject| subject.record_index)
+                .collect(),
         })
     }
 }
@@ -579,7 +655,7 @@ impl LoadedRegistry {
         Ok(RingMemberOpening {
             present,
             record: record_view(stored),
-            path: path_view(&path),
+            path: path_view(path.index, &path.siblings),
         })
     }
 }
@@ -621,16 +697,16 @@ fn write_view(write: &RecordWriteProofInput) -> RingRecordWriteView {
         old_lists: write.old_lists,
         old_escrow: Hash(write.old_escrow),
         old_mint_policy: write.old_mint_policy,
-        slot: path_view(&write.slot),
+        slot: path_view(write.slot.index, &write.slot.siblings),
         low: member_view(&write.low),
-        low_path: path_view(&write.low_path),
+        low_path: path_view(write.low_path.index, &write.low_path.siblings),
     }
 }
 
-fn path_view(path: &QuadPath) -> RingRecordPathView {
+fn path_view(index: u64, siblings: &[[[u8; 32]; QUAD_ARITY - 1]]) -> RingRecordPathView {
     RingRecordPathView {
-        index: path.index,
-        siblings: path.siblings.iter().map(|level| level.map(Hash)).collect(),
+        index,
+        siblings: siblings.iter().map(|level| level.map(Hash)).collect(),
     }
 }
 

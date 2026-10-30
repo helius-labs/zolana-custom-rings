@@ -2,14 +2,14 @@
 
 use arrayvec::ArrayVec;
 use solana_address::Address;
-use thiserror::Error;
-use zolana_hasher::{
+use spr_hasher::{
     primitives::{hash_bytes, right_align, BN254_SCALAR_MODULUS_BE},
     HasherError,
 };
-use zolana_interface::{
+use spr_interface::{
     error::ShieldedPoolError, instruction::InterfaceTransfer, N_PUBLIC_SLOTS, SOL_ASSET_FIELD,
 };
+use thiserror::Error;
 
 /// The fee payer in every SPP transact account list.
 pub const TRANSACT_PAYER_INDEX: usize = 0;
@@ -197,7 +197,7 @@ pub const fn funder_account_position(transfer: &InterfaceTransfer) -> Option<usi
 
 pub fn merge_ring_instruction_data(output_ring_data_hash: &[u8; 32], merge: &[u8]) -> Vec<u8> {
     [
-        &[zolana_interface::instruction::tag::RING_MERGE_TRANSACT][..],
+        &[spr_interface::instruction::tag::RING_MERGE_TRANSACT][..],
         output_ring_data_hash,
         merge,
     ]

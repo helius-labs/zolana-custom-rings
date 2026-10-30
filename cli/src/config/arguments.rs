@@ -94,7 +94,7 @@ pub enum Command {
     AuditorKey(AuditorKeyArgs),
     /// Open the ring's transactions with the auditor key, read from the indexer.
     Audit(AuditArgs),
-    /// Issue a `zolana:` address of the member, what an anonymous ring pays.
+    /// Mint a `zolana:` payment request for the member on an anonymous ring.
     Address(AddressArgs),
 }
 
@@ -312,22 +312,9 @@ pub struct AuditorKeyArgs {
 
 #[derive(Debug, Args)]
 pub struct AddressArgs {
-    /// An issued index to print again or one inside the discovery gap, the next index by default.
-    #[arg(long)]
-    pub index: Option<u32>,
-    /// Issue `--index` past the discovery gap, every later scan reads each index below it.
-    #[arg(long, requires = "index")]
-    pub beyond_gap: bool,
     /// The member's Solana keypair, `keys/sender-keypair.json` by default.
     #[arg(long)]
     pub keypair: Option<PathBuf>,
-    /// A first contact of the mint at or above the amount opens a pair stream, `any:<min>`
-    /// for every mint, at most four, a new address takes `any:0`.
-    #[arg(long, value_name = "MINT:MIN")]
-    pub pairing: Vec<PairingRowArg>,
-    /// Every payment to the address takes the inbox stream.
-    #[arg(long, conflicts_with = "pairing")]
-    pub no_pairing: bool,
     /// Requested amount in base units, unauthenticated like the mint and label.
     #[arg(long)]
     pub amount: Option<u64>,

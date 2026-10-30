@@ -24,14 +24,14 @@ use jsonrpsee::{
 };
 use sea_orm::DatabaseConnection;
 use serde::Deserialize;
+use spr_indexer_api::RpcMethod;
+use spr_rpc_http::MethodPathLayer;
 use tower::{Layer, Service};
 use tower_http::cors::{Any, CorsLayer};
-use zolana_indexer_api::RpcMethod;
 use zolana_ring_indexer::rpc::method::{
     GetRingApplyProofInputs, GetRingMemberOpenings, GetRingMemberRecord, GetRingMemberRecords,
-    GetRingMemberRegistryRoot, GetRingRecordQueue,
+    GetRingMemberRegistryRoot, GetRingRecordPool, GetRingRecordQueue,
 };
-use zolana_rpc_http::MethodPathLayer;
 
 use crate::{
     api::{self, CachedChain},
@@ -40,10 +40,11 @@ use crate::{
 };
 
 /// Served here, every other call goes to Photon untouched.
-pub const RING_METHODS: [&str; 6] = [
+pub const RING_METHODS: [&str; 7] = [
     GetRingMemberRecord::NAME,
     GetRingMemberRecords::NAME,
     GetRingMemberOpenings::NAME,
+    GetRingRecordPool::NAME,
     GetRingMemberRegistryRoot::NAME,
     GetRingRecordQueue::NAME,
     GetRingApplyProofInputs::NAME,
@@ -144,6 +145,7 @@ fn ring_methods(lookups: Lookups) -> Result<RpcModule<Lookups>> {
         GetRingMemberRecord => api::member_record,
         GetRingMemberRecords => api::member_records,
         GetRingMemberOpenings => api::member_openings,
+        GetRingRecordPool => api::record_pool,
         GetRingMemberRegistryRoot => api::registry_root,
         GetRingRecordQueue => api::record_queue,
         GetRingApplyProofInputs => api::apply_proof_inputs,

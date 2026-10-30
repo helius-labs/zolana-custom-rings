@@ -40,13 +40,13 @@ func (h AuditHead) Elements(t testing.TB) []*big.Int {
 type Layout struct {
 	Exits        bool
 	Escrow       bool
-	DataFree     bool
+	Reserved     bool
 	FullOpenings bool
 }
 
 func (l Layout) Value() int64 {
 	return ringtest.Bit(l.Exits)*audit.LayoutExits | ringtest.Bit(l.Escrow)*audit.LayoutEscrow |
-		ringtest.Bit(l.DataFree)*audit.LayoutDataFree | ringtest.Bit(l.FullOpenings)*audit.LayoutFullOpenings
+		ringtest.Bit(l.Reserved)*audit.LayoutReserved | ringtest.Bit(l.FullOpenings)*audit.LayoutFullOpenings
 }
 
 func hasExit(utxos []Utxo) bool {
@@ -56,27 +56,17 @@ func hasExit(utxos []Utxo) bool {
 // StatementOutput is one published output as an audit statement reads it.
 type StatementOutput struct {
 	Hash *big.Int
-	// Exit chains zero for its body, recipient key and tag.
+	// Exit chains zero for its body and recipient key.
 	Exit bool
 	U    [32]byte
-	// Tag is the TagLen-byte tag read as a field.
-	Tag  *big.Int
 	Body []byte
 }
 
 // AnonymousTail is what only an anonymous audit statement binds.
 type AnonymousTail struct {
 	PrivateTxHash    *big.Int
-	Epoch            uint64
-	FirstContactRoot *big.Int
 	SenderCommitment *big.Int
 	PartyIdentities  [3]*big.Int
-}
-
-// PackedStatement mirrors AuditKind::Packed.
-func PackedStatement(t testing.TB, head AuditHead, outputs []StatementOutput, disclosure []*big.Int) []*big.Int {
-	t.Helper()
-	return append(head.Elements(t), outputChain(t, outputs), spptest.MustHashChain4(t, disclosure))
 }
 
 // DeliveredStatement mirrors AuditKind::Delivered.
@@ -97,16 +87,9 @@ func DeliveredStatement(t testing.TB, head AuditHead, outputs []StatementOutput,
 // AnonymousStatement mirrors AuditKind::Anonymous.
 func AnonymousStatement(t testing.TB, head AuditHead, outputs []StatementOutput, disclosure []*big.Int, tail AnonymousTail) []*big.Int {
 	t.Helper()
-	tags := make([]*big.Int, len(outputs))
-	for i, output := range outputs {
-		tags[i] = big.NewInt(0)
-		if !output.Exit {
-			tags[i] = output.Tag
-		}
-	}
 	return append(head.Elements(t),
-		outputChain(t, outputs), bodyChain(t, outputs), spptest.MustHashChain4(t, disclosure), tail.PrivateTxHash,
-		spptest.MustHashChain4(t, tags), new(big.Int).SetUint64(tail.Epoch), tail.FirstContactRoot, tail.SenderCommitment, tail.PartyIdentities[0], tail.PartyIdentities[1], tail.PartyIdentities[2])
+		outputChain(t, outputs), spptest.MustHashChain4(t, disclosure), tail.PrivateTxHash, tail.SenderCommitment,
+		tail.PartyIdentities[0], tail.PartyIdentities[1], tail.PartyIdentities[2])
 }
 
 func outputChain(t testing.TB, outputs []StatementOutput) *big.Int {

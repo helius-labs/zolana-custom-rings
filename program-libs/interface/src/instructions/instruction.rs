@@ -64,8 +64,8 @@ instruction_tags! {
     LegacyTransact = LEGACY_TRANSACT: 3 => PROOF_UNITS,
     Transact = TRANSACT: 43 => PROOF_UNITS,
     /// Always refused, deposits go through `AuditedDeposit`.
-    Deposit = DEPOSIT: zolana_interface::instruction::tag::RING_DEPOSIT => 200_000,
-    Merge = MERGE: zolana_interface::instruction::tag::RING_MERGE_TRANSACT => PROOF_UNITS,
+    Deposit = DEPOSIT: spr_interface::instruction::tag::RING_DEPOSIT => 200_000,
+    Merge = MERGE: spr_interface::instruction::tag::RING_MERGE_TRANSACT => PROOF_UNITS,
     GrantReadAccess = GRANT_READ_ACCESS: 4 => ACCOUNT_UNITS,
     RevokeReadAccess = REVOKE_READ_ACCESS: 5 => ACCOUNT_UNITS,
     SetAuthority = SET_AUTHORITY: 6 => ACCOUNT_UNITS,
@@ -363,11 +363,10 @@ impl RecordWriteData {
         } else {
             self.lists.entry(self.member, Writer::Authority)?
         };
-        entry.mint_policy = match self.mint_policy[0] {
+        let [tag, policy @ ..] = self.mint_policy;
+        entry.mint_policy = match tag {
             0 if self.mint_policy == [0; 33] && entry.mask != 0 => None,
-            1 => Some(zolana_ring_policy::MintPolicy::from_bytes(
-                self.mint_policy[1..].try_into().unwrap(),
-            )),
+            1 => Some(zolana_ring_policy::MintPolicy::from_bytes(policy)),
             _ => return Err(CustomRingError::InvalidInstructionData),
         };
         Ok(entry)
@@ -432,7 +431,7 @@ const _: () = assert!(APPLY_BATCH <= u8::MAX as usize);
 
 #[cfg(test)]
 mod tests {
-    use zolana_hasher::primitives::right_align;
+    use spr_hasher::primitives::right_align;
     use zolana_ring_policy::ListId;
 
     use super::*;

@@ -18,23 +18,14 @@ import (
 const fieldCountVector = "audit/ring-disclosure-counts.json"
 
 const fieldCountDescription = "Published field counts of the audit disclosures, each record a host disclosure the audit circuit solves. " +
-	"packed takes the published outputs and the exits, key_escrow and data_free flags, delivered the capacity and the exits and key_escrow flags, " +
+	"delivered takes the capacity and the exits and key_escrow flags, " +
 	"anonymous the audit key, its input class, the published input count, the output count and the exits flag. " +
 	"Produced by prover/circuits/audit/disclosure_test.go with WRITE_AUDIT_VECTORS=1."
 
 type fieldCounts struct {
 	Description string                `json:"description"`
-	Packed      []packedFieldCount    `json:"packed"`
 	Delivered   []deliveredFieldCount `json:"delivered"`
 	Anonymous   []anonymousFieldCount `json:"anonymous"`
-}
-
-type packedFieldCount struct {
-	Outputs   int  `json:"outputs"`
-	Exits     bool `json:"exits"`
-	KeyEscrow bool `json:"key_escrow"`
-	DataFree  bool `json:"data_free"`
-	Fields    int  `json:"fields"`
 }
 
 type deliveredFieldCount struct {
@@ -55,19 +46,6 @@ type anonymousFieldCount struct {
 
 func TestDisclosureFieldCountsAreTheSharedVector(t *testing.T) {
 	want := fieldCounts{Description: fieldCountDescription}
-	packed := compilePacked(t, 4)
-	for _, layout := range []ringaudit.Layout{{Exits: true}, {}, {Exits: true, Escrow: true}, {Escrow: true, DataFree: true}} {
-		p := ringaudit.PackedAuditOf(t, 4, 3)
-		if layout.Exits {
-			p = ringaudit.PackedAuditOf(t, 4, 3, 2)
-		}
-		if layout.DataFree {
-			withoutData(&p)
-		}
-		p.Layout = layout
-		packed.requireSolved(t, p.Circuit(t))
-		want.Packed = append(want.Packed, packedFieldCount{Outputs: p.NOut, Exits: layout.Exits, KeyEscrow: layout.Escrow, DataFree: layout.DataFree, Fields: len(p.Disclosure(t))})
-	}
 	for _, capacity := range audit.DeliveredAuditCapacities {
 		delivered := compileDelivered(t, capacity)
 		for _, layout := range []ringaudit.Layout{{Exits: true}, {}, {Exits: true, Escrow: true}, {Escrow: true}} {
@@ -88,8 +66,7 @@ func TestDisclosureFieldCountsAreTheSharedVector(t *testing.T) {
 		{audit.AnonymousAuditShape{InputClass: 4, Outputs: 2}, []int{1, 2, 3, 4}},
 		{audit.AnonymousAuditShape{InputClass: 4, Outputs: 4}, []int{2}},
 		{audit.AnonymousAuditShape{InputClass: 4, Outputs: 8}, []int{2}},
-		{audit.AnonymousAuditShape{InputClass: 32, Outputs: 2}, []int{31, 32}},
-		{audit.AnonymousAuditShape{InputClass: 1, Outputs: 16}, []int{1}},
+		{audit.AnonymousAuditShape{InputClass: 16, Outputs: 2}, []int{15, 16}},
 	}
 	for _, shape := range audit.AnonymousEntryShapes {
 		anonymous = append(anonymous, anonymousCounts{shape, []int{2}})

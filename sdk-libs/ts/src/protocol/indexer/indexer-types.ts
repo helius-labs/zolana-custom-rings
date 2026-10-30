@@ -78,6 +78,24 @@ export interface RingMemberOpeningsResponse {
   readonly openings: readonly RingMemberOpeningView[];
 }
 
+/** At most `MAX_RING_MEMBER_BATCH` openings, `members` distinct and at most `openings`. */
+export interface RingRecordPoolRequest {
+  readonly ringProgramId: Address;
+  readonly members: readonly Hash[];
+  readonly expectedRoot: Hash;
+  readonly openings: number;
+}
+
+export interface RingRecordPoolResponse {
+  readonly context: IndexerContext;
+  readonly root: RingRegistryRootView;
+  /** Distinct leaves in first use order, each path cut at the canopy. */
+  readonly records: readonly Readonly<{ record: RingMemberRecordView; path: RingRecordPathView }>[];
+  readonly canopy: readonly Hash[];
+  /** `subjects[i]` indexes the record holding or bracketing member `i`. */
+  readonly subjects: readonly number[];
+}
+
 export interface RingMemberPageResponse {
   readonly context: IndexerContext;
   readonly root: RingRegistryRootView;

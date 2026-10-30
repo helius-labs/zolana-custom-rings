@@ -10,15 +10,14 @@ import {
   LocalShieldedKeys,
   SOL_MINT,
   Utxo,
-  Wallet,
-  serializeWallet,
   type ShieldedKeys,
 } from "@heliuslabs/zolana";
 import { DEFAULT_TREE_ID } from "@heliuslabs/zolana/interface";
-import { decryptTransactions, EncryptedScheme } from "@heliuslabs/zolana/transaction";
-import { encodeOutputData, encodeRingDepositPlaintext } from "@heliuslabs/zolana/internal";
+import { AssetRegistry, EncryptedScheme } from "@heliuslabs/zolana/transaction";
+import { encodeOutputData } from "@heliuslabs/zolana/internal";
 import { encodeRingDepositCapsule } from "../../../src/protocol/codec/deposit-capsule.js";
-import { customRingDepositPayload } from "../../../src/protocol/transaction/deposit-payload.js";
+import { encodeRingDepositPlaintext } from "../../../src/protocol/codec/ring-deposit-plaintext.js";
+import { openRingNotes } from "../../../src/state/ring-sync.js";
 
 const OWNER = address("4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi");
 const TREE = address("3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3");
@@ -37,13 +36,6 @@ function remoteOver(keys: ShieldedKeys): ShieldedKeys {
     derive: (requests) => keys.derive(requests),
     transactionKeys: (requests) => keys.transactionKeys(requests),
   };
-}
-
-function decryptWithKeys(
-  keys: ShieldedKeys,
-  input: Omit<Parameters<typeof decryptTransactions>[0], "keys">,
-): Promise<ReturnType<typeof decryptTransactions> extends Promise<infer R> ? R : never> {
-  return decryptTransactions({ ...input, keys });
 }
 
 function ringDepositBody(
@@ -72,10 +64,9 @@ function ringDepositBody(
 
 describe("audited ring deposit sync", () => {
   it.each([false, true])(
-    "opens audited deposits through customRingDepositPayload, malformed %s",
+    "opens audited deposits through the ring capsule, malformed %s",
     async (malformed) => {
       const recipient = ShieldedKeypair.generate();
-      const wallet = new Wallet({ identity: recipient.shieldedAddress() });
       const envelope = ViewingKey.generate();
       const salt = new Uint8Array(16).fill(6) as Bytes16;
       const blinding = bytes(30);
@@ -107,9 +98,9 @@ describe("audited ring deposit sync", () => {
         },
       };
 
-      const before = serializeWallet(wallet);
-      const pending = decryptWithKeys(holder, {
-        wallet,
+      const notes = await openRingNotes({
+        keys: holder,
+        assets: new AssetRegistry(),
         transactions: [
           {
             slot: 3n,
@@ -120,6 +111,7 @@ describe("audited ring deposit sync", () => {
                 outputContext: {
                   hash: utxo.hash(recipient.nullifierPublicKey(), DEFAULT_TREE_ID),
                   tree: TREE,
+                  treeId: DEFAULT_TREE_ID,
                   leafIndex: 9n,
                 },
                 payload: encodeOutputData(
@@ -139,22 +131,18 @@ describe("audited ring deposit sync", () => {
             proofless: true,
           },
         ],
-        config: { depositPayloadDecoder: customRingDepositPayload },
       });
 
       if (malformed) {
-        await expect(pending).rejects.toMatchObject({ code: "INTERFACE_CODEC" });
-        expect(serializeWallet(wallet)).toEqual(before);
+        expect(notes.utxos).toEqual([]);
         expect(seen).toEqual([]);
         return;
       }
-      const report = await pending;
-      expect(report).toMatchObject({ storedUtxos: 1, undecryptableCandidates: 0 });
       // The holder never sees the auditor slot, only the recipient ciphertext.
       expect(seen.flat().map((request) => request.ciphertext.length)).toEqual([
         capsule.length - 138,
       ]);
-      expect(wallet.utxos()[0]?.utxo).toEqual(utxo);
+      expect(notes.utxos.map((entry) => entry.utxo)).toEqual([utxo]);
     },
   );
 });

@@ -16,8 +16,8 @@ use sea_orm::{DatabaseConnection, DatabaseTransaction, TransactionTrait};
 use solana_account::Account;
 use solana_address::Address;
 use solana_transaction_status_client_types::TransactionDetails;
+use spr_interface::state::{discriminator::RING_CONFIG, RingConfig};
 use thiserror::Error;
-use zolana_interface::state::{discriminator::RING_CONFIG, RingConfig};
 use zolana_ring_indexer::records::{self, RecordCall, RecordChange, RegistryAccounts};
 
 use crate::{
@@ -748,7 +748,7 @@ async fn registered_rings(rpc: &SolanaRpc, programs: &[Address]) -> Result<Vec<b
     for chunk in programs.chunks(ACCOUNTS_PER_REQUEST) {
         let addresses = chunk
             .iter()
-            .map(|program| zolana_interface::pda::ring_auth(program).0)
+            .map(|program| spr_interface::pda::ring_auth(program).0)
             .collect::<Vec<_>>();
         let accounts = rpc.get_multiple_accounts(&addresses).await?;
         registered.extend(chunk.iter().zip(accounts).map(|(program, account)| {
@@ -759,7 +759,7 @@ async fn registered_rings(rpc: &SolanaRpc, programs: &[Address]) -> Result<Vec<b
 }
 
 fn activated_ring_config(account: &Account, program: &Address) -> bool {
-    account.owner == zolana_interface::pda::shielded_pool_program_id()
+    account.owner == spr_interface::pda::shielded_pool_program_id()
         && bytemuck::try_from_bytes::<RingConfig>(&account.data).is_ok_and(|config| {
             config.discriminator == RING_CONFIG
                 && config.program_id == *program

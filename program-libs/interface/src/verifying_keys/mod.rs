@@ -16,46 +16,26 @@ pub mod audit_anonymous_entry_v2_8_2_verifying_key;
 pub mod audit_anonymous_entry_v2_8_4_verifying_key;
 #[path = "audit/entry/audit_anonymous_entry_v2_8_8_verifying_key.rs"]
 pub mod audit_anonymous_entry_v2_8_8_verifying_key;
-#[path = "audit/anonymous/outputs_2/audit_anonymous_v2_12_2_verifying_key.rs"]
-pub mod audit_anonymous_v2_12_2_verifying_key;
-#[path = "audit/anonymous/outputs_4/audit_anonymous_v2_12_4_verifying_key.rs"]
-pub mod audit_anonymous_v2_12_4_verifying_key;
-#[path = "audit/anonymous/outputs_8/audit_anonymous_v2_12_8_verifying_key.rs"]
-pub mod audit_anonymous_v2_12_8_verifying_key;
 #[path = "audit/anonymous/outputs_2/audit_anonymous_v2_16_2_verifying_key.rs"]
 pub mod audit_anonymous_v2_16_2_verifying_key;
 #[path = "audit/anonymous/outputs_4/audit_anonymous_v2_16_4_verifying_key.rs"]
 pub mod audit_anonymous_v2_16_4_verifying_key;
-#[path = "audit/anonymous/outputs_8/audit_anonymous_v2_16_8_verifying_key.rs"]
-pub mod audit_anonymous_v2_16_8_verifying_key;
-#[path = "audit/anonymous/outputs_16/audit_anonymous_v2_1_16_verifying_key.rs"]
-pub mod audit_anonymous_v2_1_16_verifying_key;
-#[path = "audit/anonymous/outputs_2/audit_anonymous_v2_24_2_verifying_key.rs"]
-pub mod audit_anonymous_v2_24_2_verifying_key;
-#[path = "audit/anonymous/outputs_4/audit_anonymous_v2_24_4_verifying_key.rs"]
-pub mod audit_anonymous_v2_24_4_verifying_key;
-#[path = "audit/anonymous/outputs_2/audit_anonymous_v2_32_2_verifying_key.rs"]
-pub mod audit_anonymous_v2_32_2_verifying_key;
 #[path = "audit/anonymous/outputs_2/audit_anonymous_v2_4_2_verifying_key.rs"]
 pub mod audit_anonymous_v2_4_2_verifying_key;
 #[path = "audit/anonymous/outputs_4/audit_anonymous_v2_4_4_verifying_key.rs"]
 pub mod audit_anonymous_v2_4_4_verifying_key;
 #[path = "audit/anonymous/outputs_8/audit_anonymous_v2_4_8_verifying_key.rs"]
 pub mod audit_anonymous_v2_4_8_verifying_key;
-#[path = "audit/anonymous/outputs_2/audit_anonymous_v2_8_2_verifying_key.rs"]
-pub mod audit_anonymous_v2_8_2_verifying_key;
-#[path = "audit/anonymous/outputs_4/audit_anonymous_v2_8_4_verifying_key.rs"]
-pub mod audit_anonymous_v2_8_4_verifying_key;
 #[path = "audit/anonymous/outputs_8/audit_anonymous_v2_8_8_verifying_key.rs"]
 pub mod audit_anonymous_v2_8_8_verifying_key;
 #[path = "audit/audit_delivered_16_verifying_key.rs"]
 pub mod audit_delivered_16_verifying_key;
+#[path = "audit/audit_delivered_2_verifying_key.rs"]
+pub mod audit_delivered_2_verifying_key;
+#[path = "audit/audit_delivered_4_verifying_key.rs"]
+pub mod audit_delivered_4_verifying_key;
 #[path = "audit/audit_delivered_8_verifying_key.rs"]
 pub mod audit_delivered_8_verifying_key;
-#[path = "audit/audit_packed_2_verifying_key.rs"]
-pub mod audit_packed_2_verifying_key;
-#[path = "audit/audit_packed_4_verifying_key.rs"]
-pub mod audit_packed_4_verifying_key;
 #[path = "deposit/deposit_1_verifying_key.rs"]
 pub mod deposit_1_verifying_key;
 #[path = "deposit/deposit_2_verifying_key.rs"]
@@ -68,138 +48,138 @@ pub mod deposit_8_verifying_key;
 pub mod merge_anonymous_v2_24_verifying_key;
 #[path = "merge/merge_anonymous_v2_8_verifying_key.rs"]
 pub mod merge_anonymous_v2_8_verifying_key;
-#[path = "policy/delegate/policy_delegate_v2_2x2_curator_verifying_key.rs"]
-pub mod policy_delegate_v2_2x2_curator_verifying_key;
-#[path = "policy/delegate/policy_delegate_v2_2x2_own_verifying_key.rs"]
-pub mod policy_delegate_v2_2x2_own_verifying_key;
-#[path = "policy/delegate/policy_delegate_v2_4x4_curator_verifying_key.rs"]
-pub mod policy_delegate_v2_4x4_curator_verifying_key;
-#[path = "policy/delegate/policy_delegate_v2_4x4_own_verifying_key.rs"]
-pub mod policy_delegate_v2_4x4_own_verifying_key;
-#[path = "policy/member/outputs_16/curator/policy_member_v2_16_w0_curator_verifying_key.rs"]
-pub mod policy_member_v2_16_w0_curator_verifying_key;
-#[path = "policy/member/outputs_16/own/policy_member_v2_16_w0_own_verifying_key.rs"]
-pub mod policy_member_v2_16_w0_own_verifying_key;
-#[path = "policy/member/outputs_16/curator/policy_member_v2_16_w16_curator_verifying_key.rs"]
-pub mod policy_member_v2_16_w16_curator_verifying_key;
-#[path = "policy/member/outputs_16/own/policy_member_v2_16_w16_own_verifying_key.rs"]
-pub mod policy_member_v2_16_w16_own_verifying_key;
-#[path = "policy/member/outputs_16/curator/policy_member_v2_16_w1_curator_verifying_key.rs"]
-pub mod policy_member_v2_16_w1_curator_verifying_key;
-#[path = "policy/member/outputs_16/own/policy_member_v2_16_w1_own_verifying_key.rs"]
-pub mod policy_member_v2_16_w1_own_verifying_key;
-#[path = "policy/member/outputs_16/curator/policy_member_v2_16_w2_curator_verifying_key.rs"]
-pub mod policy_member_v2_16_w2_curator_verifying_key;
-#[path = "policy/member/outputs_16/own/policy_member_v2_16_w2_own_verifying_key.rs"]
-pub mod policy_member_v2_16_w2_own_verifying_key;
-#[path = "policy/member/outputs_16/curator/policy_member_v2_16_w32_curator_verifying_key.rs"]
-pub mod policy_member_v2_16_w32_curator_verifying_key;
-#[path = "policy/member/outputs_16/own/policy_member_v2_16_w32_own_verifying_key.rs"]
-pub mod policy_member_v2_16_w32_own_verifying_key;
-#[path = "policy/member/outputs_16/curator/policy_member_v2_16_w4_curator_verifying_key.rs"]
-pub mod policy_member_v2_16_w4_curator_verifying_key;
-#[path = "policy/member/outputs_16/own/policy_member_v2_16_w4_own_verifying_key.rs"]
-pub mod policy_member_v2_16_w4_own_verifying_key;
-#[path = "policy/member/outputs_16/curator/policy_member_v2_16_w8_curator_verifying_key.rs"]
-pub mod policy_member_v2_16_w8_curator_verifying_key;
-#[path = "policy/member/outputs_16/own/policy_member_v2_16_w8_own_verifying_key.rs"]
-pub mod policy_member_v2_16_w8_own_verifying_key;
-#[path = "policy/member/outputs_2/curator/policy_member_v2_2_w0_curator_verifying_key.rs"]
-pub mod policy_member_v2_2_w0_curator_verifying_key;
-#[path = "policy/member/outputs_2/own/policy_member_v2_2_w0_own_verifying_key.rs"]
-pub mod policy_member_v2_2_w0_own_verifying_key;
-#[path = "policy/member/outputs_2/curator/policy_member_v2_2_w16_curator_verifying_key.rs"]
-pub mod policy_member_v2_2_w16_curator_verifying_key;
-#[path = "policy/member/outputs_2/own/policy_member_v2_2_w16_own_verifying_key.rs"]
-pub mod policy_member_v2_2_w16_own_verifying_key;
-#[path = "policy/member/outputs_2/curator/policy_member_v2_2_w1_curator_verifying_key.rs"]
-pub mod policy_member_v2_2_w1_curator_verifying_key;
-#[path = "policy/member/outputs_2/own/policy_member_v2_2_w1_own_verifying_key.rs"]
-pub mod policy_member_v2_2_w1_own_verifying_key;
-#[path = "policy/member/outputs_2/curator/policy_member_v2_2_w2_curator_verifying_key.rs"]
-pub mod policy_member_v2_2_w2_curator_verifying_key;
-#[path = "policy/member/outputs_2/own/policy_member_v2_2_w2_own_verifying_key.rs"]
-pub mod policy_member_v2_2_w2_own_verifying_key;
-#[path = "policy/member/outputs_2/curator/policy_member_v2_2_w32_curator_verifying_key.rs"]
-pub mod policy_member_v2_2_w32_curator_verifying_key;
-#[path = "policy/member/outputs_2/own/policy_member_v2_2_w32_own_verifying_key.rs"]
-pub mod policy_member_v2_2_w32_own_verifying_key;
-#[path = "policy/member/outputs_2/curator/policy_member_v2_2_w4_curator_verifying_key.rs"]
-pub mod policy_member_v2_2_w4_curator_verifying_key;
-#[path = "policy/member/outputs_2/own/policy_member_v2_2_w4_own_verifying_key.rs"]
-pub mod policy_member_v2_2_w4_own_verifying_key;
-#[path = "policy/member/outputs_2/curator/policy_member_v2_2_w8_curator_verifying_key.rs"]
-pub mod policy_member_v2_2_w8_curator_verifying_key;
-#[path = "policy/member/outputs_2/own/policy_member_v2_2_w8_own_verifying_key.rs"]
-pub mod policy_member_v2_2_w8_own_verifying_key;
-#[path = "policy/member/outputs_4/curator/policy_member_v2_4_w0_curator_verifying_key.rs"]
-pub mod policy_member_v2_4_w0_curator_verifying_key;
-#[path = "policy/member/outputs_4/own/policy_member_v2_4_w0_own_verifying_key.rs"]
-pub mod policy_member_v2_4_w0_own_verifying_key;
-#[path = "policy/member/outputs_4/curator/policy_member_v2_4_w16_curator_verifying_key.rs"]
-pub mod policy_member_v2_4_w16_curator_verifying_key;
-#[path = "policy/member/outputs_4/own/policy_member_v2_4_w16_own_verifying_key.rs"]
-pub mod policy_member_v2_4_w16_own_verifying_key;
-#[path = "policy/member/outputs_4/curator/policy_member_v2_4_w1_curator_verifying_key.rs"]
-pub mod policy_member_v2_4_w1_curator_verifying_key;
-#[path = "policy/member/outputs_4/own/policy_member_v2_4_w1_own_verifying_key.rs"]
-pub mod policy_member_v2_4_w1_own_verifying_key;
-#[path = "policy/member/outputs_4/curator/policy_member_v2_4_w2_curator_verifying_key.rs"]
-pub mod policy_member_v2_4_w2_curator_verifying_key;
-#[path = "policy/member/outputs_4/own/policy_member_v2_4_w2_own_verifying_key.rs"]
-pub mod policy_member_v2_4_w2_own_verifying_key;
-#[path = "policy/member/outputs_4/curator/policy_member_v2_4_w32_curator_verifying_key.rs"]
-pub mod policy_member_v2_4_w32_curator_verifying_key;
-#[path = "policy/member/outputs_4/own/policy_member_v2_4_w32_own_verifying_key.rs"]
-pub mod policy_member_v2_4_w32_own_verifying_key;
-#[path = "policy/member/outputs_4/curator/policy_member_v2_4_w4_curator_verifying_key.rs"]
-pub mod policy_member_v2_4_w4_curator_verifying_key;
-#[path = "policy/member/outputs_4/own/policy_member_v2_4_w4_own_verifying_key.rs"]
-pub mod policy_member_v2_4_w4_own_verifying_key;
-#[path = "policy/member/outputs_4/curator/policy_member_v2_4_w8_curator_verifying_key.rs"]
-pub mod policy_member_v2_4_w8_curator_verifying_key;
-#[path = "policy/member/outputs_4/own/policy_member_v2_4_w8_own_verifying_key.rs"]
-pub mod policy_member_v2_4_w8_own_verifying_key;
-#[path = "policy/member/outputs_8/curator/policy_member_v2_8_w0_curator_verifying_key.rs"]
-pub mod policy_member_v2_8_w0_curator_verifying_key;
-#[path = "policy/member/outputs_8/own/policy_member_v2_8_w0_own_verifying_key.rs"]
-pub mod policy_member_v2_8_w0_own_verifying_key;
-#[path = "policy/member/outputs_8/curator/policy_member_v2_8_w16_curator_verifying_key.rs"]
-pub mod policy_member_v2_8_w16_curator_verifying_key;
-#[path = "policy/member/outputs_8/own/policy_member_v2_8_w16_own_verifying_key.rs"]
-pub mod policy_member_v2_8_w16_own_verifying_key;
-#[path = "policy/member/outputs_8/curator/policy_member_v2_8_w1_curator_verifying_key.rs"]
-pub mod policy_member_v2_8_w1_curator_verifying_key;
-#[path = "policy/member/outputs_8/own/policy_member_v2_8_w1_own_verifying_key.rs"]
-pub mod policy_member_v2_8_w1_own_verifying_key;
-#[path = "policy/member/outputs_8/curator/policy_member_v2_8_w2_curator_verifying_key.rs"]
-pub mod policy_member_v2_8_w2_curator_verifying_key;
-#[path = "policy/member/outputs_8/own/policy_member_v2_8_w2_own_verifying_key.rs"]
-pub mod policy_member_v2_8_w2_own_verifying_key;
-#[path = "policy/member/outputs_8/curator/policy_member_v2_8_w32_curator_verifying_key.rs"]
-pub mod policy_member_v2_8_w32_curator_verifying_key;
-#[path = "policy/member/outputs_8/own/policy_member_v2_8_w32_own_verifying_key.rs"]
-pub mod policy_member_v2_8_w32_own_verifying_key;
-#[path = "policy/member/outputs_8/curator/policy_member_v2_8_w4_curator_verifying_key.rs"]
-pub mod policy_member_v2_8_w4_curator_verifying_key;
-#[path = "policy/member/outputs_8/own/policy_member_v2_8_w4_own_verifying_key.rs"]
-pub mod policy_member_v2_8_w4_own_verifying_key;
-#[path = "policy/member/outputs_8/curator/policy_member_v2_8_w8_curator_verifying_key.rs"]
-pub mod policy_member_v2_8_w8_curator_verifying_key;
-#[path = "policy/member/outputs_8/own/policy_member_v2_8_w8_own_verifying_key.rs"]
-pub mod policy_member_v2_8_w8_own_verifying_key;
+#[path = "policy/delegate/policy_delegate_v3_2x2_curator_verifying_key.rs"]
+pub mod policy_delegate_v3_2x2_curator_verifying_key;
+#[path = "policy/delegate/policy_delegate_v3_2x2_own_verifying_key.rs"]
+pub mod policy_delegate_v3_2x2_own_verifying_key;
+#[path = "policy/delegate/policy_delegate_v3_4x4_curator_verifying_key.rs"]
+pub mod policy_delegate_v3_4x4_curator_verifying_key;
+#[path = "policy/delegate/policy_delegate_v3_4x4_own_verifying_key.rs"]
+pub mod policy_delegate_v3_4x4_own_verifying_key;
+#[path = "policy/member/outputs_16/curator/policy_member_v3_16_w0_curator_verifying_key.rs"]
+pub mod policy_member_v3_16_w0_curator_verifying_key;
+#[path = "policy/member/outputs_16/own/policy_member_v3_16_w0_own_verifying_key.rs"]
+pub mod policy_member_v3_16_w0_own_verifying_key;
+#[path = "policy/member/outputs_16/curator/policy_member_v3_16_w16_curator_verifying_key.rs"]
+pub mod policy_member_v3_16_w16_curator_verifying_key;
+#[path = "policy/member/outputs_16/own/policy_member_v3_16_w16_own_verifying_key.rs"]
+pub mod policy_member_v3_16_w16_own_verifying_key;
+#[path = "policy/member/outputs_16/curator/policy_member_v3_16_w1_curator_verifying_key.rs"]
+pub mod policy_member_v3_16_w1_curator_verifying_key;
+#[path = "policy/member/outputs_16/own/policy_member_v3_16_w1_own_verifying_key.rs"]
+pub mod policy_member_v3_16_w1_own_verifying_key;
+#[path = "policy/member/outputs_16/curator/policy_member_v3_16_w2_curator_verifying_key.rs"]
+pub mod policy_member_v3_16_w2_curator_verifying_key;
+#[path = "policy/member/outputs_16/own/policy_member_v3_16_w2_own_verifying_key.rs"]
+pub mod policy_member_v3_16_w2_own_verifying_key;
+#[path = "policy/member/outputs_16/curator/policy_member_v3_16_w32_curator_verifying_key.rs"]
+pub mod policy_member_v3_16_w32_curator_verifying_key;
+#[path = "policy/member/outputs_16/own/policy_member_v3_16_w32_own_verifying_key.rs"]
+pub mod policy_member_v3_16_w32_own_verifying_key;
+#[path = "policy/member/outputs_16/curator/policy_member_v3_16_w4_curator_verifying_key.rs"]
+pub mod policy_member_v3_16_w4_curator_verifying_key;
+#[path = "policy/member/outputs_16/own/policy_member_v3_16_w4_own_verifying_key.rs"]
+pub mod policy_member_v3_16_w4_own_verifying_key;
+#[path = "policy/member/outputs_16/curator/policy_member_v3_16_w8_curator_verifying_key.rs"]
+pub mod policy_member_v3_16_w8_curator_verifying_key;
+#[path = "policy/member/outputs_16/own/policy_member_v3_16_w8_own_verifying_key.rs"]
+pub mod policy_member_v3_16_w8_own_verifying_key;
+#[path = "policy/member/outputs_2/curator/policy_member_v3_2_w0_curator_verifying_key.rs"]
+pub mod policy_member_v3_2_w0_curator_verifying_key;
+#[path = "policy/member/outputs_2/own/policy_member_v3_2_w0_own_verifying_key.rs"]
+pub mod policy_member_v3_2_w0_own_verifying_key;
+#[path = "policy/member/outputs_2/curator/policy_member_v3_2_w16_curator_verifying_key.rs"]
+pub mod policy_member_v3_2_w16_curator_verifying_key;
+#[path = "policy/member/outputs_2/own/policy_member_v3_2_w16_own_verifying_key.rs"]
+pub mod policy_member_v3_2_w16_own_verifying_key;
+#[path = "policy/member/outputs_2/curator/policy_member_v3_2_w1_curator_verifying_key.rs"]
+pub mod policy_member_v3_2_w1_curator_verifying_key;
+#[path = "policy/member/outputs_2/own/policy_member_v3_2_w1_own_verifying_key.rs"]
+pub mod policy_member_v3_2_w1_own_verifying_key;
+#[path = "policy/member/outputs_2/curator/policy_member_v3_2_w2_curator_verifying_key.rs"]
+pub mod policy_member_v3_2_w2_curator_verifying_key;
+#[path = "policy/member/outputs_2/own/policy_member_v3_2_w2_own_verifying_key.rs"]
+pub mod policy_member_v3_2_w2_own_verifying_key;
+#[path = "policy/member/outputs_2/curator/policy_member_v3_2_w32_curator_verifying_key.rs"]
+pub mod policy_member_v3_2_w32_curator_verifying_key;
+#[path = "policy/member/outputs_2/own/policy_member_v3_2_w32_own_verifying_key.rs"]
+pub mod policy_member_v3_2_w32_own_verifying_key;
+#[path = "policy/member/outputs_2/curator/policy_member_v3_2_w4_curator_verifying_key.rs"]
+pub mod policy_member_v3_2_w4_curator_verifying_key;
+#[path = "policy/member/outputs_2/own/policy_member_v3_2_w4_own_verifying_key.rs"]
+pub mod policy_member_v3_2_w4_own_verifying_key;
+#[path = "policy/member/outputs_2/curator/policy_member_v3_2_w8_curator_verifying_key.rs"]
+pub mod policy_member_v3_2_w8_curator_verifying_key;
+#[path = "policy/member/outputs_2/own/policy_member_v3_2_w8_own_verifying_key.rs"]
+pub mod policy_member_v3_2_w8_own_verifying_key;
+#[path = "policy/member/outputs_4/curator/policy_member_v3_4_w0_curator_verifying_key.rs"]
+pub mod policy_member_v3_4_w0_curator_verifying_key;
+#[path = "policy/member/outputs_4/own/policy_member_v3_4_w0_own_verifying_key.rs"]
+pub mod policy_member_v3_4_w0_own_verifying_key;
+#[path = "policy/member/outputs_4/curator/policy_member_v3_4_w16_curator_verifying_key.rs"]
+pub mod policy_member_v3_4_w16_curator_verifying_key;
+#[path = "policy/member/outputs_4/own/policy_member_v3_4_w16_own_verifying_key.rs"]
+pub mod policy_member_v3_4_w16_own_verifying_key;
+#[path = "policy/member/outputs_4/curator/policy_member_v3_4_w1_curator_verifying_key.rs"]
+pub mod policy_member_v3_4_w1_curator_verifying_key;
+#[path = "policy/member/outputs_4/own/policy_member_v3_4_w1_own_verifying_key.rs"]
+pub mod policy_member_v3_4_w1_own_verifying_key;
+#[path = "policy/member/outputs_4/curator/policy_member_v3_4_w2_curator_verifying_key.rs"]
+pub mod policy_member_v3_4_w2_curator_verifying_key;
+#[path = "policy/member/outputs_4/own/policy_member_v3_4_w2_own_verifying_key.rs"]
+pub mod policy_member_v3_4_w2_own_verifying_key;
+#[path = "policy/member/outputs_4/curator/policy_member_v3_4_w32_curator_verifying_key.rs"]
+pub mod policy_member_v3_4_w32_curator_verifying_key;
+#[path = "policy/member/outputs_4/own/policy_member_v3_4_w32_own_verifying_key.rs"]
+pub mod policy_member_v3_4_w32_own_verifying_key;
+#[path = "policy/member/outputs_4/curator/policy_member_v3_4_w4_curator_verifying_key.rs"]
+pub mod policy_member_v3_4_w4_curator_verifying_key;
+#[path = "policy/member/outputs_4/own/policy_member_v3_4_w4_own_verifying_key.rs"]
+pub mod policy_member_v3_4_w4_own_verifying_key;
+#[path = "policy/member/outputs_4/curator/policy_member_v3_4_w8_curator_verifying_key.rs"]
+pub mod policy_member_v3_4_w8_curator_verifying_key;
+#[path = "policy/member/outputs_4/own/policy_member_v3_4_w8_own_verifying_key.rs"]
+pub mod policy_member_v3_4_w8_own_verifying_key;
+#[path = "policy/member/outputs_8/curator/policy_member_v3_8_w0_curator_verifying_key.rs"]
+pub mod policy_member_v3_8_w0_curator_verifying_key;
+#[path = "policy/member/outputs_8/own/policy_member_v3_8_w0_own_verifying_key.rs"]
+pub mod policy_member_v3_8_w0_own_verifying_key;
+#[path = "policy/member/outputs_8/curator/policy_member_v3_8_w16_curator_verifying_key.rs"]
+pub mod policy_member_v3_8_w16_curator_verifying_key;
+#[path = "policy/member/outputs_8/own/policy_member_v3_8_w16_own_verifying_key.rs"]
+pub mod policy_member_v3_8_w16_own_verifying_key;
+#[path = "policy/member/outputs_8/curator/policy_member_v3_8_w1_curator_verifying_key.rs"]
+pub mod policy_member_v3_8_w1_curator_verifying_key;
+#[path = "policy/member/outputs_8/own/policy_member_v3_8_w1_own_verifying_key.rs"]
+pub mod policy_member_v3_8_w1_own_verifying_key;
+#[path = "policy/member/outputs_8/curator/policy_member_v3_8_w2_curator_verifying_key.rs"]
+pub mod policy_member_v3_8_w2_curator_verifying_key;
+#[path = "policy/member/outputs_8/own/policy_member_v3_8_w2_own_verifying_key.rs"]
+pub mod policy_member_v3_8_w2_own_verifying_key;
+#[path = "policy/member/outputs_8/curator/policy_member_v3_8_w32_curator_verifying_key.rs"]
+pub mod policy_member_v3_8_w32_curator_verifying_key;
+#[path = "policy/member/outputs_8/own/policy_member_v3_8_w32_own_verifying_key.rs"]
+pub mod policy_member_v3_8_w32_own_verifying_key;
+#[path = "policy/member/outputs_8/curator/policy_member_v3_8_w4_curator_verifying_key.rs"]
+pub mod policy_member_v3_8_w4_curator_verifying_key;
+#[path = "policy/member/outputs_8/own/policy_member_v3_8_w4_own_verifying_key.rs"]
+pub mod policy_member_v3_8_w4_own_verifying_key;
+#[path = "policy/member/outputs_8/curator/policy_member_v3_8_w8_curator_verifying_key.rs"]
+pub mod policy_member_v3_8_w8_curator_verifying_key;
+#[path = "policy/member/outputs_8/own/policy_member_v3_8_w8_own_verifying_key.rs"]
+pub mod policy_member_v3_8_w8_own_verifying_key;
 #[path = "records/register_key_verifying_key.rs"]
 pub mod register_key_verifying_key;
 #[path = "records/withdrawal_exemption_verifying_key.rs"]
 pub mod withdrawal_exemption_verifying_key;
 pub const PROVING_KEY_SHA256S: &[(&str, [u8; 32])] = &[
     (
-        "custom_ring_audit_packed_2.key",
-        audit_packed_2_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_audit_delivered_2.key",
+        audit_delivered_2_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_audit_packed_4.key",
-        audit_packed_4_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_audit_delivered_4.key",
+        audit_delivered_4_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
         "custom_ring_audit_delivered_8.key",
@@ -214,44 +194,16 @@ pub const PROVING_KEY_SHA256S: &[(&str, [u8; 32])] = &[
         audit_anonymous_v2_4_2_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_audit_anonymous_v2_8_2.key",
-        audit_anonymous_v2_8_2_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_audit_anonymous_v2_12_2.key",
-        audit_anonymous_v2_12_2_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
         "custom_ring_audit_anonymous_v2_16_2.key",
         audit_anonymous_v2_16_2_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_audit_anonymous_v2_24_2.key",
-        audit_anonymous_v2_24_2_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_audit_anonymous_v2_32_2.key",
-        audit_anonymous_v2_32_2_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
         "custom_ring_audit_anonymous_v2_4_4.key",
         audit_anonymous_v2_4_4_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_audit_anonymous_v2_8_4.key",
-        audit_anonymous_v2_8_4_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_audit_anonymous_v2_12_4.key",
-        audit_anonymous_v2_12_4_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
         "custom_ring_audit_anonymous_v2_16_4.key",
         audit_anonymous_v2_16_4_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_audit_anonymous_v2_24_4.key",
-        audit_anonymous_v2_24_4_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
         "custom_ring_audit_anonymous_v2_4_8.key",
@@ -260,18 +212,6 @@ pub const PROVING_KEY_SHA256S: &[(&str, [u8; 32])] = &[
     (
         "custom_ring_audit_anonymous_v2_8_8.key",
         audit_anonymous_v2_8_8_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_audit_anonymous_v2_12_8.key",
-        audit_anonymous_v2_12_8_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_audit_anonymous_v2_16_8.key",
-        audit_anonymous_v2_16_8_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_audit_anonymous_v2_1_16.key",
-        audit_anonymous_v2_1_16_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
         "custom_ring_audit_anonymous_entry_v2_8_2.key",
@@ -286,244 +226,244 @@ pub const PROVING_KEY_SHA256S: &[(&str, [u8; 32])] = &[
         audit_anonymous_entry_v2_8_8_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_2_w0_curator.key",
-        policy_member_v2_2_w0_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_2_w0_curator.key",
+        policy_member_v3_2_w0_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_2_w0_own.key",
-        policy_member_v2_2_w0_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_2_w0_own.key",
+        policy_member_v3_2_w0_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_2_w1_curator.key",
-        policy_member_v2_2_w1_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_2_w1_curator.key",
+        policy_member_v3_2_w1_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_2_w1_own.key",
-        policy_member_v2_2_w1_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_2_w1_own.key",
+        policy_member_v3_2_w1_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_2_w2_curator.key",
-        policy_member_v2_2_w2_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_2_w2_curator.key",
+        policy_member_v3_2_w2_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_2_w2_own.key",
-        policy_member_v2_2_w2_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_2_w2_own.key",
+        policy_member_v3_2_w2_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_2_w4_curator.key",
-        policy_member_v2_2_w4_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_2_w4_curator.key",
+        policy_member_v3_2_w4_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_2_w4_own.key",
-        policy_member_v2_2_w4_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_2_w4_own.key",
+        policy_member_v3_2_w4_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_2_w8_curator.key",
-        policy_member_v2_2_w8_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_2_w8_curator.key",
+        policy_member_v3_2_w8_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_2_w8_own.key",
-        policy_member_v2_2_w8_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_2_w8_own.key",
+        policy_member_v3_2_w8_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_2_w16_curator.key",
-        policy_member_v2_2_w16_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_2_w16_curator.key",
+        policy_member_v3_2_w16_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_2_w16_own.key",
-        policy_member_v2_2_w16_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_2_w16_own.key",
+        policy_member_v3_2_w16_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_2_w32_curator.key",
-        policy_member_v2_2_w32_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_2_w32_curator.key",
+        policy_member_v3_2_w32_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_2_w32_own.key",
-        policy_member_v2_2_w32_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_2_w32_own.key",
+        policy_member_v3_2_w32_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_4_w0_curator.key",
-        policy_member_v2_4_w0_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_4_w0_curator.key",
+        policy_member_v3_4_w0_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_4_w0_own.key",
-        policy_member_v2_4_w0_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_4_w0_own.key",
+        policy_member_v3_4_w0_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_4_w1_curator.key",
-        policy_member_v2_4_w1_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_4_w1_curator.key",
+        policy_member_v3_4_w1_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_4_w1_own.key",
-        policy_member_v2_4_w1_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_4_w1_own.key",
+        policy_member_v3_4_w1_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_4_w2_curator.key",
-        policy_member_v2_4_w2_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_4_w2_curator.key",
+        policy_member_v3_4_w2_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_4_w2_own.key",
-        policy_member_v2_4_w2_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_4_w2_own.key",
+        policy_member_v3_4_w2_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_4_w4_curator.key",
-        policy_member_v2_4_w4_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_4_w4_curator.key",
+        policy_member_v3_4_w4_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_4_w4_own.key",
-        policy_member_v2_4_w4_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_4_w4_own.key",
+        policy_member_v3_4_w4_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_4_w8_curator.key",
-        policy_member_v2_4_w8_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_4_w8_curator.key",
+        policy_member_v3_4_w8_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_4_w8_own.key",
-        policy_member_v2_4_w8_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_4_w8_own.key",
+        policy_member_v3_4_w8_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_4_w16_curator.key",
-        policy_member_v2_4_w16_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_4_w16_curator.key",
+        policy_member_v3_4_w16_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_4_w16_own.key",
-        policy_member_v2_4_w16_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_4_w16_own.key",
+        policy_member_v3_4_w16_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_4_w32_curator.key",
-        policy_member_v2_4_w32_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_4_w32_curator.key",
+        policy_member_v3_4_w32_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_4_w32_own.key",
-        policy_member_v2_4_w32_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_4_w32_own.key",
+        policy_member_v3_4_w32_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_8_w0_curator.key",
-        policy_member_v2_8_w0_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_8_w0_curator.key",
+        policy_member_v3_8_w0_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_8_w0_own.key",
-        policy_member_v2_8_w0_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_8_w0_own.key",
+        policy_member_v3_8_w0_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_8_w1_curator.key",
-        policy_member_v2_8_w1_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_8_w1_curator.key",
+        policy_member_v3_8_w1_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_8_w1_own.key",
-        policy_member_v2_8_w1_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_8_w1_own.key",
+        policy_member_v3_8_w1_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_8_w2_curator.key",
-        policy_member_v2_8_w2_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_8_w2_curator.key",
+        policy_member_v3_8_w2_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_8_w2_own.key",
-        policy_member_v2_8_w2_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_8_w2_own.key",
+        policy_member_v3_8_w2_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_8_w4_curator.key",
-        policy_member_v2_8_w4_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_8_w4_curator.key",
+        policy_member_v3_8_w4_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_8_w4_own.key",
-        policy_member_v2_8_w4_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_8_w4_own.key",
+        policy_member_v3_8_w4_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_8_w8_curator.key",
-        policy_member_v2_8_w8_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_8_w8_curator.key",
+        policy_member_v3_8_w8_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_8_w8_own.key",
-        policy_member_v2_8_w8_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_8_w8_own.key",
+        policy_member_v3_8_w8_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_8_w16_curator.key",
-        policy_member_v2_8_w16_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_8_w16_curator.key",
+        policy_member_v3_8_w16_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_8_w16_own.key",
-        policy_member_v2_8_w16_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_8_w16_own.key",
+        policy_member_v3_8_w16_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_8_w32_curator.key",
-        policy_member_v2_8_w32_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_8_w32_curator.key",
+        policy_member_v3_8_w32_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_8_w32_own.key",
-        policy_member_v2_8_w32_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_8_w32_own.key",
+        policy_member_v3_8_w32_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_16_w0_curator.key",
-        policy_member_v2_16_w0_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_16_w0_curator.key",
+        policy_member_v3_16_w0_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_16_w0_own.key",
-        policy_member_v2_16_w0_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_16_w0_own.key",
+        policy_member_v3_16_w0_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_16_w1_curator.key",
-        policy_member_v2_16_w1_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_16_w1_curator.key",
+        policy_member_v3_16_w1_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_16_w1_own.key",
-        policy_member_v2_16_w1_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_16_w1_own.key",
+        policy_member_v3_16_w1_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_16_w2_curator.key",
-        policy_member_v2_16_w2_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_16_w2_curator.key",
+        policy_member_v3_16_w2_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_16_w2_own.key",
-        policy_member_v2_16_w2_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_16_w2_own.key",
+        policy_member_v3_16_w2_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_16_w4_curator.key",
-        policy_member_v2_16_w4_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_16_w4_curator.key",
+        policy_member_v3_16_w4_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_16_w4_own.key",
-        policy_member_v2_16_w4_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_16_w4_own.key",
+        policy_member_v3_16_w4_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_16_w8_curator.key",
-        policy_member_v2_16_w8_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_16_w8_curator.key",
+        policy_member_v3_16_w8_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_16_w8_own.key",
-        policy_member_v2_16_w8_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_16_w8_own.key",
+        policy_member_v3_16_w8_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_16_w16_curator.key",
-        policy_member_v2_16_w16_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_16_w16_curator.key",
+        policy_member_v3_16_w16_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_16_w16_own.key",
-        policy_member_v2_16_w16_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_16_w16_own.key",
+        policy_member_v3_16_w16_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_16_w32_curator.key",
-        policy_member_v2_16_w32_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_16_w32_curator.key",
+        policy_member_v3_16_w32_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_member_v2_16_w32_own.key",
-        policy_member_v2_16_w32_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_member_v3_16_w32_own.key",
+        policy_member_v3_16_w32_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_delegate_v2_2x2_curator.key",
-        policy_delegate_v2_2x2_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_delegate_v3_2x2_curator.key",
+        policy_delegate_v3_2x2_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_delegate_v2_2x2_own.key",
-        policy_delegate_v2_2x2_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_delegate_v3_2x2_own.key",
+        policy_delegate_v3_2x2_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_delegate_v2_4x4_curator.key",
-        policy_delegate_v2_4x4_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_delegate_v3_4x4_curator.key",
+        policy_delegate_v3_4x4_curator_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_policy_delegate_v2_4x4_own.key",
-        policy_delegate_v2_4x4_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_policy_delegate_v3_4x4_own.key",
+        policy_delegate_v3_4x4_own_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
         "custom_ring_apply_records_1.key",
@@ -582,11 +522,11 @@ pub fn verifying_key(
     circuit: key_catalog::RingCircuit,
 ) -> Option<&'static groth16_solana::groth16::Groth16Verifyingkey<'static>> {
     match circuit {
-        key_catalog::RingCircuit::PackedAudit { outputs: 2 } => {
-            Some(&audit_packed_2_verifying_key::VERIFYINGKEY)
+        key_catalog::RingCircuit::DeliveredAudit { outputs: 2 } => {
+            Some(&audit_delivered_2_verifying_key::VERIFYINGKEY)
         }
-        key_catalog::RingCircuit::PackedAudit { outputs: 4 } => {
-            Some(&audit_packed_4_verifying_key::VERIFYINGKEY)
+        key_catalog::RingCircuit::DeliveredAudit { outputs: 4 } => {
+            Some(&audit_delivered_4_verifying_key::VERIFYINGKEY)
         }
         key_catalog::RingCircuit::DeliveredAudit { outputs: 8 } => {
             Some(&audit_delivered_8_verifying_key::VERIFYINGKEY)
@@ -599,45 +539,17 @@ pub fn verifying_key(
             outputs: 2,
         } => Some(&audit_anonymous_v2_4_2_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::AnonymousAudit {
-            class: 8,
-            outputs: 2,
-        } => Some(&audit_anonymous_v2_8_2_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::AnonymousAudit {
-            class: 12,
-            outputs: 2,
-        } => Some(&audit_anonymous_v2_12_2_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::AnonymousAudit {
             class: 16,
             outputs: 2,
         } => Some(&audit_anonymous_v2_16_2_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::AnonymousAudit {
-            class: 24,
-            outputs: 2,
-        } => Some(&audit_anonymous_v2_24_2_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::AnonymousAudit {
-            class: 32,
-            outputs: 2,
-        } => Some(&audit_anonymous_v2_32_2_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::AnonymousAudit {
             class: 4,
             outputs: 4,
         } => Some(&audit_anonymous_v2_4_4_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::AnonymousAudit {
-            class: 8,
-            outputs: 4,
-        } => Some(&audit_anonymous_v2_8_4_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::AnonymousAudit {
-            class: 12,
-            outputs: 4,
-        } => Some(&audit_anonymous_v2_12_4_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::AnonymousAudit {
             class: 16,
             outputs: 4,
         } => Some(&audit_anonymous_v2_16_4_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::AnonymousAudit {
-            class: 24,
-            outputs: 4,
-        } => Some(&audit_anonymous_v2_24_4_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::AnonymousAudit {
             class: 4,
             outputs: 8,
@@ -646,18 +558,6 @@ pub fn verifying_key(
             class: 8,
             outputs: 8,
         } => Some(&audit_anonymous_v2_8_8_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::AnonymousAudit {
-            class: 12,
-            outputs: 8,
-        } => Some(&audit_anonymous_v2_12_8_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::AnonymousAudit {
-            class: 16,
-            outputs: 8,
-        } => Some(&audit_anonymous_v2_16_8_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::AnonymousAudit {
-            class: 1,
-            outputs: 16,
-        } => Some(&audit_anonymous_v2_1_16_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::AnonymousEntryAudit {
             class: 8,
             outputs: 2,
@@ -674,302 +574,302 @@ pub fn verifying_key(
             outputs: 2,
             withdrawals: 0,
             own_only: false,
-        } => Some(&policy_member_v2_2_w0_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_2_w0_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 2,
             withdrawals: 0,
             own_only: true,
-        } => Some(&policy_member_v2_2_w0_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_2_w0_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 2,
             withdrawals: 1,
             own_only: false,
-        } => Some(&policy_member_v2_2_w1_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_2_w1_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 2,
             withdrawals: 1,
             own_only: true,
-        } => Some(&policy_member_v2_2_w1_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_2_w1_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 2,
             withdrawals: 2,
             own_only: false,
-        } => Some(&policy_member_v2_2_w2_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_2_w2_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 2,
             withdrawals: 2,
             own_only: true,
-        } => Some(&policy_member_v2_2_w2_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_2_w2_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 2,
             withdrawals: 4,
             own_only: false,
-        } => Some(&policy_member_v2_2_w4_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_2_w4_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 2,
             withdrawals: 4,
             own_only: true,
-        } => Some(&policy_member_v2_2_w4_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_2_w4_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 2,
             withdrawals: 8,
             own_only: false,
-        } => Some(&policy_member_v2_2_w8_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_2_w8_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 2,
             withdrawals: 8,
             own_only: true,
-        } => Some(&policy_member_v2_2_w8_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_2_w8_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 2,
             withdrawals: 16,
             own_only: false,
-        } => Some(&policy_member_v2_2_w16_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_2_w16_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 2,
             withdrawals: 16,
             own_only: true,
-        } => Some(&policy_member_v2_2_w16_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_2_w16_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 2,
             withdrawals: 32,
             own_only: false,
-        } => Some(&policy_member_v2_2_w32_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_2_w32_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 2,
             withdrawals: 32,
             own_only: true,
-        } => Some(&policy_member_v2_2_w32_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_2_w32_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 4,
             withdrawals: 0,
             own_only: false,
-        } => Some(&policy_member_v2_4_w0_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_4_w0_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 4,
             withdrawals: 0,
             own_only: true,
-        } => Some(&policy_member_v2_4_w0_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_4_w0_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 4,
             withdrawals: 1,
             own_only: false,
-        } => Some(&policy_member_v2_4_w1_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_4_w1_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 4,
             withdrawals: 1,
             own_only: true,
-        } => Some(&policy_member_v2_4_w1_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_4_w1_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 4,
             withdrawals: 2,
             own_only: false,
-        } => Some(&policy_member_v2_4_w2_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_4_w2_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 4,
             withdrawals: 2,
             own_only: true,
-        } => Some(&policy_member_v2_4_w2_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_4_w2_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 4,
             withdrawals: 4,
             own_only: false,
-        } => Some(&policy_member_v2_4_w4_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_4_w4_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 4,
             withdrawals: 4,
             own_only: true,
-        } => Some(&policy_member_v2_4_w4_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_4_w4_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 4,
             withdrawals: 8,
             own_only: false,
-        } => Some(&policy_member_v2_4_w8_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_4_w8_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 4,
             withdrawals: 8,
             own_only: true,
-        } => Some(&policy_member_v2_4_w8_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_4_w8_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 4,
             withdrawals: 16,
             own_only: false,
-        } => Some(&policy_member_v2_4_w16_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_4_w16_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 4,
             withdrawals: 16,
             own_only: true,
-        } => Some(&policy_member_v2_4_w16_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_4_w16_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 4,
             withdrawals: 32,
             own_only: false,
-        } => Some(&policy_member_v2_4_w32_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_4_w32_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 4,
             withdrawals: 32,
             own_only: true,
-        } => Some(&policy_member_v2_4_w32_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_4_w32_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 8,
             withdrawals: 0,
             own_only: false,
-        } => Some(&policy_member_v2_8_w0_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_8_w0_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 8,
             withdrawals: 0,
             own_only: true,
-        } => Some(&policy_member_v2_8_w0_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_8_w0_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 8,
             withdrawals: 1,
             own_only: false,
-        } => Some(&policy_member_v2_8_w1_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_8_w1_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 8,
             withdrawals: 1,
             own_only: true,
-        } => Some(&policy_member_v2_8_w1_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_8_w1_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 8,
             withdrawals: 2,
             own_only: false,
-        } => Some(&policy_member_v2_8_w2_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_8_w2_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 8,
             withdrawals: 2,
             own_only: true,
-        } => Some(&policy_member_v2_8_w2_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_8_w2_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 8,
             withdrawals: 4,
             own_only: false,
-        } => Some(&policy_member_v2_8_w4_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_8_w4_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 8,
             withdrawals: 4,
             own_only: true,
-        } => Some(&policy_member_v2_8_w4_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_8_w4_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 8,
             withdrawals: 8,
             own_only: false,
-        } => Some(&policy_member_v2_8_w8_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_8_w8_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 8,
             withdrawals: 8,
             own_only: true,
-        } => Some(&policy_member_v2_8_w8_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_8_w8_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 8,
             withdrawals: 16,
             own_only: false,
-        } => Some(&policy_member_v2_8_w16_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_8_w16_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 8,
             withdrawals: 16,
             own_only: true,
-        } => Some(&policy_member_v2_8_w16_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_8_w16_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 8,
             withdrawals: 32,
             own_only: false,
-        } => Some(&policy_member_v2_8_w32_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_8_w32_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 8,
             withdrawals: 32,
             own_only: true,
-        } => Some(&policy_member_v2_8_w32_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_8_w32_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 16,
             withdrawals: 0,
             own_only: false,
-        } => Some(&policy_member_v2_16_w0_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_16_w0_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 16,
             withdrawals: 0,
             own_only: true,
-        } => Some(&policy_member_v2_16_w0_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_16_w0_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 16,
             withdrawals: 1,
             own_only: false,
-        } => Some(&policy_member_v2_16_w1_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_16_w1_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 16,
             withdrawals: 1,
             own_only: true,
-        } => Some(&policy_member_v2_16_w1_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_16_w1_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 16,
             withdrawals: 2,
             own_only: false,
-        } => Some(&policy_member_v2_16_w2_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_16_w2_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 16,
             withdrawals: 2,
             own_only: true,
-        } => Some(&policy_member_v2_16_w2_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_16_w2_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 16,
             withdrawals: 4,
             own_only: false,
-        } => Some(&policy_member_v2_16_w4_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_16_w4_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 16,
             withdrawals: 4,
             own_only: true,
-        } => Some(&policy_member_v2_16_w4_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_16_w4_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 16,
             withdrawals: 8,
             own_only: false,
-        } => Some(&policy_member_v2_16_w8_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_16_w8_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 16,
             withdrawals: 8,
             own_only: true,
-        } => Some(&policy_member_v2_16_w8_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_16_w8_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 16,
             withdrawals: 16,
             own_only: false,
-        } => Some(&policy_member_v2_16_w16_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_16_w16_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 16,
             withdrawals: 16,
             own_only: true,
-        } => Some(&policy_member_v2_16_w16_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_16_w16_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 16,
             withdrawals: 32,
             own_only: false,
-        } => Some(&policy_member_v2_16_w32_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_16_w32_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::MemberPolicy {
             outputs: 16,
             withdrawals: 32,
             own_only: true,
-        } => Some(&policy_member_v2_16_w32_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_member_v3_16_w32_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::DelegatePolicy {
             inputs: 2,
             outputs: 2,
             own_only: false,
-        } => Some(&policy_delegate_v2_2x2_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_delegate_v3_2x2_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::DelegatePolicy {
             inputs: 2,
             outputs: 2,
             own_only: true,
-        } => Some(&policy_delegate_v2_2x2_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_delegate_v3_2x2_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::DelegatePolicy {
             inputs: 4,
             outputs: 4,
             own_only: false,
-        } => Some(&policy_delegate_v2_4x4_curator_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_delegate_v3_4x4_curator_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::DelegatePolicy {
             inputs: 4,
             outputs: 4,
             own_only: true,
-        } => Some(&policy_delegate_v2_4x4_own_verifying_key::VERIFYINGKEY),
+        } => Some(&policy_delegate_v3_4x4_own_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::ApplyRecords { writes: 1 } => {
             Some(&apply_records_1_verifying_key::VERIFYINGKEY)
         }

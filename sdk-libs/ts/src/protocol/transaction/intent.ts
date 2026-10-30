@@ -25,7 +25,7 @@ export type RingAnonymousTransferIntent = Readonly<{
   ringProgramId: Address;
   asset: Address;
   amount: bigint;
-  /** The address the payment takes its stream from, inside `ringProgramId`. */
+  /** The address the payment pays, inside `ringProgramId`. */
   recipient: RingAddress;
   /** Default-ring UTXO value the payment moves into the ring. */
   defaultFunding: bigint;

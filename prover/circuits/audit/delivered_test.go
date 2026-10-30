@@ -32,7 +32,7 @@ func TestDeliveredAuditRefusals(t *testing.T) {
 		{"recipient key given as its high-bit alias", func(d *ringaudit.DeliveredAudit) {
 			alias := slot
 			alias.RecipientKey[31] |= 0x80
-			d.Outputs[0] = d.NewRingOutput(t, alias, func(*big.Int) *big.Int { return big.NewInt(0) })
+			d.Outputs[0] = d.NewRingOutput(t, alias)
 		}},
 		{"dense slots with an exit published", func(d *ringaudit.DeliveredAudit) { d.Layout.Exits = false }},
 		{"SeedOut published without an exit", func(d *ringaudit.DeliveredAudit) {
@@ -58,19 +58,21 @@ func TestDeliveredAuditRefusals(t *testing.T) {
 	})
 }
 
-// Every flag value solves, an exit-free transfer with dense slots and the data-free flag a delivered key ignores.
+// Every flag value solves at the smallest and a larger capacity, an exit-free transfer with dense slots and the reserved flag a delivered key ignores.
 func TestDeliveredAuditSolvesEveryLayout(t *testing.T) {
-	c := compileDelivered(t, 8)
-	deliveredFlags := audit.LayoutExits | audit.LayoutEscrow | audit.LayoutDataFree
-	for value := range deliveredFlags + 1 {
-		layout := ringaudit.Layout{Exits: value&audit.LayoutExits != 0, Escrow: value&audit.LayoutEscrow != 0, DataFree: value&audit.LayoutDataFree != 0}
-		t.Run(fmt.Sprintf("%+v", layout), func(t *testing.T) {
-			d := ringaudit.DeliveredAuditOf(t, 8)
-			if layout.Exits {
-				d = ringaudit.NewDeliveredAudit(t, 8)
-			}
-			d.Layout = layout
-			c.requireSolved(t, d.Circuit(t))
-		})
+	deliveredFlags := audit.LayoutExits | audit.LayoutEscrow | audit.LayoutReserved
+	for _, capacity := range []int{2, 8} {
+		c := compileDelivered(t, capacity)
+		for value := range deliveredFlags + 1 {
+			layout := ringaudit.Layout{Exits: value&audit.LayoutExits != 0, Escrow: value&audit.LayoutEscrow != 0, Reserved: value&audit.LayoutReserved != 0}
+			t.Run(fmt.Sprintf("%d/%+v", capacity, layout), func(t *testing.T) {
+				d := ringaudit.DeliveredAuditOf(t, capacity)
+				if layout.Exits {
+					d = ringaudit.NewDeliveredAudit(t, capacity)
+				}
+				d.Layout = layout
+				c.requireSolved(t, d.Circuit(t))
+			})
+		}
 	}
 }

@@ -6,8 +6,8 @@ use pinocchio::{
     instruction::{InstructionAccount, InstructionView},
     AccountView, Address, ProgramResult,
 };
+use spr_interface::{RING_AUTH_PDA_SEED, SHIELDED_POOL_PROGRAM_ID};
 use wincode::{config::DefaultConfig, SchemaRead};
-use zolana_interface::{RING_AUTH_PDA_SEED, SHIELDED_POOL_PROGRAM_ID};
 
 /// Instruction data of `T`, trailing bytes refused.
 #[inline(never)]

@@ -7,7 +7,7 @@ use custom_ring_interface::{
     ParsedTransact, ANONYMOUS_ENTRY_OUTPUTS, ANONYMOUS_MERGE_WIDTHS,
 };
 use custom_ring_test_validator::{policy::RingNotes, shared::restart_prover};
-use zolana_client::{Shape, SPP_SUPPORTED_SHAPES};
+use spr_client::{Shape, SPP_SUPPORTED_SHAPES};
 
 const UTXO_AMOUNT: u64 = 1_000_000;
 
@@ -41,13 +41,8 @@ impl Column {
     /// The widest shapes a spend padded to its full published width still fits.
     const fn widest(self) -> &'static [Shape] {
         match self {
-            Self::Anonymous => &[
-                Shape::IN32_OUT2,
-                Shape::IN24_OUT4,
-                Shape::IN16_OUT8,
-                Shape::IN1_OUT16,
-            ],
-            Self::AnonymousPolicy => &[Shape::IN24_OUT2, Shape::IN24_OUT4, Shape::IN16_OUT8],
+            Self::Anonymous => &[Shape::IN16_OUT2, Shape::IN16_OUT4, Shape::IN5_OUT8],
+            Self::AnonymousPolicy => &[Shape::IN16_OUT2, Shape::IN16_OUT4],
             Self::Confidential | Self::ConfidentialPolicy | Self::Delegate => &[],
         }
     }
@@ -89,9 +84,9 @@ impl Coverage {
             // Each required key belongs to one independently runnable sweep.
             .filter(|circuit| {
                 let owner = match circuit {
-                    RingCircuit::PackedAudit { .. }
-                    | RingCircuit::DeliveredAudit { .. }
-                    | RingCircuit::Deposit { .. } => Column::Confidential,
+                    RingCircuit::DeliveredAudit { .. } | RingCircuit::Deposit { .. } => {
+                        Column::Confidential
+                    }
                     RingCircuit::AnonymousAudit { .. }
                     | RingCircuit::AnonymousEntryAudit { .. }
                     | RingCircuit::AnonymousMerge { .. } => Column::Anonymous,
@@ -145,7 +140,8 @@ struct ShapeRing<'a> {
     /// Signs and pays every move of the delegate rail.
     delegate: Keypair,
     mode: RingMode,
-    sender: AnonymousRingState,
+    /// The anonymous sender's history, advanced past every proven transfer.
+    sender: std::cell::RefCell<ViewingHistory>,
     escrowed: HashMap<[u8; 32], [u8; 32]>,
 }
 
@@ -222,7 +218,10 @@ impl<'a> ColumnSetup<'a> {
             auditor,
             delegate,
             mode: config.mode,
-            sender: AnonymousRingState::new(self.program, config.creation_epoch()),
+            sender: std::cell::RefCell::new(ViewingHistory::new(
+                env.sender.keypair.viewing_pubkey(),
+                0,
+            )),
             escrowed,
         })
     }
@@ -382,7 +381,7 @@ impl ShapeRing<'_> {
                 return Ok(Settlement::TooLarge);
             }
         };
-        let instruction = proven.instruction_at(rpc.get_slot()?)?;
+        let instruction = proven.instruction()?;
         let parsed = ParsedTransact::new(frame(&instruction, self.column.rail())?)?;
         let data = parsed.data();
         coverage.cover(RingCircuit::audit(parsed.layout(), data.n_out));
@@ -397,7 +396,7 @@ impl ShapeRing<'_> {
             .context("a tagged ring instruction")?;
         let budget = ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::try_from(*tag)?));
         let payer = self.payer();
-        let size = zolana_client::transaction_size(
+        let size = spr_client::transaction_size(
             &payer.pubkey(),
             std::slice::from_ref(&instruction),
             budget,
@@ -426,7 +425,7 @@ impl ShapeRing<'_> {
         Ok(Settlement::Settled)
     }
 
-    /// Anonymous payments go to fresh recipients, no inbox stream of one address fills.
+    /// Anonymous payments go to fresh recipients, each a bootstrap payment.
     fn prove(&self, transfer: ShapeTransfer) -> Result<Proven> {
         let env = self.env;
         let client = env.client.ring_client();
@@ -456,16 +455,20 @@ impl ShapeRing<'_> {
                 env.run(owner_transfer(transaction).with_shape(shape)?.prove(client))
             }
             RingRail::Anonymous => {
+                let history = self.sender.borrow().clone();
                 let mut anonymous = owner_transfer(transaction(env.payer.pubkey())?)
-                    .with_anonymous_signer(&sender.signing_key, &self.sender);
+                    .with_anonymous_signer(&sender.signing_key, &history);
                 for _ in payments {
                     anonymous = anonymous.with_payment(custom_ring_sdk::AnonymousPayment {
-                        to: ring_address(&ShieldedKeypair::new_ed25519()?, program, 0)?,
+                        to: ring_address(&ShieldedKeypair::new_ed25519()?, program)?,
+                        first_contact: custom_ring_sdk::FirstContact::Bootstrap,
                         asset: Mint::SOL,
                         amount,
                     })?;
                 }
-                env.run(anonymous.with_shape(shape)?.prove(client))
+                let anonymous = anonymous.with_shape(shape)?;
+                *self.sender.borrow_mut() = anonymous.viewing_history()?;
+                env.run(anonymous.prove(client))
             }
             RingRail::Delegate => {
                 let recipient = env.recipient.keypair.shielded_address()?;
@@ -526,7 +529,7 @@ fn ring_openings(outputs: &[SppProofOutputUtxo]) -> Result<Vec<Opened>> {
 }
 
 #[test]
-fn anonymous_sixteen_output_transfer_settles() -> Result<()> {
+fn anonymous_widest_eight_output_transfer_settles() -> Result<()> {
     let env = setup()?;
     let mut coverage = Coverage::default();
     let ring = ColumnSetup {
@@ -537,8 +540,8 @@ fn anonymous_sixteen_output_transfer_settles() -> Result<()> {
     .configure(&mut coverage)?;
     ring.settled(
         ShapeTransfer {
-            shape: Shape::IN1_OUT16,
-            inputs: ring.utxos(1, &mut coverage)?,
+            shape: Shape::IN5_OUT8,
+            inputs: ring.utxos(5, &mut coverage)?,
         },
         &mut coverage,
     )

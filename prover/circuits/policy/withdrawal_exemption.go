@@ -4,6 +4,7 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/std/rangecheck"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
@@ -20,7 +21,7 @@ type WithdrawalExemptionCircuit struct {
 
 func (c *WithdrawalExemptionCircuit) Define(api frontend.API) error {
 	rc := rangecheck.New(api)
-	fields := []frontend.Variable{0x43525758, c.Root} // CRWX
+	fields := []frontend.Variable{shared.WithdrawalExemptionDomain, c.Root}
 	for i, asset := range c.Assets {
 		amount := c.Amounts[i]
 		active := api.Sub(1, api.IsZero(asset))

@@ -8,6 +8,7 @@ import {
   MEMBER_REGISTRY_ROOT_HISTORY,
   QUAD_ARITY,
   QUAD_HEIGHT,
+  canopyLevels,
 } from "../membership/member-registry.js";
 import { MAX_RING_MEMBER_BATCH } from "./indexer-limits.js";
 import type {
@@ -23,6 +24,8 @@ import type {
   RingMemberRecordsRequest,
   RingMemberRequest,
   RingRecordPathView,
+  RingRecordPoolRequest,
+  RingRecordPoolResponse,
   RingRecordQueueResponse,
   RingRegistryRootView,
   RingRegistryStateResponse,
@@ -145,8 +148,8 @@ function sealedMemberRecord(value: unknown, path: string): RingMemberRecordView 
   };
 }
 
-/** `index` then 10 levels of 3 siblings, leaf level first. */
-function recordPath(value: unknown, path: string): RingRecordPathView {
+/** `index` then `levels` levels of 3 siblings, leaf level first. */
+function recordPath(value: unknown, path: string, levels = QUAD_HEIGHT): RingRecordPathView {
   const row = object(value, path, ["index", "siblings"]);
   const siblings = array(row["siblings"], `${path}.siblings`, (level, levelPath) => {
     const hashes = array(level, levelPath, checkedHash);
@@ -154,11 +157,11 @@ function recordPath(value: unknown, path: string): RingRecordPathView {
       return schemaFailure("INDEXER_SCHEMA_INVALID_TYPE", levelPath, "3 siblings", level);
     return hashes;
   });
-  if (siblings.length !== QUAD_HEIGHT)
+  if (siblings.length !== levels)
     return schemaFailure(
       "INDEXER_SCHEMA_INVALID_TYPE",
       `${path}.siblings`,
-      `${String(QUAD_HEIGHT)} levels`,
+      `${String(levels)} levels`,
       row["siblings"],
     );
   return {
@@ -225,6 +228,56 @@ export function decodeRingMemberOpenings(value: unknown): RingMemberOpeningsResp
     context: context(row["context"], "context"),
     root: registryRoot(row["root"], "root"),
     openings: array(row["openings"], "openings", memberOpening),
+  };
+}
+
+export function encodeRingRecordPoolRequest(value: RingRecordPoolRequest): WireObject {
+  const openings = toWireInteger(
+    BigInt(value.openings),
+    "openings",
+    1n,
+    BigInt(MAX_RING_MEMBER_BATCH),
+  );
+  const request = encodeRingMemberOpeningsRequest(value);
+  if (value.members.length > openings)
+    return schemaFailure(
+      "INDEXER_SCHEMA_INVALID_TYPE",
+      "$.members",
+      `at most ${String(openings)} members`,
+      value.members,
+    );
+  return { ...request, openings };
+}
+
+/** The `getRingRecordPool` response, its canopy width fixing the path height. */
+export function decodeRingRecordPool(value: unknown): RingRecordPoolResponse {
+  const row = object(value, "$", ["context", "root", "records", "canopy", "subjects"]);
+  const canopy = array(row["canopy"], "canopy", checkedHash);
+  const levels = canopyLevels(canopy.length);
+  if (canopy.length !== QUAD_ARITY ** levels)
+    return schemaFailure("INDEXER_SCHEMA_INVALID_TYPE", "canopy", "a power of 4", row["canopy"]);
+  const records = array(row["records"], "records", (entry, path) => {
+    const item = object(entry, path, ["record", "path"]);
+    return {
+      record: sealedMemberRecord(item["record"], `${path}.record`),
+      path: recordPath(item["path"], `${path}.path`, QUAD_HEIGHT - levels),
+    };
+  });
+  if (records.length > MAX_RING_MEMBER_BATCH)
+    return schemaFailure(
+      "INDEXER_SCHEMA_INVALID_TYPE",
+      "records",
+      `at most ${String(MAX_RING_MEMBER_BATCH)}`,
+      row["records"],
+    );
+  return {
+    context: context(row["context"], "context"),
+    root: registryRoot(row["root"], "root"),
+    records,
+    canopy,
+    subjects: array(row["subjects"], "subjects", (index, path) =>
+      Number(wireInteger(index, path, 0n, BigInt(MAX_RING_MEMBER_BATCH - 1))),
+    ),
   };
 }
 

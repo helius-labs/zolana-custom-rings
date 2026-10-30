@@ -8,10 +8,10 @@ use custom_ring_interface::{
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
+use spr_client::ComputeBudgetConfig;
+use spr_interface::pda;
+use spr_keypair::X25519Pubkey;
 use wincode::{config::DefaultConfig, SchemaWrite};
-use zolana_client::ComputeBudgetConfig;
-use zolana_interface::pda;
-use zolana_keypair::X25519Pubkey;
 use zolana_ring_client::ReaderKey;
 use zolana_ring_policy::{ListId, ListSet, Rule, RuleTable, SourceMap};
 

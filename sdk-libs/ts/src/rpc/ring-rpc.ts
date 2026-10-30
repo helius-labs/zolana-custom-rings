@@ -9,7 +9,6 @@ import {
 
 import type {
   Address,
-  Bytes16,
   Bytes32,
   Bytes33,
   Bytes64,
@@ -36,7 +35,7 @@ import {
 import { MAX_MERGE_INPUTS } from "@heliuslabs/zolana/interface";
 import { X25519PublicKey, KeypairError } from "@heliuslabs/zolana/keypair";
 import { MEMBER_REGISTRY_ROOT_HISTORY } from "../protocol/membership/member-registry.js";
-import { ringIdField, ringTagFromOwnerTag } from "../crypto/derivation/ring-stream.js";
+import { ringIdField } from "../crypto/derivation/ring-stream.js";
 
 import {
   DUMMY_INPUT,
@@ -1147,12 +1146,12 @@ function decodeTransaction(wire: Record<string, unknown>): DecryptedRingTransact
         inputs.some((input, index) => !equalBytes(input.nullifier, nullifiers[index]!))
   )
     throw invalid("inputs");
-  // A tag marks an anonymous ring output, a confidential ring publishes none.
+  // A view tag marks an anonymous ring output, a confidential ring publishes the recipient's u.
   if (
     outputs.some(
       (output) =>
         output.opening.kind === "ring" &&
-        (output.opening.tag !== undefined) !== (sender !== undefined),
+        (output.opening.ownerTag.kind === "view") !== (sender !== undefined),
     )
   )
     throw invalid("outputs.tag");
@@ -1202,12 +1201,15 @@ function decodeOutput(wire: Record<string, unknown>, path: string): DecryptedRin
   const recipientU = wire["recipientU"];
   const tag = wire["tag"];
   let opening: OutputOpening;
-  if (kind === "ring" && !absent(utxo) && !absent(recipientU)) {
+  if (kind === "ring" && !absent(utxo) && absent(recipientU) !== absent(tag)) {
     opening = Object.freeze({
       kind,
       utxo: decodeDecryptedUtxo(record(utxo, `${path}.utxo`), `${path}.utxo`),
-      recipientU: hash(recipientU, `${path}.recipientU`),
-      ...(absent(tag) ? {} : { tag: ringTag(tag, `${path}.tag`) }),
+      ownerTag: Object.freeze(
+        absent(tag)
+          ? { kind: "recipient", u: hash(recipientU, `${path}.recipientU`) }
+          : { kind: "view", tag: hash(tag, `${path}.tag`) },
+      ),
     });
   } else if (kind === "exit" && !absent(utxo) && absent(recipientU) && absent(tag)) {
     opening = Object.freeze({
@@ -1345,12 +1347,6 @@ function decodeInputRing(wire: Record<string, unknown>, path: string): InputRing
     default:
       throw invalid(`${path}.opening.ring.kind`);
   }
-}
-
-function ringTag(value: unknown, path: string): Bytes16 {
-  const tag = ringTagFromOwnerTag(hash(value, path));
-  if (tag === undefined) throw invalid(path);
-  return tag;
 }
 
 /** Rust `OutputPayloadErrorKind` as the ring rpc serializes it. */

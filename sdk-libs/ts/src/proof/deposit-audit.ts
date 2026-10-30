@@ -9,13 +9,15 @@ import {
   hashChain,
   isZero,
   readOutputData,
-  decodeRingDepositOutput,
-  type RingDepositOutput,
 } from "@heliuslabs/zolana/internal";
 import { pack33 } from "@heliuslabs/zolana/interface";
 import type { Address, Bytes32, Bytes33, Bytes96 } from "@heliuslabs/zolana/interface";
 import { EncryptedScheme, ownerUtxoHash } from "@heliuslabs/zolana/transaction";
 import { ringIdField } from "../crypto/derivation/ring-stream.js";
+import {
+  decodeRingDepositOutput,
+  type RingDepositOutput,
+} from "../protocol/codec/ring-deposit-plaintext.js";
 import {
   encodeRingDepositCapsule,
   readRingDepositCapsule,
@@ -26,6 +28,7 @@ import {
 } from "../protocol/codec/deposit-capsule.js";
 import { auditSharedSecret } from "../crypto/audit/audit.js";
 import { RingError } from "../protocol/error.js";
+import { domainField, RingDomain } from "../crypto/derivation/ring-domain.js";
 import { ConfirmedDeposit } from "../protocol/transaction/origin.js";
 
 const INFO = new TextEncoder().encode("CRING/dep1");
@@ -200,7 +203,7 @@ export function depositStatementElements(input: DepositStatement): readonly Byte
   )
     throw new RingError("RING_BUILD_DEPOSIT");
   return Object.freeze([
-    bigIntBytes(0x43524450n) as Bytes32,
+    domainField(RingDomain.depositStatement),
     input.contextHash,
     bigIntBytes(BigInt(count)) as Bytes32,
     bigIntBytes(input.anonymous ? 1n : 0n) as Bytes32,

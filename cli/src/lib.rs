@@ -90,8 +90,8 @@ use anyhow::{bail, ensure, Context as _, Result};
 use clap::{Args, FromArgMatches, Parser, Subcommand};
 use custom_ring_interface::{compute_unit_limit, CustomRingError, InstructionTag};
 use custom_ring_sdk::{
-    CustomRing, CustomRingConfig, PendingFirstContact, RingError, RingMode, RingOperation,
-    RingSubmission, SettledSubmission, MERGE_DEFAULT_INPUT_COUNT,
+    CustomRing, CustomRingConfig, RingError, RingMode, RingOperation, RingSubmission,
+    SettledSubmission, MERGE_DEFAULT_INPUT_COUNT,
 };
 use solana_address::Address;
 use solana_instruction::{error::InstructionError, Instruction};
@@ -99,17 +99,16 @@ use solana_keypair::Keypair;
 use solana_signature::Signature;
 use solana_signer::Signer;
 use solana_transaction_error::TransactionError;
-use zolana_api::BlockingInsideRuntime;
-use zolana_client::{
+use spr_api::BlockingInsideRuntime;
+use spr_client::{
     prover::tee::TeePolicy, Blocking, ClientError, ComputeBudgetConfig, IndexerPollConfig, Rpc,
     SolanaRpc, ZolanaIndexer,
 };
-use zolana_interface::error::ShieldedPoolError;
-use zolana_keypair::ShieldedAddress;
+use spr_interface::error::ShieldedPoolError;
+use spr_keypair::ShieldedAddress;
 use zolana_ring_client::ReaderKey;
 
 pub use crate::{
-    address::PairingRowArg,
     chain::{transaction_error, Chain, Zolana, ZolanaServices},
     config::{CoSignClass, Mint, ModeName, RingConfig, Service, Target, ThresholdSpec, RING_TOML},
     list::{MemberArgs, MemberList},
@@ -346,7 +345,7 @@ mod tests {
         assert_eq!((args.mint, args.count), (Some(Mint(mint)), 4));
         for sol in ["sol", "SOL"] {
             let args = parse(&["--mint", sol]).expect("sol");
-            assert_eq!(args.mint, Some(Mint(zolana_transaction::SOL_MINT)));
+            assert_eq!(args.mint, Some(Mint(spr_transaction::SOL_MINT)));
         }
         assert_eq!(parse(&[]).expect("defaults").count, 24);
         assert!(parse(&["--count", "50"]).is_ok());
@@ -369,9 +368,9 @@ mod tests {
         let mint = Address::new_from_array([7; 32]);
         let token = Address::new_from_array([8; 32]);
         let to = |seed: u8| {
-            zolana_keypair::ShieldedKeypair::from_keypair(
-                zolana_keypair::SigningKey::from_ed25519_bytes(&[seed; 32]),
-            )
+            spr_keypair::ShieldedKeypair::from_keypair(spr_keypair::SigningKey::from_ed25519_bytes(
+                &[seed; 32],
+            ))
             .unwrap()
             .shielded_address()
             .unwrap()
@@ -474,7 +473,7 @@ mod tests {
     fn the_indexer_wait_retries_only_a_transient_failure() {
         use std::sync::atomic::{AtomicU8, Ordering};
 
-        use zolana_client::{
+        use spr_client::{
             AsyncProverClient, GetShieldedTransactionsBySignatureResponse,
             IndexedShieldedTransaction, IndexerRpcConfig, ShieldedTransaction, WitnessReader,
         };
@@ -504,7 +503,7 @@ mod tests {
                     });
                 }
                 Ok(GetShieldedTransactionsBySignatureResponse {
-                    context: zolana_client::Context {
+                    context: spr_client::Context {
                         block_time: 0,
                         slot: 1,
                     },

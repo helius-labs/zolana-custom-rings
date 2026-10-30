@@ -3,7 +3,7 @@ use custom_ring_interface::{
     MergeAnonymousPublicInput, MergeDisclosureRef, RingProgramConfig, VIEWING_PUBKEY_TAG,
 };
 use pinocchio::{Address, ProgramResult};
-use zolana_interface::instruction::instruction_data::merge_transact::{
+use spr_interface::instruction::instruction_data::merge_transact::{
     merge_circuit_width, MergeOutputEncryption, MergeTransactIxDataRef,
 };
 use zolana_ring_policy::ring_id_field;
@@ -42,7 +42,6 @@ impl MergeAudit<'_> {
         if disclosure.eph_pk[0] != VIEWING_PUBKEY_TAG {
             return Err(CustomRingError::InvalidMergeDisclosure.into());
         }
-        // Only a ring output's CRAT ring data opens as an anchor.
         if self.output_ring_data_hash != &[0; 32] {
             return Err(CustomRingError::AnonymousRingDataNotZero.into());
         }

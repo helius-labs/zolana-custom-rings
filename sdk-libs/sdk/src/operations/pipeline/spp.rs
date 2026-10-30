@@ -2,7 +2,7 @@
 
 use custom_ring_interface::{InputTrees, PlainGroth16Proof, RingRail};
 use solana_address::Address;
-use zolana_client::{
+use spr_client::{
     attach_input_proofs,
     prover::{
         indexed::{IndexedTransferPreparation, IndexedTransferRail, PreparedIndexedTransfer},
@@ -11,9 +11,9 @@ use zolana_client::{
     AsyncRpc, AsyncWitnessReader, ClientError, ProofAuthority, ProofCompressed,
     RingAuthorityProver, RingTransferProver, TransferInputs,
 };
-use zolana_interface::instruction::{CircuitId, TreeContext};
-use zolana_keypair::SigningKey;
-use zolana_transaction::instructions::transact::SppProofInputs;
+use spr_interface::instruction::{CircuitId, TreeContext};
+use spr_keypair::SigningKey;
+use spr_transaction::instructions::transact::SppProofInputs;
 
 use super::compact::OwnedAnonymousProofData;
 use crate::client::{RingClient, RingIndexerBackend};

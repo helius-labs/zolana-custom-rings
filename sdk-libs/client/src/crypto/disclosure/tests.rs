@@ -1,4 +1,4 @@
-use zolana_hasher::primitives::BN254_SCALAR_MODULUS_BE;
+use spr_hasher::primitives::BN254_SCALAR_MODULUS_BE;
 
 use super::*;
 use crate::encryption::{seal_stream, StreamSchedule};
@@ -69,7 +69,8 @@ fn anonymous_outputs() -> Vec<AnonymousOutputOpening> {
         AnonymousOutputOpening::Ring {
             owner_key: [0xb5; 32],
             nullifier_pk: field(0x25),
-            recipient_u: [0x15; 32],
+            asset: field(0x15),
+            amount: 70,
         },
         AnonymousOutputOpening::Exit {
             nullifier_pk: field(0x26),
@@ -80,7 +81,8 @@ fn anonymous_outputs() -> Vec<AnonymousOutputOpening> {
         AnonymousOutputOpening::Ring {
             owner_key: [0xa1; 32],
             nullifier_pk: field(0x5a),
-            recipient_u: [0x17; 32],
+            asset: field(0x17),
+            amount: u64::MAX,
         },
     ]
 }
@@ -133,26 +135,36 @@ fn anonymous_commitment() -> (AuditDisclosure, [bool; 4]) {
     (disclosure, [false; 4])
 }
 
-fn packed(key_escrow: bool, data_free: bool) -> (AuditDisclosure, [bool; 3]) {
-    let opening = |byte: u8| PackedOutputOpening {
-        owner_key: [byte; 32],
-        nullifier_pk: (!key_escrow).then(|| field(byte)),
-        asset: field(byte + 1),
-        amount: u64::from(byte),
-        data_hash: if data_free { [0; 32] } else { field(byte + 2) },
-        ring_data_hash: [0; 32],
-    };
-    let disclosure = AuditDisclosure::Packed {
-        layout: PackedLayout {
-            outputs: 3,
-            exits: true,
-            key_escrow,
-            data_free,
+/// Two slots at capacity 2, the second an exit when `exits`.
+fn delivered_pair(key_escrow: bool, exits: bool) -> (AuditDisclosure, [bool; 2]) {
+    let nullifier_pk = |byte| (!key_escrow).then(|| field(byte));
+    let second = match exits {
+        true => DeliveredOutputOpening::Exit {
+            nullifier_pk: nullifier_pk(0x40),
+            asset: field(0x41),
+            amount: 0x40,
         },
-        seed_out: Some(field(1)),
-        outputs: vec![Some(opening(0x30)), None, Some(opening(0x40))],
+        false => DeliveredOutputOpening::Ring {
+            owner_key: [0x40; 32],
+            nullifier_pk: nullifier_pk(0x40),
+        },
     };
-    (disclosure, [false, false, true])
+    let disclosure = AuditDisclosure::Delivered {
+        layout: DeliveredLayout {
+            outputs: 2,
+            exits,
+            key_escrow,
+        },
+        seed_out: exits.then(|| field(1)),
+        outputs: vec![
+            DeliveredOutputOpening::Ring {
+                owner_key: [0x30; 32],
+                nullifier_pk: nullifier_pk(0x30),
+            },
+            second,
+        ],
+    };
+    (disclosure, [false, exits])
 }
 
 fn decode(disclosure: &AuditDisclosure, exits: &[bool], fields: &[[u8; 32]]) -> AuditDisclosure {
@@ -323,8 +335,8 @@ fn nonzero_padding_is_refused() {
 
     let (anonymous, exits) = anonymous();
     let fields = anonymous.fields().unwrap();
-    // The output block starts behind 6 fields, the amounts behind its 10.
-    let exit_padding = DISCLOSURE_SENDER_KEY_BYTES + ANONYMOUS_SLOT_BYTES + KEY_AND_AMOUNT_BYTES;
+    // The output block starts behind 6 fields, the amounts behind its 11, an exit masks its owner key.
+    let exit_padding = DISCLOSURE_SENDER_KEY_BYTES + ANONYMOUS_SLOT_BYTES + 5;
     let mut padded = fields.clone();
     *packed_byte(&mut padded, 6, exit_padding) = 1;
     // One malformed slot decodes unreadable, the others still open.
@@ -339,7 +351,7 @@ fn nonzero_padding_is_refused() {
     assert_eq!(decoded.outputs, expected);
     let unpublished_amount = 2 * DISCLOSURE_INPUT_AMOUNT_BYTES + 7;
     let mut padded = fields;
-    *packed_byte(&mut padded, 16, unpublished_amount) = 1;
+    *packed_byte(&mut padded, 17, unpublished_amount) = 1;
     assert!(matches!(
         refused(&anonymous, &exits, &padded),
         Err(AuditError::DisclosurePadding)
@@ -355,13 +367,6 @@ fn disclosures_and_input_openings_print_no_blinding_or_seed() {
         blinding: hidden,
     };
     let seeded = |disclosure: AuditDisclosure| match disclosure {
-        AuditDisclosure::Packed {
-            layout, outputs, ..
-        } => AuditDisclosure::Packed {
-            layout,
-            seed_out: Some(hidden),
-            outputs,
-        },
         AuditDisclosure::Delivered {
             layout, outputs, ..
         } => AuditDisclosure::Delivered {
@@ -376,7 +381,6 @@ fn disclosures_and_input_openings_print_no_blinding_or_seed() {
     };
     let printed = [
         format!("{input:?}"),
-        format!("{:?}", seeded(packed(false, false).0)),
         format!("{:?}", seeded(delivered().0)),
         format!("{:?}", seeded(anonymous().0)),
     ];
@@ -447,8 +451,8 @@ fn a_disclosure_off_its_layout_is_refused() {
 /// Every flag drops exactly its fields, a disclosure carrying a dropped one is off its layout.
 #[test]
 fn every_layout_round_trips_through_the_positions_its_flags_fix() {
-    for (key_escrow, data_free) in [(false, false), (true, false), (false, true), (true, true)] {
-        let (disclosure, exits) = packed(key_escrow, data_free);
+    for (key_escrow, exits) in [(false, false), (true, false), (false, true), (true, true)] {
+        let (disclosure, exits) = delivered_pair(key_escrow, exits);
         let fields = disclosure.fields().unwrap();
         assert_eq!(fields.len(), disclosure.layout().field_count());
         assert_eq!(decode(&disclosure, &exits, &fields), disclosure);
@@ -456,34 +460,27 @@ fn every_layout_round_trips_through_the_positions_its_flags_fix() {
     let (commitment, exits) = anonymous_commitment();
     let fields = commitment.fields().unwrap();
     assert_eq!(decode(&commitment, &exits, &fields), commitment);
-    let AuditDisclosure::Packed {
+    let AuditDisclosure::Delivered {
         layout,
         seed_out,
         mut outputs,
-    } = packed(true, true).0
+    } = delivered_pair(true, true).0
     else {
-        panic!("packed layout");
+        panic!("delivered layout");
     };
-    let mut keyed = outputs.clone();
-    keyed[0] = keyed[0].map(|opening| PackedOutputOpening {
+    outputs[0] = DeliveredOutputOpening::Ring {
+        owner_key: [0x30; 32],
         nullifier_pk: Some(field(0x30)),
-        ..opening
-    });
-    outputs[2] = outputs[2].map(|opening| PackedOutputOpening {
-        data_hash: field(0x42),
-        ..opening
-    });
-    for outputs in [keyed, outputs] {
-        assert!(matches!(
-            AuditDisclosure::Packed {
-                layout,
-                seed_out,
-                outputs,
-            }
-            .fields(),
-            Err(AuditError::DisclosureLayout)
-        ));
-    }
+    };
+    assert!(matches!(
+        AuditDisclosure::Delivered {
+            layout,
+            seed_out,
+            outputs,
+        }
+        .fields(),
+        Err(AuditError::DisclosureLayout)
+    ));
     let AuditDisclosure::Delivered {
         mut layout,
         seed_out,

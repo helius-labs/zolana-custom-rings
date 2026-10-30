@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use anyhow::Result;
-use zolana_keypair::X25519Keypair;
+use spr_keypair::X25519Keypair;
 use zolana_ring_client::rpc::{read_auditor_key, write_auditor_key};
 use zolana_secret_file::Access;
 

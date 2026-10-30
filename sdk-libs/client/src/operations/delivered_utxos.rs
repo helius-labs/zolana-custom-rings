@@ -1,24 +1,22 @@
-//! Delivered ring outputs opened into a wallet's decryption result, the pinned zolana scan skips schemes 9 and 10.
+//! Delivered ring outputs opened into a wallet's decryption result, the pinned zolana scan skips scheme 10.
 
 use std::collections::HashMap;
 
 use custom_ring_interface::{
-    stream::{RingTag, SlotSecret},
-    RING_CONFIDENTIAL_DELIVERED_SCHEME_TAG, RING_DELIVERED_BODY_LEN,
+    ring_confidential_delivered_output_body, stream::SlotSecret, RING_DELIVERED_BODY_LEN,
 };
 use solana_address::Address;
 use solana_signature::Signature;
-use zolana_event::{OutputDataEncoding, RING_ANONYMOUS_ENCRYPTED_SCHEME_TAG};
-use zolana_hasher::primitives::is_canonical_bn254_scalar_be;
-use zolana_keypair::{shielded::ShieldedAddress, X25519Pubkey};
-use zolana_ring_keys::{RingDeliveryRequest, RingKeys, RingRecipientKey};
+use spr_hasher::primitives::is_canonical_bn254_scalar_be;
+use spr_keypair::{shielded::ShieldedAddress, X25519Pubkey};
+use spr_transaction::{
+    DecryptionResult, DeriveRequest, Mint, OutputSlot, ShieldedKeys, ShieldedTransaction,
+    TransactionError, WalletUtxo,
+};
+use zolana_ring_keys::{RingDeliveryRequest, RingKeys};
 use zolana_ring_transaction::{
     is_contributory, RingAssets, RingDelivered, RingDeliveredNote, RingDeliveryOpening,
     RingUtxoOwner,
-};
-use zolana_transaction::{
-    DecryptionResult, DeriveRequest, Mint, OutputSlot, ShieldedKeys, ShieldedTransaction,
-    TransactionError, WalletUtxo,
 };
 
 use crate::{exactly_one_each, AnonymousError};
@@ -28,8 +26,6 @@ use crate::{exactly_one_each, AnonymousError};
 pub struct RingDeliveredCandidate<'a> {
     pub tx: &'a ShieldedTransaction,
     pub slot_index: u32,
-    /// The published tag of an anonymous output, `None` for a confidential delivered one.
-    pub tag: Option<RingTag>,
     pub slot_secret: SlotSecret,
 }
 
@@ -102,18 +98,8 @@ impl PendingUtxo {
     }
 }
 
-/// The delivered body of a scheme 9 or 10 slot, `None` at another scheme or length.
-pub fn ring_delivered_body(slot: &OutputSlot, scheme: u8) -> Option<[u8; RING_DELIVERED_BODY_LEN]> {
-    let OutputDataEncoding::Encrypted(blob) = slot.output_data()? else {
-        return None;
-    };
-    let (&scheme_byte, body) = blob.split_first()?;
-    (scheme_byte == scheme).then(|| body.try_into().ok())?
-}
-
-fn delivered_body(slot: &OutputSlot) -> Option<[u8; RING_DELIVERED_BODY_LEN]> {
-    ring_delivered_body(slot, RING_ANONYMOUS_ENCRYPTED_SCHEME_TAG)
-        .or_else(|| ring_delivered_body(slot, RING_CONFIDENTIAL_DELIVERED_SCHEME_TAG))
+fn delivered_body(slot: &OutputSlot) -> Option<&[u8; RING_DELIVERED_BODY_LEN]> {
+    ring_confidential_delivered_output_body(&slot.payload)
 }
 
 /// Keeps every candidate whose body rebuilds its published commitment, both results unchanged on error.
@@ -206,14 +192,14 @@ pub fn confidential_delivered<'a, K: ShieldedKeys + RingKeys + ?Sized>(
             let Some(&viewing_pubkey) = held.get(&slot.view_tag) else {
                 continue;
             };
-            if ring_delivered_body(slot, RING_CONFIDENTIAL_DELIVERED_SCHEME_TAG).is_none() {
+            if delivered_body(slot).is_none() {
                 continue;
             }
             let output_index =
                 u32::try_from(position).map_err(|_| TransactionError::TooManyOutputs)?;
             sites.push((tx, output_index));
             requests.push(RingDeliveryRequest {
-                recipient: RingRecipientKey::Viewing(viewing_pubkey),
+                viewing_pubkey,
                 tx_viewing_pk,
                 salt,
                 output_index,
@@ -235,7 +221,6 @@ pub fn confidential_delivered<'a, K: ShieldedKeys + RingKeys + ?Sized>(
             Ok(RingDeliveredCandidate {
                 tx,
                 slot_index,
-                tag: None,
                 slot_secret: SlotSecret::new(secret)?,
             })
         })
@@ -278,8 +263,7 @@ pub(crate) fn open_delivered(
         let context = &slot.output_context;
         let delivered = RingDeliveryOpening {
             ring,
-            tag: candidate.tag,
-            body: &body,
+            body,
             slot_secret: &candidate.slot_secret,
             owner,
             commitment: &context.hash,
@@ -317,7 +301,7 @@ fn wallet_utxo(note: &RingDeliveredNote, mint: Mint, publication: Publication) -
         nullifier: [0; 32],
         tx_viewing_key: None,
         data_hash: None,
-        ring_data_hash: (note.ring_data_hash != [0; 32]).then_some(note.ring_data_hash),
+        ring_data_hash: None,
         tree_id: note.tree_id,
         leaf_index: publication.leaf_index,
         latest_tree_id: None,
@@ -327,7 +311,7 @@ fn wallet_utxo(note: &RingDeliveredNote, mint: Mint, publication: Publication) -
     }
 }
 
-fn assign_nullifiers<K: ShieldedKeys + ?Sized>(
+pub(crate) fn assign_nullifiers<K: ShieldedKeys + ?Sized>(
     shielded_keys: &K,
     utxos: &mut [WalletUtxo],
 ) -> Result<(), AnonymousError> {
@@ -348,8 +332,8 @@ fn assign_nullifiers<K: ShieldedKeys + ?Sized>(
     Ok(())
 }
 
-/// Mirrors zolana-transaction's private publication order.
-fn sort_by_publication(utxos: &mut [WalletUtxo]) {
+/// Mirrors spr-transaction's private publication order.
+pub(crate) fn sort_by_publication(utxos: &mut [WalletUtxo]) {
     utxos.sort_by_key(|utxo| {
         (
             utxo.slot,

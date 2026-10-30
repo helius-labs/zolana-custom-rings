@@ -7,7 +7,7 @@ use custom_ring_interface::{queue_chain, CustomRingError, QueueEntry, RecordQueu
 use custom_ring_sdk::{CustomRing, CustomRingConfig, MemberRecords, RecordApplication, RingError};
 use solana_address::Address;
 use solana_signer::Signer;
-use zolana_client::{BlockingIndexer, BlockingRpc, Rpc};
+use spr_client::{BlockingIndexer, BlockingRpc, Rpc};
 use zolana_ring_client::{records::MemberOpeningRead, RingIndexer};
 use zolana_ring_indexer::rpc::{GetRingRecordQueueRequest, GetRingRecordQueueResponse};
 use zolana_ring_member_registry::MemberRecord;
@@ -191,10 +191,10 @@ pub(crate) mod fixtures {
     use custom_ring_sdk::CustomRing;
     use solana_account::Account;
     use solana_address::Address;
-    use zolana_client::{AsyncProverClient, ClientError, Rpc, WitnessReader};
+    use spr_client::{AsyncProverClient, ClientError, Rpc, WitnessReader};
 
     use crate::{Zolana, ZolanaServices};
-    use zolana_indexer_api::{Base64String, Context as Page, Hash};
+    use spr_indexer_api::{Base64String, Context as Page, Hash};
     use zolana_ring_client::SealedNullifierKey;
     use zolana_ring_indexer::rpc::{
         GetRingMemberOpeningsResponse, RingMemberOpening, RingMemberRecordView, RingRecordPathView,
@@ -330,7 +330,7 @@ pub(crate) mod fixtures {
 
 #[cfg(test)]
 mod tests {
-    use zolana_indexer_api::{Context as Page, Hash};
+    use spr_indexer_api::{Context as Page, Hash};
     use zolana_ring_indexer::rpc::RingQueueEntryView;
     use zolana_ring_policy::ListId;
 

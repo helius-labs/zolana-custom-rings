@@ -4,8 +4,8 @@ import { initializePoseidon } from "@heliuslabs/zolana";
 import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
 import type { X25519Keypair } from "@heliuslabs/zolana/keypair";
 import type { OutputSlot } from "@heliuslabs/zolana/transaction";
-import type { RingDepositOutput } from "@heliuslabs/zolana/internal";
 import { ringIdField } from "../../crypto/derivation/ring-stream.js";
+import type { RingDepositOutput } from "../../protocol/codec/ring-deposit-plaintext.js";
 
 import {
   knownUtxoHash,

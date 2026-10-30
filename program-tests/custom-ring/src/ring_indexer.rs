@@ -11,7 +11,7 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
-use zolana_test_utils::localnet::isolated_temp_path;
+use spr_test_utils::localnet::isolated_temp_path;
 
 const BINARY_ENV: &str = "RING_INDEXER_BIN";
 const READY_TIMEOUT: Duration = Duration::from_secs(120);

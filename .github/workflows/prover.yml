@@ -73,6 +73,7 @@ jobs:
       - uses: ./zolana/.github/actions/setup-rust
         with:
           shared-key: ring-proving-keys
+          install-go: "false"
           private-libs-token: ${{ secrets.PRIVATE_LIBS_TOKEN }}
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:

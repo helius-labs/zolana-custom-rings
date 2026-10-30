@@ -34,20 +34,22 @@ changes.
 
 ## Audit statements
 
-Packed audit keys cover smaller confidential and delegate outputs. Delivered
-keys also prove that each output body opens for its recipient. Anonymous audit
-keys additionally bind the hidden sender and its input class; an entry key
-fully opens default-ring inputs. The [audit key tests](../prover/circuits/audit/keys_test.go)
+Delivered audit keys cover confidential and delegate outputs and prove that
+each output body opens for its recipient. Anonymous audit keys disclose each
+output's owner key, asset and amount, prove no body, and bind the hidden sender
+and its input class. An entry key fully opens default-ring inputs. The [audit key tests](../prover/circuits/audit/keys_test.go)
 pin the current compiled counts.
 
 ## Policy statements
 
-A member policy proof opens the sender's record and records for each output's
-owner and asset, and each nonzero public asset. Mint settings reuse these
-authenticated asset records; proof work depends on the transaction shape rather
-than the number of configured mints. A delegate policy proof also reopens spent notes. The
-[policy key tests](../prover/circuits/policy/policy_test.go) enforce budgets for
-the small output shapes; transaction size limits the wider shapes.
+A policy proof opens one record pool per registry. The pool holds the records
+of the sender, each payment's owner and asset, and each nonzero public asset.
+The key's output and withdrawal widths fix its capacity. Mint settings
+reuse these asset records, so proof work depends on the shape rather than the
+number of configured mints. A delegate policy proof also reopens spent notes.
+[Policy circuit](circuit-policy.md#record-pool) gives the capacities. The
+[policy key tests](../prover/circuits/policy/policy_test.go) enforce budgets
+for the small output shapes, and transaction size limits the wider shapes.
 
 ## Registry, deposits and merge disclosures
 
@@ -56,21 +58,22 @@ disclosures have separate keys. The [registry tests](../prover/circuits/registry
 pin opening constraints. Verify the current cost of any other key by compiling
 it with the [ring key tests](../prover/ring/keys_test.go).
 
-## Mint-record transition
+## Representative counts
 
-Measured BN254 constraints before and after removing the three eight-mint tables:
+BN254 constraints of selected policy keys, from
+[`constraints.json`](../prover/ringtest/ringkey/constraints.json):
 
-| Circuit | Before | With mint records |
+| Policy key | Own | Curator |
 | --- | ---: | ---: |
-| Member policy, 2 outputs, own registry, no public withdrawal metadata | 30,923 | 41,334 |
-| Member policy, 2 outputs, curator | 49,039 | 59,776 |
-| Member policy, 16 outputs, own registry | 167,536 | 183,813 |
-| Apply 16 records | 232,892 | 240,828 |
-| Deposit 8 | 148,936 | 149,392 |
-| Withdrawal exemption, up to 3 distinct withdrawn mints | — | 12,102 |
+| Member, 2 outputs, no withdrawals | 38,085 | 55,659 |
+| Member, 4 outputs, no withdrawals | 55,801 | 86,191 |
+| Member, 8 outputs, no withdrawals | 90,244 | 145,881 |
+| Member, 16 outputs, no withdrawals | 156,732 | 258,002 |
+| Member, 2 outputs, 32 withdrawals | 172,413 | 294,865 |
+| Member, 16 outputs, 32 withdrawals | 290,445 | 491,460 |
+| Delegate, 2x2 | 30,315 | 47,890 |
+| Delegate, 4x4 | 50,562 | 80,953 |
 
-The three public asset openings add a fixed cost to member policy proofs.
-Leaf openings also hash two additional fields. Audit encryption circuits are
-unchanged. Adding configured mints increases registry storage, not these circuit
-sizes. The current counts are pinned in
-[`constraints.json`](../prover/ringtest/ringkey/constraints.json).
+Apply 16 records takes 240,828, deposit 8 takes 149,392 and the withdrawal
+exemption takes 12,102. Adding configured mints increases registry storage,
+not these circuit sizes.

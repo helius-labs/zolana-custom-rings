@@ -8,20 +8,20 @@ use std::{
 use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
 use custom_ring_interface::{
-    stream::EPOCH_SLOTS, AppliedAt, CoSignScope, EscrowKey, MemberRegistry, QueueEntry,
-    RecordQueue, RingMode, RingProgramConfig, SourceSlot, CONFIG_PDA_SEED, DEFAULT_INSERT_FEE,
-    MEMBER_REGISTRY_PDA_SEED, N_SOURCE_SLOTS, RECORD_QUEUE_PDA_SEED, RING_PROGRAM_CONFIG,
+    AppliedAt, CoSignScope, EscrowKey, MemberRegistry, QueueEntry, RecordQueue, RingMode,
+    RingProgramConfig, SourceSlot, CONFIG_PDA_SEED, DEFAULT_INSERT_FEE, MEMBER_REGISTRY_PDA_SEED,
+    N_SOURCE_SLOTS, RECORD_QUEUE_PDA_SEED, RING_PROGRAM_CONFIG,
 };
 use solana_account::Account;
 use solana_address::Address;
-use zolana_client::{
+use spr_client::{
     rpc::STATE_TREE_HEIGHT, AsyncProverClient, AsyncRpc, AsyncWitnessReader, AsyncZolanaClient,
-    ClientError, Context, GetMerkleProofsResponse, GetShieldedTransactionsByTagsResponse,
-    IndexerRpcConfig, InputWitnesses, MerkleContext, MerkleProof, ProofDataSource,
+    ClientError, Context, GetMerkleProofsResponse, IndexerRpcConfig, InputWitnesses, MerkleContext,
+    MerkleProof, ProofDataSource,
 };
-use zolana_hasher::{Hasher, Poseidon};
-use zolana_indexer_api::{Base64String, Hash, SerializablePubkey};
-use zolana_interface::{
+use spr_hasher::{Hasher, Poseidon};
+use spr_indexer_api::{Base64String, Hash, SerializablePubkey};
+use spr_interface::{
     state::{
         default_tree_fees,
         discriminator::{RING_CONFIG, TREE_ACCOUNT_DISCRIMINATOR},
@@ -29,24 +29,24 @@ use zolana_interface::{
     },
     RING_AUTH_PDA_SEED, SHIELDED_POOL_PROGRAM_ID,
 };
-use zolana_keypair::{random_blinding, NullifierKey, ShieldedKeypair, SigningKey, X25519Keypair};
-use zolana_ring_client::{AsyncRingIndexer, RingIndexerError};
+use spr_keypair::{random_blinding, NullifierKey, ShieldedKeypair, SigningKey, X25519Keypair};
+use spr_transaction::{utxo::SppProofInputUtxo, Data, Mint, Utxo, WalletUtxo};
+use spr_tree::{TreeAccount, UTXO_TREE_HEIGHT};
+use zolana_ring_client::{AsyncRingIndexer, RingIndexerError, ViewingHistory};
 use zolana_ring_indexer::rpc::{
-    GetRingMemberOpeningsRequest, GetRingMemberOpeningsResponse, RingMemberOpening,
+    GetRingMemberOpeningsRequest, GetRingMemberOpeningsResponse, GetRingRecordPoolRequest,
+    GetRingRecordPoolResponse, RingIndexedMemberRecordView, RingMemberOpening,
     RingMemberRecordView, RingRecordPathView, RingRegistryRootView,
 };
-use zolana_ring_member_registry::{MemberRecord, MemberRegistryTree, RecordOpening, RecordTree};
-use zolana_ring_policy::{Member, RuleTable};
-use zolana_transaction::{
-    instructions::transact::ShieldedTransaction, utxo::SppProofInputUtxo, Data, Mint, Utxo,
-    WalletUtxo,
+use zolana_ring_member_registry::{
+    Canopy, MemberRecord, MemberRegistryTree, RecordOpening, RecordTree,
 };
-use zolana_tree::{TreeAccount, UTXO_TREE_HEIGHT};
+use zolana_ring_policy::{Member, RuleTable};
 
 use crate::client::RingClient;
 use crate::{trees::PoolTree, CustomRing, REDACTED};
 
-pub(crate) const SLOT: u64 = 9 * EPOCH_SLOTS + 5;
+pub(crate) const SLOT: u64 = 2_359_301;
 pub(crate) const TREE_ID: u16 = 0;
 
 pub(crate) fn program() -> Address {
@@ -71,6 +71,10 @@ pub(crate) fn auditor() -> X25519Keypair {
 
 pub(crate) fn keypair(seed: u8) -> ShieldedKeypair {
     ShieldedKeypair::from_keypair(SigningKey::from_ed25519_bytes(&[seed; 32])).unwrap()
+}
+
+pub(crate) fn history(owner: &ShieldedKeypair) -> ViewingHistory {
+    ViewingHistory::new(owner.viewing_pubkey(), 0)
 }
 
 pub(crate) fn owner_identity(owner: &ShieldedKeypair) -> Member {
@@ -164,14 +168,6 @@ impl LeafTree {
         )
     }
 
-    fn dense(&self) -> Vec<[u8; 32]> {
-        let mut dense = vec![[0; 32]; self.0.keys().last().map_or(0, |last| *last as usize + 1)];
-        for (index, leaf) in &self.0 {
-            dense[*index as usize] = *leaf;
-        }
-        dense
-    }
-
     fn node(&self, level: usize, position: u64) -> [u8; 32] {
         let first = position << level;
         if self.0.range(first..first + (1 << level)).next().is_none() {
@@ -252,8 +248,6 @@ impl RingSettings {
 #[derive(Clone, Default)]
 pub(crate) struct Chain {
     accounts: HashMap<Address, Account>,
-    /// Outputs occupying stream tags.
-    transactions: Vec<ShieldedTransaction>,
     /// Leaf indexes a Merkle proof request may name, every one settled in the tree's account.
     leaves: HashMap<[u8; 32], u64>,
     /// Leaves the indexer serves that the tree's account lacks.
@@ -294,34 +288,10 @@ impl Chain {
 
     pub(crate) fn with_tree(self, id: u16) -> Self {
         let tree = PoolTree {
-            address: zolana_interface::pda::tree(id),
+            address: spr_interface::pda::tree(id),
             id,
         };
         self.with(tree.address, tree_account(tree))
-    }
-
-    pub(crate) fn with_paused_tree(self) -> Self {
-        self.edit_tree(|tree| tree.set_paused(true))
-    }
-
-    pub(crate) fn with_leaf(mut self, hash: [u8; 32], leaf_index: u64) -> Self {
-        self.leaves.insert(hash, leaf_index);
-        let leaves = LeafTree::new(&self.leaves).dense();
-        self.edit_tree(|tree| {
-            let utxo = tree.utxo_tree();
-            utxo.init(UTXO_TREE_HEIGHT).unwrap();
-            utxo.append_batch(&leaves, 1).unwrap();
-        })
-    }
-
-    pub(crate) fn with_unsettled_leaf(mut self, hash: [u8; 32], leaf_index: u64) -> Self {
-        self.unsettled.insert(hash, leaf_index);
-        self
-    }
-
-    pub(crate) fn with_transaction(mut self, transaction: ShieldedTransaction) -> Self {
-        self.transactions.push(transaction);
-        self
     }
 
     /// The ring's own registry pinning `rules`, every list read from it.
@@ -366,13 +336,6 @@ impl Chain {
             prover(),
         )
     }
-
-    fn edit_tree(mut self, edit: impl FnOnce(&mut TreeAccount<'_>)) -> Self {
-        let address = zolana_interface::pda::tree(TREE_ID);
-        let account = self.accounts.get_mut(&address).unwrap();
-        edit(&mut TreeAccount::from_bytes(&mut account.data, address.to_bytes()).unwrap());
-        self
-    }
 }
 
 const CONTEXT: Context = Context {
@@ -398,31 +361,6 @@ impl AsyncRpc for Chain {
 
     async fn get_slot(&self) -> Result<u64, ClientError> {
         Ok(SLOT)
-    }
-
-    async fn get_shielded_transactions_by_tags(
-        &self,
-        tags: Vec<[u8; 32]>,
-        _cursor: Option<Vec<u8>>,
-        _limit: Option<u32>,
-        _config: Option<IndexerRpcConfig>,
-    ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
-        Ok(GetShieldedTransactionsByTagsResponse {
-            context: CONTEXT,
-            output_tree_id: Some(TREE_ID),
-            transactions: self
-                .transactions
-                .iter()
-                .filter(|tx| {
-                    tx.output_slots
-                        .iter()
-                        .any(|slot| tags.contains(&slot.view_tag))
-                })
-                .cloned()
-                .collect(),
-            next_cursor: None,
-            scanned_through: None,
-        })
     }
 
     async fn get_merkle_proofs(
@@ -481,20 +419,58 @@ impl AsyncRingIndexer for Chain {
                 "get_ring_member_openings",
             ))?;
         Ok(GetRingMemberOpeningsResponse {
-            context: zolana_indexer_api::Context {
+            context: spr_indexer_api::Context {
                 block_time: 0,
                 slot: SLOT,
             },
-            root: RingRegistryRootView {
-                root: Hash(registry.root()),
-                root_index: 1,
-                applied: 0,
-                next_index: registry.tree.records().len() as u64,
-            },
+            root: registry.root_view(),
             openings: request
                 .members
                 .iter()
                 .map(|member| registry.opening(&member.0))
+                .collect(),
+        })
+    }
+
+    async fn get_ring_record_pool(
+        &self,
+        request: GetRingRecordPoolRequest,
+    ) -> Result<GetRingRecordPoolResponse, RingIndexerError> {
+        let registry = self
+            .registry
+            .as_ref()
+            .ok_or(ClientError::UnsupportedRpcMethod("get_ring_record_pool"))?;
+        let members: Vec<[u8; 32]> = request.members.iter().map(|member| member.0).collect();
+        let pool = registry
+            .tree
+            .record_pool(
+                &members,
+                Canopy::covering(request.openings as usize).unwrap(),
+            )
+            .unwrap();
+        Ok(GetRingRecordPoolResponse {
+            context: spr_indexer_api::Context {
+                block_time: 0,
+                slot: SLOT,
+            },
+            root: registry.root_view(),
+            records: pool
+                .records
+                .iter()
+                .zip(&pool.proof.paths)
+                .map(|(record, path)| RingIndexedMemberRecordView {
+                    record: registry.view(record),
+                    path: RingRecordPathView {
+                        index: path.index,
+                        siblings: path.siblings.iter().map(|level| level.map(Hash)).collect(),
+                    },
+                })
+                .collect(),
+            canopy: pool.proof.canopy.into_iter().map(Hash).collect(),
+            subjects: pool
+                .subjects
+                .iter()
+                .map(|subject| subject.record_index)
                 .collect(),
         })
     }
@@ -623,12 +599,32 @@ impl Registry {
         account(program(), &registry)
     }
 
+    fn root_view(&self) -> RingRegistryRootView {
+        RingRegistryRootView {
+            root: Hash(self.root()),
+            root_index: 1,
+            applied: 0,
+            next_index: self.tree.records().len() as u64,
+        }
+    }
+
     fn opening(&self, member: &[u8; 32]) -> RingMemberOpening {
         let opening = self.tree.opening(member).unwrap();
         let (present, record, path) = match opening {
             RecordOpening::Present { record, path } => (true, record, path),
             RecordOpening::Absent { low, path } => (false, low, path),
         };
+        RingMemberOpening {
+            present,
+            record: self.view(&record),
+            path: RingRecordPathView {
+                index: path.index,
+                siblings: path.siblings.iter().map(|level| level.map(Hash)).collect(),
+            },
+        }
+    }
+
+    fn view(&self, record: &MemberRecord) -> RingMemberRecordView {
         let mut view = self
             .views
             .get(&record.member)
@@ -646,13 +642,6 @@ impl Registry {
             });
         view.next = Hash(record.next);
         view.mint_policy = record.mint_policy;
-        RingMemberOpening {
-            present,
-            record: view,
-            path: RingRecordPathView {
-                index: path.index,
-                siblings: path.siblings.iter().map(|level| level.map(Hash)).collect(),
-            },
-        }
+        view
     }
 }

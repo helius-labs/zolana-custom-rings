@@ -1,36 +1,54 @@
 {
-  "description": "Published field counts of the audit disclosures, each record a host disclosure the audit circuit solves. packed takes the published outputs and the exits, key_escrow and data_free flags, delivered the capacity and the exits and key_escrow flags, anonymous the audit key, its input class, the published input count, the output count and the exits flag. Produced by prover/circuits/audit/disclosure_test.go with WRITE_AUDIT_VECTORS=1.",
-  "packed": [
-    {
-      "outputs": 3,
-      "exits": true,
-      "key_escrow": false,
-      "data_free": false,
-      "fields": 19
-    },
-    {
-      "outputs": 3,
-      "exits": false,
-      "key_escrow": false,
-      "data_free": false,
-      "fields": 18
-    },
-    {
-      "outputs": 3,
-      "exits": true,
-      "key_escrow": true,
-      "data_free": false,
-      "fields": 16
-    },
-    {
-      "outputs": 3,
-      "exits": false,
-      "key_escrow": true,
-      "data_free": true,
-      "fields": 9
-    }
-  ],
+  "description": "Published field counts of the audit disclosures, each record a host disclosure the audit circuit solves. delivered takes the capacity and the exits and key_escrow flags, anonymous the audit key, its input class, the published input count, the output count and the exits flag. Produced by prover/circuits/audit/disclosure_test.go with WRITE_AUDIT_VECTORS=1.",
   "delivered": [
+    {
+      "outputs": 2,
+      "exits": true,
+      "key_escrow": false,
+      "fields": 6
+    },
+    {
+      "outputs": 2,
+      "exits": false,
+      "key_escrow": false,
+      "fields": 5
+    },
+    {
+      "outputs": 2,
+      "exits": true,
+      "key_escrow": true,
+      "fields": 4
+    },
+    {
+      "outputs": 2,
+      "exits": false,
+      "key_escrow": true,
+      "fields": 3
+    },
+    {
+      "outputs": 4,
+      "exits": true,
+      "key_escrow": false,
+      "fields": 11
+    },
+    {
+      "outputs": 4,
+      "exits": false,
+      "key_escrow": false,
+      "fields": 9
+    },
+    {
+      "outputs": 4,
+      "exits": true,
+      "key_escrow": true,
+      "fields": 7
+    },
+    {
+      "outputs": 4,
+      "exits": false,
+      "key_escrow": true,
+      "fields": 5
+    },
     {
       "outputs": 8,
       "exits": true,
@@ -119,7 +137,7 @@
       "inputs": 2,
       "outputs": 4,
       "exits": true,
-      "fields": 16
+      "fields": 17
     },
     {
       "key": "commitment",
@@ -127,31 +145,23 @@
       "inputs": 2,
       "outputs": 8,
       "exits": true,
-      "fields": 28
+      "fields": 30
     },
     {
       "key": "commitment",
-      "class": 32,
-      "inputs": 31,
+      "class": 16,
+      "inputs": 15,
       "outputs": 2,
       "exits": false,
-      "fields": 23
+      "fields": 15
     },
     {
       "key": "commitment",
-      "class": 32,
-      "inputs": 32,
+      "class": 16,
+      "inputs": 16,
       "outputs": 2,
       "exits": false,
-      "fields": 24
-    },
-    {
-      "key": "commitment",
-      "class": 1,
-      "inputs": 1,
-      "outputs": 16,
-      "exits": true,
-      "fields": 52
+      "fields": 16
     },
     {
       "key": "entry",
@@ -167,7 +177,7 @@
       "inputs": 2,
       "outputs": 4,
       "exits": true,
-      "fields": 23
+      "fields": 24
     },
     {
       "key": "entry",
@@ -175,7 +185,7 @@
       "inputs": 2,
       "outputs": 8,
       "exits": true,
-      "fields": 35
+      "fields": 37
     }
   ]
 }

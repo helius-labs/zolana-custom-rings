@@ -5,7 +5,7 @@ use pinocchio::{
     AccountView, Address, ProgramResult,
 };
 use pinocchio_system::instructions::Transfer;
-use zolana_account_checks::AccountIterator;
+use spr_account_checks::AccountIterator;
 
 use crate::instructions::instruction_runtime::check_system_program;
 

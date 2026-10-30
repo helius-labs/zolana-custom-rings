@@ -9,34 +9,33 @@ use std::{
 use custom_ring_interface::{
     blinding::ring_blinding_seed,
     ring_confidential_delivered_output_body,
-    stream::{DeliveredSlot, RingTag, SlotSecret},
-    AuditorMessage, DisclosureLayout, InputPrefix, RING_DELIVERED_BODY_LEN,
+    stream::{DeliveredSlot, SlotSecret},
+    AuditorMessage, DisclosureLayout, InputPrefix,
 };
 use solana_address::Address;
-use zeroize::Zeroizing;
-use zolana_client::ProofInputUtxo;
-use zolana_event::{confidential_encrypted_output_body, ring_anonymous_encrypted_output_body};
-use zolana_hasher::primitives::right_align;
-use zolana_interface::tree_slot::tree_id_field;
-use zolana_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
-use zolana_ring_transaction::{delivered_ring_data, RingAssets, RingDeliveredBody};
-use zolana_transaction::{
+use spr_client::ProofInputUtxo;
+use spr_event::confidential_encrypted_output_body;
+use spr_hasher::primitives::right_align;
+use spr_interface::tree_slot::tree_id_field;
+use spr_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
+use spr_transaction::{
     utxo::{derive_output_blinding_seed, derive_transact_output_blinding, DUMMY_DOMAIN},
     OutputSlot, ShieldedTransaction,
 };
+use zeroize::Zeroizing;
+use zolana_ring_transaction::{RingAssets, RingDeliveredBody};
 
 use crate::{
     disclosure::{
         AnonymousDisclosure, AnonymousInputs, AnonymousOutputOpening, AuditDisclosure,
-        AuditEnvelope, DeliveredOutputOpening, DisclosurePad, PackedOutputOpening,
-        PublishedOutputs,
+        AuditEnvelope, DeliveredOutputOpening, DisclosurePad, PublishedOutputs,
     },
     encryption::auditor_view_tag,
     known::KnownUtxoIndex,
     types::{
         AuditedInput, AuditedInputOpening, AuditedOutput, AuditedSender, AuditedTransaction,
         AuditedUtxo, InputOpening, InputRing, KnownUtxo, OutputOpening, OutputPayloadError,
-        OutputPayloadErrorKind,
+        OutputPayloadErrorKind, RingOwnerTag,
     },
     AuditError,
 };
@@ -181,14 +180,6 @@ impl<'a> TransactionAudit<'a> {
             .zip(&tx.output_slots)
             .map(|(index, output)| Slot { index, output });
         match disclosure {
-            AuditDisclosure::Packed {
-                seed_out, outputs, ..
-            } => {
-                let transfer = transfer(seed_out)?;
-                for (slot, opening) in slots.zip(outputs) {
-                    audited.record(slot, transfer.packed(slot, opening)?);
-                }
-            }
             AuditDisclosure::Delivered {
                 seed_out, outputs, ..
             } => {
@@ -222,7 +213,6 @@ fn check_published(
     exits: &[bool],
 ) -> Result<(), AuditError> {
     let (outputs, inputs, flagged) = match layout {
-        DisclosureLayout::Packed(packed) => (packed.outputs, None, packed.exits),
         DisclosureLayout::Delivered(delivered) => (delivered.outputs, None, delivered.exits),
         DisclosureLayout::Anonymous(anonymous) => {
             (anonymous.outputs, Some(anonymous.inputs), anonymous.exits)
@@ -274,18 +264,8 @@ impl<'a> Slot<'a> {
         self.output.view_tag
     }
 
-    fn tag(self) -> Option<RingTag> {
-        RingTag::from_owner_tag(&self.output.view_tag)
-    }
-
-    fn body(self, anonymous: bool) -> Option<&'a [u8; RING_DELIVERED_BODY_LEN]> {
-        let payload = &self.output.payload;
-        match anonymous {
-            true => ring_anonymous_encrypted_output_body(payload)?
-                .try_into()
-                .ok(),
-            false => ring_confidential_delivered_output_body(payload),
-        }
+    fn body(self) -> Option<&'a [u8; custom_ring_interface::RING_DELIVERED_BODY_LEN]> {
+        ring_confidential_delivered_output_body(&self.output.payload)
     }
 
     fn tree_id(self) -> u16 {
@@ -315,8 +295,6 @@ struct Delivery<'a> {
     slot: Slot<'a>,
     owner_key: [u8; 32],
     nullifier_pk: Option<[u8; 32]>,
-    recipient_u: [u8; 32],
-    tag: Option<RingTag>,
 }
 
 struct DeliveredExit {
@@ -333,41 +311,6 @@ struct SpentInputs<'a> {
 }
 
 impl Transfer<'_> {
-    fn packed(
-        &self,
-        slot: Slot<'_>,
-        opening: Option<PackedOutputOpening>,
-    ) -> Result<SlotOpening, AuditError> {
-        let Some(opening) = opening else {
-            return self.verify(slot, OutputOpening::Dummy);
-        };
-        let Some(nullifier_pk) = self.nullifier_pk(&opening.owner_key, opening.nullifier_pk) else {
-            return Ok(Err(OutputPayloadErrorKind::EscrowUnknown));
-        };
-        let exit = is_exit(slot.output);
-        let utxo = AuditedUtxo {
-            owner_key: opening.owner_key,
-            nullifier_pk,
-            asset: opening.asset,
-            mint: self.mint(&opening.asset),
-            amount: opening.amount,
-            blinding: self.blinding(slot)?,
-            data_hash: opening.data_hash,
-            ring_data_hash: opening.ring_data_hash,
-        };
-        self.verify(
-            slot,
-            match exit {
-                true => OutputOpening::Exit(utxo),
-                false => OutputOpening::Ring {
-                    utxo,
-                    recipient_u: slot.owner_tag(),
-                    tag: None,
-                },
-            },
-        )
-    }
-
     fn delivered(
         &self,
         slot: Slot<'_>,
@@ -381,8 +324,6 @@ impl Transfer<'_> {
                 slot,
                 owner_key,
                 nullifier_pk,
-                recipient_u: slot.owner_tag(),
-                tag: None,
             }),
             DeliveredOutputOpening::Exit {
                 nullifier_pk,
@@ -409,18 +350,26 @@ impl Transfer<'_> {
             AnonymousOutputOpening::Ring {
                 owner_key,
                 nullifier_pk,
-                recipient_u,
+                asset,
+                amount,
             } => {
-                let Some(tag) = slot.tag() else {
-                    return Ok(Err(OutputPayloadErrorKind::Frame));
-                };
-                self.deliver(Delivery {
-                    slot,
+                let utxo = AuditedUtxo {
                     owner_key,
-                    nullifier_pk: Some(nullifier_pk),
-                    recipient_u,
-                    tag: Some(tag),
-                })
+                    nullifier_pk,
+                    asset,
+                    mint: self.mint(&asset),
+                    amount,
+                    blinding: self.blinding(slot)?,
+                    data_hash: [0; 32],
+                    ring_data_hash: [0; 32],
+                };
+                self.verify(
+                    slot,
+                    OutputOpening::Ring {
+                        utxo,
+                        owner_tag: RingOwnerTag::View(slot.owner_tag()),
+                    },
+                )
             }
             AnonymousOutputOpening::Exit {
                 nullifier_pk,
@@ -444,13 +393,12 @@ impl Transfer<'_> {
             slot,
             owner_key,
             nullifier_pk,
-            recipient_u,
-            tag,
         } = delivery;
+        let recipient_u = slot.owner_tag();
         let Some(nullifier_pk) = self.nullifier_pk(&owner_key, nullifier_pk) else {
             return Ok(Err(OutputPayloadErrorKind::EscrowUnknown));
         };
-        let Some(body) = slot.body(tag.is_some()) else {
+        let Some(body) = slot.body() else {
             return Ok(Err(OutputPayloadErrorKind::Frame));
         };
         let Some(secret) = self.delivered_secret(slot, recipient_u)? else {
@@ -461,7 +409,6 @@ impl Transfer<'_> {
         if body.blinding != blinding {
             return Ok(Err(OutputPayloadErrorKind::Commitment));
         }
-        let ring_data_hash = delivered_ring_data(&secret, tag.as_ref())?;
         for (asset, mint) in self.assets.fields() {
             let utxo = AuditedUtxo {
                 owner_key,
@@ -471,14 +418,13 @@ impl Transfer<'_> {
                 amount: body.amount,
                 blinding,
                 data_hash: [0; 32],
-                ring_data_hash,
+                ring_data_hash: [0; 32],
             };
             if utxo.commitment(slot.tree_id(), Some(self.ring))? == slot.output.output_context.hash
             {
                 return Ok(Ok(OutputOpening::Ring {
                     utxo,
-                    recipient_u,
-                    tag,
+                    owner_tag: RingOwnerTag::Recipient(recipient_u),
                 }));
             }
         }

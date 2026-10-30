@@ -3,9 +3,9 @@ use aes::{
     Aes256,
 };
 use ctr::Ctr32BE;
+use spr_hasher::primitives::right_align;
+use spr_keypair::hash::poseidon;
 use zeroize::Zeroizing;
-use zolana_hasher::primitives::right_align;
-use zolana_keypair::hash::poseidon;
 
 use crate::RingKeyError;
 

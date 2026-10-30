@@ -1,11 +1,11 @@
 //! Gross public payments screened by policy version 2.
 use crate::{CustomRingError, SettlementAccount};
-use zolana_hasher::{
+use spr_hasher::{
     hash_chain::create_hash_chain_4_from_slice,
     primitives::{hash_bytes, right_align, solana_owner_identity},
     HasherError,
 };
-use zolana_interface::{
+use spr_interface::{
     instruction::InterfaceTransfer, SOL_ASSET_FIELD, SPL_TOKEN_2022_PROGRAM_ID,
     SPL_TOKEN_PROGRAM_ID,
 };
@@ -37,7 +37,7 @@ impl PolicyWithdrawal {
 /// Order and count matter, even when two legs pay the same owner and asset.
 pub fn policy_withdrawal_hash(legs: &[PolicyWithdrawal]) -> Result<[u8; 32], HasherError> {
     let mut fields = vec![
-        right_align(b"CRPW"),
+        crate::domain::field(crate::domain::WITHDRAWALS),
         right_align(&(legs.len() as u64).to_be_bytes()),
     ];
     for leg in legs {

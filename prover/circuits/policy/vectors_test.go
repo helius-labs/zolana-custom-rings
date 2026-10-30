@@ -166,7 +166,7 @@ func TestPolicyRulesMatchRustVectors(t *testing.T) {
 					t.Fatalf("the rules before rule %d refuse, %v", v.Outcome.Rule, err)
 				}
 				for _, rules := range []int{v.Outcome.Rule + 1, len(v.Rules)} {
-					ringtest.RequireRefused(t, v.solve(t, rules), "policy.(*Policy).assertRules")
+					ringtest.RequireRefused(t, v.solve(t, rules), "policy.(*PolicyInputs).assertRules")
 				}
 			default:
 				t.Fatalf("outcome %q", v.Outcome.Kind)
@@ -253,14 +253,14 @@ func (v statementVector) circuits(t *testing.T) (frontend.Circuit, frontend.Circ
 	b.Rebind(t)
 	if delegated {
 		v.requireHostStatement(t, b.Delegate.PublicInputHash)
-		skeleton, err := policy.NewDelegatePolicyCircuit(w.Shape)
+		skeleton, err := policy.NewDelegatePolicyCircuit(policy.DelegateShape{Shape: w.Shape})
 		if err != nil {
 			t.Fatal(err)
 		}
 		return &delegateStatementCircuit{*skeleton}, &delegateStatementCircuit{*b.Delegate}
 	}
 	v.requireHostStatement(t, b.Member.PublicInputHash)
-	skeleton, err := policy.NewMemberPolicyCircuit(w.Outputs)
+	skeleton, err := policy.NewMemberPolicyCircuit(policy.MemberShape{Outputs: w.Outputs})
 	if err != nil {
 		t.Fatal(err)
 	}

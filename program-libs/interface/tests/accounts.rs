@@ -7,7 +7,7 @@ use custom_ring_interface::{
     QUEUE_CAPACITY, RING_PROGRAM_CONFIG,
 };
 use solana_address::Address;
-use zolana_hasher::primitives::right_align;
+use spr_hasher::primitives::right_align;
 use zolana_ring_policy::{ListChange, ListId, ListSet, Rule, RuleTable, Subject, Writer};
 
 const PROGRAM: Address = Address::new_from_array([7; 32]);

@@ -9,11 +9,9 @@ use pinocchio::{
     AccountView, Address, ProgramResult,
 };
 use solana_loader_v3_interface::state::UpgradeableLoaderState;
-use zolana_interface::{
-    instruction::InterfaceTransfer, state::discriminator::TREE_ACCOUNT_DISCRIMINATOR,
-    BPF_LOADER_UPGRADEABLE_ID, SHIELDED_POOL_PROGRAM_ID,
+use spr_interface::{
+    instruction::InterfaceTransfer, BPF_LOADER_UPGRADEABLE_ID, SHIELDED_POOL_PROGRAM_ID,
 };
-use zolana_tree::TreeAccount;
 
 /// Owner and discriminator suffice, accounts are created only at their canonical PDA.
 #[inline(always)]
@@ -120,24 +118,6 @@ pub fn load_queue_mut<'a>(
     account: &'a mut AccountView,
 ) -> Result<RefMut<'a, RecordQueue>, ProgramError> {
     load_mut(program_id, account)
-}
-
-/// The borrow ends here, the tree may be one the SPP CPI writes.
-pub fn load_spp_tree_root(account: &mut AccountView, index: u16) -> Result<[u8; 32], ProgramError> {
-    let missing = CustomRingError::FirstContactRootMissing;
-    if !account.owned_by(&Address::from(SHIELDED_POOL_PROGRAM_ID)) {
-        return Err(missing.into());
-    }
-    let address = account.address().to_bytes();
-    let mut data = account.try_borrow_mut().map_err(|_| missing)?;
-    if data.first() != Some(&TREE_ACCOUNT_DISCRIMINATOR) {
-        return Err(missing.into());
-    }
-    let tree = TreeAccount::from_bytes(&mut data, address).map_err(|_| missing)?;
-    if tree.is_paused() {
-        return Err(CustomRingError::FirstContactTreePaused.into());
-    }
-    tree.get_utxo_tree_root(index).map_err(|_| missing.into())
 }
 
 /// The shielded pool by address, its account position differs per forwarded layout.

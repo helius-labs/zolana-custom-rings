@@ -10,11 +10,12 @@ import (
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
+	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
 var MemberOutputs = [...]int{2, 4, 8, 16}
 
-type MemberPolicyCircuit struct {
+type MemberPolicyValues struct {
 	PublicInputHash frontend.Variable `gnark:",public"`
 	// Anonymous selects how Sender reads, the owner signer identity or the sender commitment.
 	Anonymous        frontend.Variable
@@ -23,40 +24,43 @@ type MemberPolicyCircuit struct {
 	Sender           frontend.Variable
 	// InputChain stays opaque, the program's sole owner signer or the anonymous audit proof binds every input to the sender.
 	InputChain frontend.Variable
+}
+
+type MemberPolicyCircuit struct {
+	MemberPolicyValues
 	Policy
 }
 
 type MemberShape struct {
 	Outputs, Withdrawals int
 	OwnOnly              bool
+	Records              RecordPoolShape
 }
 
 var WithdrawalCapacities = []int{0, 1, 2, 4, 8, 16, 32}
 
-func NewMemberPolicyCircuit(outputs int) (*MemberPolicyCircuit, error) {
-	return NewMemberPolicyCircuitWith(MemberShape{Outputs: outputs})
-}
-
-func NewMemberPolicyCircuitWith(shape MemberShape) (*MemberPolicyCircuit, error) {
-	outputs := shape.Outputs
+func NewMemberPolicyCircuit(shape MemberShape) (*MemberPolicyCircuit, error) {
 	if !slices.Contains(WithdrawalCapacities, shape.Withdrawals) {
 		return nil, fmt.Errorf("policy: unsupported withdrawal capacity %d", shape.Withdrawals)
 	}
-
-	if !slices.Contains(MemberOutputs[:], outputs) {
-		return nil, fmt.Errorf("policy: no member key for %d outputs", outputs)
+	if !slices.Contains(MemberOutputs[:], shape.Outputs) {
+		return nil, fmt.Errorf("policy: no member key for %d outputs", shape.Outputs)
 	}
-	return &MemberPolicyCircuit{Policy: newPolicy(outputs, shape.Withdrawals, shape.OwnOnly)}, nil
+	p, err := newPolicy(newPolicyInputs(shape.Outputs, shape.Withdrawals, shape.OwnOnly), shape.Records, transaction.NPublicSlots)
+	if err != nil {
+		return nil, err
+	}
+	return &MemberPolicyCircuit{Policy: p}, nil
 }
 
 func (c *MemberPolicyCircuit) Define(api frontend.API) error {
-	if err := c.validate(); err != nil {
+	if err := c.validate(transaction.NPublicSlots); err != nil {
 		return err
 	}
 	rc := rangecheck.New(api)
 	cmp := c.comparator(rc)
 	// 1. The rules read the table under policy_hash.
-	t := c.Table.decode(api, rc, c.PolicyHash)
+	table := c.Table.decode(api, rc, c.PolicyHash)
 	c.assertOwnOnly(api)
 	// 2. The outputs open private_tx_hash beside the input chain SPP proves.
 	outputs := c.openOutputs(api, c.InputChain)
@@ -64,13 +68,13 @@ func (c *MemberPolicyCircuit) Define(api frontend.API) error {
 	sender := c.sender(api)
 	// 4. The sender and every UTXO output's subjects open under own_root, and under curator_root when a list is foreign.
 	payments := append(append([]utxoView{}, outputs...), c.openWithdrawals(api, rc)...)
-	s := c.resolveSubjects(api, t, sender, payments)
+	resolved := c.resolveSubjects(api, table, sender, payments)
 	// 5. Every enabled rule holds for its subjects.
-	c.assertRules(api, cmp, t, s, payments)
+	c.assertRules(api, cmp, table, resolved, payments)
 	// 6. Every limit row bounds the outflow, approval_required says whether one passes its co-sign bound.
-	c.assertApproval(api, c.constrainOutflow(api, cmp, sender, outputs, s.mintPolicies[:len(outputs)]))
+	c.assertApproval(api, c.constrainOutflow(api, cmp, sender, outputs, resolved))
 	// 7. Under key escrow every output owner escrows the output's nullifier key.
-	c.assertEscrow(api, c.KeyEscrow, s.owners, outputs)
+	c.assertEscrow(api, c.KeyEscrow, resolved.owners, outputs)
 	// 8. The one public input is the statement the program rebuilds.
 	bindStatement(api, c.PublicInputHash, c.Statement())
 	return nil

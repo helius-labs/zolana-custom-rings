@@ -11,19 +11,20 @@ use solana_rpc_client::{
     rpc_client::GetConfirmedSignaturesForAddress2Config,
 };
 use solana_signature::Signature;
-use std::num::NonZeroUsize;
-use zolana_api::ZolanaApi;
-use zolana_client::{
+use spr_api::ZolanaApi;
+use spr_client::{
     rpc::ProgramAccountsFilter, AsyncRpc, AsyncSolanaRpc, AsyncZolanaIndexer, ClientError,
     GetShieldedTransactionsByTagsResponse, IndexedShieldedTransaction, IndexerRpcConfig,
     RingHistoryOptions,
 };
-use zolana_interface::{
+use spr_interface::{
     pda,
     state::{discriminator::SPL_ASSET_REGISTRY, SplAssetRegistry},
     BPF_LOADER_UPGRADEABLE_ID, PROGRAM_ID_PUBKEY,
 };
-use zolana_keypair::X25519Pubkey;
+use spr_keypair::X25519Pubkey;
+use spr_transaction::{AssetRegistry, Mint, SOL_MINT};
+use std::num::NonZeroUsize;
 use zolana_ring_client::{
     program_data, ring_deposits_in, AsyncRingIndexer, AuditError, ConfirmedEventKind, MergeAudit,
     MergeAuditPage, ReaderKey, RingIndexerError, RingOrigin, TransactionOrigin,
@@ -33,7 +34,6 @@ use zolana_ring_indexer::rpc::{
     GetRingMemberRecordsResponse, GetRingRecordQueueRequest, GetRingRecordQueueResponse,
 };
 use zolana_ring_transaction::RingAssets;
-use zolana_transaction::{AssetRegistry, Mint, SOL_MINT};
 
 use zolana_ring_client::rpc::{DepositRecord, RingChainStatus, RingDepositsResponse};
 
@@ -131,7 +131,7 @@ pub struct RingHistoryPage<'a> {
 #[must_use]
 pub struct MergeAuditRequest<'a> {
     pub ring: Address,
-    pub auditor: &'a zolana_keypair::X25519Keypair,
+    pub auditor: &'a spr_keypair::X25519Keypair,
     pub page: &'a Page,
 }
 
@@ -675,7 +675,7 @@ mod tests {
 
     #[test]
     fn history_pages_reject_repeated_or_reordered_indexer_rows() {
-        use zolana_transaction::ShieldedTransaction;
+        use spr_transaction::ShieldedTransaction;
 
         let position = |slot: u64, signature: &Signature, event_index: u16| {
             let mut cursor = vec![2];
@@ -700,7 +700,7 @@ mod tests {
         let first = tx(9, 1);
         let second = tx(9, 2);
         let mut response = GetShieldedTransactionsByTagsResponse {
-            context: zolana_client::Context {
+            context: spr_client::Context {
                 slot: 9,
                 block_time: 0,
             },
@@ -746,7 +746,7 @@ mod tests {
     fn config_accounts_require_the_canonical_layout() {
         let ring = Address::new_from_array([9; 32]);
         let bump = Address::find_program_address(&[CONFIG_PDA_SEED], &ring).1;
-        let key = zolana_keypair::X25519Keypair::new().pubkey();
+        let key = spr_keypair::X25519Keypair::new().pubkey();
         let valid = config_account(ring, *key.as_bytes(), bump);
         let configuration = |account: &Account, bump| {
             CanonicalAccount {
@@ -834,7 +834,7 @@ mod tests {
 
     #[tokio::test]
     async fn public_deposit_history_rejects_forged_amount_asset_context_and_signature() {
-        use zolana_transaction::{OutputContext, OutputSlot, ShieldedTransaction};
+        use spr_transaction::{OutputContext, OutputSlot, ShieldedTransaction};
         let fixture: serde_json::Value = serde_json::from_str(include_str!(
             "../../../../sdk-libs/client/tests/fixtures/confirmed-deposit-event.json"
         ))

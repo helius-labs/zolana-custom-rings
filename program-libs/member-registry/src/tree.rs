@@ -6,7 +6,7 @@ use custom_ring_interface::{
 use crate::{
     path::{children, quad_node, NodePosition, QuadPath, ZERO_SUBTREES},
     record::check_member,
-    MemberRecord, RecordTreeError,
+    Canopy, MemberRecord, PoolSubject, RecordPool, RecordTreeError, SharedPath, SharedProof,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,7 +78,7 @@ impl OpeningCheck<'_> {
 }
 
 /// One queued write's proof input, mirror `RecordWrite` of
-/// `prover/server/custom_rings/circuits/registry/apply.go`.
+/// `prover/circuits/registry/apply_records.go`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecordWriteProofInput {
     pub entry: QueueEntry,
@@ -148,6 +148,48 @@ pub trait RecordTree: RecordStore {
                     path: self.path(index)?,
                 }
             }
+        })
+    }
+
+    /// Each member's record or low record once.
+    fn record_pool(&self, members: &[[u8; 32]], canopy: Canopy) -> Result<RecordPool, Self::Error> {
+        if members.len() > canopy.width() {
+            return Err(RecordTreeError::PoolCapacity.into());
+        }
+        let mut records: Vec<MemberRecord> = Vec::new();
+        let mut paths: Vec<SharedPath> = Vec::new();
+        let mut subjects = Vec::with_capacity(members.len());
+        for member in members {
+            let (RecordOpening::Present { record, path }
+            | RecordOpening::Absent { low: record, path }) = self.opening(member)?;
+            let record_index = match paths.iter().position(|known| known.index == path.index) {
+                Some(index) => index,
+                None => {
+                    records.push(record);
+                    paths.push(SharedPath {
+                        index: path.index,
+                        siblings: path.siblings[..canopy.path_levels()].to_vec(),
+                    });
+                    records.len() - 1
+                }
+            };
+            subjects.push(PoolSubject {
+                member: *member,
+                record_index: u32::try_from(record_index)
+                    .map_err(|_| RecordTreeError::PoolCapacity)?,
+            });
+        }
+        let filled = Filled::of(self)?;
+        Ok(RecordPool {
+            records,
+            proof: SharedProof {
+                canopy: canopy
+                    .positions()
+                    .map(|at| filled.node(at))
+                    .collect::<Result<_, _>>()?,
+                paths,
+            },
+            subjects,
         })
     }
 

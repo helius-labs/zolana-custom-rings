@@ -7,7 +7,7 @@ use solana_curve25519::{
     edwards::{add_edwards, multiply_edwards, validate_edwards, PodEdwardsPoint},
     scalar::PodScalar,
 };
-use zolana_hasher::primitives::is_canonical_x25519_public_key;
+use spr_hasher::primitives::is_canonical_x25519_public_key;
 
 pub(crate) struct Init<'a, T>(pub &'a T);
 

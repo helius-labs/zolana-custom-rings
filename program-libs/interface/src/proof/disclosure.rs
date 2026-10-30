@@ -1,23 +1,17 @@
-//! Field layouts of the auditor disclosure, mirror `prover/server/custom_rings/circuits/base`.
+//! Field layouts of the auditor disclosure, mirror `prover/circuits/audit`.
 
 use core::ops::Range;
 
-use zolana_hasher::primitives::{
+use spr_hasher::primitives::{
     is_canonical_bn254_scalar_be, pack_be_chunks, BN254_SCALAR_MODULUS_BE, PACK_BE_CHUNK_BYTES,
 };
 
-/// Capacities without a delivery proof.
-pub const PACKED_AUDIT_CAPACITIES: [usize; 2] = [2, 4];
-pub const DELIVERED_AUDIT_CAPACITIES: [usize; 2] = [8, 16];
+pub const DELIVERED_AUDIT_CAPACITIES: [usize; 4] = [2, 4, 8, 16];
 /// Input slots of the widest SPP shape a compact confidential ring spend uses.
 pub const CONFIDENTIAL_RING_MAX_INPUTS: usize = 48;
 /// Input classes of the anonymous commitment keys per output capacity, ascending.
-pub const ANONYMOUS_AUDIT_CLASSES: [(usize, &[usize]); 4] = [
-    (2, &[4, 8, 12, 16, 24, 32]),
-    (4, &[4, 8, 12, 16, 24]),
-    (8, &[4, 8, 12, 16]),
-    (16, &[1]),
-];
+pub const ANONYMOUS_AUDIT_CLASSES: [(usize, &[usize]); 3] =
+    [(2, &[4, 16]), (4, &[4, 16]), (8, &[4, 8])];
 /// Input slots of every anonymous entry key.
 pub const ANONYMOUS_ENTRY_CLASS: usize = 8;
 pub const ANONYMOUS_ENTRY_OUTPUTS: [usize; 3] = [2, 4, 8];
@@ -25,8 +19,8 @@ pub const ANONYMOUS_ENTRY_OUTPUTS: [usize; 3] = [2, 4, 8];
 pub const DELIVERED_SLOT_BYTES: usize = 40;
 /// A delivered ring slot of an exit-free transfer, `owner_key`.
 pub const DENSE_DELIVERED_SLOT_BYTES: usize = 32;
-/// A ring slot `owner_key || u`, an exit `asset || u64be(amount) || 0^24`.
-pub const ANONYMOUS_SLOT_BYTES: usize = 64;
+/// `owner_key || fe32(asset) || u64be(amount)`, the owner key zero on an exit.
+pub const ANONYMOUS_SLOT_BYTES: usize = 72;
 /// The hidden sender's key ahead of the entry key's output slots.
 pub const DISCLOSURE_SENDER_KEY_BYTES: usize = 32;
 /// The first bytes of a spent hash a commitment key discloses.
@@ -35,28 +29,22 @@ pub const INPUT_PREFIX_BYTES: usize = 16;
 pub const INPUT_PREFIX_BITS: u32 = 126;
 /// One `u64be(amount)` per input slot of the entry class.
 pub const DISCLOSURE_INPUT_AMOUNT_BYTES: usize = 8;
-/// `pack_disclosure(owner_key || u64be(amount))` closing every packed slot.
-const PACKED_OWNER_AND_AMOUNT_FIELDS: usize = pack_be_chunks(32 + 8);
 
-/// The audit statement's layout element, mirror `prover/server/custom_rings/circuits/base/layout.go`.
+/// The audit statement's layout element, mirror `prover/circuits/audit/layout.go`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AuditLayout {
     /// A published output exits, `SeedOut` opens the disclosure.
     pub exits: bool,
     /// The policy proof escrows every output nullifier key the disclosure leaves out.
     pub key_escrow: bool,
-    /// No published output carries a data hash.
-    pub data_free: bool,
     /// The anonymous entry key, every spent UTXO opens in full.
     pub full_openings: bool,
 }
 
 impl AuditLayout {
+    /// Bit 2 is free in every audit key and stays clear.
     pub const fn value(self) -> u8 {
-        self.exits as u8
-            | (self.key_escrow as u8) << 1
-            | (self.data_free as u8) << 2
-            | (self.full_openings as u8) << 3
+        self.exits as u8 | (self.key_escrow as u8) << 1 | (self.full_openings as u8) << 3
     }
 }
 
@@ -112,9 +100,7 @@ impl AnonymousSpend {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DisclosureLayout {
-    /// Capacity 2 and 4 of the confidential and delegate rails.
-    Packed(PackedLayout),
-    /// Capacity 8 and 16 of the confidential and delegate rails.
+    /// The confidential and delegate rails.
     Delivered(DeliveredLayout),
     Anonymous(AnonymousLayout),
 }
@@ -122,57 +108,8 @@ pub enum DisclosureLayout {
 impl DisclosureLayout {
     pub fn field_count(self) -> usize {
         match self {
-            Self::Packed(layout) => layout.fields().field_count,
             Self::Delivered(layout) => layout.fields().field_count,
             Self::Anonymous(layout) => layout.fields().field_count,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PackedLayout {
-    /// The published slots, a prefix of the capacity.
-    pub outputs: usize,
-    pub exits: bool,
-    pub key_escrow: bool,
-    pub data_free: bool,
-}
-
-/// Positions in a packed disclosure, slot `k` opens at `first_slot + k * slot_width`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PackedFields {
-    pub seed_out: Option<usize>,
-    pub first_slot: usize,
-    pub slot_width: usize,
-    /// Offsets inside a slot from here on.
-    pub nullifier_pk: Option<usize>,
-    pub asset: usize,
-    /// `data_hash` then `ring_data_hash`.
-    pub data_hashes: Option<usize>,
-    /// The two fields of `pack_disclosure(owner_key || u64be(amount))`.
-    pub owner_and_amount: usize,
-    pub field_count: usize,
-}
-
-impl PackedLayout {
-    pub fn fields(self) -> PackedFields {
-        let mut next = Cursor::default();
-        let seed_out = self.exits.then(|| next.one());
-        let mut slot = Cursor::default();
-        let nullifier_pk = (!self.key_escrow).then(|| slot.one());
-        let asset = slot.one();
-        let data_hashes = (!self.data_free).then(|| slot.run(2).start);
-        let owner_and_amount = slot.run(PACKED_OWNER_AND_AMOUNT_FIELDS).start;
-        let first_slot = next.run(self.outputs * slot.0).start;
-        PackedFields {
-            seed_out,
-            first_slot,
-            slot_width: slot.0,
-            nullifier_pk,
-            asset,
-            data_hashes,
-            owner_and_amount,
-            field_count: next.0,
         }
     }
 }
@@ -415,15 +352,6 @@ mod tests {
             usize::try_from(record[name].as_u64().unwrap()).unwrap()
         };
         let flag = |record: &serde_json::Value, name: &str| record[name].as_bool().unwrap();
-        let packed = records("packed").map(|record| {
-            let layout = PackedLayout {
-                outputs: count(record, "outputs"),
-                exits: flag(record, "exits"),
-                key_escrow: flag(record, "key_escrow"),
-                data_free: flag(record, "data_free"),
-            };
-            (DisclosureLayout::Packed(layout), record)
-        });
         let delivered = records("delivered").map(|record| {
             let layout = DeliveredLayout {
                 outputs: count(record, "outputs"),
@@ -448,7 +376,7 @@ mod tests {
             };
             (DisclosureLayout::Anonymous(layout), record)
         });
-        for (layout, record) in packed.chain(delivered).chain(anonymous) {
+        for (layout, record) in delivered.chain(anonymous) {
             assert_eq!(layout.field_count(), count(record, "fields"), "{record}");
         }
     }
@@ -484,21 +412,19 @@ mod tests {
     }
 
     #[test]
-    fn the_layout_value_packs_its_flags_from_the_low_bit() {
-        let flags = |exits, key_escrow, data_free, full_openings| {
+    fn the_layout_value_keeps_bit_two_clear() {
+        let flags = |exits, key_escrow, full_openings| {
             AuditLayout {
                 exits,
                 key_escrow,
-                data_free,
                 full_openings,
             }
             .value()
         };
-        assert_eq!(flags(true, false, false, false), 1);
-        assert_eq!(flags(false, true, false, false), 2);
-        assert_eq!(flags(false, false, true, false), 4);
-        assert_eq!(flags(false, false, false, true), 8);
-        assert_eq!(flags(true, true, true, true), 15);
+        assert_eq!(flags(true, false, false), 1);
+        assert_eq!(flags(false, true, false), 2);
+        assert_eq!(flags(false, false, true), 8);
+        assert_eq!(flags(true, true, true), 11);
     }
 
     #[test]
@@ -513,15 +439,14 @@ mod tests {
         };
         let commitment = |class| Some(AnonymousAuditKey::Commitment { class });
         assert_eq!(key(1, 2, false), commitment(4));
-        assert_eq!(key(17, 2, false), commitment(24));
-        assert_eq!(key(25, 2, false), commitment(32));
-        assert_eq!(key(32, 2, false), commitment(32));
-        assert_eq!(key(33, 2, false), None);
-        assert_eq!(key(25, 4, false), None);
-        assert_eq!(key(9, 8, false), commitment(12));
-        assert_eq!(key(17, 8, false), None);
-        assert_eq!(key(1, 16, false), commitment(1));
-        assert_eq!(key(2, 16, false), None);
+        assert_eq!(key(4, 2, false), commitment(4));
+        assert_eq!(key(5, 2, false), commitment(16));
+        assert_eq!(key(16, 4, false), commitment(16));
+        assert_eq!(key(17, 2, false), None);
+        assert_eq!(key(17, 4, false), None);
+        assert_eq!(key(5, 8, false), commitment(8));
+        assert_eq!(key(9, 8, false), None);
+        assert_eq!(key(1, 16, false), None);
         assert_eq!(key(1, 2, true), Some(AnonymousAuditKey::Entry));
         assert_eq!(key(8, 8, true), Some(AnonymousAuditKey::Entry));
         assert_eq!(key(9, 4, true), None);
