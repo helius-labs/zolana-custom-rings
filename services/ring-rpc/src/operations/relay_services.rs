@@ -22,7 +22,6 @@ pub struct RelayServices {
 }
 
 pub(crate) struct MergeParts {
-    pub(crate) submit: Arc<dyn RelaySubmit>,
     pub(crate) builder: Arc<dyn MergeBuilder>,
 }
 
@@ -56,11 +55,11 @@ impl RelayServicesInit<'_> {
             parts: RelayParts {
                 store: self.store,
                 prover: Arc::new(SdkRelayProver::new(ring_client())),
-                submit: submit.clone(),
+                submit,
                 chain,
                 rings: self.rings,
             },
-            merge: MergeParts { submit, builder },
+            merge: MergeParts { builder },
         }
     }
 }

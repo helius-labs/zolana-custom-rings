@@ -3,6 +3,8 @@ use std::{sync::Arc, time::Duration};
 use custom_ring_sdk::{RingError, SenderOutflow};
 use jsonrpsee::types::ErrorObjectOwned;
 use log::warn;
+use sea_orm::{DatabaseConnection, TransactionTrait};
+use sha2::{Digest, Sha256};
 use solana_address::Address;
 use solana_instruction::Instruction;
 use solana_message::VersionedMessage;
@@ -26,6 +28,7 @@ use crate::{
     },
     database::Store,
     error::{redacted, RingRpcError},
+    merge_inputs::{HoldInputs, MergeInputs},
     relay_chain::{ChainOutcome, RelayChain},
     relay_prover::{DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver},
     relay_submit::{CollectedSignature, RelaySubmit, RelayTransaction},
@@ -38,6 +41,7 @@ pub const QUOTE_SLOTS: u64 = 150;
 pub const RELAY_TRACK_INTERVAL: Duration = Duration::from_secs(2);
 const MAX_CONCURRENT_PROOFS: usize = 4;
 const EXPIRED: &str = "the relay message expired before it landed";
+const MANAGED_MERGE_DOMAIN: &[u8] = b"zolana/ring-rpc-managed-merge/v1";
 
 #[derive(Debug, Error)]
 pub enum RelayError {
@@ -106,6 +110,16 @@ pub struct Relay {
     proofs: Semaphore,
     /// Every record write after the proofs, one relay state at a time.
     transitions: Mutex<()>,
+}
+
+/// Every signature except the fee payer's is collected.
+#[must_use]
+pub(crate) struct HeldMerge {
+    pub ring: Address,
+    pub message: VersionedMessage,
+    pub last_valid_block_height: u64,
+    pub co_signature: Option<CollectedSignature>,
+    pub nullifiers: Vec<[u8; 32]>,
 }
 
 #[must_use]
@@ -345,6 +359,69 @@ impl Relay {
         Ok(step(relay_id, &record))
     }
 
+    /// The record and its held inputs commit together before the send.
+    pub(crate) async fn send_merge(&self, merge: HeldMerge) -> Result<RelayId, RingRpcError> {
+        let relay_id = RelayId(
+            <[u8; 32]>::from(
+                Sha256::new()
+                    .chain_update(MANAGED_MERGE_DOMAIN)
+                    .chain_update(merge.message.serialize())
+                    .finalize(),
+            )
+            .into(),
+        );
+        let mut record = RelayRecord {
+            message: merge.message,
+            signatures: merge.co_signature.into_iter().collect(),
+            awaiting: Vec::new(),
+            co_signature: merge.co_signature.map(|collected| collected.signature),
+            last_valid_block_height: merge.last_valid_block_height,
+            state: RelayState::Signed,
+        };
+        let _transition = self.transitions.lock().await;
+        let hold = HoldInputs {
+            ring: &merge.ring,
+            relay_id: &relay_id,
+            nullifiers: &merge.nullifiers,
+        };
+        match self.store_merge(&record, hold).await {
+            Ok(true) => {}
+            // The stored relay keeps the co-signer reservation.
+            Ok(false) => return Ok(relay_id),
+            Err(error) => {
+                self.settle(record.co_signature, CoSignSettlement::Failed)
+                    .await?;
+                return Err(error);
+            }
+        }
+        self.send(&relay_id, &mut record).await?;
+        Ok(relay_id)
+    }
+
+    /// `false` when the relay is stored already.
+    async fn store_merge(
+        &self,
+        record: &RelayRecord,
+        hold: HoldInputs<'_>,
+    ) -> Result<bool, RingRpcError> {
+        let transaction = self.store.connection().begin().await?;
+        if !RelayStore::new(&transaction)
+            .insert(hold.relay_id, record)
+            .await?
+        {
+            return Ok(false);
+        }
+        MergeInputs { conn: &transaction }.hold(hold).await?;
+        transaction.commit().await?;
+        Ok(true)
+    }
+
+    pub(crate) fn merge_inputs(&self) -> MergeInputs<'_, DatabaseConnection> {
+        MergeInputs {
+            conn: self.store.connection(),
+        }
+    }
+
     /// A signature already collected leaves the relay as it is.
     pub async fn submit(&self, request: &SubmitRelayRequest) -> Result<RelayStatus, RingRpcError> {
         let _transition = self.transitions.lock().await;
@@ -397,7 +474,7 @@ impl Relay {
         }
     }
 
-    async fn track(&self) -> Result<(), RingRpcError> {
+    pub(crate) async fn track(&self) -> Result<(), RingRpcError> {
         for relay_id in self.relays().pending().await? {
             let _transition = self.transitions.lock().await;
             let advanced = match self.record(&relay_id).await {
@@ -411,7 +488,7 @@ impl Relay {
         Ok(())
     }
 
-    fn relays(&self) -> RelayStore<'_> {
+    fn relays(&self) -> RelayStore<'_, DatabaseConnection> {
         RelayStore::new(self.store.connection())
     }
 

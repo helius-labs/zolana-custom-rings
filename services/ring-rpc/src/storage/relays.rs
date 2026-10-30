@@ -1,4 +1,4 @@
-use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr, QueryResult, Statement, Value};
+use sea_orm::{ConnectionTrait, DbErr, QueryResult, Statement, Value};
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
 use solana_message::VersionedMessage;
@@ -43,8 +43,15 @@ pub(crate) enum RelayState {
     },
 }
 
-pub(crate) struct RelayStore<'a> {
-    db: &'a DatabaseConnection,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RelayPhase {
+    Pending,
+    Confirmed,
+    Failed,
+}
+
+pub(crate) struct RelayStore<'a, C> {
+    db: &'a C,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -65,6 +72,8 @@ struct StoredSignature {
 }
 
 const PENDING: [&str; 3] = ["awaitingSignature", "signed", "sent"];
+const CONFIRMED: &str = "confirmed";
+const FAILED: &str = "failed";
 
 impl RelayState {
     fn status(&self) -> &'static str {
@@ -72,14 +81,25 @@ impl RelayState {
             Self::AwaitingSignature => PENDING[0],
             Self::Signed => PENDING[1],
             Self::Sent { .. } => PENDING[2],
-            Self::Confirmed { .. } => "confirmed",
-            Self::Failed { .. } => "failed",
+            Self::Confirmed { .. } => CONFIRMED,
+            Self::Failed { .. } => FAILED,
         }
     }
 }
 
-impl<'a> RelayStore<'a> {
-    pub fn new(db: &'a DatabaseConnection) -> Self {
+impl RelayPhase {
+    pub(crate) fn of_status(status: &str) -> Result<Self, DbErr> {
+        match status {
+            CONFIRMED => Ok(Self::Confirmed),
+            FAILED => Ok(Self::Failed),
+            pending if PENDING.contains(&pending) => Ok(Self::Pending),
+            _ => Err(corrupt("status")),
+        }
+    }
+}
+
+impl<'a, C: ConnectionTrait> RelayStore<'a, C> {
+    pub fn new(db: &'a C) -> Self {
         Self { db }
     }
 

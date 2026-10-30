@@ -1,20 +1,15 @@
-use std::{
-    collections::HashSet,
-    num::NonZeroU32,
-    sync::{Arc, Mutex, PoisonError},
-    time::Duration,
-};
+use std::{collections::HashSet, num::NonZeroU32, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use custom_ring_interface::{cosign::CoSignDemand, RingMode};
 use custom_ring_sdk::{select_merge_where, RingError, MAX_RING_MERGE_INPUTS};
 use solana_address::Address;
 use solana_message::VersionedMessage;
-use solana_signature::Signature;
 use spr_keypair::NullifierKey;
 use spr_transaction::WalletUtxo;
 use zolana_ring_client::rpc::{
-    MergeSettings, MergeSettingsAttestation, SetMergeSettingsRequest, SetMergeSettingsResponse,
+    MergeSettings, MergeSettingsAttestation, RelayId, SetMergeSettingsRequest,
+    SetMergeSettingsResponse,
 };
 use zolana_ring_policy::Member;
 use zolana_ring_transaction::RingAssets;
@@ -25,9 +20,11 @@ use crate::{
     cosign::{CoSignDecision, CoSignRequest},
     error::{redacted, RingRpcError},
     hub::Hub,
+    merge_inputs::HeldInput,
     merge_settings::{MergeSettingsBook, SignedMergeSettings, WalletMergeSettings},
-    relay::RelayError,
-    relay_submit::{CollectedSignature, RelaySubmit, RelayTransaction},
+    relay::{HeldMerge, Relay, RelayError},
+    relay_submit::CollectedSignature,
+    relays::RelayPhase,
     replay::ReplayCheck,
     upstream::TransactionSource,
     utxos::SpendableNotes,
@@ -55,6 +52,7 @@ pub struct OwnerMerge<'a> {
 /// The fee payer the message names signs at relay.
 pub struct BuiltMerge {
     pub message: VersionedMessage,
+    pub last_valid_block_height: u64,
     pub co_signer: Option<Address>,
 }
 
@@ -67,20 +65,19 @@ pub trait MergeBuilder: Send + Sync {
 pub struct ManagedMergeInit<S> {
     pub hub: Arc<Hub<S>>,
     pub builder: Arc<dyn MergeBuilder>,
-    pub relay: Arc<dyn RelaySubmit>,
+    pub relay: Arc<Relay>,
 }
 
 pub struct ManagedMerge<S> {
     hub: Arc<Hub<S>>,
     builder: Arc<dyn MergeBuilder>,
-    relay: Arc<dyn RelaySubmit>,
-    /// Nullifiers of sent merges, held back for the life of the process.
-    pending: Mutex<HashSet<[u8; 32]>>,
+    relay: Arc<Relay>,
 }
 
 struct RingPass<S> {
     service: AuditService<S>,
     assets: RingAssets,
+    held: HashSet<[u8; 32]>,
 }
 
 impl MergeTarget {
@@ -124,7 +121,6 @@ impl<S> ManagedMergeInit<S> {
             hub: self.hub,
             builder: self.builder,
             relay: self.relay,
-            pending: Mutex::new(HashSet::new()),
         }
     }
 }
@@ -142,7 +138,7 @@ impl<S: TransactionSource> ManagedMerge<S> {
     }
 
     /// At most one merge for each wallet and mint, a failed ring or wallet only logs.
-    pub async fn merge_due(&self) -> Result<Vec<Signature>, RingRpcError> {
+    pub async fn merge_due(&self) -> Result<Vec<RelayId>, RingRpcError> {
         let book = self.hub.shared().merge_settings()?;
         let mut sent = Vec::new();
         for ring in book.rings().await? {
@@ -162,7 +158,7 @@ impl<S: TransactionSource> ManagedMerge<S> {
         &self,
         book: &MergeSettingsBook<'_>,
         ring: Address,
-    ) -> Result<Vec<Signature>, RingRpcError> {
+    ) -> Result<Vec<RelayId>, RingRpcError> {
         let service = self.hub.service(Some(ring))?;
         let shared = self.hub.shared();
         let escrowed = shared
@@ -179,11 +175,12 @@ impl<S: TransactionSource> ManagedMerge<S> {
         let pass = RingPass {
             service,
             assets: shared.due_assets().await,
+            held: self.held_inputs(ring).await?,
         };
         let mut sent = Vec::new();
         for wallet in book.active(ring).await? {
             match self.merge_wallet(&pass, wallet).await {
-                Ok(Some(signature)) => sent.push(signature),
+                Ok(Some(relay_id)) => sent.push(relay_id),
                 Ok(None) => {}
                 Err(error) => log::warn!(
                     "managed merge of {} on ring {ring} failed because {}",
@@ -195,11 +192,29 @@ impl<S: TransactionSource> ManagedMerge<S> {
         Ok(sent)
     }
 
+    /// A failed merge frees its inputs, a confirmed one once the ring history spends them.
+    async fn held_inputs(&self, ring: Address) -> Result<HashSet<[u8; 32]>, RingRpcError> {
+        let synced = self.hub.shared().store(ring);
+        let inputs = self.relay.merge_inputs();
+        let (settled, held): (Vec<HeldInput>, Vec<HeldInput>) = inputs
+            .held(&ring)
+            .await?
+            .into_iter()
+            .partition(|input| match input.phase {
+                RelayPhase::Pending => false,
+                RelayPhase::Confirmed => synced.is_spent(&input.nullifier),
+                RelayPhase::Failed => true,
+            });
+        let settled: Vec<[u8; 32]> = settled.iter().map(|input| input.nullifier).collect();
+        inputs.release(&settled).await?;
+        Ok(held.iter().map(|input| input.nullifier).collect())
+    }
+
     async fn merge_wallet(
         &self,
         pass: &RingPass<S>,
         wallet: WalletMergeSettings,
-    ) -> Result<Option<Signature>, RingRpcError> {
+    ) -> Result<Option<RelayId>, RingRpcError> {
         let Some(target) = MergeTarget::of(&wallet.settings) else {
             return Ok(None);
         };
@@ -215,14 +230,11 @@ impl<S: TransactionSource> ManagedMerge<S> {
             mint: pass.assets.registry().mint(&wallet.settings.mint.0)?,
             nullifier_key: &nullifier_key,
         })?;
-        // 2. Each candidate is unspent and in no merge already sent.
-        let notes: Vec<WalletUtxo> = {
-            let pending = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
-            notes
-                .into_iter()
-                .filter(|note| !pending.contains(&note.nullifier))
-                .collect()
-        };
+        // 2. Each candidate is unspent and held by no merge in the store.
+        let notes: Vec<WalletUtxo> = notes
+            .into_iter()
+            .filter(|note| !pass.held.contains(&note.nullifier))
+            .collect();
         let Some(inputs) = target.plan(&notes) else {
             return Ok(None);
         };
@@ -241,7 +253,7 @@ impl<S: TransactionSource> ManagedMerge<S> {
             .await?;
         drop(nullifier_key);
         // 4. A co-signer whose scope covers transfers signs, or the merge waits.
-        let mut signatures = Vec::new();
+        let mut co_signature = None;
         if let Some(named) = built.co_signer {
             let signer = co_signer
                 .signer_named(named)
@@ -258,7 +270,7 @@ impl<S: TransactionSource> ManagedMerge<S> {
                 .await?;
             match decision {
                 CoSignDecision::Signed(signature) => {
-                    signatures.push(CollectedSignature { signer, signature })
+                    co_signature = Some(CollectedSignature { signer, signature })
                 }
                 CoSignDecision::Refused(refusal) => {
                     log::info!(
@@ -269,19 +281,18 @@ impl<S: TransactionSource> ManagedMerge<S> {
                 }
             }
         }
-        // 5. The inputs stay out of later merges once the relay accepts the merge.
-        let signature = self
+        // 5. The inputs stay held until the relay fails or the ring history spends them.
+        let relay_id = self
             .relay
-            .submit(RelayTransaction {
+            .send_merge(HeldMerge {
+                ring,
                 message: built.message,
-                signatures,
+                last_valid_block_height: built.last_valid_block_height,
+                co_signature,
+                nullifiers,
             })
             .await?;
-        self.pending
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .extend(nullifiers);
-        Ok(Some(signature))
+        Ok(Some(relay_id))
     }
 }
 
@@ -339,10 +350,14 @@ pub(crate) mod tests {
     use std::{collections::HashMap, sync::Mutex};
 
     use custom_ring_interface::RingMode;
+    use solana_hash::Hash;
     use solana_keypair::Keypair;
-    use solana_message::{v1, VersionedMessage};
+    use solana_signature::Signature;
     use solana_signer::Signer;
-    use spr_client::{ClientError, GetShieldedTransactionsByTagsResponse};
+    use solana_transaction::versioned::VersionedTransaction;
+    use spr_client::{
+        compile_message, ClientError, ComputeBudgetConfig, GetShieldedTransactionsByTagsResponse,
+    };
     use spr_keypair::X25519Keypair;
     use spr_transaction::Mint;
     use zolana_ring_client::{
@@ -359,7 +374,11 @@ pub(crate) mod tests {
     use crate::{
         database::Store,
         hub::ServiceIdentity,
-        relay::RelayParts,
+        relay::{RelayParts, ServedRings},
+        relay_chain::{ChainOutcome, RelayChain},
+        relay_prover::{DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver},
+        relay_submit::{RelaySubmit, RelayTransaction},
+        storage_chain::LatestBlockhash,
         upstream::{
             DepositHistory, DepositPage, MergeAuditRequest, RecordsTip, RingConfiguration,
             RingHistoryPage, TransactionPage,
@@ -370,6 +389,8 @@ pub(crate) mod tests {
     pub(crate) const RING: Address = Address::new_from_array([8; 32]);
     pub(crate) const GENESIS: [u8; 32] = [3; 32];
     pub(crate) const MINT: Address = Address::new_from_array([6; 32]);
+    const FEE_PAYER: Address = Address::new_from_array([5; 32]);
+    const LAST_VALID_BLOCK_HEIGHT: u64 = 100;
 
     pub(crate) struct EscrowRingSource {
         config: RingConfiguration,
@@ -478,12 +499,17 @@ pub(crate) mod tests {
     #[async_trait]
     impl MergeBuilder for RecordingBuilder {
         async fn build(&self, merge: OwnerMerge<'_>) -> Result<BuiltMerge, RingRpcError> {
-            self.owners
-                .lock()
-                .expect("owners")
-                .push((merge.owner, merge.inputs.len()));
+            let mut owners = self.owners.lock().expect("owners");
+            owners.push((merge.owner, merge.inputs.len()));
+            let blockhash = Hash::new_from_array([u8::try_from(owners.len()).expect("builds"); 32]);
             Ok(BuiltMerge {
-                message: VersionedMessage::V1(v1::Message::default()),
+                message: compile_message(
+                    &FEE_PAYER,
+                    &[],
+                    blockhash,
+                    ComputeBudgetConfig::new(400_000),
+                )?,
+                last_valid_block_height: LAST_VALID_BLOCK_HEIGHT,
                 co_signer: None,
             })
         }
@@ -492,17 +518,82 @@ pub(crate) mod tests {
     #[derive(Default)]
     pub(crate) struct RecordingRelay {
         sent: Mutex<usize>,
+        down: Mutex<bool>,
     }
 
     #[async_trait]
     impl RelaySubmit for RecordingRelay {
         fn fee_payer(&self) -> Address {
-            Address::new_from_array([5; 32])
+            FEE_PAYER
         }
 
         async fn submit(&self, _transaction: RelayTransaction) -> Result<Signature, RingRpcError> {
+            if *self.down.lock().expect("down") {
+                return Err(RingRpcError::Upstream(ClientError::Rpc("down".to_owned())));
+            }
             *self.sent.lock().expect("sent") += 1;
             Ok(Signature::from([9; 64]))
+        }
+    }
+
+    /// No outcome until a test sets one.
+    pub(crate) struct ScriptedChain {
+        height: Mutex<u64>,
+        outcome: Mutex<Option<ChainOutcome>>,
+    }
+
+    impl Default for ScriptedChain {
+        fn default() -> Self {
+            Self {
+                height: Mutex::new(1),
+                outcome: Mutex::new(None),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl RelayChain for ScriptedChain {
+        async fn slot(&self) -> Result<u64, RingRpcError> {
+            Ok(1)
+        }
+
+        async fn latest_blockhash(&self) -> Result<LatestBlockhash, RingRpcError> {
+            Ok((Hash::new_from_array([4; 32]), LAST_VALID_BLOCK_HEIGHT).into())
+        }
+
+        async fn block_height(&self) -> Result<u64, RingRpcError> {
+            Ok(*self.height.lock().expect("height"))
+        }
+
+        async fn send(&self, _transaction: &VersionedTransaction) -> Result<(), RingRpcError> {
+            Ok(())
+        }
+
+        async fn outcome(
+            &self,
+            _signature: Signature,
+        ) -> Result<Option<ChainOutcome>, RingRpcError> {
+            Ok(self.outcome.lock().expect("outcome").clone())
+        }
+    }
+
+    struct UnusedProver;
+
+    #[async_trait]
+    impl RelayProver for UnusedProver {
+        async fn prove(
+            &self,
+            _request: RelayProofRequest<'_>,
+        ) -> Result<ProvenRelay, RingRpcError> {
+            Err(RingRpcError::StateUnavailable)
+        }
+
+        async fn seal_delegate(
+            &self,
+            _seal: DelegateSeal<'_>,
+            _parties: RelayParties,
+        ) -> Result<zolana_ring_client::rpc::RelayProofInputs, RingRpcError> {
+            Err(RingRpcError::StateUnavailable)
         }
     }
 
@@ -522,11 +613,29 @@ pub(crate) mod tests {
         pub(crate) hub: Arc<Hub<EscrowRingSource>>,
         builder: Arc<RecordingBuilder>,
         relay: Arc<RecordingRelay>,
+        chain: Arc<ScriptedChain>,
     }
 
     impl Fixture {
         async fn new() -> Self {
-            Self::serving(None, None).await
+            Self::on(Store::open("sqlite::memory:", 1).await.expect("store")).await
+        }
+
+        async fn on(store: Store) -> Self {
+            let relay = Arc::new(RecordingRelay::default());
+            let chain = Arc::new(ScriptedChain::default());
+            let parts = RelayParts {
+                store,
+                prover: Arc::new(UnusedProver),
+                submit: relay.clone(),
+                chain: chain.clone(),
+                rings: ServedRings::One(RING),
+            };
+            Self {
+                relay,
+                chain,
+                ..Self::serving(None, Some(parts)).await
+            }
         }
 
         pub(crate) async fn serving(delegate: Option<Address>, relay: Option<RelayParts>) -> Self {
@@ -542,7 +651,10 @@ pub(crate) mod tests {
                     delegate,
                 },
             };
-            let store = Store::open("sqlite::memory:", 1).await.expect("store");
+            let store = match &relay {
+                Some(relay) => relay.store.clone(),
+                None => Store::open("sqlite::memory:", 1).await.expect("store"),
+            };
             let identity = ServiceIdentity {
                 genesis_hash: GENESIS,
                 service: Keypair::new(),
@@ -558,6 +670,7 @@ pub(crate) mod tests {
                 hub: Arc::new(hub),
                 builder: Arc::default(),
                 relay: Arc::default(),
+                chain: Arc::default(),
             }
         }
 
@@ -642,16 +755,32 @@ pub(crate) mod tests {
                 .expect("stored settings");
         }
 
-        async fn merge_due(&self) -> Vec<Signature> {
+        async fn merge_due(&self) -> Vec<RelayId> {
             ManagedMergeInit {
                 hub: self.hub.clone(),
                 builder: self.builder.clone(),
-                relay: self.relay.clone(),
+                relay: self.relay().clone(),
             }
             .build()
             .merge_due()
             .await
             .expect("merge pass")
+        }
+
+        fn relay(&self) -> &Arc<Relay> {
+            self.hub.relay().expect("relay")
+        }
+
+        async fn track(&self) {
+            self.relay().track().await.expect("tracked relays");
+        }
+
+        async fn held(&self) -> Vec<HeldInput> {
+            self.relay()
+                .merge_inputs()
+                .held(&RING)
+                .await
+                .expect("held inputs")
         }
     }
 
@@ -681,5 +810,65 @@ pub(crate) mod tests {
 
         assert!(fixture.merge_due().await.is_empty());
         assert_eq!(*fixture.relay.sent.lock().expect("sent"), 0);
+    }
+
+    #[tokio::test]
+    async fn a_dropped_merge_frees_its_notes_after_expiry() {
+        let fixture = Fixture::new().await;
+        let wallet = Keypair::new_from_array([11; 32]);
+        fixture.escrow_notes(&wallet, 3);
+        fixture.settle(&wallet, 1).await;
+        assert_eq!(fixture.merge_due().await.len(), 1);
+        assert!(fixture.merge_due().await.is_empty());
+
+        *fixture.chain.height.lock().expect("height") = LAST_VALID_BLOCK_HEIGHT + 1;
+        fixture.track().await;
+
+        assert_eq!(fixture.merge_due().await.len(), 1);
+        assert_eq!(*fixture.relay.sent.lock().expect("sent"), 2);
+    }
+
+    #[tokio::test]
+    async fn a_confirmed_merge_holds_nothing_once_its_spend_syncs() {
+        let fixture = Fixture::new().await;
+        let wallet = Keypair::new_from_array([11; 32]);
+        fixture.escrow_notes(&wallet, 3);
+        fixture.settle(&wallet, 1).await;
+        assert_eq!(fixture.merge_due().await.len(), 1);
+        *fixture.chain.outcome.lock().expect("outcome") = Some(ChainOutcome::Confirmed { slot: 5 });
+        fixture.track().await;
+        // The backfill has not seen the spend, the notes still read as spendable.
+        assert!(fixture.merge_due().await.is_empty());
+
+        let spent: Vec<[u8; 32]> = fixture
+            .held()
+            .await
+            .iter()
+            .map(|input| input.nullifier)
+            .collect();
+        assert_eq!(spent.len(), 3);
+        fixture.hub.shared().store(RING).spend(spent);
+
+        assert!(fixture.merge_due().await.is_empty());
+        assert!(fixture.held().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_restart_resends_the_stored_merge_and_builds_no_second_one() {
+        let store = Store::open("sqlite::memory:", 1).await.expect("store");
+        let before = Fixture::on(store.clone()).await;
+        let wallet = Keypair::new_from_array([11; 32]);
+        before.escrow_notes(&wallet, 3);
+        before.settle(&wallet, 1).await;
+        *before.relay.down.lock().expect("down") = true;
+        assert!(before.merge_due().await.is_empty());
+
+        let after = Fixture::on(store).await;
+        after.escrow_notes(&wallet, 3);
+        assert!(after.merge_due().await.is_empty());
+        after.track().await;
+
+        assert!(after.builder.owners.lock().expect("owners").is_empty());
+        assert_eq!(*after.relay.sent.lock().expect("sent"), 1);
     }
 }

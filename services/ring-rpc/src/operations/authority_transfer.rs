@@ -144,13 +144,10 @@ mod tests {
     use async_trait::async_trait;
     use custom_ring_interface::cosign::CoSignDemand;
     use solana_address::Address;
-    use solana_hash::Hash;
     use solana_instruction::{AccountMeta, Instruction};
     use solana_keypair::Keypair;
     use solana_message::VersionedMessage;
-    use solana_signature::Signature;
     use solana_signer::Signer;
-    use solana_transaction::versioned::VersionedTransaction;
     use spr_client::ComputeBudgetConfig;
     use spr_keypair::{NullifierKey, PublicKey, ShieldedAddress, ViewingKey, X25519Keypair};
     use spr_transaction::instructions::transact::ExternalData;
@@ -163,11 +160,9 @@ mod tests {
     use super::*;
     use crate::{
         database::Store,
-        managed_merge::tests::{Fixture, RecordingRelay, GENESIS, MINT, RING},
+        managed_merge::tests::{Fixture, RecordingRelay, ScriptedChain, GENESIS, MINT, RING},
         relay::{RelayParts, RelayPayload, ServedRings},
-        relay_chain::{ChainOutcome, RelayChain},
         relay_prover::{DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver},
-        storage_chain::LatestBlockhash,
     };
 
     #[derive(Default)]
@@ -247,41 +242,13 @@ mod tests {
         }
     }
 
-    struct IdleChain;
-
-    #[async_trait]
-    impl RelayChain for IdleChain {
-        async fn slot(&self) -> Result<u64, RingRpcError> {
-            Ok(1)
-        }
-
-        async fn latest_blockhash(&self) -> Result<LatestBlockhash, RingRpcError> {
-            Ok((Hash::new_from_array([4; 32]), 100).into())
-        }
-
-        async fn block_height(&self) -> Result<u64, RingRpcError> {
-            Ok(1)
-        }
-
-        async fn send(&self, _transaction: &VersionedTransaction) -> Result<(), RingRpcError> {
-            Ok(())
-        }
-
-        async fn outcome(
-            &self,
-            _signature: Signature,
-        ) -> Result<Option<ChainOutcome>, RingRpcError> {
-            Ok(None)
-        }
-    }
-
     async fn served(delegate: Address) -> (Fixture, Arc<SealingProver>) {
         let prover = Arc::new(SealingProver::default());
         let relay = RelayParts {
             store: Store::open("sqlite::memory:", 1).await.expect("store"),
             prover: prover.clone(),
             submit: Arc::new(RecordingRelay::default()),
-            chain: Arc::new(IdleChain),
+            chain: Arc::new(ScriptedChain::default()),
             rings: ServedRings::One(RING),
         };
         (Fixture::serving(Some(delegate), Some(relay)).await, prover)

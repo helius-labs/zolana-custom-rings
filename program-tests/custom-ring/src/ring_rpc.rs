@@ -211,7 +211,7 @@ impl RelayedRingRpc {
         })
     }
 
-    pub fn managed_merge_pass(&self) -> Result<Vec<Signature>> {
+    pub fn managed_merge_pass(&self) -> Result<Vec<RelayId>> {
         self.served
             .runtime
             .block_on(self.merge.merge_due())

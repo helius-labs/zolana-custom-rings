@@ -42,7 +42,8 @@ impl<R: AsyncRpc, I: RingIndexerBackend> RingSdkMergeBuilder<R, I> {
         }
         .prove(merge)
         .await?;
-        let (blockhash, _) = self.client.zolana().get_latest_blockhash().await?;
+        let (blockhash, last_valid_block_height) =
+            self.client.zolana().get_latest_blockhash().await?;
         let message = compile_message(
             &self.payer,
             &[proven.instruction(self.payer)?],
@@ -51,6 +52,7 @@ impl<R: AsyncRpc, I: RingIndexerBackend> RingSdkMergeBuilder<R, I> {
         )?;
         Ok(BuiltMerge {
             message,
+            last_valid_block_height,
             co_signer: proven.co_signer(),
         })
     }

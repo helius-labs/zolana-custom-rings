@@ -173,7 +173,7 @@ With a fee payer key, a store and a prover, `serve` spawns `ManagedMerge::run` b
 
 A note is a candidate when the service opened it for that owner, mint and escrowed nullifier key, it has a nonzero amount and no data, and the ring history has not published its nullifier. The wallet keeps at most its target count and, under a nonzero minimum average amount, at most its total divided by that amount, never less than one note. When the candidates exceed that count, one merge joins the smallest notes of the tree that holds the most of them, no more than the count needs and at most `MAX_RING_MERGE_INPUTS`.
 
-The merge needs the fee payer, the co-signer signature when a co-signer scope covers transfers, and the nullifier secret. It needs no owner signature. `RingSdkMergeBuilder` proves it through the ring SDK, and the worker sends it through `RelaySubmit`. The inputs of a sent merge stay out of later merges until the process restarts.
+The merge needs the fee payer, the co-signer signature when a co-signer scope covers transfers, and the nullifier secret. It needs no owner signature. `RingSdkMergeBuilder` proves it through the ring SDK. The worker stores the merge as a relay with its input nullifiers, then sends it. The relay tracker confirms or expires it and resumes it after a restart. Its inputs stay out of later merges until the relay fails or expires, or until it confirms and the ring history publishes their nullifiers.
 
 ## Audit result
 
