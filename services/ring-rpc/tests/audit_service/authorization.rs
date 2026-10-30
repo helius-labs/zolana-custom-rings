@@ -168,6 +168,39 @@ async fn auditor_key_requests_bind_cluster_ring_time_and_nonce() {
     ));
 }
 
+async fn assert_a_replay_to_a_second_hub_is_refused(url: &str) {
+    let fixture = Fixture::new();
+    let hub = || async {
+        Hub::builder(fixture.source(), identity(GENESIS))
+            .with_store(Store::open(url, 1).await.expect("store"))
+            .local(RING, fixture.auditor.clone())
+            .expect("hub")
+    };
+    let (first, second) = (hub().await, hub().await);
+    let request = signed_by(&authority());
+    authorize(&first, &request).await.expect("first use");
+    assert!(refused(
+        authorize(&second, &request).await,
+        Unauthorized::Replay
+    ));
+}
+
+#[tokio::test]
+async fn a_request_replayed_to_a_second_hub_over_one_sqlite_file_is_refused() {
+    let path = std::env::temp_dir().join(format!("replay-{}.sqlite", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    assert_a_replay_to_a_second_hub_is_refused(&format!("sqlite://{}?mode=rwc", path.display()))
+        .await;
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+#[ignore = "needs RING_RPC_TEST_POSTGRES_URL"]
+async fn a_request_replayed_to_a_second_hub_over_one_postgres_store_is_refused() {
+    let url = std::env::var("RING_RPC_TEST_POSTGRES_URL").expect("postgres url");
+    assert_a_replay_to_a_second_hub_is_refused(&url).await;
+}
+
 #[tokio::test]
 async fn auditor_key_requests_are_accepted_exactly_within_the_skew_window() {
     let fixture = Fixture::new();

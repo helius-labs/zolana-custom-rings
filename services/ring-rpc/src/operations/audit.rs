@@ -201,7 +201,7 @@ impl<S: TransactionSource> AuditService<S> {
         &self,
         request: &GetAuditedUtxosRequest,
     ) -> Result<GetAuditedUtxosResponse, RingRpcError> {
-        self.authorize_utxos(request).await?.execute()
+        self.authorize_utxos(request).await?.execute().await
     }
 
     /// The upgrade authority asks before `Initialize`, the policy authority after.
@@ -220,12 +220,15 @@ impl<S: TransactionSource> AuditService<S> {
         self.shared
             .require_ring_authority(self.ring, authority)
             .await?;
-        self.shared.replay.accept(ReplayCheck {
-            ring: self.ring,
-            nonce,
-            timestamp: auth.timestamp,
-            now: self.shared.clock.now()?,
-        })?;
+        self.shared
+            .replay
+            .accept(ReplayCheck {
+                ring: self.ring,
+                nonce,
+                timestamp: auth.timestamp,
+                now: self.shared.clock.now()?,
+            })
+            .await?;
         Ok(AuditorKeyStatement {
             cluster: &self.shared.genesis_hash,
             ring: &self.ring,
@@ -362,12 +365,15 @@ impl<S: TransactionSource> AuditService<S> {
             now: self.shared.clock.now()?,
         }
         .decide()?;
-        self.shared.replay.accept(ReplayCheck {
-            ring: self.ring,
-            nonce,
-            timestamp: request.timestamp,
-            now: self.shared.clock.now()?,
-        })?;
+        self.shared
+            .replay
+            .accept(ReplayCheck {
+                ring: self.ring,
+                nonce,
+                timestamp: request.timestamp,
+                now: self.shared.clock.now()?,
+            })
+            .await?;
         rows.write(GrantRow {
             pair: GrantPair {
                 ring: self.ring,
@@ -650,21 +656,25 @@ impl<S: TransactionSource> AuditService<S> {
 
 impl<S> Grant<'_, S> {
     /// The clock is read again, a nonce evicted while the read awaited stays spent.
-    fn spend(&self) -> Result<(), RingRpcError> {
+    async fn spend(&self) -> Result<(), RingRpcError> {
         let service = self.service;
-        Ok(service.shared.replay.accept(ReplayCheck {
-            ring: service.ring,
-            nonce: self.nonce,
-            timestamp: self.timestamp,
-            now: service.shared.clock.now()?,
-        })?)
+        service
+            .shared
+            .replay
+            .accept(ReplayCheck {
+                ring: service.ring,
+                nonce: self.nonce,
+                timestamp: self.timestamp,
+                now: service.shared.clock.now()?,
+            })
+            .await
     }
 }
 
 impl<S: TransactionSource> AuthorizedRead<'_, S> {
     pub(crate) async fn execute(self) -> Result<GetDecryptedTransactionsResponse, RingRpcError> {
         let service = self.grant.service;
-        self.grant.spend()?;
+        self.grant.spend().await?;
         let mut response = service
             .decrypted_transactions(self.page, self.grant.mode)
             .await?;
@@ -674,7 +684,7 @@ impl<S: TransactionSource> AuthorizedRead<'_, S> {
 
     pub(crate) async fn execute_merges(self) -> Result<GetAuditedMergesResponse, RingRpcError> {
         let service = self.grant.service;
-        self.grant.spend()?;
+        self.grant.spend().await?;
         let page = service
             .shared
             .source
@@ -699,9 +709,9 @@ impl<S: TransactionSource> AuthorizedRead<'_, S> {
 
 impl<S: TransactionSource> AuthorizedUtxos<'_, S> {
     /// The store answers alone, a UTXO no page or backfill opened yet reads `null`.
-    fn execute(self) -> Result<GetAuditedUtxosResponse, RingRpcError> {
+    async fn execute(self) -> Result<GetAuditedUtxosResponse, RingRpcError> {
         let service = self.grant.service;
-        self.grant.spend()?;
+        self.grant.spend().await?;
         let store = service.shared.store(service.ring);
         Ok(GetAuditedUtxosResponse {
             context: store.context(),

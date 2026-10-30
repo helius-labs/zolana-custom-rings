@@ -6,7 +6,6 @@ use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signature::Signature;
 use solana_signer::Signer;
-use tokio::sync::Mutex;
 use zolana_ring_policy::{AssetLimits, Member};
 
 use crate::{
@@ -45,8 +44,6 @@ pub struct LimitedCoSigner<L> {
     signer: Keypair,
     limits: L,
     store: Arc<Store>,
-    /// Held from the usage read until the reservation commits.
-    reserving: Mutex<()>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,7 +93,6 @@ impl<L> LimitedCoSignerInit<L> {
             signer: self.signer,
             limits: self.limits,
             store: self.store,
-            reserving: Mutex::new(()),
         }
     }
 }
@@ -129,15 +125,17 @@ impl<L: AssetLimitSource> CoSignPolicy for LimitedCoSigner<L> {
             .collect();
         let signature = self.signer.sign_message(&request.message.serialize());
 
-        // 2. A repeated message keeps its one reservation.
-        let _reserving = self.reserving.lock().await;
+        // 2. Co-signers sharing the store decide one at a time for each asset.
         let transaction = self.store.connection().begin().await?;
         let ledger = UsageLedger { conn: &transaction };
+        ledger.admit(&request.ring, &assets).await?;
+
+        // 3. A repeated message keeps its one reservation.
         if ledger.reserved(&signature).await? {
             return Ok(CoSignDecision::Signed(signature));
         }
 
-        // 3. The window read and the reservation commit in one database transaction.
+        // 4. The window read and the reservation commit in one database transaction.
         let usage = WindowUsage {
             slot,
             reservations: ledger
@@ -313,6 +311,7 @@ fn longest_window(checks: &[AssetCheck]) -> u64 {
 #[cfg(test)]
 mod tests {
     use custom_ring_interface::{cosign::CoSignDemand, CoSignScope};
+    use sea_orm::ConnectionTrait;
     use solana_message::{Message, VersionedMessage};
 
     use super::*;
@@ -461,5 +460,57 @@ mod tests {
             co_signer.decide(&request(2, 60)).await.expect("retry"),
             CoSignDecision::Signed(_)
         ));
+    }
+
+    async fn co_signer(url: &str) -> Arc<LimitedCoSigner<FixedLimits>> {
+        let store = Store::open(url, crate::database::STORE_CONNECTIONS)
+            .await
+            .expect("store");
+        Arc::new(
+            LimitedCoSignerInit {
+                signer: Keypair::new_from_array([5; 32]),
+                limits: FixedLimits,
+                store: Arc::new(store),
+            }
+            .build(),
+        )
+    }
+
+    async fn assert_two_co_signers_share_one_allowance(url: &str) {
+        let co_signers = [co_signer(url).await, co_signer(url).await];
+        let mut decisions = tokio::task::JoinSet::new();
+        for nonce in 0..24u8 {
+            let co_signer = co_signers[usize::from(nonce % 2)].clone();
+            decisions.spawn(async move { co_signer.decide(&request(nonce, 20)).await });
+        }
+        let mut signed = 0;
+        while let Some(decision) = decisions.join_next().await {
+            if let CoSignDecision::Signed(_) = decision.expect("task").expect("decision") {
+                signed += 1;
+            }
+        }
+        assert_eq!(signed, 5);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn two_co_signers_over_one_sqlite_file_grant_the_allowance_once() {
+        let path = std::env::temp_dir().join(format!("cosign-{}.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        assert_two_co_signers_share_one_allowance(&format!("sqlite://{}?mode=rwc", path.display()))
+            .await;
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "needs RING_RPC_TEST_POSTGRES_URL"]
+    async fn two_co_signers_over_one_postgres_store_grant_the_allowance_once() {
+        let url = std::env::var("RING_RPC_TEST_POSTGRES_URL").expect("postgres url");
+        let store = Store::open(&url, 1).await.expect("store");
+        store
+            .connection()
+            .execute_unprepared("DELETE FROM cosign_usage")
+            .await
+            .expect("empty usage");
+        assert_two_co_signers_share_one_allowance(&url).await;
     }
 }

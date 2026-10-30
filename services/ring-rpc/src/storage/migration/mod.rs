@@ -1,5 +1,6 @@
 use sea_orm_migration::prelude::*;
 
+mod cosign3_000001_admission;
 mod cosign_m20261029_000001_usage;
 mod grants;
 mod merge_0001_settings;
@@ -7,6 +8,7 @@ mod records2_000001_attempts;
 mod records3_000001_enrolments;
 mod records_000001_queue;
 mod relay_000001_relays;
+mod replay_000001_nonces;
 
 pub struct Migrator;
 
@@ -21,6 +23,8 @@ impl MigratorTrait for Migrator {
             Box::new(merge_0001_settings::Migration),
             Box::new(records2_000001_attempts::Migration),
             Box::new(records3_000001_enrolments::Migration),
+            Box::new(cosign3_000001_admission::Migration),
+            Box::new(replay_000001_nonces::Migration),
         ]
     }
 }

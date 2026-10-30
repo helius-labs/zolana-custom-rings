@@ -2,12 +2,22 @@ use std::{collections::HashMap, sync::Mutex};
 
 use solana_address::Address;
 
-use crate::authorize::{Unauthorized, AUTH_SKEW};
+use crate::{
+    authorize::{Unauthorized, AUTH_SKEW},
+    database::Store,
+    error::RingRpcError,
+    replay_nonces::NonceBook,
+};
 
 const MAX_REPLAY_ENTRIES: usize = 65_536;
 
+pub(crate) enum ReplayGuard {
+    Local(LocalNonces),
+    Shared(Store),
+}
+
 #[derive(Default)]
-pub(crate) struct ReplayGuard(Mutex<HashMap<Address, HashMap<[u8; 32], u64>>>);
+pub(crate) struct LocalNonces(Mutex<HashMap<Address, HashMap<[u8; 32], u64>>>);
 
 #[must_use]
 pub(crate) struct ReplayCheck {
@@ -18,11 +28,27 @@ pub(crate) struct ReplayCheck {
 }
 
 impl ReplayGuard {
+    pub(crate) async fn accept(&self, check: ReplayCheck) -> Result<(), RingRpcError> {
+        match self {
+            Self::Local(nonces) => Ok(nonces.accept(check)?),
+            Self::Shared(store) => {
+                check.fresh()?;
+                let book = NonceBook {
+                    conn: store.connection(),
+                };
+                match book.spend(&check).await? {
+                    true => Ok(()),
+                    false => Err(Unauthorized::Replay.into()),
+                }
+            }
+        }
+    }
+}
+
+impl LocalNonces {
     /// `now` is read at acceptance, a nonce leaves the set only once its timestamp is stale.
     pub(crate) fn accept(&self, check: ReplayCheck) -> Result<(), Unauthorized> {
-        if check.now.abs_diff(check.timestamp) > AUTH_SKEW.as_secs() {
-            return Err(Unauthorized::StaleTimestamp);
-        }
+        check.fresh()?;
         let mut rings = self.0.lock().map_err(|_| Unauthorized::Replay)?;
         let accepted = rings.entry(check.ring).or_default();
         accepted.retain(|_, timestamp| check.now.abs_diff(*timestamp) <= AUTH_SKEW.as_secs());
@@ -32,6 +58,15 @@ impl ReplayGuard {
             return Err(Unauthorized::Replay);
         }
         Ok(())
+    }
+}
+
+impl ReplayCheck {
+    fn fresh(&self) -> Result<(), Unauthorized> {
+        match self.now.abs_diff(self.timestamp) > AUTH_SKEW.as_secs() {
+            true => Err(Unauthorized::StaleTimestamp),
+            false => Ok(()),
+        }
     }
 }
 
@@ -54,7 +89,7 @@ mod tests {
     /// skew rule already refuses its timestamp.
     #[test]
     fn a_nonce_leaves_the_set_when_it_leaves_the_skew_window() {
-        let guard = ReplayGuard::default();
+        let guard = LocalNonces::default();
         let skew = AUTH_SKEW.as_secs();
         guard
             .accept(check(RING, 7, 1_000, 1_000))
@@ -75,7 +110,7 @@ mod tests {
     /// A replay granted on the window's edge is accepted only after another request evicted its nonce.
     #[test]
     fn a_nonce_evicted_while_its_replay_awaited_is_refused_at_acceptance() {
-        let guard = ReplayGuard::default();
+        let guard = LocalNonces::default();
         let skew = AUTH_SKEW.as_secs();
         guard
             .accept(check(RING, 7, 1_000, 1_000))
@@ -93,7 +128,7 @@ mod tests {
     /// budget.
     #[test]
     fn the_nonce_set_is_scoped_to_one_ring() {
-        let guard = ReplayGuard::default();
+        let guard = LocalNonces::default();
         let other = Address::new_from_array([2; 32]);
         guard
             .accept(check(RING, 7, 1_000, 1_000))
@@ -107,7 +142,7 @@ mod tests {
     /// full set instead of locking the ring out forever.
     #[test]
     fn a_full_nonce_set_reopens_once_its_entries_expire() {
-        let guard = ReplayGuard::default();
+        let guard = LocalNonces::default();
         let now = 1_000;
         {
             let mut rings = guard.0.lock().expect("nonce set");

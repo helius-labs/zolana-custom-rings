@@ -20,7 +20,9 @@ impl<S: TransactionSource> Hub<S> {
         let action = ListEnrolments {
             cursor: request.cursor.clone(),
         };
-        let authority = self.authorize_enrolment(ring, &request.auth, action)?;
+        let authority = self
+            .authorize_enrolment(ring, &request.auth, action)
+            .await?;
         self.record_writer()?
             .pending_enrolments(authority, request)
             .await
@@ -32,7 +34,9 @@ impl<S: TransactionSource> Hub<S> {
     ) -> Result<RecordUpdateStatus, RingRpcError> {
         let ring = request.ring.0;
         let action = RefuseEnrolment(request.update_id.clone());
-        let authority = self.authorize_enrolment(ring, &request.auth, action)?;
+        let authority = self
+            .authorize_enrolment(ring, &request.auth, action)
+            .await?;
         self.record_writer()?
             .refuse_enrolment(ring, authority, &request.update_id)
             .await
@@ -45,7 +49,9 @@ impl<S: TransactionSource> Hub<S> {
     ) -> Result<CreateRecordsRegistryResponse, RingRpcError> {
         let ring = request.ring.0;
         let writer = self.record_writer()?;
-        let authority = self.authorize_enrolment(ring, &request.auth, CreateRecords)?;
+        let authority = self
+            .authorize_enrolment(ring, &request.auth, CreateRecords)
+            .await?;
         self.shared()
             .require_ring_authority(ring, authority)
             .await?;
@@ -56,7 +62,7 @@ impl<S: TransactionSource> Hub<S> {
     }
 
     /// Signature and nonce only, the writer checks the policy authority.
-    fn authorize_enrolment<A: EnrolmentAction>(
+    async fn authorize_enrolment<A: EnrolmentAction>(
         &self,
         ring: Address,
         auth: &ConfigAuthorityAuth,
@@ -82,12 +88,15 @@ impl<S: TransactionSource> Hub<S> {
             now,
         }
         .decide()?;
-        shared.replay.accept(ReplayCheck {
-            ring,
-            nonce,
-            timestamp: auth.timestamp,
-            now,
-        })?;
+        shared
+            .replay
+            .accept(ReplayCheck {
+                ring,
+                nonce,
+                timestamp: auth.timestamp,
+                now,
+            })
+            .await?;
         Ok(authority)
     }
 }

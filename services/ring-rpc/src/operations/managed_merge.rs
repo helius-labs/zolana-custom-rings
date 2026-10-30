@@ -310,12 +310,15 @@ impl<S: TransactionSource> Hub<S> {
             now,
         }
         .decide()?;
-        shared.replay.accept(ReplayCheck {
-            ring,
-            nonce,
-            timestamp: request.timestamp,
-            now,
-        })?;
+        shared
+            .replay
+            .accept(ReplayCheck {
+                ring,
+                nonce,
+                timestamp: request.timestamp,
+                now,
+            })
+            .await?;
         let saved = book
             .save(SignedMergeSettings {
                 ring,
