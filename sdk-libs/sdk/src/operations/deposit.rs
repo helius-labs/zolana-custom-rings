@@ -439,10 +439,7 @@ impl PreparedRingDeposit {
                 .map_or_else(Default::default, |curator| curator.revision),
         };
         instruction.data = [bytemuck::bytes_of(&prefix), &instruction.data].concat();
-        let mut accounts = vec![AccountMeta::new_readonly(self.ring.config_pda(), false)];
-        if roots.is_some() {
-            accounts.push(AccountMeta::new_readonly(self.ring.policy_pda(), false));
-        }
+        let mut accounts = vec![AccountMeta::new_readonly(self.ring.policy_pda(), false)];
         accounts.extend(
             self.cosigner
                 .into_iter()

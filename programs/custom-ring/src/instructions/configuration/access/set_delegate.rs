@@ -1,11 +1,8 @@
-use custom_ring_interface::{CustomRingError, RingMode};
+use custom_ring_interface::{CustomRingError, RingMode, RingRole};
 use pinocchio::{AccountView, Address, ProgramResult};
 use spr_account_checks::AccountIterator;
 
-use crate::instructions::{
-    instruction_runtime::no_data,
-    loader::{load_authorized_config_mut, load_policy},
-};
+use crate::instructions::{instruction_runtime::no_data, loader::RoleHolder};
 
 #[inline(never)]
 pub fn process_set_delegate_ix(
@@ -15,26 +12,30 @@ pub fn process_set_delegate_ix(
 ) -> ProgramResult {
     no_data(data)?;
     let mut iter = AccountIterator::new(accounts);
-    let authority = iter.next_signer("authority")?;
-    let config = iter.next_mut("config")?;
+    let admin = iter.next_signer("admin")?;
+    let ring = iter.next_mut("ring")?;
     let delegate = iter.next_signer("delegate")?;
-    let policy = iter.next_account("policy")?;
 
     // 1. The delegate is permanent for the instructions of the deployed binary.
-    let mut config = load_authorized_config_mut(program_id, config, authority)?;
-    if config.delegate().is_some() {
+    let mut ring = RoleHolder {
+        program_id,
+        role: RingRole::Admin,
+        signer: admin,
+    }
+    .load_mut(ring)?;
+    if ring.delegate().is_some() {
         return Err(CustomRingError::DelegateAlreadySet.into());
     }
     // 2. An anonymous ring hides the owner a delegate would sign for.
-    if config.mode()? == RingMode::Anonymous {
+    if ring.mode()? == RingMode::Anonymous {
         return Err(CustomRingError::AnonymousRingRefused.into());
     }
-    if !config.has_policy() {
+    if !ring.has_policy() {
         return Err(CustomRingError::DelegateRequiresPolicy.into());
     }
-    // 3. `ConfidentialEscrow` mode escrows every output nullifier key in the policy's records.
-    load_policy(program_id, policy)?;
-    config.delegate = *delegate.address();
-    config.mode = RingMode::ConfidentialEscrow as u8;
+    // 3. The delegate holds no role, and `ConfidentialEscrow` mode escrows every output nullifier key in the records.
+    ring.roles.check(Some(delegate.address()))?;
+    ring.delegate = *delegate.address();
+    ring.mode = RingMode::ConfidentialEscrow as u8;
     Ok(())
 }

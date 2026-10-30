@@ -38,7 +38,7 @@ impl<S: TransactionSource> Hub<S> {
             .await
     }
 
-    /// The upgrade authority signs before the config exists, the config authority after.
+    /// The upgrade authority signs before `Initialize`, the policy authority after.
     pub async fn create_records_registry(
         &self,
         request: &CreateRecordsRegistryRequest,
@@ -55,7 +55,7 @@ impl<S: TransactionSource> Hub<S> {
         })
     }
 
-    /// Signature and nonce only, the writer checks the config authority.
+    /// Signature and nonce only, the writer checks the policy authority.
     fn authorize_enrolment<A: EnrolmentAction>(
         &self,
         ring: Address,

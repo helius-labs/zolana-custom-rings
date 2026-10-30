@@ -20,13 +20,12 @@ ring_errors! {
     HashingFailed = 8102 => "hashing failed",
     InvalidShieldedPoolProgram = 8103 => "shielded pool program account is invalid",
     MissingRingAuth = 8104 => "ring auth account is missing from the forwarded account list",
-    ConfigAlreadyInitialized = 8105 => "ring config account is already initialized",
-    ConfigNotInitialized = 8106 => "ring config account is not initialized",
+    // 8105 and 8106 retired.
     UnauthorizedAuthority = 8107 => "signer is not the configured ring authority",
     InvalidAuditorPubkey = 8108 => "auditor public key is not allowed",
     // 8109 and 8110 retired.
     InvalidSystemProgram = 8111 => "system program account is invalid",
-    InvalidConfigPda = 8112 => "config account is not the canonical config PDA",
+    // 8112 retired.
     UnsupportedCircuit = 8113 => "circuit selector is not supported by the ring",
     UnauthorizedInitializer = 8114 => "authority is not the program upgrade authority",
     TooManyAccounts = 8115 => "forwarded account list exceeds the CPI account limit",
@@ -142,7 +141,7 @@ ring_errors! {
     RingPolicyAlreadyExists = 8301 => "ring policy already exists",
     InvalidStorageRegistry = 8302 => "storage registry account is invalid",
     StorageAuthorityMismatch = 8303 =>
-        "the records registry answers to neither the config authority nor the named storage authority",
+        "the records registry answers to neither the policy authority nor the named storage authority",
     UnmirroredRegistry = 8304 => "the registry is neither the policy records nor its curator source",
     MirrorNotSynced = 8305 => "the root mirror holds no roots of the registry the policy names",
     MirrorRootExpired = 8306 => "the revision names no unexpired root of the mirror",
@@ -151,6 +150,8 @@ ring_errors! {
     DepositMintAccountMissing = 8410 => "an spl deposit group has no mint account",
     DepositAssetIndexUnknown = 8411 => "a deposit entry names no asset group",
     UnexpectedCuratorRevision = 8470 => "the deposit names a curator revision without a curator source",
+    ZeroRoleKey = 8471 => "a ring role key is zero",
+    DuplicateRoleKey = 8472 => "one key holds two ring roles",
 }
 
 impl From<CustomRingError> for ProgramError {

@@ -217,7 +217,10 @@ impl RecordsSetup<'_> {
                         .expect("auditor key"),
                 )
                 .expect("auditor key"),
-                authority: authority().pubkey(),
+                roles: custom_ring_interface::RingRoles {
+                    policy: authority().pubkey(),
+                    ..bytemuck::Zeroable::zeroed()
+                },
                 mode: RingMode::Confidential,
                 delegate: None,
             },

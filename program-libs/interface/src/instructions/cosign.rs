@@ -1,8 +1,6 @@
 //! The co-signer a ring operation must carry, one rule for the program and the SDKs.
 
-use crate::{
-    CoSignScope, CoSigner, CustomRingError, PublicLeg, RingProgramConfig, SOL_ASSET_ADDRESS,
-};
+use crate::{CoSignScope, CoSigner, CustomRingError, PublicLeg, RingPolicy, SOL_ASSET_ADDRESS};
 use solana_address::Address;
 
 #[derive(Clone, Debug)]
@@ -50,9 +48,9 @@ impl CoSignDemand {
     /// `None` when no record covers a class of the operation and no approval is demanded.
     pub fn requirement(
         &self,
-        config: &RingProgramConfig,
+        ring: &RingPolicy,
     ) -> Result<Option<CoSignRequirement>, CustomRingError> {
-        let covered = config.co_signers.covered();
+        let covered = ring.co_signers.covered();
         let mut shared = covered.map_or(0, CoSignScope::bits) & self.classes.bits();
         if self.withdrawals.is_empty() {
             shared &= !CoSignScope::WITHDRAWALS.bits();
@@ -151,7 +149,7 @@ mod tests {
         let mut demand = CoSignDemand::transact(false, &legs);
         assert_eq!(demand.withdrawals, vec![(Address::default(), 120)]);
         let config = |scope: CoSignScope| {
-            let mut config = RingProgramConfig::zeroed();
+            let mut config = RingPolicy::zeroed();
             config.co_signers = CoSignerCounts::default().added(scope).unwrap();
             config
         };
@@ -172,7 +170,7 @@ mod tests {
             Ok(Some(CoSignRequirement::Any))
         );
         assert_eq!(
-            approval.requirement(&RingProgramConfig::zeroed()),
+            approval.requirement(&RingPolicy::zeroed()),
             Err(CustomRingError::ApprovalWithoutCoSigner)
         );
         let hash = WithdrawalExemptionStatement::new([1; 32], &demand)

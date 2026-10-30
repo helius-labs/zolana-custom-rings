@@ -1,7 +1,7 @@
 use custom_ring_interface::{
     anonymous_exit_destination, cosign::CoSignRequirement, storage::StorageRegistry, CoSigner,
-    CustomRingError, RingAccount, RingPolicy, RingProgramConfig, SettlementAccount,
-    TokenAccountState, STORAGE_PROGRAM_ID,
+    CustomRingError, RingAccount, RingPolicy, RingRole, SettlementAccount, TokenAccountState,
+    STORAGE_PROGRAM_ID,
 };
 use pinocchio::{
     account::{Ref, RefMut},
@@ -38,45 +38,6 @@ pub fn load_mut<'a, T: RingAccount>(
     RefMut::filter_map(data, T::from_data_mut).map_err(|_| T::INVALID.into())
 }
 
-/// The ring config, its mode byte known.
-#[inline(always)]
-pub fn load_config<'a>(
-    program_id: &Address,
-    account: &'a AccountView,
-) -> Result<Ref<'a, RingProgramConfig>, ProgramError> {
-    load(program_id, account)
-}
-
-/// The config whose authority is `authority`, the processor checks the signature.
-#[inline(always)]
-pub fn load_authorized_config<'a>(
-    program_id: &Address,
-    config: &'a AccountView,
-    authority: &AccountView,
-) -> Result<Ref<'a, RingProgramConfig>, ProgramError> {
-    let config = load_config(program_id, config)?;
-    check_authority(&config, authority)?;
-    Ok(config)
-}
-
-#[inline(always)]
-pub fn load_authorized_config_mut<'a>(
-    program_id: &Address,
-    config: &'a mut AccountView,
-    authority: &AccountView,
-) -> Result<RefMut<'a, RingProgramConfig>, ProgramError> {
-    let config = load_mut::<RingProgramConfig>(program_id, config)?;
-    check_authority(&config, authority)?;
-    Ok(config)
-}
-
-fn check_authority(config: &RingProgramConfig, authority: &AccountView) -> ProgramResult {
-    if authority.address() != &config.authority {
-        return Err(CustomRingError::UnauthorizedAuthority.into());
-    }
-    Ok(())
-}
-
 #[inline(always)]
 pub fn load_policy<'a>(
     program_id: &Address,
@@ -91,6 +52,33 @@ pub fn load_policy_mut<'a>(
     account: &'a mut AccountView,
 ) -> Result<RefMut<'a, RingPolicy>, ProgramError> {
     load_mut(program_id, account)
+}
+
+/// The ring account whose `role` the signer holds, the processor checks the signature.
+#[must_use]
+pub struct RoleHolder<'a> {
+    pub program_id: &'a Address,
+    pub role: RingRole,
+    pub signer: &'a AccountView,
+}
+
+impl RoleHolder<'_> {
+    #[inline(always)]
+    pub fn load<'a>(self, ring: &'a AccountView) -> Result<Ref<'a, RingPolicy>, ProgramError> {
+        let ring = load_policy(self.program_id, ring)?;
+        ring.check_role(self.role, self.signer.address())?;
+        Ok(ring)
+    }
+
+    #[inline(always)]
+    pub fn load_mut<'a>(
+        self,
+        ring: &'a mut AccountView,
+    ) -> Result<RefMut<'a, RingPolicy>, ProgramError> {
+        let ring = load_policy_mut(self.program_id, ring)?;
+        ring.check_role(self.role, self.signer.address())?;
+        Ok(ring)
+    }
 }
 
 /// Any authority's registry, the storage program creates it only at its canonical PDA.

@@ -639,7 +639,10 @@ mod tests {
         let auditor = X25519Keypair::new();
         source.config = Some(RingConfiguration {
             auditor_pubkey: auditor.pubkey(),
-            authority: Address::new_from_array([2; 32]),
+            roles: custom_ring_interface::RingRoles {
+                policy: Address::new_from_array([2; 32]),
+                ..bytemuck::Zeroable::zeroed()
+            },
             mode: custom_ring_interface::RingMode::Confidential,
             delegate: None,
         });

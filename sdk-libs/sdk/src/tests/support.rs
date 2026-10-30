@@ -9,9 +9,8 @@ use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
 use custom_ring_interface::{
     storage::{Revision, StorageRegistry},
-    CoSignScope, CoSigner, CoSignerCounts, EscrowKey, RingMode, RingPolicy, RingProgramConfig,
-    SourceSlot, CONFIG_PDA_SEED, CO_SIGNER, N_SOURCE_SLOTS, RING_POLICY_PDA_SEED,
-    RING_PROGRAM_CONFIG,
+    CoSignScope, CoSigner, CoSignerCounts, EscrowKey, NewRing, RingMode, RingPolicy, RingRoles,
+    SourceSlot, CO_SIGNER, N_SOURCE_SLOTS, RING_POLICY_PDA_SEED,
 };
 use solana_account::Account;
 use solana_address::Address;
@@ -227,15 +226,25 @@ impl RingSettings {
         }
     }
 
-    pub(crate) fn config(&self) -> RingProgramConfig {
-        let mut config = RingProgramConfig::zeroed();
-        config.discriminator = RING_PROGRAM_CONFIG;
-        config.authority = authority();
-        config.auditor_pubkey = *auditor().pubkey().as_bytes();
-        config.bump = Address::find_program_address(&[CONFIG_PDA_SEED], &program()).1;
-        config.has_policy = u8::from(self.has_policy);
-        config.mode = self.mode as u8;
-        config.created_slot = self.created_slot.to_le_bytes();
+    /// A policy ring's hash is a stand-in until `with_registry` pins its table.
+    pub(crate) fn config(&self) -> Box<RingPolicy> {
+        let mut config = NewRing {
+            bump: Address::find_program_address(&[RING_POLICY_PDA_SEED], &program()).1,
+            mode: self.mode,
+            roles: RingRoles {
+                admin: authority(),
+                policy: Address::new_from_array([0xa2; 32]),
+                pauser: Address::new_from_array([0xa3; 32]),
+                cosign_admin: Address::new_from_array([0xa4; 32]),
+            },
+            auditor_pubkey: *auditor().pubkey().as_bytes(),
+            created_slot: self.created_slot,
+            records: Address::default(),
+        }
+        .account();
+        if self.has_policy {
+            config.policy_hash = [0x11; 32];
+        }
         if let Some((_, scope)) = self.co_signer {
             config.co_signers = CoSignerCounts::default().added(scope).expect("one record");
         }
@@ -294,7 +303,7 @@ impl Chain {
             None => chain,
         };
         chain
-            .with(ring().config_pda(), account(program(), &settings.config()))
+            .with(ring().policy_pda(), account(program(), &*settings.config()))
             .with(
                 ring().ring_auth_pda(),
                 account(
@@ -318,9 +327,14 @@ impl Chain {
         self.with(tree.address, tree_account(tree))
     }
 
-    /// The ring policy pinning `rules`, every list read from the ring's records.
+    /// The ring account pinning `rules`, every list read from the ring's records.
     pub(crate) fn with_registry(self, registry: Registry, rules: &RuleTable) -> Self {
-        let policy = registry.policy(rules);
+        let account = self
+            .accounts
+            .get(&ring().policy_pda())
+            .map(|account| Box::new(*bytemuck::from_bytes::<RingPolicy>(&account.data)))
+            .expect("Chain::ring writes the ring account");
+        let policy = registry.policy(account, rules);
         Self {
             registry: Some(Arc::new(registry)),
             ..self
@@ -595,9 +609,8 @@ impl Registry {
     }
 
     /// `rules` over the records, synced at `REVISION`.
-    fn policy(&self, rules: &RuleTable) -> Account {
-        let bump = Address::find_program_address(&[RING_POLICY_PDA_SEED], &program()).1;
-        let mut policy = RingPolicy::new(bump, RECORDS);
+    fn policy(&self, mut policy: Box<RingPolicy>, rules: &RuleTable) -> Account {
+        policy.records = RECORDS;
         let mut records = StorageRegistry::new(authority(), 0);
         records.roots[0].hash = self.root();
         records.roots[0].revision = Revision::from(REVISION);

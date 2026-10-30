@@ -113,7 +113,6 @@ pub struct ProvenCustomRingMerge {
     input_tree: Address,
     output_tree: Address,
     ring: CustomRing,
-    mode: RingMode,
     co_signer: Option<Address>,
     /// `Some` on a key escrow ring, its merge proves the owner's escrow record under the root.
     bound: Option<BoundRoot>,
@@ -247,7 +246,6 @@ impl PreparedCustomRingMerge {
             input_tree: input.input_tree,
             output_tree: input.output_tree,
             ring: self.ring,
-            mode: config.mode,
             co_signer,
             bound,
             data: CustomRingMergeIxData {
@@ -284,7 +282,6 @@ impl ProvenCustomRingMerge {
             output_tree: self.output_tree,
             payer,
             co_signer: self.co_signer,
-            mode: self.mode,
             data: self.data.clone(),
         }
         .instruction()
@@ -328,7 +325,6 @@ impl RingMergeOperation {
             }
             .unchecked()?
             .map(|(_, signer)| signer),
-            mode: config.mode,
             data: CustomRingMergeIxData {
                 own_revision: Default::default(),
                 output_ring_data_hash: merge.inner.output_utxo.ring_data_hash.unwrap_or_default(),
@@ -359,7 +355,7 @@ impl RingMergeOperation {
     }
 }
 
-/// `[config, policy?, co-signer record and signer?]` ahead of SPP's merge list.
+/// `[ring, co-signer record and signer?]` ahead of SPP's merge list.
 #[must_use]
 pub struct CustomRingMergeInstruction {
     pub ring: CustomRing,
@@ -367,8 +363,6 @@ pub struct CustomRingMergeInstruction {
     pub output_tree: Address,
     pub payer: Address,
     pub co_signer: Option<Address>,
-    /// A key escrow merge binds the policy's own root at `own_revision`.
-    pub mode: RingMode,
     pub data: CustomRingMergeIxData,
 }
 
@@ -391,10 +385,7 @@ impl CustomRingMergeInstruction {
         }
         .instruction();
         instruction.data = data;
-        let mut prefix = vec![AccountMeta::new_readonly(self.ring.config_pda(), false)];
-        if self.mode == RingMode::ConfidentialEscrow {
-            prefix.push(AccountMeta::new_readonly(self.ring.policy_pda(), false));
-        }
+        let mut prefix = vec![AccountMeta::new_readonly(self.ring.policy_pda(), false)];
         prefix.extend(
             self.co_signer
                 .into_iter()

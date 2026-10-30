@@ -1,8 +1,6 @@
 //! The ring's accounts as the chain holds them, every read checked against its canonical address.
 
-use custom_ring_interface::{
-    CoSignScope, CoSigner, RingAccount, RingMode, RingPolicy, RingProgramConfig,
-};
+use custom_ring_interface::{CoSignScope, CoSigner, RingAccount, RingMode, RingPolicy, RingRoles};
 use solana_account::Account;
 use solana_address::Address;
 use spr_client::AsyncRpc;
@@ -17,9 +15,10 @@ pub struct CustomRing {
     program_id: Address,
 }
 
+/// The ring account, decoded once.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CustomRingConfig {
-    pub authority: Address,
+    pub roles: RingRoles,
     pub auditor_pubkey: X25519Pubkey,
     /// A policy ring enforces its table, an audit-only ring proves only the audit statement.
     pub has_policy: bool,
@@ -29,7 +28,7 @@ pub struct CustomRingConfig {
     pub co_signer_classes: Option<CoSignScope>,
     pub delegate: Option<Address>,
     pub created_slot: u64,
-    account: RingProgramConfig,
+    account: Box<RingPolicy>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -52,7 +51,6 @@ pub struct RingRegistration {
 pub struct RingStatus {
     pub config: CustomRingConfig,
     pub registration: Option<RingRegistration>,
-    pub policy: Option<Box<RingPolicy>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -79,10 +77,6 @@ impl CustomRing {
 
     fn pda(self, seeds: &[&[u8]]) -> (Address, u8) {
         Address::find_program_address(seeds, &self.program_id)
-    }
-
-    pub fn config_pda(self) -> Address {
-        self.pda(&[RingProgramConfig::SEED]).0
     }
 
     pub fn policy_pda(self) -> Address {
@@ -125,10 +119,10 @@ impl CustomRing {
         self,
         rpc: &(impl AsyncRpc + ?Sized),
     ) -> Result<Option<CustomRingConfig>, RingError> {
-        let Some(account) = self.read::<RingProgramConfig>(rpc).await? else {
+        let Some(account) = self.read::<RingPolicy>(rpc).await? else {
             return Ok(None);
         };
-        CustomRingConfig::new(account, self.config_pda()).map(Some)
+        CustomRingConfig::new(Box::new(account), self.policy_pda()).map(Some)
     }
 
     pub async fn require_config(
@@ -157,10 +151,11 @@ impl CustomRing {
         self,
         rpc: &(impl AsyncRpc + ?Sized),
     ) -> Result<Option<PinnedPolicy>, RingError> {
-        if !self.require_config(rpc).await?.has_policy {
+        let config = self.require_config(rpc).await?;
+        if !config.has_policy {
             return Ok(None);
         }
-        PinnedPolicy::of(&*self.require_policy(rpc).await?).map(Some)
+        PinnedPolicy::of(config.account()).map(Some)
     }
 
     /// `None` when `signer` holds no record.
@@ -217,7 +212,6 @@ impl CustomRing {
         Ok(RingStatus {
             config: self.require_config(rpc).await?,
             registration: self.registration(rpc).await?,
-            policy: self.policy(rpc).await?,
         })
     }
 }
@@ -229,10 +223,10 @@ impl CustomRingCoSigner {
 }
 
 impl CustomRingConfig {
-    fn new(account: RingProgramConfig, address: Address) -> Result<Self, RingError> {
+    fn new(account: Box<RingPolicy>, address: Address) -> Result<Self, RingError> {
         let invalid = || RingError::InvalidAccount { address };
         Ok(Self {
-            authority: account.authority,
+            roles: account.roles,
             auditor_pubkey: X25519Pubkey::from_bytes(account.auditor_pubkey)
                 .map_err(|_| invalid())?,
             has_policy: account.has_policy(),
@@ -244,7 +238,7 @@ impl CustomRingConfig {
         })
     }
 
-    pub fn account(&self) -> &RingProgramConfig {
+    pub fn account(&self) -> &RingPolicy {
         &self.account
     }
 }

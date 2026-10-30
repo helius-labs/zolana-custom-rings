@@ -203,14 +203,14 @@ impl RecordWriter {
             .ok_or_else(|| RecordUpdateRefusal::UnknownUpdate.into())
     }
 
-    /// One page of the ring's enrolments that await its config authority, oldest first.
+    /// One page of the ring's enrolments that await its policy authority, oldest first.
     pub(crate) async fn pending_enrolments(
         &self,
         signer: Address,
         request: &GetPendingEnrolmentsRequest,
     ) -> Result<GetPendingEnrolmentsResponse, RingRpcError> {
         let ring = request.ring.0;
-        self.require_config_authority(ring, signer).await?;
+        self.require_policy_authority(ring, signer).await?;
         let mut enrolments = self
             .queue()
             .awaiting_page(AwaitingPage {
@@ -247,7 +247,7 @@ impl RecordWriter {
         signer: Address,
         update_id: &RecordUpdateId,
     ) -> Result<RecordUpdateStatus, RingRpcError> {
-        self.require_config_authority(ring, signer).await?;
+        self.require_policy_authority(ring, signer).await?;
         let _queueing = self.submits.lock().await;
         if !self.queue().refuse_awaiting(ring, &update_id.0 .0).await? {
             return Err(RecordUpdateRefusal::UnknownEnrolment.into());
@@ -555,7 +555,7 @@ impl RecordWriter {
         Ok(rings)
     }
 
-    async fn require_config_authority(
+    async fn require_policy_authority(
         &self,
         ring: Address,
         signer: Address,
@@ -565,8 +565,8 @@ impl RecordWriter {
             .ring_config(ring)
             .await?
             .ok_or(RecordUpdateRefusal::UnknownRing)?;
-        if config.authority != signer {
-            return Err(RecordUpdateRefusal::NotConfigAuthority.into());
+        if config.roles.policy != signer {
+            return Err(RecordUpdateRefusal::NotPolicyAuthority.into());
         }
         Ok(())
     }

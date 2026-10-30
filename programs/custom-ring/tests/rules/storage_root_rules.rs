@@ -1,8 +1,8 @@
 //! Policy transfers read every root from the policy's mirrors, refused until `SyncRoots` copies it.
 
 use custom_ring_interface::{
-    storage::Revision, CustomRingError, PolicyTableIxData, RingPolicy, RingRail, SourceSpec,
-    UpdatePolicyIxData,
+    storage::Revision, CustomRingError, PolicyTableIxData, RingPolicy, RingRail, RingRole,
+    SourceSpec, UpdatePolicyIxData,
 };
 use solana_address::Address;
 use solana_keypair::{Keypair, Signer};
@@ -13,7 +13,7 @@ use crate::{
         allow_list_table, policy_pda, reaches_verification, refused, retired, root, sync_roots,
         Ring, Setup, UpdatePolicyIx, RECORDS,
     },
-    transact_rules::{confidential, policy_meta, Fixture},
+    transact_rules::{confidential, Fixture},
 };
 
 const CURATOR: Address = Address::new_from_array([0x5c; 32]);
@@ -22,10 +22,10 @@ const CURATOR: Address = Address::new_from_array([0x5c; 32]);
 fn a_policy_transfer_proves_under_a_synced_storage_root() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::Policy);
-    let authority = ring.authority.pubkey();
+    let policy_key = ring.roles.policy.pubkey();
     ring.store_registry(
         RECORDS,
-        &authority,
+        &policy_key,
         &[root(1, [0x0d; 32]), retired(0, [0x0e; 32], 1_000)],
     );
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
@@ -33,18 +33,18 @@ fn a_policy_transfer_proves_under_a_synced_storage_root() {
     policy.own_revision = Revision::from(1);
     // The mirror holds revision 0 alone until the writer syncs.
     refused(
-        confidential(&mut ring, vec![policy_meta()], &data),
+        confidential(&mut ring, Vec::new(), &data),
         CustomRingError::MirrorRootExpired,
     );
     ring.send(sync_roots(&RECORDS), &[]).unwrap();
-    reaches_verification(confidential(&mut ring, vec![policy_meta()], &data));
+    reaches_verification(confidential(&mut ring, Vec::new(), &data));
     // A retired root keeps its registry expiry in the mirror.
     data.policy.as_mut().unwrap().own_revision = Revision::from(0);
     ring.warp(999);
-    reaches_verification(confidential(&mut ring, vec![policy_meta()], &data));
+    reaches_verification(confidential(&mut ring, Vec::new(), &data));
     ring.warp(1_000);
     refused(
-        confidential(&mut ring, vec![policy_meta()], &data),
+        confidential(&mut ring, Vec::new(), &data),
         CustomRingError::MirrorRootExpired,
     );
 }
@@ -53,7 +53,7 @@ fn a_policy_transfer_proves_under_a_synced_storage_root() {
 fn a_curator_registry_of_another_authority_serves_a_list_after_sync_roots() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::Policy);
-    let authority = ring.authority.insecure_clone();
+    let authority = ring.holder(RingRole::Policy);
     ring.store_registry(CURATOR, &Keypair::new().pubkey(), &[root(4, [0x0c; 32])]);
     let curated = PolicyTableIxData {
         sources: vec![SourceSpec {
@@ -75,7 +75,7 @@ fn a_curator_registry_of_another_authority_serves_a_list_after_sync_roots() {
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
     data.policy.as_mut().unwrap().curator_revision = Some(Revision::from(4));
     refused(
-        confidential(&mut ring, vec![policy_meta()], &data),
+        confidential(&mut ring, Vec::new(), &data),
         CustomRingError::MirrorNotSynced,
     );
     // Only the records and the curator source have a mirror.
@@ -86,14 +86,14 @@ fn a_curator_registry_of_another_authority_serves_a_list_after_sync_roots() {
         CustomRingError::UnmirroredRegistry,
     );
     ring.send(sync_roots(&CURATOR), &[]).unwrap();
-    reaches_verification(confidential(&mut ring, vec![policy_meta()], &data));
+    reaches_verification(confidential(&mut ring, Vec::new(), &data));
 }
 
 #[test]
 fn update_policy_rebinds_the_records_to_another_registry_of_the_same_authority() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::Policy);
-    let authority = ring.authority.insecure_clone();
+    let authority = ring.holder(RingRole::Policy);
     let rebind = |records: Address| {
         UpdatePolicyIx {
             authority: authority.pubkey(),
@@ -122,7 +122,7 @@ fn update_policy_rebinds_the_records_to_another_registry_of_the_same_authority()
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
     data.policy.as_mut().unwrap().own_revision = Revision::from(3);
     refused(
-        confidential(&mut ring, vec![policy_meta()], &data),
+        confidential(&mut ring, Vec::new(), &data),
         CustomRingError::MirrorNotSynced,
     );
     refused(
@@ -130,5 +130,5 @@ fn update_policy_rebinds_the_records_to_another_registry_of_the_same_authority()
         CustomRingError::UnmirroredRegistry,
     );
     ring.send(sync_roots(&records), &[]).unwrap();
-    reaches_verification(confidential(&mut ring, vec![policy_meta()], &data));
+    reaches_verification(confidential(&mut ring, Vec::new(), &data));
 }

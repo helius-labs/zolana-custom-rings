@@ -9,13 +9,12 @@ use solana_keypair::{Keypair, Signer};
 use crate::{
     common::{reaches_verification, refused, Ring, Sent, Setup},
     forward_rules::{deposit_instruction, merge_data, merge_instruction_with, ring_deposit},
-    transact_rules::{policy_meta, send, spp_list, Fixture},
+    transact_rules::{send, spp_list, Fixture},
 };
 
-/// An anonymous policy transfer, `prefix` after the registry, the payer its only signer.
+/// An anonymous policy transfer, `prefix` after the ring account, the payer its only signer.
 fn transfer(ring: &mut Ring, prefix: Vec<AccountMeta>, data: &RingTransactData<'_>) -> Sent {
     let spp = spp_list(&ring.payer.pubkey(), data, &[]);
-    let prefix = [vec![policy_meta()], prefix].concat();
     send(
         ring,
         tag::TRANSFER,
@@ -52,7 +51,7 @@ fn an_anonymous_policy_transfer_takes_no_signer_but_the_payer() {
         send(
             &mut ring,
             tag::TRANSFER,
-            vec![policy_meta()],
+            Vec::new(),
             data.encode().unwrap(),
             spp,
             &[&owner],
@@ -84,15 +83,11 @@ fn an_anonymous_transfer_reaches_its_keys_under_any_tags_and_bodies() {
             tag: &tags[1],
             body: &body,
         });
-        let prefix = match policy {
-            true => vec![policy_meta()],
-            false => Vec::new(),
-        };
         let spp = spp_list(&ring.payer.pubkey(), &data, &[]);
         reaches_verification(send(
             &mut ring,
             tag::TRANSFER,
-            prefix,
+            Vec::new(),
             data.encode().unwrap(),
             spp,
             &[],
@@ -146,10 +141,7 @@ fn an_anonymous_policy_ring_refuses_the_delegate_rail() {
         send(
             &mut ring,
             tag::AUTHORITY_TRANSFER,
-            vec![
-                policy_meta(),
-                AccountMeta::new_readonly(delegate.pubkey(), true),
-            ],
+            vec![AccountMeta::new_readonly(delegate.pubkey(), true)],
             data.encode().unwrap(),
             spp,
             &[&delegate],
@@ -162,7 +154,7 @@ fn an_anonymous_policy_ring_refuses_the_delegate_rail() {
 fn an_anonymous_policy_merge_discloses_its_owner_to_the_auditor_alone() {
     let mut ring = Ring::new(Setup::AnonymousPolicy);
     let mut merge = |data| {
-        let instruction = merge_instruction_with(&ring, None, &data);
+        let instruction = merge_instruction_with(&ring, &data);
         ring.send(instruction, &[])
     };
     let disclosed = |registry, inputs| {

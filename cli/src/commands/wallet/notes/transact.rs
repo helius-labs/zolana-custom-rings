@@ -5,7 +5,7 @@ use std::str::FromStr;
 use anyhow::{bail, ensure, Context as _, Result};
 use custom_ring_interface::{
     cosign::{CoSignDemand, CoSignRequirement},
-    AnonymousSpend, RingProgramConfig, RingRail,
+    AnonymousSpend, RingPolicy, RingRail,
 };
 use custom_ring_sdk::{
     select_spend_where, shape_keyed, AnonymousMove, AnonymousPayment, CoSignScope,
@@ -836,7 +836,7 @@ impl CoSigner {
 }
 
 impl Requirement {
-    fn of(config: &RingProgramConfig, demand: Demand) -> Result<Self> {
+    fn of(config: &RingPolicy, demand: Demand) -> Result<Self> {
         let demanded = CoSignDemand {
             approval_required: demand == Demand::Approval,
             classes: demand.classes(),
@@ -1295,7 +1295,6 @@ fn read_back(ctx: &Context, reader: &Keypair, signature: Signature) -> Result<()
 
 #[cfg(test)]
 mod tests {
-    use bytemuck::Zeroable;
     use custom_ring_sdk::FirstContact;
     use spr_keypair::SigningKey;
 
@@ -1304,8 +1303,8 @@ mod tests {
 
     const RING: Address = Address::new_from_array([4; 32]);
 
-    fn configured(scope: CoSignScope) -> RingProgramConfig {
-        let mut config = RingProgramConfig::zeroed();
+    fn configured(scope: CoSignScope) -> Box<RingPolicy> {
+        let mut config: Box<RingPolicy> = bytemuck::zeroed_box();
         config.co_signers = custom_ring_interface::CoSignerCounts::default()
             .added(scope)
             .unwrap();
@@ -1325,7 +1324,7 @@ mod tests {
             }
         }
 
-        fn signs(&self, config: &RingProgramConfig, demand: Demand) -> Result<Option<Address>> {
+        fn signs(&self, config: &RingPolicy, demand: Demand) -> Result<Option<Address>> {
             Ok(self
                 .sign_for(Requirement::of(config, demand)?)?
                 .map(|cosigner| cosigner.pubkey()))
@@ -1349,7 +1348,7 @@ mod tests {
         assert_eq!(ABSENT.signs(&withdrawals, Demand::Transfer).unwrap(), None);
         assert!(refusal(ABSENT.signs(&withdrawals, Demand::Approval))
             .contains("pass --cosigner-keypair"));
-        let none = RingProgramConfig::zeroed();
+        let none: Box<RingPolicy> = bytemuck::zeroed_box();
         assert_eq!(ABSENT.signs(&none, Demand::Transfer).unwrap(), None);
         assert!(refusal(ABSENT.signs(&none, Demand::Approval))
             .contains("dual control needs a configured co-signer"));

@@ -3,8 +3,8 @@
 use curve25519_dalek::constants::{ED25519_BASEPOINT_POINT, EIGHT_TORSION};
 use custom_ring_interface::{
     CustomRingMergeIxData, CustomRingMergeIxDataRef, InitializeIxData, MergeDisclosure,
-    PolicyBindingIxData, PolicySourceIxData, RingMode, SetCoSignerRecordIxData, SetPausedIxData,
-    SourceSpec, UpdatePolicyIxData, AUDIT_CIPHERTEXT_LEN,
+    PolicyBindingIxData, PolicySourceIxData, RingRole, RingRoles, SetCoSignerRecordIxData,
+    SetPausedIxData, SourceSpec, UpdateAuthorityIxData, UpdatePolicyIxData, AUDIT_CIPHERTEXT_LEN,
 };
 use custom_ring_sdk::{
     tag, ClearCoSigner, CoSignScope, CustomRing, CustomRingMergeInstruction, InitialPolicy,
@@ -78,9 +78,17 @@ fn replace_rules(
 fn policy_write() -> Vec<AccountMeta> {
     vec![
         AccountMeta::new_readonly(authority(), true),
-        AccountMeta::new_readonly(ring().config_pda(), false),
         AccountMeta::new(ring().policy_pda(), false),
     ]
+}
+
+fn roles() -> RingRoles {
+    RingRoles {
+        admin: Address::new_from_array([21; 32]),
+        policy: Address::new_from_array([22; 32]),
+        pauser: Address::new_from_array([23; 32]),
+        cosign_admin: Address::new_from_array([24; 32]),
+    }
 }
 
 fn split(instruction: &Instruction) -> (u8, &[u8]) {
@@ -94,13 +102,12 @@ fn parse<'a, T: SchemaRead<'a, DefaultConfig, Dst = T>>(body: &'a [u8]) -> T {
 }
 
 #[test]
-fn initialize_runs_under_the_upgrade_authority_and_appends_the_policy_accounts_only_with_a_policy()
-{
+fn initialize_runs_under_the_upgrade_authority_and_appends_the_records_only_with_a_policy() {
     let auditor_pubkey = X25519Keypair::from_bytes(&[5; 32]).pubkey();
     let accounts = vec![
         AccountMeta::new(payer(), true),
         AccountMeta::new_readonly(authority(), true),
-        AccountMeta::new(ring().config_pda(), false),
+        AccountMeta::new(ring().policy_pda(), false),
         AccountMeta::new_readonly(SYSTEM, false),
         AccountMeta::new_readonly(program(), false),
         AccountMeta::new_readonly(program_data(), false),
@@ -115,6 +122,7 @@ fn initialize_runs_under_the_upgrade_authority_and_appends_the_policy_accounts_o
             authority: authority(),
             auditor_pubkey,
             kind,
+            roles: roles(),
             policy,
         }
         .instruction()
@@ -130,6 +138,7 @@ fn initialize_runs_under_the_upgrade_authority_and_appends_the_policy_accounts_o
         InitializeIxData {
             auditor_pubkey: *auditor_pubkey.as_bytes(),
             kind: RingKind::Anonymous,
+            roles: roles(),
             policy: None,
         }
     );
@@ -156,7 +165,6 @@ fn initialize_runs_under_the_upgrade_authority_and_appends_the_policy_accounts_o
         [
             accounts,
             vec![
-                AccountMeta::new(ring().policy_pda(), false),
                 AccountMeta::new_readonly(records.records, false),
                 AccountMeta::new_readonly(curator, false),
             ]
@@ -194,23 +202,30 @@ fn a_grant_takes_only_a_canonical_prime_order_ed25519_reader() {
 }
 
 #[test]
-fn update_authority_takes_both_signers() {
+fn update_authority_takes_both_signers_and_names_the_role() {
     let new_authority = Address::new_from_array([31; 32]);
     let instruction = UpdateAuthority {
         ring: ring(),
-        authority: authority(),
+        admin: authority(),
         new_authority,
+        role: RingRole::CosignAdmin,
     }
-    .instruction();
+    .instruction()
+    .unwrap();
     assert_eq!(
         instruction.accounts,
         vec![
             AccountMeta::new_readonly(authority(), true),
             AccountMeta::new_readonly(new_authority, true),
-            AccountMeta::new(ring().config_pda(), false),
+            AccountMeta::new(ring().policy_pda(), false),
         ]
     );
-    assert_eq!(instruction.data, [tag::UPDATE_AUTHORITY]);
+    let (ix_tag, body) = split(&instruction);
+    assert_eq!(ix_tag, tag::UPDATE_AUTHORITY);
+    assert_eq!(
+        parse::<UpdateAuthorityIxData>(body).role,
+        RingRole::CosignAdmin
+    );
 }
 
 #[test]
@@ -223,7 +238,7 @@ fn pause_and_resume_reach_spp_through_the_ring_auth() {
             instruction.accounts,
             vec![
                 AccountMeta::new_readonly(authority(), true),
-                AccountMeta::new_readonly(ring().config_pda(), false),
+                AccountMeta::new_readonly(ring().policy_pda(), false),
                 AccountMeta::new(ring_auth(), false),
                 AccountMeta::new_readonly(pda::shielded_pool_program_id(), false),
             ]
@@ -253,7 +268,7 @@ fn co_signer_writes_name_the_signers_record() {
         vec![
             AccountMeta::new(payer(), true),
             AccountMeta::new_readonly(authority(), true),
-            AccountMeta::new(ring().config_pda(), false),
+            AccountMeta::new(ring().policy_pda(), false),
             record.clone(),
             AccountMeta::new_readonly(Address::default(), false),
         ]
@@ -279,7 +294,7 @@ fn co_signer_writes_name_the_signers_record() {
         clear.accounts,
         vec![
             AccountMeta::new_readonly(authority(), true),
-            AccountMeta::new(ring().config_pda(), false),
+            AccountMeta::new(ring().policy_pda(), false),
             record,
             AccountMeta::new(rent_recipient, false),
         ]
@@ -288,7 +303,7 @@ fn co_signer_writes_name_the_signers_record() {
 }
 
 #[test]
-fn set_delegate_runs_under_the_config_authority_and_the_delegate_beside_the_policy() {
+fn set_delegate_runs_under_the_admin_and_the_delegate() {
     let delegate = Address::new_from_array([34; 32]);
     let instruction = SetDelegate {
         ring: ring(),
@@ -300,9 +315,8 @@ fn set_delegate_runs_under_the_config_authority_and_the_delegate_beside_the_poli
         instruction.accounts,
         vec![
             AccountMeta::new_readonly(authority(), true),
-            AccountMeta::new(ring().config_pda(), false),
+            AccountMeta::new(ring().policy_pda(), false),
             AccountMeta::new_readonly(delegate, true),
-            AccountMeta::new_readonly(ring().policy_pda(), false),
         ]
     );
     assert_eq!(instruction.data, [tag::SET_DELEGATE]);
@@ -467,7 +481,6 @@ fn an_anonymous_merge_names_no_registry() {
         output_tree,
         payer: payer(),
         co_signer: None,
-        mode: RingMode::Anonymous,
         data: CustomRingMergeIxData {
             own_revision: Default::default(),
             output_ring_data_hash: [0; 32],
@@ -480,7 +493,7 @@ fn an_anonymous_merge_names_no_registry() {
     assert_eq!(
         instruction.accounts,
         [
-            vec![AccountMeta::new_readonly(ring().config_pda(), false)],
+            vec![AccountMeta::new_readonly(ring().policy_pda(), false)],
             spp.accounts
         ]
         .concat()
@@ -488,7 +501,7 @@ fn an_anonymous_merge_names_no_registry() {
 }
 
 #[test]
-fn a_merge_names_the_config_the_policy_and_the_co_signer_ahead_of_spp() {
+fn a_merge_names_the_ring_and_the_co_signer_ahead_of_spp() {
     let (input_tree, output_tree) = (pda::tree(1), pda::tree(2));
     let data = CustomRingMergeIxData {
         own_revision: 3.into(),
@@ -526,15 +539,11 @@ fn a_merge_names_the_config_the_policy_and_the_co_signer_ahead_of_spp() {
             output_tree,
             payer: payer(),
             co_signer,
-            mode: RingMode::ConfidentialEscrow,
             data: data.clone(),
         }
         .instruction()
         .unwrap();
-        let mut prefix = vec![
-            AccountMeta::new_readonly(ring().config_pda(), false),
-            AccountMeta::new_readonly(ring().policy_pda(), false),
-        ];
+        let mut prefix = vec![AccountMeta::new_readonly(ring().policy_pda(), false)];
         prefix.extend(co_signer.into_iter().flat_map(|co_signer| {
             [
                 AccountMeta::new_readonly(ring().co_signer_pda(&co_signer), false),

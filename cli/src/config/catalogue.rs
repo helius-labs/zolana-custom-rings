@@ -290,7 +290,8 @@ mod tests {
         );
         assert!(registered_rings([(address, &bytes[1..])]).is_err());
 
-        let mut registry = RingPolicy::new(0, Address::default());
+        let mut registry: Box<RingPolicy> = bytemuck::zeroed_box();
+        registry.discriminator = custom_ring_interface::RING_POLICY;
         registry.sources[ListId::Block.slot()] = SourceSlot {
             list_id: ListId::Block as u8,
             registry: Address::default(),

@@ -204,7 +204,7 @@ impl<S: TransactionSource> AuditService<S> {
         self.authorize_utxos(request).await?.execute()
     }
 
-    /// The upgrade authority asks before the config exists, the config authority after.
+    /// The upgrade authority asks before `Initialize`, the policy authority after.
     pub async fn auditor_key_statement(
         &self,
         auth: &AuthorityAuth,
@@ -343,7 +343,8 @@ impl<S: TransactionSource> AuditService<S> {
                     .ring_config(self.ring)
                     .await?
                     .ok_or(Unauthorized::NoConfig)?
-                    .authority
+                    .roles
+                    .policy
             }
         };
         let attestation = ReaderGrantAttestation {

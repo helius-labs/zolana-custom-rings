@@ -186,14 +186,14 @@ impl<S> Shared<S> {
 }
 
 impl<S: TransactionSource> Shared<S> {
-    /// The config authority, or the upgrade authority while no config exists.
+    /// The policy authority, or the upgrade authority before `Initialize`.
     pub(crate) async fn require_ring_authority(
         &self,
         ring: Address,
         signer: Address,
     ) -> Result<(), RingRpcError> {
         let ring_authority = match self.source.ring_config(ring).await? {
-            Some(config) => Some(config.authority),
+            Some(config) => Some(config.roles.policy),
             None => self.source.upgrade_authority(ring).await?,
         };
         if ring_authority != Some(signer) {

@@ -881,7 +881,10 @@ impl Fixture {
                 RING,
                 RingConfiguration {
                     auditor_pubkey: self.auditor.pubkey(),
-                    authority: authority().pubkey(),
+                    roles: custom_ring_interface::RingRoles {
+                        policy: authority().pubkey(),
+                        ..bytemuck::Zeroable::zeroed()
+                    },
                     mode: RingMode::Confidential,
                     delegate: None,
                 },

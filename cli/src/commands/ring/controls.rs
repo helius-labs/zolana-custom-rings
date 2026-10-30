@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use anyhow::{anyhow, bail, ensure, Context as _, Result};
+use custom_ring_interface::RingRole;
 use custom_ring_sdk::{
     ClearCoSigner, CoSignScope, CustomRingCoSigner, RingMode, RingRegistration, SetCoSigner,
     SetDelegate,
@@ -17,7 +18,6 @@ use crate::{
     file, keys, line,
     list::{ListChange, ListUpdate, Subject},
     policy,
-    records::NO_RING_POLICY,
     ui::{self, icon},
     CoSignerCommand, Context, DelegateCommand, ReaderCommand, AUDITOR_KEY_FILE,
 };
@@ -66,11 +66,12 @@ pub fn cosigner(ctx: &Context, command: CoSignerCommand) -> Result<()> {
                 delegate: ctx.ring_config()?.delegate,
             }
             .check()?;
-            let authority = ctx.funded_authority()?;
+            let payer = ctx.funded_authority()?;
+            let cosign_admin = ctx.role_keypair(RingRole::CosignAdmin)?;
             let set = SetCoSigner {
                 ring: ctx.ring,
-                payer: authority.pubkey(),
-                authority: authority.pubkey(),
+                payer: payer.pubkey(),
+                authority: cosign_admin.pubkey(),
                 signer: spec.key.0,
                 scope,
             }
@@ -90,7 +91,7 @@ pub fn cosigner(ctx: &Context, command: CoSignerCommand) -> Result<()> {
                 *policy != current.get(member).copied().unwrap_or_default()
             });
             // Set the co-signer before applying its threshold records.
-            ctx.send(&[authority], &[set])?;
+            ctx.send(&[payer, &cosign_admin], &[set])?;
             crate::records::write_mint_policies(ctx, &desired)?;
             line("co-signer", format_args!("{} set", spec.key));
             print_cosigners(ctx, Some(spec.key.0))
@@ -102,15 +103,16 @@ pub fn cosigner(ctx: &Context, command: CoSignerCommand) -> Result<()> {
                     .is_some(),
                 "{signer} holds no co-signer record"
             );
-            let authority = ctx.funded_authority()?;
+            let payer = ctx.funded_authority()?;
+            let cosign_admin = ctx.role_keypair(RingRole::CosignAdmin)?;
             let clear = ClearCoSigner {
                 ring: ctx.ring,
-                authority: authority.pubkey(),
+                authority: cosign_admin.pubkey(),
                 signer,
-                rent_recipient: authority.pubkey(),
+                rent_recipient: payer.pubkey(),
             }
             .instruction();
-            ctx.send(&[authority], &[clear])?;
+            ctx.send(&[payer, &cosign_admin], &[clear])?;
             line("co-signer", format_args!("{signer} cleared"));
             print_cosigners(ctx, None)
         }
@@ -201,16 +203,17 @@ pub fn reader(ctx: &Context, command: ReaderCommand) -> Result<()> {
 
 pub fn pause(ctx: &Context, paused: bool) -> Result<()> {
     let registration = require_initialized(ctx)?;
-    let authority = ctx.authority()?;
     let outcome = match (registration.paused == paused, paused) {
         (true, true) => "already paused",
         (true, false) => "already open",
         (false, _) => {
+            let payer = ctx.funded_authority()?;
+            let pauser = ctx.role_keypair(RingRole::Pauser)?;
             let set = match paused {
-                true => ctx.ring.pause(authority.pubkey())?,
-                false => ctx.ring.resume(authority.pubkey())?,
+                true => ctx.ring.pause(pauser.pubkey())?,
+                false => ctx.ring.resume(pauser.pubkey())?,
             };
-            ctx.send(&[authority], &[set])?;
+            ctx.send(&[payer, &pauser], &[set])?;
             ["resumed", "paused"][usize::from(paused)]
         }
     };
@@ -244,15 +247,14 @@ pub fn delegate(ctx: &Context, command: DelegateCommand) -> Result<()> {
                 "a delegate escrows keys only on a confidential policy ring"
             );
             ring_auditor_key(ctx, Path::new(AUDITOR_KEY_FILE))?;
-            ctx.block(ctx.ring.policy(ctx.chain()))?
-                .context(NO_RING_POLICY)?;
-            let authority = ctx.funded_authority()?;
+            let payer = ctx.funded_authority()?;
+            let admin = ctx.role_keypair(RingRole::Admin)?;
             let set = SetDelegate {
                 ring: ctx.ring,
-                authority: authority.pubkey(),
+                authority: admin.pubkey(),
                 delegate: delegate.pubkey(),
             };
-            ctx.send(&[authority, &delegate], &[set.instruction()])?;
+            ctx.send(&[payer, &admin, &delegate], &[set.instruction()])?;
             line("delegate", format_args!("{} set", delegate.pubkey()));
             ui::warn("every later transfer escrows its output keys");
         }

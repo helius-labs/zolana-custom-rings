@@ -1,10 +1,10 @@
-//! Instructions of the ring authority and the upgrade authority.
+//! Instructions of the ring roles and the upgrade authority.
 
 use custom_ring_interface::SYSTEM_PROGRAM_ID;
 use custom_ring_interface::{
     compute_unit_limit, tag, CoSignScope, InitializeIxData, InstructionTag, PolicyBindingIxData,
-    PolicySourceIxData, PolicyTableIxData, RingKind, SetCoSignerRecordIxData, SetPausedIxData,
-    SourceSpec, UpdatePolicyIxData,
+    PolicySourceIxData, PolicyTableIxData, RingKind, RingRole, RingRoles, SetCoSignerRecordIxData,
+    SetPausedIxData, SourceSpec, UpdateAuthorityIxData, UpdatePolicyIxData,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -23,7 +23,7 @@ pub enum SourceOwner {
     Curator(Address),
 }
 
-/// The upgrade authority signs and becomes the ring authority, SPP registers the ring in the same instruction.
+/// The upgrade authority signs and holds only the roles it names, SPP registers the ring in the same instruction.
 #[must_use]
 #[derive(Clone, Copy, Debug)]
 pub struct Initialize<'a> {
@@ -32,6 +32,7 @@ pub struct Initialize<'a> {
     pub authority: Address,
     pub auditor_pubkey: X25519Pubkey,
     pub kind: RingKind,
+    pub roles: RingRoles,
     /// Required on a policy ring, an audit-only ring takes it for its withdrawal exemptions.
     pub policy: Option<InitialPolicy<'a>>,
 }
@@ -44,16 +45,17 @@ pub struct InitialPolicy<'a> {
     pub table: PolicyTable<'a>,
 }
 
-/// Both keys sign, a mistyped address cannot strand the config.
+/// The admin and the new key sign, a mistyped address cannot strand the role.
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UpdateAuthority {
     pub ring: CustomRing,
-    pub authority: Address,
+    pub admin: Address,
     pub new_authority: Address,
+    pub role: RingRole,
 }
 
-/// Creates the signer's record or rescopes it.
+/// The co-signer admin creates the signer's record or rescopes it.
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SetCoSigner {
@@ -73,7 +75,7 @@ pub struct ClearCoSigner {
     pub rent_recipient: Address,
 }
 
-/// The delegate signs and is permanent.
+/// The admin and the delegate sign, the delegate is permanent.
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SetDelegate {
@@ -116,7 +118,7 @@ pub struct PolicyTable<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PolicyRecords {
     pub records: Address,
-    /// The records may answer to it beside the config authority.
+    /// The records may answer to it beside the policy authority.
     pub storage_authority: Address,
 }
 
@@ -131,7 +133,7 @@ impl Initialize<'_> {
         let mut accounts = vec![
             AccountMeta::new(self.payer, true),
             AccountMeta::new_readonly(self.authority, true),
-            AccountMeta::new(ring.config_pda(), false),
+            AccountMeta::new(ring.policy_pda(), false),
             AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
         ];
         accounts.extend(ring.upgrade_metas());
@@ -143,10 +145,7 @@ impl Initialize<'_> {
         let policy = match self.policy {
             Some(InitialPolicy { records, table }) => {
                 let TablePayload { data, curators } = table.payload()?;
-                accounts.extend([
-                    AccountMeta::new(ring.policy_pda(), false),
-                    AccountMeta::new_readonly(records.records, false),
-                ]);
+                accounts.push(AccountMeta::new_readonly(records.records, false));
                 accounts.extend(curators);
                 Some(PolicyBindingIxData {
                     storage_authority: records.storage_authority,
@@ -160,6 +159,7 @@ impl Initialize<'_> {
             &InitializeIxData {
                 auditor_pubkey: *self.auditor_pubkey.as_bytes(),
                 kind: self.kind,
+                roles: self.roles,
                 policy,
             },
         )?;
@@ -173,13 +173,17 @@ impl Initialize<'_> {
 }
 
 impl UpdateAuthority {
-    pub fn instruction(self) -> Instruction {
+    pub fn instruction(self) -> Result<Instruction, RingError> {
         let accounts = vec![
-            AccountMeta::new_readonly(self.authority, true),
+            AccountMeta::new_readonly(self.admin, true),
             AccountMeta::new_readonly(self.new_authority, true),
-            AccountMeta::new(self.ring.config_pda(), false),
+            AccountMeta::new(self.ring.policy_pda(), false),
         ];
-        self.ring.ix(accounts, vec![tag::UPDATE_AUTHORITY])
+        let data = tagged(
+            tag::UPDATE_AUTHORITY,
+            &UpdateAuthorityIxData { role: self.role },
+        )?;
+        Ok(self.ring.ix(accounts, data))
     }
 }
 
@@ -194,7 +198,7 @@ impl SetCoSigner {
         let accounts = vec![
             AccountMeta::new(self.payer, true),
             AccountMeta::new_readonly(self.authority, true),
-            AccountMeta::new(ring.config_pda(), false),
+            AccountMeta::new(ring.policy_pda(), false),
             AccountMeta::new(ring.co_signer_pda(&self.signer), false),
             AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
         ];
@@ -207,7 +211,7 @@ impl ClearCoSigner {
         let ring = self.ring;
         let accounts = vec![
             AccountMeta::new_readonly(self.authority, true),
-            AccountMeta::new(ring.config_pda(), false),
+            AccountMeta::new(ring.policy_pda(), false),
             AccountMeta::new(ring.co_signer_pda(&self.signer), false),
             AccountMeta::new(self.rent_recipient, false),
         ];
@@ -218,11 +222,8 @@ impl ClearCoSigner {
 impl SetDelegate {
     pub fn instruction(self) -> Instruction {
         let ring = self.ring;
-        let mut accounts = ring.config_write_metas(self.authority);
-        accounts.extend([
-            AccountMeta::new_readonly(self.delegate, true),
-            AccountMeta::new_readonly(ring.policy_pda(), false),
-        ]);
+        let mut accounts = ring.ring_write_metas(self.authority);
+        accounts.push(AccountMeta::new_readonly(self.delegate, true));
         ring.ix(accounts, vec![tag::SET_DELEGATE])
     }
 }
@@ -230,7 +231,7 @@ impl SetDelegate {
 impl UpdatePolicy<'_> {
     pub fn instruction(self) -> Result<Instruction, RingError> {
         let ring = self.ring;
-        let mut accounts = ring.policy_write_metas(self.authority);
+        let mut accounts = ring.ring_write_metas(self.authority);
         let update = match self.update {
             PolicyUpdate::Rules(table) => {
                 let TablePayload { data, curators } = table.payload()?;
@@ -335,7 +336,7 @@ impl CustomRing {
     ) -> Result<Instruction, RingError> {
         let accounts = vec![
             AccountMeta::new_readonly(authority, true),
-            AccountMeta::new_readonly(self.config_pda(), false),
+            AccountMeta::new_readonly(self.policy_pda(), false),
             AccountMeta::new(self.ring_auth_pda(), false),
             AccountMeta::new_readonly(pda::shielded_pool_program_id(), false),
         ];
@@ -357,17 +358,9 @@ impl CustomRing {
         ]
     }
 
-    fn config_write_metas(self, authority: Address) -> Vec<AccountMeta> {
+    fn ring_write_metas(self, authority: Address) -> Vec<AccountMeta> {
         vec![
             AccountMeta::new_readonly(authority, true),
-            AccountMeta::new(self.config_pda(), false),
-        ]
-    }
-
-    fn policy_write_metas(self, authority: Address) -> Vec<AccountMeta> {
-        vec![
-            AccountMeta::new_readonly(authority, true),
-            AccountMeta::new_readonly(self.config_pda(), false),
             AccountMeta::new(self.policy_pda(), false),
         ]
     }

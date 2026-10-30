@@ -530,7 +530,10 @@ pub(crate) mod tests {
             let source = EscrowRingSource {
                 config: RingConfiguration {
                     auditor_pubkey: auditor.pubkey(),
-                    authority: Address::new_from_array([2; 32]),
+                    roles: custom_ring_interface::RingRoles {
+                        policy: Address::new_from_array([2; 32]),
+                        ..bytemuck::Zeroable::zeroed()
+                    },
                     mode: RingMode::ConfidentialEscrow,
                     delegate,
                 },

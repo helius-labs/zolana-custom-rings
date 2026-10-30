@@ -16,6 +16,7 @@ use std::{
 
 use anyhow::{anyhow, ensure, Context, Result};
 use custom_ring_cli::{localnet::GENESIS_PROGRAMS, Zolana, ZolanaServices};
+use custom_ring_interface::RingRoles;
 use custom_ring_sdk::{
     compute_unit_limit, CustomRing, InitialPolicy, Initialize, InitializeStorage, InstructionTag,
     MemberRecords, PolicyRecords, PolicyTable, RingError, RingKind, SyncRoots,
@@ -303,7 +304,39 @@ impl Tier {
     }
 }
 
-/// The payer doubles as the upgrade authority and the config authority.
+/// Derived from the payer, every helper finds the same role keys.
+pub struct RingRoleKeys {
+    pub admin: Keypair,
+    pub pauser: Keypair,
+    pub cosign_admin: Keypair,
+}
+
+impl RingRoleKeys {
+    pub fn of(payer: &Keypair) -> Self {
+        let derive = |role: u8| {
+            let mut secret = *payer.secret_bytes();
+            secret[31] ^= role;
+            Keypair::new_from_array(secret)
+        };
+        Self {
+            admin: derive(1),
+            pauser: derive(2),
+            cosign_admin: derive(3),
+        }
+    }
+
+    /// `payer` holds the policy role.
+    pub fn roles(&self, payer: &Keypair) -> RingRoles {
+        RingRoles {
+            admin: self.admin.pubkey(),
+            policy: payer.pubkey(),
+            pauser: self.pauser.pubkey(),
+            cosign_admin: self.cosign_admin.pubkey(),
+        }
+    }
+}
+
+/// The payer doubles as the upgrade authority and the policy authority.
 pub struct RegisterRing<'a> {
     pub ring: CustomRing,
     pub payer: &'a Keypair,
@@ -340,6 +373,7 @@ impl RegisterRing<'_> {
             authority,
             auditor_pubkey: self.auditor_pubkey,
             kind: self.tier.kind(),
+            roles: RingRoleKeys::of(self.payer).roles(self.payer),
             policy: Some(InitialPolicy {
                 records: PolicyRecords {
                     records: self.storage().registry(),
@@ -714,6 +748,25 @@ pub fn send(rpc: &SolanaRpc, payer: &dyn Signer, ixs: &[Instruction]) -> Result<
         &[payer],
         ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Transfer)),
     )?)
+}
+
+/// [`send`] with the role key the instructions name as their signer.
+#[must_use]
+pub struct SendAs<'a> {
+    pub rpc: &'a SolanaRpc,
+    pub payer: &'a dyn Signer,
+    pub holder: &'a dyn Signer,
+}
+
+impl SendAs<'_> {
+    pub fn send(self, ixs: &[Instruction]) -> Result<Signature> {
+        Ok(self.rpc.create_and_send_transaction(
+            ixs,
+            self.payer.pubkey(),
+            &[self.payer, self.holder],
+            ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Transfer)),
+        )?)
+    }
 }
 
 /// Sends a transaction that must be rejected and returns the runtime's typed failure,

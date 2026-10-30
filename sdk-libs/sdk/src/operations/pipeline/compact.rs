@@ -2,7 +2,7 @@
 
 use custom_ring_interface::{
     storage::Revision, tag, AnonymousProofData, CustomRingProof, InProofOwner, InputTrees,
-    PlainGroth16Proof, PolicyProof, PolicyRecipients, RingOutput, RingProgramConfig, RingRail,
+    PlainGroth16Proof, PolicyProof, PolicyRecipients, RingOutput, RingPolicy, RingRail,
     RingTransactData, SenderBundle, AUDIT_CIPHERTEXT_LEN, RING_DELIVERED_BODY_LEN,
 };
 use solana_address::Address;
@@ -254,8 +254,6 @@ pub(crate) struct TransactAccounts {
     /// Only the confidential rail names owner signers.
     pub owner_signers: Vec<Address>,
     pub interface_transfer_accounts: Vec<TransactInterfaceTransferAccounts>,
-    /// On a policy ring, and on any ring with a withdrawal exemption.
-    pub policy: Option<Address>,
     pub co_signer: Option<Address>,
     pub delegate: Option<Address>,
 }
@@ -265,7 +263,7 @@ impl TransactAccounts {
     pub fn instruction(
         &self,
         ring: CustomRing,
-        config: &RingProgramConfig,
+        config: &RingPolicy,
         parts: &TransactParts,
     ) -> Result<Instruction, RingError> {
         let data = parts.data();
@@ -297,11 +295,7 @@ impl TransactAccounts {
                 .accounts
             }
         };
-        let mut accounts = vec![AccountMeta::new_readonly(ring.config_pda(), false)];
-        accounts.extend(
-            self.policy
-                .map(|policy| AccountMeta::new_readonly(policy, false)),
-        );
+        let mut accounts = vec![AccountMeta::new_readonly(ring.policy_pda(), false)];
         accounts.extend(
             self.co_signer
                 .into_iter()

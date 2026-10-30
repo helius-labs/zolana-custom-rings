@@ -15,7 +15,7 @@ use spr_interface::instruction::instruction_data::deposit::RingDepositIxDataRef;
 use crate::instructions::{
     deposit_audit::{AuditedDeposit, DepositVerification},
     instruction_runtime::RingAuth,
-    loader::{check_funding_signer, load_config, load_policy, validate_spp_program, CoSignerSlot},
+    loader::{check_funding_signer, load_policy, validate_spp_program, CoSignerSlot},
     merge_disclosure::MergeAudit,
 };
 
@@ -28,14 +28,13 @@ pub fn process_merge_ix(
     let request = CustomRingMergeIxDataRef::from_bytes(data)?;
 
     let mut iter = AccountIterator::new(accounts);
-    let config = Box::new(*load_config(program_id, iter.next_account("config")?)?);
-    let mode = config.mode()?;
+    let ring = load_policy(program_id, iter.next_account("ring")?)?;
+    let mode = ring.mode()?;
     // 1. Only a key escrow ring binds its own root, its owner's record escrows the merged key.
     let root = match mode {
-        RingMode::ConfidentialEscrow => Some(
-            load_policy(program_id, iter.next_account("policy")?)?
-                .own_root(request.own_revision, Clock::get()?.slot)?,
-        ),
+        RingMode::ConfidentialEscrow => {
+            Some(ring.own_root(request.own_revision, Clock::get()?.slot)?)
+        }
         _ if request.own_revision.value() != 0 => {
             return Err(CustomRingError::UnexpectedMemberRegistryRoot.into())
         }
@@ -47,7 +46,7 @@ pub fn process_merge_ix(
         classes: CoSignScope::TRANSFERS,
         withdrawals: Vec::new(),
     };
-    let co_signer = match demand.requirement(&config)? {
+    let co_signer = match demand.requirement(&ring)? {
         Some(requirement) => Some(
             CoSignerSlot {
                 program_id,
@@ -77,7 +76,7 @@ pub fn process_merge_ix(
     MergeAudit {
         party_identities: &parties,
         program_id,
-        config: &config,
+        ring: &ring,
         anonymous: mode == RingMode::Anonymous,
         member_registry_root: root.as_ref(),
         output_ring_data_hash: request.output_ring_data_hash,
@@ -103,12 +102,12 @@ pub fn process_deposit_ix(
         .map_err(|_| CustomRingError::InvalidDepositData)?;
 
     let mut iter = AccountIterator::new(accounts);
-    let config = Box::new(*load_config(program_id, iter.next_account("config")?)?);
-    let mode = config.mode()?;
+    let ring = load_policy(program_id, iter.next_account("ring")?)?;
+    let mode = ring.mode()?;
     let key_escrow = mode == RingMode::ConfidentialEscrow;
     // 2. An escrow or policy ring binds its own root, a policy ring also its policy and any curator root.
-    let loaded = match key_escrow || config.has_policy() {
-        true => Some(load_policy(program_id, iter.next_account("policy")?)?),
+    let loaded = match key_escrow || ring.has_policy() {
+        true => Some(&*ring),
         false if audited.own_revision.value() != 0 => {
             return Err(CustomRingError::UnexpectedMemberRegistryRoot.into())
         }
@@ -141,7 +140,7 @@ pub fn process_deposit_ix(
         classes: CoSignScope::DEPOSITS,
         withdrawals: Vec::new(),
     };
-    if let Some(requirement) = demand.requirement(&config)? {
+    if let Some(requirement) = demand.requirement(&ring)? {
         CoSignerSlot {
             program_id,
             record: iter.next_account("co_signer_record")?,
@@ -177,7 +176,7 @@ pub fn process_deposit_ix(
     DepositVerification {
         program_id,
         tree: tree.address(),
-        auditor_pubkey: &config.auditor_pubkey,
+        auditor_pubkey: &ring.auditor_pubkey,
         anonymous,
         registry,
         assets: &assets,
