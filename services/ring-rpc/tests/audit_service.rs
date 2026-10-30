@@ -397,8 +397,8 @@ struct StaticSource {
     by_tag: HashMap<[u8; 32], Vec<ShieldedTransaction>>,
     /// The ring's own storage tree, rewritten while a hub serves it.
     records: Records,
-    /// Off while the policy mirrors no root of the tree.
-    records_synced: bool,
+    /// Off while the ring's records address holds no storage registry.
+    records_registered: bool,
     /// Per program, absent when immutable or not deployed.
     upgrade_authorities: HashMap<Address, Address>,
     healthy: bool,
@@ -641,11 +641,11 @@ impl TransactionSource for StaticSource {
     }
 
     async fn records_root(&self, _ring: Address) -> Result<RecordsTip, ClientError> {
-        if !self.records_synced {
-            return Ok(RecordsTip::Unsynced);
+        if !self.records_registered {
+            return Ok(RecordsTip::NoRegistry);
         }
         let root = self.records.root();
-        Ok(RecordsTip::Mirrored(StorageTip {
+        Ok(RecordsTip::Newest(StorageTip {
             registry: RECORDS,
             root: root.root.0,
             revision: root.revision,
@@ -933,7 +933,7 @@ impl Fixture {
                 reader_member(ReaderKey::ed25519(delegate().pubkey()).expect("delegate reader")),
                 reader_member(ReaderKey::p256(Passkey::new(46).pubkey()).expect("passkey reader")),
             ]),
-            records_synced: true,
+            records_registered: true,
             upgrade_authorities: HashMap::from([(RING, deployer().pubkey())]),
             healthy: true,
             assets: Some(RingAssets::new([]).expect("ring assets")),
@@ -1230,7 +1230,7 @@ impl Records {
         records
     }
 
-    /// The source mirrors the new root at once, as after `SyncRoots`.
+    /// The source serves the new root at once, as the registry does once storage applies it.
     fn list_reader(&self, member: Member, listed: bool) {
         let bit = ListId::Reader.record_bit();
         self.apply(QueueEntry {

@@ -1,6 +1,6 @@
 use custom_ring_interface::{
     cosign::CoSignDemand, merge_ring_instruction_data, ring_deposit_assets, CoSignScope,
-    CustomRingError, CustomRingMergeIxDataRef, DepositRegistry, RingMode,
+    CustomRingError, CustomRingMergeIxDataRef, DepositRegistry, RingMode, RootRead,
     RING_DEPOSIT_DEPOSITOR_INDEX, RING_DEPOSIT_RING_CONFIG_INDEX, RING_MERGE_PAYER_INDEX,
     RING_MERGE_RING_CONFIG_INDEX,
 };
@@ -15,7 +15,9 @@ use spr_interface::instruction::instruction_data::deposit::RingDepositIxDataRef;
 use crate::instructions::{
     deposit_audit::{AuditedDeposit, DepositVerification},
     instruction_runtime::RingAuth,
-    loader::{check_funding_signer, load_policy, validate_spp_program, CoSignerSlot},
+    loader::{
+        check_funding_signer, load_policy, validate_spp_program, CoSignerSlot, RegistrySlots,
+    },
     merge_disclosure::MergeAudit,
 };
 
@@ -30,16 +32,16 @@ pub fn process_merge_ix(
     let mut iter = AccountIterator::new(accounts);
     let ring = load_policy(program_id, iter.next_account("ring")?)?;
     let mode = ring.mode()?;
+    let registries = RegistrySlots {
+        ring: &ring,
+        read: RootRead::merge(&ring)?,
+    }
+    .load(|| Ok(iter.next_account("registry")?))?;
     // 1. Only a key escrow ring binds its own root, its owner's record escrows the merged key.
-    let root = match mode {
-        RingMode::ConfidentialEscrow => {
-            Some(ring.own_root(request.own_revision, Clock::get()?.slot)?)
-        }
-        _ if request.own_revision.value() != 0 => {
-            return Err(CustomRingError::UnexpectedMemberRegistryRoot.into())
-        }
-        _ => None,
-    };
+    let root = registries.roots(Clock::get()?.slot).own_if_read(
+        request.own_revision,
+        CustomRingError::UnexpectedMemberRegistryRoot,
+    )?;
     // 2. A merge is a transfer, a co-signer scoped to transfers signs it.
     let demand = CoSignDemand {
         approval_required: false,
@@ -105,35 +107,27 @@ pub fn process_deposit_ix(
     let ring = load_policy(program_id, iter.next_account("ring")?)?;
     let mode = ring.mode()?;
     let key_escrow = mode == RingMode::ConfidentialEscrow;
+    let registries = RegistrySlots {
+        ring: &ring,
+        read: RootRead::deposit(&ring)?,
+    }
+    .load(|| Ok(iter.next_account("registry")?))?;
+    let roots = registries.roots(Clock::get()?.slot);
     // 2. An escrow or policy ring binds its own root, a policy ring also its policy and any curator root.
-    let loaded = match key_escrow || ring.has_policy() {
-        true => Some(&*ring),
-        false if audited.own_revision.value() != 0 => {
-            return Err(CustomRingError::UnexpectedMemberRegistryRoot.into())
-        }
-        false => None,
-    };
-    let slot = Clock::get()?.slot;
-    let own_root = loaded
-        .as_ref()
-        .map(|policy| policy.own_root(audited.own_revision, slot))
-        .transpose()?;
-    let curator_root = match loaded.as_ref().filter(|policy| policy.curator().is_some()) {
-        Some(policy) => Some(policy.curator_root(audited.curator_revision, slot)?),
-        None if audited.curator_revision.value() != 0 => {
-            return Err(CustomRingError::UnexpectedCuratorRevision.into())
-        }
-        None => None,
-    };
-    let registry = loaded
-        .as_ref()
-        .zip(own_root.as_ref())
-        .map(|(policy, own_root)| DepositRegistry {
-            own_root,
-            curator_root: curator_root.as_ref(),
-            key_escrow,
-            policy_hash: policy.written_policy_hash(),
-        });
+    let own_root = roots.own_if_read(
+        audited.own_revision,
+        CustomRingError::UnexpectedMemberRegistryRoot,
+    )?;
+    let curator_root = roots.curator_if_read(
+        audited.curator_revision,
+        CustomRingError::UnexpectedCuratorRevision,
+    )?;
+    let registry = own_root.as_ref().map(|own_root| DepositRegistry {
+        own_root,
+        curator_root: curator_root.as_ref(),
+        key_escrow,
+        policy_hash: ring.written_policy_hash(),
+    });
     // 3. A co-signer scoped to deposits signs.
     let demand = CoSignDemand {
         approval_required: false,

@@ -52,7 +52,7 @@ The delivered statement carries no `private_tx_hash`. They bind the transfer thr
   withdrawal_hash ]
 ```
 
-- `policy_hash` comes from the ring policy, and `own_root` and `curator_root` are its mirrored roots at the frame's `own_revision` and `curator_revision`. `curator_root` is `0` without a curator.
+- `policy_hash` comes from the ring policy, and `own_root` and `curator_root` are the roots the records and curator registries serve at the frame's `own_revision` and `curator_revision`. `curator_root` is `0` without a curator.
 - `key_escrow` is `mode == ConfidentialEscrow`. The delegate key binds `approval_required = 0` and `key_escrow = 1`.
 - `sender` is `solana_owner_identity` of the sole owner signer or of the in-proof owner on the confidential rail, `sender_commitment` on the anonymous rail and `0` on the delegate rail.
 - `recipient_o` is output `o`'s owner identity from the frame on the confidential and delegate rails, `0` for a dummy slot. Every `recipient_o` is `0` on the anonymous rail.
@@ -83,7 +83,7 @@ The statement has 8 elements and no registry root.
 [ CRWX, own_root, asset_0, amount_0, asset_1, amount_1, asset_2, amount_2 ]
 ```
 
-`own_root` is the own mirror's root at the exemption's `own_revision`. Each used slot holds `hash_bytes(mint)` of one withdrawn mint, in first-seen order of the withdrawal legs, and `right_align` of the gross sum of that mint's withdrawal legs. Deposit legs do not enter the sum. Slots past the withdrawn mints are zeros.
+`own_root` is the records registry's root at the exemption's `own_revision`. Each used slot holds `hash_bytes(mint)` of one withdrawn mint, in first-seen order of the withdrawal legs, and `right_align` of the gross sum of that mint's withdrawal legs. Deposit legs do not enter the sum. Slots past the withdrawn mints are zeros.
 
 ## Deposit
 

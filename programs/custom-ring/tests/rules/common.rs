@@ -1,10 +1,12 @@
 use bytemuck::{Pod, Zeroable};
 use custom_ring_interface::{
     compute_unit_limit,
-    storage::{Revision, Root, StorageRegistry},
-    tag, CustomRingError, InitializeIxData, InstructionTag, PolicyBindingIxData, PolicyTableIxData,
-    RingKind, RingRole, RingRoles, SetCoSignerRecordIxData, SourceSpec, UpdateAuthorityIxData,
-    UpdatePolicyIxData, CO_SIGNER_PDA_SEED, RING_POLICY_PDA_SEED, STORAGE_PROGRAM_ID,
+    storage::{Revision, Root, RootUpdate, StorageRegistry},
+    storage_instruction::{StorageUpdateIxData, UpdateMode},
+    tag, ApplyRecordsIxData, CustomRingError, InitializeIxData, InstructionTag,
+    PolicyBindingIxData, PolicyTableIxData, RingKind, RingPolicy, RingRole, RingRoles, RootRead,
+    SetCoSignerRecordIxData, SourceSpec, UpdateAuthorityIxData, UpdatePolicyIxData,
+    CO_SIGNER_PDA_SEED, RING_POLICY_PDA_SEED, STORAGE_PROGRAM_ID,
 };
 use litesvm::LiteSVM;
 use solana_account::Account;
@@ -184,17 +186,47 @@ impl Ring {
             InstructionTag::Initialize,
             ring.send(initialize, &[&authority]),
         );
-        within_budget(
-            InstructionTag::SyncRoots,
-            ring.send(sync_roots(&RECORDS), &[]),
-        );
         ring
+    }
+
+    /// The registry accounts `read` passes after the ring account.
+    pub fn registries(&self, read: RootRead) -> Vec<AccountMeta> {
+        self.read::<RingPolicy>(&policy_pda())
+            .root_registries(read)
+            .map(|registry| AccountMeta::new_readonly(registry, false))
+            .collect()
     }
 
     /// A `StorageRegistry` of `authority` holding `roots` newest first.
     pub fn store_registry(&mut self, address: Address, authority: &Address, roots: &[Root]) {
         let mut registry = StorageRegistry::new(*authority, 0);
         registry.roots[..roots.len()].copy_from_slice(roots);
+        self.store(
+            address,
+            STORAGE_PROGRAM_ID,
+            bytemuck::bytes_of(&registry).to_vec(),
+        );
+    }
+
+    /// The registry after the storage program applies an `UpdateImmediate`.
+    pub fn apply_immediate(&mut self, address: Address, new_root: [u8; 32]) {
+        let mut registry: StorageRegistry = self.read(&address);
+        let apply = ApplyRecordsIxData {
+            new_root,
+            new_next_index: registry.next_index,
+            ..Zeroable::zeroed()
+        };
+        registry
+            .update(RootUpdate {
+                mode: UpdateMode::Immediate,
+                slot: 0,
+                data: &StorageUpdateIxData {
+                    revision: registry.roots[0].revision,
+                    writes: Vec::new(),
+                    apply: &apply,
+                },
+            })
+            .expect("apply the update");
         self.store(
             address,
             STORAGE_PROGRAM_ID,
@@ -467,16 +499,6 @@ impl InitializeIx<'_> {
             tagged(tag::INITIALIZE, &wincode::serialize(&self.data).unwrap()),
         )
     }
-}
-
-pub fn sync_roots(registry: &Address) -> Instruction {
-    instruction(
-        vec![
-            AccountMeta::new(policy_pda(), false),
-            AccountMeta::new_readonly(*registry, false),
-        ],
-        vec![tag::SYNC_ROOTS],
-    )
 }
 
 /// `UpdatePolicy`, the trailing accounts follow the ring.

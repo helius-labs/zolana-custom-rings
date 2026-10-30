@@ -20,8 +20,6 @@ mod set_cosigner;
 mod set_delegate;
 #[path = "configuration/access/set_paused.rs"]
 mod set_paused;
-#[path = "records/sync_roots.rs"]
-mod sync_roots;
 mod transfer;
 #[path = "configuration/access/update_authority.rs"]
 mod update_authority;
@@ -35,7 +33,6 @@ pub(crate) use initialize::process_initialize_ix;
 pub(crate) use set_cosigner::{process_clear_cosigner_ix, process_set_cosigner_ix};
 pub(crate) use set_delegate::process_set_delegate_ix;
 pub(crate) use set_paused::process_set_paused_ix;
-pub(crate) use sync_roots::process_sync_roots_ix;
 pub(crate) use transfer::process_transfer_ix;
 pub(crate) use update_authority::process_update_authority_ix;
 pub(crate) use update_policy::process_update_policy_ix;

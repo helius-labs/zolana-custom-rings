@@ -3,7 +3,9 @@
 use std::time::Duration;
 
 use custom_ring_interface::{
-    compute_unit_limit, storage::Revision, CustomRingError, InstructionTag, RingPolicy, RootMirror,
+    compute_unit_limit,
+    storage::{Revision, StorageRegistry},
+    CustomRingError, InstructionTag, RingPolicy,
 };
 use solana_address::Address;
 use solana_commitment_config::CommitmentLevel;
@@ -103,76 +105,69 @@ operations! {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Mirror {
-    Own,
-    Curator,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct BoundRoot {
-    pub ring: CustomRing,
-    pub mirror: Mirror,
-    /// The `StorageRegistry` the indexer serves the records of.
+    /// The registry the program reads the root from.
     pub registry: Address,
     pub revision: Revision,
     pub root: [u8; 32],
 }
 
 impl BoundRoot {
-    /// The newest root of the records mirror.
-    pub(crate) fn own(ring: CustomRing, policy: &RingPolicy) -> Result<Self, RingError> {
-        Self::mirrored(ring, Mirror::Own, &policy.records, &policy.own_roots)
+    /// The newest root of the ring's records registry.
+    pub(crate) async fn own(
+        policy: &RingPolicy,
+        rpc: &(impl AsyncRpc + ?Sized),
+    ) -> Result<Self, RingError> {
+        Self::newest_of(policy.records, rpc).await
     }
 
-    /// The newest root of the curator mirror, `None` without a curator source.
-    pub(crate) fn curator(
-        ring: CustomRing,
+    /// The newest root of the curator registry, `None` without a curator source.
+    pub(crate) async fn curator(
         policy: &RingPolicy,
+        rpc: &(impl AsyncRpc + ?Sized),
     ) -> Result<Option<Self>, RingError> {
-        policy
-            .curator()
-            .map(|curator| Self::mirrored(ring, Mirror::Curator, &curator, &policy.curator_roots))
-            .transpose()
+        match policy.curator() {
+            Some(curator) => Ok(Some(Self::newest_of(curator, rpc).await?)),
+            None => Ok(None),
+        }
     }
 
     pub(crate) async fn newest(
         ring: CustomRing,
         rpc: &(impl AsyncRpc + ?Sized),
     ) -> Result<Self, RingError> {
-        Self::own(ring, &*ring.require_policy(rpc).await?)
+        Self::own(&*ring.require_policy(rpc).await?, rpc).await
     }
 
-    fn mirrored(
-        ring: CustomRing,
-        mirror: Mirror,
-        registry: &Address,
-        roots: &RootMirror,
+    async fn newest_of(
+        registry: Address,
+        rpc: &(impl AsyncRpc + ?Sized),
     ) -> Result<Self, RingError> {
-        let newest = roots.roots[0];
-        if roots.registry != *registry || newest.hash == [0; 32] {
-            return Err(RingError::UnsyncedRoots {
-                registry: *registry,
-            });
-        }
+        let newest = live_registry(registry, rpc).await?.newest();
         Ok(Self {
-            ring,
-            mirror,
-            registry: *registry,
+            registry,
             revision: newest.revision,
             root: newest.hash,
         })
     }
 
-    /// `true` once the mirror no longer serves the root at its revision.
+    /// `true` once the registry no longer serves the root at its revision.
     async fn replaced(self, client: &(impl AsyncRpc + ?Sized)) -> Result<bool, RingError> {
-        let policy = self.ring.require_policy(client).await?;
+        let registry = live_registry(self.registry, client).await?;
         let slot = client.get_slot().await?;
-        let served = match self.mirror {
-            Mirror::Own => policy.own_root(self.revision, slot),
-            Mirror::Curator => policy.curator_root(self.revision, slot),
-        };
-        Ok(served != Ok(self.root))
+        Ok(registry.root(self.revision, slot) != Ok(self.root))
     }
+}
+
+/// `NotStorageRegistry` unless `registry` is an initialized storage registry.
+pub async fn live_registry(
+    registry: Address,
+    rpc: &(impl AsyncRpc + ?Sized),
+) -> Result<StorageRegistry, RingError> {
+    rpc.get_account(registry)
+        .await?
+        .and_then(|account| StorageRegistry::decode(&account.owner, &account.data))
+        .ok_or(RingError::NotStorageRegistry { registry })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -202,8 +197,8 @@ impl BoundState {
             return self.moved(client).await;
         }
         Ok([
-            CustomRingError::MirrorRootExpired,
-            CustomRingError::MirrorNotSynced,
+            CustomRingError::RootNotServed,
+            CustomRingError::UnboundRegistry,
         ]
         .into_iter()
         .any(|stale| code == stale as u32))

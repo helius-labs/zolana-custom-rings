@@ -16,7 +16,7 @@ export const RingInstructionTag = Object.freeze({
   // Tags 28 and 29 are retired, never reuse them.
   deposit: 31,
   // Tags 39 to 42 are retired, never reuse them.
-  syncRoots: 48,
+  // Tag 48 is retired, never reuse it.
   initialize: 53,
   updatePolicy: 54,
 } as const);

@@ -1,7 +1,9 @@
 use std::{future::Future, time::Duration};
 
 use async_trait::async_trait;
-use custom_ring_interface::{RingAccount, RingMode, RingPolicy, RingRoles, RootMirror};
+use custom_ring_interface::{
+    storage::StorageRegistry, RingAccount, RingMode, RingPolicy, RingRoles,
+};
 use solana_account::Account;
 use solana_address::Address;
 use solana_commitment_config::CommitmentConfig;
@@ -19,10 +21,7 @@ use spr_client::{
 };
 use spr_interface::{
     pda,
-    state::{
-        discriminator::{RING_CONFIG, SPL_ASSET_REGISTRY},
-        RingConfig as SppRingConfig, SplAssetRegistry,
-    },
+    state::{discriminator::SPL_ASSET_REGISTRY, SplAssetRegistry},
     BPF_LOADER_UPGRADEABLE_ID, PROGRAM_ID_PUBKEY,
 };
 use spr_keypair::X25519Pubkey;
@@ -210,16 +209,9 @@ impl From<DepositHistory> for RingDepositsResponse {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordsTip {
     NoPolicy,
-    /// The policy mirror holds no root of its records registry yet.
-    Unsynced,
-    Mirrored(StorageTip),
-}
-
-/// A ring whose policy reads lists from a curator registry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Subscriber {
-    pub ring: Address,
-    pub curator_roots: RootMirror,
+    /// The ring's records address holds no initialized storage registry.
+    NoRegistry,
+    Newest(StorageTip),
 }
 
 #[derive(Clone, Copy)]
@@ -363,46 +355,6 @@ impl ChainSource {
 
     pub fn rpc(&self) -> &AsyncSolanaRpc {
         &self.rpc
-    }
-
-    /// Every ring the shielded pool registered whose policy names `registry` as a source.
-    pub(crate) async fn subscribers(
-        &self,
-        registry: Address,
-    ) -> Result<Vec<Subscriber>, ClientError> {
-        let filter = ProgramAccountsFilter::new(SppRingConfig::SIZE).with_memcmp(0, [RING_CONFIG]);
-        let configs = self
-            .rpc
-            .get_program_accounts_filtered(PROGRAM_ID_PUBKEY, &filter)
-            .await?;
-        let rings = configs.iter().filter_map(|(_, account)| {
-            bytemuck::try_from_bytes::<SppRingConfig>(&account.data)
-                .ok()
-                .filter(|config| config.has_discriminator())
-                .map(|config| config.program_id)
-        });
-        let mut subscribers = Vec::new();
-        for ring in rings {
-            let (address, bump) = Address::find_program_address(&[RingPolicy::SEED], &ring);
-            let Some(account) = self.owned_account(address, ring).await? else {
-                continue;
-            };
-            let policy: Option<RingPolicy> = CanonicalAccount {
-                account: &account,
-                ring,
-                bump,
-            }
-            .decode();
-            if let Some(policy) =
-                policy.filter(|policy| policy.sources.iter().any(|slot| slot.registry == registry))
-            {
-                subscribers.push(Subscriber {
-                    ring,
-                    curator_roots: policy.curator_roots,
-                });
-            }
-        }
-        Ok(subscribers)
     }
 
     fn history(&self) -> HistorySource<'_> {
@@ -572,12 +524,22 @@ impl TransactionSource for ChainSource {
         let Some(account) = self.owned_account(address, ring).await? else {
             return Ok(RecordsTip::NoPolicy);
         };
-        CanonicalAccount {
+        let records = CanonicalAccount {
             account: &account,
             ring,
             bump,
         }
-        .records_root()
+        .decode::<RingPolicy>()
+        .ok_or_else(|| ClientError::Rpc(INVALID_POLICY.to_owned()))?
+        .records;
+        Ok(self
+            .rpc
+            .get_account(records)
+            .await?
+            .and_then(|account| StorageRegistry::decode(&account.owner, &account.data))
+            .map_or(RecordsTip::NoRegistry, |registry| {
+                RecordsTip::Newest(StorageTip::newest(records, &registry))
+            }))
     }
 
     async fn storage_member_openings(
@@ -722,13 +684,6 @@ impl CanonicalAccount<'_> {
             mode: config.mode().map_err(|_| invalid())?,
             delegate: config.delegate().copied(),
         })
-    }
-
-    fn records_root(self) -> Result<RecordsTip, ClientError> {
-        let policy: RingPolicy = self
-            .decode()
-            .ok_or_else(|| ClientError::Rpc(INVALID_POLICY.to_owned()))?;
-        Ok(StorageTip::mirrored(&policy).map_or(RecordsTip::Unsynced, RecordsTip::Mirrored))
     }
 }
 

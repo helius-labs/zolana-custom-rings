@@ -135,17 +135,6 @@ export async function initializeRingInstruction(
   return instruction;
 }
 
-/** Rust `SyncRoots`, permissionless, `registry` is the ring's records or its curator. */
-export async function syncRootsInstruction(
-  input: Readonly<{ ringProgramId: Address; registry: Address }>,
-): Promise<Instruction> {
-  const policy = await ringPolicyAddress(input.ringProgramId);
-  return ringInstruction(input.ringProgramId, Uint8Array.of(RingInstructionTag.syncRoots), [
-    meta(policy, false, true),
-    meta(input.registry, false, false),
-  ]);
-}
-
 /** Rust `UpdateAuthority`, the admin and the new key sign so a mistyped address cannot strand the role. */
 export async function updateRingAuthorityInstruction(
   input: Readonly<{
@@ -286,7 +275,7 @@ export type RingPolicyUpdate =
 
 const POLICY_UPDATE_VARIANT = Object.freeze({ rules: 0, source: 1, records: 2 } as const);
 
-/** Rust `UpdatePolicy`, the policy role signs and own lists read rebound records once `syncRootsInstruction` mirrors them. */
+/** Rust `UpdatePolicy`, the policy role signs. */
 export async function updateRingPolicyInstruction(
   input: Readonly<{
     ringProgramId: Address;

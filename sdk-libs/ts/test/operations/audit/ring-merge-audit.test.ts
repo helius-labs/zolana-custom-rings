@@ -35,7 +35,11 @@ import {
   transactionsPage,
 } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { recordTree, type FixtureRecord } from "../../helpers/member-registry.js";
-import { ownedAccount, ringPolicyData } from "../../helpers/ring-accounts.js";
+import {
+  ownedAccount,
+  ringPolicyData,
+  storageRegistryAccount,
+} from "../../helpers/ring-accounts.js";
 
 await initializePoseidon();
 
@@ -191,18 +195,10 @@ async function scanClient(
       ...kitReads({ solanaRpc: solanaRpcReads({}) }),
       getAccount: async (account: Address) =>
         account === policy
-          ? ownedAccount(
-              ring,
-              ringPolicyData({
-                bump,
-                records: RECORDS,
-                ownRoots: {
-                  registry: RECORDS,
-                  roots: [{ hash: tree.root, revision: REVISION, expiresAt: 0n }],
-                },
-              }),
-            )
-          : undefined,
+          ? ownedAccount(ring, ringPolicyData({ bump, records: RECORDS }))
+          : account === RECORDS
+            ? storageRegistryAccount([{ hash: tree.root, revision: REVISION, expiresAt: 0n }])
+            : undefined,
       getStorageMemberRecords: memberPages,
       getShieldedTransactionsByTags: transactionPages,
     },
@@ -212,7 +208,7 @@ async function scanClient(
 }
 
 describe("auditRingMerges", () => {
-  it("authenticates every records page at the mirrored root and keeps an unopened merge", async () => {
+  it("authenticates every records page at the live registry root and keeps an unopened merge", async () => {
     // 101 members and the sentinel need two pages of `MAX_RING_MEMBER_BATCH`.
     const records = Array.from({ length: 101 }, (_, index) => ({
       member: memberOf(index + 1),

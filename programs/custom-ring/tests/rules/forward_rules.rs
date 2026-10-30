@@ -3,7 +3,7 @@
 use bytemuck::Zeroable;
 use custom_ring_interface::{
     merge_disclosure_field_count, tag, CoSignScope, CustomRingError, CustomRingMergeIxData,
-    DepositPrefix, MergeDisclosure, RingDepositAuditCapsule, AUDIT_CIPHERTEXT_LEN,
+    DepositPrefix, MergeDisclosure, RingDepositAuditCapsule, RootRead, AUDIT_CIPHERTEXT_LEN,
     MAX_RING_DEPOSIT_AUDIT_SLOTS, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN, RING_DEPOSIT_DEPOSITOR_INDEX,
     RING_DEPOSIT_RING_CONFIG_INDEX, RING_MERGE_PAYER_INDEX, RING_MERGE_RING_CONFIG_INDEX,
 };
@@ -73,6 +73,7 @@ pub fn merge_instruction_with(ring: &Ring, data: &CustomRingMergeIxData) -> Inst
     spp[RING_MERGE_RING_CONFIG_INDEX] = AccountMeta::new(ring_auth(), false);
     spp.push(AccountMeta::new(ring.payer.pubkey(), true));
     let mut accounts = vec![AccountMeta::new_readonly(policy_pda(), false)];
+    accounts.extend(ring.registries(RootRead::merge(&ring.read(&policy_pda())).unwrap()));
     accounts.extend(spp);
     Instruction {
         program_id: PROGRAM,
@@ -87,12 +88,9 @@ fn merge(ring: &mut Ring, registry: Option<u64>) -> Sent {
 }
 
 #[test]
-fn an_escrow_merge_revision_outside_the_own_mirror_is_refused() {
+fn an_escrow_merge_revision_its_registry_does_not_serve_is_refused() {
     let mut ring = delegate_ring(&Keypair::new());
-    refused(
-        merge(&mut ring, Some(1)),
-        CustomRingError::MirrorRootExpired,
-    );
+    refused(merge(&mut ring, Some(1)), CustomRingError::RootNotServed);
     reaches_verification(merge(&mut ring, Some(0)));
 }
 
@@ -198,6 +196,7 @@ pub fn deposit_instruction(
         AccountMeta::new(Address::new_unique(), false),
     ]);
     let mut accounts = vec![AccountMeta::new_readonly(policy_pda(), false)];
+    accounts.extend(ring.registries(RootRead::deposit(&ring.read(&policy_pda())).unwrap()));
     accounts.extend(spp);
     Instruction {
         program_id: PROGRAM,
@@ -207,11 +206,11 @@ pub fn deposit_instruction(
 }
 
 #[test]
-fn an_escrowing_deposit_revision_outside_the_own_mirror_is_refused() {
+fn an_escrowing_deposit_revision_its_registry_does_not_serve_is_refused() {
     let mut ring = delegate_ring(&Keypair::new());
     refused(
         audited_deposit(&mut ring, Some(1)),
-        CustomRingError::MirrorRootExpired,
+        CustomRingError::RootNotServed,
     );
     reaches_verification(audited_deposit(&mut ring, Some(0)));
 }

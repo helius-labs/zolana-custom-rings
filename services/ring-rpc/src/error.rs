@@ -85,8 +85,8 @@ pub enum RingRpcError {
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 #[repr(i32)]
 pub enum GrantRefusal {
-    #[error("ring mirrors no root of its own records")]
-    RecordsUnsynced = -32130,
+    #[error("ring has no initialized records registry")]
+    RecordsUnavailable = -32130,
     #[error("service keeps reader grants in the storage tree")]
     GrantsInTree = -32131,
     #[error("read method and wallet scope disagree")]
@@ -252,9 +252,9 @@ mod tests {
     #[test]
     fn grant_refusal_codes_are_stable() {
         use GrantRefusal::*;
-        for refusal in [RecordsUnsynced, GrantsInTree, WalletScope] {
+        for refusal in [RecordsUnavailable, GrantsInTree, WalletScope] {
             let code = match refusal {
-                RecordsUnsynced => -32130,
+                RecordsUnavailable => -32130,
                 GrantsInTree => -32131,
                 WalletScope => -32270,
             };

@@ -10,7 +10,7 @@ import type { RingPolicy } from "../protocol/codec/ring-codecs.js";
 import { memberOfAsset } from "../protocol/membership/policy.js";
 import { RingError } from "../protocol/error.js";
 import { domainField, RingDomain } from "../crypto/derivation/ring-domain.js";
-import { ownRoot, readMemberOpenings, type BoundRoot } from "../rpc/registered-record.js";
+import { fetchBoundRoot, readMemberOpenings, type BoundRoot } from "../rpc/registered-record.js";
 import type { WithdrawalExemptionProofRequest } from "../rpc/prover/ring.js";
 import { N_PUBLIC_SLOTS } from "../protocol/transaction/spp.js";
 import type { PolicyReadClient } from "./policy-proof.js";
@@ -43,7 +43,9 @@ export async function readWithdrawalExemption(
     return undefined;
   if (input.own === undefined && equalBytes(addressBytes(config.records, "records"), ZERO_32))
     return undefined;
-  const root = input.own ?? ownRoot(ringProgramId, config);
+  const root =
+    input.own ??
+    (await fetchBoundRoot({ client, ringProgramId, registry: config.records }, context));
   const assets = demand.withdrawals.map((row) => memberOfAsset(row.mint) as Bytes32);
   const amounts = demand.withdrawals.map((row) => bigIntBytes(row.amount, 32) as Bytes32);
   if (assets.length > N_PUBLIC_SLOTS) throw new RingError("RING_MEMBER_REGISTRY_INVALID");

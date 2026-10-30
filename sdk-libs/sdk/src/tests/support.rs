@@ -10,7 +10,7 @@ use bytemuck::{Pod, Zeroable};
 use custom_ring_interface::{
     storage::{Revision, StorageRegistry},
     CoSignScope, CoSigner, CoSignerCounts, EscrowKey, NewRing, RingMode, RingPolicy, RingRoles,
-    SourceSlot, CO_SIGNER, N_SOURCE_SLOTS, RING_POLICY_PDA_SEED,
+    SourceSlot, CO_SIGNER, N_SOURCE_SLOTS, RING_POLICY_PDA_SEED, STORAGE_PROGRAM_ID,
 };
 use solana_account::Account;
 use solana_address::Address;
@@ -47,7 +47,7 @@ use crate::client::RingClient;
 use crate::{trees::PoolTree, CustomRing, REDACTED};
 
 pub(crate) const SLOT: u64 = 2_359_301;
-/// The ring's own `StorageRegistry`, mirrored at `REVISION`.
+/// The ring's own `StorageRegistry`, its newest root at `REVISION`.
 pub(crate) const RECORDS: Address = Address::new_from_array([0x5a; 32]);
 pub(crate) const REVISION: u64 = 1;
 pub(crate) const TREE_ID: u16 = 0;
@@ -335,11 +335,13 @@ impl Chain {
             .map(|account| Box::new(*bytemuck::from_bytes::<RingPolicy>(&account.data)))
             .expect("Chain::ring writes the ring account");
         let policy = registry.policy(account, rules);
+        let records = registry.records();
         Self {
             registry: Some(Arc::new(registry)),
             ..self
         }
         .with(ring().policy_pda(), policy)
+        .with(RECORDS, records)
     }
 
     /// The indexed route, the prover fetches the input proofs and no witness is read here.
@@ -608,13 +610,17 @@ impl Registry {
         self.tree.root().unwrap()
     }
 
-    /// `rules` over the records, synced at `REVISION`.
-    fn policy(&self, mut policy: Box<RingPolicy>, rules: &RuleTable) -> Account {
-        policy.records = RECORDS;
+    /// The `RECORDS` registry at `REVISION`.
+    fn records(&self) -> Account {
         let mut records = StorageRegistry::new(authority(), 0);
         records.roots[0].hash = self.root();
         records.roots[0].revision = Revision::from(REVISION);
-        policy.sync(&RECORDS, &records).unwrap();
+        account(STORAGE_PROGRAM_ID, &records)
+    }
+
+    /// `rules` over the records.
+    fn policy(&self, mut policy: Box<RingPolicy>, rules: &RuleTable) -> Account {
+        policy.records = RECORDS;
         let mut sources = [SourceSlot::zeroed(); N_SOURCE_SLOTS];
         for list in rules.referenced().iter() {
             sources[list.slot()].list_id = list as u8;

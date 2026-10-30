@@ -3,7 +3,7 @@
 use custom_ring_interface::{
     storage::Revision, tag, AnonymousProofData, CustomRingProof, InProofOwner, InputTrees,
     PlainGroth16Proof, PolicyProof, PolicyRecipients, RingOutput, RingPolicy, RingRail,
-    RingTransactData, SenderBundle, AUDIT_CIPHERTEXT_LEN, RING_DELIVERED_BODY_LEN,
+    RingTransactData, RootRead, SenderBundle, AUDIT_CIPHERTEXT_LEN, RING_DELIVERED_BODY_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -296,6 +296,14 @@ impl TransactAccounts {
             }
         };
         let mut accounts = vec![AccountMeta::new_readonly(ring.policy_pda(), false)];
+        accounts.extend(
+            config
+                .root_registries(RootRead::transfer(
+                    config,
+                    parts.withdrawal_exemption.as_ref(),
+                ))
+                .map(|registry| AccountMeta::new_readonly(registry, false)),
+        );
         accounts.extend(
             self.co_signer
                 .into_iter()

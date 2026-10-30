@@ -19,7 +19,7 @@ use custom_ring_cli::{localnet::GENESIS_PROGRAMS, Zolana, ZolanaServices};
 use custom_ring_interface::RingRoles;
 use custom_ring_sdk::{
     compute_unit_limit, CustomRing, InitialPolicy, Initialize, InitializeStorage, InstructionTag,
-    MemberRecords, PolicyTable, RingError, RingKind, SyncRoots,
+    MemberRecords, PolicyTable, RingError, RingKind,
 };
 use solana_address::Address;
 use solana_instruction::Instruction;
@@ -349,7 +349,7 @@ impl RegisterRing<'_> {
         self.create_records(client.rpc())?;
         let initialize = self.initialize(client)?;
         send(client.rpc(), self.payer, &[initialize])?;
-        self.complete(client)
+        Ok(())
     }
 
     /// The records registry `Initialize` binds.
@@ -383,28 +383,6 @@ impl RegisterRing<'_> {
             }),
         }
         .instruction()?)
-    }
-
-    /// After `Initialize`, the `SyncRoots` of every bound registry.
-    pub fn complete(&self, client: &Zolana) -> Result<()> {
-        let curators = self.curator_records(client)?;
-        let mut registries: Vec<Address> = core::iter::once(self.storage().registry())
-            .chain(curators.iter().map(|(_, registry)| *registry))
-            .collect();
-        registries.sort();
-        registries.dedup();
-        let instructions: Vec<Instruction> = registries
-            .into_iter()
-            .map(|registry| {
-                SyncRoots {
-                    ring: self.ring,
-                    registry,
-                }
-                .instruction()
-            })
-            .collect();
-        send(client.rpc(), self.payer, &instructions)?;
-        Ok(())
     }
 
     fn storage(&self) -> InitializeStorage {

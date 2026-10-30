@@ -520,7 +520,6 @@ impl<'a> Sealed<'a> {
         let legs: Vec<_> = transfers.iter().map(public_leg).collect();
         let demand = CoSignDemand::transact(approval_required, &legs);
         let withdrawal_exemption = withdrawals::Exemption::read(
-            ring,
             config,
             &demand,
             policy.as_ref().map(|policy| policy.own),

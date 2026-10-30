@@ -180,12 +180,12 @@ async fn a_revoked_grant_stops_reads() {
 }
 
 #[tokio::test]
-async fn a_database_ring_grant_serves_a_ring_whose_policy_mirrors_no_root() {
+async fn a_database_ring_grant_serves_a_ring_without_a_records_registry() {
     let fixture = Fixture::new();
     let mut source = fixture
         .source()
         .with_transactions(vec![fixture.audited.clone()]);
-    source.records_synced = false;
+    source.records_registered = false;
     let hub = database_hub(&fixture, source).await;
     let module = rpc_module(hub.clone()).expect("module");
     let service = hub.service(None).expect("service");

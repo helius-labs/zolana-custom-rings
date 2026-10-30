@@ -137,6 +137,12 @@ impl StorageRegistry {
             .filter(|registry| registry.valid())
     }
 
+    pub fn decode(owner: &Address, data: &[u8]) -> Option<Self> {
+        (*owner == STORAGE_PROGRAM_ID)
+            .then(|| Self::from_data(data).copied())
+            .flatten()
+    }
+
     pub fn from_data_mut(data: &mut [u8]) -> Option<&mut Self> {
         bytemuck::try_from_bytes_mut::<Self>(data)
             .ok()
@@ -149,6 +155,10 @@ impl StorageRegistry {
 
     pub const fn next_index(&self) -> u32 {
         u32::from_le_bytes(self.next_index)
+    }
+
+    pub const fn newest(&self) -> Root {
+        self.roots[0]
     }
 
     pub fn root(&self, revision: Revision, slot: u64) -> Result<[u8; 32], StorageError> {
@@ -204,7 +214,7 @@ pub fn chain_start(registry: &Address, revision: Revision) -> Result<[u8; 32], S
 }
 
 /// The current root, or a retired one before its expiry.
-pub(crate) fn root_at(
+fn root_at(
     roots: &[Root; ROOT_HISTORY],
     revision: Revision,
     slot: u64,
@@ -228,6 +238,7 @@ impl From<StorageError> for ProgramError {
 
 // Byte fields only, the `Pod` image is the account data with no padding.
 const _: () = assert!(core::mem::align_of::<StorageRegistry>() == 1);
+const _: () = assert!(StorageRegistry::SIZE == 1581);
 
 #[cfg(test)]
 mod tests {

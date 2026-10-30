@@ -1513,6 +1513,58 @@ async fn a_recipient_the_rules_refuse_fails_before_proving() {
     ));
 }
 
+/// The records follow the ring account, a curator registry only where a source names one.
+#[tokio::test]
+async fn a_policy_transfer_names_a_curator_registry_only_under_a_curator_source() {
+    use crate::tests::support::{keypair, Registry, RECORDS};
+    use custom_ring_interface::SourceSlot;
+    use solana_instruction::AccountMeta;
+    use zolana_ring_policy::ListId;
+    let sender = keypair(1);
+    let recipient = keypair(2);
+    let client = Chain::ring(RingSettings {
+        has_policy: true,
+        ..RingSettings::new(RingMode::Confidential)
+    })
+    .with_registry(
+        Registry::new(&[(&sender, 1), (&recipient, 1)]),
+        &crate::tests::pipeline_rules(),
+    )
+    .client();
+    let mut transaction = ring_transaction(vec![ring_utxo(&sender, Mint::SOL, 10, 0)]);
+    transaction
+        .transfer_with_ring(
+            &recipient.shielded_address().unwrap(),
+            Mint::SOL,
+            3,
+            Some(ring().program_id()),
+        )
+        .unwrap();
+    let transfer = owner_transfer(&sender, transaction);
+    let unwitnessed = transfer.frame(&client).await.unwrap();
+    let registry = |address| AccountMeta::new_readonly(address, false);
+    let accounts = unwitnessed.instruction().unwrap().accounts;
+    assert_eq!(accounts[1], registry(RECORDS));
+    assert_ne!(accounts[2].pubkey, RECORDS);
+    let curator = Address::new_from_array([0x5c; 32]);
+    let mut curated = *unwitnessed.config.account();
+    curated.sources[ListId::Allow.slot()] = SourceSlot {
+        list_id: ListId::Allow as u8,
+        registry: curator,
+    };
+    let frame = &unwitnessed.frame;
+    let accounts = frame
+        .accounts
+        .instruction(frame.ring, &curated, &frame.parts)
+        .unwrap()
+        .accounts;
+    assert_eq!(accounts[1..3], [registry(RECORDS), registry(curator)]);
+    assert_eq!(
+        accounts[3..],
+        unwitnessed.instruction().unwrap().accounts[2..]
+    );
+}
+
 /// `UPDATE_PROVER_JSON=1` rewrites the shared pooled request Go solves and TS rebuilds.
 #[tokio::test]
 async fn the_member_policy_request_opens_each_subject_once_in_padded_pools() {
@@ -1798,187 +1850,187 @@ const SIZE_PINS: [SizePin; 38] = [
     SizePin {
         n_in: 1,
         n_out: 2,
-        bytes: [Some(1357), Some(1687), Some(1668), Some(2030), None],
+        bytes: [Some(1357), Some(1720), Some(1668), Some(2063), None],
     },
     SizePin {
         n_in: 1,
         n_out: 4,
-        bytes: [Some(1693), Some(2023), Some(2370), Some(2732), None],
+        bytes: [Some(1693), Some(2056), Some(2370), Some(2765), None],
     },
     SizePin {
         n_in: 1,
         n_out: 8,
-        bytes: [Some(2365), Some(2695), Some(3742), Some(4104), None],
+        bytes: [Some(2365), Some(2728), Some(3742), Some(4137), None],
     },
     SizePin {
         n_in: 2,
         n_out: 2,
-        bytes: [Some(1422), Some(1752), Some(1765), Some(2127), Some(1752)],
+        bytes: [Some(1422), Some(1785), Some(1765), Some(2160), Some(1785)],
     },
     SizePin {
         n_in: 2,
         n_out: 4,
-        bytes: [Some(1758), Some(2088), Some(2467), Some(2829), None],
+        bytes: [Some(1758), Some(2121), Some(2467), Some(2862), None],
     },
     SizePin {
         n_in: 1,
         n_out: 16,
-        bytes: [Some(3710), Some(4040), None, None, None],
+        bytes: [Some(3710), Some(4073), None, None, None],
     },
     SizePin {
         n_in: 2,
         n_out: 8,
-        bytes: [Some(2430), Some(2760), Some(3839), Some(4201), None],
+        bytes: [Some(2430), Some(2793), Some(3839), Some(4234), None],
     },
     SizePin {
         n_in: 3,
         n_out: 2,
-        bytes: [Some(1487), Some(1817), Some(1830), Some(2192), None],
+        bytes: [Some(1487), Some(1850), Some(1830), Some(2225), None],
     },
     SizePin {
         n_in: 3,
         n_out: 4,
-        bytes: [Some(1823), Some(2153), Some(2532), Some(2894), None],
+        bytes: [Some(1823), Some(2186), Some(2532), Some(2927), None],
     },
     SizePin {
         n_in: 2,
         n_out: 16,
-        bytes: [Some(3775), Some(4105), None, None, None],
+        bytes: [Some(3775), Some(4138), None, None, None],
     },
     SizePin {
         n_in: 3,
         n_out: 8,
-        bytes: [Some(2495), Some(2825), Some(3904), Some(4266), None],
+        bytes: [Some(2495), Some(2858), Some(3904), Some(4299), None],
     },
     SizePin {
         n_in: 4,
         n_out: 2,
-        bytes: [Some(1552), Some(1882), Some(1927), Some(2289), None],
+        bytes: [Some(1552), Some(1915), Some(1927), Some(2322), None],
     },
     SizePin {
         n_in: 4,
         n_out: 4,
-        bytes: [Some(1888), Some(2218), Some(2629), Some(2991), Some(2218)],
+        bytes: [Some(1888), Some(2251), Some(2629), Some(3024), Some(2251)],
     },
     SizePin {
         n_in: 4,
         n_out: 8,
-        bytes: [Some(2560), Some(2890), Some(4001), Some(4363), None],
+        bytes: [Some(2560), Some(2923), Some(4001), Some(4396), None],
     },
     SizePin {
         n_in: 5,
         n_out: 2,
-        bytes: [Some(1617), Some(1947), Some(1992), Some(2354), None],
+        bytes: [Some(1617), Some(1980), Some(1992), Some(2387), None],
     },
     SizePin {
         n_in: 5,
         n_out: 4,
-        bytes: [Some(1953), Some(2283), Some(2694), Some(3056), None],
+        bytes: [Some(1953), Some(2316), Some(2694), Some(3089), None],
     },
     SizePin {
         n_in: 4,
         n_out: 16,
-        bytes: [Some(3905), Some(4235), None, None, None],
+        bytes: [Some(3905), Some(4268), None, None, None],
     },
     SizePin {
         n_in: 5,
         n_out: 8,
-        bytes: [Some(2625), Some(2955), Some(4066), Some(4428), None],
+        bytes: [Some(2625), Some(2988), Some(4066), Some(4461), None],
     },
     SizePin {
         n_in: 6,
         n_out: 2,
-        bytes: [Some(1682), Some(2012), Some(2089), Some(2451), None],
+        bytes: [Some(1682), Some(2045), Some(2089), Some(2484), None],
     },
     SizePin {
         n_in: 6,
         n_out: 4,
-        bytes: [Some(2018), Some(2348), Some(2791), Some(3153), None],
+        bytes: [Some(2018), Some(2381), Some(2791), Some(3186), None],
     },
     SizePin {
         n_in: 5,
         n_out: 16,
-        bytes: [Some(3970), Some(4300), None, None, None],
+        bytes: [Some(3970), Some(4333), None, None, None],
     },
     SizePin {
         n_in: 6,
         n_out: 8,
-        bytes: [Some(2690), Some(3020), Some(4163), Some(4525), None],
+        bytes: [Some(2690), Some(3053), Some(4163), Some(4558), None],
     },
     SizePin {
         n_in: 8,
         n_out: 2,
-        bytes: [Some(1812), Some(2142), Some(2251), Some(2613), None],
+        bytes: [Some(1812), Some(2175), Some(2251), Some(2646), None],
     },
     SizePin {
         n_in: 8,
         n_out: 4,
-        bytes: [Some(2148), Some(2478), Some(2953), Some(3315), None],
+        bytes: [Some(2148), Some(2511), Some(2953), Some(3348), None],
     },
     SizePin {
         n_in: 8,
         n_out: 8,
-        bytes: [Some(2820), Some(3150), Some(4325), Some(4687), None],
+        bytes: [Some(2820), Some(3183), Some(4325), Some(4720), None],
     },
     SizePin {
         n_in: 8,
         n_out: 16,
-        bytes: [Some(4165), Some(4495), None, None, None],
+        bytes: [Some(4165), Some(4528), None, None, None],
     },
     SizePin {
         n_in: 12,
         n_out: 2,
-        bytes: [Some(2072), Some(2402), Some(2575), Some(2937), None],
+        bytes: [Some(2072), Some(2435), Some(2575), Some(2970), None],
     },
     SizePin {
         n_in: 12,
         n_out: 4,
-        bytes: [Some(2408), Some(2738), Some(3277), Some(3639), None],
+        bytes: [Some(2408), Some(2771), Some(3277), Some(3672), None],
     },
     SizePin {
         n_in: 12,
         n_out: 8,
-        bytes: [Some(3080), Some(3410), None, None, None],
+        bytes: [Some(3080), Some(3443), None, None, None],
     },
     SizePin {
         n_in: 16,
         n_out: 2,
-        bytes: [Some(2332), Some(2662), Some(2899), Some(3261), None],
+        bytes: [Some(2332), Some(2695), Some(2899), Some(3294), None],
     },
     SizePin {
         n_in: 16,
         n_out: 4,
-        bytes: [Some(2668), Some(2998), Some(3601), Some(3963), None],
+        bytes: [Some(2668), Some(3031), Some(3601), Some(3996), None],
     },
     SizePin {
         n_in: 16,
         n_out: 8,
-        bytes: [Some(3340), Some(3670), None, None, None],
+        bytes: [Some(3340), Some(3703), None, None, None],
     },
     SizePin {
         n_in: 24,
         n_out: 2,
-        bytes: [Some(2852), Some(3182), None, None, None],
+        bytes: [Some(2852), Some(3215), None, None, None],
     },
     SizePin {
         n_in: 24,
         n_out: 4,
-        bytes: [Some(3188), Some(3518), None, None, None],
+        bytes: [Some(3188), Some(3551), None, None, None],
     },
     SizePin {
         n_in: 32,
         n_out: 2,
-        bytes: [Some(3372), Some(3702), None, None, None],
+        bytes: [Some(3372), Some(3735), None, None, None],
     },
     SizePin {
         n_in: 40,
         n_out: 2,
-        bytes: [Some(3892), Some(4222), None, None, None],
+        bytes: [Some(3892), Some(4255), None, None, None],
     },
     SizePin {
         n_in: 48,
         n_out: 2,
-        bytes: [Some(4412), Some(4742), None, None, None],
+        bytes: [Some(4412), Some(4775), None, None, None],
     },
     SizePin {
         n_in: 49,
@@ -2203,7 +2255,7 @@ async fn audit_only_withdrawal_exemptions_use_records_and_gross_totals() {
         mint: Some([9; 32]),
     };
     let demand = CoSignDemand::transact(false, &[leg(40), leg(60)]);
-    let exemption = withdrawals::Exemption::read(ring(), &config, &demand, None, &chain)
+    let exemption = withdrawals::Exemption::read(&config, &demand, None, &chain)
         .await
         .unwrap();
     assert!(
@@ -2225,7 +2277,7 @@ async fn audit_only_withdrawal_exemptions_use_records_and_gross_totals() {
         ],
     );
     assert!(
-        withdrawals::Exemption::read(ring(), &config, &demand, None, &chain)
+        withdrawals::Exemption::read(&config, &demand, None, &chain)
             .await
             .unwrap()
             .is_none(),
@@ -2242,7 +2294,7 @@ async fn audit_only_withdrawal_exemptions_use_records_and_gross_totals() {
         }],
     );
     assert!(
-        withdrawals::Exemption::read(ring(), &config, &demand, None, &chain)
+        withdrawals::Exemption::read(&config, &demand, None, &chain)
             .await
             .unwrap()
             .is_none(),

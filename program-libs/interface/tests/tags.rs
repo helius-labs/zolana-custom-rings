@@ -15,7 +15,6 @@ fn ring_dispatch_tags_do_not_collide_with_forwarded_spp_tags() {
         tag::SET_DELEGATE,
         tag::AUTHORITY_TRANSFER,
         tag::DEPOSIT,
-        tag::SYNC_ROOTS,
     ];
     let unique: std::collections::BTreeSet<_> = tags.into_iter().collect();
     assert_eq!(unique.len(), tags.len());
@@ -25,7 +24,7 @@ fn ring_dispatch_tags_do_not_collide_with_forwarded_spp_tags() {
 fn retired_tags_name_no_instruction() {
     for retired in [
         1, 2, 4, 5, 7, 8, 9, 10, 12, 18, 22, 23, 26, 28, 29, 30, 32, 33, 34, 35, 36, 37, 38, 39,
-        40, 41, 42,
+        40, 41, 42, 48,
     ] {
         assert_eq!(
             InstructionTag::try_from(retired),
@@ -47,7 +46,6 @@ fn every_tag_names_one_instruction_and_its_budget() {
         Err(CustomRingError::InvalidInstructionData)
     );
     assert_eq!(compute_unit_limit(InstructionTag::SetPaused), 50_000);
-    assert_eq!(compute_unit_limit(InstructionTag::SyncRoots), 50_000);
     assert_eq!(compute_unit_limit(InstructionTag::UpdatePolicy), 150_000);
     assert_eq!(compute_unit_limit(InstructionTag::Transfer), 1_400_000);
 }

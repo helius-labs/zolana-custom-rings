@@ -101,7 +101,7 @@ pub enum PolicyUpdate<'a> {
         list_id: ListId,
         source: SourceOwner,
     },
-    /// Own lists read the new records once `SyncRoots` mirrors them.
+    /// Own lists read the new records from the next transfer on.
     Records(Address),
 }
 

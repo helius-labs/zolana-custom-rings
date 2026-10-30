@@ -2,8 +2,8 @@
 
 use custom_ring_interface::{
     cosign::CoSignDemand, key_catalog::RingCircuit, merge_disclosure_field_count,
-    CustomRingMergeIxData, MergeDisclosure, MergePublicInput, RingMode, AUDIT_CIPHERTEXT_LEN,
-    MERGE_WIDTHS, TAGGED_X25519_KEY_LEN,
+    CustomRingMergeIxData, MergeDisclosure, MergePublicInput, RingMode, RootRead,
+    AUDIT_CIPHERTEXT_LEN, MERGE_WIDTHS, TAGGED_X25519_KEY_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -114,6 +114,7 @@ pub struct ProvenCustomRingMerge {
     output_tree: Address,
     ring: CustomRing,
     co_signer: Option<Address>,
+    records: Option<Address>,
     /// `Some` on a key escrow ring, its merge proves the owner's escrow record under the root.
     bound: Option<BoundRoot>,
     pub data: CustomRingMergeIxData,
@@ -247,6 +248,7 @@ impl PreparedCustomRingMerge {
             output_tree: input.output_tree,
             ring: self.ring,
             co_signer,
+            records: merge_registry(&config)?,
             bound,
             data: CustomRingMergeIxData {
                 own_revision: bound.map_or_else(Default::default, |bound| bound.revision),
@@ -281,11 +283,18 @@ impl ProvenCustomRingMerge {
             input_tree: self.input_tree,
             output_tree: self.output_tree,
             payer,
+            records: self.records,
             co_signer: self.co_signer,
             data: self.data.clone(),
         }
         .instruction()
     }
+}
+
+/// The records registry a merge passes, `None` off a key escrow ring.
+fn merge_registry(config: &CustomRingConfig) -> Result<Option<Address>, RingError> {
+    let policy = config.account();
+    Ok(policy.root_registries(RootRead::merge(policy)?).next())
 }
 
 #[must_use]
@@ -317,6 +326,7 @@ impl RingMergeOperation {
             input_tree: self.input.input_tree,
             output_tree: self.input.output_tree,
             payer,
+            records: merge_registry(config)?,
             co_signer: CoSignerChoice {
                 ring: merge.ring,
                 config,
@@ -355,13 +365,15 @@ impl RingMergeOperation {
     }
 }
 
-/// `[ring, co-signer record and signer?]` ahead of SPP's merge list.
+/// `[ring, records registry?, co-signer record and signer?]` ahead of SPP's merge list.
 #[must_use]
 pub struct CustomRingMergeInstruction {
     pub ring: CustomRing,
     pub input_tree: Address,
     pub output_tree: Address,
     pub payer: Address,
+    /// The records registry a key escrow merge reads its root from.
+    pub records: Option<Address>,
     pub co_signer: Option<Address>,
     pub data: CustomRingMergeIxData,
 }
@@ -386,6 +398,10 @@ impl CustomRingMergeInstruction {
         .instruction();
         instruction.data = data;
         let mut prefix = vec![AccountMeta::new_readonly(self.ring.policy_pda(), false)];
+        prefix.extend(
+            self.records
+                .map(|records| AccountMeta::new_readonly(records, false)),
+        );
         prefix.extend(
             self.co_signer
                 .into_iter()

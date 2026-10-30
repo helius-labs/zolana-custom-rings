@@ -164,24 +164,6 @@ impl<'a> UpdateQueue<'a> {
             .collect()
     }
 
-    pub async fn applied_registries(&self) -> Result<Vec<Address>, DbErr> {
-        let sql = "SELECT DISTINCT registry FROM records_batches WHERE status=$1";
-        self.query_all(sql, vec![APPLIED.into()])
-            .await?
-            .iter()
-            .map(|row| address(row, "registry"))
-            .collect()
-    }
-
-    pub async fn rings(&self) -> Result<Vec<Address>, DbErr> {
-        let sql = "SELECT DISTINCT ring FROM records_updates";
-        self.query_all(sql, Vec::new())
-            .await?
-            .iter()
-            .map(|row| address(row, "ring"))
-            .collect()
-    }
-
     /// Every queued or submitted write, and the awaiting writes of `members` alone.
     pub async fn pending_writes(
         &self,

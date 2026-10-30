@@ -50,7 +50,7 @@ pub(crate) trait GrantSource {
     fn grants(&self, query: GrantQuery) -> impl Future<Output = Result<bool, RingRpcError>> + Send;
 }
 
-/// `Reader` lists of the ring's own storage tree, opened under the root its policy mirrors.
+/// `Reader` lists of the ring's own storage tree, opened under its registry's newest root.
 pub(crate) struct TreeGrants<'a, S> {
     pub source: &'a S,
 }
@@ -114,8 +114,8 @@ impl<S: TransactionSource> GrantSource for TreeGrants<'_, S> {
             let wallet = Member::owner_tag(wallet.as_array())?;
             members.push(*Member::wallet_grant(&wallet, &reader)?.as_bytes());
         }
-        let RecordsTip::Mirrored(records) = self.source.records_root(query.ring).await? else {
-            return Err(GrantRefusal::RecordsUnsynced.into());
+        let RecordsTip::Newest(records) = self.source.records_root(query.ring).await? else {
+            return Err(GrantRefusal::RecordsUnavailable.into());
         };
         Ok(self
             .source

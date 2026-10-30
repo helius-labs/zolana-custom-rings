@@ -27,8 +27,7 @@ import {
   type PendingWalletSubmission,
 } from "@heliuslabs/zolana/transaction";
 import type { RingSubmissionStatus, RingSubmissionTransport } from "../../rpc/ports.js";
-import { fetchRingPolicy } from "../../protocol/membership/config.js";
-import { rootMirror } from "../../protocol/codec/ring-codecs.js";
+import { fetchRingPolicy, fetchStorageRegistry } from "../../protocol/membership/config.js";
 import { RingError, RingProgramError } from "../../protocol/error.js";
 import type { RingBoundState } from "./pipeline.js";
 import type { ViewingHistory } from "../../state/viewing-history.js";
@@ -76,10 +75,10 @@ export interface ReservationHold {
 export type RingSubmissionBuild = (context?: RequestContext) => Promise<RingSubmissionAttempt>;
 
 const MAX_ATTEMPTS = 3;
-/** Rust `reproof_fixes` codes, a fresh proof fixes an expired or unsynced mirror root. */
+/** Rust `reproof_fixes` codes, a fresh proof fixes a revoked root or a rebound registry. */
 const STALE_PROOF_CODES: ReadonlySet<number> = new Set([
-  RingProgramError.mirrorRootExpired,
-  RingProgramError.mirrorNotSynced,
+  RingProgramError.rootNotServed,
+  RingProgramError.unboundRegistry,
 ]);
 const NO_RESERVATION: ReservationHold = Object.freeze({ release() {}, extend() {} });
 
@@ -211,14 +210,12 @@ export class RingTransactionSubmission {
     const chain = this.#registry;
     if (chain === undefined) return false;
     for (const bound of roots) {
-      const mirror = rootMirror(
-        await fetchRingPolicy(chain, bound.ringProgramId, context),
-        bound.mirror,
-      );
-      const held = mirror.roots.some(
+      // Expiry is not checked here, an expired root fails on chain as `rootNotServed` and a reproof follows.
+      const registry = await fetchStorageRegistry(chain, bound.registry, context);
+      const held = registry.roots.some(
         (root) => root?.revision === bound.revision && equalBytes(root.hash, bound.root),
       );
-      if (mirror.registry !== bound.registry || !held) return true;
+      if (!held) return true;
     }
     if (policy === undefined) return false;
     const ringPolicy = await fetchRingPolicy(chain, policy.ringProgramId, context);

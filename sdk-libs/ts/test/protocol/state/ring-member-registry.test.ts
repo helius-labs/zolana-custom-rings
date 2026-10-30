@@ -32,7 +32,11 @@ import {
   sealNullifierKeyWith,
 } from "../../../src/operations/management/register-key.js";
 import { recordTree, type FixtureRecord } from "../../helpers/member-registry.js";
-import { ownedAccount, ringPolicyData } from "../../helpers/ring-accounts.js";
+import {
+  ownedAccount,
+  ringPolicyData,
+  storageRegistryAccount,
+} from "../../helpers/ring-accounts.js";
 
 // sdk-libs/client/src/crypto/encryption/mod.rs `the_sealed_key_and_its_escrow_key_match_the_pinned_vector`.
 const AUDITOR_SK = hex("01323130373635343b3a39383f3e3d3c23222120272625242b2a29282f2e2d2c");
@@ -83,13 +87,10 @@ async function ring(
           mode: options.mode ?? "confidentialEscrow",
           policyHash: new Uint8Array(32).fill(1) as Bytes32,
           records: RECORDS,
-          ownRoots: {
-            registry: RECORDS,
-            roots: [{ hash: tree.root, revision: REVISION, expiresAt: 0n }],
-          },
         }),
       ),
     ],
+    [RECORDS, storageRegistryAccount([{ hash: tree.root, revision: REVISION, expiresAt: 0n }])],
   ]);
   const getStorageMemberOpenings = vi.fn<RingRecordReader["getStorageMemberOpenings"]>(
     async (request) => ({

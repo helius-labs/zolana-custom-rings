@@ -1,8 +1,9 @@
 use std::fmt::Write;
 
 use anyhow::Result;
-use custom_ring_interface::{RingPolicy, RingRoles, RootMirror};
-use custom_ring_sdk::{RingError, RingMode};
+use custom_ring_interface::{RingPolicy, RingRoles};
+use custom_ring_sdk::{live_registry, RingError, RingMode};
+use solana_address::Address;
 use solana_signer::Signer;
 use spr_client::Rpc;
 
@@ -131,7 +132,7 @@ fn print_chain(ctx: &Context) -> Result<()> {
         Some(delegate) => line("delegate", delegate),
         None => line("delegate", "none"),
     }
-    print_roots(config.account());
+    print_roots(ctx, config.account())?;
     let pinned = Pinned::of(Box::new(*config.account()))?;
     if !config.has_policy {
         line("policy", "none (audit-only ring)");
@@ -168,30 +169,27 @@ fn mode(mode: RingMode) -> &'static str {
     }
 }
 
-/// The newest root each mirror holds, a proof names its revision.
-fn print_roots(policy: &RingPolicy) {
-    let newest = |mirror: &RootMirror| {
-        let root = mirror.roots[0];
-        match root.hash == [0; 32] {
-            true => "not synced".to_owned(),
-            false => format!(
+/// The newest root each live registry holds, a proof names its revision.
+fn print_roots(ctx: &Context, policy: &RingPolicy) -> Result<()> {
+    let newest = |registry: Address| -> Result<String> {
+        Ok(match ctx.block(live_registry(registry, ctx.chain())) {
+            Ok(registry) => format!(
                 "revision {} root {}",
-                root.revision.value(),
-                hex::encode(root.hash)
+                registry.newest().revision.value(),
+                hex::encode(registry.newest().hash)
             ),
-        }
+            Err(RingError::NotStorageRegistry { .. }) => "not a storage registry".to_owned(),
+            Err(error) => return Err(error.into()),
+        })
     };
     line(
         "records",
-        format_args!("{} {}", policy.records, newest(&policy.own_roots)),
+        format_args!("{} {}", policy.records, newest(policy.records)?),
     );
     if let Some(curator) = policy.curator() {
-        let synced = match policy.curator_roots.registry == curator {
-            true => newest(&policy.curator_roots),
-            false => "not synced".to_owned(),
-        };
-        line("curator", format_args!("{curator} {synced}"));
+        line("curator", format_args!("{curator} {}", newest(curator)?));
     }
+    Ok(())
 }
 
 fn program_state(ctx: &Context) -> Result<String> {

@@ -33,9 +33,10 @@ export {
   checkedCustomRingProof,
   decodeRingCoSigner,
   decodeRingPolicy,
-  mirrorCurrentRoot,
-  mirrorRoot,
+  decodeStorageRegistry,
   registryCurator,
+  registryRoot,
+  ringRootRegistries,
 } from "../protocol/codec/ring-codecs.js";
 export type {
   RingAuthorityRole,
@@ -44,14 +45,15 @@ export type {
   RingPolicy,
   RingRoles,
   RingSourceSlot,
-  RootMirror,
-  RootMirrorKind,
+  RootReader,
+  StorageRegistry,
   StorageRegistryRoot,
 } from "../protocol/codec/ring-codecs.js";
 export {
   BPF_LOADER_UPGRADEABLE_ID,
   fetchRingCoSignerRecord,
   fetchRingPolicy,
+  fetchStorageRegistry,
   requireActiveRing,
   ringProgramDataAddress,
 } from "../protocol/membership/config.js";
@@ -67,7 +69,6 @@ export {
   setRingCoSignerInstruction,
   setRingDelegateInstruction,
   setRingPausedInstruction,
-  syncRootsInstruction,
   updateRingAuthorityInstruction,
   updateRingPolicyInstruction,
 } from "../operations/management/admin.js";

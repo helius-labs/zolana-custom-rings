@@ -60,7 +60,6 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
         .at(0)
         .assert_client(&rejection);
     send(rpc, &env.payer, &[register.initialize(&env.client)?])?;
-    register.complete(&env.client)?;
 
     let (config_address, config_bump) =
         Address::find_program_address(&[RING_POLICY_PDA_SEED], &ring_program);

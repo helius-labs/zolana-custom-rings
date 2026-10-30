@@ -24,7 +24,7 @@ use crate::{
     authorize::Unauthorized,
     config::{GrantRowsSecret, ReaderGrantStore, RootSecret},
     cosign::{CoSignPolicy, RefusingCoSigner},
-    cosign_limits::{LimitedCoSignerInit, MirroredLimits},
+    cosign_limits::{LimitedCoSignerInit, RecordLimits},
     database::Store,
     error::{redacted, RingRpcError},
     grant_rows::{GrantRowKey, GrantRows},
@@ -39,7 +39,7 @@ use crate::{
     origins::Origins,
     record_update::RecordUpdateRefusal,
     record_writer::{RecordWriter, WriterParts, RECORD_FLUSH_INTERVAL},
-    relay::{Relay, RelayParts, ServedRings, RELAY_TRACK_INTERVAL},
+    relay::{Relay, RelayParts, RELAY_TRACK_INTERVAL},
     relay_services::{MergeParts, RelayServices},
     replay::{LocalNonces, ReplayGuard},
     storage_chain::StorageChain,
@@ -127,7 +127,6 @@ pub struct HubBuilder<S> {
     clock: Clock,
     store: Option<Store>,
     storage: Option<(Arc<dyn StorageChain>, Keypair)>,
-    watched_registries: Vec<Address>,
     reader_grants: ReaderGrantStore,
     grant_rows: Option<GrantRowsSecret>,
     co_signer: Option<Keypair>,
@@ -266,7 +265,6 @@ impl<S: TransactionSource> Hub<S> {
             clock: Clock::System,
             store: None,
             storage: None,
-            watched_registries: Vec::new(),
             reader_grants: ReaderGrantStore::Tree,
             grant_rows: None,
             co_signer: None,
@@ -541,13 +539,6 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
         self
     }
 
-    /// The writer also syncs the subscribers of these curator registries.
-    #[must_use = "use the updated builder"]
-    pub fn with_watched_registries(mut self, registries: Vec<Address>) -> Self {
-        self.watched_registries = registries;
-        self
-    }
-
     /// `Database` needs a store and a grant rows key.
     #[must_use = "use the updated builder"]
     pub fn with_reader_grants(mut self, store: ReaderGrantStore) -> Self {
@@ -605,11 +596,6 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
                         chain,
                         authority,
                         genesis_hash,
-                        watched: self.watched_registries,
-                        rings: match &keys {
-                            KeySource::Local { ring, .. } => ServedRings::One(*ring),
-                            KeySource::Derived(_) => ServedRings::Any,
-                        },
                         reader_grants: self.reader_grants,
                     }
                     .writer(),
@@ -667,7 +653,7 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
             Some(signer) => Arc::new(
                 LimitedCoSignerInit {
                     signer,
-                    limits: MirroredLimits(shared.clone()),
+                    limits: RecordLimits(shared.clone()),
                     store: Arc::new(self.store.ok_or(RingRpcError::CoSignerStoreMissing)?),
                 }
                 .build(),

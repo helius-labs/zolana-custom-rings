@@ -3,7 +3,7 @@ import { Reader, encodeBase58, ZERO_32, equalBytes } from "@heliuslabs/zolana/in
 import type { Address, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 import { X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import { RING_RULE_SLOTS, RING_SOURCE_SLOTS } from "../../rpc/prover/types.js";
-import { ROOT_HISTORY } from "../membership/member-registry.js";
+import { MEMBER_REGISTRY_CAPACITY, ROOT_HISTORY } from "../membership/member-registry.js";
 
 import { RingError } from "../error.js";
 
@@ -64,7 +64,7 @@ export interface EncodedRuleTable {
   readonly rules: readonly Bytes32[];
 }
 
-/** Rust `Root` as a mirror copied it. */
+/** Rust `Root`. */
 export interface StorageRegistryRoot {
   readonly hash: Bytes32;
   readonly revision: bigint;
@@ -72,10 +72,12 @@ export interface StorageRegistryRoot {
   readonly expiresAt: bigint;
 }
 
-/** Rust `RootMirror`, newest first, `undefined` where the registry held no root. */
-export interface RootMirror {
-  /** Absent before the first `SyncRoots`. */
-  readonly registry?: Address;
+/** Rust `StorageRegistry`, the live root history every root reader passes. */
+export interface StorageRegistry {
+  readonly authority: Address;
+  readonly graceSlots: bigint;
+  readonly nextIndex: number;
+  /** Newest first, `undefined` where the history holds no root. */
   readonly roots: readonly (StorageRegistryRoot | undefined)[];
 }
 
@@ -102,11 +104,10 @@ export interface RingPolicy {
   readonly rules: EncodedRuleTable;
   readonly generation: number;
   readonly generationSlot: bigint;
-  readonly ownRoots: RootMirror;
-  readonly curatorRoots: RootMirror;
 }
 
-export type RootMirrorKind = "own" | "curator";
+/** The instructions that bind roots, Rust `RootRead::transfer`, `deposit` and `merge`. */
+export type RootReader = "transfer" | "exemptTransfer" | "deposit" | "merge";
 
 /** Rust `GRACE_SLOTS`, the grace a new storage registry gives an outgoing root. */
 export const GRACE_SLOTS = 750n;
@@ -116,7 +117,9 @@ export const RING_CO_SIGNER_DISCRIMINATOR = 14;
 export const RING_CO_SIGNER_SIZE = 35;
 const RING_COSIGN_CLASSES = [RING_COSIGN_TRANSFERS, RING_COSIGN_DEPOSITS, RING_COSIGN_WITHDRAWALS];
 export const RING_POLICY_DISCRIMINATOR = 15;
-export const RING_POLICY_SIZE = 4196;
+export const RING_POLICY_SIZE = 1060;
+export const STORAGE_REGISTRY_DISCRIMINATOR = 1;
+export const STORAGE_REGISTRY_SIZE = 1581;
 
 /** Mirrors Rust `CoSigner::valid`, a nonzero signer under a valid scope. */
 export function decodeRingCoSigner(data: Uint8Array): RingCoSigner & Readonly<{ bump: number }> {
@@ -155,8 +158,6 @@ export function decodeRingPolicy(data: Uint8Array): RingPolicy {
   const createdSlot = reader.u64("createdSlot");
   const records = encodeBase58(reader.bytes(32, "records"));
   const policy = readPolicyFields(reader, "RING_POLICY_INVALID");
-  const ownRoots = readRootMirror(reader);
-  const curatorRoots = readRootMirror(reader);
   reader.done();
   const classes = RING_COSIGN_CLASSES.reduce(
     (covered, bit, index) => (counts[index] === 0 ? covered : covered | bit),
@@ -174,8 +175,6 @@ export function decodeRingPolicy(data: Uint8Array): RingPolicy {
     records,
     ...policy,
     hasPolicy: !equalBytes(policy.policyHash, ZERO_32),
-    ownRoots,
-    curatorRoots,
   });
 }
 
@@ -184,34 +183,49 @@ export function registryCurator(registry: Pick<RingPolicy, "sources">): Address 
   return registry.sources.find((source) => !isZeroAddress(source.registry))?.registry;
 }
 
-export function rootMirror(policy: RingPolicy, kind: RootMirrorKind): RootMirror {
-  return kind === "own" ? policy.ownRoots : policy.curatorRoots;
+/** Rust `RingPolicy::root_registries`, the live registries `reader` passes after the ring account, the records first. */
+export function ringRootRegistries(policy: RingPolicy, reader: RootReader): readonly Address[] {
+  const read = rootRead(policy, reader);
+  const curator = read === "policy" ? registryCurator(policy) : undefined;
+  if (read === "none") return Object.freeze([]);
+  return Object.freeze(curator === undefined ? [policy.records] : [policy.records, curator]);
 }
 
-/** Rust `RootMirror::root`, the current root or a retired one before its expiry. */
-export function mirrorRoot(mirror: RootMirror, revision: bigint, slot: bigint): Bytes32 {
-  const current = mirror.roots[0]?.revision;
-  const root = mirror.roots.find(
-    (entry) =>
-      entry !== undefined &&
-      entry.revision === revision &&
-      (revision === current || slot < entry.expiresAt),
-  );
-  if (root === undefined)
-    throw new RingError("RING_ROOT_NOT_MIRRORED", {
-      details: { registry: mirror.registry, revision: revision.toString() },
-    });
-  return root.hash;
+/** Mirrors Rust `StorageRegistry::from_data`, a nonzero next index within the tree capacity. */
+export function decodeStorageRegistry(data: Uint8Array): StorageRegistry {
+  const reader = accountReader(data, {
+    discriminator: STORAGE_REGISTRY_DISCRIMINATOR,
+    size: STORAGE_REGISTRY_SIZE,
+    code: "RING_MEMBER_REGISTRY_INVALID",
+  });
+  const authority = encodeBase58(reader.bytes(32, "authority"));
+  const graceSlots = reader.u64("graceSlots");
+  const nextIndex = reader.u32("nextIndex");
+  const roots = Array.from({ length: ROOT_HISTORY }, () => {
+    const hash = reader.bytes(32, "root.hash") as Bytes32;
+    const revision = reader.u64("root.revision");
+    const expiresAt = reader.u64("root.expiresAt");
+    return equalBytes(hash, ZERO_32) ? undefined : Object.freeze({ hash, revision, expiresAt });
+  });
+  reader.done();
+  if (nextIndex < 1 || BigInt(nextIndex) > MEMBER_REGISTRY_CAPACITY)
+    throw new RingError("RING_MEMBER_REGISTRY_INVALID", { details: { nextIndex } });
+  return Object.freeze({ authority, graceSlots, nextIndex, roots: Object.freeze(roots) });
 }
 
-/** The newest root `SyncRoots` copied from `registry`, refused when the mirror holds another registry. */
-export function mirrorCurrentRoot(mirror: RootMirror, registry: Address): StorageRegistryRoot {
-  const current = mirror.roots[0];
-  if (mirror.registry !== registry || current === undefined)
-    throw new RingError("RING_ROOT_NOT_MIRRORED", {
-      details: { registry, mirrored: mirror.registry },
-    });
-  return current;
+/** Rust `StorageRegistry::root`, the current root or a retired one before its expiry. */
+export function registryRoot(
+  registry: StorageRegistry,
+  revision: bigint,
+  slot: bigint,
+): Bytes32 | undefined {
+  const current = registry.roots[0]?.revision;
+  return registry.roots.find(
+    (root) =>
+      root !== undefined &&
+      root.revision === revision &&
+      (revision === current || slot < root.expiresAt),
+  )?.hash;
 }
 
 export { CUSTOM_RING_PROOF_LENGTH };
@@ -258,7 +272,10 @@ function validScope(scope: number): boolean {
   return scope !== 0 && (scope & ~RING_COSIGN_SCOPE_MASK) === 0;
 }
 
-type AccountInvalidCode = "RING_CO_SIGNER_INVALID" | "RING_POLICY_INVALID";
+type AccountInvalidCode =
+  | "RING_CO_SIGNER_INVALID"
+  | "RING_POLICY_INVALID"
+  | "RING_MEMBER_REGISTRY_INVALID";
 
 function readPolicyFields(reader: Reader, code: AccountInvalidCode) {
   const policyHash = reader.bytes(32, "policyHash") as Bytes32;
@@ -274,18 +291,17 @@ function readPolicyFields(reader: Reader, code: AccountInvalidCode) {
   return { policyHash, sources: Object.freeze(sources), rules, generation, generationSlot };
 }
 
-function readRootMirror(reader: Reader): RootMirror {
-  const registry = reader.bytes(32, "mirror.registry");
-  const roots = Array.from({ length: ROOT_HISTORY }, () => {
-    const hash = reader.bytes(32, "mirror.root") as Bytes32;
-    const revision = reader.u64("mirror.revision");
-    const expiresAt = reader.u64("mirror.expiresAt");
-    return equalBytes(hash, ZERO_32) ? undefined : Object.freeze({ hash, revision, expiresAt });
-  });
-  return Object.freeze({
-    ...(equalBytes(registry, ZERO_32) ? {} : { registry: encodeBase58(registry) }),
-    roots: Object.freeze(roots),
-  });
+function rootRead(policy: RingPolicy, reader: RootReader): "none" | "own" | "policy" {
+  switch (reader) {
+    case "transfer":
+      return policy.hasPolicy ? "policy" : "none";
+    case "exemptTransfer":
+      return policy.hasPolicy ? "policy" : "own";
+    case "deposit":
+      return policy.hasPolicy || policy.keyEscrow ? "policy" : "none";
+    case "merge":
+      return policy.keyEscrow ? "own" : "none";
+  }
 }
 
 /** Mirrors Rust `EncodedRuleTable::decode`, every slot past a count zero. */

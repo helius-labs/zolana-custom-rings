@@ -202,8 +202,7 @@ fn a_curated_block_list_yields_to_the_subscribers_own_approval_list() -> Result<
             present,
             env,
         }
-        .send()?;
-        rings.wait_for_subscriber_mirror()
+        .send()
     };
 
     // 1. The subscriber pins the mixed group with Block read from the curator.

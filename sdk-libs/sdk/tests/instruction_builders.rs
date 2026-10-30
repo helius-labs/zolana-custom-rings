@@ -468,6 +468,7 @@ fn an_anonymous_merge_names_no_registry() {
         input_tree,
         output_tree,
         payer: payer(),
+        records: None,
         co_signer: None,
         data: CustomRingMergeIxData {
             own_revision: Default::default(),
@@ -489,7 +490,8 @@ fn an_anonymous_merge_names_no_registry() {
 }
 
 #[test]
-fn a_merge_names_the_ring_and_the_co_signer_ahead_of_spp() {
+fn a_key_escrow_merge_names_the_ring_its_records_and_the_co_signer_ahead_of_spp() {
+    let records = Address::new_from_array([0x5a; 32]);
     let (input_tree, output_tree) = (pda::tree(1), pda::tree(2));
     let data = CustomRingMergeIxData {
         own_revision: 3.into(),
@@ -526,12 +528,16 @@ fn a_merge_names_the_ring_and_the_co_signer_ahead_of_spp() {
             input_tree,
             output_tree,
             payer: payer(),
+            records: Some(records),
             co_signer,
             data: data.clone(),
         }
         .instruction()
         .unwrap();
-        let mut prefix = vec![AccountMeta::new_readonly(ring().policy_pda(), false)];
+        let mut prefix = vec![
+            AccountMeta::new_readonly(ring().policy_pda(), false),
+            AccountMeta::new_readonly(records, false),
+        ];
         prefix.extend(co_signer.into_iter().flat_map(|co_signer| {
             [
                 AccountMeta::new_readonly(ring().co_signer_pda(&co_signer), false),

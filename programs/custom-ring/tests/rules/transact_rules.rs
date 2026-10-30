@@ -4,7 +4,8 @@ use custom_ring_interface::{
     funder_account_position, input_flag, key_catalog::RingCircuit, shape_flag, tag, transact_flag,
     AnonymousProofData, CoSignScope, CustomRingError, CustomRingProof, InputTrees,
     PlainGroth16Proof, PolicyProof, PolicyRecipients, RingOutput, RingPolicy, RingRail,
-    RingTransactData, SenderBundle, RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
+    RingTransactData, RootRead, SenderBundle, RING_TRANSACT_RING_CONFIG_INDEX,
+    TRANSACT_PAYER_INDEX,
 };
 use solana_address::Address;
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
@@ -18,7 +19,7 @@ use spr_interface::{
 
 use crate::common::{
     delegate_ring, off_curve_g2, on_curve_g2, policy_pda, reaches_verification, refused, ring_auth,
-    set_co_signer, transact, CoSignerSlot, Ring, Sent, Setup, PROGRAM, SYSTEM,
+    set_co_signer, transact, CoSignerSlot, Ring, Sent, Setup, PROGRAM, RECORDS, SYSTEM,
 };
 
 pub const SPP: Address = Address::new_from_array(SHIELDED_POOL_PROGRAM_ID);
@@ -213,8 +214,10 @@ pub fn send(
     spp: Vec<AccountMeta>,
     signers: &[&Keypair],
 ) -> Sent {
+    let policy: RingPolicy = ring.read(&policy_pda());
     let accounts = [
         vec![AccountMeta::new_readonly(policy_pda(), false)],
+        ring.registries(RootRead::transfer(&policy, None)),
         prefix,
         spp,
     ]
@@ -247,11 +250,23 @@ pub fn confidential(
 #[test]
 fn a_transfer_passing_every_check_names_exactly_one_ring_account() {
     let fixture = Fixture::new();
-    for (setup, policy) in [(Setup::AuditOnly, false), (Setup::Policy, true)] {
+    for (setup, policy, registries) in [
+        (Setup::AuditOnly, false, Vec::new()),
+        (Setup::Policy, true, vec![RECORDS]),
+    ] {
         let mut ring = Ring::new(setup);
         let data = fixture.transfer(RingRail::Confidential, 2, 2, policy);
         let spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(&ring));
-        let accounts = [vec![AccountMeta::new_readonly(policy_pda(), false)], spp].concat();
+        let registries = registries
+            .into_iter()
+            .map(|registry| AccountMeta::new_readonly(registry, false))
+            .collect();
+        let accounts = [
+            vec![AccountMeta::new_readonly(policy_pda(), false)],
+            registries,
+            spp,
+        ]
+        .concat();
         let ring_owned = accounts
             .iter()
             .filter(|meta| ring.owner(&meta.pubkey) == Some(PROGRAM))
@@ -701,10 +716,11 @@ fn withdraw_with_exemption(
                 .map(|_| AccountMeta::new(Address::new_unique(), false)),
         );
     }
+    let records = exemption.map(|_| AccountMeta::new_readonly(RECORDS, false));
     send(
         ring,
         tag::TRANSFER,
-        prefix,
+        records.into_iter().chain(prefix).collect(),
         data.encode().unwrap(),
         spp,
         signers,
@@ -1288,7 +1304,7 @@ fn policy_spl_metadata_must_match_the_live_token_owner() {
 }
 
 #[test]
-fn withdrawal_exemptions_must_prove_under_a_mirrored_own_root() {
+fn withdrawal_exemptions_must_prove_under_a_live_own_root() {
     use bytemuck::Zeroable;
     use custom_ring_interface::{storage::Revision, WithdrawalExemptionProof};
     let mut ring = Ring::new(Setup::AuditOnly);
@@ -1299,9 +1315,9 @@ fn withdrawal_exemptions_must_prove_under_a_mirrored_own_root() {
     };
     refused(
         withdraw_with_exemption(&mut ring, &[60, 60], Vec::new(), &[], Some(&exemption(1))),
-        CustomRingError::MirrorRootExpired,
+        CustomRingError::RootNotServed,
     );
-    // A mirrored revision alone cannot waive the signature, the proof is checked.
+    // A served revision alone cannot waive the signature, the proof is checked.
     reaches_verification(withdraw_with_exemption(
         &mut ring,
         &[60, 60],

@@ -13,11 +13,10 @@ A **member record** is one leaf `Poseidon(member, next, lists, escrow_key, mint_
 The policy lives in the ring's `RingPolicy` PDA at seed `[b"policy"]`, alongside:
 
 - `records`: the ring's own `StorageRegistry`, bound by `Initialize` and rebound by `UpdatePolicy`
-- `own_roots`, `curator_roots`: the mirrors of the records' and the curator's root history, see **Root freshness** below
 - `policy_hash`: the commitment to the table and the source map
 - `generation`: plus one at every table, source or records write, not hashed
 
-The account stores the whole table. It stores no member record, only the mirrored roots of the record trees. The records reach clients through instruction data and the ring indexer. See `RingPolicy` in `program-libs/interface/src/accounts/state.rs:301`. [RingPolicy](spec.md#ringpolicy)
+The account stores the whole table. It stores no member record and no root, see **Root freshness** below. The records reach clients through instruction data and the ring indexer. See `RingPolicy` in `program-libs/interface/src/accounts/state.rs:431`. [RingPolicy](spec.md#ringpolicy)
 
 ### Rule
 
@@ -203,15 +202,15 @@ The circuit binds three things (`prover/circuits/policy/member.go:56`):
 
 1. **Subjects to the transaction**: outputs reopen `private_tx_hash`, SPP's blinded hash over the spent note hashes and the output hashes, which the SPP proof binds (`prover/circuits/policy/transaction.go:45`). Withdrawals hash to `withdrawal_hash`, which the program rebuilds from the settlement accounts (`prover/circuits/policy/withdrawals.go:33`, `programs/custom-ring/src/instructions/transfer/verify.rs:66`). The sender is the statement's `sender`, which the program supplies: the identity of the sole owner signer or the in-proof owner, or on the anonymous rail the sender commitment the circuit opens to the hidden sender (`programs/custom-ring/src/instructions/transfer/accounts.rs:114`, `prover/circuits/policy/member.go:85`). On the delegate rail the circuit takes it from the reopened inputs (`prover/circuits/policy/delegate.go:76`).
 2. **Rules to the ring**: the table and the source map hash to the `policy_hash` the program reads from the ring policy (`prover/circuits/policy/table.go:89`, `program-libs/interface/src/instructions/transact.rs:952`).
-3. **Openings to the registries**: every pool folds to `own_root` or `curator_root`, which the program reads by revision from the ring policy's mirrors (`program-libs/interface/src/instructions/transact.rs:953`, `program-libs/interface/src/accounts/state.rs:344`).
+3. **Openings to the registries**: every pool folds to `own_root` or `curator_root`, which the program reads by revision from the live registries the transfer passes (`program-libs/interface/src/instructions/transact.rs:953`, `programs/custom-ring/src/instructions/accounts/loader.rs:115`).
 
 It then requires every enabled rule to pass and every outflow limit to hold. The program validates the table at write time, and the circuit trusts that validation (`program-libs/interface/src/accounts/state.rs:383`, `prover/circuits/policy/table.go:88`). The program then verifies the proof and only then CPIs SPP (`programs/custom-ring/src/instructions/transfer/processor.rs:58`). [Transfer](spec.md#9-transfer)
 
 <aside>
 
-**Root freshness:** a statement names each root by its revision. `SyncRoots` copies a storage registry's roots into the ring policy's mirror. A mirrored root verifies while it is the newest one or its `expires_at` lies above the current slot. The Storage Program's `Update` sets a retired root's `expires_at` to the slot plus the registry's `grace_slots`, and `UpdateImmediate` clears every earlier root, so a block binds every transfer after the next `SyncRoots`. A root the registry dropped stays valid in the mirror until that sync.
+**Root freshness:** a statement names each root by its revision. The transfer passes the records registry, and the curator registry when a source names one, after the ring account. The program refuses an account that is not the ring's records or its curator (`UnboundRegistry`). A root verifies while it is the newest one or its `expires_at` lies above the current slot (`RootNotServed`). The Storage Program's `Update` sets a retired root's `expires_at` to the slot plus the registry's `grace_slots`, and `UpdateImmediate` clears every earlier root, so a block binds the next transfer.
 
-`program-libs/interface/src/accounts/state.rs:344`, `:464`, `:469`, `root_at` in `program-libs/interface/src/accounts/storage.rs`
+`RegistrySlots` in `programs/custom-ring/src/instructions/accounts/loader.rs:115`, `LiveRoots` in `program-libs/interface/src/accounts/state.rs:367`, `root_at` in `program-libs/interface/src/accounts/storage.rs`
 
 ```text
 root at revision r: nonzero, and r is the newest revision or slot < expires_at

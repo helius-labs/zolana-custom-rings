@@ -70,8 +70,7 @@ instruction_tags! {
     // Tags 28 to 30 are retired, never reuse them.
     Deposit = DEPOSIT: 31 => PROOF_UNITS,
     // Tags 32 to 42 are retired, never reuse them.
-    /// Permissionless and without data, the registry account picks the mirror.
-    SyncRoots = SYNC_ROOTS: 48 => ACCOUNT_UNITS,
+    // Tag 48 is retired, never reuse it.
     /// Signed by the upgrade authority, one budget for the ring account, its policy and the SPP CPI.
     Initialize = INITIALIZE: 53 => 2 * ACCOUNT_UNITS + POLICY_UNITS,
     UpdatePolicy = UPDATE_POLICY: 54 => POLICY_UNITS,

@@ -4,7 +4,7 @@ use anyhow::{bail, ensure, Context as _, Result};
 use custom_ring_interface::{RingRole, RingRoles};
 use custom_ring_sdk::{
     CustomRingConfig, InitialPolicy, Initialize, ListRegistry, PolicyTable, PolicyUpdate,
-    RingError, RingKind, SourceOwner, SyncRoots, UpdatePolicy,
+    RingError, RingKind, SourceOwner, UpdatePolicy,
 };
 use solana_address::Address;
 use solana_keypair::Keypair;
@@ -63,7 +63,7 @@ struct ConfigCreation<'a> {
     existing: Option<&'a CustomRingConfig>,
 }
 
-/// `Initialize` over the records Ring RPC holds, then the `SyncRoots` of the records and of every pinned curator.
+/// `Initialize` over the records Ring RPC holds.
 #[must_use]
 struct RingInitialization<'a> {
     deployer: &'a Keypair,
@@ -299,20 +299,13 @@ impl RingInitialization<'_> {
             .instruction()
         };
         // Curators past the transaction size are pointed one by one by the policy pin.
-        let (initialize, pinned_sources) = match instruction(&shared_sources) {
+        let initialize = match instruction(&shared_sources) {
             Err(RingError::TransactionTooLarge { .. }) if !shared_sources.is_empty() => {
-                (instruction(&[])?, &[][..])
+                instruction(&[])?
             }
-            result => (result?, shared_sources.as_slice()),
+            result => result?,
         };
         ctx.send(&[self.config_authority, self.deployer], &[initialize])?;
-        let mut syncs = vec![SyncRoots {
-            ring: ctx.ring,
-            registry: records,
-        }
-        .instruction()];
-        syncs.extend(policy::curator_syncs(ctx.ring, pinned_sources));
-        ctx.send(&[self.config_authority], &syncs)?;
         Ok(())
     }
 }
@@ -347,12 +340,7 @@ impl PolicyPin<'_> {
                         },
                     }
                     .instruction()?;
-                    let sync = SyncRoots {
-                        ring: ctx.ring,
-                        registry: *registry,
-                    }
-                    .instruction();
-                    ctx.send(&[authority], &[point, sync])?;
+                    ctx.send(&[authority], &[point])?;
                     pointed = true;
                     CREATED
                 };

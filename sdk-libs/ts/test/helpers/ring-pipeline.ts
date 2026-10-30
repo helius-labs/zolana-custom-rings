@@ -90,6 +90,7 @@ import {
   ringCoSignerAccount,
   ringPolicyData,
   sppRingRegistration,
+  storageRegistryAccount,
 } from "./ring-accounts.js";
 import { settlementAccounts } from "../../src/protocol/transaction/spp.js";
 import { checkTransactionFits } from "../../src/operations/workflow/compile.js";
@@ -247,21 +248,20 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
                 table,
                 generation: 1,
               }),
-          ownRoots: {
-            registry: ownRegistry,
-            roots: [{ hash: ownTree.root, revision: OWN_REVISION, expiresAt: 0n }],
-          },
-          ...(curatorRegistry === undefined || curatorTree === undefined
-            ? {}
-            : {
-                curatorRoots: {
-                  registry: curatorRegistry,
-                  roots: [{ hash: curatorTree.root, revision: CURATOR_REVISION, expiresAt: 0n }],
-                },
-              }),
         }),
       ),
     );
+    accounts.set(
+      ownRegistry,
+      storageRegistryAccount([{ hash: ownTree.root, revision: OWN_REVISION, expiresAt: 0n }]),
+    );
+    if (curatorRegistry !== undefined && curatorTree !== undefined)
+      accounts.set(
+        curatorRegistry,
+        storageRegistryAccount([
+          { hash: curatorTree.root, revision: CURATOR_REVISION, expiresAt: 0n },
+        ]),
+      );
   } else {
     accounts.set(
       ringAddress,
@@ -495,7 +495,9 @@ export async function checkAccounts(
   expected: Readonly<{
     fixture: Fixture;
     data: RingTransactData;
-    /** After the ring account, the co-signer, delegate and anchor tree in order. */
+    /** The live registries right after the ring account, `ringRootRegistries` order. */
+    registries?: readonly Address[];
+    /** After the registries, the co-signer, delegate and anchor tree in order. */
     prefix: readonly AccountEntry[];
     payer: Address;
     ownerSigners?: readonly Address[];
@@ -512,6 +514,7 @@ export async function checkAccounts(
     instruction.accounts?.map((account) => ({ address: account.address, role: account.role })),
   ).toEqual([
     readonly(await ringPolicyAddress(fixture.ringProgramId)),
+    ...(expected.registries ?? []).map(readonly),
     ...expected.prefix,
     { address: expected.payer, role: AccountRole.WRITABLE_SIGNER },
     writable(TREE),

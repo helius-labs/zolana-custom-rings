@@ -86,11 +86,16 @@ import { ListId, recordBit } from "../../../src/protocol/membership/policy.js";
 import { BLOCKHASH } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { stateTree } from "../../helpers/state-tree.js";
 import { recordTree, type FixtureRecord } from "../../helpers/member-registry.js";
-import { ownedAccount, ringCoSignerAccount, ringPolicyData } from "../../helpers/ring-accounts.js";
+import {
+  ownedAccount,
+  ringCoSignerAccount,
+  ringPolicyData,
+  storageRegistryAccount,
+} from "../../helpers/ring-accounts.js";
 import { decompressG2 } from "../../../src/protocol/codec/codecs.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
-/** The policy mirrors the records' newest root at this revision. */
+/** The records registry's newest root revision. */
 const OWN_REVISION = 3n;
 /** Pays every merge, the merge circuit refuses the owner as payer. */
 const RELAYER = address("3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3");
@@ -327,12 +332,12 @@ async function ringMergeParams({
               mode,
               ...(coSigner === undefined ? {} : { coSigner }),
               records: RECORDS,
-              ownRoots: {
-                registry: RECORDS,
-                roots: [{ hash: tree.root, revision: OWN_REVISION, expiresAt: 0n }],
-              },
             }),
           );
+        if (account === RECORDS)
+          return storageRegistryAccount([
+            { hash: tree.root, revision: OWN_REVISION, expiresAt: 0n },
+          ]);
         return undefined;
       },
       getStorageMemberOpenings: async (
@@ -410,7 +415,7 @@ describe("ring merge", () => {
       const data = ringInstruction(transaction);
       expect(data.slice(1, 9)).toEqual(Uint8Array.of(Number(OWN_REVISION), 0, 0, 0, 0, 0, 0, 0));
       const [ring] = await ringPolicyPda(RING);
-      expect(ringAccounts(transaction).slice(0, 2)).toEqual([ring, treeAddress(7)]);
+      expect(ringAccounts(transaction).slice(0, 3)).toEqual([ring, RECORDS, treeAddress(7)]);
     } finally {
       local.destroy();
     }
@@ -657,7 +662,7 @@ describe("ring merge", () => {
     );
   });
 
-  it("compresses proof b and places the ring policy and the co-signer ahead of SPP's accounts", async () => {
+  it("compresses proof b and places the ring policy, its records and the co-signer ahead of SPP's accounts", async () => {
     const inputs = [input(3n), input(5n)];
     const data = provenMerge(merge(inputs).prepare(), g2Point());
     const cosigner = ShieldedKeypair.generate().shieldedAddress().solanaAddress();
@@ -670,6 +675,7 @@ describe("ring merge", () => {
       payer: owner.shieldedAddress().solanaAddress(),
       cosigner,
       outputRingDataHash: field(4),
+      registries: [RECORDS],
       ownRevision: 11n,
       disclosure,
       data,
@@ -685,38 +691,41 @@ describe("ring merge", () => {
     expect(body.length).toBe(encodeMergeTransactInstructionData(data).length - 64);
     expect(decompressG2(body.slice(40, 104) as Bytes64)).toEqual(data.proof.b);
     const [ring] = await ringPolicyPda(RING);
-    expect(instruction.accounts?.slice(0, 3)).toEqual([
+    expect(instruction.accounts?.slice(0, 4)).toEqual([
       { address: ring, role: AccountRole.READONLY },
+      { address: RECORDS, role: AccountRole.READONLY },
       { address: await ringCoSignerAddress(RING, cosigner), role: AccountRole.READONLY },
       { address: cosigner, role: AccountRole.READONLY_SIGNER },
     ]);
-    expect(instruction.accounts?.[5]).toEqual({
+    expect(instruction.accounts?.[6]).toEqual({
       address: await ringAuthAddress(RING),
       role: AccountRole.READONLY,
     });
-    expect(instruction.accounts).toHaveLength(9 + inputs.length);
+    expect(instruction.accounts).toHaveLength(10 + inputs.length);
     const without = await ringMergeInstruction({
       ringProgramId: RING,
       inputTree: treeAddress(7),
       outputTree: treeAddress(7),
       payer: owner.shieldedAddress().solanaAddress(),
       outputRingDataHash: field(4),
+      registries: [RECORDS],
       ownRevision: 11n,
       disclosure,
       data,
     });
-    expect(without.accounts?.slice(1)).toEqual(instruction.accounts?.slice(3));
+    expect(without.accounts?.slice(2)).toEqual(instruction.accounts?.slice(4));
     const plain = await ringMergeInstruction({
       ringProgramId: RING,
       inputTree: treeAddress(7),
       outputTree: treeAddress(7),
       payer: owner.shieldedAddress().solanaAddress(),
       outputRingDataHash: field(4),
+      registries: [],
       disclosure,
       data,
     });
     expect(plain.data?.[1]).toBe(0);
-    expect(plain.accounts?.slice(1)).toEqual(instruction.accounts?.slice(3));
+    expect(plain.accounts?.slice(1)).toEqual(instruction.accounts?.slice(4));
   });
 
   it("binds ring identity and destination into approval", () => {

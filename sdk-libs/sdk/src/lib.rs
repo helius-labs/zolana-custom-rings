@@ -87,10 +87,10 @@ pub use crate::{
     register_key::{EscrowedRecipients, KeyEscrowAuthority, KeyRegistration, SealedEscrow},
     relay::{PendingSignature, PreparedAuthorityTransfer, PreparedRelay, RelaySent, RingRelay},
     select::{select_merge_where, select_spend_where},
-    storage::{
-        InitializeStorage, StorageApplyProof, SyncRoots, UpdateStorage, UpdateStorageAuthority,
+    storage::{InitializeStorage, StorageApplyProof, UpdateStorage, UpdateStorageAuthority},
+    submission::{
+        live_registry, RingOperation, RingSubmission, SettledSubmission, SubmissionStatus,
     },
-    submission::{RingOperation, RingSubmission, SettledSubmission, SubmissionStatus},
     trees::tree_id,
 };
 pub use zolana_ring_client::FirstContact;

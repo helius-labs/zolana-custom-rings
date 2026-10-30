@@ -13,7 +13,7 @@ use custom_ring_interface::{
     storage::{Revision, Root, StorageRegistry},
     transact_flag, AnonymousAuditKey, AnonymousLayout, AnonymousProofData, AuditBinding, AuditKind,
     CustomRingError, CustomRingProof, DeliveredLayout, DisclosureLayout, InProofOwner, InputTrees,
-    InstructionTag, ParsedTransact, PlainGroth16Proof, PolicyBinding, PolicyProof,
+    InstructionTag, LiveRoots, ParsedTransact, PlainGroth16Proof, PolicyBinding, PolicyProof,
     PolicyRecipients, RailSigner, RingMode, RingOutput, RingPolicy, RingRail, RingTransactData,
     SenderBundle, Settlement, SourceSlot, RING_POLICY,
 };
@@ -844,16 +844,34 @@ fn an_spp_point_off_the_curve_is_refused_at_expansion() {
 fn the_policy_proof_follows_the_ring_policy() {
     let fixture = Fixture::new();
     let policy = fixture.confidential_policy();
-    let records = Address::new_from_array([2; 32]);
     let curator = Address::new_from_array([3; 32]);
     let mut ring_policy = config();
-    ring_policy.records = records;
+    let registry = |revision: u64, hash: u8| {
+        let mut registry = StorageRegistry::new(Address::default(), 0);
+        registry.roots[0] = Root {
+            hash: [hash; 32],
+            revision: Revision::from(revision),
+            expires_at: [0; 8],
+        };
+        registry
+    };
+    let (own, curated, replaced) = (registry(7, 7), registry(3, 3), registry(8, 8));
+    let unpassed = LiveRoots {
+        own: None,
+        curator: None,
+        slot: 0,
+    };
+    let live = LiveRoots {
+        own: Some(&own),
+        curator: Some(&curated),
+        slot: 0,
+    };
     assert_eq!(
-        policy.check_policy(None, 0),
+        policy.check_policy(None, &live),
         Err(CustomRingError::UnexpectedPolicyProof)
     );
     assert_eq!(
-        policy.check_policy(Some(&ring_policy), 0),
+        policy.check_policy(Some(&ring_policy), &live),
         Err(CustomRingError::FlagNotAllowed)
     );
     ring_policy.sources[0] = SourceSlot {
@@ -867,35 +885,20 @@ fn the_policy_proof_follows_the_ring_policy() {
         ..policy
     });
     assert_eq!(
-        uncurated.check_policy(Some(&ring_policy), 0),
+        uncurated.check_policy(Some(&ring_policy), &live),
         Err(CustomRingError::FlagNotAllowed)
     );
     assert_eq!(
-        policy.check_policy(Some(&ring_policy), 0),
+        policy.check_policy(Some(&ring_policy), &live),
         Err(CustomRingError::PolicyNotSet)
     );
     ring_policy.policy_hash = [9; 32];
     assert_eq!(
-        policy.check_policy(Some(&ring_policy), 0),
-        Err(CustomRingError::MirrorNotSynced)
-    );
-    let registry = |revision: u64, hash: u8| {
-        let mut registry = StorageRegistry::new(Address::default(), 0);
-        registry.roots[0] = Root {
-            hash: [hash; 32],
-            revision: Revision::from(revision),
-            expires_at: [0; 8],
-        };
-        registry
-    };
-    ring_policy.sync(&records, &registry(7, 7)).unwrap();
-    ring_policy.sync(&curator, &registry(3, 3)).unwrap();
-    assert_eq!(
-        ring_policy.sync(&Address::new_from_array([4; 32]), &registry(3, 3)),
-        Err(CustomRingError::UnmirroredRegistry)
+        policy.check_policy(Some(&ring_policy), &unpassed),
+        Err(CustomRingError::MissingRegistry)
     );
     assert_eq!(
-        policy.check_policy(Some(&ring_policy), 0),
+        policy.check_policy(Some(&ring_policy), &live),
         Ok(Some(PolicyBinding {
             proof: policy.policy.unwrap(),
             policy_hash: [9; 32],
@@ -903,19 +906,26 @@ fn the_policy_proof_follows_the_ring_policy() {
             curator_root: Some([3; 32]),
         }))
     );
-    ring_policy.sync(&records, &registry(8, 8)).unwrap();
     assert_eq!(
-        policy.check_policy(Some(&ring_policy), 0),
-        Err(CustomRingError::MirrorRootExpired)
+        policy.check_policy(
+            Some(&ring_policy),
+            &LiveRoots {
+                own: Some(&replaced),
+                ..live
+            }
+        ),
+        Err(CustomRingError::RootNotServed)
     );
     assert_eq!(
         fixture
             .confidential_delivered()
-            .check_policy(Some(&ring_policy), 0),
+            .check_policy(Some(&ring_policy), &live),
         Err(CustomRingError::MissingPolicyProof)
     );
     assert_eq!(
-        fixture.confidential_delivered().check_policy(None, 0),
+        fixture
+            .confidential_delivered()
+            .check_policy(None, &unpassed),
         Ok(None)
     );
 }

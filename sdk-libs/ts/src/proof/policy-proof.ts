@@ -39,7 +39,7 @@ import {
   type RecordLists,
   type RuleRefusal,
 } from "../protocol/membership/policy.js";
-import { boundRoot, ownRoot, readRecordPool, type BoundRoot } from "../rpc/registered-record.js";
+import { fetchBoundRoot, readRecordPool, type BoundRoot } from "../rpc/registered-record.js";
 import { policyStatementHash, type PolicyKey } from "../protocol/proof/statement.js";
 import { policyPoolCapacity } from "../protocol/proof/proving-keys.js";
 import { publishesRecipients, type RingRail } from "../protocol/transaction/transact.js";
@@ -106,11 +106,11 @@ export async function readPolicy(
 ): Promise<PolicyInputs> {
   const { client, ringProgramId, proofInputs, config: policy } = input;
   const pinned = pinnedPolicy(policy);
-  const own = ownRoot(ringProgramId, policy);
+  const own = await fetchBoundRoot({ client, ringProgramId, registry: policy.records }, context);
   const curatorRoot =
     pinned.curator === undefined
       ? undefined
-      : boundRoot({ ringProgramId, policy, mirror: "curator", registry: pinned.curator });
+      : await fetchBoundRoot({ client, ringProgramId, registry: pinned.curator }, context);
   const { withdrawals, splWithdrawalOwners } = await readPolicyWithdrawals(
     client,
     proofInputs.externalData.interfaceTransfers,

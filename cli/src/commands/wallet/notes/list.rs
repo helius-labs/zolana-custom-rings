@@ -4,7 +4,7 @@ use anyhow::{bail, Context as _, Result};
 use clap::{builder::PossibleValue, Args, ValueEnum};
 use custom_ring_interface::ListRegistry;
 use custom_ring_sdk::{
-    AuthorityRecordUpdate, MemberRecords, PolicyUpdate, SourceOwner, SyncRoots, UpdatePolicy,
+    AuthorityRecordUpdate, MemberRecords, PolicyUpdate, SourceOwner, UpdatePolicy,
     WalletRecordUpdate,
 };
 use solana_address::Address;
@@ -290,17 +290,7 @@ fn set_source(ctx: &Context, list_id: ListId, source: SourceOwner) -> Result<()>
             update: PolicyUpdate::Source { list_id, source },
         }
         .instruction()?;
-        let mut instructions = vec![point];
-        if let SourceOwner::Curator(registry) = source {
-            instructions.push(
-                SyncRoots {
-                    ring: ctx.ring,
-                    registry,
-                }
-                .instruction(),
-            );
-        }
-        ctx.send(&[authority], &instructions)?;
+        ctx.send(&[authority], &[point])?;
         "created"
     };
     let registry = policy::pinned(ctx)?

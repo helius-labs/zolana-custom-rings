@@ -10,8 +10,8 @@ use zolana_ring_policy::{
 
 use crate::{
     error::CustomRingError,
-    storage::{root_at, Revision, Root, StorageError, StorageRegistry},
-    TAGGED_X25519_KEY_LEN,
+    storage::{Revision, StorageRegistry},
+    WithdrawalExemptionProof, TAGGED_X25519_KEY_LEN,
 };
 
 /// Roots a transfer proof may bind, applications in between leave it provable.
@@ -325,6 +325,106 @@ pub enum ListRegistry {
     Curator(Address),
 }
 
+/// The roots an instruction binds, each read from a live registry account after the ring account.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum RootRead {
+    None,
+    Own,
+    /// The own root, and the curator root when a source names one.
+    Policy,
+}
+
+impl RootRead {
+    pub fn transfer(ring: &RingPolicy, exemption: Option<&WithdrawalExemptionProof>) -> Self {
+        if ring.has_policy() {
+            Self::Policy
+        } else if exemption.is_some() {
+            Self::Own
+        } else {
+            Self::None
+        }
+    }
+
+    pub fn deposit(ring: &RingPolicy) -> Result<Self, CustomRingError> {
+        Ok(
+            match ring.has_policy() || ring.mode()? == RingMode::ConfidentialEscrow {
+                true => Self::Policy,
+                false => Self::None,
+            },
+        )
+    }
+
+    pub fn merge(ring: &RingPolicy) -> Result<Self, CustomRingError> {
+        Ok(match ring.mode()? {
+            RingMode::ConfidentialEscrow => Self::Own,
+            RingMode::Confidential | RingMode::Anonymous => Self::None,
+        })
+    }
+}
+
+/// The roots the passed registries serve at `slot`, a revoked root fails at once.
+#[derive(Debug, Copy, Clone)]
+pub struct LiveRoots<'a> {
+    pub own: Option<&'a StorageRegistry>,
+    pub curator: Option<&'a StorageRegistry>,
+    pub slot: u64,
+}
+
+impl LiveRoots<'_> {
+    pub fn own(&self, revision: Revision) -> Result<[u8; 32], CustomRingError> {
+        self.served(self.own, revision)?
+            .ok_or(CustomRingError::MissingRegistry)
+    }
+
+    pub fn curator(&self, revision: Revision) -> Result<[u8; 32], CustomRingError> {
+        self.served(self.curator, revision)?
+            .ok_or(CustomRingError::MissingRegistry)
+    }
+
+    /// Without the records, `None` at revision zero and `unread` otherwise.
+    pub fn own_if_read(
+        &self,
+        revision: Revision,
+        unread: CustomRingError,
+    ) -> Result<Option<[u8; 32]>, CustomRingError> {
+        Self::named(self.served(self.own, revision)?, revision, unread)
+    }
+
+    /// Without a curator, `None` at revision zero and `unread` otherwise.
+    pub fn curator_if_read(
+        &self,
+        revision: Revision,
+        unread: CustomRingError,
+    ) -> Result<Option<[u8; 32]>, CustomRingError> {
+        Self::named(self.served(self.curator, revision)?, revision, unread)
+    }
+
+    fn served(
+        &self,
+        registry: Option<&StorageRegistry>,
+        revision: Revision,
+    ) -> Result<Option<[u8; 32]>, CustomRingError> {
+        registry
+            .map(|registry| {
+                registry
+                    .root(revision, self.slot)
+                    .map_err(|_| CustomRingError::RootNotServed)
+            })
+            .transpose()
+    }
+
+    fn named(
+        root: Option<[u8; 32]>,
+        revision: Revision,
+        unread: CustomRingError,
+    ) -> Result<Option<[u8; 32]>, CustomRingError> {
+        match root {
+            None if revision.value() != 0 => Err(unread),
+            root => Ok(root),
+        }
+    }
+}
+
 /// One per ring, every ring instruction and transfer passes it.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
@@ -352,20 +452,6 @@ pub struct RingPolicy {
     pub generation: [u8; 4],
     /// Little endian, the slot of the write `generation` counts.
     pub generation_slot: [u8; 8],
-    /// Mirrors `records`.
-    pub own_roots: RootMirror,
-    /// Mirrors the curator registry the sources name.
-    pub curator_roots: RootMirror,
-}
-
-/// A `StorageRegistry` root history as `SyncRoots` last copied it.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Pod, Zeroable)]
-#[repr(C)]
-pub struct RootMirror {
-    /// Zero before the first sync, a reader refuses roots of another registry.
-    pub registry: Address,
-    /// Newest first, as the registry holds them.
-    pub roots: [Root; ROOT_HISTORY],
 }
 
 /// At `[CO_SIGNER_PDA_SEED, signer]`.
@@ -377,26 +463,6 @@ pub struct CoSigner {
     /// [`CoSignScope`] bits.
     pub scope: u8,
     pub bump: u8,
-}
-
-impl RootMirror {
-    /// The registry's root rule over the last synced copy, a root dropped since stays valid until the next sync.
-    pub fn root(&self, revision: Revision, slot: u64) -> Result<[u8; 32], StorageError> {
-        root_at(&self.roots, revision, slot)
-    }
-
-    fn root_of(
-        &self,
-        registry: &Address,
-        revision: Revision,
-        slot: u64,
-    ) -> Result<[u8; 32], CustomRingError> {
-        if self.registry != *registry {
-            return Err(CustomRingError::MirrorNotSynced);
-        }
-        self.root(revision, slot)
-            .map_err(|_| CustomRingError::MirrorRootExpired)
-    }
 }
 
 #[must_use]
@@ -411,7 +477,7 @@ pub struct NewRing {
 }
 
 impl NewRing {
-    /// Unsynced mirrors and no policy, boxed in place past the SBF stack frame.
+    /// No policy, boxed in place past the SBF stack frame.
     pub fn account(self) -> Box<RingPolicy> {
         let mut ring: Box<RingPolicy> = bytemuck::zeroed_box();
         ring.discriminator = RING_POLICY;
@@ -483,14 +549,13 @@ impl RingPolicy {
         Ok(())
     }
 
-    /// `InvalidSource` for the curator, the own mirror stays empty until the next sync.
+    /// `InvalidSource` for the curator.
     pub fn rebind_records(&mut self, records: Address, slot: u64) -> Result<(), CustomRingError> {
         if self.curator() == Some(records) {
             return Err(CustomRingError::InvalidSource);
         }
         self.count_generation(slot)?;
         self.records = records;
-        self.own_roots = RootMirror::zeroed();
         Ok(())
     }
 
@@ -530,32 +595,11 @@ impl RingPolicy {
         Ok(self.rules.validate(&self.source_map()?)?)
     }
 
-    /// `UnmirroredRegistry` unless `registry` is the records or the curator.
-    pub fn sync(
-        &mut self,
-        registry: &Address,
-        source: &StorageRegistry,
-    ) -> Result<(), CustomRingError> {
-        let mirror = match self.curator() {
-            _ if *registry == self.records => &mut self.own_roots,
-            Some(curator) if curator == *registry => &mut self.curator_roots,
-            _ => return Err(CustomRingError::UnmirroredRegistry),
-        };
-        *mirror = RootMirror {
-            registry: *registry,
-            roots: source.roots,
-        };
-        Ok(())
-    }
-
-    pub fn own_root(&self, revision: Revision, slot: u64) -> Result<[u8; 32], CustomRingError> {
-        self.own_roots.root_of(&self.records, revision, slot)
-    }
-
-    /// `MirrorNotSynced` without a curator source.
-    pub fn curator_root(&self, revision: Revision, slot: u64) -> Result<[u8; 32], CustomRingError> {
-        let curator = self.curator().ok_or(CustomRingError::MirrorNotSynced)?;
-        self.curator_roots.root_of(&curator, revision, slot)
+    /// The registries `read` passes after the ring account, the records first.
+    pub fn root_registries(&self, read: RootRead) -> impl Iterator<Item = Address> {
+        let own = (read != RootRead::None).then_some(self.records);
+        let curator = (read == RootRead::Policy).then(|| self.curator()).flatten();
+        own.into_iter().chain(curator)
     }
 }
 
@@ -575,10 +619,9 @@ fn source_map(sources: &[SourceSlot; N_SOURCE_SLOTS]) -> Result<SourceMap, Custo
 
 const _: () = assert!(core::mem::size_of::<SourceSlot>() == 33);
 const _: () = assert!(ROOT_HISTORY <= u8::MAX as usize);
-const _: () = assert!(RingPolicy::SIZE == 4196);
+const _: () = assert!(RingPolicy::SIZE == 1060);
 const _: () = assert!(core::mem::offset_of!(RingPolicy, roles) == 6);
 const _: () = assert!(core::mem::offset_of!(RingPolicy, delegate) == 134);
 const _: () = assert!(core::mem::offset_of!(RingPolicy, auditor_pubkey) == 166);
 const _: () = assert!(core::mem::offset_of!(RingPolicy, records) == 207);
-const _: () = assert!(core::mem::offset_of!(RingPolicy, own_roots) == 1060);
 const _: () = assert!(CoSigner::SIZE == 35);
