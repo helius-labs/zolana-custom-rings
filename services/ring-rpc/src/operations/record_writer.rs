@@ -29,7 +29,7 @@ use zolana_ring_indexer::rpc::{GetStorageApplyProofInputsRequest, StorageWriteVi
 use crate::{
     config::ReaderGrantStore,
     database::Store,
-    error::{redacted, GrantRefusal, RingRpcError},
+    error::{redacted, RingRpcError},
     record_update::{
         escrowed_members, limits_within_bounds, ApplyInputsCheck, BatchPlan, CheckedUpdate,
         EnrolmentApproval, EscrowUniqueness, ModeDecision, QueuedCheck, RecordUpdateCheck,
@@ -151,7 +151,8 @@ impl RecordWriter {
             },
         }
         .check()?;
-        self.check_limited_assets(&update, &policy).await?;
+        let records = StorageTip::newest(policy.records, &registry);
+        self.check_limited_assets(&update, &records).await?;
         let _queueing = self.submits.lock().await;
         if queue.contains(&update.id.0 .0).await? {
             return Ok(SubmitRecordUpdateResponse {
@@ -160,7 +161,7 @@ impl RecordWriter {
         }
         // An expired enrolment joins no approval.
         queue.expire_awaiting(request.registry.0, slot).await?;
-        self.check_escrows(&update, &policy).await?;
+        self.check_escrows(&update, &records).await?;
         let approves = EnrolmentApproval {
             update: &update,
             awaiting: &queue
@@ -413,14 +414,13 @@ impl RecordWriter {
     async fn check_escrows(
         &self,
         update: &CheckedUpdate,
-        policy: &RingPolicy,
+        records: &StorageTip,
     ) -> Result<(), RingRpcError> {
         let registering = escrowed_members(&update.writes)?;
         if registering.is_empty() {
             return Ok(());
         }
-        let records = self.records_tip(policy).await?;
-        let openings = self.chain.verified_openings(&records, &registering).await?;
+        let openings = self.chain.verified_openings(records, &registering).await?;
         let pending = self
             .queue()
             .pending_writes(records.registry, &registering)
@@ -436,14 +436,13 @@ impl RecordWriter {
     async fn check_limited_assets(
         &self,
         update: &CheckedUpdate,
-        policy: &RingPolicy,
+        records: &StorageTip,
     ) -> Result<(), RingRpcError> {
         let assets = update.limited_assets()?;
         if assets.is_empty() {
             return Ok(());
         }
-        let records = self.records_tip(policy).await?;
-        let openings = self.chain.verified_openings(&records, &assets).await?;
+        let openings = self.chain.verified_openings(records, &assets).await?;
         if openings.iter().any(|opening| opening.record().is_none()) {
             return Err(RecordUpdateRefusal::LimitsWithoutRecord.into());
         }
@@ -486,14 +485,6 @@ impl RecordWriter {
             .account(address)
             .await?
             .and_then(|account| StorageRegistry::decode(&account.owner, &account.data)))
-    }
-
-    async fn records_tip(&self, policy: &RingPolicy) -> Result<StorageTip, RingRpcError> {
-        let account = self
-            .registry(policy.records)
-            .await?
-            .ok_or(GrantRefusal::RecordsUnavailable)?;
-        Ok(StorageTip::newest(policy.records, &account))
     }
 
     fn queue(&self) -> UpdateQueue<'_> {

@@ -28,8 +28,7 @@ use zolana_ring_member_registry::ApplyProofInputs;
 use zolana_ring_policy::{AssetLimits, ListId, Member, MintPolicy};
 use zolana_ring_rpc::{
     LatestBlockhash, ReaderGrantStore, RecordUpdateRefusal, RecordWriter, StorageChain, Store,
-    TransactionOutcome, BATCH_WINDOW_SLOTS, MAX_ENROLMENT_WINDOW_SLOTS,
-    MAX_LIMIT_WINDOW_SLOTS,
+    TransactionOutcome, BATCH_WINDOW_SLOTS, MAX_ENROLMENT_WINDOW_SLOTS, MAX_LIMIT_WINDOW_SLOTS,
 };
 
 use super::*;
