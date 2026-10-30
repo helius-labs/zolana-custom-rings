@@ -263,7 +263,7 @@ async function recoverDeposits(
             output: deposit,
             opening,
           });
-          if (created !== undefined) found.created.insert(commitment, created.utxo);
+          found.created.insert(commitment, created.utxo);
           if (!equalBytes(opening.ownerHash, sourceOwner)) continue;
           // The deposit proof binds the raw mint, its commitment opens without the registry.
           const opened = sourceWalletUtxo(input, {

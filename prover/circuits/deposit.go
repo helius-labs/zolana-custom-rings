@@ -25,7 +25,7 @@ import (
 // Properties:
 // 1. The first Count of 1..8 owner commitments open to (owner hash, blinding, owner key) AES-CTR encrypted to AuditorPk, the padding slots carry nothing.
 // 2. Every blinding is Poseidon(CRDB, BlindingSecret), domain separated from every SPP output blinding.
-// 3. An anonymous ring's deposit names the Ed25519 key behind each owner, any other deposit names none.
+// 3. Each occupied slot discloses the key whose Solana owner identity is its owner_pk_hash.
 // 4. Under key escrow every owner's record lies under MemberRegistryRoot and escrows the key the owner's nullifier key and ciphertext hash name.
 // 5. Under a nonzero PolicyHash every active asset rule of its table holds for each deposited asset on the lists its records under MemberRegistryRoot and CuratorRoot carry.
 
@@ -104,11 +104,10 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 		c.Members[i].AssertPresent(api, escrowed, c.MemberRegistryRoot, c.OwnerPkHashes[i])
 		key := registry.EscrowKey(api, c.NullifierPks[i], c.CtHashes[i])
 		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: escrowed, A: c.Members[i].EscrowKey, B: key})
-		// 4. An anonymous slot's owner hash is its key's identity, the envelope bounds the key bytes, any other slot discloses no key.
-		anonymous := api.Mul(c.Anonymous, active)
-		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: anonymous, A: c.OwnerPkHashes[i], B: gadget.SolanaOwnerIdentityBounded(api, c.OwnerKeys[i])})
+		// 4. An occupied slot's owner_pk_hash is the Solana owner identity of its key, the envelope bounds the key bytes, a padding slot's key is zero.
+		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: active, A: c.OwnerPkHashes[i], B: gadget.SolanaOwnerIdentityBounded(api, c.OwnerKeys[i])})
 		for _, b := range c.OwnerKeys[i] {
-			abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, anonymous), V: b})
+			abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, active), V: b})
 		}
 		// 5. The blinding is derived in the CRDB domain, the commitment is the deposited UTXO's owner part.
 		owner := gadget.PoseidonHash(api, []frontend.Variable{c.OwnerPkHashes[i], c.NullifierPks[i]})

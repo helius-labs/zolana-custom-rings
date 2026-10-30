@@ -775,8 +775,8 @@ pub(crate) struct DepositRequest<'a> {
     pub anonymous: bool,
     #[serde(serialize_with = "fe::seq")]
     pub owner_pk_hashes: [[u8; 32]; 1],
-    #[serde(serialize_with = "option_seq", skip_serializing_if = "Option::is_none")]
-    pub owner_keys: Option<[[u8; 32]; 1]>,
+    #[serde(serialize_with = "fe::seq")]
+    pub owner_keys: [[u8; 32]; 1],
     #[serde(serialize_with = "fe::seq")]
     pub nullifier_pks: [[u8; 32]; 1],
     #[serde(serialize_with = "zeroizing_seq")]
@@ -838,16 +838,6 @@ fn path<S: Serializer>(path: &QuadPath, serializer: S) -> Result<S::Ok, S::Error
         .flat_map(|level: &[[u8; 32]; QUAD_ARITY - 1]| level.iter().copied())
         .collect();
     fe::seq(&flat, serializer)
-}
-
-fn option_seq<S: Serializer, const N: usize>(
-    values: &Option<[[u8; 32]; N]>,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    match values {
-        Some(values) => fe::seq(values, serializer),
-        None => serializer.serialize_none(),
-    }
 }
 
 fn zeroizing_seq<S: Serializer, const N: usize>(

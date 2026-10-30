@@ -146,10 +146,13 @@ type DepositSealingParams = Omit<
     depositor: SignerAccount;
   }>;
 
+/** The proof binds the key's Solana owner identity into the owner hash. */
+type DisclosedOwner = Readonly<{ kind: "confidential" | "anonymous"; key: Bytes32 }>;
+
 type DepositSealing = Readonly<{
   config: RingPolicy;
   recipient: TaggedRecipient;
-  ownerKey: Bytes32 | undefined;
+  owner: DisclosedOwner;
   asset: Address;
   settlement: RingAssetDeposit["asset"];
 }>;
@@ -190,8 +193,7 @@ export class PreparedRingDeposit {
   readonly #contextHash: Bytes32;
   readonly #ownerPkHash: Bytes32;
   readonly #nullifierPk: Bytes32;
-  /** The Ed25519 owner key an anonymous ring discloses, the proof binds it to the owner hash. */
-  readonly #ownerKey: Bytes32 | undefined;
+  readonly #owner: DisclosedOwner;
   readonly #auditor: X25519PublicKey;
   readonly #keyEscrow: boolean;
   readonly #hasPolicy: boolean;
@@ -212,7 +214,7 @@ export class PreparedRingDeposit {
     contextHash: Bytes32;
     ownerPkHash: Bytes32;
     nullifierPk: Bytes32;
-    ownerKey: Bytes32 | undefined;
+    owner: DisclosedOwner;
     auditor: X25519PublicKey;
     keyEscrow: boolean;
     hasPolicy: boolean;
@@ -232,7 +234,7 @@ export class PreparedRingDeposit {
     this.#contextHash = state.contextHash;
     this.#ownerPkHash = state.ownerPkHash;
     this.#nullifierPk = state.nullifierPk;
-    this.#ownerKey = state.ownerKey;
+    this.#owner = state.owner;
     this.#auditor = state.auditor;
     this.#keyEscrow = state.keyEscrow;
     this.#hasPolicy = state.hasPolicy;
@@ -340,7 +342,7 @@ export class PreparedRingDeposit {
       const escrowed = records?.escrowed;
       const policy = records?.policy;
       const curator = policy?.curator;
-      const anonymous = this.#ownerKey !== undefined;
+      const anonymous = this.#owner.kind === "anonymous";
       const commitment = this.#deposit.ownerUtxoHash;
       const first = <T>(value: T, _padding: T): readonly T[] => [value];
       const request: DepositProofRequest = {
@@ -367,7 +369,7 @@ export class PreparedRingDeposit {
         count: 1,
         anonymous,
         ownerPkHashes: first(this.#ownerPkHash, ZERO_32),
-        ...(this.#ownerKey === undefined ? {} : { ownerKeys: first(this.#ownerKey, ZERO_32) }),
+        ownerKeys: first(this.#owner.key, ZERO_32),
         nullifierPks: first(this.#nullifierPk, ZERO_32),
         blindingSecrets: first(this.#blindingSecret, ZERO_32),
         ctHashes: first(escrowed?.ctHash ?? ZERO_32, ZERO_32),
@@ -515,7 +517,7 @@ export class PreparedRingDeposit {
           {
             ownerHash,
             blinding,
-            ...(sealing.ownerKey === undefined ? {} : { ownerKey: sealing.ownerKey }),
+            ownerKey: sealing.owner.key,
             recipientCiphertext: envelope.encryptRingDeposit(
               recipient.address.viewingPublicKey,
               plaintext,
@@ -567,7 +569,7 @@ export class PreparedRingDeposit {
         contextHash: ringDepositContextHash(params.ringProgramId, input.tree, spp.data),
         ownerPkHash: recipient.address.signingPublicKey.ownerProofInputHash(),
         nullifierPk: recipient.address.nullifierPublicKey,
-        ownerKey: sealing.ownerKey,
+        owner: sealing.owner,
         auditor: sealing.config.auditorPublicKey,
         keyEscrow: sealing.config.keyEscrow,
         hasPolicy: sealing.config.hasPolicy,
@@ -636,7 +638,10 @@ async function depositSealing(
   return Object.freeze({
     config,
     recipient,
-    ownerKey: anonymous ? recipient.address.signingPublicKey.ed25519() : undefined,
+    owner: Object.freeze({
+      kind: anonymous ? "anonymous" : "confidential",
+      key: recipient.address.signingPublicKey.confidentialViewTag(),
+    }),
     asset,
     settlement,
   });
@@ -647,9 +652,9 @@ function checkDepositSigners(
   sealing: DepositSealing,
   signers: readonly (Address | SignerAccount | undefined)[],
 ): void {
-  if (sealing.ownerKey === undefined) return;
+  if (sealing.owner.kind !== "anonymous") return;
   checkSignersHideOwner(
-    sealing.ownerKey,
+    sealing.owner.key,
     signers.map((party) => (party === undefined ? undefined : signerAddress(party))),
   );
 }

@@ -37,7 +37,7 @@ Breaking
   the API key in one place.
 - `openRingDepositOpening` requires a `ConfirmedDeposit` → take it from `ConfirmedDeposit.fromTransaction` or from the `deposits` of a confirmed deposit's `ConfirmedRingTransaction`.
 - Custom-ring auditor envelopes use X25519 keys → create a new auditor configuration with `X25519Keypair`/`X25519PublicKey` before using this version.
-- Ring deposit audit capsules carry a `RING_DEPOSIT_OPENING_LENGTH` (96) byte opening that also discloses the Ed25519 owner key of an anonymous ring deposit, `RingDepositOpening` takes it as `ownerKey` and `openRingDepositOpening` returns it → re-prove audited deposits with this version, a capsule sealed by an earlier version no longer decodes.
+- Ring deposit audit capsules carry a `RING_DEPOSIT_OPENING_LENGTH` (96) byte opening that also discloses the owner key of every deposit, `RingDepositOpening` requires it as `ownerKey`, `openRingDepositOpening` always returns it, `DepositProofRequest` requires `ownerKeys` and `createdRingUtxos` opens a confidential ring's deposits too → re-prove audited deposits with this version, a capsule sealed by an earlier version no longer decodes.
 
 Added
 

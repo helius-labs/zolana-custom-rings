@@ -30,7 +30,7 @@ pub(crate) const MAX_BACKFILL_PAGES: usize = 64;
 pub(crate) struct AuditStore {
     utxos: RwLock<KnownUtxoIndex<StoredUtxo>>,
     escrow: RwLock<EscrowMap>,
-    /// Confidential deposits by commitment, each opens once the escrow names its owner.
+    /// Escrow ring deposits by commitment, each opens once the escrow names its owner.
     unowned: RwLock<HashMap<[u8; 32], (CreatedIn, DepositNote)>>,
     /// Every nullifier the ring history published.
     spent: RwLock<HashSet<[u8; 32]>>,
@@ -361,7 +361,7 @@ mod tests {
             slot_index: 0,
             leaf_index: 0,
             owner_hash: [8; 32],
-            owner_key: None,
+            owner_key: [2; 32],
             asset: [4; 32],
             mint: Address::new_from_array([6; 32]),
             amount: 10,
@@ -371,7 +371,7 @@ mod tests {
             tree_id: 1,
         };
         let owner = EscrowedOwner {
-            owner_key: [2; 32],
+            owner_key: note.owner_key,
             nullifier_pk: [3; 32],
             owner_hash: note.owner_hash,
             sealed: NullifierKeyEnvelope::new(

@@ -704,7 +704,7 @@ Each SPP deposit entry's ciphertext begins with a `CRDEP001` capsule: its slot i
 The deposit proof checks, for each of `count` entries:
 
 1. The note's `owner_utxo_hash = Poseidon(Poseidon(owner_pk_hash, nullifier_pk), Poseidon(CRDB, blinding_secret))`.
-2. The capsule seals `(owner hash, blinding, owner key)` to the auditor. On an anonymous ring `owner_pk_hash = solana_owner_identity(owner key)`. Elsewhere the owner key is zero.
+2. The capsule seals `(owner hash, blinding, owner key)` to the auditor, and `owner_pk_hash = solana_owner_identity(owner key)`.
 3. In `ConfidentialEscrow` mode the owner's record opens under the bound root with `escrow_key = Poseidon(nullifier_pk, ct_hash)`.
 4. Under a nonzero `policy_hash` the rule table hashes to it, and the entry's asset record or its absence opens under the own root and, when a policy source names a curator, under the curator root. Each list reads the record of the registry its source names, as for a transfer. Every active asset rule holds for the asset as for a transfer output, an amount guard summing the batch's entries of the asset.
 5. The statement binds a context hash over the ring id, the tree and the exact SPP data. It also binds each entry's asset and amount, the curator root and the policy hash. [Public inputs](spec/crypto/public-inputs.md#deposit)

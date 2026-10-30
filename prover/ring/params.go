@@ -275,14 +275,13 @@ type RegisterKeyParams struct {
 	AuditorPk       Bytes `json:"auditorPk"`
 }
 
-// DepositParams carries Ed25519 owner keys only for anonymous deposits.
 type DepositParams struct {
 	RequestHead
 	ContextHash        Field            `json:"contextHash"`
 	Count              uint32           `json:"count"`
 	Anonymous          bool             `json:"anonymous,omitempty"`
 	OwnerPkHashes      []Field          `json:"ownerPkHashes"`
-	OwnerKeys          *[]Bytes         `json:"ownerKeys,omitempty"`
+	OwnerKeys          []Bytes          `json:"ownerKeys"`
 	NullifierPks       []Field          `json:"nullifierPks"`
 	BlindingSecrets    []Field          `json:"blindingSecrets"`
 	CtHashes           []Field          `json:"ctHashes"`

@@ -58,8 +58,7 @@ pub struct DepositNote {
     pub slot_index: u32,
     pub leaf_index: u64,
     pub owner_hash: [u8; 32],
-    /// Named by an anonymous ring's capsule alone.
-    pub owner_key: Option<[u8; 32]>,
+    pub owner_key: [u8; 32],
     pub asset: [u8; 32],
     pub mint: Address,
     pub amount: u64,
@@ -72,7 +71,7 @@ pub struct DepositNote {
 #[derive(Debug, Default)]
 pub struct CreatedNotes {
     pub utxos: Vec<CreatedUtxo>,
-    /// Confidential deposits no escrowed owner names yet.
+    /// Deposits no escrowed owner names yet.
     pub unowned: Vec<DepositNote>,
 }
 
@@ -163,12 +162,16 @@ impl<'a> CreatedUtxoScan<'a> {
 }
 
 impl CreatedUtxos<'_> {
-    /// Empty for a transfer and for a confidential ring's deposit or merge.
+    /// Empty for a transfer.
     pub fn open(self, auditor: &X25519Keypair) -> Result<Vec<CreatedUtxo>, AuditError> {
-        Ok(self.open_for(auditor, &HashMap::new())?.utxos)
+        let mut notes = self.open_for(auditor, &HashMap::new())?;
+        notes
+            .utxos
+            .extend(notes.unowned.iter().map(DepositNote::deposited));
+        Ok(notes.utxos)
     }
 
-    /// Also opens a confidential deposit of an owner `owners` names.
+    /// A deposit `owners` does not name stays in `unowned`.
     pub fn open_for(
         self,
         auditor: &X25519Keypair,
@@ -272,24 +275,27 @@ impl CreatedUtxos<'_> {
 }
 
 impl DepositNote {
-    /// `None` until `owners` or the capsule names the owner key.
+    /// `None` until `owners` names the owner's nullifier key.
     pub fn created(&self, owners: &dyn DepositOwners) -> Option<CreatedUtxo> {
-        let owner_hash = self.owner_hash;
-        let (owner_key, owner) = match owners.deposit_owner(&owner_hash) {
-            Some(escrowed) => (
-                escrowed.owner_key,
-                UtxoOwner::Keyed {
-                    nullifier_pk: escrowed.nullifier_pk,
-                },
-            ),
-            None => (self.owner_key?, UtxoOwner::Deposited { owner_hash }),
-        };
-        Some(CreatedUtxo {
+        let escrowed = owners.deposit_owner(&self.owner_hash)?;
+        Some(self.owned_by(UtxoOwner::Keyed {
+            nullifier_pk: escrowed.nullifier_pk,
+        }))
+    }
+
+    pub fn deposited(&self) -> CreatedUtxo {
+        self.owned_by(UtxoOwner::Deposited {
+            owner_hash: self.owner_hash,
+        })
+    }
+
+    fn owned_by(&self, owner: UtxoOwner) -> CreatedUtxo {
+        CreatedUtxo {
             commitment: self.commitment,
             slot_index: self.slot_index,
             leaf_index: self.leaf_index,
             utxo: KnownUtxo {
-                owner_key,
+                owner_key: self.owner_key,
                 owner,
                 asset: self.asset,
                 mint: Some(self.mint),
@@ -299,7 +305,7 @@ impl DepositNote {
                 ring_data_hash: self.ring_data_hash,
                 tree_id: self.tree_id,
             },
-        })
+        }
     }
 }
 

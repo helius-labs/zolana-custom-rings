@@ -7,7 +7,6 @@ import {
   bigIntBytes,
   equalBytes,
   hashChain,
-  isZero,
   readOutputData,
   U64_MAX,
 } from "@heliuslabs/zolana/internal";
@@ -42,8 +41,8 @@ const ZERO = new Uint8Array(32) as Bytes32;
 export interface RingDepositOpening {
   readonly ownerHash: Bytes32;
   readonly blinding: Bytes32;
-  /** The Ed25519 owner key an anonymous ring discloses, the proof binds it to `ownerHash`. */
-  readonly ownerKey?: Bytes32;
+  /** The proof binds its Solana owner identity into `ownerHash`. */
+  readonly ownerKey: Bytes32;
   readonly recipientCiphertext: Uint8Array;
 }
 
@@ -68,11 +67,10 @@ export function sealRingDepositOpenings(
         throw new RingError("RING_BUILD_DEPOSIT");
       plaintext.set(opening.ownerHash, index * OPENING_LENGTH);
       plaintext.set(opening.blinding, index * OPENING_LENGTH + 32);
-      if (opening.ownerKey !== undefined)
-        plaintext.set(
-          copyBytes(opening.ownerKey, 32, "deposit owner key"),
-          index * OPENING_LENGTH + OWNER_KEY_OFFSET,
-        );
+      plaintext.set(
+        copyBytes(opening.ownerKey, 32, "deposit owner key"),
+        index * OPENING_LENGTH + OWNER_KEY_OFFSET,
+      );
     }
     const ephemeralPublicKey = ephemeral.publicKey();
     dh = ephemeral.ecdh(auditor);
@@ -120,13 +118,12 @@ export function ringDepositOutput(
   }
 }
 
-/** `ownerKey` is the Ed25519 owner key of an anonymous ring deposit, absent otherwise. */
 export function openRingDepositOpening(
   capsule: RingDepositCapsule,
   auditor: X25519Keypair,
   ownerCommitment: Bytes32,
   confirmed: ConfirmedDeposit,
-): Readonly<{ ownerHash: Bytes32; blinding: Bytes32; ownerKey?: Bytes32 }> {
+): Readonly<{ ownerHash: Bytes32; blinding: Bytes32; ownerKey: Bytes32 }> {
   if (!ConfirmedDeposit.is(confirmed)) throw new RingError("RING_AUDIT_MESSAGE");
   const snapshot = readRingDepositCapsule(encodeRingDepositCapsule(capsule));
   if (snapshot === undefined) throw new RingError("RING_AUDIT_MESSAGE");
@@ -159,9 +156,7 @@ export function openRingDepositOpening(
       blinding.fill(0);
       throw cause;
     }
-    return Object.freeze(
-      isZero(ownerKey) ? { ownerHash, blinding } : { ownerHash, blinding, ownerKey },
-    );
+    return Object.freeze({ ownerHash, blinding, ownerKey });
   } finally {
     ciphertext.fill(0);
     dh?.fill(0);
@@ -199,7 +194,7 @@ export interface DepositRegistry {
 /** Rust `DepositPublicInput`, the tagged keys as the statement packs them. */
 export interface DepositStatement {
   readonly contextHash: Bytes32;
-  /** An anonymous ring discloses every owner key, the program sets it from the ring's mode. */
+  /** Set by the program from the ring's mode. */
   readonly anonymous: boolean;
   readonly ownerUtxoHashes: readonly Bytes32[];
   readonly ciphertexts: readonly Bytes96[];

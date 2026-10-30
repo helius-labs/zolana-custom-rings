@@ -434,11 +434,11 @@ fn a_prefix_opens_only_a_note_of_the_sender_that_carries_it() {
 }
 
 /// The confirmed deposit of `spend` into the ring, its capsule sealed to the auditor.
-fn deposited(transfer: &Transfer, spend: &Spend, owner_key: Option<[u8; 32]>) -> Confirmed {
+fn deposited(transfer: &Transfer, spend: &Spend) -> Confirmed {
     let opening = DepositOpening {
         owner_hash: spend.utxo.owner_hash(),
         blinding: zeroize::Zeroizing::new(spend.blinding),
-        owner_key,
+        owner_key: spend.utxo.owner_key,
     };
     let owner_utxo_hash = owner_utxo_hash(&opening.owner_hash, &opening.blinding).unwrap();
     let sealed = seal_deposits(&[opening], &auditor().pubkey()).unwrap();
@@ -585,7 +585,7 @@ fn a_deposited_or_merged_ring_utxo_opens_as_a_commitment_input() {
         audit(&built.transaction, built.layout),
         Err(AuditError::UnseenInput { .. })
     ));
-    let deposit = deposited(&transfer, &spent[0], Some(spent[0].utxo.owner_key));
+    let deposit = deposited(&transfer, &spent[0]);
     let merge = merged(&transfer, &spent[1]);
     let created: Vec<CreatedUtxo> = [&deposit, &merge]
         .into_iter()
@@ -652,8 +652,6 @@ fn a_deposited_or_merged_ring_utxo_opens_as_a_commitment_input() {
         forged.open(&transfer),
         Err(AuditError::MergeDisclosureMismatch)
     ));
-    let confidential = deposited(&transfer, &spent[0], None);
-    assert_eq!(confidential.open(&transfer).unwrap(), []);
 }
 
 /// A ring slot framed as an exit misreads its disclosure, that slot alone is reported.
@@ -726,11 +724,11 @@ impl TransactionOrigin for ConfirmedOrigins {
 #[tokio::test]
 async fn the_created_utxo_scan_opens_every_deposit_and_merge_of_the_ring_history() {
     let (transfer, built, spent) = anonymous_spend();
-    let deposit = deposited(&transfer, &spent[0], Some(spent[0].utxo.owner_key));
+    let deposit = deposited(&transfer, &spent[0]);
     let mut merge = merged(&transfer, &spent[1]);
     merge.transaction.tx_signature = Signature::from([0xd1; 64]);
     // A ring transfer and a row the ring never invoked open nothing.
-    let mut foreign = deposited(&transfer, &spent[1], Some(spent[1].utxo.owner_key));
+    let mut foreign = deposited(&transfer, &spent[1]);
     foreign.transaction.tx_signature = Signature::from([0xd2; 64]);
     foreign.origin.ring_invoked = false;
     let rows = [&deposit, &merge, &foreign];

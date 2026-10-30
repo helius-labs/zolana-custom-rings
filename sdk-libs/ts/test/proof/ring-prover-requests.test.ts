@@ -468,9 +468,7 @@ function request(item: Json): RingProofRequest {
       count: count(item["count"]),
       anonymous: item["anonymous"] === undefined ? false : flag(item["anonymous"]),
       ownerPkHashes,
-      ...(item["ownerKeys"] === undefined
-        ? {}
-        : { ownerKeys: list(item["ownerKeys"]).map((key) => bytes<Bytes32>(key, 32)) }),
+      ownerKeys: list(item["ownerKeys"]).map((key) => bytes<Bytes32>(key, 32)),
       nullifierPks: fields(item["nullifierPks"]),
       blindingSecrets: fields(item["blindingSecrets"]),
       ctHashes: fields(item["ctHashes"]),

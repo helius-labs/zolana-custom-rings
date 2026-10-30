@@ -4,8 +4,7 @@ use thiserror::Error;
 use crate::TAGGED_X25519_KEY_LEN;
 
 pub const MAX_RING_DEPOSIT_AUDIT_SLOTS: usize = 8;
-/// One opening is `owner_hash || blinding || owner_key`. The owner key is the
-/// Ed25519 key of an anonymous ring deposit and zero otherwise.
+/// One opening is `owner_hash || blinding || owner_key`.
 pub const RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN: usize = 96;
 pub const RING_DEPOSIT_AUDIT_OWNER_KEY_OFFSET: usize = 64;
 pub const RING_DEPOSIT_AUDIT_PREFIX_LEN: usize = core::mem::size_of::<CapsuleHeader>();

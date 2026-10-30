@@ -9,6 +9,7 @@ import {
   treeAddress,
   bigIntToBytes,
   checkedBytes,
+  decodeRingDepositInstructionData,
 } from "@heliuslabs/zolana/internal";
 import { initializePoseidon } from "@heliuslabs/zolana";
 import {
@@ -54,7 +55,10 @@ import {
   encodeRingDepositCapsule,
   readRingDepositCapsule,
 } from "../../src/protocol/codec/deposit-capsule.js";
-import { ringDepositInstruction } from "../../src/protocol/transaction/deposit-instruction.js";
+import {
+  AUDITED_DEPOSIT_PREFIX_LENGTH,
+  ringDepositInstruction,
+} from "../../src/protocol/transaction/deposit-instruction.js";
 import { decryptRingDepositUtxo } from "../../src/protocol/transaction/deposit-payload.js";
 import { encodeRingDepositPlaintext } from "../../src/protocol/codec/ring-deposit-plaintext.js";
 import { escrowKeyHash } from "../../src/protocol/membership/member-opening.js";
@@ -94,8 +98,18 @@ describe("deposit disclosure", () => {
       .mockImplementation(() => X25519Keypair.fromBytes(new Uint8Array(32).fill(0x22) as Bytes32));
     const sealed = sealRingDepositOpenings(
       [
-        { ownerHash: field(1n), blinding: field(3n), recipientCiphertext: Uint8Array.of(1) },
-        { ownerHash: field(2n), blinding: field(4n), recipientCiphertext: Uint8Array.of(2) },
+        {
+          ownerHash: field(1n),
+          blinding: field(3n),
+          ownerKey: field(0n),
+          recipientCiphertext: Uint8Array.of(1),
+        },
+        {
+          ownerHash: field(2n),
+          blinding: field(4n),
+          ownerKey: field(0n),
+          recipientCiphertext: Uint8Array.of(2),
+        },
       ],
       auditor.publicKey(),
     );
@@ -156,12 +170,14 @@ describe("deposit disclosure", () => {
       const ownerPkHashes = words(fixture["ownerPkHashes"]);
       const nullifierPks = words(fixture["nullifierPks"]);
       const secrets = words(fixture["blindingSecrets"]);
+      const ownerKeys = words(fixture["ownerKeys"]);
       const openings = Array.from({ length: count }, (_, slot) => {
         const owner = ownerHash(ownerPkHashes[slot] ?? field(0n), nullifierPks[slot] ?? field(0n));
         const blinding = depositBlinding(secrets[slot] ?? field(0n));
         return {
           ownerHash: owner as Bytes32,
           blinding,
+          ownerKey: ownerKeys[slot] ?? field(0n),
           recipientCiphertext: new Uint8Array(),
         };
       });
@@ -202,11 +218,10 @@ describe("deposit disclosure", () => {
 
   it("opens every slot of one shared stream and preserves recipient ciphertext", () => {
     const auditor = X25519Keypair.generate();
-    // Odd slots disclose an owner key like an anonymous ring.
     const openings = Array.from({ length: 8 }, (_, index) => ({
       ownerHash: field(BigInt(index + 1)),
       blinding: field(BigInt(index + 11)),
-      ...(index % 2 === 0 ? {} : { ownerKey: new Uint8Array(32).fill(index) as Bytes32 }),
+      ownerKey: new Uint8Array(32).fill(index + 1) as Bytes32,
       recipientCiphertext: Uint8Array.of(index, 9),
     }));
     const sealed = sealRingDepositOpenings(openings, auditor.publicKey());
@@ -265,7 +280,14 @@ describe("deposit disclosure", () => {
   it("binds the SPP wire, both addresses, the anonymous flag, the commitments and the ciphertext", () => {
     const auditor = X25519Keypair.generate();
     const sealed = sealRingDepositOpenings(
-      [{ ownerHash: field(1n), blinding: field(2n), recipientCiphertext: Uint8Array.of(3) }],
+      [
+        {
+          ownerHash: field(1n),
+          blinding: field(2n),
+          ownerKey: field(0n),
+          recipientCiphertext: Uint8Array.of(3),
+        },
+      ],
       auditor.publicKey(),
     );
     try {
@@ -323,6 +345,7 @@ describe("deposit disclosure", () => {
         {
           ownerHash: recipient.shieldedAddress().ownerHash(),
           blinding,
+          ownerKey: recipient.signingPublicKey().confidentialViewTag(),
           recipientCiphertext: ciphertext,
         },
       ],
@@ -363,6 +386,7 @@ describe("audited deposit instruction", () => {
       Array.from({ length: 8 }, () => ({
         ownerHash: field(1n),
         blinding: field(2n),
+        ownerKey: field(0n),
         recipientCiphertext: Uint8Array.of(3),
       })),
       auditor.publicKey(),
@@ -553,7 +577,7 @@ describe("ring deposit builder", () => {
       if (request?.kind !== "deposit") throw new Error("expected one deposit request");
       expect(request.keyEscrow).toBe(true);
       expect(request.anonymous).toBe(false);
-      expect(request.ownerKeys).toBeUndefined();
+      expect(request.ownerKeys).toEqual([recipient.signingPublicKey().confidentialViewTag()]);
       expect(request.ctHashes[0]).toEqual(hashBytes(SEALED_CIPHERTEXT));
       expect(request.members[0]?.record.escrowKey).toEqual(
         escrowKeyHash({
@@ -591,6 +615,37 @@ describe("ring deposit builder", () => {
       recipient.destroy();
     }
     expect(requests[0]?.kind === "deposit" && requests[0].blindingSecrets[0]).toEqual(field(0n));
+  });
+
+  it("seals a confidential recipient's owner key for the auditor", async () => {
+    const recipient = ShieldedKeypair.generate();
+    const { client } = await fixture({ mode: "confidential" });
+    const prepared = await PreparedRingDeposit.prepare(
+      params(client, { kind: "confidential", address: recipient.shieldedAddress() }),
+    );
+    try {
+      const proven = await prepared.prove(client);
+      const spp = (proven.instruction.data ?? new Uint8Array()).slice(
+        AUDITED_DEPOSIT_PREFIX_LENGTH,
+      );
+      const [entry] = decodeRingDepositInstructionData(spp.slice(1)).deposits;
+      const capsule = readRingDepositCapsule(entry?.encrypted.ciphertext ?? new Uint8Array());
+      if (entry === undefined || capsule === undefined) throw new Error("missing capsule");
+      const signature = "1".repeat(87) as Signature;
+      const [binding] = ConfirmedDeposit.fromTransaction(
+        confirmedDepositTransaction(RING, signature, [capsule], [entry.ownerUtxoHash]),
+        signature,
+        0,
+        RING,
+      );
+      if (binding === undefined) throw new Error("missing confirmation");
+      expect(
+        openRingDepositOpening(capsule, auditor, entry.ownerUtxoHash, binding).ownerKey,
+      ).toEqual(recipient.signingPublicKey().confidentialViewTag());
+    } finally {
+      prepared.destroy();
+      recipient.destroy();
+    }
   });
 
   it("refuses a recipient whose record escrows another key before any proof", async () => {
@@ -631,7 +686,7 @@ describe("ring deposit builder", () => {
       if (request?.kind !== "deposit") throw new Error("expected one deposit request");
       expect(request.anonymous).toBe(true);
       expect(request.keyEscrow).toBe(false);
-      expect(request.ownerKeys?.[0]).toEqual(owner.signingPublicKey().ed25519());
+      expect(request.ownerKeys[0]).toEqual(owner.signingPublicKey().ed25519());
       expect(request.members.every((member) => member === undefined)).toBe(true);
       expect(proven.roots).toBeUndefined();
       const [ring] = await ringPolicyPda(RING);
@@ -884,6 +939,7 @@ describe("confirmed deposit attribution", () => {
         {
           ownerHash: field(3n),
           blinding: field(4n),
+          ownerKey: field(0n),
           recipientCiphertext: Uint8Array.of(8),
         },
       ],
