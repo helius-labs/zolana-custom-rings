@@ -322,7 +322,7 @@ impl Relay {
         .await
     }
 
-    /// The co-signer signs before the record lands, a lost insert frees its reservation.
+    /// A relay awaiting no signer is co-signed before the record lands, a lost insert frees its reservation.
     async fn stage(&self, proven: ProvenStep) -> Result<RelayStep, RingRpcError> {
         let ProvenStep {
             relay_id,
@@ -538,7 +538,7 @@ impl Relay {
             .ok_or_else(|| RelayError::UnknownRelay.into())
     }
 
-    /// Fixes the relay's one signature after the co-signature, every later send repeats it.
+    /// The fee payer signs only after the co-sign decision, every later send repeats its signature.
     async fn sign_when_complete(&self, record: &mut RelayRecord) -> Result<(), RingRpcError> {
         if record.state != RelayState::AwaitingSignature || !record.awaiting.is_empty() {
             return Ok(());

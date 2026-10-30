@@ -24,7 +24,7 @@ A ring bounds what moves with three mechanisms: co-signer approval in the ring p
 - Each asset's record holds a sender cap, a volume cap, a deposit cap and a withdrawal cap, each with its own window in slots. A zero cap is no cap.
 - The sender cap counts what one sender transfers and withdraws. The volume cap counts what the ring transfers, deposits and withdraws.
 - Ring RPC checks them when it decides whether to co-sign, and the program checks only the co-signature.
-- Ring RPC reserves flows when it co-signs and fails closed, see [Flow 9](../spec.md#9-co-signer-limits-configuration). A deposit, a signer-rail spend or a delegate move reserves only once its other signers sign, so an unsigned relay holds no allowance. Ring RPC's store serializes admission, so no allowance is granted twice.
+- Ring RPC reserves flows when it co-signs and fails closed, see [Flow 9](../spec.md#9-co-signer-limits-configuration). A deposit or a delegate move reserves only once its other signers sign, so an unsigned relay holds no allowance. Ring RPC's store serializes admission, so no allowance is granted twice.
 
 ## What passes them
 

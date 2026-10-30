@@ -19,7 +19,9 @@ use zolana_ring_client::rpc::{
     RelayMergeInputs, RelayOperation, RelayQuote, RelayRail, RelayStatus, RelayStep,
     SubmitRelayRequest, GET_RELAY_QUOTE, GET_RELAY_STATUS, PREPARE_RELAY, SUBMIT_RELAY,
 };
-use zolana_ring_rpc::{relay_module, Relay, RelayError, RelayParts, RingRpcError, ServedRings, Store};
+use zolana_ring_rpc::{
+    relay_module, Relay, RelayError, RelayParts, RingRpcError, ServedRings, Store,
+};
 
 use relay_fixture::{
     anonymous_rail, deposit_request, proof_inputs, signed_request, signers_verify, RecordingChain,

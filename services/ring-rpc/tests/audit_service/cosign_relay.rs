@@ -259,7 +259,10 @@ async fn an_unsigned_relay_holds_no_allowance_and_the_signed_one_past_the_cap_is
         .call(SUBMIT_RELAY, as_object(first_signed))
         .await
         .expect("the first signed deposit fits the cap");
-    assert!(matches!(landed, RelayStatus::Sent { .. }), "{landed:?}");
+    assert!(
+        matches!(landed, RelayStatus::Confirmed { .. }),
+        "{landed:?}"
+    );
     let beyond = relay
         .module
         .call::<_, RelayStatus>(SUBMIT_RELAY, as_object(second_signed))

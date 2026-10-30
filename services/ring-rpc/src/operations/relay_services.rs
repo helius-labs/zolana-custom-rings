@@ -6,12 +6,8 @@ use solana_signer::Signer;
 use spr_client::{AsyncProverClient, AsyncSolanaRpc, AsyncZolanaClient, AsyncZolanaIndexer};
 
 use crate::{
-    database::Store,
-    escrow_merge::RingSdkMergeBuilder,
-    landing::SolanaChain,
-    managed_merge::MergeBuilder,
-    relay::RelayParts,
-    relay_prover::SdkRelayProver,
+    database::Store, escrow_merge::RingSdkMergeBuilder, landing::SolanaChain,
+    managed_merge::MergeBuilder, relay::RelayParts, relay_prover::SdkRelayProver,
 };
 
 /// The relay and the managed merge pay through one fee payer.

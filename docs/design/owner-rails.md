@@ -11,7 +11,7 @@ SPP authorizes a ring spend in one of four ways. The instruction, the ring mode 
 
 ## Why the in-proof rail exists
 
-- Ring RPC relays and pays for a wallet spend unless it has a deposit leg or needs an outside co-signer. On the signer rail the owner must sign the final transaction after Ring RPC builds it.
+- Ring RPC relays and pays for a wallet spend unless it has a deposit leg or needs an outside co-signer. A relayed anonymous or confidential transfer names no owner signer, its owner signs inside the proof.
 - Zolana's in-proof owner circuit serves default-ring transfers only. The ring needs the same authorization on SPP ring transfers.
 - Its twin enters zolana as new circuit files, and the audited circuits stay untouched.
 - With it, one wallet signature over the message hash lets Ring RPC prove, pay and send.
