@@ -163,6 +163,7 @@ impl CappedRelay {
 const FAULT_TRIGGER: &str = "relay_store_fault";
 
 enum StoreFault {
+    /// A NOT NULL refusal proves the update never committed.
     UpdateRefused,
     /// `RAISE(FAIL)` keeps the inserted row and still returns an error.
     InsertReplyLost,
@@ -171,10 +172,16 @@ enum StoreFault {
 impl StoreFault {
     fn trigger(self) -> String {
         let (event, raise) = match self {
-            Self::UpdateRefused => ("BEFORE UPDATE", "RAISE(ABORT, 'the store is down')"),
-            Self::InsertReplyLost => ("AFTER INSERT", "RAISE(FAIL, 'the insert reply was lost')"),
+            Self::UpdateRefused => (
+                "BEFORE UPDATE",
+                "INSERT INTO relay_relays(status) VALUES(NULL)",
+            ),
+            Self::InsertReplyLost => (
+                "AFTER INSERT",
+                "SELECT RAISE(FAIL, 'the insert reply was lost')",
+            ),
         };
-        format!("CREATE TRIGGER {FAULT_TRIGGER} {event} ON relay_relays BEGIN SELECT {raise}; END")
+        format!("CREATE TRIGGER {FAULT_TRIGGER} {event} ON relay_relays BEGIN {raise}; END")
     }
 }
 
