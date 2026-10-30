@@ -140,11 +140,12 @@ pub struct DeliveredFields {
 impl DeliveredLayout {
     /// The sender key's input class at `outputs`, `None` when it holds fewer than `inputs`.
     pub fn sender_class(outputs: usize, inputs: usize) -> Option<usize> {
-        DELIVERED_SENDER_CLASSES
-            .iter()
-            .find(|(capacity, _)| *capacity == outputs)
-            .map(|(_, class)| *class)
-            .filter(|class| inputs <= *class)
+        for (capacity, class) in DELIVERED_SENDER_CLASSES {
+            if capacity == outputs {
+                return (inputs <= class).then_some(class);
+            }
+        }
+        None
     }
 
     pub fn fields(self) -> DeliveredFields {

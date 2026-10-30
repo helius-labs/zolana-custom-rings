@@ -1,6 +1,6 @@
 //! The in-proof owner rail refuses any owner signer, a relayer alone pays and signs.
 
-use custom_ring_interface::{tag, CustomRingError};
+use custom_ring_interface::{tag, CustomRingError, DELIVERED_AUDIT_CAPACITIES};
 use solana_instruction::AccountMeta;
 use solana_keypair::Signer;
 
@@ -41,6 +41,24 @@ fn a_relayer_pays_an_audit_only_transfer_its_owner_signs_in_the_proof() {
         spp,
         &[],
     ));
+}
+
+#[test]
+fn every_delivered_capacity_reaches_its_sender_key() {
+    let fixture = Fixture::new();
+    for outputs in DELIVERED_AUDIT_CAPACITIES {
+        let mut ring = Ring::new(Setup::AuditOnly);
+        let data = fixture.in_proof_owner(&OWNER, 1, outputs as u8, false);
+        let spp = spp_list(&ring.payer.pubkey(), &data, &[]);
+        reaches_verification(send(
+            &mut ring,
+            tag::TRANSFER,
+            Vec::new(),
+            data.encode().unwrap(),
+            spp,
+            &[],
+        ));
+    }
 }
 
 #[test]
