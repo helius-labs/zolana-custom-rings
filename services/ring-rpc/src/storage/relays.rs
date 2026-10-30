@@ -3,10 +3,11 @@ use serde::{Deserialize, Serialize};
 use solana_address::Address;
 use solana_message::VersionedMessage;
 use solana_signature::Signature;
-use spr_indexer_api::{Base64String, SerializablePubkey, SerializableSignature};
+use spr_indexer_api::{Base64String, Hash, SerializablePubkey, SerializableSignature};
 use zolana_ring_client::rpc::RelayId;
+use zolana_ring_policy::Member;
 
-use crate::relay_submit::CollectedSignature;
+use crate::{cosign::AssetFlow, relay_submit::CollectedSignature};
 
 /// Holds no proof input.
 #[derive(Clone)]
@@ -16,10 +17,20 @@ pub(crate) struct RelayRecord {
     pub signatures: Vec<CollectedSignature>,
     /// Signers the message still lacks.
     pub awaiting: Vec<Address>,
+    /// Decided once `awaiting` is empty, an unsigned relay reserves no allowance.
+    pub co_sign: Option<PendingCoSign>,
     /// Settled with the co-signer when the relay ends.
     pub co_signature: Option<Signature>,
     pub last_valid_block_height: u64,
     pub state: RelayState,
+}
+
+#[derive(Clone)]
+pub(crate) struct PendingCoSign {
+    pub signer: Address,
+    pub ring: Address,
+    pub sender: Member,
+    pub flows: Vec<AssetFlow>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,9 +71,28 @@ struct StoredRelay {
     message: Base64String,
     signatures: Vec<StoredSignature>,
     awaiting: Vec<SerializablePubkey>,
+    co_sign: Option<StoredCoSign>,
     co_signature: Option<SerializableSignature>,
     last_valid_block_height: u64,
     state: RelayState,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredCoSign {
+    signer: SerializablePubkey,
+    ring: SerializablePubkey,
+    sender: Hash,
+    flows: Vec<StoredFlow>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredFlow {
+    asset: SerializablePubkey,
+    transferred: u64,
+    deposited: u64,
+    withdrawn: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -164,6 +194,21 @@ fn state(record: &RelayRecord) -> Result<Value, DbErr> {
             })
             .collect(),
         awaiting: record.awaiting.iter().copied().map(Into::into).collect(),
+        co_sign: record.co_sign.as_ref().map(|pending| StoredCoSign {
+            signer: pending.signer.into(),
+            ring: pending.ring.into(),
+            sender: Hash(*pending.sender.as_bytes()),
+            flows: pending
+                .flows
+                .iter()
+                .map(|flow| StoredFlow {
+                    asset: flow.asset.into(),
+                    transferred: flow.transferred,
+                    deposited: flow.deposited,
+                    withdrawn: flow.withdrawn,
+                })
+                .collect(),
+        }),
         co_signature: record.co_signature.map(Into::into),
         last_valid_block_height: record.last_valid_block_height,
         state: record.state.clone(),
@@ -187,9 +232,28 @@ fn record(row: &QueryResult) -> Result<RelayRecord, DbErr> {
             })
             .collect(),
         awaiting: stored.awaiting.into_iter().map(|signer| signer.0).collect(),
+        co_sign: stored.co_sign.map(pending_co_sign).transpose()?,
         co_signature: stored.co_signature.map(|signature| signature.0),
         last_valid_block_height: stored.last_valid_block_height,
         state: stored.state,
+    })
+}
+
+fn pending_co_sign(stored: StoredCoSign) -> Result<PendingCoSign, DbErr> {
+    Ok(PendingCoSign {
+        signer: stored.signer.0,
+        ring: stored.ring.0,
+        sender: Member::from_bytes(stored.sender.0).map_err(|_| corrupt("co_sign"))?,
+        flows: stored
+            .flows
+            .into_iter()
+            .map(|flow| AssetFlow {
+                asset: flow.asset.0,
+                transferred: flow.transferred,
+                deposited: flow.deposited,
+                withdrawn: flow.withdrawn,
+            })
+            .collect(),
     })
 }
 

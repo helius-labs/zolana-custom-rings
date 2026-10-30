@@ -120,7 +120,7 @@ pub use crate::{
     list::{MemberArgs, MemberList},
     policy::ListName,
     ring_rpc::{RingRpcClient, Trust},
-    transact::{EntrySpendName, Funding, OwnerRail, Recipient},
+    transact::{AllowListing, EntrySpendName, Funding, OwnerRail, Recipient},
     ui::{line, Ask},
 };
 
@@ -436,6 +436,30 @@ mod tests {
                 ..
             }))
         ));
+    }
+
+    #[test]
+    fn transact_writes_no_list_entry_unless_a_localnet_demo_asks() {
+        let transact = |flags: &[&str]| {
+            let words = ["zolana-ring", "transact"].iter().chain(flags);
+            match Cli::try_parse_from(words).expect("parses").command {
+                Command::Transact(args) => args,
+                _ => unreachable!("transact"),
+            }
+        };
+        let asked = transact(&["--enrol-allow"]);
+
+        assert_eq!(
+            transact(&[])
+                .allow_listing(Target::Localnet)
+                .expect("plain"),
+            AllowListing::Refuse
+        );
+        assert_eq!(
+            asked.allow_listing(Target::Localnet).expect("localnet"),
+            AllowListing::Enrol
+        );
+        assert!(asked.allow_listing(Target::Devnet).is_err());
     }
 
     #[test]

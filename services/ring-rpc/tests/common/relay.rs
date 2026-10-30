@@ -6,7 +6,7 @@ use std::sync::{
 };
 
 use async_trait::async_trait;
-use custom_ring_interface::cosign::CoSignDemand;
+use custom_ring_sdk::DepositAsset;
 use solana_address::Address;
 use solana_hash::Hash;
 use solana_instruction::{AccountMeta, Instruction};
@@ -14,7 +14,7 @@ use solana_signature::Signature;
 use solana_signer::Signer;
 use solana_transaction::versioned::VersionedTransaction;
 use spr_client::{ClientError, ComputeBudgetConfig};
-use spr_event::MessageData;
+use spr_event::{EncryptedRingDepositData, MessageData};
 use spr_interface::{
     instruction::instruction_data::transact::{OwnerTag, TransactOutput},
     MAX_OUTPUTS,
@@ -25,7 +25,8 @@ use spr_transaction::{
     Utxo,
 };
 use zolana_ring_client::rpc::{
-    PrepareRelayRequest, ProofInputBytes, RelayIntent, RelayProofInputs, RelayQuote, RelayRail,
+    PrepareRelayRequest, ProofInputBytes, RelayDepositInputs, RelayIntent, RelayProofInputs,
+    RelayQuote, RelayRail,
 };
 use zolana_ring_rpc::{
     ChainOutcome, ChainSubmit, DelegateSeal, LatestBlockhash, ProvenRelay, RelayError,
@@ -78,7 +79,6 @@ impl RelayProver for RecordingProver {
             },
             budget: ComputeBudgetConfig::new(400_000),
             co_signer: self.co_signer,
-            co_sign_demand: CoSignDemand::transact(false, &[]),
             signers,
         })
     }
@@ -242,6 +242,38 @@ pub fn proof_inputs(ring: Address, rail: RelayRail) -> RelayProofInputs {
         interface_transfer_accounts: Vec::new(),
         blinding_seed: [28; 32],
         output_tree_id: 4,
+    }
+}
+
+/// A SOL deposit to the owner, the depositor signs its funding after the relay proves.
+pub fn deposit_request(
+    quote: RelayQuote,
+    ring: Address,
+    depositor: Address,
+    amount: u64,
+) -> PrepareRelayRequest {
+    let deposit = RelayDepositInputs {
+        ring_program_id: ring,
+        tree: Address::new_from_array([42; 32]),
+        depositor,
+        recipient: owner().shielded_address().expect("address"),
+        asset: DepositAsset::Sol,
+        amount,
+        view_tag: [43; 32],
+        encrypted: EncryptedRingDepositData {
+            tx_viewing_pk: [44; 33],
+            salt: [45; 16],
+            ciphertext: vec![46; 8],
+        },
+        blinding_secret: zeroize::Zeroizing::new([47; 32]),
+        audit_ephemeral_key: zeroize::Zeroizing::new([48; 32]),
+    };
+    PrepareRelayRequest {
+        ring: ring.into(),
+        quote,
+        intent: RelayIntent::Deposit {
+            proof_inputs: ProofInputBytes::new(deposit.encode().expect("encode")),
+        },
     }
 }
 

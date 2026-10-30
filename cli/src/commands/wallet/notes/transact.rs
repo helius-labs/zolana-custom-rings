@@ -43,7 +43,7 @@ use crate::{
     policy, records,
     ui::{self, icon},
     wallet::WalletScan,
-    Context, CosignerArg, DepositArgs, TransactArgs, TransferArgs, DEFAULT_TRANSACT_AMOUNT,
+    Context, CosignerArg, DepositArgs, Target, TransactArgs, TransferArgs, DEFAULT_TRANSACT_AMOUNT,
     SENDER_KEYPAIR_FILE,
 };
 
@@ -142,11 +142,21 @@ struct Requirement {
     demanded: Option<CoSignRequirement>,
 }
 
+/// Applies only on a policy that reads the ring's own `Allow`.
+#[must_use]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AllowListing {
+    /// The fresh recipient has no entry, the demo stops before it deposits.
+    Refuse,
+    Enrol,
+}
+
 /// The demo parties a table referencing `Allow` refuses until their records carry it.
 #[must_use]
 struct AllowEnrolment<'a> {
     authority: &'a Keypair,
     parties: &'a [(&'a str, &'a ShieldedKeypair)],
+    listing: AllowListing,
 }
 
 #[must_use]
@@ -193,6 +203,7 @@ struct Sent {
 }
 
 pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
+    let listing = args.allow_listing(ctx.config.target)?;
     let config = ctx.ring_config()?;
     args.owner_rail.check(config.mode)?;
     let program = ctx.ring.program_id();
@@ -245,6 +256,7 @@ pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
     AllowEnrolment {
         authority,
         parties: &parties,
+        listing,
     }
     .send(ctx)?;
     transfer.fund(ctx, inputs.drawn_lamports())?;
@@ -857,6 +869,20 @@ impl Demand {
     }
 }
 
+impl TransactArgs {
+    /// List entries are the policy authority's to write, a payment writes them only in a localnet demo.
+    pub fn allow_listing(&self, target: Target) -> Result<AllowListing> {
+        if !self.enrol_allow {
+            return Ok(AllowListing::Refuse);
+        }
+        ensure!(
+            target == Target::Localnet,
+            "`--enrol-allow` runs on localnet only"
+        );
+        Ok(AllowListing::Enrol)
+    }
+}
+
 impl AllowEnrolment<'_> {
     /// A curated `Allow` list is the curator's to write.
     fn send(self, ctx: &Context) -> Result<()> {
@@ -870,6 +896,10 @@ impl AllowEnrolment<'_> {
             line("allow", format_args!("curated by {registry}"));
             return Ok(());
         }
+        ensure!(
+            self.listing == AllowListing::Enrol,
+            "`--enrol-allow` is required on a policy that reads the ring's own allow list"
+        );
         let subjects = self
             .parties
             .iter()

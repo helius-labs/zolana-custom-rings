@@ -10,7 +10,7 @@ use crate::{
     escrow_merge::RingSdkMergeBuilder,
     landing::SolanaChain,
     managed_merge::MergeBuilder,
-    relay::{RelayParts, ServedRings},
+    relay::RelayParts,
     relay_prover::SdkRelayProver,
 };
 
@@ -32,7 +32,6 @@ pub struct RelayServicesInit<'a> {
     pub rpc_url: &'a str,
     pub indexer_url: &'a str,
     pub prover_url: &'a str,
-    pub rings: ServedRings,
 }
 
 impl RelayServicesInit<'_> {
@@ -55,7 +54,6 @@ impl RelayServicesInit<'_> {
                 prover: Arc::new(SdkRelayProver::new(ring_client())),
                 fee_payer: self.fee_payer,
                 chain: Arc::new(SolanaChain::new(self.rpc_url)),
-                rings: self.rings,
             },
             merge: MergeParts { builder },
         }

@@ -20,7 +20,7 @@ Ring RPC is the one writer of a ring's records. It turns signed record updates i
 
 - One storage update carries at most 16 writes and never splits a record update.
 - An authority batch passes queued wallet updates unless one of them writes the same record.
-- A batch revokes when it sets block or frozen, clears allow or approval, or restricts mint settings. It then goes out as an immediate update.
+- A batch revokes when, under the ring's current rule table, it clears a list a rule accepts on, sets a list a rule accepts off, or restricts mint settings. It then goes out as an immediate update.
 - A wallet batch also goes out early when an authority batch waits behind it.
 - A grant revocation goes graced. A wallet that could force an immediate update would void every member's proof in flight.
 - A reader list clear goes graced even when a rule reads the reader list.

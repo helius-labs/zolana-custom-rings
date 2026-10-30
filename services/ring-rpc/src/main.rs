@@ -11,7 +11,7 @@ use zolana_ring_client::{
 use zolana_ring_rpc::{
     run_server, write_grant_rows_secret, write_keypair, write_root_secret, ChainSource, Cli,
     Command, Hub, KeyKind, KeySource, KeygenArgs, LiveStorageChain, OriginPolicy,
-    RelayServicesInit, ServeArgs, ServeKeys, ServedRings, ServerOptions, ServiceIdentity, Store,
+    RelayServicesInit, ServeArgs, ServeKeys, ServerOptions, ServiceIdentity, Store,
     TransactionSource, Upstreams, MANAGED_MERGE_INTERVAL, STORE_CONNECTIONS,
 };
 
@@ -108,11 +108,6 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 rpc_url: &args.rpc_url,
                 indexer_url: &args.indexer_url,
                 prover_url,
-                // One ring with a local auditor key, any ring with derived keys.
-                rings: match args.ring_program_id {
-                    Some(ring) => ServedRings::One(ring),
-                    None => ServedRings::Any,
-                },
             }
             .build())
         })

@@ -152,7 +152,7 @@ fn the_cli_pins_the_released_rows_and_governs_its_demo_transfers() -> Result<()>
     // 2. The demo, a granted reader, enrols both parties in Allow, the
     //    auditor opens its transfer.
     demo.grant_reader()?;
-    let output = demo.project.run(&["transact"])?;
+    let output = demo.project.run(&["transact", "--enrol-allow"])?;
     for line in ["allow       sender added", "allow       recipient added"] {
         assert!(output.contains(line), "{line} in\n{output}");
     }
@@ -189,7 +189,7 @@ fn the_cli_pins_the_released_rows_and_governs_its_demo_transfers() -> Result<()>
     demo.project.write_list(frozen(true))?;
     demo.refused_transact()?;
     demo.project.write_list(frozen(false))?;
-    demo.project.run(&["transact"])?;
+    demo.project.run(&["transact", "--enrol-allow"])?;
     assert_eq!(
         demo.audited()?.len(),
         2,
@@ -308,7 +308,7 @@ impl<'a> DemoRing<'a> {
         };
         let before = unspent()?;
         let audited_before = self.audited()?.len();
-        let refused = self.project.output(&["transact"])?;
+        let refused = self.project.output(&["transact", "--enrol-allow"])?;
         assert!(
             !refused.status.success(),
             "transact landed under a refusing rule"

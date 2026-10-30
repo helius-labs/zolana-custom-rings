@@ -993,27 +993,36 @@ export class RingRpc {
     });
   }
 
-  /** Verified against `servicePubkey` before the key is returned. */
+  /** Verified under the pinned `servicePublicKey` before the key is returned. */
   async createAuditorKey(
     input: Readonly<{
       ringProgramId: Address;
       genesisHash: Bytes32;
       /** The upgrade authority, or the policy authority after `Initialize`. */
       authority: MessagePartialSigner;
+      /** Confirmed out of band, never read from the service. */
+      servicePublicKey: Address;
       timestamp?: bigint;
     }>,
     context?: RequestContext,
   ): Promise<RingAuditorKey> {
     let request = RingAuditorKeyRequest.forRing(input.ringProgramId, input.genesisHash);
     if (input.timestamp !== undefined) request = request.at(input.timestamp);
-    return this.createAuditorKeySigned(await request.sign(input.authority), context);
+    return this.createAuditorKeySigned(
+      await request.sign(input.authority),
+      input.servicePublicKey,
+      context,
+    );
   }
 
+  /** Refused unless the pinned `servicePublicKey` signed the answer. */
   async createAuditorKeySigned(
     request: SignedAuditorKeyRequest,
+    servicePublicKey: Address,
     context?: RequestContext,
   ): Promise<RingAuditorKey> {
     const checked = checkedSignedAuditorKeyRequest(request);
+    const pinned = requestAddress(servicePublicKey, "servicePublicKey");
     const wire = record(
       await this.#call(
         "createAuditorKey",
@@ -1032,7 +1041,11 @@ export class RingRpc {
     const key = base64(wire["auditorPubkey"], "result.auditorPubkey");
     if (key.length !== 33) throw invalid("result.auditorPubkey");
     const auditorPublicKey = X25519PublicKey.fromBytes(key as Bytes33);
-    const servicePublicKey = address(wire["servicePubkey"], "result.servicePubkey");
+    if (address(wire["servicePubkey"], "result.servicePubkey") !== pinned) {
+      throw new RingError("RING_RPC", {
+        details: { method: "createAuditorKey", reason: "service key is not the pinned key" },
+      });
+    }
     const signature = base58(wire["signature"], "result.signature");
     const ring = address(wire["ringProgramId"], "result.ringProgramId");
     if (ring !== checked.ringProgramId) throw invalid("result.ringProgramId");
@@ -1044,7 +1057,7 @@ export class RingRpc {
         auditorPublicKey,
         nonce: checked.nonce,
       }),
-      addressBytes(servicePublicKey, "servicePubkey"),
+      addressBytes(pinned, "servicePublicKey"),
     );
     if (!attested) {
       throw new RingError("RING_RPC", {
@@ -1055,7 +1068,7 @@ export class RingRpc {
       ringProgramId: ring,
       auditorPublicKey,
       auditorViewTag: hash(wire["auditorViewTag"], "result.auditorViewTag"),
-      servicePublicKey,
+      servicePublicKey: pinned,
       signature,
     });
   }

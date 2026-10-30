@@ -37,7 +37,8 @@ use crate::{
     limits::ReaderPermit,
     replay::ReplayCheck,
     upstream::{
-        MergeAuditRequest, RecordsTip, RingHistoryPage, TransactionPage, TransactionSource,
+        MergeAuditRequest, RecordsTip, RingConfiguration, RingHistoryPage, TransactionPage,
+        TransactionSource,
     },
     utxos::{AuditStore, CreatedIn, EscrowRoot, EscrowedOwner, MAX_BACKFILL_PAGES},
 };
@@ -184,6 +185,12 @@ impl<S: TransactionSource> AuditService<S> {
     pub async fn configured_auditor(&self) -> Result<Option<X25519Pubkey>, RingRpcError> {
         let config = self.shared.source.ring_config(self.ring).await?;
         Ok(config.map(|config| config.auditor_pubkey))
+    }
+
+    /// `None` unless the ring's config names the auditor key held here.
+    pub(crate) async fn served_config(&self) -> Result<Option<RingConfiguration>, RingRpcError> {
+        let config = self.shared.source.ring_config(self.ring).await?;
+        Ok(config.filter(|config| config.auditor_pubkey == self.auditor.pubkey()))
     }
 
     pub async fn chain_status(&self) -> Result<RingChainStatus, RingRpcError> {

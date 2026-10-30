@@ -32,8 +32,8 @@ use crate::{
     landing::{Attempt, ChainOutcome, Landing},
     record_update::{
         escrowed_members, limits_within_bounds, ApplyInputsCheck, BatchPlan, CheckedUpdate,
-        EnrolmentApproval, EscrowUniqueness, ModeDecision, QueuedCheck, RecordUpdateCheck,
-        RecordUpdateRefusal, UpdateContext,
+        EnrolmentApproval, EscrowUniqueness, ModeDecision, QueuedCheck, QueuedState,
+        RecordUpdateCheck, RecordUpdateRefusal, UpdateContext,
     },
     storage_chain::StorageChain,
     update_queue::{AwaitingPage, BatchOutcome, NewBatch, NewUpdate, OpenBatch, UpdateQueue},
@@ -290,24 +290,32 @@ impl RecordWriter {
         let slot = self.chain.slot().await?;
         queue.expire_awaiting(registry, slot).await?;
         let queued = queue.queued(registry).await?;
-        let mut policy_authorities = HashMap::new();
-        for update in queued.iter().filter(|update| update.signer.is_authority()) {
-            if let Entry::Vacant(ring) = policy_authorities.entry(update.ring) {
-                let config = self.chain.ring_config(update.ring).await?;
-                ring.insert(config.map(|config| config.roles.policy));
+        let mut policies = HashMap::new();
+        for update in &queued {
+            if let Entry::Vacant(ring) = policies.entry(update.ring) {
+                ring.insert(self.ring_policy(update.ring).await?);
             }
         }
         let mut live = Vec::new();
+        let mut deferred = false;
         for update in queued {
             let check = QueuedCheck {
                 update: &update,
                 slot,
-                policy_authority: policy_authorities.get(&update.ring).copied().flatten(),
+                policy_authority: policies
+                    .get(&update.ring)
+                    .and_then(Option::as_ref)
+                    .map(|policy| policy.roles.policy),
             };
             match check.check() {
-                Ok(()) => live.push(update),
+                Ok(QueuedState::Live) => live.push(update),
+                Ok(QueuedState::Deferred) => deferred = true,
                 Err(refusal) => queue.refuse(&update.id, refusal).await?,
             }
+        }
+        // An unread ring account holds the whole registry, so each record keeps its write order.
+        if deferred {
+            return Ok(());
         }
         let Some(plan) = (BatchPlan { queue: &live, slot }).decide()? else {
             return Ok(());
@@ -340,9 +348,17 @@ impl RecordWriter {
             entries: &entries,
         }
         .check()?;
+        let tables = policies
+            .iter()
+            .filter(|(ring, _)| batch.iter().any(|update| update.ring == **ring))
+            .filter_map(|(_, policy)| policy.as_ref())
+            .map(RingPolicy::rule_table)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| RingRpcError::StorageUpdate(Box::new(error.into())))?;
         let Some(mode) = (ModeDecision {
             inputs: &checked.inputs,
             registry: &state,
+            tables: &tables,
             slot,
         })
         .decide() else {

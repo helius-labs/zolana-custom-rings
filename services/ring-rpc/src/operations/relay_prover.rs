@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use custom_ring_interface::{compute_unit_limit, cosign::CoSignDemand, InstructionTag};
+use custom_ring_interface::{compute_unit_limit, InstructionTag};
 use custom_ring_sdk::{
     CustomRing, DelegateMove, DelegatePayment, RelayedDeposit, RelayedTransferInput, RingClient,
     RingIndexerBackend, RingTransfer,
@@ -51,7 +51,6 @@ pub struct ProvenRelay {
     pub instruction: Instruction,
     pub budget: ComputeBudgetConfig,
     pub co_signer: Option<Address>,
-    pub co_sign_demand: CoSignDemand,
     /// The owners, the delegate or the depositor, each signs the returned message.
     pub signers: Vec<Address>,
 }
@@ -150,7 +149,6 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
                 .copied()
                 .chain(delegate)
                 .collect(),
-            co_sign_demand: proven.co_sign_demand,
         })
     }
 
@@ -175,7 +173,6 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
                 .map_err(RelayError::proof)?,
             budget: ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Deposit)),
             co_signer: prepared.co_signer(),
-            co_sign_demand: prepared.co_sign_demand(),
             signers: vec![prepared.depositor()],
         })
     }
@@ -209,7 +206,6 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
                 .map_err(RelayError::proof)?,
             budget: ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Merge)),
             co_signer: proven.co_signer(),
-            co_sign_demand: CoSignDemand::transact(false, &[]),
             signers: Vec::new(),
         })
     }

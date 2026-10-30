@@ -309,7 +309,6 @@ fn longest_window(checks: &[AssetCheck]) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use custom_ring_interface::{cosign::CoSignDemand, CoSignScope};
     use sea_orm::ConnectionTrait;
     use solana_message::{Message, VersionedMessage};
 
@@ -422,11 +421,6 @@ mod tests {
                 ..Message::default()
             }),
             sender: member(7),
-            demand: CoSignDemand {
-                approval_required: true,
-                classes: CoSignScope::TRANSFERS,
-                withdrawals: Vec::new(),
-            },
             flows: vec![transfer(amount)],
         }
     }

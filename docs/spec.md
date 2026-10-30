@@ -142,7 +142,7 @@ Ring RPC keeps one key file per role. The auditor key opens ring activity. The s
 
 1. **Storage authority:** trusted for every record. The tree proof verifies the update, not the record. A write the authority signs directly skips every Ring RPC check, the wallet's signature and the escrow proof included.
 2. **Policy authority:** trusted to set policy rules, lists, limits and ring-wide grants, and to bind the records. Each other role is trusted for its own control.
-3. **Ring RPC:** trusted to protect the auditor key and every proof input a wallet hands it. It is trusted to enforce reader grants and co-signer limits, and to write records as signed. A depositor or the delegate signs the message Ring RPC builds. The ring SDKs sign it only when the quoted fee payer pays and the one instruction is the ring operation the request asked for. With derived keys Ring RPC relays and pays for any ring, and only its rate limits bound what it pays. No two Ring RPC processes serve one ring.
+3. **Ring RPC:** trusted to protect the auditor key and every proof input a wallet hands it. It is trusted to enforce reader grants and co-signer limits, and to write records as signed. A depositor or the delegate signs the message Ring RPC builds. The ring SDKs sign it only when the quoted fee payer pays and the one instruction is the ring operation the request asked for. With derived keys Ring RPC relays and pays only for a ring whose config names an auditor key it derives, and its rate limits bound what it pays. No two Ring RPC processes serve one ring.
 4. **Curator:** a ring trusts the authority of its one curator tree.
 5. **Delegate:** trusted to move escrowed members' funds within the ring under the configured controls.
 6. **Upgrade authority:** trusted to create the ring and to deploy upgrades that keep the program's guarantees. An upgrade can replace every check. Only the operator tools refuse an upgrade over a ring account the new release cannot read.
@@ -239,12 +239,12 @@ A deposit moves SOL or tokens from a wallet's public balance into up to 8 ring n
 2. **Ring RPC:**
    1. Checks that the ring is active.
    2. Generates the deposit proof. It shows the asset rules hold and, on a ring with a delegate, that each recipient escrows its key.
-   3. Co-signs when deposits demand approval.
-   4. Returns the transaction to the **Wallet** for signing.
+   3. Returns the transaction to the **Wallet** for signing.
 3. **Wallet:** signs to authorize the SOL or SPL token transfer.
 4. **Ring RPC:**
-   1. Pays fees and submits the deposit to the **Ring Program**.
-   2. Follows the deposit to confirmation. The recipient's **Wallet** finds its notes by view tag.
+   1. Co-signs when deposits demand approval.
+   2. Pays fees and submits the deposit to the **Ring Program**.
+   3. Follows the deposit to confirmation. The recipient's **Wallet** finds its notes by view tag.
 
 On every ring the sealed opening names each note's owner key, and the deposit proof binds that key to the note's owner commitment.
 
@@ -309,9 +309,8 @@ An authority transfer moves a wallet's funds to recipients within the same ring,
    2. Opens the source's escrowed nullifier secret and checks it against the source's nullifier key.
    3. Funds the payments from the source's notes and returns the change to the source.
    4. Generates the delegate-rail proofs, including the recipients' key-escrow checks.
-   5. Co-signs when the move demands a co-signer.
 3. **Delegate:** signs the transaction.
-4. **Ring RPC:** pays fees, submits the transfer to the **Ring Program** and indexes the result.
+4. **Ring RPC:** co-signs when the move demands a co-signer, pays fees, submits the transfer to the **Ring Program** and indexes the result.
 
 ## 8. Reader access grants and revocation
 
