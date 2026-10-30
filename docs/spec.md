@@ -142,7 +142,7 @@ Ring RPC keeps one key file per role. The auditor key opens ring activity. The s
 
 1. **Storage authority:** trusted for every record. The tree proof verifies the update, not the record. A write the authority signs directly skips every Ring RPC check, the wallet's signature and the escrow proof included.
 2. **Policy authority:** trusted to set policy rules, lists, limits and ring-wide grants, and to bind the records. Each other role is trusted for its own control.
-3. **Ring RPC:** trusted to protect the auditor key and every proof input a wallet hands it. It is trusted to enforce reader grants and co-signer limits, and to write records as signed. A depositor, a signer-rail owner or the delegate signs the transaction Ring RPC builds, and so trusts Ring RPC with all that transaction can move. With derived keys Ring RPC relays and pays for any ring, and only its rate limits bound what it pays. No two Ring RPC processes serve one ring.
+3. **Ring RPC:** trusted to protect the auditor key and every proof input a wallet hands it. It is trusted to enforce reader grants and co-signer limits, and to write records as signed. A depositor or the delegate signs the message Ring RPC builds. The ring SDKs sign it only when the quoted fee payer pays and the one instruction is the ring operation the request asked for. With derived keys Ring RPC relays and pays for any ring, and only its rate limits bound what it pays. No two Ring RPC processes serve one ring.
 4. **Curator:** a ring trusts the authority of its one curator tree.
 5. **Delegate:** trusted to move escrowed members' funds within the ring under the configured controls.
 6. **Upgrade authority:** trusted to create the ring and to deploy upgrades that keep the program's guarantees. An upgrade can replace every check. Only the operator tools refuse an upgrade over a ring account the new release cannot read.
@@ -151,6 +151,7 @@ Ring RPC keeps one key file per role. The auditor key opens ring activity. The s
 9. **Limits:** Ring RPC enforces co-signer limits only on what it co-signs. A co-signer outside Ring RPC enforces none.
 10. **Photon, ring indexer and chain RPC:** Photon and the ring indexer that forwards to it are trusted for complete history, the chain RPC for confirmed contents. Ring RPC verifies each record opening under the newest root. While the ring indexer lags that root, Ring RPC's tree-mode reader grant checks, its escrow and limit updates and its co-signatures on a deposit, transfer or withdrawal fail.
 11. **SPP governance:** trusted to activate the ring when SPP does not activate it at creation, and to enable its authority rail.
+12. **Delegate message:** the ring SDKs bind the leading output owners of the delegate's message to the payees in payment order, and each other owner to the source or zero. They do not bind whose notes it spends, the mint or the amount each payee gets.
 
 ## Glossary
 
