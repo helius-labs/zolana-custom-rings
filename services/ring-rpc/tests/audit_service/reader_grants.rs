@@ -1,6 +1,7 @@
 //! Serves a wallet reader its own part of each transaction and refuses it outside its wallet or after its only grant is revoked, in the tree or the database.
 
 use super::*;
+use custom_ring_interface::{InProofOwner, RingOutput, RingRail, RingTransactData};
 
 async fn wallet_read(
     service: &AuditService<StaticSource>,
@@ -317,4 +318,111 @@ async fn a_sender_sees_its_own_anonymous_transfer() {
     assert_eq!(outputs.len(), 2);
     assert_eq!(inputs.len(), 2);
     assert_eq!(withdrawals.len(), 2);
+}
+
+const OWNER: Address = Address::new_from_array([0xd0; 32]);
+const CO_OWNER: Address = Address::new_from_array([0xd1; 32]);
+
+/// The fixture's confidential transfer, `owners` its owner signer run.
+fn owner_signed(fixture: &Fixture, owners: &[Address]) -> StaticSource {
+    let mut source = fixture
+        .source()
+        .with_transactions(vec![fixture.audited.clone()]);
+    source
+        .owner_signers
+        .insert(fixture.audited.tx_signature, owners.to_vec());
+    source
+}
+
+/// The fixture's confidential transfer, `owner` verified in the SPP proof.
+fn owned_in_proof(fixture: &Fixture, owner: Address) -> StaticSource {
+    let mut frames = fixture.frames.lock().unwrap();
+    let frame = frames
+        .get_mut(&fixture.audited.tx_signature)
+        .expect("frame");
+    let zero = [0; 32];
+    let mut data = RingTransactData::parse(&frame[1..], RingRail::Confidential)
+        .expect("frame")
+        .into_data();
+    // The in-proof rail frames each ring slot under its owner.
+    for output in &mut data.outputs {
+        if let RingOutput::Delivered { hash, u, body } = *output {
+            *output = RingOutput::Owned {
+                hash,
+                owner: u,
+                u,
+                body,
+            };
+        }
+    }
+    data.in_proof_owner = Some(InProofOwner {
+        owner: owner.as_array(),
+        commitment: &zero,
+        commitment_pok: &zero,
+    });
+    let encoded = [vec![frame[0]], data.encode().expect("frame")].concat();
+    *frame = encoded;
+    drop(frames);
+    owner_signed(fixture, &[])
+}
+
+async fn wallet_activity(
+    source: StaticSource,
+    fixture: &Fixture,
+    wallet: Address,
+) -> Vec<WalletActivity> {
+    let reader = wallet_reader(&source, wallet);
+    let service = fixture.hub(source).service(None).expect("service");
+    activity(wallet_read(&service, &reader, wallet).await)
+}
+
+/// A spender sees every output and no input opening.
+fn assert_spent_in_full(items: Vec<WalletActivity>) {
+    let [item] = items.try_into().expect("the spender's transfer");
+    let WalletView::Sender {
+        inputs, outputs, ..
+    } = item.view
+    else {
+        panic!("a sender view")
+    };
+    let amounts: Vec<u64> = outputs
+        .iter()
+        .flat_map(|output| &output.utxo)
+        .map(|utxo| utxo.amount)
+        .collect();
+    assert_eq!(amounts, [500, 7]);
+    assert!(inputs.is_empty());
+}
+
+#[tokio::test]
+async fn a_confidential_owner_signer_sees_its_full_transfer() {
+    let fixture = Fixture::new();
+    let source = owner_signed(&fixture, &[OWNER]);
+    assert_spent_in_full(wallet_activity(source, &fixture, OWNER).await);
+}
+
+#[tokio::test]
+async fn a_confidential_in_proof_owner_sees_its_full_transfer() {
+    let fixture = Fixture::new();
+    let source = owned_in_proof(&fixture, OWNER);
+    assert_spent_in_full(wallet_activity(source, &fixture, OWNER).await);
+}
+
+#[tokio::test]
+async fn a_fee_payer_that_owns_no_input_sees_nothing_on_either_rail() {
+    let fixture = Fixture::new();
+    // SENDER pays and signs, OWNER spends.
+    let source = owner_signed(&fixture, &[OWNER]);
+    assert!(wallet_activity(source, &fixture, SENDER).await.is_empty());
+    let source = owned_in_proof(&fixture, OWNER);
+    assert!(wallet_activity(source, &fixture, SENDER).await.is_empty());
+}
+
+#[tokio::test]
+async fn each_co_spender_of_an_audit_only_ring_sees_no_input_opening() {
+    let fixture = Fixture::new();
+    for owner in [OWNER, CO_OWNER] {
+        let source = owner_signed(&fixture, &[OWNER, CO_OWNER]);
+        assert_spent_in_full(wallet_activity(source, &fixture, owner).await);
+    }
 }

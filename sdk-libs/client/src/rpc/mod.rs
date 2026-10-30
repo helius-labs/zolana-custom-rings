@@ -470,6 +470,9 @@ pub struct DecryptedTransaction {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<DecryptedInput>,
     pub nullifiers: Vec<Hash>,
+    /// The input owners of a confidential transfer, by owner signature or in proof.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spenders: Vec<SerializablePubkey>,
     /// Required signers, fee payer first.
     pub signers: Vec<SerializablePubkey>,
     /// Public settlement legs, where value left the ring.
@@ -482,6 +485,7 @@ pub struct ConfirmedAudit {
     pub audited: AuditedTransaction,
     pub event_index: u16,
     pub nullifiers: Vec<[u8; 32]>,
+    pub spenders: Vec<Address>,
     pub signers: Vec<Address>,
     pub withdrawals: Vec<RingWithdrawal>,
 }
@@ -758,6 +762,7 @@ impl From<ConfirmedAudit> for DecryptedTransaction {
             audited,
             event_index,
             nullifiers,
+            spenders,
             signers,
             withdrawals,
         } = confirmed;
@@ -781,6 +786,10 @@ impl From<ConfirmedAudit> for DecryptedTransaction {
             }),
             inputs: audited.inputs.into_iter().map(Into::into).collect(),
             nullifiers: nullifiers.into_iter().map(Into::into).collect(),
+            spenders: spenders
+                .into_iter()
+                .map(|key| key.to_bytes().into())
+                .collect(),
             signers: signers
                 .into_iter()
                 .map(|key| key.to_bytes().into())

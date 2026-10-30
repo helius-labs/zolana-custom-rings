@@ -26,6 +26,7 @@ use custom_ring_interface::{
     encode_ring_confidential_delivered_output,
     storage_instruction::{EscrowWriteData, StorageWriteData},
     tagged_x25519, QueueEntry, RingMode, DELIVERED_AUDIT_CAPACITIES,
+    RING_TRANSACT_ACCOUNT_PREFIX_LEN,
 };
 use spr_keypair::{X25519Keypair, X25519Pubkey};
 use std::{
@@ -380,6 +381,7 @@ struct StaticSource {
     transactions: Vec<ShieldedTransaction>,
     origins: HashMap<(Signature, u16), bool>,
     frames: Frames,
+    owner_signers: HashMap<Signature, Vec<Address>>,
     /// Confirmed deposits and merges do not carry transfer auditor messages.
     confirmed_events: HashMap<(Signature, u16), zolana_ring_client::ConfirmedEvent>,
     /// The capsule bindings of each audited deposit.
@@ -444,6 +446,23 @@ impl StaticSource {
 }
 
 impl StaticSource {
+    /// SPP's ring transact accounts, SENDER paying and no settlement group.
+    fn pool_accounts(&self, signature: Signature) -> Vec<Address> {
+        let nullifiers = self
+            .transactions
+            .iter()
+            .chain(self.by_tag.values().flatten())
+            .find(|tx| tx.tx_signature == signature)
+            .map_or(0, |tx| tx.nullifiers.len());
+        let mut accounts = vec![SENDER];
+        accounts.resize(
+            RING_TRANSACT_ACCOUNT_PREFIX_LEN + 1 + nullifiers,
+            Address::default(),
+        );
+        accounts.extend(self.owner_signers.get(&signature).into_iter().flatten());
+        accounts
+    }
+
     /// The page `page` names, else every transaction the source holds under `tagged`.
     fn page_at(
         &self,
@@ -547,6 +566,7 @@ impl TransactionSource for StaticSource {
                 deposits: self.deposits.get(&signature).cloned().unwrap_or_default(),
                 merge_disclosure: None,
                 transact: self.frames.lock().unwrap().get(&signature).cloned(),
+                pool_accounts: self.pool_accounts(signature),
                 withdrawals: vec![
                     RingWithdrawal {
                         screened_owner: None,
@@ -890,6 +910,7 @@ impl Fixture {
             transactions: Vec::new(),
             origins: HashMap::new(),
             frames: self.frames.clone(),
+            owner_signers: HashMap::new(),
             confirmed_events: HashMap::new(),
             deposits: HashMap::new(),
             next_cursor: Some(vec![7, 7]),

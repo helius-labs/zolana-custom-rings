@@ -553,6 +553,7 @@ fn check_audit(audit: &Audit) {
         ring_invoked: true,
         event: origin_fixture::event(&audit.transaction),
         signers: Vec::new(),
+        pool_accounts: Vec::new(),
         withdrawals: Vec::new(),
         deposits: Vec::new(),
         merge_disclosure: None,

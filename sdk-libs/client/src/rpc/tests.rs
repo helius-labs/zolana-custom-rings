@@ -257,6 +257,7 @@ fn page(
                 audited,
                 event_index: 7,
                 nullifiers,
+                spenders: Vec::new(),
                 signers: vec![Address::new_from_array([13; 32])],
                 withdrawals: vec![withdrawal],
             }
@@ -297,7 +298,8 @@ fn a_decrypted_page_keeps_its_wire_json() {
         sender: None,
         inputs: Vec::new(),
     };
-    let page = page(audited, vec![[12; 32]]);
+    let mut page = page(audited, vec![[12; 32]]);
+    page.value.items[0].spenders = vec![[13; 32].into()];
     let json = serde_json::to_string(&page).expect("json");
     assert_eq!(json, include_str!("decrypted_page.json").trim_end());
     assert_eq!(

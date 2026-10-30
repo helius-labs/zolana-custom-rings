@@ -618,9 +618,11 @@ impl<S: TransactionSource> AuditService<S> {
                 mode,
             };
             // Missing mint preimages affect optional metadata, never verified disclosure.
-            let result = bound.and_then(|()| self.audit(audit, &assets));
+            let result = bound
+                .and_then(|()| self.audit(audit, &assets))
+                .and_then(|opened| Ok((opened, origin.spenders(mode)?)));
             match result {
-                Ok(opened) => {
+                Ok((opened, spenders)) => {
                     store.record(
                         CreatedIn {
                             slot: opened.slot,
@@ -634,6 +636,7 @@ impl<S: TransactionSource> AuditService<S> {
                             audited: opened,
                             event_index,
                             nullifiers: tx.nullifiers,
+                            spenders,
                             signers: origin.signers,
                             withdrawals: origin.withdrawals,
                         }

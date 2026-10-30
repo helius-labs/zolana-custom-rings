@@ -904,6 +904,7 @@ mod tests {
             deposits: Vec::new(),
             merge_disclosure: None,
             transact: None,
+            pool_accounts: Vec::new(),
         });
         let records = |origin, indexed| ConfirmedDepositRecords {
             origin,

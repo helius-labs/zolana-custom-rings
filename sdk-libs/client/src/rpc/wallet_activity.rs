@@ -38,7 +38,7 @@ pub struct WalletActivity {
     deny_unknown_fields
 )]
 pub enum WalletView {
-    /// Only an anonymous ring discloses its sender.
+    /// The anonymous sender or a confidential spender.
     Sender {
         inputs: Vec<DecryptedInput>,
         outputs: Vec<DecryptedOutput>,
@@ -67,18 +67,20 @@ impl WalletActivity {
             payload_errors,
             sender,
             inputs,
+            spenders,
             withdrawals,
             ..
         } = transaction;
         let names = |key: SerializablePubkey| key.0 == wallet;
-        let view = match sender {
-            Some(sender) if names(sender.owner_key) => WalletView::Sender {
+        let anonymous = sender.is_some_and(|sender| names(sender.owner_key));
+        let view = match anonymous || spenders.into_iter().any(names) {
+            true => WalletView::Sender {
                 inputs,
                 outputs,
                 payload_errors,
                 withdrawals,
             },
-            _ => {
+            false => {
                 let outputs: Vec<_> = outputs
                     .into_iter()
                     .filter(|output| {
