@@ -359,12 +359,16 @@ fn off_curve<const N: usize>(on_curve: impl Fn(&[u8; N]) -> bool) -> [u8; N] {
         .expect("a canonical x off the curve")
 }
 
-/// The SBF build, `SBF_OUT_DIR` when set, else the workspace deploy directory.
 fn program_bytes() -> Vec<u8> {
+    deployed("custom_ring_program.so")
+}
+
+/// The SBF build, `SBF_OUT_DIR` when set, else the workspace deploy directory.
+pub fn deployed(file: &str) -> Vec<u8> {
     let dir = std::env::var("SBF_OUT_DIR")
         .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/deploy").into());
-    let path = format!("{dir}/custom_ring_program.so");
-    std::fs::read(&path).unwrap_or_else(|_| panic!("build the ring program into {path}"))
+    let path = format!("{dir}/{file}");
+    std::fs::read(&path).unwrap_or_else(|_| panic!("no SBF build at {path}"))
 }
 
 /// `ZOLANA_SPP_PROGRAM_SO` when set, else the zolana deploy directory.
