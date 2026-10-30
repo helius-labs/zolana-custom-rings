@@ -365,6 +365,9 @@ pub struct TransactArgs {
     /// `in-proof` signs the spend inside the proof and the authority pays, on a confidential ring.
     #[arg(long, value_enum, default_value_t = OwnerRail::Signer)]
     pub owner_rail: OwnerRail,
+    /// Localnet only, the authority lists both demo parties on the ring's own allow list.
+    #[arg(long)]
+    pub enrol_allow: bool,
 }
 
 #[derive(Debug, Args)]
