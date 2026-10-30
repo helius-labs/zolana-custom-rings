@@ -4,7 +4,10 @@ use async_trait::async_trait;
 use custom_ring_sdk::{RingError, SenderOutflow};
 use jsonrpsee::types::ErrorObjectOwned;
 use log::warn;
-use sea_orm::{DatabaseConnection, TransactionTrait};
+use sea_orm::{
+    sqlx::error::{Error as SqlxError, ErrorKind},
+    DatabaseConnection, DbErr, RuntimeErr, TransactionTrait,
+};
 use sha2::{Digest, Sha256};
 use solana_address::Address;
 use solana_instruction::Instruction;
@@ -138,6 +141,33 @@ struct PrepareCheck<'a> {
 struct Checked {
     owner_signature: Option<[u8; 64]>,
     setup: Vec<Instruction>,
+}
+
+#[must_use]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReservationAfterWrite {
+    Keep,
+    Free(Signature),
+}
+
+enum WriteError {
+    /// The commit was never sent.
+    Uncommitted(DbErr),
+    /// The write may have committed unless the store refused it.
+    Committing(DbErr),
+}
+
+enum UnstoredWrite<'a> {
+    /// Another record holds the relay id.
+    Existing,
+    Failed(&'a WriteError),
+}
+
+#[must_use]
+struct FailedWrite<'a> {
+    write: UnstoredWrite<'a>,
+    co_signature: Option<Signature>,
+    stored: Result<Option<&'a RelayRecord>, &'a DbErr>,
 }
 
 impl RelayError {
@@ -322,7 +352,7 @@ impl Relay {
         .await
     }
 
-    /// A relay awaiting no signer is co-signed before the record lands, a lost insert frees its reservation.
+    /// A relay awaiting no signer is co-signed before the record lands.
     async fn stage(&self, proven: ProvenStep) -> Result<RelayStep, RingRpcError> {
         let ProvenStep {
             relay_id,
@@ -355,15 +385,28 @@ impl Relay {
         };
         self.sign_when_complete(&mut record).await?;
         let _transition = self.transitions.lock().await;
-        let inserted = self.relays().insert(&relay_id, &record).await;
-        if !matches!(inserted, Ok(true)) {
-            self.settle(record.co_signature, CoSignSettlement::Failed)
-                .await?;
+        let inserted = self
+            .relays()
+            .insert(&relay_id, &record)
+            .await
+            .map_err(WriteError::Committing);
+        let write = match &inserted {
+            Ok(true) => None,
+            Ok(false) => Some(UnstoredWrite::Existing),
+            Err(error) => Some(UnstoredWrite::Failed(error)),
+        };
+        if let Some(write) = write {
+            let stored = self.relays().get(&relay_id).await;
+            self.free_unless_stored(FailedWrite {
+                write,
+                co_signature: record.co_signature,
+                stored: stored.as_ref().map(Option::as_ref),
+            })
+            .await?;
             inserted?;
-            let stored = self.relays().get(&relay_id).await?;
             return Ok(step(
                 relay_id,
-                &stored.ok_or(RingRpcError::StateUnavailable)?,
+                &stored?.ok_or(RingRpcError::StateUnavailable)?,
             ));
         }
         self.first_send(&relay_id, &mut record).await?;
@@ -402,9 +445,14 @@ impl Relay {
             // The stored relay keeps the co-signer reservation.
             Ok(false) => return Ok(relay_id),
             Err(error) => {
-                self.settle(record.co_signature, CoSignSettlement::Failed)
-                    .await?;
-                return Err(error);
+                let stored = self.relays().get(&relay_id).await;
+                self.free_unless_stored(FailedWrite {
+                    write: UnstoredWrite::Failed(&error),
+                    co_signature: record.co_signature,
+                    stored: stored.as_ref().map(Option::as_ref),
+                })
+                .await?;
+                return Err(error.into());
             }
         }
         self.first_send(&relay_id, &mut record).await?;
@@ -416,17 +464,29 @@ impl Relay {
         &self,
         record: &RelayRecord,
         hold: HoldInputs<'_>,
-    ) -> Result<bool, RingRpcError> {
-        let transaction = self.store.connection().begin().await?;
-        if !RelayStore::new(&transaction)
-            .insert(hold.relay_id, record)
-            .await?
-        {
-            return Ok(false);
+    ) -> Result<bool, WriteError> {
+        let transaction = self
+            .store
+            .connection()
+            .begin()
+            .await
+            .map_err(WriteError::Uncommitted)?;
+        let staged = async {
+            if !RelayStore::new(&transaction)
+                .insert(hold.relay_id, record)
+                .await?
+            {
+                return Ok(false);
+            }
+            MergeInputs { conn: &transaction }.hold(hold).await?;
+            Ok(true)
         }
-        MergeInputs { conn: &transaction }.hold(hold).await?;
-        transaction.commit().await?;
-        Ok(true)
+        .await
+        .map_err(WriteError::Uncommitted)?;
+        if staged {
+            transaction.commit().await.map_err(WriteError::Committing)?;
+        }
+        Ok(staged)
     }
 
     pub(crate) fn merge_inputs(&self) -> MergeInputs<'_, DatabaseConnection> {
@@ -459,7 +519,17 @@ impl Relay {
                 .signatures
                 .push(CollectedSignature { signer, signature });
             self.sign_when_complete(&mut record).await?;
-            self.relays().update(&request.relay_id, &record).await?;
+            if let Err(error) = self.relays().update(&request.relay_id, &record).await {
+                let error = WriteError::Committing(error);
+                let stored = self.relays().get(&request.relay_id).await;
+                self.free_unless_stored(FailedWrite {
+                    write: UnstoredWrite::Failed(&error),
+                    co_signature: record.co_signature,
+                    stored: stored.as_ref().map(Option::as_ref),
+                })
+                .await?;
+                return Err(error.into());
+            }
             self.first_send(&request.relay_id, &mut record).await?;
         }
         self.advance(&request.relay_id, &mut record).await?;
@@ -634,6 +704,17 @@ impl Relay {
         Ok(self.relays().update(relay_id, record).await?)
     }
 
+    async fn free_unless_stored(&self, failed: FailedWrite<'_>) -> Result<(), RingRpcError> {
+        match failed.reservation() {
+            ReservationAfterWrite::Free(co_signature) => {
+                self.co_signer
+                    .settle(CoSignSettlement::Failed(co_signature))
+                    .await
+            }
+            ReservationAfterWrite::Keep => Ok(()),
+        }
+    }
+
     async fn settle(
         &self,
         co_signature: Option<Signature>,
@@ -685,6 +766,35 @@ impl CoSignStep<'_> {
             }),
             signers: proven.signers,
         })
+    }
+}
+
+impl FailedWrite<'_> {
+    /// An unknown commit outcome or an unreadable store keeps the reservation, a stored relay can still land.
+    fn reservation(self) -> ReservationAfterWrite {
+        let Some(co_signature) = self.co_signature else {
+            return ReservationAfterWrite::Keep;
+        };
+        if let UnstoredWrite::Failed(WriteError::Committing(error)) = self.write {
+            if !refused(error) {
+                return ReservationAfterWrite::Keep;
+            }
+        }
+        match self.stored {
+            Ok(Some(record)) if record.co_signature == Some(co_signature) => {
+                ReservationAfterWrite::Keep
+            }
+            Ok(_) => ReservationAfterWrite::Free(co_signature),
+            Err(_) => ReservationAfterWrite::Keep,
+        }
+    }
+}
+
+impl From<WriteError> for RingRpcError {
+    fn from(error: WriteError) -> Self {
+        match error {
+            WriteError::Uncommitted(error) | WriteError::Committing(error) => error.into(),
+        }
     }
 }
 
@@ -806,6 +916,22 @@ impl RelayPayload {
     }
 }
 
+/// A constraint violation or a failed pool acquire proves the store never committed the write.
+fn refused(error: &DbErr) -> bool {
+    match error {
+        DbErr::ConnectionAcquire(_) => true,
+        DbErr::Exec(RuntimeErr::SqlxError(SqlxError::Database(error)))
+        | DbErr::Query(RuntimeErr::SqlxError(SqlxError::Database(error))) => matches!(
+            error.kind(),
+            ErrorKind::UniqueViolation
+                | ErrorKind::ForeignKeyViolation
+                | ErrorKind::NotNullViolation
+                | ErrorKind::CheckViolation
+        ),
+        _ => false,
+    }
+}
+
 fn step(relay_id: RelayId, record: &RelayRecord) -> RelayStep {
     match record.state {
         RelayState::AwaitingSignature => RelayStep::SignMessage {
@@ -877,4 +1003,25 @@ fn flow(flows: &mut Vec<AssetFlow>, asset: Address) -> &mut AssetFlow {
         }
     };
     &mut flows[index]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_in_doubt_commit_keeps_the_reservation_with_no_stored_relay() {
+        let lost = WriteError::Committing(DbErr::Query(RuntimeErr::SqlxError(SqlxError::Io(
+            std::io::ErrorKind::ConnectionReset.into(),
+        ))));
+
+        let reservation = FailedWrite {
+            write: UnstoredWrite::Failed(&lost),
+            co_signature: Some(Signature::from([1; 64])),
+            stored: Ok(None),
+        }
+        .reservation();
+
+        assert_eq!(reservation, ReservationAfterWrite::Keep);
+    }
 }
