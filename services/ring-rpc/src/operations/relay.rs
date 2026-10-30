@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use custom_ring_sdk::{RingError, SenderOutflow};
 use jsonrpsee::types::ErrorObjectOwned;
 use log::warn;
-use sea_orm::{DatabaseConnection, TransactionTrait};
+use sea_orm::{DatabaseConnection, DbErr, TransactionTrait};
 use sha2::{Digest, Sha256};
 use solana_address::Address;
 use solana_instruction::Instruction;
@@ -138,6 +138,13 @@ struct PrepareCheck<'a> {
 struct Checked {
     owner_signature: Option<[u8; 64]>,
     setup: Vec<Instruction>,
+}
+
+#[must_use]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReservationAfterWrite {
+    Keep,
+    Free,
 }
 
 impl RelayError {
@@ -322,7 +329,7 @@ impl Relay {
         .await
     }
 
-    /// A relay awaiting no signer is co-signed before the record lands, a lost insert frees its reservation.
+    /// A relay awaiting no signer is co-signed before the record lands.
     async fn stage(&self, proven: ProvenStep) -> Result<RelayStep, RingRpcError> {
         let ProvenStep {
             relay_id,
@@ -357,13 +364,13 @@ impl Relay {
         let _transition = self.transitions.lock().await;
         let inserted = self.relays().insert(&relay_id, &record).await;
         if !matches!(inserted, Ok(true)) {
-            self.settle(record.co_signature, CoSignSettlement::Failed)
+            let stored = self.relays().get(&relay_id).await;
+            self.free_unless_stored(record.co_signature, stored.as_ref().map(Option::as_ref))
                 .await?;
             inserted?;
-            let stored = self.relays().get(&relay_id).await?;
             return Ok(step(
                 relay_id,
-                &stored.ok_or(RingRpcError::StateUnavailable)?,
+                &stored?.ok_or(RingRpcError::StateUnavailable)?,
             ));
         }
         self.first_send(&relay_id, &mut record).await?;
@@ -402,7 +409,8 @@ impl Relay {
             // The stored relay keeps the co-signer reservation.
             Ok(false) => return Ok(relay_id),
             Err(error) => {
-                self.settle(record.co_signature, CoSignSettlement::Failed)
+                let stored = self.relays().get(&relay_id).await;
+                self.free_unless_stored(record.co_signature, stored.as_ref().map(Option::as_ref))
                     .await?;
                 return Err(error);
             }
@@ -459,7 +467,12 @@ impl Relay {
                 .signatures
                 .push(CollectedSignature { signer, signature });
             self.sign_when_complete(&mut record).await?;
-            self.relays().update(&request.relay_id, &record).await?;
+            if let Err(error) = self.relays().update(&request.relay_id, &record).await {
+                let stored = self.relays().get(&request.relay_id).await;
+                self.free_unless_stored(record.co_signature, stored.as_ref().map(Option::as_ref))
+                    .await?;
+                return Err(error.into());
+            }
             self.first_send(&request.relay_id, &mut record).await?;
         }
         self.advance(&request.relay_id, &mut record).await?;
@@ -634,6 +647,24 @@ impl Relay {
         Ok(self.relays().update(relay_id, record).await?)
     }
 
+    async fn free_unless_stored(
+        &self,
+        co_signature: Option<Signature>,
+        stored: Result<Option<&RelayRecord>, &DbErr>,
+    ) -> Result<(), RingRpcError> {
+        match co_signature {
+            Some(co_signature)
+                if ReservationAfterWrite::decide(co_signature, stored)
+                    == ReservationAfterWrite::Free =>
+            {
+                self.co_signer
+                    .settle(CoSignSettlement::Failed(co_signature))
+                    .await
+            }
+            _ => Ok(()),
+        }
+    }
+
     async fn settle(
         &self,
         co_signature: Option<Signature>,
@@ -685,6 +716,17 @@ impl CoSignStep<'_> {
             }),
             signers: proven.signers,
         })
+    }
+}
+
+impl ReservationAfterWrite {
+    /// An unreadable store keeps the reservation, a stored relay can still land.
+    fn decide(co_signature: Signature, stored: Result<Option<&RelayRecord>, &DbErr>) -> Self {
+        match stored {
+            Ok(Some(record)) if record.co_signature == Some(co_signature) => Self::Keep,
+            Ok(_) => Self::Free,
+            Err(_) => Self::Keep,
+        }
     }
 }
 

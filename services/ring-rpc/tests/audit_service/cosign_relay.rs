@@ -1,6 +1,7 @@
-//! The relay co-signs within its asset's window caps and refuses an outflow beyond them, a proof naming another co-signer, or a ring whose auditor key it does not hold, and keeps the reservation of a transfer that landed before a lost send reply.
+//! The relay co-signs within its asset's window caps and refuses an outflow beyond them, a proof naming another co-signer, or a ring whose auditor key it does not hold, and keeps a reservation while a stored relay holds it.
 
 use jsonrpsee::RpcModule;
+use sea_orm::ConnectionTrait;
 use spr_keypair::{ShieldedKeypair, SigningKey};
 use zolana_ring_client::rpc::{
     GetRelayQuoteRequest, GetRelayStatusRequest, PrepareRelayRequest, RelayProofInputs, RelayQuote,
@@ -20,7 +21,9 @@ const SENDER_CAP: u64 = 1_000;
 const DEPOSIT_CAP: u64 = 1_000;
 
 struct CappedRelay {
+    hub: Arc<Hub<StaticSource>>,
     module: RpcModule<Arc<Hub<StaticSource>>>,
+    store: Store,
     chain: Arc<RecordingChain>,
     co_signer: Address,
     quote: RelayQuote,
@@ -51,7 +54,7 @@ impl CappedRelay {
             .with_store(store.clone())
             .with_co_signer(co_signer_key())
             .with_relay(RelayParts {
-                store,
+                store: store.clone(),
                 prover: Arc::new(RecordingProver {
                     co_signer: Some(named.unwrap_or(co_signer)),
                     ..RecordingProver::default()
@@ -61,7 +64,8 @@ impl CappedRelay {
             })
             .local(RING, fixture.auditor.clone())
             .expect("hub");
-        let module = rpc_module(Arc::new(hub)).expect("module");
+        let hub = Arc::new(hub);
+        let module = rpc_module(hub.clone()).expect("module");
         let quote = module
             .call(
                 GET_RELAY_QUOTE,
@@ -73,12 +77,30 @@ impl CappedRelay {
             .await
             .expect("quote");
         Self {
+            hub,
             module,
+            store,
             chain,
             co_signer,
             quote,
             rail,
         }
+    }
+
+    async fn fault(&self, fault: StoreFault) {
+        self.store
+            .connection()
+            .execute_unprepared(&fault.trigger())
+            .await
+            .expect("store fault");
+    }
+
+    async fn heal(&self) {
+        self.store
+            .connection()
+            .execute_unprepared(&format!("DROP TRIGGER {FAULT_TRIGGER}"))
+            .await
+            .expect("store healed");
     }
 
     /// The transfer of `seed` spends the whole SENDER_CAP.
@@ -138,10 +160,36 @@ impl CappedRelay {
     }
 }
 
+const FAULT_TRIGGER: &str = "relay_store_fault";
+
+enum StoreFault {
+    UpdateRefused,
+    /// `RAISE(FAIL)` keeps the inserted row and still returns an error.
+    InsertReplyLost,
+}
+
+impl StoreFault {
+    fn trigger(self) -> String {
+        let (event, raise) = match self {
+            Self::UpdateRefused => ("BEFORE UPDATE", "RAISE(ABORT, 'the store is down')"),
+            Self::InsertReplyLost => ("AFTER INSERT", "RAISE(FAIL, 'the insert reply was lost')"),
+        };
+        format!("CREATE TRIGGER {FAULT_TRIGGER} {event} ON relay_relays BEGIN SELECT {raise}; END")
+    }
+}
+
 fn sender_capped() -> AssetLimits {
     AssetLimits {
         sender_cap: SENDER_CAP,
         sender_window_slots: 100,
+        ..AssetLimits::EMPTY
+    }
+}
+
+fn deposit_capped() -> AssetLimits {
+    AssetLimits {
+        deposit_cap: DEPOSIT_CAP,
+        deposit_window_slots: 100,
         ..AssetLimits::EMPTY
     }
 }
@@ -234,17 +282,87 @@ async fn a_transfer_that_landed_before_a_lost_send_reply_keeps_its_reservation()
 }
 
 #[tokio::test]
+async fn a_stored_relay_whose_insert_reply_was_lost_keeps_its_reservation() {
+    let relay = CappedRelay::new(|| RelayRail::Confidential).await;
+    let landed = relay.spending_cap(1);
+    let relay_id = landed.relay_id().expect("relay id");
+    relay.fault(StoreFault::InsertReplyLost).await;
+    let interrupted = relay
+        .module
+        .call::<_, RelayStep>(PREPARE_RELAY, as_object(&landed))
+        .await;
+    assert!(interrupted.is_err());
+    relay.heal().await;
+
+    let tracker = tokio::spawn(
+        relay
+            .hub
+            .relay()
+            .expect("relay")
+            .clone()
+            .run(Duration::from_millis(1)),
+    );
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while relay.chain.sent().is_empty() {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the tracker resends the stored relay");
+    tracker.abort();
+
+    let status: RelayStatus = relay
+        .module
+        .call(
+            GET_RELAY_STATUS,
+            as_object(GetRelayStatusRequest { relay_id }),
+        )
+        .await
+        .expect("status");
+    assert!(
+        matches!(status, RelayStatus::Confirmed { .. }),
+        "{status:?}"
+    );
+    // A freed reservation would let a second full cap through.
+    let beyond = relay
+        .module
+        .call::<_, RelayStep>(PREPARE_RELAY, as_object(relay.spending_cap(2)))
+        .await;
+    assert_eq!(refusal(beyond), RelayError::CoSignRefused.code());
+}
+
+#[tokio::test]
+async fn a_submit_whose_store_update_failed_frees_its_reservation() {
+    let relay = CappedRelay::naming(anonymous_rail, None, deposit_capped()).await;
+    let (first, second) = (
+        Keypair::new_from_array([51; 32]),
+        Keypair::new_from_array([52; 32]),
+    );
+    let first_signed = relay.deposit(&first, 700).await;
+    let second_signed = relay.deposit(&second, 700).await;
+    relay.fault(StoreFault::UpdateRefused).await;
+    let refused = relay
+        .module
+        .call::<_, RelayStatus>(SUBMIT_RELAY, as_object(first_signed))
+        .await;
+    assert!(refused.is_err());
+    relay.heal().await;
+
+    let landed: RelayStatus = relay
+        .module
+        .call(SUBMIT_RELAY, as_object(second_signed))
+        .await
+        .expect("the unstored relay holds no allowance");
+
+    assert!(
+        matches!(landed, RelayStatus::Confirmed { .. }),
+        "{landed:?}"
+    );
+}
+
+#[tokio::test]
 async fn an_unsigned_relay_holds_no_allowance_and_the_signed_one_past_the_cap_is_refused() {
-    let relay = CappedRelay::naming(
-        anonymous_rail,
-        None,
-        AssetLimits {
-            deposit_cap: DEPOSIT_CAP,
-            deposit_window_slots: 100,
-            ..AssetLimits::EMPTY
-        },
-    )
-    .await;
+    let relay = CappedRelay::naming(anonymous_rail, None, deposit_capped()).await;
     let (first, second) = (
         Keypair::new_from_array([51; 32]),
         Keypair::new_from_array([52; 32]),
