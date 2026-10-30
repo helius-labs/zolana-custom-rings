@@ -247,14 +247,12 @@ async fn concurrent_backfills_read_the_registry_once() {
 }
 
 #[tokio::test]
-async fn an_applied_write_rereads_only_the_members_it_names() {
+async fn a_moved_records_root_rereads_the_records() {
     let fixture = Fixture::new();
     let owners = [sol(0xc0, 30), sol(0xc1, 12)];
-    let source = escrowed_source(&fixture, &owners, &owners);
-    let registry = source.registry.clone();
-    *registry.lock().unwrap() = Some(EscrowRegistry::new(&owners[..1]).with_pending(&owners[1..]));
+    let source = escrowed_source(&fixture, &owners, &owners[..1]);
+    let records = source.records.clone();
     let record_reads = source.record_reads.clone();
-    let opening_reads = source.opening_reads.clone();
     let service = fixture.hub(source).service(None).expect("service");
     service.backfill_utxos().await.expect("backfill");
     assert_eq!(
@@ -262,18 +260,10 @@ async fn an_applied_write_rereads_only_the_members_it_names() {
         [OutputPayloadErrorKind::EscrowUnknown]
     );
 
-    *registry.lock().unwrap() = Some(EscrowRegistry::new(&owners).applied(1));
+    records.escrow(&escrow_writes(&owners[1..]));
     service.backfill_utxos().await.expect("backfill");
     assert!(escrow_errors(&read_at(&service, None).await).is_empty());
-    assert_eq!(record_reads.load(Ordering::Relaxed), 1);
-    assert_eq!(opening_reads.load(Ordering::Relaxed), 1);
-
-    // Writes no refresh saw pending leave only the full scan.
-    let late = [owners[0], owners[1], sol(0xc2, 5)];
-    *registry.lock().unwrap() = Some(EscrowRegistry::new(&late).applied(3));
-    service.backfill_utxos().await.expect("backfill");
     assert_eq!(record_reads.load(Ordering::Relaxed), 2);
-    assert_eq!(opening_reads.load(Ordering::Relaxed), 1);
 }
 
 #[tokio::test]
@@ -303,14 +293,7 @@ async fn a_registry_page_short_of_a_record_escrows_no_key() {
     let fixture = Fixture::new();
     let owners = [sol(0xc0, 30), sol(0xc1, 12)];
     let source = escrowed_source(&fixture, &owners, &owners);
-    source
-        .registry
-        .lock()
-        .unwrap()
-        .as_mut()
-        .expect("registry")
-        .records
-        .remove(0);
+    source.records.shorten_pages();
     let record_reads = source.record_reads.clone();
     let service = fixture.hub(source).service(None).expect("service");
     service.backfill_utxos().await.expect("backfill");
@@ -365,6 +348,7 @@ async fn confirmed_deposit_and_merge_tag_collisions_do_not_poison_an_audit_page(
             read: PagedRead::DecryptedTransactions,
             auth: &auth(&delegate()),
             page: &page(),
+            wallet: None,
         })
         .await
         .unwrap();
@@ -426,6 +410,7 @@ async fn recipient_bodies_cannot_poison_an_audit_page_or_trigger_registry_refres
             read: PagedRead::DecryptedTransactions,
             auth: &auth(&delegate()),
             page: &page(),
+            wallet: None,
         })
         .await
         .unwrap();
@@ -474,11 +459,13 @@ async fn unknown_assets_share_refresh_and_back_off_after_failure() {
             read: PagedRead::DecryptedTransactions,
             auth: &ed25519,
             page: &page,
+            wallet: None,
         }),
         service.read(AuditRead {
             read: PagedRead::DecryptedTransactions,
             auth: &p256,
             page: &page,
+            wallet: None,
         })
     );
     let mint = |response: &GetDecryptedTransactionsResponse| {
@@ -502,6 +489,7 @@ async fn unknown_assets_share_refresh_and_back_off_after_failure() {
                 read: PagedRead::DecryptedTransactions,
                 auth: &auth(signer),
                 page: &page,
+                wallet: None,
             })
             .await
             .unwrap();
@@ -522,6 +510,7 @@ async fn unknown_assets_share_refresh_and_back_off_after_failure() {
             read: PagedRead::DecryptedTransactions,
             auth: &first,
             page: &page,
+            wallet: None,
         })
     )
     .await
@@ -532,6 +521,7 @@ async fn unknown_assets_share_refresh_and_back_off_after_failure() {
             read: PagedRead::DecryptedTransactions,
             auth: &second,
             page: &page,
+            wallet: None,
         })
         .await
         .unwrap();

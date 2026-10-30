@@ -3,7 +3,7 @@
 use std::{collections::BTreeMap, path::Path};
 
 use anyhow::{ensure, Context as _, Result};
-use custom_ring_interface::{MemberRegistry, RingAccount};
+use custom_ring_interface::{RingAccount, RingPolicy};
 use custom_ring_sdk::{CustomRing, ListRegistry};
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
@@ -106,16 +106,16 @@ pub fn discover(rpc: &SolanaRpc) -> Result<Vec<Curator>> {
         .map(|(address, account)| (*address, &account.data[..]));
     let mut curators = Vec::new();
     for ring in registered_rings(data)?.into_iter().map(CustomRing::new) {
-        let Some(account) = rpc.get_account(ring.registry_pda())? else {
+        let Some(account) = rpc.get_account(ring.policy_pda())? else {
             continue;
         };
-        // A registry of another layout is no curator.
+        // A policy of another layout is no curator.
         let program = ring.program_id();
-        let Some(registry) = MemberRegistry::decode(&account.owner, &program, &account.data) else {
+        let Some(policy) = RingPolicy::decode(&account.owner, &program, &account.data) else {
             continue;
         };
-        if let Ok(Some(pinned)) = Pinned::of(Box::new(registry)) {
-            curators.push(curator_of(ring, &pinned.registry));
+        if let Ok(Some(pinned)) = Pinned::of(Box::new(policy)) {
+            curators.push(curator_of(ring, &pinned.account));
         }
     }
     Ok(curators)
@@ -137,33 +137,31 @@ pub fn registered_rings<'a>(
         .collect()
 }
 
-/// The lists a ring serves from its own registry.
-pub fn curator_of(ring: CustomRing, registry: &MemberRegistry) -> Curator {
+/// The lists a ring serves from its own records.
+pub fn curator_of(ring: CustomRing, policy: &RingPolicy) -> Curator {
     Curator {
         program: Base58Address(ring.program_id()),
         lists: ListName::ALL
             .into_iter()
-            .filter(|list| registry.registry_for(list.id()) == Some(ListRegistry::Own))
+            .filter(|list| policy.registry_for(list.id()) == Some(ListRegistry::Own))
             .collect(),
     }
 }
 
-/// The curator must pin a policy that serves `list` from its own registry.
+/// The curator must pin a policy that serves `list` from its own records.
 pub fn check_curator(ctx: &Context, curator: CustomRing, list: ListId) -> Result<()> {
     let program = curator.program_id();
     let deployed = ctx.rpc().get_account(program)?.is_some();
     ensure!(deployed, "curator {program} is not deployed");
-    let registry = ctx
-        .block(curator.registry(ctx.chain()))?
-        .with_context(|| format!("curator {program} has no member registry"))?;
-    let pinned = Pinned::of(registry)
-        .with_context(|| {
-            format!("curator {program} pins a policy its registry does not reproduce")
-        })?
+    let policy = ctx
+        .block(curator.policy(ctx.chain()))?
+        .with_context(|| format!("curator {program} has no ring policy"))?;
+    let pinned = Pinned::of(policy)
+        .with_context(|| format!("curator {program} pins a policy it does not reproduce"))?
         .with_context(|| format!("curator {program} pins no policy"))?;
     ensure!(
-        pinned.registry.registry_for(list) == Some(ListRegistry::Own),
-        "curator {program} does not serve the {} list from its own registry",
+        pinned.account.registry_for(list) == Some(ListRegistry::Own),
+        "curator {program} does not serve the {} list from its own records",
         list.name()
     );
     Ok(())
@@ -292,7 +290,8 @@ mod tests {
         );
         assert!(registered_rings([(address, &bytes[1..])]).is_err());
 
-        let mut registry = MemberRegistry::new(0, 0);
+        let mut registry: Box<RingPolicy> = bytemuck::zeroed_box();
+        registry.discriminator = custom_ring_interface::RING_POLICY;
         registry.sources[ListId::Block.slot()] = SourceSlot {
             list_id: ListId::Block as u8,
             registry: Address::default(),

@@ -15,6 +15,7 @@ async fn only_granted_readers_with_the_configured_auditor_key_can_read() {
                 read: PagedRead::DecryptedTransactions,
                 auth: &request,
                 page: &page,
+                wallet: None,
             })
             .await
             .is_ok());
@@ -28,6 +29,7 @@ async fn only_granted_readers_with_the_configured_auditor_key_can_read() {
                     read: PagedRead::DecryptedTransactions,
                     auth: &request,
                     page: &page,
+                    wallet: None,
                 })
                 .await,
             Err(RingRpcError::Unauthorized(Unauthorized::NotGranted))
@@ -39,8 +41,12 @@ async fn only_granted_readers_with_the_configured_auditor_key_can_read() {
         RING,
         RingConfiguration {
             auditor_pubkey: X25519Keypair::new().pubkey(),
-            authority: authority().pubkey(),
+            roles: custom_ring_interface::RingRoles {
+                policy: authority().pubkey(),
+                ..bytemuck::Zeroable::zeroed()
+            },
             mode: RingMode::Confidential,
+            delegate: None,
         },
     );
     let service = fixture.hub(source).service(None).expect("service");
@@ -51,6 +57,7 @@ async fn only_granted_readers_with_the_configured_auditor_key_can_read() {
                 read: PagedRead::DecryptedTransactions,
                 auth: &request,
                 page: &page,
+                wallet: None,
             })
             .await,
         Err(RingRpcError::Unauthorized(Unauthorized::AuditorKeyMismatch))
@@ -161,6 +168,39 @@ async fn auditor_key_requests_bind_cluster_ring_time_and_nonce() {
     ));
 }
 
+async fn assert_a_replay_to_a_second_hub_is_refused(url: &str) {
+    let fixture = Fixture::new();
+    let hub = || async {
+        Hub::builder(fixture.source(), identity(GENESIS))
+            .with_store(Store::open(url, 1).await.expect("store"))
+            .local(RING, fixture.auditor.clone())
+            .expect("hub")
+    };
+    let (first, second) = (hub().await, hub().await);
+    let request = signed_by(&authority());
+    authorize(&first, &request).await.expect("first use");
+    assert!(refused(
+        authorize(&second, &request).await,
+        Unauthorized::Replay
+    ));
+}
+
+#[tokio::test]
+async fn a_request_replayed_to_a_second_hub_over_one_sqlite_file_is_refused() {
+    let path = std::env::temp_dir().join(format!("replay-{}.sqlite", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    assert_a_replay_to_a_second_hub_is_refused(&format!("sqlite://{}?mode=rwc", path.display()))
+        .await;
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+#[ignore = "needs RING_RPC_TEST_POSTGRES_URL"]
+async fn a_request_replayed_to_a_second_hub_over_one_postgres_store_is_refused() {
+    let url = std::env::var("RING_RPC_TEST_POSTGRES_URL").expect("postgres url");
+    assert_a_replay_to_a_second_hub_is_refused(&url).await;
+}
+
 #[tokio::test]
 async fn auditor_key_requests_are_accepted_exactly_within_the_skew_window() {
     let fixture = Fixture::new();
@@ -225,11 +265,15 @@ async fn a_ring_registered_with_another_auditor_stays_closed() {
         ring,
         RingConfiguration {
             auditor_pubkey: fixture.auditor.pubkey(),
-            authority: authority().pubkey(),
+            roles: custom_ring_interface::RingRoles {
+                policy: authority().pubkey(),
+                ..bytemuck::Zeroable::zeroed()
+            },
             mode: RingMode::Confidential,
+            delegate: None,
         },
     )]);
-    let hub = Hub::builder(source, GENESIS)
+    let hub = Hub::builder(source, identity(GENESIS))
         .with_origins(origins())
         .derived(RootSecret::from_bytes([7; 32]).expect("root"))
         .expect("hub");
@@ -257,6 +301,7 @@ async fn a_ring_registered_with_another_auditor_stays_closed() {
                 read: PagedRead::DecryptedTransactions,
                 auth: &request,
                 page: &page,
+                wallet: None,
             })
             .await,
         Err(RingRpcError::Unauthorized(Unauthorized::AuditorKeyMismatch))
@@ -276,12 +321,12 @@ async fn derived_keys_are_ring_and_cluster_specific() {
     source
         .upgrade_authorities
         .insert(ring_a, deployer().pubkey());
-    let hub = Hub::builder(source, genesis_hash)
+    let hub = Hub::builder(source, identity(genesis_hash))
         .derived(root)
         .expect("hub");
     let key_a = hub.service(Some(ring_a)).expect("ring a").auditor_pubkey();
     let key_b = hub.service(Some(ring_b)).expect("ring b").auditor_pubkey();
-    let other_genesis = Hub::builder(fixture.source(), [10; 32])
+    let other_genesis = Hub::builder(fixture.source(), identity([10; 32]))
         .derived(RootSecret::from_bytes(root_bytes).expect("root"))
         .expect("hub");
     assert_ne!(
@@ -292,15 +337,11 @@ async fn derived_keys_are_ring_and_cluster_specific() {
         key_a
     );
     assert_eq!(
-        hub.service_pubkey().to_string(),
-        "FQ7ZZ4DEkoubT5Ca9BzzbgXDTmjKdRh6a3snGfPjpEZT"
-    );
-    assert_eq!(
         hex::encode(key_a.as_bytes()),
         "046ac65f6fa828249939ac012a53b665c474fadedc018f71010fb7fcf4b5585248"
     );
     assert_ne!(key_a, key_b);
-    let second = Hub::builder(fixture.source(), genesis_hash)
+    let second = Hub::builder(fixture.source(), identity(genesis_hash))
         .derived(derivation_root)
         .expect("hub");
     assert_eq!(
@@ -367,6 +408,7 @@ async fn a_read_signed_for_another_method_cluster_or_service_is_refused() {
                     read: PagedRead::DecryptedTransactions,
                     auth,
                     page: &page,
+                    wallet: None,
                 })
                 .await,
             Err(RingRpcError::Unauthorized(Unauthorized::BadSignature))
@@ -378,6 +420,7 @@ async fn a_read_signed_for_another_method_cluster_or_service_is_refused() {
             read: PagedRead::DecryptedTransactions,
             auth: &valid,
             page: &page,
+            wallet: None,
         })
         .await
         .expect("read");

@@ -86,6 +86,6 @@ export function ringFrame(
 /** The ring program's own instruction data around `frame`. */
 export function ringInstructionData(frame: RingTransactData): Uint8Array {
   const tag =
-    frame.rail === "delegate" ? RingInstructionTag.delegateTransact : RingInstructionTag.transact;
+    frame.rail === "delegate" ? RingInstructionTag.authorityTransfer : RingInstructionTag.transfer;
   return Uint8Array.of(tag, ...RingTransactData.encode(frame));
 }

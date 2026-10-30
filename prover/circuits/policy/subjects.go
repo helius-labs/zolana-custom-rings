@@ -1,3 +1,10 @@
+// Finds the lists and limits of the sender, every recipient and every token.
+// Lists can come from a curator's registry, but limits and escrow keys always
+// come from the ring's own registry.
+//
+// Read after policy/record_pool.go, policy/table.go. Read before
+// policy/rules.go, policy/outflow.go.
+
 package policy
 
 import (
@@ -34,9 +41,7 @@ func (p *Policy) resolveSubjects(api frontend.API, table tableView, sender front
 		view := subjectView{onList: record.onList, escrowKey: record.escrowKey}
 		if !p.OwnOnly {
 			curated := curator.resolve(api, recordQuery{active: api.Mul(active, table.sources.anyForeign), member: member, index: entry.Curator[0]})
-			for i, on := range curated.onList {
-				view.onList[i] = api.Select(table.sources.foreign[i], on, record.onList[i])
-			}
+			view.onList = table.sources.lists(api, record.onList, curated.onList)
 		}
 		return view, record.mintPolicy
 	}

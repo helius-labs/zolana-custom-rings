@@ -11,6 +11,7 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringdeposit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringkey"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringpolicy"
 )
 
 func solveDeposit(c *circuits.DepositCircuit) error {
@@ -58,8 +59,11 @@ func TestDepositRefusals(t *testing.T) {
 		{"an anonymous owner hash of another key", ringdeposit.ModeAnonymous, func(_ *testing.T, d *ringdeposit.Deposit) {
 			d.Circuit.OwnerKeys[0][1] = 0
 		}, append([]string{"gadget.AssertEqualWhen"}, define...)},
-		{"a key disclosed by a ring that is not anonymous", ringdeposit.ModeOff, func(_ *testing.T, d *ringdeposit.Deposit) {
-			d.Circuit.OwnerKeys[0][0] = 1
+		{"a confidential owner hash of another key", ringdeposit.ModeOff, func(_ *testing.T, d *ringdeposit.Deposit) {
+			d.Circuit.OwnerKeys[0][1] = 0
+		}, append([]string{"gadget.AssertEqualWhen"}, define...)},
+		{"a padding slot with an owner key", ringdeposit.ModeOff, func(_ *testing.T, d *ringdeposit.Deposit) {
+			d.Circuit.OwnerKeys[circuits.MaxDeposits-1][0] = 1
 		}, append([]string{"gadget.AssertZeroWhen"}, define...)},
 		{"owner key bytes outside 0..255 with the same owner identity", ringdeposit.ModeAnonymous, func(_ *testing.T, d *ringdeposit.Deposit) {
 			// Moving 256 between adjacent bytes keeps the identity, the envelope's byte table refuses the encoding.
@@ -74,6 +78,24 @@ func TestDepositRefusals(t *testing.T) {
 			ringtest.RequireRefused(t, solveDeposit(d.Circuit), tt.frames...)
 		})
 	}
+}
+
+// A policy requiring the allow list admits a listed asset and refuses one off it.
+func TestDepositScreensEachAssetOnItsRecord(t *testing.T) {
+	if err := solveDeposit(ringdeposit.BuildScreened(t, 2, ringdeposit.Allowlisted(ringpolicy.AssetA)).Circuit); err != nil {
+		t.Fatalf("listed asset refused: %v", err)
+	}
+	unlisted := ringdeposit.BuildScreened(t, 2, ringdeposit.Allowlisted(ringpolicy.AssetB)).Circuit
+	ringtest.RequireRefused(t, solveDeposit(unlisted), "policy.paymentScreen.assert", "policy.DepositAssets.Assert")
+}
+
+// A curator served allow list admits a listed asset and refuses one off it.
+func TestDepositScreensEachAssetOnItsCuratorRecord(t *testing.T) {
+	if err := solveDeposit(ringdeposit.BuildScreened(t, 2, ringdeposit.CuratorAllowlisted(ringpolicy.AssetA)).Circuit); err != nil {
+		t.Fatalf("curator listed asset refused: %v", err)
+	}
+	unlisted := ringdeposit.BuildScreened(t, 2, ringdeposit.CuratorAllowlisted(ringpolicy.AssetB)).Circuit
+	ringtest.RequireRefused(t, solveDeposit(unlisted), "policy.paymentScreen.assert", "policy.DepositAssets.Assert")
 }
 
 func TestDepositKey(t *testing.T) {

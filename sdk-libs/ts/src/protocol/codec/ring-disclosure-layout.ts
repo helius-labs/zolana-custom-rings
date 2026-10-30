@@ -2,6 +2,16 @@
 import { InterfaceError } from "@heliuslabs/zolana/interface";
 
 export const DELIVERED_AUDIT_CAPACITIES: readonly number[] = Object.freeze([2, 4, 8, 16]);
+/** Rust `DELIVERED_SENDER_CLASSES`. */
+export const DELIVERED_SENDER_CLASSES: readonly Readonly<{
+  outputs: number;
+  inputClass: number;
+}>[] = Object.freeze([
+  Object.freeze({ outputs: 2, inputClass: 48 }),
+  Object.freeze({ outputs: 4, inputClass: 24 }),
+  Object.freeze({ outputs: 8, inputClass: 16 }),
+  Object.freeze({ outputs: 16, inputClass: 8 }),
+]);
 /** Input classes of the anonymous commitment keys per output capacity, ascending. */
 export const ANONYMOUS_AUDIT_CLASSES: readonly Readonly<{
   outputs: number;
@@ -15,8 +25,8 @@ export const ANONYMOUS_AUDIT_CLASSES: readonly Readonly<{
 export const ANONYMOUS_ENTRY_CLASS = 8;
 /** Output capacities of the anonymous entry keys. */
 export const ANONYMOUS_ENTRY_OUTPUTS: readonly number[] = Object.freeze([2, 4, 8]);
-/** Rust `ANONYMOUS_MERGE_WIDTHS`, the merge widths whose disclosure still fits one v1 transaction. */
-export const ANONYMOUS_MERGE_WIDTHS: readonly number[] = Object.freeze([8, 24]);
+/** Rust `MERGE_WIDTHS`, the merge widths whose disclosure still fits one v1 transaction. */
+export const MERGE_WIDTHS: readonly number[] = Object.freeze([8, 24]);
 /** The widest commitment class, no anonymous key serves more inputs. */
 export const ANONYMOUS_MAX_INPUTS = Math.max(
   ...ANONYMOUS_AUDIT_CLASSES.flatMap((entry) => entry.classes),
@@ -106,6 +116,16 @@ export interface DeliveredLayout {
   readonly outputs: number;
   readonly exits: boolean;
   readonly keyEscrow: boolean;
+  /** In-proof owner rail only, the disclosure fields ignore it. */
+  readonly senderClass?: number;
+}
+
+/** Rust `DeliveredLayout::sender_class`. */
+export function deliveredSenderClass(outputs: number, inputs: number): number | undefined {
+  const inputClass = DELIVERED_SENDER_CLASSES.find(
+    (entry) => entry.outputs === outputs,
+  )?.inputClass;
+  return inputClass !== undefined && inputs <= inputClass ? inputClass : undefined;
 }
 
 export interface AnonymousLayout {

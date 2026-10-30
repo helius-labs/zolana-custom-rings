@@ -25,7 +25,6 @@ groth16-solana = { workspace = true, features = ["bsb22"] }
 pinocchio = { workspace = true, features = ["cpi"] }
 pinocchio-system = { workspace = true }
 solana-loader-v3-interface = { workspace = true, features = ["serde"] }
-solana-curve25519 = { workspace = true }
 wincode = { workspace = true }
 spr-account-checks = { workspace = true }
 spr-hasher = { workspace = true }
@@ -42,6 +41,7 @@ solana-bn254 = { workspace = true }
 solana-instruction = { workspace = true }
 solana-keypair = { workspace = true }
 solana-message = { workspace = true }
+solana-sbpf = { workspace = true }
 solana-signer = { workspace = true }
 solana-transaction = { workspace = true }
 solana-transaction-error = { workspace = true }

@@ -10,11 +10,13 @@ use std::{
 };
 
 use anyhow::{ensure, Context as _, Result};
+use custom_ring_interface::STORAGE_PROGRAM_ID;
 use serde::Deserialize;
+use solana_address::Address;
 use zolana_cli_common::{
     config_dir,
     process::{answers, process_scope, spawn_owned, stop_owned_listener, wait_until},
-    release::{host_platform, make_executable},
+    release::{host_platform, make_executable, Asset},
 };
 
 use crate::{
@@ -26,6 +28,27 @@ use crate::{
     workspace::{Workspace, WRONG_TARGET},
     Context, LocalnetArgs, AUDITOR_KEY_FILE,
 };
+
+/// A fixed id with no deploy keypair.
+pub struct GenesisProgram {
+    pub address: Address,
+    /// Relative to the workspace root.
+    pub path: &'static str,
+    pub release_section: &'static str,
+}
+
+/// Mirrored by ring-genesis-programs in justfile.
+pub const GENESIS_PROGRAMS: [GenesisProgram; 1] = [GenesisProgram {
+    address: STORAGE_PROGRAM_ID,
+    path: "target/deploy/storage_program.so",
+    release_section: "storage_program",
+}];
+
+#[derive(Debug)]
+struct GenesisFile {
+    address: Address,
+    path: PathBuf,
+}
 
 /// SIMD-0500 off, the ring program deploys as SBPF v0 like on devnet.
 const SBPF_V0_FEATURE: &str = "B8JJXCy5amZyWG9r7EnUYLwzXSXTxG7GZ1qZ1qggo83g";
@@ -76,12 +99,13 @@ fn bring_up(config: &RingConfig, auditor_key: &Path, replace: bool) -> Result<()
         for key in RING_KEYS {
             release.ensure_as(release.key(key)?, &keys_dir.join(key.file_name()))?;
         }
+        let genesis = genesis_files(&release, |asset| release.ensure(asset))?;
         line("validator", "zolana dev start");
-        let mut command = Command::new("zolana");
-        command.args(["dev", "start"]);
-        ZOLANA
-            .named("zolana dev start")
-            .run(dev_start(&mut command, [rpc, photon, prover]))?;
+        let start = ReleaseDevStart {
+            ports: [rpc, photon, prover],
+            genesis,
+        };
+        ZOLANA.named("zolana dev start").run(&mut start.command())?;
     }
     check_prover_serves_custom_ring(&urls.prover)?;
     if !replace && answers(local(ring_rpc)) {
@@ -92,6 +116,11 @@ fn bring_up(config: &RingConfig, auditor_key: &Path, replace: bool) -> Result<()
     let (os, arch) = host_platform()?;
     let binary = release.ensure(release.binary("ring_rpc", os, arch)?)?;
     make_executable(&binary)?;
+    ServiceKey {
+        binary: &binary,
+        auditor_key,
+    }
+    .ensure()?;
     let command = serve(&binary, config, ring_rpc, auditor_key);
     start_ring_rpc(command, config, ring_rpc, &scope()?)
 }
@@ -134,8 +163,14 @@ fn bring_up_workspace(
             .arg(snapshots)
             .arg("--sbf-program")
             .arg(spr_interface::pda::shielded_pool_program_id().to_string())
-            .arg(workspace.shielded_pool_so()?)
-            .args(["--", "--deactivate-feature", SBPF_V0_FEATURE]);
+            .arg(workspace.shielded_pool_so()?);
+        for program in &GENESIS_PROGRAMS {
+            command
+                .arg("--sbf-program")
+                .arg(program.address.to_string())
+                .arg(workspace.artifact(program.path)?);
+        }
+        command.args(["--", "--deactivate-feature", SBPF_V0_FEATURE]);
         ZOLANA
             .named("workspace zolana dev start")
             .run(&mut command)?;
@@ -165,6 +200,11 @@ fn bring_up_workspace(
     let next = "zolana-ring pipeline in a second terminal with the same environment";
     line("next", next);
     let ring_rpc_binary = workspace.ring_rpc()?;
+    ServiceKey {
+        binary: &ring_rpc_binary,
+        auditor_key,
+    }
+    .ensure()?;
     RING_RPC.run(&mut serve(&ring_rpc_binary, config, ring_rpc, auditor_key))
 }
 
@@ -252,15 +292,48 @@ fn ports(urls: &Urls) -> Result<[u16; 4]> {
     Ok([port(rpc)?, port(indexer)?, port(prover)?, port(ring_rpc)?])
 }
 
-/// The service ports and the SBPF v0 deployment both `zolana dev start` paths take.
-fn dev_start(command: &mut Command, ports: [u16; 3]) -> &mut Command {
-    for (flag, port) in ["--rpc-port", "--photon-port", "--prover-port"]
+fn genesis_files(
+    release: &RingRelease,
+    fetch: impl Fn(&Asset) -> Result<PathBuf>,
+) -> Result<Vec<GenesisFile>> {
+    GENESIS_PROGRAMS
         .iter()
-        .zip(ports)
-    {
-        command.arg(flag).arg(port.to_string());
+        .map(|program| {
+            Ok(GenesisFile {
+                address: program.address,
+                path: fetch(release.genesis_program(program.release_section)?)?,
+            })
+        })
+        .collect()
+}
+
+#[must_use]
+struct ReleaseDevStart {
+    /// RPC, Photon and prover, in that order.
+    ports: [u16; 3],
+    genesis: Vec<GenesisFile>,
+}
+
+impl ReleaseDevStart {
+    fn command(self) -> Command {
+        let mut command = Command::new("zolana");
+        command.args(["dev", "start"]);
+        for (flag, port) in ["--rpc-port", "--photon-port", "--prover-port"]
+            .iter()
+            .zip(self.ports)
+        {
+            command.arg(flag).arg(port.to_string());
+        }
+        command.args(["--", "--deactivate-feature", SBPF_V0_FEATURE]);
+        // A zolana `--sbf-program` turns off its release artifacts.
+        for program in self.genesis {
+            command
+                .arg("--bpf-program")
+                .arg(program.address.to_string())
+                .arg(program.path);
+        }
+        command
     }
-    command.args(["--", "--deactivate-feature", SBPF_V0_FEATURE])
 }
 
 /// Local mode, `init` pins the key from `keys/`.
@@ -272,8 +345,34 @@ fn serve(binary: &Path, config: &RingConfig, port: u16, auditor_key: &Path) -> C
         .args(["--indexer-url", &urls.indexer, "--rpc-url", &urls.rpc])
         .arg("--auditor-key-file")
         .arg(auditor_key)
+        .arg("--service-key-file")
+        .arg(service_key_file(auditor_key))
         .args(["--ring-program-id", &config.program_id.to_string()]);
     command
+}
+
+/// Kept across runs, a new key breaks every pin of the old one.
+struct ServiceKey<'a> {
+    binary: &'a Path,
+    auditor_key: &'a Path,
+}
+
+impl ServiceKey<'_> {
+    fn ensure(self) -> Result<()> {
+        let service_key = service_key_file(self.auditor_key);
+        if service_key.is_file() {
+            return Ok(());
+        }
+        RING_RPC.named("ring-rpc keygen").run(
+            Command::new(self.binary)
+                .args(["keygen", "--kind", "service", "--out"])
+                .arg(service_key),
+        )
+    }
+}
+
+fn service_key_file(auditor_key: &Path) -> PathBuf {
+    auditor_key.with_file_name("service.key")
 }
 
 /// Receipts of the services the cli started, the task scope when one is set.
@@ -396,6 +495,68 @@ mod tests {
         assert!(
             error.starts_with("http://localhost carries no port"),
             "{error}"
+        );
+    }
+
+    #[test]
+    fn the_release_localnet_loads_every_genesis_program_from_the_lock() {
+        let release = RingRelease::parse(
+            r#"{
+                "release_tag": "v1",
+                "storage_program": {"asset": "storage-program-v1.so", "size": 1, "sha256": "x"}
+            }"#,
+        )
+        .expect("parses");
+        let genesis =
+            genesis_files(&release, |asset| Ok(PathBuf::from(&asset.name))).expect("genesis");
+        let command = ReleaseDevStart {
+            ports: [8899, 8784, 3001],
+            genesis,
+        }
+        .command();
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(!args.iter().any(|arg| arg == "--sbf-program"), "{args:?}");
+        let validator = &args[args.iter().position(|arg| arg == "--").expect("--")..];
+        let loaded: Vec<_> = validator
+            .windows(3)
+            .filter(|flag| flag[0] == "--bpf-program")
+            .map(|flag| [flag[1].clone(), flag[2].clone()])
+            .collect();
+        let expected: Vec<_> = GENESIS_PROGRAMS
+            .iter()
+            .map(|program| {
+                let asset = release.genesis_program(program.release_section);
+                [
+                    program.address.to_string(),
+                    asset.expect("pinned").name.clone(),
+                ]
+            })
+            .collect();
+        assert_eq!(loaded, expected);
+        let bare = RingRelease::parse(r#"{"release_tag": "v1"}"#).expect("parses");
+        let missing = genesis_files(&bare, |_| unreachable!())
+            .expect_err("no storage program")
+            .to_string();
+        assert_eq!(
+            missing,
+            "release v1 ships no storage_program, use a complete custom-rings release"
+        );
+    }
+
+    #[test]
+    fn the_justfile_loads_every_genesis_program() {
+        let flags = GENESIS_PROGRAMS
+            .iter()
+            .map(|program| format!("--sbf-program {} {}", program.address, program.path))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let variable = format!("ring-genesis-programs := \"{flags}\"");
+        assert!(
+            include_str!("../../../../justfile").contains(&variable),
+            "the justfile misses {variable}"
         );
     }
 }

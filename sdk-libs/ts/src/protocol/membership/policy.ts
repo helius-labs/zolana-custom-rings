@@ -23,7 +23,7 @@ import { RING_RULE_SLOTS, RING_SOURCE_SLOTS } from "../../rpc/prover/types.js";
 import {
   registryCurator,
   type EncodedRuleTable,
-  type RingMemberRegistry,
+  type RingPolicy,
   type RingSourceSlot,
 } from "../codec/ring-codecs.js";
 import { RingError } from "../error.js";
@@ -226,7 +226,7 @@ function checkRule(rule: Rule): void {
   }
 }
 
-/** Mirrors Rust `EncodedRuleTable::decode`, the padding is checked by `decodeRingMemberRegistry`. */
+/** Mirrors Rust `EncodedRuleTable::decode`, the padding is checked by `decodeRingPolicy`. */
 export function decodeRuleTable(config: EncodedRuleTable): RuleTable {
   if (config.rules.length > RING_RULE_SLOTS) throw ruleTableInvalid("TooManyRules");
   return checkedRuleTable({ ...config, rules: config.rules.map(decodeRule) });
@@ -505,7 +505,9 @@ export interface PinnedPolicy {
 }
 
 /** Mirrors Rust `PinnedPolicy::of`, `RING_POLICY_HASH_MISMATCH` unless the stored table reproduces the hash. */
-export function pinnedPolicy(registry: RingMemberRegistry): PinnedPolicy {
+export function pinnedPolicy(
+  registry: Pick<RingPolicy, "policyHash" | "sources" | "rules" | "generation">,
+): PinnedPolicy {
   if (equalBytes(registry.policyHash, ZERO_32))
     throw new RingError("RING_POLICY_NOT_SET", { details: { generation: registry.generation } });
   const sources = policySourceOwners(registry.sources);
@@ -541,6 +543,17 @@ export function memberOfIdentity(identity: Bytes32): Member {
 /** Mirrors Rust `Member::asset`, the mint as the UTXO asset field. */
 export function memberOfAsset(mint: Address): Member {
   return checkedMember(hashBytes(decodeAddress(mint)) as Bytes32);
+}
+
+/** Mirrors Rust `Member::wallet_grant`, its `reader` list is the wallet's grant to `reader`. */
+export function walletGrantMember(wallet: Member, reader: Member): Member {
+  return checkedMember(
+    poseidon([
+      domainField(RingDomain.walletGrant),
+      checkedMember(wallet),
+      checkedMember(reader),
+    ]) as Bytes32,
+  );
 }
 
 function checkedMember(bytes: Bytes32): Member {

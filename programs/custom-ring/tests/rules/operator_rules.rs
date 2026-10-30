@@ -1,84 +1,153 @@
-//! Config, policy and read access writes and their declared budgets.
+//! Ring account and policy writes, their roles and their declared budgets.
 
 use custom_ring_interface::{
-    tag, CreateConfigIxData, CustomRingError, InstructionTag, MemberRegistry, ReadAccessRecord,
-    ReaderIxData, RingKind, RingMode, RingProgramConfig, SetCoSignerIxData, SetPausedIxData,
-    SetPolicySourceIxData, WriteRecordsIxData, DEFAULT_INSERT_FEE, READER_KEY_P256,
-    READ_ACCESS_RECORD_PDA_SEED,
+    tag, CoSignScope, CoSigner, CustomRingError, InitializeIxData, InstructionTag,
+    PolicyBindingIxData, PolicySourceIxData, RingKind, RingMode, RingPolicy, RingRole,
+    SetPausedIxData, UpdatePolicyIxData, TAGGED_X25519_KEY_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{error::InstructionError, AccountMeta, Instruction};
 use solana_keypair::{Keypair, Signer};
 use solana_transaction_error::TransactionError;
 use spr_account_checks::AccountError;
-use zolana_ring_policy::{ListChange, ListId, ListSet};
+use spr_interface::state::RingConfig;
+use zolana_ring_policy::ListId;
 
 use crate::common::{
-    allow_list_table, auditor_pubkey, config_pda, config_write, create_config,
-    create_member_registry, list_table, policy_write, program_data_of, queue_pda, refused,
-    refused_with, registry_pda, ring_auth, set_delegate, within_budget, write_records, Fee, Ring,
-    Sent, Setup, PROGRAM, SYSTEM,
+    allow_list_table, auditor_pubkey, co_signer_record, list_table, policy_pda, program_data_of,
+    refused, refused_with, ring_auth, rules_write, set_co_signer, set_delegate, within_budget,
+    ClearCoSignerIx, InitializeIx, Ring, Sent, SetCoSignerIx, Setup, UpdateAuthorityIx,
+    UpdatePolicyIx, PROGRAM, RECORDS,
 };
 use crate::transact_rules::SPP;
 
-fn set_co_signer_data(signer: [u8; 32], scope: u8, _mints: &[[u8; 32]]) -> Vec<u8> {
-    wincode::serialize(&SetCoSignerIxData { signer, scope }).unwrap()
+const ROLES: [RingRole; 4] = [
+    RingRole::Admin,
+    RingRole::Policy,
+    RingRole::Pauser,
+    RingRole::CosignAdmin,
+];
+
+impl Ring {
+    fn role_send(&mut self, role: RingRole, instruction: Instruction) -> Sent {
+        let holder = self.holder(role);
+        self.send(instruction, &[&holder])
+    }
 }
 
-fn authority_send(ring: &mut Ring, instruction: Instruction) -> Sent {
+fn upgrade_send(ring: &mut Ring, instruction: Instruction) -> Sent {
     let authority = ring.authority.insecure_clone();
     ring.send(instruction, &[&authority])
 }
 
-#[test]
-fn only_the_upgrade_authority_creates_a_config_for_a_usable_auditor_key() {
-    let ring = Ring::new(Setup::AuditOnly);
-    let config: RingProgramConfig = ring.read(&config_pda());
-    assert_eq!(config.authority, ring.authority.pubkey());
-    assert_eq!(
-        (config.co_signer(), config.delegate(), config.insert_fee()),
-        (None, None, DEFAULT_INSERT_FEE)
-    );
+/// The state before `Initialize`, the deployed program alone.
+fn uninitialized(setup: Setup) -> Ring {
+    let mut ring = Ring::new(setup);
+    for account in [policy_pda(), ring_auth()] {
+        ring.drain(&account);
+    }
+    ring
+}
 
-    let mut fresh = Ring::new(Setup::AuditOnly);
-    fresh.store(config_pda(), SYSTEM, Vec::new());
-    let stranger = Keypair::new();
-    let data = CreateConfigIxData {
+fn initialize(ring: &Ring, signer: &Address, data: InitializeIxData) -> Instruction {
+    InitializeIx {
+        payer: ring.payer.pubkey(),
+        authority: *signer,
+        data,
+        curators: &[],
+    }
+    .instruction()
+}
+
+fn upgrade_initialize(ring: &mut Ring, data: InitializeIxData) -> Sent {
+    let authority = ring.authority.pubkey();
+    let instruction = initialize(ring, &authority, data);
+    upgrade_send(ring, instruction)
+}
+
+fn policy_config(ring: &Ring) -> InitializeIxData {
+    InitializeIxData {
+        auditor_pubkey: auditor_pubkey(),
+        kind: RingKind::Policy,
+        roles: ring.roles.addresses(),
+        policy: Some(PolicyBindingIxData {
+            table: allow_list_table(Vec::new()),
+        }),
+    }
+}
+
+fn audit_only_config(ring: &Ring) -> InitializeIxData {
+    InitializeIxData {
         auditor_pubkey: auditor_pubkey(),
         kind: RingKind::AuditOnly,
-    };
-    let payer = fresh.payer.pubkey();
+        roles: ring.roles.addresses(),
+        policy: None,
+    }
+}
+
+#[test]
+fn initialize_creates_the_ring_and_spp_registration_under_the_upgrade_authority() {
+    let mut ring = uninitialized(Setup::Policy);
+    let stranger = Keypair::new();
+    let data = policy_config(&ring);
     refused(
-        fresh.send(
-            create_config(&payer, &stranger.pubkey(), data),
-            &[&stranger],
-        ),
+        ring.send(initialize(&ring, &stranger.pubkey(), data), &[&stranger]),
         CustomRingError::UnauthorizedInitializer,
     );
-    let mut low_order = data;
+    assert_eq!(ring.lamports(&policy_pda()), 0);
+    let mut low_order = policy_config(&ring);
     low_order.auditor_pubkey[1..].fill(0);
-    let authority = fresh.authority.pubkey();
     refused(
-        authority_send(&mut fresh, create_config(&payer, &authority, low_order)),
+        upgrade_initialize(&mut ring, low_order),
         CustomRingError::InvalidAuditorPubkey,
+    );
+    let data = policy_config(&ring);
+    within_budget(
+        InstructionTag::Initialize,
+        upgrade_initialize(&mut ring, data),
+    );
+    let account: RingPolicy = ring.read(&policy_pda());
+    assert_eq!(account.roles, ring.roles.addresses());
+    assert_eq!(
+        (account.co_signers.covered(), account.delegate()),
+        (None, None)
+    );
+    assert_eq!(account.records, RECORDS);
+    assert!(account.written_policy_hash().is_some());
+    let registration: RingConfig = ring.read(&ring_auth());
+    assert_eq!(
+        (registration.program_id, registration.authority),
+        (PROGRAM, ring_auth())
     );
 }
 
 #[test]
+fn initialize_refuses_a_zero_or_shared_role_key() {
+    let mut ring = uninitialized(Setup::AuditOnly);
+    let mut shared = audit_only_config(&ring);
+    shared.roles.policy = shared.roles.admin;
+    refused(
+        upgrade_initialize(&mut ring, shared),
+        CustomRingError::DuplicateRoleKey,
+    );
+    let mut zero = audit_only_config(&ring);
+    zero.roles.pauser = Address::default();
+    refused(
+        upgrade_initialize(&mut ring, zero),
+        CustomRingError::ZeroRoleKey,
+    );
+    assert_eq!(ring.lamports(&policy_pda()), 0);
+}
+
+#[test]
 fn the_upgrade_authority_comes_from_the_ring_programs_own_program_data() {
-    let mut ring = Ring::new(Setup::AuditOnly);
-    ring.store(config_pda(), SYSTEM, Vec::new());
+    let mut ring = uninitialized(Setup::AuditOnly);
     let stranger = Keypair::new();
     let stand_in = Address::new_unique();
     ring.deploy_stand_in(stand_in);
     ring.set_upgrade_authority(&stand_in, &stranger.pubkey());
-    let data = CreateConfigIxData {
-        auditor_pubkey: auditor_pubkey(),
-        kind: RingKind::AuditOnly,
-    };
-    let payer = ring.payer.pubkey();
     for program in [stand_in, PROGRAM] {
-        let mut instruction = create_config(&payer, &stranger.pubkey(), data);
+        let mut instruction = initialize(&ring, &stranger.pubkey(), audit_only_config(&ring));
         instruction.accounts[4] = AccountMeta::new_readonly(program, false);
         instruction.accounts[5] = AccountMeta::new_readonly(program_data_of(&stand_in), false);
         refused(
@@ -89,81 +158,75 @@ fn the_upgrade_authority_comes_from_the_ring_programs_own_program_data() {
 }
 
 #[test]
-fn the_config_records_the_slot_it_was_created_in() {
-    let mut ring = Ring::new(Setup::Anonymous);
-    ring.store(config_pda(), SYSTEM, Vec::new());
+fn the_ring_records_the_slot_it_was_created_in() {
+    let mut ring = uninitialized(Setup::Anonymous);
     let created = 1_000_007;
     ring.warp(created);
-    let (payer, authority) = (ring.payer.pubkey(), ring.authority.pubkey());
-    let data = CreateConfigIxData {
-        auditor_pubkey: auditor_pubkey(),
+    let data = InitializeIxData {
         kind: RingKind::Anonymous,
+        ..audit_only_config(&ring)
     };
-    authority_send(&mut ring, create_config(&payer, &authority, data))
-        .expect("the upgrade authority creates the config");
-    let config: RingProgramConfig = ring.read(&config_pda());
-    assert_eq!(config.created_slot(), created);
+    upgrade_initialize(&mut ring, data).expect("the upgrade authority creates the ring");
+    let account: RingPolicy = ring.read(&policy_pda());
+    assert_eq!(account.created_slot(), created);
 }
 
 #[test]
-fn the_co_signer_and_scope_live_in_the_config() {
+fn each_co_signer_lives_in_its_own_record() {
     let mut ring = Ring::new(Setup::AuditOnly);
-    let authority = ring.authority.pubkey();
-    let usdc = [7; 32];
+    let (payer, authority) = (ring.payer.pubkey(), ring.roles.cosign_admin.pubkey());
+    let set = |signer, scope| {
+        SetCoSignerIx {
+            payer,
+            authority,
+            signer: Address::new_from_array(signer),
+            scope,
+        }
+        .instruction()
+    };
+    let send = |ring: &mut Ring, instruction| ring.role_send(RingRole::CosignAdmin, instruction);
     refused(
-        authority_send(
-            &mut ring,
-            config_write(
-                tag::SET_CO_SIGNER,
-                &authority,
-                &[],
-                &set_co_signer_data([1; 32], 0, &[]),
-            ),
-        ),
+        send(&mut ring, set([1; 32], 0)),
         CustomRingError::InvalidCoSignerScope,
     );
     refused(
-        authority_send(
-            &mut ring,
-            config_write(
-                tag::SET_CO_SIGNER,
-                &authority,
-                &[],
-                &set_co_signer_data([0; 32], 1, &[]),
-            ),
-        ),
+        send(&mut ring, set([0; 32], 1)),
         CustomRingError::InvalidCoSigner,
     );
     within_budget(
         InstructionTag::SetCoSigner,
-        authority_send(
-            &mut ring,
-            config_write(
-                tag::SET_CO_SIGNER,
-                &authority,
-                &[],
-                &set_co_signer_data([1; 32], 4, &[usdc]),
-            ),
-        ),
+        send(&mut ring, set([1; 32], 4)),
     );
-    let config: RingProgramConfig = ring.read(&config_pda());
-    assert_eq!(config.co_signer(), Some(&Address::new_from_array([1; 32])));
+    within_budget(
+        InstructionTag::SetCoSigner,
+        send(&mut ring, set([1; 32], 5)),
+    );
+    let signer = Address::new_from_array([1; 32]);
+    let record: CoSigner = ring.read(&co_signer_record(&signer));
+    assert_eq!((record.signer, record.scope), (signer, 5));
+    let account: RingPolicy = ring.read(&policy_pda());
+    assert_eq!(account.co_signers.covered(), CoSignScope::new(5));
     within_budget(
         InstructionTag::ClearCoSigner,
-        authority_send(
+        send(
             &mut ring,
-            config_write(tag::CLEAR_CO_SIGNER, &authority, &[], &[]),
+            ClearCoSignerIx {
+                authority,
+                signer,
+                rent_recipient: payer,
+            }
+            .instruction(),
         ),
     );
-    let config: RingProgramConfig = ring.read(&config_pda());
-    assert_eq!(config.co_signer(), None);
+    let account: RingPolicy = ring.read(&policy_pda());
+    assert_eq!(account.co_signers.covered(), None);
 }
 
 fn appoint(ring: &mut Ring, delegate: &Keypair) -> Sent {
-    let authority = ring.authority.insecure_clone();
+    let admin = ring.holder(RingRole::Admin);
     ring.send(
-        set_delegate(&authority.pubkey(), &delegate.pubkey()),
-        &[&authority, delegate],
+        set_delegate(&admin.pubkey(), &delegate.pubkey()),
+        &[&admin, delegate],
     )
 }
 
@@ -171,10 +234,15 @@ fn appoint(ring: &mut Ring, delegate: &Keypair) -> Sent {
 fn the_delegate_is_permanent_and_needs_a_confidential_policy_ring() {
     let delegate = Keypair::new();
     let mut ring = Ring::new(Setup::Policy);
+    let pauser = ring.holder(RingRole::Pauser);
+    refused(
+        appoint(&mut ring, &pauser),
+        CustomRingError::DuplicateRoleKey,
+    );
     within_budget(InstructionTag::SetDelegate, appoint(&mut ring, &delegate));
-    let config: RingProgramConfig = ring.read(&config_pda());
-    assert_eq!(config.delegate(), Some(&delegate.pubkey()));
-    assert_eq!(config.mode(), Ok(RingMode::ConfidentialEscrow));
+    let account: RingPolicy = ring.read(&policy_pda());
+    assert_eq!(account.delegate(), Some(&delegate.pubkey()));
+    assert_eq!(account.mode(), Ok(RingMode::ConfidentialEscrow));
     refused(
         appoint(&mut ring, &Keypair::new()),
         CustomRingError::DelegateAlreadySet,
@@ -192,64 +260,59 @@ fn the_delegate_is_permanent_and_needs_a_confidential_policy_ring() {
 #[test]
 fn the_delegate_signs_its_appointment_and_no_data_names_it() {
     let mut ring = Ring::new(Setup::Policy);
-    let authority = ring.authority.insecure_clone();
+    let admin = ring.holder(RingRole::Admin);
     let delegate = Keypair::new();
-    let mut unsigned = set_delegate(&authority.pubkey(), &delegate.pubkey());
+    let mut unsigned = set_delegate(&admin.pubkey(), &delegate.pubkey());
     unsigned.accounts[2].is_signer = false;
     refused_with(
-        ring.send(unsigned, &[&authority]),
+        ring.send(unsigned, &[&admin]),
         InstructionError::Custom(u32::from(AccountError::InvalidSigner)),
     );
-    let mut named = set_delegate(&authority.pubkey(), &delegate.pubkey());
+    let mut named = set_delegate(&admin.pubkey(), &delegate.pubkey());
     named.data.extend_from_slice(delegate.pubkey().as_ref());
     refused(
-        ring.send(named, &[&authority, &delegate]),
+        ring.send(named, &[&admin, &delegate]),
         CustomRingError::InvalidInstructionData,
     );
-    let config: RingProgramConfig = ring.read(&config_pda());
-    assert_eq!(config.delegate(), None);
+    let account: RingPolicy = ring.read(&policy_pda());
+    assert_eq!(account.delegate(), None);
 }
 
 #[test]
-fn only_the_upgrade_authority_appoints_the_delegate() {
+fn a_rotated_admin_appoints_the_delegate_and_the_old_one_cannot() {
     let mut ring = Ring::new(Setup::Policy);
     let successor = Keypair::new();
-    let authority = ring.authority.insecure_clone();
-    let handover = Instruction {
-        program_id: PROGRAM,
-        accounts: vec![
-            AccountMeta::new_readonly(authority.pubkey(), true),
-            AccountMeta::new_readonly(successor.pubkey(), true),
-            AccountMeta::new(config_pda(), false),
-        ],
-        data: vec![tag::SET_AUTHORITY],
-    };
-    ring.send(handover, &[&authority, &successor])
-        .expect("hand the config to a successor");
+    let admin = ring.holder(RingRole::Admin);
+    let handover = UpdateAuthorityIx {
+        admin: admin.pubkey(),
+        new_key: successor.pubkey(),
+        role: RingRole::Admin,
+    }
+    .instruction();
+    ring.send(handover, &[&admin, &successor])
+        .expect("hand the admin role to a successor");
     let delegate = Keypair::new();
     refused(
-        ring.send(
-            set_delegate(&successor.pubkey(), &delegate.pubkey()),
-            &[&successor, &delegate],
-        ),
-        CustomRingError::UnauthorizedInitializer,
+        appoint(&mut ring, &delegate),
+        CustomRingError::UnauthorizedAuthority,
     );
-    appoint(&mut ring, &delegate).expect("the upgrade authority appoints the delegate");
+    ring.send(
+        set_delegate(&successor.pubkey(), &delegate.pubkey()),
+        &[&successor, &delegate],
+    )
+    .expect("the admin appoints the delegate");
+    let account: RingPolicy = ring.read(&policy_pda());
+    assert_eq!(account.delegate(), Some(&delegate.pubkey()));
 }
 
 #[test]
 fn a_rule_over_a_member_written_list_is_refused() {
     let mut ring = Ring::new(Setup::Policy);
-    let authority = ring.authority.pubkey();
+    let policy = ring.roles.policy.pubkey();
     refused(
-        authority_send(
-            &mut ring,
-            policy_write(
-                tag::SET_POLICY_RULES,
-                &authority,
-                list_table(ListId::RingViewing, Vec::new()),
-                &[],
-            ),
+        ring.role_send(
+            RingRole::Policy,
+            rules_write(&policy, list_table(ListId::RingViewing, Vec::new())),
         ),
         CustomRingError::MemberWrittenListRule,
     );
@@ -257,303 +320,269 @@ fn a_rule_over_a_member_written_list_is_refused() {
 
 #[test]
 fn policy_writes_need_a_policy_ring_and_a_foreign_curator() {
-    let mut audit_only = Ring::new(Setup::AuditOnly);
-    let authority = audit_only.authority.pubkey();
+    let mut audit_only = uninitialized(Setup::AuditOnly);
+    let table_on_audit_only = InitializeIxData {
+        kind: RingKind::AuditOnly,
+        ..policy_config(&audit_only)
+    };
     refused(
-        authority_send(
-            &mut audit_only,
-            policy_write(
-                tag::CREATE_POLICY,
-                &authority,
-                allow_list_table(Vec::new()),
-                &[],
-            ),
-        ),
+        upgrade_initialize(&mut audit_only, table_on_audit_only),
         CustomRingError::PolicyOnAuditOnlyRing,
     );
+    let mut audit_only = Ring::new(Setup::AuditOnly);
+    let policy = audit_only.roles.policy.pubkey();
     refused(
-        authority_send(
-            &mut audit_only,
-            policy_write(
-                tag::SET_POLICY_RULES,
-                &authority,
-                allow_list_table(Vec::new()),
-                &[],
-            ),
+        audit_only.role_send(
+            RingRole::Policy,
+            rules_write(&policy, allow_list_table(Vec::new())),
         ),
         CustomRingError::PolicyNotSet,
     );
 
     let mut ring = Ring::new(Setup::Policy);
-    let authority = ring.authority.pubkey();
-    refused(
-        authority_send(
-            &mut ring,
-            policy_write(
-                tag::CREATE_POLICY,
-                &authority,
-                allow_list_table(Vec::new()),
-                &[],
-            ),
-        ),
-        CustomRingError::PolicyAlreadySet,
-    );
-    let before: MemberRegistry = ring.read(&registry_pda());
+    let policy = ring.roles.policy.pubkey();
+    let before: RingPolicy = ring.read(&policy_pda());
     let mut own = allow_list_table(Vec::new());
     own.sources[0].source = 1;
+    let send = |ring: &mut Ring, instruction| ring.role_send(RingRole::Policy, instruction);
     refused(
-        authority_send(
+        send(
             &mut ring,
-            policy_write(tag::SET_POLICY_RULES, &authority, own, &[registry_pda()]),
+            UpdatePolicyIx {
+                authority: policy,
+                update: UpdatePolicyIxData::Rules(own),
+                trailing: &[RECORDS],
+            }
+            .instruction(),
         ),
         CustomRingError::InvalidSource,
     );
     let mut unreferenced = allow_list_table(Vec::new());
     unreferenced.sources[0].list_id = ListId::Block as u8;
     refused(
-        authority_send(
-            &mut ring,
-            policy_write(tag::SET_POLICY_RULES, &authority, unreferenced, &[]),
-        ),
+        send(&mut ring, rules_write(&policy, unreferenced)),
         CustomRingError::InvalidSource,
     );
     let mut unsourced = allow_list_table(Vec::new());
     unsourced.sources.clear();
     refused(
-        authority_send(
-            &mut ring,
-            policy_write(tag::SET_POLICY_RULES, &authority, unsourced, &[]),
-        ),
+        send(&mut ring, rules_write(&policy, unsourced)),
         CustomRingError::InvalidSource,
     );
-    authority_send(
+    send(
         &mut ring,
-        policy_write(
-            tag::SET_POLICY_RULES,
-            &authority,
-            allow_list_table(Vec::new()),
-            &[],
-        ),
+        rules_write(&policy, allow_list_table(Vec::new())),
     )
     .expect("rewrite the table");
-    let after: MemberRegistry = ring.read(&registry_pda());
+    let after: RingPolicy = ring.read(&policy_pda());
     assert_eq!(after.policy_hash, before.policy_hash);
     assert_eq!(after.generation(), before.generation() + 1);
 }
 
 #[test]
-fn a_policy_ring_registers_with_spp_once_its_table_is_set() {
-    let mut ring = Ring::new(Setup::Policy);
-    ring.deploy_stand_in(SPP);
-    let mut registry: MemberRegistry = ring.read(&registry_pda());
-    registry.policy_hash = [0; 32];
-    ring.write(&registry_pda(), &registry);
-    let register = init_spp_ring_config(&ring);
+fn a_policy_ring_initializes_only_with_its_policy() {
+    let mut ring = uninitialized(Setup::Policy);
+    let unpinned = InitializeIxData {
+        policy: None,
+        ..policy_config(&ring)
+    };
     refused(
-        authority_send(&mut ring, register),
+        upgrade_initialize(&mut ring, unpinned),
         CustomRingError::PolicyNotSet,
     );
 }
 
-fn init_spp_ring_config(ring: &Ring) -> Instruction {
-    Instruction {
-        program_id: PROGRAM,
-        accounts: vec![
-            AccountMeta::new(ring.payer.pubkey(), true),
-            AccountMeta::new_readonly(ring.authority.pubkey(), true),
-            AccountMeta::new_readonly(config_pda(), false),
-            AccountMeta::new_readonly(Address::new_unique(), false),
-            AccountMeta::new(ring_auth(), false),
-            AccountMeta::new_readonly(SYSTEM, false),
-            AccountMeta::new_readonly(SPP, false),
-            AccountMeta::new_readonly(registry_pda(), false),
-        ],
-        data: vec![tag::INIT_SPP_RING_CONFIG],
+#[test]
+fn update_policy_binds_records_late_on_an_audit_only_ring() {
+    let mut ring = uninitialized(Setup::AuditOnly);
+    let data = audit_only_config(&ring);
+    upgrade_initialize(&mut ring, data).expect("the ring starts without records");
+    let bind = UpdatePolicyIx {
+        authority: ring.roles.policy.pubkey(),
+        update: UpdatePolicyIxData::Records,
+        trailing: &[RECORDS],
     }
+    .instruction();
+    ring.role_send(RingRole::Policy, bind)
+        .expect("the policy authority binds the records");
+    let account: RingPolicy = ring.read(&policy_pda());
+    assert_eq!(account.records, RECORDS);
+    assert_eq!(account.written_policy_hash(), None);
 }
 
+struct RoleWrite {
+    role: RingRole,
+    signer_slot: usize,
+    instruction: fn(&Ring, &Address, &Keypair) -> Instruction,
+}
+
+const ROLE_WRITES: [RoleWrite; 8] = [
+    RoleWrite {
+        role: RingRole::Admin,
+        signer_slot: 0,
+        instruction: |_, signer, other| {
+            UpdateAuthorityIx {
+                admin: *signer,
+                new_key: other.pubkey(),
+                role: RingRole::Pauser,
+            }
+            .instruction()
+        },
+    },
+    RoleWrite {
+        role: RingRole::Admin,
+        signer_slot: 0,
+        instruction: |_, signer, other| set_delegate(signer, &other.pubkey()),
+    },
+    RoleWrite {
+        role: RingRole::Policy,
+        signer_slot: 0,
+        instruction: |_, signer, _| rules_write(signer, allow_list_table(Vec::new())),
+    },
+    RoleWrite {
+        role: RingRole::Policy,
+        signer_slot: 0,
+        instruction: |_, signer, _| {
+            UpdatePolicyIx {
+                authority: *signer,
+                update: UpdatePolicyIxData::Source(PolicySourceIxData {
+                    list_id: ListId::Allow as u8,
+                    source: 0,
+                }),
+                trailing: &[],
+            }
+            .instruction()
+        },
+    },
+    RoleWrite {
+        role: RingRole::Policy,
+        signer_slot: 0,
+        instruction: |_, signer, _| {
+            UpdatePolicyIx {
+                authority: *signer,
+                update: UpdatePolicyIxData::Records,
+                trailing: &[RECORDS],
+            }
+            .instruction()
+        },
+    },
+    RoleWrite {
+        role: RingRole::Pauser,
+        signer_slot: 0,
+        instruction: |_, signer, _| set_paused(signer, ring_auth(), SPP),
+    },
+    RoleWrite {
+        role: RingRole::CosignAdmin,
+        signer_slot: 1,
+        instruction: |ring, signer, _| {
+            SetCoSignerIx {
+                payer: ring.payer.pubkey(),
+                authority: *signer,
+                signer: Address::new_from_array([1; 32]),
+                scope: 1,
+            }
+            .instruction()
+        },
+    },
+    RoleWrite {
+        role: RingRole::CosignAdmin,
+        signer_slot: 0,
+        instruction: |ring, signer, _| {
+            ClearCoSignerIx {
+                authority: *signer,
+                signer: Address::new_from_array([1; 32]),
+                rent_recipient: ring.payer.pubkey(),
+            }
+            .instruction()
+        },
+    },
+];
+
 #[test]
-fn every_authority_write_refuses_a_stranger() {
+fn each_role_instruction_refuses_every_other_role_and_the_upgrade_authority() {
     let mut ring = Ring::new(Setup::Policy);
-    let stranger = Keypair::new();
-    let authority = ring.authority.pubkey();
-    let source = SetPolicySourceIxData {
-        list_id: ListId::Allow as u8,
-        source: 0,
-    };
-    let co_signer = set_co_signer_data([1; 32], 1, &[]);
-    let writes = [
-        (
-            config_write(tag::SET_CO_SIGNER, &authority, &[], &co_signer),
-            0,
-        ),
-        (config_write(tag::CLEAR_CO_SIGNER, &authority, &[], &[]), 0),
-        (
-            policy_write(
-                tag::CREATE_POLICY,
-                &authority,
-                allow_list_table(Vec::new()),
-                &[],
-            ),
-            0,
-        ),
-        (
-            policy_write(
-                tag::SET_POLICY_RULES,
-                &authority,
-                allow_list_table(Vec::new()),
-                &[],
-            ),
-            0,
-        ),
-        (
-            config_write(
-                tag::SET_POLICY_SOURCE,
-                &authority,
-                &[AccountMeta::new(registry_pda(), false)],
-                &wincode::serialize(&source).unwrap(),
-            ),
-            0,
-        ),
-        (grant(&ring), 1),
-        (revoke(&ring, Keypair::new().pubkey()), 0),
-        (create_member_registry(&ring.payer.pubkey(), &authority), 1),
-        (init_spp_ring_config(&ring), 1),
-    ];
-    let unauthorized = TransactionError::InstructionError(
+    set_co_signer(&mut ring, &Address::new_from_array([1; 32]), 1);
+    let other = Keypair::new();
+    let unauthorized = Err(TransactionError::InstructionError(
         0,
         InstructionError::Custom(CustomRingError::UnauthorizedAuthority as u32),
-    );
-    let refusals: Vec<_> = writes
-        .into_iter()
-        .map(|(mut instruction, slot)| {
-            instruction.accounts[slot] = AccountMeta::new_readonly(stranger.pubkey(), true);
-            let tag = instruction.data[0];
-            (
-                tag,
-                ring.send(instruction, &[&stranger])
-                    .map_err(|(error, _)| error),
-            )
-        })
-        .collect();
-    let expected: Vec<_> = refusals
-        .iter()
-        .map(|(tag, _)| (*tag, Err(unauthorized.clone())))
-        .collect();
-    assert_eq!(refusals, expected);
-}
-
-fn reader() -> [u8; 34] {
-    let mut reader = [0u8; 34];
-    reader[0] = READER_KEY_P256;
-    reader[1] = 0x02;
-    reader[2..].fill(9);
-    reader
-}
-
-fn read_access(tag: u8, accounts: Vec<AccountMeta>) -> Instruction {
-    let mut data = vec![tag];
-    data.extend(wincode::serialize(&ReaderIxData { reader: reader() }).unwrap());
-    Instruction {
-        program_id: PROGRAM,
-        accounts,
-        data,
+    ));
+    for write in &ROLE_WRITES {
+        let wrong = ROLES
+            .into_iter()
+            .filter(|role| *role != write.role)
+            .map(|role| ring.holder(role))
+            .chain([ring.authority.insecure_clone()]);
+        for signer in wrong.collect::<Vec<_>>() {
+            let instruction = (write.instruction)(&ring, &signer.pubkey(), &other);
+            assert_eq!(
+                instruction.accounts[write.signer_slot].pubkey,
+                signer.pubkey()
+            );
+            let signs_too = instruction
+                .accounts
+                .iter()
+                .any(|meta| meta.pubkey == other.pubkey());
+            let signers: Vec<&Keypair> = [&signer]
+                .into_iter()
+                .chain(signs_too.then_some(&other))
+                .collect();
+            let sent = ring.send(instruction, &signers).map_err(|(error, _)| error);
+            assert_eq!(sent, unauthorized, "{:?} signed by another key", write.role);
+        }
     }
 }
 
-fn record_pda() -> Address {
-    let seed = ReadAccessRecord::seed_hash(&reader()).unwrap();
-    Address::find_program_address(&[READ_ACCESS_RECORD_PDA_SEED, &seed], &PROGRAM).0
-}
-
 #[test]
-fn read_access_is_granted_and_revoked_by_the_authority() {
-    let mut ring = Ring::new(Setup::AuditOnly);
-    let granted = grant(&ring);
-    within_budget(
-        InstructionTag::GrantReadAccess,
-        authority_send(&mut ring, granted),
-    );
-    assert_eq!(
-        ring.read::<ReadAccessRecord>(&record_pda()).reader,
-        reader()
-    );
-    let revoked = revoke(&ring, Keypair::new().pubkey());
-    within_budget(
-        InstructionTag::RevokeReadAccess,
-        authority_send(&mut ring, revoked),
-    );
-    assert_eq!(ring.lamports(&record_pda()), 0);
-}
-
-#[test]
-fn the_authority_moves_only_to_a_cosigning_successor() {
+fn update_authority_needs_the_new_keys_signature_and_a_free_key() {
     let mut ring = Ring::new(Setup::AuditOnly);
     let successor = Keypair::new();
-    let authority = ring.authority.insecure_clone();
-    let handover = |successor: &Address, signs: bool| Instruction {
-        program_id: PROGRAM,
-        accounts: vec![
-            AccountMeta::new_readonly(authority.pubkey(), true),
-            AccountMeta::new_readonly(*successor, signs),
-            AccountMeta::new(config_pda(), false),
-        ],
-        data: vec![tag::SET_AUTHORITY],
+    let admin = ring.holder(RingRole::Admin);
+    let handover = |new_key: &Address, role: RingRole, signs: bool| {
+        let mut instruction = UpdateAuthorityIx {
+            admin: admin.pubkey(),
+            new_key: *new_key,
+            role,
+        }
+        .instruction();
+        instruction.accounts[1].is_signer = signs;
+        instruction
     };
     refused_with(
-        ring.send(handover(&successor.pubkey(), false), &[&authority]),
+        ring.send(
+            handover(&successor.pubkey(), RingRole::Pauser, false),
+            &[&admin],
+        ),
         InstructionError::Custom(u32::from(AccountError::InvalidSigner)),
     );
+    let policy = ring.holder(RingRole::Policy);
+    refused(
+        ring.send(
+            handover(&policy.pubkey(), RingRole::Pauser, true),
+            &[&admin, &policy],
+        ),
+        CustomRingError::DuplicateRoleKey,
+    );
+    let mut unknown = handover(&successor.pubkey(), RingRole::Pauser, true);
+    unknown.data[1] = ROLES.len() as u8;
+    refused(
+        ring.send(unknown, &[&admin, &successor]),
+        CustomRingError::InvalidInstructionData,
+    );
     assert_eq!(
-        ring.read::<RingProgramConfig>(&config_pda()).authority,
-        authority.pubkey()
+        ring.read::<RingPolicy>(&policy_pda()).roles,
+        ring.roles.addresses()
     );
     within_budget(
-        InstructionTag::SetAuthority,
+        InstructionTag::UpdateAuthority,
         ring.send(
-            handover(&successor.pubkey(), true),
-            &[&authority, &successor],
+            handover(&successor.pubkey(), RingRole::Pauser, true),
+            &[&admin, &successor],
         ),
     );
-    assert_eq!(
-        ring.read::<RingProgramConfig>(&config_pda()).authority,
-        successor.pubkey()
-    );
-    let other = Keypair::new();
-    refused(
-        ring.send(handover(&other.pubkey(), true), &[&authority, &other]),
-        CustomRingError::UnauthorizedAuthority,
-    );
-}
-
-#[test]
-fn a_reader_key_that_cannot_authorize_reads_is_refused() {
-    let mut ring = Ring::new(Setup::AuditOnly);
-    let (payer, authority) = (ring.payer.pubkey(), ring.authority.pubkey());
-    let mut uncompressed = reader();
-    uncompressed[1] = 0x04;
-    let mut data = vec![tag::GRANT_READ_ACCESS];
-    data.extend(
-        wincode::serialize(&ReaderIxData {
-            reader: uncompressed,
-        })
-        .unwrap(),
-    );
-    let grant = Instruction {
-        program_id: PROGRAM,
-        accounts: vec![
-            AccountMeta::new(payer, true),
-            AccountMeta::new_readonly(authority, true),
-            AccountMeta::new_readonly(config_pda(), false),
-            AccountMeta::new(record_pda(), false),
-            AccountMeta::new_readonly(SYSTEM, false),
-        ],
-        data,
-    };
-    refused(
-        authority_send(&mut ring, grant),
-        CustomRingError::InvalidReaderKey,
-    );
+    let mut rotated = ring.roles.addresses();
+    rotated.pauser = successor.pubkey();
+    assert_eq!(ring.read::<RingPolicy>(&policy_pda()).roles, rotated);
 }
 
 #[test]
@@ -564,11 +593,30 @@ fn retired_and_unknown_tags_are_refused() {
         accounts: Vec::new(),
         data,
     };
-    refused(
-        ring.send(instruction(vec![tag::DEPOSIT]), &[]),
-        CustomRingError::DepositAuditRequired,
-    );
-    for unknown in [8, 9, 22, 23, 26, 30, 32, 33, 38, u8::MAX] {
+    for unknown in [
+        1,
+        2,
+        4,
+        5,
+        7,
+        8,
+        9,
+        10,
+        12,
+        18,
+        22,
+        23,
+        26,
+        28,
+        29,
+        30,
+        32,
+        33,
+        38,
+        39,
+        42,
+        u8::MAX,
+    ] {
         refused(
             ring.send(instruction(vec![unknown]), &[]),
             CustomRingError::InvalidInstructionData,
@@ -577,98 +625,51 @@ fn retired_and_unknown_tags_are_refused() {
 }
 
 #[test]
-fn operator_and_record_instructions_fit_their_declared_budgets() {
+fn operator_instructions_fit_their_declared_budgets() {
     let mut ring = Ring::new(Setup::Policy);
-    let authority = ring.authority.pubkey();
+    let (policy, cosign_admin) = (ring.roles.policy.pubkey(), ring.roles.cosign_admin.pubkey());
+    let payer = ring.payer.pubkey();
     within_budget(
-        InstructionTag::SetPolicyRules,
-        authority_send(
-            &mut ring,
-            policy_write(
-                tag::SET_POLICY_RULES,
-                &authority,
-                allow_list_table(Vec::new()),
-                &[],
-            ),
+        InstructionTag::UpdatePolicy,
+        ring.role_send(
+            RingRole::Policy,
+            rules_write(&policy, allow_list_table(Vec::new())),
         ),
     );
     within_budget(
         InstructionTag::SetCoSigner,
-        authority_send(
-            &mut ring,
-            config_write(
-                tag::SET_CO_SIGNER,
-                &authority,
-                &[],
-                &set_co_signer_data([1; 32], 4, &[[7; 32]]),
-            ),
+        ring.role_send(
+            RingRole::CosignAdmin,
+            SetCoSignerIx {
+                payer,
+                authority: cosign_admin,
+                signer: Address::new_from_array([1; 32]),
+                scope: 4,
+            }
+            .instruction(),
         ),
     );
-    within_budget(
-        InstructionTag::SetInsertFee,
-        authority_send(
-            &mut ring,
-            config_write(
-                tag::SET_INSERT_FEE,
-                &authority,
-                &[],
-                &(2 * DEFAULT_INSERT_FEE).to_le_bytes(),
-            ),
-        ),
-    );
-    let member = Keypair::new();
-    let payer = Keypair::new();
-    ring.fund(&payer.pubkey());
-    let lists = WriteRecordsIxData::new(
-        ListChange {
-            set: ListSet::single(ListId::RingViewing),
-            clear: ListSet::EMPTY,
-        }
-        .check()
-        .unwrap(),
-    );
-    within_budget(
-        InstructionTag::WriteRecords,
-        ring.send(
-            write_records(
-                &member.pubkey(),
-                lists,
-                Some(Fee {
-                    payer: payer.pubkey(),
-                    recipient: authority,
-                }),
-            ),
-            &[&member, &payer],
-        ),
-    );
-}
-
-fn audit_only_config() -> CreateConfigIxData {
-    CreateConfigIxData {
-        auditor_pubkey: auditor_pubkey(),
-        kind: RingKind::AuditOnly,
-    }
 }
 
 #[test]
-fn create_config_takes_its_canonical_address_once_beside_the_system_program() {
+fn initialize_takes_its_canonical_ring_address_once_beside_the_system_program() {
     let mut ring = Ring::new(Setup::AuditOnly);
-    let (payer, authority) = (ring.payer.pubkey(), ring.authority.pubkey());
-    let again = create_config(&payer, &authority, audit_only_config());
+    let authority = ring.authority.pubkey();
+    let again = initialize(&ring, &authority, audit_only_config(&ring));
     refused(
-        authority_send(&mut ring, again),
-        CustomRingError::ConfigAlreadyInitialized,
+        upgrade_send(&mut ring, again),
+        CustomRingError::RingPolicyAlreadyExists,
     );
-    let mut elsewhere = create_config(&payer, &authority, audit_only_config());
+    let mut elsewhere = initialize(&ring, &authority, audit_only_config(&ring));
     elsewhere.accounts[2] = AccountMeta::new(Address::new_unique(), false);
     refused(
-        authority_send(&mut ring, elsewhere),
-        CustomRingError::InvalidConfigPda,
+        upgrade_send(&mut ring, elsewhere),
+        CustomRingError::InvalidRingPolicy,
     );
-    let mut impostor = create_config(&payer, &authority, audit_only_config());
+    let mut impostor = initialize(&ring, &authority, audit_only_config(&ring));
     impostor.accounts[3] = AccountMeta::new_readonly(Address::new_unique(), false);
     refused(
-        authority_send(&mut ring, impostor),
+        upgrade_send(&mut ring, impostor),
         CustomRingError::InvalidSystemProgram,
     );
 }
@@ -681,142 +682,76 @@ fn each_ring_kind_fixes_its_policy_flag_and_mode() {
         (Setup::Anonymous, false, RingMode::Anonymous),
         (Setup::AnonymousPolicy, true, RingMode::Anonymous),
     ] {
-        let config: RingProgramConfig = Ring::new(setup).read(&config_pda());
-        assert_eq!((config.has_policy(), config.mode()), (has_policy, Ok(mode)));
+        let account: RingPolicy = Ring::new(setup).read(&policy_pda());
+        assert_eq!(
+            (account.has_policy(), account.mode()),
+            (has_policy, Ok(mode))
+        );
     }
-    let mut ring = Ring::new(Setup::AuditOnly);
-    ring.store(config_pda(), SYSTEM, Vec::new());
-    let (payer, authority) = (ring.payer.pubkey(), ring.authority.pubkey());
-    let mut unknown = create_config(&payer, &authority, audit_only_config());
-    *unknown.data.last_mut().unwrap() = 4;
+    let mut ring = uninitialized(Setup::AuditOnly);
+    let authority = ring.authority.pubkey();
+    let mut unknown = initialize(&ring, &authority, audit_only_config(&ring));
+    unknown.data[1 + TAGGED_X25519_KEY_LEN] = 4;
     refused(
-        authority_send(&mut ring, unknown),
+        upgrade_send(&mut ring, unknown),
         CustomRingError::InvalidInstructionData,
-    );
-}
-
-fn grant(ring: &Ring) -> Instruction {
-    read_access(
-        tag::GRANT_READ_ACCESS,
-        vec![
-            AccountMeta::new(ring.payer.pubkey(), true),
-            AccountMeta::new_readonly(ring.authority.pubkey(), true),
-            AccountMeta::new_readonly(config_pda(), false),
-            AccountMeta::new(record_pda(), false),
-            AccountMeta::new_readonly(SYSTEM, false),
-        ],
-    )
-}
-
-fn revoke(ring: &Ring, rent_recipient: Address) -> Instruction {
-    read_access(
-        tag::REVOKE_READ_ACCESS,
-        vec![
-            AccountMeta::new_readonly(ring.authority.pubkey(), true),
-            AccountMeta::new_readonly(config_pda(), false),
-            AccountMeta::new(record_pda(), false),
-            AccountMeta::new(rent_recipient, false),
-        ],
-    )
-}
-
-#[test]
-fn a_reader_holds_one_record_revoked_only_under_its_own_key() {
-    let mut ring = Ring::new(Setup::AuditOnly);
-    let first = grant(&ring);
-    authority_send(&mut ring, first).expect("grant the reader");
-    let second = grant(&ring);
-    refused(
-        authority_send(&mut ring, second),
-        CustomRingError::ReadAccessRecordAlreadyExists,
-    );
-    let mut other_reader = revoke(&ring, Keypair::new().pubkey());
-    *other_reader.data.last_mut().unwrap() ^= 1;
-    refused(
-        authority_send(&mut ring, other_reader),
-        CustomRingError::InvalidReadAccessRecord,
-    );
-    let into_itself = revoke(&ring, record_pda());
-    refused(
-        authority_send(&mut ring, into_itself),
-        CustomRingError::InvalidReadAccessRecord,
     );
 }
 
 #[test]
 fn a_source_write_names_a_known_list() {
     let mut ring = Ring::new(Setup::Policy);
-    let authority = ring.authority.pubkey();
+    let policy = ring.roles.policy.pubkey();
     for list_id in [0, u8::MAX] {
-        let data = SetPolicySourceIxData { list_id, source: 0 };
-        let instruction = Instruction {
-            program_id: PROGRAM,
-            accounts: vec![
-                AccountMeta::new_readonly(authority, true),
-                AccountMeta::new_readonly(config_pda(), false),
-                AccountMeta::new(registry_pda(), false),
-            ],
-            data: [
-                &[tag::SET_POLICY_SOURCE][..],
-                &wincode::serialize(&data).unwrap(),
-            ]
-            .concat(),
-        };
+        let instruction = UpdatePolicyIx {
+            authority: policy,
+            update: UpdatePolicyIxData::Source(PolicySourceIxData { list_id, source: 0 }),
+            trailing: &[],
+        }
+        .instruction();
         refused(
-            authority_send(&mut ring, instruction),
+            ring.role_send(RingRole::Policy, instruction),
             CustomRingError::InvalidListId,
         );
     }
 }
 
 #[test]
-fn a_table_write_decodes_and_counts_its_generation_on_the_own_registry() {
+fn a_table_write_decodes_and_counts_its_generation_on_the_policy() {
     let mut ring = Ring::new(Setup::Policy);
-    let authority = ring.authority.pubkey();
+    let policy = ring.roles.policy.pubkey();
+    let send = |ring: &mut Ring, instruction| ring.role_send(RingRole::Policy, instruction);
     let mut malformed = allow_list_table(Vec::new());
     malformed.sources.clear();
     malformed.rules[0] = [0; 32];
     refused(
-        authority_send(
-            &mut ring,
-            policy_write(tag::SET_POLICY_RULES, &authority, malformed, &[]),
-        ),
+        send(&mut ring, rules_write(&policy, malformed)),
         CustomRingError::InvalidPolicyRules,
     );
-    let mut queue_as_registry = policy_write(
-        tag::SET_POLICY_RULES,
-        &authority,
-        allow_list_table(Vec::new()),
-        &[],
-    );
-    queue_as_registry.accounts[2] = AccountMeta::new(queue_pda(), false);
+    let mut records_as_ring = rules_write(&policy, allow_list_table(Vec::new()));
+    records_as_ring.accounts[1] = AccountMeta::new(RECORDS, false);
     refused(
-        authority_send(&mut ring, queue_as_registry),
-        CustomRingError::InvalidMemberRegistry,
+        send(&mut ring, records_as_ring),
+        CustomRingError::InvalidRingPolicy,
     );
-    let mut registry: MemberRegistry = ring.read(&registry_pda());
-    registry.generation = u32::MAX.to_le_bytes();
-    ring.write(&registry_pda(), &registry);
+    let mut account: RingPolicy = ring.read(&policy_pda());
+    account.generation = u32::MAX.to_le_bytes();
+    ring.write(&policy_pda(), &account);
     refused(
-        authority_send(
+        send(
             &mut ring,
-            policy_write(
-                tag::SET_POLICY_RULES,
-                &authority,
-                allow_list_table(Vec::new()),
-                &[],
-            ),
+            rules_write(&policy, allow_list_table(Vec::new())),
         ),
         CustomRingError::PolicyGenerationOverflow,
     );
 }
 
-fn set_paused(ring: &Ring, ring_auth: Address, spp: Address) -> Instruction {
+fn set_paused(pauser: &Address, ring_auth: Address, spp: Address) -> Instruction {
     Instruction {
         program_id: PROGRAM,
         accounts: vec![
-            AccountMeta::new_readonly(ring.authority.pubkey(), true),
-            AccountMeta::new_readonly(config_pda(), false),
+            AccountMeta::new_readonly(*pauser, true),
+            AccountMeta::new_readonly(policy_pda(), false),
             AccountMeta::new(ring_auth, false),
             AccountMeta::new_readonly(spp, false),
         ],
@@ -829,44 +764,33 @@ fn set_paused(ring: &Ring, ring_auth: Address, spp: Address) -> Instruction {
 }
 
 #[test]
-fn only_the_authority_pauses_through_the_ring_pda_and_the_pool() {
+fn only_the_pauser_pauses_through_the_ring_pda_and_the_pool() {
     let mut ring = Ring::new(Setup::AuditOnly);
     let spp = SPP;
     ring.deploy_stand_in(spp);
-    let stranger = Keypair::new();
-    let mut unauthorized = set_paused(&ring, ring_auth(), spp);
-    unauthorized.accounts[0] = AccountMeta::new_readonly(stranger.pubkey(), true);
+    let pauser = ring.roles.pauser.pubkey();
+    let no_pool = set_paused(&pauser, ring_auth(), Address::new_unique());
     refused(
-        ring.send(unauthorized, &[&stranger]),
-        CustomRingError::UnauthorizedAuthority,
-    );
-    let no_pool = set_paused(&ring, ring_auth(), Address::new_unique());
-    refused(
-        authority_send(&mut ring, no_pool),
+        ring.role_send(RingRole::Pauser, no_pool),
         CustomRingError::InvalidShieldedPoolProgram,
     );
-    let no_pda = set_paused(&ring, Address::new_unique(), spp);
+    let no_pda = set_paused(&pauser, Address::new_unique(), spp);
     refused(
-        authority_send(&mut ring, no_pda),
+        ring.role_send(RingRole::Pauser, no_pda),
         CustomRingError::MissingRingAuth,
     );
 }
 
 #[test]
-fn a_config_with_an_unknown_mode_reads_as_uninitialized() {
+fn a_ring_with_an_unknown_mode_reads_as_invalid() {
     let mut ring = Ring::new(Setup::AuditOnly);
-    let mut config: RingProgramConfig = ring.read(&config_pda());
-    config.mode = 3;
-    ring.write(&config_pda(), &config);
-    let authority = ring.authority.pubkey();
-    let fee = config_write(
-        tag::SET_INSERT_FEE,
-        &authority,
-        &[],
-        &DEFAULT_INSERT_FEE.to_le_bytes(),
-    );
+    let mut account: RingPolicy = ring.read(&policy_pda());
+    account.mode = 3;
+    ring.write(&policy_pda(), &account);
+    let policy = ring.roles.policy.pubkey();
+    let rules = rules_write(&policy, allow_list_table(Vec::new()));
     refused(
-        authority_send(&mut ring, fee),
-        CustomRingError::ConfigNotInitialized,
+        ring.role_send(RingRole::Policy, rules),
+        CustomRingError::InvalidRingPolicy,
     );
 }

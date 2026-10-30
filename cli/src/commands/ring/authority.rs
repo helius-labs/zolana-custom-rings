@@ -1,9 +1,10 @@
-//! `authority`, the program's upgrade authority and the ring config's authority.
+//! `authority`, the program's upgrade authority and the ring roles.
 
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Context as _, Result};
-use custom_ring_sdk::SetAuthority;
+use custom_ring_interface::RingRole;
+use custom_ring_sdk::UpdateAuthority;
 use solana_address::Address;
 use solana_loader_v3_interface::instruction as loader;
 use solana_signer::Signer;
@@ -35,26 +36,27 @@ pub fn run(ctx: &Context, command: AuthorityCommand) -> Result<()> {
                 ctx.config_path.display()
             );
         }
-        AuthorityCommand::TransferConfig {
-            new_authority_keypair,
-        } => {
-            let authority = ctx.authority()?;
-            let path = expand_tilde(&ctx.path(&new_authority_keypair))?;
+        AuthorityCommand::UpdateRole { role, new_keypair } => {
+            let payer = ctx.funded_authority()?;
+            let admin = ctx.role_keypair(RingRole::Admin)?;
+            let path = expand_tilde(&ctx.path(&new_keypair))?;
             let new_authority = solana_keypair::read_keypair_file(&path)
-                .map_err(|_| anyhow!("cannot read the new authority keypair {}", path.display()))?;
-            let hand_over = SetAuthority {
+                .map_err(|_| anyhow!("cannot read the new {role} keypair {}", path.display()))?;
+            let hand_over = UpdateAuthority {
                 ring: ctx.ring,
-                authority: authority.pubkey(),
+                admin: admin.pubkey(),
                 new_authority: new_authority.pubkey(),
+                role: role.role(),
             }
-            .instruction();
-            ctx.send(&[authority, &new_authority], &[hand_over])
-                .context("sending set_authority failed")?;
+            .instruction()?;
+            ctx.send(&[payer, &admin, &new_authority], &[hand_over])
+                .context("sending update_authority failed")?;
             println!(
-                "ring config authority of {program} is now {}, set config_authority_keypair in {} to {}",
+                "{role} of {program} is now {}, set {} in {} to {}",
                 new_authority.pubkey(),
+                role.keypair_field(),
                 ctx.config_path.display(),
-                new_authority_keypair.display()
+                new_keypair.display()
             );
         }
         AuthorityCommand::Pause => controls::pause(ctx, true)?,

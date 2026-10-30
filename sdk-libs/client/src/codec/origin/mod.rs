@@ -18,8 +18,8 @@ use spr_transaction::{ShieldedTransaction, SOL_MINT};
 
 use crate::AuditError;
 use custom_ring_interface::{
-    tag as ring_tag, CustomRingError, DisclosureLayout, InstructionTag, RingMode, RingRail,
-    RingTransactData,
+    tag as ring_tag, CustomRingError, DisclosureLayout, InstructionTag, ParsedTransact, RingMode,
+    RingRail, RingTransactData,
 };
 
 /// What a confirmed transaction says about its ring, its signers and the value it settled out.
@@ -37,6 +37,8 @@ pub struct RingOrigin {
     pub merge_disclosure: Option<ConfirmedMergeDisclosure>,
     /// `tag || data` of the ring instruction that forwarded a transfer.
     pub transact: Option<Vec<u8>>,
+    /// Accounts of the SPP instruction behind `event`.
+    pub pool_accounts: Vec<Address>,
 }
 
 /// The auditor's half of a confirmed anonymous merge, bound to the forwarded SPP body.
@@ -154,7 +156,40 @@ impl RingOrigin {
             .transact
             .as_deref()
             .ok_or(AuditError::MissingRingTransact)?;
-        frame_layout(mode, frame)
+        parse_frame(mode, frame).map(|parsed| parsed.layout())
+    }
+
+    /// The input owners a confidential transfer binds, a legacy frame names none.
+    pub fn spenders(&self, mode: RingMode) -> Result<Vec<Address>, AuditError> {
+        let frame = self
+            .transact
+            .as_deref()
+            .ok_or(AuditError::MissingRingTransact)?;
+        if is_legacy(frame) {
+            return Ok(Vec::new());
+        }
+        let parsed = parse_frame(mode, frame)?;
+        let data = parsed.data();
+        let run = match (data.rail, data.in_proof_owner) {
+            (RingRail::Confidential, Some(owner)) => {
+                return Ok(vec![Address::new_from_array(*owner.owner)])
+            }
+            (RingRail::Confidential, None) => {
+                let accounts = &self.pool_accounts;
+                let window =
+                    settlement_accounts(&data.interface_transfers, data.circuit(), accounts)
+                        .ok_or(AuditError::SettlementAccounts)?;
+                data.owner_signers(accounts, window.len())
+                    .map_err(|error| AuditError::InvalidTransactData(error.to_string()))?
+            }
+            (RingRail::Anonymous | RingRail::Delegate, _) => return Ok(Vec::new()),
+        };
+        Ok(run.iter().fold(Vec::new(), |mut spenders, owner| {
+            if !spenders.contains(owner) {
+                spenders.push(*owner);
+            }
+            spenders
+        }))
     }
 
     pub fn bind_transaction(
@@ -252,6 +287,7 @@ pub fn ring_event_origin_in(
         deposits: confirmed_deposits(groups, source, ring)?,
         merge_disclosure: confirmed_merge_disclosure(groups, source, ring),
         transact,
+        pool_accounts: source.accounts.clone(),
     })
 }
 
@@ -264,12 +300,7 @@ fn bind_withdrawal_owners(
     if withdrawals.is_empty() {
         return Ok(());
     }
-    let invalid = |e: CustomRingError| AuditError::InvalidTransactData(e.to_string());
-    let (&tag, payload) = frame.split_first().ok_or(AuditError::MissingRingTransact)?;
-    if matches!(
-        tag,
-        ring_tag::LEGACY_TRANSACT | ring_tag::LEGACY_DELEGATE_TRANSACT
-    ) {
+    if is_legacy(frame) {
         return Ok(());
     }
     let (spp, _) = TransactIxDataRef::parse_with_external_data_prefix(&source.data[1..])
@@ -279,10 +310,7 @@ fn bind_withdrawal_owners(
     } else {
         RingMode::Confidential
     };
-    let rail = InstructionTag::try_from(tag)
-        .and_then(|tag| RingRail::of(tag, mode))
-        .map_err(invalid)?;
-    let parsed = RingTransactData::parse(payload, rail).map_err(invalid)?;
+    let parsed = parse_frame(mode, frame)?;
     let Some(policy) = parsed.data().policy else {
         return Ok(());
     };
@@ -319,8 +347,8 @@ fn confirmed_transact(
         && matches!(
             caller.data.first(),
             Some(
-                &(ring_tag::TRANSACT
-                    | ring_tag::DELEGATE_TRANSACT
+                &(ring_tag::TRANSFER
+                    | ring_tag::AUTHORITY_TRANSFER
                     | ring_tag::LEGACY_TRANSACT
                     | ring_tag::LEGACY_DELEGATE_TRANSACT)
             )
@@ -328,27 +356,31 @@ fn confirmed_transact(
     .then(|| caller.data.clone())
 }
 
-pub(crate) fn frame_layout(mode: RingMode, frame: &[u8]) -> Result<DisclosureLayout, AuditError> {
+fn parse_frame(mode: RingMode, frame: &[u8]) -> Result<ParsedTransact<'_>, AuditError> {
     let invalid = |error: CustomRingError| AuditError::InvalidTransactData(error.to_string());
     let (&tag, data) = frame.split_first().ok_or(AuditError::MissingRingTransact)?;
     let rail = InstructionTag::try_from(tag)
         .and_then(|tag| RingRail::of(tag, mode))
         .map_err(invalid)?;
-    let parsed = if matches!(
-        tag,
-        ring_tag::LEGACY_TRANSACT | ring_tag::LEGACY_DELEGATE_TRANSACT
-    ) {
+    let parsed = if is_legacy(frame) {
         RingTransactData::parse_legacy(data, rail)
     } else {
         RingTransactData::parse(data, rail)
     };
-    parsed.map(|parsed| parsed.layout()).map_err(invalid)
+    parsed.map_err(invalid)
+}
+
+fn is_legacy(frame: &[u8]) -> bool {
+    matches!(
+        frame.first(),
+        Some(&(ring_tag::LEGACY_TRANSACT | ring_tag::LEGACY_DELEGATE_TRANSACT))
+    )
 }
 
 /// The ring merge forwards `output_ring_data_hash || body` behind the tag.
 const FORWARDED_MERGE_PREFIX_LEN: usize = 1 + 32;
 
-/// A disclosure counts only when the ring forwarded the exact SPP body, the program takes one from an anonymous ring alone.
+/// A disclosure counts only when the ring forwarded the exact SPP body it proved against.
 fn confirmed_merge_disclosure(
     groups: &[InstructionGroup],
     source: &ParsedInstruction,
@@ -364,7 +396,7 @@ fn confirmed_merge_disclosure(
     }
     let request =
         custom_ring_interface::CustomRingMergeIxDataRef::from_bytes(&caller.data[1..]).ok()?;
-    let disclosure = request.disclosure?;
+    let disclosure = request.disclosure;
     let forwarded = source.data.get(1..FORWARDED_MERGE_PREFIX_LEN)?;
     let body = request.spp_merge_body().ok()?;
     (forwarded == request.output_ring_data_hash.as_slice()
@@ -402,10 +434,10 @@ fn confirmed_deposits(
     let caller = direct_caller(groups, source);
     if !caller.is_some_and(|caller| {
         caller.program_id == ring
-            && caller.data.first() == Some(&custom_ring_interface::tag::AUDITED_DEPOSIT)
+            && caller.data.first() == Some(&custom_ring_interface::tag::DEPOSIT)
             && caller
                 .data
-                .get(core::mem::size_of::<custom_ring_interface::AuditedDepositPrefix>()..)
+                .get(core::mem::size_of::<custom_ring_interface::DepositPrefix>()..)
                 == Some(source.data.as_slice())
     }) {
         return Ok(Vec::new());

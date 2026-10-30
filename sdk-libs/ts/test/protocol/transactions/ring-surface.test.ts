@@ -9,6 +9,7 @@ import {
   ringProvingKey,
 } from "../../../src/protocol/proof/proving-keys.js";
 import { RingError, wrapRingError } from "../../../src/protocol/error.js";
+import * as entry from "../../../src/index.js";
 
 const ZERO_POINT = ["0x0", "0x0"];
 const ZERO_PROOF = {
@@ -23,6 +24,40 @@ type Lockfile = { keys: Record<string, { sha256: string }> };
 const lock = JSON.parse(
   readFileSync(new URL("../../../../../prover/ring/proving-keys.lock", import.meta.url), "utf8"),
 ) as Lockfile;
+
+describe("relayer-free wallet surface", () => {
+  it("exports a path that builds, proves and sends every wallet operation without Ring RPC", () => {
+    const direct = [
+      "createCustomRingClient",
+      "syncRingWallet",
+      "AnonymousSync",
+      "applyAnonymousScan",
+      "readMemberRecords",
+      "buildRingDepositTransaction",
+      "createRingDepositSubmission",
+      "PreparedRingDeposit",
+      "buildRingTransferTransaction",
+      "createRingTransferSubmission",
+      "buildRingExitTransaction",
+      "createRingExitSubmission",
+      "buildRingEntryTransaction",
+      "createRingEntrySubmission",
+      "buildRingWithdrawalTransaction",
+      "createRingWithdrawalSubmission",
+      "buildRingMergeTransaction",
+      "createRingMergeSubmission",
+      "buildRingDelegateTransferTransaction",
+      "createRingDelegateSubmission",
+      "CustomRingTransfer",
+      "AnonymousTransfer",
+      "DelegateTransfer",
+      "RingTransactionSubmission",
+      "createKitRingSubmissionTransport",
+      "reconcileRingSubmissions",
+    ] as const satisfies readonly (keyof typeof entry)[];
+    for (const name of direct) expect(typeof entry[name], name).toBe("function");
+  });
+});
 
 describe("ring error envelope", () => {
   it("keeps the cause reachable but out of serialization", () => {
@@ -92,23 +127,17 @@ describe("public package surface", () => {
       import("../../../src/ring-advanced.js"),
     ]);
     for (const name of [
-      "ringConfigAddress",
-      "createRingConfigInstruction",
-      "createMemberRegistryInstruction",
-      "initSppRingConfigInstruction",
+      "ringPolicyAddress",
+      "initializeRingInstruction",
       "ringTransactInstruction",
       "CustomRingTransfer",
       "AnonymousTransfer",
       "DelegateTransfer",
-      "createRingPolicyInstruction",
-      "setRingPolicyRulesInstruction",
-      "setRingPolicySourceInstruction",
-      "buildRingCreatePolicyTransaction",
-      "memberListWriteInstruction",
-      "AuthorityListWrite",
-      "RecordApplication",
+      "updateRingPolicyInstruction",
+      "updateRingAuthorityInstruction",
+      "buildRingUpdatePolicyTransaction",
       "deployRingProgram",
-      "RegisterKey",
+      "KeyRegistration",
       "recoverRingMemberNotes",
       "createCustomRingClient",
       "decryptRingDepositUtxo",

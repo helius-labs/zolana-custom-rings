@@ -1,6 +1,18 @@
-import { bigIntBytes, bytesToBigInt } from "@heliuslabs/zolana/internal";
+import { bigIntBytes, bytesToBigInt, equalBytes } from "@heliuslabs/zolana/internal";
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import { RingError } from "../error.js";
+
+/** Rust `AssetLimits`, Ring RPC checks them only on operations it co-signs. */
+export interface AssetLimits {
+  readonly senderCap: bigint;
+  readonly senderWindowSlots: bigint;
+  readonly volumeCap: bigint;
+  readonly volumeWindowSlots: bigint;
+  readonly depositCap: bigint;
+  readonly depositWindowSlots: bigint;
+  readonly withdrawalCap: bigint;
+  readonly withdrawalWindowSlots: bigint;
+}
 
 /** Per-mint settings stored in the ring's authenticated asset record. */
 export interface MintPolicy {
@@ -8,14 +20,41 @@ export interface MintPolicy {
   readonly cap: bigint;
   readonly cosignAbove: bigint;
   readonly withdrawalThreshold: bigint;
+  readonly limits: AssetLimits;
 }
+
+/** Rust `AssetLimits` field order. */
+export const ASSET_LIMIT_KEYS = Object.freeze([
+  "senderCap",
+  "senderWindowSlots",
+  "volumeCap",
+  "volumeWindowSlots",
+  "depositCap",
+  "depositWindowSlots",
+  "withdrawalCap",
+  "withdrawalWindowSlots",
+] as const satisfies readonly (keyof AssetLimits)[]);
+
+export const EMPTY_ASSET_LIMITS: AssetLimits = Object.freeze({
+  senderCap: 0n,
+  senderWindowSlots: 0n,
+  volumeCap: 0n,
+  volumeWindowSlots: 0n,
+  depositCap: 0n,
+  depositWindowSlots: 0n,
+  withdrawalCap: 0n,
+  withdrawalWindowSlots: 0n,
+});
 
 export const EMPTY_MINT_POLICY: MintPolicy = Object.freeze({
   threshold: 0n,
   cap: 0n,
   cosignAbove: 0n,
   withdrawalThreshold: 0n,
+  limits: EMPTY_ASSET_LIMITS,
 });
+
+const U64_MAX = 0xffff_ffff_ffff_ffffn;
 
 /** Three u64 amounts packed in the same order as Rust `MintPolicy::field`. */
 export function mintPolicyField(policy: MintPolicy): Bytes32 {
@@ -25,20 +64,98 @@ export function mintPolicyField(policy: MintPolicy): Bytes32 {
     policy.withdrawalThreshold > 0xffff_ffff_ffff_ffffn
   )
     throw new RingError("RING_MEMBER_REGISTRY_INVALID");
-  let packed = 0n;
-  for (const amount of [policy.threshold, policy.cap, policy.cosignAbove]) {
-    if (typeof amount !== "bigint" || amount < 0n || amount > 0xffff_ffff_ffff_ffffn)
-      throw new RingError("RING_MEMBER_REGISTRY_INVALID", {
-        details: { reason: "MintPolicyRange" },
-      });
-    packed = (packed << 64n) | amount;
-  }
-  return bigIntBytes(packed) as Bytes32;
+  return packed([policy.threshold, policy.cap, policy.cosignAbove]);
 }
 
-/** Bit 192 marks a replacement, including clearing all four settings. */
+/** Bit 192 marks a replacement, including clearing every setting. */
 export function mintPolicyWriteField(policy: MintPolicy | undefined): Bytes32 {
   return bigIntBytes(
     policy === undefined ? 0n : (1n << 192n) | bytesToBigInt(mintPolicyField(policy)),
   ) as Bytes32;
+}
+
+/** Rust `AssetLimits::fields`, the three leaf fields after the withdrawal threshold. */
+export function assetLimitsFields(limits: AssetLimits): readonly [Bytes32, Bytes32, Bytes32] {
+  const amounts = ASSET_LIMIT_KEYS.map((key) => limits[key]);
+  return [packed(amounts.slice(0, 3)), packed(amounts.slice(3, 6)), packed(amounts.slice(6))];
+}
+
+/** Rust `mint_policy_write`, `1 || MintPolicy::bytes` replaces the settings, all zero keeps them. */
+export function mintPolicyWrite(policy: MintPolicy | undefined): Uint8Array {
+  const write = new Uint8Array(1 + MINT_POLICY_LEN);
+  if (policy === undefined) return write;
+  checkAssetLimits(policy.limits);
+  write[0] = 1;
+  write.set(mintPolicyBytes(policy), 1);
+  return write;
+}
+
+/** Rust `MintPolicy::from_bytes`. */
+export function mintPolicyFromBytes(bytes: Uint8Array): MintPolicy {
+  if (bytes.length !== MINT_POLICY_LEN) throw new RingError("RING_MEMBER_REGISTRY_INVALID");
+  const [threshold = 0n, cap = 0n, cosignAbove = 0n, withdrawalThreshold = 0n, ...amounts] =
+    Array.from({ length: MINT_POLICY_LEN / 8 }, (_, index) =>
+      bytesToBigInt(bytes.subarray(8 * index, 8 * index + 8)),
+    );
+  const limits = Object.fromEntries(
+    ASSET_LIMIT_KEYS.map((key, index) => [key, amounts[index] ?? 0n]),
+  ) as unknown as AssetLimits;
+  return Object.freeze({
+    threshold,
+    cap,
+    cosignAbove,
+    withdrawalThreshold,
+    limits: Object.freeze(limits),
+  });
+}
+
+export function sameMintPolicy(left: MintPolicy, right: MintPolicy): boolean {
+  return equalBytes(mintPolicyBytes(left), mintPolicyBytes(right));
+}
+
+export function isEmptyMintPolicy(policy: MintPolicy): boolean {
+  return sameMintPolicy(policy, EMPTY_MINT_POLICY);
+}
+
+/** Rust `AssetLimits::check`, each cap and its window are both zero or both nonzero. */
+export function checkAssetLimits(limits: AssetLimits): AssetLimits {
+  assetLimitsFields(limits);
+  const unpaired = (cap: bigint, windowSlots: bigint): boolean =>
+    (cap === 0n) !== (windowSlots === 0n);
+  if (
+    unpaired(limits.senderCap, limits.senderWindowSlots) ||
+    unpaired(limits.volumeCap, limits.volumeWindowSlots) ||
+    unpaired(limits.depositCap, limits.depositWindowSlots) ||
+    unpaired(limits.withdrawalCap, limits.withdrawalWindowSlots)
+  )
+    throw new RingError("RING_MEMBER_REGISTRY_INVALID", {
+      details: { reason: "UnpairedWindow" },
+    });
+  return limits;
+}
+
+/** Rust `MintPolicy::LEN`. */
+export const MINT_POLICY_LEN = 96;
+
+/** Rust `MintPolicy::bytes`, big endian u64 amounts in field order. */
+function mintPolicyBytes(policy: MintPolicy): Uint8Array {
+  const bytes = new Uint8Array(MINT_POLICY_LEN);
+  bytes.set(mintPolicyField(policy).subarray(8));
+  bytes.set(bigIntBytes(policy.withdrawalThreshold, 8), 24);
+  assetLimitsFields(policy.limits).forEach((field, index) =>
+    bytes.set(field.subarray(index === 2 ? 16 : 8), 32 + 24 * index),
+  );
+  return bytes;
+}
+
+function packed(amounts: readonly bigint[]): Bytes32 {
+  let field = 0n;
+  for (const amount of amounts) {
+    if (typeof amount !== "bigint" || amount < 0n || amount > U64_MAX)
+      throw new RingError("RING_MEMBER_REGISTRY_INVALID", {
+        details: { reason: "MintPolicyRange" },
+      });
+    field = (field << 64n) | amount;
+  }
+  return bigIntBytes(field) as Bytes32;
 }

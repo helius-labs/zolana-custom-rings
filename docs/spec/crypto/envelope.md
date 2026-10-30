@@ -5,7 +5,7 @@ The envelope seals a secret to the ring's X25519 auditor key. A ring uses it for
 ## Key encoding
 
 - A tagged X25519 key is `0x04 || u`, 33 bytes, with `u` the canonical 32-byte little-endian coordinate below `2^255 - 19`.
-- `CreateConfig` refuses an auditor key whose `u` is one of the 5 low-order values. The program supplies the auditor key from the config, so a prover cannot pick the recipient.
+- `Initialize` refuses an auditor key whose `u` is one of the 5 low-order values. The program supplies the auditor key from the ring policy, so a prover cannot pick the recipient.
 - The auditor view tag is `u` without the tag byte.
 - Secret scalars are clamped as RFC 7748. The audit circuit asserts that `tx_viewing_sk` is clamped.
 
@@ -54,9 +54,9 @@ The cipher carries no authentication tag. Integrity comes from `hash_bytes(ciphe
 | Delivered body | audit stream, slot secret | `fe32(blinding) \|\| u64be(amount)`, 40 bytes | `hash_bytes(body)` per slot |
 | Register key | `CRING/nfk1` | the 32-byte nullifier secret, first byte zero | `hash_bytes(ciphertext)` |
 | Deposit | `CRING/dep1` | per note `fe32(owner_hash) \|\| fe32(blinding) \|\| owner_key`, 96 bytes, one stream for the batch | `hash_bytes` of each 96-byte slot |
-| Anonymous merge | `CRING/mrg1` | the 32-byte disclosure key of [Merge disclosure](disclosure.md#merge-disclosure) | `hash_bytes(ciphertext)` |
+| Merge | `CRING/mrg1` | the 32-byte disclosure key of [Merge disclosure](disclosure.md#merge-disclosure) | `hash_bytes(ciphertext)` |
 
-The deposit owner key is the Ed25519 key on an anonymous ring and 32 zero bytes otherwise.
+The deposit owner key is the key whose `solana_owner_identity` is the note's `owner_pk_hash`.
 
 ## Deposit capsule
 

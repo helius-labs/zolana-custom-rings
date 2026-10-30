@@ -15,7 +15,7 @@ pub struct Cli {
     #[arg(long, global = true, env = "RING_CATALOGUE")]
     pub catalogue: Option<String>,
     /// Require the prover to attest to the TEE policy in FILE, bare or as a {"deployment": ...}
-    /// pin file, in place of the release pin.
+    /// pin file.
     #[arg(
         long,
         value_name = "FILE",
@@ -75,16 +75,16 @@ pub enum Command {
     /// Set, clear or show the ring's co-signer.
     #[command(subcommand)]
     Cosigner(CoSignerCommand),
-    /// Set or show the lamports a member's record write pays the config authority.
-    #[command(subcommand)]
-    InsertFee(InsertFeeCommand),
     /// Set or show the permanent delegate, or move a note as the delegate.
     #[command(subcommand)]
     Delegate(DelegateCommand),
-    /// Escrow the member's nullifier key in its record of the ring member registry.
+    /// Escrow the member's nullifier key in its record of the ring's storage registry.
     #[command(subcommand)]
     Key(KeyCommand),
-    /// Read and write the list bits of member records and apply the record queue.
+    /// List the wallet enrolments that await the config authority, or approve one.
+    #[command(subcommand)]
+    Enrolment(EnrolmentCommand),
+    /// Read and write the list bits of member records.
     #[command(subcommand)]
     List(ListCommand),
     /// Read, check and replace the pinned rule table.
@@ -100,7 +100,7 @@ pub enum Command {
 
 #[derive(Debug, Subcommand)]
 pub enum ListCommand {
-    /// Set the list bit of each member's record, the pending writes apply in the same proof.
+    /// Set the list bit of each member's record.
     Add(EntryArgs),
     /// Clear the list bit of each member's record.
     Clear(EntryArgs),
@@ -117,9 +117,7 @@ pub enum ListCommand {
         #[arg(long)]
         own: bool,
     },
-    /// Apply the queued member writes once the queue is full or aged, anyone may.
-    Apply,
-    /// Set a list the sender writes on its own record, it applies with the queue.
+    /// Set a list the sender writes on its own record.
     Join {
         #[arg(value_enum)]
         list: MemberList,
@@ -155,7 +153,7 @@ pub enum PolicyCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum CoSignerCommand {
-    /// Create or replace the co-signer, flags absent means the `[cosigner]` table of ring.toml.
+    /// Create or rescope a co-signer's record, flags absent means the `[cosigner]` table of ring.toml.
     Set {
         /// The Solana key that signs beside the sender.
         #[arg(long)]
@@ -167,23 +165,22 @@ pub enum CoSignerCommand {
         #[arg(long, requires = "signer")]
         threshold: Vec<ThresholdSpec>,
     },
-    /// Close the co-signer account, the rent returns to the authority.
-    Clear,
-    Show,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum InsertFeeCommand {
-    /// Zero lets members write their records free.
-    Set {
-        lamports: u64,
+    /// Close the co-signer's record, the rent returns to the authority.
+    Clear {
+        /// The record's key, absent means the `[cosigner]` key of ring.toml.
+        #[arg(long)]
+        signer: Option<Address>,
     },
-    Show,
+    /// The classes some record covers and the named record, absent means the `[cosigner]` key.
+    Show {
+        #[arg(long)]
+        signer: Option<Address>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
 pub enum DelegateCommand {
-    /// Set the delegate once, signed by the delegate and by the upgrade authority holding the ring
+    /// Set the delegate once, signed by the delegate and by the config authority holding the ring
     /// auditor key.
     Set {
         /// The delegate's keypair, it signs the set and every later move.
@@ -226,6 +223,14 @@ pub struct CosignerArg {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum EnrolmentCommand {
+    /// Print each awaiting enrolment with the lists it awaits.
+    Pending,
+    /// Set every list the wallet's enrolments await in one update that lands them.
+    Approve { wallet: Address },
+}
+
+#[derive(Debug, Subcommand)]
 pub enum KeyCommand {
     /// Seal the member's nullifier key to the ring auditor and register it, `transfer` does it on first use.
     Register,
@@ -235,7 +240,7 @@ pub enum KeyCommand {
 pub enum ReaderCommand {
     /// A base58 Solana key or the 66-hex P-256 key of a passkey.
     Grant { reader: ReaderKey },
-    /// Close the reader's record, the rent returns to the authority.
+    /// Clear the `reader` list of the reader's record.
     Revoke { reader: ReaderKey },
 }
 
@@ -248,8 +253,11 @@ pub enum AuthorityCommand {
         #[arg(long)]
         yes: bool,
     },
-    /// Hand the ring config authority to another keypair, both keys sign.
-    TransferConfig { new_authority_keypair: PathBuf },
+    /// Hand one ring role to another keypair, the admin and the new key sign.
+    UpdateRole {
+        role: RoleName,
+        new_keypair: PathBuf,
+    },
     /// Stop every deposit, transfer and merge of the ring.
     Pause,
     /// Open the ring again after a pause.
@@ -354,6 +362,12 @@ pub struct TransactArgs {
     pub amount: u64,
     #[command(flatten)]
     pub cosigner: CosignerArg,
+    /// `in-proof` signs the spend inside the proof and the authority pays, on a confidential ring.
+    #[arg(long, value_enum, default_value_t = OwnerRail::Signer)]
+    pub owner_rail: OwnerRail,
+    /// Localnet only, the authority lists both demo parties on the ring's own allow list.
+    #[arg(long)]
+    pub enrol_allow: bool,
 }
 
 #[derive(Debug, Args)]
@@ -387,6 +401,9 @@ pub struct TransferArgs {
     pub default_ring: bool,
     #[command(flatten)]
     pub cosigner: CosignerArg,
+    /// `in-proof` signs the spend inside the proof and the authority pays, on a confidential ring.
+    #[arg(long, value_enum, default_value_t = OwnerRail::Signer)]
+    pub owner_rail: OwnerRail,
 }
 
 #[derive(Debug, Args)]

@@ -63,7 +63,10 @@ pub use crate::viewing_history::{
 };
 pub use crate::{
     confidential::{open_ring_confidential, RingConfidentialNotes, RingConfidentialScan},
-    created::{CreatedUtxoPage, CreatedUtxoScan, CreatedUtxos},
+    created::{
+        CreatedNotes, CreatedUtxoPage, CreatedUtxoScan, CreatedUtxos, DepositNote, DepositOwner,
+        DepositOwners,
+    },
     decrypt::{EscrowedKeys, KnownUtxos, TransactionAudit},
     deposit::{ring_deposits_in, RingDeposit},
     deposit_payload::deposit_payload,
@@ -87,12 +90,10 @@ pub use crate::{
         ring_event_origin_in, ConfirmedDeposit, ConfirmedEvent, ConfirmedEventKind,
         ConfirmedMergeDisclosure, RingOrigin, RingWithdrawal, TransactionOrigin,
     },
-    reader::{
-        Ed25519ReaderKey, P256ReaderKey, ReaderKey, ReaderKeyError, READ_ACCESS_RECORD_PDA_SEED,
-    },
+    reader::{Ed25519ReaderKey, P256ReaderKey, ReaderKey, ReaderKeyError},
     records::{
-        apply_proof_inputs, member_record, quad_path, MemberOpeningRead, RecordPoolCheck,
-        RecordPoolRead, RegistryTip,
+        member_record, quad_path, storage_apply_proof_inputs, MemberOpeningRead, RecordPoolCheck,
+        RecordPoolRead, StorageTip,
     },
     recover::{MemberRecovery, RecoveredNotes, RingRecovery, SourceMember},
     scan::{AuditedPage, RingScan, RingScanPage, ScanPage},

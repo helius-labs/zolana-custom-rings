@@ -41,13 +41,14 @@ tower = { workspace = true }
 tower-http = { workspace = true }
 tracing-subscriber = { workspace = true }
 spr-indexer-api = { workspace = true }
-spr-interface = { workspace = true }
 zolana-ring-indexer = { workspace = true }
 zolana-ring-policy = { workspace = true }
 spr-rpc-http = { workspace = true }
 
 [dev-dependencies]
 base64 = { workspace = true }
-hex = { workspace = true }
+custom-ring-sdk = { workspace = true }
 hyper-util = { workspace = true }
+spr-keypair = { workspace = true }
+zolana-ring-client = { workspace = true, features = ["rpc"] }
 zolana-ring-member-registry = { workspace = true }

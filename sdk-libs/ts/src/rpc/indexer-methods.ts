@@ -1,90 +1,43 @@
-import type { Address } from "@heliuslabs/zolana";
 import type { MethodDescriptor } from "@heliuslabs/zolana/internal";
 
 import {
-  decodeRingApplyProofInputs,
-  decodeRingMemberOpening,
-  decodeRingMemberOpenings,
-  decodeRingMemberPage,
-  decodeRingRecordPool,
-  decodeRingRecordQueue,
-  decodeRingRegistryState,
-  encodeRingApplyProofInputsRequest,
-  encodeRingMemberOpeningsRequest,
-  encodeRingMemberProofRequest,
-  encodeRingMemberRecordsRequest,
-  encodeRingMemberRegistryRootRequest,
-  encodeRingRecordPoolRequest,
+  decodeStorageMemberOpenings,
+  decodeStorageMemberPage,
+  decodeStorageRecordPool,
+  encodeStorageMemberOpeningsRequest,
+  encodeStorageMemberRecordsRequest,
+  encodeStorageRecordPoolRequest,
 } from "../protocol/indexer/indexer-codec.js";
 import type {
-  RingApplyProofInputsRequest,
-  RingApplyProofInputsResponse,
-  RingMemberOpeningResponse,
-  RingMemberOpeningsRequest,
-  RingMemberOpeningsResponse,
-  RingMemberPageResponse,
-  RingMemberProofRequest,
-  RingMemberRecordsRequest,
-  RingRecordPoolRequest,
-  RingRecordPoolResponse,
-  RingRecordQueueResponse,
-  RingRegistryStateResponse,
+  StorageMemberOpeningsRequest,
+  StorageMemberOpeningsResponse,
+  StorageMemberPageResponse,
+  StorageMemberRecordsRequest,
+  StorageRecordPoolRequest,
+  StorageRecordPoolResponse,
 } from "../protocol/indexer/indexer-types.js";
 
-export const getRingMemberRecordMethod: MethodDescriptor<
-  RingMemberProofRequest,
-  RingMemberOpeningResponse
+export const getStorageMemberOpeningsMethod: MethodDescriptor<
+  StorageMemberOpeningsRequest,
+  StorageMemberOpeningsResponse
 > = {
-  name: "getRingMemberRecord",
-  encodeRequest: encodeRingMemberProofRequest,
-  decodeResponse: decodeRingMemberOpening,
+  name: "getStorageMemberOpenings",
+  encodeRequest: encodeStorageMemberOpeningsRequest,
+  decodeResponse: decodeStorageMemberOpenings,
 };
-export const getRingMemberRecordsMethod: MethodDescriptor<
-  RingMemberRecordsRequest,
-  RingMemberPageResponse
+export const getStorageMemberRecordsMethod: MethodDescriptor<
+  StorageMemberRecordsRequest,
+  StorageMemberPageResponse
 > = {
-  name: "getRingMemberRecords",
-  encodeRequest: encodeRingMemberRecordsRequest,
-  decodeResponse: decodeRingMemberPage,
+  name: "getStorageMemberRecords",
+  encodeRequest: encodeStorageMemberRecordsRequest,
+  decodeResponse: decodeStorageMemberPage,
 };
-export const getRingMemberRegistryRootMethod: MethodDescriptor<
-  Readonly<{ ringProgramId: Address }>,
-  RingRegistryStateResponse
+export const getStorageRecordPoolMethod: MethodDescriptor<
+  StorageRecordPoolRequest,
+  StorageRecordPoolResponse
 > = {
-  name: "getRingMemberRegistryRoot",
-  encodeRequest: encodeRingMemberRegistryRootRequest,
-  decodeResponse: decodeRingRegistryState,
-};
-
-export const getRingMemberOpeningsMethod: MethodDescriptor<
-  RingMemberOpeningsRequest,
-  RingMemberOpeningsResponse
-> = {
-  name: "getRingMemberOpenings",
-  encodeRequest: encodeRingMemberOpeningsRequest,
-  decodeResponse: decodeRingMemberOpenings,
-};
-export const getRingRecordPoolMethod: MethodDescriptor<
-  RingRecordPoolRequest,
-  RingRecordPoolResponse
-> = {
-  name: "getRingRecordPool",
-  encodeRequest: encodeRingRecordPoolRequest,
-  decodeResponse: decodeRingRecordPool,
-};
-export const getRingRecordQueueMethod: MethodDescriptor<
-  Readonly<{ ringProgramId: Address }>,
-  RingRecordQueueResponse
-> = {
-  name: "getRingRecordQueue",
-  encodeRequest: encodeRingMemberRegistryRootRequest,
-  decodeResponse: decodeRingRecordQueue,
-};
-export const getRingApplyProofInputsMethod: MethodDescriptor<
-  RingApplyProofInputsRequest,
-  RingApplyProofInputsResponse
-> = {
-  name: "getRingApplyProofInputs",
-  encodeRequest: encodeRingApplyProofInputsRequest,
-  decodeResponse: decodeRingApplyProofInputs,
+  name: "getStorageRecordPool",
+  encodeRequest: encodeStorageRecordPoolRequest,
+  decodeResponse: decodeStorageRecordPool,
 };

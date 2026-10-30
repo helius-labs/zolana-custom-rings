@@ -1,0 +1,4 @@
+{
+  "description": "One prepareRelay request as the ring rpc reads it. ring is the address of bytes 0x01 repeated, feePayer of 0x02, validUntilSlot 4242, intent the anonymous rail with proofInputs the bytes 03 04 05 and ownerSignature 64 bytes of 0x07. wire is the exact JSON text, pinned by the sdk-libs/client rpc tests and produced by the TypeScript encodePrepareRelayRequest.",
+  "wire": "{\"ring\":\"4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi\",\"quote\":{\"feePayer\":\"8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR\",\"validUntilSlot\":4242},\"intent\":{\"operation\":\"anonymous\",\"proofInputs\":\"AwQF\",\"ownerSignature\":\"99eUso3aSbE9tqGSTXzo3TLfKb9RkMTURrHKQ1K7Zh3BbeqPevr5E1iCbpTjqHuTFLtfxTTD5ekfVuZFzQyEQf8\"}}"
+}

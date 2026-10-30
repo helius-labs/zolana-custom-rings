@@ -23,7 +23,7 @@ The auditor opens the envelope, derives the pad, subtracts it, and rebuilds each
 | 4 | reserved | always clear, every key accepts either value |
 | 8 | full openings | an anonymous transfer spends default-ring notes |
 
-The delivered key varies exits and key escrow. The anonymous key varies exits and pins key escrow to `0`. The entry key pins full openings to `1`, the others to `0`.
+The delivered key and the delivered sender key vary exits and key escrow. The anonymous key varies exits and pins key escrow to `0`. The entry key varies exits, pins full openings to `1` and pins key escrow to `0`.
 
 ## Fields per layout
 
@@ -52,7 +52,7 @@ A delivered ring output's amount and blinding are in its body, not in the disclo
 
 ## Merge disclosure
 
-An anonymous merge seals a fresh 32-byte disclosure key under `CRING/mrg1` and masks its fields with:
+A merge seals a fresh 32-byte disclosure key under `CRING/mrg1` and masks its fields with:
 
 ```text
 seed  = Poseidon(CR_MD, PackBytesBE(disclosure_key), right_align(salt))

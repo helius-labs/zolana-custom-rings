@@ -5,7 +5,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use custom_ring_interface::{MemberRegistry, RecordQueue, RingAccount, RootEntry};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -24,6 +23,26 @@ use zolana_secret_file::{
     create_new, read_key32, Access, KeyPairFiles, SecretFileError, Visibility,
 };
 
+mod authority_transfer;
+mod enrolment;
+mod merge_settings;
+mod reader_grant;
+mod record_update;
+mod relay;
+mod relay_deposit;
+mod relay_proof;
+mod wallet_activity;
+
+pub use authority_transfer::*;
+pub use enrolment::*;
+pub use merge_settings::*;
+pub use reader_grant::*;
+pub use record_update::*;
+pub use relay::*;
+pub use relay_deposit::*;
+pub use relay_proof::*;
+pub use wallet_activity::*;
+
 use crate::{
     AuditError, AuditedInput, AuditedOutput, AuditedTransaction, AuditedUtxo, InputOpening,
     InputRing, KnownUtxo, MergeAuditPage, MergeKeys, OutputOpening, OutputPayloadErrorKind,
@@ -35,14 +54,28 @@ pub const CREATE_AUDITOR_KEY: &str = "createAuditorKey";
 pub const RING_STATUS: &str = "ringStatus";
 pub const RING_DEPOSITS: &str = "ringDeposits";
 pub const GET_DECRYPTED_TRANSACTIONS: &str = "getDecryptedTransactions";
+pub const GET_WALLET_ACTIVITY: &str = "getWalletActivity";
 pub const GET_AUDITED_MERGES: &str = "getAuditedMerges";
 pub const GET_AUDITED_UTXOS: &str = "getAuditedUtxos";
+pub const GET_RELAY_QUOTE: &str = "getRelayQuote";
+pub const PREPARE_RELAY: &str = "prepareRelay";
+pub const SUBMIT_RELAY: &str = "submitRelay";
+pub const GET_RELAY_STATUS: &str = "getRelayStatus";
+pub const SUBMIT_RECORD_UPDATE: &str = "submitRecordUpdate";
+pub const GET_RECORD_UPDATE_STATUS: &str = "getRecordUpdateStatus";
+pub const SET_MERGE_SETTINGS: &str = "setMergeSettings";
+pub const SET_READER_GRANT: &str = "setReaderGrant";
+pub const PREPARE_AUTHORITY_TRANSFER: &str = "prepareAuthorityTransfer";
+pub const GET_PENDING_ENROLMENTS: &str = "getPendingEnrolments";
+pub const REFUSE_ENROLMENT: &str = "refuseEnrolment";
+pub const CREATE_RECORDS_REGISTRY: &str = "createRecordsRegistry";
 /// The most UTXO hashes one `getAuditedUtxos` request names.
 pub const AUDITED_UTXOS_LIMIT: usize = 100;
 pub const AUDIT_CURSOR_LIMIT: usize = 256;
 pub const AUDIT_PAGE_LIMIT: u64 = 100;
 pub const DEPOSITS_PAGE_LIMIT: u32 = 50;
 pub const MAX_DEPOSITS_PAGE_LIMIT: u32 = 200;
+pub const PENDING_ENROLMENTS_PAGE_LIMIT: usize = 100;
 const ATTESTATION_DOMAIN: &[u8] = b"zolana/ring-auditor-key/v2";
 const READ_DOMAIN: &str = "zolana/ring-rpc-read/v2";
 const AUDITOR_KEY_REQUEST_DOMAIN: &str = "zolana/ring-rpc-auditor-key-request/v1";
@@ -161,9 +194,6 @@ pub struct RingStatusResponse {
     /// Absent until SPP holds a config for the ring.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activation: Option<RingActivation>,
-    /// Absent until the ring creates its member registry.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub registry: Option<RegistryStatus>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,37 +203,9 @@ pub struct RingActivation {
     pub paused: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RegistryStatus {
-    /// Entry `i` sits at history slot `i`, `null` for a slot never written.
-    pub history: Vec<Option<RegistryRoot>>,
-    /// The history slot of the newest root.
-    pub history_cursor: u8,
-    pub next_index: u32,
-    /// The applied position every own-ring root must reach.
-    pub floor: u64,
-    pub prior_floor: u64,
-    /// The slot of the last floor raise.
-    pub floor_slot: u64,
-    /// Queue positions `head..tail` wait for an application.
-    pub queue_head: u64,
-    pub queue_tail: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RegistryRoot {
-    pub root: Hash,
-    /// The queue head right after the application that pushed the root.
-    pub applied: u64,
-    pub slot: u64,
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RingChainStatus {
     pub activation: Option<RingActivation>,
-    pub registry: Option<RegistryStatus>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -232,6 +234,9 @@ pub struct GetDecryptedTransactionsRequest {
     pub cursor: Option<Base64String>,
     #[serde(default)]
     pub limit: Option<Limit>,
+    /// Narrows the read to one wallet's rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wallet: Option<SerializablePubkey>,
     pub auth: ReadAuth,
 }
 
@@ -250,6 +255,9 @@ pub struct GetAuditedUtxosRequest {
     pub ring_program_id: Option<SerializablePubkey>,
     /// UTXO hashes with their tree id, `1..=AUDITED_UTXOS_LIMIT` of them.
     pub utxo_hashes: Vec<Hash>,
+    /// Narrows the read to one wallet's notes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wallet: Option<SerializablePubkey>,
     pub auth: ReadAuth,
 }
 
@@ -462,6 +470,9 @@ pub struct DecryptedTransaction {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<DecryptedInput>,
     pub nullifiers: Vec<Hash>,
+    /// The input owners of a confidential transfer, by owner signature or in proof.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spenders: Vec<SerializablePubkey>,
     /// Required signers, fee payer first.
     pub signers: Vec<SerializablePubkey>,
     /// Public settlement legs, where value left the ring.
@@ -474,6 +485,7 @@ pub struct ConfirmedAudit {
     pub audited: AuditedTransaction,
     pub event_index: u16,
     pub nullifiers: Vec<[u8; 32]>,
+    pub spenders: Vec<Address>,
     pub signers: Vec<Address>,
     pub withdrawals: Vec<RingWithdrawal>,
 }
@@ -635,6 +647,7 @@ pub trait Attestation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PagedRead {
     DecryptedTransactions,
+    WalletActivity,
     AuditedMerges,
 }
 
@@ -654,6 +667,7 @@ pub struct ReadAttestation {
     pub target: ReadTarget,
     pub cursor: Option<Base64String>,
     pub limit: Option<Limit>,
+    pub wallet: Option<Address>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -667,6 +681,7 @@ pub struct AuditedUtxosAttestation {
     pub target: ReadTarget,
     /// sha256 of the requested hashes, concatenated in request order.
     pub utxo_hashes: [u8; 32],
+    pub wallet: Option<Address>,
 }
 
 /// The service's statement of the auditor key it holds, bound to the request it answers.
@@ -747,6 +762,7 @@ impl From<ConfirmedAudit> for DecryptedTransaction {
             audited,
             event_index,
             nullifiers,
+            spenders,
             signers,
             withdrawals,
         } = confirmed;
@@ -770,6 +786,10 @@ impl From<ConfirmedAudit> for DecryptedTransaction {
             }),
             inputs: audited.inputs.into_iter().map(Into::into).collect(),
             nullifiers: nullifiers.into_iter().map(Into::into).collect(),
+            spenders: spenders
+                .into_iter()
+                .map(|key| key.to_bytes().into())
+                .collect(),
             signers: signers
                 .into_iter()
                 .map(|key| key.to_bytes().into())
@@ -959,47 +979,12 @@ impl From<AuditedInput> for DecryptedInput {
     }
 }
 
-impl RegistryStatus {
-    pub fn new(registry: &MemberRegistry, queue: &RecordQueue) -> Self {
-        Self {
-            history: registry
-                .history
-                .iter()
-                .map(|entry| (entry.root != [0; 32]).then(|| RegistryRoot::from(entry)))
-                .collect(),
-            history_cursor: registry.history_cursor,
-            next_index: registry.next_index(),
-            floor: registry.floor(),
-            prior_floor: registry.prior_floor(),
-            floor_slot: registry.floor_slot(),
-            queue_head: queue.head(),
-            queue_tail: queue.tail(),
-        }
-    }
-}
-
-impl From<&RootEntry> for RegistryRoot {
-    fn from(entry: &RootEntry) -> Self {
-        Self {
-            root: entry.root.into(),
-            applied: entry.applied(),
-            slot: entry.slot(),
-        }
-    }
-}
-
 impl RingChainStatus {
     /// An account of another owner reads as absent, a malformed one of the ring is an error.
     pub async fn read<R: AsyncRpc + ?Sized>(rpc: &R, ring: Address) -> Result<Self, ClientError> {
         let pool = Address::new_from_array(SHIELDED_POOL_PROGRAM_ID);
         let (config, config_bump) = Address::find_program_address(&[RING_AUTH_PDA_SEED], &ring);
-        let (registry, registry_bump) =
-            Address::find_program_address(&[MemberRegistry::SEED], &ring);
-        let (queue, queue_bump) = Address::find_program_address(&[RecordQueue::SEED], &ring);
-        let accounts = rpc
-            .get_multiple_accounts(vec![config, registry, queue])
-            .await?;
-        let [config, registry, queue] = <[_; 3]>::try_from(accounts)
+        let [config] = <[_; 1]>::try_from(rpc.get_multiple_accounts(vec![config]).await?)
             .map_err(|_| ClientError::Rpc("ring status accounts are missing".to_owned()))?;
         let invalid = |name: &str| ClientError::Rpc(format!("ring {name} account is invalid"));
         let activation = config
@@ -1016,26 +1001,7 @@ impl RingChainStatus {
                     .ok_or_else(|| invalid("SPP config"))
             })
             .transpose()?;
-        let registry = match (
-            registry.filter(|account| account.owner == ring),
-            queue.filter(|account| account.owner == ring),
-        ) {
-            (Some(registry), Some(queue)) => {
-                let registry = MemberRegistry::decode(&registry.owner, &ring, &registry.data)
-                    .filter(|registry| registry.bump == registry_bump)
-                    .ok_or_else(|| invalid("member registry"))?;
-                let queue = RecordQueue::decode(&queue.owner, &ring, &queue.data)
-                    .filter(|queue| queue.bump == queue_bump)
-                    .ok_or_else(|| invalid("record queue"))?;
-                Some(RegistryStatus::new(&registry, &queue))
-            }
-            (None, None) => None,
-            _ => return Err(invalid("member registry")),
-        };
-        Ok(Self {
-            activation,
-            registry,
-        })
+        Ok(Self { activation })
     }
 }
 
@@ -1052,6 +1018,7 @@ impl PagedRead {
     pub const fn method(self) -> &'static str {
         match self {
             Self::DecryptedTransactions => GET_DECRYPTED_TRANSACTIONS,
+            Self::WalletActivity => GET_WALLET_ACTIVITY,
             Self::AuditedMerges => GET_AUDITED_MERGES,
         }
     }
@@ -1063,6 +1030,7 @@ impl PagedRead {
             target,
             cursor: None,
             limit: None,
+            wallet: None,
         })
     }
 }
@@ -1082,12 +1050,13 @@ impl Attestation for ReadAttestation {
     fn message(&self, timestamp: u64, nonce: &[u8; 32]) -> Vec<u8> {
         let cursor = self.cursor.as_ref().map_or(&[][..], |cursor| &cursor.0);
         format!(
-            "{READ_DOMAIN}\nmethod: {}\n{}\ntimestamp: {timestamp}\nnonce: {}\nlimit: {}\ncursor: {}",
+            "{READ_DOMAIN}\nmethod: {}\n{}\ntimestamp: {timestamp}\nnonce: {}\nlimit: {}\ncursor: {}{}",
             self.read.method(),
             self.target.lines(),
             base64(nonce),
             self.limit.as_ref().map_or(0, Limit::value),
             base64(cursor),
+            wallet_line(self.wallet),
         )
         .into_bytes()
     }
@@ -1114,6 +1083,7 @@ impl AuditedUtxosAttestation {
         Self {
             target,
             utxo_hashes: digest.finalize().into(),
+            wallet: None,
         }
     }
 }
@@ -1121,10 +1091,11 @@ impl AuditedUtxosAttestation {
 impl Attestation for AuditedUtxosAttestation {
     fn message(&self, timestamp: u64, nonce: &[u8; 32]) -> Vec<u8> {
         format!(
-            "{AUDITED_UTXOS_DOMAIN}\n{}\ntimestamp: {timestamp}\nnonce: {}\nutxos: {}",
+            "{AUDITED_UTXOS_DOMAIN}\n{}\ntimestamp: {timestamp}\nnonce: {}\nutxos: {}{}",
             self.target.lines(),
             base64(nonce),
             base64(&self.utxo_hashes),
+            wallet_line(self.wallet),
         )
         .into_bytes()
     }
@@ -1188,6 +1159,11 @@ impl ReadRequest {
         Ok(self)
     }
 
+    pub fn with_wallet(mut self, wallet: Address) -> Self {
+        self.attestation.wallet = Some(wallet);
+        self
+    }
+
     pub fn sign<S: ReadSigner + ?Sized>(
         self,
         signer: &S,
@@ -1197,12 +1173,14 @@ impl ReadRequest {
             target,
             cursor,
             limit,
+            wallet,
             ..
         } = self.attestation;
         Ok(GetDecryptedTransactionsRequest {
             ring_program_id: Some(target.ring.to_bytes().into()),
             cursor,
             limit,
+            wallet: wallet.map(Into::into),
             auth,
         })
     }
@@ -1216,12 +1194,18 @@ impl AuditedUtxosRequest {
         }
     }
 
+    pub fn with_wallet(mut self, wallet: Address) -> Self {
+        self.signed.attestation.wallet = Some(wallet);
+        self
+    }
+
     pub fn sign<S: ReadSigner + ?Sized>(
         self,
         signer: &S,
     ) -> Result<GetAuditedUtxosRequest, ReadBuildError> {
         Ok(GetAuditedUtxosRequest {
             ring_program_id: Some(self.signed.attestation.target.ring.to_bytes().into()),
+            wallet: self.signed.attestation.wallet.map(Into::into),
             auth: self.signed.read_auth(signer)?,
             utxo_hashes: self.utxo_hashes,
         })
@@ -1390,6 +1374,11 @@ pub fn public_key_path(secret: &Path) -> Result<PathBuf, KeyFileError> {
 fn base64(bytes: &[u8]) -> String {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+/// Empty for a ring-wide read, its attestation keeps the bytes the TypeScript twin signs.
+fn wallet_line(wallet: Option<Address>) -> String {
+    wallet.map_or_else(String::new, |wallet| format!("\nwallet: {wallet}"))
 }
 
 #[cfg(test)]

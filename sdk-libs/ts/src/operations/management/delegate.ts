@@ -43,19 +43,13 @@ import {
   type DelegateTransferClient,
   type RingTransferApproval,
 } from "../payments/transfer-rails.js";
-import {
-  provenWithinTransaction,
-  ringIntentMismatch,
-  ringProofInput,
-  ringSelectionErrors,
-} from "../workflow/selection.js";
+import { ringIntentMismatch, ringProofInput, ringSelectionErrors } from "../workflow/selection.js";
 import {
   RingTransactionSubmission,
   checkRetainedEntries,
   type RingSubmissionAttempt,
   type RingSubmissionBuildState,
 } from "../workflow/submission.js";
-import { checkDemandedCoSigner } from "../payments/transfer.js";
 import { RING_AUTHORITY_SHAPES } from "../../protocol/transaction/spp.js";
 
 export type RingDelegateTransferClient = DelegateTransferClient & BlockhashProvider & KitRpcAccess;
@@ -247,14 +241,14 @@ async function buildDelegateTransaction(
       outputs,
       assets,
       outputTreeId: move.client.treeId,
+      ...(intent.cosigner === undefined ? {} : { coSigner: intent.cosigner }),
     });
     const approval: RingTransferApproval = {
       transaction:
         move.priorityFeeLamports === undefined
           ? {}
           : { priorityFeeLamports: move.priorityFeeLamports },
-      approve: async ({ prepared, coSigner }) => {
-        checkDemandedCoSigner(move.ringProgramId, move.cosigner, coSigner);
+      approve: async ({ prepared }) => {
         if (source.kind === "keys") {
           const approved = await source.approve({
             solanaPublicKey: ownerSolanaAccount(owner, move.feePayer),
@@ -266,9 +260,7 @@ async function buildDelegateTransaction(
         checkPreparedTransfer(prepared, intent, ringIntentMismatch);
       },
     };
-    const proven = await provenWithinTransaction(selected.length, () =>
-      transfer.proveApproved(move.client, approval, context),
-    );
+    const proven = await transfer.proveApproved(move.client, approval, context);
     const [instruction, lifetime] = await Promise.all([
       proven.instruction(),
       move.client.getLatestBlockhash(context),
@@ -278,7 +270,7 @@ async function buildDelegateTransaction(
       feePayer: move.feePayer,
       lifetime,
       instructions: [instruction],
-      computeUnitLimit: ringComputeUnitLimit(RingInstructionTag.delegateTransact),
+      computeUnitLimit: ringComputeUnitLimit(RingInstructionTag.authorityTransfer),
     });
     return Object.freeze({
       transaction,

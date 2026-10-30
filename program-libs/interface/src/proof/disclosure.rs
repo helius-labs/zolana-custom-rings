@@ -7,6 +7,8 @@ use spr_hasher::primitives::{
 };
 
 pub const DELIVERED_AUDIT_CAPACITIES: [usize; 4] = [2, 4, 8, 16];
+/// The input class of the sender key per delivered capacity.
+pub const DELIVERED_SENDER_CLASSES: [(usize, usize); 4] = [(2, 48), (4, 24), (8, 16), (16, 8)];
 /// Input slots of the widest SPP shape a compact confidential ring spend uses.
 pub const CONFIDENTIAL_RING_MAX_INPUTS: usize = 48;
 /// Input classes of the anonymous commitment keys per output capacity, ascending.
@@ -120,6 +122,8 @@ pub struct DeliveredLayout {
     pub outputs: usize,
     pub exits: bool,
     pub key_escrow: bool,
+    /// The in-proof owner rail's sender key input class, the disclosure fields stay the same.
+    pub sender_class: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -134,6 +138,16 @@ pub struct DeliveredFields {
 }
 
 impl DeliveredLayout {
+    /// The sender key's input class at `outputs`, `None` when it holds fewer than `inputs`.
+    pub fn sender_class(outputs: usize, inputs: usize) -> Option<usize> {
+        for (capacity, class) in DELIVERED_SENDER_CLASSES {
+            if capacity == outputs {
+                return (inputs <= class).then_some(class);
+            }
+        }
+        None
+    }
+
     pub fn fields(self) -> DeliveredFields {
         let mut next = Cursor::default();
         let seed_out = self.exits.then(|| next.one());
@@ -357,6 +371,7 @@ mod tests {
                 outputs: count(record, "outputs"),
                 exits: flag(record, "exits"),
                 key_escrow: flag(record, "key_escrow"),
+                sender_class: None,
             };
             (DisclosureLayout::Delivered(layout), record)
         });

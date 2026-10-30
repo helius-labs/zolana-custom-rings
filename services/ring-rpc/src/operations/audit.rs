@@ -5,36 +5,40 @@ use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::GetShieldedTransactionsByTagsResponse;
 use spr_indexer_api::{Base64String, Hash, Limit};
-use spr_keypair::{X25519Keypair, X25519Pubkey};
+use spr_keypair::{hash::owner_hash, NullifierKey, PublicKey, X25519Keypair, X25519Pubkey};
 use spr_transaction::instructions::transact::canonical_shape;
 use zolana_ring_client::{
     auditor_view_tag,
-    records::{MemberOpeningRead, RegistryTip},
+    records::{MemberOpeningRead, StorageTip},
     rpc::{
         cursor_in_bounds, limit_in_bounds, utxo_hashes_in_bounds, Attestation,
         AuditedUtxosAttestation, AuditedUtxosPage, AuditorKeyStatement, AuthorityAuth,
         ConfirmedAudit, DecryptedTransaction, DecryptedTransactionsPage, GetAuditedMergesResponse,
         GetAuditedUtxosRequest, GetAuditedUtxosResponse, GetDecryptedTransactionsResponse,
-        PagedRead, ReadAttestation, ReadAuth, ReadTarget, RingChainStatus, SkippedReason,
-        SkippedTransaction, AUDIT_PAGE_LIMIT,
+        GetWalletActivityResponse, PagedRead, ReadAttestation, ReadAuth, ReadTarget,
+        ReaderGrantAction, ReaderGrantAttestation, RingChainStatus, SetReaderGrantRequest,
+        SkippedReason, SkippedTransaction, AUDIT_PAGE_LIMIT,
     },
-    AuditError, AuditedTransaction, CreatedUtxos, MergeAuditPage, RingOrigin, TransactionAudit,
+    AuditError, AuditedTransaction, CreatedUtxos, DepositNote, MergeAuditPage, ReaderKey,
+    RingOrigin, TransactionAudit,
 };
 use zolana_ring_indexer::rpc::{
-    GetRingMemberOpeningsRequest, GetRingMemberRecordsRequest, RingMemberOpening,
-    MAX_RING_MEMBER_PAGE_LIMIT,
+    GetStorageMemberRecordsRequest, RingMemberOpening, MAX_RING_MEMBER_PAGE_LIMIT,
 };
 use zolana_ring_policy::Member;
 use zolana_ring_transaction::RingAssets;
 
 use crate::{
-    authorize::{AuthorityCheck, AuthorityClaim, ReadCheck, ReadClaim, Unauthorized},
-    error::{redacted, RingRpcError},
+    authorize::{AuthorityCheck, AuthorityClaim, ReadCheck, ReadClaim, Unauthorized, WalletCheck},
+    error::{redacted, GrantRefusal, RingRpcError},
+    grant_rows::{GrantPair, GrantRow},
+    grants::{GrantQuery, Grants, ReadScope},
     hub::Shared,
     limits::ReaderPermit,
     replay::ReplayCheck,
     upstream::{
-        MergeAuditRequest, ReaderGrant, RingHistoryPage, TransactionPage, TransactionSource,
+        MergeAuditRequest, RecordsTip, RingConfiguration, RingHistoryPage, TransactionPage,
+        TransactionSource,
     },
     utxos::{AuditStore, CreatedIn, EscrowRoot, EscrowedOwner, MAX_BACKFILL_PAGES},
 };
@@ -70,6 +74,7 @@ struct Grant<'a, S> {
     timestamp: u64,
     /// The config read at authorization names the rail its frames parse under.
     mode: RingMode,
+    scope: ReadScope,
     _reader: ReaderPermit<'a>,
 }
 
@@ -88,6 +93,8 @@ pub struct AuditRead<'a> {
     pub read: PagedRead,
     pub auth: &'a ReadAuth,
     pub page: &'a Page,
+    /// Narrows the read to one wallet's rows.
+    pub wallet: Option<Address>,
 }
 
 #[derive(Clone, Copy)]
@@ -156,10 +163,34 @@ impl<S: TransactionSource> AuditService<S> {
         self.view_tag
     }
 
+    /// Opened from the verified escrow record, never kept past one merge.
+    pub(crate) fn escrowed_nullifier_key(
+        &self,
+        owner_key: &[u8; 32],
+    ) -> Result<Option<NullifierKey>, RingRpcError> {
+        let Some(escrowed) = self.shared.store(self.ring).escrowed(owner_key) else {
+            return Ok(None);
+        };
+        let key = escrowed
+            .sealed
+            .open(&self.auditor)
+            .map_err(|_| RingRpcError::EscrowedKey)?;
+        if key.pubkey()? != escrowed.nullifier_pk {
+            return Err(RingRpcError::EscrowedKey);
+        }
+        Ok(Some(key))
+    }
+
     /// `None` until the config exists, the config then fixes the key forever.
     pub async fn configured_auditor(&self) -> Result<Option<X25519Pubkey>, RingRpcError> {
         let config = self.shared.source.ring_config(self.ring).await?;
         Ok(config.map(|config| config.auditor_pubkey))
+    }
+
+    /// `None` unless the ring's config names the auditor key held here.
+    pub(crate) async fn served_config(&self) -> Result<Option<RingConfiguration>, RingRpcError> {
+        let config = self.shared.source.ring_config(self.ring).await?;
+        Ok(config.filter(|config| config.auditor_pubkey == self.auditor.pubkey()))
     }
 
     pub async fn chain_status(&self) -> Result<RingChainStatus, RingRpcError> {
@@ -173,14 +204,24 @@ impl<S: TransactionSource> AuditService<S> {
         self.authorize(request).await?.execute().await
     }
 
+    pub async fn wallet_activity(
+        &self,
+        request: AuditRead<'_>,
+    ) -> Result<GetWalletActivityResponse, RingRpcError> {
+        self.authorize(request)
+            .await?
+            .execute_wallet_activity()
+            .await
+    }
+
     pub async fn audited_utxos(
         &self,
         request: &GetAuditedUtxosRequest,
     ) -> Result<GetAuditedUtxosResponse, RingRpcError> {
-        self.authorize_utxos(request).await?.execute()
+        self.authorize_utxos(request).await?.execute().await
     }
 
-    /// The upgrade authority asks before the config exists, the config authority after.
+    /// The upgrade authority asks before `Initialize`, the policy authority after.
     pub async fn auditor_key_statement(
         &self,
         auth: &AuthorityAuth,
@@ -193,20 +234,18 @@ impl<S: TransactionSource> AuditService<S> {
             now,
         }
         .decide()?;
-        let source = &self.shared.source;
-        let ring_authority = match source.ring_config(self.ring).await? {
-            Some(config) => Some(config.authority),
-            None => source.upgrade_authority(self.ring).await?,
-        };
-        if ring_authority != Some(authority) {
-            return Err(Unauthorized::NotRingAuthority.into());
-        }
-        self.shared.replay.accept(ReplayCheck {
-            ring: self.ring,
-            nonce,
-            timestamp: auth.timestamp,
-            now: self.shared.clock.now()?,
-        })?;
+        self.shared
+            .require_ring_authority(self.ring, authority)
+            .await?;
+        self.shared
+            .replay
+            .accept(ReplayCheck {
+                ring: self.ring,
+                nonce,
+                timestamp: auth.timestamp,
+                now: self.shared.clock.now()?,
+            })
+            .await?;
         Ok(AuditorKeyStatement {
             cluster: &self.shared.genesis_hash,
             ring: &self.ring,
@@ -217,7 +256,7 @@ impl<S: TransactionSource> AuditService<S> {
     }
 
     /// The service's own cluster, key and ring, a reader's signature carries to no other.
-    fn read_target(&self) -> ReadTarget {
+    pub(crate) fn read_target(&self) -> ReadTarget {
         ReadTarget {
             cluster: self.shared.genesis_hash,
             service: self.shared.service,
@@ -234,9 +273,12 @@ impl<S: TransactionSource> AuditService<S> {
             target: self.read_target(),
             cursor: request.page.cursor.clone(),
             limit: request.page.attested_limit.clone(),
+            wallet: request.wallet,
         };
         Ok(AuthorizedRead {
-            grant: self.grant(request.auth, &attestation).await?,
+            grant: self
+                .grant(request.auth, &attestation, request.wallet)
+                .await?,
             page: request.page,
         })
     }
@@ -249,9 +291,13 @@ impl<S: TransactionSource> AuditService<S> {
         if !utxo_hashes_in_bounds(&request.utxo_hashes) {
             return Err(RingRpcError::InvalidUtxoRequest);
         }
-        let attestation = AuditedUtxosAttestation::new(self.read_target(), &request.utxo_hashes);
+        let wallet = request.wallet.map(|wallet| wallet.0);
+        let attestation = AuditedUtxosAttestation {
+            wallet,
+            ..AuditedUtxosAttestation::new(self.read_target(), &request.utxo_hashes)
+        };
         Ok(AuthorizedUtxos {
-            grant: self.grant(&request.auth, &attestation).await?,
+            grant: self.grant(&request.auth, &attestation, wallet).await?,
             utxo_hashes: &request.utxo_hashes,
         })
     }
@@ -260,6 +306,7 @@ impl<S: TransactionSource> AuditService<S> {
         &'a self,
         auth: &ReadAuth,
         attestation: &impl Attestation,
+        wallet: Option<Address>,
     ) -> Result<Grant<'a, S>, RingRpcError> {
         let ReadClaim { reader, nonce } = ReadCheck {
             auth,
@@ -277,23 +324,86 @@ impl<S: TransactionSource> AuditService<S> {
         if config.auditor_pubkey != self.auditor.pubkey() {
             return Err(Unauthorized::AuditorKeyMismatch.into());
         }
-        let grant = ReaderGrant {
-            ring: self.ring,
-            reader,
-        };
-        if !source.reader_granted(grant).await? {
-            return Err(Unauthorized::NotGranted.into());
-        }
+        let scope = self
+            .shared
+            .read_scope(GrantQuery {
+                ring: self.ring,
+                reader,
+                wallet,
+            })
+            .await?;
         Ok(Grant {
             service: self,
             nonce,
             timestamp: auth.timestamp,
             mode: config.mode,
+            scope,
             _reader: permit,
         })
     }
 
-    /// Opens the ring's transfers, audited deposits and anonymous merges from the store's resume point.
+    /// Returns the action the store holds for the grant after the write.
+    pub async fn set_reader_grant(
+        &self,
+        request: &SetReaderGrantRequest,
+    ) -> Result<ReaderGrantAction, RingRpcError> {
+        let Grants::Database(rows) = &self.shared.grants else {
+            return Err(GrantRefusal::GrantsInTree.into());
+        };
+        let reader = <[u8; 34]>::try_from(request.reader.0.as_slice())
+            .ok()
+            .and_then(|tagged| ReaderKey::from_bytes(tagged).ok())
+            .ok_or(Unauthorized::UnknownReaderKey)?;
+        let wallet = request.wallet.map(|wallet| wallet.0);
+        let signer = match wallet {
+            Some(wallet) => wallet,
+            None => {
+                self.shared
+                    .source
+                    .ring_config(self.ring)
+                    .await?
+                    .ok_or(Unauthorized::NoConfig)?
+                    .roles
+                    .policy
+            }
+        };
+        let attestation = ReaderGrantAttestation {
+            target: self.read_target(),
+            wallet,
+            reader,
+            action: request.action,
+        };
+        let nonce = WalletCheck {
+            wallet: signer,
+            timestamp: request.timestamp,
+            nonce: &request.nonce,
+            signature: &request.signature,
+            attestation: &attestation,
+            now: self.shared.clock.now()?,
+        }
+        .decide()?;
+        self.shared
+            .replay
+            .accept(ReplayCheck {
+                ring: self.ring,
+                nonce,
+                timestamp: request.timestamp,
+                now: self.shared.clock.now()?,
+            })
+            .await?;
+        rows.write(GrantRow {
+            pair: GrantPair {
+                ring: self.ring,
+                wallet,
+                reader,
+            },
+            action: request.action,
+            timestamp: request.timestamp,
+        })
+        .await
+    }
+
+    /// Opens the ring's transfers, audited deposits and merges from the store's resume point.
     pub async fn backfill_utxos(&self) -> Result<(), RingRpcError> {
         let source = &self.shared.source;
         let Some(config) = source.ring_config(self.ring).await? else {
@@ -332,107 +442,61 @@ impl<S: TransactionSource> AuditService<S> {
                 slot: response.context.slot,
             };
             self.audit_rows(response, config.mode, &store).await?;
-            match frontier {
-                Some(frontier) => {
+            match (frontier, next) {
+                (Some(frontier), _) => {
                     store.absorbed(context);
                     *cursor = Some(frontier);
                     return Ok(());
                 }
-                None => *cursor = next,
+                // An empty stream has no position to resume from.
+                (None, None) => return Ok(()),
+                (None, next) => *cursor = next,
             }
         }
         Ok(())
     }
 
-    /// Rereads only the members the writes applied since the last refresh name, else every record.
+    /// Every escrowed key under the records registry's newest root, read again once that root moves.
     async fn refresh_escrow(&self, store: &AuditStore) -> Result<(), RingRpcError> {
-        let source = &self.shared.source;
-        let Some(registry) = source.ring_chain_status(self.ring).await?.registry else {
+        let RecordsTip::Newest(tip) = self.shared.source.records_root(self.ring).await? else {
             return Ok(());
         };
-        let newest = registry
-            .history
-            .get(usize::from(registry.history_cursor))
-            .and_then(Option::as_ref)
-            .ok_or(RingRpcError::InvalidIndexerResponse)?;
         let root = EscrowRoot {
-            root: newest.root.0,
-            applied: newest.applied,
+            root: tip.root,
+            revision: tip.revision,
         };
-        let current = store.escrow_root();
         // A lagging RPC node answers an older root, the map never moves back to it.
-        let settled = current
-            .is_some_and(|current| current.root == root.root || root.applied < current.applied);
+        let settled = store
+            .escrow_root()
+            .is_some_and(|current| current.root == root.root || root.revision < current.revision);
         if !settled {
-            let tip = RegistryTip {
-                root: root.root,
-                root_index: registry.history_cursor,
-                next_index: u64::from(registry.next_index),
-            };
-            match current.and_then(|current| store.applied_members(current.applied..root.applied)) {
-                Some(members) => {
-                    store.update_escrow(root, self.reread_members(tip, members).await?)
-                }
-                None => store.replace_escrow(root, self.rescan_registry(tip).await?),
-            }
-        }
-        if registry.queue_head < registry.queue_tail {
-            let queue = source.ring_record_queue(self.ring).await?;
-            store.remember_pending(registry.queue_head..registry.queue_tail, &queue.entries);
+            store.replace_escrow(root, self.rescan_records(tip).await?);
         }
         Ok(())
     }
 
-    /// Each member's opening under the tip, `None` where it escrows no key.
-    async fn reread_members(
+    /// Every record from leaf 1, each verified under the registry's newest root.
+    async fn rescan_records(
         &self,
-        tip: RegistryTip,
-        members: Vec<[u8; 32]>,
-    ) -> Result<Vec<([u8; 32], Option<EscrowedOwner>)>, RingRpcError> {
-        let mut reread = Vec::with_capacity(members.len());
-        for chunk in members.chunks(MAX_RING_MEMBER_PAGE_LIMIT as usize) {
-            let response = self
-                .shared
-                .source
-                .ring_member_openings(GetRingMemberOpeningsRequest {
-                    ring_program_id: self.ring.into(),
-                    members: chunk.iter().copied().map(Hash).collect(),
-                    expected_root: Hash(tip.root),
-                })
-                .await?;
-            if response.openings.len() != chunk.len() {
-                return Err(RingRpcError::InvalidIndexerResponse);
-            }
-            for (member, opening) in chunk.iter().zip(&response.openings) {
-                reread.push((*member, escrowed_owner(opening, &tip.root, member)?));
-            }
-        }
-        Ok(reread)
-    }
-
-    /// Every record from leaf 1, each verified under the chain-pinned root.
-    async fn rescan_registry(
-        &self,
-        tip: RegistryTip,
+        tip: StorageTip,
     ) -> Result<HashMap<[u8; 32], EscrowedOwner>, RingRpcError> {
         let mut owners = HashMap::new();
-        let mut start_index = 1;
-        while start_index < tip.next_index {
-            let response = self
+        let mut start_index = Some(1);
+        while let Some(start) = start_index {
+            let page = self
                 .shared
                 .source
-                .ring_member_records(GetRingMemberRecordsRequest {
-                    ring_program_id: self.ring.into(),
+                .storage_member_records(GetStorageMemberRecordsRequest {
+                    registry: tip.registry.into(),
                     expected_root: Hash(tip.root),
-                    expected_next_index: tip.next_index,
-                    start_index,
+                    start_index: start,
                     limit: MAX_RING_MEMBER_PAGE_LIMIT,
                 })
                 .await?;
-            if !tip.covers(&response, start_index) {
-                return Err(RingRpcError::InvalidIndexerResponse);
-            }
-            for row in &response.records {
+            start_index = tip
+                .next_page(&page, start)
+                .map_err(|_| RingRpcError::InvalidIndexerResponse)?;
+            for row in &page.records {
                 let opening = RingMemberOpening {
                     present: true,
                     record: row.record.clone(),
@@ -443,7 +507,6 @@ impl<S: TransactionSource> AuditService<S> {
                     owners.insert(member, owner);
                 }
             }
-            start_index = response.next_leaf_index.unwrap_or(tip.next_index);
         }
         Ok(owners)
     }
@@ -517,6 +580,7 @@ impl<S: TransactionSource> AuditService<S> {
             if tx.ring_program_id != Some(self.ring) {
                 continue;
             }
+            store.spend(tx.nullifiers.iter().copied());
             let event_index = tx.event_index.ok_or(RingRpcError::InvalidIndexerResponse)?;
             let origin = match origins.get(&(tx.tx_signature, event_index)) {
                 Some(known) => known.clone(),
@@ -537,17 +601,27 @@ impl<S: TransactionSource> AuditService<S> {
                             origin: &origin,
                             ring: self.ring,
                         }
-                        .open(&self.auditor)
+                        .open_for(&self.auditor, store)
                     });
                     match created {
-                        Ok(created) => store.record(
-                            CreatedIn {
+                        Ok(created) => {
+                            let created_in = CreatedIn {
                                 slot: tx.slot,
                                 tx_signature: tx.tx_signature,
                                 event_index,
-                            },
-                            created,
-                        ),
+                            };
+                            store.record(created_in, created.utxos);
+                            match mode {
+                                // Only an escrow ring's backfill names a held owner.
+                                RingMode::ConfidentialEscrow => {
+                                    store.hold(created_in, created.unowned)
+                                }
+                                RingMode::Confidential | RingMode::Anonymous => store.record(
+                                    created_in,
+                                    created.unowned.iter().map(DepositNote::deposited),
+                                ),
+                            }
+                        }
                         Err(error) => log::warn!(
                             "ring {} event {}:{event_index} opened no UTXOs because {}",
                             self.ring,
@@ -566,9 +640,11 @@ impl<S: TransactionSource> AuditService<S> {
                 mode,
             };
             // Missing mint preimages affect optional metadata, never verified disclosure.
-            let result = bound.and_then(|()| self.audit(audit, &assets));
+            let result = bound
+                .and_then(|()| self.audit(audit, &assets))
+                .and_then(|opened| Ok((opened, origin.spenders(mode)?)));
             match result {
-                Ok(opened) => {
+                Ok((opened, spenders)) => {
                     store.record(
                         CreatedIn {
                             slot: opened.slot,
@@ -582,6 +658,7 @@ impl<S: TransactionSource> AuditService<S> {
                             audited: opened,
                             event_index,
                             nullifiers: tx.nullifiers,
+                            spenders,
                             signers: origin.signers,
                             withdrawals: origin.withdrawals,
                         }
@@ -608,29 +685,50 @@ impl<S: TransactionSource> AuditService<S> {
 
 impl<S> Grant<'_, S> {
     /// The clock is read again, a nonce evicted while the read awaited stays spent.
-    fn spend(&self) -> Result<(), RingRpcError> {
+    async fn spend(&self) -> Result<(), RingRpcError> {
         let service = self.service;
-        Ok(service.shared.replay.accept(ReplayCheck {
-            ring: service.ring,
-            nonce: self.nonce,
-            timestamp: self.timestamp,
-            now: service.shared.clock.now()?,
-        })?)
+        service
+            .shared
+            .replay
+            .accept(ReplayCheck {
+                ring: service.ring,
+                nonce: self.nonce,
+                timestamp: self.timestamp,
+                now: service.shared.clock.now()?,
+            })
+            .await
     }
 }
 
 impl<S: TransactionSource> AuthorizedRead<'_, S> {
     pub(crate) async fn execute(self) -> Result<GetDecryptedTransactionsResponse, RingRpcError> {
+        let ReadScope::Ring = self.grant.scope else {
+            return Err(GrantRefusal::WalletScope.into());
+        };
         let service = self.grant.service;
-        self.grant.spend()?;
+        self.grant.spend().await?;
         service
             .decrypted_transactions(self.page, self.grant.mode)
             .await
     }
 
+    pub(crate) async fn execute_wallet_activity(
+        self,
+    ) -> Result<GetWalletActivityResponse, RingRpcError> {
+        let ReadScope::Wallet(scope) = self.grant.scope else {
+            return Err(GrantRefusal::WalletScope.into());
+        };
+        let service = self.grant.service;
+        self.grant.spend().await?;
+        let response = service
+            .decrypted_transactions(self.page, self.grant.mode)
+            .await?;
+        Ok(scope.activity(response))
+    }
+
     pub(crate) async fn execute_merges(self) -> Result<GetAuditedMergesResponse, RingRpcError> {
         let service = self.grant.service;
-        self.grant.spend()?;
+        self.grant.spend().await?;
         let page = service
             .shared
             .source
@@ -647,15 +745,17 @@ impl<S: TransactionSource> AuthorizedRead<'_, S> {
                 error => error.into(),
             })?;
         validate_merge_page(&page, self.page)?;
-        Ok(page.into())
+        let mut response = GetAuditedMergesResponse::from(page);
+        self.grant.scope.merges(&mut response.value);
+        Ok(response)
     }
 }
 
 impl<S: TransactionSource> AuthorizedUtxos<'_, S> {
     /// The store answers alone, a UTXO no page or backfill opened yet reads `null`.
-    fn execute(self) -> Result<GetAuditedUtxosResponse, RingRpcError> {
+    async fn execute(self) -> Result<GetAuditedUtxosResponse, RingRpcError> {
         let service = self.grant.service;
-        self.grant.spend()?;
+        self.grant.spend().await?;
         let store = service.shared.store(service.ring);
         Ok(GetAuditedUtxosResponse {
             context: store.context(),
@@ -663,7 +763,7 @@ impl<S: TransactionSource> AuthorizedUtxos<'_, S> {
                 utxos: self
                     .utxo_hashes
                     .iter()
-                    .map(|hash| store.view(hash))
+                    .map(|hash| self.grant.scope.utxo(store.view(hash)))
                     .collect(),
             },
         })
@@ -684,9 +784,9 @@ fn escrowed_owner(
     let Some(nullifier_pk) = read.nullifier_pk else {
         return Ok(None);
     };
-    if read.sealed.is_none() {
+    let Some(sealed) = read.sealed else {
         return Ok(None);
-    }
+    };
     // The record binds the owner key through its member identity.
     let bound = Member::owner_tag(owner.as_array()).is_ok_and(|tag| tag.as_bytes() == member);
     let escrowed = read.escrowed(&nullifier_pk).map_err(invalid)?;
@@ -696,6 +796,8 @@ fn escrowed_owner(
     Ok(Some(EscrowedOwner {
         owner_key: owner.to_bytes(),
         nullifier_pk,
+        owner_hash: owner_hash(&PublicKey::from_ed25519(owner.as_array()), &nullifier_pk)?,
+        sealed,
     }))
 }
 
@@ -720,7 +822,7 @@ fn validate_indexer_response(
     let next = response.next_cursor.as_deref();
     let frontier = response.scanned_through.as_deref();
     if response.transactions.len() > page.limit.get() as usize
-        || next.or(frontier).is_none()
+        || (next.or(frontier).is_none() && !response.transactions.is_empty())
         || next.is_some_and(|cursor| !cursor_in_bounds(cursor) || page.cursor() == Some(cursor))
         || frontier.is_some_and(|cursor| {
             !cursor_in_bounds(cursor) || response.transactions.len() >= page.limit.get() as usize

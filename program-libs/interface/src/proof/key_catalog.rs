@@ -14,6 +14,11 @@ pub enum RingCircuit {
     DeliveredAudit {
         outputs: u8,
     },
+    /// Holds every spent UTXO to the in-proof owner the statement publishes.
+    DeliveredSenderAudit {
+        inputs: u8,
+        outputs: u8,
+    },
     AnonymousAudit {
         class: u8,
         outputs: u8,
@@ -42,7 +47,7 @@ pub enum RingCircuit {
     Deposit {
         capacity: u8,
     },
-    AnonymousMerge {
+    Merge {
         width: u8,
     },
 }
@@ -50,7 +55,13 @@ pub enum RingCircuit {
 impl RingCircuit {
     pub const fn audit(layout: DisclosureLayout, n_out: u8) -> Self {
         match layout {
-            DisclosureLayout::Delivered(_) => Self::DeliveredAudit { outputs: n_out },
+            DisclosureLayout::Delivered(layout) => match layout.sender_class {
+                None => Self::DeliveredAudit { outputs: n_out },
+                Some(class) => Self::DeliveredSenderAudit {
+                    inputs: class as u8,
+                    outputs: n_out,
+                },
+            },
             DisclosureLayout::Anonymous(layout) => {
                 let class = layout.key.class() as u8;
                 match layout.key {
@@ -112,7 +123,7 @@ impl RingCircuit {
     }
 }
 
-/// A policy key's record pool widths, mirror `recordCapacity` in `prover/circuits/policy/pooled_policy.go`.
+/// A policy key's record pool widths, mirror `recordCapacity` in `prover/circuits/policy/record_pool.go`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecordPools {
     pub own: usize,

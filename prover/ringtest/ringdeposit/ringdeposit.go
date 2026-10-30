@@ -6,9 +6,11 @@ import (
 	"testing"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringpolicy"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
@@ -27,7 +29,16 @@ type Deposit struct {
 	Circuit *circuits.DepositCircuit
 }
 
-// Build deposits count owners under the CRDB blinding, escrowed on ModeRegistry and disclosing their keys on ModeAnonymous.
+// Policy is a registry ring's table, the registry serving AllowBit lists every Listed asset.
+type Policy struct {
+	Rules   []ringpolicy.Rule
+	Listed  []int64
+	Curator bool
+	// Asset is every slot's deposited asset.
+	Asset int64
+}
+
+// Build deposits count owners under the CRDB blinding, escrowed on ModeRegistry, every owner key disclosed.
 func Build(t testing.TB, count int, mode RingMode) *Deposit {
 	t.Helper()
 	return BuildBlinded(t, count, mode, ringprotocol.DepositBlinding)
@@ -36,13 +47,48 @@ func Build(t testing.TB, count int, mode RingMode) *Deposit {
 // BuildBlinded is Build with blindingOf deriving the blinding every commitment and opening carries.
 func BuildBlinded(t testing.TB, count int, mode RingMode, blindingOf func(testing.TB, *big.Int) *big.Int) *Deposit {
 	t.Helper()
-	anonymous, escrow := mode == ModeAnonymous, mode == ModeRegistry
-	keys, registry := ringaudit.DefaultKeys(t), ringregistry.New(t)
+	return build(t, count, mode, blindingOf, Policy{Rules: nil, Listed: nil, Curator: false, Asset: ringpolicy.AssetA})
+}
+
+// Allowlisted requires every deposited asset on AllowBit, where the registry lists only AssetA.
+func Allowlisted(asset int64) Policy {
+	return Policy{Rules: []ringpolicy.Rule{ringpolicy.Require(policy.SubjectAsset, ringregistry.AllowBit)}, Listed: []int64{ringpolicy.AssetA}, Curator: false, Asset: asset}
+}
+
+// CuratorAllowlisted is Allowlisted with AllowBit served by the curator registry.
+func CuratorAllowlisted(asset int64) Policy {
+	listed := Allowlisted(asset)
+	listed.Curator = true
+	return listed
+}
+
+// BuildScreened deposits count owners into a registry ring whose policy screens every deposited asset.
+func BuildScreened(t testing.TB, count int, policy Policy) *Deposit {
+	t.Helper()
+	return build(t, count, ModeRegistry, ringprotocol.DepositBlinding, policy)
+}
+
+func build(t testing.TB, count int, mode RingMode, blindingOf func(testing.TB, *big.Int) *big.Int, policy Policy) *Deposit {
+	t.Helper()
+	anonymous, escrow, screened := mode == ModeAnonymous, mode == ModeRegistry, policy.Rules != nil
+	keys, registry, curator := ringaudit.DefaultKeys(t), ringregistry.New(t), ringregistry.New(t)
 	c, err := circuits.NewDepositCircuit(circuits.MaxDeposits)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.ContextHash, c.Count, c.Anonymous, c.KeyEscrow, c.MemberRegistryRoot = big.NewInt(0xabcdef), count, ringtest.Bit(anonymous), ringtest.Bit(escrow), 0
+	c.ContextHash, c.Count, c.Anonymous, c.KeyEscrow, c.MemberRegistryRoot, c.CuratorRoot = big.NewInt(0xabcdef), count, ringtest.Bit(anonymous), ringtest.Bit(escrow), 0, 0
+	c.Table, c.PolicyHash = ringpolicy.Table{}.Wires(), 0
+	if screened {
+		c.Table = ringpolicy.Table{Lists: []uint64{ringregistry.AllowBit}, Curator: map[uint64]bool{ringregistry.AllowBit: policy.Curator}, Rules: policy.Rules}.Wires()
+		c.PolicyHash = ringpolicy.TableHash(t, c.Table)
+		lists := registry
+		if policy.Curator {
+			lists = curator
+		}
+		for _, asset := range policy.Listed {
+			lists.Apply(t, ringregistry.Entry{Member: big.NewInt(asset), Mask: big.NewInt(ringregistry.AllowBit), Value: big.NewInt(ringregistry.AllowBit), EscrowKey: big.NewInt(0)})
+		}
+	}
 	eph, auditor := keys.EphSk(), keys.AuditorPk()
 	ringtest.SetBytes(c.EphSk[:], eph[:])
 	ringtest.SetBytes(c.AuditorPk[:], auditor[:])
@@ -52,13 +98,10 @@ func BuildBlinded(t testing.TB, count int, mode RingMode, blindingOf func(testin
 		var key [32]byte
 		ownerPkHash, nullifierPk, secret, ctHash := big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0)
 		if i < count {
-			ownerPkHash = big.NewInt(int64(11 + i))
-			if anonymous {
-				for j := range key {
-					key[j] = byte(i + j + 1)
-				}
-				ownerPkHash = ringtest.MustSolanaPkField(t, key)
+			for j := range key {
+				key[j] = byte(i + j + 1)
 			}
+			ownerPkHash = ringtest.MustSolanaPkField(t, key)
 			nullifierPk = spptest.MustNullifierPk(t, big.NewInt(int64(51+i)))
 			secret = big.NewInt(int64(91 + i))
 			if escrow {
@@ -70,6 +113,10 @@ func BuildBlinded(t testing.TB, count int, mode RingMode, blindingOf func(testin
 			}
 		}
 		c.OwnerPkHashes[i], c.NullifierPks[i], c.BlindingSecrets[i], c.CtHashes[i] = ownerPkHash, nullifierPk, secret, ctHash
+		c.Assets[i], c.Amounts[i] = 0, 0
+		if i < count {
+			c.Assets[i], c.Amounts[i] = policy.Asset, 100+i
+		}
 		ringtest.SetBytes(c.OwnerKeys[i][:], key[:])
 		owner := spptest.MustOwnerHash(t, ownerPkHash, nullifierPk)
 		blinding := blindingOf(t, secret)
@@ -84,9 +131,14 @@ func BuildBlinded(t testing.TB, count int, mode RingMode, blindingOf func(testin
 		if escrow {
 			c.Members[i] = registry.Opening(ringtest.AsBigInt(c.OwnerPkHashes[i])).RecordWires()
 		}
+		c.AssetRecords[i] = registry.Opening(ringtest.AsBigInt(c.Assets[i])).Wires()
+		c.CuratorAssetRecords[i] = curator.Opening(ringtest.AsBigInt(c.Assets[i])).Wires()
 	}
-	if escrow {
+	if escrow || screened {
 		c.MemberRegistryRoot = registry.Root()
+	}
+	if policy.Curator {
+		c.CuratorRoot = curator.Root()
 	}
 	ciphertext := keys.EnvelopeCiphertext(t, plaintext, shared.DepositEncInfo)
 	sealed := keys.Sealed(t, ciphertext)
@@ -99,7 +151,10 @@ func BuildBlinded(t testing.TB, count int, mode RingMode, blindingOf func(testin
 		}
 		chain = append(chain, commitments[i], ringtest.HashBytes(t, ciphertext[i*circuits.DepositOpeningBytes:(i+1)*circuits.DepositOpeningBytes]))
 	}
-	chain = append(chain, sealed.AuditorLo, sealed.AuditorHi, sealed.EphLo, sealed.EphHi, ringtest.AsBigInt(c.KeyEscrow), ringtest.AsBigInt(c.MemberRegistryRoot))
+	chain = append(chain, sealed.AuditorLo, sealed.AuditorHi, sealed.EphLo, sealed.EphHi, ringtest.AsBigInt(c.KeyEscrow), ringtest.AsBigInt(c.MemberRegistryRoot), ringtest.AsBigInt(c.CuratorRoot), ringtest.AsBigInt(c.PolicyHash))
+	for i := range circuits.MaxDeposits {
+		chain = append(chain, ringtest.AsBigInt(c.Assets[i]), ringtest.AsBigInt(c.Amounts[i]))
+	}
 	c.PublicInputHash = spptest.MustHashChain(t, chain)
 	return &Deposit{Circuit: c}
 }
@@ -107,11 +162,16 @@ func BuildBlinded(t testing.TB, count int, mode RingMode, blindingOf func(testin
 // BuildCapacity keeps the fixed statement while witnessing only the compiled prefix.
 func BuildCapacity(t testing.TB, capacity, count int, mode RingMode) *Deposit {
 	t.Helper()
-	if count > capacity {
+	return Build(t, count, mode).Narrow(t, capacity)
+}
+
+// Narrow keeps the fixed statement while witnessing only the compiled prefix.
+func (d *Deposit) Narrow(t testing.TB, capacity int) *Deposit {
+	t.Helper()
+	c := d.Circuit
+	if ringtest.AsBigInt(c.Count).Cmp(big.NewInt(int64(capacity))) > 0 {
 		t.Fatal("count exceeds deposit capacity")
 	}
-	d := Build(t, count, mode)
-	c := d.Circuit
 	c.Capacity = capacity
 	c.OwnerPkHashes = c.OwnerPkHashes[:capacity]
 	c.OwnerKeys = c.OwnerKeys[:capacity]
@@ -119,5 +179,9 @@ func BuildCapacity(t testing.TB, capacity, count int, mode RingMode) *Deposit {
 	c.BlindingSecrets = c.BlindingSecrets[:capacity]
 	c.CtHashes = c.CtHashes[:capacity]
 	c.Members = c.Members[:capacity]
+	c.Assets = c.Assets[:capacity]
+	c.Amounts = c.Amounts[:capacity]
+	c.AssetRecords = c.AssetRecords[:capacity]
+	c.CuratorAssetRecords = c.CuratorAssetRecords[:capacity]
 	return d
 }

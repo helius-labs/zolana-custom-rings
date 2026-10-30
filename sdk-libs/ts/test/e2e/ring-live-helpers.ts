@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 
 import { ed25519 } from "@noble/curves/ed25519.js";
 import {
+  address,
   createKeyPairSignerFromBytes,
   createSolanaRpc,
   generateKeyPairSigner,
@@ -18,40 +19,18 @@ import {
   compileUnsignedTransaction,
   setRingActivationInstruction,
 } from "@heliuslabs/zolana/internal";
-import { ClientError } from "@heliuslabs/zolana/client";
 import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import { LocalKeys, ShieldedKeypair, SigningKey, Wallet, type Bytes32 } from "@heliuslabs/zolana";
-import type { MemberRecord } from "../../src/protocol/membership/member-registry.js";
+import { type RuleTable } from "../../src/ring/advanced.js";
 import {
-  ListId,
-  memberOfTag,
-  recordBit,
-  verifyRecordOpening,
-  type Member,
-  type RuleTable,
-} from "../../src/ring/advanced.js";
-import {
-  AuthorityListWrite,
-  RecordApplication,
-  RingError,
-  RingInstructionTag,
   RingProgramBinary,
+  RingReaderGrantRequest,
   RingRpc,
-  buildRingCreatePolicyTransaction,
-  checkedReaderKey,
-  createMemberRegistryInstruction,
-  createRingConfigInstruction,
   deployRingProgram,
-  fetchRingMemberRegistry,
-  fetchRingProgramConfig,
-  grantReadAccessInstruction,
-  initSppRingConfigInstruction,
-  listWrite,
+  initializeRingInstruction,
   LocalRingKeys,
   messageSignerReader,
-  registryCurrentRoot,
   ringAuthAddress,
-  ringComputeUnitLimit,
   ringWalletKeys,
   syncRingWallet,
   createKitRingSubmissionTransport,
@@ -59,7 +38,6 @@ import {
   type RingTransactionSubmission,
 } from "../../src/ring/index.js";
 import type { RingSubmissionTransport } from "../../src/rpc/ports.js";
-import { MEMBER_REGISTRY_PROJECTION_ERRORS } from "../../src/rpc/projection.js";
 import {
   currentSlot,
   liveHarness,
@@ -147,51 +125,43 @@ export async function createRing(client: CustomRingClient, ring: FreshRing): Pro
     binary: RingProgramBinary.parse(new Uint8Array(await readFile(requiredEnv("RING_PROGRAM_SO")))),
   });
   const { auditor } = ring;
-  const auditorPublicKey =
-    "releasedBy" in auditor
-      ? (
-          await auditor.releasedBy.createAuditorKey({
-            ringProgramId,
-            genesisHash: (await ringReadTarget(auditor.releasedBy, ringProgramId)).cluster,
-            authority,
-          })
-        ).auditorPublicKey
-      : auditor;
+  const released = async (ringRpc: RingRpc): Promise<X25519PublicKey> => {
+    // The local service's own health answer is the key this test pins.
+    const target = await ringReadTarget(ringRpc, ringProgramId);
+    const key = await ringRpc.createAuditorKey({
+      ringProgramId,
+      genesisHash: target.cluster,
+      authority,
+      servicePublicKey: target.service,
+    });
+    return key.auditorPublicKey;
+  };
+  const auditorPublicKey = "releasedBy" in auditor ? await released(auditor.releasedBy) : auditor;
+  const fresh = async () => (await generateKeyPairSigner()).address;
+  // A policy binds a records registry the storage program created beforehand.
   await sendInstruction(
     client,
-    await createRingConfigInstruction({
+    await initializeRingInstruction({
       ringProgramId,
       payer: authority,
       authority,
       auditorPublicKey,
       kind: ring.kind,
-    }),
-    authority,
-  );
-  // The policy table lives in the member registry, the registry precedes it.
-  await sendInstruction(
-    client,
-    await createMemberRegistryInstruction({ ringProgramId, payer: authority, authority }),
-    authority,
-  );
-  if (table !== undefined)
-    await signSendAndConfirm(
-      client,
-      await buildRingCreatePolicyTransaction({
-        client,
-        ringProgramId,
-        authority: authority.address,
-        table,
-      }),
-      [authority],
-    );
-  await sendInstruction(
-    client,
-    await initSppRingConfigInstruction({
-      ringProgramId,
-      payer: authority,
-      authority,
-      config: await fetchRingProgramConfig(client, ringProgramId),
+      // The upgrade authority keeps the policy role, Ring RPC takes its ring-wide grants.
+      roles: {
+        admin: await fresh(),
+        policy: authority.address,
+        pauser: await fresh(),
+        cosignAdmin: await fresh(),
+      },
+      ...(table === undefined
+        ? {}
+        : {
+            policy: {
+              records: address(requiredEnv("RING_RECORDS_REGISTRY")),
+              table,
+            },
+          }),
     }),
     authority,
   );
@@ -241,18 +211,13 @@ export async function readableRing(
     authorityTransact: false,
     ...kind,
   });
-  // Reads are grant only, the ring authority included.
-  await sendInstruction(
-    client,
-    await grantReadAccessInstruction({
-      ringProgramId,
-      payer: authority,
-      authority,
-      reader: checkedReaderKey(authority.address),
-    }),
-    authority,
-  );
   const target = await ringReadTarget(ringRpc, ringProgramId);
+  await ringRpc.setReaderGrant(
+    await RingReaderGrantRequest.forGrant(target, {
+      reader: authority.address,
+      action: "grant",
+    }).sign(authority),
+  );
   return { client, ringProgramId, authority, ringRpc, target };
 }
 
@@ -271,11 +236,15 @@ export function auditedRingAmounts(
     .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 }
 
+export function ringKeys(actor: Actor) {
+  return ringWalletKeys(actor.keys, LocalRingKeys.fromKeypair(actor.keypair));
+}
+
 export async function sync(client: CustomRingClient, actor: Actor): Promise<void> {
   await syncRingWallet({
     client,
     wallet: actor.wallet,
-    keys: ringWalletKeys(actor.keys, LocalRingKeys.fromKeypair(actor.keypair)),
+    keys: ringKeys(actor),
     config: { requireSlot: await currentSlot(client) },
   });
 }
@@ -310,162 +279,6 @@ export async function waitForAudited(
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   throw new Error(`transaction ${signature} did not reach the ring view`);
-}
-
-export type ListState = "active" | "cleared";
-
-/** A member's record under the registry's newest root, `undefined` for an absent member. */
-export interface IndexedRecord {
-  readonly member: Member;
-  readonly root: Bytes32;
-  readonly nextIndex: number;
-  readonly record: MemberRecord | undefined;
-}
-
-/** The record Photon serves, authenticated against the root the registry account holds. */
-export async function indexedRecord(
-  client: CustomRingClient,
-  ringProgramId: Address,
-  member: Member,
-): Promise<IndexedRecord> {
-  const registry = await fetchRingMemberRegistry(client, ringProgramId);
-  const { root } = registryCurrentRoot(registry);
-  const read = await client.getRingMemberRecord({
-    ringProgramId,
-    member,
-    expectedRoot: root,
-    expectedNextIndex: registry.nextIndex,
-  });
-  return {
-    member,
-    root,
-    nextIndex: registry.nextIndex,
-    record: verifyRecordOpening(read.opening, root, member),
-  };
-}
-
-/** Retries `read` while the indexer's registry projection lags the chain. */
-export async function indexedKeys<T>(read: () => Promise<T>): Promise<T> {
-  const lagging: ReadonlySet<string> = MEMBER_REGISTRY_PROJECTION_ERRORS;
-  const deadline = Date.now() + 120_000;
-  for (;;) {
-    try {
-      return await read();
-    } catch (cause) {
-      // The ring indexer refuses under the RingError's own code.
-      const codes =
-        cause instanceof ClientError
-          ? [cause.code]
-          : cause instanceof RingError
-            ? [cause.code, cause.causeCode]
-            : [];
-      if (!codes.some((code) => code !== undefined && lagging.has(code)) || Date.now() > deadline)
-        throw cause;
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-  }
-}
-
-/** Polls until the registry holds `bit` in the wanted state, the indexer lags the chain. */
-async function awaitLists(
-  client: CustomRingClient,
-  ringProgramId: Address,
-  member: Member,
-  bit: bigint,
-  wanted: boolean,
-): Promise<IndexedRecord> {
-  for (let attempt = 0; attempt < 240; attempt++) {
-    const read = await indexedKeys(() => indexedRecord(client, ringProgramId, member));
-    if ((((read.record?.lists ?? 0n) & bit) !== 0n) === wanted) return read;
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-  throw new Error("member list update not indexed");
-}
-
-export type ListWriteOutcome =
-  | Readonly<{ kind: "transaction"; member: Member }>
-  | (Readonly<{ kind: "unchanged" }> & IndexedRecord);
-
-/** Lands one authority write unless the bit already holds, then authenticates it against the registry root. */
-export async function writeList(
-  client: CustomRingClient,
-  ringProgramId: Address,
-  authority: KeyPairSigner,
-  input: Readonly<{ listId: ListId; tag: Uint8Array; state: ListState }>,
-): Promise<ListWriteOutcome> {
-  const member = memberOfTag(input.tag);
-  const bit = recordBit(input.listId);
-  const wanted = input.state === "active";
-  const current = await indexedKeys(() => indexedRecord(client, ringProgramId, member));
-  if ((((current.record?.lists ?? 0n) & bit) !== 0n) === wanted)
-    return { kind: "unchanged", ...current };
-  const proven = await new AuthorityListWrite({
-    ringProgramId,
-    authority: authority.address,
-  })
-    .withWrite(member, listWrite(wanted ? { set: [input.listId] } : { clear: [input.listId] }))
-    .prove(client);
-  await sendInstruction(
-    client,
-    proven.instruction,
-    authority,
-    ringComputeUnitLimit(RingInstructionTag.authorityWriteRecords),
-  );
-  await awaitLists(client, ringProgramId, member, bit, wanted);
-  return { kind: "transaction", member };
-}
-
-/** Applies every queued member write once the queue is due, `payer` signs the application. */
-export async function applyQueuedWrites(
-  client: CustomRingClient,
-  ringProgramId: Address,
-  payer: KeyPairSigner,
-): Promise<void> {
-  const application = new RecordApplication(ringProgramId);
-  for (let attempt = 0; attempt < 600; attempt++) {
-    const proven = await application.prove(client);
-    if (proven !== undefined) {
-      await sendInstruction(
-        client,
-        proven.instruction,
-        payer,
-        ringComputeUnitLimit(RingInstructionTag.applyRecords),
-      );
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-  throw new Error("the record queue never became due");
-}
-
-/** Puts every party on the allow list in one authority write. */
-export async function enrolInAllow(
-  client: CustomRingClient,
-  ringProgramId: Address,
-  authority: KeyPairSigner,
-  parties: readonly Actor[],
-): Promise<void> {
-  const bit = recordBit(ListId.allow);
-  const members = parties.map((party) =>
-    memberOfTag(party.keypair.shieldedAddress().confidentialViewTag()),
-  );
-  let write = new AuthorityListWrite({
-    ringProgramId,
-    authority: authority.address,
-  });
-  for (const member of members) {
-    const current = await indexedKeys(() => indexedRecord(client, ringProgramId, member));
-    if (((current.record?.lists ?? 0n) & bit) === 0n)
-      write = write.withWrite(member, listWrite({ set: [ListId.allow] }));
-  }
-  if (write.writes().length === 0) return;
-  await sendInstruction(
-    client,
-    (await write.prove(client)).instruction,
-    authority,
-    ringComputeUnitLimit(RingInstructionTag.authorityWriteRecords),
-  );
-  for (const member of members) await awaitLists(client, ringProgramId, member, bit, true);
 }
 
 export async function settle(

@@ -1,6 +1,12 @@
 use solana_address::Address;
-use spr_hasher::primitives::{hash_bytes, solana_owner_identity};
+use spr_hasher::{
+    primitives::{hash_bytes, right_align, solana_owner_identity},
+    Hasher, Poseidon,
+};
 use thiserror::Error;
+
+/// `"CRWG"`, keys the record holding a wallet's grants to one reader.
+pub const WALLET_GRANT_DOMAIN: u32 = 0x4352_5747;
 
 /// A list subject, the field element the transfer openings carry for it, never zero.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,6 +31,17 @@ impl Member {
     /// The mint, encoded exactly as the `Asset` field of the UTXO hash.
     pub fn asset(mint: &Address) -> Result<Self, MemberError> {
         Self::from_hash_bytes(mint.as_array())
+    }
+
+    /// `Poseidon(CRWG, wallet, reader)`, its `Reader` list is the wallet's grant to `reader`.
+    pub fn wallet_grant(wallet: &Self, reader: &Self) -> Result<Self, MemberError> {
+        let key = Poseidon::hashv(&[
+            &right_align(&WALLET_GRANT_DOMAIN.to_be_bytes()),
+            &wallet.0,
+            &reader.0,
+        ])
+        .map_err(|_| MemberError::Hashing)?;
+        Self::from_bytes(key)
     }
 
     pub const fn as_bytes(&self) -> &[u8; 32] {

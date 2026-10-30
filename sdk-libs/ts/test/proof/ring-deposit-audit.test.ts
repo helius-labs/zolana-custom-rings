@@ -1,15 +1,23 @@
 import { existsSync, readFileSync } from "node:fs";
 
-import { AccountRole, address, getAddressDecoder, type Address, type Signature } from "@solana/kit";
+import {
+  AccountRole,
+  address,
+  generateKeyPairSigner,
+  getAddressDecoder,
+  signTransactionWithSigners,
+  type Address,
+  type Signature,
+} from "@solana/kit";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-import { type RingMemberRecordResult } from "../../src/rpc/ports.js";
 import {
   BN254_SCALAR_ORDER,
   hashBytes,
   treeAddress,
   bigIntToBytes,
   checkedBytes,
+  decodeRingDepositInstructionData,
 } from "@heliuslabs/zolana/internal";
 import { initializePoseidon } from "@heliuslabs/zolana";
 import {
@@ -29,9 +37,9 @@ import {
 } from "@heliuslabs/zolana/keypair";
 import { SOL_MINT, ownerUtxoHash } from "@heliuslabs/zolana/transaction";
 import { LocalRingKeys } from "../../src/state/ring-keys.js";
-import type { RingMemberProofRequest } from "../../src/rpc/ports.js";
+import type { StorageMemberOpenings, StorageOpeningsRequest } from "../../src/rpc/ports.js";
 import type { RingProofRequest } from "../../src/rpc/prover/ring.js";
-import { ringConfigPda, ringMemberRegistryPda } from "../../src/protocol/pda/index.js";
+import { ringCoSignerAddress, ringPolicyPda } from "../../src/protocol/pda/index.js";
 import { depositBlinding } from "../../src/crypto/derivation/ring-domain.js";
 import {
   RING_COSIGN_DEPOSITS,
@@ -55,7 +63,10 @@ import {
   encodeRingDepositCapsule,
   readRingDepositCapsule,
 } from "../../src/protocol/codec/deposit-capsule.js";
-import { ringDepositInstruction } from "../../src/protocol/transaction/deposit-instruction.js";
+import {
+  AUDITED_DEPOSIT_PREFIX_LENGTH,
+  ringDepositInstruction,
+} from "../../src/protocol/transaction/deposit-instruction.js";
 import { decryptRingDepositUtxo } from "../../src/protocol/transaction/deposit-payload.js";
 import { encodeRingDepositPlaintext } from "../../src/protocol/codec/ring-deposit-plaintext.js";
 import { escrowKeyHash } from "../../src/protocol/membership/member-opening.js";
@@ -65,9 +76,10 @@ import { BLOCKHASH } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.j
 import { confirmedDepositTransaction } from "../helpers/confirmed-deposits.js";
 import { recordTree, type FixtureRecord } from "../helpers/member-registry.js";
 import {
-  memberRegistryData,
   ownedAccount,
-  ringProgramConfigData,
+  ringCoSignerAccount,
+  ringPolicyData,
+  storageRegistryAccount,
 } from "../helpers/ring-accounts.js";
 import { type RingKeys } from "../../src/state/ring-keys.js";
 import {
@@ -76,11 +88,14 @@ import {
   type FirstContact,
 } from "../../src/state/viewing-history.js";
 import { RingAddress } from "../../src/crypto/keys/ring-address.js";
+import { RingProgramError, createRingDepositSubmission } from "../../src/index.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 const TREE = treeAddress(0);
 const PAYER = address("4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T");
 const CONTEXT = Object.freeze({ slot: 1n, blockTime: 1n });
+const RECORDS = address("Stor111111111111111111111111111111111111111");
+const RECORDS_REVISION = 3n;
 function field(value: bigint): Bytes32 {
   return bigIntToBytes(value) as Bytes32;
 }
@@ -97,8 +112,18 @@ describe("deposit disclosure", () => {
       .mockImplementation(() => X25519Keypair.fromBytes(new Uint8Array(32).fill(0x22) as Bytes32));
     const sealed = sealRingDepositOpenings(
       [
-        { ownerHash: field(1n), blinding: field(3n), recipientCiphertext: Uint8Array.of(1) },
-        { ownerHash: field(2n), blinding: field(4n), recipientCiphertext: Uint8Array.of(2) },
+        {
+          ownerHash: field(1n),
+          blinding: field(3n),
+          ownerKey: field(0n),
+          recipientCiphertext: Uint8Array.of(1),
+        },
+        {
+          ownerHash: field(2n),
+          blinding: field(4n),
+          ownerKey: field(0n),
+          recipientCiphertext: Uint8Array.of(2),
+        },
       ],
       auditor.publicKey(),
     );
@@ -123,9 +148,13 @@ describe("deposit disclosure", () => {
           ownerUtxoHash(field(2n), field(4n)),
         ],
         capsules: sealed.capsules,
+        assets: [
+          { asset: field(5n), amount: 7n },
+          { asset: field(6n), amount: 8n },
+        ],
         auditorPublicKey: auditor.publicKey(),
       });
-      expect(hex(hash)).toBe("0313e323a3870bacb7042d78648a0d01d5f5b4ddfa56ee3024bcd26207ebe4f3");
+      expect(hex(hash)).toBe("29429067e1c71c8fde746d04e9c20bed8b73c04e7a7836095586322c57ab5078");
     } finally {
       generate.mockRestore();
       sealed.ephemeralSecret.fill(0);
@@ -134,7 +163,7 @@ describe("deposit disclosure", () => {
   });
 
   const golden = new URL(
-    "../../../../prover/ring/testdata/deposit/custom-ring-deposit.json",
+    "../../../../prover/ring/testdata/deposit/custom-ring-deposit-1.json",
     import.meta.url,
   );
   // The Go ring prover goldens live outside the repository.
@@ -151,15 +180,18 @@ describe("deposit disclosure", () => {
         return value.map(word);
       };
       const count = Number(fixture["count"]);
+      const amounts = (fixture["amounts"] as string[]).map((value) => BigInt(value));
       const ownerPkHashes = words(fixture["ownerPkHashes"]);
       const nullifierPks = words(fixture["nullifierPks"]);
       const secrets = words(fixture["blindingSecrets"]);
+      const ownerKeys = words(fixture["ownerKeys"]);
       const openings = Array.from({ length: count }, (_, slot) => {
         const owner = ownerHash(ownerPkHashes[slot] ?? field(0n), nullifierPks[slot] ?? field(0n));
         const blinding = depositBlinding(secrets[slot] ?? field(0n));
         return {
           ownerHash: owner as Bytes32,
           blinding,
+          ownerKey: ownerKeys[slot] ?? field(0n),
           recipientCiphertext: new Uint8Array(),
         };
       });
@@ -179,8 +211,16 @@ describe("deposit disclosure", () => {
             ownerUtxoHash(opening.ownerHash, opening.blinding),
           ),
           capsules: sealed.capsules,
+          assets: words(fixture["assets"])
+            .slice(0, count)
+            .map((asset, slot) => ({ asset, amount: amounts[slot] ?? 0n })),
           auditorPublicKey: auditor,
-          memberRegistryRoot: word(fixture["memberRegistryRoot"]),
+          registry: {
+            ownRoot: word(fixture["memberRegistryRoot"]),
+            curatorRoot: word(fixture["curatorRoot"]),
+            keyEscrow: fixture["keyEscrow"] === true,
+            policyHash: word(fixture["policyHash"]),
+          },
         });
         expect(hex(hash)).toBe(String(fixture["publicInputHash"]).slice(2));
       } finally {
@@ -192,11 +232,10 @@ describe("deposit disclosure", () => {
 
   it("opens every slot of one shared stream and preserves recipient ciphertext", () => {
     const auditor = X25519Keypair.generate();
-    // Odd slots disclose an owner key like an anonymous ring.
     const openings = Array.from({ length: 8 }, (_, index) => ({
       ownerHash: field(BigInt(index + 1)),
       blinding: field(BigInt(index + 11)),
-      ...(index % 2 === 0 ? {} : { ownerKey: new Uint8Array(32).fill(index) as Bytes32 }),
+      ownerKey: new Uint8Array(32).fill(index + 1) as Bytes32,
       recipientCiphertext: Uint8Array.of(index, 9),
     }));
     const sealed = sealRingDepositOpenings(openings, auditor.publicKey());
@@ -255,7 +294,14 @@ describe("deposit disclosure", () => {
   it("binds the SPP wire, both addresses, the anonymous flag, the commitments and the ciphertext", () => {
     const auditor = X25519Keypair.generate();
     const sealed = sealRingDepositOpenings(
-      [{ ownerHash: field(1n), blinding: field(2n), recipientCiphertext: Uint8Array.of(3) }],
+      [
+        {
+          ownerHash: field(1n),
+          blinding: field(2n),
+          ownerKey: field(0n),
+          recipientCiphertext: Uint8Array.of(3),
+        },
+      ],
       auditor.publicKey(),
     );
     try {
@@ -267,6 +313,7 @@ describe("deposit disclosure", () => {
         anonymous: false,
         ownerCommitments: [ownerUtxoHash(field(1n), field(2n))],
         capsules: sealed.capsules,
+        assets: [{ asset: field(4n), amount: 5n }],
         auditorPublicKey: auditor.publicKey(),
       };
       const hash = ringDepositPublicInputHash(input);
@@ -274,9 +321,15 @@ describe("deposit disclosure", () => {
       expect(ringDepositPublicInputHash({ ...input, ownerCommitments: [field(3n)] })).not.toEqual(
         hash,
       );
-      expect(ringDepositPublicInputHash({ ...input, memberRegistryRoot: field(0n) })).not.toEqual(
-        hash,
-      );
+      expect(
+        ringDepositPublicInputHash({ ...input, assets: [{ asset: field(4n), amount: 6n }] }),
+      ).not.toEqual(hash);
+      expect(
+        ringDepositPublicInputHash({
+          ...input,
+          registry: { ownRoot: field(0n), keyEscrow: false, policyHash: field(9n) },
+        }),
+      ).not.toEqual(hash);
       expect(() =>
         ringDepositPublicInputHash({ ...input, contextHash: field(BN254_SCALAR_ORDER) }),
       ).toThrow(expect.objectContaining({ code: "RING_BUILD_DEPOSIT" }));
@@ -306,6 +359,7 @@ describe("deposit disclosure", () => {
         {
           ownerHash: recipient.shieldedAddress().ownerHash(),
           blinding,
+          ownerKey: recipient.signingPublicKey().confidentialViewTag(),
           recipientCiphertext: ciphertext,
         },
       ],
@@ -340,12 +394,13 @@ describe("deposit disclosure", () => {
 });
 
 describe("audited deposit instruction", () => {
-  it("prefixes the proof and the root slot and keeps the SPP deposit bytes and accounts", async () => {
+  it("prefixes the proof and the root slot, then the live registries, and keeps the SPP deposit bytes and accounts", async () => {
     const auditor = X25519Keypair.generate();
     const sealed = sealRingDepositOpenings(
       Array.from({ length: 8 }, () => ({
         ownerHash: field(1n),
         blinding: field(2n),
+        ownerKey: field(0n),
         recipientCiphertext: Uint8Array.of(3),
       })),
       auditor.publicKey(),
@@ -363,32 +418,35 @@ describe("audited deposit instruction", () => {
           ciphertext,
         },
       }));
-      const input = { ringProgramId: RING, tree: TREE, depositor: PAYER, deposits };
+      const input = { ringProgramId: RING, tree: TREE, depositor: PAYER, deposits, registries: [] };
       const proof = new Uint8Array(192).fill(7);
       const plain = await ringDepositInstruction({ ...input, proof });
+      const curator = TREE;
       const escrowed = await ringDepositInstruction({
         ...input,
         proof,
-        registryRootIndex: 5,
+        registries: [RECORDS, curator],
+        ownRevision: 5n,
+        curatorRevision: 6n,
         cosigner: RING,
       });
-      const [config] = await ringConfigPda(RING);
-      const [registry] = await ringMemberRegistryPda(RING);
+      const [ring] = await ringPolicyPda(RING);
       expect(plain.data?.[0]).toBe(31);
       expect(plain.data?.slice(1, 193)).toEqual(proof);
-      expect(plain.data?.[193]).toBe(0);
-      expect(plain.data?.[194]).toBe(InstructionTag.ringDeposit);
-      expect(escrowed.data?.[193]).toBe(5);
-      expect(escrowed.data?.slice(194)).toEqual(plain.data?.slice(194));
-      expect(plain.accounts?.slice(0, 1)).toEqual([
-        { address: config, role: AccountRole.READONLY },
-      ]);
-      expect(escrowed.accounts?.slice(0, 3)).toEqual([
-        { address: config, role: AccountRole.READONLY },
-        { address: registry, role: AccountRole.READONLY },
+      expect(plain.data?.slice(193, 209)).toEqual(new Uint8Array(16));
+      expect(plain.data?.[209]).toBe(InstructionTag.ringDeposit);
+      expect(escrowed.data?.slice(193, 201)).toEqual(Uint8Array.of(5, 0, 0, 0, 0, 0, 0, 0));
+      expect(escrowed.data?.slice(201, 209)).toEqual(Uint8Array.of(6, 0, 0, 0, 0, 0, 0, 0));
+      expect(escrowed.data?.slice(209)).toEqual(plain.data?.slice(209));
+      expect(plain.accounts?.slice(0, 1)).toEqual([{ address: ring, role: AccountRole.READONLY }]);
+      expect(escrowed.accounts?.slice(0, 5)).toEqual([
+        { address: ring, role: AccountRole.READONLY },
+        { address: RECORDS, role: AccountRole.READONLY },
+        { address: curator, role: AccountRole.READONLY },
+        { address: await ringCoSignerAddress(RING, RING), role: AccountRole.READONLY },
         { address: RING, role: AccountRole.READONLY_SIGNER },
       ]);
-      expect(escrowed.accounts?.slice(3)).toEqual(plain.accounts?.slice(1));
+      expect(escrowed.accounts?.slice(5)).toEqual(plain.accounts?.slice(1));
       await expect(
         ringDepositInstruction({ ...input, proof, deposits: [...deposits, deposits[0]!] }),
       ).rejects.toMatchObject({ code: "INTERFACE_CODEC", details: { field: "deposit count" } });
@@ -421,8 +479,7 @@ describe("ring deposit builder", () => {
     }>,
   ) {
     const records = recordTree(input.members ?? []);
-    const [config, configBump] = await ringConfigPda(RING);
-    const [registry, registryBump] = await ringMemberRegistryPda(RING);
+    const [policy, policyBump] = await ringPolicyPda(RING);
     const requests: RingProofRequest[] = [];
     const proveRing = vi.fn(async (request: RingProofRequest) => {
       requests.push(request);
@@ -433,35 +490,33 @@ describe("ring deposit builder", () => {
       treeId: 0,
       getLatestBlockhash: async () => BLOCKHASH,
       getAccount: async (account: Address) => {
-        if (account === config)
+        if (input.coSigner !== undefined) {
+          const [record, stored] = await ringCoSignerAccount(RING, input.coSigner);
+          if (account === record) return stored;
+        }
+        if (account === policy)
           return ownedAccount(
             RING,
-            ringProgramConfigData({
-              authority: RING,
+            ringPolicyData({
+              bump: policyBump,
               auditorPublicKey: auditor.publicKey().toBytes(),
-              bump: configBump,
-              hasPolicy: false,
               mode: input.mode,
               ...(input.coSigner === undefined ? {} : { coSigner: input.coSigner }),
+              records: RECORDS,
             }),
           );
-        if (account === registry)
-          return ownedAccount(
-            RING,
-            memberRegistryData({
-              bump: registryBump,
-              history: [{ root: records.root, applied: 0n, slot: 0n }],
-              nextIndex: records.nextIndex,
-            }),
-          );
+        if (account === RECORDS)
+          return storageRegistryAccount([
+            { hash: records.root, revision: RECORDS_REVISION, expiresAt: 0n },
+          ]);
         return undefined;
       },
-      getRingMemberRecord: async (request: RingMemberProofRequest) =>
+      getStorageMemberOpenings: async (request: StorageOpeningsRequest) =>
         ({
           context: CONTEXT,
-          root: { root: records.root, rootIndex: 0, applied: 0n, nextIndex: records.nextIndex },
-          opening: records.opening(request.member),
-        }) satisfies RingMemberRecordResult,
+          root: { root: records.root, revision: RECORDS_REVISION, nextIndex: records.nextIndex },
+          openings: request.members.map((member) => records.opening(member)),
+        }) satisfies StorageMemberOpenings,
       proveRing,
     };
     return { client, requests, proveRing };
@@ -540,7 +595,7 @@ describe("ring deposit builder", () => {
       if (request?.kind !== "deposit") throw new Error("expected one deposit request");
       expect(request.keyEscrow).toBe(true);
       expect(request.anonymous).toBe(false);
-      expect(request.ownerKeys).toBeUndefined();
+      expect(request.ownerKeys).toEqual([recipient.signingPublicKey().confidentialViewTag()]);
       expect(request.ctHashes[0]).toEqual(hashBytes(SEALED_CIPHERTEXT));
       expect(request.members[0]?.record.escrowKey).toEqual(
         escrowKeyHash({
@@ -551,17 +606,22 @@ describe("ring deposit builder", () => {
       expect(request.memberRegistryRoot).toEqual(recordTree([escrowedMember(recipient)]).root);
       expect(request.blindingSecrets).toHaveLength(1);
       expect(proven.roots).toEqual([
-        { ringProgramId: RING, rootIndex: 0, root: recordTree([escrowedMember(recipient)]).root },
+        {
+          ringProgramId: RING,
+          registry: RECORDS,
+          revision: RECORDS_REVISION,
+          root: recordTree([escrowedMember(recipient)]).root,
+        },
       ]);
       const data = proven.instruction.data ?? new Uint8Array();
-      expect(data[193]).toBe(0);
-      const [registry] = await ringMemberRegistryPda(RING);
-      expect(proven.instruction.accounts?.[1]).toEqual({
-        address: registry,
-        role: AccountRole.READONLY,
-      });
+      expect(data.slice(193, 201)).toEqual(Uint8Array.of(3, 0, 0, 0, 0, 0, 0, 0));
+      const [registry] = await ringPolicyPda(RING);
+      expect(proven.instruction.accounts?.slice(0, 2)).toEqual([
+        { address: registry, role: AccountRole.READONLY },
+        { address: RECORDS, role: AccountRole.READONLY },
+      ]);
       // The recipient opens its note from the ciphertext behind the capsule.
-      const spp = data.slice(194);
+      const spp = data.slice(209);
       expect(spp[0]).toBe(InstructionTag.ringDeposit);
       expect(prepared.utxo.blinding).toEqual(
         depositBlinding(request.blindingSecrets[0] ?? field(0n)),
@@ -572,6 +632,37 @@ describe("ring deposit builder", () => {
       recipient.destroy();
     }
     expect(requests[0]?.kind === "deposit" && requests[0].blindingSecrets[0]).toEqual(field(0n));
+  });
+
+  it("seals a confidential recipient's owner key for the auditor", async () => {
+    const recipient = ShieldedKeypair.generate();
+    const { client } = await fixture({ mode: "confidential" });
+    const prepared = await PreparedRingDeposit.prepare(
+      params(client, { kind: "confidential", address: recipient.shieldedAddress() }),
+    );
+    try {
+      const proven = await prepared.prove(client);
+      const spp = (proven.instruction.data ?? new Uint8Array()).slice(
+        AUDITED_DEPOSIT_PREFIX_LENGTH,
+      );
+      const [entry] = decodeRingDepositInstructionData(spp.slice(1)).deposits;
+      const capsule = readRingDepositCapsule(entry?.encrypted.ciphertext ?? new Uint8Array());
+      if (entry === undefined || capsule === undefined) throw new Error("missing capsule");
+      const signature = "1".repeat(87) as Signature;
+      const [binding] = ConfirmedDeposit.fromTransaction(
+        confirmedDepositTransaction(RING, signature, [capsule], [entry.ownerUtxoHash]),
+        signature,
+        0,
+        RING,
+      );
+      if (binding === undefined) throw new Error("missing confirmation");
+      expect(
+        openRingDepositOpening(capsule, auditor, entry.ownerUtxoHash, binding).ownerKey,
+      ).toEqual(recipient.signingPublicKey().confidentialViewTag());
+    } finally {
+      prepared.destroy();
+      recipient.destroy();
+    }
   });
 
   it("refuses a recipient whose record escrows another key before any proof", async () => {
@@ -612,14 +703,14 @@ describe("ring deposit builder", () => {
       if (request?.kind !== "deposit") throw new Error("expected one deposit request");
       expect(request.anonymous).toBe(true);
       expect(request.keyEscrow).toBe(false);
-      expect(request.ownerKeys?.[0]).toEqual(owner.signingPublicKey().ed25519());
+      expect(request.ownerKeys[0]).toEqual(owner.signingPublicKey().ed25519());
       expect(request.members.every((member) => member === undefined)).toBe(true);
       expect(proven.roots).toBeUndefined();
-      const [registry] = await ringMemberRegistryPda(RING);
-      expect(proven.instruction.accounts?.map((account) => account.address)).not.toContain(
-        registry,
-      );
-      const spp = (proven.instruction.data ?? new Uint8Array()).slice(194);
+      const [ring] = await ringPolicyPda(RING);
+      expect(
+        proven.instruction.accounts?.filter((account) => account.address === ring),
+      ).toHaveLength(1);
+      const spp = (proven.instruction.data ?? new Uint8Array()).slice(201);
       const [lowest, next, stored] = tags.map(hex);
       expect(hex(spp)).toContain(stored);
       expect(hex(spp)).not.toContain(lowest);
@@ -649,7 +740,7 @@ describe("ring deposit builder", () => {
       await expect(buildRingDepositTransaction(deposit(history))).rejects.toMatchObject({
         code: "RING_BUILD_DEPOSIT",
         causeCode: "RING_ANONYMOUS_SUBMISSION_REQUIRED",
-        cause: { details: { use: "PreparedRingDeposit" } },
+        cause: { details: { use: "createRingDepositSubmission" } },
       });
       expect(proveRing).not.toHaveBeenCalled();
       const initial = await PreparedRingDeposit.prepare(deposit(history));
@@ -663,6 +754,43 @@ describe("ring deposit builder", () => {
       expect(await publishes(next, client, first)).toBe(false);
     } finally {
       for (const held of prepared) held.destroy();
+      local.destroy();
+      owner.destroy();
+    }
+  });
+
+  it("sends an anonymous deposit as a submission that keeps its tag and proves again after a stale root", async () => {
+    const owner = ShieldedKeypair.generate();
+    const local = LocalRingKeys.fromKeypair(owner);
+    const viewing = owner.viewingKey();
+    const first = viewing.senderViewTag(0n);
+    viewing.destroy();
+    const { client, proveRing } = await fixture({ mode: "anonymous" });
+    const payer = await generateKeyPairSigner();
+    try {
+      const history = ViewingHistory.create(owner.shieldedAddress().viewingPublicKey, 0n);
+      const submission = await createRingDepositSubmission(
+        params(client, { kind: "anonymous", keys: local, history }, { feePayer: payer.address }),
+      );
+      expect(submission.viewingHistory?.current().txCount).toBe(1n);
+      const signed: string[] = [];
+      let polled = 0;
+      const result = await submission.send({
+        sign: async (transaction) => {
+          signed.push(hex(new Uint8Array(transaction.messageBytes)));
+          return signTransactionWithSigners([payer], transaction);
+        },
+        send: async () => undefined,
+        status: async () =>
+          ++polled === 1
+            ? { kind: "failed", instructionIndex: 0, customCode: RingProgramError.rootNotServed }
+            : { kind: "confirmed", slot: 4n },
+      });
+
+      expect(result).toMatchObject({ kind: "confirmed", attempts: 2 });
+      expect(proveRing).toHaveBeenCalledTimes(2);
+      expect(signed.map((message) => message.includes(hex(first)))).toEqual([true, true]);
+    } finally {
       local.destroy();
       owner.destroy();
     }
@@ -831,10 +959,10 @@ describe("ring deposit builder", () => {
       try {
         const withCoSigner = await signed.prove(covered.client);
         const withoutCoSigner = await unsigned.prove(outside.client);
-        expect(withCoSigner.instruction.accounts?.[1]).toEqual({
-          address: cosigner,
-          role: AccountRole.READONLY_SIGNER,
-        });
+        expect(withCoSigner.instruction.accounts?.slice(1, 3)).toEqual([
+          { address: await ringCoSignerAddress(RING, cosigner), role: AccountRole.READONLY },
+          { address: cosigner, role: AccountRole.READONLY_SIGNER },
+        ]);
         expect(
           withoutCoSigner.instruction.accounts?.map((account) => account.address),
         ).not.toContain(cosigner);
@@ -865,6 +993,7 @@ describe("confirmed deposit attribution", () => {
         {
           ownerHash: field(3n),
           blinding: field(4n),
+          ownerKey: field(0n),
           recipientCiphertext: Uint8Array.of(8),
         },
       ],

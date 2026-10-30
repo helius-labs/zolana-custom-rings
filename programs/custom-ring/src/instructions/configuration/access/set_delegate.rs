@@ -1,13 +1,9 @@
-use custom_ring_interface::{CustomRingError, RingMode, RingProgramConfig};
+use custom_ring_interface::{CustomRingError, RingMode, RingRole};
 use pinocchio::{AccountView, Address, ProgramResult};
 use spr_account_checks::AccountIterator;
 
-use crate::instructions::{
-    instruction_runtime::no_data,
-    loader::{load_mut, load_registry, UpgradeAuthorityCheck},
-};
+use crate::instructions::{instruction_runtime::no_data, loader::RoleHolder};
 
-/// Only the upgrade authority appoints the delegate.
 #[inline(never)]
 pub fn process_set_delegate_ix(
     program_id: &Address,
@@ -16,36 +12,30 @@ pub fn process_set_delegate_ix(
 ) -> ProgramResult {
     no_data(data)?;
     let mut iter = AccountIterator::new(accounts);
-    let authority = iter.next_signer("authority")?;
-    let config = iter.next_mut("config")?;
+    let admin = iter.next_signer("admin")?;
+    let ring = iter.next_mut("ring")?;
     let delegate = iter.next_signer("delegate")?;
-    let registry = iter.next_account("registry")?;
-    let program = iter.next_account("program")?;
-    let program_data = iter.next_account("program_data")?;
 
-    // 1. The program's upgrade authority signs, as for `CreateConfig`.
-    UpgradeAuthorityCheck {
+    // 1. The delegate is permanent for the instructions of the deployed binary.
+    let mut ring = RoleHolder {
         program_id,
-        authority,
-        program,
-        program_data,
+        role: RingRole::Admin,
+        signer: admin,
     }
-    .verify()?;
-    // 2. The delegate is permanent for the instructions of the deployed binary.
-    let mut config = load_mut::<RingProgramConfig>(program_id, config)?;
-    if config.delegate().is_some() {
+    .load_mut(ring)?;
+    if ring.delegate().is_some() {
         return Err(CustomRingError::DelegateAlreadySet.into());
     }
-    // 3. An anonymous ring hides the owner a delegate would sign for.
-    if config.mode()? == RingMode::Anonymous {
+    // 2. An anonymous ring hides the owner a delegate would sign for.
+    if ring.mode()? == RingMode::Anonymous {
         return Err(CustomRingError::AnonymousRingRefused.into());
     }
-    if !config.has_policy() {
+    if !ring.has_policy() {
         return Err(CustomRingError::DelegateRequiresPolicy.into());
     }
-    // 4. `ConfidentialEscrow` mode escrows every output nullifier key in the member registry.
-    load_registry(program_id, registry)?;
-    config.delegate = *delegate.address();
-    config.mode = RingMode::ConfidentialEscrow as u8;
+    // 3. The delegate holds no role, and `ConfidentialEscrow` mode escrows every output nullifier key in the records.
+    ring.roles.check(Some(delegate.address()))?;
+    ring.delegate = *delegate.address();
+    ring.mode = RingMode::ConfidentialEscrow as u8;
     Ok(())
 }

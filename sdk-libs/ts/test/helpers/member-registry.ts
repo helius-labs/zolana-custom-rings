@@ -100,7 +100,7 @@ export function recordTree(records: readonly FixtureRecord[] = []) {
     if (low === undefined) throw new Error("member outside the fixture registry");
     return { kind: "absent", low, path: path(lowIndex) };
   };
-  /** The `getRingRecordPool` body, distinct leaves in first use order. */
+  /** The `getStorageRecordPool` body, distinct leaves in first use order. */
   const pool = (members: readonly Bytes32[], openings: number) => {
     const levels = canopyLevels(openings);
     const height = QUAD_HEIGHT - levels;

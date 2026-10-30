@@ -26,12 +26,7 @@ import type {
   PolicySubjectEntry,
 } from "../rpc/prover/ring.js";
 
-import {
-  registryCurrentRoot,
-  type RingMemberRegistry,
-  type RingProgramConfig,
-} from "../protocol/codec/ring-codecs.js";
-import { fetchCuratorRegistry, fetchRingMemberRegistry } from "../protocol/membership/config.js";
+import type { RingPolicy } from "../protocol/codec/ring-codecs.js";
 import { RingError } from "../protocol/error.js";
 import { ownerEscrowed, type MemberOpeningRead } from "../protocol/membership/member-opening.js";
 import {
@@ -44,18 +39,13 @@ import {
   type RecordLists,
   type RuleRefusal,
 } from "../protocol/membership/policy.js";
-import { readRecordPool } from "../rpc/registered-record.js";
+import { fetchBoundRoot, readRecordPool, type BoundRoot } from "../rpc/registered-record.js";
 import { policyStatementHash, type PolicyKey } from "../protocol/proof/statement.js";
 import { policyPoolCapacity } from "../protocol/proof/proving-keys.js";
-import type { RingRail } from "../protocol/transaction/transact.js";
+import { publishesRecipients, type RingRail } from "../protocol/transaction/transact.js";
 import { publicAmountFields, type PublicSlots } from "../protocol/transaction/spp.js";
 
-/** The registry root a statement names by its history slot. */
-export interface BoundRoot {
-  readonly ringProgramId: Address;
-  readonly rootIndex: number;
-  readonly root: Bytes32;
-}
+export type { BoundRoot } from "../rpc/registered-record.js";
 
 /** The registry policy hash a policy statement binds, Rust `BoundPolicy`. */
 export interface BoundPolicy {
@@ -64,7 +54,7 @@ export interface BoundPolicy {
 }
 
 export type PolicyReadClient = Pick<ChainReader, "getAccount"> &
-  Pick<RingRecordReader, "getRingMemberOpenings" | "getRingRecordPool">;
+  Pick<RingRecordReader, "getStorageMemberOpenings" | "getStorageRecordPool">;
 
 /** The ring's table, its roots and every subject's openings, read before the statement, Rust `PolicyInputs`. */
 export interface PolicyInputs {
@@ -73,8 +63,7 @@ export interface PolicyInputs {
   readonly pinned: PinnedPolicy;
   readonly own: BoundRoot;
   readonly ownPool: RecordPool;
-  /** The curator registry account, the root bound from it and its pool. */
-  readonly curator?: Readonly<{ registry: Address; root: BoundRoot; pool: RecordPool }>;
+  readonly curator?: Readonly<{ root: BoundRoot; pool: RecordPool }>;
   readonly senderEntry: PolicySubjectEntry;
   /** Outputs then every withdrawal slot. */
   readonly ownerEntries: readonly PolicySubjectEntry[];
@@ -83,6 +72,8 @@ export interface PolicyInputs {
   readonly publicAssetEntries: readonly number[];
   /** The escrowed key ciphertext hash of every UTXO output's owner, under key escrow. */
   readonly ctHashes: readonly (Bytes32 | undefined)[];
+  /** One per output slot, zero on a dummy and on the anonymous rail. */
+  readonly recipients: readonly Bytes32[];
   readonly approvalRequired: boolean;
   readonly keyEscrow: boolean;
 }
@@ -105,7 +96,7 @@ export async function readPolicy(
     tokenOwnerHint?: Address;
     client: PolicyReadClient;
     ringProgramId: Address;
-    config: RingProgramConfig;
+    config: RingPolicy;
     rail: RingRail;
     proofInputs: SppProofInputs;
     sender: Bytes32;
@@ -113,18 +104,13 @@ export async function readPolicy(
   }>,
   context?: RequestContext,
 ): Promise<PolicyInputs> {
-  const { client, ringProgramId, proofInputs } = input;
-  const registry = await fetchRingMemberRegistry(client, ringProgramId, context);
-  const pinned = pinnedPolicy(registry);
-  const own = currentRoot(ringProgramId, registry);
-  const curatorRegistry = pinned.curator;
+  const { client, ringProgramId, proofInputs, config: policy } = input;
+  const pinned = pinnedPolicy(policy);
+  const own = await fetchBoundRoot({ client, ringProgramId, registry: policy.records }, context);
   const curatorRoot =
-    curatorRegistry === undefined
+    pinned.curator === undefined
       ? undefined
-      : await (async () => {
-          const read = await fetchCuratorRegistry(client, curatorRegistry, context);
-          return currentRoot(read.ringProgramId, read.registry);
-        })();
+      : await fetchBoundRoot({ client, ringProgramId, registry: pinned.curator }, context);
   const { withdrawals, splWithdrawalOwners } = await readPolicyWithdrawals(
     client,
     proofInputs.externalData.interfaceTransfers,
@@ -162,20 +148,14 @@ export async function readPolicy(
   ]);
   const ownMembers = firstSeen([...curatorMembers, ...publicAssets]);
   const ownPool = await readRecordPool(
-    { client, ringProgramId, root: own.root, members: ownMembers, openings: capacity.own },
+    { client, root: own, members: ownMembers, openings: capacity.own },
     context,
   );
   const curatorPool =
     curatorRoot === undefined
       ? undefined
       : await readRecordPool(
-          {
-            client,
-            ringProgramId: curatorRoot.ringProgramId,
-            root: curatorRoot.root,
-            members: curatorMembers,
-            openings: capacity.curator,
-          },
+          { client, root: curatorRoot, members: curatorMembers, openings: capacity.curator },
           context,
         );
   const ownReads = subjectReads(ownMembers, ownPool.reads);
@@ -267,15 +247,9 @@ export async function readPolicy(
     splWithdrawalOwners,
     own,
     ownPool: ownPool.pool,
-    ...(curatorRegistry === undefined || curatorRoot === undefined || curatorPool === undefined
+    ...(curatorRoot === undefined || curatorPool === undefined
       ? {}
-      : {
-          curator: Object.freeze({
-            registry: curatorRegistry,
-            root: curatorRoot,
-            pool: curatorPool.pool,
-          }),
-        }),
+      : { curator: Object.freeze({ root: curatorRoot, pool: curatorPool.pool }) }),
     senderEntry: entry(input.sender),
     ownerEntries: Object.freeze([
       ...owners.map((owner) => entry(owner)),
@@ -291,6 +265,11 @@ export async function readPolicy(
       memberRail ? input.publicSlots.assets.map((asset) => subject(ownReads, asset)) : [],
     ),
     ctHashes: Object.freeze(ctHashes),
+    recipients: Object.freeze(
+      owners.map((owner) =>
+        publishesRecipients(input.rail) && owner !== undefined ? owner : zeroField(),
+      ),
+    ),
     approvalRequired,
     keyEscrow,
   });
@@ -310,6 +289,7 @@ export function policyPublicInputHash(policy: PolicyInputs, proving: PolicyProvi
     ownRoot: policy.own.root,
     curatorRoot: policy.curator?.root.root ?? zeroField(),
     sender: proving.sender,
+    recipients: policy.recipients,
     publicAssets: proving.publicSlots.assets,
     publicAmounts: publicAmountFields(proving.publicSlots),
   });
@@ -353,6 +333,7 @@ export function policyProofRequest(
         ...(ctHash === undefined ? {} : { ctHash }),
       });
     }),
+    recipients: policy.recipients,
     senderPkHash: proving.senderPkHash,
     ownPool: policy.ownPool,
     ...(policy.curator === undefined ? {} : { curatorPool: policy.curator.pool }),
@@ -456,15 +437,6 @@ function ruleUnsatisfied(refusal: RuleRefusal, live: readonly number[]): RingErr
               subject: refusal.subject.kind,
               slotIndex: slot(refusal.subject.output),
             },
-  });
-}
-
-/** Rust `BoundRoot::current`, the newest root of the registry. */
-export function currentRoot(ringProgramId: Address, registry: RingMemberRegistry): BoundRoot {
-  return Object.freeze({
-    ringProgramId,
-    rootIndex: registry.historyCursor,
-    root: registryCurrentRoot(registry).root,
   });
 }
 

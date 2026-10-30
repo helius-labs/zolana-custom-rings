@@ -4,7 +4,9 @@ use spr_interface::pda;
 use spr_keypair::ShieldedKeypair;
 use spr_transaction::Mint;
 
-use super::support::{keypair, ring, ring_utxo, Chain, RingSettings, TREE_ID};
+use super::support::{
+    keypair, owner_identity, ring, ring_utxo, Chain, Registry, RingSettings, TREE_ID,
+};
 use crate::{
     CustomRingMerge, MergeProofInput, PreparedCustomRingMerge, RingError, RingMergeOperation,
     RingSubmission,
@@ -35,6 +37,7 @@ impl Merge<'_> {
                 nullifier_key: self.owner.nullifier_key.clone(),
                 input_tree: pda::tree(TREE_ID),
                 output_tree: pda::tree(TREE_ID),
+                co_signer: self.settings.co_signer.map(|(signer, _)| signer),
             },
         );
         RingSubmission::new(merge)
@@ -46,6 +49,37 @@ impl Merge<'_> {
             .await
             .unwrap_err()
     }
+}
+
+/// A key escrow merge opens the owner's escrow record before any proof.
+#[tokio::test]
+async fn a_key_escrow_merge_of_an_unregistered_owner_is_refused() {
+    let registered = keypair(1);
+    let stranger = keypair(2);
+    let payer = keypair(9);
+    let chain = Chain::ring(RingSettings {
+        has_policy: true,
+        ..RingSettings::new(RingMode::ConfidentialEscrow)
+    })
+    .with_registry(
+        Registry::new(&[(&registered, 1)]),
+        &crate::tests::pipeline_rules(),
+    );
+    let client = chain.client();
+    let merge = RingMergeOperation::new(
+        prepared(&stranger),
+        MergeProofInput {
+            nullifier_key: stranger.nullifier_key.clone(),
+            input_tree: pda::tree(TREE_ID),
+            output_tree: pda::tree(TREE_ID),
+            co_signer: None,
+        },
+    );
+    let owner = owner_identity(&stranger);
+    assert!(matches!(
+        RingSubmission::new(merge).send(&client, &payer, &[]).await,
+        Err(RingError::UnregisteredOutputKey { owner: refused }) if refused == owner
+    ));
 }
 
 /// The hidden owner never pays, signs or co-signs its anonymous merge.
@@ -89,6 +123,23 @@ async fn an_anonymous_merge_its_owner_would_sign_in_public_is_refused_before_pro
         .is_ok());
 }
 
+/// The merge circuit keeps the owner off the payer and co-signer on every ring.
+#[tokio::test]
+async fn a_confidential_merge_its_owner_pays_is_refused_before_proving() {
+    let owner = keypair(1);
+    let merge = Merge {
+        owner: &owner,
+        settings: RingSettings::new(RingMode::Confidential),
+        payer: &owner,
+        signers: &[],
+    };
+    let refusal = merge.refusal().await;
+    assert!(
+        matches!(refusal, RingError::AnonymousPublicSignerLinksOwner),
+        "{refusal}"
+    );
+}
+
 #[tokio::test]
 async fn the_widest_merge_fits_a_transaction_beside_its_co_signer() {
     use custom_ring_interface::{compute_unit_limit, InstructionTag};
@@ -107,6 +158,7 @@ async fn the_widest_merge_fits_a_transaction_beside_its_co_signer() {
             nullifier_key: owner.nullifier_key.clone(),
             input_tree: pda::tree(TREE_ID),
             output_tree: pda::tree(TREE_ID),
+            co_signer: Some(Address::new_from_array([0x46; 32])),
         },
     );
     let config = ring()

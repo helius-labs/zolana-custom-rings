@@ -1,13 +1,20 @@
 import {
+  address,
+  getAddressEncoder,
   getProgramDerivedAddress,
+  type AccountMeta,
   type Address,
   type ProgramDerivedAddress,
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { meta, signerAddress, type SignerAccount } from "@heliuslabs/zolana/internal";
+
 export { ringAuthAddress } from "@heliuslabs/zolana/internal";
 
 const encoder = new TextEncoder();
+
+export const STORAGE_PROGRAM_ID = address("6cGXszer5keoaWm8Co5G9f4KGBThuGz4NsKTqYij1emg");
 
 function ringPda(
   ringProgramId: Address,
@@ -23,26 +30,48 @@ async function ringAddress(pda: Promise<ProgramDerivedAddress>): Promise<Address
   return (await pda)[0];
 }
 
-export function ringConfigPda(ringProgramId: Address): Promise<ProgramDerivedAddress> {
-  return ringPda(ringProgramId, encoder.encode("config"));
+export function ringCoSignerPda(
+  ringProgramId: Address,
+  signer: Address,
+): Promise<ProgramDerivedAddress> {
+  return ringPda(ringProgramId, encoder.encode("co_signer"), getAddressEncoder().encode(signer));
 }
 
-export function ringConfigAddress(ringProgramId: Address): Promise<Address> {
-  return ringAddress(ringConfigPda(ringProgramId));
+export function ringCoSignerAddress(ringProgramId: Address, signer: Address): Promise<Address> {
+  return ringAddress(ringCoSignerPda(ringProgramId, signer));
 }
 
-export function ringMemberRegistryPda(ringProgramId: Address): Promise<ProgramDerivedAddress> {
-  return ringPda(ringProgramId, encoder.encode("members"));
+/** The program reads the record first, the signer next. */
+export async function ringCoSignerMetas(
+  ringProgramId: Address,
+  signer: SignerAccount,
+): Promise<readonly [AccountMeta, AccountMeta]> {
+  const record = await ringCoSignerAddress(ringProgramId, signerAddress(signer));
+  return [meta(record, false, false), meta(signer, true, false)];
 }
 
-export function ringMemberRegistryAddress(ringProgramId: Address): Promise<Address> {
-  return ringAddress(ringMemberRegistryPda(ringProgramId));
+export function ringPolicyPda(ringProgramId: Address): Promise<ProgramDerivedAddress> {
+  return ringPda(ringProgramId, encoder.encode("policy"));
 }
 
-export function ringRecordQueuePda(ringProgramId: Address): Promise<ProgramDerivedAddress> {
-  return ringPda(ringProgramId, encoder.encode("queue"));
+export function ringPolicyAddress(ringProgramId: Address): Promise<Address> {
+  return ringAddress(ringPolicyPda(ringProgramId));
 }
 
-export function ringRecordQueueAddress(ringProgramId: Address): Promise<Address> {
-  return ringAddress(ringRecordQueuePda(ringProgramId));
+/** Seeds match Rust `InitializeStorage::records`. */
+export function ringRecordsAddress(
+  ringProgramId: Address,
+  storageAuthority: Address,
+): Promise<Address> {
+  const addresses = getAddressEncoder();
+  return ringAddress(
+    getProgramDerivedAddress({
+      programAddress: STORAGE_PROGRAM_ID,
+      seeds: [
+        encoder.encode("storage"),
+        addresses.encode(storageAuthority),
+        addresses.encode(ringProgramId),
+      ],
+    }),
+  );
 }

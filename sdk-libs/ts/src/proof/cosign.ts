@@ -1,6 +1,7 @@
 import type { Address } from "@solana/kit";
 
-import { signerAddress, type SignerAccount } from "@heliuslabs/zolana/internal";
+import type { ChainReader } from "@heliuslabs/zolana/client";
+import type { RequestContext } from "@heliuslabs/zolana/interface";
 import { SOL_MINT } from "@heliuslabs/zolana/transaction";
 import type { SettlementTransfer } from "@heliuslabs/zolana/transaction";
 
@@ -9,8 +10,10 @@ import {
   RING_COSIGN_TRANSFERS,
   RING_COSIGN_WITHDRAWALS,
   type RingCoSigner,
+  type RingPolicy,
 } from "../protocol/codec/ring-codecs.js";
 import { RingError } from "../protocol/error.js";
+import { fetchRingCoSignerRecord } from "../protocol/membership/config.js";
 
 /** Describes the operation classes and withdrawal amounts requiring approval. */
 export interface CoSignDemand {
@@ -46,29 +49,82 @@ export function transactDemand(transfers: readonly SettlementTransfer[]): CoSign
   });
 }
 
-/** Rust `CoSignDemand::signer`, the approval bit demands the co-signer whatever its scope. */
-export function demandedCoSigner(
-  input: Readonly<{
-    ringProgramId: Address;
-    configured: RingCoSigner | undefined;
-    approvalRequired: boolean;
-    withdrawalExempt?: boolean;
-    transfers: readonly SettlementTransfer[];
-    /** Empty on the anonymous and delegate rails. */
-    ownerSigners: readonly Address[];
-    delegate?: Address;
-  }>,
-): Address | undefined {
-  // Supplied with the configured signer, the check only answers whether the demand names it.
-  const supplied = checkRingCoSigner({
-    ringProgramId: input.ringProgramId,
-    configured: input.configured,
-    supplied: input.configured?.signer,
-    demand: transactDemand(input.transfers),
-    approvalRequired: input.approvalRequired,
-    withdrawalExempt: input.withdrawalExempt ?? false,
-  });
-  const demanded = supplied === undefined ? undefined : signerAddress(supplied);
+/** Rust `CoSignRequirement`, one `CoSigner` record must satisfy it. */
+export type CoSignRequirement =
+  | Readonly<{ kind: "any" }>
+  | Readonly<{ kind: "covering"; classes: number }>;
+
+type RequirementInput = Readonly<{
+  ringProgramId: Address;
+  config: RingPolicy;
+  demand: CoSignDemand;
+  approvalRequired: boolean;
+  /** Only a verified exemption proof waives the withdrawal class. */
+  withdrawalExempt?: boolean;
+}>;
+
+/** Rust `CoSignDemand::requirement`, `undefined` when no record covers a class and no approval is demanded. */
+export function coSignRequirement(input: RequirementInput): CoSignRequirement | undefined {
+  const covered = input.config.coSignerClasses ?? 0;
+  let shared = covered & input.demand.classes;
+  if (input.withdrawalExempt === true || input.demand.withdrawals.length === 0)
+    shared &= ~RING_COSIGN_WITHDRAWALS;
+  if (shared !== 0) return Object.freeze({ kind: "covering", classes: shared });
+  if (!input.approvalRequired) return undefined;
+  if (covered === 0) throw coSignerRequired(input.ringProgramId, "approvalWithoutCoSigner");
+  return Object.freeze({ kind: "any" });
+}
+
+/** Rust `CoSignRequirement::check`, the record's signer signs. */
+export function checkCoSignRecord(
+  ringProgramId: Address,
+  requirement: CoSignRequirement,
+  record: RingCoSigner,
+): Address {
+  if (
+    requirement.kind === "covering" &&
+    (record.scope & requirement.classes) !== requirement.classes
+  )
+    throw coSignerRequired(ringProgramId, "outOfScope", record.signer);
+  return record.signer;
+}
+
+/** Rust `CoSignerChoice::resolve`, the supplied signer once its record covers the demand. */
+export async function resolveRingCoSigner(
+  input: RequirementInput &
+    Readonly<{ client: Pick<ChainReader, "getAccount">; supplied: Address | undefined }>,
+  context?: RequestContext,
+): Promise<Address | undefined> {
+  const requirement = coSignRequirement(input);
+  if (requirement === undefined) return undefined;
+  if (input.supplied === undefined) throw coSignerRequired(input.ringProgramId, "missing");
+  const record = await fetchRingCoSignerRecord(
+    input.client,
+    input.ringProgramId,
+    input.supplied,
+    context,
+  );
+  if (record === undefined) throw coSignerRequired(input.ringProgramId, "noRecord", input.supplied);
+  return checkCoSignRecord(input.ringProgramId, requirement, record);
+}
+
+/** The transfer's co-signer, never one of its owner signers or its delegate. */
+export async function demandedCoSigner(
+  input: Omit<RequirementInput, "demand"> &
+    Readonly<{
+      client: Pick<ChainReader, "getAccount">;
+      supplied: Address | undefined;
+      transfers: readonly SettlementTransfer[];
+      /** Empty on the anonymous and delegate rails. */
+      ownerSigners: readonly Address[];
+      delegate?: Address;
+    }>,
+  context?: RequestContext,
+): Promise<Address | undefined> {
+  const demanded = await resolveRingCoSigner(
+    { ...input, demand: transactDemand(input.transfers) },
+    context,
+  );
   // Rust `CoSignerIsOwner` and `CoSignerIsDelegate`, dual control needs a second key.
   if (demanded !== undefined && input.ownerSigners.includes(demanded))
     throw new RingError("RING_COSIGNER_REQUIRED", {
@@ -81,54 +137,12 @@ export function demandedCoSigner(
   return demanded;
 }
 
-/** Mirrors Rust `CoSignDemand::signer`, the supplied signer once its scope or the approval bit demands it. */
-export function checkRingCoSigner(
-  input: Readonly<{
-    ringProgramId: Address;
-    configured: RingCoSigner | undefined;
-    supplied: SignerAccount | undefined;
-    demand: CoSignDemand;
-    approvalRequired: boolean;
-    withdrawalExempt?: boolean;
-  }>,
-): SignerAccount | undefined {
-  const { configured } = input;
-  if (configured === undefined) {
-    if (input.approvalRequired) throw coSignerRequired(input, "approvalWithoutCoSigner");
-    return undefined;
-  }
-  if (
-    !input.approvalRequired &&
-    !inScope(configured, input.demand, input.withdrawalExempt ?? false)
-  )
-    return undefined;
-  if (input.supplied === undefined) throw coSignerRequired(input, "missing");
-  if (signerAddress(input.supplied) !== configured.signer)
-    throw coSignerRequired(input, "mismatch");
-  return input.supplied;
-}
-
-/** A shared class demands the co-signer, a withdrawal only above its mint's threshold or without a row. */
-function inScope(
-  configured: RingCoSigner,
-  demand: CoSignDemand,
-  withdrawalExempt: boolean,
-): boolean {
-  const classes = configured.scope & demand.classes;
-  if ((classes & (RING_COSIGN_TRANSFERS | RING_COSIGN_DEPOSITS)) !== 0) return true;
-  if ((classes & RING_COSIGN_WITHDRAWALS) === 0) return false;
-  return !withdrawalExempt && demand.withdrawals.length > 0;
-}
-
 function coSignerRequired(
-  input: Readonly<{ ringProgramId: Address; configured: RingCoSigner | undefined }>,
-  reason: "approvalWithoutCoSigner" | "missing" | "mismatch",
+  ringProgramId: Address,
+  reason: "approvalWithoutCoSigner" | "missing" | "noRecord" | "outOfScope",
+  signer?: Address,
 ): RingError {
   return new RingError("RING_COSIGNER_REQUIRED", {
-    details: {
-      ringProgramId: input.ringProgramId,
-      reason,
-      ...(input.configured === undefined ? {} : { expected: input.configured.signer }),
-    },
+    details: { ringProgramId, reason, ...(signer === undefined ? {} : { signer }) },
   });
 }

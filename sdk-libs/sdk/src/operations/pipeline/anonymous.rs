@@ -6,7 +6,7 @@ use custom_ring_interface::{
 };
 use solana_account::Account;
 use solana_address::Address;
-use spr_client::{AsyncRpc, Shape};
+use spr_client::{AsyncRpc, OwnerAuthorization, Shape};
 use spr_interface::{pda, SPL_TOKEN_2022_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID};
 use spr_keypair::{Curve, NullifierKey, PublicKey, ShieldedAddress, SigningKey};
 use spr_transaction::{
@@ -26,9 +26,8 @@ use super::{
     owner::{CustomRingTransferInput, Owner},
     pad_under_rail, sealed,
     selection::{payment_total, widest, Candidate, Funding},
-    spends_default_ring,
-    spp::HiddenSpend,
-    transaction_key, Rail, RailKind, RingSender, RingTransfer, Spend, Staged, TransferAuthority,
+    spends_default_ring, transaction_key, Rail, RailKind, RingSender, RingTransfer, Spend, Staged,
+    TransferAuthority,
 };
 use crate::{
     client::{RingClient, RingIndexerBackend},
@@ -86,6 +85,8 @@ pub struct AnonymousMove<'a> {
     /// The change returns to the sender.
     pub payments: Vec<RingPayment>,
     pub entry: EntrySpend,
+    /// Read only when the ring demands a co-signer.
+    pub co_signer: Option<Address>,
 }
 
 /// A default-ring spend publishes the hidden owner's key, a move takes one only when allowed.
@@ -102,7 +103,7 @@ pub struct Anonymous<'a> {
     history: &'a ViewingHistory,
     /// In declared order, the order of their ring outputs.
     payments: Vec<AnonymousPayment>,
-    exit_token_owner: Option<Address>,
+    pub(super) exit_token_owner: Option<Address>,
 }
 
 pub type AnonymousTransfer<'a> = RingTransfer<Anonymous<'a>>;
@@ -124,6 +125,7 @@ impl<'a> RingTransfer<Owner<'a>> {
     ) -> RingTransfer<Anonymous<'a>> {
         RingTransfer {
             ring: self.ring,
+            co_signer: self.co_signer,
             rail: Anonymous {
                 owner: self.rail,
                 signer,
@@ -257,12 +259,15 @@ impl<'a> AnonymousMove<'a> {
             self.payer,
             self.ring.program_id(),
         )?;
-        let transfer = RingTransfer::<Owner<'a>>::new(CustomRingTransferInput {
-            ring: self.ring,
-            sender: self.sender,
-            nullifier_key: Some(self.nullifier_key),
-            transaction,
-        })
+        let transfer = RingTransfer {
+            co_signer: self.co_signer,
+            ..RingTransfer::<Owner<'a>>::new(CustomRingTransferInput {
+                ring: self.ring,
+                sender: self.sender,
+                nullifier_key: Some(self.nullifier_key),
+                transaction,
+            })
+        }
         .with_anonymous_signer(self.signer, self.history);
         self.payments
             .iter()
@@ -301,16 +306,27 @@ impl AnonymousKey {
 pub(crate) struct HiddenOwner(pub Address);
 
 pub(crate) struct AnonymousSpend<'a> {
-    pub party_identities: [[u8; 32]; 3],
+    pub payer: Address,
+    pub exit_destination: Option<Address>,
     pub token_owner: Option<Address>,
-    signer: &'a SigningKey,
-    /// Past the transfer's tags.
-    pub history: ViewingHistory,
+    pub signer: OwnerAuthorization<'a>,
+    /// Past the transfer's tags, `None` when the wallet keeps its history.
+    pub history: Option<ViewingHistory>,
 }
 
 impl AnonymousSpend<'_> {
-    pub(super) fn hidden(&self) -> HiddenSpend<'_> {
-        HiddenSpend { owner: self.signer }
+    /// Binds the signing co-signer, zero when none signs.
+    pub(super) fn party_identities(
+        &self,
+        co_signer: Option<Address>,
+    ) -> Result<[[u8; 32]; 3], RingError> {
+        HiddenOwner::of(&self.signer.public_key())?.check_signers(co_signer)?;
+        Ok(custom_ring_interface::AnonymousParties {
+            payer: self.payer.as_array(),
+            cosigner: co_signer.as_ref().map(Address::as_array),
+            exit_destination: self.exit_destination.as_ref().map(Address::as_array),
+        }
+        .identities()?)
     }
 }
 
@@ -364,37 +380,18 @@ impl Anonymous<'_> {
             return Err(RingError::AnonymousSignerMismatch);
         }
         let owner = HiddenOwner::of(&sender.signing_pubkey)?;
-        let co_signer = config.co_signer.as_ref().map(|co_signer| co_signer.signer);
-        owner.check_signers(core::iter::once(self.owner.transaction.payer()).chain(co_signer))?;
+        let payer = self.owner.transaction.payer();
+        owner.check_signers([payer])?;
         self.owner.check_settlement_accounts()?;
         self.owner.check_payer_funds_deposits()?;
         let transfers = self.owner.transaction.interface_transfers()?;
-        let token_owner = AnonymousExits {
+        let exits = AnonymousExits {
             transfers: &transfers,
             hidden_owner: &owner.0,
             named_owner: self.exit_token_owner,
         }
-        .token_owner(client)
+        .owners(client)
         .await?;
-        let sol_owner = transfers.iter().find_map(|transfer| match transfer {
-            SettlementTransfer::Sol {
-                user_sol_account, ..
-            } if !transfer.is_deposit() => Some(*user_sol_account),
-            _ => None,
-        });
-        if sol_owner
-            .zip(token_owner)
-            .is_some_and(|(sol, token)| sol != token)
-        {
-            return Err(CustomRingError::AnonymousExitDestinationsDiffer.into());
-        }
-        let destination = token_owner.or(sol_owner);
-        let party_identities = custom_ring_interface::AnonymousParties {
-            payer: self.owner.transaction.payer().as_array(),
-            cosigner: co_signer.as_ref().map(Address::as_array),
-            exit_destination: destination.as_ref().map(Address::as_array),
-        }
-        .identities()?;
         let tags = self.tags()?;
         let transaction = SenderChange {
             shape: self.owner.shape,
@@ -414,16 +411,7 @@ impl Anonymous<'_> {
         );
         let transaction = pad_under_rail(transaction, &rail, shape, &sender)?;
         let proof_inputs = rail.encrypt(transaction, &sender)?;
-        check_anonymous_slots(&proof_inputs)?;
-        if let Some(index) = proof_inputs
-            .input_utxos
-            .iter()
-            .position(|input| !input.is_dummy() && input.utxo.owner != sender.signing_pubkey)
-        {
-            return Err(RingError::MixedOwners { index });
-        }
-        check_entry_inputs(&proof_inputs)?;
-        check_audit_key(&proof_inputs)?;
+        check_anonymous_inputs(&proof_inputs, &sender)?;
         Ok(Staged {
             proof_inputs,
             rail,
@@ -434,13 +422,32 @@ impl Anonymous<'_> {
             owner_signers: Vec::new(),
             interface_transfer_accounts: self.owner.interface_transfer_accounts.clone(),
             spend: Spend::Anonymous(Box::new(AnonymousSpend {
-                party_identities,
-                token_owner,
-                signer: self.signer,
-                history: tags.history,
+                payer,
+                exit_destination: exits.destination,
+                token_owner: exits.token_owner,
+                signer: OwnerAuthorization::SigningKey(self.signer),
+                history: Some(tags.history),
             })),
+            presealed: None,
         })
     }
+}
+
+/// Every real input is the sender's, the anonymous audit key serves the spend.
+pub(super) fn check_anonymous_inputs(
+    inputs: &SppProofInputs,
+    sender: &ShieldedAddress,
+) -> Result<(), RingError> {
+    check_anonymous_slots(inputs)?;
+    if let Some(index) = inputs
+        .input_utxos
+        .iter()
+        .position(|input| !input.is_dummy() && input.utxo.owner != sender.signing_pubkey)
+    {
+        return Err(RingError::MixedOwners { index });
+    }
+    check_entry_inputs(inputs)?;
+    check_audit_key(inputs)
 }
 
 /// The anonymous rail takes uncached noncompact notes only, real outputs owned by Ed25519 keys.
@@ -512,10 +519,15 @@ fn carries_no_data(hashes: [Option<[u8; 32]>; 2]) -> bool {
         .all(|hash| hash.is_none_or(|hash| hash == [0; 32]))
 }
 
-struct AnonymousExits<'a> {
-    transfers: &'a [SettlementTransfer],
-    hidden_owner: &'a Address,
-    named_owner: Option<Address>,
+pub(super) struct AnonymousExits<'a> {
+    pub transfers: &'a [SettlementTransfer],
+    pub hidden_owner: &'a Address,
+    pub named_owner: Option<Address>,
+}
+
+pub(super) struct ExitOwners {
+    pub destination: Option<Address>,
+    pub token_owner: Option<Address>,
 }
 
 struct SplExit {
@@ -524,6 +536,30 @@ struct SplExit {
 }
 
 impl AnonymousExits<'_> {
+    /// Refused unless every exit pays one destination.
+    pub(super) async fn owners<R: AsyncRpc + ?Sized>(
+        self,
+        client: &R,
+    ) -> Result<ExitOwners, RingError> {
+        let sol_owner = self.transfers.iter().find_map(|transfer| match transfer {
+            SettlementTransfer::Sol {
+                user_sol_account, ..
+            } if !transfer.is_deposit() => Some(*user_sol_account),
+            _ => None,
+        });
+        let token_owner = self.token_owner(client).await?;
+        if sol_owner
+            .zip(token_owner)
+            .is_some_and(|(sol, token)| sol != token)
+        {
+            return Err(CustomRingError::AnonymousExitDestinationsDiffer.into());
+        }
+        Ok(ExitOwners {
+            destination: token_owner.or(sol_owner),
+            token_owner,
+        })
+    }
+
     /// The SPL withdrawal's token owner, `None` without one.
     async fn token_owner<R: AsyncRpc + ?Sized>(
         self,

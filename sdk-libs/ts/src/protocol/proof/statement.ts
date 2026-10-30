@@ -6,6 +6,7 @@ import {
   rightAlign,
 } from "@heliuslabs/zolana/internal";
 import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
+import { solanaOwnerIdentity } from "@heliuslabs/zolana/keypair";
 import { packBytesBe } from "../../crypto/derivation/hasher.js";
 import { auditLayoutValue, type AuditLayout } from "../codec/ring-disclosure-layout.js";
 
@@ -39,7 +40,11 @@ export interface AuditHead {
 }
 
 export type AuditKind =
-  | Readonly<{ kind: "delivered" }>
+  | Readonly<{
+      kind: "delivered";
+      /** In-proof owner rail only, Rust `DeliveredSender`. */
+      sender?: Readonly<{ privateTxHash: Bytes32; sender: Bytes32 }>;
+    }>
   | Readonly<{
       kind: "anonymous";
       privateTxHash: Bytes32;
@@ -76,6 +81,8 @@ export interface PolicyStatement {
   readonly curatorRoot: Bytes32;
   /** The owner signer's identity, the sender commitment on an anonymous ring, zero on the delegate rail. */
   readonly sender: Bytes32;
+  /** One owner identity per output slot, zero on a dummy and on the anonymous rail. */
+  readonly recipients: readonly Bytes32[];
   /** SPP's public asset fields, zero past the used slots. */
   readonly publicAssets: readonly Bytes32[];
   /** SPP's public amount fields, a withdrawal is `q - |amount|`. */
@@ -107,6 +114,7 @@ export interface RegisterKeyStatement {
 
 /**
  * `head ‖ [output_chain, body_chain, disclosure_chain, recipient_key_chain]` delivered,
+ * `‖ [private_tx_hash, sender]` on the in-proof owner rail,
  * `head ‖ [output_chain, disclosure_chain, private_tx_hash, sender_commitment, party0,
  * party1, party2]` anonymous.
  */
@@ -123,6 +131,12 @@ export function auditStatementElements(statement: AuditStatement): readonly Byte
         chain(outputs.map(outputBodyHash)),
         disclosureChain,
         chain(outputs.flatMap(outputRecipientKeyFields)),
+        ...(kind.sender === undefined
+          ? []
+          : [
+              checkedBytes<Bytes32>(kind.sender.privateTxHash, 32, "private tx hash"),
+              checkedBytes<Bytes32>(kind.sender.sender, 32, "sender"),
+            ]),
       ];
     case "anonymous":
       return [
@@ -163,7 +177,17 @@ export function ringAuditStatement(data: RingTransactData, binding: AuditBinding
           partyIdentities: binding.partyIdentities,
           senderCommitment: data.policy?.senderCommitment ?? (new Uint8Array(32) as Bytes32),
         }
-      : { kind: layout.kind };
+      : {
+          kind: "delivered",
+          ...(layout.senderClass === undefined || data.inProofOwner === undefined
+            ? {}
+            : {
+                sender: {
+                  privateTxHash: data.privateTxHash,
+                  sender: solanaOwnerIdentity(data.inProofOwner.owner) as Bytes32,
+                },
+              }),
+        };
   return Object.freeze({
     head: Object.freeze({
       firstNullifier: RingTransactData.firstNullifier(data),
@@ -183,8 +207,8 @@ export function ringAuditStatement(data: RingTransactData, binding: AuditBinding
 
 /**
  * `[CRPO, private_tx_hash, policy_hash, ring_id, anonymous, approval_required,
- * key_escrow, own_root, curator_root, sender, (asset_k, amount_k) x 3]`, the
- * delegate key without `anonymous`.
+ * key_escrow, own_root, curator_root, sender, recipient_o per output slot,
+ * (asset_k, amount_k) x 3, version, withdrawal_hash]`, the delegate key without `anonymous`.
  */
 export function policyStatementElements(statement: PolicyStatement): readonly Bytes32[] {
   const { publicAssets, publicAmounts } = statement;
@@ -203,6 +227,7 @@ export function policyStatementElements(statement: PolicyStatement): readonly By
     checkedBytes<Bytes32>(statement.ownRoot, 32, "own root"),
     checkedBytes<Bytes32>(statement.curatorRoot, 32, "curator root"),
     checkedBytes<Bytes32>(statement.sender, 32, "sender"),
+    ...statement.recipients.map((recipient) => checkedBytes<Bytes32>(recipient, 32, "recipient")),
     ...publicAssets.flatMap((asset, slot) => [
       checkedBytes<Bytes32>(asset, 32, "public asset"),
       checkedBytes<Bytes32>(publicAmounts[slot] as Bytes32, 32, "public amount"),

@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::{bail, ensure, Context as _, Result};
-use custom_ring_interface::{MemberRegistry, RingAccount, RingProgramConfig, VIEWING_PUBKEY_TAG};
+use custom_ring_interface::{RingAccount, RingPolicy, VIEWING_PUBKEY_TAG};
 use sha2::{Digest, Sha256};
 use solana_account::Account;
 use solana_address::Address;
@@ -94,10 +94,10 @@ impl ProgramUpload<'_> {
                 if binary.deployed_sha256(ctx)? == Some(binary.sha256) {
                     return Ok("present");
                 }
-                let ring_config = ctx.rpc().get_account(ctx.ring.config_pda())?;
-                ensure_ring_config_compatible(program, ring_config.as_ref())?;
-                let registry = ctx.rpc().get_account(ctx.ring.registry_pda())?;
-                ensure_registry_compatible(program, registry.as_ref())?;
+                let retired = Address::find_program_address(&[RETIRED_CONFIG_SEED], &program).0;
+                ensure_no_retired_config(program, ctx.rpc().get_account(retired)?.as_ref())?;
+                let policy = ctx.rpc().get_account(ctx.ring.policy_pda())?;
+                ensure_policy_compatible(program, policy.as_ref())?;
             }
             None => {
                 let found = file::read_keypair(program_keypair)
@@ -238,39 +238,38 @@ impl ProgramBinary {
     }
 }
 
-/// An upgrade must not strand notes behind an auditor key the new program rejects.
-fn ensure_ring_config_compatible(program: Address, account: Option<&Account>) -> Result<()> {
-    let Some(account) = account.filter(|account| !account.data.is_empty()) else {
-        return Ok(());
-    };
-    let config = RingProgramConfig::decode(&account.owner, &program, &account.data);
+const RETIRED_CONFIG_SEED: &[u8] = b"config";
+
+/// An upgrade must not strand the notes of a retired ring config.
+fn ensure_no_retired_config(program: Address, account: Option<&Account>) -> Result<()> {
+    let retired =
+        account.is_some_and(|account| account.owner == program && !account.data.is_empty());
     ensure!(
-        config.is_some(),
-        "program {program} has an incompatible ring config, migrate its notes before deploying a fresh ring"
-    );
-    ensure!(
-        config.is_some_and(|config| config.auditor_pubkey[0] == VIEWING_PUBKEY_TAG),
-        "program {program} keeps a legacy auditor key, migrate its notes before upgrading"
+        !retired,
+        "program {program} keeps a retired ring config, migrate its notes before deploying a fresh ring"
     );
     Ok(())
 }
 
-/// The current schema must decode the registry and reproduce its pinned policy hash.
-fn ensure_registry_compatible(program: Address, registry: Option<&Account>) -> Result<()> {
-    let Some(account) = registry.filter(|account| account.owner == program) else {
+/// The current schema must decode the ring policy and reproduce its pinned policy hash.
+fn ensure_policy_compatible(program: Address, policy: Option<&Account>) -> Result<()> {
+    let Some(account) = policy.filter(|account| account.owner == program) else {
         return Ok(());
     };
     ensure!(
-        account.data.len() == MemberRegistry::SIZE,
-        "program {program} keeps a member registry of {} bytes, the release needs {}, deploy a fresh ring",
+        account.data.len() == RingPolicy::SIZE,
+        "program {program} keeps a ring policy of {} bytes, the release needs {}, deploy a fresh ring",
         account.data.len(),
-        MemberRegistry::SIZE
+        RingPolicy::SIZE
     );
-    let compatible = MemberRegistry::from_data(&account.data)
-        .is_some_and(|registry| Pinned::of(Box::new(*registry)).is_ok());
+    let policy = RingPolicy::decode(&account.owner, &program, &account.data);
     ensure!(
-        compatible,
-        "program {program} has an incompatible member registry or policy commitment, deploy a fresh ring"
+        policy.is_some_and(|policy| Pinned::of(Box::new(policy)).is_ok()),
+        "program {program} has an incompatible ring policy or policy commitment, deploy a fresh ring"
+    );
+    ensure!(
+        policy.is_some_and(|policy| policy.auditor_pubkey[0] == VIEWING_PUBKEY_TAG),
+        "program {program} keeps a legacy auditor key, migrate its notes before upgrading"
     );
     Ok(())
 }
@@ -438,50 +437,24 @@ mod tests {
     }
 
     #[test]
-    fn upgrades_require_a_compatible_ring_config_even_without_policy() {
-        use bytemuck::Zeroable;
+    fn an_upgrade_over_a_retired_ring_config_is_refused() {
         let program = Address::from([7u8; 32]);
-        let mut config = RingProgramConfig::zeroed();
-        config.discriminator = custom_ring_interface::RING_PROGRAM_CONFIG;
-        config.auditor_pubkey[0] = custom_ring_interface::VIEWING_PUBKEY_TAG;
-        let account = |config: &RingProgramConfig| Account {
-            owner: program,
-            data: bytemuck::bytes_of(config).to_vec(),
+        let account = |owner, data: Vec<u8>| Account {
+            owner,
+            data,
             ..Default::default()
         };
-        assert!(ensure_ring_config_compatible(program, None).is_ok());
-        for mode in 0..=2 {
-            config.mode = mode;
-            assert!(ensure_ring_config_compatible(program, Some(&account(&config))).is_ok());
-        }
-        config.mode = 0;
-        // An audit-only ring has no pinned policy to refuse its upgrade.
-        for tag in [2, 3] {
-            config.auditor_pubkey[0] = tag;
-            let error =
-                ensure_ring_config_compatible(program, Some(&account(&config))).unwrap_err();
-            assert!(error.to_string().contains("legacy auditor key"));
-        }
-        config.auditor_pubkey[0] = custom_ring_interface::VIEWING_PUBKEY_TAG;
-        config.mode = 3;
-        assert!(ensure_ring_config_compatible(program, Some(&account(&config))).is_err());
-        config.mode = 0;
-        let mut retired = account(&config);
-        retired.data[0] = 1;
-        assert!(
-            ensure_ring_config_compatible(program, Some(&retired)).is_err(),
-            "a retired discriminator"
-        );
-        let mut wrong_owner = account(&config);
-        wrong_owner.owner = Address::from([9u8; 32]);
-        assert!(ensure_ring_config_compatible(program, Some(&wrong_owner)).is_err());
-        let mut wrong_layout = account(&config);
-        wrong_layout.data.pop();
-        assert!(ensure_ring_config_compatible(program, Some(&wrong_layout)).is_err());
+        assert!(ensure_no_retired_config(program, None).is_ok());
+        assert!(ensure_no_retired_config(program, Some(&account(program, Vec::new()))).is_ok());
+        let foreign = account(Address::from([9u8; 32]), vec![10; 112]);
+        assert!(ensure_no_retired_config(program, Some(&foreign)).is_ok());
+        let error =
+            ensure_no_retired_config(program, Some(&account(program, vec![10; 112]))).unwrap_err();
+        assert!(error.to_string().contains("retired ring config"));
     }
 
     #[test]
-    fn an_incompatible_member_registry_refuses_the_upgrade() {
+    fn an_incompatible_ring_policy_refuses_the_upgrade() {
         use custom_ring_interface::N_SOURCE_SLOTS;
         let program = Address::from([7u8; 32]);
         let foreign = Address::from([9u8; 32]);
@@ -490,10 +463,12 @@ mod tests {
             data: data.to_vec(),
             ..Default::default()
         };
-        assert!(ensure_registry_compatible(program, None).is_ok());
-        let mut registry = MemberRegistry::new(0, 0);
-        let audit_only = account(program, bytemuck::bytes_of(&registry));
-        assert!(ensure_registry_compatible(program, Some(&audit_only)).is_ok());
+        assert!(ensure_policy_compatible(program, None).is_ok());
+        let mut registry: Box<RingPolicy> = bytemuck::zeroed_box();
+        registry.discriminator = custom_ring_interface::RING_POLICY;
+        registry.auditor_pubkey[0] = VIEWING_PUBKEY_TAG;
+        let audit_only = account(program, bytemuck::bytes_of(&*registry));
+        assert!(ensure_policy_compatible(program, Some(&audit_only)).is_ok());
         let rules = zolana_ring_policy::RuleTable::builder().build();
         registry
             .set_policy(
@@ -502,24 +477,32 @@ mod tests {
                 0,
             )
             .unwrap();
-        let pinned = account(program, bytemuck::bytes_of(&registry));
-        assert!(ensure_registry_compatible(program, Some(&pinned)).is_ok());
-        let short = [0; MemberRegistry::SIZE - 1];
-        assert!(ensure_registry_compatible(program, Some(&account(foreign, &short))).is_ok());
-        let refused = ensure_registry_compatible(program, Some(&account(program, &short)))
-            .expect_err("short");
+        let pinned = account(program, bytemuck::bytes_of(&*registry));
+        assert!(ensure_policy_compatible(program, Some(&pinned)).is_ok());
+        let short = [0; RingPolicy::SIZE - 1];
+        assert!(ensure_policy_compatible(program, Some(&account(foreign, &short))).is_ok());
+        let refused =
+            ensure_policy_compatible(program, Some(&account(program, &short))).expect_err("short");
         assert!(refused.to_string().contains(&format!(
             "of {} bytes, the release needs {}",
-            MemberRegistry::SIZE - 1,
-            MemberRegistry::SIZE
+            RingPolicy::SIZE - 1,
+            RingPolicy::SIZE
         )));
         registry.policy_hash[0] ^= 1;
-        let drifted = ensure_registry_compatible(
+        let drifted = ensure_policy_compatible(
             program,
-            Some(&account(program, bytemuck::bytes_of(&registry))),
+            Some(&account(program, bytemuck::bytes_of(&*registry))),
         )
         .expect_err("drifted");
-        assert!(drifted.to_string().contains("incompatible member registry"));
+        assert!(drifted.to_string().contains("incompatible ring policy"));
+        registry.policy_hash[0] ^= 1;
+        registry.auditor_pubkey[0] = 2;
+        let legacy = ensure_policy_compatible(
+            program,
+            Some(&account(program, bytemuck::bytes_of(&*registry))),
+        )
+        .expect_err("legacy auditor key");
+        assert!(legacy.to_string().contains("legacy auditor key"));
     }
 
     #[test]

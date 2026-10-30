@@ -4,7 +4,7 @@
 use super::*;
 use custom_ring_interface::{
     key_catalog::{RingCircuit, RING_KEYS},
-    ParsedTransact, ANONYMOUS_ENTRY_OUTPUTS, ANONYMOUS_MERGE_WIDTHS,
+    ParsedTransact, ANONYMOUS_ENTRY_OUTPUTS, DELIVERED_AUDIT_CAPACITIES, MERGE_WIDTHS,
 };
 use custom_ring_test_validator::{policy::RingNotes, shared::restart_prover};
 use spr_client::{Shape, SPP_SUPPORTED_SHAPES};
@@ -84,12 +84,13 @@ impl Coverage {
             // Each required key belongs to one independently runnable sweep.
             .filter(|circuit| {
                 let owner = match circuit {
-                    RingCircuit::DeliveredAudit { .. } | RingCircuit::Deposit { .. } => {
-                        Column::Confidential
-                    }
+                    RingCircuit::DeliveredAudit { .. }
+                    | RingCircuit::DeliveredSenderAudit { .. }
+                    | RingCircuit::Deposit { .. } => Column::Confidential,
                     RingCircuit::AnonymousAudit { .. }
                     | RingCircuit::AnonymousEntryAudit { .. }
-                    | RingCircuit::AnonymousMerge { .. } => Column::Anonymous,
+                    | RingCircuit::Merge { .. } => Column::Anonymous,
+                    RingCircuit::MemberPolicy { outputs: 16, .. } => Column::Delegate,
                     RingCircuit::MemberPolicy { .. }
                     | RingCircuit::RegisterKey
                     | RingCircuit::WithdrawalExemption => Column::ConfidentialPolicy,
@@ -113,6 +114,23 @@ impl Coverage {
 struct ShapeTransfer {
     shape: Shape,
     inputs: Vec<WalletUtxo>,
+    spend: Spend,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Spend {
+    Rail(RingRail),
+    /// SPP's anonymous rail proves the confidential owner.
+    InProofOwner,
+}
+
+impl Spend {
+    fn rail(self) -> RingRail {
+        match self {
+            Self::Rail(rail) => rail,
+            Self::InProofOwner => RingRail::Confidential,
+        }
+    }
 }
 
 enum Proven {
@@ -159,23 +177,20 @@ impl<'a> ColumnSetup<'a> {
         .send(&env.client)?;
         let delegate = env.funded_keypair()?;
         let members = [&env.sender.keypair, &env.recipient.keypair];
-        let queue = QueueHead { env, ring };
         let applied = match self.column {
-            Column::ConfidentialPolicy => Some(queue.applied_by(|| {
-                register_key(env, ring, &env.sender.keypair)?;
-                Queued::now(&env.client, ring)?.apply(&env.client, &env.payer)
-            })?),
+            Column::ConfidentialPolicy => {
+                register_keys(env, ring, &[&env.sender.keypair])?;
+                Some(1)
+            }
             Column::Delegate => {
-                let applied = queue.applied_by(|| {
-                    EscrowedDelegate {
-                        ring,
-                        delegate: &delegate,
-                        members: &members,
-                    }
-                    .set(env)
-                })?;
+                EscrowedDelegate {
+                    ring,
+                    delegate: &delegate,
+                    members: &members,
+                }
+                .set(env)?;
                 env.enable_authority_rail(ring)?;
-                Some(applied)
+                Some(members.len() as u64)
             }
             Column::Confidential | Column::Anonymous | Column::AnonymousPolicy => None,
         };
@@ -227,26 +242,6 @@ impl<'a> ColumnSetup<'a> {
     }
 }
 
-struct QueueHead<'a> {
-    env: &'a TestEnv,
-    ring: CustomRing,
-}
-
-impl QueueHead<'_> {
-    /// The writes `apply` moved the record queue head past.
-    fn applied_by(self, apply: impl FnOnce() -> Result<()>) -> Result<u64> {
-        let head = || -> Result<u64> {
-            Ok(self
-                .env
-                .run(self.ring.require_queue(self.env.client.as_async()))?
-                .head())
-        };
-        let before = head()?;
-        apply()?;
-        Ok(head()? - before)
-    }
-}
-
 impl ShapeRing<'_> {
     fn sweep(&self, coverage: &mut Coverage) -> Result<()> {
         let (mut settled, mut too_large) = (Vec::new(), Vec::new());
@@ -258,6 +253,7 @@ impl ShapeRing<'_> {
             let transfer = ShapeTransfer {
                 shape,
                 inputs: self.utxos(1, coverage)?,
+                spend: Spend::Rail(self.column.rail()),
             };
             match self.settle(transfer, coverage)? {
                 Settlement::Settled => settled.push(shape),
@@ -295,8 +291,40 @@ impl ShapeRing<'_> {
             let transfer = ShapeTransfer {
                 shape: Shape::new(1, outputs),
                 inputs: vec![utxo.input_utxo(env)?],
+                spend: Spend::Rail(RingRail::Anonymous),
             };
             self.settled(transfer, coverage)?;
+        }
+        Ok(())
+    }
+
+    /// Sixteen policy outputs fit only when key escrow keeps the nullifier keys out of the disclosure.
+    fn escrowed_owner_transfer(&self, coverage: &mut Coverage) -> Result<()> {
+        restart_prover()?;
+        let transfer = ShapeTransfer {
+            shape: Shape::IN1_OUT16,
+            inputs: self.utxos(1, coverage)?,
+            spend: Spend::Rail(RingRail::Confidential),
+        };
+        self.settled(transfer, coverage)
+    }
+
+    /// Each delivered capacity proves its sender key once.
+    fn in_proof_owners(&self, coverage: &mut Coverage) -> Result<()> {
+        for outputs in DELIVERED_AUDIT_CAPACITIES {
+            restart_prover()?;
+            let shape = Shape::new(1, outputs);
+            let transfer = ShapeTransfer {
+                shape,
+                inputs: self.utxos(1, coverage)?,
+                spend: Spend::InProofOwner,
+            };
+            // The policy disclosure pushes only the sixteen output transfer past the size ceiling.
+            if self.column == Column::ConfidentialPolicy && shape == Shape::IN1_OUT16 {
+                self.settle(transfer, coverage)?;
+            } else {
+                self.settled(transfer, coverage)?;
+            }
         }
         Ok(())
     }
@@ -306,7 +334,7 @@ impl ShapeRing<'_> {
         let env = self.env;
         let tree_id = env.tree_id(env.tree)?;
         let mut count = 2;
-        for width in ANONYMOUS_MERGE_WIDTHS {
+        for width in MERGE_WIDTHS {
             restart_prover()?;
             let prepared = CustomRingMerge::new(self.ring, self.utxos(count, coverage)?, None)?
                 .with_output_tree_id(tree_id)
@@ -323,10 +351,11 @@ impl ShapeRing<'_> {
                     nullifier_key: env.sender.keypair.nullifier_key.clone(),
                     input_tree: env.tree,
                     output_tree: env.tree,
+                    co_signer: None,
                 },
             );
             land(env, merge, &env.payer, &[])?;
-            coverage.cover(RingCircuit::AnonymousMerge { width: proved });
+            coverage.cover(RingCircuit::Merge { width: proved });
             count = width + 1;
         }
         Ok(())
@@ -355,17 +384,20 @@ impl ShapeRing<'_> {
 
     fn settled(&self, transfer: ShapeTransfer, coverage: &mut Coverage) -> Result<()> {
         let shape = transfer.shape;
+        let spend = transfer.spend;
         match self.settle(transfer, coverage)? {
             Settlement::Settled => Ok(()),
-            Settlement::TooLarge => Err(anyhow!("{:?} {shape:?} must fit", self.column)),
+            Settlement::TooLarge => Err(anyhow!("{:?} {spend:?} {shape:?} must fit", self.column)),
         }
     }
 
     fn settle(&self, transfer: ShapeTransfer, coverage: &mut Coverage) -> Result<Settlement> {
         let env = self.env;
         let rpc = env.client.rpc();
+        let spend = transfer.spend;
+        let rail = spend.rail();
         let label = format!(
-            "{:?} {}x{} inputs={}",
+            "{:?} {spend:?} {}x{} inputs={}",
             self.column,
             transfer.shape.n_inputs(),
             transfer.shape.n_outputs(),
@@ -382,7 +414,7 @@ impl ShapeRing<'_> {
             }
         };
         let instruction = proven.instruction()?;
-        let parsed = ParsedTransact::new(frame(&instruction, self.column.rail())?)?;
+        let parsed = ParsedTransact::new(frame(&instruction, rail)?)?;
         let data = parsed.data();
         coverage.cover(RingCircuit::audit(parsed.layout(), data.n_out));
         if data.policy.is_some() {
@@ -395,7 +427,7 @@ impl ShapeRing<'_> {
             .first()
             .context("a tagged ring instruction")?;
         let budget = ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::try_from(*tag)?));
-        let payer = self.payer();
+        let payer = self.payer(spend);
         let size = spr_client::transaction_size(
             &payer.pubkey(),
             std::slice::from_ref(&instruction),
@@ -431,7 +463,11 @@ impl ShapeRing<'_> {
         let client = env.client.ring_client();
         let sender = &env.sender.keypair;
         let program = self.ring.program_id();
-        let ShapeTransfer { shape, inputs } = transfer;
+        let ShapeTransfer {
+            shape,
+            inputs,
+            spend,
+        } = transfer;
         let total: u64 = inputs.iter().map(|input| input.utxo.amount).sum();
         let amount = total / (2 * shape.n_outputs() as u64);
         let payments = 1..shape.n_outputs();
@@ -445,16 +481,25 @@ impl ShapeRing<'_> {
                 transaction,
             })
         };
-        let proven = match self.column.rail() {
-            RingRail::Confidential => {
-                let recipient = env.recipient.keypair.shielded_address()?;
-                let mut transaction = transaction(sender.pubkey())?;
-                for _ in payments {
-                    transaction.transfer_sol(&recipient, amount)?;
-                }
-                env.run(owner_transfer(transaction).with_shape(shape)?.prove(client))
+        let confidential = |spend: Spend| -> Result<_> {
+            let recipient = env.recipient.keypair.shielded_address()?;
+            let mut transaction = transaction(self.payer(spend).pubkey())?;
+            for _ in payments.clone() {
+                transaction.transfer_sol(&recipient, amount)?;
             }
-            RingRail::Anonymous => {
+            Ok(owner_transfer(transaction))
+        };
+        let proven = match spend {
+            Spend::Rail(RingRail::Confidential) => {
+                env.run(confidential(spend)?.with_shape(shape)?.prove(client))
+            }
+            Spend::InProofOwner => env.run(
+                confidential(spend)?
+                    .with_in_proof_owner(&sender.signing_key)
+                    .with_shape(shape)?
+                    .prove(client),
+            ),
+            Spend::Rail(RingRail::Anonymous) => {
                 let history = self.sender.borrow().clone();
                 let mut anonymous = owner_transfer(transaction(env.payer.pubkey())?)
                     .with_anonymous_signer(&sender.signing_key, &history);
@@ -470,7 +515,7 @@ impl ShapeRing<'_> {
                 *self.sender.borrow_mut() = anonymous.viewing_history()?;
                 env.run(anonymous.prove(client))
             }
-            RingRail::Delegate => {
+            Spend::Rail(RingRail::Delegate) => {
                 let recipient = env.recipient.keypair.shielded_address()?;
                 let delegated = DelegateTransfer::new(DelegateTransferInput {
                     ring: self.ring,
@@ -494,17 +539,17 @@ impl ShapeRing<'_> {
         };
         match proven {
             Ok(proven) => Ok(Proven::Transfer(Box::new(proven))),
-            Err(RingError::TransactionTooLarge { bytes, .. }) => Ok(Proven::TooLarge { bytes }),
+            Err(RingError::TransferTooWide { bytes, .. }) => Ok(Proven::TooLarge { bytes }),
             Err(error) => Err(error.into()),
         }
     }
 
-    /// The anonymous rail's owner never signs, the payer alone does.
-    fn payer(&self) -> &(dyn Signer + Sync) {
-        match self.column.rail() {
-            RingRail::Confidential => &self.env.sender.keypair,
-            RingRail::Anonymous => &self.env.payer,
-            RingRail::Delegate => &self.delegate,
+    /// The owner on SPP's anonymous rail never signs, the payer alone does.
+    fn payer(&self, spend: Spend) -> &(dyn Signer + Sync) {
+        match spend {
+            Spend::Rail(RingRail::Confidential) => &self.env.sender.keypair,
+            Spend::Rail(RingRail::Anonymous) | Spend::InProofOwner => &self.env.payer,
+            Spend::Rail(RingRail::Delegate) => &self.delegate,
         }
     }
 }
@@ -542,6 +587,7 @@ fn anonymous_widest_eight_output_transfer_settles() -> Result<()> {
         ShapeTransfer {
             shape: Shape::IN5_OUT8,
             inputs: ring.utxos(5, &mut coverage)?,
+            spend: Spend::Rail(RingRail::Anonymous),
         },
         &mut coverage,
     )
@@ -582,8 +628,17 @@ fn sweep(column: Column) -> Result<()> {
     }
     .configure(&mut coverage)?;
     ring.sweep(&mut coverage)?;
-    if column == Column::Anonymous {
-        ring.entries(&mut coverage)?;
+    match column {
+        Column::Anonymous => ring.entries(&mut coverage)?,
+        Column::Delegate => ring.escrowed_owner_transfer(&mut coverage)?,
+        Column::Confidential | Column::ConfidentialPolicy => ring.in_proof_owners(&mut coverage)?,
+        Column::AnonymousPolicy => {}
+    }
+    // One column per rail proves the merges, the delegate one also opens the key escrow record.
+    if matches!(
+        column,
+        Column::Anonymous | Column::Confidential | Column::Delegate
+    ) {
         ring.merges(&mut coverage)?;
     }
     coverage.assert_transfer_keys(column);

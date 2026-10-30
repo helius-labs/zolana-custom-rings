@@ -36,6 +36,14 @@ pub mod audit_delivered_2_verifying_key;
 pub mod audit_delivered_4_verifying_key;
 #[path = "audit/audit_delivered_8_verifying_key.rs"]
 pub mod audit_delivered_8_verifying_key;
+#[path = "audit/audit_delivered_sender_16_8_verifying_key.rs"]
+pub mod audit_delivered_sender_16_8_verifying_key;
+#[path = "audit/audit_delivered_sender_24_4_verifying_key.rs"]
+pub mod audit_delivered_sender_24_4_verifying_key;
+#[path = "audit/audit_delivered_sender_48_2_verifying_key.rs"]
+pub mod audit_delivered_sender_48_2_verifying_key;
+#[path = "audit/audit_delivered_sender_8_16_verifying_key.rs"]
+pub mod audit_delivered_sender_8_16_verifying_key;
 #[path = "deposit/deposit_1_verifying_key.rs"]
 pub mod deposit_1_verifying_key;
 #[path = "deposit/deposit_2_verifying_key.rs"]
@@ -44,10 +52,10 @@ pub mod deposit_2_verifying_key;
 pub mod deposit_4_verifying_key;
 #[path = "deposit/deposit_8_verifying_key.rs"]
 pub mod deposit_8_verifying_key;
-#[path = "merge/merge_anonymous_v2_24_verifying_key.rs"]
-pub mod merge_anonymous_v2_24_verifying_key;
-#[path = "merge/merge_anonymous_v2_8_verifying_key.rs"]
-pub mod merge_anonymous_v2_8_verifying_key;
+#[path = "merge/merge_v3_24_verifying_key.rs"]
+pub mod merge_v3_24_verifying_key;
+#[path = "merge/merge_v3_8_verifying_key.rs"]
+pub mod merge_v3_8_verifying_key;
 #[path = "policy/delegate/policy_delegate_v3_2x2_curator_verifying_key.rs"]
 pub mod policy_delegate_v3_2x2_curator_verifying_key;
 #[path = "policy/delegate/policy_delegate_v3_2x2_own_verifying_key.rs"]
@@ -188,6 +196,22 @@ pub const PROVING_KEY_SHA256S: &[(&str, [u8; 32])] = &[
     (
         "custom_ring_audit_delivered_16.key",
         audit_delivered_16_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+    ),
+    (
+        "custom_ring_audit_delivered_sender_48_2.key",
+        audit_delivered_sender_48_2_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+    ),
+    (
+        "custom_ring_audit_delivered_sender_24_4.key",
+        audit_delivered_sender_24_4_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+    ),
+    (
+        "custom_ring_audit_delivered_sender_16_8.key",
+        audit_delivered_sender_16_8_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+    ),
+    (
+        "custom_ring_audit_delivered_sender_8_16.key",
+        audit_delivered_sender_8_16_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
         "custom_ring_audit_anonymous_v2_4_2.key",
@@ -510,12 +534,12 @@ pub const PROVING_KEY_SHA256S: &[(&str, [u8; 32])] = &[
         deposit_8_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_merge_anonymous_v2_8.key",
-        merge_anonymous_v2_8_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_merge_v3_8.key",
+        merge_v3_8_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
-        "custom_ring_merge_anonymous_v2_24.key",
-        merge_anonymous_v2_24_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
+        "custom_ring_merge_v3_24.key",
+        merge_v3_24_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
 ];
 pub fn verifying_key(
@@ -534,6 +558,22 @@ pub fn verifying_key(
         key_catalog::RingCircuit::DeliveredAudit { outputs: 16 } => {
             Some(&audit_delivered_16_verifying_key::VERIFYINGKEY)
         }
+        key_catalog::RingCircuit::DeliveredSenderAudit {
+            inputs: 48,
+            outputs: 2,
+        } => Some(&audit_delivered_sender_48_2_verifying_key::VERIFYINGKEY),
+        key_catalog::RingCircuit::DeliveredSenderAudit {
+            inputs: 24,
+            outputs: 4,
+        } => Some(&audit_delivered_sender_24_4_verifying_key::VERIFYINGKEY),
+        key_catalog::RingCircuit::DeliveredSenderAudit {
+            inputs: 16,
+            outputs: 8,
+        } => Some(&audit_delivered_sender_16_8_verifying_key::VERIFYINGKEY),
+        key_catalog::RingCircuit::DeliveredSenderAudit {
+            inputs: 8,
+            outputs: 16,
+        } => Some(&audit_delivered_sender_8_16_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::AnonymousAudit {
             class: 4,
             outputs: 2,
@@ -901,11 +941,11 @@ pub fn verifying_key(
         key_catalog::RingCircuit::Deposit { capacity: 8 } => {
             Some(&deposit_8_verifying_key::VERIFYINGKEY)
         }
-        key_catalog::RingCircuit::AnonymousMerge { width: 8 } => {
-            Some(&merge_anonymous_v2_8_verifying_key::VERIFYINGKEY)
+        key_catalog::RingCircuit::Merge { width: 8 } => {
+            Some(&merge_v3_8_verifying_key::VERIFYINGKEY)
         }
-        key_catalog::RingCircuit::AnonymousMerge { width: 24 } => {
-            Some(&merge_anonymous_v2_24_verifying_key::VERIFYINGKEY)
+        key_catalog::RingCircuit::Merge { width: 24 } => {
+            Some(&merge_v3_24_verifying_key::VERIFYINGKEY)
         }
         _ => None,
     }

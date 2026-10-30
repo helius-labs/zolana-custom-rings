@@ -1,15 +1,18 @@
 //! Member record views as record tree types, every opening checked against its root.
 
 use custom_ring_interface::{
-    EscrowKey, QueueEntry, AUDIT_CIPHERTEXT_LEN, QUAD_ARITY, QUAD_HEIGHT, TAGGED_X25519_KEY_LEN,
+    storage::StorageRegistry, EscrowKey, QueueEntry, AUDIT_CIPHERTEXT_LEN, QUAD_ARITY, QUAD_HEIGHT,
+    TAGGED_X25519_KEY_LEN,
 };
 use solana_address::Address;
 use spr_hasher::{primitives::hash_bytes, HasherError};
+use spr_indexer_api::Hash;
 use spr_keypair::X25519Pubkey;
 use zolana_ring_indexer::rpc::{
-    GetRingApplyProofInputsResponse, GetRingMemberRecordsResponse, GetRingRecordPoolResponse,
-    RingMemberOpening, RingMemberRecordView, RingRecordPathView, RingRecordWriteView,
-    MAX_RING_MEMBER_PAGE_LIMIT,
+    GetStorageApplyProofInputsResponse, GetStorageMemberOpeningsRequest,
+    GetStorageMemberOpeningsResponse, GetStorageMemberRecordsResponse,
+    GetStorageRecordPoolResponse, RingMemberOpening, RingMemberRecordView, RingRecordPathView,
+    RingRecordWriteView, MAX_RING_MEMBER_PAGE_LIMIT,
 };
 use zolana_ring_member_registry::{
     ApplyProofInputs, Canopy, MemberRecord, OpeningCheck, PoolSubject, QuadPath, RecordOpening,
@@ -25,18 +28,18 @@ pub struct MemberOpeningRead {
     pub opening: RecordOpening,
     /// The nullifier secret a registered member sealed to the auditor.
     pub sealed: Option<SealedNullifierKey>,
-    /// The `RegisterKey` signer whose owner identity is the member.
+    /// The escrow write's owner, its owner identity is the member.
     pub owner_pubkey: Option<Address>,
     /// The key the escrow key binds beside the sealed secret.
     pub nullifier_pk: Option<[u8; 32]>,
 }
 
-/// The chain-pinned newest registry root every record page is read under.
+/// A registry's newest root, every record page is read under it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RegistryTip {
+pub struct StorageTip {
+    pub registry: Address,
     pub root: [u8; 32],
-    pub root_index: u8,
-    pub next_index: u64,
+    pub revision: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -64,7 +67,7 @@ pub struct RecordPoolRead {
 /// One pool read of distinct `members` under `root`, its canopy sized for `openings` paths.
 #[must_use]
 pub struct RecordPoolCheck<'a> {
-    pub response: &'a GetRingRecordPoolResponse,
+    pub response: &'a GetStorageRecordPoolResponse,
     pub root: &'a [u8; 32],
     pub members: &'a [[u8; 32]],
     pub openings: usize,
@@ -164,25 +167,65 @@ impl RecordPoolRead {
     }
 }
 
-impl RegistryTip {
-    /// True only for every record from `start_index` to the page end, read under the tip.
-    #[must_use]
-    pub fn covers(&self, page: &GetRingMemberRecordsResponse, start_index: u64) -> bool {
-        if start_index >= self.next_index {
-            return false;
+impl StorageTip {
+    /// The newest root `account` holds, the one a reader proves against.
+    pub fn newest(registry: Address, account: &StorageRegistry) -> Self {
+        let newest = account.newest();
+        Self {
+            registry,
+            root: newest.hash,
+            revision: newest.revision.value(),
         }
-        let end_index =
-            start_index + (self.next_index - start_index).min(MAX_RING_MEMBER_PAGE_LIMIT);
-        page.root.root.0 == self.root
-            && page.root.root_index == self.root_index
-            && page.root.next_index == self.next_index
-            && page.records.len() == (end_index - start_index) as usize
+    }
+
+    pub fn openings_request(&self, members: &[[u8; 32]]) -> GetStorageMemberOpeningsRequest {
+        GetStorageMemberOpeningsRequest {
+            registry: self.registry.into(),
+            members: members.iter().copied().map(Hash).collect(),
+            expected_root: Hash(self.root),
+        }
+    }
+
+    /// `members[i]` opened under the tip root, else the indexer response is invalid.
+    pub fn verify_openings(
+        &self,
+        response: &GetStorageMemberOpeningsResponse,
+        members: &[[u8; 32]],
+    ) -> Result<Vec<MemberOpeningRead>, AuditError> {
+        if response.openings.len() != members.len() {
+            return Err(AuditError::InvalidMemberRegistry);
+        }
+        response
+            .openings
+            .iter()
+            .zip(members)
+            .map(|(view, member)| MemberOpeningRead::verify(view, &self.root, member))
+            .collect()
+    }
+
+    /// `None` after the last page, refused unless the page holds every record from `start_index`.
+    pub fn next_page(
+        &self,
+        page: &GetStorageMemberRecordsResponse,
+        start_index: u64,
+    ) -> Result<Option<u64>, AuditError> {
+        let next_index = page.root.next_index;
+        let end_index = start_index
+            .saturating_add(MAX_RING_MEMBER_PAGE_LIMIT)
+            .min(next_index);
+        let complete = page.root.root.0 == self.root
+            && page.root.revision == self.revision
+            && start_index <= end_index
+            && page.records.len() as u64 == end_index - start_index
             && page
                 .records
                 .iter()
-                .enumerate()
-                .all(|(offset, row)| row.path.index == start_index + offset as u64)
-            && page.next_leaf_index == (end_index < self.next_index).then_some(end_index)
+                .zip(start_index..)
+                .all(|(row, index)| row.path.index == index)
+            && page.next_leaf_index == (end_index < next_index).then_some(end_index);
+        complete
+            .then_some(page.next_leaf_index)
+            .ok_or(AuditError::InvalidMemberRegistry)
     }
 }
 
@@ -293,9 +336,9 @@ pub fn member_record(view: &RingMemberRecordView) -> MemberRecord {
     }
 }
 
-/// The proof inputs of one application, in queue order.
-pub fn apply_proof_inputs(
-    response: &GetRingApplyProofInputsResponse,
+/// The proof inputs of one storage `Update`, in request order.
+pub fn storage_apply_proof_inputs(
+    response: &GetStorageApplyProofInputsResponse,
 ) -> Result<ApplyProofInputs, AuditError> {
     Ok(ApplyProofInputs {
         old_root: response.old_root.0,
@@ -304,12 +347,12 @@ pub fn apply_proof_inputs(
         new_next_index: response.new_next_index,
         chain_start: response.chain_start.0,
         chain_end: response.chain_end.0,
-        writes: response
-            .writes
-            .iter()
-            .map(record_write)
-            .collect::<Result<_, _>>()?,
+        writes: record_writes(&response.writes)?,
     })
+}
+
+fn record_writes(views: &[RingRecordWriteView]) -> Result<Vec<RecordWriteProofInput>, AuditError> {
+    views.iter().map(record_write).collect()
 }
 
 /// The sealed nullifier secret a record view carries, refused when only half of it is present.

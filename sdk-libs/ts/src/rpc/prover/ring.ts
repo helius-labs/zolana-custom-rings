@@ -1,7 +1,9 @@
 import {
   EMPTY_MINT_POLICY,
+  assetLimitsFields,
   mintPolicyField,
   mintPolicyWriteField,
+  type AssetLimits,
 } from "../../protocol/membership/mint-policy.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 
@@ -131,6 +133,7 @@ export interface PolicyProofInputs extends PolicyTableProofInputs {
   readonly addressChain: Bytes32;
   readonly privateTxBlinding: Bytes32;
   readonly outputs: readonly PolicyOutputOpening[];
+  readonly recipients: readonly Bytes32[];
   readonly senderPkHash: Bytes32;
   readonly ownPool: RecordPool;
   /** Absent on the own-only key. */
@@ -156,6 +159,18 @@ export interface DeliveredAuditProofRequest extends AuditEnvelopeProofInputs {
   readonly kind: "deliveredAudit";
   readonly publicInputHash: Bytes32;
   readonly outputs: readonly DeliveredSlotProofInputs[];
+}
+
+/** Go `DeliveredSenderAuditParams`, `inputs` fill the input class. */
+export interface DeliveredSenderAuditProofRequest extends AuditEnvelopeProofInputs {
+  readonly kind: "deliveredSenderAudit";
+  readonly publicInputHash: Bytes32;
+  readonly outputs: readonly DeliveredSlotProofInputs[];
+  /** The in-proof owner's identity. */
+  readonly sender: Bytes32;
+  readonly privateTxHash: Bytes32;
+  readonly privateTxBlinding: Bytes32;
+  readonly inputs: readonly RingSlotOpening[];
 }
 
 /** Go `AnonymousAuditParams`, `inputs` fill the input class. */
@@ -218,8 +233,7 @@ export interface DepositProofRequest {
   readonly count: number;
   readonly anonymous: boolean;
   readonly ownerPkHashes: readonly Bytes32[];
-  /** Absent keys assign zeros, only an anonymous deposit names them. */
-  readonly ownerKeys?: readonly Bytes32[];
+  readonly ownerKeys: readonly Bytes32[];
   readonly nullifierPks: readonly Bytes32[];
   readonly blindingSecrets: readonly Bytes32[];
   readonly ctHashes: readonly Bytes32[];
@@ -228,12 +242,22 @@ export interface DepositProofRequest {
   readonly auditorPk: Bytes32;
   readonly keyEscrow: boolean;
   readonly memberRegistryRoot: Bytes32;
+  readonly curatorRoot: Bytes32;
+  readonly policyHash: Bytes32;
+  /** SPP's asset field of each deposit's group. */
+  readonly assets: readonly Bytes32[];
+  readonly amounts: readonly Bytes32[];
+  /** Absent without a written policy, `assetRecords` then opens nothing. */
+  readonly table?: PolicyTableProofInputs;
+  readonly assetRecords: readonly (RecordOpening | undefined)[];
+  /** Undefined entries without a curator source. */
+  readonly curatorAssetRecords: readonly (RecordOpening | undefined)[];
 }
 
-/** Go `MergeAnonymousParams`. */
-export interface AnonymousMergeProofRequest {
+/** Go `MergeParams`. */
+export interface MergeProofRequest {
   readonly partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
-  readonly kind: "anonymousMerge";
+  readonly kind: "merge";
   readonly publicInputHash: Bytes32;
   readonly privateTxHash: Bytes32;
   readonly outputUtxoHash: Bytes32;
@@ -250,6 +274,12 @@ export interface AnonymousMergeProofRequest {
   readonly inputs: readonly MergeInputOpening[];
   readonly outputTreeId: Bytes32;
   readonly outputRingDataHash: Bytes32;
+  readonly keyEscrow: boolean;
+  readonly memberRegistryRoot: Bytes32;
+  /** `hashBytes` of the RegisterKey ciphertext the record escrows beside the nullifier key. */
+  readonly ctHash: Bytes32;
+  /** Present exactly when `keyEscrow` is set. */
+  readonly member?: PresentRecordOpening;
 }
 
 export interface WithdrawalExemptionProofRequest {
@@ -264,19 +294,26 @@ export interface WithdrawalExemptionProofRequest {
 export type RingProofRequest =
   | WithdrawalExemptionProofRequest
   | DeliveredAuditProofRequest
+  | DeliveredSenderAuditProofRequest
   | AnonymousAuditProofRequest
   | MemberPolicyProofRequest
   | DelegatePolicyProofRequest
   | ApplyRecordsProofRequest
   | RegisterKeyProofRequest
   | DepositProofRequest
-  | AnonymousMergeProofRequest;
+  | MergeProofRequest;
 
 /** The key a request proves under, its list widths pick the shape. */
 export function ringProofCircuit(request: RingProofRequest): RingKeyCircuit {
   switch (request.kind) {
     case "deliveredAudit":
       return { family: "deliveredAudit", outputs: listLength(request.outputs) };
+    case "deliveredSenderAudit":
+      return {
+        family: "deliveredSenderAudit",
+        inputClass: listLength(request.inputs),
+        outputs: listLength(request.outputs),
+      };
     case "anonymousAudit":
       return {
         family: request.layout.fullOpenings ? "anonymousEntryAudit" : "anonymousAudit",
@@ -294,8 +331,8 @@ export function ringProofCircuit(request: RingProofRequest): RingKeyCircuit {
       return { family: "registerKey" };
     case "deposit":
       return { family: "deposit", capacity: depositCapacity(request.count) };
-    case "anonymousMerge":
-      return { family: "anonymousMerge", width: listLength(request.inputs) };
+    case "merge":
+      return { family: "merge", width: listLength(request.inputs) };
     default:
       throw new ClientError("CLIENT_INVALID_PROOF_INPUTS");
   }
@@ -336,6 +373,16 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
         ...head,
         ...envelopeJson(request),
         outputs: request.outputs.map((output, i) => deliveredJson(output, `outputs[${i}]`)),
+      };
+    case "deliveredSenderAudit":
+      return {
+        ...head,
+        ...envelopeJson(request),
+        outputs: request.outputs.map((output, i) => deliveredJson(output, `outputs[${i}]`)),
+        sender: field(request.sender, "sender"),
+        privateTxHash: field(request.privateTxHash, "privateTxHash"),
+        privateTxBlinding: field(request.privateTxBlinding, "privateTxBlinding"),
+        inputs: request.inputs.map((input, i) => openingJson(input, `inputs[${i}]`)),
       };
     case "anonymousAudit":
       return {
@@ -415,13 +462,9 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
           depositCapacity(request.count),
           "ownerPkHashes",
         ),
-        ...(request.ownerKeys === undefined
-          ? {}
-          : {
-              ownerKeys: sized(request.ownerKeys, depositCapacity(request.count), "ownerKeys").map(
-                (key, i) => hexBytes(key, 32, `ownerKeys[${i}]`),
-              ),
-            }),
+        ownerKeys: sized(request.ownerKeys, depositCapacity(request.count), "ownerKeys").map(
+          (key, i) => hexBytes(key, 32, `ownerKeys[${i}]`),
+        ),
         nullifierPks: fields(request.nullifierPks, depositCapacity(request.count), "nullifierPks"),
         blindingSecrets: fields(
           request.blindingSecrets,
@@ -436,8 +479,23 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
         auditorPk: hexBytes(request.auditorPk, 32, "auditorPk"),
         keyEscrow: flag(request.keyEscrow),
         memberRegistryRoot: field(request.memberRegistryRoot, "memberRegistryRoot"),
+        curatorRoot: field(request.curatorRoot, "curatorRoot"),
+        policyHash: field(request.policyHash, "policyHash"),
+        assets: fields(request.assets, depositCapacity(request.count), "assets"),
+        amounts: fields(request.amounts, depositCapacity(request.count), "amounts"),
+        ...(request.table === undefined ? {} : { table: tableJson(request.table) }),
+        assetRecords: sized(
+          request.assetRecords,
+          depositCapacity(request.count),
+          "assetRecords",
+        ).map((opening, i) => memberOpeningJson(opening, `assetRecords[${i}]`)),
+        curatorAssetRecords: sized(
+          request.curatorAssetRecords,
+          depositCapacity(request.count),
+          "curatorAssetRecords",
+        ).map((opening, i) => memberOpeningJson(opening, `curatorAssetRecords[${i}]`)),
       };
-    case "anonymousMerge":
+    case "merge":
       return {
         ...head,
         partyIdentities: fields(request.partyIdentities, 3, "partyIdentities"),
@@ -455,6 +513,10 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
         inputs: request.inputs.map((input, i) => mergeInputJson(input, `inputs[${i}]`)),
         outputTreeId: field(request.outputTreeId, "outputTreeId"),
         outputRingDataHash: field(request.outputRingDataHash, "outputRingDataHash"),
+        keyEscrow: flag(request.keyEscrow),
+        memberRegistryRoot: field(request.memberRegistryRoot, "memberRegistryRoot"),
+        ctHash: field(request.ctHash, "ctHash"),
+        member: request.member === undefined ? null : recordJson(request.member, "member"),
       };
   }
 }
@@ -561,12 +623,7 @@ function policyJson(policy: PolicyProofInputs, circuit: PolicyKeyCircuit): Json 
     curatorRoot: field(policy.curatorRoot, "curatorRoot"),
     publicAssets: fields(policy.publicAssets, N_PUBLIC_SLOTS, "publicAssets"),
     publicAmounts: fields(policy.publicAmounts, N_PUBLIC_SLOTS, "publicAmounts"),
-    sources: sized(policy.sources, RING_SOURCE_SLOTS, "sources").map((source, i) => ({
-      listId: integer(source.listId, `sources[${i}].listId`, 0, U8_MAX),
-      registry: field(source.registry, `sources[${i}].registry`),
-    })),
-    policyLen: integer(policy.policyLen, "policyLen", 0, RING_RULE_SLOTS),
-    rules: fields(policy.rules, RING_RULE_SLOTS, "rules"),
+    ...tableJson(policy),
     addressChain: field(policy.addressChain, "addressChain"),
     privateTxBlinding: field(policy.privateTxBlinding, "privateTxBlinding"),
     outputs: policy.outputs.map((output, i) => ({
@@ -575,6 +632,7 @@ function policyJson(policy: PolicyProofInputs, circuit: PolicyKeyCircuit): Json 
         ? {}
         : { ctHash: field(output.ctHash, `outputs[${i}].ctHash`) }),
     })),
+    recipients: fields(policy.recipients, policy.outputs.length, "recipients"),
     senderPkHash: field(policy.senderPkHash, "senderPkHash"),
     ownRecords: own.records,
     curatorRecords: curator.records,
@@ -594,6 +652,17 @@ function policyJson(policy: PolicyProofInputs, circuit: PolicyKeyCircuit): Json 
       circuit.family === "memberPolicy" ? N_PUBLIC_SLOTS : 0,
       "publicAssetEntries",
     ).map((index, i) => integer(index, `publicAssetEntries[${i}]`, 0, capacity.own - 1)),
+  };
+}
+
+function tableJson(table: PolicyTableProofInputs): Json {
+  return {
+    sources: sized(table.sources, RING_SOURCE_SLOTS, "sources").map((source, i) => ({
+      listId: integer(source.listId, `sources[${i}].listId`, 0, U8_MAX),
+      registry: field(source.registry, `sources[${i}].registry`),
+    })),
+    policyLen: integer(table.policyLen, "policyLen", 0, RING_RULE_SLOTS),
+    rules: fields(table.rules, RING_RULE_SLOTS, "rules"),
   };
 }
 
@@ -665,6 +734,10 @@ function memberOpeningJson(opening: RecordOpening | undefined, name: string): Js
       bigIntBytes(record?.mintPolicy.withdrawalThreshold ?? 0n, 32) as Bytes32,
       `${name}.withdrawalThreshold`,
     ),
+    assetLimits: limitsJson(
+      (record?.mintPolicy ?? EMPTY_MINT_POLICY).limits,
+      `${name}.assetLimits`,
+    ),
     ...quadPathJson(opening.path, name, "index", "path"),
     lowMember: field(low?.member ?? ZERO, `${name}.lowMember`),
     lowNext: field(low?.next ?? ZERO, `${name}.lowNext`),
@@ -677,6 +750,10 @@ function memberOpeningJson(opening: RecordOpening | undefined, name: string): Js
     lowWithdrawalThreshold: field(
       bigIntBytes(low?.mintPolicy.withdrawalThreshold ?? 0n, 32) as Bytes32,
       `${name}.lowWithdrawalThreshold`,
+    ),
+    lowAssetLimits: limitsJson(
+      (low?.mintPolicy ?? EMPTY_MINT_POLICY).limits,
+      `${name}.lowAssetLimits`,
     ),
   };
 }
@@ -700,6 +777,7 @@ function recordFieldsJson(record: MemberRecord, name: string): Json {
       bigIntBytes(record.mintPolicy.withdrawalThreshold, 32) as Bytes32,
       `${name}.withdrawalThreshold`,
     ),
+    assetLimits: limitsJson(record.mintPolicy.limits, `${name}.assetLimits`),
   };
 }
 
@@ -715,6 +793,7 @@ function writeJson(write: RecordWriteProofInput, name: string): Json {
       bigIntBytes(write.oldMintPolicy.withdrawalThreshold, 32) as Bytes32,
       `${name}.oldWithdrawalThreshold`,
     ),
+    oldAssetLimits: limitsJson(write.oldMintPolicy.limits, `${name}.oldAssetLimits`),
     ...quadPathJson(write.slot, name, "index", "path"),
     lowMember: field(write.low.member, `${name}.lowMember`),
     lowNext: field(write.low.next, `${name}.lowNext`),
@@ -725,6 +804,7 @@ function writeJson(write: RecordWriteProofInput, name: string): Json {
       bigIntBytes(write.low.mintPolicy.withdrawalThreshold, 32) as Bytes32,
       `${name}.lowWithdrawalThreshold`,
     ),
+    lowAssetLimits: limitsJson(write.low.mintPolicy.limits, `${name}.lowAssetLimits`),
     ...quadPathJson(write.lowPath, name, "lowIndex", "lowPath"),
   };
 }
@@ -740,7 +820,12 @@ function queueEntryJson(entry: QueueEntry, name: string): Json {
       bigIntBytes(entry.mintPolicy?.withdrawalThreshold ?? 0n, 32) as Bytes32,
       `${name}.withdrawalThreshold`,
     ),
+    assetLimits: limitsJson((entry.mintPolicy ?? EMPTY_MINT_POLICY).limits, `${name}.assetLimits`),
   };
+}
+
+function limitsJson(limits: AssetLimits, name: string): string[] {
+  return assetLimitsFields(limits).map((limit, index) => field(limit, `${name}[${String(index)}]`));
 }
 
 function mergeInputJson(input: MergeInputOpening, name: string): Json {

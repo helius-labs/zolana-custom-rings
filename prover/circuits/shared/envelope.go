@@ -1,3 +1,10 @@
+// Proves that a ciphertext is encrypted to the ring's auditor key, so the
+// auditor can always open what the proof binds. Each envelope needs a fresh
+// one-time key, a reused key repeats the keystream.
+//
+// Read after shared/disclosure.go, ringgadget/bytes.go, shared/derivation.go.
+// Read before audit/audit.go, deposit.go, merge.go.
+
 package shared
 
 import (
@@ -26,6 +33,10 @@ type Envelope struct {
 // Every Ciphertext byte is bounded to 8 bits by the cipher's tables.
 type Sealed struct {
 	Auditor, Eph, Ciphertext []frontend.Variable
+}
+
+func (s Sealed) StatementFields(api frontend.API) []frontend.Variable {
+	return append(slices.Concat(s.Auditor, s.Eph), gadget.HashBoundedBytes(api, s.Ciphertext))
 }
 
 type keySchedule func(secret frontend.Variable) ([32]frontend.Variable, [12]frontend.Variable)

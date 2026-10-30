@@ -41,8 +41,6 @@
     "lint": "oxlint --deny-warnings src test scripts",
     "test": "vitest run --exclude \"test/e2e/**\"",
     "test:e2e": "vitest run --no-file-parallelism test/e2e",
-    "test:ring-compat": "vitest run test/e2e/ring-flow.live.test.ts -t \"deposits, transfers audited\"",
-    "test:ring-controls:live": "node scripts/run-ring-controls-live.mjs",
     "check": "npm run format:check && npm run lint && npm run changelog:check && npm run typecheck && npm run test && npm run build && npm run check:dist",
     "check:dist": "tsc -p tsconfig.dist.json"
   },
@@ -61,7 +59,7 @@
     "vitest": "^5.0.0"
   },
   "peerDependencies": {
-    "@heliuslabs/zolana": "0.5.1-alpha",
+    "@heliuslabs/zolana": "0.7.0-alpha",
     "@solana/kit": "^8.3.0"
   },
   "engines": {

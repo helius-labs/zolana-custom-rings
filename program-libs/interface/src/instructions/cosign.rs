@@ -1,10 +1,11 @@
 //! The co-signer a ring operation must carry, one rule for the program and the SDKs.
 
-use crate::{CoSignScope, CustomRingError, PublicLeg, RingProgramConfig, SOL_ASSET_ADDRESS};
+use crate::{CoSignScope, CoSigner, CustomRingError, PublicLeg, RingPolicy, SOL_ASSET_ADDRESS};
 use solana_address::Address;
 
+#[derive(Clone, Debug)]
 pub struct CoSignDemand {
-    /// Demands the co-signer whatever its scope.
+    /// Demands a co-signer of any scope when no class is shared.
     pub approval_required: bool,
     pub classes: CoSignScope,
     /// Public withdrawal total per mint, each mint once.
@@ -37,33 +38,53 @@ impl CoSignDemand {
         }
     }
 
-    /// A shared class demands the co-signer unless a verified exemption is supplied.
-    pub fn signer(&self, config: &RingProgramConfig) -> Result<Option<Address>, CustomRingError> {
-        self.signer_with_exemption(config, false)
+    /// Only a verified exemption proof may waive the withdrawal class.
+    #[must_use]
+    pub fn exempt_withdrawals(mut self) -> Self {
+        self.withdrawals.clear();
+        self
     }
 
-    /// Only a verified registry proof may waive the withdrawal class.
-    pub fn signer_with_exemption(
+    /// `None` when no record covers a class of the operation and no approval is demanded.
+    pub fn requirement(
         &self,
-        config: &RingProgramConfig,
-        withdrawal_exempt: bool,
-    ) -> Result<Option<Address>, CustomRingError> {
-        let co_signer = config.co_signer().copied();
-        if self.approval_required {
-            return co_signer
-                .map(Some)
-                .ok_or(CustomRingError::ApprovalWithoutCoSigner);
+        ring: &RingPolicy,
+    ) -> Result<Option<CoSignRequirement>, CustomRingError> {
+        let covered = ring.co_signers.covered();
+        let mut shared = covered.map_or(0, CoSignScope::bits) & self.classes.bits();
+        if self.withdrawals.is_empty() {
+            shared &= !CoSignScope::WITHDRAWALS.bits();
         }
-        let (Some(co_signer), Some(scope)) = (co_signer, config.co_sign_scope()) else {
+        if let Some(classes) = CoSignScope::new(shared) {
+            return Ok(Some(CoSignRequirement::Covering(classes)));
+        }
+        if !self.approval_required {
             return Ok(None);
+        }
+        covered
+            .map(|_| Some(CoSignRequirement::Any))
+            .ok_or(CustomRingError::ApprovalWithoutCoSigner)
+    }
+}
+
+/// One `CoSigner` record must satisfy it, its signer signs the operation.
+#[must_use]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CoSignRequirement {
+    /// The policy proof demands approval and no class is shared.
+    Any,
+    Covering(CoSignScope),
+}
+
+impl CoSignRequirement {
+    pub fn check(self, record: &CoSigner) -> Result<Address, CustomRingError> {
+        let covers = match self {
+            Self::Any => true,
+            Self::Covering(classes) => record.scope().is_some_and(|scope| scope.contains(classes)),
         };
-        let shared = |class| scope.contains(class) && self.classes.contains(class);
-        let in_scope = shared(CoSignScope::TRANSFERS)
-            || shared(CoSignScope::DEPOSITS)
-            || (shared(CoSignScope::WITHDRAWALS)
-                && !withdrawal_exempt
-                && !self.withdrawals.is_empty());
-        Ok(in_scope.then_some(co_signer))
+        covers
+            .then_some(record.signer)
+            .ok_or(CustomRingError::CoSignerOutOfScope)
     }
 }
 
@@ -106,6 +127,7 @@ impl WithdrawalExemptionStatement {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CoSignerCounts;
     use bytemuck::Zeroable;
     use spr_interface::instruction::InterfaceTransfer;
     #[test]
@@ -126,23 +148,30 @@ mod tests {
         ];
         let mut demand = CoSignDemand::transact(false, &legs);
         assert_eq!(demand.withdrawals, vec![(Address::default(), 120)]);
-        let mut config = RingProgramConfig::zeroed();
-        config.co_signer = Address::new_from_array([7; 32]);
-        config.co_sign_scope = CoSignScope::WITHDRAWALS.bits();
-        assert_eq!(demand.signer(&config), Ok(Some(config.co_signer)));
-        assert_eq!(demand.signer_with_exemption(&config, true), Ok(None));
-        for scope in [CoSignScope::TRANSFERS, CoSignScope::DEPOSITS] {
-            config.co_sign_scope = scope.bits();
-            assert_eq!(
-                demand.signer_with_exemption(&config, true),
-                Ok(Some(config.co_signer))
-            );
-        }
-        config.co_sign_scope = CoSignScope::WITHDRAWALS.bits();
-        demand.approval_required = true;
+        let config = |scope: CoSignScope| {
+            let mut config = RingPolicy::zeroed();
+            config.co_signers = CoSignerCounts::default().added(scope).unwrap();
+            config
+        };
+        let covering = |classes| Ok(Some(CoSignRequirement::Covering(classes)));
+        let withdrawals = config(CoSignScope::WITHDRAWALS);
         assert_eq!(
-            demand.signer_with_exemption(&config, true),
-            Ok(Some(config.co_signer))
+            demand.requirement(&withdrawals),
+            covering(CoSignScope::WITHDRAWALS)
+        );
+        let exempt = CoSignDemand::transact(false, &legs).exempt_withdrawals();
+        assert_eq!(exempt.requirement(&withdrawals), Ok(None));
+        for scope in [CoSignScope::TRANSFERS, CoSignScope::DEPOSITS] {
+            assert_eq!(exempt.requirement(&config(scope)), covering(scope));
+        }
+        let approval = CoSignDemand::transact(true, &legs).exempt_withdrawals();
+        assert_eq!(
+            approval.requirement(&withdrawals),
+            Ok(Some(CoSignRequirement::Any))
+        );
+        assert_eq!(
+            approval.requirement(&RingPolicy::zeroed()),
+            Err(CustomRingError::ApprovalWithoutCoSigner)
         );
         let hash = WithdrawalExemptionStatement::new([1; 32], &demand)
             .unwrap()

@@ -2,24 +2,24 @@
 
 use std::path::Path;
 
-use anyhow::{bail, ensure, Context as _, Result};
+use anyhow::{anyhow, bail, ensure, Context as _, Result};
+use custom_ring_interface::RingRole;
 use custom_ring_sdk::{
-    CoSignScope, CustomRingCoSigner, CustomRingConfig, GrantReader, RevokeReader, RingMode,
-    RingRegistration, SetCoSigner, SetDelegate,
+    ClearCoSigner, CoSignScope, CustomRingCoSigner, RingMode, RingRegistration, SetCoSigner,
+    SetDelegate,
 };
 use solana_address::Address;
 use solana_signer::Signer;
-use spr_client::Rpc;
 use spr_keypair::X25519Keypair;
+use zolana_ring_policy::ListId;
 
 use crate::{
     config::{Base58Address, CoSignClass, CoSignerSpec},
-    file,
-    fund::MIN_AUTHORITY_BALANCE,
-    keys, line, policy,
-    records::NO_MEMBER_REGISTRY,
+    file, keys, line,
+    list::{ListChange, ListUpdate, Subject},
+    policy,
     ui::{self, icon},
-    CoSignerCommand, Context, DelegateCommand, InsertFeeCommand, ReaderCommand, AUDITOR_KEY_FILE,
+    CoSignerCommand, Context, DelegateCommand, ReaderCommand, AUDITOR_KEY_FILE,
 };
 
 #[must_use]
@@ -27,9 +27,6 @@ pub(crate) struct DualControl {
     pub cosigner: Option<Address>,
     pub delegate: Option<Address>,
 }
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct RentFloor(u64);
 
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,10 +66,12 @@ pub fn cosigner(ctx: &Context, command: CoSignerCommand) -> Result<()> {
                 delegate: ctx.ring_config()?.delegate,
             }
             .check()?;
-            let authority = ctx.funded_authority()?;
+            let payer = ctx.funded_authority()?;
+            let cosign_admin = ctx.role_keypair(RingRole::CosignAdmin)?;
             let set = SetCoSigner {
                 ring: ctx.ring,
-                authority: authority.pubkey(),
+                payer: payer.pubkey(),
+                authority: cosign_admin.pubkey(),
                 signer: spec.key.0,
                 scope,
             }
@@ -92,117 +91,129 @@ pub fn cosigner(ctx: &Context, command: CoSignerCommand) -> Result<()> {
                 *policy != current.get(member).copied().unwrap_or_default()
             });
             // Set the co-signer before applying its threshold records.
-            ctx.send(&[authority], &[set])?;
+            ctx.send(&[payer, &cosign_admin], &[set])?;
             crate::records::write_mint_policies(ctx, &desired)?;
             line("co-signer", format_args!("{} set", spec.key));
+            print_cosigners(ctx, Some(spec.key.0))
         }
-        CoSignerCommand::Clear => {
-            let authority = ctx.funded_authority()?;
+        CoSignerCommand::Clear { signer } => {
+            let signer = cosigner_key(ctx, signer)?;
             ensure!(
-                ctx.ring_config()?.co_signer.is_some(),
-                "the ring has no co-signer"
+                ctx.block(ctx.ring.co_signer(ctx.chain(), &signer))?
+                    .is_some(),
+                "{signer} holds no co-signer record"
             );
-            ctx.send(&[authority], &[ctx.ring.clear_cosigner(authority.pubkey())])?;
-            line("co-signer", "cleared");
-        }
-        CoSignerCommand::Show => {}
-    }
-    match ctx.ring_config()?.co_signer {
-        Some(cosigner) => {
-            print_cosigner(&cosigner);
-            for (member, policy) in crate::records::mint_policies(ctx)? {
-                if policy.withdrawal_threshold != 0 {
-                    line(
-                        "withdrawal threshold",
-                        format_args!(
-                            "{} above {}",
-                            hex::encode(member),
-                            policy.withdrawal_threshold
-                        ),
-                    );
-                }
+            let payer = ctx.funded_authority()?;
+            let cosign_admin = ctx.role_keypair(RingRole::CosignAdmin)?;
+            let clear = ClearCoSigner {
+                ring: ctx.ring,
+                authority: cosign_admin.pubkey(),
+                signer,
+                rent_recipient: payer.pubkey(),
             }
+            .instruction();
+            ctx.send(&[payer, &cosign_admin], &[clear])?;
+            line("co-signer", format_args!("{signer} cleared"));
+            print_cosigners(ctx, None)
         }
-        None => line("co-signer", "none"),
+        CoSignerCommand::Show { signer } => {
+            let signer = signer.or_else(|| ctx.config.cosigner.as_ref().map(|spec| spec.key.0));
+            print_cosigners(ctx, signer)
+        }
+    }
+}
+
+/// The named key, else the `[cosigner]` key of ring.toml.
+fn cosigner_key(ctx: &Context, signer: Option<Address>) -> Result<Address> {
+    match signer {
+        Some(signer) => Ok(signer),
+        None => Ok(ctx
+            .config
+            .cosigner
+            .as_ref()
+            .context("no signer given and ring.toml has no [cosigner] table")?
+            .key
+            .0),
+    }
+}
+
+/// The classes some record covers, then `signer`'s record and the withdrawal thresholds.
+fn print_cosigners(ctx: &Context, signer: Option<Address>) -> Result<()> {
+    let Some(classes) = ctx.ring_config()?.co_signer_classes else {
+        line("co-signer", "none");
+        return Ok(());
+    };
+    line("co-signed classes", class_names(classes));
+    if let Some(signer) = signer {
+        match ctx.block(ctx.ring.co_signer(ctx.chain(), &signer))? {
+            Some(cosigner) => print_cosigner(&cosigner),
+            None => line("co-signer", format_args!("{signer} holds no record")),
+        }
+    }
+    for (member, policy) in crate::records::mint_policies(ctx)? {
+        if policy.withdrawal_threshold != 0 {
+            line(
+                "withdrawal threshold",
+                format_args!(
+                    "{} above {}",
+                    hex::encode(member),
+                    policy.withdrawal_threshold
+                ),
+            );
+        }
     }
     Ok(())
+}
+
+pub(crate) fn class_names(scope: CoSignScope) -> String {
+    let names: Vec<_> = CoSignClass::ALL
+        .into_iter()
+        .filter(|class| scope.contains(class.scope()))
+        .map(CoSignClass::as_str)
+        .collect();
+    names.join(",")
 }
 
 pub(crate) fn print_cosigner(cosigner: &CustomRingCoSigner) {
-    let scope: Vec<_> = CoSignClass::ALL
-        .into_iter()
-        .filter(|class| cosigner.scope.contains(class.scope()))
-        .map(CoSignClass::as_str)
-        .collect();
     line("co-signer", cosigner.signer);
-    line("scope", scope.join(","));
-}
-
-pub fn insert_fee(ctx: &Context, command: InsertFeeCommand) -> Result<()> {
-    if let InsertFeeCommand::Set { lamports } = command {
-        RentFloor(ctx.rpc().get_minimum_balance_for_rent_exemption(0)?).admits(lamports)?;
-        let authority = ctx.funded_authority()?;
-        let set = ctx.ring.set_insert_fee(authority.pubkey(), lamports);
-        ctx.send(&[authority], &[set])?;
-    }
-    print_insert_fee(&ctx.ring_config()?);
-    Ok(())
-}
-
-pub(crate) fn print_insert_fee(config: &CustomRingConfig) {
-    line(
-        "insert fee",
-        format_args!("{} lamports per member write", config.insert_fee),
-    );
+    line("scope", class_names(cosigner.scope));
 }
 
 /// A grant of a granted reader and a revoke of an absent one send nothing.
 pub fn reader(ctx: &Context, command: ReaderCommand) -> Result<()> {
-    let authority = ctx.funded_authority()?;
-    let a = authority.pubkey();
-    let (ReaderCommand::Grant { reader } | ReaderCommand::Revoke { reader }) = command;
-    let granted = ctx.block(ctx.ring.access_record(ctx.chain(), &reader))?;
-    let outcome = match (command, granted.is_some()) {
-        (ReaderCommand::Grant { .. }, true) => "already granted",
-        (ReaderCommand::Grant { .. }, false) => {
-            let grant = GrantReader {
-                ring: ctx.ring,
-                payer: a,
-                authority: a,
-                reader,
-            };
-            ctx.send(&[authority], &[grant.instruction()?])?;
-            "granted"
-        }
-        (ReaderCommand::Revoke { .. }, true) => {
-            let revoke = RevokeReader {
-                ring: ctx.ring,
-                authority: a,
-                reader,
-                rent_recipient: a,
-            };
-            ctx.send(&[authority], &[revoke.instruction()?])?;
-            "revoked"
-        }
-        (ReaderCommand::Revoke { .. }, false) => "not granted",
+    let (change, reader) = match command {
+        ReaderCommand::Grant { reader } => (ListChange::Set, reader),
+        ReaderCommand::Revoke { reader } => (ListChange::Clear, reader),
     };
+    let subject = Subject {
+        member: reader.member()?,
+        label: format!("reader {reader}"),
+    };
+    let outcomes = ListUpdate {
+        authority: ctx.authority()?,
+        list_id: ListId::Reader,
+        subjects: core::slice::from_ref(&subject),
+        change,
+    }
+    .send(ctx)?;
+    let [outcome] = <[_; 1]>::try_from(outcomes).map_err(|_| anyhow!("one reader, one outcome"))?;
     line("reader", format_args!("{reader} {outcome}"));
-    line("record", ctx.ring.read_access_record_pda(&reader));
     Ok(())
 }
 
 pub fn pause(ctx: &Context, paused: bool) -> Result<()> {
     let registration = require_initialized(ctx)?;
-    let authority = ctx.authority()?;
     let outcome = match (registration.paused == paused, paused) {
         (true, true) => "already paused",
         (true, false) => "already open",
         (false, _) => {
+            let payer = ctx.funded_authority()?;
+            let pauser = ctx.role_keypair(RingRole::Pauser)?;
             let set = match paused {
-                true => ctx.ring.pause(authority.pubkey())?,
-                false => ctx.ring.resume(authority.pubkey())?,
+                true => ctx.ring.pause(pauser.pubkey())?,
+                false => ctx.ring.resume(pauser.pubkey())?,
             };
-            ctx.send(&[authority], &[set])?;
+            ctx.send(&[payer, &pauser], &[set])?;
             ["resumed", "paused"][usize::from(paused)]
         }
     };
@@ -227,7 +238,7 @@ pub fn delegate(ctx: &Context, command: DelegateCommand) -> Result<()> {
                 bail!("the ring's delegate {current} is permanent");
             }
             DualControl {
-                cosigner: config.co_signer.as_ref().map(|cosigner| cosigner.signer),
+                cosigner: ctx.config.cosigner.as_ref().map(|spec| spec.key.0),
                 delegate: Some(delegate.pubkey()),
             }
             .check()?;
@@ -236,16 +247,14 @@ pub fn delegate(ctx: &Context, command: DelegateCommand) -> Result<()> {
                 "a delegate escrows keys only on a confidential policy ring"
             );
             ring_auditor_key(ctx, Path::new(AUDITOR_KEY_FILE))?;
-            ctx.block(ctx.ring.registry(ctx.chain()))?
-                .context(NO_MEMBER_REGISTRY)?;
-            let authority = ctx.config.upgrade_authority()?;
-            ctx.fund(authority.pubkey(), MIN_AUTHORITY_BALANCE)?;
+            let payer = ctx.funded_authority()?;
+            let admin = ctx.role_keypair(RingRole::Admin)?;
             let set = SetDelegate {
                 ring: ctx.ring,
-                authority: authority.pubkey(),
+                authority: admin.pubkey(),
                 delegate: delegate.pubkey(),
             };
-            ctx.send(&[&authority, &delegate], &[set.instruction()])?;
+            ctx.send(&[payer, &admin, &delegate], &[set.instruction()])?;
             line("delegate", format_args!("{} set", delegate.pubkey()));
             ui::warn("every later transfer escrows its output keys");
         }
@@ -310,17 +319,6 @@ impl DualControl {
     }
 }
 
-impl RentFloor {
-    fn admits(self, fee: u64) -> Result<()> {
-        let RentFloor(floor) = self;
-        ensure!(
-            fee == 0 || fee >= floor,
-            "an insert fee of {fee} lamports is below the {floor} an empty account needs, set 0 or at least {floor}"
-        );
-        Ok(())
-    }
-}
-
 fn check_thresholds(scope: CoSignScope, thresholds: &[crate::config::ThresholdSpec]) -> Result<()> {
     ensure!(
         thresholds.is_empty() || scope.contains(CoSignScope::WITHDRAWALS),
@@ -332,15 +330,6 @@ fn check_thresholds(scope: CoSignScope, thresholds: &[crate::config::ThresholdSp
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_nonzero_insert_fee_below_the_rent_floor_is_refused() {
-        let floor = RentFloor(890_880);
-        assert!(floor.admits(0).is_ok());
-        assert!(floor.admits(890_880).is_ok());
-        let refused = floor.admits(890_879).unwrap_err().to_string();
-        assert!(refused.contains("890880"), "{refused}");
-    }
 
     #[test]
     fn co_signer_thresholds_need_the_withdrawal_scope() {

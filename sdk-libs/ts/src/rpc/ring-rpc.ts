@@ -31,10 +31,11 @@ import {
   ZERO_32,
   equalBytes,
   assetField,
+  indexerScalars,
+  type indexerTypes,
 } from "@heliuslabs/zolana/internal";
 import { MAX_MERGE_INPUTS } from "@heliuslabs/zolana/interface";
 import { X25519PublicKey, KeypairError } from "@heliuslabs/zolana/keypair";
-import { MEMBER_REGISTRY_ROOT_HISTORY } from "../protocol/membership/member-registry.js";
 import { ringIdField } from "../crypto/derivation/ring-stream.js";
 
 import {
@@ -54,14 +55,62 @@ import type {
   MergeKeys,
   UnresolvedRingMerge,
 } from "../operations/audit/audit-merge.js";
-import type { RingRootEntry } from "../protocol/codec/ring-codecs.js";
 import { RingError } from "../protocol/error.js";
+import { ringRecordsAddress } from "../protocol/pda/index.js";
 import {
   checkedReaderKey,
   readerKeyBytes,
   readerKeyFromBytes,
+  type ReaderKey,
 } from "../operations/management/reader-access.js";
 import { memberOfTag } from "../protocol/membership/policy.js";
+import { verifyRecordUpdate } from "../protocol/ring-rpc/record-update.js";
+import {
+  decodePendingEnrolmentsPage,
+  decodeRecordsRegistry,
+  decodeRecordUpdateStatus,
+  decodeRelayQuote,
+  decodeRelayStatus,
+  decodeReaderGrantAction,
+  decodeRelayStep,
+  decodeSubmitRecordUpdate,
+  encodeCreateRecordsRegistryRequest,
+  encodeGetPendingEnrolmentsRequest,
+  encodePrepareAuthorityTransferRequest,
+  encodePrepareRelayRequest,
+  encodeRecordUpdateStatusRequest,
+  encodeRefuseEnrolmentRequest,
+  encodeRelayQuoteRequest,
+  encodeRelayStatusRequest,
+  encodeSetReaderGrantRequest,
+  encodeSubmitRecordUpdateRequest,
+  encodeSubmitRelayRequest,
+  shieldedAddressText,
+} from "../protocol/ring-rpc/ring-rpc-codec.js";
+import {
+  RingRpcMethod,
+  type AuthorityTransfer,
+  type ConfigAuthorityAuth,
+  type CreateRecordsRegistryRequest,
+  type GetPendingEnrolmentsRequest,
+  type PendingEnrolmentsPage,
+  type PrepareAuthorityTransferRequest,
+  type PrepareRelayRequest,
+  type ReaderGrantAction,
+  type RecordsRegistry,
+  type RecordUpdateStatus,
+  type RefuseEnrolmentRequest,
+  type RelayQuote,
+  type RelayQuoteRequest,
+  type RelayStatus,
+  type RelayStep,
+  type SetReaderGrantRequest,
+  type SubmitRecordUpdateRequest,
+  type SubmitRelayRequest,
+} from "../protocol/ring-rpc/ring-rpc-types.js";
+import { ringRpcRefusalName } from "../protocol/ring-rpc/ring-rpc-refusal.js";
+
+type Hash = indexerTypes.Hash;
 
 const base58Decoder = getBase58Decoder();
 const base64Decoder = getBase64Decoder();
@@ -88,6 +137,9 @@ const READ_DOMAIN = "zolana/ring-rpc-read/v2";
 const AUDITOR_KEY_DOMAIN = "zolana/ring-auditor-key/v2";
 const AUDITOR_KEY_REQUEST_DOMAIN = "zolana/ring-rpc-auditor-key-request/v1";
 const AUDITED_UTXOS_DOMAIN = "zolana/ring-rpc-audited-utxos/v1";
+const AUTHORITY_TRANSFER_DOMAIN = "zolana/ring-rpc-authority-transfer/v1";
+const ENROLMENT_DOMAIN = "zolana/ring-rpc-enrolment/v1";
+const READER_GRANT_DOMAIN = "zolana/ring-rpc-reader-grant/v1";
 /** Rust `AUDIT_PAGE_LIMIT`. */
 export const RING_READ_PAGE_LIMIT = 100n;
 /** Rust `AUDITED_UTXOS_LIMIT`, the UTXO hashes one read names. */
@@ -96,7 +148,7 @@ export const RING_AUDITED_UTXOS_LIMIT = 100;
 export const RING_READ_CURSOR_LIMIT = 256;
 
 /** Rust `PagedRead`, the paged read a reader's signature authorizes. */
-export type RingPagedRead = "getDecryptedTransactions" | "getAuditedMerges";
+export type RingPagedRead = "getDecryptedTransactions" | "getWalletActivity" | "getAuditedMerges";
 
 /** Rust `ReadTarget`, one ring behind one ring rpc on one cluster, every signed read names all three. */
 export interface RingReadTarget {
@@ -114,6 +166,11 @@ function targetLines(target: RingReadTarget): readonly string[] {
     `service: ${target.service}`,
     `ring: ${target.ringProgramId}`,
   ];
+}
+
+/** Rust `wallet_line`, no line for a ring-wide request. */
+function walletLines(wallet: Address | undefined): readonly string[] {
+  return wallet === undefined ? [] : [`wallet: ${wallet}`];
 }
 
 function checkedReadTarget(target: RingReadTarget): RingReadTarget {
@@ -135,6 +192,7 @@ export function ringReadAttestation(
     nonce: Bytes32;
     cursor?: Uint8Array;
     limit?: bigint;
+    wallet?: Address;
   }>,
 ): Uint8Array {
   const cursor = input.cursor === undefined ? "" : base64Decoder.decode(input.cursor);
@@ -147,6 +205,7 @@ export function ringReadAttestation(
       `nonce: ${base64Decoder.decode(input.nonce)}`,
       `limit: ${input.limit ?? 0n}`,
       `cursor: ${cursor}`,
+      ...walletLines(input.wallet),
     ].join("\n"),
   );
 }
@@ -158,6 +217,7 @@ export function auditedUtxosAttestation(
     timestamp: bigint;
     nonce: Bytes32;
     utxoHashes: readonly Bytes32[];
+    wallet?: Address;
   }>,
 ): Uint8Array {
   const joined = new Uint8Array(32 * input.utxoHashes.length);
@@ -169,6 +229,7 @@ export function auditedUtxosAttestation(
       `timestamp: ${input.timestamp}`,
       `nonce: ${base64Decoder.decode(input.nonce)}`,
       `utxos: ${base64Decoder.decode(sha256(joined))}`,
+      ...walletLines(input.wallet),
     ].join("\n"),
   );
 }
@@ -211,6 +272,262 @@ export function auditorKeyRequestAttestation(
   );
 }
 
+/** Mirrors Rust `AuthorityTransferAttestation::message`, one `payment:` line per payment in order. */
+export function authorityTransferAttestation(
+  input: Readonly<{
+    target: RingReadTarget;
+    delegate: Address;
+    transfer: AuthorityTransfer;
+    timestamp: bigint;
+    nonce: Bytes32;
+  }>,
+): Uint8Array {
+  return encoder.encode(
+    [
+      AUTHORITY_TRANSFER_DOMAIN,
+      ...targetLines(input.target),
+      `delegate: ${input.delegate}`,
+      `source: ${shieldedAddressText(input.transfer.source)}`,
+      `mint: ${input.transfer.mint}`,
+      ...input.transfer.payments.map(
+        (payment) => `payment: ${shieldedAddressText(payment.recipient)} ${payment.amount}`,
+      ),
+      `timestamp: ${input.timestamp}`,
+      `nonce: ${base64Decoder.decode(input.nonce)}`,
+    ].join("\n"),
+  );
+}
+
+/** Mirrors Rust `AuthorityTransferRequest`, the ring delegate signs it. */
+export class RingAuthorityTransferRequest {
+  readonly #target: RingReadTarget;
+  readonly #transfer: AuthorityTransfer;
+  #timestamp?: bigint;
+
+  private constructor(target: RingReadTarget, transfer: AuthorityTransfer) {
+    this.#target = checkedReadTarget(target);
+    this.#transfer = transfer;
+  }
+
+  static forTransfer(
+    target: RingReadTarget,
+    transfer: AuthorityTransfer,
+  ): RingAuthorityTransferRequest {
+    return new RingAuthorityTransferRequest(target, transfer);
+  }
+
+  /** Unix seconds, the RPC rejects a clock more than its skew away. */
+  at(timestamp: bigint): this {
+    this.#timestamp = checkedUnixTimestamp(timestamp, "timestamp");
+    return this;
+  }
+
+  async sign(delegate: MessagePartialSigner): Promise<PrepareAuthorityTransferRequest> {
+    const timestamp = timestampOrNow(this.#timestamp);
+    const nonce = freshNonce();
+    const signature = await signMessage(
+      delegate,
+      authorityTransferAttestation({
+        target: this.#target,
+        delegate: delegate.address,
+        transfer: this.#transfer,
+        timestamp,
+        nonce,
+      }),
+    );
+    return Object.freeze({
+      ring: this.#target.ringProgramId,
+      delegate: delegate.address,
+      transfer: this.#transfer,
+      timestamp,
+      nonce: base64Decoder.decode(nonce) as indexerTypes.Base64String,
+      signature: base58Decoder.decode(signature) as Signature,
+    });
+  }
+}
+
+/** Rust `ListEnrolments`, `RefuseEnrolment` or `CreateRecords`, the action the policy authority signs. */
+export type RingEnrolmentAction =
+  | Readonly<{ kind: "list"; cursor?: Hash }>
+  | Readonly<{ kind: "refuse"; updateId: Hash }>
+  | Readonly<{ kind: "createRecords" }>;
+
+/** Mirrors Rust `EnrolmentAttestation::message`. */
+export function enrolmentAttestation(
+  input: Readonly<{
+    target: RingReadTarget;
+    authority: Address;
+    action: RingEnrolmentAction;
+    timestamp: bigint;
+    nonce: Bytes32;
+  }>,
+): Uint8Array {
+  const action = enrolmentActionLine(input.action);
+  return encoder.encode(
+    [
+      ENROLMENT_DOMAIN,
+      ...targetLines(input.target),
+      `authority: ${input.authority}`,
+      `action: ${action}`,
+      `timestamp: ${input.timestamp}`,
+      `nonce: ${base64Decoder.decode(input.nonce)}`,
+    ].join("\n"),
+  );
+}
+
+function enrolmentActionLine(action: RingEnrolmentAction): string {
+  switch (action.kind) {
+    case "refuse":
+      return `refuse ${indexerScalars.checkedHash(action.updateId, "updateId")}`;
+    case "createRecords":
+      return "create records";
+    case "list":
+      return action.cursor === undefined
+        ? "list"
+        : `list after ${indexerScalars.checkedHash(action.cursor, "cursor")}`;
+  }
+}
+
+/** Rust `GetPendingEnrolmentsRequest::read` signed by the policy authority, the page after `cursor`. */
+export async function signPendingEnrolmentsRequest(
+  target: RingReadTarget,
+  authority: MessagePartialSigner,
+  cursor?: Hash,
+  timestamp?: bigint,
+): Promise<GetPendingEnrolmentsRequest> {
+  const checked = checkedReadTarget(target);
+  const action =
+    cursor === undefined ? { kind: "list" as const } : { kind: "list" as const, cursor };
+  return Object.freeze({
+    ring: checked.ringProgramId,
+    ...(cursor === undefined ? {} : { cursor }),
+    auth: await configAuthorityAuth(checked, authority, action, timestamp),
+  });
+}
+
+/** Rust `RefuseEnrolmentRequest::refusal` signed by the policy authority. */
+export async function signRefuseEnrolmentRequest(
+  target: RingReadTarget,
+  authority: MessagePartialSigner,
+  updateId: Hash,
+  timestamp?: bigint,
+): Promise<RefuseEnrolmentRequest> {
+  const checked = checkedReadTarget(target);
+  return Object.freeze({
+    ring: checked.ringProgramId,
+    updateId,
+    auth: await configAuthorityAuth(checked, authority, { kind: "refuse", updateId }, timestamp),
+  });
+}
+
+/** Rust `CreateRecordsRegistryRequest::create` signed by the policy authority, or the upgrade authority before `Initialize`. */
+export async function signCreateRecordsRegistryRequest(
+  target: RingReadTarget,
+  authority: MessagePartialSigner,
+  timestamp?: bigint,
+): Promise<CreateRecordsRegistryRequest> {
+  const checked = checkedReadTarget(target);
+  return Object.freeze({
+    ring: checked.ringProgramId,
+    auth: await configAuthorityAuth(checked, authority, { kind: "createRecords" }, timestamp),
+  });
+}
+
+async function configAuthorityAuth(
+  target: RingReadTarget,
+  authority: MessagePartialSigner,
+  action: RingEnrolmentAction,
+  timestamp: bigint | undefined,
+): Promise<ConfigAuthorityAuth> {
+  const signedAt = timestampOrNow(
+    timestamp === undefined ? undefined : checkedUnixTimestamp(timestamp, "timestamp"),
+  );
+  const nonce = freshNonce();
+  const signature = await signMessage(
+    authority,
+    enrolmentAttestation({
+      target,
+      authority: authority.address,
+      action,
+      timestamp: signedAt,
+      nonce,
+    }),
+  );
+  return Object.freeze({
+    authority: authority.address,
+    timestamp: signedAt,
+    nonce: base64Decoder.decode(nonce) as indexerTypes.Base64String,
+    signature: base58Decoder.decode(signature) as Signature,
+  });
+}
+
+/** Rust `ReaderGrantAttestation` without its target, a ring-wide grant names no `wallet`. */
+export interface RingReaderGrant {
+  readonly wallet?: Address;
+  readonly reader: ReaderKey;
+  readonly action: ReaderGrantAction;
+}
+
+/** Mirrors Rust `ReaderGrantAttestation::message`. */
+export function readerGrantAttestation(
+  input: RingReaderGrant & Readonly<{ target: RingReadTarget; timestamp: bigint; nonce: Bytes32 }>,
+): Uint8Array {
+  return encoder.encode(
+    [
+      READER_GRANT_DOMAIN,
+      ...targetLines(input.target),
+      ...walletLines(input.wallet),
+      `reader: ${base64Decoder.decode(readerKeyBytes(checkedReaderKey(input.reader)))}`,
+      `action: ${input.action}`,
+      `timestamp: ${input.timestamp}`,
+      `nonce: ${base64Decoder.decode(input.nonce)}`,
+    ].join("\n"),
+  );
+}
+
+/** Mirrors Rust `ReaderGrantRequest`, the service takes a ring-wide grant only from the ring's policy authority. */
+export class RingReaderGrantRequest {
+  readonly #target: RingReadTarget;
+  readonly #grant: RingReaderGrant;
+  #timestamp?: bigint;
+
+  private constructor(target: RingReadTarget, grant: RingReaderGrant) {
+    this.#target = checkedReadTarget(target);
+    if (grant.wallet !== undefined) addressBytes(grant.wallet, "wallet");
+    this.#grant = Object.freeze({ ...grant, reader: checkedReaderKey(grant.reader) });
+  }
+
+  static forGrant(target: RingReadTarget, grant: RingReaderGrant): RingReaderGrantRequest {
+    return new RingReaderGrantRequest(target, grant);
+  }
+
+  /** Unix seconds, the RPC rejects a clock more than its skew away. */
+  at(timestamp: bigint): this {
+    this.#timestamp = checkedUnixTimestamp(timestamp, "timestamp");
+    return this;
+  }
+
+  async sign(signer: MessagePartialSigner): Promise<SetReaderGrantRequest> {
+    const { wallet, reader, action } = this.#grant;
+    if (wallet !== undefined && signer.address !== wallet) throw invalidRequest("signer");
+    const timestamp = timestampOrNow(this.#timestamp);
+    const nonce = freshNonce();
+    const signature = await signMessage(
+      signer,
+      readerGrantAttestation({ target: this.#target, ...this.#grant, timestamp, nonce }),
+    );
+    return Object.freeze({
+      ring: this.#target.ringProgramId,
+      ...(wallet === undefined ? {} : { wallet }),
+      reader: base64Decoder.decode(readerKeyBytes(reader)) as indexerTypes.Base64String,
+      action,
+      timestamp,
+      nonce: base64Decoder.decode(nonce) as indexerTypes.Base64String,
+      signature: base58Decoder.decode(signature) as Signature,
+    });
+  }
+}
+
 export function messageSignerReader(signer: MessagePartialSigner): RingReadSigner {
   return Object.freeze({
     reader: readerKeyBytes(checkedReaderKey(signer.address)),
@@ -224,6 +541,8 @@ export interface SignedRingRead {
   readonly ringProgramId: Address;
   readonly cursor?: Uint8Array;
   readonly limit?: bigint;
+  /** Narrows the read to the wallet's rows. */
+  readonly wallet?: Address;
   readonly reader: Uint8Array;
   readonly timestamp: bigint;
   readonly nonce: Bytes32;
@@ -236,6 +555,7 @@ export class RingReadRequest {
   readonly #target: RingReadTarget;
   #cursor?: Uint8Array;
   #limit?: bigint;
+  #wallet?: Address;
   #timestamp?: bigint;
 
   private constructor(method: RingPagedRead, target: RingReadTarget) {
@@ -245,6 +565,10 @@ export class RingReadRequest {
 
   static decryptedTransactions(target: RingReadTarget): RingReadRequest {
     return new RingReadRequest("getDecryptedTransactions", target);
+  }
+
+  static walletActivity(target: RingReadTarget, wallet: Address): RingReadRequest {
+    return new RingReadRequest("getWalletActivity", target).withWallet(wallet);
   }
 
   static auditedMerges(target: RingReadTarget): RingReadRequest {
@@ -258,6 +582,12 @@ export class RingReadRequest {
 
   withLimit(limit: bigint): this {
     this.#limit = checkedReadLimit(limit);
+    return this;
+  }
+
+  withWallet(wallet: Address): this {
+    addressBytes(wallet, "wallet");
+    this.#wallet = wallet;
     return this;
   }
 
@@ -278,6 +608,7 @@ export class RingReadRequest {
         nonce,
         ...(this.#cursor === undefined ? {} : { cursor: this.#cursor }),
         ...(this.#limit === undefined ? {} : { limit: this.#limit }),
+        ...(this.#wallet === undefined ? {} : { wallet: this.#wallet }),
       }),
     );
     return Object.freeze({
@@ -285,6 +616,7 @@ export class RingReadRequest {
       ringProgramId: this.#target.ringProgramId,
       ...(this.#cursor === undefined ? {} : { cursor: this.#cursor }),
       ...(this.#limit === undefined ? {} : { limit: this.#limit }),
+      ...(this.#wallet === undefined ? {} : { wallet: this.#wallet }),
       reader: signer.reader,
       timestamp,
       nonce,
@@ -298,6 +630,8 @@ export interface SignedAuditedUtxosRead {
   readonly ringProgramId: Address;
   /** Answers come back in the same order. */
   readonly utxoHashes: readonly Bytes32[];
+  /** Narrows the read to the wallet's notes. */
+  readonly wallet?: Address;
   readonly reader: Uint8Array;
   readonly timestamp: bigint;
   readonly nonce: Bytes32;
@@ -308,6 +642,7 @@ export interface SignedAuditedUtxosRead {
 export class RingAuditedUtxosRequest {
   readonly #target: RingReadTarget;
   readonly #utxoHashes: readonly Bytes32[];
+  #wallet?: Address;
   #timestamp?: bigint;
 
   private constructor(target: RingReadTarget, utxoHashes: readonly Bytes32[]) {
@@ -317,6 +652,12 @@ export class RingAuditedUtxosRequest {
 
   static read(target: RingReadTarget, utxoHashes: readonly Bytes32[]): RingAuditedUtxosRequest {
     return new RingAuditedUtxosRequest(target, checkedUtxoHashes(utxoHashes));
+  }
+
+  withWallet(wallet: Address): this {
+    addressBytes(wallet, "wallet");
+    this.#wallet = wallet;
+    return this;
   }
 
   /** Unix seconds, the RPC rejects a clock more than its skew away. */
@@ -334,11 +675,13 @@ export class RingAuditedUtxosRequest {
         timestamp,
         nonce,
         utxoHashes: this.#utxoHashes,
+        ...(this.#wallet === undefined ? {} : { wallet: this.#wallet }),
       }),
     );
     return Object.freeze({
       ringProgramId: this.#target.ringProgramId,
       utxoHashes: this.#utxoHashes,
+      ...(this.#wallet === undefined ? {} : { wallet: this.#wallet }),
       reader: signer.reader,
       timestamp,
       nonce,
@@ -447,34 +790,15 @@ export interface RingActivation {
   readonly paused: boolean;
 }
 
-/** Mirrors Rust `RegistryStatus`, the registry's history, floor and queue as the chain holds them. */
-export interface RingRegistryStatus {
-  /** Entry `i` sits at history slot `i`, `undefined` for a slot never written. */
-  readonly history: readonly (RingRootEntry | undefined)[];
-  /** The history slot of the newest root. */
-  readonly historyCursor: number;
-  readonly nextIndex: number;
-  /** The applied position every own-ring root must reach. */
-  readonly floor: bigint;
-  readonly priorFloor: bigint;
-  /** The slot of the last floor raise. */
-  readonly floorSlot: bigint;
-  /** Queue positions `queueHead..queueTail` wait for an application. */
-  readonly queueHead: bigint;
-  readonly queueTail: bigint;
-}
-
 /** Mirrors Rust `RingStatusResponse`, unsigned and only what the chain publishes. */
 export interface RingStatus {
   readonly ringProgramId: Address;
   readonly state: RingState;
-  /** The key the ring's config names, absent until the config exists. */
+  /** The key the ring account names, absent before `Initialize`. */
   readonly configAuditorPublicKey?: X25519PublicKey;
   readonly servicePublicKey: Address;
   /** Absent until SPP holds a config for the ring. */
   readonly activation?: RingActivation;
-  /** Absent until the ring creates its member registry. */
-  readonly registry?: RingRegistryStatus;
 }
 
 /** Mirrors Rust `DecryptedOutputContext`, the tree is the canonical PDA of `treeId`. */
@@ -516,6 +840,8 @@ export interface DecryptedRingTransaction {
   /** One per published nullifier of an anonymous ring. */
   readonly inputs: readonly AuditedInput[];
   readonly nullifiers: readonly Bytes32[];
+  /** The input owners of a confidential transfer, by owner signature or in proof. */
+  readonly spenders: readonly Address[];
   /** Required signers, fee payer first. */
   readonly signers: readonly Address[];
   /** Empty when nothing left the ring. */
@@ -556,6 +882,36 @@ export interface DecryptedRingTransactionsPage {
   readonly blockTime: bigint;
   readonly items: readonly DecryptedRingTransaction[];
   readonly skipped: readonly SkippedRingTransaction[];
+  readonly cursor?: Uint8Array;
+}
+
+/** Mirrors Rust `WalletView`, the sender is the anonymous sender or a confidential spender. */
+export type RingWalletView =
+  | {
+      readonly role: "sender";
+      readonly inputs: readonly AuditedInput[];
+      readonly outputs: readonly DecryptedRingOutput[];
+      readonly payloadErrors: readonly OutputPayloadError[];
+      readonly withdrawals: readonly DecryptedRingWithdrawal[];
+    }
+  | {
+      readonly role: "recipient";
+      readonly outputs: readonly DecryptedRingOutput[];
+      readonly withdrawals: readonly DecryptedRingWithdrawal[];
+    };
+
+/** Mirrors Rust `WalletActivity`. */
+export interface RingWalletActivity {
+  readonly slot: bigint;
+  readonly signature: Signature;
+  readonly eventIndex: number;
+  readonly view: RingWalletView;
+}
+
+export interface RingWalletActivityPage {
+  readonly slot: bigint;
+  readonly blockTime: bigint;
+  readonly items: readonly RingWalletActivity[];
   readonly cursor?: Uint8Array;
 }
 
@@ -637,27 +993,36 @@ export class RingRpc {
     });
   }
 
-  /** Verified against `servicePubkey` before the key is returned. */
+  /** Verified under the pinned `servicePublicKey` before the key is returned. */
   async createAuditorKey(
     input: Readonly<{
       ringProgramId: Address;
       genesisHash: Bytes32;
-      /** The upgrade authority, or the config authority once the config exists. */
+      /** The upgrade authority, or the policy authority after `Initialize`. */
       authority: MessagePartialSigner;
+      /** Confirmed out of band, never read from the service. */
+      servicePublicKey: Address;
       timestamp?: bigint;
     }>,
     context?: RequestContext,
   ): Promise<RingAuditorKey> {
     let request = RingAuditorKeyRequest.forRing(input.ringProgramId, input.genesisHash);
     if (input.timestamp !== undefined) request = request.at(input.timestamp);
-    return this.createAuditorKeySigned(await request.sign(input.authority), context);
+    return this.createAuditorKeySigned(
+      await request.sign(input.authority),
+      input.servicePublicKey,
+      context,
+    );
   }
 
+  /** Refused unless the pinned `servicePublicKey` signed the answer. */
   async createAuditorKeySigned(
     request: SignedAuditorKeyRequest,
+    servicePublicKey: Address,
     context?: RequestContext,
   ): Promise<RingAuditorKey> {
     const checked = checkedSignedAuditorKeyRequest(request);
+    const pinned = requestAddress(servicePublicKey, "servicePublicKey");
     const wire = record(
       await this.#call(
         "createAuditorKey",
@@ -676,7 +1041,11 @@ export class RingRpc {
     const key = base64(wire["auditorPubkey"], "result.auditorPubkey");
     if (key.length !== 33) throw invalid("result.auditorPubkey");
     const auditorPublicKey = X25519PublicKey.fromBytes(key as Bytes33);
-    const servicePublicKey = address(wire["servicePubkey"], "result.servicePubkey");
+    if (address(wire["servicePubkey"], "result.servicePubkey") !== pinned) {
+      throw new RingError("RING_RPC", {
+        details: { method: "createAuditorKey", reason: "service key is not the pinned key" },
+      });
+    }
     const signature = base58(wire["signature"], "result.signature");
     const ring = address(wire["ringProgramId"], "result.ringProgramId");
     if (ring !== checked.ringProgramId) throw invalid("result.ringProgramId");
@@ -688,7 +1057,7 @@ export class RingRpc {
         auditorPublicKey,
         nonce: checked.nonce,
       }),
-      addressBytes(servicePublicKey, "servicePubkey"),
+      addressBytes(pinned, "servicePublicKey"),
     );
     if (!attested) {
       throw new RingError("RING_RPC", {
@@ -699,7 +1068,7 @@ export class RingRpc {
       ringProgramId: ring,
       auditorPublicKey,
       auditorViewTag: hash(wire["auditorViewTag"], "result.auditorViewTag"),
-      servicePublicKey,
+      servicePublicKey: pinned,
       signature,
     });
   }
@@ -709,7 +1078,11 @@ export class RingRpc {
    * `limit` counts signatures examined, so an empty page can still carry a cursor over older history.
    */
   async ringDeposits(
-    input: Readonly<{ ringProgramId: Address; limit?: number; cursor?: Uint8Array }>,
+    input: Readonly<{
+      ringProgramId: Address;
+      limit?: number;
+      cursor?: Uint8Array;
+    }>,
     context?: RequestContext,
   ): Promise<RingDepositsPage> {
     const wire = record(
@@ -759,7 +1132,6 @@ export class RingRpc {
     if (ring !== ringProgramId) throw invalid("result.ringProgramId");
     const config = wire["configAuditorPubkey"];
     const activation = wire["activation"];
-    const registry = wire["registry"];
     return Object.freeze({
       ringProgramId: ring,
       state,
@@ -768,8 +1140,85 @@ export class RingRpc {
         : { configAuditorPublicKey: x25519Key(config, "result.configAuditorPubkey") }),
       servicePublicKey: address(wire["servicePubkey"], "result.servicePubkey"),
       ...(absent(activation) ? {} : { activation: decodeActivation(activation) }),
-      ...(absent(registry) ? {} : { registry: decodeRegistryStatus(registry) }),
     });
+  }
+
+  /** Refused before sending unless the signature verifies, the service must answer the same id. */
+  async submitRecordUpdate(
+    request: SubmitRecordUpdateRequest,
+    context?: RequestContext,
+  ): Promise<Hash> {
+    const id = indexerScalars.hash(verifyRecordUpdate(request));
+    const wire = await this.#call(
+      RingRpcMethod.submitRecordUpdate,
+      encodeSubmitRecordUpdateRequest(request),
+      context,
+    );
+    if (decodeSubmitRecordUpdate(wire) !== id) throw invalid("result.updateId");
+    return id;
+  }
+
+  async getRecordUpdateStatus(
+    updateId: Hash,
+    context?: RequestContext,
+  ): Promise<RecordUpdateStatus> {
+    return decodeRecordUpdateStatus(
+      await this.#call(
+        RingRpcMethod.getRecordUpdateStatus,
+        encodeRecordUpdateStatusRequest(updateId),
+        context,
+      ),
+    );
+  }
+
+  /** One page of the enrolments that await the policy authority, oldest first. */
+  async getPendingEnrolments(
+    request: GetPendingEnrolmentsRequest,
+    context?: RequestContext,
+  ): Promise<PendingEnrolmentsPage> {
+    return decodePendingEnrolmentsPage(
+      await this.#call(
+        RingRpcMethod.getPendingEnrolments,
+        encodeGetPendingEnrolmentsRequest(request),
+        context,
+      ),
+    );
+  }
+
+  async refuseEnrolment(
+    request: RefuseEnrolmentRequest,
+    context?: RequestContext,
+  ): Promise<RecordUpdateStatus> {
+    return decodeRecordUpdateStatus(
+      await this.#call(
+        RingRpcMethod.refuseEnrolment,
+        encodeRefuseEnrolmentRequest(request),
+        context,
+      ),
+    );
+  }
+
+  /** Idempotent, the ring's records under the service's storage authority. */
+  async createRecordsRegistry(
+    request: CreateRecordsRegistryRequest,
+    context?: RequestContext,
+  ): Promise<RecordsRegistry> {
+    const records = decodeRecordsRegistry(
+      await this.#call(
+        RingRpcMethod.createRecordsRegistry,
+        encodeCreateRecordsRegistryRequest(request),
+        context,
+      ),
+    );
+    if (records.registry !== (await ringRecordsAddress(request.ring, records.storageAuthority))) {
+      throw new RingError("RING_RPC", {
+        details: {
+          method: RingRpcMethod.createRecordsRegistry,
+          reason: "registry is not the ring records under storageAuthority",
+        },
+      });
+    }
+    return records;
   }
 
   /** Each page is signed again, the attestation binds the nonce, the cursor and the time. */
@@ -790,17 +1239,38 @@ export class RingRpc {
     return this.readSigned(await request.sign(input.signer), context);
   }
 
+  /** The wallet's own part of each transaction it spends in or receives an output in. */
+  async getWalletActivity(
+    input: Readonly<{
+      target: RingReadTarget;
+      signer: RingReadSigner;
+      wallet: Address;
+      cursor?: Uint8Array;
+      limit?: bigint;
+      timestamp?: bigint;
+    }>,
+    context?: RequestContext,
+  ): Promise<RingWalletActivityPage> {
+    let request = RingReadRequest.walletActivity(input.target, input.wallet);
+    if (input.cursor !== undefined) request = request.withCursor(input.cursor);
+    if (input.limit !== undefined) request = request.withLimit(input.limit);
+    if (input.timestamp !== undefined) request = request.at(input.timestamp);
+    return this.readSignedWalletActivity(await request.sign(input.signer), context);
+  }
+
   /** The UTXOs the service opened, signed over the requested hashes. */
   async getAuditedUtxos(
     input: Readonly<{
       target: RingReadTarget;
       utxoHashes: readonly Bytes32[];
       signer: RingReadSigner;
+      wallet?: Address;
       timestamp?: bigint;
     }>,
     context?: RequestContext,
   ): Promise<RingAuditedUtxosPage> {
     let request = RingAuditedUtxosRequest.read(input.target, input.utxoHashes);
+    if (input.wallet !== undefined) request = request.withWallet(input.wallet);
     if (input.timestamp !== undefined) request = request.at(input.timestamp);
     return this.readSignedUtxos(await request.sign(input.signer), context);
   }
@@ -814,7 +1284,7 @@ export class RingRpc {
     const { utxoHashes, ...auth } = exactRequestRecord(
       read,
       SIGNED_UTXOS_FIELDS,
-      SIGNED_UTXOS_FIELDS,
+      SIGNED_UTXOS_REQUIRED_FIELDS,
       "request",
     );
     const hashes = checkedUtxoHashes(utxoHashes);
@@ -870,6 +1340,7 @@ export class RingRpc {
       signer: RingReadSigner;
       cursor?: Uint8Array;
       limit?: bigint;
+      wallet?: Address;
       timestamp?: bigint;
     }>,
     context?: RequestContext,
@@ -877,6 +1348,7 @@ export class RingRpc {
     let request = RingReadRequest.auditedMerges(input.target);
     if (input.cursor !== undefined) request = request.withCursor(input.cursor);
     if (input.limit !== undefined) request = request.withLimit(input.limit);
+    if (input.wallet !== undefined) request = request.withWallet(input.wallet);
     if (input.timestamp !== undefined) request = request.at(input.timestamp);
     return this.readSignedMerges(await request.sign(input.signer), context);
   }
@@ -983,6 +1455,82 @@ export class RingRpc {
     });
   }
 
+  async readSignedWalletActivity(
+    read: SignedRingRead,
+    context?: RequestContext,
+  ): Promise<RingWalletActivityPage> {
+    const checked = checkedSignedRead(read, "getWalletActivity");
+    const wire = record(
+      await this.#call("getWalletActivity", signedReadParams(checked), context),
+      "result",
+    );
+    const wireContext = record(wire["context"], "result.context");
+    const value = record(wire["value"], "result.value");
+    const cursor = readResponseCursor(value["cursor"], checked);
+    const items = list(value["items"], "result.value.items");
+    if (items.length > Number(checked.limit ?? RING_READ_PAGE_LIMIT)) throw invalid("result.value");
+    return Object.freeze({
+      slot: integer(wireContext["slot"], "result.context.slot"),
+      blockTime: signedInteger(wireContext["blockTime"], "result.context.blockTime"),
+      items: Object.freeze(
+        items.map((item, index) =>
+          decodeWalletActivity(record(item, `result.value.items[${index}]`)),
+        ),
+      ),
+      ...(cursor === undefined ? {} : { cursor }),
+    });
+  }
+
+  async getRelayQuote(request: RelayQuoteRequest, context?: RequestContext): Promise<RelayQuote> {
+    return decodeRelayQuote(
+      await this.#call(RingRpcMethod.getRelayQuote, encodeRelayQuoteRequest(request), context),
+    );
+  }
+
+  async prepareRelay(request: PrepareRelayRequest, context?: RequestContext): Promise<RelayStep> {
+    return decodeRelayStep(
+      await this.#call(RingRpcMethod.prepareRelay, encodePrepareRelayRequest(request), context),
+    );
+  }
+
+  async prepareAuthorityTransfer(
+    request: PrepareAuthorityTransferRequest,
+    context?: RequestContext,
+  ): Promise<RelayStep> {
+    return decodeRelayStep(
+      await this.#call(
+        RingRpcMethod.prepareAuthorityTransfer,
+        encodePrepareAuthorityTransferRequest(request),
+        context,
+      ),
+    );
+  }
+
+  async submitRelay(request: SubmitRelayRequest, context?: RequestContext): Promise<RelayStatus> {
+    return decodeRelayStatus(
+      await this.#call(RingRpcMethod.submitRelay, encodeSubmitRelayRequest(request), context),
+    );
+  }
+
+  async getRelayStatus(
+    relayId: RelayStep["relayId"],
+    context?: RequestContext,
+  ): Promise<RelayStatus> {
+    return decodeRelayStatus(
+      await this.#call(RingRpcMethod.getRelayStatus, encodeRelayStatusRequest(relayId), context),
+    );
+  }
+
+  /** A request from `RingReaderGrantRequest.sign`, answered with the action the service now holds. */
+  async setReaderGrant(
+    request: SetReaderGrantRequest,
+    context?: RequestContext,
+  ): Promise<ReaderGrantAction> {
+    return decodeReaderGrantAction(
+      await this.#call(RingRpcMethod.setReaderGrant, encodeSetReaderGrantRequest(request), context),
+    );
+  }
+
   // `params` is the request object, not a positional list.
   async #call(
     method: string,
@@ -1004,6 +1552,17 @@ export class RingRpc {
       );
     } catch (error) {
       if (!(error instanceof TransportFailure)) throw error;
+      const refusal = error.kind === "rpc" ? ringRpcRefusalName(error.facts["rpcCode"]) : undefined;
+      if (refusal !== undefined)
+        throw new RingError("RING_RPC_REFUSED", { details: { method, refusal, ...error.facts } });
+      const status = error.kind === "http" ? error.facts["status"] : undefined;
+      // Ring RPC answers -32250 to -32253 with 429 and -32254 with 401.
+      if (status === 429)
+        throw new RingError("RING_RPC_RATE_LIMITED", { details: { method, ...error.facts } });
+      if (status === 401)
+        throw new RingError("RING_RPC_CONFIG", {
+          details: { method, field: "apiKey", ...error.facts },
+        });
       const code =
         error.kind === "envelope" || error.kind === "missingResult" || error.kind === "rpc"
           ? "RING_RPC"
@@ -1044,6 +1603,7 @@ function signedReadParams(
     ringProgramId: checked.ringProgramId,
     ...(checked.cursor === undefined ? {} : { cursor: base64Decoder.decode(checked.cursor) }),
     ...(checked.limit === undefined ? {} : { limit: Number(checked.limit) }),
+    ...(checked.wallet === undefined ? {} : { wallet: checked.wallet }),
     auth: {
       reader: base64Decoder.decode(checked.reader),
       ...authWire({
@@ -1113,16 +1673,8 @@ export async function signMessage(
 
 /** Structure only, the openings stay as the service rebuilt them. */
 function decodeTransaction(wire: Record<string, unknown>): DecryptedRingTransaction {
-  const outputs = list(wire["outputs"], "outputs").map((entry, index) =>
-    decodeOutput(record(entry, `outputs[${index}]`), `outputs[${index}]`),
-  );
-  const payloadErrors = list(wire["payloadErrors"], "payloadErrors").map((entry, index) => {
-    const error = record(entry, `payloadErrors[${index}]`);
-    return Object.freeze({
-      slotIndex: u32(error["slotIndex"], `payloadErrors[${index}].slotIndex`),
-      kind: payloadErrorKind(error["kind"], `payloadErrors[${index}].kind`),
-    });
-  });
+  const outputs = decodeOutputs(wire["outputs"]);
+  const payloadErrors = decodePayloadErrors(wire["payloadErrors"]);
   checkSlotCoverage([
     ...outputs.map((output) => output.slotIndex),
     ...payloadErrors.map((error) => error.slotIndex),
@@ -1160,29 +1712,101 @@ function decodeTransaction(wire: Record<string, unknown>): DecryptedRingTransact
     signature: signature(wire["txSignature"], "txSignature"),
     eventIndex: u16(wire["eventIndex"], "eventIndex"),
     txViewingPublicKey: x25519Key(wire["txViewingPk"], "txViewingPk"),
-    outputs: Object.freeze(outputs),
-    payloadErrors: Object.freeze(payloadErrors),
+    outputs,
+    payloadErrors,
     ...(sender === undefined ? {} : { sender }),
     inputs: Object.freeze(inputs),
     nullifiers: Object.freeze(nullifiers),
+    spenders: Object.freeze(
+      absent(wire["spenders"])
+        ? []
+        : list(wire["spenders"], "spenders").map((key, index) =>
+            address(key, `spenders[${index}]`),
+          ),
+    ),
     signers: Object.freeze(
       list(wire["signers"], "signers").map((key, index) => address(key, `signers[${index}]`)),
     ),
-    withdrawals: Object.freeze(
-      list(wire["withdrawals"], "withdrawals").map((entry, index) => {
-        const path = `withdrawals[${index}]`;
-        const leg = record(entry, path);
-        return Object.freeze({
-          ...(leg["screenedOwner"] === undefined
-            ? {}
-            : { screenedOwner: address(leg["screenedOwner"], `${path}.screenedOwner`) }),
-          recipient: address(leg["recipient"], `${path}.recipient`),
-          asset: address(leg["asset"], `${path}.asset`),
-          amount: u64(leg["amount"], `${path}.amount`),
-        });
-      }),
-    ),
+    withdrawals: decodeWithdrawals(wire["withdrawals"]),
   });
+}
+
+function decodeWalletActivity(wire: Record<string, unknown>): RingWalletActivity {
+  const view = record(wire["view"], "view");
+  const outputs = decodeOutputs(view["outputs"], "view.outputs");
+  const withdrawals = decodeWithdrawals(view["withdrawals"], "view.withdrawals");
+  let decoded: RingWalletView;
+  if (view["role"] === "sender") {
+    const payloadErrors = decodePayloadErrors(view["payloadErrors"], "view.payloadErrors");
+    checkSlotCoverage([
+      ...outputs.map((output) => output.slotIndex),
+      ...payloadErrors.map((error) => error.slotIndex),
+    ]);
+    decoded = Object.freeze({
+      role: "sender",
+      inputs: Object.freeze(
+        list(view["inputs"], "view.inputs").map((entry, index) =>
+          decodeInput(record(entry, `view.inputs[${index}]`), `view.inputs[${index}]`),
+        ),
+      ),
+      outputs,
+      payloadErrors,
+      withdrawals,
+    });
+  } else if (view["role"] === "recipient" && outputs.length > 0) {
+    decoded = Object.freeze({ role: "recipient", outputs, withdrawals });
+  } else {
+    throw invalid("view.role");
+  }
+  return Object.freeze({
+    slot: integer(wire["slot"], "slot"),
+    signature: signature(wire["txSignature"], "txSignature"),
+    eventIndex: u16(wire["eventIndex"], "eventIndex"),
+    view: decoded,
+  });
+}
+
+function decodeOutputs(value: unknown, path = "outputs"): readonly DecryptedRingOutput[] {
+  return Object.freeze(
+    list(value, path).map((entry, index) =>
+      decodeOutput(record(entry, `${path}[${index}]`), `${path}[${index}]`),
+    ),
+  );
+}
+
+function decodePayloadErrors(
+  value: unknown,
+  path = "payloadErrors",
+): readonly OutputPayloadError[] {
+  return Object.freeze(
+    list(value, path).map((entry, index) => {
+      const error = record(entry, `${path}[${index}]`);
+      return Object.freeze({
+        slotIndex: u32(error["slotIndex"], `${path}[${index}].slotIndex`),
+        kind: payloadErrorKind(error["kind"], `${path}[${index}].kind`),
+      });
+    }),
+  );
+}
+
+function decodeWithdrawals(
+  value: unknown,
+  path = "withdrawals",
+): readonly DecryptedRingWithdrawal[] {
+  return Object.freeze(
+    list(value, path).map((entry, index) => {
+      const legPath = `${path}[${index}]`;
+      const leg = record(entry, legPath);
+      return Object.freeze({
+        ...(leg["screenedOwner"] === undefined
+          ? {}
+          : { screenedOwner: address(leg["screenedOwner"], `${legPath}.screenedOwner`) }),
+        recipient: address(leg["recipient"], `${legPath}.recipient`),
+        asset: address(leg["asset"], `${legPath}.asset`),
+        amount: u64(leg["amount"], `${legPath}.amount`),
+      });
+    }),
+  );
 }
 
 /** Rust `TransactionAudit` records every published slot as an output or as one payload error. */
@@ -1374,38 +1998,6 @@ function decodeActivation(value: unknown): RingActivation {
   return Object.freeze({ activated: flag("activated"), paused: flag("paused") });
 }
 
-function decodeRegistryStatus(value: unknown): RingRegistryStatus {
-  const wire = record(value, "result.registry");
-  const history = list(wire["history"], "result.registry.history");
-  if (history.length !== MEMBER_REGISTRY_ROOT_HISTORY) throw invalid("result.registry.history");
-  const historyCursor = u32(wire["historyCursor"], "result.registry.historyCursor");
-  const queueHead = u64(wire["queueHead"], "result.registry.queueHead");
-  const queueTail = u64(wire["queueTail"], "result.registry.queueTail");
-  if (historyCursor >= MEMBER_REGISTRY_ROOT_HISTORY || queueHead > queueTail)
-    throw invalid("result.registry");
-  return Object.freeze({
-    history: Object.freeze(
-      history.map((entry, index) => {
-        if (entry === null) return undefined;
-        const path = `result.registry.history[${index}]`;
-        const root = record(entry, path);
-        return Object.freeze({
-          root: hash(root["root"], `${path}.root`),
-          applied: u64(root["applied"], `${path}.applied`),
-          slot: u64(root["slot"], `${path}.slot`),
-        });
-      }),
-    ),
-    historyCursor,
-    nextIndex: u32(wire["nextIndex"], "result.registry.nextIndex"),
-    floor: u64(wire["floor"], "result.registry.floor"),
-    priorFloor: u64(wire["priorFloor"], "result.registry.priorFloor"),
-    floorSlot: u64(wire["floorSlot"], "result.registry.floorSlot"),
-    queueHead,
-    queueTail,
-  });
-}
-
 function absent(value: unknown): boolean {
   return value === undefined || value === null;
 }
@@ -1522,6 +2114,7 @@ const SIGNED_READ_FIELDS = new Set([
   "ringProgramId",
   "cursor",
   "limit",
+  "wallet",
   "reader",
   "timestamp",
   "nonce",
@@ -1535,7 +2128,7 @@ const SIGNED_READ_REQUIRED_FIELDS = new Set([
   "nonce",
   "signature",
 ]);
-const SIGNED_UTXOS_FIELDS = new Set([
+const SIGNED_UTXOS_REQUIRED_FIELDS = new Set([
   "ringProgramId",
   "utxoHashes",
   "reader",
@@ -1543,6 +2136,7 @@ const SIGNED_UTXOS_FIELDS = new Set([
   "nonce",
   "signature",
 ]);
+const SIGNED_UTXOS_FIELDS = new Set([...SIGNED_UTXOS_REQUIRED_FIELDS, "wallet"]);
 const WEBAUTHN_FIELDS = new Set(["signature", "authenticatorData", "clientDataJSON"]);
 const SIGNED_AUDITOR_FIELDS = new Set([
   "ringProgramId",
@@ -1577,6 +2171,12 @@ function checkedSignedRead(value: unknown, method: RingPagedRead): SignedRingRea
     "request",
   );
   if (read["method"] !== method) throw invalidRequest("method");
+  // Rust `ReadScope`, a full transaction page is ring wide and wallet activity names its wallet.
+  if (
+    method !== "getAuditedMerges" &&
+    (method === "getWalletActivity") !== (read["wallet"] !== undefined)
+  )
+    throw invalidRequest("wallet");
   const cursor = read["cursor"] === undefined ? undefined : checkedReadCursor(read["cursor"]);
   const limit = read["limit"] === undefined ? undefined : checkedReadLimit(read["limit"]);
   return Object.freeze({
@@ -1591,6 +2191,8 @@ type ReadAuth = Omit<SignedRingRead, "method" | "cursor" | "limit">;
 
 function checkedReadAuth(read: Readonly<Record<string, unknown>>): ReadAuth {
   const ringProgramId = requestAddress(read["ringProgramId"], "ringProgramId");
+  const wallet =
+    read["wallet"] === undefined ? {} : { wallet: requestAddress(read["wallet"], "wallet") };
   const reader = checkedReaderBytes(read["reader"]);
   const nonce = requestBytes(read["nonce"], 32, "nonce") as Bytes32;
   const timestamp = checkedUnixTimestamp(read["timestamp"], "timestamp");
@@ -1598,6 +2200,7 @@ function checkedReadAuth(read: Readonly<Record<string, unknown>>): ReadAuth {
   if (signature instanceof Uint8Array) {
     return Object.freeze({
       ringProgramId,
+      ...wallet,
       reader,
       nonce,
       timestamp,
@@ -1618,6 +2221,7 @@ function checkedReadAuth(read: Readonly<Record<string, unknown>>): ReadAuth {
   }
   return Object.freeze({
     ringProgramId,
+    ...wallet,
     reader,
     nonce,
     timestamp,

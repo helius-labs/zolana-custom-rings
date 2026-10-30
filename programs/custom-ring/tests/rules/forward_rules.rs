@@ -2,11 +2,10 @@
 
 use bytemuck::Zeroable;
 use custom_ring_interface::{
-    merge_disclosure_field_count, tag, AuditedDepositPrefix, CoSignScope, CustomRingError,
-    CustomRingMergeIxData, MemberRegistry, MergeDisclosure, RingDepositAuditCapsule,
-    AUDIT_CIPHERTEXT_LEN, MAX_RING_DEPOSIT_AUDIT_SLOTS, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN,
-    RING_DEPOSIT_DEPOSITOR_INDEX, RING_DEPOSIT_RING_CONFIG_INDEX, RING_MERGE_PAYER_INDEX,
-    RING_MERGE_RING_CONFIG_INDEX,
+    merge_disclosure_field_count, tag, CoSignScope, CustomRingError, CustomRingMergeIxData,
+    DepositPrefix, MergeDisclosure, RingDepositAuditCapsule, RootRead, AUDIT_CIPHERTEXT_LEN,
+    MAX_RING_DEPOSIT_AUDIT_SLOTS, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN, RING_DEPOSIT_DEPOSITOR_INDEX,
+    RING_DEPOSIT_RING_CONFIG_INDEX, RING_MERGE_PAYER_INDEX, RING_MERGE_RING_CONFIG_INDEX,
 };
 use solana_address::Address;
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
@@ -19,19 +18,18 @@ use spr_interface::instruction::instruction_data::{
 
 use crate::{
     common::{
-        auditor_pubkey, config_pda, delegate_ring, floored, off_curve_g2, on_curve_g2,
-        reaches_verification, refused, registry_pda, ring_auth, set_co_signer, Ring, Sent, Setup,
-        PROGRAM, SYSTEM,
+        auditor_pubkey, delegate_ring, off_curve_g2, on_curve_g2, policy_pda, reaches_verification,
+        refused, ring_auth, set_co_signer, CoSignerSlot, Ring, Sent, Setup, PROGRAM, SYSTEM,
     },
     transact_rules::SPP,
 };
 
-/// A merge of `inputs` notes, `registry` the own root index a non-anonymous ring binds.
-pub fn merge_data(registry: Option<u8>, inputs: usize) -> CustomRingMergeIxData {
+/// A merge of `inputs` notes, `registry` the own revision a key escrow ring binds.
+pub fn merge_data(registry: Option<u64>, inputs: usize) -> CustomRingMergeIxData {
     CustomRingMergeIxData {
-        registry_root_index: registry.unwrap_or_default(),
+        own_revision: registry.unwrap_or_default().into(),
         output_ring_data_hash: [8; 32],
-        disclosure: None,
+        disclosure: merge_disclosure(inputs),
         merge: MergeTransactIxData {
             expiry_unix_ts: 1_800_000_000,
             proof: MergeProof {
@@ -52,7 +50,7 @@ pub fn merge_data(registry: Option<u8>, inputs: usize) -> CustomRingMergeIxData 
     }
 }
 
-/// The disclosure an anonymous merge of `inputs` notes carries, its field count the width's.
+/// The disclosure a merge of `inputs` notes carries, its field count the width's.
 pub fn merge_disclosure(inputs: usize) -> MergeDisclosure {
     let width = merge_circuit_width(inputs).expect("a merge width");
     MergeDisclosure {
@@ -63,26 +61,19 @@ pub fn merge_disclosure(inputs: usize) -> MergeDisclosure {
     }
 }
 
-/// `registry` the own root index a non-anonymous ring binds, the registry follows the config.
-fn merge_instruction(ring: &Ring, registry: Option<u8>) -> Instruction {
-    merge_instruction_with(ring, registry, &merge_data(registry, 8))
+fn merge_instruction(ring: &Ring, registry: Option<u64>) -> Instruction {
+    merge_instruction_with(ring, &merge_data(registry, 8))
 }
 
-/// The forwarded list follows the config and, with `registry`, the registry.
-pub fn merge_instruction_with(
-    ring: &Ring,
-    registry: Option<u8>,
-    data: &CustomRingMergeIxData,
-) -> Instruction {
+/// The forwarded list follows the ring account.
+pub fn merge_instruction_with(ring: &Ring, data: &CustomRingMergeIxData) -> Instruction {
     let mut spp: Vec<AccountMeta> = (0..RING_MERGE_PAYER_INDEX)
         .map(|_| AccountMeta::new(Address::new_unique(), false))
         .collect();
     spp[RING_MERGE_RING_CONFIG_INDEX] = AccountMeta::new(ring_auth(), false);
     spp.push(AccountMeta::new(ring.payer.pubkey(), true));
-    let mut accounts = vec![AccountMeta::new_readonly(config_pda(), false)];
-    if registry.is_some() {
-        accounts.push(AccountMeta::new_readonly(registry_pda(), false));
-    }
+    let mut accounts = vec![AccountMeta::new_readonly(policy_pda(), false)];
+    accounts.extend(ring.registries(RootRead::merge(&ring.read(&policy_pda())).unwrap()));
     accounts.extend(spp);
     Instruction {
         program_id: PROGRAM,
@@ -91,29 +82,40 @@ pub fn merge_instruction_with(
     }
 }
 
-fn merge(ring: &mut Ring, registry: Option<u8>) -> Sent {
+fn merge(ring: &mut Ring, registry: Option<u64>) -> Sent {
     let instruction = merge_instruction(ring, registry);
     ring.send(instruction, &[])
 }
 
 #[test]
-fn a_merge_root_below_the_own_floor_is_refused() {
-    let mut ring = Ring::new(Setup::AuditOnly);
-    let base: MemberRegistry = ring.read(&registry_pda());
-    ring.write(&registry_pda(), &floored(&base, 4, 5));
-    refused(merge(&mut ring, Some(1)), CustomRingError::RootBelowFloor);
-    ring.write(&registry_pda(), &floored(&base, 4, 4));
-    // Every account check passes, the escrow-mode merge stops at its ring merge proof.
-    refused(
-        merge(&mut ring, Some(1)),
-        CustomRingError::EscrowMergeUnverified,
-    );
+fn an_escrow_merge_revision_its_registry_does_not_serve_is_refused() {
+    let mut ring = delegate_ring(&Keypair::new());
+    refused(merge(&mut ring, Some(1)), CustomRingError::RootNotServed);
+    reaches_verification(merge(&mut ring, Some(0)));
+}
+
+#[test]
+fn a_merge_outside_key_escrow_binds_no_root() {
+    for setup in [Setup::AuditOnly, Setup::Policy, Setup::Anonymous] {
+        let mut ring = Ring::new(setup);
+        let mut data = merge_data(Some(1), 8);
+        data.output_ring_data_hash = [0; 32];
+        let instruction = merge_instruction_with(&ring, &data);
+        refused(
+            ring.send(instruction, &[]),
+            CustomRingError::UnexpectedMemberRegistryRoot,
+        );
+        let mut data = merge_data(None, 8);
+        data.output_ring_data_hash = [0; 32];
+        let instruction = merge_instruction_with(&ring, &data);
+        reaches_verification(ring.send(instruction, &[]));
+    }
 }
 
 #[test]
 fn a_merge_proof_point_off_the_curve_is_refused_before_the_forward() {
     let mut ring = Ring::new(Setup::AuditOnly);
-    let mut instruction = merge_instruction(&ring, Some(0));
+    let mut instruction = merge_instruction(&ring, None);
     let compressed = alt_bn128_g2_compress_be(&on_curve_g2()).unwrap();
     let at = instruction
         .data
@@ -124,19 +126,6 @@ fn a_merge_proof_point_off_the_curve_is_refused_before_the_forward() {
     refused(
         ring.send(instruction, &[]),
         CustomRingError::InvalidSppProofPoint,
-    );
-}
-
-#[test]
-fn an_anonymous_merge_carries_its_disclosure() {
-    let mut ring = Ring::new(Setup::Anonymous);
-    refused(
-        merge(&mut ring, None),
-        CustomRingError::MissingMergeDisclosure,
-    );
-    refused(
-        merge(&mut ring, Some(1)),
-        CustomRingError::UnexpectedMemberRegistryRoot,
     );
 }
 
@@ -173,25 +162,26 @@ pub fn ring_deposit() -> RingDepositIxData {
     deposit_of(vec![deposit_entry(0, &auditor_pubkey())])
 }
 
-/// `registry` the root index a Registry-mode ring binds, the registry account follows the config.
-fn audited_deposit(ring: &mut Ring, registry: Option<u8>) -> Sent {
+/// `registry` the own revision an escrow-mode ring binds.
+fn audited_deposit(ring: &mut Ring, registry: Option<u64>) -> Sent {
     let instruction = deposit_instruction(ring, registry, &ring_deposit());
     ring.send(instruction, &[])
 }
 
 pub fn deposit_instruction(
     ring: &Ring,
-    registry: Option<u8>,
+    registry: Option<u64>,
     deposit: &RingDepositIxData,
 ) -> Instruction {
-    let prefix = AuditedDepositPrefix {
-        tag: tag::AUDITED_DEPOSIT,
+    let prefix = DepositPrefix {
+        tag: tag::DEPOSIT,
         proof: Zeroable::zeroed(),
-        registry_root_index: registry.unwrap_or_default(),
+        own_revision: registry.unwrap_or_default().into(),
+        curator_revision: Default::default(),
     };
     let data = [
         bytemuck::bytes_of(&prefix),
-        &[tag::DEPOSIT],
+        &[spr_interface::instruction::tag::RING_DEPOSIT],
         &deposit.serialize().unwrap(),
     ]
     .concat();
@@ -205,10 +195,8 @@ pub fn deposit_instruction(
         AccountMeta::new_readonly(SYSTEM, false),
         AccountMeta::new(Address::new_unique(), false),
     ]);
-    let mut accounts = vec![AccountMeta::new_readonly(config_pda(), false)];
-    if registry.is_some() {
-        accounts.push(AccountMeta::new_readonly(registry_pda(), false));
-    }
+    let mut accounts = vec![AccountMeta::new_readonly(policy_pda(), false)];
+    accounts.extend(ring.registries(RootRead::deposit(&ring.read(&policy_pda())).unwrap()));
     accounts.extend(spp);
     Instruction {
         program_id: PROGRAM,
@@ -218,25 +206,21 @@ pub fn deposit_instruction(
 }
 
 #[test]
-fn an_escrowing_deposit_root_below_the_own_floor_is_refused() {
+fn an_escrowing_deposit_revision_its_registry_does_not_serve_is_refused() {
     let mut ring = delegate_ring(&Keypair::new());
-    let base: MemberRegistry = ring.read(&registry_pda());
-    ring.write(&registry_pda(), &floored(&base, 4, 5));
     refused(
         audited_deposit(&mut ring, Some(1)),
-        CustomRingError::RootBelowFloor,
+        CustomRingError::RootNotServed,
     );
-    ring.write(&registry_pda(), &floored(&base, 4, 4));
-    reaches_verification(audited_deposit(&mut ring, Some(1)));
+    reaches_verification(audited_deposit(&mut ring, Some(0)));
 }
 
 #[test]
 fn a_merge_and_a_deposit_carry_the_co_signer_their_class_demands() {
     let co_signer = Keypair::new();
     let with_co_signer = |mut instruction: Instruction, slot: usize| {
-        instruction
-            .accounts
-            .insert(slot, AccountMeta::new_readonly(co_signer.pubkey(), true));
+        let pair = CoSignerSlot::own(co_signer.pubkey()).signed();
+        instruction.accounts.splice(slot..slot, pair);
         instruction
     };
     let mut ring = Ring::new(Setup::AuditOnly);
@@ -245,20 +229,17 @@ fn a_merge_and_a_deposit_carry_the_co_signer_their_class_demands() {
         &co_signer.pubkey(),
         CoSignScope::TRANSFERS.bits(),
     );
-    let merge = merge_instruction(&ring, Some(0));
+    let merge = merge_instruction(&ring, None);
     refused(
         ring.send(merge.clone(), &[]),
-        CustomRingError::MissingCoSigner,
+        CustomRingError::InvalidCoSignerRecord,
     );
-    refused(
-        ring.send(with_co_signer(merge, MERGE_SPP), &[&co_signer]),
-        CustomRingError::EscrowMergeUnverified,
-    );
+    reaches_verification(ring.send(with_co_signer(merge, MERGE_SPP), &[&co_signer]));
     set_co_signer(&mut ring, &co_signer.pubkey(), CoSignScope::DEPOSITS.bits());
     let deposit = deposit_instruction(&ring, None, &ring_deposit());
     refused(
         ring.send(deposit.clone(), &[]),
-        CustomRingError::MissingCoSigner,
+        CustomRingError::InvalidCoSignerRecord,
     );
     reaches_verification(ring.send(with_co_signer(deposit, DEPOSIT_SPP), &[&co_signer]));
 }
@@ -272,7 +253,7 @@ fn an_audited_deposit_without_a_bound_root_reaches_its_proof() {
 #[test]
 fn a_merge_naming_the_ring_pda_past_its_slot_is_refused() {
     let mut ring = Ring::new(Setup::AuditOnly);
-    let mut instruction = merge_instruction(&ring, Some(0));
+    let mut instruction = merge_instruction(&ring, None);
     instruction
         .accounts
         .push(AccountMeta::new(ring_auth(), false));
@@ -282,9 +263,9 @@ fn a_merge_naming_the_ring_pda_past_its_slot_is_refused() {
     );
 }
 
-/// The merge's forwarded list starts after the config and the registry.
-const MERGE_SPP: usize = 2;
-/// The deposit's forwarded list starts after the config.
+/// The merge's forwarded list starts after the ring account.
+const MERGE_SPP: usize = 1;
+/// The deposit's forwarded list starts after the ring account.
 const DEPOSIT_SPP: usize = 1;
 
 #[test]
@@ -300,46 +281,31 @@ fn a_merge_forward_holds_the_ring_pda_a_signing_payer_and_a_written_root() {
             CustomRingError::MissingFundingSigner,
         ),
     ] {
-        let mut instruction = merge_instruction(&ring, Some(0));
+        let mut instruction = merge_instruction(&ring, None);
         instruction.accounts[MERGE_SPP + index] = AccountMeta::new(Address::new_unique(), false);
         refused(ring.send(instruction, &[]), error);
     }
-    refused(merge(&mut ring, Some(5)), CustomRingError::RootIndexEmpty);
-}
-
-#[test]
-fn a_non_anonymous_merge_carries_no_disclosure() {
-    let mut ring = Ring::new(Setup::AuditOnly);
-    let mut data = merge_data(Some(0), 8);
-    data.disclosure = Some(merge_disclosure(8));
-    let instruction = merge_instruction_with(&ring, Some(0), &data);
-    refused(
-        ring.send(instruction, &[]),
-        CustomRingError::InvalidMergeDisclosure,
-    );
 }
 
 #[test]
 fn a_forward_past_the_cpi_account_cap_is_refused() {
     let mut ring = Ring::new(Setup::AuditOnly);
     ring.deploy_stand_in(SPP);
-    let mut instruction = merge_instruction(&ring, Some(0));
+    let mut instruction = merge_instruction(&ring, None);
     instruction.accounts.extend(std::iter::repeat_n(
         AccountMeta::new_readonly(SPP, false),
         128,
     ));
-    // The escrow-mode merge proof precedes the forward, the cap holds the forward alone.
-    refused(
-        ring.send(instruction, &[]),
-        CustomRingError::EscrowMergeUnverified,
-    );
+    // The merge proof precedes the forward, the cap holds the forward alone.
+    reaches_verification(ring.send(instruction, &[]));
 }
 
 #[test]
 fn an_audited_deposit_forwards_deposit_data_its_capsules_open() {
     let mut ring = Ring::new(Setup::AuditOnly);
     let mut untagged = deposit_instruction(&ring, None, &ring_deposit());
-    untagged.data[core::mem::size_of::<AuditedDepositPrefix>()] = tag::DEPOSIT.wrapping_add(1);
+    untagged.data[core::mem::size_of::<DepositPrefix>()] =
+        spr_interface::instruction::tag::RING_DEPOSIT.wrapping_add(1);
     refused(
         ring.send(untagged, &[]),
         CustomRingError::InvalidAuditedDeposit,

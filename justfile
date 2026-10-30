@@ -22,7 +22,10 @@ localnet-ring-indexer-url := env_var_or_default("ZOLANA_LOCALNET_RING_INDEXER_UR
 localnet-prover-url := env_var_or_default("ZOLANA_PROVER_URL", "http://127.0.0.1:" + localnet-prover-port)
 photon-bin := env_var_or_default("ZOLANA_PHOTON_BIN", "target/debug/photon")
 export RING_INDEXER_BIN := env_var_or_default("RING_INDEXER_BIN", justfile_directory() / "target/debug/ring-indexer")
-spp-keys-dir := env_var_or_default("ZOLANA_SPP_KEYS_DIR", "zolana/prover/server/proving-keys")
+# join keeps an absolute ZOLANA_SPP_KEYS_DIR as given.
+spp-keys-dir := join(justfile_directory(), env_var_or_default("ZOLANA_SPP_KEYS_DIR", "zolana/prover/server/proving-keys"))
+# Nonempty serves the TS live ring rpc with the relay, its fee payer funded from the faucet.
+ts-live-relay := env_var_or_default("RING_TS_RELAY", "")
 ring-keys-lock := "prover/ring/proving-keys.lock"
 custom-ring-keys := `python3 -c "import json;print(' '.join(sorted(json.load(open('prover/ring/proving-keys.lock'))['keys'])))"`
 
@@ -32,6 +35,8 @@ export PROVER_INDEXER_URL := localnet-ring-indexer-url
 # Any genesis address works, the shared ring binary serves it.
 export CUSTOM_RING_PROGRAM_ID := env_var_or_default("CUSTOM_RING_PROGRAM_ID", "9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh")
 export PROVER_BIN := justfile_directory() / "target/prover-server"
+# Mirrored by GENESIS_PROGRAMS in cli/src/commands/ring/localnet.rs.
+ring-genesis-programs := "--sbf-program 6cGXszer5keoaWm8Co5G9f4KGBThuGz4NsKTqYij1emg target/deploy/storage_program.so"
 sdk-lib-crates := "zolana-ring-client zolana-ring-indexer zolana-ring-transaction zolana-ring-rpc custom-ring-sdk custom-ring-cli custom-ring-interface zolana-ring-policy zolana-ring-member-registry"
 
 default:
@@ -52,17 +57,17 @@ build-spp-programs:
             --manifest-path "programs/$program/Cargo.toml" -- --locked --features bpf-entrypoint
     done
 
-build-ring-program: build-policy-store-program
+build-ring-program: build-storage-program
     #!/usr/bin/env bash
     [[ -z "${ZOLANA_PREBUILT:-}" ]] || exit 0
     SBF_TOOLS_VERSION={{sbf-tools-version}} zolana/tools/build-programs.sh \
         --manifest-path programs/custom-ring/Cargo.toml -- --locked --features bpf-entrypoint
 
-build-policy-store-program:
+build-storage-program:
     #!/usr/bin/env bash
     [[ -z "${ZOLANA_PREBUILT:-}" ]] || exit 0
     SBF_TOOLS_VERSION={{sbf-tools-version}} zolana/tools/build-programs.sh \
-        --manifest-path programs/policy-store/Cargo.toml -- --locked --features bpf-entrypoint
+        --manifest-path programs/storage/Cargo.toml -- --locked --features bpf-entrypoint
 
 # Skipped when ZOLANA_SPP_PROGRAM_SO and ZOLANA_USER_REGISTRY_SO name builds.
 _spp-programs:
@@ -114,7 +119,7 @@ build-localnet-archives dir="target/nextest-archives":
 test-hermetic: test-program-fast test-sdk-libs test-ring-indexer
 
 test-program-fast: build-programs
-    cargo nextest run -p custom-ring-program -p policy-store-program --tests
+    cargo nextest run -p custom-ring-program -p storage-program --tests
 
 test-sdk-libs:
     cargo nextest run {{prepend("-p ", sdk-lib-crates)}}
@@ -130,7 +135,7 @@ test-custom-ring-validator filter="all()" *args: fetch-custom-ring-keys build-pr
     eval "$program_ids"
     : "${SHIELDED_POOL_PROGRAM_ID:?xtask did not emit SHIELDED_POOL_PROGRAM_ID}"
     export SHIELDED_POOL_PROGRAM_ID
-    bash tools/test-ring-controls.sh ring -E '{{filter}}' {{args}}
+    ZOLANA_SPP_KEYS_DIR="{{spp-keys-dir}}" bash tools/test-ring-controls.sh ring -E '{{filter}}' {{args}}
 
 # Two-ring shared policy source lifecycle on a local validator.
 test-custom-ring-shared: (_custom-ring-suite "shared_sources")
@@ -138,7 +143,7 @@ test-custom-ring-shared: (_custom-ring-suite "shared_sources")
 # Policy rule lifecycle over the rule table pinned from ring.toml.
 test-custom-ring-rules: (_custom-ring-suite "policy_rules")
 
-# set_policy_rules rewrites the rule table of a live ring.
+# UpdatePolicy rewrites the rule table of a live ring.
 test-custom-ring-repin: (_custom-ring-suite "policy_repin")
 
 _custom-ring-suite test: fetch-custom-ring-keys build-prover-server build-programs zolana::build-cli zolana::ensure-smart-account zolana::ensure-surfpool
@@ -148,7 +153,7 @@ _custom-ring-suite test: fetch-custom-ring-keys build-prover-server build-progra
     eval "$program_ids"
     : "${SHIELDED_POOL_PROGRAM_ID:?xtask did not emit SHIELDED_POOL_PROGRAM_ID}"
     export SHIELDED_POOL_PROGRAM_ID
-    bash tools/test-ring-controls.sh {{test}}
+    ZOLANA_SPP_KEYS_DIR="{{spp-keys-dir}}" bash tools/test-ring-controls.sh {{test}}
 
 # === Keys ===
 
@@ -211,7 +216,7 @@ check-custom-ring-keys: fetch-custom-ring-keys build-prover-server
         module="${key#custom_ring_}"
         module="${module%.key}_verifying_key.rs"
         target/prover-server export-vk --keys-file "{{spp-keys-dir}}/$key" --output "$export_dir/$key.vkbin" >/dev/null
-        cargo run -q --manifest-path zolana/Cargo.toml -p xtask -- bsb22-vk "$export_dir/$key.vkbin" "$PWD/{{spp-keys-dir}}/$key" "$export_dir" "$module" >/dev/null
+        cargo run -q --manifest-path zolana/Cargo.toml -p xtask -- bsb22-vk "$export_dir/$key.vkbin" "{{spp-keys-dir}}/$key" "$export_dir" "$module" >/dev/null
         rustfmt --config-path rustfmt.toml "$export_dir/$module"
         relative="$(python3 -c 'import sys; from tools.ring_key_layout import verifier_relative_path; print(verifier_relative_path(sys.argv[1]))' "$module")"
         cp "program-libs/interface/src/verifying_keys/$relative" "$export_dir/committed-$module"
@@ -236,10 +241,8 @@ ring-localnet: check-custom-ring-keys build-programs zolana::build-cli build-pho
     mkdir -p "$workdir"
     photon_bin="{{photon-bin}}"
     [[ "$photon_bin" = /* ]] || photon_bin="$PWD/$photon_bin"
-    keys_dir="{{spp-keys-dir}}"
-    [[ "$keys_dir" = /* ]] || keys_dir="$PWD/$keys_dir"
     export ZOLANA_PHOTON_BIN="$photon_bin"
-    export ZOLANA_PROVER_KEYS_DIR="$keys_dir"
+    export ZOLANA_PROVER_KEYS_DIR="{{spp-keys-dir}}"
     for port in {{localnet-rpc-port}} {{localnet-photon-port}} {{localnet-prover-port}} {{localnet-ring-indexer-port}}; do
       lsof -ti "tcp:$port" 2>/dev/null | xargs kill -9 2>/dev/null || true
     done
@@ -253,6 +256,7 @@ ring-localnet: check-custom-ring-keys build-programs zolana::build-cli build-pho
       --account-dir "$accounts_dir" --limit-ledger-size 5000000 \
       --sbf-program "$SHIELDED_POOL_PROGRAM_ID" zolana/target/deploy/shielded_pool_program.so \
       --sbf-program "$USER_REGISTRY_PROGRAM_ID" zolana/target/deploy/spr_user_registry.so \
+      {{ring-genesis-programs}} \
       -- --deactivate-feature B8JJXCy5amZyWG9r7EnUYLwzXSXTxG7GZ1qZ1qggo83g
     tools/start-ring-indexer.sh "$workdir/ring-indexer" {{localnet-rpc-url}} {{localnet-photon-url}} \
       {{localnet-ring-indexer-port}}
@@ -283,14 +287,12 @@ ring-devnet-services rpc_url: check-custom-ring-keys build-prover-server build-p
     mkdir -p "$workdir"
     photon_bin="{{photon-bin}}"
     [[ "$photon_bin" = /* ]] || photon_bin="$PWD/$photon_bin"
-    keys_dir="{{spp-keys-dir}}"
-    [[ "$keys_dir" = /* ]] || keys_dir="$PWD/$keys_dir"
     lsof -ti "tcp:{{localnet-photon-port}}" 2>/dev/null | xargs kill -9 2>/dev/null || true
     lsof -ti "tcp:{{localnet-prover-port}}" 2>/dev/null | xargs kill -9 2>/dev/null || true
     sleep 1
     nohup "$photon_bin" --rpc-url "{{rpc_url}}" --port {{localnet-photon-port}} --start-slot latest \
       > "$workdir/photon.log" 2>&1 &
-    nohup target/prover-server start --keys-dir "$keys_dir" \
+    nohup target/prover-server start --keys-dir "{{spp-keys-dir}}" \
       --prover-address 0.0.0.0:{{localnet-prover-port}} --auto-download=true \
       ${ZOLANA_PROVER_REDIS_URL:+--redis-url "$ZOLANA_PROVER_REDIS_URL"} \
       > "$workdir/prover.log" 2>&1 &
@@ -331,16 +333,20 @@ ring-rpc-derived:
     set -euo pipefail
     mkdir -p target/ring-localnet
     secret="target/ring-localnet/root.secret"
+    service_key="target/ring-localnet/service.key"
     if [ ! -f "$secret" ]; then
         cargo run -q -p zolana-ring-rpc -- keygen --out "$secret" --kind root
     fi
+    if [ ! -f "$service_key" ]; then
+        cargo run -q -p zolana-ring-rpc -- keygen --out "$service_key" --kind service
+    fi
     cargo run -q -p zolana-ring-rpc -- serve --port {{localnet-ring-rpc-port}} \
         --indexer-url {{localnet-ring-indexer-url}} --rpc-url {{localnet-rpc-url}} \
-        --root-secret-file "$secret"
+        --root-secret-file "$secret" --service-key-file "$service_key"
 
 # === Release and deploy ===
 
-# Release the ring program, ring keys, ring-rpc and zolana-ring, `--upload --prerelease` publishes.
+# Release the ring and storage programs, ring keys, ring-rpc and zolana-ring, `--upload --prerelease` publishes.
 release tag *args: build-programs check-custom-ring-keys
     cargo run -p ring-xtask -- create-release --tag {{tag}} {{args}}
 
@@ -367,12 +373,6 @@ test-ts:
 
 # Ring TypeScript SDK flows against a fresh validator, Photon, ring indexer, ring prover and ring RPC.
 test-ts-e2e *args: (_test-ts-live "test:ts:e2e" args)
-
-# The fresh ring controls suite on the same stack, its runner creates its own mints.
-test-ts-ring-controls: (_test-ts-live "test:ts:ring-controls")
-
-# One ring happy path through the ring indexer, on the ZOLANA_PHOTON_BIN, ZOLANA_SPP_PROGRAM_SO and ZOLANA_USER_REGISTRY_SO builds when set.
-test-ring-compat: (_test-ts-live "test:ts:ring-compat")
 
 _test-ts-live test-script *args: build-ring-program _spp-programs build-photon build-ring-indexer build-cli build-ring-rpc build-prover-server zolana::build-cli zolana::ensure-surfpool fetch-custom-ring-keys
     #!/usr/bin/env bash
@@ -416,9 +416,7 @@ _test-ts-live test-script *args: build-ring-program _spp-programs build-photon b
     [[ "$registry_so" = /* ]] || registry_so="$PWD/$registry_so"
     # Surfpool gives empty slots synthetic hashes, only the fixture keeps ring blocks linked across the jump.
     export ZOLANA_RING_SURFPOOL_FIXTURE=1
-    keys_dir="{{spp-keys-dir}}"
-    [[ "$keys_dir" = /* ]] || keys_dir="$PWD/$keys_dir"
-    export ZOLANA_PROVER_KEYS_DIR="$keys_dir"
+    export ZOLANA_PROVER_KEYS_DIR="{{spp-keys-dir}}"
     cleanup
     sleep 2
 
@@ -444,6 +442,7 @@ _test-ts-live test-script *args: build-ring-program _spp-programs build-photon b
       --photon-port {{localnet-photon-port}} --account-dir "$accounts_dir" \
       --sbf-program "$SHIELDED_POOL_PROGRAM_ID" "$spp_so" \
       --sbf-program "$USER_REGISTRY_PROGRAM_ID" "$registry_so" \
+      {{ring-genesis-programs}} \
       --upgradeable-program "$ring_program_id" target/deploy/custom_ring_program.so \
       "$ring_authority"
     tools/start-ring-indexer.sh "$workdir/ring-indexer" {{localnet-rpc-url}} {{localnet-photon-url}} \
@@ -506,23 +505,56 @@ _test-ts-live test-script *args: build-ring-program _spp-programs build-photon b
     TOML
     # Derived mode, the suites deploy their own rings and take each auditor key from the service.
     "$ring_rpc" keygen --kind root --out "$ring_dir/root.secret"
-    nohup "$ring_rpc" serve --port {{localnet-ring-rpc-port}} \
-      --indexer-url {{localnet-ring-indexer-url}} --rpc-url {{localnet-rpc-url}} \
-      --root-secret-file "$ring_dir/root.secret" \
-      --allow-origin "$ring_origin" --webauthn-rp-id localhost \
-      > "$workdir/ring-rpc.log" 2>&1 &
-    printf 'waiting for ring rpc %s ' "$ring_rpc_url"
-    for _ in $(seq 1 60); do
-      if curl -sf --max-time 5 "$ring_rpc_url/health" >/dev/null 2>&1; then break; fi
-      printf '.'
-      sleep 1
-    done
-    if ! curl -sf --max-time 5 "$ring_rpc_url/health" >/dev/null 2>&1; then
-      echo " timed out"
-      echo "the ring rpc did not answer, see $workdir/ring-rpc.log" >&2
-      exit 1
+    "$ring_rpc" keygen --kind service --out "$ring_dir/service.key" >/dev/null
+    "$ring_rpc" keygen --kind grant-rows --out "$ring_dir/grant-rows.key" >/dev/null
+    # The record writer pays every records write from the storage authority.
+    storage_authority="$("$ring_rpc" keygen --kind storage-authority \
+      --out "$ring_dir/storage-authority.key" | sed -n 's/^storage authority *//p')"
+    solana airdrop 100 "$storage_authority" --url {{localnet-rpc-url}} >/dev/null
+    relay_args=()
+    if [[ -n "{{ts-live-relay}}" ]]; then
+      fee_payer="$("$ring_rpc" keygen --kind fee-payer --out "$ring_dir/fee-payer.secret" \
+        | sed -n 's/^fee payer *//p')"
+      solana airdrop 100 "$fee_payer" --url {{localnet-rpc-url}} >/dev/null
+      relay_args=(--fee-payer-key-file "$ring_dir/fee-payer.secret")
     fi
-    echo " ready"
+    serve_ring_rpc() {
+      local reader_grants="$1" port={{localnet-ring-rpc-port}}
+      held() { lsof -t -i "tcp:$port" -s tcp:listen 2>/dev/null; }
+      held | xargs kill 2>/dev/null || true
+      for _ in $(seq 1 50); do
+        held >/dev/null || break
+        sleep 0.2
+      done
+      if held >/dev/null; then
+        echo "port $port is still held" >&2
+        exit 1
+      fi
+      nohup "$ring_rpc" serve --port "$port" \
+        --indexer-url {{localnet-ring-indexer-url}} --rpc-url {{localnet-rpc-url}} \
+        --root-secret-file "$ring_dir/root.secret" --service-key-file "$ring_dir/service.key" \
+        --storage-authority-key-file "$ring_dir/storage-authority.key" \
+        --grant-rows-key-file "$ring_dir/grant-rows.key" \
+        --allow-origin "$ring_origin" --webauthn-rp-id localhost \
+        --store-url "sqlite://$PWD/$workdir/ring-rpc.sqlite?mode=rwc" \
+        --prover-url {{localnet-prover-url}} --reader-grants "$reader_grants" \
+        ${relay_args[@]+"${relay_args[@]}"} \
+        > "$workdir/ring-rpc-$reader_grants.log" 2>&1 &
+      printf 'waiting for ring rpc %s ' "$ring_rpc_url"
+      for _ in $(seq 1 60); do
+        if curl -sf --max-time 5 "$ring_rpc_url/health" >/dev/null 2>&1; then
+          echo " ready"
+          return 0
+        fi
+        printf '.'
+        sleep 1
+      done
+      echo " timed out"
+      echo "the ring rpc did not answer, see $workdir/ring-rpc-$reader_grants.log" >&2
+      exit 1
+    }
+    # `init` creates the ring's records through the record writer.
+    serve_ring_rpc tree
     # This recipe started the service, its key needs no pin.
     "$ring_cli" --config "$ring_dir/ring.toml" \
       init --auditor-pubkey-file "auditor.key.pub" --trust-ring-rpc
@@ -531,6 +563,8 @@ _test-ts-live test-script *args: build-ring-program _spp-programs build-photon b
       reader grant "$ring_authority"
     # The ring-status probe, otherwise exercised only against a hosted rpc.
     "$ring_cli" --config "$ring_dir/ring.toml" rpc-check
+    # The suites' rings have no records registry to list a reader in.
+    serve_ring_rpc database
 
     # The root and workspace npm runs each strip one `--`.
     ZOLANA_LOCALNET_URL="{{localnet-rpc-url}}" \

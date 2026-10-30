@@ -3,7 +3,10 @@
 use std::str::FromStr;
 
 use anyhow::{bail, ensure, Context as _, Result};
-use custom_ring_interface::{cosign::CoSignDemand, AnonymousSpend, RingProgramConfig, RingRail};
+use custom_ring_interface::{
+    cosign::{CoSignDemand, CoSignRequirement},
+    AnonymousSpend, RingPolicy, RingRail,
+};
 use custom_ring_sdk::{
     select_spend_where, shape_keyed, AnonymousMove, AnonymousPayment, CoSignScope,
     CustomRingConfig, CustomRingTransfer, CustomRingTransferInput, DepositAsset, DepositRecipient,
@@ -22,10 +25,7 @@ use spr_transaction::{
     },
     SpendableDecryptionResult, WalletUtxo, SOL_MINT,
 };
-use zolana_ring_client::{
-    rpc::{DecryptedOutputKind, ReadTarget},
-    ReaderKey,
-};
+use zolana_ring_client::{rpc::DecryptedOutputKind, ReaderKey};
 use zolana_ring_keys::{ring_address::RING_PAYMENT_SCHEME, RingAddress, RingPaymentRequest};
 use zolana_ring_policy::{ListId, Member, OutflowLimit};
 use zolana_ring_transaction::RingAssets;
@@ -43,7 +43,7 @@ use crate::{
     policy, records,
     ui::{self, icon},
     wallet::WalletScan,
-    Context, CosignerArg, DepositArgs, TransactArgs, TransferArgs, Trust, DEFAULT_TRANSACT_AMOUNT,
+    Context, CosignerArg, DepositArgs, Target, TransactArgs, TransferArgs, DEFAULT_TRANSACT_AMOUNT,
     SENDER_KEYPAIR_FILE,
 };
 
@@ -56,6 +56,13 @@ named_enum! {
     pub enum Funding("funding") {
         Deposit = "deposit",
         Held = "held",
+    }
+}
+
+named_enum! {
+    pub enum OwnerRail("owner rail") {
+        Signer = "signer",
+        InProof = "in-proof",
     }
 }
 
@@ -132,8 +139,16 @@ struct Outflow {
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Requirement {
-    configured: Option<Address>,
-    demanded: Option<Address>,
+    demanded: Option<CoSignRequirement>,
+}
+
+/// Applies only on a policy that reads the ring's own `Allow`.
+#[must_use]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AllowListing {
+    /// The fresh recipient has no entry, the demo stops before it deposits.
+    Refuse,
+    Enrol,
 }
 
 /// The demo parties a table referencing `Allow` refuses until their records carry it.
@@ -141,6 +156,7 @@ struct Requirement {
 struct AllowEnrolment<'a> {
     authority: &'a Keypair,
     parties: &'a [(&'a str, &'a ShieldedKeypair)],
+    listing: AllowListing,
 }
 
 #[must_use]
@@ -161,6 +177,7 @@ struct Transfer<'a> {
     sender: &'a ShieldedKeypair,
     payments: &'a Payments,
     cosigner: Option<&'a (dyn Signer + Sync)>,
+    owner_rail: OwnerRail,
 }
 
 enum Inputs<'a> {
@@ -186,7 +203,9 @@ struct Sent {
 }
 
 pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
+    let listing = args.allow_listing(ctx.config.target)?;
     let config = ctx.ring_config()?;
+    args.owner_rail.check(config.mode)?;
     let program = ctx.ring.program_id();
     let sender = ShieldedKeypair::from_keypair(&ctx.sender()?)?;
     let recipient = ShieldedKeypair::new_ed25519()?;
@@ -217,6 +236,7 @@ pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
         sender: &sender,
         payments: &payments,
         cosigner: cosigner.sign(&config, demand)?,
+        owner_rail: args.owner_rail,
     };
     payments.fits(&inputs)?;
     ctx.ring_rpc().check_serves(program)?;
@@ -227,25 +247,18 @@ pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
     );
     let authority = ctx.funded_authority()?;
     let parties = [("sender", &sender), ("recipient", &recipient)];
-    let queued = (config.mode == RingMode::ConfidentialEscrow)
-        .then(|| {
-            KeyEnrolment {
-                funder: authority,
-                members: &[&sender, &recipient],
-            }
-            .queue(ctx)
-        })
-        .transpose()?
-        .flatten();
+    if config.mode == RingMode::ConfidentialEscrow {
+        KeyEnrolment {
+            members: &[&sender, &recipient],
+        }
+        .ensure(ctx)?;
+    }
     AllowEnrolment {
         authority,
         parties: &parties,
+        listing,
     }
     .send(ctx)?;
-    if let Some(queued) = queued {
-        queued.apply(&ctx.zolana, authority)?;
-        line("member keys", "applied");
-    }
     transfer.fund(ctx, inputs.drawn_lamports())?;
     let sent = transfer.send(ctx, inputs)?;
     for (party, keys) in parties {
@@ -264,6 +277,7 @@ pub fn run(ctx: &Context, args: TransactArgs) -> Result<()> {
 /// Every recipient is checked against the ring's mode before anything is deposited.
 pub fn run_transfer(ctx: &Context, args: TransferArgs) -> Result<()> {
     let config = ctx.ring_config()?;
+    args.owner_rail.check(config.mode)?;
     let payments = PaymentPlan::of(&args).resolve(config.mode, ctx.ring.program_id())?;
     let total = payments.total()?;
     let sender = ShieldedKeypair::from_keypair(&ctx.sender()?)?;
@@ -278,6 +292,7 @@ pub fn run_transfer(ctx: &Context, args: TransferArgs) -> Result<()> {
         sender: &sender,
         payments: &payments,
         cosigner: cosigner.sign(&config, demand)?,
+        owner_rail: args.owner_rail,
     };
     let inputs = match args.funding {
         Funding::Deposit => {
@@ -308,7 +323,6 @@ pub fn run_transfer(ctx: &Context, args: TransferArgs) -> Result<()> {
     if config.mode == RingMode::ConfidentialEscrow {
         payments.check_escrowed(ctx, &sender)?;
         KeyEnrolment {
-            funder: ctx.funded_authority()?,
             members: &[&sender],
         }
         .ensure(ctx)?;
@@ -352,7 +366,6 @@ pub fn run_deposit(ctx: &Context, args: DepositArgs) -> Result<()> {
     )?;
     if config.mode == RingMode::ConfidentialEscrow {
         KeyEnrolment {
-            funder: ctx.funded_authority()?,
             members: &[&sender],
         }
         .ensure(ctx)?;
@@ -398,6 +411,16 @@ impl FromStr for Recipient {
                     "{text} is neither a shielded address, a ring address nor a `zolana:` request"
                 )
             })
+    }
+}
+
+impl OwnerRail {
+    fn check(self, mode: RingMode) -> Result<()> {
+        ensure!(
+            self == Self::Signer || mode != RingMode::Anonymous,
+            "--owner-rail in-proof needs a confidential ring"
+        );
+        Ok(())
     }
 }
 
@@ -810,17 +833,10 @@ impl CoSigner {
         self.sign_for(Requirement::of(config.account(), demand)?)
     }
 
-    /// Refused when the operation demands a co-signer the operator did not pass, or another key is passed.
+    /// Refused when the operation demands a co-signer the operator did not pass.
     fn sign_for(&self, requirement: Requirement) -> Result<Option<&(dyn Signer + Sync)>> {
-        let provided = self.keypair.as_ref().map(Signer::pubkey);
-        if let (Some(configured), Some(found)) = (requirement.configured, provided) {
-            ensure!(
-                found == configured,
-                "the configured co-signer is {configured}, not {found}"
-            );
-        }
         ensure!(
-            requirement.demanded.is_none() || provided.is_some(),
+            requirement.demanded.is_none() || self.keypair.is_some(),
             "the operation needs the co-signer's approval, pass --cosigner-keypair"
         );
         Ok(self
@@ -832,15 +848,14 @@ impl CoSigner {
 }
 
 impl Requirement {
-    fn of(config: &RingProgramConfig, demand: Demand) -> Result<Self> {
+    fn of(config: &RingPolicy, demand: Demand) -> Result<Self> {
         let demanded = CoSignDemand {
             approval_required: demand == Demand::Approval,
             classes: demand.classes(),
             withdrawals: Vec::new(),
         };
         Ok(Self {
-            configured: config.co_signer().copied(),
-            demanded: demanded.signer(config)?,
+            demanded: demanded.requirement(config)?,
         })
     }
 }
@@ -854,6 +869,20 @@ impl Demand {
     }
 }
 
+impl TransactArgs {
+    /// List entries are the policy authority's to write, a payment writes them only in a localnet demo.
+    pub fn allow_listing(&self, target: Target) -> Result<AllowListing> {
+        if !self.enrol_allow {
+            return Ok(AllowListing::Refuse);
+        }
+        ensure!(
+            target == Target::Localnet,
+            "`--enrol-allow` runs on localnet only"
+        );
+        Ok(AllowListing::Enrol)
+    }
+}
+
 impl AllowEnrolment<'_> {
     /// A curated `Allow` list is the curator's to write.
     fn send(self, ctx: &Context) -> Result<()> {
@@ -863,10 +892,14 @@ impl AllowEnrolment<'_> {
         if !pinned.policy.table.referenced().contains(ListId::Allow) {
             return Ok(());
         }
-        if let Some(ListRegistry::Curator(registry)) = pinned.registry.registry_for(ListId::Allow) {
+        if let Some(ListRegistry::Curator(registry)) = pinned.account.registry_for(ListId::Allow) {
             line("allow", format_args!("curated by {registry}"));
             return Ok(());
         }
+        ensure!(
+            self.listing == AllowListing::Enrol,
+            "`--enrol-allow` is required on a policy that reads the ring's own allow list"
+        );
         let subjects = self
             .parties
             .iter()
@@ -1033,7 +1066,11 @@ impl Transfer<'_> {
         };
         match &self.payments.payees {
             Payees::Confidential(payees) => {
-                let mut transaction = transaction(inputs, self.sender.pubkey())?;
+                let payer: &(dyn Signer + Sync) = match self.owner_rail {
+                    OwnerRail::Signer => self.sender,
+                    OwnerRail::InProof => self.payer,
+                };
+                let mut transaction = transaction(inputs, payer.pubkey())?;
                 for payment in payees {
                     if self.payments.mint == SOL_MINT {
                         transaction.transfer_sol(&payment.to, payment.amount)?;
@@ -1050,14 +1087,22 @@ impl Transfer<'_> {
                 if let Some(shape) = shape {
                     transfer = transfer.with_shape(shape)?;
                 }
-                // The owner signs its spends, it pays the transaction too.
-                TopUp {
-                    funder: self.payer,
-                    who: self.sender.pubkey(),
-                    lamports: SENDER_FEE_BUDGET,
+                if let Some(cosigner) = self.cosigner {
+                    transfer = transfer.with_co_signer(cosigner.pubkey());
                 }
-                .send(ctx)?;
-                ctx.submit(transfer, self.sender, self.cosigner.as_slice())
+                match self.owner_rail {
+                    // The owner signs its spends, it pays the transaction too.
+                    OwnerRail::Signer => TopUp {
+                        funder: self.payer,
+                        who: self.sender.pubkey(),
+                        lamports: SENDER_FEE_BUDGET,
+                    }
+                    .send(ctx)?,
+                    OwnerRail::InProof => {
+                        transfer = transfer.with_in_proof_owner(&self.sender.signing_key);
+                    }
+                }
+                ctx.submit(transfer, payer, self.cosigner.as_slice())
             }
             Payees::Anonymous {
                 ring: payees,
@@ -1081,6 +1126,7 @@ impl Transfer<'_> {
                             asset: mint,
                             payments: payees.clone(),
                             entry: *entry,
+                            co_signer: self.cosigner.map(|signer| signer.pubkey()),
                         };
                         ctx.block(select.select(ctx.ring_client()))?
                     }
@@ -1109,8 +1155,12 @@ impl Transfer<'_> {
                                 amount: payment.amount,
                             })?;
                         }
-                        match shape {
+                        let transfer = match shape {
                             Some(shape) => transfer.with_shape(shape)?,
+                            None => transfer,
+                        };
+                        match self.cosigner {
+                            Some(cosigner) => transfer.with_co_signer(cosigner.pubkey()),
                             None => transfer,
                         }
                     }
@@ -1196,8 +1246,14 @@ fn held_total(utxos: &[WalletUtxo]) -> Result<u64> {
 }
 
 fn granted(ctx: &Context, reader: &ReaderKey) -> Result<bool> {
-    let record = ctx.block(ctx.ring.access_record(ctx.chain(), reader))?;
-    Ok(record.is_some())
+    let read = records::read_one(
+        &ctx.zolana,
+        custom_ring_sdk::MemberRecords {
+            ring: ctx.ring,
+            members: &[reader.member()?],
+        },
+    )?;
+    Ok(read.listed(ListId::Reader))
 }
 
 /// The `list` member argument of a party.
@@ -1228,20 +1284,9 @@ fn print_signatures(ctx: &Context, sent: &Sent) -> Result<()> {
 fn read_back(ctx: &Context, reader: &Keypair, signature: Signature) -> Result<()> {
     println!("waiting for the indexer and the ring rpc to open the transaction");
     ctx.wait_for_indexed(signature)?;
-    let ring_rpc = ctx.ring_rpc();
-    let service = ring_rpc.service_pubkey()?;
-    if let Trust::Pinned(pinned) = ctx.trust(Trust::Unpinned)? {
-        ensure!(
-            pinned == service,
-            "the ring rpc reports service key {service}, ring.toml pins {pinned}"
-        );
-    }
-    let target = ReadTarget {
-        cluster: ctx.rpc().genesis_hash()?,
-        service,
-        ring: ctx.ring.program_id(),
-    };
-    let opened = ring_rpc
+    let target = ctx.ring_rpc_target()?;
+    let opened = ctx
+        .ring_rpc()
         // The submission carries one ring operation, its SPP event sits at index zero.
         .wait_for_decrypted(target, reader, signature, 0)
         .context("the ring rpc did not open the transfer")?;
@@ -1280,7 +1325,6 @@ fn read_back(ctx: &Context, reader: &Keypair, signature: Signature) -> Result<()
 
 #[cfg(test)]
 mod tests {
-    use bytemuck::Zeroable;
     use custom_ring_sdk::FirstContact;
     use spr_keypair::SigningKey;
 
@@ -1289,10 +1333,11 @@ mod tests {
 
     const RING: Address = Address::new_from_array([4; 32]);
 
-    fn configured(co_signer: Address, scope: CoSignScope) -> RingProgramConfig {
-        let mut config = RingProgramConfig::zeroed();
-        config.co_signer = co_signer;
-        config.co_sign_scope = scope.bits();
+    fn configured(scope: CoSignScope) -> Box<RingPolicy> {
+        let mut config: Box<RingPolicy> = bytemuck::zeroed_box();
+        config.co_signers = custom_ring_interface::CoSignerCounts::default()
+            .added(scope)
+            .unwrap();
         config
     }
 
@@ -1309,7 +1354,7 @@ mod tests {
             }
         }
 
-        fn signs(&self, config: &RingProgramConfig, demand: Demand) -> Result<Option<Address>> {
+        fn signs(&self, config: &RingPolicy, demand: Demand) -> Result<Option<Address>> {
             Ok(self
                 .sign_for(Requirement::of(config, demand)?)?
                 .map(|cosigner| cosigner.pubkey()))
@@ -1317,9 +1362,9 @@ mod tests {
     }
 
     #[test]
-    fn blanket_scope_and_private_approval_require_the_configured_signer() {
-        let (key, stranger) = (Keypair::new(), Keypair::new());
-        let transfers = configured(key.pubkey(), CoSignScope::TRANSFERS);
+    fn blanket_scope_and_private_approval_require_a_co_signer() {
+        let key = Keypair::new();
+        let transfers = configured(CoSignScope::TRANSFERS);
         assert!(
             refusal(ABSENT.signs(&transfers, Demand::Transfer)).contains("pass --cosigner-keypair")
         );
@@ -1329,15 +1374,11 @@ mod tests {
                 .unwrap(),
             Some(key.pubkey())
         );
-        assert!(
-            refusal(CoSigner::passing(&stranger).signs(&transfers, Demand::Transfer))
-                .starts_with("the configured co-signer is")
-        );
-        let withdrawals = configured(key.pubkey(), CoSignScope::WITHDRAWALS);
+        let withdrawals = configured(CoSignScope::WITHDRAWALS);
         assert_eq!(ABSENT.signs(&withdrawals, Demand::Transfer).unwrap(), None);
         assert!(refusal(ABSENT.signs(&withdrawals, Demand::Approval))
             .contains("pass --cosigner-keypair"));
-        let none = RingProgramConfig::zeroed();
+        let none: Box<RingPolicy> = bytemuck::zeroed_box();
         assert_eq!(ABSENT.signs(&none, Demand::Transfer).unwrap(), None);
         assert!(refusal(ABSENT.signs(&none, Demand::Approval))
             .contains("dual control needs a configured co-signer"));
@@ -1352,7 +1393,7 @@ mod tests {
             (CoSignScope::TRANSFERS, false, true),
             (CoSignScope::WITHDRAWALS, false, false),
         ] {
-            let config = configured(key.pubkey(), scope);
+            let config = configured(scope);
             let handed = |demand| passed.signs(&config, demand).unwrap().is_some();
             assert_eq!(handed(Demand::Deposit), deposit, "{scope:?}");
             assert_eq!(handed(Demand::Transfer), transfer, "{scope:?}");

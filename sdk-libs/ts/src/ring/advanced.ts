@@ -19,6 +19,7 @@ export {
   ANONYMOUS_MAX_INPUTS,
   ANONYMOUS_SLOT_BYTES,
   DELIVERED_AUDIT_CAPACITIES,
+  DELIVERED_SENDER_CLASSES,
   DELIVERED_SLOT_BYTES,
   DENSE_DELIVERED_SLOT_BYTES,
   DISCLOSURE_CHUNK_BYTES,
@@ -32,6 +33,7 @@ export {
   anonymousKeyClass,
   auditLayoutValue,
   deliveredFields,
+  deliveredSenderClass,
   disclosureFieldCount,
   packedChunks,
 } from "../protocol/codec/ring-disclosure-layout.js";
@@ -124,6 +126,7 @@ export {
   ringRail,
   ringRailOf,
   ringSppInputs,
+  outputOwnerTag,
   ringTransactOutput,
   taggedX25519,
 } from "../protocol/transaction/transact.js";
@@ -135,8 +138,10 @@ export {
 } from "../protocol/proof/circuit.js";
 export type {
   AnonymousProofData,
+  InProofOwner,
   InputTrees,
   PolicyProof,
+  PolicyRecipients,
   RingOutput,
   RingRail,
   RingTransactConfig,
@@ -164,7 +169,7 @@ export type {
   RegisterKeyStatement,
 } from "../protocol/proof/statement.js";
 export { depositStatementElements } from "../proof/deposit-audit.js";
-export type { DepositStatement } from "../proof/deposit-audit.js";
+export type { DepositedAsset, DepositRegistry, DepositStatement } from "../proof/deposit-audit.js";
 export type { EncodedRuleTable } from "../protocol/codec/ring-codecs.js";
 
 export {
@@ -189,7 +194,6 @@ export { openDisclosedMerge } from "../operations/audit/audit-merge.js";
 export { recoverMergeOpening, type MergeAuditorOpening } from "../operations/audit/audit-merge.js";
 
 export {
-  AUDITED_RING_DEPOSIT_TAG,
   RING_DEPOSIT_AUDIT_SLOTS,
   RING_DEPOSIT_OPENING_LENGTH,
   RING_DEPOSIT_OPENING_OWNER_KEY_OFFSET,
@@ -197,6 +201,11 @@ export {
   readRingDepositCapsule,
   type RingDepositCapsule,
 } from "../protocol/codec/deposit-capsule.js";
+export {
+  decodeStorageWrites,
+  encodeStorageWrites,
+  type StorageWrite,
+} from "../protocol/codec/storage-writes.js";
 export {
   ringDepositSpp,
   type RingDepositSpp,
@@ -227,7 +236,16 @@ export {
   recordBit,
   referencedLists,
   ruleAlternatives,
+  walletGrantMember,
 } from "../protocol/membership/policy.js";
+export {
+  ENROLMENT_LISTS,
+  recordUpdateQueueEntry,
+  recordUpdateStatementHash,
+  signRecordUpdate,
+  verifyRecordUpdate,
+} from "../protocol/ring-rpc/record-update.js";
+export type { UnsignedRecordUpdate } from "../protocol/ring-rpc/record-update.js";
 export type {
   ListWriter,
   Member,
@@ -249,4 +267,9 @@ export type {
   TransferSubjects,
 } from "../protocol/membership/policy.js";
 
-export { EMPTY_MINT_POLICY, type MintPolicy } from "../protocol/membership/mint-policy.js";
+export {
+  EMPTY_ASSET_LIMITS,
+  EMPTY_MINT_POLICY,
+  type AssetLimits,
+  type MintPolicy,
+} from "../protocol/membership/mint-policy.js";

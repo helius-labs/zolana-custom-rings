@@ -18,6 +18,7 @@ type Family int
 
 const (
 	DeliveredAudit Family = iota
+	DeliveredSenderAudit
 	AnonymousAudit
 	AnonymousEntryAudit
 	MemberPolicy
@@ -25,7 +26,7 @@ const (
 	ApplyRecords
 	RegisterKey
 	Deposit
-	AnonymousMerge
+	Merge
 	WithdrawalExemption
 )
 
@@ -55,6 +56,9 @@ func keys() []Key {
 	}
 	for _, outputs := range audit.DeliveredAuditCapacities {
 		add(DeliveredAudit, 0, outputs)
+	}
+	for _, shape := range audit.DeliveredSenderShapes {
+		add(DeliveredSenderAudit, shape.Inputs, shape.Outputs)
 	}
 	for _, shape := range audit.AnonymousAuditShapes {
 		add(AnonymousAudit, shape.InputClass, shape.Outputs)
@@ -87,9 +91,13 @@ func keys() []Key {
 		add(Deposit, capacity, 0)
 	}
 	for _, width := range circuits.MergeWidths {
-		add(AnonymousMerge, width, 0)
+		add(Merge, width, 0)
 	}
 	return keys
+}
+
+func (k Key) deliveredSenderShape() audit.DeliveredSenderShape {
+	return audit.DeliveredSenderShape{Inputs: k.Inputs, Outputs: k.Outputs}
 }
 
 func (k Key) anonymousShape() audit.AnonymousAuditShape {
@@ -113,6 +121,8 @@ func (k Key) circuitType() common.CircuitType {
 	switch k.Family {
 	case DeliveredAudit:
 		return named("audit-delivered-%d", k.Outputs)
+	case DeliveredSenderAudit:
+		return named("audit-delivered-sender-%d-%d", k.Inputs, k.Outputs)
 	case AnonymousAudit:
 		return named("audit-anonymous-v2-%d-%d", k.Inputs, k.Outputs)
 	case AnonymousEntryAudit:
@@ -129,8 +139,8 @@ func (k Key) circuitType() common.CircuitType {
 		return named("register-key")
 	case Deposit:
 		return named("deposit-%d", k.Inputs)
-	case AnonymousMerge:
-		return named("merge-anonymous-v2-%d", k.Inputs)
+	case Merge:
+		return named("merge-v3-%d", k.Inputs)
 	}
 	panic(fmt.Sprintf("ring: unknown ring family %d", k.Family))
 }

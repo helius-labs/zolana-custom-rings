@@ -15,13 +15,11 @@ import {
 } from "@heliuslabs/zolana/internal";
 import { InstructionTag } from "@heliuslabs/zolana/interface";
 import type { Address, RingAssetDeposit } from "@heliuslabs/zolana/interface";
-import { ringAuthAddress, ringConfigAddress, ringMemberRegistryAddress } from "../pda/index.js";
+import { ringAuthAddress, ringCoSignerMetas, ringPolicyAddress } from "../pda/index.js";
+import { REVISION_LENGTH } from "./transact.js";
 
-import {
-  AUDITED_RING_DEPOSIT_TAG,
-  RING_DEPOSIT_AUDIT_SLOTS,
-  readRingDepositCapsule,
-} from "../codec/deposit-capsule.js";
+import { RING_DEPOSIT_AUDIT_SLOTS, readRingDepositCapsule } from "../codec/deposit-capsule.js";
+import { RingInstructionTag } from "./instruction-tag.js";
 
 /** The SPP ring deposit the ring program forwards unchanged, Rust `RingDeposit`. */
 export interface RingDepositSpp {
@@ -30,10 +28,10 @@ export interface RingDepositSpp {
   readonly accounts: readonly AccountMeta[];
 }
 
-/**
- * `AUDITED_DEPOSIT ‖ proof ‖ registry_root_index ‖ spp`, the accounts
- * `[config, registry?, co_signer?]` ahead of SPP's deposit list.
- */
+/** `AUDITED_DEPOSIT ‖ proof ‖ own_revision ‖ curator_revision` ahead of the forwarded SPP deposit. */
+export const AUDITED_DEPOSIT_PREFIX_LENGTH = 1 + CUSTOM_RING_PROOF_LENGTH + 2 * REVISION_LENGTH;
+
+/** The accounts `[ring, registries, co_signer?]` ahead of SPP's deposit list. */
 export async function ringDepositInstruction(
   input: Readonly<{
     ringProgramId: Address;
@@ -41,29 +39,32 @@ export async function ringDepositInstruction(
     depositor: SignerAccount;
     deposits: readonly RingAssetDeposit[];
     proof: Uint8Array;
-    /** The registry history slot of the bound root, present exactly on a ring that escrows keys. */
-    registryRootIndex?: number;
-    /** The co-signer the config demands for deposits. */
+    /** Read only, right after the ring account, the records first. */
+    registries: readonly Address[];
+    /** Escrow or policy rings only. */
+    ownRevision?: bigint;
+    /** Rings with a curator source only. */
+    curatorRevision?: bigint;
+    /** The supplied co-signer when a record covers deposits. */
     cosigner?: SignerAccount;
   }>,
 ): Promise<Instruction> {
-  const [spp, config, registry] = await Promise.all([
+  const [spp, ring, cosigner] = await Promise.all([
     ringDepositSpp(input),
-    ringConfigAddress(input.ringProgramId),
-    input.registryRootIndex === undefined
-      ? undefined
-      : ringMemberRegistryAddress(input.ringProgramId),
+    ringPolicyAddress(input.ringProgramId),
+    input.cosigner === undefined ? [] : ringCoSignerMetas(input.ringProgramId, input.cosigner),
   ]);
   const prefix = new Writer()
     .bytes(input.proof, CUSTOM_RING_PROOF_LENGTH, "deposit proof")
-    .u8(input.registryRootIndex ?? 0, "registryRootIndex")
+    .u64(input.ownRevision ?? 0n, "ownRevision")
+    .u64(input.curatorRevision ?? 0n, "curatorRevision")
     .finish();
   return instruction(
-    tagged(AUDITED_RING_DEPOSIT_TAG, new Uint8Array([...prefix, ...spp.data])),
+    tagged(RingInstructionTag.deposit, new Uint8Array([...prefix, ...spp.data])),
     [
-      meta(config, false, false),
-      ...(registry === undefined ? [] : [meta(registry, false, false)]),
-      ...(input.cosigner === undefined ? [] : [meta(input.cosigner, true, false)]),
+      meta(ring, false, false),
+      ...input.registries.map((registry) => meta(registry, false, false)),
+      ...cosigner,
       ...spp.accounts,
     ],
     input.ringProgramId,

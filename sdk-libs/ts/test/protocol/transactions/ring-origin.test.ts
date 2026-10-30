@@ -430,8 +430,9 @@ describe("confirmedRingWithdrawals", () => {
       interfaceTransfers: transfers,
       policy: {
         proof: new Uint8Array(192),
-        ownRootIndex: 0,
+        ownRevision: 0n,
         splWithdrawalOwners: [addressBytes(DEPOSITOR) as Bytes32],
+        recipients: { kind: "framed", recipients: [zeros(32) as Bytes32, zeros(32) as Bytes32] },
       },
     };
     const source = poolInstruction(transfers, [

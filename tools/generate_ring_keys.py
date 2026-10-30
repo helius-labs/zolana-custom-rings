@@ -14,12 +14,12 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 def variant(k):
     i, o, w, own = k['Inputs'], k['Outputs'], k['Withdrawals'], str(k['OwnOnly']).lower()
-    return [f'DeliveredAudit {{ outputs: {o} }}',
+    return [f'DeliveredAudit {{ outputs: {o} }}', f'DeliveredSenderAudit {{ inputs: {i}, outputs: {o} }}',
             f'AnonymousAudit {{ class: {i}, outputs: {o} }}', f'AnonymousEntryAudit {{ class: {i}, outputs: {o} }}',
             f'MemberPolicy {{ outputs: {o}, withdrawals: {w}, own_only: {own} }}',
             f'DelegatePolicy {{ inputs: {i}, outputs: {o}, own_only: {own} }}',
             f'ApplyRecords {{ writes: {i} }}', 'RegisterKey', f'Deposit {{ capacity: {i} }}',
-            f'AnonymousMerge {{ width: {i} }}', 'WithdrawalExemption'][k['Family']]
+            f'Merge {{ width: {i} }}', 'WithdrawalExemption'][k['Family']]
 
 def main():
     parser = argparse.ArgumentParser()

@@ -1,4 +1,4 @@
-import { X25519Keypair, ShieldedKeypair } from "@heliuslabs/zolana/keypair";
+import { ShieldedKeypair } from "@heliuslabs/zolana/keypair";
 import { LocalKeys } from "@heliuslabs/zolana/client";
 import {
   compileUnsignedTransaction,
@@ -24,7 +24,7 @@ import {
 import { address, generateKeyPairSigner, signTransactionWithSigners } from "@solana/kit";
 import { afterEach, expect, it, vi } from "vitest";
 
-import { ringConfigPda } from "../../../src/protocol/pda/index.js";
+import { ringPolicyPda } from "../../../src/protocol/pda/index.js";
 import { buildRingTransferTransaction } from "../../../src/operations/payments/transfer.js";
 import {
   RingTransactionSubmission,
@@ -32,11 +32,7 @@ import {
 } from "../../../src/operations/workflow/submission.js";
 import { ringTransferClient } from "../../helpers/clients.js";
 import { BLOCKHASH } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
-import {
-  ownedAccount,
-  ringProgramConfigData,
-  sppRingRegistration,
-} from "../../helpers/ring-accounts.js";
+import { ownedAccount, ringPolicyData, sppRingRegistration } from "../../helpers/ring-accounts.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 const MEMO = address("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
@@ -73,7 +69,7 @@ afterEach(() => vi.restoreAllMocks());
 
 it("binds high level ring transfers to the configured nonzero tree", async () => {
   const f = funded(7);
-  const [config, bump] = await ringConfigPda(RING);
+  const [ring, bump] = await ringPolicyPda(RING);
   const authority = f.owner.shieldedAddress().solanaAddress();
   const [ringAuth, registration] = await sppRingRegistration({ authority, ringProgramId: RING });
   let outputTreeId: number | undefined;
@@ -81,18 +77,8 @@ it("binds high level ring transfers to the configured nonzero tree", async () =>
     tree: treeAddress(7),
     treeId: 7,
     getAccount: async (key) =>
-      key === config
-        ? ownedAccount(
-            RING,
-            ringProgramConfigData({
-              authority,
-              auditorPublicKey: X25519Keypair.fromBytes(new Uint8Array(32).fill(9))
-                .publicKey()
-                .toBytes(),
-              bump,
-              hasPolicy: false,
-            }),
-          )
+      key === ring
+        ? ownedAccount(RING, ringPolicyData({ bump, roles: { admin: authority } }))
         : key === ringAuth
           ? registration
           : undefined,

@@ -394,6 +394,7 @@ impl Transfer {
                     outputs: outputs.len(),
                     exits,
                     key_escrow,
+                    sender_class: None,
                 },
                 seed_out,
                 outputs: outputs
@@ -521,6 +522,7 @@ impl Transfer {
                 commitment_pok: &zero,
                 default_owner_tag: None,
             }),
+            in_proof_owner: None,
             spp_proof: &groth16,
             nullifiers: &tx.nullifiers,
             input_trees: InputTrees::One(TreeContext {
@@ -528,7 +530,7 @@ impl Transfer {
                 nullifier_tree_root_index: 0,
             }),
         };
-        [vec![ring_tag::TRANSACT], data.encode().unwrap()].concat()
+        [vec![ring_tag::TRANSFER], data.encode().unwrap()].concat()
     }
 }
 

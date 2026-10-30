@@ -151,7 +151,7 @@ impl Queued {
             )
             .expect("escrow write"),
             Self::Authority { member, set, clear } => RecordWriteData {
-                mint_policy: [0; 33],
+                mint_policy: custom_ring_interface::mint_policy_write(None),
                 member: *member,
                 lists: lists(*set, *clear),
             }

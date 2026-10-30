@@ -8,9 +8,9 @@ use std::{
 use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
 use custom_ring_interface::{
-    AppliedAt, CoSignScope, EscrowKey, MemberRegistry, QueueEntry, RecordQueue, RingMode,
-    RingProgramConfig, SourceSlot, CONFIG_PDA_SEED, DEFAULT_INSERT_FEE, MEMBER_REGISTRY_PDA_SEED,
-    N_SOURCE_SLOTS, RECORD_QUEUE_PDA_SEED, RING_PROGRAM_CONFIG,
+    storage::{Revision, StorageRegistry},
+    CoSignScope, CoSigner, CoSignerCounts, EscrowKey, NewRing, RingMode, RingPolicy, RingRoles,
+    SourceSlot, CO_SIGNER, N_SOURCE_SLOTS, RING_POLICY_PDA_SEED, STORAGE_PROGRAM_ID,
 };
 use solana_account::Account;
 use solana_address::Address;
@@ -34,9 +34,9 @@ use spr_transaction::{utxo::SppProofInputUtxo, Data, Mint, Utxo, WalletUtxo};
 use spr_tree::{TreeAccount, UTXO_TREE_HEIGHT};
 use zolana_ring_client::{AsyncRingIndexer, RingIndexerError, ViewingHistory};
 use zolana_ring_indexer::rpc::{
-    GetRingMemberOpeningsRequest, GetRingMemberOpeningsResponse, GetRingRecordPoolRequest,
-    GetRingRecordPoolResponse, RingIndexedMemberRecordView, RingMemberOpening,
-    RingMemberRecordView, RingRecordPathView, RingRegistryRootView,
+    GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse, GetStorageRecordPoolRequest,
+    GetStorageRecordPoolResponse, RingIndexedMemberRecordView, RingMemberOpening,
+    RingMemberRecordView, RingRecordPathView, StorageRootView,
 };
 use zolana_ring_member_registry::{
     Canopy, MemberRecord, MemberRegistryTree, RecordOpening, RecordTree,
@@ -47,6 +47,9 @@ use crate::client::RingClient;
 use crate::{trees::PoolTree, CustomRing, REDACTED};
 
 pub(crate) const SLOT: u64 = 2_359_301;
+/// The ring's own `StorageRegistry`, its newest root at `REVISION`.
+pub(crate) const RECORDS: Address = Address::new_from_array([0x5a; 32]);
+pub(crate) const REVISION: u64 = 1;
 pub(crate) const TREE_ID: u16 = 0;
 
 pub(crate) fn program() -> Address {
@@ -223,19 +226,27 @@ impl RingSettings {
         }
     }
 
-    pub(crate) fn config(&self) -> RingProgramConfig {
-        let mut config = RingProgramConfig::zeroed();
-        config.discriminator = RING_PROGRAM_CONFIG;
-        config.authority = authority();
-        config.auditor_pubkey = *auditor().pubkey().as_bytes();
-        config.bump = Address::find_program_address(&[CONFIG_PDA_SEED], &program()).1;
-        config.has_policy = u8::from(self.has_policy);
-        config.mode = self.mode as u8;
-        config.insert_fee = DEFAULT_INSERT_FEE.to_le_bytes();
-        config.created_slot = self.created_slot.to_le_bytes();
-        if let Some((signer, scope)) = self.co_signer {
-            config.co_signer = signer;
-            config.co_sign_scope = scope.bits();
+    /// A policy ring's hash is a stand-in until `with_registry` pins its table.
+    pub(crate) fn config(&self) -> Box<RingPolicy> {
+        let mut config = NewRing {
+            bump: Address::find_program_address(&[RING_POLICY_PDA_SEED], &program()).1,
+            mode: self.mode,
+            roles: RingRoles {
+                admin: authority(),
+                policy: Address::new_from_array([0xa2; 32]),
+                pauser: Address::new_from_array([0xa3; 32]),
+                cosign_admin: Address::new_from_array([0xa4; 32]),
+            },
+            auditor_pubkey: *auditor().pubkey().as_bytes(),
+            created_slot: self.created_slot,
+            records: Address::default(),
+        }
+        .account();
+        if self.has_policy {
+            config.policy_hash = [0x11; 32];
+        }
+        if let Some((_, scope)) = self.co_signer {
+            config.co_signers = CoSignerCounts::default().added(scope).expect("one record");
         }
         if let Some(delegate) = self.delegate {
             config.delegate = delegate;
@@ -256,6 +267,8 @@ pub(crate) struct Chain {
     /// The leaves of every Merkle proof request.
     pub proof_requests: Arc<Mutex<Vec<Vec<[u8; 32]>>>>,
     pub witness_requests: Arc<Mutex<Vec<Vec<[u8; 32]>>>>,
+    /// The ring of every record opening or pool request.
+    pub record_requests: Arc<Mutex<Vec<SerializablePubkey>>>,
 }
 
 impl Chain {
@@ -269,8 +282,28 @@ impl Chain {
             activated: 1,
             bump: Address::find_program_address(&[RING_AUTH_PDA_SEED], &program()).1,
         };
-        Self::default()
-            .with(ring().config_pda(), account(program(), &settings.config()))
+        let chain = Self::default();
+        let chain = match settings.co_signer {
+            Some((signer, scope)) => chain.with(
+                ring().co_signer_pda(&signer),
+                account(
+                    program(),
+                    &CoSigner {
+                        discriminator: CO_SIGNER,
+                        signer,
+                        scope: scope.bits(),
+                        bump: Address::find_program_address(
+                            &[CoSigner::SEED, signer.as_ref()],
+                            &program(),
+                        )
+                        .1,
+                    },
+                ),
+            ),
+            None => chain,
+        };
+        chain
+            .with(ring().policy_pda(), account(program(), &*settings.config()))
             .with(
                 ring().ring_auth_pda(),
                 account(
@@ -294,29 +327,21 @@ impl Chain {
         self.with(tree.address, tree_account(tree))
     }
 
-    /// The ring's own registry pinning `rules`, every list read from it.
+    /// The ring account pinning `rules`, every list read from the ring's records.
     pub(crate) fn with_registry(self, registry: Registry, rules: &RuleTable) -> Self {
-        let account = registry.account(rules);
+        let account = self
+            .accounts
+            .get(&ring().policy_pda())
+            .map(|account| Box::new(*bytemuck::from_bytes::<RingPolicy>(&account.data)))
+            .expect("Chain::ring writes the ring account");
+        let policy = registry.policy(account, rules);
+        let records = registry.records();
         Self {
             registry: Some(Arc::new(registry)),
             ..self
         }
-        .with(ring().registry_pda(), account)
-    }
-
-    pub(crate) fn with_queue(
-        self,
-        entries: &[QueueEntry],
-        queued_at: u64,
-        next_apply_slot: u64,
-    ) -> Self {
-        let bump = Address::find_program_address(&[RECORD_QUEUE_PDA_SEED], &program()).1;
-        let mut queue = RecordQueue::new(bump);
-        for entry in entries {
-            queue.push(entry, queued_at).unwrap();
-        }
-        queue.next_apply_slot = next_apply_slot.to_le_bytes();
-        self.with(ring().queue_pda(), account(program(), &queue))
+        .with(ring().policy_pda(), policy)
+        .with(RECORDS, records)
     }
 
     /// The indexed route, the prover fetches the input proofs and no witness is read here.
@@ -408,17 +433,19 @@ impl AsyncRpc for Chain {
 
 #[async_trait]
 impl AsyncRingIndexer for Chain {
-    async fn get_ring_member_openings(
+    async fn get_storage_member_openings(
         &self,
-        request: GetRingMemberOpeningsRequest,
-    ) -> Result<GetRingMemberOpeningsResponse, RingIndexerError> {
+        request: GetStorageMemberOpeningsRequest,
+    ) -> Result<GetStorageMemberOpeningsResponse, RingIndexerError> {
+        self.record_requests.lock().unwrap().push(request.registry);
         let registry = self
             .registry
             .as_ref()
+            .filter(|_| request.registry == RECORDS.into())
             .ok_or(ClientError::UnsupportedRpcMethod(
-                "get_ring_member_openings",
+                "get_storage_member_openings",
             ))?;
-        Ok(GetRingMemberOpeningsResponse {
+        Ok(GetStorageMemberOpeningsResponse {
             context: spr_indexer_api::Context {
                 block_time: 0,
                 slot: SLOT,
@@ -432,14 +459,16 @@ impl AsyncRingIndexer for Chain {
         })
     }
 
-    async fn get_ring_record_pool(
+    async fn get_storage_record_pool(
         &self,
-        request: GetRingRecordPoolRequest,
-    ) -> Result<GetRingRecordPoolResponse, RingIndexerError> {
+        request: GetStorageRecordPoolRequest,
+    ) -> Result<GetStorageRecordPoolResponse, RingIndexerError> {
+        self.record_requests.lock().unwrap().push(request.registry);
         let registry = self
             .registry
             .as_ref()
-            .ok_or(ClientError::UnsupportedRpcMethod("get_ring_record_pool"))?;
+            .filter(|_| request.registry == RECORDS.into())
+            .ok_or(ClientError::UnsupportedRpcMethod("get_storage_record_pool"))?;
         let members: Vec<[u8; 32]> = request.members.iter().map(|member| member.0).collect();
         let pool = registry
             .tree
@@ -448,7 +477,7 @@ impl AsyncRingIndexer for Chain {
                 Canopy::covering(request.openings as usize).unwrap(),
             )
             .unwrap();
-        Ok(GetRingRecordPoolResponse {
+        Ok(GetStorageRecordPoolResponse {
             context: spr_indexer_api::Context {
                 block_time: 0,
                 slot: SLOT,
@@ -581,29 +610,29 @@ impl Registry {
         self.tree.root().unwrap()
     }
 
-    fn account(&self, rules: &RuleTable) -> Account {
-        let bump = Address::find_program_address(&[MEMBER_REGISTRY_PDA_SEED], &program()).1;
-        let mut registry = MemberRegistry::new(bump, SLOT);
-        registry.push_root(
-            self.root(),
-            AppliedAt {
-                applied: 0,
-                slot: SLOT,
-            },
-        );
+    /// The `RECORDS` registry at `REVISION`.
+    fn records(&self) -> Account {
+        let mut records = StorageRegistry::new(authority(), 0);
+        records.roots[0].hash = self.root();
+        records.roots[0].revision = Revision::from(REVISION);
+        account(STORAGE_PROGRAM_ID, &records)
+    }
+
+    /// `rules` over the records.
+    fn policy(&self, mut policy: Box<RingPolicy>, rules: &RuleTable) -> Account {
+        policy.records = RECORDS;
         let mut sources = [SourceSlot::zeroed(); N_SOURCE_SLOTS];
         for list in rules.referenced().iter() {
             sources[list.slot()].list_id = list as u8;
         }
-        registry.set_policy(sources, rules.encode(), SLOT).unwrap();
-        account(program(), &registry)
+        policy.set_policy(sources, rules.encode(), SLOT).unwrap();
+        account(program(), &*policy)
     }
 
-    fn root_view(&self) -> RingRegistryRootView {
-        RingRegistryRootView {
+    fn root_view(&self) -> StorageRootView {
+        StorageRootView {
             root: Hash(self.root()),
-            root_index: 1,
-            applied: 0,
+            revision: REVISION,
             next_index: self.tree.records().len() as u64,
         }
     }
@@ -644,4 +673,60 @@ impl Registry {
         view.mint_policy = record.mint_policy;
         view
     }
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct MessageCase {
+    pub name: String,
+    pub message: Base64String,
+    /// A `MessageMismatch` variant, or `Accepted`.
+    pub verdict: String,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct MessageVector<R> {
+    pub description: String,
+    pub request: R,
+    pub cases: Vec<MessageCase>,
+}
+
+pub(crate) fn verdict(checked: Result<crate::VerifiedMessage, crate::MessageMismatch>) -> String {
+    checked.map_or_else(
+        |mismatch| format!("{mismatch:?}"),
+        |_| "Accepted".to_owned(),
+    )
+}
+
+/// Compiled as Ring RPC compiles its relay messages.
+pub(crate) fn relay_message(
+    fee_payer: &Address,
+    instructions: &[solana_instruction::Instruction],
+    units: u32,
+) -> Base64String {
+    spr_client::compile_message(
+        fee_payer,
+        instructions,
+        solana_message::Hash::new_from_array([0x7b; 32]),
+        spr_client::ComputeBudgetConfig::new(units),
+    )
+    .unwrap()
+    .serialize()
+    .into()
+}
+
+/// `UPDATE_RELAY_MESSAGES=1` rewrites the file from `fresh`, the committed file is the one read.
+pub(crate) fn pinned_vector<R>(name: &str, fresh: MessageVector<R>) -> MessageVector<R>
+where
+    R: serde::Serialize + serde::de::DeserializeOwned,
+{
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-vectors/rpc")
+        .join(name);
+    if std::env::var_os("UPDATE_RELAY_MESSAGES").is_some() {
+        let json = serde_json::to_string_pretty(&fresh).unwrap();
+        std::fs::write(&path, json + "\n").unwrap();
+    }
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }

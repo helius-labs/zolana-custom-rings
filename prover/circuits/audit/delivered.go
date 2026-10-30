@@ -1,3 +1,10 @@
+// Proves that each recipient and the auditor can open the notes of a
+// confidential or delegate transfer. A false encrypted note would leave the
+// recipient with funds it cannot spend.
+//
+// Read after audit/audit.go, audit/layout.go, ringgadget/bytes.go. Read before
+// prover/ring/ring.go.
+
 package audit
 
 import (
@@ -8,7 +15,9 @@ import (
 	"github.com/consensys/gnark/std/rangecheck"
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
+	"github.com/helius-labs/zolana/prover/server/circuits/crypto/aes"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
@@ -21,12 +30,44 @@ import (
 // 5. Every UTXO's blinding is SPP's TXOB blinding over the seed tx_viewing_sk fixes.
 // 6. The disclosure opens a ring output's owner key and every UTXO's nullifier key, LayoutEscrow leaves the keys to the policy's escrow records.
 // 7. Every exit discloses its full opening, SeedOut and slots of 40 bytes appear exactly when a UTXO exits.
+// 8. A sender key holds every spent UTXO to the published sender and reopens SPP's private transaction hash over the same slots.
 
 type DeliveredAuditCircuit struct {
 	PublicInputHash frontend.Variable `gnark:",public"`
 	Capacity        int               `gnark:"-"`
 	AuditWires
 	Outputs []DeliveryWires
+}
+
+type DeliveryWires struct {
+	Output shared.UtxoWires
+	// RecipientKey is the X25519 u the body is sealed to.
+	RecipientKey [32]frontend.Variable
+	OwnerKey     [32]frontend.Variable
+	Body         [shared.BodyLen]frontend.Variable
+}
+
+type delivery struct {
+	outputSlot
+	// bodyHash is hash_bytes(body), zero on an exit.
+	bodyHash frontend.Variable
+	amount   []frontend.Variable
+}
+
+// DeliveredSenderAuditCircuit audits the in-proof owner rail, SPP hides the owner it verifies.
+type DeliveredSenderAuditCircuit struct {
+	DeliveredAuditCircuit
+	Shape DeliveredSenderShape `gnark:"-"`
+	// Sender is the published owner identity, bound to SPP's hidden owner through the spent UTXOs.
+	Sender            frontend.Variable
+	PrivateTxHash     frontend.Variable
+	PrivateTxBlinding frontend.Variable
+	Inputs            []shared.UtxoWires
+}
+
+type senderSpend struct {
+	sender, privateTxHash, privateTxBlinding frontend.Variable
+	inputs                                   []shared.UtxoWires
 }
 
 func NewDeliveredAuditCircuit(capacity int) (*DeliveredAuditCircuit, error) {
@@ -36,8 +77,30 @@ func NewDeliveredAuditCircuit(capacity int) (*DeliveredAuditCircuit, error) {
 	return &DeliveredAuditCircuit{Capacity: capacity, Outputs: make([]DeliveryWires, capacity)}, nil
 }
 
+func NewDeliveredSenderAuditCircuit(shape DeliveredSenderShape) (*DeliveredSenderAuditCircuit, error) {
+	if !slices.Contains(DeliveredSenderShapes[:], shape) {
+		return nil, fmt.Errorf("audit: unsupported delivered sender shape %+v, want one of %v", shape, DeliveredSenderShapes)
+	}
+	delivered, err := NewDeliveredAuditCircuit(shape.Outputs)
+	if err != nil {
+		return nil, err
+	}
+	return &DeliveredSenderAuditCircuit{DeliveredAuditCircuit: *delivered, Shape: shape, Inputs: make([]shared.UtxoWires, shape.Inputs)}, nil
+}
+
 func (c *DeliveredAuditCircuit) Define(api frontend.API) error {
-	if err := transaction.ValidateLength("output", len(c.Outputs), c.Capacity); err != nil {
+	return c.define(api, nil)
+}
+
+func (c *DeliveredSenderAuditCircuit) Define(api frontend.API) error {
+	if err := shared.ValidateLength("audit", "input", len(c.Inputs), c.Shape.Inputs); err != nil {
+		return err
+	}
+	return c.define(api, &senderSpend{sender: c.Sender, privateTxHash: c.PrivateTxHash, privateTxBlinding: c.PrivateTxBlinding, inputs: c.Inputs})
+}
+
+func (c *DeliveredAuditCircuit) define(api frontend.API, spend *senderSpend) error {
+	if err := shared.ValidateLength("audit", "output", len(c.Outputs), c.Capacity); err != nil {
 		return err
 	}
 	rc := rangecheck.New(api)
@@ -64,15 +127,36 @@ func (c *DeliveredAuditCircuit) Define(api frontend.API) error {
 	// 5. SeedOut and the exit bytes of every slot appear exactly when a UTXO exits.
 	layout.assertExits(api, slots)
 	// 6. Only the holder of tx_viewing_sk opens the disclosure of every slot.
-	statement := c.statement(api, envelope,
+	elements := []frontend.Variable{
 		gadget.HashChain4(api, hashes),
 		gadget.HashChain4(api, bodyHashes),
 		c.disclosure(api, envelope, layout, nullifierPks, slotBytes),
 		gadget.HashChain4(api, recipientKeys),
-	)
-	// 7. The one public input commits the statement the program rebuilds.
-	api.AssertIsEqual(c.PublicInputHash, statement)
+	}
+	if spend != nil {
+		// 7. Every spent UTXO is the sender's, over the slots SPP settles.
+		elements = append(elements, spend.bind(api, slots)...)
+	}
+	// 8. The one public input commits the statement the program rebuilds.
+	api.AssertIsEqual(c.PublicInputHash, c.statement(api, envelope, elements))
 	return nil
+}
+
+// bind holds every spent UTXO to the sender, mirrored by DeliveredSender in program-libs/interface/src/proof/statement.rs.
+//
+//	private_tx_hash, sender
+func (s *senderSpend) bind(api frontend.API, slots []outputSlot) []frontend.Variable {
+	inputHashes := make([]frontend.Variable, len(s.inputs))
+	for i, input := range s.inputs {
+		_, inputHashes[i] = spentBySender(api, input, 1, s.sender, i)
+	}
+	outputHashes := make([]frontend.Variable, len(slots))
+	for i, slot := range slots {
+		outputHashes[i] = api.Mul(slot.Utxo, slot.Hash)
+	}
+	// SPP's private transaction hash reopens over the same slots with no address input, so SPP spends the audited inputs.
+	api.AssertIsEqual(s.privateTxHash, transaction.PrivateTxHashCircuit(api, inputHashes, outputHashes, nil, s.privateTxBlinding))
+	return []frontend.Variable{s.privateTxHash, s.sender}
 }
 
 // disclosure is the delivered disclosure the layout flags select, mirrored by DisclosureLayout::Delivered in program-libs/interface/src/proof/disclosure.rs.
@@ -100,7 +184,69 @@ func (c *DeliveredAuditCircuit) disclosure(api frontend.API, e auditEnvelope, la
 
 // statement is the delivered audit preimage, mirrored by AuditStatement::elements under AuditKind::Delivered in program-libs/interface/src/proof/statement.rs.
 //
-//	head ‖ output_chain, body_chain, disclosure_chain, recipient_key_chain
-func (c *DeliveredAuditCircuit) statement(api frontend.API, e auditEnvelope, outputChain, bodyChain, disclosureChain, recipientKeyChain frontend.Variable) frontend.Variable {
-	return gadget.HashChain4(api, append(e.statementHead(c.AuditWires), outputChain, bodyChain, disclosureChain, recipientKeyChain))
+//	head ‖ output_chain, body_chain, disclosure_chain, recipient_key_chain ‖ private_tx_hash, sender on a sender key
+func (c *DeliveredAuditCircuit) statement(api frontend.API, e auditEnvelope, elements []frontend.Variable) frontend.Variable {
+	return gadget.HashChain4(api, append(e.statementHead(c.AuditWires), elements...))
+}
+
+func recipientKey(api frontend.API, slot outputSlot, key [32]frontend.Variable) [32]frontend.Variable {
+	var u [32]frontend.Variable
+	for j := range u {
+		// A slot without a recipient agrees with the base point, the ladder stays satisfiable on every slot.
+		u[j] = api.Select(slot.ring, key[j], basepointByte(j))
+	}
+	return u
+}
+
+// deliver proves a ring output's body opens to its committed blinding and amount for the holder of u.
+func (w AuditWires) deliver(api frontend.API, rc frontend.Rangechecker, e auditEnvelope, d DeliveryWires, slot outputSlot, u [32]frontend.Variable, i int) delivery {
+	// 1. One encoding per recipient key, an alias would key the slot secret and the owner tag to bytes the recipient never derives.
+	agreement := shared.AgreeCanonical(api, e.txViewingSk, u)
+	// 2. be32 is the one encoding below q, the recipient decodes the committed blinding.
+	blinding := ringgadget.FieldToBytesBEWith(api, rc, d.Output.Blinding)
+	// 3. The agreement's ECDH bounds every byte of u and returns canonical agreement bytes.
+	recipient := [2]frontend.Variable(shared.PackBounded(api, shared.Tagged(u)))
+	// 4. The slot secret binds the agreement, both keys, the salt, the slot and n0, no two slots share a keystream.
+	secret := shared.DeliveredSlot{
+		Agreement:      [2]frontend.Variable(shared.PackBounded(api, agreement[:])),
+		TxPk:           e.txPk,
+		Recipient:      recipient,
+		Salt:           e.salt,
+		OutputIndex:    i,
+		FirstNullifier: w.FirstNullifier,
+	}.Secret(api)
+	key, nonce := shared.AuditStreamKeySchedule(api, secret)
+	// 5. A ring output's body is the encryption of its opening, the recipient and the auditor decrypt the same bytes.
+	amount := ringgadget.UintBytesBE(api, d.Output.Amount, 8)
+	for j, b := range aes.NewCipher(api, key).CTREncrypt(nonce, slices.Concat(blinding[:], amount)) {
+		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: slot.ring, A: d.Body[j], B: b})
+	}
+	// 6. A ring output's owner is the identity of the key the disclosure names.
+	assertOwnerKey(api, slot, d.Output, d.OwnerKey)
+	return delivery{
+		outputSlot: slot,
+		// A ring output's body bytes are the cipher's bounded bytes, a dummy's random body binds nothing else.
+		bodyHash: api.Mul(api.Sub(1, slot.exit), gadget.HashBoundedBytes(api, d.Body[:])),
+		amount:   amount,
+	}
+}
+
+// slotDisclosure is owner_key ‖ ringTail on a ring output, asset ‖ u64be(amount) zero padded to its width on an exit.
+func slotDisclosure(api frontend.API, rc frontend.Rangechecker, o DeliveryWires, d delivery, ringTail []frontend.Variable) []frontend.Variable {
+	bytes := slices.Concat(masked(api, d.ring, o.OwnerKey[:]), masked(api, d.ring, ringTail))
+	// An exit discloses its asset as the one 32-byte encoding below q.
+	asset := ringgadget.FieldToBytesBEWith(api, rc, api.Mul(d.exit, o.Output.Asset))
+	exit := slices.Concat(asset[:], masked(api, d.exit, d.amount))
+	for j, b := range exit {
+		// A ring output and an exit exclude each other, so every byte holds one layout.
+		bytes[j] = api.Add(bytes[j], b)
+	}
+	return bytes
+}
+
+func basepointByte(j int) frontend.Variable {
+	if j == 0 {
+		return 9
+	}
+	return 0
 }

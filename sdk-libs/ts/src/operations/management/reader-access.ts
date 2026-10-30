@@ -1,38 +1,20 @@
 import { p256 } from "@noble/curves/nist.js";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
+import { isAddress, type Address } from "@solana/kit";
 import {
-  getProgramDerivedAddress,
-  isAddress,
-  type Address,
-  type Instruction,
-  type ProgramDerivedAddress,
-} from "@solana/kit";
-import type { ChainReader } from "@heliuslabs/zolana/client";
-import {
-  SYSTEM_PROGRAM,
-  meta,
   addressBytes,
   encodeBase58,
-  Reader,
-  sha256,
   equalBytes,
   checkedBytes,
   copyBytes,
+  hashBytes,
   wrapKeypairError,
 } from "@heliuslabs/zolana/internal";
-import type { SignerAccount } from "@heliuslabs/zolana/instructions";
-import {
-  type Bytes32,
-  type Bytes33,
-  type RequestContext,
-  ShieldedPublicKey,
-} from "@heliuslabs/zolana";
+import { type Bytes32, type Bytes33, ShieldedPublicKey } from "@heliuslabs/zolana";
 
-import { ringConfigAddress } from "../../protocol/pda/index.js";
+import { memberOfIdentity, memberOfTag, type Member } from "../../protocol/membership/policy.js";
 import { RingError } from "../../protocol/error.js";
-
-const encoder = new TextEncoder();
 
 /** Passkey public key for ring-rpc audit access. */
 export class P256ReaderKey {
@@ -77,24 +59,12 @@ export class P256ReaderKey {
   }
 }
 
-/** Rust `tag::GRANT_READ_ACCESS` and `tag::REVOKE_READ_ACCESS`. */
-const GRANT_READ_ACCESS_TAG = 4;
-const REVOKE_READ_ACCESS_TAG = 5;
 /** Rust `READER_KEY_P256` and `READER_KEY_ED25519`. */
 const READER_KEY_P256 = 0x00;
 const READER_KEY_ED25519 = 0x01;
 
 /** Mirrors Rust `ReaderKey`. */
 export type ReaderKey = Address | P256ReaderKey;
-
-/** Mirrors Rust `ReadAccessRecord`. */
-export interface ReadAccessRecord {
-  readonly reader: ReaderKey;
-  readonly bump: number;
-}
-
-const READ_ACCESS_RECORD_DISCRIMINATOR = 2;
-const READ_ACCESS_RECORD_SIZE = 36;
 
 /** Mirrors Rust `ReaderKey::ed25519` and `ReaderKey::p256`, a key that cannot sign a read is refused. */
 export function checkedReaderKey(reader: ReaderKey): ReaderKey {
@@ -122,6 +92,13 @@ export function readerKeyBytes(reader: ReaderKey): Uint8Array {
   const bytes = new Uint8Array(34);
   bytes.set(reader.toBytes(), 1);
   return bytes;
+}
+
+/** Mirrors Rust `ReaderKey::member`, the member whose record holds the reader's ring-wide grant. */
+export function readerKeyMember(reader: ReaderKey): Member {
+  return typeof reader === "string"
+    ? memberOfTag(addressBytes(reader, "reader"))
+    : memberOfIdentity(hashBytes(readerKeyBytes(reader)) as Bytes32);
 }
 
 /** Mirrors Rust `ReaderKey::from_bytes`. */
@@ -164,120 +141,4 @@ export function parseReaderKey(text: string): ReaderKey {
 
 export function readerKeyToString(reader: ReaderKey): string {
   return typeof reader === "string" ? reader : bytesToHex(reader.toBytes());
-}
-
-/** Mirrors Rust `ReaderKey::record_address`. */
-export async function readAccessRecordAddress(
-  ringProgramId: Address,
-  reader: ReaderKey,
-): Promise<Address> {
-  return (await readAccessRecordPda(ringProgramId, reader))[0];
-}
-
-async function readAccessRecordPda(
-  ringProgramId: Address,
-  reader: ReaderKey,
-): Promise<ProgramDerivedAddress> {
-  return getProgramDerivedAddress({
-    programAddress: ringProgramId,
-    seeds: [encoder.encode("reader"), sha256(readerKeyBytes(checkedReaderKey(reader)))],
-  });
-}
-
-/** Mirrors Rust `GrantReadAccess`. The authority signs, so a Squads-held authority grants by proposal. */
-export async function grantReadAccessInstruction(
-  input: Readonly<{
-    ringProgramId: Address;
-    payer: SignerAccount;
-    authority: SignerAccount;
-    reader: ReaderKey;
-  }>,
-): Promise<Instruction> {
-  const [config, record] = await Promise.all([
-    ringConfigAddress(input.ringProgramId),
-    readAccessRecordAddress(input.ringProgramId, input.reader),
-  ]);
-  return {
-    programAddress: input.ringProgramId,
-    accounts: [
-      meta(input.payer, true, true),
-      meta(input.authority, true, false),
-      meta(config, false, false),
-      meta(record, false, true),
-      meta(SYSTEM_PROGRAM, false, false),
-    ],
-    data: readerInstructionData(GRANT_READ_ACCESS_TAG, input.reader),
-  };
-}
-
-/** Mirrors Rust `RevokeReadAccess`. */
-export async function revokeReadAccessInstruction(
-  input: Readonly<{
-    ringProgramId: Address;
-    authority: SignerAccount;
-    reader: ReaderKey;
-    rentRecipient: Address;
-  }>,
-): Promise<Instruction> {
-  const [config, record] = await Promise.all([
-    ringConfigAddress(input.ringProgramId),
-    readAccessRecordAddress(input.ringProgramId, input.reader),
-  ]);
-  return {
-    programAddress: input.ringProgramId,
-    accounts: [
-      meta(input.authority, true, false),
-      meta(config, false, false),
-      meta(record, false, true),
-      meta(input.rentRecipient, false, true),
-    ],
-    data: readerInstructionData(REVOKE_READ_ACCESS_TAG, input.reader),
-  };
-}
-
-export function decodeReadAccessRecord(data: Uint8Array): ReadAccessRecord {
-  if (data.length !== READ_ACCESS_RECORD_SIZE || data[0] !== READ_ACCESS_RECORD_DISCRIMINATOR) {
-    throw new RingError("RING_READ_ACCESS_RECORD_INVALID", {
-      details: { length: data.length, discriminator: data[0] },
-    });
-  }
-  const reader = new Reader(data);
-  reader.u8("discriminator");
-  const tagged = reader.bytes(34, "reader");
-  const bump = reader.u8("bump");
-  reader.done();
-  let key: ReaderKey;
-  try {
-    key = readerKeyFromBytes(tagged);
-  } catch (cause) {
-    throw new RingError("RING_READ_ACCESS_RECORD_INVALID", { cause });
-  }
-  return Object.freeze({ reader: key, bump });
-}
-
-/** Mirrors Rust `CustomRing::read_read_access_record`, a record under the address that names another key is invalid. */
-export async function fetchReaderGrant(
-  client: Pick<ChainReader, "getAccount">,
-  ringProgramId: Address,
-  reader: ReaderKey,
-  context?: RequestContext,
-): Promise<boolean> {
-  const [record, bump] = await readAccessRecordPda(ringProgramId, reader);
-  const account = await client.getAccount(record, context);
-  if (account === undefined) return false;
-  if (account.owner !== ringProgramId) {
-    throw new RingError("RING_READ_ACCESS_RECORD_INVALID", { details: { record } });
-  }
-  const decoded = decodeReadAccessRecord(account.data);
-  if (!readerKeyEquals(decoded.reader, reader) || decoded.bump !== bump) {
-    throw new RingError("RING_READ_ACCESS_RECORD_INVALID", { details: { record } });
-  }
-  return true;
-}
-
-function readerInstructionData(tag: number, reader: ReaderKey): Uint8Array {
-  const data = new Uint8Array(35);
-  data[0] = tag;
-  data.set(readerKeyBytes(reader), 1);
-  return data;
 }

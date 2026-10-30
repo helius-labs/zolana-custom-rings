@@ -15,10 +15,11 @@ use std::{
 };
 
 use anyhow::{anyhow, ensure, Context, Result};
-use custom_ring_cli::{Zolana, ZolanaServices};
+use custom_ring_cli::{localnet::GENESIS_PROGRAMS, Zolana, ZolanaServices};
+use custom_ring_interface::RingRoles;
 use custom_ring_sdk::{
-    compute_unit_limit, CreateConfig, CreateMemberRegistry, CustomRing, InitSppRingConfig,
-    InstructionTag, MemberRecords, PolicyRules, RingError, RingKind,
+    compute_unit_limit, CustomRing, InitialPolicy, Initialize, InitializeStorage, InstructionTag,
+    MemberRecords, PolicyTable, RingError, RingKind,
 };
 use solana_address::Address;
 use solana_instruction::Instruction;
@@ -292,9 +293,50 @@ impl Tier {
             Self::AnonymousPolicy { .. } => RingKind::AnonymousPolicy,
         }
     }
+
+    fn shared_sources(&self) -> &[(ListId, CustomRing)] {
+        match self {
+            Self::Policy { shared_sources, .. } | Self::AnonymousPolicy { shared_sources, .. } => {
+                shared_sources
+            }
+            Self::AuditOnly | Self::AnonymousAuditOnly => &[],
+        }
+    }
 }
 
-/// The payer doubles as the config authority.
+/// Derived from the payer, every helper finds the same role keys.
+pub struct RingRoleKeys {
+    pub admin: Keypair,
+    pub pauser: Keypair,
+    pub cosign_admin: Keypair,
+}
+
+impl RingRoleKeys {
+    pub fn of(payer: &Keypair) -> Self {
+        let derive = |role: u8| {
+            let mut secret = *payer.secret_bytes();
+            secret[31] ^= role;
+            Keypair::new_from_array(secret)
+        };
+        Self {
+            admin: derive(1),
+            pauser: derive(2),
+            cosign_admin: derive(3),
+        }
+    }
+
+    /// `payer` holds the policy role.
+    pub fn roles(&self, payer: &Keypair) -> RingRoles {
+        RingRoles {
+            admin: self.admin.pubkey(),
+            policy: payer.pubkey(),
+            pauser: self.pauser.pubkey(),
+            cosign_admin: self.cosign_admin.pubkey(),
+        }
+    }
+}
+
+/// The payer doubles as the upgrade authority and the policy authority.
 pub struct RegisterRing<'a> {
     pub ring: CustomRing,
     pub payer: &'a Keypair,
@@ -302,108 +344,60 @@ pub struct RegisterRing<'a> {
     pub tier: Tier,
 }
 
-#[must_use]
-pub struct ConfiguredRing<'a> {
-    ring: CustomRing,
-    payer: &'a Keypair,
-    tier: Tier,
-}
-
-#[must_use]
-pub struct PinnedRing<'a> {
-    payer: &'a Keypair,
-    registration: Instruction,
-}
-
-impl<'a> RegisterRing<'a> {
+impl RegisterRing<'_> {
     pub fn send(self, client: &Zolana) -> Result<()> {
-        self.pin(client)?.register(client.rpc())
+        self.create_records(client.rpc())?;
+        let initialize = self.initialize(client)?;
+        send(client.rpc(), self.payer, &[initialize])?;
+        Ok(())
     }
 
-    pub fn pin(self, client: &Zolana) -> Result<PinnedRing<'a>> {
-        self.configure(client.rpc())?.pin(client)
+    /// The records registry `Initialize` binds.
+    pub fn create_records(&self, rpc: &SolanaRpc) -> Result<()> {
+        send(rpc, self.payer, &[self.storage().instruction()])?;
+        Ok(())
     }
 
-    /// A policy ring also gets its registry, the policy lives there.
-    pub fn configure(self, rpc: &SolanaRpc) -> Result<ConfiguredRing<'a>> {
+    /// Every ring binds its records, an audit-only ring with an empty table.
+    pub fn initialize(&self, client: &Zolana) -> Result<Instruction> {
         let authority = self.payer.pubkey();
-        let kind = self.tier.kind();
-        let mut instructions = vec![CreateConfig {
+        let empty = RuleTable::empty();
+        let rules = match &self.tier {
+            Tier::Policy { rules, .. } | Tier::AnonymousPolicy { rules, .. } => *rules,
+            Tier::AuditOnly | Tier::AnonymousAuditOnly => &empty,
+        };
+        let shared_sources = self.curator_records(client)?;
+        Ok(Initialize {
             ring: self.ring,
             payer: authority,
             authority,
             auditor_pubkey: self.auditor_pubkey,
-            kind,
+            kind: self.tier.kind(),
+            roles: RingRoleKeys::of(self.payer).roles(self.payer),
+            policy: Some(InitialPolicy {
+                records: self.storage().registry(),
+                table: PolicyTable {
+                    rules,
+                    shared_sources: &shared_sources,
+                },
+            }),
         }
-        .instruction()?];
-        if kind.has_policy() {
-            instructions.push(
-                CreateMemberRegistry {
-                    ring: self.ring,
-                    payer: authority,
-                    authority,
-                }
-                .instruction(),
-            );
-        }
-        send(rpc, self.payer, &instructions)?;
-        Ok(ConfiguredRing {
-            ring: self.ring,
-            payer: self.payer,
-            tier: self.tier,
-        })
-    }
-}
-
-impl<'a> ConfiguredRing<'a> {
-    /// The program refuses it for a policy ring until the policy is pinned.
-    pub fn registration(&self, client: &Zolana) -> Result<Instruction> {
-        let config = client.block_on(self.ring.require_config(client.as_async()))?;
-        let authority = self.payer.pubkey();
-        Ok(InitSppRingConfig {
-            ring: self.ring,
-            payer: authority,
-            authority,
-            config: &config,
-        }
-        .instruction())
+        .instruction()?)
     }
 
-    pub fn pin(self, client: &Zolana) -> Result<PinnedRing<'a>> {
-        let registration = self.registration(client)?;
-        if let Tier::Policy {
-            rules,
-            shared_sources,
-        }
-        | Tier::AnonymousPolicy {
-            rules,
-            shared_sources,
-        } = self.tier
-        {
-            let pin = PolicyRules {
-                ring: self.ring,
-                authority: self.payer.pubkey(),
-                rules,
-                shared_sources: &shared_sources,
-            }
-            .create()?;
-            send(client.rpc(), self.payer, &[pin])?;
-        }
-        Ok(PinnedRing {
-            payer: self.payer,
-            registration,
-        })
-    }
-}
-
-impl PinnedRing<'_> {
-    pub fn registration(&self) -> Instruction {
-        self.registration.clone()
+    fn storage(&self) -> InitializeStorage {
+        InitializeStorage::records(self.ring, self.payer.pubkey())
     }
 
-    pub fn register(self, rpc: &SolanaRpc) -> Result<()> {
-        send(rpc, self.payer, &[self.registration])?;
-        Ok(())
+    fn curator_records(&self, client: &Zolana) -> Result<Vec<(ListId, Address)>> {
+        self.tier
+            .shared_sources()
+            .iter()
+            .map(|&(list_id, curator)| {
+                let policy = client.block_on(curator.require_policy(client.as_async()))?;
+                Ok((list_id, policy.records))
+            })
+            .collect()
     }
 }
 
@@ -485,6 +479,7 @@ pub fn setup() -> Result<TestEnv> {
 pub fn setup_with_extra_rings(extra_ring_programs: &[Address]) -> Result<TestEnv> {
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../zolana");
     let artifacts = WorkspaceArtifacts::new(root);
+    let ring_artifacts = ring_artifacts();
     let cli =
         std::env::var("ZOLANA_CLI_BIN").unwrap_or_else(|_| artifacts.path("target/debug/zolana"));
     let ring_program = custom_ring_program_id()?;
@@ -507,7 +502,7 @@ pub fn setup_with_extra_rings(extra_ring_programs: &[Address]) -> Result<TestEnv
         ports: LocalnetPorts::checkout()?,
         account_dir: account_dir.into(),
         log_dir: artifacts.path("test-ledger").into(),
-        programs: vec![
+        programs: [
             (
                 user_registry_program_id(),
                 artifacts.path("target/deploy/spr_user_registry.so").into(),
@@ -518,7 +513,14 @@ pub fn setup_with_extra_rings(extra_ring_programs: &[Address]) -> Result<TestEnv
                     .path("target/deploy/squads_smart_account_program.so")
                     .into(),
             ),
-        ],
+        ]
+        .into_iter()
+        .chain(
+            GENESIS_PROGRAMS
+                .iter()
+                .map(|program| (program.address, ring_artifacts.path(program.path).into())),
+        )
+        .collect(),
         slot_time: None,
     };
     let deployments: Vec<UpgradeableProgram> = std::iter::once(UpgradeableProgram {
@@ -690,9 +692,12 @@ pub fn custom_ring_program_id() -> Result<Address> {
 }
 
 pub fn ring_program_so() -> String {
-    let artifacts = WorkspaceArtifacts::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
     std::env::var("CUSTOM_RING_PROGRAM_SO")
-        .unwrap_or_else(|_| artifacts.path("target/deploy/custom_ring_program.so"))
+        .unwrap_or_else(|_| ring_artifacts().path("target/deploy/custom_ring_program.so"))
+}
+
+fn ring_artifacts() -> WorkspaceArtifacts {
+    WorkspaceArtifacts::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
 }
 
 /// A fresh eddsa actor: one keypair funded on chain, its shielded address,
@@ -716,8 +721,27 @@ pub fn send(rpc: &SolanaRpc, payer: &dyn Signer, ixs: &[Instruction]) -> Result<
         ixs,
         payer.pubkey(),
         &[payer],
-        ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Transact)),
+        ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Transfer)),
     )?)
+}
+
+/// [`send`] with the role key the instructions name as their signer.
+#[must_use]
+pub struct SendAs<'a> {
+    pub rpc: &'a SolanaRpc,
+    pub payer: &'a dyn Signer,
+    pub holder: &'a dyn Signer,
+}
+
+impl SendAs<'_> {
+    pub fn send(self, ixs: &[Instruction]) -> Result<Signature> {
+        Ok(self.rpc.create_and_send_transaction(
+            ixs,
+            self.payer.pubkey(),
+            &[self.payer, self.holder],
+            ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Transfer)),
+        )?)
+    }
 }
 
 /// Sends a transaction that must be rejected and returns the runtime's typed failure,
@@ -746,7 +770,7 @@ pub struct RejectedTransact<'a> {
 impl RejectedTransact<'_> {
     pub fn send(self, rpc: &SolanaRpc) -> Result<ClientError> {
         let (blockhash, _) = rpc.get_latest_blockhash()?;
-        let budget = ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Transact));
+        let budget = ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Transfer));
         let message =
             compile_message(&self.payer.pubkey(), &[self.instruction], blockhash, budget)?;
         let signers: Vec<&dyn Signer> = std::iter::once(self.payer)

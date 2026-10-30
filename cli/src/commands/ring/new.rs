@@ -20,7 +20,7 @@ pub const DEFAULT_AUTHORITY_KEYPAIR: &str = "~/.config/solana/id.json";
 
 const DEVNET_RPC: &str = "https://api.devnet.solana.com";
 const DEVNET_INDEXER: &str = "https://d2xah7tnhdhcom.cloudfront.net";
-const DEVNET_PROVER: &str = spr_client::prover::tee::DEFAULT_PROVER_URL;
+const DEVNET_PROVER: &str = "https://dd73hh473h6ha.cloudfront.net";
 const DEVNET_RING_RPC: &str = "https://d24brah9h1i4q9.cloudfront.net";
 const DEVNET_RING_RPC_PUBKEY: &str = "C8TeRCdueRdXj3y4uFDtNywYThc3qeiH2ZGfcbYZzVSs";
 
@@ -72,6 +72,9 @@ pub fn run(args: NewArgs, ask: &mut dyn Ask, catalogue: Option<&str>) -> Result<
         authority_keypair: PathBuf::from(&args.authority_keypair),
         upgrade_authority_keypair: None,
         config_authority_keypair: None,
+        admin_keypair: None,
+        pauser_keypair: None,
+        cosign_admin_keypair: None,
         mode: answers.mode,
         policy: answers.policy,
         cosigner: None,

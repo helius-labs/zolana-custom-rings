@@ -1,16 +1,21 @@
+// Proves that the auditor can recover the secret behind the nullifier key a
+// member registers for escrow. Ring RPC checks the proof off chain before it
+// writes the key, the chain does not check it.
+//
+// Read after shared/envelope.go. Read before prover/ring/ring.go.
+
 package registry
 
 import (
 	"github.com/consensys/gnark/frontend"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
 // Properties:
 // 1. The nullifier key is Poseidon of the 31-byte nullifier secret the envelope seals to AuditorPk, so the auditor recovers the secret behind the escrowed key.
-// 2. The statement binds the member, the key, both tagged envelope keys and the ciphertext hash, and the program queues the escrow write Poseidon(nullifier_pk, ct_hash) from them.
+// 2. The statement binds the member, the key, both tagged envelope keys and the ciphertext hash, and Ring RPC checks it before the storage writer submits the escrow write Poseidon(nullifier_pk, ct_hash).
 // 3. No registry record and no UTXO owner is opened, the queue applies the write later.
 
 type RegisterKeyCircuit struct {
@@ -25,7 +30,7 @@ type RegisterKeyCircuit struct {
 func (c *RegisterKeyCircuit) Define(api frontend.API) error {
 	// 1. A zero lead byte keeps the secret below q, the envelope's cipher bounds the other 31 bytes.
 	api.AssertIsEqual(c.NullifierSecret[0], 0)
-	nullifierPk := gadget.PoseidonHash(api, gadget.PackBytesBEWith(api, ringgadget.BoundedBytes{}, c.NullifierSecret[1:]))
+	nullifierPk := gadget.PoseidonHash(api, shared.PackBounded(api, c.NullifierSecret[1:]))
 	// 2. The envelope seals the same 32 bytes to the auditor, its cipher bounds every ciphertext byte.
 	sealed := shared.Envelope{Plaintext: c.NullifierSecret[:], EphSk: c.EphSk, AuditorPk: c.AuditorPk, Info: shared.NfKeyEncInfo}.Seal(api)
 	// 3. The statement names the member and the envelope the program reads from the instruction.
@@ -35,8 +40,5 @@ func (c *RegisterKeyCircuit) Define(api frontend.API) error {
 
 // statement mirrors RegisterKeyStatement::elements in program-libs/interface/src/proof/statement.rs.
 func (c *RegisterKeyCircuit) statement(api frontend.API, nullifierPk frontend.Variable, sealed shared.Sealed) []frontend.Variable {
-	return []frontend.Variable{
-		shared.RegisterKeyDomain, c.Member, nullifierPk, sealed.Auditor[0], sealed.Auditor[1], sealed.Eph[0], sealed.Eph[1],
-		gadget.HashBoundedBytes(api, sealed.Ciphertext),
-	}
+	return append([]frontend.Variable{shared.RegisterKeyDomain, c.Member, nullifierPk}, sealed.StatementFields(api)...)
 }

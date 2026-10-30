@@ -29,13 +29,13 @@ pub fn run_move(ctx: &Context, args: DelegateMoveArgs) -> Result<()> {
         "the delegate keypair {} is not the ring's delegate {stored}",
         delegate.pubkey()
     );
+    let cosigner = CoSigner::read(ctx, &args.cosigner)?;
+    let move_cosigner = cosigner.sign(&config, Demand::Transfer)?;
     DualControl {
-        cosigner: config.co_signer.as_ref().map(|cosigner| cosigner.signer),
+        cosigner: move_cosigner.map(|signer| signer.pubkey()),
         delegate: Some(stored),
     }
     .check()?;
-    let cosigner = CoSigner::read(ctx, &args.cosigner)?;
-    let move_cosigner = cosigner.sign(&config, Demand::Transfer)?;
     // The auditor key decrypts recovery material, only the delegate signs.
     let auditor = ring_auditor_key(ctx, &args.auditor_key)?;
     let read = records::read_one(
@@ -90,6 +90,7 @@ pub fn run_move(ctx: &Context, args: DelegateMoveArgs) -> Result<()> {
                 })
                 .collect(),
             assets: assets.registry(),
+            co_signer: move_cosigner.map(|signer| signer.pubkey()),
         }
         .select(ctx.ring_client()),
     )?;

@@ -61,7 +61,7 @@ def main():
     for name in sorted(names):
         log = args.keys_dir/(name+'.log')
         if log.exists():
-            match = re.search(r'nbConstraints=(\d+)',log.read_text())
+            match = re.search(r'nbConstraints=(\d+)',re.sub(r'\x1b\[[0-9;]*m','',log.read_text()))
             if match: costs[name.removesuffix('.key')] = int(match[1])
     if len(costs)!=len(names): raise SystemExit('Missing constraint counts from setup logs')
     (ROOT/'prover/ringtest/ringkey/constraints.json').write_text(json.dumps(dict(sorted(costs.items())),indent=2)+'\n')

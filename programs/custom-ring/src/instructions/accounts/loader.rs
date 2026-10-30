@@ -1,10 +1,10 @@
 use custom_ring_interface::{
-    anonymous_exit_destination, CustomRingError, MemberRegistry, RecordQueue, RingAccount,
-    RingProgramConfig, SettlementAccount, TokenAccountState,
+    anonymous_exit_destination, cosign::CoSignRequirement, storage::StorageRegistry, CoSigner,
+    CustomRingError, LiveRoots, RingAccount, RingPolicy, RingRole, RootRead, SettlementAccount,
+    TokenAccountState, STORAGE_PROGRAM_ID,
 };
 use pinocchio::{
     account::{Ref, RefMut},
-    address::address_eq,
     error::ProgramError,
     AccountView, Address, ProgramResult,
 };
@@ -38,86 +38,110 @@ pub fn load_mut<'a, T: RingAccount>(
     RefMut::filter_map(data, T::from_data_mut).map_err(|_| T::INVALID.into())
 }
 
-/// The ring config, its mode byte known.
 #[inline(always)]
-pub fn load_config<'a>(
+pub fn load_policy<'a>(
     program_id: &Address,
     account: &'a AccountView,
-) -> Result<Ref<'a, RingProgramConfig>, ProgramError> {
-    load(program_id, account)
-}
-
-/// The config whose authority is `authority`, the processor checks the signature.
-#[inline(always)]
-pub fn load_authorized_config<'a>(
-    program_id: &Address,
-    config: &'a AccountView,
-    authority: &AccountView,
-) -> Result<Ref<'a, RingProgramConfig>, ProgramError> {
-    let config = load_config(program_id, config)?;
-    check_authority(&config, authority)?;
-    Ok(config)
-}
-
-#[inline(always)]
-pub fn load_authorized_config_mut<'a>(
-    program_id: &Address,
-    config: &'a mut AccountView,
-    authority: &AccountView,
-) -> Result<RefMut<'a, RingProgramConfig>, ProgramError> {
-    let config = load_mut::<RingProgramConfig>(program_id, config)?;
-    check_authority(&config, authority)?;
-    Ok(config)
-}
-
-fn check_authority(config: &RingProgramConfig, authority: &AccountView) -> ProgramResult {
-    if authority.address() != &config.authority {
-        return Err(CustomRingError::UnauthorizedAuthority.into());
-    }
-    Ok(())
-}
-
-#[inline(always)]
-pub fn load_registry<'a>(
-    program_id: &Address,
-    account: &'a AccountView,
-) -> Result<Ref<'a, MemberRegistry>, ProgramError> {
+) -> Result<Ref<'a, RingPolicy>, ProgramError> {
     load(program_id, account)
 }
 
 #[inline(always)]
-pub fn load_registry_mut<'a>(
+pub fn load_policy_mut<'a>(
     program_id: &Address,
     account: &'a mut AccountView,
-) -> Result<RefMut<'a, MemberRegistry>, ProgramError> {
+) -> Result<RefMut<'a, RingPolicy>, ProgramError> {
     load_mut(program_id, account)
 }
 
-/// A registry of another ring, the `[b"members"]` PDA of the program owning it.
-pub fn load_curator_registry(
+/// The ring account whose `role` the signer holds, the processor checks the signature.
+#[must_use]
+pub struct RoleHolder<'a> {
+    pub program_id: &'a Address,
+    pub role: RingRole,
+    pub signer: &'a AccountView,
+}
+
+impl RoleHolder<'_> {
+    #[inline(always)]
+    pub fn load<'a>(self, ring: &'a AccountView) -> Result<Ref<'a, RingPolicy>, ProgramError> {
+        let ring = load_policy(self.program_id, ring)?;
+        ring.check_role(self.role, self.signer.address())?;
+        Ok(ring)
+    }
+
+    #[inline(always)]
+    pub fn load_mut<'a>(
+        self,
+        ring: &'a mut AccountView,
+    ) -> Result<RefMut<'a, RingPolicy>, ProgramError> {
+        let ring = load_policy_mut(self.program_id, ring)?;
+        ring.check_role(self.role, self.signer.address())?;
+        Ok(ring)
+    }
+}
+
+/// Any authority's registry, the storage program creates it only at its canonical PDA.
+pub fn load_storage_registry(
     account: &AccountView,
-) -> Result<Ref<'_, MemberRegistry>, ProgramError> {
-    let invalid = CustomRingError::InvalidCuratorRegistry;
-    let curator_program = *account.owner();
-    let data = account.try_borrow().map_err(|_| invalid)?;
-    let registry = Ref::filter_map(data, MemberRegistry::from_data).map_err(|_| invalid)?;
-    let address = Address::derive_address(
-        &[MemberRegistry::SEED],
-        Some(registry.bump),
-        &curator_program,
-    );
-    if !address_eq(account.address(), &address) {
+) -> Result<Ref<'_, StorageRegistry>, ProgramError> {
+    let invalid = CustomRingError::InvalidStorageRegistry;
+    if !account.owned_by(&STORAGE_PROGRAM_ID) {
         return Err(invalid.into());
     }
-    Ok(registry)
+    let data = account.try_borrow().map_err(|_| invalid)?;
+    Ref::filter_map(data, StorageRegistry::from_data).map_err(|_| invalid.into())
 }
 
-#[inline(always)]
-pub fn load_queue_mut<'a>(
-    program_id: &Address,
-    account: &'a mut AccountView,
-) -> Result<RefMut<'a, RecordQueue>, ProgramError> {
-    load_mut(program_id, account)
+/// The ring's live registries, read where an instruction names them after the ring account.
+pub struct RingRegistries<'a> {
+    own: Option<Ref<'a, StorageRegistry>>,
+    curator: Option<Ref<'a, StorageRegistry>>,
+    pub len: usize,
+}
+
+impl RingRegistries<'_> {
+    pub fn roots(&self, slot: u64) -> LiveRoots<'_> {
+        LiveRoots {
+            own: self.own.as_deref(),
+            curator: self.curator.as_deref(),
+            slot,
+        }
+    }
+}
+
+#[must_use]
+pub struct RegistrySlots<'a> {
+    pub ring: &'a RingPolicy,
+    pub read: RootRead,
+}
+
+impl RegistrySlots<'_> {
+    /// `UnboundRegistry` unless each account `next` yields is the bound one, the records first.
+    #[inline(never)]
+    pub fn load<'b>(
+        self,
+        mut next: impl FnMut() -> Result<&'b AccountView, ProgramError>,
+    ) -> Result<RingRegistries<'b>, ProgramError> {
+        let mut registries = RingRegistries {
+            own: None,
+            curator: None,
+            len: 0,
+        };
+        for (index, bound) in self.ring.root_registries(self.read).enumerate() {
+            let account = next()?;
+            if account.address() != &bound {
+                return Err(CustomRingError::UnboundRegistry.into());
+            }
+            let registry = Some(load_storage_registry(account)?);
+            match index {
+                0 => registries.own = registry,
+                _ => registries.curator = registry,
+            }
+            registries.len = index + 1;
+        }
+        Ok(registries)
+    }
 }
 
 /// The shielded pool by address, its account position differs per forwarded layout.
@@ -146,14 +170,26 @@ pub fn check_funding_signer(
     Ok(funder)
 }
 
-pub fn check_co_signer(account: &AccountView, expected: &Address) -> ProgramResult {
-    if !account.is_signer() {
-        return Err(CustomRingError::MissingCoSigner.into());
+/// The demanded co-signature's `[co_signer_record, co_signer]` slot.
+#[must_use]
+pub struct CoSignerSlot<'a> {
+    pub program_id: &'a Address,
+    pub record: &'a AccountView,
+    pub signer: &'a AccountView,
+}
+
+impl CoSignerSlot<'_> {
+    /// The record's signer, signing.
+    pub fn verify(self, requirement: CoSignRequirement) -> Result<Address, ProgramError> {
+        let expected = requirement.check(&*load::<CoSigner>(self.program_id, self.record)?)?;
+        if !self.signer.is_signer() {
+            return Err(CustomRingError::MissingCoSigner.into());
+        }
+        if self.signer.address() != &expected {
+            return Err(CustomRingError::UnauthorizedCoSigner.into());
+        }
+        Ok(expected)
     }
-    if account.address() != expected {
-        return Err(CustomRingError::UnauthorizedCoSigner.into());
-    }
-    Ok(())
 }
 
 /// Passes only the program's nonzero loader-v3 upgrade authority.

@@ -7,6 +7,8 @@ mod account;
 mod admin;
 #[path = "rpc/client.rs"]
 mod client;
+#[path = "validation/co_signer.rs"]
+mod co_signer;
 #[path = "operations/deposit.rs"]
 mod deposit;
 mod error;
@@ -26,10 +28,16 @@ mod prover;
 mod records;
 #[path = "operations/register_key.rs"]
 mod register_key;
+#[path = "rpc/relay.rs"]
+mod relay;
+#[path = "validation/relay_message.rs"]
+mod relay_message;
 #[path = "codec/request.rs"]
 mod request;
 #[path = "operations/utxo_selection.rs"]
 mod select;
+#[path = "operations/storage.rs"]
+mod storage;
 #[path = "operations/submission.rs"]
 mod submission;
 #[cfg(test)]
@@ -48,38 +56,44 @@ pub use spr_program::instruction::{DepositAsset, DepositSplAccounts};
 pub use crate::prover::secret_json_body;
 pub use crate::{
     account::{
-        CustomRing, CustomRingCoSigner, CustomRingConfig, PinnedPolicy, QueueStatus, RegistryRoot,
-        RegistryStatus, RingRegistration, RingStatus,
+        CustomRing, CustomRingCoSigner, CustomRingConfig, PinnedPolicy, RingRegistration,
+        RingStatus,
     },
     admin::{
-        CreateConfig, CreateMemberRegistry, GrantReader, InitSppRingConfig, PolicyRules,
-        RevokeReader, SetAuthority, SetCoSigner, SetDelegate, SetSourceOwner, SourceOwner,
+        ClearCoSigner, InitialPolicy, Initialize, PolicyTable, PolicyUpdate, SetCoSigner,
+        SetDelegate, SourceOwner, UpdateAuthority, UpdatePolicy,
     },
     client::{RingClient, RingIndexerBackend},
     deposit::{
-        fetch_asset_id_async, DepositRecipient, PreparedRingDeposit, RingDeposit,
+        fetch_asset_id_async, DepositRecipient, PreparedRingDeposit, RelayedDeposit, RingDeposit,
         RingDepositReceipt,
     },
     error::RingError,
+    limits::SenderOutflow,
     merge::{
-        CustomRingMerge, CustomRingMergeInstruction, MergeProofInput, PreparedCustomRingMerge,
-        ProvenCustomRingMerge, RingMergeOperation, MAX_RING_MERGE_INPUTS,
+        CustomRingMerge, CustomRingMergeInstruction, MergeProofInput, MergeRelay,
+        PreparedCustomRingMerge, ProvenCustomRingMerge, RingMergeOperation, MAX_RING_MERGE_INPUTS,
         MERGE_DEFAULT_INPUT_COUNT,
     },
     pipeline::{
         shape_keyed, Anonymous, AnonymousMove, AnonymousPayment, AnonymousTransfer,
         CustomRingTransfer, CustomRingTransferInput, DelegateMove, DelegateOutput, DelegatePayment,
         DelegateTransfer, DelegateTransferInput, Delegated, EntrySpend, Owner, ProvenRingTransfer,
-        Rail, RailKind, RingPayment, RingSender, RingTransfer,
+        Rail, RailKind, Relayed, RelayedTransfer, RelayedTransferInput, RingPayment, RingSender,
+        RingTransfer,
     },
     records::{
-        AuthorityListWrite, MemberListWrite, MemberRecords, ProvenRecordWrite, RecordApplication,
+        AuthorityRecordUpdate, MemberRecords, RecordUpdateService, RecordUpdateTarget,
+        WalletRecordUpdate,
     },
-    register_key::{
-        EscrowedRecipients, KeyEscrowAuthority, ProvenKeyRegistration, RegisterKey, SealedEscrow,
-    },
+    register_key::{EscrowedRecipients, KeyEscrowAuthority, KeyRegistration, SealedEscrow},
+    relay::{PendingSignature, PreparedAuthorityTransfer, PreparedRelay, RelaySent, RingRelay},
+    relay_message::{MessageMismatch, VerifiedMessage},
     select::{select_merge_where, select_spend_where},
-    submission::{RingOperation, RingSubmission, SettledSubmission, SubmissionStatus},
+    storage::{InitializeStorage, StorageApplyProof, UpdateStorage, UpdateStorageAuthority},
+    submission::{
+        live_registry, RingOperation, RingSubmission, SettledSubmission, SubmissionStatus,
+    },
     trees::tree_id,
 };
 pub use zolana_ring_client::FirstContact;

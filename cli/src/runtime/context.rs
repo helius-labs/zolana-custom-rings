@@ -1,5 +1,7 @@
 //! Loaded ring context and transaction landing.
 
+use zolana_ring_client::rpc::RECORD_UPDATE_SLOTS;
+
 use super::*;
 
 pub struct Context {
@@ -160,6 +162,26 @@ impl Context {
         Ok(payer)
     }
 
+    /// The policy role reads `config_authority_keypair`.
+    pub fn role_keypair_path(&self, role: RingRole) -> Result<PathBuf> {
+        let (configured, default) = match role {
+            RingRole::Policy => {
+                return config::expand_tilde(self.config.config_authority_keypair())
+            }
+            RingRole::Admin => (&self.config.admin_keypair, ADMIN_KEYPAIR_FILE),
+            RingRole::Pauser => (&self.config.pauser_keypair, PAUSER_KEYPAIR_FILE),
+            RingRole::CosignAdmin => (&self.config.cosign_admin_keypair, COSIGN_ADMIN_KEYPAIR_FILE),
+        };
+        match configured {
+            Some(path) => config::expand_tilde(path),
+            None => Ok(self.path(Path::new(default))),
+        }
+    }
+
+    pub fn role_keypair(&self, role: RingRole) -> Result<Keypair> {
+        file::read_keypair(&self.role_keypair_path(role)?)
+    }
+
     /// For a step that only pays fees and small rent.
     pub fn funded_authority(&self) -> Result<&Keypair> {
         let authority = self.authority()?;
@@ -263,6 +285,37 @@ impl Context {
 
     pub fn ring_rpc(&self) -> RingRpcClient {
         RingRpcClient::new(&self.config.urls().ring_rpc)
+    }
+
+    pub fn record_update_target(&self) -> Result<custom_ring_sdk::RecordUpdateTarget> {
+        let policy = self
+            .block(
+                self.ring
+                    .read::<custom_ring_interface::RingPolicy>(self.chain()),
+            )?
+            .context("the ring has no policy account, run `zolana-ring init` first")?;
+        Ok(custom_ring_sdk::RecordUpdateTarget {
+            genesis_hash: self.rpc().genesis_hash()?,
+            ring: self.ring,
+            registry: policy.records,
+            valid_until_slot: self.rpc().get_slot()?.saturating_add(RECORD_UPDATE_SLOTS),
+        })
+    }
+
+    /// Under the service key the ring rpc reports, refused when ring.toml pins another.
+    pub fn ring_rpc_target(&self) -> Result<zolana_ring_client::rpc::ReadTarget> {
+        let service = self.ring_rpc().service_pubkey()?;
+        if let Trust::Pinned(pinned) = self.trust(Trust::Unpinned)? {
+            ensure!(
+                pinned == service,
+                "the ring rpc reports service key {service}, ring.toml pins {pinned}"
+            );
+        }
+        Ok(zolana_ring_client::rpc::ReadTarget {
+            cluster: self.rpc().genesis_hash()?,
+            service,
+            ring: self.ring.program_id(),
+        })
     }
 
     /// `unpinned` applies only when ring.toml pins no service key.

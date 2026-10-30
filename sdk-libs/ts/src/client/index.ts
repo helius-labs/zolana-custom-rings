@@ -9,20 +9,21 @@ export {
   ringProvingKey,
 } from "../protocol/proof/proving-keys.js";
 export type { RingKeyCircuit } from "../protocol/proof/proving-keys.js";
-export { ANONYMOUS_MERGE_WIDTHS } from "../protocol/codec/ring-disclosure-layout.js";
+export { MERGE_WIDTHS } from "../protocol/codec/ring-disclosure-layout.js";
 export { RING_RULE_SLOTS, RING_SOURCE_SLOTS } from "../rpc/prover/types.js";
 export type { PresentRecordOpening } from "../rpc/prover/types.js";
 export type {
   AnonymousAuditProofRequest,
-  AnonymousMergeProofRequest,
   AnonymousSlotProofInputs,
   ApplyRecordsProofRequest,
   AuditEnvelopeProofInputs,
   DelegatePolicyProofRequest,
   DeliveredAuditProofRequest,
+  DeliveredSenderAuditProofRequest,
   DeliveredSlotProofInputs,
   DepositProofRequest,
   MemberPolicyProofRequest,
+  MergeProofRequest,
   MergeInputOpening,
   OutflowLimitProofInput,
   PolicyOutputOpening,
@@ -37,27 +38,12 @@ export type {
 } from "../rpc/prover/ring.js";
 export type { RingMergeDisclosureRequest } from "../crypto/audit/merge-disclosure.js";
 export type {
-  AnonymousRingTransactProofInput,
   AnonymousRingTransactProver,
-  HiddenOwnerAuthorization,
   ProvenAnonymousRingTransact,
-  RecordWrite,
-  RingApplyProofInputs,
   RingMemberOpening,
-  RingMemberOpenings,
-  RingMemberPage,
-  RingMemberPageRequest,
-  RingMemberProofRequest,
-  RingMemberRecordResult,
-  RingMemberRequest,
   RingMergeClient,
   RingProver,
-  RingQueueState,
-  RingRecordPool,
-  RingRecordPoolRequest,
   RingRecordReader,
-  RingRegistryRoot,
-  RingRegistryState,
   RingSealedKey,
   RingServedRecord,
   RingSealedNullifierKey,
@@ -65,4 +51,11 @@ export type {
   RingSubmissionPending,
   RingSubmissionStatus,
   RingSubmissionTransport,
+  StorageMemberOpenings,
+  StorageMemberPage,
+  StorageOpeningsRequest,
+  StoragePageRequest,
+  StorageRecordPool,
+  StorageRecordPoolRequest,
+  StorageRoot,
 } from "../rpc/ports.js";

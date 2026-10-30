@@ -51,17 +51,9 @@ import {
 } from "@heliuslabs/zolana/client";
 import type { SignerAccount } from "@heliuslabs/zolana/instructions";
 
-import {
-  ringConfigAddress,
-  ringMemberRegistryAddress,
-  ringRecordQueueAddress,
-} from "../pda/index.js";
+import { ringPolicyAddress } from "../pda/index.js";
 import { BPF_LOADER_UPGRADEABLE_ID, ringProgramDataAddress } from "../membership/config.js";
-import {
-  decodeRingMemberRegistry,
-  decodeRingProgramConfig,
-  decodeRingRecordQueue,
-} from "../codec/ring-codecs.js";
+import { decodeRingPolicy } from "../codec/ring-codecs.js";
 import { RingError, wrapRingError } from "../error.js";
 import { checkRingElf } from "../elf.js";
 
@@ -538,9 +530,7 @@ async function ensureRingStateCompatible(
   context: RequestContext | undefined,
 ): Promise<void> {
   const accounts = [
-    { account: "config", address: ringConfigAddress, decode: decodeRingProgramConfig },
-    { account: "registry", address: ringMemberRegistryAddress, decode: decodeRingMemberRegistry },
-    { account: "queue", address: ringRecordQueueAddress, decode: decodeRingRecordQueue },
+    { account: "policy", address: ringPolicyAddress, decode: decodeRingPolicy },
   ] as const;
   for (const { account, address, decode } of accounts) {
     const stored = await params.client.getAccount(await address(params.ringProgramId), context);

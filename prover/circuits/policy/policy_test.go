@@ -168,6 +168,10 @@ var refusals = []struct {
 		w.Inputs[1] = ringpolicy.Slot{Owner: ringpolicy.Alice, Asset: ringpolicy.AssetA, Amount: 100}
 	}, in: "policy.(*DelegatePolicyCircuit).sender"},
 	{name: "delegate move without a spent input", honest: delegate2, world: func(w *ringpolicy.World) { w.Inputs[0] = ringpolicy.Slot{} }, in: "policy.(*DelegatePolicyCircuit).sender"},
+	{name: "output owner other than its public recipient", honest: ringpolicy.Confidential, witness: func(t testing.TB, b ringpolicy.Witness) {
+		b.Policy().Recipients[0] = ringpolicy.Bob
+		b.Rebind(t)
+	}, in: "policy.(*PolicyInputs).assertRecipients", wide: true},
 	{name: "owner off a required list", honest: ringpolicy.Confidential, world: func(w *ringpolicy.World) { w.Own[ringpolicy.Alice] = ringpolicy.Escrowed(0) }, in: "policy.(*PolicyInputs).assertRules", wide: true},
 	{name: "owner on a forbidden list", honest: blocked, world: func(w *ringpolicy.World) {
 		w.Own[ringpolicy.Alice] = ringpolicy.Escrowed(ringregistry.AllowBit | ringregistry.BlockBit)

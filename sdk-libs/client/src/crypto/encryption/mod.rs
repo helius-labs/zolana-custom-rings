@@ -150,8 +150,8 @@ impl SealedNullifierKey {
 pub struct DepositOpening {
     pub owner_hash: [u8; 32],
     pub blinding: Zeroizing<[u8; 32]>,
-    /// The Ed25519 owner key an anonymous ring discloses, the proof binds it to `owner_hash`.
-    pub owner_key: Option<[u8; 32]>,
+    /// The proof binds its Solana owner identity into `owner_hash`.
+    pub owner_key: [u8; 32],
 }
 
 /// Batch ciphertexts and the ephemeral secret the disclosure proof witnesses.
@@ -185,8 +185,7 @@ fn seal_deposits_with(
     for (slot, opening) in slots.iter_mut().zip(openings) {
         slot[..32].copy_from_slice(&opening.owner_hash);
         slot[32..RING_DEPOSIT_AUDIT_OWNER_KEY_OFFSET].copy_from_slice(opening.blinding.as_slice());
-        slot[RING_DEPOSIT_AUDIT_OWNER_KEY_OFFSET..]
-            .copy_from_slice(&opening.owner_key.unwrap_or_default());
+        slot[RING_DEPOSIT_AUDIT_OWNER_KEY_OFFSET..].copy_from_slice(&opening.owner_key);
     }
     seal_stream(&ephemeral, auditor_pk, DEPOSIT_SCHEDULE, &mut *plaintext)?;
     Ok(DepositEncryption {
@@ -223,7 +222,7 @@ pub fn open_deposit(
     let mut opening = DepositOpening {
         owner_hash: [0; 32],
         blinding: Zeroizing::new([0; 32]),
-        owner_key: None,
+        owner_key: [0; 32],
     };
     let key_offset = offset + RING_DEPOSIT_AUDIT_OWNER_KEY_OFFSET;
     opening
@@ -232,9 +231,9 @@ pub fn open_deposit(
     opening
         .blinding
         .copy_from_slice(&plaintext[offset + 32..key_offset]);
-    let mut owner_key = [0u8; 32];
-    owner_key.copy_from_slice(&plaintext[key_offset..opened.end]);
-    opening.owner_key = (owner_key != [0; 32]).then_some(owner_key);
+    opening
+        .owner_key
+        .copy_from_slice(&plaintext[key_offset..opened.end]);
     if Poseidon::hashv(&[&opening.owner_hash, opening.blinding.as_slice()])? != *owner_utxo_hash {
         return Err(AuditError::DepositOpeningMismatch);
     }
@@ -383,12 +382,12 @@ mod tests {
             DepositOpening {
                 owner_hash: word(1),
                 blinding: Zeroizing::new(word(3)),
-                owner_key: None,
+                owner_key: [0; 32],
             },
             DepositOpening {
                 owner_hash: word(2),
                 blinding: Zeroizing::new(word(4)),
-                owner_key: None,
+                owner_key: [0; 32],
             },
         ];
         let sealed = seal_deposits_with(&openings, &auditor.pubkey(), ephemeral).unwrap();
@@ -421,15 +420,25 @@ mod tests {
             anonymous: false,
             owner_utxo_hashes: &owners,
             ciphertexts: &sealed.ciphertexts,
+            assets: &[
+                custom_ring_interface::DepositedAsset {
+                    asset: word(5),
+                    amount: 7,
+                },
+                custom_ring_interface::DepositedAsset {
+                    asset: word(6),
+                    amount: 8,
+                },
+            ],
             auditor_pk: auditor.pubkey().as_bytes(),
             eph_pk: sealed.ephemeral_pk.as_bytes(),
-            member_registry_root: None,
+            registry: None,
         }
         .hash()
         .unwrap();
         assert_eq!(
             hex::encode(public_hash),
-            "0313e323a3870bacb7042d78648a0d01d5f5b4ddfa56ee3024bcd26207ebe4f3"
+            "29429067e1c71c8fde746d04e9c20bed8b73c04e7a7836095586322c57ab5078"
         );
     }
 
@@ -440,8 +449,7 @@ mod tests {
             .map(|index| DepositOpening {
                 owner_hash: [index as u8; 32],
                 blinding: Zeroizing::new([index as u8 + 1; 32]),
-                // Odd slots disclose an owner key like an anonymous ring.
-                owner_key: (index % 2 == 1).then_some([index as u8 + 2; 32]),
+                owner_key: [index as u8 + 2; 32],
             })
             .collect();
         let sealed = seal_deposits(&openings, &auditor.pubkey()).unwrap();
@@ -498,7 +506,7 @@ mod tests {
             .map(|_| DepositOpening {
                 owner_hash: [0; 32],
                 blinding: Zeroizing::new([0; 32]),
-                owner_key: None,
+                owner_key: [0; 32],
             })
             .collect();
         assert!(matches!(

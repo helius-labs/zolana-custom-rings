@@ -62,6 +62,15 @@ type DeliveredAuditParams struct {
 	Outputs []DeliveredOutput `json:"outputs"`
 }
 
+type DeliveredSenderAuditParams struct {
+	DeliveredAuditParams
+	Sender            Field `json:"sender"`
+	PrivateTxHash     Field `json:"privateTxHash"`
+	PrivateTxBlinding Field `json:"privateTxBlinding"`
+	// Inputs fill the input class, a slot SPP spends no UTXO from carries none.
+	Inputs []Opening `json:"inputs"`
+}
+
 type AnonymousOutput struct {
 	Output   Opening `json:"output"`
 	OwnerKey Bytes   `json:"ownerKey"`
@@ -107,6 +116,7 @@ type RecordOpening struct {
 	EscrowKey           Field   `json:"escrowKey"`
 	MintPolicy          Field   `json:"mintPolicy"`
 	WithdrawalThreshold Field   `json:"withdrawalThreshold"`
+	AssetLimits         []Field `json:"assetLimits"`
 	Index               uint64  `json:"index"`
 	Path                []Field `json:"path"`
 }
@@ -115,12 +125,13 @@ type RecordOpening struct {
 type MemberOpening struct {
 	Present bool `json:"present"`
 	RecordOpening
-	LowMember              Field  `json:"lowMember"`
-	LowNext                Field  `json:"lowNext"`
-	LowLists               uint64 `json:"lowLists"`
-	LowEscrow              Field  `json:"lowEscrow"`
-	LowMintPolicy          Field  `json:"lowMintPolicy"`
-	LowWithdrawalThreshold Field  `json:"lowWithdrawalThreshold"`
+	LowMember              Field   `json:"lowMember"`
+	LowNext                Field   `json:"lowNext"`
+	LowLists               uint64  `json:"lowLists"`
+	LowEscrow              Field   `json:"lowEscrow"`
+	LowMintPolicy          Field   `json:"lowMintPolicy"`
+	LowWithdrawalThreshold Field   `json:"lowWithdrawalThreshold"`
+	LowAssetLimits         []Field `json:"lowAssetLimits"`
 }
 
 type Withdrawal struct {
@@ -144,16 +155,18 @@ type PolicyInputsParams struct {
 	AddressChain      Field           `json:"addressChain"`
 	PrivateTxBlinding Field           `json:"privateTxBlinding"`
 	Outputs           []OutputOpening `json:"outputs"`
+	Recipients        []Field         `json:"recipients"`
 	SenderPkHash      Field           `json:"senderPkHash"`
 }
 
 type PooledRecord struct {
-	Member              Field  `json:"member"`
-	Next                Field  `json:"next"`
-	Lists               uint64 `json:"lists"`
-	EscrowKey           Field  `json:"escrowKey"`
-	MintPolicy          Field  `json:"mintPolicy"`
-	WithdrawalThreshold Field  `json:"withdrawalThreshold"`
+	Member              Field   `json:"member"`
+	Next                Field   `json:"next"`
+	Lists               uint64  `json:"lists"`
+	EscrowKey           Field   `json:"escrowKey"`
+	MintPolicy          Field   `json:"mintPolicy"`
+	WithdrawalThreshold Field   `json:"withdrawalThreshold"`
+	AssetLimits         []Field `json:"assetLimits"`
 }
 
 type PooledSubject struct {
@@ -217,12 +230,13 @@ type DelegatePolicyParams struct {
 }
 
 type QueueEntry struct {
-	Member              Field  `json:"member"`
-	Mask                uint64 `json:"mask"`
-	Value               uint64 `json:"value"`
-	EscrowKey           Field  `json:"escrowKey"`
-	MintPolicy          Field  `json:"mintPolicy"`
-	WithdrawalThreshold Field  `json:"withdrawalThreshold"`
+	Member              Field   `json:"member"`
+	Mask                uint64  `json:"mask"`
+	Value               uint64  `json:"value"`
+	EscrowKey           Field   `json:"escrowKey"`
+	MintPolicy          Field   `json:"mintPolicy"`
+	WithdrawalThreshold Field   `json:"withdrawalThreshold"`
+	AssetLimits         []Field `json:"assetLimits"`
 }
 
 type RecordWrite struct {
@@ -233,6 +247,7 @@ type RecordWrite struct {
 	OldEscrow              Field      `json:"oldEscrow"`
 	OldMintPolicy          Field      `json:"oldMintPolicy"`
 	OldWithdrawalThreshold Field      `json:"oldWithdrawalThreshold"`
+	OldAssetLimits         []Field    `json:"oldAssetLimits"`
 	// Index and Path open the member's leaf or the leaf an insert takes.
 	Index                  uint64  `json:"index"`
 	Path                   []Field `json:"path"`
@@ -242,6 +257,7 @@ type RecordWrite struct {
 	LowEscrow              Field   `json:"lowEscrow"`
 	LowMintPolicy          Field   `json:"lowMintPolicy"`
 	LowWithdrawalThreshold Field   `json:"lowWithdrawalThreshold"`
+	LowAssetLimits         []Field `json:"lowAssetLimits"`
 	// LowIndex and LowPath open the low record.
 	LowIndex uint64  `json:"lowIndex"`
 	LowPath  []Field `json:"lowPath"`
@@ -268,14 +284,13 @@ type RegisterKeyParams struct {
 	AuditorPk       Bytes `json:"auditorPk"`
 }
 
-// DepositParams carries Ed25519 owner keys only for anonymous deposits.
 type DepositParams struct {
 	RequestHead
 	ContextHash        Field            `json:"contextHash"`
 	Count              uint32           `json:"count"`
 	Anonymous          bool             `json:"anonymous,omitempty"`
 	OwnerPkHashes      []Field          `json:"ownerPkHashes"`
-	OwnerKeys          *[]Bytes         `json:"ownerKeys,omitempty"`
+	OwnerKeys          []Bytes          `json:"ownerKeys"`
 	NullifierPks       []Field          `json:"nullifierPks"`
 	BlindingSecrets    []Field          `json:"blindingSecrets"`
 	CtHashes           []Field          `json:"ctHashes"`
@@ -284,9 +299,17 @@ type DepositParams struct {
 	AuditorPk          Bytes            `json:"auditorPk"`
 	KeyEscrow          bool             `json:"keyEscrow"`
 	MemberRegistryRoot Field            `json:"memberRegistryRoot"`
+	CuratorRoot        Field            `json:"curatorRoot"`
+	PolicyHash         Field            `json:"policyHash"`
+	Assets             []Field          `json:"assets"`
+	Amounts            []Field          `json:"amounts"`
+	// Table and AssetRecords are absent without a written policy, CuratorAssetRecords also without a curator source.
+	Table               *PolicyTable     `json:"table,omitempty"`
+	AssetRecords        []*MemberOpening `json:"assetRecords"`
+	CuratorAssetRecords []*MemberOpening `json:"curatorAssetRecords"`
 }
 
-// MergeInput is one SPP merge slot as the anonymous merge circuit opens it.
+// MergeInput is one SPP merge slot as the merge circuit opens it.
 type MergeInput struct {
 	Domain       Field `json:"domain"`
 	TreeID       Field `json:"treeId"`
@@ -295,24 +318,28 @@ type MergeInput struct {
 	RingDataHash Field `json:"ringDataHash"`
 }
 
-// AnonymousMergeParams discloses an anonymous ring's SPP merge to its auditor.
-type AnonymousMergeParams struct {
+// MergeParams discloses a ring's SPP merge to its auditor, Member is nil without key escrow.
+type MergeParams struct {
 	RequestHead
-	PartyIdentities    []Field      `json:"partyIdentities"`
-	PrivateTxHash      Field        `json:"privateTxHash"`
-	OutputUtxoHash     Field        `json:"outputUtxoHash"`
-	FirstNullifier     Field        `json:"firstNullifier"`
-	RingProgramID      Field        `json:"ringProgramId"`
-	AuditorPk          Bytes        `json:"auditorPk"`
-	Salt               Field        `json:"salt"`
-	EphSk              Bytes        `json:"ephSk"`
-	DisclosureKey      Bytes        `json:"disclosureKey"`
-	OwnerKey           Bytes        `json:"ownerKey"`
-	NullifierSecret    Field        `json:"nullifierSecret"`
-	MintChunks         []Field      `json:"mintChunks"`
-	Inputs             []MergeInput `json:"inputs"`
-	OutputTreeID       Field        `json:"outputTreeId"`
-	OutputRingDataHash Field        `json:"outputRingDataHash"`
+	PartyIdentities    []Field        `json:"partyIdentities"`
+	PrivateTxHash      Field          `json:"privateTxHash"`
+	OutputUtxoHash     Field          `json:"outputUtxoHash"`
+	FirstNullifier     Field          `json:"firstNullifier"`
+	RingProgramID      Field          `json:"ringProgramId"`
+	AuditorPk          Bytes          `json:"auditorPk"`
+	Salt               Field          `json:"salt"`
+	EphSk              Bytes          `json:"ephSk"`
+	DisclosureKey      Bytes          `json:"disclosureKey"`
+	OwnerKey           Bytes          `json:"ownerKey"`
+	NullifierSecret    Field          `json:"nullifierSecret"`
+	MintChunks         []Field        `json:"mintChunks"`
+	Inputs             []MergeInput   `json:"inputs"`
+	OutputTreeID       Field          `json:"outputTreeId"`
+	OutputRingDataHash Field          `json:"outputRingDataHash"`
+	KeyEscrow          bool           `json:"keyEscrow"`
+	MemberRegistryRoot Field          `json:"memberRegistryRoot"`
+	CtHash             Field          `json:"ctHash"`
+	Member             *RecordOpening `json:"member"`
 }
 
 // Unmarshal refuses an unknown or repeated key, a missing key without omitempty and trailing data.

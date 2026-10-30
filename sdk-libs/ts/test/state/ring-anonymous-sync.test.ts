@@ -37,6 +37,7 @@ import {
   ProofInputUtxo,
   SOL_MINT,
   Utxo,
+  Wallet as WalletState,
   type IndexedShieldedTransaction,
   type OutputSlot,
   type WalletUtxo,
@@ -44,6 +45,7 @@ import {
 
 import {
   AnonymousSync,
+  applyAnonymousScan,
   type AnonymousScan,
   type AnonymousStream,
   type AnonymousSyncClient,
@@ -701,6 +703,12 @@ describe("anonymous sync", () => {
     expect(
       next.utxos.filter((utxo) => !utxo.spent).map((utxo) => hex(utxo.outputContext.hash)),
     ).toEqual([hex(mergedHash)]);
+    const wallet = new WalletState({ identity: bob.address, registry: ASSETS });
+    for (const scan of [held, next, next]) await applyAnonymousScan(wallet, scan);
+    expect(wallet.utxos().map((utxo) => [hex(utxo.outputContext.hash), utxo.spent])).toEqual([
+      ...held.utxos.map((utxo) => [hex(utxo.outputContext.hash), true]),
+      [hex(mergedHash), false],
+    ]);
   });
 
   it("finds an own deposit on the sender tag and moves tx_count, a malformed capsule opens to nothing", async () => {

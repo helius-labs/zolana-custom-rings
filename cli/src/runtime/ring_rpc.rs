@@ -1,4 +1,5 @@
 use anyhow::{bail, ensure, Context as _, Result};
+use custom_ring_sdk::{CustomRing, InitializeStorage};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
 use solana_address::Address;
@@ -10,9 +11,15 @@ use zolana_ring_client::{
     auditor_view_tag,
     rpc::{
         AuditorKeyStatement, CreateAuditorKeyRequest, CreateAuditorKeyResponse,
-        DecryptedTransaction, DecryptedTransactionsPage, GetDecryptedTransactionsRequest,
-        GetDecryptedTransactionsResponse, HealthResponse, ReadTarget, RingState, RingStatusRequest,
-        RingStatusResponse, CREATE_AUDITOR_KEY, GET_DECRYPTED_TRANSACTIONS, HEALTH, RING_STATUS,
+        CreateRecordsRegistryRequest, CreateRecordsRegistryResponse, DecryptedTransaction,
+        DecryptedTransactionsPage, GetDecryptedTransactionsRequest,
+        GetDecryptedTransactionsResponse, GetPendingEnrolmentsRequest,
+        GetPendingEnrolmentsResponse, GetRecordUpdateStatusRequest, HealthResponse,
+        PendingEnrolment, ReadTarget, RecordUpdateStatus, RingState, RingStatusRequest,
+        RingStatusResponse, SubmitRecordUpdateRequest, SubmitRecordUpdateResponse,
+        CREATE_AUDITOR_KEY, CREATE_RECORDS_REGISTRY, GET_DECRYPTED_TRANSACTIONS,
+        GET_PENDING_ENROLMENTS, GET_RECORD_UPDATE_STATUS, HEALTH, RING_STATUS,
+        SUBMIT_RECORD_UPDATE,
     },
 };
 
@@ -119,6 +126,30 @@ impl RingRpcClient {
         })
     }
 
+    /// The ring's records PDA under the storage authority the service names, created on first call.
+    pub fn create_records_registry(
+        &self,
+        target: ReadTarget,
+        authority: &dyn Signer,
+    ) -> Result<Address> {
+        let ring = target.ring;
+        let request =
+            CreateRecordsRegistryRequest::create(target, authority.pubkey()).sign(authority)?;
+        let created: CreateRecordsRegistryResponse = self.call(CREATE_RECORDS_REGISTRY, request)?;
+        let records = created.registry.0;
+        let storage_authority = created.storage_authority.0;
+        let expected =
+            InitializeStorage::records(CustomRing::new(ring), storage_authority).registry();
+        ensure!(
+            records == expected,
+            "the ring rpc at {} named registry {} that is not the ring records under storage authority {}",
+            redact_url(&self.url),
+            records,
+            storage_authority
+        );
+        Ok(records)
+    }
+
     /// Unsigned, `release_auditor_key` is the attested path `init` pins from.
     pub fn ring_status(&self, ring: Address) -> Result<RingStatusResponse> {
         let ring_program_id = ring.to_bytes().into();
@@ -159,6 +190,64 @@ impl RingRpcClient {
                 Ok(page.value)
             })
         })
+    }
+
+    /// Blocks until the writer applies the update, a refusal fails.
+    pub fn apply_record_update(&self, request: SubmitRecordUpdateRequest) -> Result<u64> {
+        let update_id = request.verify()?;
+        let submitted: SubmitRecordUpdateResponse = self.call(SUBMIT_RECORD_UPDATE, request)?;
+        ensure!(
+            submitted.update_id == update_id,
+            "the ring rpc at {} answered another update id",
+            redact_url(&self.url)
+        );
+        wait_for("ring rpc to apply the record update", || {
+            let status: RecordUpdateStatus = self.call(
+                GET_RECORD_UPDATE_STATUS,
+                GetRecordUpdateStatusRequest {
+                    update_id: update_id.clone(),
+                },
+            )?;
+            match status {
+                RecordUpdateStatus::Applied { revision, .. } => Ok(Probe::Ready(revision)),
+                RecordUpdateStatus::Refused { reason } => {
+                    bail!("the writer refused the record update, {reason}")
+                }
+                RecordUpdateStatus::AwaitingAuthority
+                | RecordUpdateStatus::Queued
+                | RecordUpdateStatus::Submitted { .. } => Ok(Probe::NotYet),
+            }
+        })
+    }
+
+    /// Every page signed by the config authority, oldest first.
+    pub fn pending_enrolments(
+        &self,
+        target: ReadTarget,
+        authority: &dyn Signer,
+    ) -> Result<Vec<PendingEnrolment>> {
+        let mut enrolments = Vec::new();
+        let mut cursor = None;
+        for _ in 0..MAX_PAGES {
+            let read = GetPendingEnrolmentsRequest::read(target, authority.pubkey());
+            let read = match cursor.clone() {
+                Some(cursor) => read.with_cursor(cursor),
+                None => read,
+            };
+            let page: GetPendingEnrolmentsResponse =
+                self.call(GET_PENDING_ENROLMENTS, read.sign(authority)?)?;
+            let Some(next) = page.next_cursor else {
+                enrolments.extend(page.enrolments);
+                return Ok(enrolments);
+            };
+            ensure!(
+                page.enrolments.last().map(|row| &row.update_id) == Some(&next),
+                "the ring rpc named a cursor outside its page"
+            );
+            enrolments.extend(page.enrolments);
+            cursor = Some(next);
+        }
+        bail!("the ring rpc returned more than {MAX_PAGES} pending enrolment pages")
     }
 
     /// A service that holds another key for this ring can open nothing here.
@@ -374,6 +463,7 @@ mod tests {
             sender: None,
             inputs: Vec::new(),
             nullifiers: Vec::new(),
+            spenders: Vec::new(),
             signers: Vec::new(),
             withdrawals: Vec::new(),
         }

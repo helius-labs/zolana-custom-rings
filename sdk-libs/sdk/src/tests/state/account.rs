@@ -4,7 +4,7 @@ use super::support::{account, keypair, program, ring, Chain, Registry, RingSetti
 use crate::{PinnedPolicy, RingError};
 
 #[tokio::test]
-async fn the_status_carries_the_pinned_registry() {
+async fn the_status_carries_the_pinned_policy() {
     let member = keypair(1);
     let client = Chain::ring(RingSettings {
         has_policy: true,
@@ -13,18 +13,18 @@ async fn the_status_carries_the_pinned_registry() {
     .with_registry(Registry::new(&[(&member, 1)]), &super::pipeline_rules())
     .client();
     let status = ring().status(client.zolana()).await.unwrap();
-    let pinned = PinnedPolicy::of(status.registry.unwrap().account()).unwrap();
+    let pinned = PinnedPolicy::of(status.config.account()).unwrap();
     assert_eq!(pinned.table, super::pipeline_rules());
 }
 
 #[tokio::test]
-async fn a_config_with_an_unknown_mode_byte_is_an_invalid_account() {
+async fn a_ring_account_with_an_unknown_mode_byte_is_invalid() {
     let settings = RingSettings::new(RingMode::Confidential);
     let mut config = settings.config();
     config.mode = 7;
-    let chain = Chain::ring(settings).with(ring().config_pda(), account(program(), &config));
+    let chain = Chain::ring(settings).with(ring().policy_pda(), account(program(), &*config));
     assert!(matches!(
         ring().config(&chain).await,
-        Err(RingError::InvalidAccount { address }) if address == ring().config_pda()
+        Err(RingError::InvalidAccount { address }) if address == ring().policy_pda()
     ));
 }

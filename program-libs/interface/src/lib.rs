@@ -30,8 +30,6 @@ pub mod member_registry;
 pub mod merge;
 #[path = "codec/output.rs"]
 pub mod output;
-#[path = "accounts/policy_store.rs"]
-pub mod policy_store;
 #[path = "proof/ring_keys.rs"]
 pub mod ring_keys;
 #[path = "codec/spp.rs"]
@@ -40,6 +38,10 @@ pub mod spp;
 pub mod state;
 #[path = "proof/statement.rs"]
 pub mod statement;
+#[path = "accounts/storage.rs"]
+pub mod storage;
+#[path = "instructions/storage.rs"]
+pub mod storage_instruction;
 #[path = "codec/stream.rs"]
 pub mod stream;
 #[path = "instructions/transact.rs"]
@@ -76,6 +78,10 @@ pub use state::*;
 pub use statement::*;
 pub use transact::*;
 pub use verification::RingProof;
+
+/// Not a deployable key, no keypair exists for it.
+pub const STORAGE_PROGRAM_ID: solana_address::Address =
+    solana_address::Address::new_from_array([0x53; 32]);
 
 /// One-byte `0x04` scheme tag followed by a canonical X25519 u-coordinate.
 pub use output::RECIPIENT_KEY_LEN as TAGGED_X25519_KEY_LEN;

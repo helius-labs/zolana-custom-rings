@@ -1,46 +1,47 @@
 use bytemuck::{Pod, Zeroable};
 use custom_ring_interface::{
-    compute_unit_limit, tag, AppliedAt, ApplyRecordsIxData, AuthorityWriteRecordsIxData,
-    CreateConfigIxData, CustomRingError, InstructionTag, MemberRegistry, MemberWriteIxData,
-    PolicyTableIxData, RecordWriteData, RegisterKeyIxData, RingKind, SetCoSignerIxData, SourceSpec,
-    WriteRecordsIxData, CONFIG_PDA_SEED, MEMBER_REGISTRY_PDA_SEED, RECORD_QUEUE_PDA_SEED,
+    compute_unit_limit,
+    storage::{Revision, Root, RootUpdate, StorageRegistry},
+    storage_instruction::{StorageUpdateIxData, UpdateMode},
+    tag, ApplyRecordsIxData, CustomRingError, InitializeIxData, InstructionTag,
+    PolicyBindingIxData, PolicyTableIxData, RingKind, RingPolicy, RingRole, RingRoles, RootRead,
+    SetCoSignerRecordIxData, SourceSpec, UpdateAuthorityIxData, UpdatePolicyIxData,
+    CO_SIGNER_PDA_SEED, RING_POLICY_PDA_SEED, STORAGE_PROGRAM_ID,
 };
 use litesvm::LiteSVM;
 use solana_account::Account;
 use solana_address::Address;
-use solana_bn254::compression::prelude::{alt_bn128_g1_decompress_be, alt_bn128_g2_decompress_be};
+use solana_bn254::compression::prelude::alt_bn128_g2_decompress_be;
 use solana_instruction::{error::InstructionError, AccountMeta, Instruction};
 use solana_keypair::{Keypair, Signer};
 use solana_loader_v3_interface::state::UpgradeableLoaderState;
 use solana_message::{v1, VersionedMessage};
 use solana_transaction::versioned::VersionedTransaction;
 use solana_transaction_error::TransactionError;
-use spr_hasher::primitives::right_align;
-use spr_interface::{BPF_LOADER_UPGRADEABLE_ID, RING_AUTH_PDA_SEED};
+use spr_interface::{
+    pda::protocol_config,
+    state::{discriminator::PROTOCOL_CONFIG, ProtocolConfig},
+    BPF_LOADER_UPGRADEABLE_ID, RING_AUTH_PDA_SEED, SHIELDED_POOL_PROGRAM_ID,
+};
 use zolana_ring_policy::{ListId, Member, OutflowLimit, Rule, RuleTable, Subject};
 
 /// Any address serves as the ring program.
 pub const PROGRAM: Address = Address::new_from_array([0x52; 32]);
 pub const SYSTEM: Address = Address::new_from_array([0; 32]);
+/// The ring's own `StorageRegistry`, written in place of a storage program `Update`.
+pub const RECORDS: Address = Address::new_from_array([0x5a; 32]);
 const LOADER: Address = Address::new_from_array(BPF_LOADER_UPGRADEABLE_ID);
+const SHIELDED_POOL: Address = Address::new_from_array(SHIELDED_POOL_PROGRAM_ID);
 const SOL: u64 = 1_000_000_000;
-const UNITS: u32 = compute_unit_limit(InstructionTag::Transact);
+const UNITS: u32 = compute_unit_limit(InstructionTag::Transfer);
 const LOADED_ACCOUNTS_DATA: u32 = 64 * 1024 * 1024;
 
 pub fn pda(seed: &[u8]) -> Address {
     Address::find_program_address(&[seed], &PROGRAM).0
 }
 
-pub fn config_pda() -> Address {
-    pda(CONFIG_PDA_SEED)
-}
-
-pub fn registry_pda() -> Address {
-    pda(MEMBER_REGISTRY_PDA_SEED)
-}
-
-pub fn queue_pda() -> Address {
-    pda(RECORD_QUEUE_PDA_SEED)
+pub fn policy_pda() -> Address {
+    pda(RING_POLICY_PDA_SEED)
 }
 
 pub fn ring_auth() -> Address {
@@ -78,18 +79,58 @@ impl Setup {
 
 pub type Sent = Result<u64, (TransactionError, u64)>;
 
+pub struct RoleKeys {
+    pub admin: Keypair,
+    pub policy: Keypair,
+    pub pauser: Keypair,
+    pub cosign_admin: Keypair,
+}
+
+impl RoleKeys {
+    fn new() -> Self {
+        Self {
+            admin: Keypair::new(),
+            policy: Keypair::new(),
+            pauser: Keypair::new(),
+            cosign_admin: Keypair::new(),
+        }
+    }
+
+    pub fn holder(&self, role: RingRole) -> &Keypair {
+        match role {
+            RingRole::Admin => &self.admin,
+            RingRole::Policy => &self.policy,
+            RingRole::Pauser => &self.pauser,
+            RingRole::CosignAdmin => &self.cosign_admin,
+        }
+    }
+
+    pub fn addresses(&self) -> RingRoles {
+        RingRoles {
+            admin: self.admin.pubkey(),
+            policy: self.policy.pubkey(),
+            pauser: self.pauser.pubkey(),
+            cosign_admin: self.cosign_admin.pubkey(),
+        }
+    }
+}
+
 pub struct Ring {
     svm: LiteSVM,
     pub payer: Keypair,
+    /// The upgrade authority, it holds no role.
     pub authority: Keypair,
+    pub roles: RoleKeys,
 }
 
 impl Ring {
-    /// A deployed ring whose config, registry and policy came through their instructions.
+    /// A deployed ring whose account and SPP registration came through their instructions.
     pub fn new(setup: Setup) -> Self {
         let mut svm = LiteSVM::new();
         svm.add_program(PROGRAM, &program_bytes())
             .expect("load the ring program");
+        svm.add_program(SHIELDED_POOL, &shielded_pool_bytes())
+            .expect("load the shielded pool");
         let payer = Keypair::new();
         let authority = Keypair::new();
         for wallet in [&payer, &authority] {
@@ -100,26 +141,19 @@ impl Ring {
             svm,
             payer,
             authority,
+            roles: RoleKeys::new(),
         };
+        let protocol = ProtocolConfig {
+            discriminator: PROTOCOL_CONFIG,
+            ..Zeroable::zeroed()
+        };
+        ring.store(
+            protocol_config(),
+            SHIELDED_POOL,
+            bytemuck::bytes_of(&protocol).to_vec(),
+        );
         let authority = ring.authority.insecure_clone();
         ring.set_upgrade_authority(&PROGRAM, &authority.pubkey());
-        let config = create_config(
-            &ring.payer.pubkey(),
-            &authority.pubkey(),
-            CreateConfigIxData {
-                auditor_pubkey: auditor_pubkey(),
-                kind: setup.kind(),
-            },
-        );
-        within_budget(
-            InstructionTag::CreateConfig,
-            ring.send(config, &[&authority]),
-        );
-        let registry = create_member_registry(&ring.payer.pubkey(), &authority.pubkey());
-        within_budget(
-            InstructionTag::CreateMemberRegistry,
-            ring.send(registry, &[&authority]),
-        );
         let limits = match setup {
             Setup::LimitedPolicy => vec![OutflowLimit::of(
                 &Member::asset(&Address::new_from_array([7; 32])).expect("asset member"),
@@ -127,19 +161,77 @@ impl Ring {
             .with_cosign_above(1_000)],
             _ => Vec::new(),
         };
-        if setup.kind().has_policy() {
-            let policy = policy_write(
-                tag::CREATE_POLICY,
-                &authority.pubkey(),
-                allow_list_table(limits),
-                &[],
-            );
-            within_budget(
-                InstructionTag::CreatePolicy,
-                ring.send(policy, &[&authority]),
-            );
+        let policy_key = ring.roles.policy.pubkey();
+        ring.store_registry(RECORDS, &policy_key, &[root(0, [0x0e; 32])]);
+        let table = match setup.kind().has_policy() {
+            true => allow_list_table(limits),
+            false => PolicyTableIxData {
+                sources: Vec::new(),
+                rules: Vec::new(),
+            },
+        };
+        let initialize = InitializeIx {
+            payer: ring.payer.pubkey(),
+            authority: authority.pubkey(),
+            data: InitializeIxData {
+                auditor_pubkey: auditor_pubkey(),
+                kind: setup.kind(),
+                roles: ring.roles.addresses(),
+                policy: Some(PolicyBindingIxData { table }),
+            },
+            curators: &[],
         }
+        .instruction();
+        within_budget(
+            InstructionTag::Initialize,
+            ring.send(initialize, &[&authority]),
+        );
         ring
+    }
+
+    /// The registry accounts `read` passes after the ring account.
+    pub fn registries(&self, read: RootRead) -> Vec<AccountMeta> {
+        self.read::<RingPolicy>(&policy_pda())
+            .root_registries(read)
+            .map(|registry| AccountMeta::new_readonly(registry, false))
+            .collect()
+    }
+
+    /// A `StorageRegistry` of `authority` holding `roots` newest first.
+    pub fn store_registry(&mut self, address: Address, authority: &Address, roots: &[Root]) {
+        let mut registry = StorageRegistry::new(*authority, 0);
+        registry.roots[..roots.len()].copy_from_slice(roots);
+        self.store(
+            address,
+            STORAGE_PROGRAM_ID,
+            bytemuck::bytes_of(&registry).to_vec(),
+        );
+    }
+
+    /// The registry after the storage program applies an `UpdateImmediate`.
+    pub fn apply_immediate(&mut self, address: Address, new_root: [u8; 32]) {
+        let mut registry: StorageRegistry = self.read(&address);
+        let apply = ApplyRecordsIxData {
+            new_root,
+            new_next_index: registry.next_index,
+            ..Zeroable::zeroed()
+        };
+        registry
+            .update(RootUpdate {
+                mode: UpdateMode::Immediate,
+                slot: 0,
+                data: &StorageUpdateIxData {
+                    revision: registry.roots[0].revision,
+                    writes: Vec::new(),
+                    apply: &apply,
+                },
+            })
+            .expect("apply the update");
+        self.store(
+            address,
+            STORAGE_PROGRAM_ID,
+            bytemuck::bytes_of(&registry).to_vec(),
+        );
     }
 
     pub fn send(&mut self, instruction: Instruction, signers: &[&Keypair]) -> Sent {
@@ -172,12 +264,17 @@ impl Ring {
         *bytemuck::from_bytes(&account.data)
     }
 
-    pub fn lamports(&self, address: &Address) -> u64 {
-        self.svm.get_balance(address).unwrap_or_default()
+    pub fn owner(&self, address: &Address) -> Option<Address> {
+        self.svm.get_account(address).map(|account| account.owner)
     }
 
-    pub fn rent_exempt_minimum(&self, len: usize) -> u64 {
-        self.svm.minimum_balance_for_rent_exemption(len)
+    /// The signer of `role`, a clone the caller can sign with beside `&mut self`.
+    pub fn holder(&self, role: RingRole) -> Keypair {
+        self.roles.holder(role).insecure_clone()
+    }
+
+    pub fn lamports(&self, address: &Address) -> u64 {
+        self.svm.get_balance(address).unwrap_or_default()
     }
 
     /// Replaces a program account's data, the state a sequence of instructions would reach.
@@ -198,22 +295,11 @@ impl Ring {
             .expect("store the account");
     }
 
-    pub fn fund(&mut self, address: &Address) {
-        self.svm.airdrop(address, SOL).expect("fund the account");
-    }
-
     /// Leaves `address` an empty system account.
     pub fn drain(&mut self, address: &Address) {
         self.svm
             .set_account(*address, Account::default())
             .expect("drain the account");
-    }
-
-    pub fn fee(&self) -> Fee {
-        Fee {
-            payer: self.payer.pubkey(),
-            recipient: self.authority.pubkey(),
-        }
     }
 
     /// An executable account at `address`, for refusals that precede any CPI into it.
@@ -227,7 +313,7 @@ impl Ring {
         self.svm.warp_to_slot(slot);
     }
 
-    /// litesvm deploys with no upgrade authority, `CreateConfig` needs one.
+    /// litesvm deploys with no upgrade authority, `Initialize` needs one.
     pub fn set_upgrade_authority(&mut self, program: &Address, authority: &Address) {
         let program_data = program_data_of(program);
         let mut account = self
@@ -257,10 +343,6 @@ pub fn on_curve_g2() -> [u8; 128] {
         .unwrap()
 }
 
-pub fn off_curve_g1() -> [u8; 32] {
-    off_curve(|point| alt_bn128_g1_decompress_be(point).is_ok())
-}
-
 pub fn off_curve_g2() -> [u8; 64] {
     off_curve(|point| alt_bn128_g2_decompress_be(point).is_ok())
 }
@@ -277,12 +359,28 @@ fn off_curve<const N: usize>(on_curve: impl Fn(&[u8; N]) -> bool) -> [u8; N] {
         .expect("a canonical x off the curve")
 }
 
-/// The SBF build, `SBF_OUT_DIR` when set, else the workspace deploy directory.
 fn program_bytes() -> Vec<u8> {
+    deployed("custom_ring_program.so")
+}
+
+/// The SBF build, `SBF_OUT_DIR` when set, else the workspace deploy directory.
+pub fn deployed(file: &str) -> Vec<u8> {
     let dir = std::env::var("SBF_OUT_DIR")
         .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/deploy").into());
-    let path = format!("{dir}/custom_ring_program.so");
-    std::fs::read(&path).unwrap_or_else(|_| panic!("build the ring program into {path}"))
+    let path = format!("{dir}/{file}");
+    std::fs::read(&path).unwrap_or_else(|_| panic!("no SBF build at {path}"))
+}
+
+/// `ZOLANA_SPP_PROGRAM_SO` when set, else the zolana deploy directory.
+fn shielded_pool_bytes() -> Vec<u8> {
+    let path = std::env::var("ZOLANA_SPP_PROGRAM_SO").unwrap_or_else(|_| {
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../zolana/target/deploy/shielded_pool_program.so"
+        )
+        .into()
+    });
+    std::fs::read(&path).unwrap_or_else(|_| panic!("build the shielded pool into {path}"))
 }
 
 pub fn auditor_pubkey() -> [u8; 33] {
@@ -330,12 +428,17 @@ pub fn within_budget(tag: InstructionTag, sent: Sent) -> u64 {
     units
 }
 
-/// History slot 1 applied at `applied` under `floor`.
-pub fn floored(base: &MemberRegistry, applied: u64, floor: u64) -> MemberRegistry {
-    let mut registry = *base;
-    registry.push_root([0x0f; 32], AppliedAt { applied, slot: 10 });
-    registry.floor = floor.to_le_bytes();
-    registry
+/// Valid only while it is the newest root.
+pub fn root(revision: u64, hash: [u8; 32]) -> Root {
+    retired(revision, hash, 0)
+}
+
+pub fn retired(revision: u64, hash: [u8; 32], expires_at: u64) -> Root {
+    Root {
+        hash,
+        revision: Revision::from(revision),
+        expires_at: expires_at.to_le_bytes(),
+    }
 }
 
 /// Only a ring proof check raises either code, every earlier check passed.
@@ -366,187 +469,214 @@ fn tagged(tag: u8, body: &[u8]) -> Vec<u8> {
     [&[tag][..], body].concat()
 }
 
-pub fn create_config(
-    payer: &Address,
-    authority: &Address,
-    data: CreateConfigIxData,
-) -> Instruction {
-    instruction(
-        vec![
-            AccountMeta::new(*payer, true),
-            AccountMeta::new_readonly(*authority, true),
-            AccountMeta::new(config_pda(), false),
+/// `Initialize`, the records and curators follow the SPP program only with a policy binding.
+pub struct InitializeIx<'a> {
+    pub payer: Address,
+    pub authority: Address,
+    pub data: InitializeIxData,
+    pub curators: &'a [Address],
+}
+
+impl InitializeIx<'_> {
+    pub fn instruction(self) -> Instruction {
+        let mut accounts = vec![
+            AccountMeta::new(self.payer, true),
+            AccountMeta::new_readonly(self.authority, true),
+            AccountMeta::new(policy_pda(), false),
             AccountMeta::new_readonly(SYSTEM, false),
             AccountMeta::new_readonly(PROGRAM, false),
             AccountMeta::new_readonly(program_data(), false),
-        ],
-        tagged(tag::CREATE_CONFIG, &wincode::serialize(&data).unwrap()),
-    )
+            AccountMeta::new_readonly(protocol_config(), false),
+            AccountMeta::new(ring_auth(), false),
+            AccountMeta::new_readonly(SHIELDED_POOL, false),
+        ];
+        if self.data.policy.is_some() {
+            accounts.push(AccountMeta::new_readonly(RECORDS, false));
+            accounts.extend(
+                self.curators
+                    .iter()
+                    .map(|curator| AccountMeta::new_readonly(*curator, false)),
+            );
+        }
+        instruction(
+            accounts,
+            tagged(tag::INITIALIZE, &wincode::serialize(&self.data).unwrap()),
+        )
+    }
 }
 
-pub fn create_member_registry(payer: &Address, authority: &Address) -> Instruction {
-    instruction(
-        vec![
-            AccountMeta::new(*payer, true),
-            AccountMeta::new_readonly(*authority, true),
-            AccountMeta::new_readonly(config_pda(), false),
-            AccountMeta::new(registry_pda(), false),
-            AccountMeta::new(queue_pda(), false),
-            AccountMeta::new_readonly(SYSTEM, false),
-        ],
-        vec![tag::CREATE_MEMBER_REGISTRY],
-    )
+/// `UpdatePolicy`, the trailing accounts follow the ring.
+pub struct UpdatePolicyIx<'a> {
+    pub authority: Address,
+    pub update: UpdatePolicyIxData,
+    pub trailing: &'a [Address],
 }
 
-/// `CreatePolicy` or `SetPolicyRules`, curators follow the registry.
-pub fn policy_write(
-    tag: u8,
-    authority: &Address,
-    table: PolicyTableIxData,
-    curators: &[Address],
-) -> Instruction {
+impl UpdatePolicyIx<'_> {
+    pub fn instruction(self) -> Instruction {
+        let mut accounts = vec![
+            AccountMeta::new_readonly(self.authority, true),
+            AccountMeta::new(policy_pda(), false),
+        ];
+        accounts.extend(
+            self.trailing
+                .iter()
+                .map(|account| AccountMeta::new_readonly(*account, false)),
+        );
+        instruction(
+            accounts,
+            tagged(
+                tag::UPDATE_POLICY,
+                &wincode::serialize(&self.update).unwrap(),
+            ),
+        )
+    }
+}
+
+/// A rules update without curators.
+pub fn rules_write(authority: &Address, table: PolicyTableIxData) -> Instruction {
+    UpdatePolicyIx {
+        authority: *authority,
+        update: UpdatePolicyIxData::Rules(table),
+        trailing: &[],
+    }
+    .instruction()
+}
+
+pub fn ring_write(tag: u8, authority: &Address, extra: &[AccountMeta], body: &[u8]) -> Instruction {
     let mut accounts = vec![
         AccountMeta::new_readonly(*authority, true),
-        AccountMeta::new_readonly(config_pda(), false),
-        AccountMeta::new(registry_pda(), false),
-    ];
-    accounts.extend(
-        curators
-            .iter()
-            .map(|curator| AccountMeta::new_readonly(*curator, false)),
-    );
-    instruction(accounts, tagged(tag, &wincode::serialize(&table).unwrap()))
-}
-
-pub fn config_write(
-    tag: u8,
-    authority: &Address,
-    extra: &[AccountMeta],
-    body: &[u8],
-) -> Instruction {
-    let mut accounts = vec![
-        AccountMeta::new_readonly(*authority, true),
-        AccountMeta::new(config_pda(), false),
+        AccountMeta::new(policy_pda(), false),
     ];
     accounts.extend_from_slice(extra);
     instruction(accounts, tagged(tag, body))
 }
 
-pub fn set_co_signer(ring: &mut Ring, co_signer: &Address, scope: u8) {
-    let authority = ring.authority.insecure_clone();
-    let data = SetCoSignerIxData {
-        signer: co_signer.to_bytes(),
-        scope,
-    };
-    ring.send(
-        config_write(
-            tag::SET_CO_SIGNER,
-            &authority.pubkey(),
-            &[],
-            &wincode::serialize(&data).unwrap(),
-        ),
-        &[&authority],
-    )
-    .expect("set the co-signer");
+/// `UpdateAuthority`, the admin and the new key sign.
+pub struct UpdateAuthorityIx {
+    pub admin: Address,
+    pub new_key: Address,
+    pub role: RingRole,
 }
 
+impl UpdateAuthorityIx {
+    pub fn instruction(self) -> Instruction {
+        instruction(
+            vec![
+                AccountMeta::new_readonly(self.admin, true),
+                AccountMeta::new_readonly(self.new_key, true),
+                AccountMeta::new(policy_pda(), false),
+            ],
+            tagged(
+                tag::UPDATE_AUTHORITY,
+                &wincode::serialize(&UpdateAuthorityIxData { role: self.role }).unwrap(),
+            ),
+        )
+    }
+}
+
+pub fn co_signer_record(signer: &Address) -> Address {
+    Address::find_program_address(&[CO_SIGNER_PDA_SEED, signer.as_ref()], &PROGRAM).0
+}
+
+/// The `[co_signer_record, co_signer]` slot of a demanded co-signature.
 #[derive(Clone, Copy)]
-pub struct Fee {
+pub struct CoSignerSlot {
+    pub record_of: Address,
+    pub signer: Address,
+}
+
+impl CoSignerSlot {
+    pub const fn own(signer: Address) -> Self {
+        Self {
+            record_of: signer,
+            signer,
+        }
+    }
+
+    pub fn signed(self) -> Vec<AccountMeta> {
+        self.metas(true)
+    }
+
+    pub fn unsigned(self) -> Vec<AccountMeta> {
+        self.metas(false)
+    }
+
+    fn metas(self, signs: bool) -> Vec<AccountMeta> {
+        vec![
+            AccountMeta::new_readonly(co_signer_record(&self.record_of), false),
+            AccountMeta::new_readonly(self.signer, signs),
+        ]
+    }
+}
+
+pub struct SetCoSignerIx {
     pub payer: Address,
-    pub recipient: Address,
+    pub authority: Address,
+    pub signer: Address,
+    pub scope: u8,
 }
 
-fn record_write(tag: u8, signer: &Address, fee: Option<Fee>, body: &[u8]) -> Instruction {
-    let mut accounts = vec![
-        AccountMeta::new_readonly(*signer, true),
-        AccountMeta::new_readonly(config_pda(), false),
-        AccountMeta::new_readonly(registry_pda(), false),
-        AccountMeta::new(queue_pda(), false),
-    ];
-    if let Some(fee) = fee {
-        accounts.extend([
-            AccountMeta::new(fee.payer, true),
-            AccountMeta::new(fee.recipient, false),
-            AccountMeta::new_readonly(SYSTEM, false),
-        ]);
-    }
-    instruction(accounts, tagged(tag, body))
-}
-
-/// A member write accepting any insert fee.
-pub fn write_records(member: &Address, lists: WriteRecordsIxData, fee: Option<Fee>) -> Instruction {
-    let data = MemberWriteIxData {
-        lists,
-        max_fee: u64::MAX.to_le_bytes(),
-    };
-    member_write(member, &data, fee)
-}
-
-pub fn member_write(member: &Address, data: &MemberWriteIxData, fee: Option<Fee>) -> Instruction {
-    record_write(tag::WRITE_RECORDS, member, fee, bytemuck::bytes_of(data))
-}
-
-pub fn register_key(member: &Address, data: &RegisterKeyIxData, fee: Option<Fee>) -> Instruction {
-    record_write(tag::REGISTER_KEY, member, fee, bytemuck::bytes_of(data))
-}
-
-/// Accepts any insert fee.
-pub fn key_registration() -> RegisterKeyIxData {
-    RegisterKeyIxData {
-        proof: Zeroable::zeroed(),
-        nullifier_pk: right_align(&[4]),
-        eph_u: [5; 32],
-        ciphertext: [6; 32],
-        max_fee: u64::MAX.to_le_bytes(),
+impl SetCoSignerIx {
+    pub fn instruction(self) -> Instruction {
+        let data = SetCoSignerRecordIxData {
+            signer: self.signer,
+            scope: self.scope,
+        };
+        instruction(
+            vec![
+                AccountMeta::new(self.payer, true),
+                AccountMeta::new_readonly(self.authority, true),
+                AccountMeta::new(policy_pda(), false),
+                AccountMeta::new(co_signer_record(&self.signer), false),
+                AccountMeta::new_readonly(SYSTEM, false),
+            ],
+            tagged(tag::SET_CO_SIGNER, &wincode::serialize(&data).unwrap()),
+        )
     }
 }
 
-pub fn authority_write_records(
-    authority: &Address,
-    writes: &[RecordWriteData],
-    apply: &ApplyRecordsIxData,
-) -> Instruction {
-    instruction(
-        vec![
-            AccountMeta::new_readonly(*authority, true),
-            AccountMeta::new_readonly(config_pda(), false),
-            AccountMeta::new(registry_pda(), false),
-            AccountMeta::new(queue_pda(), false),
-        ],
-        tagged(
-            tag::AUTHORITY_WRITE_RECORDS,
-            &AuthorityWriteRecordsIxData { writes, apply }
-                .encode()
-                .expect("one to sixteen writes"),
-        ),
-    )
+pub struct ClearCoSignerIx {
+    pub authority: Address,
+    pub signer: Address,
+    pub rent_recipient: Address,
 }
 
-pub fn apply_records(apply: &ApplyRecordsIxData) -> Instruction {
-    instruction(
-        vec![
-            AccountMeta::new(registry_pda(), false),
-            AccountMeta::new(queue_pda(), false),
-        ],
-        tagged(tag::APPLY_RECORDS, bytemuck::bytes_of(apply)),
-    )
+impl ClearCoSignerIx {
+    pub fn instruction(self) -> Instruction {
+        instruction(
+            vec![
+                AccountMeta::new_readonly(self.authority, true),
+                AccountMeta::new(policy_pda(), false),
+                AccountMeta::new(co_signer_record(&self.signer), false),
+                AccountMeta::new(self.rent_recipient, false),
+            ],
+            tagged(tag::CLEAR_CO_SIGNER, &[]),
+        )
+    }
+}
+
+pub fn set_co_signer(ring: &mut Ring, co_signer: &Address, scope: u8) {
+    let authority = ring.holder(RingRole::CosignAdmin);
+    let set = SetCoSignerIx {
+        payer: ring.payer.pubkey(),
+        authority: authority.pubkey(),
+        signer: *co_signer,
+        scope,
+    }
+    .instruction();
+    ring.send(set, &[&authority]).expect("set the co-signer");
 }
 
 pub fn transact(tag: u8, accounts: Vec<AccountMeta>, data: Vec<u8>) -> Instruction {
     instruction(accounts, tagged(tag, &data))
 }
 
-/// `SetDelegate` signed by `authority` and `delegate`, accepted only from the upgrade authority.
-pub fn set_delegate(authority: &Address, delegate: &Address) -> Instruction {
-    config_write(
+pub fn set_delegate(admin: &Address, delegate: &Address) -> Instruction {
+    ring_write(
         tag::SET_DELEGATE,
-        authority,
-        &[
-            AccountMeta::new_readonly(*delegate, true),
-            AccountMeta::new_readonly(registry_pda(), false),
-            AccountMeta::new_readonly(PROGRAM, false),
-            AccountMeta::new_readonly(program_data(), false),
-        ],
+        admin,
+        &[AccountMeta::new_readonly(*delegate, true)],
         &[],
     )
 }
@@ -554,12 +684,12 @@ pub fn set_delegate(authority: &Address, delegate: &Address) -> Instruction {
 /// A policy ring whose delegate put it in `ConfidentialEscrow` mode.
 pub fn delegate_ring(delegate: &Keypair) -> Ring {
     let mut ring = Ring::new(Setup::Policy);
-    let authority = ring.authority.insecure_clone();
+    let admin = ring.holder(RingRole::Admin);
     within_budget(
         InstructionTag::SetDelegate,
         ring.send(
-            set_delegate(&authority.pubkey(), &delegate.pubkey()),
-            &[&authority, delegate],
+            set_delegate(&admin.pubkey(), &delegate.pubkey()),
+            &[&admin, delegate],
         ),
     );
     ring

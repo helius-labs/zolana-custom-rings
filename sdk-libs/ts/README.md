@@ -20,8 +20,10 @@ version `peerDependencies` names, the two share the protocol layouts.
 `createZolanaClient` and returns a `CustomRingClient`. It is a `ZolanaClient`
 that also proves the Ring circuits and reads the Ring projections of the
 indexer, over the same attested prover session. `checkRingProvingKeys()`
-compares the prover's Ring keys with the keys the package pins, run it before
-the first Ring proof.
+refuses a prover that does not serve a pinned Ring key or serves another
+digest. Run it before the first Ring proof. A Helius mainnet or devnet RPC URL
+selects the pinned Nitro Enclave prover of that cluster when `proverUrl` is
+omitted.
 
 `syncRingWallet` runs `syncWallet`, then opens the confidential Ring notes and
 Ring deposits it skips into the wallet. Keys that are also `RingKeys` open
@@ -34,43 +36,70 @@ const client = await createCustomRingClient({ solanaRpcUrl });
 await syncRingWallet({ client, wallet, keys });
 ```
 
-Ring projection errors, such as a key registry the indexer has not caught up
-with, are `RingError` codes. The flows retry the transient ones.
+Ring projection errors, such as a storage registry the indexer has not caught
+up with, are `RingError` codes. The flows retry the transient ones.
 
 ## Custom Rings
 
 Besides the permissionless default Ring, regulated entities can create custom Rings.
 Custom Rings are simple Solana programs for compliance and policy control. Each Ring deploys its own program. It has a program
-upgrade authority, a protocol authority, and an auditor key. The default Ring does not have an auditor key.
+upgrade authority, four role keys (admin, policy, pauser and co-signer admin), and an auditor key. The default Ring does not have an auditor key.
 
-The auditor key lives in a Ring RPC. The Ring authority grants view access.
+The auditor key lives in a Ring RPC. The Ring's policy authority grants view access.
 Helius can host that RPC; the authority can host it itself. The forester is
 shared with the default Ring.
 
-Rings support confidential transactions only. Anonymous transfers that
-would use a relayer are not supported. A Ring is audit-only or carries a
-policy, a rule table over lists of members whose addresses the Ring claims in
-its address tree. The tier is fixed when the Ring config is created.
+A Ring is confidential or anonymous. A Ring is audit-only or carries a
+policy, a rule table over the list bits of the member records in the Ring's
+storage registry. The tier is fixed when the Ring account is created.
 
 Set a Ring up in this order.
 
 1. `deployRingProgram` deploys or upgrades the Ring program from a
    `RingProgramBinary` and returns once the program is usable,
    `verifyRingProgram` checks the deployed bytes.
-2. `createRingConfigInstruction` stores the auditor key and the tier.
-3. A policy Ring pins its rule table with `buildRingCreatePolicyTransaction`
-   over its address tree.
-4. `initSppRingConfigInstruction` registers the Ring with the pool, a policy
-   Ring only after its policy exists.
-5. On a permissioned pool the governance authority activates the Ring with
+2. The records `StorageRegistry` exists in the storage program.
+3. `initializeRingInstruction`, signed by the upgrade authority, stores the
+   auditor key and the tier, binds the records, pins a policy Ring's rule table
+   and registers the Ring with the pool.
+4. On a permissioned pool the governance authority activates the Ring with
    `getSetRingActivationInstructionAsync` from `@heliuslabs/zolana/instructions`.
-6. `buildRingListWriteTransaction` fills the lists and
-   `grantReadAccessInstruction` admits readers.
+5. `AuthorityRecordUpdate` fills the lists through `RingRpc.submitRecordUpdate`.
 
-Build exact Ring entries, in-ring transfers, shielded exits, and public
-withdrawals with `buildRingEntryTransaction`, `buildRingTransferTransaction`,
-`buildRingExitTransaction`, and `buildRingWithdrawalTransaction`. `RingRpc`
-reads decrypted Ring transactions for a granted reader.
+A wallet sends its operations through the Ring RPC relay by default, or
+proves and sends them itself.
+
+Through the relay the wallet reads no Merkle path and no record.
+`prepareRingEntryRelay`, `prepareRingTransferRelay`, `prepareRingExitRelay`
+and `prepareRingWithdrawalRelay` take the quote of `RingRpc.getRelayQuote`,
+the nullifier key and the sender's signer, as `anonymous` on an anonymous Ring
+and as `confidential` on any other, and `relay.send` hands the spend to Ring
+RPC. On an anonymous Ring they also take the sender's `ViewingHistory`.
+`PreparedRingDeposit.prepareRelay` relays a deposit, whose message the
+depositor signs, and `prepareRingMergeRelay` relays a merge of the wallet's
+smallest notes. `RingRpc` reads
+decrypted Ring transactions for a granted reader.
+
+Without Ring RPC the `CustomRingClient` reads the records and Merkle paths
+from the indexer and proves, and the wallet signs and sends from a fee payer
+it chooses. `createRingTransferSubmission`, `createRingExitSubmission`,
+`createRingEntrySubmission`, `createRingWithdrawalSubmission`,
+`createRingDepositSubmission`, `createRingMergeSubmission` and
+`createRingDelegateSubmission` return a `RingTransactionSubmission`, and its
+`send` takes the transport of `createKitRingSubmissionTransport`. A rejected
+proof whose root left its registry proves again under the live root. A spend
+with `inProofOwner` signs inside the proof, spends ring notes only, and only
+the fee payer and a demanded co-signer sign the transaction. Without it each
+input owner signs. A withdrawal creates its recipient's missing associated
+token account in the same transaction. On an anonymous Ring a spend
+takes `anonymous`, the hidden owner's signer and `ViewingHistory`, and the
+wallet stores `viewingHistory` before `send`. The fee payer and any co-signer
+must differ from the hidden owner. On every Ring they must also differ from the
+owner of a merge. `CustomRingClient` proves SPP's anonymous rail, the rail of
+an anonymous spend and of a spend with `inProofOwner`.
+The `build*Transaction` functions return one unsigned transaction. A spend or
+deposit on an anonymous Ring goes through its submission, which returns the
+viewing history.
 
 Connect to a hosted Ring RPC with its service base URL and your API key:
 
@@ -110,17 +139,16 @@ A deploy that fails after its buffer exists names the buffer in the
 `RING_DEPLOY_PROGRAM` error details. Pass the same buffer keypair again to
 resume, or reclaim its rent with `closeBufferInstruction`.
 
-The deploy path is tested on Agave 4.0.2. The shipped Ring binaries are
+The deploy path is tested on Agave 4.2. The shipped Ring binaries are
 SBPF v0 and do not load on Agave 4.1.2.
 
 Passkey access to Ring audit traces uses `P256ReaderKey`.
 
-The live ring controls test is described in
-[test/e2e/RING-CONTROLS.md](test/e2e/RING-CONTROLS.md).
-
 ## Entry points
 
-`@heliuslabs/zolana-custom-rings` exports the whole surface.
+`@heliuslabs/zolana-custom-rings` exports the wallet and operator surface, and
+`@heliuslabs/zolana-custom-rings/advanced` adds the codecs, statements and
+registry proofs the Ring circuits bind.
 `@heliuslabs/zolana-custom-rings/client` narrows it to the Ring prover
 requests, the client ports and `CustomRingClient`, and
 `@heliuslabs/zolana-custom-rings/keypair` to the auditor envelope helpers.

@@ -17,7 +17,7 @@ pub struct MemberRegistryTree {
 }
 
 impl MemberRegistryTree {
-    /// The tree holding only the sentinel, the state `CreateMemberRegistry` starts from.
+    /// The tree holding only the sentinel, the state a new `StorageRegistry` starts from.
     pub fn new() -> Result<Self, RecordTreeError> {
         Self::from_records(vec![MemberRecord::SENTINEL])
     }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildRingDepositTransaction, buildRingTransferTransaction } from "../../src/ring/index.js";
+import { buildRingDepositTransaction, buildRingTransferTransaction } from "../../src/index.js";
 import { signSendAndConfirm } from "./live-helpers.js";
 import {
   airdrop,

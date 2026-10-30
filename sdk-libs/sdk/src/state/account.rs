@@ -1,15 +1,11 @@
 //! The ring's accounts as the chain holds them, every read checked against its canonical address.
 
-use custom_ring_interface::{
-    CoSignScope, MemberRegistry, ReadAccessRecord, RecordQueue, RingAccount, RingMode,
-    RingProgramConfig, ROOT_HISTORY,
-};
+use custom_ring_interface::{CoSignScope, CoSigner, RingAccount, RingMode, RingPolicy, RingRoles};
 use solana_account::Account;
 use solana_address::Address;
 use spr_client::AsyncRpc;
 use spr_interface::{pda, state::RingConfig, BPF_LOADER_UPGRADEABLE_ID, RING_AUTH_PDA_SEED};
 use spr_keypair::X25519Pubkey;
-use zolana_ring_client::ReaderKey;
 use zolana_ring_policy::{ring_id_field, RuleTable, SourceMap};
 
 use crate::RingError;
@@ -19,26 +15,27 @@ pub struct CustomRing {
     program_id: Address,
 }
 
+/// The ring account, decoded once.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CustomRingConfig {
-    pub authority: Address,
+    pub roles: RingRoles,
     pub auditor_pubkey: X25519Pubkey,
     /// A policy ring enforces its table, an audit-only ring proves only the audit statement.
     pub has_policy: bool,
     /// Selects the spend rail and the disclosure layout, `SetDelegate` moves Off to Registry.
     pub mode: RingMode,
-    /// Lamports a member's record write pays the authority.
-    pub insert_fee: u64,
-    pub co_signer: Option<CustomRingCoSigner>,
+    /// The classes some `CoSigner` record covers.
+    pub co_signer_classes: Option<CoSignScope>,
     pub delegate: Option<Address>,
     pub created_slot: u64,
-    account: RingProgramConfig,
+    account: Box<RingPolicy>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CustomRingCoSigner {
     pub signer: Address,
     pub scope: CoSignScope,
+    account: CoSigner,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,44 +46,11 @@ pub struct RingRegistration {
     pub authority_rail: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RegistryRoot {
-    pub index: u8,
-    pub root: [u8; 32],
-    /// The queue position the root reached.
-    pub applied: u64,
-    pub slot: u64,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RegistryStatus {
-    /// Newest first, unwritten slots left out.
-    pub roots: Vec<RegistryRoot>,
-    pub next_index: u32,
-    pub floor: u64,
-    pub prior_floor: u64,
-    pub floor_slot: u64,
-    /// Zero before the first policy write.
-    pub policy_hash: [u8; 32],
-    account: Box<MemberRegistry>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct QueueStatus {
-    pub head: u64,
-    pub tail: u64,
-    pub pending: u64,
-    /// The first slot a permissionless application may land in.
-    pub next_apply_slot: u64,
-}
-
 /// `None` for an absent account.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RingStatus {
     pub config: CustomRingConfig,
     pub registration: Option<RingRegistration>,
-    pub registry: Option<RegistryStatus>,
-    pub queue: Option<QueueStatus>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -115,20 +79,12 @@ impl CustomRing {
         Address::find_program_address(seeds, &self.program_id)
     }
 
-    pub fn config_pda(self) -> Address {
-        self.pda(&[RingProgramConfig::SEED]).0
+    pub fn policy_pda(self) -> Address {
+        self.pda(&[RingPolicy::SEED]).0
     }
 
-    pub fn registry_pda(self) -> Address {
-        self.pda(&[MemberRegistry::SEED]).0
-    }
-
-    pub fn queue_pda(self) -> Address {
-        self.pda(&[RecordQueue::SEED]).0
-    }
-
-    pub fn read_access_record_pda(self, reader: &ReaderKey) -> Address {
-        reader.record_address(&self.program_id)
+    pub fn co_signer_pda(self, signer: &Address) -> Address {
+        self.pda(&[CoSigner::SEED, signer.as_ref()]).0
     }
 
     /// SPP stores the ring config here and requires it as the signer of ring CPIs.
@@ -163,10 +119,10 @@ impl CustomRing {
         self,
         rpc: &(impl AsyncRpc + ?Sized),
     ) -> Result<Option<CustomRingConfig>, RingError> {
-        let Some(account) = self.read::<RingProgramConfig>(rpc).await? else {
+        let Some(account) = self.read::<RingPolicy>(rpc).await? else {
             return Ok(None);
         };
-        CustomRingConfig::new(account, self.config_pda()).map(Some)
+        CustomRingConfig::new(Box::new(account), self.policy_pda()).map(Some)
     }
 
     pub async fn require_config(
@@ -176,34 +132,18 @@ impl CustomRing {
         self.config(rpc).await?.ok_or(RingError::MissingRingConfig)
     }
 
-    pub async fn registry(
+    pub async fn policy(
         self,
         rpc: &(impl AsyncRpc + ?Sized),
-    ) -> Result<Option<Box<MemberRegistry>>, RingError> {
-        Ok(self.read::<MemberRegistry>(rpc).await?.map(Box::new))
+    ) -> Result<Option<Box<RingPolicy>>, RingError> {
+        Ok(self.read::<RingPolicy>(rpc).await?.map(Box::new))
     }
 
-    pub async fn require_registry(
+    pub async fn require_policy(
         self,
         rpc: &(impl AsyncRpc + ?Sized),
-    ) -> Result<Box<MemberRegistry>, RingError> {
-        self.registry(rpc)
-            .await?
-            .ok_or(RingError::MissingMemberRegistry)
-    }
-
-    pub async fn queue(
-        self,
-        rpc: &(impl AsyncRpc + ?Sized),
-    ) -> Result<Option<RecordQueue>, RingError> {
-        self.read::<RecordQueue>(rpc).await
-    }
-
-    pub async fn require_queue(
-        self,
-        rpc: &(impl AsyncRpc + ?Sized),
-    ) -> Result<RecordQueue, RingError> {
-        self.queue(rpc).await?.ok_or(RingError::MissingRecordQueue)
+    ) -> Result<Box<RingPolicy>, RingError> {
+        self.policy(rpc).await?.ok_or(RingError::MissingRingPolicy)
     }
 
     /// `None` on an audit-only ring.
@@ -211,25 +151,32 @@ impl CustomRing {
         self,
         rpc: &(impl AsyncRpc + ?Sized),
     ) -> Result<Option<PinnedPolicy>, RingError> {
-        if !self.require_config(rpc).await?.has_policy {
+        let config = self.require_config(rpc).await?;
+        if !config.has_policy {
             return Ok(None);
         }
-        PinnedPolicy::of(&*self.require_registry(rpc).await?).map(Some)
+        PinnedPolicy::of(config.account()).map(Some)
     }
 
-    pub async fn access_record(
+    /// `None` when `signer` holds no record.
+    pub async fn co_signer(
         self,
         rpc: &(impl AsyncRpc + ?Sized),
-        reader: &ReaderKey,
-    ) -> Result<Option<ReadAccessRecord>, RingError> {
-        let bytes = reader.to_bytes();
-        let seed_hash = ReadAccessRecord::seed_hash(&bytes)?;
-        let (address, bump) = self.pda(&[ReadAccessRecord::SEED, &seed_hash]);
+        signer: &Address,
+    ) -> Result<Option<CustomRingCoSigner>, RingError> {
+        let (address, bump) = self.pda(&[CoSigner::SEED, signer.as_ref()]);
         let Some(account) = rpc.get_account(address).await? else {
             return Ok(None);
         };
-        ReadAccessRecord::decode(&account.owner, &self.program_id, &account.data)
-            .filter(|record| record.bump() == bump && record.reader == bytes)
+        CoSigner::decode(&account.owner, &self.program_id, &account.data)
+            .filter(|record| record.bump() == bump && record.signer == *signer)
+            .and_then(|record| {
+                Some(CustomRingCoSigner {
+                    signer: record.signer,
+                    scope: record.scope()?,
+                    account: record,
+                })
+            })
             .map(Some)
             .ok_or(RingError::InvalidAccount { address })
     }
@@ -262,93 +209,46 @@ impl CustomRing {
     }
 
     pub async fn status(self, rpc: &(impl AsyncRpc + ?Sized)) -> Result<RingStatus, RingError> {
-        let config = self.require_config(rpc).await?;
-        let registry = self.registry(rpc).await?;
-        let queue = self.queue(rpc).await?;
         Ok(RingStatus {
-            config,
+            config: self.require_config(rpc).await?,
             registration: self.registration(rpc).await?,
-            registry: registry.map(RegistryStatus::of),
-            queue: queue.map(|queue| QueueStatus {
-                head: queue.head(),
-                tail: queue.tail(),
-                pending: queue.pending(),
-                next_apply_slot: queue.next_apply_slot(),
-            }),
         })
     }
 }
 
+impl CustomRingCoSigner {
+    pub fn account(&self) -> &CoSigner {
+        &self.account
+    }
+}
+
 impl CustomRingConfig {
-    fn new(account: RingProgramConfig, address: Address) -> Result<Self, RingError> {
+    fn new(account: Box<RingPolicy>, address: Address) -> Result<Self, RingError> {
         let invalid = || RingError::InvalidAccount { address };
-        let co_signer = match account.co_signer() {
-            Some(signer) => Some(CustomRingCoSigner {
-                signer: *signer,
-                scope: account.co_sign_scope().ok_or_else(invalid)?,
-            }),
-            None => None,
-        };
         Ok(Self {
-            authority: account.authority,
+            roles: account.roles,
             auditor_pubkey: X25519Pubkey::from_bytes(account.auditor_pubkey)
                 .map_err(|_| invalid())?,
             has_policy: account.has_policy(),
             mode: account.mode()?,
-            insert_fee: account.insert_fee(),
-            co_signer,
+            co_signer_classes: account.co_signers.covered(),
             delegate: account.delegate().copied(),
             created_slot: account.created_slot(),
             account,
         })
     }
 
-    pub fn account(&self) -> &RingProgramConfig {
-        &self.account
-    }
-
-    pub fn insert_fee_for(&self, writer: &Address) -> Option<u64> {
-        self.account.insert_fee_for(writer)
-    }
-}
-
-impl RegistryStatus {
-    fn of(registry: Box<MemberRegistry>) -> Self {
-        let cursor = usize::from(registry.history_cursor);
-        let roots = (0..ROOT_HISTORY)
-            .map(|back| (cursor + ROOT_HISTORY - back) % ROOT_HISTORY)
-            .filter_map(|index| {
-                let entry = &registry.history[index];
-                (entry.root != [0; 32]).then(|| RegistryRoot {
-                    index: index as u8,
-                    root: entry.root,
-                    applied: entry.applied(),
-                    slot: entry.slot(),
-                })
-            })
-            .collect();
-        Self {
-            roots,
-            next_index: registry.next_index(),
-            floor: registry.floor(),
-            prior_floor: registry.prior_floor(),
-            floor_slot: registry.floor_slot(),
-            policy_hash: registry.policy_hash,
-            account: registry,
-        }
-    }
-
-    pub fn account(&self) -> &MemberRegistry {
+    pub fn account(&self) -> &RingPolicy {
         &self.account
     }
 }
 
 impl PinnedPolicy {
     /// The stored table and sources, refused unless they reproduce the pinned hash.
-    pub fn of(registry: &MemberRegistry) -> Result<Self, RingError> {
-        let policy_hash = *registry.policy_hash()?;
-        let sources = registry.source_map()?;
-        let table = registry.rule_table()?;
+    pub fn of(policy: &RingPolicy) -> Result<Self, RingError> {
+        let policy_hash = *policy.policy_hash()?;
+        let sources = policy.source_map()?;
+        let table = policy.rule_table()?;
         if table.hash(&sources)? != policy_hash {
             return Err(RingError::HashMismatch);
         }
@@ -356,7 +256,7 @@ impl PinnedPolicy {
             table,
             sources,
             policy_hash,
-            curator: registry.curator(),
+            curator: policy.curator(),
         })
     }
 

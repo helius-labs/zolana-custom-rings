@@ -1,3 +1,9 @@
+// Opens many registry records under one root at a lower cost, because their
+// Merkle paths share the top of the tree. Each record still proves its full
+// path to the root.
+//
+// Read after registry/registry.go. Read before policy/record_pool.go.
+
 package registry
 
 import (
@@ -6,6 +12,7 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/std/lookup/logderivlookup"
 	"github.com/consensys/gnark/std/selector"
+	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
@@ -44,7 +51,7 @@ func (p SharedQuadProof) AssertLeavesWhen(api frontend.API, active, root fronten
 		panic(err)
 	}
 	api.AssertIsBoolean(active)
-	api.AssertIsEqual(api.Mul(active, api.Sub(canopyRoot(api, p.Canopy), root)), 0)
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: active, A: canopyRoot(api, p.Canopy), B: root})
 	if len(p.Canopy) <= muxCanopyLimit {
 		for i, path := range p.Paths {
 			node := path.root(api, leaves[i])

@@ -2,19 +2,16 @@ use core::ops::BitOr;
 
 use bytemuck::{Pod, Zeroable};
 use solana_address::Address;
-use spr_hasher::{sha256::Sha256, Hasher, HasherError};
+use spr_hasher::HasherError;
+use wincode::{SchemaRead, SchemaWrite};
 use zolana_ring_policy::{
     registry_field, EncodedRuleTable, ListId, PolicySource, RuleTable, SourceMap,
 };
 
 use crate::{
     error::CustomRingError,
-    member_registry::{
-        queue_chain, QueueEntry, APPLY_DELAY_SLOTS, AUTHORITY_RESERVED_LEAVES, GRACE_SLOTS,
-        MEMBER_QUEUE_LIMIT, MEMBER_REGISTRY_CAPACITY, MEMBER_REGISTRY_EMPTY_ROOT, QUEUE_CAPACITY,
-    },
-    statement::ApplyRecordsStatement,
-    ApplyRecordsIxData, ReaderKeyBytes, TAGGED_X25519_KEY_LEN,
+    storage::{Revision, StorageRegistry},
+    WithdrawalExemptionProof, TAGGED_X25519_KEY_LEN,
 };
 
 /// Roots a transfer proof may bind, applications in between leave it provable.
@@ -104,22 +101,14 @@ macro_rules! ring_accounts {
 }
 
 // Discriminator zero marks an uninitialized account.
-// Discriminators 1 and 3 to 9 are retired, never reuse them.
+// Discriminators 1 to 13 are retired, never reuse them.
 ring_accounts! {
-    ReadAccessRecord = READ_ACCESS_RECORD: 2, READ_ACCESS_RECORD_PDA_SEED: b"reader",
-        InvalidReadAccessRecord, ReadAccessRecordAlreadyExists, InvalidReadAccessRecord;
-    RingProgramConfig = RING_PROGRAM_CONFIG: 10, CONFIG_PDA_SEED: b"config",
-        ConfigNotInitialized, ConfigAlreadyInitialized, InvalidConfigPda,
-        |config: &RingProgramConfig| config.mode().is_ok()
-            && config.has_policy <= 1;
-    MemberRegistry = MEMBER_REGISTRY: 11, MEMBER_REGISTRY_PDA_SEED: b"members",
-        InvalidMemberRegistry, MemberRegistryAlreadyExists, InvalidMemberRegistry,
-        |registry: &MemberRegistry| usize::from(registry.history_cursor) < ROOT_HISTORY
-            && u64::from(registry.next_index()) <= MEMBER_REGISTRY_CAPACITY;
-    RecordQueue = RECORD_QUEUE: 12, RECORD_QUEUE_PDA_SEED: b"queue",
-        InvalidRecordQueue, MemberRegistryAlreadyExists, InvalidRecordQueue,
-        |queue: &RecordQueue| queue.head() <= queue.tail()
-            && queue.pending() <= QUEUE_CAPACITY as u64;
+    RingPolicy = RING_POLICY: 15, RING_POLICY_PDA_SEED: b"policy",
+        InvalidRingPolicy, RingPolicyAlreadyExists, InvalidRingPolicy,
+        |ring: &RingPolicy| ring.mode().is_ok();
+    CoSigner = CO_SIGNER: 14, CO_SIGNER_PDA_SEED: b"co_signer",
+        InvalidCoSignerRecord, CoSignerRecordAlreadyExists, InvalidCoSignerRecord,
+        |record: &CoSigner| record.scope().is_some() && record.signer != Address::default();
 }
 
 macro_rules! le_getters {
@@ -133,52 +122,72 @@ macro_rules! le_getters {
 }
 
 le_getters! {
-    RingProgramConfig { insert_fee: u64, created_slot: u64 }
-    MemberRegistry {
-        next_index: u32, floor: u64, prior_floor: u64, floor_slot: u64, generation: u32,
-        generation_slot: u64
-    }
-    RootEntry { applied: u64, slot: u64 }
-    RecordQueue { head: u64, tail: u64, next_apply_slot: u64 }
-    QueueCheckpoint { slot: u64 }
+    RingPolicy { created_slot: u64, generation: u32, generation_slot: u64 }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Pod, Zeroable)]
+/// Nonzero keys, pairwise distinct with the delegate.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Pod, Zeroable, SchemaRead, SchemaWrite)]
 #[repr(C)]
-pub struct ReadAccessRecord {
-    pub discriminator: u8,
-    pub reader: ReaderKeyBytes,
-    pub bump: u8,
+pub struct RingRoles {
+    /// Rotates every role and appoints the delegate.
+    pub admin: Address,
+    /// Signs `UpdatePolicy` and the authority record updates Ring RPC accepts.
+    pub policy: Address,
+    pub pauser: Address,
+    /// Signs `SetCoSigner` and `ClearCoSigner`.
+    pub cosign_admin: Address,
 }
 
-impl ReadAccessRecord {
-    pub fn seed_hash(reader: &ReaderKeyBytes) -> Result<[u8; 32], HasherError> {
-        Sha256::hash(reader)
+#[derive(Debug, Copy, Clone, PartialEq, Eq, SchemaRead, SchemaWrite)]
+#[wincode(tag_encoding = "u8")]
+pub enum RingRole {
+    #[wincode(tag = 0)]
+    Admin,
+    #[wincode(tag = 1)]
+    Policy,
+    #[wincode(tag = 2)]
+    Pauser,
+    #[wincode(tag = 3)]
+    CosignAdmin,
+}
+
+impl RingRoles {
+    pub const fn key(&self, role: RingRole) -> &Address {
+        match role {
+            RingRole::Admin => &self.admin,
+            RingRole::Policy => &self.policy,
+            RingRole::Pauser => &self.pauser,
+            RingRole::CosignAdmin => &self.cosign_admin,
+        }
     }
-}
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Pod, Zeroable)]
-#[repr(C)]
-pub struct RingProgramConfig {
-    pub discriminator: u8,
-    pub authority: Address,
-    /// Auditor X25519 public key as `0x04 || canonical little-endian u`.
-    pub auditor_pubkey: [u8; TAGGED_X25519_KEY_LEN],
-    pub bump: u8,
-    /// One for a policy ring.
-    pub has_policy: u8,
-    /// [`RingMode`] byte.
-    pub mode: u8,
-    /// Lamports a record write by a signer other than the authority pays the authority.
-    pub insert_fee: [u8; 8],
-    /// Zero without a co-signer.
-    pub co_signer: Address,
-    /// [`CoSignScope`] bits, zero without a co-signer.
-    pub co_sign_scope: u8,
-    /// Zero without a delegate.
-    pub delegate: Address,
-    /// Little endian, the slot `CreateConfig` ran in.
-    pub created_slot: [u8; 8],
+    fn key_mut(&mut self, role: RingRole) -> &mut Address {
+        match role {
+            RingRole::Admin => &mut self.admin,
+            RingRole::Policy => &mut self.policy,
+            RingRole::Pauser => &mut self.pauser,
+            RingRole::CosignAdmin => &mut self.cosign_admin,
+        }
+    }
+
+    /// `ZeroRoleKey` or `DuplicateRoleKey` unless every key and the delegate are nonzero and distinct.
+    pub fn check(&self, delegate: Option<&Address>) -> Result<(), CustomRingError> {
+        let keys = || {
+            [&self.admin, &self.policy, &self.pauser, &self.cosign_admin]
+                .into_iter()
+                .chain(delegate)
+        };
+        if keys().any(|key| *key == Address::default()) {
+            return Err(CustomRingError::ZeroRoleKey);
+        }
+        if keys()
+            .enumerate()
+            .any(|(index, key)| keys().take(index).any(|earlier| earlier == key))
+        {
+            return Err(CustomRingError::DuplicateRoleKey);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -201,35 +210,6 @@ impl TryFrom<u8> for RingMode {
             2 => Ok(Self::Anonymous),
             _ => Err(CustomRingError::InvalidRingMode),
         }
-    }
-}
-
-impl RingProgramConfig {
-    pub fn mode(&self) -> Result<RingMode, CustomRingError> {
-        RingMode::try_from(self.mode)
-    }
-
-    pub const fn has_policy(&self) -> bool {
-        self.has_policy == 1
-    }
-
-    pub fn co_signer(&self) -> Option<&Address> {
-        (self.co_signer != Address::default()).then_some(&self.co_signer)
-    }
-
-    /// `None` without a co-signer, every set scope bit is a known class.
-    pub const fn co_sign_scope(&self) -> Option<CoSignScope> {
-        CoSignScope::new(self.co_sign_scope)
-    }
-
-    pub fn delegate(&self) -> Option<&Address> {
-        (self.delegate != Address::default()).then_some(&self.delegate)
-    }
-
-    /// `None` when the authority writes or the ring charges no fee.
-    pub fn insert_fee_for(&self, writer: &Address) -> Option<u64> {
-        let fee = self.insert_fee();
-        (fee != 0 && *writer != self.authority).then_some(fee)
     }
 }
 
@@ -271,46 +251,48 @@ impl BitOr for CoSignScope {
     }
 }
 
-/// `applied` is the queue head right after the application that pushed the root.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Pod, Zeroable)]
+/// Count of `CoSigner` records covering each class, a class with none demands no co-signer.
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
-pub struct RootEntry {
-    pub root: [u8; 32],
-    pub applied: [u8; 8],
-    pub slot: [u8; 8],
-}
+pub struct CoSignerCounts([u8; 3]);
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct AppliedAt {
-    pub applied: u64,
-    pub slot: u64,
-}
+impl CoSignerCounts {
+    const CLASSES: [CoSignScope; 3] = [
+        CoSignScope::TRANSFERS,
+        CoSignScope::DEPOSITS,
+        CoSignScope::WITHDRAWALS,
+    ];
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Pod, Zeroable)]
-#[repr(C)]
-pub struct MemberRegistry {
-    pub discriminator: u8,
-    pub bump: u8,
-    /// Index of the newest root in `history`.
-    pub history_cursor: u8,
-    /// Little endian, the leaf the next insert takes.
-    pub next_index: [u8; 4],
-    /// Little endian, the applied position every own-ring root must reach.
-    pub floor: [u8; 8],
-    /// Little endian, the floor before the last raise.
-    pub prior_floor: [u8; 8],
-    /// Little endian, the slot of the last floor raise.
-    pub floor_slot: [u8; 8],
-    pub history: [RootEntry; ROOT_HISTORY],
-    /// Zero without a policy.
-    pub policy_hash: [u8; 32],
-    /// Non-empty exactly for the lists `rules` references.
-    pub sources: [SourceSlot; N_SOURCE_SLOTS],
-    pub rules: EncodedRuleTable,
-    /// Little endian, one more at every table or source write.
-    pub generation: [u8; 4],
-    /// Little endian, the slot of the write `generation` counts.
-    pub generation_slot: [u8; 8],
+    /// `None` without a record.
+    pub fn covered(&self) -> Option<CoSignScope> {
+        let bits = Self::CLASSES
+            .iter()
+            .zip(self.0)
+            .filter(|(_, count)| *count != 0)
+            .fold(0, |bits, (class, _)| bits | class.bits());
+        CoSignScope::new(bits)
+    }
+
+    pub fn added(self, scope: CoSignScope) -> Result<Self, CustomRingError> {
+        self.step(scope, u8::checked_add)
+    }
+
+    pub fn removed(self, scope: CoSignScope) -> Result<Self, CustomRingError> {
+        self.step(scope, u8::checked_sub)
+    }
+
+    fn step(
+        mut self,
+        scope: CoSignScope,
+        step: fn(u8, u8) -> Option<u8>,
+    ) -> Result<Self, CustomRingError> {
+        for (class, count) in Self::CLASSES.iter().zip(&mut self.0) {
+            if scope.contains(*class) {
+                *count = step(*count, 1).ok_or(CustomRingError::CoSignerCountOutOfRange)?;
+            }
+        }
+        Ok(self)
+    }
 }
 
 /// One list's source, slot `i` is empty (`list_id == 0`) or serves list `i + 1`.
@@ -318,7 +300,7 @@ pub struct MemberRegistry {
 #[repr(C)]
 pub struct SourceSlot {
     pub list_id: u8,
-    /// The curator's `MemberRegistry` account serving the list, zero for the ring's own.
+    /// The curator's `StorageRegistry` serving the list, zero for the ring's own records.
     pub registry: Address,
 }
 
@@ -343,71 +325,211 @@ pub enum ListRegistry {
     Curator(Address),
 }
 
-impl MemberRegistry {
-    /// The fresh registry, its first root holds only the sentinel.
-    pub fn new(bump: u8, slot: u64) -> Self {
-        let mut registry: Self = Zeroable::zeroed();
-        registry.discriminator = MEMBER_REGISTRY;
-        registry.bump = bump;
-        registry.next_index = 1u32.to_le_bytes();
-        registry.history[0] = RootEntry {
-            root: MEMBER_REGISTRY_EMPTY_ROOT,
-            applied: [0; 8],
-            slot: slot.to_le_bytes(),
-        };
+/// The roots an instruction binds, each read from a live registry account after the ring account.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum RootRead {
+    None,
+    Own,
+    /// The own root, and the curator root when a source names one.
+    Policy,
+}
+
+impl RootRead {
+    pub fn transfer(ring: &RingPolicy, exemption: Option<&WithdrawalExemptionProof>) -> Self {
+        if ring.has_policy() {
+            Self::Policy
+        } else if exemption.is_some() {
+            Self::Own
+        } else {
+            Self::None
+        }
+    }
+
+    pub fn deposit(ring: &RingPolicy) -> Result<Self, CustomRingError> {
+        Ok(
+            match ring.has_policy() || ring.mode()? == RingMode::ConfidentialEscrow {
+                true => Self::Policy,
+                false => Self::None,
+            },
+        )
+    }
+
+    pub fn merge(ring: &RingPolicy) -> Result<Self, CustomRingError> {
+        Ok(match ring.mode()? {
+            RingMode::ConfidentialEscrow => Self::Own,
+            RingMode::Confidential | RingMode::Anonymous => Self::None,
+        })
+    }
+}
+
+/// The roots the passed registries serve at `slot`, a revoked root fails at once.
+#[derive(Debug, Copy, Clone)]
+pub struct LiveRoots<'a> {
+    pub own: Option<&'a StorageRegistry>,
+    pub curator: Option<&'a StorageRegistry>,
+    pub slot: u64,
+}
+
+impl LiveRoots<'_> {
+    pub fn own(&self, revision: Revision) -> Result<[u8; 32], CustomRingError> {
+        self.served(self.own, revision)?
+            .ok_or(CustomRingError::MissingRegistry)
+    }
+
+    pub fn curator(&self, revision: Revision) -> Result<[u8; 32], CustomRingError> {
+        self.served(self.curator, revision)?
+            .ok_or(CustomRingError::MissingRegistry)
+    }
+
+    /// Without the records, `None` at revision zero and `unread` otherwise.
+    pub fn own_if_read(
+        &self,
+        revision: Revision,
+        unread: CustomRingError,
+    ) -> Result<Option<[u8; 32]>, CustomRingError> {
+        Self::named(self.served(self.own, revision)?, revision, unread)
+    }
+
+    /// Without a curator, `None` at revision zero and `unread` otherwise.
+    pub fn curator_if_read(
+        &self,
+        revision: Revision,
+        unread: CustomRingError,
+    ) -> Result<Option<[u8; 32]>, CustomRingError> {
+        Self::named(self.served(self.curator, revision)?, revision, unread)
+    }
+
+    fn served(
+        &self,
+        registry: Option<&StorageRegistry>,
+        revision: Revision,
+    ) -> Result<Option<[u8; 32]>, CustomRingError> {
         registry
+            .map(|registry| {
+                registry
+                    .root(revision, self.slot)
+                    .map_err(|_| CustomRingError::RootNotServed)
+            })
+            .transpose()
     }
 
-    /// The root an own-ring statement binds, `applied` must reach the floor.
-    pub fn own_root(&self, index: u8) -> Result<[u8; 32], CustomRingError> {
-        let entry = self.entry(index)?;
-        if entry.applied() < self.floor() {
-            return Err(CustomRingError::RootBelowFloor);
+    fn named(
+        root: Option<[u8; 32]>,
+        revision: Revision,
+        unread: CustomRingError,
+    ) -> Result<Option<[u8; 32]>, CustomRingError> {
+        match root {
+            None if revision.value() != 0 => Err(unread),
+            root => Ok(root),
         }
-        Ok(entry.root)
+    }
+}
+
+/// One per ring, every ring instruction and transfer passes it.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Pod, Zeroable)]
+#[repr(C)]
+pub struct RingPolicy {
+    pub discriminator: u8,
+    pub bump: u8,
+    /// [`RingMode`] byte.
+    pub mode: u8,
+    pub co_signers: CoSignerCounts,
+    pub roles: RingRoles,
+    /// Zero without a delegate.
+    pub delegate: Address,
+    /// Auditor X25519 public key as `0x04 || canonical little-endian u`.
+    pub auditor_pubkey: [u8; TAGGED_X25519_KEY_LEN],
+    /// Little endian, the slot `Initialize` ran in.
+    pub created_slot: [u8; 8],
+    /// The ring's own `StorageRegistry`, zero on an audit-only ring bound to none.
+    pub records: Address,
+    /// Zero without a policy.
+    pub policy_hash: [u8; 32],
+    /// Non-empty exactly for the lists `rules` references.
+    pub sources: [SourceSlot; N_SOURCE_SLOTS],
+    pub rules: EncodedRuleTable,
+    /// Little endian, one more at every table, source or records write.
+    pub generation: [u8; 4],
+    /// Little endian, the slot of the write `generation` counts.
+    pub generation_slot: [u8; 8],
+}
+
+/// At `[CO_SIGNER_PDA_SEED, signer]`.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Pod, Zeroable)]
+#[repr(C)]
+pub struct CoSigner {
+    pub discriminator: u8,
+    pub signer: Address,
+    /// [`CoSignScope`] bits.
+    pub scope: u8,
+    pub bump: u8,
+}
+
+#[must_use]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct NewRing {
+    pub bump: u8,
+    pub mode: RingMode,
+    pub roles: RingRoles,
+    pub auditor_pubkey: [u8; TAGGED_X25519_KEY_LEN],
+    pub created_slot: u64,
+    pub records: Address,
+}
+
+impl NewRing {
+    /// No policy, boxed in place past the SBF stack frame.
+    pub fn account(self) -> Box<RingPolicy> {
+        let mut ring: Box<RingPolicy> = bytemuck::zeroed_box();
+        ring.discriminator = RING_POLICY;
+        ring.bump = self.bump;
+        ring.mode = self.mode as u8;
+        ring.roles = self.roles;
+        ring.auditor_pubkey = self.auditor_pubkey;
+        ring.created_slot = self.created_slot.to_le_bytes();
+        ring.records = self.records;
+        ring
+    }
+}
+
+impl RingPolicy {
+    pub fn mode(&self) -> Result<RingMode, CustomRingError> {
+        RingMode::try_from(self.mode)
     }
 
-    /// A curator root at the floor, or within `GRACE_SLOTS` of the last raise at the prior floor.
-    pub fn curator_root(&self, index: u8, now: u64) -> Result<[u8; 32], CustomRingError> {
-        let entry = self.entry(index)?;
-        let applied = entry.applied();
-        let in_grace = now < self.floor_slot().saturating_add(GRACE_SLOTS);
-        if applied >= self.floor() || (in_grace && applied >= self.prior_floor()) {
-            return Ok(entry.root);
+    /// A policy ring pins its table at `Initialize`, an audit-only ring never writes one.
+    pub fn has_policy(&self) -> bool {
+        self.written_policy_hash().is_some()
+    }
+
+    pub fn delegate(&self) -> Option<&Address> {
+        (self.delegate != Address::default()).then_some(&self.delegate)
+    }
+
+    /// `UnauthorizedAuthority` unless `signer` holds `role`.
+    pub fn check_role(&self, role: RingRole, signer: &Address) -> Result<(), CustomRingError> {
+        if self.roles.key(role) != signer {
+            return Err(CustomRingError::UnauthorizedAuthority);
         }
-        Err(CustomRingError::CuratorRootStale)
+        Ok(())
     }
 
-    /// The root the next application starts from.
-    pub fn current_root(&self) -> [u8; 32] {
-        self.history[usize::from(self.history_cursor)].root
-    }
-
-    /// Records an application, the oldest root leaves the history.
-    pub fn push_root(&mut self, root: [u8; 32], at: AppliedAt) {
-        let cursor = (usize::from(self.history_cursor) + 1) % ROOT_HISTORY;
-        self.history[cursor] = RootEntry {
-            root,
-            applied: at.applied.to_le_bytes(),
-            slot: at.slot.to_le_bytes(),
-        };
-        self.history_cursor = cursor as u8;
-    }
-
-    /// Every authority write floors the own ring, curators keep the prior floor for `GRACE_SLOTS`.
-    pub fn raise_floor(&mut self) {
-        let newest = self.history[usize::from(self.history_cursor)];
-        self.prior_floor = self.floor;
-        self.floor = newest.applied;
-        self.floor_slot = newest.slot;
+    /// `ZeroRoleKey` or `DuplicateRoleKey` unless `key` stays apart from the other roles and the delegate.
+    pub fn rotate_role(&mut self, role: RingRole, key: Address) -> Result<(), CustomRingError> {
+        let mut roles = self.roles;
+        *roles.key_mut(role) = key;
+        roles.check(self.delegate())?;
+        self.roles = roles;
+        Ok(())
     }
 
     /// `PolicyNotSet` before the first policy write.
     pub fn policy_hash(&self) -> Result<&[u8; 32], CustomRingError> {
-        if self.policy_hash == [0; 32] {
-            return Err(CustomRingError::PolicyNotSet);
-        }
-        Ok(&self.policy_hash)
+        self.written_policy_hash()
+            .ok_or(CustomRingError::PolicyNotSet)
+    }
+
+    pub fn written_policy_hash(&self) -> Option<&[u8; 32]> {
+        (self.policy_hash != [0; 32]).then_some(&self.policy_hash)
     }
 
     /// Validates the table against the sources and repins its hash.
@@ -417,15 +539,31 @@ impl MemberRegistry {
         rules: EncodedRuleTable,
         slot: u64,
     ) -> Result<(), CustomRingError> {
+        let source_map = source_map(&sources)?;
+        rules.validate(&source_map)?;
+        let policy_hash = rules.hash(&source_map)?;
+        self.count_generation(slot)?;
+        self.policy_hash = policy_hash;
+        self.sources = sources;
+        self.rules = rules;
+        Ok(())
+    }
+
+    /// `InvalidSource` for the curator.
+    pub fn rebind_records(&mut self, records: Address, slot: u64) -> Result<(), CustomRingError> {
+        if self.curator() == Some(records) {
+            return Err(CustomRingError::InvalidSource);
+        }
+        self.count_generation(slot)?;
+        self.records = records;
+        Ok(())
+    }
+
+    fn count_generation(&mut self, slot: u64) -> Result<(), CustomRingError> {
         let generation = self
             .generation()
             .checked_add(1)
             .ok_or(CustomRingError::PolicyGenerationOverflow)?;
-        let source_map = source_map(&sources)?;
-        rules.validate(&source_map)?;
-        self.policy_hash = rules.hash(&source_map)?;
-        self.sources = sources;
-        self.rules = rules;
         self.generation = generation.to_le_bytes();
         self.generation_slot = slot.to_le_bytes();
         Ok(())
@@ -457,11 +595,17 @@ impl MemberRegistry {
         Ok(self.rules.validate(&self.source_map()?)?)
     }
 
-    fn entry(&self, index: u8) -> Result<&RootEntry, CustomRingError> {
-        self.history
-            .get(usize::from(index))
-            .filter(|entry| entry.root != [0; 32])
-            .ok_or(CustomRingError::RootIndexEmpty)
+    /// The registries `read` passes after the ring account, the records first.
+    pub fn root_registries(&self, read: RootRead) -> impl Iterator<Item = Address> {
+        let own = (read != RootRead::None).then_some(self.records);
+        let curator = (read == RootRead::Policy).then(|| self.curator()).flatten();
+        own.into_iter().chain(curator)
+    }
+}
+
+impl CoSigner {
+    pub const fn scope(&self) -> Option<CoSignScope> {
+        CoSignScope::new(self.scope)
     }
 }
 
@@ -473,170 +617,11 @@ fn source_map(sources: &[SourceSlot; N_SOURCE_SLOTS]) -> Result<SourceMap, Custo
     Ok(SourceMap::from_slots(slots)?)
 }
 
-/// `chain(p)` and the slot `p` was queued at.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Pod, Zeroable)]
-#[repr(C)]
-pub struct QueueCheckpoint {
-    pub chain: [u8; 32],
-    pub slot: [u8; 8],
-}
-
-/// Chain checkpoints of the pending record writes, the writes stay in instruction data.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Pod, Zeroable)]
-#[repr(C)]
-pub struct RecordQueue {
-    pub discriminator: u8,
-    pub bump: u8,
-    /// Little endian, the position of the oldest pending write.
-    pub head: [u8; 8],
-    /// Little endian, the position the next write takes.
-    pub tail: [u8; 8],
-    /// `chain(head - 1)`.
-    pub chain_head: [u8; 32],
-    /// Position `p` sits at `p mod QUEUE_CAPACITY`.
-    pub checkpoints: [QueueCheckpoint; QUEUE_CAPACITY],
-    /// Little endian, the first slot a permissionless application may land in.
-    pub next_apply_slot: [u8; 8],
-}
-
-impl RecordQueue {
-    pub fn new(bump: u8) -> Self {
-        let mut queue: Self = Zeroable::zeroed();
-        queue.discriminator = RECORD_QUEUE;
-        queue.bump = bump;
-        queue
-    }
-
-    pub const fn pending(&self) -> u64 {
-        self.tail().saturating_sub(self.head())
-    }
-
-    /// `chain(tail - 1)`, the chain an application of every pending write ends at.
-    pub fn chain_tail(&self) -> [u8; 32] {
-        match self.tail().checked_sub(1) {
-            Some(last) if self.pending() > 0 => self.checkpoint(last).chain,
-            _ => self.chain_head,
-        }
-    }
-
-    /// A member write or a key registration fits the member share of the queue and of the leaves.
-    pub fn admit_member_write(&self, registry: &MemberRegistry) -> Result<(), CustomRingError> {
-        if self.pending() >= MEMBER_QUEUE_LIMIT {
-            return Err(CustomRingError::QueueFull);
-        }
-        if self.reserved(registry, 1) > MEMBER_REGISTRY_CAPACITY - AUTHORITY_RESERVED_LEAVES {
-            return Err(CustomRingError::AuthorityLeafReserve);
-        }
-        Ok(())
-    }
-
-    /// The authority's writes fit the batch beside every pending write.
-    pub fn admit_authority_writes(&self, count: u64) -> Result<(), CustomRingError> {
-        if self.pending().saturating_add(count) > QUEUE_CAPACITY as u64 {
-            return Err(CustomRingError::AuthorityBatchTooLarge);
-        }
-        Ok(())
-    }
-
-    /// Appends one admitted write at `tail`.
-    pub fn push(&mut self, entry: &QueueEntry, slot: u64) -> Result<(), CustomRingError> {
-        let chain = queue_chain(&self.chain_tail(), entry)?;
-        let tail = self.tail();
-        self.checkpoints[checkpoint_index(tail)] = QueueCheckpoint {
-            chain,
-            slot: slot.to_le_bytes(),
-        };
-        self.tail = (tail + 1).to_le_bytes();
-        Ok(())
-    }
-
-    /// Anyone applies a full or aged queue, at most once per `APPLY_DELAY_SLOTS`.
-    pub fn apply_due(&self, slot: u64) -> Result<(), CustomRingError> {
-        let pending = self.pending();
-        let aged = || {
-            let queued = self.checkpoint(self.head()).slot();
-            slot >= queued.saturating_add(APPLY_DELAY_SLOTS)
-        };
-        if pending == 0 || (pending < MEMBER_QUEUE_LIMIT && !aged()) {
-            return Err(CustomRingError::ApplyNotDue);
-        }
-        if slot < self.next_apply_slot() {
-            return Err(CustomRingError::ApplyTooSoon);
-        }
-        Ok(())
-    }
-
-    fn checkpoint(&self, position: u64) -> &QueueCheckpoint {
-        &self.checkpoints[checkpoint_index(position)]
-    }
-
-    /// The leaves taken once every pending write and `count` more insert.
-    fn reserved(&self, registry: &MemberRegistry, count: u64) -> u64 {
-        u64::from(registry.next_index())
-            .saturating_add(self.pending())
-            .saturating_add(count)
-    }
-}
-
-const fn checkpoint_index(position: u64) -> usize {
-    (position % QUEUE_CAPACITY as u64) as usize
-}
-
-#[must_use]
-pub struct PendingApplication<'a> {
-    pub registry: &'a mut MemberRegistry,
-    pub queue: &'a mut RecordQueue,
-}
-
-impl PendingApplication<'_> {
-    pub fn statement(&self, data: &ApplyRecordsIxData) -> ApplyRecordsStatement {
-        ApplyRecordsStatement {
-            old_root: self.registry.current_root(),
-            new_root: data.new_root,
-            old_next_index: self.registry.next_index(),
-            new_next_index: data.new_next_index(),
-            chain_start: self.queue.chain_head,
-            chain_end: self.queue.chain_tail(),
-            count: self.queue.pending(),
-        }
-    }
-
-    /// Settles a verified `ApplyRecords` at `slot`, the next one waits `APPLY_DELAY_SLOTS`.
-    pub fn settle_permissionless(mut self, data: &ApplyRecordsIxData, slot: u64) {
-        self.queue.next_apply_slot = slot.saturating_add(APPLY_DELAY_SLOTS).to_le_bytes();
-        self.settle(data, slot);
-    }
-
-    /// Settles a verified `AuthorityWriteRecords` at `slot`, its writes floor the own root.
-    pub fn settle_authority(mut self, data: &ApplyRecordsIxData, slot: u64) {
-        self.settle(data, slot);
-        self.registry.raise_floor();
-    }
-
-    fn settle(&mut self, data: &ApplyRecordsIxData, slot: u64) {
-        let applied = self.queue.tail();
-        self.queue.chain_head = self.queue.chain_tail();
-        self.queue.head = applied.to_le_bytes();
-        self.registry
-            .push_root(data.new_root, AppliedAt { applied, slot });
-        self.registry.next_index = data.new_next_index;
-    }
-}
-
-const _: () = assert!(ReadAccessRecord::SIZE == 36);
-const _: () = assert!(RingProgramConfig::SIZE == 150);
-const _: () = assert!(core::mem::offset_of!(RingProgramConfig, insert_fee) == 69);
-const _: () = assert!(core::mem::offset_of!(RingProgramConfig, co_signer) == 77);
-const _: () = assert!(core::mem::offset_of!(RingProgramConfig, delegate) == 110);
-const _: () = assert!(core::mem::offset_of!(RingProgramConfig, created_slot) == 142);
 const _: () = assert!(core::mem::size_of::<SourceSlot>() == 33);
-const _: () = assert!(MemberRegistry::SIZE == 2388);
-const _: () = assert!(core::mem::offset_of!(MemberRegistry, next_index) == 3);
-const _: () = assert!(core::mem::offset_of!(MemberRegistry, history) == 31);
-const _: () = assert!(core::mem::offset_of!(MemberRegistry, policy_hash) == 1567);
-const _: () = assert!(core::mem::offset_of!(MemberRegistry, rules) == 1863);
-const _: () = assert!(core::mem::offset_of!(MemberRegistry, generation_slot) == 2380);
 const _: () = assert!(ROOT_HISTORY <= u8::MAX as usize);
-const _: () = assert!(RecordQueue::SIZE == 698);
-const _: () = assert!(core::mem::offset_of!(RecordQueue, next_apply_slot) == 690);
-const _: () = assert!(core::mem::offset_of!(RecordQueue, checkpoints) == 50);
+const _: () = assert!(RingPolicy::SIZE == 1060);
+const _: () = assert!(core::mem::offset_of!(RingPolicy, roles) == 6);
+const _: () = assert!(core::mem::offset_of!(RingPolicy, delegate) == 134);
+const _: () = assert!(core::mem::offset_of!(RingPolicy, auditor_pubkey) == 166);
+const _: () = assert!(core::mem::offset_of!(RingPolicy, records) == 207);
+const _: () = assert!(CoSigner::SIZE == 35);

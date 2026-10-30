@@ -1,4 +1,10 @@
-import { EMPTY_MINT_POLICY, mintPolicyField, mintPolicyWriteField } from "./mint-policy.js";
+import {
+  EMPTY_MINT_POLICY,
+  assetLimitsFields,
+  isEmptyMintPolicy,
+  mintPolicyField,
+  mintPolicyWriteField,
+} from "./mint-policy.js";
 import { hexToBytes } from "@noble/hashes/utils.js";
 
 import {
@@ -41,7 +47,7 @@ import type { ApplyRecordsStatement } from "../proof/statement.js";
 export const FIELD_MAX = bigIntBytes(BN254_SCALAR_ORDER - 1n) as Bytes32;
 /** Rust `MEMBER_REGISTRY_EMPTY_ROOT`, the tree holding only the sentinel, a registry's first root. */
 export const MEMBER_REGISTRY_EMPTY_ROOT = hexToBytes(
-  "0771d415ec42a482ed0169394bd583c89f08f5377bb20a45b240f7d241cd9841",
+  "00c0b07d78024d985b995bd9db525f329d0bfb285f75cc222f900d8f6faf5130",
 ) as Bytes32;
 
 const U64_MAX = 0xffff_ffff_ffff_ffffn;
@@ -78,6 +84,7 @@ export function memberRecordHash(record: MemberRecord): Bytes32 {
     checkedBytes<Bytes32>(record.escrowKey, 32, "record escrow key"),
     mintPolicyField(record.mintPolicy),
     u64Field(record.mintPolicy.withdrawalThreshold, "withdrawal threshold"),
+    ...assetLimitsFields(record.mintPolicy.limits),
   ]);
 }
 
@@ -262,7 +269,7 @@ export function escrowEntry(member: Bytes32, key: EscrowKey): QueueEntry {
   });
 }
 
-/** `Poseidon(CRQW, member, mask, value, escrow_key, mint_policy_write, withdrawal_threshold)`. */
+/** `Poseidon(CRQW, member, mask, value, escrow_key, mint_policy_write, withdrawal_threshold, limits_0, limits_1, limits_2)`. */
 export function queueEntryHash(entry: QueueEntry): Bytes32 {
   return poseidon([
     domainField(RingDomain.queueWrite),
@@ -272,6 +279,7 @@ export function queueEntryHash(entry: QueueEntry): Bytes32 {
     checkedBytes<Bytes32>(entry.escrowKey, 32, "entry escrow key"),
     mintPolicyWriteField(entry.mintPolicy),
     u64Field(entry.mintPolicy?.withdrawalThreshold ?? 0n, "withdrawal threshold"),
+    ...assetLimitsFields((entry.mintPolicy ?? EMPTY_MINT_POLICY).limits),
   ]);
 }
 
@@ -358,8 +366,7 @@ function replayWrite(
     !equalBytes(write.oldNext, low.next) ||
     write.oldLists !== 0n ||
     !equalBytes(write.oldEscrow, ZERO_32) ||
-    !equalBytes(mintPolicyField(write.oldMintPolicy), ZERO_32) ||
-    write.oldMintPolicy.withdrawalThreshold !== 0n
+    !isEmptyMintPolicy(write.oldMintPolicy)
   )
     invalid("NotBracketed");
   if (!equalBytes(quadPathRoot(write.lowPath, memberRecordHash(low)), root))
@@ -378,8 +385,7 @@ function replayWrite(
   if (
     inserted.lists === 0n &&
     equalBytes(inserted.escrowKey, ZERO_32) &&
-    equalBytes(mintPolicyField(inserted.mintPolicy), ZERO_32) &&
-    inserted.mintPolicy.withdrawalThreshold === 0n
+    isEmptyMintPolicy(inserted.mintPolicy)
   ) {
     // The circuit range-checks a no-op's slot and nothing else.
     checkedIndex(write.slot.index);

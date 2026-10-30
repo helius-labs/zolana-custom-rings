@@ -1,6 +1,19 @@
+// Applies the ring's rules to the sender, each recipient and each token. A
+// sender no list admits is refused. A recipient or token no list admits passes
+// only within an amount limit, and a payment split across outputs counts as one
+// total.
+//
+// Read after policy/table.go, policy/subjects.go, policy/transaction.go. Read
+// before policy/outflow.go, policy/deposit.go, policy/delegate.go.
+
 package policy
 
 import (
+	"errors"
+	"math/big"
+	"math/bits"
+
+	"github.com/consensys/gnark/constraint/solver"
 	"github.com/consensys/gnark/frontend"
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
@@ -14,6 +27,27 @@ type outputTotals struct {
 }
 
 func (p *PolicyInputs) assertRules(api frontend.API, cmp comparator, table tableView, resolved subjects, outputs []utxoView) {
+	// 1. Every payment's guard inputs fold once.
+	screen := newPaymentScreen(api, cmp, resolved, outputs)
+	// 2. A scalar guard sums one owner's outputs, under one every UTXO output carries one asset.
+	assertScalarAssets(api, outputs, table.scalarOwner)
+	// 3. Every active rule holds for its subjects, the sender once and each live output owner or asset.
+	for r, rule := range table.rules {
+		// The one sender meets every sender rule, with or without a spent input.
+		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Mul(table.ruleActive[r], rule.onSender), V: rule.refuses(api, resolved.sender.onList)})
+		screen.assert(api, rule, api.Mul(table.ruleActive[r], api.Add(rule.onOwner, rule.onAsset)))
+	}
+}
+
+type paymentScreen struct {
+	cmp                    comparator
+	resolved               subjects
+	outputs                []utxoView
+	liveOwner, assetExempt []frontend.Variable
+	totals                 []outputTotals
+}
+
+func newPaymentScreen(api frontend.API, cmp comparator, resolved subjects, outputs []utxoView) paymentScreen {
 	// 1. A zero owner carries no obligation, an asset needs no such gate since SPP refuses a UTXO of asset 0.
 	liveOwner := make([]frontend.Variable, len(outputs))
 	for o, out := range outputs {
@@ -25,24 +59,21 @@ func (p *PolicyInputs) assertRules(api frontend.API, cmp comparator, table table
 	for o := range outputs {
 		assetExempt[o] = cmp.atMost(api, totals[o].byOwnerAndAsset, resolved.mintPolicies[o].threshold)
 	}
-	// 3. A scalar guard sums one owner's outputs, under one every UTXO output carries one asset.
-	assertScalarAssets(api, outputs, table.scalarOwner)
-	// 4. Every active rule holds for its subjects, the sender once and each live output owner or asset.
-	for r, rule := range table.rules {
-		// The one sender meets every sender rule, with or without a spent input.
-		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Mul(table.ruleActive[r], rule.onSender), V: rule.refuses(api, resolved.sender.onList)})
-		onOutput := api.Mul(table.ruleActive[r], api.Add(rule.onOwner, rule.onAsset))
-		for o := range outputs {
-			enabled := api.Mul(onOutput, api.Select(rule.onAsset, outputs[o].utxo, liveOwner[o]))
-			refused := rule.refuses(api, subjectLists(api, rule.onAsset, resolved.assets[o], resolved.owners[o]))
-			// An asset guarded rule needs an inline limit for the output's asset.
-			transaction.AssertWhen(api, api.Mul(enabled, rule.assetGuard), ringgadget.IsNonZero(api, resolved.mintPolicies[o].threshold))
-			total := api.Select(rule.onAsset, totals[o].byAsset, totals[o].byOwner)
-			scalar := api.Mul(rule.scalarGuard, cmp.atMost(api, total, rule.threshold))
-			exempt := api.Or(scalar, api.Mul(rule.assetGuard, assetExempt[o]))
-			// A subject the lists refuse needs its amounts within the rule's guard.
-			transaction.AssertWhen(api, api.Mul(enabled, refused), exempt)
-		}
+	return paymentScreen{cmp: cmp, resolved: resolved, outputs: outputs, liveOwner: liveOwner, assetExempt: assetExempt, totals: totals}
+}
+
+// assert holds one rule for every live payment while onOutput is set.
+func (s paymentScreen) assert(api frontend.API, rule ruleFields, onOutput frontend.Variable) {
+	for o := range s.outputs {
+		enabled := api.Mul(onOutput, api.Select(rule.onAsset, s.outputs[o].utxo, s.liveOwner[o]))
+		refused := rule.refuses(api, subjectLists(api, rule.onAsset, s.resolved.assets[o], s.resolved.owners[o]))
+		// An asset guarded rule needs an inline limit for the output's asset.
+		transaction.AssertWhen(api, api.Mul(enabled, rule.assetGuard), ringgadget.IsNonZero(api, s.resolved.mintPolicies[o].threshold))
+		total := api.Select(rule.onAsset, s.totals[o].byAsset, s.totals[o].byOwner)
+		scalar := api.Mul(rule.scalarGuard, s.cmp.atMost(api, total, rule.threshold))
+		exempt := api.Or(scalar, api.Mul(rule.assetGuard, s.assetExempt[o]))
+		// A subject the lists refuse needs its amounts within the rule's guard.
+		transaction.AssertWhen(api, api.Mul(enabled, refused), exempt)
 	}
 }
 
@@ -95,4 +126,52 @@ func subjectLists(api frontend.API, onAsset frontend.Variable, asset, owner subj
 		onList[i] = api.Select(onAsset, asset.onList[i], owner.onList[i])
 	}
 	return onList
+}
+
+type comparator struct {
+	rc frontend.Rangechecker
+	// width bounds every difference the key compares, fixed when the key compiles.
+	width int
+}
+
+// comparator bounds gross output/withdrawal sums and the existing public net, each leg bounded to u64.
+func (p *PolicyInputs) comparator(rc frontend.Rangechecker) comparator {
+	return newComparator(rc, len(p.Outputs)+len(p.Withdrawals))
+}
+
+func newComparator(rc frontend.Rangechecker, payments int) comparator {
+	return comparator{rc: rc, width: transaction.AmountBits + bits.Len(uint(payments+1))}
+}
+
+// atMost returns total <= threshold, the caller bounds their difference below 2^width in magnitude.
+func (c comparator) atMost(api frontend.API, total, threshold frontend.Variable) frontend.Variable {
+	offset := new(big.Int).Lsh(big.NewInt(1), uint(c.width))
+	delta := api.Add(api.Sub(threshold, total), offset)
+	// 1. The hint proposes the low width bits and the top bit of delta, untrusted until the checks below bind them.
+	parts, err := api.Compiler().NewHint(comparisonHint, 2, delta, c.width)
+	if err != nil {
+		panic(err)
+	}
+	low, top := parts[0], parts[1]
+	// 2. low below 2^width leaves one split per delta.
+	c.rc.Check(low, c.width)
+	// 3. top is a bit, the split then covers delta below 2^(width+1) only.
+	api.AssertIsBoolean(top)
+	// 4. delta lies in (0, 2^(width+1)), its split is unique and top is set exactly when total <= threshold.
+	api.AssertIsEqual(delta, api.Add(low, api.Mul(top, offset)))
+	return top
+}
+
+func init() { solver.RegisterHint(comparisonHint) }
+
+// comparisonHint splits delta at the width, atMost range checks and recomposes both parts.
+func comparisonHint(_ *big.Int, inputs, outputs []*big.Int) error {
+	if len(inputs) != 2 || len(outputs) != 2 || !inputs[1].IsUint64() {
+		return errors.New("comparison: want delta, width and two outputs")
+	}
+	width := uint(inputs[1].Uint64())
+	mask := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), width), big.NewInt(1))
+	outputs[0].And(inputs[0], mask)
+	outputs[1].Rsh(inputs[0], width)
+	return nil
 }

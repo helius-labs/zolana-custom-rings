@@ -1,6 +1,6 @@
 //! The SPP half of a ring transfer, its witness complete or prepared for the indexed prover.
 
-use custom_ring_interface::{InputTrees, PlainGroth16Proof, RingRail};
+use custom_ring_interface::{InputTrees, PlainGroth16Proof};
 use solana_address::Address;
 use spr_client::{
     attach_input_proofs,
@@ -8,24 +8,32 @@ use spr_client::{
         indexed::{IndexedTransferPreparation, IndexedTransferRail, PreparedIndexedTransfer},
         transact::{AnonymousEddsaTransferInputs, AnonymousRingEddsaProver},
     },
-    AsyncRpc, AsyncWitnessReader, ClientError, ProofAuthority, ProofCompressed,
+    AsyncRpc, AsyncWitnessReader, ClientError, OwnerAuthorization, ProofAuthority, ProofCompressed,
     RingAuthorityProver, RingTransferProver, TransferInputs,
 };
-use spr_interface::instruction::{CircuitId, TreeContext};
-use spr_keypair::SigningKey;
+use spr_interface::instruction::{
+    instruction_data::transact::Bsb22Commitment, CircuitId, TreeContext,
+};
 use spr_transaction::instructions::transact::SppProofInputs;
 
-use super::compact::OwnedAnonymousProofData;
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{trees::SpendTrees, RingError};
 
-pub(super) struct HiddenSpend<'a> {
-    pub owner: &'a SigningKey,
+/// The SPP circuit a ring transfer proves on, with the owner that signs inside the proof.
+#[derive(Clone, Copy)]
+pub(super) enum SppRail<'a> {
+    /// The confidential rail, every input owner signs the transaction.
+    OwnerSigners,
+    /// SPP's anonymous rail, the hidden owner of the anonymous ring or the in-proof owner of a confidential one.
+    Anonymous(OwnerAuthorization<'a>),
+    Delegate,
 }
 
 pub(super) struct ProvenSpp {
     pub proof: PlainGroth16Proof,
-    pub anonymous: Option<OwnedAnonymousProofData>,
+    /// The BSB22 commitment of the rails whose owner signs inside the proof.
+    pub commitment: Option<Bsb22Commitment>,
+    pub default_owner_tag: Option<[u8; 32]>,
     pub nullifiers: Vec<[u8; 32]>,
     pub input_trees: InputTrees,
 }
@@ -62,11 +70,10 @@ enum SppInputs {
 
 pub(super) struct SppWitness<'a> {
     pub ring: Address,
-    pub rail: RingRail,
+    pub rail: SppRail<'a>,
     pub inputs: &'a SppProofInputs,
     pub trees: &'a SpendTrees,
     pub authority: &'a dyn ProofAuthority,
-    pub hidden: Option<HiddenSpend<'a>>,
 }
 
 impl SppWitness<'_> {
@@ -77,14 +84,13 @@ impl SppWitness<'_> {
         let inputs = self.inputs;
         let allow_dummy_inputs = self.trees.allow_dummy_inputs;
         if client.indexed_prover().is_some() {
-            let rail = match (self.rail, self.hidden) {
-                (RingRail::Anonymous, Some(hidden)) => IndexedTransferRail::AnonymousRingEddsa {
+            let rail = match self.rail {
+                SppRail::Anonymous(owner) => IndexedTransferRail::AnonymousRingEddsa {
                     ring: self.ring,
-                    owner: hidden.owner,
+                    owner,
                 },
-                (RingRail::Delegate, _) => IndexedTransferRail::RingAuthority(self.ring),
-                (RingRail::Confidential, _) => IndexedTransferRail::Ring(self.ring),
-                (RingRail::Anonymous, None) => return Err(RingError::MissingAnonymousSigner),
+                SppRail::Delegate => IndexedTransferRail::RingAuthority(self.ring),
+                SppRail::OwnerSigners => IndexedTransferRail::Ring(self.ring),
             };
             let prepared = IndexedTransferPreparation {
                 transaction: inputs.clone(),
@@ -107,8 +113,8 @@ impl SppWitness<'_> {
             &witnesses.dummy_nullifier_proofs,
         )?;
         let shape = inputs.check_shape()?;
-        let mut complete = match (self.rail, self.hidden) {
-            (RingRail::Anonymous, Some(hidden)) => {
+        let mut complete = match self.rail {
+            SppRail::Anonymous(owner) => {
                 let result = AnonymousRingEddsaProver {
                     inputs: spends,
                     outputs: inputs.output_utxos.clone(),
@@ -119,7 +125,7 @@ impl SppWitness<'_> {
                     // The hidden owner signs inside the proof, every public signer slot is zero.
                     signer_pk_hashes: vec![[0; 32]; shape.signer_width()],
                     allow_dummy_inputs,
-                    owner: hidden.owner,
+                    owner,
                     ring_program_id: Some(self.ring),
                     shape,
                 }
@@ -135,8 +141,7 @@ impl SppWitness<'_> {
                     private_tx_hash: result.private_tx_hash,
                 }
             }
-            (RingRail::Anonymous, None) => return Err(RingError::MissingAnonymousSigner),
-            (RingRail::Confidential, _) => {
+            SppRail::OwnerSigners => {
                 let result = RingTransferProver {
                     inputs: spends,
                     outputs: inputs.output_utxos.clone(),
@@ -158,7 +163,7 @@ impl SppWitness<'_> {
                     private_tx_hash: result.private_tx_hash,
                 }
             }
-            (RingRail::Delegate, _) => {
+            SppRail::Delegate => {
                 let result = RingAuthorityProver {
                     inputs: spends,
                     outputs: inputs.output_utxos.clone(),
@@ -281,21 +286,17 @@ impl Spp {
             },
             _ => return Err(RingError::IncompleteProofSet),
         };
-        let anonymous = proof
-            .commitment
-            .as_ref()
-            .map(|commitment| OwnedAnonymousProofData {
-                commitment: commitment.commitment,
-                commitment_pok: commitment.commitment_pok,
-                default_owner_tag,
-            });
         Ok(ProvenSpp {
             proof: PlainGroth16Proof {
                 proof_a: proof.a,
                 proof_b: proof.compressed_b()?,
                 proof_c: proof.c,
             },
-            anonymous,
+            commitment: proof.commitment.as_ref().map(|commitment| Bsb22Commitment {
+                commitment: commitment.commitment,
+                commitment_pok: commitment.commitment_pok,
+            }),
+            default_owner_tag,
             nullifiers,
             input_trees,
         })

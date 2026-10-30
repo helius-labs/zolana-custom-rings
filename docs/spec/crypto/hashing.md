@@ -10,7 +10,7 @@ Every commitment and statement of a custom ring is a Poseidon hash over BN254. T
 
 - `HashChain([x_0, ..., x_n])` is the left fold `h = x_0`, then `h = Poseidon(h, x_i)`. An empty list hashes to `0`.
 - `NonZeroHashChain(xs)` is `HashChain` over the nonzero elements of `xs`, and `0` when none is nonzero.
-- `HashChain4([x_0, ..., x_n])` is `h = x_0`, then `h = Poseidon(h, g_0, g_1, g_2)` per group of three of `x_1..`, with the last group padded by zeros. `[a]` hashes to `a`. It hashes no length, so every statement that uses it has a fixed element count per key.
+- `HashChain4([x_0, ..., x_n])` is `h = x_0`, then `h = Poseidon(h, g_0, g_1, g_2)` per group of three of `x_1..`, with the last group padded by zeros. `[a]` hashes to `a`. It hashes no length. A transfer's disclosure chain follows its layout and, on the anonymous rail, its spent note count, so the ring program refuses every zero disclosure field. Every other use has a fixed element count per key.
 - `HashPrefix4(xs, n)` is `HashChain4` of the first `n` elements. A circuit selects `n` by a one-hot flag set over the key's range.
 
 ## Bytes to fields
@@ -57,21 +57,31 @@ Every commitment and statement of a custom ring is a Poseidon hash over BN254. T
 
 The recipient rebuilds the slot secret from `X25519(u_sk, tx_viewing_u)`, the auditor from the sealed transaction viewing secret. The anonymous rail hashes no tag and no body. Its view tags and body keys are zolana's [View Tags](../../../zolana/docs/spec.md#view-tags) and [AES Key derivation](../../../zolana/docs/spec.md#aes-key-derivation).
 
-## Member registry
+## Record tree
 
 | Value | Encoding |
 |---|---|
 | Member range | `1 <= member <= q - 2`, as big-endian bytes |
-| Record | `Poseidon(member, next, right_align(lists as u64 BE), escrow_key, mint_policy, right_align(withdrawal_threshold as u64 BE))` |
+| Record | `Poseidon(member, next, right_align(lists as u64 BE), escrow_key, mint_policy, right_align(withdrawal_threshold as u64 BE), limits_0, limits_1, limits_2)` |
 | Mint policy field | `threshold * 2^128 + cap * 2^64 + cosign_above`, each a u64 |
-| Sentinel | `(0, q - 1, 0, 0, 0, 0)` at leaf `0` |
+| Asset limit fields | `limits_0 = sender_cap * 2^128 + sender_window_slots * 2^64 + volume_cap`, `limits_1 = volume_window_slots * 2^128 + deposit_cap * 2^64 + deposit_window_slots`, `limits_2 = withdrawal_cap * 2^64 + withdrawal_window_slots`, each a u64 |
+| Sentinel | `(0, q - 1, 0, 0, 0, 0, 0, 0, 0)` at leaf `0` |
 | Escrow key | `Poseidon(nullifier_pk, hash_bytes(ciphertext))`, the 32-byte sealed secret |
 | Tree node | `Poseidon(c_0, c_1, c_2, c_3)`, height 10, the leaf index as 20 bits |
-| Queue entry | `Poseidon(CRQW, member, right_align(mask), right_align(value), escrow_key, mint_policy_write, right_align(withdrawal_threshold))` |
-| Mint policy write | `0` when the write keeps the mint settings, else `2^192 + mint policy field`. `withdrawal_threshold` is `0` when the write keeps them. |
-| Queue chain | `chain(-1) = 0`, `chain(p) = Poseidon(chain(p - 1), entry_p)` |
+| Queue entry | `Poseidon(CRQW, member, right_align(mask), right_align(value), escrow_key, mint_policy_write, right_align(withdrawal_threshold), limits_0, limits_1, limits_2)` |
+| Mint policy write | `0` when the write keeps the mint settings, else `2^192 + mint policy field`. `withdrawal_threshold` and every asset limit field are `0` when the write keeps them. |
+| Queue chain | `chain(-1) = chain_start`, `chain(p) = Poseidon(chain(p - 1), entry_p)` |
 
-`policy_hash` is in [EncodedRuleTable](../../spec.md#encodedruletable).
+## Policy table hash
+
+```text
+fields      = [CRTB, 12, (list_id_i, registry_i) × 8, rule_count, rule_j × 16]   // zero padded to 44
+acc_0       = 0
+acc_{c + 1} = Poseidon(acc_c, fields[11 c .. 11 c + 11])
+policy_hash = acc_4
+```
+
+`12` is the table version. `registry_i` is `0` for the ring's own records and `hash_bytes(address)` for a curator. Each `rule_j` is the 32-byte row `Rule::encoded` writes in `program-libs/policy/src/rule_table/mod.rs`, zero past `rule_count`.
 
 ## Domain tags
 
@@ -92,6 +102,8 @@ The recipient rebuilds the slot secret from `X25519(u_sk, tx_viewing_u)`, the au
 | `CRDB` | `0x43524442` | deposit blinding |
 | `CRWX` | `0x43525758` | withdrawal exemption statement |
 | `CRMG` | `0x43524d47` | merge statement |
+| `CRRU` | `0x43525255` | record update statement |
+| `CRWG` | `0x43525747` | wallet grant record key |
 | `CR_S` | `0x43525f53` | envelope shared secret |
 | `CR_MD` | `0x43525f4d44` | merge disclosure pad |
 | `TMOB` | `0x544d4f42` | zolana merge output blinding |

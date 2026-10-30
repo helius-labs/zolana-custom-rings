@@ -1,3 +1,9 @@
+// Proves that the auditor can see who sent an anonymous transfer and what notes
+// they spent, while the chain sees neither.
+//
+// Read after audit/audit.go, audit/layout.go, shared/utxo.go. Read before
+// prover/ring/ring.go.
+
 package audit
 
 import (
@@ -22,7 +28,7 @@ import (
 // 3. A ring output's owner is the identity of the owner key the disclosure opens.
 // 4. Every UTXO's amount lies below 2^64, the disclosure opens every UTXO's asset and amount and leaves a dummy slot zero.
 // 5. Every exit discloses its full opening to the auditor, SeedOut opens the disclosure exactly when a UTXO exits.
-// 6. Every spent UTXO lies below the published input count, ahead of every dummy on a commitment key, and belongs to the hidden sender.
+// 6. Every spent UTXO lies below the published input count, ahead of every dummy, and belongs to the hidden sender.
 // 7. A commitment key spends notes of the ring only and discloses spent UTXO 0's hash and the prefix of every other spent hash, an entry key opens every spent UTXO under one nullifier key with no data.
 // 8. Every UTXO's blinding is SPP's TXOB blinding over the seed tx_viewing_sk fixes.
 // 9. private_tx_hash reopens over the same slots, the sender commitment opens to the sender the inputs prove.
@@ -88,9 +94,9 @@ func NewAnonymousAuditCircuit(shape AnonymousAuditShape) (*AnonymousAuditCircuit
 
 func (c *AnonymousAuditCircuit) Define(api frontend.API) error {
 	if err := errors.Join(
-		transaction.ValidateLength("output", len(c.Outputs), c.Shape.Outputs),
-		transaction.ValidateLength("input", len(c.Inputs), c.Shape.InputClass),
-		transaction.ValidateLength("sender key byte", len(c.SenderKey), c.Shape.senderKeyLen()),
+		shared.ValidateLength("audit", "output", len(c.Outputs), c.Shape.Outputs),
+		shared.ValidateLength("audit", "input", len(c.Inputs), c.Shape.InputClass),
+		shared.ValidateLength("audit", "sender key byte", len(c.SenderKey), c.Shape.senderKeyLen()),
 	); err != nil {
 		return err
 	}
@@ -118,7 +124,7 @@ func (c *AnonymousAuditCircuit) Define(api frontend.API) error {
 	api.AssertIsEqual(c.PrivateTxHash, transaction.PrivateTxHashCircuit(api, spent.hashes, outputHashes, nil, c.PrivateTxBlinding))
 	// 6. The commitment is 0 on an audit-only transfer or opens to the sender the inputs prove, the policy proof reads it.
 	commitment := shared.SenderCommitment(api, senderPkHash, c.PrivateTxBlinding)
-	api.AssertIsEqual(api.Mul(c.SenderCommitment, api.Sub(c.SenderCommitment, commitment)), 0)
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: c.SenderCommitment, A: c.SenderCommitment, B: commitment})
 	// 7. Only the holder of tx_viewing_sk opens the disclosure of every output and spent UTXO.
 	statement := c.statement(api, envelope, gadget.HashChain4(api, hashes), c.disclosure(api, envelope, layout, nullifierPks, slotBytes, spent))
 	// 8. The one public input commits the statement the program rebuilds.
@@ -142,7 +148,7 @@ func (c *AnonymousAuditCircuit) openSlot(api frontend.API, rc frontend.Rangechec
 	assertOwnerKey(api, slot, o.Output, o.OwnerKey)
 	// 3. be32 is the one asset encoding below q, the decomposition bounds a live amount below 2^64.
 	asset := ringgadget.FieldToBytesBEWith(api, rc, api.Mul(slot.live, o.Output.Asset))
-	amount := uintBytes(api, api.Mul(slot.live, o.Output.Amount), 8)
+	amount := ringgadget.UintBytesBE(api, api.Mul(slot.live, o.Output.Amount), 8)
 	return anonymousSlot{outputSlot: slot, bytes: slices.Concat(masked(api, slot.ring, o.OwnerKey[:]), asset[:], amount)}
 }
 
@@ -153,39 +159,33 @@ func (c *AnonymousAuditCircuit) spend(api frontend.API, rc frontend.Rangechecker
 	var openings [][]frontend.Variable
 	previousUtxo := frontend.Variable(1)
 	for i, input := range c.Inputs {
-		opened := input.Open(api)
-		// 2. An input at or past the count is no UTXO, so no spent UTXO escapes the published inputs.
-		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, spent.count.Active[i]), V: opened.Utxo})
-		// 3. Every spent UTXO is the hidden sender's.
-		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: opened.Utxo, A: input.OwnerPkHash, B: senderPkHash})
-		if i == 0 {
-			// 4. Input 0 is a UTXO, so the disclosed sender owns a real spent UTXO.
-			api.AssertIsEqual(opened.Utxo, 1)
-		}
-		hash := api.Mul(opened.Utxo, opened.Hash)
+		// 2. Every spent UTXO lies below the count and is the hidden sender's.
+		opened, hash := spentBySender(api, input, spent.count.Active[i], senderPkHash, i)
 		spent.hashes = append(spent.hashes, hash)
 		if !c.Shape.FullOpenings {
-			// 5. A disclosed hash names a note of the ring, an audited output whose opening the auditor holds.
+			// 3. A disclosed hash names a note of the ring, an audited output whose opening the auditor holds.
 			abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: opened.Utxo, A: input.RingProgramID, B: c.RingProgramID})
-			if i > 0 {
-				// 6. A UTXO follows only a UTXO, keeping an even count's closing half zero.
-				abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: opened.Utxo, V: api.Sub(1, previousUtxo)})
-			}
-			previousUtxo = opened.Utxo
+		}
+		if i > 0 {
+			// 4. A UTXO follows only a UTXO as in SPP, so spent UTXO k owns nullifier k.
+			abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: opened.Utxo, V: api.Sub(1, previousUtxo)})
+		}
+		previousUtxo = opened.Utxo
+		if !c.Shape.FullOpenings {
 			continue
 		}
 		// 5. The auditor rebuilds an entry input from its opening, under input 0's nullifier key and with no data.
 		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: opened.Utxo, A: input.NullifierPk, B: c.Inputs[0].NullifierPk})
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: opened.Utxo, V: input.DataHash})
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: opened.Utxo, V: input.RingDataHash})
-		spent.amounts = append(spent.amounts, uintBytes(api, api.Mul(opened.Utxo, input.Amount), 8)...)
+		spent.amounts = append(spent.amounts, ringgadget.UintBytesBE(api, api.Mul(opened.Utxo, input.Amount), 8)...)
 		openings = append(openings, []frontend.Variable{api.Mul(opened.Utxo, input.Asset), api.Mul(opened.Utxo, input.Blinding)})
 	}
 	if c.Shape.FullOpenings {
 		spent.tail = uniformTail(openings)
 		return spent
 	}
-	// 7. Input 0 opens by its hash and names the sender, every other spent UTXO matches among the sender's notes by its prefix.
+	// 5. Input 0 opens by its hash and names the sender, every other spent UTXO matches among the sender's notes by its prefix.
 	spent.tail = countedTail{fields: commitmentTail(api, rc, spent.hashes), published: func(n int) int { return 1 + n/2 }}
 	return spent
 }
@@ -217,6 +217,19 @@ func (c *AnonymousAuditCircuit) statement(api frontend.API, e auditEnvelope, out
 		outputChain, disclosureChain, c.PrivateTxHash, c.SenderCommitment,
 		c.PartyIdentities[0], c.PartyIdentities[1], c.PartyIdentities[2],
 	))
+}
+
+// spentBySender holds slot i to the sender and to live, slot 0 a UTXO, and returns its spent hash, zero off a UTXO.
+func spentBySender(api frontend.API, input shared.UtxoWires, live, sender frontend.Variable, i int) (shared.OpenedUtxo, frontend.Variable) {
+	opened := input.Open(api)
+	// An input at or past the count is no UTXO, so no spent UTXO escapes the published inputs.
+	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, live), V: opened.Utxo})
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: opened.Utxo, A: input.OwnerPkHash, B: sender})
+	if i == 0 {
+		// Input 0 is a UTXO, so the sender owns a real spent UTXO.
+		api.AssertIsEqual(opened.Utxo, 1)
+	}
+	return opened, api.Mul(opened.Utxo, opened.Hash)
 }
 
 // commitmentTail is hashes[0] in full, then the prefixes of the other hashes two per field, the last half zero for an odd prefix count.

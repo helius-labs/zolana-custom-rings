@@ -27,7 +27,7 @@ import {
   type PendingWalletSubmission,
 } from "@heliuslabs/zolana/transaction";
 import type { RingSubmissionStatus, RingSubmissionTransport } from "../../rpc/ports.js";
-import { fetchRingMemberRegistry } from "../../protocol/membership/config.js";
+import { fetchRingPolicy, fetchStorageRegistry } from "../../protocol/membership/config.js";
 import { RingError, RingProgramError } from "../../protocol/error.js";
 import type { RingBoundState } from "./pipeline.js";
 import type { ViewingHistory } from "../../state/viewing-history.js";
@@ -75,12 +75,10 @@ export interface ReservationHold {
 export type RingSubmissionBuild = (context?: RequestContext) => Promise<RingSubmissionAttempt>;
 
 const MAX_ATTEMPTS = 3;
-/** Rust `retryable`, a fresh proof fixes a root under a raised floor, an emptied slot or a batch that no longer fits. */
+/** Rust `reproof_fixes` codes, a fresh proof fixes a revoked root or a rebound registry. */
 const STALE_PROOF_CODES: ReadonlySet<number> = new Set([
-  RingProgramError.rootBelowFloor,
-  RingProgramError.curatorRootStale,
-  RingProgramError.rootIndexEmpty,
-  RingProgramError.authorityBatchTooLarge,
+  RingProgramError.rootNotServed,
+  RingProgramError.unboundRegistry,
 ]);
 const NO_RESERVATION: ReservationHold = Object.freeze({ release() {}, extend() {} });
 
@@ -212,13 +210,16 @@ export class RingTransactionSubmission {
     const chain = this.#registry;
     if (chain === undefined) return false;
     for (const bound of roots) {
-      const registry = await fetchRingMemberRegistry(chain, bound.ringProgramId, context);
-      const held = registry.history[bound.rootIndex];
-      if (held === undefined || !equalBytes(held.root, bound.root)) return true;
+      // Expiry is not checked here, an expired root fails on chain as `rootNotServed` and a reproof follows.
+      const registry = await fetchStorageRegistry(chain, bound.registry, context);
+      const held = registry.roots.some(
+        (root) => root?.revision === bound.revision && equalBytes(root.hash, bound.root),
+      );
+      if (!held) return true;
     }
     if (policy === undefined) return false;
-    const registry = await fetchRingMemberRegistry(chain, policy.ringProgramId, context);
-    return !equalBytes(registry.policyHash, policy.policyHash);
+    const ringPolicy = await fetchRingPolicy(chain, policy.ringProgramId, context);
+    return !equalBytes(ringPolicy.policyHash, policy.policyHash);
   }
 
   async #settleFailed(): Promise<void> {

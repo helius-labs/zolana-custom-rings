@@ -2,7 +2,6 @@
 
 use std::{
     borrow::Borrow,
-    cmp::Ordering,
     collections::{HashMap, HashSet},
 };
 
@@ -511,6 +510,7 @@ impl Transfer<'_> {
         self.assets.by_field(asset).map(|mint| mint.asset)
     }
 
+    /// Both audit keys keep dummies last as SPP does, opening k belongs to nullifier k.
     fn inputs(&self, spent: SpentInputs<'_>) -> Result<Spent, AuditError> {
         let SpentInputs {
             disclosure,
@@ -678,18 +678,15 @@ struct PrefixNotes {
 }
 
 impl PrefixNotes {
+    /// Exact only for one note in one position, notes sharing a prefix fit any of its positions.
     fn assign(self, inputs: usize) -> Result<Vec<InputOpening>, AuditError> {
-        match self.notes.len().cmp(&inputs) {
-            Ordering::Less => Err(AuditError::UnseenInputPrefix {
+        match self.notes[..] {
+            _ if self.notes.len() < inputs => Err(AuditError::UnseenInputPrefix {
                 prefix: self.prefix.get(),
             }),
-            Ordering::Equal => Ok(self
-                .notes
-                .into_iter()
-                .map(|(commitment, utxo)| InputOpening::Opened(ring_input(commitment, utxo)))
-                .collect()),
-            Ordering::Greater => {
-                let candidates: Vec<[u8; 32]> = self
+            [(commitment, utxo)] => Ok(vec![InputOpening::Opened(ring_input(commitment, utxo))]),
+            _ => {
+                let candidates = self
                     .notes
                     .iter()
                     .map(|(commitment, _)| *commitment)

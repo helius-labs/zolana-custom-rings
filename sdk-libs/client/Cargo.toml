@@ -19,7 +19,10 @@ rpc = [
     "dep:bytemuck",
     "dep:rand",
     "dep:solana-signer",
+    "dep:spr-instruction",
+    "dep:wincode",
     "dep:zolana-secret-file",
+    "solana-signature/verify",
 ]
 
 [dependencies]
@@ -43,12 +46,14 @@ solana-signer = { workspace = true, optional = true }
 solana-transaction-status-client-types = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+wincode = { workspace = true, optional = true }
 zeroize = { workspace = true }
 borsh = { workspace = true }
 spr-api = { workspace = true }
 spr-client = { workspace = true }
 spr-event = { workspace = true }
 spr-event-parser = { workspace = true }
+spr-instruction = { workspace = true, optional = true }
 spr-interface = { workspace = true }
 spr-hasher = { workspace = true }
 spr-indexer-api = { workspace = true }

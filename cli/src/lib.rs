@@ -33,6 +33,8 @@ pub mod controls;
 pub mod delegate;
 #[path = "commands/ring/deploy.rs"]
 pub mod deploy;
+#[path = "commands/membership/enrolment.rs"]
+pub mod enrolment;
 #[path = "runtime/file.rs"]
 pub mod file;
 #[path = "commands/wallet/notes/fund.rs"]
@@ -59,6 +61,7 @@ pub mod policy;
 pub mod probe;
 #[path = "operations/records.rs"]
 mod records;
+pub use records::patiently;
 #[path = "commands/ring/release.rs"]
 pub mod release;
 #[path = "runtime/ring_rpc.rs"]
@@ -88,7 +91,7 @@ use std::{
 
 use anyhow::{bail, ensure, Context as _, Result};
 use clap::{Args, FromArgMatches, Parser, Subcommand};
-use custom_ring_interface::{compute_unit_limit, CustomRingError, InstructionTag};
+use custom_ring_interface::{compute_unit_limit, CustomRingError, InstructionTag, RingRole};
 use custom_ring_sdk::{
     CustomRing, CustomRingConfig, RingError, RingMode, RingOperation, RingSubmission,
     SettledSubmission, MERGE_DEFAULT_INPUT_COUNT,
@@ -110,12 +113,14 @@ use zolana_ring_client::ReaderKey;
 
 pub use crate::{
     chain::{transaction_error, Chain, Zolana, ZolanaServices},
-    config::{CoSignClass, Mint, ModeName, RingConfig, Service, Target, ThresholdSpec, RING_TOML},
+    config::{
+        CoSignClass, Mint, ModeName, RingConfig, RoleName, Service, Target, ThresholdSpec,
+        RING_TOML,
+    },
     list::{MemberArgs, MemberList},
     policy::ListName,
-    records::Queued,
     ring_rpc::{RingRpcClient, Trust},
-    transact::{EntrySpendName, Funding, Recipient},
+    transact::{AllowListing, EntrySpendName, Funding, OwnerRail, Recipient},
     ui::{line, Ask},
 };
 
@@ -123,6 +128,9 @@ pub const PROGRAM_KEYPAIR_FILE: &str = "keys/program-keypair.json";
 pub const AUDITOR_KEY_FILE: &str = "keys/auditor.key";
 pub const AUDITOR_PUBKEY_FILE: &str = "keys/auditor.key.pub";
 pub const SENDER_KEYPAIR_FILE: &str = "keys/sender-keypair.json";
+pub const ADMIN_KEYPAIR_FILE: &str = "keys/admin.json";
+pub const PAUSER_KEYPAIR_FILE: &str = "keys/pauser.json";
+pub const COSIGN_ADMIN_KEYPAIR_FILE: &str = "keys/cosign-admin.json";
 pub const DEFAULT_TRANSACT_AMOUNT: u64 = 100_000_000;
 /// What localnet tops an account up to.
 const LOCALNET_BALANCE: u64 = 100_000_000_000;
@@ -145,9 +153,8 @@ fn hint(error: &ClientError) -> Option<&'static str> {
     };
     [
         (CustomRingError::UnauthorizedInitializer as u32, "the program was deployed with an upgrade authority and only that key may create the config"),
-        (CustomRingError::UnauthorizedAuthority as u32, "the config is held by another authority, `status` shows it"),
+        (CustomRingError::UnauthorizedAuthority as u32, "the signer holds another ring role, `status` shows each role key"),
         (CustomRingError::InvalidPolicyRules as u32, "the program refuses the compiled rows, the program log names the refusal"),
-        (CustomRingError::QueueFull as u32, "the record queue holds its member share, `zolana-ring list apply` applies it once it is due"),
         (ShieldedPoolError::UnauthorizedCaller as u32, "ring creation on this cluster is gated by the SPP ring creation authority"),
     ]
     .into_iter()
@@ -254,9 +261,9 @@ fn dispatch(ctx: &mut Context, command: Command) -> Result<()> {
         Command::Authority(command) => authority::run(ctx, command),
         Command::Reader(command) => controls::reader(ctx, command),
         Command::Cosigner(command) => controls::cosigner(ctx, command),
-        Command::InsertFee(command) => controls::insert_fee(ctx, command),
         Command::Delegate(command) => controls::delegate(ctx, command),
         Command::Key(command) => member::key(ctx, command),
+        Command::Enrolment(command) => enrolment::run(ctx, command),
         Command::List(command) => list::run(ctx, command),
         Command::Policy(command) => policy::run(ctx, command),
         Command::AuditorKey(args) => keys::run(&ctx.path(&args.key_file), args.create),
@@ -348,8 +355,8 @@ mod tests {
             assert_eq!(args.mint, Some(Mint(spr_transaction::SOL_MINT)));
         }
         assert_eq!(parse(&[]).expect("defaults").count, 24);
-        assert!(parse(&["--count", "50"]).is_ok());
-        assert!(parse(&["--count", "51"]).is_err());
+        assert!(parse(&["--count", "24"]).is_ok());
+        assert!(parse(&["--count", "25"]).is_err());
         assert!(parse(&["--count", "52"]).is_err());
         assert!(parse(&["--count", "1"]).is_err());
     }
@@ -403,6 +410,56 @@ mod tests {
         assert!(parse(&[]).is_err(), "a transfer names a recipient");
         assert!(parse(&[&first, "--funding", "faucet"]).is_err());
         assert!(parse(&[&first, "--entry-spend", "always"]).is_err());
+    }
+
+    #[test]
+    fn transfers_spend_on_the_signer_rail_unless_the_owner_signs_in_the_proof() {
+        let to = spr_keypair::ShieldedKeypair::from_keypair(
+            spr_keypair::SigningKey::from_ed25519_bytes(&[1; 32]),
+        )
+        .unwrap()
+        .shielded_address()
+        .unwrap()
+        .to_string();
+        assert_eq!(
+            transfer_args(&[&to]).expect("default").owner_rail,
+            OwnerRail::Signer
+        );
+        let in_proof = transfer_args(&[&to, "--owner-rail", "in-proof"]).expect("in proof");
+        assert_eq!(in_proof.owner_rail, OwnerRail::InProof);
+        assert!(transfer_args(&[&to, "--owner-rail", "relay"]).is_err());
+        assert!(matches!(
+            Cli::try_parse_from(["zolana-ring", "transact", "--owner-rail", "in-proof"])
+                .map(|cli| cli.command),
+            Ok(Command::Transact(TransactArgs {
+                owner_rail: OwnerRail::InProof,
+                ..
+            }))
+        ));
+    }
+
+    #[test]
+    fn transact_writes_no_list_entry_unless_a_localnet_demo_asks() {
+        let transact = |flags: &[&str]| {
+            let words = ["zolana-ring", "transact"].iter().chain(flags);
+            match Cli::try_parse_from(words).expect("parses").command {
+                Command::Transact(args) => args,
+                _ => unreachable!("transact"),
+            }
+        };
+        let asked = transact(&["--enrol-allow"]);
+
+        assert_eq!(
+            transact(&[])
+                .allow_listing(Target::Localnet)
+                .expect("plain"),
+            AllowListing::Refuse
+        );
+        assert_eq!(
+            asked.allow_listing(Target::Localnet).expect("localnet"),
+            AllowListing::Enrol
+        );
+        assert!(asked.allow_listing(Target::Devnet).is_err());
     }
 
     #[test]
@@ -460,7 +517,7 @@ mod tests {
             ))
         };
         assert!(hint(&custom(CustomRingError::UnauthorizedAuthority as u32))
-            .is_some_and(|hint| hint.contains("another authority")));
+            .is_some_and(|hint| hint.contains("another ring role")));
         assert_eq!(hint(&custom(1)), None);
         assert_eq!(
             hint(&transaction_error(TransactionError::AlreadyProcessed)),

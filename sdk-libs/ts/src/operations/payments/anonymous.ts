@@ -73,14 +73,13 @@ export function checkAnonymousSigner(
     signer: AnonymousSpendSigner;
     sender: ShieldedAddress;
     payer: Address;
-    coSigner: Address | undefined;
   }>,
 ): Bytes32 {
   const signing = input.signer.publicKey();
   if (!(signing instanceof ShieldedPublicKey) || !signing.equals(input.sender.signingPublicKey))
     throw new RingError("RING_ANONYMOUS_SIGNER_MISMATCH");
   const owner = signing.ed25519();
-  checkSignersHideOwner(owner, [input.payer, input.coSigner]);
+  checkSignersHideOwner(owner, [input.payer]);
   return owner;
 }
 

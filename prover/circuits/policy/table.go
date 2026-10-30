@@ -1,3 +1,10 @@
+// Reads the ring's policy table inside a proof. The table must be the one the
+// program checked and hashed at its last policy update, and each row decodes in
+// only one way.
+//
+// Read after ringgadget/count.go, shared/derivation.go. Read before
+// policy/policy.go, policy/subjects.go, policy/rules.go.
+
 package policy
 
 import (
@@ -10,6 +17,38 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
+)
+
+// Table capacities, mirrored by program-libs/policy/src/rule_table/mod.rs.
+const (
+	NRules   = 16
+	NSources = 8
+)
+
+// Policy table hash layout, mirrored by EncodedRuleTable::hash in program-libs/policy/src/rule_table/mod.rs.
+const (
+	// PolicyTableVersion enters the table hash, every layout change bumps it.
+	PolicyTableVersion = 12
+	PolicyTableFields  = 44
+	// PolicyTableRate fields join the accumulator per Poseidon call, twelve inputs is the syscall maximum.
+	PolicyTableRate = 11
+)
+
+// Every table hash call absorbs a full rate of fields.
+const _ = uint(-(PolicyTableFields % PolicyTableRate))
+
+// Rule row values, mirrored by Subject, Mode and the guard tags of Rule::encoded in program-libs/policy/src/rule_table/mod.rs.
+const (
+	SubjectOutputOwner = 1
+	SubjectSender      = 2
+	SubjectAsset       = 4
+
+	ModePresent = 1
+	ModeAbsent  = 2
+
+	GuardAlways             = 0
+	GuardAboveAmount        = 1
+	GuardAboveAmountByAsset = 2
 )
 
 type Table struct {
@@ -47,6 +86,7 @@ type ruleFields struct {
 	admitWeight                [NSources]frontend.Variable
 	onOwner, onAsset, onSender frontend.Variable
 	scalarGuard, assetGuard    frontend.Variable
+	listBits, altBits          []frontend.Variable
 }
 
 // ruleParts mirrors Row in program-libs/policy/src/rule_table/mod.rs, read from the low byte of the big-endian field.
@@ -54,16 +94,21 @@ var ruleParts = [...]struct{ shift, width uint }{{0, 8}, {8, 8}, {16, 8}, {24, 8
 
 // decode binds the table to policy_hash, the program validated it at write time (EncodedRuleTable::validate).
 func (t Table) decode(api frontend.API, rc frontend.Rangechecker, policyHash frontend.Variable) tableView {
-	// 1. The rules read the table the program hashed at its last policy write.
+	// The rules read the table the program hashed at its last policy write.
 	api.AssertIsEqual(policyHash, t.hash(api))
-	// 2. Each count selects its active rows, a count past its capacity selects none and fails.
+	return t.view(api, rc)
+}
+
+// view decodes the table, the caller binds it to policy_hash.
+func (t Table) view(api frontend.API, rc frontend.Rangechecker) tableView {
+	// 1. Each count selects its active rows, a count past its capacity selects none and fails.
 	d := tableView{
 		ruleActive:  ringgadget.SelectCount(api, t.PolicyLen, 0, NRules+1).Active,
 		sources:     t.readSources(api),
 		assetRules:  0,
 		scalarOwner: 0,
 	}
-	// 3. Every rule decodes once, the flags later steps gate on fold over the active rules.
+	// 2. Every rule decodes once, the flags later steps gate on fold over the active rules.
 	for i, packed := range t.Rules {
 		rule := decodeRule(api, rc, packed)
 		d.rules[i] = rule
@@ -108,6 +153,14 @@ func (t Table) readSources(api frontend.API) sourceView {
 	return view
 }
 
+func (s sourceView) lists(api frontend.API, own, curated [NSources]frontend.Variable) [NSources]frontend.Variable {
+	var onList [NSources]frontend.Variable
+	for i := range onList {
+		onList[i] = api.Select(s.foreign[i], curated[i], own[i])
+	}
+	return onList
+}
+
 func decodeRule(api frontend.API, rc frontend.Rangechecker, packed frontend.Variable) ruleFields {
 	// 1. The hint proposes the parts, untrusted until the range checks and the recomposition bind them.
 	parts, err := api.Compiler().NewHint(rulePartsHint, len(ruleParts), packed)
@@ -136,6 +189,8 @@ func decodeRule(api frontend.API, rc frontend.Rangechecker, packed frontend.Vari
 		onSender:    is(subject, SubjectSender),
 		scalarGuard: is(guard, GuardAboveAmount),
 		assetGuard:  is(guard, GuardAboveAmountByAsset),
+		listBits:    listBits,
+		altBits:     altBits,
 	}
 	// 5. A list of a present mask admits a subject on it, a list of an absent or the alternative mask a subject off it.
 	present := is(mode, ModePresent)

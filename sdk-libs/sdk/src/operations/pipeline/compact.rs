@@ -1,9 +1,9 @@
 //! The compact transact data a proven transfer owns, and its instruction.
 
 use custom_ring_interface::{
-    tag, AnonymousProofData, CustomRingProof, InputTrees, PlainGroth16Proof, PolicyProof,
-    RingOutput, RingProgramConfig, RingRail, RingTransactData, SenderBundle, AUDIT_CIPHERTEXT_LEN,
-    RING_DELIVERED_BODY_LEN,
+    storage::Revision, tag, AnonymousProofData, CustomRingProof, InProofOwner, InputTrees,
+    PlainGroth16Proof, PolicyProof, PolicyRecipients, RingOutput, RingPolicy, RingRail,
+    RingTransactData, RootRead, SenderBundle, AUDIT_CIPHERTEXT_LEN, RING_DELIVERED_BODY_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -105,9 +105,32 @@ impl OwnedOutput {
 pub(crate) struct OwnedPolicyProof {
     pub spl_withdrawal_owners: Vec<[u8; 32]>,
     pub proof: CustomRingProof,
-    pub own_root_index: u8,
-    pub curator_root_index: Option<u8>,
+    pub own_revision: Revision,
+    pub curator_revision: Option<Revision>,
     pub sender_commitment: Option<[u8; 32]>,
+    pub recipients: OwnedRecipients,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum OwnedRecipients {
+    Hidden,
+    Framed(Vec<[u8; 32]>),
+}
+
+impl OwnedRecipients {
+    fn view(&self) -> PolicyRecipients<'_> {
+        match self {
+            Self::Hidden => PolicyRecipients::Hidden,
+            Self::Framed(recipients) => PolicyRecipients::Framed(recipients),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OwnedInProofOwner {
+    pub owner: [u8; 32],
+    pub commitment: [u8; 32],
+    pub commitment_pok: [u8; 32],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -140,6 +163,7 @@ pub(crate) struct TransactParts {
     pub disclosure: Vec<[u8; 32]>,
     pub private_tx_hash: [u8; 32],
     pub anonymous: Option<OwnedAnonymousProofData>,
+    pub in_proof_owner: Option<OwnedInProofOwner>,
     pub spp_proof: PlainGroth16Proof,
     pub nullifiers: Vec<[u8; 32]>,
     pub input_trees: InputTrees,
@@ -155,9 +179,10 @@ impl TransactParts {
             policy: self.policy.as_ref().map(|policy| PolicyProof {
                 spl_withdrawal_owners: &policy.spl_withdrawal_owners,
                 proof: &policy.proof,
-                own_root_index: policy.own_root_index,
-                curator_root_index: policy.curator_root_index,
+                own_revision: policy.own_revision,
+                curator_revision: policy.curator_revision,
                 sender_commitment: policy.sender_commitment.as_ref(),
+                recipients: policy.recipients.view(),
             }),
             withdrawal_exemption: self.withdrawal_exemption.as_ref(),
             approval_required: self.approval_required,
@@ -178,6 +203,11 @@ impl TransactParts {
                 commitment_pok: &anonymous.commitment_pok,
                 default_owner_tag: anonymous.default_owner_tag.as_ref(),
             }),
+            in_proof_owner: self.in_proof_owner.as_ref().map(|owner| InProofOwner {
+                owner: &owner.owner,
+                commitment: &owner.commitment,
+                commitment_pok: &owner.commitment_pok,
+            }),
             spp_proof: &self.spp_proof,
             nullifiers: &self.nullifiers,
             input_trees: self.input_trees,
@@ -194,9 +224,6 @@ pub(crate) struct TransactAccounts {
     /// Only the confidential rail names owner signers.
     pub owner_signers: Vec<Address>,
     pub interface_transfer_accounts: Vec<TransactInterfaceTransferAccounts>,
-    /// Set exactly on a policy ring.
-    pub registry: Option<Address>,
-    pub curator: Option<Address>,
     pub co_signer: Option<Address>,
     pub delegate: Option<Address>,
 }
@@ -206,7 +233,7 @@ impl TransactAccounts {
     pub fn instruction(
         &self,
         ring: CustomRing,
-        config: &RingProgramConfig,
+        config: &RingPolicy,
         parts: &TransactParts,
     ) -> Result<Instruction, RingError> {
         let data = parts.data();
@@ -238,18 +265,19 @@ impl TransactAccounts {
                 .accounts
             }
         };
-        let mut accounts = vec![AccountMeta::new_readonly(ring.config_pda(), false)];
+        let mut accounts = vec![AccountMeta::new_readonly(ring.policy_pda(), false)];
         accounts.extend(
-            self.registry
+            config
+                .root_registries(RootRead::transfer(
+                    config,
+                    parts.withdrawal_exemption.as_ref(),
+                ))
                 .map(|registry| AccountMeta::new_readonly(registry, false)),
         );
         accounts.extend(
-            self.curator
-                .map(|curator| AccountMeta::new_readonly(curator, false)),
-        );
-        accounts.extend(
             self.co_signer
-                .map(|co_signer| AccountMeta::new_readonly(co_signer, true)),
+                .into_iter()
+                .flat_map(|co_signer| ring.co_signer_metas(co_signer)),
         );
         accounts.extend(
             self.delegate
@@ -257,8 +285,8 @@ impl TransactAccounts {
         );
         accounts.extend(spp);
         let mut bytes = vec![match parts.rail {
-            RingRail::Delegate => tag::DELEGATE_TRANSACT,
-            RingRail::Confidential | RingRail::Anonymous => tag::TRANSACT,
+            RingRail::Delegate => tag::AUTHORITY_TRANSFER,
+            RingRail::Confidential | RingRail::Anonymous => tag::TRANSFER,
         }];
         bytes.extend(data.encode()?);
         Ok(Instruction {

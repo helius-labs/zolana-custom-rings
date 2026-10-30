@@ -3,6 +3,7 @@ import type { Bytes32 } from "@heliuslabs/zolana";
 import { parseProof } from "@heliuslabs/zolana/client";
 import { ProverClient } from "@heliuslabs/zolana/internal";
 
+import { RING_PROVING_KEY_SHA256S } from "../../src/protocol/proof/proving-keys.js";
 import { CustomRingProver } from "../../src/rpc/prover/client.js";
 import type { RegisterKeyProofRequest } from "../../src/rpc/prover/ring.js";
 import { proofFor } from "../helpers/proofs.js";
@@ -35,6 +36,23 @@ describe("ring prover contracts", () => {
       code: "CLIENT_PROOF_PARSE",
     });
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses a key catalog that leaves out a pinned ring key", async () => {
+    const keys = Object.entries(RING_PROVING_KEY_SHA256S).map(([name, sha256]) => ({
+      name,
+      artifacts: [{ format: "gnark", sha256, size: 1, url: `https://keys.test/${name}` }],
+    }));
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => Response.json({ keys }));
+    await expect(ringProver(fetch).checkProvingKeys()).resolves.toMatchObject({
+      keys: expect.arrayContaining([expect.objectContaining({ name: keys[0]?.name })]),
+    });
+    const [dropped, ...served] = keys;
+    fetch.mockResolvedValueOnce(Response.json({ keys: served }));
+    await expect(ringProver(fetch).checkProvingKeys()).rejects.toMatchObject({
+      code: "RING_PROVING_KEYS_MISSING",
+      details: { keyNames: dropped?.name },
+    });
   });
 
   it("refuses a ring proof from another ring key", async () => {

@@ -1,5 +1,6 @@
 use custom_ring_interface::{
-    key_catalog::RingCircuit, stream::StreamError, CustomRingError, PublicSlotError, RingRail,
+    key_catalog::RingCircuit, storage::StorageError, stream::StreamError, CustomRingError,
+    PublicSlotError, RingRail,
 };
 use solana_address::Address;
 use solana_signature::Signature;
@@ -12,7 +13,7 @@ use spr_program::instruction::DepositBuildError;
 use spr_transaction::TransactionError;
 use spr_tree::TreeError;
 use thiserror::Error;
-use zolana_ring_client::{AnonymousError, RingIndexerError, RingRpcError};
+use zolana_ring_client::{rpc::RecordUpdateError, AnonymousError, RingIndexerError, RingRpcError};
 use zolana_ring_keys::RingKeyError;
 use zolana_ring_member_registry::RecordTreeError;
 use zolana_ring_policy::{
@@ -31,6 +32,8 @@ pub enum RingError {
     Stream(#[from] StreamError),
     #[error(transparent)]
     Program(#[from] CustomRingError),
+    #[error(transparent)]
+    Storage(#[from] StorageError),
     #[error(transparent)]
     Keypair(#[from] KeypairError),
     #[error(transparent)]
@@ -69,15 +72,21 @@ pub enum RingError {
     Rail(#[from] RingRailError),
     #[error(transparent)]
     Anonymous(#[from] AnonymousError),
+    #[error(transparent)]
+    Signer(#[from] solana_signer::SignerError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    RelayProofInputs(#[from] zolana_ring_client::rpc::RelayProofInputsError),
     #[error("custom ring account {address} is invalid")]
     InvalidAccount { address: Address },
     #[error("custom ring config does not exist")]
     MissingRingConfig,
-    #[error("the ring has no member registry")]
-    MissingMemberRegistry,
-    #[error("the ring has no record queue")]
-    MissingRecordQueue,
-    #[error("the ring is not registered with the shielded pool, run InitSppRingConfig")]
+    #[error("the ring has no ring policy")]
+    MissingRingPolicy,
+    #[error("registry {registry} is not an initialized storage registry")]
+    NotStorageRegistry { registry: Address },
+    #[error("the ring is not registered with the shielded pool, run Initialize")]
     RingNotRegistered,
     #[error("the shielded pool has not activated the ring, governance runs set_ring_activation")]
     RingNotActivated,
@@ -99,30 +108,35 @@ pub enum RingError {
     DuplicateSharedSource(ListId),
     #[error("curator registry {address} is not an initialized member registry")]
     InvalidCuratorRegistry { address: Address },
-    #[error("the write names member {member:?} twice")]
-    DuplicateListWrite { member: Member },
     #[error("the write changes no list")]
     EmptyListWrite,
+    #[error(transparent)]
+    RecordUpdate(#[from] RecordUpdateError),
+    #[error("the record update needs the signature of {expected}")]
+    RecordUpdateSigner { expected: Address },
+    #[error("the escrow registration names another member")]
+    EscrowMemberMismatch,
+    #[error("an enrolment awaits no list or a list outside allow, reader and approval")]
+    EnrolmentLists,
+    #[error("ring rpc answered another update id")]
+    RecordUpdateIdMismatch,
     #[error("the {writer:?} writer may not write the list {list:?}")]
     ListNotWritable { list: ListId, writer: Writer },
-    #[error("{writes} authority writes take {batches} batches beside {pending} pending, prove each batch after the one before lands")]
-    AuthorityBatchSplit {
-        writes: usize,
-        pending: u64,
-        batches: usize,
-    },
-    #[error("no application of the record queue is due")]
-    ApplicationNotDue,
-    #[error(
-        "the indexer's record queue or registry differs from the chain's, the projection lags"
-    )]
+    #[error("the indexer's registry differs from the chain's, the projection lags")]
     RecordProjectionStale,
-    #[error("{member:?} already registered a key")]
-    KeyAlreadyRegistered { member: Member },
     #[error("the transaction takes {bytes} bytes, a v1 transaction carries {limit}")]
     TransactionTooLarge { bytes: usize, limit: usize },
     #[error("the transaction names {addresses} addresses, a v1 transaction carries {limit}")]
     TooManyAddresses { addresses: usize, limit: usize },
+    #[error(
+        "a {inputs}x{outputs} transfer of {bytes} bytes exceeds {limit}, split the payout or merge notes first"
+    )]
+    TransferTooWide {
+        inputs: usize,
+        outputs: usize,
+        bytes: usize,
+        limit: usize,
+    },
     #[error("no tree holds {amount} of {mint} in {max_inputs} inputs")]
     Unfunded {
         mint: Address,
@@ -169,8 +183,8 @@ pub enum RingError {
     DepositAboveOutflow { asset: [u8; 32] },
     #[error("the compact transfer expands to external data the SPP proof does not bind")]
     ExternalDataMismatch,
-    #[error("an anonymous merge of {width} slots does not fit a v1 transaction")]
-    AnonymousMergeTooWide { width: usize },
+    #[error("a ring merge of {width} slots does not fit a v1 transaction beside its disclosure")]
+    MergeTooWide { width: usize },
     #[error("the ring is not anonymous, its owners sign in public")]
     NotAnonymousRing,
     #[error("an anonymous ring spends only through the hidden owner's proof")]
@@ -183,6 +197,12 @@ pub enum RingError {
     EntryRingInput { index: usize },
     #[error("the hidden signer does not match the sender")]
     AnonymousSignerMismatch,
+    #[error("the in-proof owner does not match the sender")]
+    InProofOwnerMismatch,
+    #[error("input {index} is a default-ring note the in-proof owner rail cannot spend")]
+    InProofDefaultRingInput { index: usize },
+    #[error("the confidential relay carries no owner signature")]
+    MissingInProofOwnerSignature,
     #[error("public transaction signers must differ from the hidden owner")]
     AnonymousPublicSignerLinksOwner,
     #[error("withdrawal destination {0} names the hidden owner")]
@@ -232,6 +252,22 @@ pub enum RingError {
     UnpinnedProvingKey(RingCircuit),
     #[error("the auditor key encryption proof is missing its BSB22 commitment")]
     MissingCommitment,
+    #[error("the relayed viewing secret does not derive the external data's viewing key")]
+    RelayViewingKeyMismatch,
+    #[error("the relayed external data does not close with the ring auditor's message")]
+    RelayAuditorMessage,
+    #[error("the relayed deposit ciphertext opens with no auditor capsule")]
+    RelayDepositCapsule,
+    #[error("the relayed audit secret does not derive the capsule's ephemeral key")]
+    RelayAuditKeyMismatch,
+    #[error("the transfer pays from {payer}, the relay quote names {fee_payer}")]
+    RelayPayerMismatch { payer: Address, fee_payer: Address },
+    #[error("ring rpc names another relay than the request hashes to")]
+    RelayIdMismatch,
+    #[error("the relay asks the hidden owner for a public signature")]
+    RelayAskedOwnerSignature,
+    #[error("the relay message is refused because {0}")]
+    RelayMessage(#[from] crate::MessageMismatch),
     #[error("{signature} failed with {error}")]
     Rejected {
         signature: Signature,
@@ -256,9 +292,7 @@ impl RingError {
             Self::RecordProjectionStale
                 | Self::Client(ClientError::IndexerProofDataNotReady)
                 | Self::Indexer(
-                    RingRpcError::RegistryOutOfSync
-                        | RingRpcError::RegistryRootChanged
-                        | RingRpcError::RecordQueueChanged
+                    RingRpcError::RegistryOutOfSync | RingRpcError::RegistryRootChanged
                 )
         )
     }

@@ -1,3 +1,10 @@
+// Helpers for circuits with a fixed number of slots and a smaller real count.
+// The count must be in range, the used slots come first, and only the used
+// slots enter the hash the program rebuilds.
+//
+// Read first. Read before audit/layout.go, policy/table.go,
+// registry/apply_records.go.
+
 package ringgadget
 
 import (
@@ -74,6 +81,11 @@ func HashPrefix4(api frontend.API, values, oneHot []frontend.Variable) frontend.
 	return selected
 }
 
+func IsConstantZero(api frontend.API, v frontend.Variable) bool {
+	value, ok := api.Compiler().ConstantValue(v)
+	return ok && value.Sign() == 0
+}
+
 func IsNonZero(api frontend.API, value frontend.Variable) frontend.Variable {
 	return api.Sub(1, api.IsZero(value))
 }
@@ -85,12 +97,4 @@ func IsAny(api frontend.API, bits ...frontend.Variable) frontend.Variable {
 		result = api.Or(result, bit)
 	}
 	return result
-}
-
-func ConstBytes(s string) []frontend.Variable {
-	out := make([]frontend.Variable, len(s))
-	for i := range s {
-		out[i] = s[i]
-	}
-	return out
 }

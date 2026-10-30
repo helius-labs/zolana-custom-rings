@@ -1,4 +1,4 @@
-import { X25519Keypair, ShieldedKeypair, SigningKey } from "@heliuslabs/zolana/keypair";
+import { ShieldedKeypair, SigningKey } from "@heliuslabs/zolana/keypair";
 import { LocalKeys, type ProofService } from "@heliuslabs/zolana/client";
 import { treeAddress } from "@heliuslabs/zolana/internal";
 import { type Bytes32 } from "@heliuslabs/zolana/interface";
@@ -15,14 +15,14 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildRingEntryTransaction,
   buildRingTransferTransaction,
-  createRingEntrySubmission,
+  prepareRingEntryRelay,
   selectRingInputs,
 } from "../../../src/operations/payments/transfer.js";
 import { ringTransferClient } from "../../helpers/clients.js";
-import { ringProgramConfigData, sppRingRegistration } from "../../helpers/ring-accounts.js";
+import { ringPolicyData, sppRingRegistration } from "../../helpers/ring-accounts.js";
 import { signingKeySpendSigner } from "../../../src/operations/payments/anonymous.js";
 import type { RingMode } from "../../../src/protocol/codec/ring-codecs.js";
-import { ringConfigPda } from "../../../src/protocol/pda/index.js";
+import { ringPolicyPda } from "../../../src/protocol/pda/index.js";
 import { ViewingHistory } from "../../../src/state/viewing-history.js";
 
 const TREE = treeAddress(0);
@@ -305,7 +305,7 @@ describe("selectRingInputs", () => {
 describe("ring approval summary", () => {
   /** An active ring, every build reaches its approval and stops at the prover. */
   async function approvalClient(_keypair: ShieldedKeypair, mode: RingMode = "confidential") {
-    const [config, bump] = await ringConfigPda(RING);
+    const [ring, bump] = await ringPolicyPda(RING);
     const [ringAuth, registration] = await sppRingRegistration({
       authority: PAYER,
       ringProgramId: RING,
@@ -313,20 +313,8 @@ describe("ring approval summary", () => {
     return ringTransferClient({
       tree: TREE,
       getAccount: async (address: Address) =>
-        address === config
-          ? {
-              owner: RING,
-              lamports: 1n,
-              data: ringProgramConfigData({
-                authority: PAYER,
-                auditorPublicKey: X25519Keypair.fromBytes(new Uint8Array(32).fill(9))
-                  .publicKey()
-                  .toBytes(),
-                bump,
-                hasPolicy: false,
-                mode,
-              }),
-            }
+        address === ring
+          ? { owner: RING, lamports: 1n, data: ringPolicyData({ bump, mode }) }
           : address === ringAuth
             ? registration
             : undefined,
@@ -388,15 +376,16 @@ describe("ring approval summary", () => {
       Array.from({ length: 9 }, () => [1_000n, undefined] as const),
     );
     const { approve, requests } = recordingApproval();
-    const error: unknown = await createRingEntrySubmission({
+    const error: unknown = await prepareRingEntryRelay({
       client: await approvalClient(keypair, "anonymous"),
       ringProgramId: RING,
       wallet,
       keys: localKeys(keypair),
       approve,
-      feePayer: PAYER,
       amount,
       anonymous: {
+        quote: { feePayer: PAYER, validUntilSlot: 1n },
+        nullifierKey: keypair.nullifierKey(),
         signer: signingKeySpendSigner(SigningKey.fromEd25519Bytes(filled(42))),
         history: ViewingHistory.create(keypair.shieldedAddress().viewingPublicKey, 0n),
       },

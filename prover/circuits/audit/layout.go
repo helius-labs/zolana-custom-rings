@@ -1,3 +1,10 @@
+// Chooses the fields an auditor disclosure contains. The proof must disclose
+// exactly the fields the program expects for the transfer, so no field the
+// auditor needs can be left out.
+//
+// Read after audit/audit.go, shared/disclosure.go, ringgadget/count.go. Read
+// before audit/delivered.go, audit/anonymous.go.
+
 package audit
 
 import (

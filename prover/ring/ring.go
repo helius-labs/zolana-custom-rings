@@ -31,6 +31,8 @@ func (k Key) extension() common.ExtensionCircuit {
 	switch k.Family {
 	case DeliveredAudit:
 		return bind[DeliveredAuditParams](k, audit.NewDeliveredAuditCircuit, k.Outputs)
+	case DeliveredSenderAudit:
+		return bind[DeliveredSenderAuditParams](k, audit.NewDeliveredSenderAuditCircuit, k.deliveredSenderShape())
 	case AnonymousAudit, AnonymousEntryAudit:
 		return bind[AnonymousAuditParams](k, audit.NewAnonymousAuditCircuit, k.anonymousShape())
 	case MemberPolicy:
@@ -45,8 +47,8 @@ func (k Key) extension() common.ExtensionCircuit {
 		return bind[RegisterKeyParams](k, unsized[registry.RegisterKeyCircuit], struct{}{})
 	case Deposit:
 		return bind[DepositParams](k, circuits.NewDepositCircuit, k.Inputs)
-	case AnonymousMerge:
-		return bind[AnonymousMergeParams](k, circuits.NewAnonymousMergeCircuit, k.Inputs)
+	case Merge:
+		return bind[MergeParams](k, circuits.NewMergeCircuit, k.Inputs)
 	}
 	panic(fmt.Sprintf("ring: no circuit for ring family %d", k.Family))
 }

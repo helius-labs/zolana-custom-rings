@@ -8,7 +8,7 @@ import type { RingTransferClient } from "../../src/operations/payments/transfer.
 const TREE_ID = DEFAULT_TREE_ID;
 const TREE = treeAddress(TREE_ID);
 
-function notImplemented(member: string): () => never {
+export function notImplemented(member: string): () => never {
   return () => {
     throw new Error(`fake client member ${member} must not be called`);
   };
@@ -22,8 +22,8 @@ export function ringTransferClient(
     treeId: TREE_ID,
     getLatestBlockhash: async () => BLOCKHASH,
     getAccount: async () => undefined,
-    getRingMemberOpenings: notImplemented("getRingMemberOpenings"),
-    getRingRecordPool: notImplemented("getRingRecordPool"),
+    getStorageMemberOpenings: notImplemented("getStorageMemberOpenings"),
+    getStorageRecordPool: notImplemented("getStorageRecordPool"),
     proveRing: notImplemented("proveRing"),
     proveRingTransact: notImplemented("proveRingTransact"),
     proveAnonymousRingTransact: notImplemented("proveAnonymousRingTransact"),

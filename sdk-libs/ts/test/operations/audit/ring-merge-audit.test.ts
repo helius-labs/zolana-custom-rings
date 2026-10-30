@@ -2,8 +2,8 @@ import { readFileSync } from "node:fs";
 import type { Address } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
 
-import vector from "../../../../../test-vectors/merge/ring-merge-anonymous.json" with { type: "json" };
-import { type RingMemberPage, type RingMemberPageRequest } from "../../../src/rpc/ports.js";
+import vector from "../../../../../test-vectors/merge/ring-merge.json" with { type: "json" };
+import { type StorageMemberPage, type StoragePageRequest } from "../../../src/rpc/ports.js";
 import {
   fieldAdd,
   wireDecoder,
@@ -22,7 +22,7 @@ import type { Bytes16, Bytes31, Bytes32, Bytes33, Signature } from "@heliuslabs/
 import { NullifierKey, X25519Keypair } from "@heliuslabs/zolana/keypair";
 import { SOL_MINT, ownerUtxoHash } from "@heliuslabs/zolana/transaction";
 import type { IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
-import { ringMemberRegistryPda } from "../../../src/protocol/pda/index.js";
+import { ringPolicyPda } from "../../../src/protocol/pda/index.js";
 import { auditRingMerges, openDisclosedMerge } from "../../../src/operations/audit/audit-merge.js";
 import type { RingMergeDisclosure } from "../../../src/crypto/audit/merge-disclosure.js";
 import { escrowKeyHash } from "../../../src/protocol/membership/member-opening.js";
@@ -35,7 +35,11 @@ import {
   transactionsPage,
 } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { recordTree, type FixtureRecord } from "../../helpers/member-registry.js";
-import { memberRegistryData, ownedAccount } from "../../helpers/ring-accounts.js";
+import {
+  ownedAccount,
+  ringPolicyData,
+  storageRegistryAccount,
+} from "../../helpers/ring-accounts.js";
 
 await initializePoseidon();
 
@@ -90,7 +94,9 @@ const UNOPENED: IndexedShieldedTransaction = {
   ],
 };
 
-/** The `RegisterKey` signer of every escrowed fixture record, its member the owner tag. */
+const RECORDS = encodeBase58(new Uint8Array(32).fill(31));
+const REVISION = 4n;
+/** The escrow write owner of every escrowed fixture record, its member the owner tag. */
 const OWNER = encodeBase58(new Uint8Array(32).fill(23));
 const OWNER_MEMBER: Bytes32 = memberOfTag(new Uint8Array(32).fill(23));
 
@@ -146,17 +152,18 @@ async function scanClient(
   input: Readonly<{
     records: readonly FixtureRecord[];
     transactions: readonly IndexedShieldedTransaction[][];
-    page?: (page: RingMemberPage, request: RingMemberPageRequest) => RingMemberPage;
+    page?: (page: StorageMemberPage, request: StoragePageRequest) => StorageMemberPage;
     noFrontier?: boolean;
   }>,
 ) {
   const tree = recordTree(input.records);
-  const [registry, bump] = await ringMemberRegistryPda(ring);
-  const memberPages = vi.fn(async (request: RingMemberPageRequest): Promise<RingMemberPage> => {
+  const [policy, bump] = await ringPolicyPda(ring);
+  const memberPages = vi.fn(async (request: StoragePageRequest): Promise<StorageMemberPage> => {
+    expect(request.registry).toBe(RECORDS);
     const end = Math.min(request.startIndex + request.limit, tree.nextIndex);
-    const page: RingMemberPage = {
+    const page: StorageMemberPage = {
       context: { slot: 7n, blockTime: 1n },
-      root: { root: tree.root, rootIndex: 0, applied: 0n, nextIndex: tree.nextIndex },
+      root: { root: tree.root, revision: REVISION, nextIndex: tree.nextIndex },
       records: tree.rows.slice(request.startIndex, end).map((record, offset) => {
         const sealed = input.records.find(
           (entry) => bytesToBigInt(entry.member) === bytesToBigInt(record.member),
@@ -187,17 +194,12 @@ async function scanClient(
     client: {
       ...kitReads({ solanaRpc: solanaRpcReads({}) }),
       getAccount: async (account: Address) =>
-        account === registry
-          ? ownedAccount(
-              ring,
-              memberRegistryData({
-                bump,
-                history: [{ root: tree.root, applied: 0n, slot: 0n }],
-                nextIndex: tree.nextIndex,
-              }),
-            )
-          : undefined,
-      getRingMemberRecords: memberPages,
+        account === policy
+          ? ownedAccount(ring, ringPolicyData({ bump, records: RECORDS }))
+          : account === RECORDS
+            ? storageRegistryAccount([{ hash: tree.root, revision: REVISION, expiresAt: 0n }])
+            : undefined,
+      getStorageMemberRecords: memberPages,
       getShieldedTransactionsByTags: transactionPages,
     },
     memberPages,
@@ -206,7 +208,7 @@ async function scanClient(
 }
 
 describe("auditRingMerges", () => {
-  it("authenticates every registry page at the chain root and keeps an unopened merge", async () => {
+  it("authenticates every records page at the live registry root and keeps an unopened merge", async () => {
     // 101 members and the sentinel need two pages of `MAX_RING_MEMBER_BATCH`.
     const records = Array.from({ length: 101 }, (_, index) => ({
       member: memberOf(index + 1),
@@ -298,8 +300,9 @@ describe("auditRingMerges", () => {
     }
   });
 
-  it.each<readonly [string, (page: RingMemberPage) => RingMemberPage]>([
+  it.each<readonly [string, (page: StorageMemberPage) => StorageMemberPage]>([
     ["another root", (page) => ({ ...page, root: { ...page.root, root: memberOf(9) } })],
+    ["another revision", (page) => ({ ...page, root: { ...page.root, revision: REVISION + 1n } })],
     [
       "a gap in the leaves",
       (page) => ({
@@ -311,7 +314,7 @@ describe("auditRingMerges", () => {
       }),
     ],
     ["a short page", (page) => ({ ...page, records: page.records.slice(1) })],
-  ])("refuses a registry page with %s before any key opens", async (_name, edit) => {
+  ])("refuses a records page with %s before any key opens", async (_name, edit) => {
     const auditor = X25519Keypair.generate();
     const { client } = await scanClient({
       records: [
@@ -340,7 +343,7 @@ describe("auditRingMerges", () => {
   });
 });
 
-describe("openDisclosedMerge (test-vectors/merge/ring-merge-anonymous.json)", () => {
+describe("openDisclosedMerge (test-vectors/merge/ring-merge.json)", () => {
   const hex = <T extends Uint8Array>(value: string, length: number): T => {
     const decoded = Uint8Array.from(Buffer.from(value.replace(/^0x/u, ""), "hex"));
     if (decoded.length !== length) throw new RangeError(`expected ${String(length)} bytes`);

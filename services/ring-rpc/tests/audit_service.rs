@@ -9,13 +9,24 @@ mod audit_pages;
 mod authorization;
 #[path = "audit_service/backfill.rs"]
 mod backfill;
+#[path = "audit_service/cosign_relay.rs"]
+mod cosign_relay;
 #[path = "audit_service/deposits.rs"]
 mod deposits;
+#[path = "audit_service/reader_grants.rs"]
+mod reader_grants;
+#[path = "audit_service/record_updates.rs"]
+mod record_updates;
+#[path = "common/relay.rs"]
+mod relay_fixture;
 #[path = "../../../sdk-libs/client/tests/common/transfer.rs"]
 pub mod transfer;
 
 use custom_ring_interface::{
-    encode_ring_confidential_delivered_output, EscrowKey, RingMode, DELIVERED_AUDIT_CAPACITIES,
+    encode_ring_confidential_delivered_output,
+    storage_instruction::{EscrowWriteData, StorageWriteData},
+    tagged_x25519, QueueEntry, RingMode, DELIVERED_AUDIT_CAPACITIES,
+    RING_TRANSACT_ACCOUNT_PREFIX_LEN,
 };
 use spr_keypair::{X25519Keypair, X25519Pubkey};
 use std::{
@@ -23,12 +34,12 @@ use std::{
     future::Future,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc, LazyLock, Mutex,
+        Arc, Mutex,
     },
     time::Duration,
 };
-use zolana_ring_member_registry::{MemberRecord, MemberRegistryTree, RecordTree};
-use zolana_ring_policy::Member;
+use zolana_ring_member_registry::{MemberRecord, MemberRegistryTree, RecordOpening, RecordTree};
+use zolana_ring_policy::{ListId, Member, MintPolicy};
 
 use p256::ecdsa::signature::hazmat::PrehashSigner;
 use sha2::Digest;
@@ -47,29 +58,29 @@ use zolana_ring_client::{
         DecryptedInputRing, DecryptedOutputKind, DecryptedPayloadError, DecryptedSender,
         DecryptedTransaction, DecryptedWithdrawal, DepositRecord, GetAuditedMergesResponse,
         GetAuditedUtxosRequest, GetAuditedUtxosResponse, GetDecryptedTransactionsRequest,
-        GetDecryptedTransactionsResponse, HealthResponse, KeyMode, PagedRead, ReadAttestation,
-        ReadAuth, ReadBuildError, ReadSignature, ReadSigner, ReadTarget, RegistryRoot,
-        RegistryStatus, RingActivation, RingChainStatus, RingDepositsRequest, RingDepositsResponse,
-        RingState, RingStatusRequest, RingStatusResponse, SkippedReason, WebAuthnAssertion,
+        GetDecryptedTransactionsResponse, GetWalletActivityResponse, HealthResponse, KeyMode,
+        PagedRead, ReadAttestation, ReadAuth, ReadBuildError, ReadSignature, ReadSigner,
+        ReadTarget, ReaderGrantAction, ReaderGrantAttestation, ReaderGrantRequest, RingActivation,
+        RingChainStatus, RingDepositsRequest, RingDepositsResponse, RingState, RingStatusRequest,
+        RingStatusResponse, SkippedReason, WalletActivity, WalletView, WebAuthnAssertion,
         AUDITED_UTXOS_LIMIT, CREATE_AUDITOR_KEY, GET_AUDITED_MERGES, GET_AUDITED_UTXOS,
-        GET_DECRYPTED_TRANSACTIONS, HEALTH, RING_DEPOSITS, RING_STATUS,
+        GET_DECRYPTED_TRANSACTIONS, HEALTH, RING_DEPOSITS, RING_STATUS, SET_READER_GRANT,
     },
     seal_deposits, AnonymousInputs, AuditDisclosure, AuditError, ConfirmedDeposit, DepositOpening,
     MergeAuditPage, MergeAuditResult, OutputPayloadErrorKind, ReaderKey, RingOrigin,
     RingWithdrawal,
 };
-use zolana_ring_client::{P256ReaderKey, RingIndexerError};
+use zolana_ring_client::{P256ReaderKey, RingIndexerError, StorageTip};
 use zolana_ring_indexer::rpc::{
-    GetRingMemberOpeningsRequest, GetRingMemberOpeningsResponse, GetRingMemberRecordsRequest,
-    GetRingMemberRecordsResponse, GetRingRecordQueueResponse, RingIndexedMemberRecordView,
-    RingMemberOpening, RingMemberRecordView, RingQueueEntryView, RingRecordPathView,
-    RingRegistryRootView,
+    GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse,
+    GetStorageMemberRecordsRequest, GetStorageMemberRecordsResponse, RingIndexedMemberRecordView,
+    RingMemberOpening, RingMemberRecordView, RingRecordPathView, StorageRootView,
 };
 use zolana_ring_rpc::{
-    rpc_module, AuditRead, AuditService, Clock, DepositHistory, DepositPage, Hub,
-    MergeAuditRequest, OriginPolicy, Origins, Page, ReadCheck, ReaderGrant, RingConfiguration,
-    RingHistoryPage, RingRpcError, RootSecret, TransactionPage, TransactionSource, Unauthorized,
-    AUTH_SKEW,
+    rpc_module, AuditRead, AuditService, Clock, DepositHistory, DepositPage, GrantRowsSecret, Hub,
+    MergeAuditRequest, OriginPolicy, Origins, Page, ReadCheck, ReaderGrantStore, RecordsTip,
+    RingConfiguration, RingHistoryPage, RingRpcError, RootSecret, ServiceIdentity, Store,
+    TransactionPage, TransactionSource, Unauthorized, AUTH_SKEW,
 };
 use zolana_ring_transaction::{RingAssets, RingDeliveredBody};
 
@@ -93,6 +104,8 @@ const TOKEN_ACCOUNT: Address = Address::new_from_array([9; 32]);
 const MINT: Address = Address::new_from_array([10; 32]);
 const SPL_WITHDRAWN: u64 = 75;
 const ORIGIN: &str = "http://localhost:3000";
+/// Every fixture ring's own `StorageRegistry`.
+const RECORDS: Address = Address::new_from_array([11; 32]);
 const USER_PRESENT_AND_VERIFIED: u8 = 0x05;
 
 fn authority() -> Keypair {
@@ -109,6 +122,29 @@ fn deployer() -> Keypair {
 
 fn stranger() -> Keypair {
     Keypair::new_from_array([43; 32])
+}
+
+fn service_key() -> Keypair {
+    Keypair::new_from_array([46; 32])
+}
+
+fn storage_authority() -> Keypair {
+    Keypair::new_from_array([48; 32])
+}
+
+fn co_signer_key() -> Keypair {
+    Keypair::new_from_array([49; 32])
+}
+
+fn grant_rows_key() -> GrantRowsSecret {
+    GrantRowsSecret::from_bytes([50; 32])
+}
+
+fn identity(genesis_hash: [u8; 32]) -> ServiceIdentity {
+    ServiceIdentity {
+        genesis_hash,
+        service: service_key(),
+    }
 }
 
 struct Passkey {
@@ -211,6 +247,13 @@ impl ReadSigner for Passkey {
     }
 }
 
+fn refusal<T: std::fmt::Debug>(result: Result<T, jsonrpsee::MethodsError>) -> i32 {
+    match result {
+        Err(jsonrpsee::MethodsError::JsonRpc(error)) => error.code(),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
 fn origins() -> Origins {
     OriginPolicy::new(vec![ORIGIN.to_owned()])
         .with_relying_party_id("localhost".to_owned())
@@ -218,16 +261,10 @@ fn origins() -> Origins {
         .expect("origins")
 }
 
-/// Fixture hubs share one auditor key and so one service key.
-static FIXTURE_SERVICE: LazyLock<Address> = LazyLock::new(|| {
-    let fixture = Fixture::new();
-    fixture.hub(fixture.source()).service_pubkey()
-});
-
 fn target(ring: Address) -> ReadTarget {
     ReadTarget {
         cluster: GENESIS,
-        service: *FIXTURE_SERVICE,
+        service: service_key().pubkey(),
         ring,
     }
 }
@@ -261,6 +298,7 @@ fn decide_now(auth: &ReadAuth, origins: &Origins) -> Result<ReaderKey, Unauthori
         target: target(RING),
         cursor: None,
         limit: None,
+        wallet: None,
     };
     ReadCheck {
         auth,
@@ -343,6 +381,7 @@ struct StaticSource {
     transactions: Vec<ShieldedTransaction>,
     origins: HashMap<(Signature, u16), bool>,
     frames: Frames,
+    owner_signers: HashMap<Signature, Vec<Address>>,
     /// Confirmed deposits and merges do not carry transfer auditor messages.
     confirmed_events: HashMap<(Signature, u16), zolana_ring_client::ConfirmedEvent>,
     /// The capsule bindings of each audited deposit.
@@ -356,7 +395,10 @@ struct StaticSource {
     chain: HashMap<Address, RingChainStatus>,
     /// Per auditor view tag, empty when every read shares `transactions`.
     by_tag: HashMap<[u8; 32], Vec<ShieldedTransaction>>,
-    granted: HashSet<ReaderKey>,
+    /// The ring's own storage tree, rewritten while a hub serves it.
+    records: Records,
+    /// Off while the ring's records address holds no storage registry.
+    records_registered: bool,
     /// Per program, absent when immutable or not deployed.
     upgrade_authorities: HashMap<Address, Address>,
     healthy: bool,
@@ -368,10 +410,7 @@ struct StaticSource {
     examined_limit: Arc<AtomicUsize>,
     /// Per request cursor, empty when every read shares one page.
     pages: HashMap<Option<Vec<u8>>, Paged>,
-    /// The ring's registry, replaced while a hub serves it.
-    registry: Arc<Mutex<Option<EscrowRegistry>>>,
     record_reads: Arc<AtomicUsize>,
-    opening_reads: Arc<AtomicUsize>,
     history_reads: Arc<AtomicUsize>,
 }
 
@@ -392,10 +431,6 @@ struct Examined {
 }
 
 impl StaticSource {
-    fn registry(&self) -> Option<EscrowRegistry> {
-        self.registry.lock().unwrap().clone()
-    }
-
     fn with_transactions(mut self, transactions: Vec<ShieldedTransaction>) -> Self {
         self.origins = transactions
             .iter()
@@ -411,6 +446,23 @@ impl StaticSource {
 }
 
 impl StaticSource {
+    /// SPP's ring transact accounts, SENDER paying and no settlement group.
+    fn pool_accounts(&self, signature: Signature) -> Vec<Address> {
+        let nullifiers = self
+            .transactions
+            .iter()
+            .chain(self.by_tag.values().flatten())
+            .find(|tx| tx.tx_signature == signature)
+            .map_or(0, |tx| tx.nullifiers.len());
+        let mut accounts = vec![SENDER];
+        accounts.resize(
+            RING_TRANSACT_ACCOUNT_PREFIX_LEN + 1 + nullifiers,
+            Address::default(),
+        );
+        accounts.extend(self.owner_signers.get(&signature).into_iter().flatten());
+        accounts
+    }
+
     /// The page `page` names, else every transaction the source holds under `tagged`.
     fn page_at(
         &self,
@@ -514,6 +566,7 @@ impl TransactionSource for StaticSource {
                 deposits: self.deposits.get(&signature).cloned().unwrap_or_default(),
                 merge_disclosure: None,
                 transact: self.frames.lock().unwrap().get(&signature).cloned(),
+                pool_accounts: self.pool_accounts(signature),
                 withdrawals: vec![
                     RingWithdrawal {
                         screened_owner: None,
@@ -579,96 +632,67 @@ impl TransactionSource for StaticSource {
         &self,
         ring: Address,
     ) -> impl Future<Output = Result<RingChainStatus, ClientError>> + Send {
-        let mut status = self.chain.get(&ring).cloned().unwrap_or_default();
-        if let Some(registry) = self.registry().filter(|_| ring == RING) {
-            status.registry = Some(registry.status());
-        }
+        let status = self.chain.get(&ring).cloned().unwrap_or_default();
         async move { Ok(status) }
     }
 
-    async fn ring_member_records(
+    async fn slot(&self) -> Result<u64, ClientError> {
+        Ok(relay_fixture::SLOT)
+    }
+
+    async fn records_root(&self, _ring: Address) -> Result<RecordsTip, ClientError> {
+        if !self.records_registered {
+            return Ok(RecordsTip::NoRegistry);
+        }
+        let root = self.records.root();
+        Ok(RecordsTip::Newest(StorageTip {
+            registry: RECORDS,
+            root: root.root.0,
+            revision: root.revision,
+        }))
+    }
+
+    async fn storage_member_openings(
         &self,
-        request: GetRingMemberRecordsRequest,
-    ) -> Result<GetRingMemberRecordsResponse, RingIndexerError> {
+        request: GetStorageMemberOpeningsRequest,
+    ) -> Result<GetStorageMemberOpeningsResponse, RingIndexerError> {
+        assert_eq!(request.registry.0, RECORDS);
+        let root = self.records.root();
+        assert_eq!(request.expected_root, root.root);
+        Ok(GetStorageMemberOpeningsResponse {
+            context: spr_indexer_api::Context {
+                block_time: 0,
+                slot: 99,
+            },
+            root,
+            openings: request
+                .members
+                .iter()
+                .map(|member| self.records.opening(&member.0))
+                .collect(),
+        })
+    }
+
+    async fn storage_member_records(
+        &self,
+        request: GetStorageMemberRecordsRequest,
+    ) -> Result<GetStorageMemberRecordsResponse, RingIndexerError> {
         self.record_reads.fetch_add(1, Ordering::Relaxed);
-        let registry = self.registry().expect("registry");
+        let root = self.records.root();
+        assert_eq!(request.expected_root, root.root);
         // A network page never answers in the same poll.
         tokio::task::yield_now().await;
-        let first = usize::try_from(request.start_index - 1).expect("leaf");
-        let records: Vec<_> = registry
-            .records
-            .iter()
-            .skip(first)
-            .take(usize::try_from(request.limit).expect("limit"))
-            .cloned()
-            .collect();
+        let records = self.records.page(request.start_index, request.limit);
         let end = request.start_index + records.len() as u64;
-        Ok(GetRingMemberRecordsResponse {
+        Ok(GetStorageMemberRecordsResponse {
             context: spr_indexer_api::Context {
                 block_time: 0,
                 slot: 99,
             },
-            root: registry.root_view(),
+            next_leaf_index: (end < root.next_index).then_some(end),
+            root,
             records,
-            next_leaf_index: (end < request.expected_next_index).then_some(end),
         })
-    }
-
-    async fn ring_member_openings(
-        &self,
-        request: GetRingMemberOpeningsRequest,
-    ) -> Result<GetRingMemberOpeningsResponse, RingIndexerError> {
-        self.opening_reads.fetch_add(1, Ordering::Relaxed);
-        let registry = self.registry().expect("registry");
-        let openings = request
-            .members
-            .iter()
-            .map(|member| {
-                let row = registry
-                    .records
-                    .iter()
-                    .find(|row| row.record.member == *member)
-                    .expect("registered member");
-                RingMemberOpening {
-                    present: true,
-                    record: row.record.clone(),
-                    path: row.path.clone(),
-                }
-            })
-            .collect();
-        Ok(GetRingMemberOpeningsResponse {
-            context: spr_indexer_api::Context {
-                block_time: 0,
-                slot: 99,
-            },
-            root: registry.root_view(),
-            openings,
-        })
-    }
-
-    async fn ring_record_queue(
-        &self,
-        _ring: Address,
-    ) -> Result<GetRingRecordQueueResponse, RingIndexerError> {
-        let registry = self.registry().expect("registry");
-        Ok(GetRingRecordQueueResponse {
-            context: spr_indexer_api::Context {
-                block_time: 0,
-                slot: 99,
-            },
-            head: registry.applied,
-            tail: registry.applied + registry.queue.len() as u64,
-            chain_head: Hash([0; 32]),
-            entries: registry.queue.clone(),
-        })
-    }
-
-    fn reader_granted(
-        &self,
-        request: ReaderGrant,
-    ) -> impl Future<Output = Result<bool, ClientError>> + Send {
-        let granted = self.granted.contains(&request.reader);
-        async move { Ok(granted) }
     }
 
     fn upgrade_authority(
@@ -886,6 +910,7 @@ impl Fixture {
             transactions: Vec::new(),
             origins: HashMap::new(),
             frames: self.frames.clone(),
+            owner_signers: HashMap::new(),
             confirmed_events: HashMap::new(),
             deposits: HashMap::new(),
             next_cursor: Some(vec![7, 7]),
@@ -894,16 +919,21 @@ impl Fixture {
                 RING,
                 RingConfiguration {
                     auditor_pubkey: self.auditor.pubkey(),
-                    authority: authority().pubkey(),
+                    roles: custom_ring_interface::RingRoles {
+                        policy: authority().pubkey(),
+                        ..bytemuck::Zeroable::zeroed()
+                    },
                     mode: RingMode::Confidential,
+                    delegate: None,
                 },
             )]),
             chain: HashMap::new(),
             by_tag: HashMap::new(),
-            granted: HashSet::from([
-                ReaderKey::ed25519(delegate().pubkey()).expect("delegate reader"),
-                ReaderKey::p256(Passkey::new(46).pubkey()).expect("passkey reader"),
+            records: Records::listing(&[
+                reader_member(ReaderKey::ed25519(delegate().pubkey()).expect("delegate reader")),
+                reader_member(ReaderKey::p256(Passkey::new(46).pubkey()).expect("passkey reader")),
             ]),
+            records_registered: true,
             upgrade_authorities: HashMap::from([(RING, deployer().pubkey())]),
             healthy: true,
             assets: Some(RingAssets::new([]).expect("ring assets")),
@@ -912,9 +942,7 @@ impl Fixture {
             history: Vec::new(),
             examined_limit: Arc::new(AtomicUsize::new(0)),
             pages: HashMap::new(),
-            registry: Arc::default(),
             record_reads: Arc::new(AtomicUsize::new(0)),
-            opening_reads: Arc::new(AtomicUsize::new(0)),
             history_reads: Arc::new(AtomicUsize::new(0)),
         };
         source.with_transactions(vec![
@@ -925,14 +953,14 @@ impl Fixture {
     }
 
     fn hub(&self, source: StaticSource) -> Hub<StaticSource> {
-        Hub::builder(source, GENESIS)
+        Hub::builder(source, identity(GENESIS))
             .with_origins(origins())
             .local(RING, self.auditor.clone())
             .expect("hub")
     }
 
     fn hub_at(&self, source: StaticSource, now: u64) -> Hub<StaticSource> {
-        Hub::builder(source, GENESIS)
+        Hub::builder(source, identity(GENESIS))
             .with_origins(origins())
             .with_clock(Clock::Fixed(now))
             .local(RING, self.auditor.clone())
@@ -952,6 +980,7 @@ impl Fixture {
                 read: PagedRead::DecryptedTransactions,
                 auth: &auth(&delegate()),
                 page: &page(),
+                wallet: None,
             })
             .await
             .expect("read")
@@ -1091,6 +1120,7 @@ async fn read_at(
             read: PagedRead::DecryptedTransactions,
             auth: &request.auth,
             page: &page,
+            wallet: None,
         })
         .await
         .expect("read")
@@ -1112,7 +1142,7 @@ fn audited_deposit(
     let opening = DepositOpening {
         owner_hash: member.owner_hash(),
         blinding: zeroize::Zeroizing::new(blinding),
-        owner_key: Some(member.owner_key),
+        owner_key: member.owner_key,
     };
     let owner_utxo_hash =
         spr_transaction::owner_utxo_hash(&opening.owner_hash, &opening.blinding).unwrap();
@@ -1169,141 +1199,159 @@ fn audited_deposit(
     (deposit, bindings)
 }
 
-/// Each owner's record escrowing its nullifier key under one registry root.
-#[derive(Clone)]
-struct EscrowRegistry {
-    root: [u8; 32],
-    records: Vec<RingIndexedMemberRecordView>,
-    next_index: u64,
-    applied: u64,
-    /// Writes past `applied`, still pending.
-    queue: Vec<RingQueueEntryView>,
+fn reader_member(reader: ReaderKey) -> Member {
+    reader.member().expect("reader member")
 }
 
-impl EscrowRegistry {
-    fn new(owners: &[UtxoFields]) -> Self {
-        let sealed = [0x5a; 32];
-        let eph_pk = X25519Keypair::new().pubkey();
-        let mut members: Vec<([u8; 32], UtxoFields)> = owners
-            .iter()
-            .map(|utxo| {
-                let member = Member::owner_tag(&utxo.owner_key).expect("owner tag");
-                (*member.as_bytes(), *utxo)
-            })
-            .collect();
-        members.sort_by_key(|(member, _)| *member);
-        let next = |position: usize| {
-            members
-                .get(position)
-                .map_or(MemberRecord::SENTINEL.next, |(member, _)| *member)
-        };
-        let mut records = vec![MemberRecord {
-            next: next(0),
-            ..MemberRecord::SENTINEL
-        }];
-        let mut views = Vec::new();
-        for (position, (member, utxo)) in members.iter().enumerate() {
-            let escrow_key = EscrowKey {
-                nullifier_pk: &utxo.nullifier_pk,
-                ciphertext: &sealed,
-            }
-            .hash()
-            .expect("escrow key");
-            records.push(MemberRecord {
-                mint_policy: Default::default(),
-                member: *member,
-                next: next(position + 1),
-                lists: 0,
-                escrow_key,
-            });
-            views.push(RingMemberRecordView {
-                mint_policy: Default::default(),
-                member: Hash(*member),
-                next: Hash(next(position + 1)),
-                lists: 0,
-                escrow_key: Hash(escrow_key),
-                owner_pubkey: Some(Address::new_from_array(utxo.owner_key).into()),
-                nullifier_pk: Some(Hash(utxo.nullifier_pk)),
-                eph_pk: Some(Base64String(eph_pk.as_bytes().to_vec())),
-                ciphertext: Some(Base64String(sealed.to_vec())),
-            });
+/// The ring's own storage tree, shared by every clone of the source.
+#[derive(Clone)]
+struct Records(Arc<Mutex<OwnRecords>>);
+
+struct OwnRecords {
+    tree: MemberRegistryTree,
+    /// The envelope each escrow write published, by member.
+    sealed: HashMap<[u8; 32], EscrowWriteData>,
+    revision: u64,
+    /// Pages leave out the first record.
+    short_pages: bool,
+}
+
+impl Records {
+    fn listing(readers: &[Member]) -> Self {
+        let records = Self(Arc::new(Mutex::new(OwnRecords {
+            tree: MemberRegistryTree::new().expect("record tree"),
+            sealed: HashMap::new(),
+            revision: 0,
+            short_pages: false,
+        })));
+        for reader in readers {
+            records.list_reader(*reader, true);
         }
-        let tree = MemberRegistryTree::from_records(records).expect("record tree");
-        let records: Vec<RingIndexedMemberRecordView> = views
-            .into_iter()
-            .zip(1u64..)
+        records
+    }
+
+    /// The source serves the new root at once, as the registry does once storage applies it.
+    fn list_reader(&self, member: Member, listed: bool) {
+        let bit = ListId::Reader.record_bit();
+        self.apply(QueueEntry {
+            member: *member.as_bytes(),
+            mask: bit,
+            value: if listed { bit } else { 0 },
+            escrow_key: [0; 32],
+            mint_policy: None,
+        });
+    }
+
+    fn write_mint_policy(&self, member: Member, policy: MintPolicy) {
+        self.apply(QueueEntry {
+            member: *member.as_bytes(),
+            mint_policy: Some(policy),
+            ..QueueEntry::default()
+        });
+    }
+
+    /// The writes and envelopes an indexer projects from an update.
+    fn escrow(&self, writes: &[EscrowWriteData]) {
+        for write in writes {
+            self.apply(
+                StorageWriteData::Escrow(*write)
+                    .entry()
+                    .expect("escrow write"),
+            );
+            let member = write.member().expect("owner tag");
+            self.0.lock().unwrap().sealed.insert(member, *write);
+        }
+    }
+
+    fn shorten_pages(&self) {
+        self.0.lock().unwrap().short_pages = true;
+    }
+
+    fn apply(&self, entry: QueueEntry) {
+        let mut own = self.0.lock().unwrap();
+        own.tree.apply([0; 32], &[entry]).expect("record write");
+        own.revision += 1;
+    }
+
+    fn root(&self) -> StorageRootView {
+        let own = self.0.lock().unwrap();
+        StorageRootView {
+            root: Hash(own.tree.root().expect("root")),
+            revision: own.revision,
+            next_index: own.tree.records().len() as u64,
+        }
+    }
+
+    fn opening(&self, member: &[u8; 32]) -> RingMemberOpening {
+        let own = self.0.lock().unwrap();
+        let (present, record, path) = match own.tree.opening(member).expect("opening") {
+            RecordOpening::Present { record, path } => (true, record, path),
+            RecordOpening::Absent { low, path } => (false, low, path),
+        };
+        RingMemberOpening {
+            present,
+            record: own.view(&record),
+            path: path_view(path.index, &path.siblings),
+        }
+    }
+
+    /// Leaves from `start` under the current root.
+    fn page(&self, start: u64, limit: u64) -> Vec<RingIndexedMemberRecordView> {
+        let own = self.0.lock().unwrap();
+        let skip = usize::try_from(start + u64::from(own.short_pages)).expect("leaf");
+        own.tree
+            .records()
+            .iter()
+            .zip(0u64..)
+            .skip(skip)
+            .take(usize::try_from(limit).expect("limit"))
             .map(|(record, index)| {
-                let path = tree.path(index).expect("path");
+                let path = own.tree.path(index).expect("path");
                 RingIndexedMemberRecordView {
-                    record,
-                    path: RingRecordPathView {
-                        index,
-                        siblings: path.siblings.iter().map(|level| level.map(Hash)).collect(),
-                    },
+                    record: own.view(record),
+                    path: path_view(index, &path.siblings),
                 }
             })
-            .collect();
-        Self {
-            root: tree.root().expect("root"),
-            next_index: records.len() as u64 + 1,
-            records,
-            applied: 0,
-            queue: Vec::new(),
+            .collect()
+    }
+}
+
+impl OwnRecords {
+    fn view(&self, record: &MemberRecord) -> RingMemberRecordView {
+        let sealed = self.sealed.get(&record.member);
+        RingMemberRecordView {
+            mint_policy: record.mint_policy,
+            member: Hash(record.member),
+            next: Hash(record.next),
+            lists: record.lists,
+            escrow_key: Hash(record.escrow_key),
+            owner_pubkey: sealed.map(|write| write.owner.into()),
+            nullifier_pk: sealed.map(|write| Hash(write.nullifier_pk)),
+            eph_pk: sealed.map(|write| Base64String(tagged_x25519(&write.eph_u).to_vec())),
+            ciphertext: sealed.map(|write| Base64String(write.ciphertext.to_vec())),
         }
     }
+}
 
-    fn applied(mut self, applied: u64) -> Self {
-        self.applied = applied;
-        self
+fn path_view(index: u64, siblings: &[[[u8; 32]; 3]]) -> RingRecordPathView {
+    RingRecordPathView {
+        index,
+        siblings: siblings.iter().map(|level| level.map(Hash)).collect(),
     }
+}
 
-    /// `owners` registered after the newest application.
-    fn with_pending(mut self, owners: &[UtxoFields]) -> Self {
-        self.queue = owners
-            .iter()
-            .zip(self.applied..)
-            .map(|(utxo, position)| RingQueueEntryView {
-                mint_policy: Default::default(),
-                position,
-                member: Hash(
-                    *Member::owner_tag(&utxo.owner_key)
-                        .expect("owner tag")
-                        .as_bytes(),
-                ),
-                mask: 0,
-                value: 0,
-                escrow_key: Hash([0; 32]),
-                slot: 41,
-            })
-            .collect();
-        self
-    }
-
-    fn status(&self) -> RegistryStatus {
-        RegistryStatus {
-            history: vec![Some(RegistryRoot {
-                root: Hash(self.root),
-                applied: self.applied,
-                slot: 40,
-            })],
-            history_cursor: 0,
-            next_index: u32::try_from(self.next_index).expect("registry size"),
-            floor: 0,
-            prior_floor: 0,
-            floor_slot: 0,
-            queue_head: self.applied,
-            queue_tail: self.applied + self.queue.len() as u64,
-        }
-    }
-
-    fn root_view(&self) -> RingRegistryRootView {
-        RingRegistryRootView {
-            root: Hash(self.root),
-            root_index: 0,
-            applied: self.applied,
-            next_index: self.next_index,
-        }
-    }
+/// Each owner's escrow write, its envelope sealed to no one.
+fn escrow_writes(owners: &[UtxoFields]) -> Vec<EscrowWriteData> {
+    let eph_u = X25519Keypair::new().pubkey().u();
+    owners
+        .iter()
+        .map(|utxo| EscrowWriteData {
+            owner: Address::new_from_array(utxo.owner_key),
+            nullifier_pk: utxo.nullifier_pk,
+            eph_u,
+            ciphertext: [0x5a; 32],
+        })
+        .collect()
 }
 
 /// A delivered transfer of a Registry-mode ring, its owners' nullifier keys left to the registry.
@@ -1329,7 +1377,7 @@ fn escrowed_source(
         (None, paged(vec![audited], None, Some(1))),
         (Some(vec![1]), paged(Vec::new(), None, Some(1))),
     ]);
-    *source.registry.lock().unwrap() = Some(EscrowRegistry::new(registered));
+    source.records.escrow(&escrow_writes(registered));
     source
 }
 

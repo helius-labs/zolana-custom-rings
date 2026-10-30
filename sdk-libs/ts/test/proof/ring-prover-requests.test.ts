@@ -13,6 +13,7 @@ import {
   type DeliveredSlotProofInputs,
   type PolicyProofInputs,
   type PolicySubjectEntry,
+  type PolicyTableProofInputs,
   type RingProofRequest,
   type RingSlotOpening,
 } from "../../src/rpc/prover/ring.js";
@@ -177,7 +178,11 @@ function presentRecord(value: unknown, member: Bytes32): PresentRecordOpening {
   return {
     kind: "present",
     record: {
-      mintPolicy: mintSettings(item["mintPolicy"], item["withdrawalThreshold"]),
+      mintPolicy: mintSettings(
+        item["mintPolicy"],
+        item["withdrawalThreshold"],
+        item["assetLimits"],
+      ),
       member,
       next: field(item["next"]),
       lists: BigInt(count(item["lists"])),
@@ -194,13 +199,28 @@ function memberOpening(value: unknown, member: Bytes32): RecordOpening | undefin
   return {
     kind: "absent",
     low: {
-      mintPolicy: mintSettings(item["lowMintPolicy"], item["lowWithdrawalThreshold"]),
+      mintPolicy: mintSettings(
+        item["lowMintPolicy"],
+        item["lowWithdrawalThreshold"],
+        item["lowAssetLimits"],
+      ),
       member: field(item["lowMember"]),
       next: field(item["lowNext"]),
       lists: BigInt(count(item["lowLists"])),
       escrowKey: field(item["lowEscrow"]),
     },
     path: quadPath(item["index"], item["path"]),
+  };
+}
+
+function table(item: Json): PolicyTableProofInputs {
+  return {
+    sources: list(item["sources"]).map((value) => {
+      const source = record(value);
+      return { listId: count(source["listId"]), registry: field(source["registry"]) };
+    }),
+    policyLen: count(item["policyLen"]),
+    rules: fields(item["rules"]),
   };
 }
 
@@ -214,7 +234,7 @@ function entry(value: unknown): PolicySubjectEntry {
 function memberRecord(value: unknown): MemberRecord {
   const item = record(value);
   return {
-    mintPolicy: mintSettings(item["mintPolicy"], item["withdrawalThreshold"]),
+    mintPolicy: mintSettings(item["mintPolicy"], item["withdrawalThreshold"], item["assetLimits"]),
     member: field(item["member"]),
     next: field(item["next"]),
     lists: BigInt(count(item["lists"])),
@@ -312,16 +332,12 @@ function policy(item: Json): PolicyProofInputs {
     curatorRoot: field(item["curatorRoot"]),
     publicAssets: fields(item["publicAssets"]),
     publicAmounts: fields(item["publicAmounts"]),
-    sources: list(item["sources"]).map((value) => {
-      const source = record(value);
-      return { listId: count(source["listId"]), registry: field(source["registry"]) };
-    }),
-    policyLen: count(item["policyLen"]),
-    rules: fields(item["rules"]),
+    ...table(item),
     publicAssetEntries: list(item["publicAssetEntries"]).map(count),
     addressChain: field(item["addressChain"]),
     privateTxBlinding: field(item["privateTxBlinding"]),
     outputs,
+    recipients: fields(item["recipients"]),
     senderPkHash: field(item["senderPkHash"]),
     ownPool,
     ...(curatorPool === undefined ? {} : { curatorPool }),
@@ -335,7 +351,11 @@ function write(value: unknown): RecordWriteProofInput {
   const item = record(value);
   const queued = record(item["entry"]);
   return {
-    oldMintPolicy: mintSettings(item["oldMintPolicy"], item["oldWithdrawalThreshold"]),
+    oldMintPolicy: mintSettings(
+      item["oldMintPolicy"],
+      item["oldWithdrawalThreshold"],
+      item["oldAssetLimits"],
+    ),
     entry: {
       member: field(queued["member"]),
       mask: BigInt(count(queued["mask"])),
@@ -348,7 +368,11 @@ function write(value: unknown): RecordWriteProofInput {
     oldEscrow: field(item["oldEscrow"]),
     slot: quadPath(item["index"], item["path"]),
     low: {
-      mintPolicy: mintSettings(item["lowMintPolicy"], item["lowWithdrawalThreshold"]),
+      mintPolicy: mintSettings(
+        item["lowMintPolicy"],
+        item["lowWithdrawalThreshold"],
+        item["lowAssetLimits"],
+      ),
       member: field(item["lowMember"]),
       next: field(item["lowNext"]),
       lists: BigInt(count(item["lowLists"])),
@@ -362,6 +386,17 @@ function write(value: unknown): RecordWriteProofInput {
 function request(item: Json): RingProofRequest {
   const circuitType = text(item["circuitType"]);
   const publicInputHash = field(item["publicInputHash"]);
+  if (circuitType.startsWith("custom-ring-audit-delivered-sender-"))
+    return {
+      kind: "deliveredSenderAudit",
+      publicInputHash,
+      ...envelope(item),
+      outputs: list(item["outputs"]).map(delivered),
+      sender: field(item["sender"]),
+      privateTxHash: field(item["privateTxHash"]),
+      privateTxBlinding: field(item["privateTxBlinding"]),
+      inputs: list(item["inputs"]).map(opening),
+    };
   if (circuitType.startsWith("custom-ring-audit-delivered-"))
     return {
       kind: "deliveredAudit",
@@ -444,9 +479,7 @@ function request(item: Json): RingProofRequest {
       count: count(item["count"]),
       anonymous: item["anonymous"] === undefined ? false : flag(item["anonymous"]),
       ownerPkHashes,
-      ...(item["ownerKeys"] === undefined
-        ? {}
-        : { ownerKeys: list(item["ownerKeys"]).map((key) => bytes<Bytes32>(key, 32)) }),
+      ownerKeys: list(item["ownerKeys"]).map((key) => bytes<Bytes32>(key, 32)),
       nullifierPks: fields(item["nullifierPks"]),
       blindingSecrets: fields(item["blindingSecrets"]),
       ctHashes: fields(item["ctHashes"]),
@@ -457,12 +490,23 @@ function request(item: Json): RingProofRequest {
       auditorPk: bytes<Bytes32>(item["auditorPk"], 32),
       keyEscrow: flag(item["keyEscrow"]),
       memberRegistryRoot: field(item["memberRegistryRoot"]),
+      curatorRoot: field(item["curatorRoot"]),
+      policyHash: field(item["policyHash"]),
+      assets: fields(item["assets"]),
+      amounts: fields(item["amounts"]),
+      ...(item["table"] === undefined ? {} : { table: table(record(item["table"])) }),
+      assetRecords: list(item["assetRecords"]).map((opening, i) =>
+        memberOpening(opening, fields(item["assets"])[i] ?? ZERO),
+      ),
+      curatorAssetRecords: list(item["curatorAssetRecords"]).map((opening, i) =>
+        memberOpening(opening, fields(item["assets"])[i] ?? ZERO),
+      ),
     };
   }
-  if (circuitType.startsWith("custom-ring-merge-anonymous-")) {
+  if (circuitType.startsWith("custom-ring-merge-v3-")) {
     const ownerKey = bytes<Bytes32>(item["ownerKey"], 32);
     return {
-      kind: "anonymousMerge",
+      kind: "merge",
       partyIdentities: fields(item["partyIdentities"]) as [Bytes32, Bytes32, Bytes32],
       publicInputHash,
       privateTxHash: field(item["privateTxHash"]),
@@ -488,6 +532,12 @@ function request(item: Json): RingProofRequest {
       }),
       outputTreeId: field(item["outputTreeId"]),
       outputRingDataHash: field(item["outputRingDataHash"]),
+      keyEscrow: flag(item["keyEscrow"]),
+      memberRegistryRoot: field(item["memberRegistryRoot"]),
+      ctHash: field(item["ctHash"]),
+      ...(item["member"] === null
+        ? {}
+        : { member: presentRecord(item["member"], solanaOwnerIdentity(ownerKey) as Bytes32) }),
     };
   }
   throw new Error(`no request for ${circuitType}`);
@@ -685,6 +735,12 @@ describe("ring prover request encoding against the Rust fixtures", () => {
   });
 
   it.each(RUST_POLICY_FIXTURES)("encodes %s byte for byte", (name) => {
+    expectReencoded(record(JSON.parse(readFileSync(new URL(name, RUST_FIXTURES), "utf8"))));
+  });
+
+  // Go solves this Rust fixture, a TS body equal to it assigns the same witness.
+  it("encodes the in-proof owner's delivered sender audit byte for byte", () => {
+    const name = "custom-ring-audit-delivered-sender-48-2.json";
     expectReencoded(record(JSON.parse(readFileSync(new URL(name, RUST_FIXTURES), "utf8"))));
   });
 });
@@ -935,6 +991,7 @@ describe.runIf(HAS_GOLDENS)("ring statements rebuilt from the Go goldens", () =>
         curatorRoot: typed.curatorRoot,
         publicAssets: typed.publicAssets,
         publicAmounts: typed.publicAmounts,
+        recipients: typed.recipients,
       };
       const hash =
         typed.kind === "memberPolicy"
@@ -996,13 +1053,39 @@ function slotSecret(
   });
 }
 
-function mintSettings(packed: unknown, withdrawal: unknown) {
-  const value = amountOf(field(packed));
+function mintSettings(packed: unknown, withdrawal: unknown, limits: unknown) {
   const mask = (1n << 64n) - 1n;
+  const amounts = (fieldValue: unknown) => {
+    const value = amountOf(field(fieldValue));
+    return [(value >> 128n) & mask, (value >> 64n) & mask, value & mask] as const;
+  };
+  const [threshold, cap, cosignAbove] = amounts(packed);
+  // The last field holds two amounts below an unused top one.
+  const [
+    senderCap,
+    senderWindowSlots,
+    volumeCap,
+    volumeWindowSlots,
+    depositCap,
+    depositWindowSlots,
+    ,
+    withdrawalCap,
+    withdrawalWindowSlots,
+  ] = list(limits).flatMap(amounts);
   return {
-    threshold: (value >> 128n) & mask,
-    cap: (value >> 64n) & mask,
-    cosignAbove: value & mask,
+    threshold,
+    cap,
+    cosignAbove,
     withdrawalThreshold: amountOf(field(withdrawal)),
+    limits: {
+      senderCap: senderCap!,
+      senderWindowSlots: senderWindowSlots!,
+      volumeCap: volumeCap!,
+      volumeWindowSlots: volumeWindowSlots!,
+      depositCap: depositCap!,
+      depositWindowSlots: depositWindowSlots!,
+      withdrawalCap: withdrawalCap!,
+      withdrawalWindowSlots: withdrawalWindowSlots!,
+    },
   };
 }

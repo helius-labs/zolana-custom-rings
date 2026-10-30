@@ -1,31 +1,36 @@
 use custom_ring_interface::{
-    key_catalog::RingCircuit, tag, AuditedDepositPrefix, CustomRingError, CustomRingProof,
-    DepositContext, DepositPublicInput, RingDepositAuditCapsule, MAX_RING_DEPOSIT_AUDIT_SLOTS,
-    RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN, VIEWING_PUBKEY_TAG,
+    key_catalog::RingCircuit, storage::Revision, tag, CustomRingError, CustomRingProof,
+    DepositContext, DepositPrefix, DepositPublicInput, DepositRegistry, DepositedAsset,
+    RingDepositAuditCapsule, MAX_RING_DEPOSIT_AUDIT_SLOTS, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN,
+    TAGGED_X25519_KEY_LEN, VIEWING_PUBKEY_TAG,
 };
 use pinocchio::{Address, ProgramResult};
-use spr_interface::instruction::instruction_data::deposit::RingDepositIxDataRef;
+use spr_interface::instruction::{
+    instruction_data::deposit::RingDepositIxDataRef, tag::RING_DEPOSIT,
+};
 
 use crate::instructions::verifier::{ring_key, RingProof};
 
 pub(crate) struct AuditedDeposit<'a> {
     pub proof: CustomRingProof,
-    pub registry_root_index: u8,
+    pub own_revision: Revision,
+    pub curator_revision: Revision,
     pub spp_data: &'a [u8],
 }
 
 impl<'a> AuditedDeposit<'a> {
     pub fn parse(data: &'a [u8]) -> Result<Self, CustomRingError> {
         let (prefix, spp_data) = data
-            .split_at_checked(AuditedDepositPrefix::SIZE)
+            .split_at_checked(DepositPrefix::SIZE)
             .ok_or(CustomRingError::InvalidInstructionData)?;
-        let prefix = AuditedDepositPrefix::parse(prefix)?;
-        if prefix.tag != tag::AUDITED_DEPOSIT || spp_data.first() != Some(&tag::DEPOSIT) {
+        let prefix = DepositPrefix::parse(prefix)?;
+        if prefix.tag != tag::DEPOSIT || spp_data.first() != Some(&RING_DEPOSIT) {
             return Err(CustomRingError::InvalidAuditedDeposit);
         }
         Ok(Self {
             proof: prefix.proof,
-            registry_root_index: prefix.registry_root_index,
+            own_revision: prefix.own_revision,
+            curator_revision: prefix.curator_revision,
             spp_data,
         })
     }
@@ -37,7 +42,8 @@ pub(crate) struct DepositVerification<'a> {
     pub tree: &'a Address,
     pub auditor_pubkey: &'a [u8; TAGGED_X25519_KEY_LEN],
     pub anonymous: bool,
-    pub member_registry_root: Option<&'a [u8; 32]>,
+    pub registry: Option<DepositRegistry<'a>>,
+    pub assets: &'a [DepositedAsset],
     pub audited: &'a AuditedDeposit<'a>,
     pub deposit: &'a RingDepositIxDataRef<'a>,
 }
@@ -79,9 +85,10 @@ impl DepositVerification<'_> {
             anonymous: self.anonymous,
             owner_utxo_hashes: &owners[..count],
             ciphertexts: &ciphertexts[..count],
+            assets: self.assets,
             auditor_pk: self.auditor_pubkey,
             eph_pk: &eph_pk,
-            member_registry_root: self.member_registry_root,
+            registry: self.registry,
         }
         .hash()
         .map_err(CustomRingError::from)?;

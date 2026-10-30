@@ -1,3 +1,9 @@
+// Proves that a member's own transfer obeys the ring's rules on who may send,
+// who may receive and how much the sender may pay out.
+//
+// Read after policy/policy.go, policy/withdrawals.go, policy/outflow.go. Read
+// before prover/ring/ring.go.
+
 package policy
 
 import (
@@ -66,16 +72,18 @@ func (c *MemberPolicyCircuit) Define(api frontend.API) error {
 	outputs := c.openOutputs(api, c.InputChain)
 	// 3. One sender, the owner signer, or on an anonymous ring the sender its commitment hides.
 	sender := c.sender(api)
-	// 4. The sender and every UTXO output's subjects open under own_root, and under curator_root when a list is foreign.
+	// 4. Each recipient is its slot's owner identity, zero on a dummy and on an anonymous ring.
+	c.assertRecipients(api, c.Anonymous, outputs)
+	// 5. The sender and every UTXO output's subjects open under own_root, and under curator_root when a list is foreign.
 	payments := append(append([]utxoView{}, outputs...), c.openWithdrawals(api, rc)...)
 	resolved := c.resolveSubjects(api, table, sender, payments)
-	// 5. Every enabled rule holds for its subjects.
+	// 6. Every enabled rule holds for its subjects.
 	c.assertRules(api, cmp, table, resolved, payments)
-	// 6. Every limit row bounds the outflow, approval_required says whether one passes its co-sign bound.
+	// 7. Every limit row bounds the outflow, approval_required says whether one passes its co-sign bound.
 	c.assertApproval(api, c.constrainOutflow(api, cmp, sender, outputs, resolved))
-	// 7. Under key escrow every output owner escrows the output's nullifier key.
+	// 8. Under key escrow every output owner escrows the output's nullifier key.
 	c.assertEscrow(api, c.KeyEscrow, resolved.owners, outputs)
-	// 8. The one public input is the statement the program rebuilds.
+	// 9. The one public input is the statement the program rebuilds.
 	bindStatement(api, c.PublicInputHash, c.Statement())
 	return nil
 }

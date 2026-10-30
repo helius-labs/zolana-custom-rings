@@ -7,20 +7,17 @@ use solana_instruction::AccountMeta;
 use solana_keypair::{Keypair, Signer};
 
 use crate::{
-    common::{key_registration, reaches_verification, refused, register_key, Ring, Sent, Setup},
-    forward_rules::{
-        deposit_instruction, merge_data, merge_disclosure, merge_instruction_with, ring_deposit,
-    },
-    transact_rules::{registry_meta, send, spp_list, Fixture},
+    common::{reaches_verification, refused, Ring, Sent, Setup},
+    forward_rules::{deposit_instruction, merge_data, merge_instruction_with, ring_deposit},
+    transact_rules::{send, spp_list, Fixture},
 };
 
-/// An anonymous policy transfer, `prefix` after the registry, the payer its only signer.
+/// An anonymous policy transfer, `prefix` after the ring account, the payer its only signer.
 fn transfer(ring: &mut Ring, prefix: Vec<AccountMeta>, data: &RingTransactData<'_>) -> Sent {
     let spp = spp_list(&ring.payer.pubkey(), data, &[]);
-    let prefix = [vec![registry_meta()], prefix].concat();
     send(
         ring,
-        tag::TRANSACT,
+        tag::TRANSFER,
         prefix,
         data.encode().unwrap(),
         spp,
@@ -53,8 +50,8 @@ fn an_anonymous_policy_transfer_takes_no_signer_but_the_payer() {
     refused(
         send(
             &mut ring,
-            tag::TRANSACT,
-            vec![registry_meta()],
+            tag::TRANSFER,
+            Vec::new(),
             data.encode().unwrap(),
             spp,
             &[&owner],
@@ -86,15 +83,11 @@ fn an_anonymous_transfer_reaches_its_keys_under_any_tags_and_bodies() {
             tag: &tags[1],
             body: &body,
         });
-        let prefix = match policy {
-            true => vec![registry_meta()],
-            false => Vec::new(),
-        };
         let spp = spp_list(&ring.payer.pubkey(), &data, &[]);
         reaches_verification(send(
             &mut ring,
-            tag::TRANSACT,
-            prefix,
+            tag::TRANSFER,
+            Vec::new(),
             data.encode().unwrap(),
             spp,
             &[],
@@ -119,7 +112,7 @@ fn an_empty_sender_bundle_is_refused() {
     compact.drain(len + 2..len + 2 + sender.body.len());
     let spp = spp_list(&ring.payer.pubkey(), &data, &[]);
     refused(
-        send(&mut ring, tag::TRANSACT, Vec::new(), compact, spp, &[]),
+        send(&mut ring, tag::TRANSFER, Vec::new(), compact, spp, &[]),
         CustomRingError::AnonymousBodyLength,
     );
 }
@@ -135,12 +128,6 @@ fn an_anonymous_policy_ring_escrows_no_key() {
         transfer(&mut ring, Vec::new(), &data),
         CustomRingError::FlagNotAllowed,
     );
-    let member = Keypair::new();
-    let registration = register_key(&member.pubkey(), &key_registration(), None);
-    refused(
-        ring.send(registration, &[&member]),
-        CustomRingError::AnonymousRingRefused,
-    );
 }
 
 #[test]
@@ -153,11 +140,8 @@ fn an_anonymous_policy_ring_refuses_the_delegate_rail() {
     refused(
         send(
             &mut ring,
-            tag::DELEGATE_TRANSACT,
-            vec![
-                registry_meta(),
-                AccountMeta::new_readonly(delegate.pubkey(), true),
-            ],
+            tag::AUTHORITY_TRANSFER,
+            vec![AccountMeta::new_readonly(delegate.pubkey(), true)],
             data.encode().unwrap(),
             spp,
             &[&delegate],
@@ -170,28 +154,23 @@ fn an_anonymous_policy_ring_refuses_the_delegate_rail() {
 fn an_anonymous_policy_merge_discloses_its_owner_to_the_auditor_alone() {
     let mut ring = Ring::new(Setup::AnonymousPolicy);
     let mut merge = |data| {
-        let instruction = merge_instruction_with(&ring, None, &data);
+        let instruction = merge_instruction_with(&ring, &data);
         ring.send(instruction, &[])
     };
     let disclosed = |registry, inputs| {
         let mut data = merge_data(registry, inputs);
         data.output_ring_data_hash = [0; 32];
-        data.disclosure = Some(merge_disclosure(inputs));
         data
     };
-    refused(
-        merge(merge_data(None, 8)),
-        CustomRingError::MissingMergeDisclosure,
-    );
     refused(
         merge(disclosed(Some(1), 8)),
         CustomRingError::UnexpectedMemberRegistryRoot,
     );
     let mut narrow = disclosed(None, 8);
-    narrow.disclosure.as_mut().unwrap().fields.pop();
+    narrow.disclosure.fields.pop();
     refused(merge(narrow), CustomRingError::MergeDisclosureWidth);
     let mut untagged = disclosed(None, 8);
-    untagged.disclosure.as_mut().unwrap().eph_pk[0] = 0;
+    untagged.disclosure.eph_pk[0] = 0;
     refused(merge(untagged), CustomRingError::InvalidMergeDisclosure);
     refused(
         merge(disclosed(None, 25)),
@@ -208,17 +187,12 @@ fn an_anonymous_policy_deposit_names_no_recipient() {
     let mut ring = Ring::new(Setup::AnonymousPolicy);
     let mut named = ring_deposit();
     named.deposits[0].ring_data_hash = [1; 32];
-    let instruction = deposit_instruction(&ring, None, &named);
+    let instruction = deposit_instruction(&ring, Some(0), &named);
     refused(
         ring.send(instruction, &[]),
         CustomRingError::AnonymousRingDataNotZero,
     );
-    let instruction = deposit_instruction(&ring, Some(1), &ring_deposit());
-    refused(
-        ring.send(instruction, &[]),
-        CustomRingError::UnexpectedMemberRegistryRoot,
-    );
-    let instruction = deposit_instruction(&ring, None, &ring_deposit());
+    let instruction = deposit_instruction(&ring, Some(0), &ring_deposit());
     reaches_verification(ring.send(instruction, &[]));
 }
 

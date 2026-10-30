@@ -1,12 +1,14 @@
 use std::fmt::Write;
 
 use anyhow::Result;
-use custom_ring_sdk::{CustomRing, QueueStatus, RegistryStatus, RingError, RingMode};
+use custom_ring_interface::{RingPolicy, RingRoles};
+use custom_ring_sdk::{live_registry, RingError, RingMode};
+use solana_address::Address;
 use solana_signer::Signer;
 use spr_client::Rpc;
 
 use crate::{
-    config::{redact_text, redact_url, RingConfig, Target},
+    config::{redact_text, redact_url, RingConfig, RoleName, Target},
     controls, deploy, line,
     policy::{print_pinned, Pinned},
     release::RingProgram,
@@ -63,6 +65,12 @@ pub fn announce(config: &RingConfig) {
     line("explorer", explorer_link(config));
 }
 
+pub fn print_roles(roles: &RingRoles) {
+    for name in RoleName::ALL {
+        line(name.as_str(), roles.key(name.role()));
+    }
+}
+
 fn explorer_link(config: &RingConfig) -> String {
     let cluster = match config.target {
         Target::Devnet => "cluster=devnet".to_owned(),
@@ -98,7 +106,7 @@ fn print_chain(ctx: &Context) -> Result<()> {
         Err(RingError::MissingRingConfig) => {
             line(
                 "config",
-                format_args!("not created ({})", ring.config_pda()),
+                format_args!("not created ({})", ring.policy_pda()),
             );
             // Until the config exists, ring.toml names the tier.
             if ctx.config.policy.is_none() {
@@ -112,41 +120,25 @@ fn print_chain(ctx: &Context) -> Result<()> {
     let auditor = hex::encode(config.auditor_pubkey.as_bytes());
     line(
         "config",
-        format_args!(
-            "{} authority {} auditor {auditor}",
-            ring.config_pda(),
-            config.authority
-        ),
+        format_args!("{} auditor {auditor}", ring.policy_pda()),
     );
+    print_roles(&config.roles);
     line("mode", mode(config.mode));
-    controls::print_insert_fee(config);
-    match &config.co_signer {
-        Some(cosigner) => controls::print_cosigner(cosigner),
+    match config.co_signer_classes {
+        Some(classes) => line("co-signed classes", controls::class_names(classes)),
         None => line("co-signer", "none"),
     }
     match config.delegate {
         Some(delegate) => line("delegate", delegate),
         None => line("delegate", "none"),
     }
-    match &status.registry {
-        Some(registry) => print_registry(ring, registry),
-        None => line(
-            "registry",
-            format_args!("not created ({})", ring.registry_pda()),
-        ),
-    }
-    if let Some(queue) = &status.queue {
-        print_queue(ring, queue);
-    }
-    let pinned = match &status.registry {
-        Some(registry) => Pinned::of(Box::new(*registry.account()))?,
-        None => None,
-    };
+    print_roots(ctx, config.account())?;
+    let pinned = Pinned::of(Box::new(*config.account()))?;
     if !config.has_policy {
         line("policy", "none (audit-only ring)");
     } else if let Some(pinned) = pinned {
-        line("policy", ring.registry_pda());
-        print_pinned(ring, &pinned);
+        line("policy", ring.policy_pda());
+        print_pinned(&pinned);
     } else {
         line("policy", "not pinned");
     }
@@ -177,48 +169,27 @@ fn mode(mode: RingMode) -> &'static str {
     }
 }
 
-/// Every own-ring proof binds a root at or above the floor.
-fn print_registry(ring: CustomRing, registry: &RegistryStatus) {
-    line(
-        "registry",
-        format_args!("{} next index {}", ring.registry_pda(), registry.next_index),
-    );
-    if let Some(newest) = registry.roots.first() {
-        line(
-            "root",
-            format_args!(
-                "{} applied {} at slot {}",
-                hex::encode(newest.root),
-                newest.applied,
-                newest.slot
+/// The newest root each live registry holds, a proof names its revision.
+fn print_roots(ctx: &Context, policy: &RingPolicy) -> Result<()> {
+    let newest = |registry: Address| -> Result<String> {
+        Ok(match ctx.block(live_registry(registry, ctx.chain())) {
+            Ok(registry) => format!(
+                "revision {} root {}",
+                registry.newest().revision.value(),
+                hex::encode(registry.newest().hash)
             ),
-        );
+            Err(RingError::NotStorageRegistry { .. }) => "not a storage registry".to_owned(),
+            Err(error) => return Err(error.into()),
+        })
+    };
+    line(
+        "records",
+        format_args!("{} {}", policy.records, newest(policy.records)?),
+    );
+    if let Some(curator) = policy.curator() {
+        line("curator", format_args!("{curator} {}", newest(curator)?));
     }
-    line("roots", format_args!("{} in history", registry.roots.len()));
-    line(
-        "floor",
-        format_args!(
-            "{} raised at slot {}, prior {}",
-            registry.floor, registry.floor_slot, registry.prior_floor
-        ),
-    );
-}
-
-fn print_queue(ring: CustomRing, queue: &QueueStatus) {
-    line(
-        "queue",
-        format_args!(
-            "{} pending {} at positions {}..{}",
-            ring.queue_pda(),
-            queue.pending,
-            queue.head,
-            queue.tail
-        ),
-    );
-    line(
-        "next apply",
-        format_args!("from slot {}", queue.next_apply_slot),
-    );
+    Ok(())
 }
 
 fn program_state(ctx: &Context) -> Result<String> {

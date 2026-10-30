@@ -1,13 +1,15 @@
 //! Ring member lists, one bit each in a member registry record, and the rule table over them.
 
+mod asset_limits;
 mod list;
 mod member;
 mod mint;
 mod rule_table;
 mod rules;
 
+pub use asset_limits::{AssetLimits, AssetLimitsError};
 pub use list::{ListChange, ListId, ListSet, ListWrite, ListWriteError, Writer};
-pub use member::{Member, MemberError};
+pub use member::{Member, MemberError, WALLET_GRANT_DOMAIN};
 pub use mint::MintPolicy;
 pub use rule_table::{
     EncodedRuleTable, Guard, Mode, OutflowLimit, PolicySource, PolicyTableError, Rule, RuleSource,

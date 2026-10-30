@@ -1,3 +1,10 @@
+// Proves that a delegate transfer obeys the ring's rules. The delegate moves a
+// member's funds without the member's signature, so the proof checks that every
+// moved note belongs to that one member.
+//
+// Read after policy/policy.go, policy/transaction.go, policy/rules.go. Read
+// before prover/ring/ring.go.
+
 package policy
 
 import (
@@ -58,15 +65,17 @@ func (c *DelegatePolicyCircuit) Define(api frontend.API) error {
 	outputs := c.openOutputs(api, inputChain)
 	// 3. A delegate move spends one member, the sender.
 	sender := c.sender(api, inputs)
-	// 4. The sender and every UTXO output's subjects open under own_root, and under curator_root when a list is foreign.
+	// 4. Each recipient is its slot's owner identity, zero on a dummy.
+	c.assertRecipients(api, 0, outputs)
+	// 5. The sender and every UTXO output's subjects open under own_root, and under curator_root when a list is foreign.
 	payments := append(append([]utxoView{}, outputs...), c.openWithdrawals(api, rc)...)
 	resolved := c.resolveSubjects(api, table, sender, payments)
-	// 5. Every enabled rule holds for its subjects.
+	// 6. Every enabled rule holds for its subjects.
 	c.assertRules(api, cmp, table, resolved, payments)
-	// 6. The key fixes approval_required to 0, the program authorizes the configured delegate signer instead.
-	// 7. The key fixes key_escrow to 1, every output owner escrows the output's nullifier key.
+	// 7. The key fixes approval_required to 0, the program authorizes the configured delegate signer instead.
+	// 8. The key fixes key_escrow to 1, every output owner escrows the output's nullifier key.
 	c.assertEscrow(api, delegateRail.keyEscrow, resolved.owners, outputs)
-	// 8. The one public input is the statement the program rebuilds, its sender value is 0.
+	// 9. The one public input is the statement the program rebuilds, its sender value is 0.
 	bindStatement(api, c.PublicInputHash, c.Statement())
 	return nil
 }

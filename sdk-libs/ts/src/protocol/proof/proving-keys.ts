@@ -7,8 +7,9 @@ import {
   ANONYMOUS_AUDIT_CLASSES,
   ANONYMOUS_ENTRY_CLASS,
   ANONYMOUS_ENTRY_OUTPUTS,
-  ANONYMOUS_MERGE_WIDTHS,
+  MERGE_WIDTHS,
   DELIVERED_AUDIT_CAPACITIES,
+  DELIVERED_SENDER_CLASSES,
 } from "../codec/ring-disclosure-layout.js";
 import { N_PUBLIC_SLOTS, RING_AUTHORITY_SHAPES } from "../transaction/spp.js";
 
@@ -17,6 +18,8 @@ export { RING_PROVING_KEY_SHA256S };
 /** A ring circuit by the shape its key serves, Rust `RingCircuit`. */
 export type RingKeyCircuit =
   | Readonly<{ family: "deliveredAudit"; outputs: number }>
+  /** Holds every spent UTXO to the in-proof owner the statement publishes. */
+  | Readonly<{ family: "deliveredSenderAudit"; inputClass: number; outputs: number }>
   | Readonly<{ family: "anonymousAudit"; inputClass: number; outputs: number }>
   /** Opens every spent UTXO, the key of a transfer spending a default-ring note. */
   | Readonly<{ family: "anonymousEntryAudit"; inputClass: number; outputs: number }>
@@ -26,7 +29,7 @@ export type RingKeyCircuit =
   | Readonly<{ family: "registerKey" }>
   | Readonly<{ family: "withdrawalExemption" }>
   | Readonly<{ family: "deposit"; capacity: number }>
-  | Readonly<{ family: "anonymousMerge"; width: number }>;
+  | Readonly<{ family: "merge"; width: number }>;
 
 export type PolicyKeyCircuit = Extract<
   RingKeyCircuit,
@@ -65,6 +68,13 @@ export const RING_KEYS: readonly Readonly<{
           [
             { family: "deliveredAudit", outputs },
             `custom-ring-audit-delivered-${outputs}`,
+          ] as const,
+      ),
+      ...DELIVERED_SENDER_CLASSES.map(
+        ({ inputClass, outputs }) =>
+          [
+            { family: "deliveredSenderAudit", inputClass, outputs },
+            `custom-ring-audit-delivered-sender-${inputClass}-${outputs}`,
           ] as const,
       ),
       ...ANONYMOUS_AUDIT_CLASSES.flatMap(({ outputs, classes }) =>
@@ -112,9 +122,8 @@ export const RING_KEYS: readonly Readonly<{
       ...[1, 2, 4, 8].map(
         (capacity) => [{ family: "deposit", capacity }, `custom-ring-deposit-${capacity}`] as const,
       ),
-      ...ANONYMOUS_MERGE_WIDTHS.map(
-        (width) =>
-          [{ family: "anonymousMerge", width }, `custom-ring-merge-anonymous-v2-${width}`] as const,
+      ...MERGE_WIDTHS.map(
+        (width) => [{ family: "merge", width }, `custom-ring-merge-v3-${width}`] as const,
       ),
     ] as const
   ).map(([circuit, name]) =>
@@ -157,6 +166,7 @@ function sameRingCircuit(left: RingKeyCircuit, right: RingKeyCircuit): boolean {
         right.withdrawals === left.withdrawals &&
         right.ownOnly === left.ownOnly
       );
+    case "deliveredSenderAudit":
     case "anonymousAudit":
     case "anonymousEntryAudit":
       return (
@@ -173,7 +183,7 @@ function sameRingCircuit(left: RingKeyCircuit, right: RingKeyCircuit): boolean {
       );
     case "applyRecords":
       return right.family === left.family && right.writes === left.writes;
-    case "anonymousMerge":
+    case "merge":
       return right.family === left.family && right.width === left.width;
     case "withdrawalExemption":
     case "registerKey":

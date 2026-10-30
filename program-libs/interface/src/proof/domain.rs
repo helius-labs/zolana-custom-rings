@@ -33,9 +33,13 @@ pub const MERGE_STATEMENT: u32 = 0x4352_4d47;
 pub const WITHDRAWALS: u32 = 0x4352_5057;
 /// `"CRWX"`
 pub const WITHDRAWAL_EXEMPTION: u32 = 0x4352_5758;
+/// `"CRRU"`
+pub const RECORD_UPDATE: u32 = 0x4352_5255;
+/// `"CRWG"`
+pub use zolana_ring_policy::WALLET_GRANT_DOMAIN as WALLET_GRANT;
 
 /// Bound into every policy statement, a layout change raises it.
-pub const POLICY_STATEMENT_VERSION: u8 = 3;
+pub const POLICY_STATEMENT_VERSION: u8 = 4;
 
 pub fn field(domain: u32) -> [u8; 32] {
     right_align(&domain.to_be_bytes())

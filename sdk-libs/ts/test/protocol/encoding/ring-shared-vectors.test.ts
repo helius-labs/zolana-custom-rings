@@ -406,7 +406,15 @@ describe("ring-statements.json", () => {
           privateTxHash: field(vector.private_tx_hash ?? ""),
           senderCommitment: field(vector.sender_commitment ?? ""),
         }
-      : { kind: "delivered" };
+      : vector.kind === "delivered_sender"
+        ? {
+            kind: "delivered",
+            sender: {
+              privateTxHash: field(vector.private_tx_hash ?? ""),
+              sender: field(vector.sender ?? ""),
+            },
+          }
+        : { kind: "delivered" };
 
   it("rebuilds every audit statement and its public input", () => {
     for (const vector of statements.audit) {
@@ -446,6 +454,7 @@ describe("ring-statements.json", () => {
         ownRoot: field(vector.own_root),
         curatorRoot: field(vector.curator_root),
         sender: field(vector.sender),
+        recipients: vector.recipients.map(field),
         publicAssets: vector.public_assets.map(field),
         publicAmounts: vector.public_amounts.map(field),
       };
@@ -492,9 +501,18 @@ describe("ring-statements.json", () => {
       anonymous: deposit.anonymous,
       ownerUtxoHashes: deposit.owner_utxo_hashes.map(field),
       ciphertexts: deposit.ciphertexts.map((value) => bytes<Bytes96>(value, 96)),
+      assets: deposit.assets.map((asset, slot) => ({
+        asset: field(asset),
+        amount: BigInt(deposit.amounts[slot] ?? 0),
+      })),
       auditorPk: bytes<Bytes33>(deposit.auditor_pubkey, 33),
       ephPk: bytes<Bytes33>(deposit.eph_pk, 33),
-      memberRegistryRoot: field(deposit.member_registry_root),
+      registry: {
+        ownRoot: field(deposit.member_registry_root),
+        curatorRoot: field(deposit.curator_root),
+        keyEscrow: deposit.key_escrow,
+        policyHash: field(deposit.policy_hash),
+      },
     });
     expect(hexes(elements)).toEqual(deposit.elements);
     expect(hex(hashChain(elements))).toBe(deposit.public_input_hash);
@@ -585,9 +603,9 @@ describe("ring-transact-expansion.json", () => {
     expect(refused("delegate_move", 1, () => wide)).toThrow(ringError("RingShapeUnkeyed"));
   });
 
-  it("refuses the retired epoch and anchor bits on every rail", () => {
+  it("refuses bit 4 on every rail and the in-proof owner off the confidential rail", () => {
     for (const vector of expansion.cases)
-      for (const bit of [3, 4]) {
+      for (const bit of vector.rail === "confidential" ? [4] : [3, 4]) {
         const compact = bytes(vector.compact);
         compact[0] = (compact[0] ?? 0) | (1 << bit);
         expect(() => RingTransactData.parse(compact, railOf(vector.rail))).toThrow(
@@ -745,18 +763,18 @@ describe("ring_keyed_shapes.json", () => {
 
 describe("ring rails", () => {
   it("picks the rail of a ring instruction under the mode and the delegate like Rust `RingRail::new`", () => {
-    const { transact, delegateTransact, merge } = RingInstructionTag;
+    const { transfer, authorityTransfer, merge } = RingInstructionTag;
     const delegate = encodeBase58(new Uint8Array(32).fill(7));
-    expect(ringRail(transact, { mode: "confidential" })).toBe("confidential");
-    expect(ringRail(transact, { mode: "anonymous" })).toBe("anonymous");
-    expect(ringRail(delegateTransact, { mode: "confidentialEscrow", delegate })).toBe("delegate");
-    expect(() => ringRail(delegateTransact, { mode: "anonymous", delegate })).toThrow(
+    expect(ringRail(transfer, { mode: "confidential" })).toBe("confidential");
+    expect(ringRail(transfer, { mode: "anonymous" })).toBe("anonymous");
+    expect(ringRail(authorityTransfer, { mode: "confidentialEscrow", delegate })).toBe("delegate");
+    expect(() => ringRail(authorityTransfer, { mode: "anonymous", delegate })).toThrow(
       ringError("AnonymousRingRefused"),
     );
-    expect(() => ringRail(delegateTransact, { mode: "confidential" })).toThrow(
+    expect(() => ringRail(authorityTransfer, { mode: "confidential" })).toThrow(
       ringError("DelegateDisabled"),
     );
-    expect(ringRailOf(delegateTransact, "confidential")).toBe("delegate");
+    expect(ringRailOf(authorityTransfer, "confidential")).toBe("delegate");
     expect(() => ringRailOf(merge, "confidential")).toThrow(ringError("InvalidInstructionData"));
   });
 });

@@ -25,16 +25,18 @@ senders and recipients.
 A ring may enforce a policy over member records or only require an audit proof.
 The owner rail uses the note owner's signature, the anonymous rail proves the
 owner's signature without publishing the owner, and the delegate rail lets an
-authorized delegate move a member's notes. See [ring policy](docs/ring-policy.md),
-[anonymous rings](docs/anonymous-rings.md) and [auditing](docs/auditing.md).
+authorized delegate move a member's notes. See the [spec](docs/spec.md),
+[owner rails](docs/design/owner-rails.md) and [audit and key escrow](docs/design/audit-and-escrow.md).
 
 ## Roles
 
-The config authority sets ring controls, the auditor opens ring activity, and
-members own notes and may write their own registry records. A curator supplies
+Four role keys govern a ring. The admin rotates the roles and appoints the
+delegate, the policy authority sets the policy and the lists, the pauser pauses
+the ring and the co-signer admin sets the co-signers. The auditor opens ring
+activity, and members own notes and may write their own registry records. A curator supplies
 lists to another ring's policy. A delegate can move notes only through the
 ring's delegate checks; an authorized reader can query the ring RPC without
-holding the auditor key. See [member records](docs/member-records.md) and the
+holding the auditor key. See [records and roots](docs/design/records-and-roots.md) and the
 [ring RPC](services/ring-rpc/README.md).
 
 ## How a transfer settles
@@ -42,13 +44,13 @@ holding the auditor key. See [member records](docs/member-records.md) and the
 The wallet prepares the SPP settlement and the ring's required audit and policy
 proofs. The ring program checks its authorization and proofs, then signs its
 SPP call as `ring_auth`. SPP verifies its own proof and updates notes, trees and
-nullifiers. [Proof costs](docs/proof-costs.md) lists the statements by operation.
+nullifiers. [Public inputs](docs/spec/crypto/public-inputs.md) lists the statements by operation.
 
 ## Shapes
 
 Each proving key fixes an input and output width; a shape such as 2x4 has two
 inputs and four outputs. The available widths depend on the rail and proof
-family. See [proof costs](docs/proof-costs.md) and the pinned
+family. See the pinned
 [key catalog](program-libs/interface/src/proof/key_catalog.rs).
 
 ## Threat
@@ -56,7 +58,7 @@ family. See [proof costs](docs/proof-costs.md) and the pinned
 An auditor can open ring activity but cannot spend merely by holding the audit
 key. A delegate's separate authority is checked by the ring program. The
 upgrade authority can replace those checks; see [Limits](#limits) and
-[auditing limits](docs/auditing.md#limits).
+[trust assumptions](docs/spec.md#trust-assumptions).
 
 ## Setup
 
@@ -73,11 +75,14 @@ validator, Photon, the ring indexer and the ring prover.
 ## Use
 
 `zolana-ring new`, `deploy` and `init` create a ring, deploy its program and
-fix its auditor key, tier and policy. Members pay with `zolana-ring transfer`
-and `merge`, or through the Rust and TypeScript SDKs.
+fix its auditor key, tier and policy. `init` creates any missing admin,
+pauser and co-signer admin key file, by default in `keys/` beside `ring.toml`,
+so the role split holds only once each key leaves that machine. Members pay
+with `zolana-ring transfer` and `merge`, or through the Rust and TypeScript
+SDKs.
 
 ## Limits
 
 - The upgrade authority can replace every check of the ring program.
-- No instruction replaces the auditor key after `CreateConfig`.
+- No instruction replaces the auditor key after `Initialize`.
 - A paused ring, or one SPP governance has not activated, moves no note.

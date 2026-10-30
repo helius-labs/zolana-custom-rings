@@ -1,14 +1,24 @@
 import { EMPTY_MINT_POLICY } from "../../../src/protocol/membership/mint-policy.js";
 import { policyWithdrawalHash } from "../../../src/proof/withdrawals.js";
 import { AccountState, getTokenEncoder } from "@solana-program/token";
-import { AccountRole, address, none, some, type Address } from "@solana/kit";
+import { ed25519 } from "@noble/curves/ed25519.js";
+import {
+  AccountRole,
+  address,
+  generateKeyPairSigner,
+  getBase58Encoder,
+  getBase64Encoder,
+  none,
+  signTransactionWithSigners,
+  some,
+  type Address,
+} from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
 import type { WalletKeys, RpcAccount } from "@heliuslabs/zolana/client";
 import {
   SYSTEM_PROGRAM,
   addressBytes,
-  reservedUtxoKeys,
   associatedTokenAddress,
   splInterfaceWithBump,
 } from "@heliuslabs/zolana/internal";
@@ -17,17 +27,15 @@ import {
   SOL_INTERFACE,
   SPL_TOKEN_2022_PROGRAM_ID,
   SPL_TOKEN_PROGRAM_ID,
-  TRANSACTION_SIZE_LIMIT,
-  transactionSize,
   TransactWithdrawal,
   type Bytes32,
-  type Transaction,
 } from "@heliuslabs/zolana/interface";
 import {
   randomBlinding,
   ShieldedAddress,
   ShieldedKeypair,
   SigningKey,
+  solanaOwnerIdentity,
   X25519PublicKey,
 } from "@heliuslabs/zolana/keypair";
 import {
@@ -40,14 +48,14 @@ import {
   ProofInputUtxo,
   Utxo,
   Wallet,
-  type SppProofInputs,
+  SppProofInputs,
 } from "@heliuslabs/zolana/transaction";
 import {
   approveRingUnattended,
   type RingApprovalRequest,
 } from "../../../src/protocol/transaction/intent.js";
 import { ringProofCircuit } from "../../../src/rpc/prover/ring.js";
-import { ringMemberRegistryAddress } from "../../../src/protocol/pda/index.js";
+import { ringCoSignerAddress, ringPolicyAddress } from "../../../src/protocol/pda/index.js";
 import { ringCircuitType } from "../../../src/protocol/proof/proving-keys.js";
 import { RingAddress, RingPaymentRequest } from "../../../src/crypto/keys/ring-address.js";
 import { ringIdField, senderCommitment } from "../../../src/crypto/derivation/ring-stream.js";
@@ -59,7 +67,7 @@ import {
 } from "../../../src/operations/payments/anonymous.js";
 import {
   RING_COSIGN_TRANSFERS,
-  decodeRingMemberRegistry,
+  decodeRingPolicy,
 } from "../../../src/protocol/codec/ring-codecs.js";
 import {
   ListId,
@@ -78,10 +86,14 @@ import {
   buildRingExitTransaction,
   buildRingTransferTransaction,
   buildRingWithdrawalTransaction,
-  createRingTransferSubmission,
-  createRingWithdrawalSubmission,
+  prepareRingTransferRelay,
+  prepareRingWithdrawalRelay,
 } from "../../../src/operations/payments/transfer.js";
-import type { RingTransactionSubmission } from "../../../src/operations/workflow/submission.js";
+import { createRingTransferSubmission } from "../../../src/index.js";
+import type { PreparedRingRelay } from "../../../src/operations/payments/transfer-rails.js";
+import { decodeRelayProofInputs } from "../../../src/protocol/ring-rpc/relay-proof-inputs.js";
+import type { PrepareRelayRequest } from "../../../src/protocol/ring-rpc/ring-rpc-types.js";
+import { relayId, submittedRelay, type RingRelayClient } from "../../../src/rpc/relay.js";
 import { RingTransactData } from "../../../src/protocol/transaction/transact.js";
 
 import { BLOCKHASH } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
@@ -173,6 +185,7 @@ function rail(
     keys: input.keys ?? walletKeys(sender.keypair),
     transfer: input.transfer,
     assets,
+    ...(fixture.coSigner === undefined ? {} : { coSigner: fixture.coSigner }),
   });
   return (
     input.withdrawal === undefined ? owner : owner.withWithdrawalAccounts(input.withdrawal)
@@ -754,8 +767,8 @@ describe("anonymous ring signer", () => {
   });
 });
 
-describe("anonymous ring transfer builder", () => {
-  /** A spend of `notes` notes of 10, of the ring or the default ring, on a ring a co-signer guards when `policy`. */
+describe("anonymous ring relay", () => {
+  /** A relay of `notes` notes of 10, of the ring or the default ring, on a ring a co-signer guards when `policy`. */
   async function anonymousSpend(
     input: Readonly<{
       notes: number;
@@ -809,46 +822,50 @@ describe("anonymous ring transfer builder", () => {
     ];
     const wallet = new Wallet({ identity: sender.keypair.shieldedAddress() });
     wallet._replace({
-      utxos: notes.map((note, index) => ({
-        utxo: new Utxo({
+      utxos: notes.map((note, index) => {
+        const utxo = new Utxo({
           owner: sender.keypair.signingPublicKey(),
           asset: SOL_MINT,
           amount: note.amount,
           blinding: randomBlinding(),
           ...(note.ring === undefined ? {} : { ringProgramId: note.ring }),
-        }),
-        outputContext: { hash: small(index + 1), tree: TREE, leafIndex: BigInt(index) },
-        nullifier: small(index + 100),
-        ...(note.dataHash === undefined ? {} : { dataHash: note.dataHash }),
-        spent: false,
-      })),
+        });
+        const nullifierPublicKey = sender.keypair.nullifierPublicKey();
+        const hash = utxo.proofInput(nullifierPublicKey, TREE_ID, note.dataHash).hash();
+        return {
+          utxo,
+          outputContext: { hash, tree: TREE, leafIndex: BigInt(index) },
+          nullifier: utxo.nullifier(hash, sender.keypair.nullifierKey()),
+          ...(note.dataHash === undefined ? {} : { dataHash: note.dataHash }),
+          spent: false,
+        };
+      }),
       transactions: [],
       nullifiers: new Set(),
     });
     const requests: RingApprovalRequest[] = [];
     const params = {
-      client: { ...fixture.client, getLatestBlockhash: async () => BLOCKHASH },
+      client: recordReads(fixture),
       ringProgramId: fixture.ringProgramId,
       wallet,
       keys: walletKeys(sender.keypair),
-      feePayer: fixture.authority,
       amount: input.amount,
-      priorityFeeLamports: 5_000n,
-      ...(input.policy === true ? { cosigner: coSigner } : {}),
       approve: async (request: RingApprovalRequest) => {
         requests.push(request);
         return approveRingUnattended(request);
       },
       anonymous: {
+        quote: { feePayer: fixture.authority, validUntilSlot: 100n },
+        nullifierKey: sender.keypair.nullifierKey(),
         signer: signingKeySpendSigner(sender.signing),
         history: historyOf(sender.keypair),
         firstContact: BOOTSTRAP,
       },
     };
-    const build = firstTransaction(
+    const relay =
       input.withdraw === true
-        ? createRingWithdrawalSubmission({ ...params, recipient: randomAddress() })
-        : createRingTransferSubmission({
+        ? prepareRingWithdrawalRelay({ ...params, recipient: randomAddress() })
+        : prepareRingTransferRelay({
             ...params,
             recipient: await addressOf(fixture, ShieldedKeypair.generate()),
             ...(input.ring === "default"
@@ -856,111 +873,196 @@ describe("anonymous ring transfer builder", () => {
               : input.defaultNotes === undefined
                 ? {}
                 : { inputs: "ring-or-default" as const }),
-          }),
+          });
+    return { fixture, requests, relay, params, sender };
+  }
+
+  /** The client the relay stages with, every record read counted. */
+  function recordReads(fixture: Fixture) {
+    const reads = { count: 0 };
+    const client = {
+      ...fixture.client,
+      getLatestBlockhash: async () => BLOCKHASH,
+      getStorageMemberOpenings: (
+        ...args: Parameters<Fixture["client"]["getStorageMemberOpenings"]>
+      ) => {
+        reads.count += 1;
+        return fixture.client.getStorageMemberOpenings(...args);
+      },
+      getStorageRecordPool: (...args: Parameters<Fixture["client"]["getStorageRecordPool"]>) => {
+        reads.count += 1;
+        return fixture.client.getStorageRecordPool(...args);
+      },
+    };
+    return Object.assign(client, { reads });
+  }
+
+  /** Ring RPC answering every relay as submitted, each request kept. */
+  function stubRelay() {
+    const prepared: PrepareRelayRequest[] = [];
+    const unexpected = () =>
+      Promise.reject(new Error("the anonymous rail calls prepareRelay only"));
+    const relay: RingRelayClient = {
+      getRelayQuote: unexpected,
+      submitRelay: unexpected,
+      getRelayStatus: unexpected,
+      prepareRelay: async (request) => {
+        prepared.push(request);
+        return { step: "submitted", relayId: relayId(request) };
+      },
+    };
+    return { relay, prepared };
+  }
+
+  async function payload(relay: PreparedRingRelay) {
+    if (relay.relay.request.intent.operation !== "anonymous")
+      throw new Error("no anonymous intent");
+    return decodeRelayProofInputs(
+      new Uint8Array(getBase64Encoder().encode(relay.relay.request.intent.proofInputs)),
+      assets,
     );
-    return { fixture, requests, build, params, sender };
   }
 
-  /** The transaction the submission would broadcast first, refused at signing. */
-  async function firstTransaction(
-    submission: Promise<RingTransactionSubmission>,
-  ): Promise<Transaction> {
-    let seen: Transaction | undefined;
-    const unsigned = new Error("unsigned");
-    await expect(
-      (await submission).send({
-        sign: async (transaction) => {
-          seen = transaction;
-          throw unsigned;
-        },
-        send: async () => undefined,
-        status: async () => ({ kind: "unknown" }),
-      }),
-    ).rejects.toBe(unsigned);
-    if (seen === undefined) throw new Error("no transaction");
-    return seen;
-  }
-
-  /** The inline owner tag of every output the last SPP proof published. */
-  function publishedTags(fixture: Fixture): readonly string[] {
-    return (fixture.sppCalls.at(-1)?.data.outputs ?? []).map((output) =>
+  /** The inline owner tag of every output the payload publishes. */
+  async function publishedTags(relay: PreparedRingRelay): Promise<readonly string[]> {
+    return (await payload(relay)).externalData.outputs.map((output) =>
       output.ownerTag.kind === "inline" ? hex(output.ownerTag.value) : "",
     );
   }
 
-  it("refuses every plain build on an anonymous ring before approval and names its submission", async () => {
-    const { fixture, requests, params, build } = await anonymousSpend({
-      notes: 1,
+  it("sends no Merkle path or record request and signs the payload's message hash", async () => {
+    const { fixture, relay, params, sender } = await anonymousSpend({
+      notes: 2,
+      amount: 5n,
+      policy: true,
+    });
+    const prepared = await relay;
+    const stub = stubRelay();
+    const relayIdSent = submittedRelay(await prepared.relay.send(stub.relay));
+
+    expect(params.client.reads.count).toBe(0);
+    noProofs(fixture);
+    const [request] = stub.prepared;
+    if (request?.intent.operation !== "anonymous") throw new Error("no anonymous relay");
+    expect(relayIdSent).toBe(relayId(request));
+    const sent = await payload(prepared);
+    const messageHash = new SppProofInputs({
+      payer: fixture.authority,
+      inputUtxos: sent.inputs,
+      outputs: sent.outputs,
+      externalData: sent.externalData,
+      blindingSeed: sent.blindingSeed,
+      outputTreeId: sent.outputTreeId,
+    }).messageHash();
+    expect(
+      ed25519.verify(
+        new Uint8Array(getBase58Encoder().encode(request.intent.ownerSignature)),
+        messageHash,
+        sender.keypair.signingPublicKey().ed25519(),
+      ),
+    ).toBe(true);
+  });
+
+  it("refuses a plain build on an anonymous ring and sends the hidden owner's submission from another payer", async () => {
+    const { fixture, requests, params, relay, sender } = await anonymousSpend({
+      notes: 2,
       amount: 5n,
       defaultNotes: [10n],
     });
-    await build;
-    const proofs = [fixture.ringRequests.length, fixture.sppCalls.length];
+    await relay;
     const approvals = requests.length;
+    const { anonymous, ...plain } = params;
+    const payer = await generateKeyPairSigner();
+    const built = { ...plain, feePayer: payer.address };
     const recipient = await addressOf(fixture, ShieldedKeypair.generate());
     const refusals = [
       [
-        () => buildRingTransferTransaction({ ...params, recipient }),
+        () =>
+          buildRingTransferTransaction({
+            ...built,
+            recipient: ShieldedKeypair.generate().shieldedAddress(),
+          }),
         "RING_BUILD_TRANSFER",
-        "createRingTransferSubmission",
       ],
       [
         () =>
           buildRingExitTransaction({
-            ...params,
+            ...built,
             recipient: ShieldedKeypair.generate().shieldedAddress(),
           }),
         "RING_BUILD_TRANSFER",
-        "createRingExitSubmission",
       ],
-      [() => buildRingEntryTransaction(params), "RING_BUILD_ENTRY", "createRingEntrySubmission"],
+      [() => buildRingEntryTransaction(built), "RING_BUILD_ENTRY"],
       [
-        () => buildRingWithdrawalTransaction({ ...params, recipient: randomAddress() }),
+        () => buildRingWithdrawalTransaction({ ...built, recipient: randomAddress() }),
         "RING_BUILD_WITHDRAWAL",
-        "createRingWithdrawalSubmission",
       ],
     ] as const;
-    for (const [build, code, use] of refusals)
+    for (const [build, code] of refusals)
       await expect(build()).rejects.toMatchObject({
         code,
-        causeCode: "RING_ANONYMOUS_SUBMISSION_REQUIRED",
-        cause: { details: { ringProgramId: fixture.ringProgramId, use } },
+        causeCode: "RING_ANONYMOUS_SIGNER_REQUIRED",
+        cause: { details: { ringProgramId: fixture.ringProgramId } },
       });
+    const owner = {
+      signer: anonymous.signer,
+      history: anonymous.history,
+      firstContact: anonymous.firstContact,
+    };
+    await expect(
+      createRingTransferSubmission({
+        ...built,
+        feePayer: sender.keypair.shieldedAddress().solanaAddress(),
+        recipient,
+        anonymous: owner,
+      }),
+    ).rejects.toMatchObject({ causeCode: "RING_ANONYMOUS_SIGNER_LINKS_OWNER" });
     expect(requests).toHaveLength(approvals);
-    expect([fixture.ringRequests.length, fixture.sppCalls.length]).toEqual(proofs);
-    expect(reservedUtxoKeys(params.wallet).size).toBe(0);
+    noProofs(fixture);
+
+    const submission = await createRingTransferSubmission({
+      ...built,
+      recipient,
+      anonymous: owner,
+    });
+    expect(submission.viewingHistory?.current().txCount).toBe(1n);
+    const result = await submission.send({
+      sign: (transaction) => signTransactionWithSigners([payer], transaction),
+      send: async () => undefined,
+      status: async () => ({ kind: "confirmed", slot: 3n }),
+    });
+    expect(result).toMatchObject({ kind: "confirmed", attempts: 1 });
+    expect(fixture.sppCalls.map((call) => call.circuit.kind)).toEqual(["ringAnonymous"]);
   });
 
-  it("takes the next tags on a second submission built from the stored history", async () => {
-    const { fixture, params, sender, build } = await anonymousSpend({ notes: 2, amount: 5n });
-    await build;
+  it("takes the next tags on a second relay prepared from the stored history", async () => {
+    const { fixture, params, sender, relay } = await anonymousSpend({ notes: 3, amount: 5n });
+    await relay;
     const bob = ShieldedKeypair.generate();
     const bobKey = bob.shieldedAddress().viewingPublicKey;
     const to = await addressOf(fixture, bob);
-    const first = await createRingTransferSubmission({ ...params, recipient: to });
-    const firstTags = publishedTags(fixture);
-    const stored = first.viewingHistory;
-    if (stored === undefined) throw new Error("no viewing history");
-    const second = await createRingTransferSubmission({
+    const first = await prepareRingTransferRelay({ ...params, recipient: to });
+    const second = await prepareRingTransferRelay({
       ...params,
       recipient: to,
-      anonymous: { ...params.anonymous, history: stored },
+      anonymous: { ...params.anonymous, history: first.viewingHistory },
     });
     const viewing = sender.keypair.viewingKey();
-    expect(firstTags.slice(0, 2)).toEqual([hex(viewing.senderViewTag(0n)), hex(bobKey.u())]);
-    expect(publishedTags(fixture).slice(0, 2)).toEqual([
+    expect((await publishedTags(first)).slice(0, 2)).toEqual([
+      hex(viewing.senderViewTag(0n)),
+      hex(bobKey.u()),
+    ]);
+    expect((await publishedTags(second)).slice(0, 2)).toEqual([
       hex(viewing.senderViewTag(1n)),
       hex(viewing.sendSharedViewTags(bobKey).tag(0n)),
     ]);
     viewing.destroy();
-    expect(second.viewingHistory?.current().txCount).toBe(2n);
-    first.cancel();
-    second.cancel();
+    expect(second.viewingHistory.current().txCount).toBe(2n);
   });
 
   it("pays a request under its tag and refuses one the payment contradicts before approval", async () => {
-    const { fixture, params, requests, build } = await anonymousSpend({ notes: 2, amount: 5n });
-    await build;
+    const { fixture, params, requests, relay } = await anonymousSpend({ notes: 4, amount: 5n });
+    await relay;
     const bob = ShieldedKeypair.generate();
     const bobViewing = bob.viewingKey();
     const requestViewTag = bobViewing.recipientRequestViewTag(0n);
@@ -972,9 +1074,8 @@ describe("anonymous ring transfer builder", () => {
       mint: SOL_MINT,
     });
     const { firstContact: _, ...anonymous } = params.anonymous;
-    const paid = await createRingTransferSubmission({ ...params, anonymous, recipient: request });
-    expect(publishedTags(fixture)[1]).toBe(hex(requestViewTag));
-    paid.cancel();
+    const paid = await prepareRingTransferRelay({ ...params, anonymous, recipient: request });
+    expect((await publishedTags(paid))[1]).toBe(hex(requestViewTag));
     const approvals = requests.length;
     const contradicted = [
       [{ amount: 4n }, "amount"],
@@ -983,7 +1084,7 @@ describe("anonymous ring transfer builder", () => {
     ] as const;
     for (const [change, field] of contradicted)
       await expect(
-        createRingTransferSubmission({ ...params, anonymous, recipient: request, ...change }),
+        prepareRingTransferRelay({ ...params, anonymous, recipient: request, ...change }),
       ).rejects.toMatchObject({
         code: "RING_BUILD_TRANSFER",
         causeCode: "RING_INTENT_MISMATCH",
@@ -994,14 +1095,10 @@ describe("anonymous ring transfer builder", () => {
 
   it("spends the widest commitment class and refuses a payment past it before approval", async () => {
     const widest = await anonymousSpend({ notes: 16, amount: 155n });
-    expect(transactionSize(await widest.build)).toBeLessThanOrEqual(TRANSACTION_SIZE_LIMIT);
+    expect((await payload(await widest.relay)).inputs).toHaveLength(16);
     expect(widest.requests).toHaveLength(1);
-    expect(widest.fixture.sppCalls.at(-1)?.proofInputs.checkShape()).toEqual({
-      inputs: 16,
-      outputs: 2,
-    });
     const wider = await anonymousSpend({ notes: 17, amount: 165n });
-    await expect(wider.build).rejects.toMatchObject({
+    await expect(wider.relay).rejects.toMatchObject({
       code: "RING_BUILD_TRANSFER",
       causeCode: "RING_TOO_MANY_INPUTS",
       cause: { details: { maximum: 16 } },
@@ -1010,18 +1107,19 @@ describe("anonymous ring transfer builder", () => {
     noProofs(wider.fixture);
   });
 
-  it("fits a policy withdrawal of the widest class in one transaction", async () => {
+  it("relays a policy withdrawal of the widest class", async () => {
     const wide = await anonymousSpend({ notes: 16, amount: 155n, policy: true, withdraw: true });
-    expect(transactionSize(await wide.build)).toBeLessThanOrEqual(TRANSACTION_SIZE_LIMIT);
+    const sent = await payload(await wide.relay);
+    expect([sent.inputs.length, sent.withdrawals.length]).toEqual([16, 1]);
     expect(wide.requests).toHaveLength(1);
   });
 
   it("spends the entry key's input class of default-ring notes and refuses one more", async () => {
     const entry = await anonymousSpend({ notes: 8, amount: 75n, ring: "default", policy: true });
-    expect(transactionSize(await entry.build)).toBeLessThanOrEqual(TRANSACTION_SIZE_LIMIT);
+    expect((await payload(await entry.relay)).inputs).toHaveLength(8);
     expect(entry.requests).toHaveLength(1);
     const wider = await anonymousSpend({ notes: 9, amount: 85n, ring: "default" });
-    await expect(wider.build).rejects.toMatchObject({
+    await expect(wider.relay).rejects.toMatchObject({
       code: "RING_BUILD_TRANSFER",
       causeCode: "RING_TOO_MANY_INPUTS",
       cause: { details: { maximum: 8 } },
@@ -1037,7 +1135,7 @@ describe("anonymous ring transfer builder", () => {
       ring: "default",
       dataNotes: [{ amount: 100n, dataHash: small(0x55) }],
     });
-    await entry.build;
+    await entry.relay;
     expect(entry.requests[0]?.intent).toMatchObject({ defaultFunding: 20n });
   });
 
@@ -1048,19 +1146,19 @@ describe("anonymous ring transfer builder", () => {
       ring: "default",
       dataNotes: [{ amount: 20n, dataHash: small(0) }],
     });
-    await entry.build;
+    await entry.relay;
     expect(entry.requests[0]?.intent).toMatchObject({ defaultFunding: 20n });
   });
 
   it("funds a ring-or-default payment from ring notes alone, else default-ring notes alone, never both", async () => {
     const ringAlone = await anonymousSpend({ notes: 3, amount: 25n, defaultNotes: [100n] });
-    await ringAlone.build;
+    await ringAlone.relay;
     expect(ringAlone.requests[0]?.intent).toMatchObject({ defaultFunding: 0n });
     const defaultAlone = await anonymousSpend({ notes: 3, amount: 40n, defaultNotes: [100n] });
-    await defaultAlone.build;
+    await defaultAlone.relay;
     expect(defaultAlone.requests[0]?.intent).toMatchObject({ defaultFunding: 100n });
     const both = await anonymousSpend({ notes: 3, amount: 50n, defaultNotes: [25n] });
-    await expect(both.build).rejects.toMatchObject({
+    await expect(both.relay).rejects.toMatchObject({
       code: "RING_BUILD_TRANSFER",
       causeCode: "RING_INSUFFICIENT_BALANCE",
     });
@@ -1144,9 +1242,13 @@ async function anonymousWithdrawal(
   };
 }
 
-function exitTokenOwnerOf(fixture: Fixture): Address | undefined {
-  const call = itemAt(fixture.sppCalls, 0);
-  return call.exitTokenOwner;
+/** The withdrawal destination the anonymous audit binds, the SPL token account's owner or the SOL recipient. */
+function exitPartyOf(fixture: Fixture): Bytes32 {
+  return anonymousAudit(fixture).audit.partyIdentities[2];
+}
+
+function partyIdentity(party: Address): Bytes32 {
+  return solanaOwnerIdentity(addressBytes(party)) as Bytes32;
 }
 
 describe("anonymous ring withdrawal destination", () => {
@@ -1218,10 +1320,10 @@ describe("anonymous ring withdrawal destination", () => {
       accounts: new Map([[TOKEN_ACCOUNT, tokenAccount(STRANGER)]]),
     });
     await expanded(spl.fixture, await spl.proven, "anonymous");
-    expect(exitTokenOwnerOf(spl.fixture)).toBe(STRANGER);
+    expect(exitPartyOf(spl.fixture)).toEqual(partyIdentity(STRANGER));
     const sol = await anonymousWithdrawal({ sender, destination: DESTINATION, spl: false });
     const { instruction, data } = await expanded(sol.fixture, await sol.proven, "anonymous");
-    expect(exitTokenOwnerOf(sol.fixture)).toBeUndefined();
+    expect(exitPartyOf(sol.fixture)).toEqual(partyIdentity(DESTINATION));
     await checkAccounts(instruction, {
       fixture: sol.fixture,
       data,
@@ -1247,7 +1349,7 @@ describe("anonymous ring withdrawal destination", () => {
       exitTokenOwner: STRANGER,
     });
     await expanded(fixture, await proven, "anonymous");
-    expect(exitTokenOwnerOf(fixture)).toBe(STRANGER);
+    expect(exitPartyOf(fixture)).toEqual(partyIdentity(STRANGER));
   });
 
   const splLeg = (destination: Address): SettlementTransfer => ({
@@ -1468,23 +1570,22 @@ describe("anonymous rail on a policy ring", () => {
     expect(policy).toMatchObject({ anonymous: true, sender: commitment, senderPkHash });
     const senderRecord = policy.ownPool.subjects[policy.senderEntry.own]?.recordIndex;
     expect(policy.ownPool.records[senderRecord ?? -1]?.member).toEqual(senderPkHash);
-    const registryAccount = fixture.accounts.get(
-      await ringMemberRegistryAddress(fixture.ringProgramId),
-    );
-    if (registryAccount === undefined) throw new Error("no registry");
+    const policyAccount = fixture.accounts.get(await ringPolicyAddress(fixture.ringProgramId));
+    if (policyAccount === undefined) throw new Error("no ring policy");
     const slots = publicSlots(call.proofInputs.externalData.interfaceTransfers);
     expect(policy.publicInputHash).toEqual(
       policyStatementHash({
         withdrawalHash: policyWithdrawalHash([]),
         key: { kind: "member", anonymous: true },
         privateTxHash: data.privateTxHash,
-        policyHash: decodeRingMemberRegistry(registryAccount.data).policyHash,
+        policyHash: decodeRingPolicy(policyAccount.data).policyHash,
         ringId: ringIdField(fixture.ringProgramId),
         approvalRequired: false,
         keyEscrow: false,
         ownRoot: fixture.ownTree.root,
         curatorRoot: ZERO,
         sender: commitment,
+        recipients: data.outputs.map(() => new Uint8Array(32) as Bytes32),
         publicAssets: slots.assets,
         publicAmounts: publicAmountFields(slots),
       }),
@@ -1494,12 +1595,8 @@ describe("anonymous rail on a policy ring", () => {
     await checkAccounts(instruction, {
       fixture,
       data,
-      prefix: [
-        {
-          address: await ringMemberRegistryAddress(fixture.ringProgramId),
-          role: AccountRole.READONLY,
-        },
-      ],
+      registries: [fixture.ownRegistry],
+      prefix: [],
       payer: fixture.authority,
     });
   });
@@ -1539,9 +1636,10 @@ describe("anonymous rail on a policy ring", () => {
     await checkAccounts(instruction, {
       fixture,
       data,
+      registries: [fixture.ownRegistry],
       prefix: [
         {
-          address: await ringMemberRegistryAddress(fixture.ringProgramId),
+          address: await ringCoSignerAddress(fixture.ringProgramId, coSigner),
           role: AccountRole.READONLY,
         },
         { address: coSigner, role: AccountRole.READONLY_SIGNER },

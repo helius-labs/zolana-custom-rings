@@ -11,12 +11,19 @@ use xtask::create_release::{
 
 const RING_KEYS_LOCK: &str = "prover/ring/proving-keys.lock";
 
-/// Deployed per ring under its own id.
-const RING_PROGRAM_SOURCE: ProgramSource = ProgramSource {
-    role: "ring_program",
-    file: "custom_ring_program.so",
-    asset_stem: "custom-ring-program",
-};
+const PROGRAM_SOURCES: [ProgramSource; 2] = [
+    // Deployed per ring under its own id.
+    ProgramSource {
+        role: "ring_program",
+        file: "custom_ring_program.so",
+        asset_stem: "custom-ring-program",
+    },
+    ProgramSource {
+        role: "storage_program",
+        file: "storage_program.so",
+        asset_stem: "storage-program",
+    },
+];
 
 struct CustomRings;
 
@@ -42,20 +49,20 @@ impl ReleaseSet for CustomRings {
     }
 
     fn lock(&self, options: &Options, staging: &Path, host: (&str, &str)) -> Result<Value> {
-        let path = options.deploy_dir.join(RING_PROGRAM_SOURCE.file);
-        require_file(&path, "run `just build-programs` first")?;
-        zolana_cli_common::release::verify_program_keys(
-            &std::fs::read(&path)?,
-            proving_key_hashes(),
-        )?;
         let repo = repo_root()?;
         let zolana = repo.join("zolana");
         let ring_lock = read_json(&repo.join(RING_KEYS_LOCK))?;
         validate_ring_key_pins(&ring_lock)?;
-        let mut lock = json!({
-            "release_tag": options.tag,
-            "ring_program": stage_program(&RING_PROGRAM_SOURCE, &path, &options.tag, staging)?,
-        });
+        let mut lock = json!({ "release_tag": options.tag });
+        for source in &PROGRAM_SOURCES {
+            let path = options.deploy_dir.join(source.file);
+            require_file(&path, "run `just build-programs` first")?;
+            zolana_cli_common::release::verify_program_keys(
+                &std::fs::read(&path)?,
+                proving_key_hashes(),
+            )?;
+            lock[source.role] = stage_program(source, &path, &options.tag, staging)?;
+        }
         for source in RING_KEYS {
             let file_name = source.file_name();
             let key_source = zolana.join(PROVING_KEYS_DIR).join(&file_name);

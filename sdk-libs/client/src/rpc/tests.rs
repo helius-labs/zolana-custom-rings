@@ -1,5 +1,5 @@
 use solana_keypair::Keypair;
-use spr_keypair::ViewingKey;
+use spr_keypair::{ShieldedAddress, ShieldedKeypair, SigningKey, ViewingKey};
 use spr_transaction::OutputContext;
 
 use super::*;
@@ -56,6 +56,7 @@ fn read_attestation_is_stable() {
         target: target(),
         cursor: Some(vec![1, 2, 3].into()),
         limit: Some(Limit::new(5).expect("in range")),
+        wallet: None,
     }
     .message(1_700_000_000, &[4; 32]);
     assert_eq!(
@@ -83,6 +84,7 @@ fn a_signed_read_names_its_method_and_target_and_draws_its_own_nonce() {
             target,
             cursor: None,
             limit: None,
+            wallet: None,
         }
         .message(1_700_000_000, &nonce)
     };
@@ -255,6 +257,7 @@ fn page(
                 audited,
                 event_index: 7,
                 nullifiers,
+                spenders: Vec::new(),
                 signers: vec![Address::new_from_array([13; 32])],
                 withdrawals: vec![withdrawal],
             }
@@ -295,7 +298,8 @@ fn a_decrypted_page_keeps_its_wire_json() {
         sender: None,
         inputs: Vec::new(),
     };
-    let page = page(audited, vec![[12; 32]]);
+    let mut page = page(audited, vec![[12; 32]]);
+    page.value.items[0].spenders = vec![[13; 32].into()];
     let json = serde_json::to_string(&page).expect("json");
     assert_eq!(json, include_str!("decrypted_page.json").trim_end());
     assert_eq!(
@@ -304,9 +308,7 @@ fn a_decrypted_page_keeps_its_wire_json() {
     );
 }
 
-/// The TypeScript decoder reads the same page.
-#[test]
-fn an_anonymous_decrypted_page_keeps_its_wire_json() {
+fn anonymous_audited() -> AuditedTransaction {
     let opening = |seed: u8, ring| AuditedInputOpening {
         asset: [seed; 32],
         mint: Some(Address::new_from_array([4; 32])),
@@ -314,7 +316,7 @@ fn an_anonymous_decrypted_page_keeps_its_wire_json() {
         blinding: [seed + 1; 32],
         ring,
     };
-    let audited = AuditedTransaction {
+    AuditedTransaction {
         tx_signature: Signature::from([1; 64]),
         slot: 42,
         tx_viewing_pk: ViewingKey::from_bytes(&[2; 32]).pubkey(),
@@ -382,11 +384,20 @@ fn an_anonymous_decrypted_page_keeps_its_wire_json() {
                 },
             },
         ],
-    };
-    let page = page(
-        audited,
+    }
+}
+
+fn anonymous_page() -> GetDecryptedTransactionsResponse {
+    page(
+        anonymous_audited(),
         vec![[12; 32], [11; 32], [10; 32], [9; 32], [8; 32], [7; 32]],
-    );
+    )
+}
+
+/// The TypeScript decoder reads the same page.
+#[test]
+fn an_anonymous_decrypted_page_keeps_its_wire_json() {
+    let page = anonymous_page();
     let json = serde_json::to_string(&page).expect("json");
     assert_eq!(
         json,
@@ -395,6 +406,33 @@ fn an_anonymous_decrypted_page_keeps_its_wire_json() {
     assert_eq!(
         serde_json::from_str::<GetDecryptedTransactionsResponse>(&json).expect("parses"),
         page
+    );
+}
+
+/// The TypeScript decoder reads both views of the anonymous page.
+#[test]
+fn a_wallet_activity_page_keeps_its_wire_json() {
+    let page = anonymous_page();
+    let [transaction] = page.value.items.as_slice() else {
+        panic!("one transaction")
+    };
+    let view = |wallet: u8| {
+        WalletActivity::of(Address::new_from_array([wallet; 32]), transaction.clone())
+            .expect("a party")
+    };
+    // 0x50 is the anonymous sender, 0x10 owns output 0 alone.
+    let activity = GetWalletActivityResponse {
+        context: page.context,
+        value: WalletActivityPage {
+            items: vec![view(0x50), view(0x10)],
+            cursor: page.value.cursor.clone(),
+        },
+    };
+    let json = serde_json::to_string(&activity).expect("json");
+    assert_eq!(json, include_str!("wallet_activity_page.json").trim_end());
+    assert_eq!(
+        serde_json::from_str::<GetWalletActivityResponse>(&json).expect("parses"),
+        activity
     );
 }
 
@@ -424,50 +462,6 @@ fn payload_errors_keep_the_encoding_of_the_shared_vector() {
     );
 }
 
-/// A root history slot never written reads as absent.
-#[test]
-fn ring_status_reads_the_registry_history_and_queue() {
-    let mut registry = MemberRegistry::new(7, 100);
-    registry.push_root(
-        [5; 32],
-        custom_ring_interface::AppliedAt {
-            applied: 3,
-            slot: 120,
-        },
-    );
-    registry.raise_floor();
-    let mut queue = RecordQueue::new(9);
-    queue.head = 3u64.to_le_bytes();
-    queue.tail = 5u64.to_le_bytes();
-    let status = RegistryStatus::new(&registry, &queue);
-    assert_eq!(status.history.len(), custom_ring_interface::ROOT_HISTORY);
-    assert_eq!(
-        status.history[..3],
-        [
-            Some(RegistryRoot {
-                root: custom_ring_interface::MEMBER_REGISTRY_EMPTY_ROOT.into(),
-                applied: 0,
-                slot: 100,
-            }),
-            Some(RegistryRoot {
-                root: [5; 32].into(),
-                applied: 3,
-                slot: 120,
-            }),
-            None,
-        ]
-    );
-    assert_eq!(
-        (status.history_cursor, status.next_index),
-        (1, registry.next_index())
-    );
-    assert_eq!(
-        (status.floor, status.prior_floor, status.floor_slot),
-        (3, 0, 120)
-    );
-    assert_eq!((status.queue_head, status.queue_tail), (3, 5));
-}
-
 #[test]
 fn a_signed_read_carries_the_reader_and_the_bounds_it_signed() {
     let reader = Keypair::new();
@@ -491,6 +485,7 @@ fn a_signed_read_carries_the_reader_and_the_bounds_it_signed() {
         target: target(),
         cursor: request.cursor.clone(),
         limit: request.limit.clone(),
+        wallet: None,
     }
     .message(
         1_700_000_000,
@@ -658,4 +653,642 @@ fn audited_utxos_are_used_only_when_they_rebuild_their_hashes() {
         full.known_utxos(ring, &[hash(0), hash(1)]),
         Err(AuditError::AuditedUtxosCount { got: 3, want: 2 })
     ));
+}
+
+/// The TypeScript encoder writes the same bytes.
+#[test]
+fn a_relay_request_serializes_to_the_shared_vector() {
+    #[derive(Deserialize)]
+    struct Vector {
+        wire: String,
+    }
+    let vector: Vector = serde_json::from_str(include_str!(
+        "../../../../test-vectors/rpc/relay_request.json"
+    ))
+    .expect("vector");
+    let request = PrepareRelayRequest {
+        ring: Address::new_from_array([1; 32]).into(),
+        quote: RelayQuote {
+            fee_payer: Address::new_from_array([2; 32]).into(),
+            valid_until_slot: 4242,
+        },
+        intent: RelayIntent::Anonymous {
+            proof_inputs: ProofInputBytes::new(zeroize::Zeroizing::new(vec![3, 4, 5])),
+            owner_signature: Signature::from([7; 64]).into(),
+            token_account_setup: Vec::new(),
+        },
+    };
+    assert_eq!(serde_json::to_string(&request).expect("json"), vector.wire);
+    let read: PrepareRelayRequest = serde_json::from_str(&vector.wire).expect("read");
+    assert_eq!(read.intent.operation(), RelayOperation::Anonymous);
+}
+
+/// The TypeScript signer writes the same wire bytes.
+#[test]
+fn a_signed_wallet_update_verifies_from_the_shared_vector() {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Vector {
+        wire: String,
+        update_id: RecordUpdateId,
+    }
+    let vector: Vector = serde_json::from_str(include_str!(
+        "../../../../test-vectors/rpc/record_update.json"
+    ))
+    .expect("vector");
+    let wallet = Keypair::new_from_array([7; 32]);
+    let identity = Hash(
+        *zolana_ring_policy::Member::owner_tag(wallet.pubkey().as_array())
+            .expect("wallet")
+            .as_bytes(),
+    );
+    let reader = Hash(*passkey_reader().member().expect("reader").as_bytes());
+    let bit = zolana_ring_policy::ListId::RingViewing.record_bit();
+    let signed = RecordUpdate {
+        genesis_hash: Hash([3; 32]),
+        ring: Address::new_from_array([1; 32]).into(),
+        entries: vec![
+            RecordUpdateEntry::Write(zolana_ring_indexer::rpc::RingListWriteView {
+                mint_policy: None,
+                member: identity.clone(),
+                mask: bit,
+                value: bit,
+            }),
+            RecordUpdateEntry::WalletGrant(WalletGrant {
+                wallet: identity,
+                reader,
+                access: ReaderAccess::Granted,
+            }),
+        ],
+        valid_until_slot: 4242,
+        awaited_lists: 0,
+    }
+    .sign(Address::new_from_array([2; 32]), &wallet)
+    .expect("sign");
+    assert_eq!(serde_json::to_string(&signed).expect("json"), vector.wire);
+    let read: SubmitRecordUpdateRequest = serde_json::from_str(&vector.wire).expect("read");
+    assert_eq!(read.verify(), Ok(vector.update_id));
+    // The signature covers the slot bound, a later one names another statement.
+    let mut extended = read;
+    extended.update.valid_until_slot += 1;
+    assert_eq!(extended.verify(), Err(RecordUpdateError::Signature));
+}
+
+fn relay_proof_inputs() -> RelayProofInputs {
+    use spr_event::MessageData;
+    use spr_instruction::instruction::{
+        TransactInterfaceTransferAccounts, TransactSolTransferAccounts,
+    };
+    use spr_interface::{
+        instruction::instruction_data::transact::{OwnerTag, TransactOutput},
+        MAX_OUTPUTS,
+    };
+    use spr_keypair::{NullifierKey, ShieldedKeypair, SigningKey, X25519Keypair};
+    use spr_transaction::{
+        instructions::transact::{ExternalData, SettlementTransfer},
+        utxo::SppProofInputUtxo,
+        Data, Mint, SppProofOutputUtxo, Utxo,
+    };
+    use zolana_ring_transaction::{AnonymousPlan, TaggedPayment};
+    let owner =
+        ShieldedKeypair::from_keypair(SigningKey::from_ed25519_bytes(&[5; 32])).expect("owner");
+    let sender = owner.shielded_address().expect("address");
+    let ring = Address::new_from_array([6; 32]);
+    let utxo = Utxo {
+        owner: sender.signing_pubkey,
+        asset: Mint::SOL,
+        amount: 900,
+        blinding: [11; 32],
+        ring_program_id: Some(ring),
+        data: Data::default(),
+    };
+    let utxo_hash = utxo
+        .hash(&sender.nullifier_pubkey, &[0; 32], &[0; 32], 4)
+        .expect("hash");
+    let spend = SppProofInputUtxo {
+        address: false,
+        nullifier: owner
+            .nullifier_key
+            .nullifier(&utxo_hash, &utxo.blinding)
+            .expect("nullifier"),
+        utxo,
+        nullifier_pubkey: sender.nullifier_pubkey,
+        utxo_hash,
+        data_hash: None,
+        ring_data_hash: None,
+        tree_id: 4,
+        leaf_index: 17,
+        cache_slot: None,
+        compact: false,
+    };
+    let change = SppProofOutputUtxo {
+        asset: Mint::SOL,
+        amount: 800,
+        blinding: [12; 32],
+        ring_program_id: Some(ring),
+        owner_address: Some(sender),
+        ..SppProofOutputUtxo::default()
+    };
+    let tx_viewing_key = ViewingKey::from_secret_key(X25519Keypair::from_bytes(&[13; 32]));
+    let recipient = Address::new_from_array([14; 32]);
+    let external_data = ExternalData {
+        interface_transfers: vec![SettlementTransfer::Sol {
+            is_deposit: false,
+            amount: 100,
+            user_sol_account: recipient,
+        }],
+        ..ExternalData::new(
+            *tx_viewing_key.pubkey().as_bytes(),
+            [15; 16],
+            vec![TransactOutput {
+                utxo_hash: [16; 32],
+                owner_tag: OwnerTag::Inline([17; 32]),
+                data: Some(vec![18, 19]),
+            }],
+            vec![[20; 32]],
+            vec![MessageData {
+                view_tag: [21; 32],
+                data: vec![22],
+            }],
+        )
+    };
+    RelayProofInputs {
+        rail: RelayRail::Anonymous {
+            plan: Box::new(AnonymousPlan::from_tags(
+                [23; 32],
+                vec![TaggedPayment {
+                    recipient: owner.viewing_pubkey(),
+                    tag: [24; 32],
+                }],
+                [[25; 32]; MAX_OUTPUTS],
+            )),
+            exit_token_owner: None,
+        },
+        ring_program_id: ring,
+        nullifier_key: NullifierKey::from_secret(*owner.nullifier_key.secret()),
+        sender,
+        tx_viewing_key,
+        audit_ephemeral_key: zeroize::Zeroizing::new([26; 32]),
+        inputs: vec![
+            spend,
+            SppProofInputUtxo::dummy_with_blinding([27; 32], 4).expect("dummy"),
+        ],
+        outputs: vec![change],
+        external_data,
+        interface_transfer_accounts: vec![TransactInterfaceTransferAccounts::Sol(
+            TransactSolTransferAccounts { recipient },
+        )],
+        blinding_seed: [28; 32],
+        output_tree_id: 4,
+    }
+}
+
+#[test]
+fn relay_proof_inputs_encode_to_the_shared_vector() {
+    let vector: PayloadVector = serde_json::from_str(include_str!(
+        "../../../../test-vectors/rpc/relay_proof_inputs.json"
+    ))
+    .expect("vector");
+    let inputs = relay_proof_inputs();
+    assert_eq!(*inputs.encode().expect("encode"), vector.proof_inputs.0);
+    let read = RelayProofInputs::decode(&vector.proof_inputs.0).expect("decode");
+    assert_eq!(read.inputs, inputs.inputs);
+    assert_eq!(read.outputs, inputs.outputs);
+    assert_eq!(read.external_data, inputs.external_data);
+    assert_eq!(read.rail.operation(), RelayOperation::Anonymous);
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PayloadVector {
+    proof_inputs: Base64String,
+}
+
+fn shielded_address(seed: u8) -> ShieldedAddress {
+    ShieldedKeypair::from_keypair(SigningKey::from_ed25519_bytes(&[seed; 32]))
+        .expect("keypair")
+        .shielded_address()
+        .expect("address")
+}
+
+/// The TypeScript encoder writes the same deposit payload.
+#[test]
+fn relay_deposit_inputs_encode_to_the_shared_vector() {
+    use spr_event::EncryptedRingDepositData;
+    use spr_instruction::instruction::{DepositAsset, DepositSplAccounts};
+    let vector: PayloadVector = serde_json::from_str(include_str!(
+        "../../../../test-vectors/rpc/relay_deposit_inputs.json"
+    ))
+    .expect("vector");
+    let recipient = shielded_address(5);
+    let inputs = RelayDepositInputs {
+        ring_program_id: Address::new_from_array([6; 32]),
+        tree: Address::new_from_array([42; 32]),
+        depositor: Address::new_from_array([41; 32]),
+        recipient,
+        asset: DepositAsset::Spl(DepositSplAccounts {
+            mint: Address::new_from_array([48; 32]),
+            user_token: Address::new_from_array([49; 32]),
+            token_program: Address::new_from_array([50; 32]),
+        }),
+        amount: 700,
+        view_tag: [43; 32],
+        encrypted: EncryptedRingDepositData {
+            tx_viewing_pk: [44; 33],
+            salt: [45; 16],
+            ciphertext: vec![46; 8],
+        },
+        blinding_secret: zeroize::Zeroizing::new([47; 32]),
+        audit_ephemeral_key: zeroize::Zeroizing::new([51; 32]),
+    };
+    assert_eq!(*inputs.encode().expect("encode"), vector.proof_inputs.0);
+    let read = RelayDepositInputs::decode(&vector.proof_inputs.0).expect("decode");
+    assert_eq!(read.recipient, recipient);
+    assert_eq!(*read.encode().expect("encode"), vector.proof_inputs.0);
+}
+
+/// The TypeScript encoder writes the same merge payload.
+#[test]
+fn relay_merge_inputs_encode_to_the_shared_vector() {
+    let vector: PayloadVector = serde_json::from_str(include_str!(
+        "../../../../test-vectors/rpc/relay_merge_inputs.json"
+    ))
+    .expect("vector");
+    let spends = relay_proof_inputs();
+    let spend = &spends.inputs[0];
+    let inputs = RelayMergeInputs {
+        ring_program_id: spends.ring_program_id,
+        sender: spends.sender,
+        nullifier_key: spends.nullifier_key.clone(),
+        inputs: vec![spr_transaction::WalletUtxo {
+            utxo: spend.utxo.clone(),
+            nullifier_pubkey: spend.nullifier_pubkey,
+            utxo_hash: spend.utxo_hash,
+            nullifier: spend.nullifier,
+            tx_viewing_key: None,
+            data_hash: None,
+            ring_data_hash: None,
+            tree_id: spend.tree_id,
+            leaf_index: spend.leaf_index,
+            latest_tree_id: None,
+            slot: 0,
+            tx_signature: Signature::default(),
+            slot_index: 0,
+        }],
+    };
+    assert_eq!(*inputs.encode().expect("encode"), vector.proof_inputs.0);
+    let read = RelayMergeInputs::decode(&vector.proof_inputs.0).expect("decode");
+    assert_eq!(read.inputs[0].nullifier, spend.nullifier);
+}
+
+/// The TypeScript signer writes the same message and wire bytes.
+#[test]
+fn a_signed_authority_transfer_matches_the_shared_vector() {
+    #[derive(Deserialize)]
+    struct Vector {
+        message: String,
+        wire: String,
+    }
+    let vector: Vector = serde_json::from_str(include_str!(
+        "../../../../test-vectors/rpc/authority_transfer.json"
+    ))
+    .expect("vector");
+    let delegate = Keypair::new_from_array([8; 32]);
+    let attestation = AuthorityTransferAttestation {
+        target: target(),
+        delegate: delegate.pubkey(),
+        transfer: AuthorityTransfer {
+            source: shielded_address(5).into(),
+            mint: Address::new_from_array([3; 32]).into(),
+            payments: vec![AuthorityPayment {
+                recipient: shielded_address(9).into(),
+                amount: 250,
+            }],
+        },
+    };
+    let message = attestation.message(1_700_000_000, &[4; 32]);
+    assert_eq!(String::from_utf8(message).expect("utf8"), vector.message);
+    let signed = SignedRequest {
+        attestation,
+        timestamp: Some(1_700_000_000),
+        nonce: [4; 32],
+    }
+    .sign(&delegate)
+    .expect("sign");
+    assert_eq!(serde_json::to_string(&signed).expect("json"), vector.wire);
+}
+
+/// The TypeScript signer writes the same wire bytes.
+#[test]
+fn a_signed_enrolment_verifies_from_the_shared_vector() {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Vector {
+        wire: String,
+        update_id: RecordUpdateId,
+    }
+    let vector: Vector = serde_json::from_str(include_str!(
+        "../../../../test-vectors/rpc/enrolment_update.json"
+    ))
+    .expect("vector");
+    let wallet = Keypair::new_from_array([7; 32]);
+    let identity = Hash(
+        *zolana_ring_policy::Member::owner_tag(wallet.pubkey().as_array())
+            .expect("wallet")
+            .as_bytes(),
+    );
+    let bit = zolana_ring_policy::ListId::RingViewing.record_bit();
+    let signed = RecordUpdate {
+        genesis_hash: Hash([3; 32]),
+        ring: Address::new_from_array([1; 32]).into(),
+        entries: vec![RecordUpdateEntry::Write(
+            zolana_ring_indexer::rpc::RingListWriteView {
+                mint_policy: None,
+                member: identity,
+                mask: bit,
+                value: bit,
+            },
+        )],
+        valid_until_slot: 4242,
+        awaited_lists: zolana_ring_policy::ListId::Allow.record_bit(),
+    }
+    .sign(Address::new_from_array([2; 32]), &wallet)
+    .expect("sign");
+    assert_eq!(serde_json::to_string(&signed).expect("json"), vector.wire);
+    let read: SubmitRecordUpdateRequest = serde_json::from_str(&vector.wire).expect("read");
+    assert_eq!(read.verify(), Ok(vector.update_id));
+    // An enrolment signature never verifies as a plain update.
+    let mut plain = read;
+    plain.update.awaited_lists = 0;
+    assert_eq!(plain.verify(), Err(RecordUpdateError::Signature));
+}
+
+/// The TypeScript signers write the same messages and wire bytes.
+#[test]
+fn the_enrolment_requests_match_the_shared_vector() {
+    #[derive(Deserialize)]
+    struct Signed {
+        message: String,
+        wire: String,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Refuse {
+        update_id: RecordUpdateId,
+        message: String,
+        wire: String,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Vector {
+        list: Signed,
+        list_after: Signed,
+        refuse: Refuse,
+        create_records: Signed,
+    }
+    let vector: Vector = serde_json::from_str(include_str!(
+        "../../../../test-vectors/rpc/enrolment_attestation.json"
+    ))
+    .expect("vector");
+    let authority = Keypair::new_from_array([8; 32]);
+    let list = EnrolmentAttestation {
+        target: target(),
+        authority: authority.pubkey(),
+        action: ListEnrolments::default(),
+    };
+    let refuse = EnrolmentAttestation {
+        target: target(),
+        authority: authority.pubkey(),
+        action: RefuseEnrolment(vector.refuse.update_id.clone()),
+    };
+    let list_after = GetPendingEnrolmentsRequest::read(target(), authority.pubkey())
+        .with_cursor(vector.refuse.update_id.clone());
+    let message = |bytes: Vec<u8>| String::from_utf8(bytes).expect("utf8");
+    assert_eq!(
+        message(list_after.attestation.message(1_700_000_000, &[4; 32])),
+        vector.list_after.message
+    );
+    let list_after = SignedRequest {
+        timestamp: Some(1_700_000_000),
+        nonce: [4; 32],
+        ..list_after
+    }
+    .sign(&authority)
+    .expect("sign the second page");
+    assert_eq!(
+        serde_json::to_string(&list_after).expect("json"),
+        vector.list_after.wire
+    );
+    assert_eq!(
+        message(list.message(1_700_000_000, &[4; 32])),
+        vector.list.message
+    );
+    assert_eq!(
+        message(refuse.message(1_700_000_000, &[4; 32])),
+        vector.refuse.message
+    );
+    let list = SignedRequest {
+        attestation: list,
+        timestamp: Some(1_700_000_000),
+        nonce: [4; 32],
+    }
+    .sign(&authority)
+    .expect("sign list");
+    let refuse = SignedRequest {
+        attestation: refuse,
+        timestamp: Some(1_700_000_000),
+        nonce: [4; 32],
+    }
+    .sign(&authority)
+    .expect("sign refusal");
+    assert_eq!(
+        serde_json::to_string(&list).expect("json"),
+        vector.list.wire
+    );
+    assert_eq!(
+        serde_json::to_string(&refuse).expect("json"),
+        vector.refuse.wire
+    );
+    let create_records = CreateRecordsRegistryRequest::create(target(), authority.pubkey());
+    assert_eq!(
+        message(create_records.attestation.message(1_700_000_000, &[4; 32])),
+        vector.create_records.message
+    );
+    let create_records = SignedRequest {
+        timestamp: Some(1_700_000_000),
+        nonce: [4; 32],
+        ..create_records
+    }
+    .sign(&authority)
+    .expect("sign the records request");
+    assert_eq!(
+        serde_json::to_string(&create_records).expect("json"),
+        vector.create_records.wire
+    );
+}
+
+/// The P-256 generator, a passkey reader the shared vectors name.
+fn passkey_reader() -> ReaderKey {
+    let key = hex::decode("036b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296")
+        .expect("hex");
+    ReaderKey::p256(
+        crate::P256ReaderKey::from_bytes(key.try_into().expect("33 bytes")).expect("on curve"),
+    )
+    .expect("passkey")
+}
+
+/// The TypeScript signers write the same messages and wire bytes.
+#[test]
+fn the_reader_grants_and_wallet_reads_match_the_shared_vector() {
+    #[derive(Deserialize)]
+    struct Signed {
+        message: String,
+        wire: String,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Vector {
+        ring_wide: Signed,
+        wallet: Signed,
+        wallet_read: String,
+        wallet_utxos: String,
+    }
+    let vector: Vector = serde_json::from_str(include_str!(
+        "../../../../test-vectors/rpc/reader_grant.json"
+    ))
+    .expect("vector");
+    let authority = Keypair::new_from_array([8; 32]);
+    let wallet = Keypair::new_from_array([7; 32]);
+    let reader = ReaderKey::ed25519(Keypair::new_from_array([9; 32]).pubkey()).expect("reader");
+    let grants = [
+        (
+            &authority,
+            None,
+            reader,
+            ReaderGrantAction::Grant,
+            &vector.ring_wide,
+        ),
+        (
+            &wallet,
+            Some(wallet.pubkey()),
+            passkey_reader(),
+            ReaderGrantAction::Revoke,
+            &vector.wallet,
+        ),
+    ];
+    let text = |bytes: Vec<u8>| String::from_utf8(bytes).expect("utf8");
+    for (signer, wallet, reader, action, expected) in grants {
+        let attestation = ReaderGrantAttestation {
+            target: target(),
+            wallet,
+            reader,
+            action,
+        };
+        let message = attestation.message(1_700_000_000, &[4; 32]);
+        assert_eq!(text(message.clone()), expected.message);
+        let signed = SignedRequest {
+            attestation,
+            timestamp: Some(1_700_000_000),
+            nonce: [4; 32],
+        }
+        .sign(signer)
+        .expect("sign");
+        assert_eq!(serde_json::to_string(&signed).expect("json"), expected.wire);
+        let read: SetReaderGrantRequest = serde_json::from_str(&expected.wire).expect("read");
+        assert!(read.signature.0.verify(signer.pubkey().as_ref(), &message));
+    }
+    let read = ReadAttestation {
+        read: PagedRead::DecryptedTransactions,
+        target: target(),
+        cursor: None,
+        limit: None,
+        wallet: Some(wallet.pubkey()),
+    };
+    assert_eq!(
+        text(read.message(1_700_000_000, &[4; 32])),
+        vector.wallet_read
+    );
+    let utxos = AuditedUtxosAttestation {
+        wallet: Some(wallet.pubkey()),
+        ..AuditedUtxosAttestation::new(target(), &[Hash([5; 32])])
+    };
+    assert_eq!(
+        text(utxos.message(1_700_000_000, &[4; 32])),
+        vector.wallet_utxos
+    );
+}
+
+/// The TypeScript codec writes and reads the same bytes.
+#[test]
+fn the_storage_writes_of_a_wallet_update_match_the_shared_vector() {
+    use custom_ring_interface::{
+        storage_instruction::StorageWriteData, CustomRingError, RecordWriteData,
+    };
+    use zolana_ring_policy::{AssetLimits, ListId, Member, MintPolicy};
+    #[derive(Deserialize)]
+    struct Vector {
+        writes: String,
+    }
+    let vector: Vector = serde_json::from_str(include_str!(
+        "../../../../test-vectors/registry/storage_writes.json"
+    ))
+    .expect("vector");
+    let wallet = Keypair::new_from_array([7; 32]);
+    let identity = Member::owner_tag(wallet.pubkey().as_array()).expect("wallet");
+    let bit = ListId::RingViewing.record_bit();
+    let entries = [
+        RecordUpdateEntry::Write(zolana_ring_indexer::rpc::RingListWriteView {
+            mint_policy: Some(MintPolicy {
+                threshold: 1,
+                cap: 2,
+                cosign_above: 3,
+                withdrawal_threshold: 4,
+                limits: AssetLimits {
+                    sender_cap: 5,
+                    sender_window_slots: 6,
+                    volume_cap: 7,
+                    volume_window_slots: 8,
+                    deposit_cap: 9,
+                    deposit_window_slots: 10,
+                    withdrawal_cap: 11,
+                    withdrawal_window_slots: 12,
+                },
+            }),
+            member: Hash(*identity.as_bytes()),
+            mask: bit,
+            value: bit,
+        }),
+        RecordUpdateEntry::WalletGrant(WalletGrant {
+            wallet: Hash(*identity.as_bytes()),
+            reader: Hash(*passkey_reader().member().expect("member").as_bytes()),
+            access: ReaderAccess::Granted,
+        }),
+        RecordUpdateEntry::Escrow(EscrowRegistration {
+            member: Hash(*identity.as_bytes()),
+            nullifier_pk: Hash([0x11; 32]),
+            eph_pk: [&[4][..], &[5; 32]].concat().into(),
+            ciphertext: vec![0x22; 32].into(),
+            proof: vec![0; 192].into(),
+        }),
+    ];
+    let writes: Vec<StorageWriteData> = entries
+        .iter()
+        .map(|entry| entry.write(&wallet.pubkey()))
+        .collect::<Result<_, _>>()
+        .expect("writes");
+    assert_eq!(
+        hex::encode(StorageWriteData::encode_all(&writes)),
+        vector.writes
+    );
+    let bytes = hex::decode(&vector.writes).expect("hex");
+    assert_eq!(StorageWriteData::parse_all(&bytes), Ok(writes));
+    let tag = 1 + core::mem::offset_of!(RecordWriteData, mint_policy);
+    for refused in [2, 0] {
+        let mut tampered = bytes.clone();
+        tampered[tag] = refused;
+        assert_eq!(
+            StorageWriteData::parse_all(&tampered),
+            Err(CustomRingError::InvalidInstructionData)
+        );
+    }
 }

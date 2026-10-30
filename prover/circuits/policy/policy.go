@@ -1,3 +1,10 @@
+// Holds the public statement that the member and delegate policy proofs share
+// with the program. Every value a rule reads ties back to the statement, so the
+// proof checks the transfer the program settles.
+//
+// Read after policy/table.go, policy/record_pool.go. Read before
+// policy/transaction.go, policy/member.go, policy/delegate.go.
+
 // Package policy proves a custom ring's policy over a transaction SPP proves.
 package policy
 
@@ -17,9 +24,10 @@ import (
 // 1. The rules read the policy table the program validated and hashed into policy_hash.
 // 2. The outputs are the ones SPP settles under the private_tx_hash its proof binds.
 // 3. One sender, the owner signer of a confidential ring, the sender an anonymous ring's commitment hides, or the one member a delegate move spends.
-// 4. Every enabled rule holds for the sender and every live output or withdrawal owner and asset on the lists their records carry, unless an amount guard exempts it.
-// 5. On the member key every limit row's outflow is never negative and within its cap, and approval_required is set exactly when one passes its co-sign bound.
-// 6. Under key escrow every UTXO output's owner record escrows the output's nullifier key.
+// 4. Every output slot's public recipient is its owner identity, zero on a dummy and on an anonymous ring.
+// 5. Every enabled rule holds for the sender and every live output or withdrawal owner and asset on the lists their records carry, unless an amount guard exempts it.
+// 6. On the member key every limit row's outflow is never negative and within its cap, and approval_required is set exactly when one passes its co-sign bound.
+// 7. Under key escrow every UTXO output's owner record escrows the output's nullifier key.
 
 type PolicyInputs struct {
 	OwnOnly         bool `gnark:"-"`
@@ -39,6 +47,7 @@ type PolicyInputs struct {
 	AddressChain      frontend.Variable
 	PrivateTxBlinding frontend.Variable
 	Outputs           []OutputWires
+	Recipients        []frontend.Variable
 	// Read on an anonymous ring and on the delegate key, free on a confidential ring.
 	SenderPkHash frontend.Variable
 }
@@ -64,7 +73,7 @@ type railValues struct {
 }
 
 func newPolicyInputs(outputs, withdrawals int, ownOnly bool) PolicyInputs {
-	return PolicyInputs{OwnOnly: ownOnly, Outputs: make([]OutputWires, outputs), Withdrawals: make([]WithdrawalWires, withdrawals)}
+	return PolicyInputs{OwnOnly: ownOnly, Outputs: make([]OutputWires, outputs), Recipients: make([]frontend.Variable, outputs), Withdrawals: make([]WithdrawalWires, withdrawals)}
 }
 
 func newPolicy(inputs PolicyInputs, capacity RecordPoolShape, publicAssets int) (Policy, error) {
@@ -109,6 +118,9 @@ func (p *Policy) validate(publicAssets int) error {
 	if len(p.Outputs) == 0 || len(p.OwnerEntries) != payments || len(p.AssetEntries) != payments {
 		return fmt.Errorf("policy requires owner and asset references for every payment")
 	}
+	if len(p.Recipients) != len(p.Outputs) {
+		return fmt.Errorf("policy requires one recipient per output")
+	}
 	if len(p.PublicAssetEntries) != publicAssets {
 		return fmt.Errorf("policy requires one public asset reference per public slot")
 	}
@@ -134,11 +146,12 @@ func (p *Policy) validate(publicAssets int) error {
 // statement is the policy preimage, mirrored by PolicyStatement::elements in program-libs/interface/src/proof/statement.rs.
 //
 //	CRPO, private_tx_hash, policy_hash, ring_id, anonymous on the member key only, approval_required,
-//	key_escrow, own_root, curator_root, sender, asset_k and amount_k per public slot, version, withdrawal_hash
+//	key_escrow, own_root, curator_root, sender, recipient_o per output slot, asset_k and amount_k per public slot, version, withdrawal_hash
 func (p *PolicyInputs) statement(rail railValues) []frontend.Variable {
 	fields := []frontend.Variable{shared.PolicyStatementDomain, p.PrivateTxHash, p.PolicyHash, p.RingProgramID}
 	fields = append(fields, rail.anonymous...)
 	fields = append(fields, rail.approvalRequired, rail.keyEscrow, p.OwnRoot, p.CuratorRoot, rail.sender)
+	fields = append(fields, p.Recipients...)
 	for k := range p.PublicAssets {
 		fields = append(fields, p.PublicAssets[k], p.PublicAmounts[k])
 	}

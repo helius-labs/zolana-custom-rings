@@ -7,8 +7,8 @@ import {
   bigIntBytes,
   equalBytes,
   hashChain,
-  isZero,
   readOutputData,
+  U64_MAX,
 } from "@heliuslabs/zolana/internal";
 import { pack33 } from "@heliuslabs/zolana/interface";
 import type { Address, Bytes32, Bytes33, Bytes96 } from "@heliuslabs/zolana/interface";
@@ -41,8 +41,8 @@ const ZERO = new Uint8Array(32) as Bytes32;
 export interface RingDepositOpening {
   readonly ownerHash: Bytes32;
   readonly blinding: Bytes32;
-  /** The Ed25519 owner key an anonymous ring discloses, the proof binds it to `ownerHash`. */
-  readonly ownerKey?: Bytes32;
+  /** The proof binds its Solana owner identity into `ownerHash`. */
+  readonly ownerKey: Bytes32;
   readonly recipientCiphertext: Uint8Array;
 }
 
@@ -67,11 +67,10 @@ export function sealRingDepositOpenings(
         throw new RingError("RING_BUILD_DEPOSIT");
       plaintext.set(opening.ownerHash, index * OPENING_LENGTH);
       plaintext.set(opening.blinding, index * OPENING_LENGTH + 32);
-      if (opening.ownerKey !== undefined)
-        plaintext.set(
-          copyBytes(opening.ownerKey, 32, "deposit owner key"),
-          index * OPENING_LENGTH + OWNER_KEY_OFFSET,
-        );
+      plaintext.set(
+        copyBytes(opening.ownerKey, 32, "deposit owner key"),
+        index * OPENING_LENGTH + OWNER_KEY_OFFSET,
+      );
     }
     const ephemeralPublicKey = ephemeral.publicKey();
     dh = ephemeral.ecdh(auditor);
@@ -119,13 +118,12 @@ export function ringDepositOutput(
   }
 }
 
-/** `ownerKey` is the Ed25519 owner key of an anonymous ring deposit, absent otherwise. */
 export function openRingDepositOpening(
   capsule: RingDepositCapsule,
   auditor: X25519Keypair,
   ownerCommitment: Bytes32,
   confirmed: ConfirmedDeposit,
-): Readonly<{ ownerHash: Bytes32; blinding: Bytes32; ownerKey?: Bytes32 }> {
+): Readonly<{ ownerHash: Bytes32; blinding: Bytes32; ownerKey: Bytes32 }> {
   if (!ConfirmedDeposit.is(confirmed)) throw new RingError("RING_AUDIT_MESSAGE");
   const snapshot = readRingDepositCapsule(encodeRingDepositCapsule(capsule));
   if (snapshot === undefined) throw new RingError("RING_AUDIT_MESSAGE");
@@ -158,9 +156,7 @@ export function openRingDepositOpening(
       blinding.fill(0);
       throw cause;
     }
-    return Object.freeze(
-      isZero(ownerKey) ? { ownerHash, blinding } : { ownerHash, blinding, ownerKey },
-    );
+    return Object.freeze({ ownerHash, blinding, ownerKey });
   } finally {
     ciphertext.fill(0);
     dh?.fill(0);
@@ -178,30 +174,57 @@ export function ringDepositContextHash(ring: Address, tree: Address, sppWire: Ui
   ]);
 }
 
+/** Rust `DepositedAsset`, `asset` is SPP's asset field of the entry's group. */
+export interface DepositedAsset {
+  readonly asset: Bytes32;
+  readonly amount: bigint;
+}
+
+/** Rust `DepositRegistry`. */
+export interface DepositRegistry {
+  readonly ownRoot: Bytes32;
+  /** Absent without a curator source. */
+  readonly curatorRoot?: Bytes32;
+  /** Every deposited owner's record escrows the deposited nullifier key. */
+  readonly keyEscrow: boolean;
+  /** Its table's asset rules screen every deposited asset, absent before the first policy write. */
+  readonly policyHash?: Bytes32;
+}
+
 /** Rust `DepositPublicInput`, the tagged keys as the statement packs them. */
 export interface DepositStatement {
   readonly contextHash: Bytes32;
-  /** An anonymous ring discloses every owner key, the program sets it from the ring's mode. */
+  /** Set by the program from the ring's mode. */
   readonly anonymous: boolean;
   readonly ownerUtxoHashes: readonly Bytes32[];
   readonly ciphertexts: readonly Bytes96[];
+  readonly assets: readonly DepositedAsset[];
   readonly auditorPk: Bytes33;
   readonly ephPk: Bytes33;
-  /** Present exactly when deposited nullifier keys must be escrowed in its records. */
-  readonly memberRegistryRoot?: Bytes32;
+  /** Absent off an escrow or policy ring. */
+  readonly registry?: DepositRegistry;
 }
 
 /** Rust `DepositPublicInput::elements`, every slot padded to the maximum. */
 export function depositStatementElements(input: DepositStatement): readonly Bytes32[] {
   const count = input.ownerUtxoHashes.length;
-  if (count < 1 || count > RING_DEPOSIT_AUDIT_SLOTS || input.ciphertexts.length !== count)
+  if (
+    count < 1 ||
+    count > RING_DEPOSIT_AUDIT_SLOTS ||
+    input.ciphertexts.length !== count ||
+    input.assets.length !== count
+  )
     throw new RingError("RING_BUILD_DEPOSIT", { details: { reason: "deposit count" } });
   if (
     !isCanonicalField(input.contextHash) ||
     typeof input.anonymous !== "boolean" ||
-    !input.ownerUtxoHashes.every(isCanonicalField)
+    !input.ownerUtxoHashes.every(isCanonicalField) ||
+    !input.assets.every(
+      ({ asset, amount }) => isCanonicalField(asset) && amount >= 0n && amount <= U64_MAX,
+    )
   )
     throw new RingError("RING_BUILD_DEPOSIT");
+  const registry = input.registry;
   return Object.freeze([
     domainField(RingDomain.depositStatement),
     input.contextHash,
@@ -216,8 +239,16 @@ export function depositStatementElements(input: DepositStatement): readonly Byte
     }).flat(),
     ...pack33(input.auditorPk),
     ...pack33(input.ephPk),
-    bigIntBytes(input.memberRegistryRoot === undefined ? 0n : 1n) as Bytes32,
-    input.memberRegistryRoot ?? ZERO,
+    bigIntBytes(registry?.keyEscrow === true ? 1n : 0n) as Bytes32,
+    registry?.ownRoot ?? ZERO,
+    registry?.curatorRoot ?? ZERO,
+    registry?.policyHash ?? ZERO,
+    ...Array.from({ length: RING_DEPOSIT_AUDIT_SLOTS }, (_, slot) => {
+      const deposited = input.assets[slot];
+      return deposited === undefined
+        ? [ZERO, ZERO]
+        : [deposited.asset, bigIntBytes(deposited.amount) as Bytes32];
+    }).flat(),
   ]);
 }
 
@@ -228,8 +259,9 @@ export function ringDepositPublicInputHash(
     anonymous: boolean;
     ownerCommitments: readonly Bytes32[];
     capsules: readonly RingDepositCapsule[];
+    assets: readonly DepositedAsset[];
     auditorPublicKey: X25519PublicKey;
-    memberRegistryRoot?: Bytes32;
+    registry?: DepositRegistry;
   }>,
 ): Bytes32 {
   const [first] = input.capsules;
@@ -250,11 +282,10 @@ export function ringDepositPublicInputHash(
       anonymous: input.anonymous,
       ownerUtxoHashes: input.ownerCommitments,
       ciphertexts: input.capsules.map((capsule) => capsule.ciphertext),
+      assets: input.assets,
       auditorPk: input.auditorPublicKey.toBytes(),
       ephPk: first.ephemeralPublicKey,
-      ...(input.memberRegistryRoot === undefined
-        ? {}
-        : { memberRegistryRoot: input.memberRegistryRoot }),
+      ...(input.registry === undefined ? {} : { registry: input.registry }),
     }),
   );
 }

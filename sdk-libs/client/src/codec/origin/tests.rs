@@ -716,9 +716,9 @@ fn a_failed_transaction_grants_no_origin() {
 #[test]
 fn ring_transfer_outer_tags_preserve_confirmed_ring_origin() {
     for (outer_tag, inner_tag) in [
-        (custom_ring_interface::tag::TRANSACT, tag::RING_TRANSACT),
+        (custom_ring_interface::tag::TRANSFER, tag::RING_TRANSACT),
         (
-            custom_ring_interface::tag::DELEGATE_TRANSACT,
+            custom_ring_interface::tag::AUTHORITY_TRANSFER,
             tag::RING_AUTHORITY_TRANSACT,
         ),
     ] {
@@ -1071,9 +1071,9 @@ fn an_anonymous_merge_binds_the_disclosure_its_ring_forwarded() {
         fields: vec![[6; 32]; 13],
     };
     let request = CustomRingMergeIxData {
-        registry_root_index: 0,
+        own_revision: Default::default(),
         output_ring_data_hash: spp.output_ring_data_hash,
-        disclosure: Some(disclosure.clone()),
+        disclosure: disclosure.clone(),
         merge: spp.merge.clone(),
     };
     group.outer.data = [
@@ -1146,7 +1146,7 @@ fn historical_policy_owners_come_from_confirmed_metadata_without_live_accounts()
     ];
     data.interface_transfers = transfers.clone();
     data.policy.as_mut().unwrap().spl_withdrawal_owners = &owners;
-    let mut frame = vec![ring_tag::TRANSACT];
+    let mut frame = vec![ring_tag::TRANSFER];
     frame.extend(data.encode().unwrap());
     let mut source = instruction(POOL, 2);
     source.data = ring_transact_bytes(transfers);

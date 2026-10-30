@@ -4,7 +4,7 @@ use spr_transaction::{instructions::transact::SppProofOutputUtxo, Mint};
 use zolana_ring_policy::{Member, OutflowLimit};
 
 use super::support::{keypair, program};
-use crate::{limits::Outflows, RingError};
+use crate::{limits::Outflows, RingError, SenderOutflow};
 
 /// Ring change stays the sender's, an exit to the sender leaves it.
 #[test]
@@ -31,8 +31,10 @@ fn the_outflow_counts_what_leaves_the_sender_less_its_public_deposit() {
         let mut public_amounts = [0; N_PUBLIC_SLOTS];
         public_amounts[0] = net;
         Outflows {
-            sender: sender_id,
-            ring: program(),
+            rule: SenderOutflow {
+                sender: Member::from_bytes(sender_id).unwrap(),
+                ring: program(),
+            },
             outputs: &outputs,
             public_assets: &public_assets,
             public_amounts: &public_amounts,

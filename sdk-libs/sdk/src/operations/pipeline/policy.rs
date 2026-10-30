@@ -3,8 +3,7 @@
 use std::collections::BTreeSet;
 
 use custom_ring_interface::{
-    key_catalog::RingCircuit, MemberRegistry, PolicyKey, PolicyStatement, RingAccount, RingMode,
-    RingRail,
+    key_catalog::RingCircuit, PolicyKey, PolicyStatement, RingMode, RingRail,
 };
 use serde::Serialize;
 use solana_address::Address;
@@ -19,7 +18,7 @@ use zolana_ring_policy::{
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
-    limits::Outflows,
+    limits::{Outflows, SenderOutflow},
     prover::{to_instruction_proof, RingRequest},
     records::PoolRead,
     request::{
@@ -45,7 +44,7 @@ pub(super) struct PolicyInputs {
     sources: SourceMap,
     pub policy_hash: [u8; 32],
     pub own: BoundRoot,
-    pub curator: Option<BoundCurator>,
+    pub curator: Option<BoundRoot>,
     own_pool: RecordPoolRead,
     curator_pool: Option<RecordPoolRead>,
     sender_entry: PoolEntry,
@@ -54,14 +53,10 @@ pub(super) struct PolicyInputs {
     public_asset_entries: Vec<u32>,
     /// The escrowed key ciphertext hash of every UTXO output's owner, under key escrow.
     ct_hashes: Vec<Option<[u8; 32]>>,
+    /// One per output slot, zero on a dummy and on the anonymous rail.
+    pub recipients: Vec<[u8; 32]>,
     pub approval_required: bool,
     pub key_escrow: bool,
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct BoundCurator {
-    pub address: Address,
-    pub root: BoundRoot,
 }
 
 pub(super) struct PolicyRead<'a> {
@@ -83,13 +78,10 @@ impl PolicyRead<'_> {
         self,
         client: &R,
     ) -> Result<PolicyInputs, RingError> {
-        let registry = self.ring.require_registry(client).await?;
-        let pinned = PinnedPolicy::of(&registry)?;
-        let own = BoundRoot::current(self.ring, &registry);
-        let curator = match pinned.curator {
-            Some(address) => Some(BoundCurator::read(client, address).await?),
-            None => None,
-        };
+        let policy = self.config.account();
+        let pinned = PinnedPolicy::of(policy)?;
+        let own = BoundRoot::own(policy, client).await?;
+        let curator = BoundRoot::curator(policy, client).await?;
         let (withdrawals, spl_withdrawal_owners) = read_withdrawals(
             client,
             &self.inputs.external_data.interface_transfers,
@@ -128,6 +120,14 @@ impl PolicyRead<'_> {
                 _ => Ok(None),
             })
             .collect::<Result<Vec<_>, RingError>>()?;
+        let publishes = self.rail.publishes_recipients();
+        let recipients = owners
+            .iter()
+            .map(|owner| match owner {
+                Some(owner) if publishes => owner.member,
+                _ => [0; 32],
+            })
+            .collect();
         let mut subjects = PoolSubjects::default();
         let entry = |index| pool_entry(index, curator.as_ref());
         let sender_entry = entry(subjects.index(Some(self.sender)));
@@ -162,7 +162,7 @@ impl PolicyRead<'_> {
         let curator_pool = match curator {
             Some(curator) => Some(
                 PoolRead {
-                    root: curator.root,
+                    root: curator,
                     members: &curator_members,
                     openings: pools.curator,
                 }
@@ -258,8 +258,10 @@ impl PolicyRead<'_> {
         let approval_required = match self.rail {
             RingRail::Delegate => false,
             RingRail::Confidential | RingRail::Anonymous => Outflows {
-                sender: self.sender,
-                ring: self.ring.program_id(),
+                rule: SenderOutflow {
+                    sender: Member::from_bytes(self.sender)?,
+                    ring: self.ring.program_id(),
+                },
                 outputs,
                 public_assets: self.public_assets,
                 public_amounts: self.public_amounts,
@@ -271,7 +273,7 @@ impl PolicyRead<'_> {
             pools,
             withdrawals,
             spl_withdrawal_owners,
-            rules: registry.rules,
+            rules: policy.rules,
             sources: pinned.sources,
             policy_hash: pinned.policy_hash,
             own,
@@ -283,6 +285,7 @@ impl PolicyRead<'_> {
             asset_entries,
             public_asset_entries,
             ct_hashes,
+            recipients,
             approval_required,
             key_escrow,
         })
@@ -313,7 +316,7 @@ impl PoolSubjects {
 }
 
 /// The subject at `index` in both pools, a key without a curator pool reads none.
-fn pool_entry(index: u32, curator: Option<&BoundCurator>) -> PoolEntry {
+fn pool_entry(index: u32, curator: Option<&BoundRoot>) -> PoolEntry {
     PoolEntry {
         own: index,
         curator: curator.map(|_| index).into_iter().collect(),
@@ -348,7 +351,7 @@ pub(super) struct PolicyProving<'a> {
 
 impl PolicyInputs {
     pub fn curator_root(&self) -> [u8; 32] {
-        self.curator.map_or([0; 32], |curator| curator.root.root)
+        self.curator.map_or([0; 32], |curator| curator.root)
     }
 
     pub fn statement(&self, proving: &PolicyProving<'_>) -> Result<[u8; 32], RingError> {
@@ -365,6 +368,7 @@ impl PolicyInputs {
             own_root: &self.own.root,
             curator_root: &self.curator_root(),
             sender: &proving.sender,
+            recipients: &self.recipients,
             public_assets: &proving.public_assets,
             public_amounts: &proving.public_amount_fields,
         }
@@ -446,6 +450,7 @@ impl PolicyInputs {
             address_chain: create_nonzero_hash_chain_from_slice(&address_nullifiers)?,
             private_tx_blinding: proving.private_tx_blinding,
             outputs,
+            recipients: &self.recipients,
             sender_pk_hash: proving.sender_pk_hash,
             pools: RecordPools {
                 own: own_pool,
@@ -487,21 +492,6 @@ impl PolicyInputs {
             circuit,
             public_input_hash,
             body,
-        })
-    }
-}
-
-impl BoundCurator {
-    async fn read<R: AsyncRpc + ?Sized>(client: &R, address: Address) -> Result<Self, RingError> {
-        let account = client
-            .get_account(address)
-            .await?
-            .ok_or(RingError::InvalidCuratorRegistry { address })?;
-        let registry = MemberRegistry::from_data(&account.data)
-            .ok_or(RingError::InvalidCuratorRegistry { address })?;
-        Ok(Self {
-            address,
-            root: BoundRoot::current(CustomRing::new(account.owner), registry),
         })
     }
 }

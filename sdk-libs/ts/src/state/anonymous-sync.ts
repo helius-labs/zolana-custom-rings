@@ -22,6 +22,7 @@ import {
   type OutputSlot,
   type ShieldedKeys,
   type Utxo,
+  type Wallet,
   type WalletUtxo,
 } from "@heliuslabs/zolana/transaction";
 
@@ -186,6 +187,23 @@ export class AnonymousSync {
     await scan.merges();
     return scan.result();
   }
+}
+
+/** Store `scan.history` only after the notes land. */
+export function applyAnonymousScan(wallet: Wallet, scan: AnonymousScan): Promise<void> {
+  return wallet._withSyncLock(async () => {
+    const state = wallet._state();
+    const nullifiers = new Set([...state.nullifiers, ...scan.spentNullifiers.map(bytesKey)]);
+    const held = new Set(state.utxos.map((entry) => bytesKey(entry.outputContext.hash)));
+    const fresh = scan.utxos.filter((entry) => unseen(held, bytesKey(entry.outputContext.hash)));
+    wallet._replace({
+      ...state,
+      utxos: [...state.utxos, ...fresh].map((entry) =>
+        nullifiers.has(bytesKey(entry.nullifier)) ? { ...entry, spent: true } : entry,
+      ),
+      nullifiers,
+    });
+  });
 }
 
 class TagWindow<T> {

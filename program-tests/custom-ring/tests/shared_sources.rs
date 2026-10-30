@@ -10,6 +10,7 @@ use custom_ring_test_validator::{
         owner_member, policy_registry, CuratedRings, PolicyTransfer, RegistryWrite, RingNotes,
         BLOCK_ONLY, DEPOSIT, TRANSFER_AMOUNT,
     },
+    ring_rpc::RingRpcSpec,
     shared::{send, RegisterRing, Tier},
 };
 use solana_signer::Signer;
@@ -19,11 +20,12 @@ use zolana_ring_policy::ListId;
 
 #[test]
 fn a_curator_sourced_blocklist_governs_the_subscriber_ring() -> Result<()> {
+    let rings = CuratedRings::setup()?;
     let CuratedRings {
-        env,
+        ref env,
         curator,
         subscriber,
-    } = CuratedRings::setup()?;
+    } = rings;
     let rpc = env.client.rpc();
     let authority = env.payer.pubkey();
     let transfer = |note: &Utxo| PolicyTransfer {
@@ -32,26 +34,35 @@ fn a_curator_sourced_blocklist_governs_the_subscriber_ring() -> Result<()> {
         recipient: &env.recipient.keypair,
         note: note.clone(),
         amount: TRANSFER_AMOUNT,
-        env: &env,
+        env,
     };
 
     // 1. The subscriber pins behind the curator's pin, its Block slot names
     //    the curator's member registry, and it registers with SPP only behind
     //    its own pin.
+    let auditor = X25519Keypair::new();
     RegisterRing {
         ring: subscriber,
         payer: &env.payer,
-        auditor_pubkey: X25519Keypair::new().pubkey(),
+        auditor_pubkey: auditor.pubkey(),
         tier: Tier::Policy {
             rules: &BLOCK_ONLY,
             shared_sources: vec![(ListId::Block, curator)],
         },
     }
     .send(&env.client)?;
-    let stored = policy_registry(subscriber, &env)?;
+    let _ring_rpc = RingRpcSpec {
+        env,
+        ring: subscriber.program_id(),
+        auditor,
+    }
+    .serve()?;
+    let stored = policy_registry(subscriber, env)?;
     assert_eq!(
         stored.registry_for(ListId::Block),
-        Some(ListRegistry::Curator(curator.registry_pda())),
+        Some(ListRegistry::Curator(
+            policy_registry(curator, env)?.records
+        )),
         "the Block slot names the curator registry"
     );
     assert_eq!(stored.generation(), 1);
@@ -62,7 +73,7 @@ fn a_curator_sourced_blocklist_governs_the_subscriber_ring() -> Result<()> {
         owner: &env.sender.keypair,
         amount: DEPOSIT,
         count: 3,
-        env: &env,
+        env,
     }
     .deposit()?;
 
@@ -72,44 +83,49 @@ fn a_curator_sourced_blocklist_governs_the_subscriber_ring() -> Result<()> {
 
     // 4. One curator write refuses the next transfer before proving.
     let member = owner_member(&env.recipient.keypair)?;
-    let curator_block = |present| RegistryWrite {
-        ring: curator,
-        list_id: ListId::Block,
-        member,
-        present,
-        env: &env,
+    let curator_block = |present| {
+        RegistryWrite {
+            ring: curator,
+            list_id: ListId::Block,
+            member,
+            present,
+            env,
+        }
+        .send()
     };
-    curator_block(true).send()?;
+    curator_block(true)?;
     transfer(&notes[1]).expect_refusal()?;
 
     // 5. Clearing the bit re-admits the refused note, an unrelated deposit
     //    moves the state root between the record read and the proof.
-    curator_block(false).send()?;
+    curator_block(false)?;
     RingNotes {
         ring: subscriber,
         owner: &env.sender.keypair,
         amount: DEPOSIT,
         count: 1,
-        env: &env,
+        env,
     }
     .deposit()?;
     transfer(&notes[1]).land()?;
 
     // 6. With the bit set again, re-pointing Block to the subscriber's own
     //    registry turns curator enforcement off.
-    curator_block(true).send()?;
+    curator_block(true)?;
     send(
         rpc,
         &env.payer,
-        &[custom_ring_sdk::SetSourceOwner {
+        &[custom_ring_sdk::UpdatePolicy {
             ring: subscriber,
             authority,
-            list_id: ListId::Block,
-            source: SourceOwner::Own,
+            update: custom_ring_sdk::PolicyUpdate::Source {
+                list_id: ListId::Block,
+                source: SourceOwner::Own,
+            },
         }
         .instruction()?],
     )?;
-    let repointed = policy_registry(subscriber, &env)?;
+    let repointed = policy_registry(subscriber, env)?;
     assert_eq!(
         repointed.registry_for(ListId::Block),
         Some(ListRegistry::Own),

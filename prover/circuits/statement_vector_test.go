@@ -18,6 +18,10 @@ type depositStatementCircuit struct {
 	Anonymous          frontend.Variable
 	KeyEscrow          frontend.Variable
 	MemberRegistryRoot frontend.Variable
+	CuratorRoot        frontend.Variable
+	PolicyHash         frontend.Variable
+	Assets             [MaxDeposits]frontend.Variable
+	Amounts            [MaxDeposits]frontend.Variable
 	Commitments        [MaxDeposits]frontend.Variable
 	Ciphertext         [MaxDeposits * DepositOpeningBytes]frontend.Variable
 	AuditorPubkey      [33]frontend.Variable
@@ -27,7 +31,9 @@ type depositStatementCircuit struct {
 func (c *depositStatementCircuit) Define(api frontend.API) error {
 	circuit := &DepositCircuit{
 		ContextHash: c.ContextHash, Count: c.Count, Anonymous: c.Anonymous, KeyEscrow: c.KeyEscrow, MemberRegistryRoot: c.MemberRegistryRoot,
+		PolicyHash: c.PolicyHash, Assets: c.Assets[:], Amounts: c.Amounts[:],
 	}
+	circuit.CuratorRoot = c.CuratorRoot
 	sealed := shared.Sealed{
 		Auditor:    gadget.PackBytesBE(api, c.AuditorPubkey[:]),
 		Eph:        gadget.PackBytesBE(api, c.EphPk[:]),
@@ -48,24 +54,38 @@ func TestDepositStatementMatchesRustVector(t *testing.T) {
 			Ciphertexts        []string `json:"ciphertexts"`
 			AuditorPubkey      string   `json:"auditor_pubkey"`
 			EphPk              string   `json:"eph_pk"`
+			Assets             []string `json:"assets"`
+			Amounts            []uint64 `json:"amounts"`
+			KeyEscrow          bool     `json:"key_escrow"`
 			MemberRegistryRoot *string  `json:"member_registry_root"`
+			CuratorRoot        *string  `json:"curator_root"`
+			PolicyHash         *string  `json:"policy_hash"`
 			PublicInputHash    string   `json:"public_input_hash"`
 		} `json:"deposit"`
 	}
 	ringtest.ReadVector(t, "proof/ring-statements.json", &vectors)
 	v := vectors.Deposit
-	if len(v.OwnerUtxoHashes) != len(v.Ciphertexts) || len(v.OwnerUtxoHashes) == 0 || len(v.OwnerUtxoHashes) > MaxDeposits {
+	if len(v.OwnerUtxoHashes) != len(v.Ciphertexts) || len(v.OwnerUtxoHashes) != len(v.Assets) || len(v.Assets) != len(v.Amounts) || len(v.OwnerUtxoHashes) == 0 || len(v.OwnerUtxoHashes) > MaxDeposits {
 		t.Fatalf("%d commitments for %d ciphertexts", len(v.OwnerUtxoHashes), len(v.Ciphertexts))
 	}
 	witness := &depositStatementCircuit{
 		PublicInputHash: ringtest.VectorField(t, v.PublicInputHash), ContextHash: ringtest.VectorField(t, v.ContextHash),
-		Count: len(v.OwnerUtxoHashes), Anonymous: ringtest.Bit(v.Anonymous), KeyEscrow: 0, MemberRegistryRoot: 0,
+		Count: len(v.OwnerUtxoHashes), Anonymous: ringtest.Bit(v.Anonymous), KeyEscrow: ringtest.Bit(v.KeyEscrow), MemberRegistryRoot: 0, CuratorRoot: 0, PolicyHash: 0,
 	}
 	if v.MemberRegistryRoot != nil {
-		witness.KeyEscrow, witness.MemberRegistryRoot = 1, ringtest.VectorField(t, *v.MemberRegistryRoot)
+		witness.MemberRegistryRoot = ringtest.VectorField(t, *v.MemberRegistryRoot)
+	}
+	if v.CuratorRoot != nil {
+		witness.CuratorRoot = ringtest.VectorField(t, *v.CuratorRoot)
+	}
+	if v.PolicyHash != nil {
+		witness.PolicyHash = ringtest.VectorField(t, *v.PolicyHash)
 	}
 	for i := range witness.Commitments {
-		witness.Commitments[i] = 0
+		witness.Commitments[i], witness.Assets[i], witness.Amounts[i] = 0, 0, 0
+	}
+	for i, asset := range v.Assets {
+		witness.Assets[i], witness.Amounts[i] = ringtest.VectorField(t, asset), v.Amounts[i]
 	}
 	for i := range witness.Ciphertext {
 		witness.Ciphertext[i] = 0

@@ -1,18 +1,16 @@
 import { X25519Keypair } from "@heliuslabs/zolana/keypair";
 import { createCustomRingClient } from "../../src/rpc/client.js";
 // Deploys a fresh ring program from the built binaries, upgrades it in place
-// and registers its config. Reads RING_PROGRAM_SO and USER_REGISTRY_PROGRAM_SO.
+// and initializes its ring account. Reads RING_PROGRAM_SO and USER_REGISTRY_PROGRAM_SO.
 import { readFile } from "node:fs/promises";
 
 import { address, generateKeyPairSigner } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
 import {
-  DEFAULT_INSERT_FEE,
-  createRingConfigInstruction,
   deployRingProgram,
-  fetchRingProgramConfig,
-  initSppRingConfigInstruction,
+  fetchRingPolicy,
+  initializeRingInstruction,
   RingProgramBinary,
   verifyRingProgram,
 } from "../../src/ring/index.js";
@@ -68,31 +66,28 @@ describe("ring program", () => {
     expect(upgraded.programData.capacity).toBeGreaterThanOrEqual(ring.bytes.length);
     await verifyRingProgram(client, program.address, ring);
 
+    const fresh = async () => (await generateKeyPairSigner()).address;
+    const roles = {
+      admin: await fresh(),
+      policy: await fresh(),
+      pauser: await fresh(),
+      cosignAdmin: await fresh(),
+    };
     await sendInstruction(
       client,
-      await createRingConfigInstruction({
+      await initializeRingInstruction({
         ringProgramId: program.address,
         payer: operator,
         authority: operator,
         auditorPublicKey: X25519Keypair.generate().publicKey(),
         kind: "auditOnly",
+        roles,
       }),
       operator,
     );
-    const config = await fetchRingProgramConfig(client, program.address);
-    await sendInstruction(
-      client,
-      await initSppRingConfigInstruction({
-        ringProgramId: program.address,
-        payer: operator,
-        authority: operator,
-        config,
-      }),
-      operator,
-    );
-    expect(config.authority).toBe(operator.address);
-    expect(config.hasPolicy).toBe(false);
-    expect(config.mode).toBe("confidential");
-    expect(config.insertFee).toBe(DEFAULT_INSERT_FEE);
+    const ringAccount = await fetchRingPolicy(client, program.address);
+    expect(ringAccount.roles).toEqual(roles);
+    expect(ringAccount.hasPolicy).toBe(false);
+    expect(ringAccount.mode).toBe("confidential");
   }, 900_000);
 });

@@ -5,7 +5,7 @@ use crate::{
     records::RecordReads,
     request::{MemberOpening, WithdrawalExemption},
     submission::BoundRoot,
-    CustomRing, CustomRingConfig, RingError,
+    CustomRingConfig, RingError,
 };
 use custom_ring_interface::{
     cosign::{CoSignDemand, WithdrawalExemptionStatement},
@@ -21,7 +21,6 @@ pub(super) struct Exemption {
 }
 impl Exemption {
     pub async fn read(
-        ring: CustomRing,
         config: &CustomRingConfig,
         demand: &CoSignDemand,
         own: Option<BoundRoot>,
@@ -29,21 +28,22 @@ impl Exemption {
     ) -> Result<Option<Self>, RingError> {
         // The proof can waive only withdrawals, never approval, transfers or deposits.
         if demand.withdrawals.is_empty()
-            || demand.signer(config.account())?.is_none()
+            || demand.requirement(config.account())?.is_none()
             || demand
-                .signer_with_exemption(config.account(), true)?
+                .clone()
+                .exempt_withdrawals()
+                .requirement(config.account())?
                 .is_some()
         {
             return Ok(None);
         }
         let root = match own {
             Some(root) => root,
-            None => {
-                let Some(registry) = ring.registry(client).await? else {
-                    return Ok(None);
-                };
-                BoundRoot::current(ring, &registry)
-            }
+            None => match BoundRoot::own(config.account(), client).await {
+                Ok(root) => root,
+                Err(RingError::NotStorageRegistry { .. }) => return Ok(None),
+                Err(error) => return Err(error),
+            },
         };
         let statement = WithdrawalExemptionStatement::new(root.root, demand)?;
         let reads = RecordReads {

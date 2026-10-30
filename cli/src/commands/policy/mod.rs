@@ -11,11 +11,14 @@ pub use grammar::{
 };
 pub use render::render;
 
+use std::collections::BTreeMap;
+
 use anyhow::{ensure, Context as _, Result};
-use custom_ring_interface::{ListRegistry, MemberRegistry};
-use custom_ring_sdk::{CustomRing, PinnedPolicy, PolicyRules};
+use custom_ring_interface::{ListRegistry, RingPolicy};
+use custom_ring_sdk::{CustomRing, PinnedPolicy, PolicyTable, PolicyUpdate, UpdatePolicy};
+use solana_address::Address;
 use solana_signer::Signer;
-use zolana_ring_policy::RuleTable;
+use zolana_ring_policy::{MintPolicy, RuleTable};
 
 use crate::{
     catalogue::check_curator,
@@ -28,7 +31,7 @@ const NO_POLICY: &str =
     "the ring pins no policy, `zolana-ring init` pins the table of a policy ring";
 
 pub(crate) struct Pinned {
-    pub registry: Box<MemberRegistry>,
+    pub account: Box<RingPolicy>,
     pub policy: PinnedPolicy,
 }
 
@@ -42,9 +45,9 @@ pub fn run(ctx: &Context, command: PolicyCommand) -> Result<()> {
     match command {
         PolicyCommand::Show => {
             let pinned = pinned(ctx)?;
-            let title = format!("policy {}", ctx.ring.registry_pda());
+            let title = format!("policy {}", ctx.ring.policy_pda());
             ui::heading(icon::POLICY, &title);
-            print_pinned(ctx.ring, &pinned);
+            print_pinned(&pinned);
             for (member, policy) in crate::records::mint_policies(ctx)? {
                 line(
                     "mint record",
@@ -66,9 +69,9 @@ pub fn run(ctx: &Context, command: PolicyCommand) -> Result<()> {
                 mint_changes(ctx, &compiled)?.is_empty(),
                 "mint settings differ from ring.toml"
             );
-            verify_sources(ctx.ring, &compiled, &pinned)?;
+            verify_sources(ctx, &compiled, &pinned)?;
             line("policy", "matches ring.toml");
-            line("generation", pinned.registry.generation());
+            line("generation", pinned.account.generation());
         }
         PolicyCommand::Set { yes } => set(ctx, yes)?,
     }
@@ -81,21 +84,41 @@ pub(crate) fn pinned(ctx: &Context) -> Result<Pinned> {
 
 /// `None` on an audit-only ring and before `init` pins the table.
 pub(crate) fn pinned_if_any(ctx: &Context) -> Result<Option<Pinned>> {
-    match ctx.block(ctx.ring.registry(ctx.chain()))? {
-        Some(registry) => Pinned::of(registry),
+    match ctx.block(ctx.ring.policy(ctx.chain()))? {
+        Some(account) => Pinned::of(account),
         None => Ok(None),
     }
 }
 
 impl Pinned {
     /// `None` before the first policy write.
-    pub(crate) fn of(registry: Box<MemberRegistry>) -> Result<Option<Self>> {
-        if registry.policy_hash().is_err() {
+    pub(crate) fn of(account: Box<RingPolicy>) -> Result<Option<Self>> {
+        if account.policy_hash().is_err() {
             return Ok(None);
         }
-        let policy = PinnedPolicy::of(&registry)?;
-        Ok(Some(Self { registry, policy }))
+        let policy = PinnedPolicy::of(&account)?;
+        Ok(Some(Self { account, policy }))
     }
+}
+
+/// The `StorageRegistry` a curator ring serves its lists from.
+pub(crate) fn curator_records(ctx: &Context, curator: CustomRing) -> Result<Address> {
+    let program = curator.program_id();
+    let policy = ctx
+        .block(curator.policy(ctx.chain()))?
+        .with_context(|| format!("curator {program} has no ring policy"))?;
+    Ok(policy.records)
+}
+
+/// Each shared list with its curator's records.
+pub(crate) fn curator_sources(
+    ctx: &Context,
+    sources: &[(zolana_ring_policy::ListId, CustomRing)],
+) -> Result<Vec<(zolana_ring_policy::ListId, Address)>> {
+    sources
+        .iter()
+        .map(|&(list_id, curator)| Ok((list_id, curator_records(ctx, curator)?)))
+        .collect()
 }
 
 /// The rows and their hash, what a source re-point never changes.
@@ -108,22 +131,21 @@ pub(crate) fn verify_rows(compiled: &CompiledPolicy, pinned: &Pinned) -> Result<
 
 /// Every referenced list reads the registry ring.toml names.
 pub(crate) fn verify_sources(
-    ring: CustomRing,
+    ctx: &Context,
     compiled: &CompiledPolicy,
     pinned: &Pinned,
 ) -> Result<()> {
     let registry = |source: Option<ListRegistry>| match source {
-        Some(ListRegistry::Own) => ring.registry_pda(),
+        Some(ListRegistry::Own) => pinned.account.records,
         Some(ListRegistry::Curator(registry)) => registry,
         None => Default::default(),
     };
     for list_id in compiled.rules.referenced().iter() {
-        let expected = compiled
-            .curator(list_id)
-            .map_or(ListRegistry::Own, |curator| {
-                ListRegistry::Curator(curator.registry_pda())
-            });
-        let chain = pinned.registry.registry_for(list_id);
+        let expected = match compiled.curator(list_id) {
+            Some(curator) => ListRegistry::Curator(curator_records(ctx, curator)?),
+            None => ListRegistry::Own,
+        };
+        let chain = pinned.account.registry_for(list_id);
         ensure!(
             chain == Some(expected),
             "the {} list reads registry {} on chain, ring.toml expects {}",
@@ -135,9 +157,9 @@ pub(crate) fn verify_sources(
     Ok(())
 }
 
-pub(crate) fn print_pinned(ring: CustomRing, pinned: &Pinned) {
-    let registry = &pinned.registry;
-    let (generation, slot) = (registry.generation(), registry.generation_slot());
+pub(crate) fn print_pinned(pinned: &Pinned) {
+    let account = &pinned.account;
+    let (generation, slot) = (account.generation(), account.generation_slot());
     line("generation", format_args!("{generation} at slot {slot}"));
     line("hash", hex::encode(pinned.policy.policy_hash));
     let table = &pinned.policy.table;
@@ -151,8 +173,8 @@ pub(crate) fn print_pinned(ring: CustomRing, pinned: &Pinned) {
         ui::heading(icon::LISTS, "sources");
     }
     for list_id in referenced.iter() {
-        let source = match registry.registry_for(list_id) {
-            Some(ListRegistry::Own) => format!("own registry {}", ring.registry_pda()),
+        let source = match account.registry_for(list_id) {
+            Some(ListRegistry::Own) => format!("own records {}", account.records),
             Some(ListRegistry::Curator(registry)) => format!("curator registry {registry}"),
             None => "no source".to_owned(),
         };
@@ -169,8 +191,8 @@ fn compiled(ctx: &Context) -> Result<CompiledPolicy> {
 fn set(ctx: &Context, yes: bool) -> Result<()> {
     let program = ctx.ring.program_id();
     let (compiled, current) = (compiled(ctx)?, pinned(ctx)?);
-    let verified = verify_rows(&compiled, &current)
-        .and_then(|()| verify_sources(ctx.ring, &compiled, &current));
+    let verified =
+        verify_rows(&compiled, &current).and_then(|()| verify_sources(ctx, &compiled, &current));
     let mint_changes = mint_changes(ctx, &compiled)?;
     if verified.is_ok() && mint_changes.is_empty() {
         line("policy", "already present");
@@ -194,18 +216,21 @@ fn set(ctx: &Context, yes: bool) -> Result<()> {
         format_args!("the table of {program} stays, the change was not confirmed"),
     )?;
     let authority = ctx.funded_authority()?;
-    let replace = PolicyRules {
+    let shared_sources = curator_sources(ctx, &compiled.shared_sources)?;
+    let replace = UpdatePolicy {
         ring: ctx.ring,
         authority: authority.pubkey(),
-        rules: &compiled.rules,
-        shared_sources: &compiled.shared_sources(),
+        update: PolicyUpdate::Rules(PolicyTable {
+            rules: &compiled.rules,
+            shared_sources: &shared_sources,
+        }),
     }
-    .replace()?;
+    .instruction()?;
     ctx.send(&[authority], &[replace])?;
     crate::records::write_mint_policies(ctx, &mint_changes)?;
     let (before, after) = (
-        current.registry.generation(),
-        pinned(ctx)?.registry.generation(),
+        current.account.generation(),
+        pinned(ctx)?.account.generation(),
     );
     line("policy", "replaced");
     line("generation", format_args!("{after} replaces {before}"));
@@ -243,24 +268,42 @@ impl Line {
     }
 }
 
-/// Replacing policy settings preserves the independent withdrawal co-sign threshold.
 pub(crate) fn mint_changes(
     ctx: &Context,
     compiled: &CompiledPolicy,
-) -> Result<std::collections::BTreeMap<[u8; 32], zolana_ring_policy::MintPolicy>> {
-    let current = crate::records::mint_policies(ctx)?;
-    let mut desired = compiled.mint_policies.clone();
-    for (member, old) in &current {
-        desired.entry(*member).or_default().withdrawal_threshold = old.withdrawal_threshold;
-    }
-    desired.retain(|member, policy| *policy != current.get(member).copied().unwrap_or_default());
-    Ok(desired)
+) -> Result<BTreeMap<[u8; 32], MintPolicy>> {
+    Ok(policy_mint_writes(
+        &crate::records::mint_policies(ctx)?,
+        &compiled.mint_policies,
+    ))
+}
+
+/// Only fields the policy compiles change, the rest keep the record value.
+fn policy_mint_writes(
+    current: &BTreeMap<[u8; 32], MintPolicy>,
+    policies: &BTreeMap<[u8; 32], MintPolicy>,
+) -> BTreeMap<[u8; 32], MintPolicy> {
+    current
+        .keys()
+        .chain(policies.keys())
+        .filter_map(|member| {
+            let old = current.get(member).copied().unwrap_or_default();
+            let policy = policies.get(member).copied().unwrap_or_default();
+            let new = MintPolicy {
+                threshold: policy.threshold,
+                cap: policy.cap,
+                cosign_above: policy.cosign_above,
+                ..old
+            };
+            (new != old).then_some((*member, new))
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zolana_ring_policy::{ListId, Rule, Subject};
+    use zolana_ring_policy::{AssetLimits, ListId, Rule, Subject};
     #[test]
     fn table_lines_show_only_rules() {
         let table = RuleTable::builder()
@@ -268,5 +311,61 @@ mod tests {
             .build();
         assert_eq!(table_lines(&table).len(), 1);
         assert!(table_lines(&RuleTable::empty()).is_empty());
+    }
+
+    #[test]
+    fn a_policy_write_keeps_the_mint_limits() {
+        let (mint, dropped) = ([7; 32], [8; 32]);
+        let limits = AssetLimits {
+            sender_cap: 30,
+            sender_window_slots: 40,
+            ..AssetLimits::EMPTY
+        };
+        let current = BTreeMap::from([
+            (
+                mint,
+                MintPolicy {
+                    threshold: 10,
+                    withdrawal_threshold: 20,
+                    limits,
+                    ..MintPolicy::EMPTY
+                },
+            ),
+            (
+                dropped,
+                MintPolicy {
+                    cap: 5,
+                    limits,
+                    ..MintPolicy::EMPTY
+                },
+            ),
+        ]);
+        let policies = BTreeMap::from([(
+            mint,
+            MintPolicy {
+                threshold: 50,
+                ..MintPolicy::EMPTY
+            },
+        )]);
+
+        assert_eq!(
+            policy_mint_writes(&current, &policies),
+            BTreeMap::from([
+                (
+                    mint,
+                    MintPolicy {
+                        threshold: 50,
+                        ..current[&mint]
+                    },
+                ),
+                (
+                    dropped,
+                    MintPolicy {
+                        cap: 0,
+                        ..current[&dropped]
+                    },
+                ),
+            ])
+        );
     }
 }

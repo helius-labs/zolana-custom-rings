@@ -106,8 +106,14 @@ func (a AnonymousAudit) SenderPkHash(t testing.TB) *big.Int {
 // SenderUtxo is a UTXO of the hidden sender in the given ring, 0 for the default ring.
 func (a AnonymousAudit) SenderUtxo(t testing.TB, ringID *big.Int, amount uint64, blinding int64) Utxo {
 	t.Helper()
+	return spentUtxo(t, a.SenderPkHash(t), a.SenderNullifierPk, ringID, amount, blinding)
+}
+
+// spentUtxo is a data-free input of owner in the given ring.
+func spentUtxo(t testing.TB, ownerPkHash, nullifierPk, ringID *big.Int, amount uint64, blinding int64) Utxo {
+	t.Helper()
 	return Utxo{
-		Domain: protocol.UtxoDomain, TreeID: 3, OwnerPkHash: a.SenderPkHash(t), NullifierPk: a.SenderNullifierPk,
+		Domain: protocol.UtxoDomain, TreeID: 3, OwnerPkHash: ownerPkHash, NullifierPk: nullifierPk,
 		Asset: ringtest.AssetField(t, ringtest.Repeat(0x0a)), Amount: amount, Blinding: big.NewInt(blinding),
 		DataHash: big.NewInt(0), RingDataHash: big.NewInt(0), RingProgramID: ringID,
 	}

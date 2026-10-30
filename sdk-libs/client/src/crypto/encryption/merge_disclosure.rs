@@ -2,8 +2,7 @@
 
 use custom_ring_interface::{
     merge_disclosure_field_count, merge_disclosure_len, pack_disclosure, unpack_disclosure,
-    ANONYMOUS_MERGE_WIDTHS, AUDIT_CIPHERTEXT_LEN, MERGE_DISCLOSURE_HEADER_LEN,
-    MERGE_DISCLOSURE_INFO,
+    AUDIT_CIPHERTEXT_LEN, MERGE_DISCLOSURE_HEADER_LEN, MERGE_DISCLOSURE_INFO, MERGE_WIDTHS,
 };
 use spr_hasher::primitives::{right_align, PACK_BE_CHUNK_BYTES};
 use spr_keypair::{random_salt, X25519Keypair, X25519Pubkey};
@@ -119,7 +118,7 @@ impl MergeDisclosureEncryption {
         ephemeral: X25519Keypair,
         disclosure_key: Zeroizing<[u8; 32]>,
     ) -> Result<Self> {
-        if !ANONYMOUS_MERGE_WIDTHS.contains(&opening.input_commitments.len()) {
+        if !MERGE_WIDTHS.contains(&opening.input_commitments.len()) {
             return Err(AuditError::DisclosureLayout);
         }
         let mut ciphertext = *disclosure_key;
@@ -144,7 +143,7 @@ pub fn open_merge_disclosure(
     salt: [u8; 16],
     fields: &[[u8; 32]],
 ) -> Result<MergeOpening> {
-    let width = ANONYMOUS_MERGE_WIDTHS
+    let width = MERGE_WIDTHS
         .into_iter()
         .find(|width| merge_disclosure_field_count(*width) == fields.len())
         .ok_or(AuditError::DisclosureLayout)?;
@@ -176,7 +175,7 @@ pub(crate) mod tests {
         pub(crate) fn load() -> Self {
             Self(
                 serde_json::from_str(include_str!(
-                    "../../../../../test-vectors/merge/ring-merge-anonymous.json"
+                    "../../../../../test-vectors/merge/ring-merge.json"
                 ))
                 .expect("vector"),
             )

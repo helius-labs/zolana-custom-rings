@@ -1,8 +1,16 @@
+// Holds the hashes that ring proofs, the programs and the SDKs must compute the
+// same way. Each kind of hash starts with its own tag, so a value made for one
+// purpose cannot pass as another.
+//
+// Read first. Read before shared/disclosure.go, shared/envelope.go,
+// audit/audit.go.
+
 // Package shared holds the ring derivations, the auditor envelope and the SPP openings two or more ring circuits share.
 package shared
 
 import (
 	"github.com/consensys/gnark/frontend"
+	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
@@ -42,7 +50,7 @@ const (
 )
 
 // PolicyStatementVersion binds the policy statement layout, mirrored by PolicyStatement::elements in program-libs/interface/src/proof/statement.rs.
-const PolicyStatementVersion = 3
+const PolicyStatementVersion = 4
 
 // Envelope and merge pad domains, mirrored by sdk-libs/client/src/crypto/encryption/mod.rs, its merge_disclosure module and sdk-libs/ts/src/crypto/audit/audit.ts.
 const (
@@ -96,4 +104,12 @@ func SenderCommitment(api frontend.API, senderPkHash, privateTxBlinding frontend
 // DepositBlinding is Poseidon(CRDB, blindingSecret), domain separated from every SPP output blinding.
 func DepositBlinding(api frontend.API, blindingSecret frontend.Variable) frontend.Variable {
 	return gadget.PoseidonHash(api, []frontend.Variable{DepositBlindingDomain, blindingSecret})
+}
+
+// AssertAnonymousParties separates the hidden owner from the public identities
+// reconstructed by the verifier. Zero denotes an absent optional party.
+func AssertAnonymousParties(api frontend.API, owner frontend.Variable, parties [3]frontend.Variable) {
+	for _, party := range parties {
+		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: party, V: api.IsZero(api.Sub(owner, party))})
+	}
 }

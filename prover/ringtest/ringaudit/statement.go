@@ -84,6 +84,12 @@ func DeliveredStatement(t testing.TB, head AuditHead, outputs []StatementOutput,
 		outputChain(t, outputs), bodyChain(t, outputs), spptest.MustHashChain4(t, disclosure), spptest.MustHashChain4(t, keys))
 }
 
+// DeliveredSenderStatement mirrors AuditKind::Delivered on the in-proof owner rail.
+func DeliveredSenderStatement(t testing.TB, head AuditHead, outputs []StatementOutput, disclosure []*big.Int, privateTxHash, sender *big.Int) []*big.Int {
+	t.Helper()
+	return append(DeliveredStatement(t, head, outputs, disclosure), privateTxHash, sender)
+}
+
 // AnonymousStatement mirrors AuditKind::Anonymous.
 func AnonymousStatement(t testing.TB, head AuditHead, outputs []StatementOutput, disclosure []*big.Int, tail AnonymousTail) []*big.Int {
 	t.Helper()

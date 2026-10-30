@@ -105,6 +105,7 @@ pub enum UtxoOwner {
 pub struct CreatedUtxo {
     pub commitment: [u8; 32],
     pub slot_index: u32,
+    pub leaf_index: u64,
     pub utxo: KnownUtxo,
 }
 
@@ -196,6 +197,7 @@ impl AuditedTransaction {
             output.opening.utxo().map(|utxo| CreatedUtxo {
                 commitment: output.context.hash,
                 slot_index: output.slot_index,
+                leaf_index: output.context.leaf_index,
                 utxo: KnownUtxo::opened(*utxo, output.context.tree_id),
             })
         })

@@ -2,7 +2,11 @@
 
 use std::time::Duration;
 
-use custom_ring_interface::{compute_unit_limit, CustomRingError, InstructionTag, MemberRegistry};
+use custom_ring_interface::{
+    compute_unit_limit,
+    storage::{Revision, StorageRegistry},
+    CustomRingError, InstructionTag, RingPolicy,
+};
 use solana_address::Address;
 use solana_commitment_config::CommitmentLevel;
 use solana_instruction::Instruction;
@@ -19,9 +23,8 @@ use spr_client::{
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
-    heap::boxed, records::BoundQueue, AnonymousTransfer, AuthorityListWrite, CustomRing,
-    CustomRingTransfer, DelegateTransfer, PreparedRingDeposit, RecordApplication, RegisterKey,
-    RingError, RingMergeOperation,
+    heap::boxed, AnonymousTransfer, CustomRing, CustomRingTransfer, DelegateTransfer,
+    PreparedRingDeposit, RingError, RingMergeOperation,
 };
 
 #[cfg(test)]
@@ -76,10 +79,6 @@ pub enum RingOperation<'a> {
     Transfer(Box<CustomRingTransfer<'a>>),
     Anonymous(Box<AnonymousTransfer<'a>>),
     Delegate(Box<DelegateTransfer<'a>>),
-    RegisterKey(Box<RegisterKey<'a>>),
-    /// One batch, [`AuthorityListWrite::batches`] splits a larger write.
-    AuthorityListWrite(Box<AuthorityListWrite>),
-    RecordApplication(RecordApplication),
     Merge(Box<RingMergeOperation>),
     Deposit(Box<PreparedRingDeposit>),
     /// A built instruction, sent as is, its budget from its tag.
@@ -100,9 +99,6 @@ operations! {
     Transfer(CustomRingTransfer<'a>) => Box::new,
     Anonymous(AnonymousTransfer<'a>) => Box::new,
     Delegate(DelegateTransfer<'a>) => Box::new,
-    RegisterKey(RegisterKey<'a>) => Box::new,
-    AuthorityListWrite(AuthorityListWrite) => Box::new,
-    RecordApplication(RecordApplication) => core::convert::identity,
     Merge(RingMergeOperation) => Box::new,
     Deposit(PreparedRingDeposit) => Box::new,
     Instruction(Instruction) => core::convert::identity,
@@ -110,34 +106,68 @@ operations! {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct BoundRoot {
-    pub ring: CustomRing,
-    /// The history slot the statement names.
-    pub index: u8,
+    /// The registry the program reads the root from.
+    pub registry: Address,
+    pub revision: Revision,
     pub root: [u8; 32],
 }
 
 impl BoundRoot {
-    pub(crate) fn registry(ring: CustomRing, index: u8, root: [u8; 32]) -> Self {
-        Self { ring, index, root }
+    /// The newest root of the ring's records registry.
+    pub(crate) async fn own(
+        policy: &RingPolicy,
+        rpc: &(impl AsyncRpc + ?Sized),
+    ) -> Result<Self, RingError> {
+        Self::newest_of(policy.records, rpc).await
     }
 
-    /// The newest root, never below the floor when read.
-    pub(crate) fn current(ring: CustomRing, registry: &MemberRegistry) -> Self {
-        Self::registry(ring, registry.history_cursor, registry.current_root())
+    /// The newest root of the curator registry, `None` without a curator source.
+    pub(crate) async fn curator(
+        policy: &RingPolicy,
+        rpc: &(impl AsyncRpc + ?Sized),
+    ) -> Result<Option<Self>, RingError> {
+        match policy.curator() {
+            Some(curator) => Ok(Some(Self::newest_of(curator, rpc).await?)),
+            None => Ok(None),
+        }
     }
 
     pub(crate) async fn newest(
         ring: CustomRing,
         rpc: &(impl AsyncRpc + ?Sized),
     ) -> Result<Self, RingError> {
-        Ok(Self::current(ring, &*ring.require_registry(rpc).await?))
+        Self::own(&*ring.require_policy(rpc).await?, rpc).await
     }
 
-    /// `true` once the history wraps over the slot, the program then reads another root.
-    async fn replaced(self, client: &(impl AsyncRpc + ?Sized)) -> Result<bool, RingError> {
-        let registry = self.ring.require_registry(client).await?;
-        Ok(registry.history[usize::from(self.index)].root != self.root)
+    async fn newest_of(
+        registry: Address,
+        rpc: &(impl AsyncRpc + ?Sized),
+    ) -> Result<Self, RingError> {
+        let newest = live_registry(registry, rpc).await?.newest();
+        Ok(Self {
+            registry,
+            revision: newest.revision,
+            root: newest.hash,
+        })
     }
+
+    /// `true` once the registry no longer serves the root at its revision.
+    async fn replaced(self, client: &(impl AsyncRpc + ?Sized)) -> Result<bool, RingError> {
+        let registry = live_registry(self.registry, client).await?;
+        let slot = client.get_slot().await?;
+        Ok(registry.root(self.revision, slot) != Ok(self.root))
+    }
+}
+
+/// `NotStorageRegistry` unless `registry` is an initialized storage registry.
+pub async fn live_registry(
+    registry: Address,
+    rpc: &(impl AsyncRpc + ?Sized),
+) -> Result<StorageRegistry, RingError> {
+    rpc.get_account(registry)
+        .await?
+        .and_then(|account| StorageRegistry::decode(&account.owner, &account.data))
+        .ok_or(RingError::NotStorageRegistry { registry })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -151,7 +181,6 @@ pub(crate) struct BoundPolicy {
 pub(crate) struct BoundState {
     pub roots: Vec<BoundRoot>,
     pub policy: Option<BoundPolicy>,
-    pub queue: Option<BoundQueue>,
 }
 
 impl BoundState {
@@ -168,10 +197,8 @@ impl BoundState {
             return self.moved(client).await;
         }
         Ok([
-            CustomRingError::RootBelowFloor,
-            CustomRingError::CuratorRootStale,
-            CustomRingError::RootIndexEmpty,
-            CustomRingError::AuthorityBatchTooLarge,
+            CustomRingError::RootNotServed,
+            CustomRingError::UnboundRegistry,
         ]
         .into_iter()
         .any(|stale| code == stale as u32))
@@ -184,17 +211,7 @@ impl BoundState {
             }
         }
         if let Some(policy) = self.policy {
-            if policy.ring.require_registry(client).await?.policy_hash != policy.hash {
-                return Ok(true);
-            }
-        }
-        if let Some(queue) = &self.queue {
-            let registry = queue.ring.require_registry(client).await?;
-            let current = queue.ring.require_queue(client).await?;
-            if current.tail() != queue.tail
-                || current.chain_tail() != queue.chain_tail
-                || registry.current_root() != queue.root
-            {
+            if policy.ring.require_policy(client).await?.policy_hash != policy.hash {
                 return Ok(true);
             }
         }
@@ -378,15 +395,12 @@ impl RingOperation<'_> {
             Self::Anonymous(transfer) => transfer.check_public_signers(signers),
             Self::Merge(operation) => {
                 let config = operation.prepared.ring().require_config(client).await?;
-                operation.prepared.check_public_signers(signers, &config)
+                operation
+                    .prepared
+                    .check_public_signers(signers.chain(operation.input.co_signer), &config)
             }
             Self::Deposit(deposit) => deposit.check_public_signers(signers),
-            Self::Transfer(_)
-            | Self::Delegate(_)
-            | Self::RegisterKey(_)
-            | Self::AuthorityListWrite(_)
-            | Self::RecordApplication(_)
-            | Self::Instruction(_) => Ok(()),
+            Self::Transfer(_) | Self::Delegate(_) | Self::Instruction(_) => Ok(()),
         }
     }
 
@@ -405,7 +419,7 @@ impl RingOperation<'_> {
                 let proven = boxed(|| transfer.prove(client)).await?;
                 proved(
                     proven.instruction()?,
-                    InstructionTag::Transact,
+                    InstructionTag::Transfer,
                     proven.bound(),
                 )
             }
@@ -413,7 +427,7 @@ impl RingOperation<'_> {
                 let proven = boxed(|| transfer.prove(client)).await?;
                 proved(
                     proven.instruction()?,
-                    InstructionTag::Transact,
+                    InstructionTag::Transfer,
                     proven.bound(),
                 )
             }
@@ -421,40 +435,8 @@ impl RingOperation<'_> {
                 let proven = boxed(|| transfer.prove(client)).await?;
                 proved(
                     proven.instruction()?,
-                    InstructionTag::DelegateTransact,
+                    InstructionTag::AuthorityTransfer,
                     proven.bound(),
-                )
-            }
-            Self::RegisterKey(registration) => {
-                let proven = boxed(|| registration.prove(client)).await?;
-                proved(
-                    proven.instruction,
-                    InstructionTag::RegisterKey,
-                    BoundState::default(),
-                )
-            }
-            Self::AuthorityListWrite(write) => {
-                let proven = boxed(|| write.prove(client)).await?;
-                proved(
-                    proven.instruction,
-                    InstructionTag::AuthorityWriteRecords,
-                    BoundState {
-                        queue: Some(proven.bound),
-                        ..BoundState::default()
-                    },
-                )
-            }
-            Self::RecordApplication(application) => {
-                let proven = boxed(|| application.prove(client))
-                    .await?
-                    .ok_or(RingError::ApplicationNotDue)?;
-                proved(
-                    proven.instruction,
-                    InstructionTag::ApplyRecords,
-                    BoundState {
-                        queue: Some(proven.bound),
-                        ..BoundState::default()
-                    },
                 )
             }
             Self::Merge(operation) => {
@@ -489,10 +471,10 @@ impl RingOperation<'_> {
                 let proven = boxed(|| deposit.prove_bound(client)).await?;
                 proved(
                     proven.instruction,
-                    InstructionTag::AuditedDeposit,
+                    InstructionTag::Deposit,
                     BoundState {
-                        roots: proven.root.into_iter().collect(),
-                        ..BoundState::default()
+                        roots: proven.roots,
+                        policy: proven.policy,
                     },
                 )
             }

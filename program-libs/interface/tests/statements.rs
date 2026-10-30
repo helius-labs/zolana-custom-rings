@@ -2,9 +2,10 @@
 
 use custom_ring_interface::{
     AnonymousAudit, AnonymousAuditKey, AnonymousLayout, ApplyRecordsStatement, AuditHead,
-    AuditKind, AuditLayout, AuditStatement, DeliveredLayout, DepositContext, DepositPublicInput,
-    DisclosureLayout, PolicyKey, PolicyStatement, RegisterKeyStatement, RingOutput,
-    ANONYMOUS_SLOT_BYTES, AUDIT_HEAD_ELEMENTS, DEPOSIT_PUBLIC_INPUT_ELEMENTS,
+    AuditKind, AuditLayout, AuditStatement, DeliveredLayout, DeliveredSender, DepositContext,
+    DepositPublicInput, DepositRegistry, DepositedAsset, DisclosureLayout, PolicyKey,
+    PolicyStatement, RegisterKeyStatement, RingOutput, ANONYMOUS_SLOT_BYTES, AUDIT_HEAD_ELEMENTS,
+    DEPOSIT_PUBLIC_INPUT_ELEMENTS,
 };
 use custom_ring_interface::{PublicLeg, PublicSlotError, PublicSlots, SOL_ASSET_ADDRESS};
 use serde::{Deserialize, Serialize};
@@ -35,7 +36,7 @@ struct StatementVectors {
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 struct AuditCase {
-    /// `delivered` or `anonymous`.
+    /// `delivered`, `delivered_sender` or `anonymous`.
     kind: String,
     first_nullifier: String,
     ring_id: String,
@@ -49,6 +50,7 @@ struct AuditCase {
     outputs: Vec<OutputCase>,
     disclosure: Vec<String>,
     private_tx_hash: Option<String>,
+    sender: Option<String>,
     sender_commitment: Option<String>,
     party_identities: Option<Vec<String>>,
     elements: Vec<String>,
@@ -78,6 +80,7 @@ struct PolicyCase {
     own_root: String,
     curator_root: String,
     sender: String,
+    recipients: Vec<String>,
     public_assets: Vec<String>,
     public_amounts: Vec<String>,
     elements: Vec<String>,
@@ -119,7 +122,12 @@ struct DepositCase {
     ciphertexts: Vec<String>,
     auditor_pubkey: String,
     eph_pk: String,
+    assets: Vec<String>,
+    amounts: Vec<u64>,
+    key_escrow: bool,
     member_registry_root: Option<String>,
+    curator_root: Option<String>,
+    policy_hash: Option<String>,
     elements: Vec<String>,
     public_input_hash: String,
 }
@@ -225,12 +233,13 @@ impl Values {
 
 fn audit_case(statement: &AuditStatement<'_>) -> AuditCase {
     let head = statement.head;
-    let anonymous = match statement.kind {
-        AuditKind::Anonymous(anonymous) => Some(anonymous),
-        AuditKind::Delivered => None,
+    let (anonymous, sender) = match statement.kind {
+        AuditKind::Anonymous(anonymous) => (Some(anonymous), None),
+        AuditKind::Delivered(sender) => (None, sender),
     };
     let kind = match statement.kind {
-        AuditKind::Delivered => "delivered",
+        AuditKind::Delivered(None) => "delivered",
+        AuditKind::Delivered(Some(_)) => "delivered_sender",
         AuditKind::Anonymous(_) => "anonymous",
     };
     AuditCase {
@@ -245,7 +254,11 @@ fn audit_case(statement: &AuditStatement<'_>) -> AuditCase {
         layout: head.layout.value(),
         outputs: statement.outputs.iter().map(output_case).collect(),
         disclosure: hexes(statement.disclosure),
-        private_tx_hash: anonymous.map(|anonymous| hex::encode(anonymous.private_tx_hash)),
+        private_tx_hash: anonymous
+            .map(|anonymous| anonymous.private_tx_hash)
+            .or(sender.map(|sender| sender.private_tx_hash))
+            .map(hex::encode),
+        sender: sender.map(|sender| hex::encode(sender.sender)),
         sender_commitment: anonymous.map(|anonymous| hex::encode(anonymous.sender_commitment)),
         party_identities: anonymous.map(|anonymous| hexes(anonymous.party_identities)),
         elements: hexes(&statement.elements().unwrap()),
@@ -284,6 +297,7 @@ fn policy_case(statement: &PolicyStatement<'_>) -> PolicyCase {
         own_root: hex::encode(statement.own_root),
         curator_root: hex::encode(statement.curator_root),
         sender: hex::encode(statement.sender),
+        recipients: hexes(statement.recipients),
         public_assets: hexes(statement.public_assets),
         public_amounts: hexes(statement.public_amounts),
         elements: hexes(&statement.elements()),
@@ -321,8 +335,9 @@ fn compute_vectors() -> StatementVectors {
                 outputs: 2,
                 exits: true,
                 key_escrow: true,
+                sender_class: None,
             })),
-            kind: AuditKind::Delivered,
+            kind: AuditKind::Delivered(None),
         },
         AuditStatement {
             head: values.head(AuditLayout {
@@ -334,8 +349,26 @@ fn compute_vectors() -> StatementVectors {
                 outputs: 8,
                 exits: true,
                 key_escrow: false,
+                sender_class: None,
             })),
-            kind: AuditKind::Delivered,
+            kind: AuditKind::Delivered(None),
+        },
+        AuditStatement {
+            head: values.head(AuditLayout {
+                exits: true,
+                ..AuditLayout::default()
+            }),
+            outputs: &delivered,
+            disclosure: values.disclosure(DisclosureLayout::Delivered(DeliveredLayout {
+                outputs: 8,
+                exits: true,
+                key_escrow: false,
+                sender_class: Some(16),
+            })),
+            kind: AuditKind::Delivered(Some(DeliveredSender {
+                private_tx_hash: &values.fields[3],
+                sender: solana_owner_identity(&[0x42; 32]).unwrap(),
+            })),
         },
         AuditStatement {
             head: values.head(AuditLayout {
@@ -366,6 +399,7 @@ fn compute_vectors() -> StatementVectors {
     let amounts = [right_aligned(500), withdrawal, [0; 32]];
     let owner_signer = solana_owner_identity(&[0x42; 32]).unwrap();
     let zero = [0u8; 32];
+    let recipients = [values.fields[62], zero];
     let confidential = PolicyStatement {
         withdrawal_hash: &custom_ring_interface::policy_withdrawal_hash(&[]).unwrap(),
         key: PolicyKey::Member { anonymous: false },
@@ -377,6 +411,7 @@ fn compute_vectors() -> StatementVectors {
         own_root: &values.fields[7],
         curator_root: &values.fields[8],
         sender: &owner_signer,
+        recipients: &recipients,
         public_assets: &assets,
         public_amounts: &amounts,
     };
@@ -384,6 +419,7 @@ fn compute_vectors() -> StatementVectors {
         key: PolicyKey::Member { anonymous: true },
         approval_required: false,
         sender: &values.fields[5],
+        recipients: &[zero; 2],
         ..confidential
     };
     let delegate = PolicyStatement {
@@ -392,6 +428,7 @@ fn compute_vectors() -> StatementVectors {
         key_escrow: true,
         curator_root: &zero,
         sender: &zero,
+        recipients: &[values.fields[62], values.fields[63]],
         ..confidential
     };
     let apply = ApplyRecordsStatement {
@@ -423,14 +460,30 @@ fn compute_vectors() -> StatementVectors {
     let owners = [values.fields[14], values.fields[15]];
     let ciphertexts = [[0x21; 96], [0x22; 96]];
     let eph_pk = tagged(0xa2);
+    let deposited = [
+        DepositedAsset {
+            asset: values.fields[17],
+            amount: 1_000,
+        },
+        DepositedAsset {
+            asset: values.fields[18],
+            amount: 2_000,
+        },
+    ];
     let deposit = DepositPublicInput {
         context_hash: &context_hash,
         anonymous: false,
         owner_utxo_hashes: &owners,
         ciphertexts: &ciphertexts,
+        assets: &deposited,
         auditor_pk: &values.auditor_pubkey,
         eph_pk: &eph_pk,
-        member_registry_root: Some(&values.fields[16]),
+        registry: Some(DepositRegistry {
+            own_root: &values.fields[16],
+            curator_root: Some(&values.fields[20]),
+            key_escrow: true,
+            policy_hash: Some(&values.fields[19]),
+        }),
     };
     StatementVectors {
         description: "Every ring statement and its public input HashChain4(elements). Audit \
@@ -439,15 +492,17 @@ fn compute_vectors() -> StatementVectors {
                       salt, layout] with the frame's random salt and layout = exits | key_escrow << 1 \
                       | full_openings << 3, the tails chain the published output \
                       hashes, then on the delivered rail the body hashes (zero for an exit), the \
-                      disclosure fields and pack_be(u) per delivered slot, on the anonymous rail \
+                      disclosure fields and pack_be(u) per delivered slot, then on the in-proof \
+                      owner rail private_tx_hash and the sender identity, on the anonymous rail \
                       the disclosure fields, private_tx_hash, the sender commitment and the three \
                       party identities, no tag or body of an anonymous slot. Each disclosure holds the field count of its layout, delivered with 2 \
                       escrowed outputs and with 8, anonymous of commitment class 4 and of the entry \
                       key with 3 inputs and 4 outputs. The deposit statement is HashChain(elements) \
                       over CRDP, the context hash of the program id, tree and SPP data, the \
                       count, the anonymous flag, each owner hash with its capsule ciphertext hash \
-                      zero padded to 8 slots, both tagged keys packed, the registry flag and \
-                      root. Produced by program-libs/interface/tests/statements.rs."
+                      zero padded to 8 slots, both tagged keys packed, the escrow flag, the \
+                      registry root, the curator root, the policy hash and each asset hash with its amount zero \
+                      padded to 8 slots. Produced by program-libs/interface/tests/statements.rs."
             .to_string(),
         audit: audit.iter().map(audit_case).collect(),
         policy: [confidential, anonymous_policy, delegate]
@@ -484,7 +539,20 @@ fn compute_vectors() -> StatementVectors {
             ciphertexts: ciphertexts.iter().map(hex::encode).collect(),
             auditor_pubkey: hex::encode(deposit.auditor_pk),
             eph_pk: hex::encode(deposit.eph_pk),
-            member_registry_root: deposit.member_registry_root.map(hex::encode),
+            assets: deposited.iter().map(|value| hex::encode(value.asset)).collect(),
+            amounts: deposited.iter().map(|value| value.amount).collect(),
+            key_escrow: deposit.registry.is_some_and(|registry| registry.key_escrow),
+            member_registry_root: deposit
+                .registry
+                .map(|registry| hex::encode(registry.own_root)),
+            curator_root: deposit
+                .registry
+                .and_then(|registry| registry.curator_root)
+                .map(hex::encode),
+            policy_hash: deposit
+                .registry
+                .and_then(|registry| registry.policy_hash)
+                .map(hex::encode),
             elements: hexes(&deposit.elements().unwrap()),
             public_input_hash: hex::encode(deposit.hash().unwrap()),
         },
@@ -506,13 +574,13 @@ fn ring_statements_vector() {
         .iter()
         .map(|case| case.elements.len())
         .collect();
-    assert_eq!(lengths, [16, 16, 19, 19]);
+    assert_eq!(lengths, [16, 16, 18, 19, 19]);
     let policy: Vec<usize> = committed
         .policy
         .iter()
         .map(|case| case.elements.len())
         .collect();
-    assert_eq!(policy, [18, 18, 17]);
+    assert_eq!(policy, [20, 20, 19]);
     assert_eq!(
         committed.deposit.elements.len(),
         DEPOSIT_PUBLIC_INPUT_ELEMENTS

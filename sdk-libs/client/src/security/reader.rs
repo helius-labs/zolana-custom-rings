@@ -1,12 +1,12 @@
 use std::{fmt, str::FromStr};
 
 use curve25519_dalek::edwards::CompressedEdwardsY;
-pub use custom_ring_interface::READ_ACCESS_RECORD_PDA_SEED;
 use custom_ring_interface::{READER_KEY_ED25519, READER_KEY_P256};
-use sha2::{Digest, Sha256};
 use solana_address::Address;
+use spr_hasher::primitives::hash_bytes;
 use spr_keypair::{KeypairError, PublicKey};
 use thiserror::Error;
+use zolana_ring_policy::{Member, MemberError};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ReaderKey {
@@ -71,9 +71,15 @@ impl ReaderKey {
         }
     }
 
-    pub fn record_address(self, ring: &Address) -> Address {
-        let seed_hash: [u8; 32] = Sha256::digest(self.to_bytes()).into();
-        Address::find_program_address(&[READ_ACCESS_RECORD_PDA_SEED, &seed_hash], ring).0
+    /// The member whose storage tree record holds the reader's ring-wide grant.
+    pub fn member(self) -> Result<Member, MemberError> {
+        match self {
+            Self::Ed25519(key) => Member::owner_tag(key.address().as_array()),
+            // The P-256 tag byte keeps the packed first chunk apart from every Solana owner identity.
+            Self::P256(_) => {
+                Member::from_bytes(hash_bytes(&self.to_bytes()).map_err(|_| MemberError::Hashing)?)
+            }
+        }
     }
 }
 

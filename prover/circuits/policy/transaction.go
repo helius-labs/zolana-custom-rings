@@ -1,3 +1,10 @@
+// Ties a policy proof to the shielded pool proof of the same transfer. Both
+// proofs rebuild the same transaction hash, so the policy checks the notes the
+// pool creates.
+//
+// Read after shared/utxo.go, policy/policy.go. Read before
+// policy/withdrawals.go, policy/rules.go, policy/delegate.go.
+
 package policy
 
 import (
@@ -44,6 +51,15 @@ func (p *PolicyInputs) openOutputs(api frontend.API, inputChain frontend.Variabl
 	// The outputs are the ones SPP settles, the SPP proof binds the same private_tx_hash.
 	api.AssertIsEqual(p.PrivateTxHash, privateTxHashFromChains(api, inputChain, outputChain, p.AddressChain, p.PrivateTxBlinding))
 	return outputs
+}
+
+// The select in MemberPolicyCircuit.sender holds anonymous to 0 or 1.
+func (p *PolicyInputs) assertRecipients(api frontend.API, anonymous frontend.Variable, outputs []utxoView) {
+	published := api.Sub(1, anonymous)
+	for o, out := range outputs {
+		// The owner rules screen the same ownerPkHash.
+		api.AssertIsEqual(p.Recipients[o], api.Mul(out.utxo, published, out.ownerPkHash))
+	}
 }
 
 func open(api frontend.API, w shared.UtxoWires) utxoView {

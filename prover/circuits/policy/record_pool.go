@@ -1,19 +1,109 @@
+// Finds the registry record of every member and token a policy checks, or
+// proves that it has none. A member without a record is on no list and has no
+// limits.
+//
+// Read after registry/shared_path.go, registry/apply_records.go,
+// ringgadget/canonical.go. Read before policy/policy.go, policy/subjects.go.
+
 package policy
 
 import (
+	"fmt"
 	"math/big"
 
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/std/rangecheck"
 	"github.com/helius-labs/zolana/prover/server/circuits/crypto/lookup"
+	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
+	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
+	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
 type PoolSubject struct {
 	Member      frontend.Variable
 	RecordIndex frontend.Variable
+}
+
+type RecordPoolShape struct {
+	Own, Curator                 int
+	OwnSubjects, CuratorSubjects int
+}
+
+type PoolEntry struct {
+	Own     frontend.Variable
+	Curator []frontend.Variable
+}
+
+func newPoolEntry(ownOnly bool) PoolEntry {
+	entry := PoolEntry{}
+	if !ownOnly {
+		entry.Curator = make([]frontend.Variable, 1)
+	}
+	return entry
+}
+
+func (s RecordPoolShape) validate(limits RecordPoolShape) error {
+	if err := validatePoolCapacity(s.Own, s.OwnSubjects, limits.Own); err != nil {
+		return err
+	}
+	if limits.Curator == 0 {
+		if s.Curator != 0 || s.CuratorSubjects != 0 {
+			return fmt.Errorf("policy own pool has curator capacity")
+		}
+		return nil
+	}
+	return validatePoolCapacity(s.Curator, s.CuratorSubjects, limits.Curator)
+}
+
+func validatePoolCapacity(records, subjects, maximum int) error {
+	for _, capacity := range []int{records, subjects} {
+		if capacity < 1 || capacity > maximum {
+			return fmt.Errorf("policy pool capacity is invalid")
+		}
+	}
+	return nil
+}
+
+func (e PoolEntry) validate(ownOnly bool) error {
+	expected := 1
+	if ownOnly {
+		expected = 0
+	}
+	if len(e.Curator) != expected {
+		return fmt.Errorf("policy curator reference shape is invalid")
+	}
+	return nil
+}
+
+func (p *PolicyInputs) recordCapacity(publicAssets int) RecordPoolShape {
+	outputs, withdrawals := len(p.Outputs), len(p.Withdrawals)
+	// Withdrawals settle through SPP public slots, so their assets are among at most NPublicSlots.
+	withdrawalAssets := min(withdrawals, transaction.NPublicSlots)
+	distinct := 1 + outputs + withdrawals + outputs
+	limits := RecordPoolShape{Own: distinct + max(withdrawalAssets, publicAssets)}
+	if !p.OwnOnly {
+		limits.Curator = distinct + withdrawalAssets
+	}
+	return limits
+}
+
+func (s RecordPoolShape) withDefaults(limits RecordPoolShape) RecordPoolShape {
+	if s.Own == 0 {
+		s.Own = limits.Own
+	}
+	if s.Curator == 0 {
+		s.Curator = limits.Curator
+	}
+	if s.OwnSubjects == 0 {
+		s.OwnSubjects = s.Own
+	}
+	if s.CuratorSubjects == 0 {
+		s.CuratorSubjects = s.Curator
+	}
+	return s
 }
 
 type recordQuery struct {
@@ -44,13 +134,19 @@ func openRecordPool(api frontend.API, active, root frontend.Variable, records []
 	for i, record := range records {
 		leaves[i] = record.Hash(api)
 		// No stored record fails these splits, ValueOutsideMask in program-libs/interface/src/instructions/instruction.rs keeps lists u64 and registry/apply_records.go keeps mint policy below 2^192.
-		bits := api.ToBinary(record.Lists, registry.ListBits)
-		row := pooledRecord{escrowKey: record.EscrowKey, mintPolicy: decodeMintPolicy(api, record.MintPolicy)}
-		copy(row.onList[:], bits)
+		onList := sourceLists(api, record.Lists)
+		row := pooledRecord{escrowKey: record.EscrowKey, onList: onList, mintPolicy: decodeMintPolicy(api, record.MintPolicy)}
 		pool.table.Insert(row.columns(record.Member, record.Next))
 	}
 	proof.AssertLeavesWhen(api, active, root, leaves)
 	return pool
+}
+
+// sourceLists keeps the NSources list bits a table can source, the split bounds lists below 2^ListBits.
+func sourceLists(api frontend.API, lists frontend.Variable) [NSources]frontend.Variable {
+	var onList [NSources]frontend.Variable
+	copy(onList[:], api.ToBinary(lists, registry.ListBits))
+	return onList
 }
 
 func decodeMintPolicy(api frontend.API, packed frontend.Variable) mintPolicyWires {
@@ -69,7 +165,7 @@ func decodeMintPolicy(api frontend.API, packed frontend.Variable) mintPolicyWire
 
 func (p pooledTable) lookup(api frontend.API, query recordQuery) []frontend.Variable {
 	api.AssertIsBoolean(query.active)
-	api.AssertIsEqual(api.Mul(query.active, api.Sub(1, p.active)), 0)
+	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: query.active, V: api.Sub(1, p.active)})
 	return p.table.Lookup(query.index)
 }
 
@@ -115,6 +211,6 @@ func openSubjectPool(api frontend.API, records recordPool, subjects []PoolSubjec
 
 func (p subjectPool) resolve(api frontend.API, query recordQuery) pooledRecord {
 	row := p.lookup(api, query)
-	api.AssertIsEqual(api.Mul(query.active, api.Sub(row[0], query.member)), 0)
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: query.active, A: row[0], B: query.member})
 	return pooledRecordAt(row[1:]).gated(api, query.active)
 }

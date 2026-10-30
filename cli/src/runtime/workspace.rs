@@ -10,7 +10,7 @@ use zolana_cli_common::{
     release::{verify, Asset},
 };
 
-use crate::{release::RING_KEYS, tool::Tool};
+use crate::{localnet::GENESIS_PROGRAMS, release::RING_KEYS, tool::Tool};
 
 const WORKSPACE_ENV: &str = "ZOLANA_RING_WORKSPACE";
 pub(crate) const WRONG_TARGET: &str = "workspace artifacts are only supported on localnet";
@@ -141,7 +141,10 @@ impl Workspace {
             PROVER_BIN,
             SHIELDED_POOL_SO,
             RING_PROGRAM_SO,
-        ] {
+        ]
+        .into_iter()
+        .chain(GENESIS_PROGRAMS.iter().map(|program| program.path))
+        {
             self.artifact(file)?;
         }
         let lock: serde_json::Value =
@@ -162,7 +165,7 @@ impl Workspace {
         Ok(())
     }
 
-    fn artifact(&self, relative: &str) -> Result<PathBuf> {
+    pub fn artifact(&self, relative: &str) -> Result<PathBuf> {
         within(&self.root, &self.root.join(relative))
     }
 }

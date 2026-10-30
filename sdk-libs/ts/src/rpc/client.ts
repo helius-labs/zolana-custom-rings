@@ -7,8 +7,6 @@ import {
 } from "@heliuslabs/zolana/internal";
 import {
   initializePoseidon,
-  type Address,
-  type Bytes32,
   type RequestContext,
   ClientError,
   type ZolanaClientConfig,
@@ -18,19 +16,14 @@ import { ZolanaClient, type ProvingKeyReport } from "@heliuslabs/zolana/client";
 import { RingError } from "../protocol/error.js";
 import { RingIndexer } from "./indexer.js";
 import type {
-  RecordWrite,
-  RingApplyProofInputs,
-  RingMemberOpenings,
-  RingMemberPage,
-  RingMemberPageRequest,
-  RingMemberProofRequest,
-  RingMemberRecordResult,
   RingProver,
-  RingQueueState,
-  RingRecordPool,
-  RingRecordPoolRequest,
   RingRecordReader,
-  RingRegistryState,
+  StorageMemberOpenings,
+  StorageMemberPage,
+  StorageOpeningsRequest,
+  StoragePageRequest,
+  StorageRecordPool,
+  StorageRecordPoolRequest,
 } from "./ports.js";
 import { CustomRingProver } from "./prover/client.js";
 import { customRingProof } from "./prover/proof.js";
@@ -70,57 +63,25 @@ export class CustomRingClient extends ZolanaClient implements RingProver, RingRe
     );
   }
 
-  getRingMemberRecord(
-    request: RingMemberProofRequest,
+  getStorageMemberOpenings(
+    request: StorageOpeningsRequest,
     context?: RequestContext,
-  ): Promise<RingMemberRecordResult> {
-    return this.#ringIndexer.getRingMemberRecord(request, context);
+  ): Promise<StorageMemberOpenings> {
+    return this.#ringIndexer.getStorageMemberOpenings(request, context);
   }
 
-  getRingMemberRecords(
-    request: RingMemberPageRequest,
+  getStorageMemberRecords(
+    request: StoragePageRequest,
     context?: RequestContext,
-  ): Promise<RingMemberPage> {
-    return this.#ringIndexer.getRingMemberRecords(request, context);
+  ): Promise<StorageMemberPage> {
+    return this.#ringIndexer.getStorageMemberRecords(request, context);
   }
 
-  getRingMemberRegistryRoot(
-    request: Readonly<{ ringProgramId: Address }>,
+  getStorageRecordPool(
+    request: StorageRecordPoolRequest,
     context?: RequestContext,
-  ): Promise<RingRegistryState> {
-    return this.#ringIndexer.getRingMemberRegistryRoot(request, context);
-  }
-
-  getRingMemberOpenings(
-    request: Readonly<{
-      ringProgramId: Address;
-      members: readonly Bytes32[];
-      expectedRoot: Bytes32;
-    }>,
-    context?: RequestContext,
-  ): Promise<RingMemberOpenings> {
-    return this.#ringIndexer.getRingMemberOpenings(request, context);
-  }
-
-  getRingRecordPool(
-    request: RingRecordPoolRequest,
-    context?: RequestContext,
-  ): Promise<RingRecordPool> {
-    return this.#ringIndexer.getRingRecordPool(request, context);
-  }
-
-  getRingRecordQueue(
-    request: Readonly<{ ringProgramId: Address }>,
-    context?: RequestContext,
-  ): Promise<RingQueueState> {
-    return this.#ringIndexer.getRingRecordQueue(request, context);
-  }
-
-  getRingApplyProofInputs(
-    request: Readonly<{ ringProgramId: Address; authorityWrites: readonly RecordWrite[] }>,
-    context?: RequestContext,
-  ): Promise<RingApplyProofInputs> {
-    return this.#ringIndexer.getRingApplyProofInputs(request, context);
+  ): Promise<StorageRecordPool> {
+    return this.#ringIndexer.getStorageRecordPool(request, context);
   }
 
   /** One ring proof, the 192-byte `CustomRingProof` the ring program verifies. */

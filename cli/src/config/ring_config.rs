@@ -7,7 +7,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, ensure, Context as _, Result};
-use custom_ring_interface::RingMode;
+use custom_ring_interface::{RingMode, RingRole};
 use custom_ring_sdk::CoSignScope;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use solana_address::{error::ParseAddressError, Address};
@@ -35,8 +35,18 @@ pub struct RingConfig {
     pub authority_keypair: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upgrade_authority_keypair: Option<PathBuf>,
+    /// The policy role key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_authority_keypair: Option<PathBuf>,
+    /// `keys/admin.json` by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admin_keypair: Option<PathBuf>,
+    /// `keys/pauser.json` by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pauser_keypair: Option<PathBuf>,
+    /// `keys/cosign-admin.json` by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cosign_admin_keypair: Option<PathBuf>,
     /// Fixed once `init` creates the config.
     #[serde(default, skip_serializing_if = "is_default")]
     pub mode: ModeName,
@@ -98,6 +108,15 @@ named_enum! {
 }
 
 named_enum! {
+    pub enum RoleName("ring role") {
+        Admin = "admin",
+        Policy = "policy",
+        Pauser = "pauser",
+        CosignAdmin = "cosign-admin",
+    }
+}
+
+named_enum! {
     pub enum Service("service") {
         Rpc = "rpc",
         Indexer = "indexer",
@@ -143,6 +162,26 @@ impl ModeName {
         match mode {
             RingMode::Confidential | RingMode::ConfidentialEscrow => Self::Confidential,
             RingMode::Anonymous => Self::Anonymous,
+        }
+    }
+}
+
+impl RoleName {
+    pub const fn role(self) -> RingRole {
+        match self {
+            Self::Admin => RingRole::Admin,
+            Self::Policy => RingRole::Policy,
+            Self::Pauser => RingRole::Pauser,
+            Self::CosignAdmin => RingRole::CosignAdmin,
+        }
+    }
+
+    pub const fn keypair_field(self) -> &'static str {
+        match self {
+            Self::Admin => "admin_keypair",
+            Self::Policy => "config_authority_keypair",
+            Self::Pauser => "pauser_keypair",
+            Self::CosignAdmin => "cosign_admin_keypair",
         }
     }
 }
@@ -241,7 +280,7 @@ fn is_default<T: Default + PartialEq>(value: &T) -> bool {
 }
 
 impl Urls {
-    /// `pinned` replaces the cluster's policy file and the release's enclave pin.
+    /// `pinned` replaces the cluster's policy file.
     pub fn prover_client(
         &self,
         root: &Path,
@@ -372,6 +411,9 @@ impl RingConfig {
         for path in [
             &mut self.config_authority_keypair,
             &mut self.upgrade_authority_keypair,
+            &mut self.admin_keypair,
+            &mut self.pauser_keypair,
+            &mut self.cosign_admin_keypair,
         ]
         .into_iter()
         .flatten()
@@ -561,7 +603,7 @@ ring_rpc = "http://127.0.0.1:8785"
 
     #[test]
     fn a_cluster_tee_policy_reads_beside_ring_toml_and_a_pinned_one_replaces_it() {
-        let policy = TeePolicy::default_deployment().unwrap();
+        let policy = probe_policy();
         let dir = std::env::temp_dir().join(format!("ring-cluster-tee-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let loopback = |policy_file: Option<&str>| Urls {
@@ -595,7 +637,7 @@ ring_rpc = "http://127.0.0.1:8785"
 
     #[test]
     fn a_tee_policy_file_reads_bare_or_as_a_deployment_pin() {
-        let policy = TeePolicy::default_deployment().unwrap();
+        let policy = probe_policy();
         let bare = serde_json::to_string(&policy).unwrap();
         let dir = std::env::temp_dir().join(format!("ring-tee-policy-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -611,6 +653,13 @@ ring_rpc = "http://127.0.0.1:8785"
         std::fs::write(&unpinned, r#"{"deployment":null}"#).unwrap();
         assert!(read_tee_policy(&unpinned).is_err());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn probe_policy() -> TeePolicy {
+        TeePolicy::from_json(include_str!(
+            "../../../zolana/prover/tee/testdata/probe_policy.json"
+        ))
+        .unwrap()
     }
 
     fn prover_urls(prover: &str) -> Urls {

@@ -22,7 +22,8 @@ export PROVER_BIN="$repo_root/target/prover-server"
 for binary in "$ZOLANA_CLI_BIN" "$PROVER_BIN" "$SURFPOOL_BIN"; do
   [[ -x "$binary" ]] || { echo "Missing executable $binary" >&2; exit 1; }
 done
-for artifact in target/deploy/custom_ring_program zolana/target/deploy/shielded_pool_program \
+for artifact in target/deploy/custom_ring_program target/deploy/storage_program \
+  zolana/target/deploy/shielded_pool_program \
   zolana/target/deploy/spr_user_registry zolana/target/deploy/squads_smart_account_program; do
   [[ -s "$artifact.so" ]] || {
     echo "Build $artifact.so with the just localnet test recipe" >&2
@@ -61,7 +62,7 @@ done
 
 # The ring keys are verified in place, the transfer keys download beside them once.
 lock="prover/ring/proving-keys.lock"
-keys_dir="$repo_root/zolana/prover/server/proving-keys"
+keys_dir="${ZOLANA_SPP_KEYS_DIR:-$repo_root/zolana/prover/server/proving-keys}"
 for key in $(jq -r '.keys | keys[] | select(startswith("custom_ring_"))' "$lock"); do
   file="$keys_dir/$key"
   expected="$(jq -er --arg name "$key" '.keys[$name].sha256' "$lock")"

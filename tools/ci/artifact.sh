@@ -13,7 +13,7 @@ case "$name" in
     ;;
   ring_program)
     inputs=(zolana Cargo.toml Cargo.lock rust-toolchain.toml .cargo programs program-libs)
-    paths=(target/deploy/custom_ring_program.so target/deploy/policy_store_program.so)
+    paths=(target/deploy/custom_ring_program.so target/deploy/storage_program.so)
     ;;
   zolana_tools)
     inputs=(zolana rust-toolchain.toml .cargo)

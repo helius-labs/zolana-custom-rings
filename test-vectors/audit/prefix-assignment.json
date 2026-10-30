@@ -1,0 +1,9 @@
+{
+  "description": "Openings of the published inputs under one commitment key prefix. notes are the sender's distinct ring notes that carry the prefix, in store order, as UTXO hashes. inputs is the count of published positions under the prefix. opened gives the one position its one note, ambiguous gives each position every note as a candidate, unseen is the UnseenInputPrefix error. Read by PrefixNotes::assign in sdk-libs/client and assignPrefixedInputs in sdk-libs/ts.",
+  "cases": [
+    { "name": "one note in one position", "inputs": 1, "notes": ["01010101010101010101010101010101aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "expected": "opened" },
+    { "name": "two notes sharing a prefix in two positions", "inputs": 2, "notes": ["01010101010101010101010101010101aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "01010101010101010101010101010101bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "expected": "ambiguous" },
+    { "name": "two notes sharing a prefix in one position", "inputs": 1, "notes": ["01010101010101010101010101010101aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "01010101010101010101010101010101bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "expected": "ambiguous" },
+    { "name": "one note in two positions", "inputs": 2, "notes": ["01010101010101010101010101010101aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "expected": "unseen" }
+  ]
+}

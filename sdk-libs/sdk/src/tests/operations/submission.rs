@@ -10,7 +10,7 @@ async fn a_policy_write_moves_the_proof() {
         ..RingSettings::new(RingMode::ConfidentialEscrow)
     })
     .with_registry(Registry::new(&[]), &crate::tests::pipeline_rules());
-    let pinned = ring().require_registry(&chain).await.unwrap().policy_hash;
+    let pinned = ring().require_policy(&chain).await.unwrap().policy_hash;
     let policy = |hash| BoundState {
         policy: Some(BoundPolicy { ring: ring(), hash }),
         ..BoundState::default()
@@ -28,13 +28,13 @@ async fn a_fresh_proof_fixes_a_stale_root_and_an_expired_blockhash_alone() {
     let unmoved = BoundState::default();
     for (error, fixed) in [
         (TransactionError::BlockhashNotFound, true),
-        (ring_failure(CustomRingError::RootBelowFloor), true),
-        (ring_failure(CustomRingError::AuthorityBatchTooLarge), true),
+        (ring_failure(CustomRingError::RootNotServed), true),
+        (ring_failure(CustomRingError::UnboundRegistry), true),
         (
             ring_failure(CustomRingError::ProofVerificationFailed),
             false,
         ),
-        (ring_failure(CustomRingError::QueueFull), false),
+        (ring_failure(CustomRingError::UnauthorizedAuthority), false),
         (TransactionError::AccountNotFound, false),
     ] {
         assert_eq!(

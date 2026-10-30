@@ -50,6 +50,8 @@ describe("ring domains", () => {
       mergeStatement: ascii("CRMG"),
       withdrawals: ascii("CRPW"),
       withdrawalExemption: ascii("CRWX"),
+      recordUpdate: ascii("CRRU"),
+      walletGrant: ascii("CRWG"),
     });
     const values = [
       ...Object.values(RingDomain),

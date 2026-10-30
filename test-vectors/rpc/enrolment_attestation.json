@@ -1,0 +1,20 @@
+{
+  "description": "The config authority's enrolment requests. The target is the ring 0x07 repeated behind the service 0x02 on the cluster 0x01, the authority the Ed25519 keypair of seed 0x08 repeated, timestamp 1700000000 and nonce 0x04 repeated. list is getPendingEnrolments, listAfter its page after the refuse updateId, refuse is refuseEnrolment of the updateId in enrolment_update.json, createRecords is createRecordsRegistry. Each message is the attestation the authority signs, each wire the exact JSON text the Rust SignedRequest<EnrolmentAttestation>::sign and the TypeScript signPendingEnrolmentsRequest, signRefuseEnrolmentRequest and signCreateRecordsRegistryRequest write.",
+  "list": {
+    "message": "zolana/ring-rpc-enrolment/v1\ncluster: 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi\nservice: 8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR\nring: US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\nauthority: 2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1\naction: list\ntimestamp: 1700000000\nnonce: BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=",
+    "wire": "{\"ring\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\",\"auth\":{\"authority\":\"2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1\",\"timestamp\":1700000000,\"nonce\":\"BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=\",\"signature\":\"abvrbr1qNK6urvn4uYLnjqszkMY1ruKC17Tws27zB8y5ebEu4Ht65a4FvJWB65EEqnBndNc9iGCy63Bxe5mhacw\"}}"
+  },
+  "listAfter": {
+    "message": "zolana/ring-rpc-enrolment/v1\ncluster: 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi\nservice: 8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR\nring: US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\nauthority: 2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1\naction: list after UNxjZNh288F4SydMHoDPUdE3QTLRBCMYpvNvszAqGeJ\ntimestamp: 1700000000\nnonce: BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=",
+    "wire": "{\"ring\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\",\"cursor\":\"UNxjZNh288F4SydMHoDPUdE3QTLRBCMYpvNvszAqGeJ\",\"auth\":{\"authority\":\"2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1\",\"timestamp\":1700000000,\"nonce\":\"BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=\",\"signature\":\"4tUmLh6rkY87A1ML9DhNrqoM6EAufZ9tCnYPmqT2M5Uszn9ZBdkyDP3Pr5Pvd5yNqF7LxbH3KXp8rR8qFRDXgoTo\"}}"
+  },
+  "refuse": {
+    "updateId": "UNxjZNh288F4SydMHoDPUdE3QTLRBCMYpvNvszAqGeJ",
+    "message": "zolana/ring-rpc-enrolment/v1\ncluster: 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi\nservice: 8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR\nring: US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\nauthority: 2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1\naction: refuse UNxjZNh288F4SydMHoDPUdE3QTLRBCMYpvNvszAqGeJ\ntimestamp: 1700000000\nnonce: BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=",
+    "wire": "{\"ring\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\",\"updateId\":\"UNxjZNh288F4SydMHoDPUdE3QTLRBCMYpvNvszAqGeJ\",\"auth\":{\"authority\":\"2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1\",\"timestamp\":1700000000,\"nonce\":\"BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=\",\"signature\":\"5UQ7YL1nfJxPN59NC67f4o5fdzZKLhUdKHujYTHrsAHuKstFMYzkbLQjJSVyYzAoUCh8eoP7qmsLqCaZqqPtH5PA\"}}"
+  },
+  "createRecords": {
+    "message": "zolana/ring-rpc-enrolment/v1\ncluster: 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi\nservice: 8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR\nring: US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\nauthority: 2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1\naction: create records\ntimestamp: 1700000000\nnonce: BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=",
+    "wire": "{\"ring\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\",\"auth\":{\"authority\":\"2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1\",\"timestamp\":1700000000,\"nonce\":\"BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=\",\"signature\":\"5vZiGhKxFGz5CNi9fJipCsuJsqDmyCFhyhDLsFsd6idyx2gfUR92n6uqrzUbiw78adcACGPKtiuSnhsU6aZvwMtk\"}}"
+  }
+}

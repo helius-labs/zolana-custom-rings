@@ -7,12 +7,17 @@ use std::{
     time::{Duration, Instant},
 };
 
-use custom_ring_cli::Landing;
-use custom_ring_cli::Zolana;
-use custom_ring_interface::MemberRegistry;
+use custom_ring_cli::{patiently, Zolana};
+use custom_ring_interface::{
+    mint_policy_write,
+    storage::Revision,
+    storage_instruction::{StorageUpdateIxData, StorageWriteData, UpdateMode},
+    RecordWriteData, RingPolicy, WriteRecordsIxData,
+};
 use custom_ring_sdk::{
-    AuthorityListWrite, CustomRing, CustomRingTransfer, CustomRingTransferInput, DepositAsset,
-    DepositRecipient, ProvenRingTransfer, RingDeposit, RingDepositReceipt, RingError,
+    CustomRing, CustomRingTransfer, CustomRingTransferInput, DepositAsset, DepositRecipient,
+    InitializeStorage, ProvenRingTransfer, RingDeposit, RingDepositReceipt, RingError,
+    StorageApplyProof, UpdateStorage,
 };
 use solana_keypair::Keypair;
 use solana_signature::Signature;
@@ -21,8 +26,11 @@ use spr_client::{prover::indexed::ProofDataSource, AsyncProverClient};
 use spr_keypair::{ShieldedKeypair, X25519Keypair};
 use spr_test_utils::test_validator_asserts::wait_for_merkle_proof;
 use spr_transaction::{instructions::transact::ConfidentialTransaction, Utxo};
-use zolana_ring_client::ViewingHistory;
-use zolana_ring_policy::{ListChange, ListId, ListSet, Member, Rule, RuleTable, Subject};
+use zolana_ring_client::{records::storage_apply_proof_inputs, RingIndexer, ViewingHistory};
+use zolana_ring_indexer::rpc::{GetStorageApplyProofInputsRequest, StorageWriteView};
+use zolana_ring_policy::{
+    ListChange, ListId, ListSet, Member, MintPolicy, Rule, RuleTable, Subject,
+};
 
 use crate::shared::{
     custom_ring_program_id, send, setup_with_extra_rings, RegisterRing, TestEnv, Tier,
@@ -62,8 +70,8 @@ pub fn owner_member(owner: &ShieldedKeypair) -> Result<Member> {
     )?)
 }
 
-pub fn policy_registry(ring: CustomRing, env: &TestEnv) -> Result<Box<MemberRegistry>> {
-    Ok(env.run(ring.require_registry(env.client.as_async()))?)
+pub fn policy_registry(ring: CustomRing, env: &TestEnv) -> Result<Box<RingPolicy>> {
+    Ok(env.run(ring.require_policy(env.client.as_async()))?)
 }
 
 pub struct CuratedRings {
@@ -303,14 +311,80 @@ impl RegistryWrite<'_> {
             },
         }
         .check()?;
-        let write = AuthorityListWrite::new(self.ring, env.payer.pubkey())
-            .with_write(self.member, lists)?;
-        Landing {
-            operation: write.into(),
-            payer: &env.payer,
-            signers: &[],
+        let write = StorageWriteData::Record(RecordWriteData {
+            member: *self.member.as_bytes(),
+            lists: WriteRecordsIxData::new(lists),
+            mint_policy: mint_policy_write(None),
+        });
+        StorageRecords {
+            ring: self.ring,
+            writes: vec![write],
+            env,
         }
-        .settle(&env.client)?;
+        .send()?;
         wait_for_list(env, self.ring, self.list_id, self.member, self.present)
+    }
+}
+
+/// Needs the payer as storage authority of the ring's records.
+pub struct StorageRecords<'a> {
+    pub ring: CustomRing,
+    pub writes: Vec<StorageWriteData>,
+    pub env: &'a TestEnv,
+}
+
+impl StorageRecords<'_> {
+    /// Replaces every mint setting of `member`.
+    pub fn mint_policy(
+        ring: CustomRing,
+        member: Member,
+        policy: MintPolicy,
+        env: &TestEnv,
+    ) -> StorageRecords<'_> {
+        StorageRecords {
+            ring,
+            writes: vec![StorageWriteData::Record(RecordWriteData {
+                member: *member.as_bytes(),
+                mint_policy: mint_policy_write(Some(policy)),
+                ..RecordWriteData::default()
+            })],
+            env,
+        }
+    }
+
+    pub fn send(self) -> Result<Signature> {
+        let env = self.env;
+        let authority = env.payer.pubkey();
+        let registry = InitializeStorage::records(self.ring, authority).registry();
+        let writes = self
+            .writes
+            .iter()
+            .map(|write| Ok(StorageWriteView::from(&write.entry()?)))
+            .collect::<Result<Vec<_>>>()?;
+        let request = GetStorageApplyProofInputsRequest {
+            registry: registry.into(),
+            writes,
+        };
+        let response = patiently("the storage apply proof inputs", || {
+            env.client
+                .indexer()
+                .get_storage_apply_proof_inputs(request.clone())
+                .map_err(RingError::from)
+        })?;
+        let inputs = storage_apply_proof_inputs(&response)?;
+        let apply =
+            env.run(StorageApplyProof { inputs: &inputs }.prove(env.client.ring_client()))?;
+        let update = UpdateStorage {
+            authority,
+            registry,
+            mode: UpdateMode::Graced,
+            data: StorageUpdateIxData {
+                revision: Revision::from(response.revision),
+                writes: self.writes,
+                apply: &apply,
+            },
+        }
+        .instruction()?;
+        send(env.client.rpc(), &env.payer, &[update])
     }
 }

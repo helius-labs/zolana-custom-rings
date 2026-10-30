@@ -272,7 +272,7 @@ impl Fixture {
         let opening = DepositOpening {
             owner_hash: self.address.owner_hash().unwrap(),
             blinding: zeroize::Zeroizing::new(held.utxo.blinding),
-            owner_key: (self.mode == RingMode::Anonymous).then(|| self.owner_key()),
+            owner_key: self.owner_key(),
         };
         let owner_utxo_hash =
             spr_transaction::owner_utxo_hash(&opening.owner_hash, &opening.blinding).unwrap();
@@ -539,6 +539,7 @@ impl TransactionOrigin for History {
                 }),
             ring_invoked: !self.foreign.contains(&signature),
             signers: Vec::new(),
+            pool_accounts: Vec::new(),
             withdrawals: Vec::new(),
             deposits: self
                 .confirmed

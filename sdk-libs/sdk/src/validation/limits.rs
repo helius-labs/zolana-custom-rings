@@ -7,14 +7,31 @@ use zolana_ring_policy::{Member, OutflowLimit};
 
 use crate::RingError;
 
-pub(crate) struct Outflows<'a> {
-    /// The sender's owner identity.
-    pub sender: [u8; 32],
+/// Mirrors the policy circuit outflow, the co-signer counts the same outputs.
+#[derive(Clone, Copy, Debug)]
+pub struct SenderOutflow {
+    pub sender: Member,
     pub ring: Address,
+}
+
+pub(crate) struct Outflows<'a> {
+    pub rule: SenderOutflow,
     pub outputs: &'a [SppProofOutputUtxo],
     pub public_assets: &'a [[u8; 32]; N_PUBLIC_SLOTS],
     /// Signed nets, a withdrawal negative.
     pub public_amounts: &'a [i128; N_PUBLIC_SLOTS],
+}
+
+impl SenderOutflow {
+    /// A dummy output never counts.
+    pub fn counts(&self, output: &SppProofOutputUtxo) -> Result<bool, RingError> {
+        let Some(owner) = output.owner_address.as_ref() else {
+            return Ok(false);
+        };
+        let change = output.ring_program_id == Some(self.ring)
+            && owner.signing_pubkey.owner_proof_input_hash()? == *self.sender.as_bytes();
+        Ok(!change)
+    }
 }
 
 impl Outflows<'_> {
@@ -22,12 +39,8 @@ impl Outflows<'_> {
     fn outflow(&self, asset: &[u8; 32]) -> Result<i128, RingError> {
         let mut others: i128 = 0;
         for output in self.outputs {
-            let Some(owner) = output.owner_address.as_ref() else {
-                continue;
-            };
-            let change = owner.signing_pubkey.owner_proof_input_hash()? == self.sender
-                && output.ring_program_id == Some(self.ring);
-            if !change && Member::asset(&output.asset.asset)?.as_bytes() == asset {
+            if self.rule.counts(output)? && Member::asset(&output.asset.asset)?.as_bytes() == asset
+            {
                 others += i128::from(output.amount);
             }
         }
