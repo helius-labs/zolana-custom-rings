@@ -15,9 +15,9 @@ use zolana_ring_client::{
         AuditedUtxosAttestation, AuditedUtxosPage, AuditorKeyStatement, AuthorityAuth,
         ConfirmedAudit, DecryptedTransaction, DecryptedTransactionsPage, GetAuditedMergesResponse,
         GetAuditedUtxosRequest, GetAuditedUtxosResponse, GetDecryptedTransactionsResponse,
-        PagedRead, ReadAttestation, ReadAuth, ReadTarget, ReaderGrantAction,
-        ReaderGrantAttestation, RingChainStatus, SetReaderGrantRequest, SkippedReason,
-        SkippedTransaction, AUDIT_PAGE_LIMIT,
+        GetWalletActivityResponse, PagedRead, ReadAttestation, ReadAuth, ReadTarget,
+        ReaderGrantAction, ReaderGrantAttestation, RingChainStatus, SetReaderGrantRequest,
+        SkippedReason, SkippedTransaction, AUDIT_PAGE_LIMIT,
     },
     AuditError, AuditedTransaction, CreatedUtxos, MergeAuditPage, ReaderKey, RingOrigin,
     TransactionAudit,
@@ -195,6 +195,16 @@ impl<S: TransactionSource> AuditService<S> {
         request: AuditRead<'_>,
     ) -> Result<GetDecryptedTransactionsResponse, RingRpcError> {
         self.authorize(request).await?.execute().await
+    }
+
+    pub async fn wallet_activity(
+        &self,
+        request: AuditRead<'_>,
+    ) -> Result<GetWalletActivityResponse, RingRpcError> {
+        self.authorize(request)
+            .await?
+            .execute_wallet_activity()
+            .await
     }
 
     pub async fn audited_utxos(
@@ -614,9 +624,11 @@ impl<S: TransactionSource> AuditService<S> {
                 mode,
             };
             // Missing mint preimages affect optional metadata, never verified disclosure.
-            let result = bound.and_then(|()| self.audit(audit, &assets));
+            let result = bound
+                .and_then(|()| self.audit(audit, &assets))
+                .and_then(|opened| Ok((opened, origin.spenders(mode)?)));
             match result {
-                Ok(opened) => {
+                Ok((opened, spenders)) => {
                     store.record(
                         CreatedIn {
                             slot: opened.slot,
@@ -630,6 +642,7 @@ impl<S: TransactionSource> AuditService<S> {
                             audited: opened,
                             event_index,
                             nullifiers: tx.nullifiers,
+                            spenders,
                             signers: origin.signers,
                             withdrawals: origin.withdrawals,
                         }
@@ -673,13 +686,28 @@ impl<S> Grant<'_, S> {
 
 impl<S: TransactionSource> AuthorizedRead<'_, S> {
     pub(crate) async fn execute(self) -> Result<GetDecryptedTransactionsResponse, RingRpcError> {
+        let ReadScope::Ring = self.grant.scope else {
+            return Err(GrantRefusal::WalletScope.into());
+        };
         let service = self.grant.service;
         self.grant.spend().await?;
-        let mut response = service
+        service
+            .decrypted_transactions(self.page, self.grant.mode)
+            .await
+    }
+
+    pub(crate) async fn execute_wallet_activity(
+        self,
+    ) -> Result<GetWalletActivityResponse, RingRpcError> {
+        let ReadScope::Wallet(scope) = self.grant.scope else {
+            return Err(GrantRefusal::WalletScope.into());
+        };
+        let service = self.grant.service;
+        self.grant.spend().await?;
+        let response = service
             .decrypted_transactions(self.page, self.grant.mode)
             .await?;
-        self.grant.scope.transactions(&mut response.value);
-        Ok(response)
+        Ok(scope.activity(response))
     }
 
     pub(crate) async fn execute_merges(self) -> Result<GetAuditedMergesResponse, RingRpcError> {

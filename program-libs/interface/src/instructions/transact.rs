@@ -957,6 +957,23 @@ impl<'a> RingTransactData<'a> {
         }))
     }
 
+    /// The run SPP reads as owner signers, between the nullifier PDAs and the settlement groups.
+    pub fn owner_signers<'s, T>(
+        &self,
+        spp: &'s [T],
+        settlements: usize,
+    ) -> Result<&'s [T], CustomRingError> {
+        let trees = match self.input_trees {
+            InputTrees::One(_) => 1,
+            InputTrees::Two { .. } => 2,
+        };
+        let start = crate::RING_TRANSACT_ACCOUNT_PREFIX_LEN + trees + self.nullifiers.len();
+        spp.len()
+            .checked_sub(settlements)
+            .and_then(|end| spp.get(start..end))
+            .ok_or(CustomRingError::InvalidSettlementAccounts)
+    }
+
     /// The SPP selector of the data's shape and rail.
     pub fn circuit(&self) -> CircuitId {
         if let Some(owner) = &self.in_proof_owner {

@@ -50,6 +50,7 @@ export const RingRpcRefusal = Object.freeze({
   unknownEnrolment: -32244,
   enrolmentWindow: -32245,
   recordsNotCreated: -32260,
+  walletScope: -32270,
   invalidLimits: -32276,
   limitsWithoutRecord: -32277,
 } as const);

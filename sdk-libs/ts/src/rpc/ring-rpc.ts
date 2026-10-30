@@ -148,7 +148,7 @@ export const RING_AUDITED_UTXOS_LIMIT = 100;
 export const RING_READ_CURSOR_LIMIT = 256;
 
 /** Rust `PagedRead`, the paged read a reader's signature authorizes. */
-export type RingPagedRead = "getDecryptedTransactions" | "getAuditedMerges";
+export type RingPagedRead = "getDecryptedTransactions" | "getWalletActivity" | "getAuditedMerges";
 
 /** Rust `ReadTarget`, one ring behind one ring rpc on one cluster, every signed read names all three. */
 export interface RingReadTarget {
@@ -567,6 +567,10 @@ export class RingReadRequest {
     return new RingReadRequest("getDecryptedTransactions", target);
   }
 
+  static walletActivity(target: RingReadTarget, wallet: Address): RingReadRequest {
+    return new RingReadRequest("getWalletActivity", target).withWallet(wallet);
+  }
+
   static auditedMerges(target: RingReadTarget): RingReadRequest {
     return new RingReadRequest("getAuditedMerges", target);
   }
@@ -836,6 +840,8 @@ export interface DecryptedRingTransaction {
   /** One per published nullifier of an anonymous ring. */
   readonly inputs: readonly AuditedInput[];
   readonly nullifiers: readonly Bytes32[];
+  /** The input owners of a confidential transfer, by owner signature or in proof. */
+  readonly spenders: readonly Address[];
   /** Required signers, fee payer first. */
   readonly signers: readonly Address[];
   /** Empty when nothing left the ring. */
@@ -876,6 +882,36 @@ export interface DecryptedRingTransactionsPage {
   readonly blockTime: bigint;
   readonly items: readonly DecryptedRingTransaction[];
   readonly skipped: readonly SkippedRingTransaction[];
+  readonly cursor?: Uint8Array;
+}
+
+/** Mirrors Rust `WalletView`, the sender is the anonymous sender or a confidential spender. */
+export type RingWalletView =
+  | {
+      readonly role: "sender";
+      readonly inputs: readonly AuditedInput[];
+      readonly outputs: readonly DecryptedRingOutput[];
+      readonly payloadErrors: readonly OutputPayloadError[];
+      readonly withdrawals: readonly DecryptedRingWithdrawal[];
+    }
+  | {
+      readonly role: "recipient";
+      readonly outputs: readonly DecryptedRingOutput[];
+      readonly withdrawals: readonly DecryptedRingWithdrawal[];
+    };
+
+/** Mirrors Rust `WalletActivity`. */
+export interface RingWalletActivity {
+  readonly slot: bigint;
+  readonly signature: Signature;
+  readonly eventIndex: number;
+  readonly view: RingWalletView;
+}
+
+export interface RingWalletActivityPage {
+  readonly slot: bigint;
+  readonly blockTime: bigint;
+  readonly items: readonly RingWalletActivity[];
   readonly cursor?: Uint8Array;
 }
 
@@ -1179,7 +1215,6 @@ export class RingRpc {
       signer: RingReadSigner;
       cursor?: Uint8Array;
       limit?: bigint;
-      wallet?: Address;
       timestamp?: bigint;
     }>,
     context?: RequestContext,
@@ -1187,9 +1222,27 @@ export class RingRpc {
     let request = RingReadRequest.decryptedTransactions(input.target);
     if (input.cursor !== undefined) request = request.withCursor(input.cursor);
     if (input.limit !== undefined) request = request.withLimit(input.limit);
-    if (input.wallet !== undefined) request = request.withWallet(input.wallet);
     if (input.timestamp !== undefined) request = request.at(input.timestamp);
     return this.readSigned(await request.sign(input.signer), context);
+  }
+
+  /** The wallet's own part of each transaction it spends in or receives an output in. */
+  async getWalletActivity(
+    input: Readonly<{
+      target: RingReadTarget;
+      signer: RingReadSigner;
+      wallet: Address;
+      cursor?: Uint8Array;
+      limit?: bigint;
+      timestamp?: bigint;
+    }>,
+    context?: RequestContext,
+  ): Promise<RingWalletActivityPage> {
+    let request = RingReadRequest.walletActivity(input.target, input.wallet);
+    if (input.cursor !== undefined) request = request.withCursor(input.cursor);
+    if (input.limit !== undefined) request = request.withLimit(input.limit);
+    if (input.timestamp !== undefined) request = request.at(input.timestamp);
+    return this.readSignedWalletActivity(await request.sign(input.signer), context);
   }
 
   /** The UTXOs the service opened, signed over the requested hashes. */
@@ -1389,6 +1442,32 @@ export class RingRpc {
     });
   }
 
+  async readSignedWalletActivity(
+    read: SignedRingRead,
+    context?: RequestContext,
+  ): Promise<RingWalletActivityPage> {
+    const checked = checkedSignedRead(read, "getWalletActivity");
+    const wire = record(
+      await this.#call("getWalletActivity", signedReadParams(checked), context),
+      "result",
+    );
+    const wireContext = record(wire["context"], "result.context");
+    const value = record(wire["value"], "result.value");
+    const cursor = readResponseCursor(value["cursor"], checked);
+    const items = list(value["items"], "result.value.items");
+    if (items.length > Number(checked.limit ?? RING_READ_PAGE_LIMIT)) throw invalid("result.value");
+    return Object.freeze({
+      slot: integer(wireContext["slot"], "result.context.slot"),
+      blockTime: signedInteger(wireContext["blockTime"], "result.context.blockTime"),
+      items: Object.freeze(
+        items.map((item, index) =>
+          decodeWalletActivity(record(item, `result.value.items[${index}]`)),
+        ),
+      ),
+      ...(cursor === undefined ? {} : { cursor }),
+    });
+  }
+
   async getRelayQuote(request: RelayQuoteRequest, context?: RequestContext): Promise<RelayQuote> {
     return decodeRelayQuote(
       await this.#call(RingRpcMethod.getRelayQuote, encodeRelayQuoteRequest(request), context),
@@ -1581,16 +1660,8 @@ export async function signMessage(
 
 /** Structure only, the openings stay as the service rebuilt them. */
 function decodeTransaction(wire: Record<string, unknown>): DecryptedRingTransaction {
-  const outputs = list(wire["outputs"], "outputs").map((entry, index) =>
-    decodeOutput(record(entry, `outputs[${index}]`), `outputs[${index}]`),
-  );
-  const payloadErrors = list(wire["payloadErrors"], "payloadErrors").map((entry, index) => {
-    const error = record(entry, `payloadErrors[${index}]`);
-    return Object.freeze({
-      slotIndex: u32(error["slotIndex"], `payloadErrors[${index}].slotIndex`),
-      kind: payloadErrorKind(error["kind"], `payloadErrors[${index}].kind`),
-    });
-  });
+  const outputs = decodeOutputs(wire["outputs"]);
+  const payloadErrors = decodePayloadErrors(wire["payloadErrors"]);
   checkSlotCoverage([
     ...outputs.map((output) => output.slotIndex),
     ...payloadErrors.map((error) => error.slotIndex),
@@ -1628,29 +1699,101 @@ function decodeTransaction(wire: Record<string, unknown>): DecryptedRingTransact
     signature: signature(wire["txSignature"], "txSignature"),
     eventIndex: u16(wire["eventIndex"], "eventIndex"),
     txViewingPublicKey: x25519Key(wire["txViewingPk"], "txViewingPk"),
-    outputs: Object.freeze(outputs),
-    payloadErrors: Object.freeze(payloadErrors),
+    outputs,
+    payloadErrors,
     ...(sender === undefined ? {} : { sender }),
     inputs: Object.freeze(inputs),
     nullifiers: Object.freeze(nullifiers),
+    spenders: Object.freeze(
+      absent(wire["spenders"])
+        ? []
+        : list(wire["spenders"], "spenders").map((key, index) =>
+            address(key, `spenders[${index}]`),
+          ),
+    ),
     signers: Object.freeze(
       list(wire["signers"], "signers").map((key, index) => address(key, `signers[${index}]`)),
     ),
-    withdrawals: Object.freeze(
-      list(wire["withdrawals"], "withdrawals").map((entry, index) => {
-        const path = `withdrawals[${index}]`;
-        const leg = record(entry, path);
-        return Object.freeze({
-          ...(leg["screenedOwner"] === undefined
-            ? {}
-            : { screenedOwner: address(leg["screenedOwner"], `${path}.screenedOwner`) }),
-          recipient: address(leg["recipient"], `${path}.recipient`),
-          asset: address(leg["asset"], `${path}.asset`),
-          amount: u64(leg["amount"], `${path}.amount`),
-        });
-      }),
-    ),
+    withdrawals: decodeWithdrawals(wire["withdrawals"]),
   });
+}
+
+function decodeWalletActivity(wire: Record<string, unknown>): RingWalletActivity {
+  const view = record(wire["view"], "view");
+  const outputs = decodeOutputs(view["outputs"], "view.outputs");
+  const withdrawals = decodeWithdrawals(view["withdrawals"], "view.withdrawals");
+  let decoded: RingWalletView;
+  if (view["role"] === "sender") {
+    const payloadErrors = decodePayloadErrors(view["payloadErrors"], "view.payloadErrors");
+    checkSlotCoverage([
+      ...outputs.map((output) => output.slotIndex),
+      ...payloadErrors.map((error) => error.slotIndex),
+    ]);
+    decoded = Object.freeze({
+      role: "sender",
+      inputs: Object.freeze(
+        list(view["inputs"], "view.inputs").map((entry, index) =>
+          decodeInput(record(entry, `view.inputs[${index}]`), `view.inputs[${index}]`),
+        ),
+      ),
+      outputs,
+      payloadErrors,
+      withdrawals,
+    });
+  } else if (view["role"] === "recipient" && outputs.length > 0) {
+    decoded = Object.freeze({ role: "recipient", outputs, withdrawals });
+  } else {
+    throw invalid("view.role");
+  }
+  return Object.freeze({
+    slot: integer(wire["slot"], "slot"),
+    signature: signature(wire["txSignature"], "txSignature"),
+    eventIndex: u16(wire["eventIndex"], "eventIndex"),
+    view: decoded,
+  });
+}
+
+function decodeOutputs(value: unknown, path = "outputs"): readonly DecryptedRingOutput[] {
+  return Object.freeze(
+    list(value, path).map((entry, index) =>
+      decodeOutput(record(entry, `${path}[${index}]`), `${path}[${index}]`),
+    ),
+  );
+}
+
+function decodePayloadErrors(
+  value: unknown,
+  path = "payloadErrors",
+): readonly OutputPayloadError[] {
+  return Object.freeze(
+    list(value, path).map((entry, index) => {
+      const error = record(entry, `${path}[${index}]`);
+      return Object.freeze({
+        slotIndex: u32(error["slotIndex"], `${path}[${index}].slotIndex`),
+        kind: payloadErrorKind(error["kind"], `${path}[${index}].kind`),
+      });
+    }),
+  );
+}
+
+function decodeWithdrawals(
+  value: unknown,
+  path = "withdrawals",
+): readonly DecryptedRingWithdrawal[] {
+  return Object.freeze(
+    list(value, path).map((entry, index) => {
+      const legPath = `${path}[${index}]`;
+      const leg = record(entry, legPath);
+      return Object.freeze({
+        ...(leg["screenedOwner"] === undefined
+          ? {}
+          : { screenedOwner: address(leg["screenedOwner"], `${legPath}.screenedOwner`) }),
+        recipient: address(leg["recipient"], `${legPath}.recipient`),
+        asset: address(leg["asset"], `${legPath}.asset`),
+        amount: u64(leg["amount"], `${legPath}.amount`),
+      });
+    }),
+  );
 }
 
 /** Rust `TransactionAudit` records every published slot as an output or as one payload error. */
@@ -2015,6 +2158,12 @@ function checkedSignedRead(value: unknown, method: RingPagedRead): SignedRingRea
     "request",
   );
   if (read["method"] !== method) throw invalidRequest("method");
+  // Rust `ReadScope`, a full transaction page is ring wide and wallet activity names its wallet.
+  if (
+    method !== "getAuditedMerges" &&
+    (method === "getWalletActivity") !== (read["wallet"] !== undefined)
+  )
+    throw invalidRequest("wallet");
   const cursor = read["cursor"] === undefined ? undefined : checkedReadCursor(read["cursor"]);
   const limit = read["limit"] === undefined ? undefined : checkedReadLimit(read["limit"]);
   return Object.freeze({

@@ -1,8 +1,8 @@
 use custom_ring_interface::{
     cosign::{CoSignDemand, CoSignRequirement},
-    funder_account_position, AnonymousParties, CustomRingError, CustomRingProof, InputTrees,
-    PublicSlots, RailSigner, RingPolicy, RingTransactData, ANONYMOUS_PARTIES,
-    RING_TRANSACT_ACCOUNT_PREFIX_LEN, RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
+    funder_account_position, AnonymousParties, CustomRingError, CustomRingProof, PublicSlots,
+    RailSigner, RingPolicy, RingTransactData, ANONYMOUS_PARTIES, RING_TRANSACT_RING_CONFIG_INDEX,
+    TRANSACT_PAYER_INDEX,
 };
 use pinocchio::{error::ProgramError, AccountView, Address};
 use spr_hasher::primitives::solana_owner_identity;
@@ -108,7 +108,7 @@ impl<'a> TransactCheck<'a> {
             }
             SignerSlot::InProofOwner(owner) => {
                 // Every input belongs to the in-proof owner, the one the policy reads as sender.
-                if !self.owner_signers(spp, window.len())?.is_empty() {
+                if !data.owner_signers(spp, window.len())?.is_empty() {
                     return Err(CustomRingError::OwnerSignerOnInProofRail.into());
                 }
                 if co_signer == Some(owner) {
@@ -122,7 +122,7 @@ impl<'a> TransactCheck<'a> {
                 }
             }
             SignerSlot::Owners => {
-                let owners = self.owner_signers(spp, window.len())?;
+                let owners = data.owner_signers(spp, window.len())?;
                 if owners.iter().any(|owner| !owner.is_signer()) {
                     return Err(CustomRingError::MissingOwnerSigner.into());
                 }
@@ -217,23 +217,6 @@ impl<'a> TransactCheck<'a> {
             signer,
             spp: next.0,
         }
-    }
-
-    /// The run SPP reads as owner signers, between the nullifier PDAs and the settlement groups.
-    fn owner_signers<'s>(
-        &self,
-        spp: &'s [AccountView],
-        settlements: usize,
-    ) -> Result<&'s [AccountView], CustomRingError> {
-        let trees = match self.data.input_trees {
-            InputTrees::One(_) => 1,
-            InputTrees::Two { .. } => 2,
-        };
-        let start = RING_TRANSACT_ACCOUNT_PREFIX_LEN + trees + self.data.nullifiers.len();
-        spp.len()
-            .checked_sub(settlements)
-            .and_then(|end| spp.get(start..end))
-            .ok_or(CustomRingError::InvalidSettlementAccounts)
     }
 }
 

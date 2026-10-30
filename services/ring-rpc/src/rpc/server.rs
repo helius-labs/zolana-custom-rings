@@ -30,16 +30,16 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use zolana_ring_client::rpc::{
     CreateAuditorKeyRequest, CreateAuditorKeyResponse, CreateRecordsRegistryRequest,
-    GetAuditedUtxosRequest, GetDecryptedTransactionsRequest, GetPendingEnrolmentsRequest,
-    GetRecordUpdateStatusRequest, GetRelayQuoteRequest, GetRelayStatusRequest, HealthResponse,
+    GetAuditedMergesResponse, GetAuditedUtxosRequest, GetDecryptedTransactionsRequest,
+    GetDecryptedTransactionsResponse, GetPendingEnrolmentsRequest, GetRecordUpdateStatusRequest,
+    GetRelayQuoteRequest, GetRelayStatusRequest, GetWalletActivityResponse, HealthResponse,
     PagedRead, PrepareAuthorityTransferRequest, PrepareRelayRequest, RefuseEnrolmentRequest,
     RingDepositsRequest, RingDepositsResponse, RingState, RingStatusRequest, RingStatusResponse,
     SetMergeSettingsRequest, SetReaderGrantRequest, SubmitRecordUpdateRequest, SubmitRelayRequest,
-    CREATE_AUDITOR_KEY, CREATE_RECORDS_REGISTRY, GET_AUDITED_MERGES, GET_AUDITED_UTXOS,
-    GET_DECRYPTED_TRANSACTIONS, GET_PENDING_ENROLMENTS, GET_RECORD_UPDATE_STATUS, GET_RELAY_QUOTE,
-    GET_RELAY_STATUS, HEALTH, PREPARE_AUTHORITY_TRANSFER, PREPARE_RELAY, REFUSE_ENROLMENT,
-    RING_DEPOSITS, RING_STATUS, SET_MERGE_SETTINGS, SET_READER_GRANT, SUBMIT_RECORD_UPDATE,
-    SUBMIT_RELAY,
+    CREATE_AUDITOR_KEY, CREATE_RECORDS_REGISTRY, GET_AUDITED_UTXOS, GET_PENDING_ENROLMENTS,
+    GET_RECORD_UPDATE_STATUS, GET_RELAY_QUOTE, GET_RELAY_STATUS, HEALTH,
+    PREPARE_AUTHORITY_TRANSFER, PREPARE_RELAY, REFUSE_ENROLMENT, RING_DEPOSITS, RING_STATUS,
+    SET_MERGE_SETTINGS, SET_READER_GRANT, SUBMIT_RECORD_UPDATE, SUBMIT_RELAY,
 };
 
 use crate::{
@@ -249,48 +249,15 @@ pub fn rpc_module<S: TransactionSource + 'static>(
             })
         },
     )?;
-    method(
-        &mut module,
-        GET_DECRYPTED_TRANSACTIONS,
-        |hub, request: GetDecryptedTransactionsRequest| async move {
-            let authentication = hub.admit(Lane::Authentication)?;
-            let service = hub.service(request.ring_program_id.map(|ring| ring.0))?;
-            let page = Page::new(request.cursor, request.limit)?;
-            let auth = &request.auth;
-            let read = service
-                .authorize(AuditRead {
-                    read: PagedRead::DecryptedTransactions,
-                    auth,
-                    page: &page,
-                    wallet: request.wallet.map(|wallet| wallet.0),
-                })
-                .await?;
-            // Decrypting holds a read slot, the authentication slot is free again.
-            drop(authentication);
-            let _slot = hub.admit(Lane::Read)?;
-            read.execute().await
-        },
-    )?;
-    method(
-        &mut module,
-        GET_AUDITED_MERGES,
-        |hub, request: GetDecryptedTransactionsRequest| async move {
-            let authentication = hub.admit(Lane::Authentication)?;
-            let service = hub.service(request.ring_program_id.map(|ring| ring.0))?;
-            let page = Page::new(request.cursor, request.limit)?;
-            let read = service
-                .authorize(AuditRead {
-                    read: PagedRead::AuditedMerges,
-                    auth: &request.auth,
-                    page: &page,
-                    wallet: request.wallet.map(|wallet| wallet.0),
-                })
-                .await?;
-            drop(authentication);
-            let _slot = hub.admit(Lane::Read)?;
-            read.execute_merges().await
-        },
-    )?;
+    for read in [
+        PagedRead::DecryptedTransactions,
+        PagedRead::WalletActivity,
+        PagedRead::AuditedMerges,
+    ] {
+        method(&mut module, read.method(), move |hub, request| {
+            paged_read(hub, request, read)
+        })?;
+    }
     method(
         &mut module,
         GET_AUDITED_UTXOS,
@@ -396,6 +363,44 @@ pub fn relay_module(relay: Arc<Relay>) -> Result<RpcModule<Arc<Relay>>, Register
     Ok(module)
 }
 
+#[derive(Clone, Serialize)]
+#[serde(untagged)]
+enum PagedResponse {
+    Transactions(GetDecryptedTransactionsResponse),
+    WalletActivity(GetWalletActivityResponse),
+    Merges(GetAuditedMergesResponse),
+}
+
+async fn paged_read<S: TransactionSource>(
+    hub: Arc<Hub<S>>,
+    request: GetDecryptedTransactionsRequest,
+    read: PagedRead,
+) -> Result<PagedResponse, RingRpcError> {
+    let authentication = hub.admit(Lane::Authentication)?;
+    let service = hub.service(request.ring_program_id.map(|ring| ring.0))?;
+    let page = Page::new(request.cursor, request.limit)?;
+    let authorized = service
+        .authorize(AuditRead {
+            read,
+            auth: &request.auth,
+            page: &page,
+            wallet: request.wallet.map(|wallet| wallet.0),
+        })
+        .await?;
+    // Decrypting holds a read slot, the authentication slot is free again.
+    drop(authentication);
+    let _slot = hub.admit(Lane::Read)?;
+    Ok(match read {
+        PagedRead::DecryptedTransactions => {
+            PagedResponse::Transactions(authorized.execute().await?)
+        }
+        PagedRead::WalletActivity => {
+            PagedResponse::WalletActivity(authorized.execute_wallet_activity().await?)
+        }
+        PagedRead::AuditedMerges => PagedResponse::Merges(authorized.execute_merges().await?),
+    })
+}
+
 /// Every handler error becomes a JSON-RPC error through one conversion.
 fn method<C, P, T, F, Fut>(
     module: &mut RpcModule<Arc<C>>,
@@ -488,7 +493,7 @@ mod tests {
     use spr_keypair::X25519Keypair;
     use zolana_ring_client::RingIndexerError;
     use zolana_ring_client::{
-        rpc::{KeyMode, RingChainStatus, DEPOSITS_PAGE_LIMIT},
+        rpc::{KeyMode, RingChainStatus, DEPOSITS_PAGE_LIMIT, GET_DECRYPTED_TRANSACTIONS},
         AuditError, RingOrigin,
     };
     use zolana_ring_transaction::RingAssets;

@@ -257,6 +257,7 @@ fn page(
                 audited,
                 event_index: 7,
                 nullifiers,
+                spenders: Vec::new(),
                 signers: vec![Address::new_from_array([13; 32])],
                 withdrawals: vec![withdrawal],
             }
@@ -297,7 +298,8 @@ fn a_decrypted_page_keeps_its_wire_json() {
         sender: None,
         inputs: Vec::new(),
     };
-    let page = page(audited, vec![[12; 32]]);
+    let mut page = page(audited, vec![[12; 32]]);
+    page.value.items[0].spenders = vec![[13; 32].into()];
     let json = serde_json::to_string(&page).expect("json");
     assert_eq!(json, include_str!("decrypted_page.json").trim_end());
     assert_eq!(
@@ -306,9 +308,7 @@ fn a_decrypted_page_keeps_its_wire_json() {
     );
 }
 
-/// The TypeScript decoder reads the same page.
-#[test]
-fn an_anonymous_decrypted_page_keeps_its_wire_json() {
+fn anonymous_audited() -> AuditedTransaction {
     let opening = |seed: u8, ring| AuditedInputOpening {
         asset: [seed; 32],
         mint: Some(Address::new_from_array([4; 32])),
@@ -316,7 +316,7 @@ fn an_anonymous_decrypted_page_keeps_its_wire_json() {
         blinding: [seed + 1; 32],
         ring,
     };
-    let audited = AuditedTransaction {
+    AuditedTransaction {
         tx_signature: Signature::from([1; 64]),
         slot: 42,
         tx_viewing_pk: ViewingKey::from_bytes(&[2; 32]).pubkey(),
@@ -384,11 +384,20 @@ fn an_anonymous_decrypted_page_keeps_its_wire_json() {
                 },
             },
         ],
-    };
-    let page = page(
-        audited,
+    }
+}
+
+fn anonymous_page() -> GetDecryptedTransactionsResponse {
+    page(
+        anonymous_audited(),
         vec![[12; 32], [11; 32], [10; 32], [9; 32], [8; 32], [7; 32]],
-    );
+    )
+}
+
+/// The TypeScript decoder reads the same page.
+#[test]
+fn an_anonymous_decrypted_page_keeps_its_wire_json() {
+    let page = anonymous_page();
     let json = serde_json::to_string(&page).expect("json");
     assert_eq!(
         json,
@@ -397,6 +406,33 @@ fn an_anonymous_decrypted_page_keeps_its_wire_json() {
     assert_eq!(
         serde_json::from_str::<GetDecryptedTransactionsResponse>(&json).expect("parses"),
         page
+    );
+}
+
+/// The TypeScript decoder reads both views of the anonymous page.
+#[test]
+fn a_wallet_activity_page_keeps_its_wire_json() {
+    let page = anonymous_page();
+    let [transaction] = page.value.items.as_slice() else {
+        panic!("one transaction")
+    };
+    let view = |wallet: u8| {
+        WalletActivity::of(Address::new_from_array([wallet; 32]), transaction.clone())
+            .expect("a party")
+    };
+    // 0x50 is the anonymous sender, 0x10 owns output 0 alone.
+    let activity = GetWalletActivityResponse {
+        context: page.context,
+        value: WalletActivityPage {
+            items: vec![view(0x50), view(0x10)],
+            cursor: page.value.cursor.clone(),
+        },
+    };
+    let json = serde_json::to_string(&activity).expect("json");
+    assert_eq!(json, include_str!("wallet_activity_page.json").trim_end());
+    assert_eq!(
+        serde_json::from_str::<GetWalletActivityResponse>(&json).expect("parses"),
+        activity
     );
 }
 

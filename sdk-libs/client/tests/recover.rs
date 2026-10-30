@@ -539,6 +539,7 @@ impl TransactionOrigin for History {
                 }),
             ring_invoked: !self.foreign.contains(&signature),
             signers: Vec::new(),
+            pool_accounts: Vec::new(),
             withdrawals: Vec::new(),
             deposits: self
                 .confirmed

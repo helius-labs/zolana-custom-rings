@@ -89,6 +89,8 @@ pub enum GrantRefusal {
     RecordsUnsynced = -32130,
     #[error("service keeps reader grants in the storage tree")]
     GrantsInTree = -32131,
+    #[error("read method and wallet scope disagree")]
+    WalletScope = -32270,
 }
 
 impl GrantRefusal {
@@ -250,10 +252,11 @@ mod tests {
     #[test]
     fn grant_refusal_codes_are_stable() {
         use GrantRefusal::*;
-        for refusal in [RecordsUnsynced, GrantsInTree] {
+        for refusal in [RecordsUnsynced, GrantsInTree, WalletScope] {
             let code = match refusal {
                 RecordsUnsynced => -32130,
                 GrantsInTree => -32131,
+                WalletScope => -32270,
             };
             assert_eq!(
                 ErrorObjectOwned::from(RingRpcError::Grant(refusal)).code(),

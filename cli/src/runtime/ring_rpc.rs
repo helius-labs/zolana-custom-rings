@@ -463,6 +463,7 @@ mod tests {
             sender: None,
             inputs: Vec::new(),
             nullifiers: Vec::new(),
+            spenders: Vec::new(),
             signers: Vec::new(),
             withdrawals: Vec::new(),
         }
