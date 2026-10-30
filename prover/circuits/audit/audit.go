@@ -42,10 +42,17 @@ func (s AnonymousAuditShape) senderKeyLen() int {
 	return 0
 }
 
+type DeliveredSenderShape struct {
+	Inputs  int
+	Outputs int
+}
+
 // Audit key shapes, mirrored by the audit capacities and the anonymous classes of program-libs/interface/src/proof/disclosure.rs.
 var (
 	// DeliveredAuditCapacities prove every confidential and delegate body.
 	DeliveredAuditCapacities = [...]int{2, 4, 8, 16}
+	// DeliveredSenderShapes take the widest SPP input count of a confidential ring spend at each capacity, mirrored by DELIVERED_SENDER_CLASSES.
+	DeliveredSenderShapes = [...]DeliveredSenderShape{{Inputs: 48, Outputs: 2}, {Inputs: 24, Outputs: 4}, {Inputs: 16, Outputs: 8}, {Inputs: 8, Outputs: 16}}
 	// AnonymousAuditShapes name spent notes by hash and prefix, a transfer takes the smallest class holding its published inputs.
 	AnonymousAuditShapes = [...]AnonymousAuditShape{
 		{InputClass: 4, Outputs: 2}, {InputClass: 16, Outputs: 2},

@@ -8,8 +8,6 @@ use spr_event::{
 use crate::CustomRingError;
 
 pub const RING_CONFIDENTIAL_DELIVERED_SCHEME_TAG: u8 = 10;
-/// Scheme 10 led by its recipient key, under the owner's own key on the in-proof owner rail.
-pub const RING_OWNER_DELIVERED_SCHEME_TAG: u8 = 11;
 
 /// AES-CTR of the 32-byte blinding then the big-endian u64 amount.
 pub const RING_DELIVERED_BODY_LEN: usize = 40;
@@ -35,14 +33,6 @@ pub fn ring_confidential_delivered_output_body(
         .ok()
 }
 
-pub fn ring_owner_delivered_output(
-    data: &[u8],
-) -> Option<(&[u8; 32], &[u8; RING_DELIVERED_BODY_LEN])> {
-    let (u, body) =
-        encrypted_output_body(data, RING_OWNER_DELIVERED_SCHEME_TAG)?.split_first_chunk::<32>()?;
-    Some((u, body.try_into().ok()?))
-}
-
 pub fn encode_confidential_output(body: &[u8]) -> Result<Vec<u8>, CustomRingError> {
     encode_encrypted_output(CONFIDENTIAL_ENCRYPTED_SCHEME_TAG, body)
 }
@@ -51,13 +41,6 @@ pub fn encode_ring_confidential_delivered_output(
     body: &[u8; RING_DELIVERED_BODY_LEN],
 ) -> Result<Vec<u8>, CustomRingError> {
     encode_encrypted_output(RING_CONFIDENTIAL_DELIVERED_SCHEME_TAG, body)
-}
-
-pub fn encode_ring_owner_delivered_output(
-    u: &[u8; 32],
-    body: &[u8; RING_DELIVERED_BODY_LEN],
-) -> Result<Vec<u8>, CustomRingError> {
-    encode_encrypted_output(RING_OWNER_DELIVERED_SCHEME_TAG, &[&u[..], body].concat())
 }
 
 pub fn encode_anonymous_recipient_output(body: &[u8]) -> Result<Vec<u8>, CustomRingError> {

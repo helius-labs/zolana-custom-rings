@@ -23,6 +23,7 @@ import (
 const (
 	smallDeliveredKey common.CircuitType = "custom-ring-audit-delivered-2"
 	deliveredKey      common.CircuitType = "custom-ring-audit-delivered-8"
+	senderKey         common.CircuitType = "custom-ring-audit-delivered-sender-48-2"
 	anonymousKey      common.CircuitType = "custom-ring-audit-anonymous-v2-4-2"
 	entryKey          common.CircuitType = "custom-ring-audit-anonymous-entry-v2-8-2"
 	memberKey         common.CircuitType = "custom-ring-policy-member-v3-2-w0-curator"
@@ -35,7 +36,7 @@ const (
 )
 
 func TestHostRequestsDecodeAndSolve(t *testing.T) {
-	for _, circuit := range []common.CircuitType{smallDeliveredKey, deliveredKey, anonymousKey, entryKey, memberKey, delegateKey, applyKey, batchKey, registerKey, depositKey, mergeKey} {
+	for _, circuit := range []common.CircuitType{smallDeliveredKey, deliveredKey, senderKey, anonymousKey, entryKey, memberKey, delegateKey, applyKey, batchKey, registerKey, depositKey, mergeKey} {
 		t.Run(string(circuit), func(t *testing.T) {
 			payload := mustMarshal(t, hostRequest(t, keyOf(t, circuit)))
 			circuitOf := extensionOf(t, circuit).Circuit
@@ -59,6 +60,8 @@ func hostRequest(t testing.TB, k Key) any {
 	switch k.Family {
 	case DeliveredAudit:
 		return requestOf[DeliveredAuditParams](t, k.Circuit, ringaudit.NewDeliveredAudit(t, k.Outputs).Circuit(t))
+	case DeliveredSenderAudit:
+		return requestOf[DeliveredSenderAuditParams](t, k.Circuit, ringaudit.NewDeliveredSenderAudit(t, k.deliveredSenderShape()).Circuit(t))
 	case AnonymousAudit, AnonymousEntryAudit:
 		return requestOf[AnonymousAuditParams](t, k.Circuit, ringaudit.NewAnonymousAudit(t, k.anonymousShape()).Circuit(t))
 	case MemberPolicy:

@@ -159,30 +159,22 @@ func (c *AnonymousAuditCircuit) spend(api frontend.API, rc frontend.Rangechecker
 	var openings [][]frontend.Variable
 	previousUtxo := frontend.Variable(1)
 	for i, input := range c.Inputs {
-		opened := input.Open(api)
-		// 2. An input at or past the count is no UTXO, so no spent UTXO escapes the published inputs.
-		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, spent.count.Active[i]), V: opened.Utxo})
-		// 3. Every spent UTXO is the hidden sender's.
-		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: opened.Utxo, A: input.OwnerPkHash, B: senderPkHash})
-		if i == 0 {
-			// 4. Input 0 is a UTXO, so the disclosed sender owns a real spent UTXO.
-			api.AssertIsEqual(opened.Utxo, 1)
-		}
-		hash := api.Mul(opened.Utxo, opened.Hash)
+		// 2. Every spent UTXO lies below the count and is the hidden sender's.
+		opened, hash := spentBySender(api, input, spent.count.Active[i], senderPkHash, i)
 		spent.hashes = append(spent.hashes, hash)
 		if !c.Shape.FullOpenings {
-			// 5. A disclosed hash names a note of the ring, an audited output whose opening the auditor holds.
+			// 3. A disclosed hash names a note of the ring, an audited output whose opening the auditor holds.
 			abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: opened.Utxo, A: input.RingProgramID, B: c.RingProgramID})
 		}
 		if i > 0 {
-			// 6. A UTXO follows only a UTXO as in SPP, so spent UTXO k owns nullifier k.
+			// 4. A UTXO follows only a UTXO as in SPP, so spent UTXO k owns nullifier k.
 			abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: opened.Utxo, V: api.Sub(1, previousUtxo)})
 		}
 		previousUtxo = opened.Utxo
 		if !c.Shape.FullOpenings {
 			continue
 		}
-		// 7. The auditor rebuilds an entry input from its opening, under input 0's nullifier key and with no data.
+		// 5. The auditor rebuilds an entry input from its opening, under input 0's nullifier key and with no data.
 		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: opened.Utxo, A: input.NullifierPk, B: c.Inputs[0].NullifierPk})
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: opened.Utxo, V: input.DataHash})
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: opened.Utxo, V: input.RingDataHash})
@@ -193,7 +185,7 @@ func (c *AnonymousAuditCircuit) spend(api frontend.API, rc frontend.Rangechecker
 		spent.tail = uniformTail(openings)
 		return spent
 	}
-	// 7. Input 0 opens by its hash and names the sender, every other spent UTXO matches among the sender's notes by its prefix.
+	// 5. Input 0 opens by its hash and names the sender, every other spent UTXO matches among the sender's notes by its prefix.
 	spent.tail = countedTail{fields: commitmentTail(api, rc, spent.hashes), published: func(n int) int { return 1 + n/2 }}
 	return spent
 }
@@ -225,6 +217,19 @@ func (c *AnonymousAuditCircuit) statement(api frontend.API, e auditEnvelope, out
 		outputChain, disclosureChain, c.PrivateTxHash, c.SenderCommitment,
 		c.PartyIdentities[0], c.PartyIdentities[1], c.PartyIdentities[2],
 	))
+}
+
+// spentBySender holds slot i to the sender and to live, slot 0 a UTXO, and returns its spent hash, zero off a UTXO.
+func spentBySender(api frontend.API, input shared.UtxoWires, live, sender frontend.Variable, i int) (shared.OpenedUtxo, frontend.Variable) {
+	opened := input.Open(api)
+	// An input at or past the count is no UTXO, so no spent UTXO escapes the published inputs.
+	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, live), V: opened.Utxo})
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: opened.Utxo, A: input.OwnerPkHash, B: sender})
+	if i == 0 {
+		// Input 0 is a UTXO, so the sender owns a real spent UTXO.
+		api.AssertIsEqual(opened.Utxo, 1)
+	}
+	return opened, api.Mul(opened.Utxo, opened.Hash)
 }
 
 // commitmentTail is hashes[0] in full, then the prefixes of the other hashes two per field, the last half zero for an odd prefix count.

@@ -30,6 +30,7 @@ type auditStatementVector struct {
 	Outputs          []statementOutputVector `json:"outputs"`
 	Disclosure       []string                `json:"disclosure"`
 	PrivateTxHash    string                  `json:"private_tx_hash"`
+	Sender           string                  `json:"sender"`
 	SenderCommitment string                  `json:"sender_commitment"`
 	Elements         []string                `json:"elements"`
 	PublicInputHash  string                  `json:"public_input_hash"`
@@ -77,6 +78,8 @@ func TestAuditStatementsMatchRustVectors(t *testing.T) {
 			switch v.Kind {
 			case "delivered":
 				elements = ringaudit.DeliveredStatement(t, head, outputs, disclosure)
+			case "delivered_sender":
+				elements = ringaudit.DeliveredSenderStatement(t, head, outputs, disclosure, ringtest.VectorField(t, v.PrivateTxHash), ringtest.VectorField(t, v.Sender))
 			case "anonymous":
 				elements = ringaudit.AnonymousStatement(t, head, outputs, disclosure, ringaudit.AnonymousTail{
 					PrivateTxHash:    ringtest.VectorField(t, v.PrivateTxHash),
@@ -90,8 +93,8 @@ func TestAuditStatementsMatchRustVectors(t *testing.T) {
 			requireElements(t, elements, v.Elements, v.PublicInputHash)
 		})
 	}
-	if len(kinds) != 2 {
-		t.Fatalf("the vector covers %v, want delivered and anonymous", kinds)
+	if len(kinds) != 3 {
+		t.Fatalf("the vector covers %v, want delivered, delivered_sender and anonymous", kinds)
 	}
 }
 

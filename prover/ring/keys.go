@@ -18,6 +18,7 @@ type Family int
 
 const (
 	DeliveredAudit Family = iota
+	DeliveredSenderAudit
 	AnonymousAudit
 	AnonymousEntryAudit
 	MemberPolicy
@@ -56,6 +57,9 @@ func keys() []Key {
 	for _, outputs := range audit.DeliveredAuditCapacities {
 		add(DeliveredAudit, 0, outputs)
 	}
+	for _, shape := range audit.DeliveredSenderShapes {
+		add(DeliveredSenderAudit, shape.Inputs, shape.Outputs)
+	}
 	for _, shape := range audit.AnonymousAuditShapes {
 		add(AnonymousAudit, shape.InputClass, shape.Outputs)
 	}
@@ -92,6 +96,10 @@ func keys() []Key {
 	return keys
 }
 
+func (k Key) deliveredSenderShape() audit.DeliveredSenderShape {
+	return audit.DeliveredSenderShape{Inputs: k.Inputs, Outputs: k.Outputs}
+}
+
 func (k Key) anonymousShape() audit.AnonymousAuditShape {
 	return audit.AnonymousAuditShape{InputClass: k.Inputs, Outputs: k.Outputs, FullOpenings: k.Family == AnonymousEntryAudit}
 }
@@ -113,6 +121,8 @@ func (k Key) circuitType() common.CircuitType {
 	switch k.Family {
 	case DeliveredAudit:
 		return named("audit-delivered-%d", k.Outputs)
+	case DeliveredSenderAudit:
+		return named("audit-delivered-sender-%d-%d", k.Inputs, k.Outputs)
 	case AnonymousAudit:
 		return named("audit-anonymous-v2-%d-%d", k.Inputs, k.Outputs)
 	case AnonymousEntryAudit:

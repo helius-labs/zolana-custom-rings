@@ -11,6 +11,9 @@ func TestAuditKeysCompileAtPinnedCounts(t *testing.T) {
 	for _, capacity := range audit.DeliveredAuditCapacities {
 		ringkey.RequirePinned(t, deliveredKeyName(capacity), compileDelivered(t, capacity).cs)
 	}
+	for _, shape := range audit.DeliveredSenderShapes {
+		ringkey.RequirePinned(t, deliveredSenderKeyName(shape), compileDeliveredSender(t, shape).cs)
+	}
 	for _, shape := range []audit.AnonymousAuditShape{{InputClass: 4, Outputs: 2}, {InputClass: 16, Outputs: 2}, entryShape} {
 		ringkey.RequirePinned(t, anonymousKeyName(shape), compileAnonymous(t, shape).cs)
 	}

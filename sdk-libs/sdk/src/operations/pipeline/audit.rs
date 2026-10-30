@@ -25,7 +25,7 @@ use crate::{
     prover::{to_instruction_proof, RingRequest},
     request::{
         owner_key, AnonymousAudit, AnonymousOutput, AuditParams, DeliveredAudit, DeliveredOutput,
-        Opening,
+        DeliveredSenderAudit, Opening,
     },
     RingError,
 };
@@ -185,6 +185,10 @@ pub(crate) struct AuditProving<'a> {
     pub auditor: &'a X25519Pubkey,
     pub ring_id: [u8; 32],
     pub public_input_hash: [u8; 32],
+    pub private_tx_hash: [u8; 32],
+    pub private_tx_blinding: [u8; 32],
+    /// The sender's owner identity, the sender key's statement value.
+    pub sender_pk_hash: [u8; 32],
     /// `None` outside the anonymous rail.
     pub anonymous: Option<&'a AnonymousStatement>,
 }
@@ -198,13 +202,12 @@ pub(crate) struct AuditRequest {
 #[serde(untagged)]
 pub(crate) enum AuditBody {
     Delivered(Box<DeliveredAudit>),
+    DeliveredSender(Box<DeliveredSenderAudit>),
     Anonymous(Box<AnonymousAudit>),
 }
 
 pub(crate) struct AnonymousStatement {
     pub party_identities: [[u8; 32]; 3],
-    pub private_tx_hash: [u8; 32],
-    pub private_tx_blinding: [u8; 32],
     pub sender_commitment: [u8; 32],
 }
 
@@ -241,24 +244,29 @@ impl AuditProving<'_> {
         };
         let tree = inputs.output_tree_id;
         let body = match (self.sealed.layout, self.anonymous) {
-            (DisclosureLayout::Delivered(_), _) => AuditBody::Delivered(Box::new(DeliveredAudit {
-                public_input_hash: self.public_input_hash,
-                audit,
-                outputs: self
-                    .published
-                    .iter()
-                    .map(|slot| delivered_output(slot, tree))
-                    .collect::<Result<_, _>>()?,
-            })),
+            (DisclosureLayout::Delivered(layout), _) => {
+                let delivered = DeliveredAudit {
+                    public_input_hash: self.public_input_hash,
+                    audit,
+                    outputs: self
+                        .published
+                        .iter()
+                        .map(|slot| delivered_output(slot, tree))
+                        .collect::<Result<_, _>>()?,
+                };
+                match layout.sender_class {
+                    None => AuditBody::Delivered(Box::new(delivered)),
+                    Some(class) => AuditBody::DeliveredSender(Box::new(DeliveredSenderAudit {
+                        delivered,
+                        sender: self.sender_pk_hash,
+                        private_tx_hash: self.private_tx_hash,
+                        private_tx_blinding: self.private_tx_blinding,
+                        inputs: self.input_openings(class)?,
+                    })),
+                }
+            }
             (DisclosureLayout::Anonymous(layout), Some(statement)) => {
                 let (class, count) = (layout.key.class(), layout.inputs);
-                let mut openings = inputs
-                    .input_utxos
-                    .iter()
-                    .filter(|input| !input.is_compact())
-                    .map(Opening::input)
-                    .collect::<Result<Vec<_>, _>>()?;
-                openings.resize(class, Opening::default());
                 AuditBody::Anonymous(Box::new(AnonymousAudit {
                     party_identities: statement.party_identities,
                     public_input_hash: self.public_input_hash,
@@ -268,8 +276,8 @@ impl AuditProving<'_> {
                         .iter()
                         .map(|slot| anonymous_output(slot, tree))
                         .collect::<Result<_, _>>()?,
-                    private_tx_hash: statement.private_tx_hash,
-                    private_tx_blinding: statement.private_tx_blinding,
+                    private_tx_hash: self.private_tx_hash,
+                    private_tx_blinding: self.private_tx_blinding,
                     sender_key: (layout.key == AnonymousAuditKey::Entry)
                         .then(|| owner_key(&self.sender.signing_pubkey))
                         .transpose()?,
@@ -279,7 +287,7 @@ impl AuditProving<'_> {
                             max: usize::from(u8::MAX),
                         }
                     })?,
-                    inputs: openings,
+                    inputs: self.input_openings(class)?,
                     sender_commitment: statement.sender_commitment,
                 }))
             }
@@ -288,6 +296,19 @@ impl AuditProving<'_> {
             }
         };
         Ok(AuditRequest { circuit, body })
+    }
+
+    /// One opening per published input, zero padded to the key's input class.
+    fn input_openings(&self, class: usize) -> Result<Vec<Opening>, RingError> {
+        let mut openings = self
+            .inputs
+            .input_utxos
+            .iter()
+            .filter(|input| !input.is_compact())
+            .map(Opening::input)
+            .collect::<Result<Vec<_>, _>>()?;
+        openings.resize(class, Opening::default());
+        Ok(openings)
     }
 }
 
@@ -349,7 +370,7 @@ fn anonymous_opening(slot: &PublishedSlot<'_>) -> Result<AnonymousOutputOpening,
 fn delivered_output(slot: &PublishedSlot<'_>, tree: u16) -> Result<DeliveredOutput, RingError> {
     let output = slot.output;
     let (recipient_key, body) = match slot.wire {
-        RingOutput::Delivered { u, body, .. } | RingOutput::Owned { u, body, .. } => (*u, *body),
+        RingOutput::Delivered { u, body, .. } => (*u, *body),
         RingOutput::Anonymous { .. } | RingOutput::Exit { .. } => {
             ([0; 32], [0; RING_DELIVERED_BODY_LEN])
         }

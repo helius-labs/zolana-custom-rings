@@ -28,6 +28,22 @@ fn a_relayer_pays_a_policy_transfer_its_owner_signs_in_the_proof() {
 }
 
 #[test]
+fn a_relayer_pays_an_audit_only_transfer_its_owner_signs_in_the_proof() {
+    let fixture = Fixture::new();
+    let mut ring = Ring::new(Setup::AuditOnly);
+    let data = fixture.in_proof_owner(&OWNER, 2, 2, false);
+    let spp = spp_list(&ring.payer.pubkey(), &data, &[]);
+    reaches_verification(send(
+        &mut ring,
+        tag::TRANSFER,
+        Vec::new(),
+        data.encode().unwrap(),
+        spp,
+        &[],
+    ));
+}
+
+#[test]
 fn an_owner_signer_beside_the_in_proof_owner_is_refused() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::Policy);

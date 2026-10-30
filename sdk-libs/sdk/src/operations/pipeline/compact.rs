@@ -21,12 +21,6 @@ pub(crate) enum OwnedOutput {
         u: [u8; 32],
         body: [u8; RING_DELIVERED_BODY_LEN],
     },
-    Owned {
-        hash: [u8; 32],
-        owner: [u8; 32],
-        u: [u8; 32],
-        body: [u8; RING_DELIVERED_BODY_LEN],
-    },
     Anonymous {
         hash: [u8; 32],
         tag: [u8; 32],
@@ -69,17 +63,6 @@ impl OwnedOutput {
                 u: *u,
                 body: *body,
             },
-            RingOutput::Owned {
-                hash,
-                owner,
-                u,
-                body,
-            } => Self::Owned {
-                hash: *hash,
-                owner: *owner,
-                u: *u,
-                body: *body,
-            },
             RingOutput::Anonymous { hash, tag, body } => Self::Anonymous {
                 hash: *hash,
                 tag: *tag,
@@ -100,17 +83,6 @@ impl OwnedOutput {
     pub fn view(&self) -> RingOutput<'_> {
         match self {
             Self::Delivered { hash, u, body } => RingOutput::Delivered { hash, u, body },
-            Self::Owned {
-                hash,
-                owner,
-                u,
-                body,
-            } => RingOutput::Owned {
-                hash,
-                owner,
-                u,
-                body,
-            },
             Self::Anonymous { hash, tag, body } => RingOutput::Anonymous {
                 hash,
                 tag,
@@ -143,7 +115,6 @@ pub(crate) struct OwnedPolicyProof {
 pub(crate) enum OwnedRecipients {
     Hidden,
     Framed(Vec<[u8; 32]>),
-    Published { dummies: u64 },
 }
 
 impl OwnedRecipients {
@@ -151,7 +122,6 @@ impl OwnedRecipients {
         match self {
             Self::Hidden => PolicyRecipients::Hidden,
             Self::Framed(recipients) => PolicyRecipients::Framed(recipients),
-            Self::Published { dummies } => PolicyRecipients::Published { dummies: *dummies },
         }
     }
 }

@@ -7,7 +7,7 @@ use std::{
 
 use custom_ring_interface::{
     blinding::ring_blinding_seed,
-    ring_confidential_delivered_output_body, ring_owner_delivered_output,
+    ring_confidential_delivered_output_body,
     stream::{DeliveredSlot, SlotSecret},
     AuditorMessage, DisclosureLayout, InputPrefix,
 };
@@ -263,18 +263,8 @@ impl<'a> Slot<'a> {
         self.output.view_tag
     }
 
-    /// Scheme 11 leads its body with the recipient key, scheme 10 publishes it as the owner tag.
-    fn delivered(
-        self,
-    ) -> Option<(
-        [u8; 32],
-        &'a [u8; custom_ring_interface::RING_DELIVERED_BODY_LEN],
-    )> {
-        match ring_owner_delivered_output(&self.output.payload) {
-            Some((u, body)) => Some((*u, body)),
-            None => ring_confidential_delivered_output_body(&self.output.payload)
-                .map(|body| (self.owner_tag(), body)),
-        }
+    fn body(self) -> Option<&'a [u8; custom_ring_interface::RING_DELIVERED_BODY_LEN]> {
+        ring_confidential_delivered_output_body(&self.output.payload)
     }
 
     fn tree_id(self) -> u16 {
@@ -403,10 +393,11 @@ impl Transfer<'_> {
             owner_key,
             nullifier_pk,
         } = delivery;
+        let recipient_u = slot.owner_tag();
         let Some(nullifier_pk) = self.nullifier_pk(&owner_key, nullifier_pk) else {
             return Ok(Err(OutputPayloadErrorKind::EscrowUnknown));
         };
-        let Some((recipient_u, body)) = slot.delivered() else {
+        let Some(body) = slot.body() else {
             return Ok(Err(OutputPayloadErrorKind::Frame));
         };
         let Some(secret) = self.delivered_secret(slot, recipient_u)? else {

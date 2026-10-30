@@ -7,7 +7,7 @@ use spr_keypair::{NullifierKey, ShieldedAddress, SigningKey};
 use spr_program::instruction::TransactInterfaceTransferAccounts;
 use spr_transaction::instructions::transact::ConfidentialTransaction;
 use zolana_ring_client::rpc::TokenAccountSetup;
-use zolana_ring_transaction::{RingDelivery, RingOutputRail};
+use zolana_ring_transaction::RingOutputRail;
 
 use super::{
     canonical_shape, delivered, pad_under_rail, sealed, shape_keyed, transaction_key, Rail,
@@ -154,13 +154,7 @@ impl Owner<'_> {
         self.check_settlement_accounts()?;
         let shape = self.shape(&sender)?;
         let transaction = self.transaction.clone();
-        let delivery = match (
-            delivered(shape.n_outputs(), RingRail::Confidential)?,
-            self.in_proof_owner,
-        ) {
-            (_, Some(_)) => RingDelivery::Owned,
-            (delivery, None) => delivery,
-        };
+        let delivery = delivered(shape.n_outputs(), RingRail::Confidential)?;
         let first_nullifier = *transaction.first_nullifier();
         let rail = RingOutputRail::new(transaction_key(self.sender, first_nullifier)?, delivery);
         let transaction = pad_under_rail(transaction, &rail, shape, &sender)?;

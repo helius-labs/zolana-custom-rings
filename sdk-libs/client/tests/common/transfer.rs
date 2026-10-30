@@ -394,6 +394,7 @@ impl Transfer {
                     outputs: outputs.len(),
                     exits,
                     key_escrow,
+                    sender_class: None,
                 },
                 seed_out,
                 outputs: outputs

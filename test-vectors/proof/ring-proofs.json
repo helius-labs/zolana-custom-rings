@@ -575,6 +575,134 @@
       "provingKeySha256": "92facd093e1e9436e92b88063c0c6766bb206cda8517c236ee6640cfda58af4f"
     }
   },
+  "custom-ring-audit-delivered-sender-16-8": {
+    "statement": "0x1818c75007313792638788c963c7c8d31d5966c14cb61967775402244b00ed94",
+    "proof": {
+      "ar": [
+        "0x0ec07acb31ac71cb07193bfb00476bd837bf77160476dc3fb4c9e6a0b5e191de",
+        "0x0a3b1f248b9a808755761a12f909e615a4034707557aad86a5bf341685203824"
+      ],
+      "bs": [
+        [
+          "0x1b5c836d5256458c5d03ce5b000e8d944f399ab3503c87df938214db1e7f4e20",
+          "0x0684634485551056951362be124c987cc732214b8596f0fb068ef2290f113b73"
+        ],
+        [
+          "0x1a24b65b82061922b5d70ca80d43ef90ad898356920275b95e7fb9256bb6ba27",
+          "0x26d64393d51b25cec7ed6b7eb0150c1f4a8c577b726b93b472c7de2d4e29b727"
+        ]
+      ],
+      "krs": [
+        "0x01a120e25dd4090bb67947db2560c682b1c2fd66a643bea3725f70c685942a28",
+        "0x1e38a2009f84e90f58d137faafd1e264236c1ae0cd7fb24d01f020a6d1059272"
+      ],
+      "proofCommitment": [
+        "0x0aa02ecc40aa7f472188163ec5aba099e6d3e9c4b45a60ffe29545b60792eb1b",
+        "0x165449afdb1da6186fac6039fe5e4d83cf7b87e1f9bc9ed0fc0e1f44ec967f56"
+      ],
+      "proofCommitmentPok": [
+        "0x01cad3caf823e2a79f139393d6e595dbb0566e9dfe2ff2d691b497b26459bfbc",
+        "0x1a0dbad88cb8c69bb82cda053b4905861acbf336c44657e8e8da0f718052f40e"
+      ],
+      "provingKeySha256": "5fffc98c2b0dac781f99d3e5cd9b3d98e6c85f96ff855856050925c0c5f052e2"
+    }
+  },
+  "custom-ring-audit-delivered-sender-24-4": {
+    "statement": "0x04a812e12eb30017fa4a2cc05989646f4b485649a568e6e17785eb014e3c5d34",
+    "proof": {
+      "ar": [
+        "0x1eb5673514c8bd66fdced2e447573d4a1262856a8bee9e6257293321a0c2763d",
+        "0x16238833a4cd95e3adaf5cad9cefa7035336089b07e8f735bfae6a511e19a057"
+      ],
+      "bs": [
+        [
+          "0x109f0718f6d5de6d48a0239edf140dec0fda6de1085ca86b924d487890740317",
+          "0x1920e790c982163290a2aaf2c38a75a2c29fb25d1e5c38fe8e70bde01f13180e"
+        ],
+        [
+          "0x11c8cd44d9a540b66a69b4e5d1c87967fef837f996fc86dfe223bc7dfecec219",
+          "0x0eae700dfc398539d23ea33ff9911008ed3e787da2168116ea594279eeb6af6b"
+        ]
+      ],
+      "krs": [
+        "0x0f9f81990f165b5f5da590309676d186ec36bc015a22344443fff9f18d3db31f",
+        "0x2b02753235228f2df53d9191066b1f6a2802d1dcc6a0ec73244d7048eed2507b"
+      ],
+      "proofCommitment": [
+        "0x1690cc27f9413d13f1590e455c93cfe20e9ab43a357ea2a830f157b06429e234",
+        "0x241fc6f2e73dcf0bd6775b5d236a158db7aa14fa6655d52c97bc08eef9b7288d"
+      ],
+      "proofCommitmentPok": [
+        "0x0f9b7a827fb3621c8118418637fa1f7edb73586b437430c9f56f8eb93be4c9c4",
+        "0x0eccd57132750e3c87b10c17e45fa1cc65c78bd6615d4645b145177e20ca328e"
+      ],
+      "provingKeySha256": "4715c00597e2346b648817b8fec82397de3a35b6986ac7a72c1c088b900e84a0"
+    }
+  },
+  "custom-ring-audit-delivered-sender-48-2": {
+    "statement": "0x2e0cbda9d0e36a7b7ae305f0f85f437f38be29162bb7b3056d5c71184c58ebc9",
+    "proof": {
+      "ar": [
+        "0x02d61420a36c7b8deae36124d4897077910cc95dce652a69970da9847378d330",
+        "0x03f5f7c9a78ab38773775946b3196330affd022abba97bfb6b6151136e0ea1ae"
+      ],
+      "bs": [
+        [
+          "0x195044598e59fb1c9120b36a5e62b63ea7d59750068f6da087fbdc3e8b2d117b",
+          "0x07c2d21a39837b270787dd29505f15d37201bd1ed91575aa390b8ac4668bed53"
+        ],
+        [
+          "0x106c6fef45864cfb38658934d61e8f853c05856092e729b782d5ae98a0d2840b",
+          "0x274df02b43895d4d9063f7085c582e5381f7e5ca351e54c09d5da74a27d32178"
+        ]
+      ],
+      "krs": [
+        "0x020ac30d0bc525629ca08887553ec493a0f162e5976dd07222d7db57f912543e",
+        "0x0fdde94e60701153ce1b9b31a0d43e890b058308421df02a3ef229ebee00ca22"
+      ],
+      "proofCommitment": [
+        "0x106223618fc9a830e260969655848424010c96152a12c1a7fd226617f965a38d",
+        "0x0f69be6d89da8e870fdb0cba1601d566ca9ad1020a54dfe0717a38e4bf67ab2f"
+      ],
+      "proofCommitmentPok": [
+        "0x218013f824f91c34bdc6c05b438ae6dd2d7ab9c56e562e8224ef91612a6d7010",
+        "0x06c1633523bfc38b9bb440532a6e1345c382545e2958462de7c0be31425b82d2"
+      ],
+      "provingKeySha256": "d2e24837a1cebac149e6f5c527e3d01ab35fdb9c8da6d46d47d24b6f46da6ff8"
+    }
+  },
+  "custom-ring-audit-delivered-sender-8-16": {
+    "statement": "0x0bdfc8aea91e8d13b84080d56210b8593a2ddbdb695d350d2035a9e49998b23c",
+    "proof": {
+      "ar": [
+        "0x0cd4800e4931edcdacdc671345316a659112e6482e70159b109a4e9cdebf2be5",
+        "0x2e47776111be941d938cd7fb08fd2c907e458a42a031b55069a7e853e19cb7b1"
+      ],
+      "bs": [
+        [
+          "0x2c52c50eedfdf34887e198d9a1ffe441babcc1d9c6ef075b6a579e29e1a3f5a9",
+          "0x1e64697e87598043c3c5b9fc95bb813f051a9558b3e4807c48265bc87ed5f6ef"
+        ],
+        [
+          "0x0f620171a81b2bbc220c94f5a049221958412eb8fa378dffddcde0be1e7cc6cb",
+          "0x0b0233600aa1c52e5210d287646e29171097d6a50ab8389a2610db9ec04a86b1"
+        ]
+      ],
+      "krs": [
+        "0x253a1bf868a2973a24f927c670cd0e6968647231c53d858c531253da47d1e5a3",
+        "0x069712f1f322b312a5a731c3df09bb5a9aa38c22a8816eb5caca940c4b3f7ba1"
+      ],
+      "proofCommitment": [
+        "0x0eaa247ba8072980830fa4273784cb827363d0cb14123e9c9474dcba95ccc2b5",
+        "0x108646c9feb09c04dc52fbc9e17603a598c0c3253cfcbdc0cf15ec7101ae4bd7"
+      ],
+      "proofCommitmentPok": [
+        "0x302921f5b2e347e4211b10809d69b294e6273fc73395286734aa25a9b177674e",
+        "0x17df695ff0d427da9ab33e96ec62c6fe83e388827ecf383e99179892ac34899b"
+      ],
+      "provingKeySha256": "fc7dffab38da3c515728d1e2644ec0ca632f918ea007703bf3c7fe8ea8cf9ddf"
+    }
+  },
   "custom-ring-deposit-1": {
     "statement": "0x010b2b4e6e8b50c81c1a6c9fa299614fa5d92613dfb5a7ae6febbadef5036ebf",
     "proof": {
