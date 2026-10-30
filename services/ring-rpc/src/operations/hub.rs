@@ -41,7 +41,7 @@ use crate::{
     record_writer::{RecordWriter, WriterParts, RECORD_FLUSH_INTERVAL},
     relay::{Relay, RelayParts, ServedRings, RELAY_TRACK_INTERVAL},
     relay_services::{MergeParts, RelayServices},
-    replay::ReplayGuard,
+    replay::{LocalNonces, ReplayGuard},
     storage_chain::StorageChain,
     upstream::{DepositHistory, DepositPage, TransactionSource},
     utxos::{AuditStore, UTXO_BACKFILL_INTERVAL},
@@ -313,7 +313,7 @@ impl<S: TransactionSource> Hub<S> {
             .ok_or_else(|| RecordUpdateRefusal::Disabled.into())
     }
 
-    /// Signs under the asset record limits with a store, refuses without one.
+    /// Signs under the asset record limits, refuses every co-signature without a co-signer key.
     pub fn co_signer(&self) -> &Arc<dyn CoSignPolicy> {
         &self.co_signer
     }
@@ -560,7 +560,7 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
         self
     }
 
-    /// Without a store the hub refuses every co-signature.
+    /// The hub refuses to build without a store.
     #[must_use = "use the updated builder"]
     pub fn with_co_signer(mut self, signer: Keypair) -> Self {
         self.co_signer = Some(signer);
@@ -641,7 +641,10 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
                 refresh: RefreshState::Never,
             }),
             origins: self.origins,
-            replay: ReplayGuard::default(),
+            replay: match &self.store {
+                Some(store) => ReplayGuard::Shared(store.clone()),
+                None => ReplayGuard::Local(LocalNonces::default()),
+            },
             active_readers: Mutex::new(HashSet::new()),
             lanes: [
                 (RequestRate::default(), None),
@@ -659,12 +662,12 @@ impl<S: TransactionSource + 'static> HubBuilder<S> {
             database: self.store.clone(),
         };
         let shared = Arc::new(shared);
-        let co_signer: Arc<dyn CoSignPolicy> = match self.store.zip(self.co_signer) {
-            Some((store, signer)) => Arc::new(
+        let co_signer: Arc<dyn CoSignPolicy> = match self.co_signer {
+            Some(signer) => Arc::new(
                 LimitedCoSignerInit {
                     signer,
                     limits: MirroredLimits(shared.clone()),
-                    store: Arc::new(store),
+                    store: Arc::new(self.store.ok_or(RingRpcError::CoSignerStoreMissing)?),
                 }
                 .build(),
             ),

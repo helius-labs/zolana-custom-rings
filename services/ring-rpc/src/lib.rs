@@ -61,6 +61,8 @@ mod relay_submit;
 mod relays;
 #[path = "security/replay.rs"]
 mod replay;
+#[path = "storage/replay_nonces.rs"]
+mod replay_nonces;
 #[path = "rpc/server.rs"]
 mod server;
 #[path = "rpc/storage_chain.rs"]

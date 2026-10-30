@@ -68,7 +68,7 @@ In `database` mode, which needs `--store-url`, the service keeps both grants in 
 
 Allowed WebAuthn origins need an explicit RP ID. The RP ID can be the origin host or a valid parent domain. Cross origin assertions are rejected.
 
-Accepted nonces are held in process memory for the timestamp window. Run one process for each service key. Multiple replicas need a shared nonce store before they can use the same key.
+With `--store-url` an accepted nonce is spent in the store for every process that shares it. Without a store the nonces stay in process memory, so run one process for each service key. Replicas must share one store, because separate stores split the nonce set and the co-signer allowance.
 
 ## Relay, record updates and merge settings
 
@@ -157,9 +157,9 @@ The leaf commits only the hash of an escrow envelope. The ephemeral key and ciph
 
 ## Co-signer limits
 
-`LimitedCoSigner` implements the `CoSignPolicy` trait the relay calls before it submits a transaction that demands the co-signer. It reads each asset's `AssetLimits` from the asset's record in the ring's own storage registry, checks the opening against the newest own root the ring policy mirrors, and signs only when every limit holds. With `--co-signer-key-file`, `serve` gives it to the relay, and a host that spawns `ManagedMerge` takes it from `Hub::co_signer`. Without a co-signer key or a store `Hub::co_signer` refuses every co-signature. [Co-signer limits](../../docs/spec.md#co-signer-limits) in the spec gives each limit and its window.
+`LimitedCoSigner` implements the `CoSignPolicy` trait the relay calls before it submits a transaction that demands the co-signer. It reads each asset's `AssetLimits` from the asset's record in the ring's own storage registry, checks the opening against the newest own root the ring policy mirrors, and signs only when every limit holds. With `--co-signer-key-file`, `serve` gives it to the relay, and a host that spawns `ManagedMerge` takes it from `Hub::co_signer`. Without a co-signer key `Hub::co_signer` refuses every co-signature, and a hub with a co-signer key and no store refuses to build. [Co-signer limits](../../docs/spec.md#co-signer-limits) in the spec gives each limit and its window.
 
-A signature reserves its flows in the `cosign_usage` table, keyed by the co-signature and the asset. `settle` keeps a confirmed reservation and deletes a failed or expired one, and a repeat of either changes nothing. The relay passes the co-signature to `settle`, since it names the transaction before the fee payer signs. A reservation the relay never settles counts until its window passes. The reservation lock lives in process memory, so run one co-signer process for each store.
+A signature reserves its flows in the `cosign_usage` table, keyed by the co-signature and the asset. `settle` keeps a confirmed reservation and deletes a failed or expired one, and a repeat of either changes nothing. The relay passes the co-signature to `settle`, since it names the transaction before the fee payer signs. A reservation the relay never settles counts until its window passes. A decision first writes the `cosign_admission` row of its ring and each asset, and holds the write locks until its transaction ends. So co-signers that share one store grant each allowance once.
 
 `keygen --kind co-signer` prints the co-signer public key for the ring's `CoSigner` record, and `serve` logs it at start.
 

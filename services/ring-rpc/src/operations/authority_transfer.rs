@@ -82,12 +82,15 @@ impl<S: TransactionSource> Hub<S> {
         {
             return Err(AuthorityTransferError::EscrowUnserved.into());
         }
-        shared.replay.accept(ReplayCheck {
-            ring,
-            nonce,
-            timestamp: request.timestamp,
-            now,
-        })?;
+        shared
+            .replay
+            .accept(ReplayCheck {
+                ring,
+                nonce,
+                timestamp: request.timestamp,
+                now,
+            })
+            .await?;
         // 3. The escrowed secret opens to the source's nullifier key and stays in memory.
         let source = transfer.source.0;
         let owner_key = source

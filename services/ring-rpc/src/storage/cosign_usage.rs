@@ -33,6 +33,19 @@ pub(crate) struct UsageLedger<'a, C> {
 }
 
 impl<C: ConnectionTrait> UsageLedger<'_, C> {
+    /// The no-op update locks each row until the transaction ends, in address order.
+    pub async fn admit(&self, ring: &Address, assets: &[Address]) -> Result<(), DbErr> {
+        let sql = "INSERT INTO cosign_admission(ring,asset) VALUES($1,$2) \
+                   ON CONFLICT(ring,asset) DO UPDATE SET asset=excluded.asset";
+        let mut ordered = assets.to_vec();
+        ordered.sort_unstable();
+        for asset in &ordered {
+            let values = vec![address_value(ring), address_value(asset)];
+            self.conn.execute(self.statement(sql, values)).await?;
+        }
+        Ok(())
+    }
+
     pub async fn reserved(&self, signature: &Signature) -> Result<bool, DbErr> {
         let sql = "SELECT 1 AS reserved FROM cosign_usage WHERE signature=$1";
         let row = self
