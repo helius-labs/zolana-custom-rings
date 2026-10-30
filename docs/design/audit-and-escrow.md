@@ -8,6 +8,7 @@ The auditor holds one viewing key for the ring's life. That key opens every oper
 - The proof forces every output blinding to derive from that secret, the salt and the first nullifier. The auditor rebuilds every output.
 - On the confidential and authority rails the proof also shows each output body encrypts the blinding and the amount to the viewing key the output publishes.
 - On the anonymous rail the disclosure opens each output's owner, asset and amount, and names each spent note by its hash or a prefix. A spend of default-ring notes opens every spent note.
+- No proof checks an anonymous output's recipient body. A sender can settle an output the auditor opens and its recipient cannot.
 - The program builds both ring statements from the frame it forwards to SPP, so the proofs bind the transfer that settles.
 
 ## Deposits and merges
