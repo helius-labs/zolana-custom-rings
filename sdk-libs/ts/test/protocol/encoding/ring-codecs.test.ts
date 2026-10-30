@@ -1215,6 +1215,30 @@ describe("ring read request", () => {
     ]);
   });
 
+  it("reads the wallet activity the Rust ring rpc serializes for its sender and a recipient", async () => {
+    const { fetch, bodies } = capturingFetch(rustPage("wallet_activity_page.json"));
+    const page = await new RingRpc("http://ring.example", {
+      fetch,
+      allowInsecureHttp: true,
+    }).getWalletActivity({
+      target: RING_TARGET,
+      signer: await anyReader(),
+      wallet: addressOf(0x50),
+    });
+    const params = bodies[0]?.["params"] as Record<string, unknown>;
+    expect(bodies[0]?.["method"]).toBe("getWalletActivity");
+    expect(params["wallet"]).toBe(addressOf(0x50));
+    const [sent, received] = page.items;
+    if (sent?.view.role !== "sender") throw new Error("a sender view");
+    expect(sent.view.inputs).toHaveLength(6);
+    expect(sent.view.outputs.map((output) => output.slotIndex)).toEqual([0, 1, 2]);
+    expect(received?.view).toEqual({
+      role: "recipient",
+      outputs: [sent.view.outputs[0]],
+      withdrawals: [],
+    });
+  });
+
   it("reads the anonymous page with its sender, tags and every input ring kind", async () => {
     const item = await readItem(rustItem("decrypted_anonymous_page.json"));
     expect(item.sender).toEqual({ ownerKey: filled(0x50, 32), nullifierPk: filled(0x51, 32) });

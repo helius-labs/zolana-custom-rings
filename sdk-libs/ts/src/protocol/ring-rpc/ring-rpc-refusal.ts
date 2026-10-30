@@ -50,6 +50,7 @@ export const RingRpcRefusal = Object.freeze({
   unknownEnrolment: -32244,
   enrolmentWindow: -32245,
   recordsNotCreated: -32260,
+  walletScope: -32270,
 } as const);
 
 export type RingRpcRefusalName = keyof typeof RingRpcRefusal;
