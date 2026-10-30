@@ -91,7 +91,7 @@ covers the owner key, the nullifier key, the mint, the amount, the output
 blinding and every input UTXO hash, and the merge names no owner on chain.
 
 On a `ConfidentialEscrow` ring the same proof opens the owner's member record
-under a root the ring policy mirrors and shows that the record escrows the
+under a root of the ring's live records registry and shows that the record escrows the
 nullifier key the inputs spend under. The merged output stays under that key,
 so the auditor reads its secret from the owner's escrow storage write. An
 owner without a registered key cannot merge on such a ring. A ring without key

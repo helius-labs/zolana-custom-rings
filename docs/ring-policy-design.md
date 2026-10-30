@@ -12,8 +12,8 @@ reference.
 
 A list membership is one bit of a member record, a leaf of an indexed Merkle
 tree that belongs to the ring. A policy is a proof obligation over the records
-of the transfer's subjects. The proof opens them under a root the ring policy
-mirrors and binds them to the transfer through `private_tx_hash`.
+of the transfer's subjects. The proof opens them under a root of the ring's
+live registry and binds them to the transfer through `private_tx_hash`.
 
 The running example is a blocklist ring. Its pinned table holds one rule,
 forbid `output-owner` on `Block`. A curator ring serves the `Block` list. The
@@ -188,25 +188,26 @@ even when no private output carries that asset.
 
 ## Roots and revocation
 
-Each registry keeps its last `ROOT_HISTORY` roots, each with its revision, and
-the ring policy mirrors them. A transfer names the revision of each root its
-proof binds, and the program reads the root from the mirror. A revision the
-mirror does not hold, or a retired root past its expiry, fails with
-`MirrorRootExpired`, and the wallet proves again.
+Each registry keeps its last `ROOT_HISTORY` roots, each with its revision. A
+transfer names the revision of each root its proof binds and passes the
+registry accounts after the ring account. The program checks that each one is
+the ring's records or its curator and reads the root from it. A revision the
+registry does not hold, or a retired root past its expiry, fails with
+`RootNotServed`, and the wallet proves again.
 
 Inclusion and absence both read one root, so an old root can show a revoked
 member as clean. A graced `Update` keeps the outgoing root readable for the
 registry's `grace_slots`. A revoking update goes out as `UpdateImmediate` and
-retires every earlier root, so after the `SyncRoots` in its transaction no
-transfer of the ring binds a root without the ban. Member writes and escrow
+retires every earlier root, so from its slot on no transfer of the ring binds a
+root without the ban. Member writes and escrow
 writes go out graced, and no rule reads the lists they write.
 
-A curator root follows the same rule in the curator's registry, read from the
-subscriber's curator mirror. In the example, the curator's write that bans
-Mr. Evil goes out as `UpdateImmediate`. A proof Mr. Crazy built a moment
-before still lands until the subscriber's curator mirror syncs. After the
-sync, every proof that pays Mr. Evil must open his record under a root that
-holds the ban, and the rule fails.
+A curator root follows the same rule, read from the curator's registry
+itself. In the example, the curator's write that bans Mr. Evil goes out as
+`UpdateImmediate`. A proof Mr. Crazy built a moment before fails on chain,
+also when a relayer or Ring RPC accepted it, because its root is gone. Every
+proof that pays Mr. Evil must open his record under a root that holds the ban,
+and the rule fails.
 
 ## The wallet cycle
 
@@ -224,7 +225,8 @@ holds the ban, and the rule fails.
 5. It builds the SPP witness, yielding `private_tx_hash`, then proves the SPP
    statement, the audit statement and the policy statement.
 6. It sends the transfer with the proofs and the revision of each root.
-   Rust's `RingSubmission` proves again when a bound root leaves the mirror.
+   Rust's `RingSubmission` proves again when the registry stops serving a
+   bound root.
 
 ## Co-signing, delegation and outflow limits
 
@@ -245,7 +247,7 @@ instruction changes the tier or the auditor, and the program stays upgradeable.
 **Co-signing** is a signer check. The ring stores one record per co-signer,
 each with a scope over transfers, deposits and withdrawals. Withdrawal thresholds live in mint
 records, including on audit-only rings. An optional withdrawal exemption proof
-opens the actual withdrawn mints under a mirrored own root and bounds each gross total by its threshold. Missing or zero thresholds
+opens the actual withdrawn mints under a live own root and bounds each gross total by its threshold. Missing or zero thresholds
 never exempt positive withdrawals; deposits cannot reduce these totals. This
 proof waives only withdrawal-scoped co-signing, never transfers, deposits or
 the approval bit. Every transact and merge

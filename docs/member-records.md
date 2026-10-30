@@ -5,10 +5,10 @@ its escrowed nullifier key. The records form a 4-ary indexed Merkle tree in the
 ring's own `StorageRegistry`, the records `Initialize` binds. The storage
 program keeps the tree's recent roots on chain, and the ring indexer stores the
 records. Owners and the policy authority sign record updates, and the Ring RPC
-writer applies them in a storage update with its apply proof. The same
-transaction sends `SyncRoots`, so the ring policy mirrors the new root at once.
-A policy proof opens records under a root the mirror holds and reveals no
-record it opened. The records themselves are public. The write hash and the
+writer applies them in a storage update with its apply proof. The ring program
+reads roots from the registry account itself, so the new root is valid for the
+next transfer. A policy proof opens records under a root the registry serves and
+reveals no record it opened. The records themselves are public. The write hash and the
 chain are in
 [Member registry](../program-libs/interface/src/accounts/member_registry.rs),
 the apply statement is in
@@ -105,13 +105,15 @@ writes.
 The registry keeps the last `ROOT_HISTORY` roots, each with its revision. A
 graced `Update` keeps the outgoing root readable for the registry's
 `grace_slots`, and `UpdateImmediate` retires every earlier root at once. A
-policy transfer names the revision of each root its proof binds and reads the
-root from the ring policy's mirror. A merge on a key-escrow ring and an
-audited deposit on a key-escrow or policy ring do the same.
+policy transfer names the revision of each root its proof binds and passes the
+registry account after the ring account, and the program reads the root from
+it. A merge on a key-escrow ring and an audited deposit on a key-escrow or
+policy ring do the same.
 
-A ring that reads a list from a curator's registry reads the curator root from
-its curator mirror. A curator update reaches a subscriber at the next
-`SyncRoots` of that subscriber's curator mirror.
+A ring that reads a list from a curator's registry passes that registry too and
+reads the curator root from it. A curator root is valid for a subscriber's next
+transfer once storage applies it, and a root an `UpdateImmediate` drops fails
+there at once.
 
 ## Indexing
 
@@ -119,33 +121,33 @@ The ring indexer reads every storage update from its instruction and replays it
 over its copy of the tree. It compares the resulting root and next leaf with
 the instruction's values. A mismatch stops the registry's projection, and the
 ring indexer then refuses the registry's record reads. Clients check every
-opening against a root the ring policy mirrors before they prove.
+opening against a root the registry serves before they prove.
 
 ## With the CLI and the SDKs
 
 `zolana-ring list add|clear <list> --owner <address>` or `--asset <mint>`
 signs a policy authority record update. `list join|leave ring-viewing|recovery`
 signs the member update of `keys/sender-keypair.json`. `key register` escrows
-the sender's key, and `status` prints the newest root of each mirror.
+the sender's key, and `status` prints the newest root of each registry.
 
 In Rust, `WalletRecordUpdate::new(target, wallet)` takes `with_lists`,
 `with_escrow` and `with_wallet_grant`, and `AuthorityRecordUpdate::new(target,
 authority)` takes one `with_write(member, write)` or `with_mint_policy` per
 record. `sign` returns the request a `RecordUpdateService` submits.
 `KeyRegistration` proves an escrow entry, and `MemberRecords` reads openings it
-checks against the mirrored root.
+checks against the registry's newest root.
 
 ## Pitfalls
 
 A transfer that binds an old root fails once later updates move it out of the
-mirror or its grace window passes. The Rust SDK proves again when a bound root
-leaves the mirror.
+registry or its grace window passes. The Rust SDK proves again when the
+registry stops serving a bound root.
 
 ## Protocol transition
 
 This layout is incompatible with earlier four-field leaves, five-field queue
 hashes and the inline mint arrays. The rule-table hash uses version 12. The
-ring policy is 4196 bytes, and no config account exists. `SetCoSigner` carries only signer and scope. A record
+ring policy is 1060 bytes, and no config account exists. `SetCoSigner` carries only signer and scope. A record
 write adds a 97-byte optional mint-setting replacement. Transfers may append a
 200-byte withdrawal exemption proof with its own revision.
 
