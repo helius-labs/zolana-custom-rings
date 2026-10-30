@@ -873,7 +873,7 @@ function disclosureSlot<T>(outputs: readonly T[], slot: Slot): T {
 
 type PrefixNote = Readonly<{ commitment: Bytes32; utxo: KnownUtxo }>;
 
-/** @internal `k` inputs under one prefix open when exactly `k` of the sender's ring notes carry it. */
+/** @internal Exact only for one note in one position, notes sharing a prefix fit any of its positions. */
 export function assignPrefixedInputs(
   prefixes: readonly (InputPrefix | undefined)[],
   notesOf: (prefix: InputPrefix) => readonly PrefixNote[],
@@ -890,7 +890,7 @@ export function assignPrefixedInputs(
         details: { prefix: prefix.toString(16).padStart(2 * INPUT_PREFIX_BYTES, "0") },
       });
     const ambiguous: InputOpening | undefined =
-      notes.length > inputs.length
+      notes.length > 1
         ? Object.freeze({
             kind: "ambiguous",
             candidates: Object.freeze(notes.map(({ commitment }) => commitment)),
@@ -939,6 +939,7 @@ function ringInput(commitment: Bytes32, utxo: KnownUtxo): InputOpening {
   });
 }
 
+/** Both audit keys keep dummies last as SPP does, opening k belongs to nullifier k. */
 function spentInputs(
   nullifiers: readonly Bytes32[],
   openings: readonly InputOpening[],

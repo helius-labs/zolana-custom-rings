@@ -1,7 +1,27 @@
+use serde::Deserialize;
+
 use super::*;
 use crate::types::UtxoOwner;
 
-fn note(byte: u8) -> ([u8; 32], KnownUtxo) {
+#[derive(Deserialize)]
+struct AssignmentCase {
+    name: String,
+    inputs: usize,
+    notes: Vec<String>,
+    expected: Expected,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Expected {
+    Opened,
+    Ambiguous,
+    Unseen,
+}
+
+fn note(commitment: &str) -> ([u8; 32], KnownUtxo) {
+    let commitment: [u8; 32] = hex::decode(commitment).unwrap().try_into().unwrap();
+    let byte = commitment[31];
     let utxo = KnownUtxo {
         owner_key: [0xa1; 32],
         owner: UtxoOwner::Keyed {
@@ -15,29 +35,43 @@ fn note(byte: u8) -> ([u8; 32], KnownUtxo) {
         ring_data_hash: [0; 32],
         tree_id: 1,
     };
-    ([byte; 32], utxo)
+    (commitment, utxo)
 }
 
 #[test]
-fn the_inputs_under_one_prefix_open_only_when_its_notes_match_their_count() {
-    let prefix = InputPrefix::of(&[0x01; 32]).unwrap();
-    let notes = || PrefixNotes {
-        prefix,
-        notes: vec![note(0x10), note(0x20)],
-    };
-    let opened = |(commitment, utxo)| InputOpening::Opened(ring_input(commitment, utxo));
-    assert_eq!(
-        notes().assign(2).unwrap(),
-        [opened(note(0x10)), opened(note(0x20))]
-    );
-    assert_eq!(
-        notes().assign(1).unwrap(),
-        [InputOpening::Ambiguous {
-            candidates: vec![[0x10; 32], [0x20; 32]]
-        }]
-    );
-    assert!(matches!(
-        notes().assign(3),
-        Err(AuditError::UnseenInputPrefix { prefix: unseen }) if unseen == prefix.get()
-    ));
+fn the_inputs_under_one_prefix_open_only_when_one_note_fills_one_position() {
+    let vector: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../../test-vectors/audit/prefix-assignment.json"
+    ))
+    .unwrap();
+    let cases: Vec<AssignmentCase> = serde_json::from_value(vector["cases"].clone()).unwrap();
+    for case in cases {
+        let notes: Vec<_> = case.notes.iter().map(String::as_str).map(note).collect();
+        let prefix = InputPrefix::of(&notes[0].0).unwrap();
+        let assigned = PrefixNotes {
+            prefix,
+            notes: notes.clone(),
+        }
+        .assign(case.inputs);
+        let candidates = notes.iter().map(|(commitment, _)| *commitment).collect();
+        match case.expected {
+            Expected::Opened => assert_eq!(
+                assigned.unwrap(),
+                [InputOpening::Opened(ring_input(notes[0].0, notes[0].1))],
+                "{}",
+                case.name
+            ),
+            Expected::Ambiguous => assert_eq!(
+                assigned.unwrap(),
+                vec![InputOpening::Ambiguous { candidates }; case.inputs],
+                "{}",
+                case.name
+            ),
+            Expected::Unseen => assert!(
+                matches!(assigned, Err(AuditError::UnseenInputPrefix { prefix: unseen }) if unseen == prefix.get()),
+                "{}",
+                case.name
+            ),
+        }
+    }
 }
