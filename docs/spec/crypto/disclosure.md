@@ -23,7 +23,7 @@ The auditor opens the envelope, derives the pad, subtracts it, and rebuilds each
 | 4 | reserved | always clear, every key accepts either value |
 | 8 | full openings | an anonymous transfer spends default-ring notes |
 
-The delivered key varies exits and key escrow. The anonymous key varies exits and pins key escrow to `0`. The entry key varies exits, pins full openings to `1` and pins key escrow to `0`.
+The delivered key and the delivered sender key vary exits and key escrow. The anonymous key varies exits and pins key escrow to `0`. The entry key varies exits, pins full openings to `1` and pins key escrow to `0`.
 
 ## Fields per layout
 

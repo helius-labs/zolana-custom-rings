@@ -88,16 +88,15 @@ it chooses. `createRingTransferSubmission`, `createRingExitSubmission`,
 `createRingDelegateSubmission` return a `RingTransactionSubmission`, and its
 `send` takes the transport of `createKitRingSubmissionTransport`. A rejected
 proof whose root left its registry proves again under the live root. A spend
-with `inProofOwner` signs inside the proof, and only the fee payer and a
-demanded co-signer sign the transaction. Without it each input owner signs. A
-withdrawal creates its recipient's missing associated token account in the
-same transaction. On an anonymous Ring a spend
+with `inProofOwner` signs inside the proof, spends ring notes only, and only
+the fee payer and a demanded co-signer sign the transaction. Without it each
+input owner signs. A withdrawal creates its recipient's missing associated
+token account in the same transaction. On an anonymous Ring a spend
 takes `anonymous`, the hidden owner's signer and `ViewingHistory`, and the
 wallet stores `viewingHistory` before `send`. The fee payer and any co-signer
 must differ from the hidden owner. On every Ring they must also differ from the
-owner of a merge. `CustomRingClient` does not prove the anonymous rail's SPP proof, so an
-anonymous spend takes a client that also implements the
-`AnonymousRingTransactProver` of `@heliuslabs/zolana-custom-rings/client`.
+owner of a merge. `CustomRingClient` proves SPP's anonymous rail, the rail of
+an anonymous spend and of a spend with `inProofOwner`.
 The `build*Transaction` functions return one unsigned transaction. A spend or
 deposit on an anonymous Ring goes through its submission, which returns the
 viewing history.

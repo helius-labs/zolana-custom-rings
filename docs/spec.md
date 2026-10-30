@@ -108,12 +108,12 @@ Zolana owns SPP: its programs, its circuits and its rails. Those circuits are au
 The ring uses these SPP rails:
 
 1. **Confidential signer rail:** each input owner signs the Solana transaction.
-2. **Confidential in-proof rail:** the owner signs inside the SPP proof, and SPP publishes the owner's key.
+2. **Confidential in-proof rail:** the owner signs inside the proof of SPP's anonymous rail. SPP hides the owner, and the delivered audit publishes it as the sender.
 3. **Anonymous rail:** a hidden owner signs inside the SPP proof.
 4. **Authority rail:** the ring PDA moves notes with no owner signature, for the delegate.
 5. **Ring deposit and ring merge.**
 
-The ring needs zolana's in-proof owner rail on ring transfers so that Ring RPC can pay for and send a confidential transfer from one wallet signature. Zolana's own in-proof circuit serves default-ring transfers only. Both confidential owner rails stay. [Owner rails](design/owner-rails.md)
+The ring needs an in-proof owner on ring transfers so that Ring RPC can pay for and send a confidential transfer from one wallet signature. Zolana's own in-proof circuit serves default-ring transfers only, so the confidential in-proof rail proves on SPP's anonymous rail and spends ring notes only. Both confidential owner rails stay. [Owner rails](design/owner-rails.md)
 
 ## Accounts
 
@@ -363,7 +363,7 @@ The **Ring Program** checks only the required co-signer signature, never the lim
 6. `ClearCoSigner`: closes a co-signer account to a rent recipient. The co-signer admin signs.
 7. `SetDelegate`: sets the delegate once and turns on key escrow. The admin and the delegate sign.
 8. `Deposit`: verifies the deposit proof before SPP CPI. The depositor signs, and a co-signer when the ring demands one.
-9. `Transfer`: verifies the audit proof, on a policy ring the policy proof, and an optional withdrawal exemption proof before SPP CPI. The payer signs. On the signer rail each input owner also signs. A demanded co-signer and each deposit leg's funder also sign.
+9. `Transfer`: verifies the audit proof, on a policy ring the policy proof, and an optional withdrawal exemption proof before SPP CPI. The payer signs. On the signer rail each input owner also signs. On the in-proof rail no owner signs, and the audit proof holds every input to the owner the frame names. A demanded co-signer and each deposit leg's funder also sign.
 10. `AuthorityTransfer`: as `Transfer` on the authority rail. The delegate and the payer sign.
 11. `Merge`: verifies the merge disclosure proof before SPP CPI. The payer signs, and a co-signer when the ring demands one. No owner signs.
 
@@ -390,8 +390,8 @@ The **Ring Program** checks only the required co-signer signature, never the lim
 12. Co-signer limits live per asset in the asset record, each cap with its own window. The tree already serves per-asset data under a root the program reads.
 13. Co-signing fails closed when Ring RPC cannot read the limits or the asset has no record. Either would otherwise read as no limits.
 14. Ring RPC relays and pays for every wallet operation except a transfer with a deposit leg or an operation that needs an outside co-signer. A relayed wallet never fetches a Merkle path, as the draft's note 4 asks.
-15. The ring's in-proof owner rail enters zolana as new files, and the ring program refuses owner signers on it. Every input then belongs to the owner the policy reads as the sender.
-16. Both confidential owner rails stay. The signer rail needs no SPP feature build.
+15. The confidential in-proof rail proves on SPP's anonymous rail, and the ring program refuses owner signers on it. The delivered audit holds every input to the owner the policy reads as the sender. Follows the maintainer's suggestion; keeps no new SPP circuit.
+16. Both confidential owner rails stay. The signer rail spends default-ring notes, and the in-proof rail spends ring notes only.
 17. This repository never refactors zolana circuits. They are audited, and a source change reopens the audit.
 18. The audit statement keeps the recipient viewing key, and the SDKs refuse shapes over one transaction. The audit stays provable on every transfer, and relayed wide payouts split.
 19. The deposit proof also opens the curator root. Curator asset lists then admit deposits.
