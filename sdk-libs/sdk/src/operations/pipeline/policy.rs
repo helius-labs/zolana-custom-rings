@@ -80,8 +80,8 @@ impl PolicyRead<'_> {
     ) -> Result<PolicyInputs, RingError> {
         let policy = self.config.account();
         let pinned = PinnedPolicy::of(policy)?;
-        let own = BoundRoot::own(self.ring, policy)?;
-        let curator = BoundRoot::curator(self.ring, policy)?;
+        let own = BoundRoot::own(policy, client).await?;
+        let curator = BoundRoot::curator(policy, client).await?;
         let (withdrawals, spl_withdrawal_owners) = read_withdrawals(
             client,
             &self.inputs.external_data.interface_transfers,

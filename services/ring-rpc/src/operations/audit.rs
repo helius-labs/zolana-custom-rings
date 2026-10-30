@@ -433,9 +433,9 @@ impl<S: TransactionSource> AuditService<S> {
         Ok(())
     }
 
-    /// Every escrowed key under the root the ring policy mirrors, read again once that root moves.
+    /// Every escrowed key under the records registry's newest root, read again once that root moves.
     async fn refresh_escrow(&self, store: &AuditStore) -> Result<(), RingRpcError> {
-        let RecordsTip::Mirrored(tip) = self.shared.source.records_root(self.ring).await? else {
+        let RecordsTip::Newest(tip) = self.shared.source.records_root(self.ring).await? else {
             return Ok(());
         };
         let root = EscrowRoot {
@@ -452,7 +452,7 @@ impl<S: TransactionSource> AuditService<S> {
         Ok(())
     }
 
-    /// Every record from leaf 1, each verified under the mirrored root.
+    /// Every record from leaf 1, each verified under the registry's newest root.
     async fn rescan_records(
         &self,
         tip: StorageTip,

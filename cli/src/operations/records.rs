@@ -4,7 +4,7 @@ use std::fmt::Display;
 
 use anyhow::{bail, ensure, Context as _, Result};
 use custom_ring_interface::RingPolicy;
-use custom_ring_sdk::{AuthorityRecordUpdate, MemberRecords, RingError};
+use custom_ring_sdk::{live_registry, AuthorityRecordUpdate, MemberRecords, RingError};
 use solana_signer::Signer;
 use spr_client::{BlockingIndexer, BlockingRpc};
 use spr_indexer_api::Hash;
@@ -33,7 +33,7 @@ pub(crate) fn read_one<R: BlockingRpc, I: BlockingIndexer + RingIndexer>(
     Ok(read)
 }
 
-/// `members` under the newest mirrored root of the curator registry.
+/// `members` under the newest root of the live curator registry.
 pub(crate) fn read_curator(
     ctx: &Context,
     policy: &RingPolicy,
@@ -41,11 +41,7 @@ pub(crate) fn read_curator(
 ) -> Result<Vec<MemberOpeningRead>> {
     use zolana_ring_indexer::rpc::{GetStorageMemberOpeningsRequest, MAX_RING_MEMBER_PAGE_LIMIT};
     let registry = policy.curator().context("the policy names no curator")?;
-    let newest = policy.curator_roots.roots[0];
-    ensure!(
-        policy.curator_roots.registry == registry && newest.hash != [0; 32],
-        "the policy mirrors no roots of curator registry {registry}, run `SyncRoots` for it"
-    );
+    let newest = ctx.block(live_registry(registry, ctx.chain()))?.newest();
     let mut reads = Vec::with_capacity(members.len());
     for chunk in members.chunks(MAX_RING_MEMBER_PAGE_LIMIT as usize) {
         let response =
@@ -89,7 +85,7 @@ pub fn patiently<T>(
     })
 }
 
-/// All nonzero mint settings, authenticated under the newest mirrored root of the ring's records.
+/// All nonzero mint settings, authenticated under the newest root of the ring's records.
 pub(crate) fn mint_policies(
     ctx: &Context,
 ) -> Result<std::collections::BTreeMap<[u8; 32], zolana_ring_policy::MintPolicy>> {
@@ -105,9 +101,8 @@ fn read_mint_policies(
         GetStorageMemberRecordsRequest, RingMemberOpening, MAX_RING_MEMBER_PAGE_LIMIT,
     };
     let ring_policy = ctx.block(ctx.ring.require_policy(ctx.chain()))?;
-    let tip = StorageTip::mirrored(&ring_policy).ok_or(RingError::UnsyncedRoots {
-        registry: ring_policy.records,
-    })?;
+    let records = ring_policy.records;
+    let tip = StorageTip::newest(records, &ctx.block(live_registry(records, ctx.chain()))?);
     let mut result = std::collections::BTreeMap::new();
     let mut start = Some(1);
     while let Some(index) = start {
@@ -170,7 +165,7 @@ pub(crate) mod fixtures {
 
     use custom_ring_interface::{
         storage::{Revision, StorageRegistry},
-        QueueEntry, RingPolicy,
+        QueueEntry, RingPolicy, STORAGE_PROGRAM_ID,
     };
     use custom_ring_sdk::CustomRing;
     use solana_account::Account;
@@ -244,7 +239,7 @@ pub(crate) mod fixtures {
         }
     }
 
-    /// Serves the ring policy synced to `tree`, every read after the first to `advanced` when set.
+    /// Serves the ring policy and its records registry at the root of `tree`, every registry read after the first at `advanced` when set.
     pub(crate) struct PolicyRpc {
         reads: AtomicU8,
         tree: MemberRegistryTree,
@@ -274,9 +269,26 @@ pub(crate) mod fixtures {
 
     impl Rpc for PolicyRpc {
         fn get_account(&self, address: Address) -> Result<Option<Account>, ClientError> {
-            let (expected, bump) =
+            let (policy_pda, bump) =
                 Address::find_program_address(&[RingPolicy::SEED], &ring().program_id());
-            assert_eq!(address, expected);
+            let account = |owner, data: &[u8]| Account {
+                lamports: 1,
+                data: data.to_vec(),
+                owner,
+                executable: false,
+                rent_epoch: 0,
+            };
+            if address == policy_pda {
+                let mut policy: Box<RingPolicy> = bytemuck::zeroed_box();
+                policy.discriminator = custom_ring_interface::RING_POLICY;
+                policy.bump = bump;
+                policy.records = RECORDS;
+                return Ok(Some(account(
+                    ring().program_id(),
+                    bytemuck::bytes_of(&*policy),
+                )));
+            }
+            assert_eq!(address, RECORDS);
             let reads = self.reads.fetch_add(1, Ordering::Relaxed);
             let tree = match &self.advanced {
                 Some(advanced) if reads > 0 => advanced,
@@ -285,18 +297,10 @@ pub(crate) mod fixtures {
             let mut records = StorageRegistry::new(Address::default(), 0);
             records.roots[0].hash = tree.root().unwrap();
             records.roots[0].revision = Revision::from(u64::from(reads) + 1);
-            let mut policy: Box<RingPolicy> = bytemuck::zeroed_box();
-            policy.discriminator = custom_ring_interface::RING_POLICY;
-            policy.bump = bump;
-            policy.records = RECORDS;
-            policy.sync(&RECORDS, &records).unwrap();
-            Ok(Some(Account {
-                lamports: 1,
-                data: bytemuck::bytes_of(&*policy).to_vec(),
-                owner: ring().program_id(),
-                executable: false,
-                rent_epoch: 0,
-            }))
+            Ok(Some(account(
+                STORAGE_PROGRAM_ID,
+                bytemuck::bytes_of(&records),
+            )))
         }
     }
 

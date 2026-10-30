@@ -15,9 +15,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{ensure, Context as _, Result};
 use custom_ring_interface::{ListRegistry, RingPolicy};
-use custom_ring_sdk::{
-    CustomRing, PinnedPolicy, PolicyTable, PolicyUpdate, SyncRoots, UpdatePolicy,
-};
+use custom_ring_sdk::{CustomRing, PinnedPolicy, PolicyTable, PolicyUpdate, UpdatePolicy};
 use solana_address::Address;
 use solana_signer::Signer;
 use zolana_ring_policy::{MintPolicy, RuleTable};
@@ -110,20 +108,6 @@ pub(crate) fn curator_records(ctx: &Context, curator: CustomRing) -> Result<Addr
         .block(curator.policy(ctx.chain()))?
         .with_context(|| format!("curator {program} has no ring policy"))?;
     Ok(policy.records)
-}
-
-/// One `SyncRoots` per distinct curator registry, a newly named curator has no mirror yet.
-pub(crate) fn curator_syncs(
-    ring: CustomRing,
-    sources: &[(zolana_ring_policy::ListId, Address)],
-) -> Vec<solana_instruction::Instruction> {
-    let mut registries: Vec<Address> = sources.iter().map(|(_, registry)| *registry).collect();
-    registries.sort();
-    registries.dedup();
-    registries
-        .into_iter()
-        .map(|registry| SyncRoots { ring, registry }.instruction())
-        .collect()
 }
 
 /// Each shared list with its curator's records.
@@ -242,9 +226,7 @@ fn set(ctx: &Context, yes: bool) -> Result<()> {
         }),
     }
     .instruction()?;
-    let mut instructions = vec![replace];
-    instructions.extend(curator_syncs(ctx.ring, &shared_sources));
-    ctx.send(&[authority], &instructions)?;
+    ctx.send(&[authority], &[replace])?;
     crate::records::write_mint_policies(ctx, &mint_changes)?;
     let (before, after) = (
         current.account.generation(),

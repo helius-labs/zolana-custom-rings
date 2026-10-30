@@ -2,7 +2,6 @@ use custom_ring_interface::{
     key_catalog::RingCircuit,
     storage::{RegistryId, StorageRegistry},
     storage_instruction::{tag, InitializeIxData, StorageUpdateIxData, UpdateMode},
-    tag::SYNC_ROOTS,
     ApplyRecordsIxData, GRACE_SLOTS, STORAGE_PROGRAM_ID, SYSTEM_PROGRAM_ID,
 };
 use solana_address::Address;
@@ -41,14 +40,6 @@ pub struct UpdateStorage<'a> {
 pub struct UpdateStorageAuthority {
     pub authority: Address,
     pub new_authority: Address,
-    pub registry: Address,
-}
-
-/// Permissionless, `registry` is the ring's records or its curator.
-#[must_use]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SyncRoots {
-    pub ring: CustomRing,
     pub registry: Address,
 }
 
@@ -113,19 +104,6 @@ impl UpdateStorageAuthority {
             ],
             vec![tag::UPDATE_AUTHORITY],
         )
-    }
-}
-
-impl SyncRoots {
-    pub fn instruction(self) -> Instruction {
-        Instruction {
-            program_id: self.ring.program_id(),
-            accounts: vec![
-                AccountMeta::new(self.ring.policy_pda(), false),
-                AccountMeta::new_readonly(self.registry, false),
-            ],
-            data: vec![SYNC_ROOTS],
-        }
     }
 }
 

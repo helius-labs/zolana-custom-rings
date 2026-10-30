@@ -35,8 +35,8 @@ use crate::{
     },
     statement::{AnonymousAudit, AuditHead, AuditKind, AuditStatement, PolicyKey},
     storage::Revision,
-    tagged_x25519, AuditorMessage, CustomRingProof, InstructionTag, PlainGroth16Proof, RingMode,
-    RingPolicy, AUDIT_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
+    tagged_x25519, AuditorMessage, CustomRingProof, InstructionTag, LiveRoots, PlainGroth16Proof,
+    RingMode, RingPolicy, AUDIT_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
 };
 
 const ZERO_FIELD: [u8; 32] = [0; 32];
@@ -927,11 +927,11 @@ impl<'a> RingTransactData<'a> {
         Ok(out)
     }
 
-    /// The policy proof a policy ring demands at `slot`, `None` on an audit-only ring.
+    /// The policy proof a policy ring demands under its live roots, `None` on an audit-only ring.
     pub fn check_policy(
         &self,
         policy: Option<&RingPolicy>,
-        slot: u64,
+        roots: &LiveRoots<'_>,
     ) -> Result<Option<PolicyBinding<'a>>, CustomRingError> {
         let (proof, policy) = match (self.policy, policy) {
             (None, None) => return Ok(None),
@@ -950,9 +950,9 @@ impl<'a> RingTransactData<'a> {
         Ok(Some(PolicyBinding {
             proof,
             policy_hash: *policy.policy_hash()?,
-            own_root: policy.own_root(proof.own_revision, slot)?,
+            own_root: roots.own(proof.own_revision)?,
             curator_root: curator_revision
-                .map(|revision| policy.curator_root(revision, slot))
+                .map(|revision| roots.curator(revision))
                 .transpose()?,
         }))
     }

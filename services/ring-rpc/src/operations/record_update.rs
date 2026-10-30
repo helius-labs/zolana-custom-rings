@@ -29,7 +29,7 @@ pub const MAX_BATCH_ATTEMPTS: u64 = 3;
 /// One day of 250 ms slots.
 pub const MAX_ENROLMENT_WINDOW_SLOTS: u64 = 4 * 60 * 60 * 24;
 const REVOKING_SETS: u64 = ListSet::of(&[ListId::Block, ListId::Frozen]).record_bits();
-// A graced reader revocation stops reads at once, grants open under the newest mirrored root.
+// A graced reader revocation stops reads at once, grants open under the newest registry root.
 const REVOKING_CLEARS: u64 = ListSet::of(&[ListId::Allow, ListId::Approval]).record_bits();
 
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
@@ -132,7 +132,6 @@ pub(crate) struct EnrolmentApproval<'a> {
 
 pub(crate) struct QueuedUpdate {
     pub id: [u8; 32],
-    pub ring: Address,
     pub writes: Vec<StorageWriteData>,
     pub urgent: bool,
     pub queued_slot: u64,
@@ -152,7 +151,7 @@ pub(crate) struct PlannedBatch<'a> {
     pub updates: Vec<&'a QueuedUpdate>,
 }
 
-/// `records[i]` opens `registering[i]` under the newest mirrored root.
+/// `records[i]` opens `registering[i]` under the newest registry root.
 #[must_use]
 pub(crate) struct EscrowUniqueness<'a> {
     pub registering: &'a [[u8; 32]],

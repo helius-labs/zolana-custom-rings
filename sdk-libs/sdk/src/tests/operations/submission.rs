@@ -28,8 +28,8 @@ async fn a_fresh_proof_fixes_a_stale_root_and_an_expired_blockhash_alone() {
     let unmoved = BoundState::default();
     for (error, fixed) in [
         (TransactionError::BlockhashNotFound, true),
-        (ring_failure(CustomRingError::MirrorRootExpired), true),
-        (ring_failure(CustomRingError::MirrorNotSynced), true),
+        (ring_failure(CustomRingError::RootNotServed), true),
+        (ring_failure(CustomRingError::UnboundRegistry), true),
         (
             ring_failure(CustomRingError::ProofVerificationFailed),
             false,

@@ -1,7 +1,7 @@
 use custom_ring_interface::{
     cosign::{CoSignDemand, CoSignRequirement},
     funder_account_position, AnonymousParties, CustomRingError, CustomRingProof, InputTrees,
-    PublicSlots, RailSigner, RingPolicy, RingTransactData, ANONYMOUS_PARTIES,
+    PublicSlots, RailSigner, RingPolicy, RingTransactData, RootRead, ANONYMOUS_PARTIES,
     RING_TRANSACT_ACCOUNT_PREFIX_LEN, RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
 };
 use pinocchio::{error::ProgramError, AccountView, Address};
@@ -10,7 +10,7 @@ use spr_interface::instruction::instruction_data::settlement_accounts;
 
 use crate::instructions::{
     instruction_runtime::{PlacedRingAuth, RingAuth},
-    loader::{check_funding_signer, load_anonymous_exit, CoSignerSlot},
+    loader::{check_funding_signer, load_anonymous_exit, CoSignerSlot, RegistrySlots},
     public_legs::PublicLegs,
 };
 
@@ -51,12 +51,21 @@ impl<'a> TransactCheck<'a> {
     #[inline(never)]
     pub fn validate(self, accounts: &[AccountView]) -> Result<TransactAccounts<'a>, ProgramError> {
         let (ring, data) = (self.ring, self.data);
+        let registries = RegistrySlots {
+            ring,
+            read: RootRead::transfer(ring, data.withdrawal_exemption),
+        }
+        .load({
+            let mut after_ring = accounts.iter().skip(RING_INDEX + 1);
+            move || after_ring.next().ok_or(ProgramError::NotEnoughAccountKeys)
+        })?;
+        let roots = registries.roots(self.slot);
         let window = settlement_accounts(&data.interface_transfers, data.circuit(), accounts)
             .ok_or(CustomRingError::InvalidSettlementAccounts)?;
         let legs = PublicLegs::new(&data.interface_transfers, window)?;
         let demand = CoSignDemand::transact(data.approval_required, legs.legs());
         if let Some(exemption) = data.withdrawal_exemption {
-            let root = ring.own_root(exemption.own_revision, self.slot)?;
+            let root = roots.own(exemption.own_revision)?;
             crate::instructions::verifier::RingProof {
                 proof: &exemption.proof,
                 statement: custom_ring_interface::cosign::WithdrawalExemptionStatement::new(
@@ -75,8 +84,11 @@ impl<'a> TransactCheck<'a> {
             None => demand,
         };
         let requirement = demand.requirement(ring);
-        let binding = data.check_policy(Some(ring).filter(|ring| ring.has_policy()), self.slot)?;
-        let prefix = self.prefix(requirement.as_ref().ok().copied().flatten());
+        let binding = data.check_policy(Some(ring).filter(|ring| ring.has_policy()), &roots)?;
+        let prefix = self.prefix(
+            RING_INDEX + 1 + registries.len,
+            requirement.as_ref().ok().copied().flatten(),
+        );
         let policy = binding.map(|binding| PolicyRoots {
             own_only: binding.curator_root.is_none(),
             proof: binding.proof.proof,
@@ -201,8 +213,9 @@ impl<'a> TransactCheck<'a> {
         })
     }
 
-    fn prefix(&self, co_signer: Option<CoSignRequirement>) -> Prefix {
-        let mut next = Cursor(RING_INDEX + 1);
+    /// `first` follows the ring account and its registries.
+    fn prefix(&self, first: usize, co_signer: Option<CoSignRequirement>) -> Prefix {
+        let mut next = Cursor(first);
         let co_signer = co_signer.map(|requirement| next.pair(requirement));
         let signer = match (self.signer, self.data.in_proof_owner) {
             (RailSigner::Owners, Some(owner)) => {

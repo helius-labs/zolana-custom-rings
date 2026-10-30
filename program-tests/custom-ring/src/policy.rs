@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use custom_ring_cli::{patiently, wait_for, Probe, Zolana};
+use custom_ring_cli::{patiently, Zolana};
 use custom_ring_interface::{
     mint_policy_write,
     storage::Revision,
@@ -17,7 +17,7 @@ use custom_ring_interface::{
 use custom_ring_sdk::{
     CustomRing, CustomRingTransfer, CustomRingTransferInput, DepositAsset, DepositRecipient,
     InitializeStorage, ProvenRingTransfer, RingDeposit, RingDepositReceipt, RingError,
-    StorageApplyProof, SyncRoots, UpdateStorage,
+    StorageApplyProof, UpdateStorage,
 };
 use solana_keypair::Keypair;
 use solana_signature::Signature;
@@ -97,18 +97,6 @@ impl CuratedRings {
             env,
             curator,
             subscriber: CustomRing::new(custom_ring_program_id()?),
-        })
-    }
-
-    pub fn wait_for_subscriber_mirror(&self) -> Result<()> {
-        wait_for("the subscriber's curator mirror", || {
-            let curator = policy_registry(self.curator, &self.env)?.own_roots;
-            let mirrored = policy_registry(self.subscriber, &self.env)?.curator_roots;
-            Ok(if mirrored == curator {
-                Probe::Ready(())
-            } else {
-                Probe::NotYet
-            })
         })
     }
 }
@@ -338,7 +326,7 @@ impl RegistryWrite<'_> {
     }
 }
 
-/// Needs the payer as storage authority of the ring's records, the same transaction syncs the mirror.
+/// Needs the payer as storage authority of the ring's records.
 pub struct StorageRecords<'a> {
     pub ring: CustomRing,
     pub writes: Vec<StorageWriteData>,
@@ -397,11 +385,6 @@ impl StorageRecords<'_> {
             },
         }
         .instruction()?;
-        let sync = SyncRoots {
-            ring: self.ring,
-            registry,
-        }
-        .instruction();
-        send(env.client.rpc(), &env.payer, &[update, sync])
+        send(env.client.rpc(), &env.payer, &[update])
     }
 }

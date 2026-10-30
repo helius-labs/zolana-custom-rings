@@ -100,9 +100,6 @@ pinned_codes! {
     RingPolicyAlreadyExists = 8301,
     InvalidStorageRegistry = 8302,
     StorageAuthorityMismatch = 8303,
-    UnmirroredRegistry = 8304,
-    MirrorNotSynced = 8305,
-    MirrorRootExpired = 8306,
     OwnerSignerOnInProofRail = 8350,
     InvalidAssetLimits = 8390,
     DepositMintAccountMissing = 8410,
@@ -110,6 +107,9 @@ pinned_codes! {
     UnexpectedCuratorRevision = 8470,
     ZeroRoleKey = 8471,
     DuplicateRoleKey = 8472,
+    UnboundRegistry = 8480,
+    RootNotServed = 8481,
+    MissingRegistry = 8482,
 }
 
 #[test]

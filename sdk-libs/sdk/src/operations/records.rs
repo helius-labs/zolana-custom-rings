@@ -24,7 +24,7 @@ use zolana_ring_policy::{ListSet, ListWrite, Member, MintPolicy, Writer};
 
 use crate::{request::RecordOpeningRequest, submission::BoundRoot, CustomRing, RingError};
 
-/// Members' records under the newest synced root of the ring's records.
+/// Members' records under the newest root of the ring's records registry.
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MemberRecords<'a> {

@@ -5,7 +5,9 @@ use std::{
     num::{NonZeroU32, NonZeroUsize},
 };
 
-use custom_ring_interface::{EscrowKey, RingAccount, RingPolicy, MEMBER_REGISTRY_CAPACITY};
+use custom_ring_interface::{
+    storage::StorageRegistry, EscrowKey, RingAccount, RingPolicy, MEMBER_REGISTRY_CAPACITY,
+};
 use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::{
@@ -380,14 +382,19 @@ impl<'a> MergeAudit<'a> {
             .get_account(pda)
             .await?
             .ok_or(AuditError::InvalidMemberRegistry)?;
-        RingPolicy::decode(&account.owner, &self.ring, &account.data)
+        let records = RingPolicy::decode(&account.owner, &self.ring, &account.data)
             .filter(|policy| policy.bump() == bump)
-            .as_ref()
-            .and_then(StorageTip::mirrored)
-            .ok_or(AuditError::InvalidMemberRegistry)
+            .ok_or(AuditError::InvalidMemberRegistry)?
+            .records;
+        let registry = indexer
+            .get_account(records)
+            .await?
+            .and_then(|account| StorageRegistry::decode(&account.owner, &account.data))
+            .ok_or(AuditError::InvalidMemberRegistry)?;
+        Ok(StorageTip::newest(records, &registry))
     }
 
-    /// Records read at the mirrored root, `visit` ends the scan once every merge opened.
+    /// Records read at the registry's newest root, `visit` ends the scan once every merge opened.
     async fn scan_records<I: AsyncRpc + AsyncRingIndexer>(
         &self,
         indexer: &I,

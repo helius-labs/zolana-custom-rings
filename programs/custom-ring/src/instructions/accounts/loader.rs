@@ -1,7 +1,7 @@
 use custom_ring_interface::{
     anonymous_exit_destination, cosign::CoSignRequirement, storage::StorageRegistry, CoSigner,
-    CustomRingError, RingAccount, RingPolicy, RingRole, SettlementAccount, TokenAccountState,
-    STORAGE_PROGRAM_ID,
+    CustomRingError, LiveRoots, RingAccount, RingPolicy, RingRole, RootRead, SettlementAccount,
+    TokenAccountState, STORAGE_PROGRAM_ID,
 };
 use pinocchio::{
     account::{Ref, RefMut},
@@ -91,6 +91,57 @@ pub fn load_storage_registry(
     }
     let data = account.try_borrow().map_err(|_| invalid)?;
     Ref::filter_map(data, StorageRegistry::from_data).map_err(|_| invalid.into())
+}
+
+/// The ring's live registries, read where an instruction names them after the ring account.
+pub struct RingRegistries<'a> {
+    own: Option<Ref<'a, StorageRegistry>>,
+    curator: Option<Ref<'a, StorageRegistry>>,
+    pub len: usize,
+}
+
+impl RingRegistries<'_> {
+    pub fn roots(&self, slot: u64) -> LiveRoots<'_> {
+        LiveRoots {
+            own: self.own.as_deref(),
+            curator: self.curator.as_deref(),
+            slot,
+        }
+    }
+}
+
+#[must_use]
+pub struct RegistrySlots<'a> {
+    pub ring: &'a RingPolicy,
+    pub read: RootRead,
+}
+
+impl RegistrySlots<'_> {
+    /// `UnboundRegistry` unless each account `next` yields is the bound one, the records first.
+    #[inline(never)]
+    pub fn load<'b>(
+        self,
+        mut next: impl FnMut() -> Result<&'b AccountView, ProgramError>,
+    ) -> Result<RingRegistries<'b>, ProgramError> {
+        let mut registries = RingRegistries {
+            own: None,
+            curator: None,
+            len: 0,
+        };
+        for (index, bound) in self.ring.root_registries(self.read).enumerate() {
+            let account = next()?;
+            if account.address() != &bound {
+                return Err(CustomRingError::UnboundRegistry.into());
+            }
+            let registry = Some(load_storage_registry(account)?);
+            match index {
+                0 => registries.own = registry,
+                _ => registries.curator = registry,
+            }
+            registries.len = index + 1;
+        }
+        Ok(registries)
+    }
 }
 
 /// The shielded pool by address, its account position differs per forwarded layout.

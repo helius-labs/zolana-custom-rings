@@ -134,9 +134,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     }
     if let (Some(prover_url), Some(authority)) = (&args.prover_url, storage_authority) {
         let chain = LiveStorageChain::connect(upstreams, prover_url)?;
-        builder = builder
-            .with_storage_chain(Arc::new(chain), authority)
-            .with_watched_registries(args.watch_registry.clone());
+        builder = builder.with_storage_chain(Arc::new(chain), authority);
     }
     if let Some(secret) = grant_rows {
         builder = builder.with_grant_rows_key(secret);

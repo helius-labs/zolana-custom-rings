@@ -32,8 +32,8 @@ pub trait AssetLimitSource: Send + Sync {
     ) -> impl Future<Output = Result<Vec<AssetLimits>, RingRpcError>> + Send;
 }
 
-/// Reads each asset record under the ring policy's newest mirrored own root, one transfers can prove against.
-pub(crate) struct MirroredLimits<S>(pub(crate) Arc<Shared<S>>);
+/// Reads each asset record under the newest root of the ring's records registry.
+pub(crate) struct RecordLimits<S>(pub(crate) Arc<Shared<S>>);
 
 pub struct LimitedCoSignerInit<L> {
     pub signer: Keypair,
@@ -181,12 +181,12 @@ impl<L: AssetLimitSource> CoSignPolicy for LimitedCoSigner<L> {
     }
 }
 
-impl<S: TransactionSource> AssetLimitSource for MirroredLimits<S> {
+impl<S: TransactionSource> AssetLimitSource for RecordLimits<S> {
     async fn current_slot(&self) -> Result<u64, RingRpcError> {
         Ok(self.0.source.slot().await?)
     }
 
-    /// Empty without a ring policy, refused for an asset until the writer's first `SyncRoots`.
+    /// Empty without a ring policy, refused without a records registry.
     async fn asset_limits(
         &self,
         ring: Address,
@@ -198,8 +198,8 @@ impl<S: TransactionSource> AssetLimitSource for MirroredLimits<S> {
         let source = &self.0.source;
         let tip = match source.records_root(ring).await? {
             RecordsTip::NoPolicy => return Ok(vec![AssetLimits::EMPTY; assets.len()]),
-            RecordsTip::Unsynced => return Err(CoSignError::LimitsUnavailable.into()),
-            RecordsTip::Mirrored(tip) => tip,
+            RecordsTip::NoRegistry => return Err(CoSignError::LimitsUnavailable.into()),
+            RecordsTip::Newest(tip) => tip,
         };
         let members = assets
             .iter()

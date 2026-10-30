@@ -28,7 +28,7 @@ use zolana_ring_member_registry::ApplyProofInputs;
 use zolana_ring_policy::{ListId, Member, MintPolicy};
 use zolana_ring_rpc::{
     LatestBlockhash, ReaderGrantStore, RecordUpdateRefusal, RecordWriter, StorageChain, Store,
-    Subscriber, TransactionOutcome, BATCH_WINDOW_SLOTS, MAX_ENROLMENT_WINDOW_SLOTS,
+    TransactionOutcome, BATCH_WINDOW_SLOTS, MAX_ENROLMENT_WINDOW_SLOTS,
 };
 
 use super::*;
@@ -87,10 +87,6 @@ impl StorageChain for StubChain {
                 .map(|member| self.records.opening(&member.0))
                 .collect(),
         })
-    }
-
-    async fn subscribers(&self, _registry: Address) -> Result<Vec<Subscriber>, RingRpcError> {
-        Ok(Vec::new())
     }
 
     async fn apply_inputs(
@@ -243,8 +239,6 @@ impl RecordsSetup<'_> {
         let mut policy = RingPolicy::zeroed();
         policy.discriminator = RING_POLICY;
         policy.records = REGISTRY;
-        policy.own_roots.registry = REGISTRY;
-        policy.own_roots.roots = registry.roots;
         chain.accounts.lock().unwrap().extend([
             (
                 CustomRing::new(RING).policy_pda(),
@@ -275,7 +269,7 @@ impl Records {
             .await
     }
 
-    /// The member's record holds an escrow key under the root the policy mirrors.
+    /// The member's record holds an escrow key under the registry's newest root.
     fn escrowed(&self, member: [u8; 32]) {
         let entry = QueueEntry {
             member,
@@ -286,11 +280,9 @@ impl Records {
         };
         self.chain.records.apply(entry);
         let mut accounts = self.chain.accounts.lock().unwrap();
-        let account = accounts
-            .get_mut(&CustomRing::new(RING).policy_pda())
-            .expect("policy");
-        let policy: &mut RingPolicy = bytemuck::from_bytes_mut(&mut account.data);
-        policy.own_roots.roots[0].hash = self.chain.records.root().root.0;
+        let account = accounts.get_mut(&REGISTRY).expect("registry");
+        let registry: &mut StorageRegistry = bytemuck::from_bytes_mut(&mut account.data);
+        registry.roots[0].hash = self.chain.records.root().root.0;
     }
 
     /// The ring's own records serve `list_id` to its policy.
@@ -522,7 +514,7 @@ async fn a_wallet_reader_revocation_goes_out_graced_and_a_block_entry_immediate_
     let flushed = records.flushed().await;
     assert_eq!(flushed.mode, tag::UPDATE_IMMEDIATE);
     assert_eq!(flushed.members, [member.0]);
-    assert_eq!(flushed.data[1], [custom_ring_interface::tag::SYNC_ROOTS]);
+    assert_eq!(flushed.data.len(), 1);
 
     *records.chain.outcome.lock().unwrap() = TransactionOutcome::Succeeded;
     records.writer.flush().await.expect("settle");

@@ -5,7 +5,7 @@ use crate::{
     records::RecordReads,
     request::{MemberOpening, WithdrawalExemption},
     submission::BoundRoot,
-    CustomRing, CustomRingConfig, RingError,
+    CustomRingConfig, RingError,
 };
 use custom_ring_interface::{
     cosign::{CoSignDemand, WithdrawalExemptionStatement},
@@ -21,7 +21,6 @@ pub(super) struct Exemption {
 }
 impl Exemption {
     pub async fn read(
-        ring: CustomRing,
         config: &CustomRingConfig,
         demand: &CoSignDemand,
         own: Option<BoundRoot>,
@@ -40,9 +39,9 @@ impl Exemption {
         }
         let root = match own {
             Some(root) => root,
-            None => match BoundRoot::own(ring, config.account()) {
+            None => match BoundRoot::own(config.account(), client).await {
                 Ok(root) => root,
-                Err(RingError::UnsyncedRoots { .. }) => return Ok(None),
+                Err(RingError::NotStorageRegistry { .. }) => return Ok(None),
                 Err(error) => return Err(error),
             },
         };

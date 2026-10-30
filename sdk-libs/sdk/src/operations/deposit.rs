@@ -423,7 +423,7 @@ impl PreparedRingDeposit {
         .await
     }
 
-    /// `[config, policy?, co-signer?]`, then SPP's deposit list.
+    /// `[config, registries?, co-signer?]`, then SPP's deposit list.
     fn instruction(
         &self,
         proof: CustomRingProof,
@@ -440,6 +440,12 @@ impl PreparedRingDeposit {
         };
         instruction.data = [bytemuck::bytes_of(&prefix), &instruction.data].concat();
         let mut accounts = vec![AccountMeta::new_readonly(self.ring.policy_pda(), false)];
+        accounts.extend(
+            roots
+                .into_iter()
+                .flat_map(DepositRoots::bound)
+                .map(|root| AccountMeta::new_readonly(root.registry, false)),
+        );
         accounts.extend(
             self.cosigner
                 .into_iter()
@@ -689,7 +695,7 @@ impl DepositDisclosure {
         rpc: &(impl AsyncRpc + AsyncRingIndexer + ?Sized),
     ) -> Result<DepositRecords, RingError> {
         let policy = ring.require_policy(rpc).await?;
-        let root = BoundRoot::own(ring, &policy)?;
+        let root = BoundRoot::own(&policy, rpc).await?;
         let escrowed = match self.key_escrow {
             true => Some(self.record(rpc, root).await?),
             false => None,
@@ -698,7 +704,7 @@ impl DepositDisclosure {
             Some(_) => {
                 let pinned = PinnedPolicy::of(&policy)?;
                 let asset = self.asset_opening(rpc, root).await?;
-                let curator = match BoundRoot::curator(ring, &policy)? {
+                let curator = match BoundRoot::curator(&policy, rpc).await? {
                     Some(root) => Some(CuratorAsset {
                         root,
                         asset: self.asset_opening(rpc, root).await?,

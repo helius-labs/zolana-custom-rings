@@ -1,7 +1,7 @@
 //! Member record views as record tree types, every opening checked against its root.
 
 use custom_ring_interface::{
-    EscrowKey, QueueEntry, RingPolicy, AUDIT_CIPHERTEXT_LEN, QUAD_ARITY, QUAD_HEIGHT,
+    storage::StorageRegistry, EscrowKey, QueueEntry, AUDIT_CIPHERTEXT_LEN, QUAD_ARITY, QUAD_HEIGHT,
     TAGGED_X25519_KEY_LEN,
 };
 use solana_address::Address;
@@ -34,7 +34,7 @@ pub struct MemberOpeningRead {
     pub nullifier_pk: Option<[u8; 32]>,
 }
 
-/// The newest own root a ring policy mirrors, every record page is read under it.
+/// A registry's newest root, every record page is read under it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StorageTip {
     pub registry: Address,
@@ -168,15 +168,14 @@ impl RecordPoolRead {
 }
 
 impl StorageTip {
-    /// `None` before the own mirror holds a root of the registry the policy names.
-    pub fn mirrored(policy: &RingPolicy) -> Option<Self> {
-        let mirror = &policy.own_roots;
-        let newest = mirror.roots[0];
-        (mirror.registry == policy.records && newest.hash != [0; 32]).then_some(Self {
-            registry: policy.records,
+    /// The newest root `account` holds, the one a reader proves against.
+    pub fn newest(registry: Address, account: &StorageRegistry) -> Self {
+        let newest = account.newest();
+        Self {
+            registry,
             root: newest.hash,
             revision: newest.revision.value(),
-        })
+        }
     }
 
     pub fn openings_request(&self, members: &[[u8; 32]]) -> GetStorageMemberOpeningsRequest {

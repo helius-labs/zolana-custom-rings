@@ -142,9 +142,7 @@ ring_errors! {
     InvalidStorageRegistry = 8302 => "storage registry account is invalid",
     StorageAuthorityMismatch = 8303 =>
         "the records registry answers to neither the policy authority nor the named storage authority",
-    UnmirroredRegistry = 8304 => "the registry is neither the policy records nor its curator source",
-    MirrorNotSynced = 8305 => "the root mirror holds no roots of the registry the policy names",
-    MirrorRootExpired = 8306 => "the revision names no unexpired root of the mirror",
+    // 8304 to 8306 retired.
     OwnerSignerOnInProofRail = 8350 => "the in-proof owner rail takes no owner signer",
     InvalidAssetLimits = 8390 => "a window cap and its window are not set together",
     DepositMintAccountMissing = 8410 => "an spl deposit group has no mint account",
@@ -152,6 +150,9 @@ ring_errors! {
     UnexpectedCuratorRevision = 8470 => "the deposit names a curator revision without a curator source",
     ZeroRoleKey = 8471 => "a ring role key is zero",
     DuplicateRoleKey = 8472 => "one key holds two ring roles",
+    UnboundRegistry = 8480 => "the registry account is not the one the ring binds",
+    RootNotServed = 8481 => "the registry serves no root at the revision",
+    MissingRegistry = 8482 => "the instruction reads a registry it does not pass",
 }
 
 impl From<CustomRingError> for ProgramError {

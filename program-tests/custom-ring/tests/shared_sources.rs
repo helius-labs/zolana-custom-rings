@@ -91,8 +91,7 @@ fn a_curator_sourced_blocklist_governs_the_subscriber_ring() -> Result<()> {
             present,
             env,
         }
-        .send()?;
-        rings.wait_for_subscriber_mirror()
+        .send()
     };
     curator_block(true)?;
     transfer(&notes[1]).expect_refusal()?;

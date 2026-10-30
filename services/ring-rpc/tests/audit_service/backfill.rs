@@ -247,7 +247,7 @@ async fn concurrent_backfills_read_the_registry_once() {
 }
 
 #[tokio::test]
-async fn a_moved_mirror_root_rereads_the_records() {
+async fn a_moved_records_root_rereads_the_records() {
     let fixture = Fixture::new();
     let owners = [sol(0xc0, 30), sol(0xc1, 12)];
     let source = escrowed_source(&fixture, &owners, &owners[..1]);

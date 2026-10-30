@@ -160,24 +160,6 @@ impl<'a> UpdateQueue<'a> {
             .collect()
     }
 
-    pub async fn applied_registries(&self) -> Result<Vec<Address>, DbErr> {
-        let sql = "SELECT DISTINCT registry FROM records_batches WHERE status=$1";
-        self.query_all(sql, vec![APPLIED.into()])
-            .await?
-            .iter()
-            .map(|row| address(row, "registry"))
-            .collect()
-    }
-
-    pub async fn rings(&self) -> Result<Vec<Address>, DbErr> {
-        let sql = "SELECT DISTINCT ring FROM records_updates";
-        self.query_all(sql, Vec::new())
-            .await?
-            .iter()
-            .map(|row| address(row, "ring"))
-            .collect()
-    }
-
     /// Every queued or submitted write, and the awaiting writes of `members` alone.
     pub async fn pending_writes(
         &self,
@@ -221,7 +203,7 @@ impl<'a> UpdateQueue<'a> {
 
     /// Submit order, each joined enrolment's writes ahead of the update that approved it.
     pub async fn queued(&self, registry: Address) -> Result<Vec<QueuedUpdate>, DbErr> {
-        let sql = "SELECT id, ring, writes, urgent, queued_slot, valid_until_slot, joined \
+        let sql = "SELECT id, writes, urgent, queued_slot, valid_until_slot, joined \
                    FROM records_updates WHERE registry=$1 AND status=$2 ORDER BY seq";
         let values = vec![bytes(registry.as_array()), QUEUED.into()];
         let mut joined: Vec<([u8; 32], Vec<StorageWriteData>, u64)> = Vec::new();
@@ -245,7 +227,6 @@ impl<'a> UpdateQueue<'a> {
             writes.extend(stored_writes(&row)?);
             queued.push(QueuedUpdate {
                 id,
-                ring: address(&row, "ring")?,
                 writes,
                 urgent: row.try_get("", "urgent")?,
                 queued_slot: unsigned(&row, "queued_slot")?,
