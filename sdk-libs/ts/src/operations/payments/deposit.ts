@@ -69,6 +69,7 @@ import type { FirstContact, ViewingHistory } from "../../state/viewing-history.j
 import { encodeRelayDepositInputs } from "../../protocol/ring-rpc/relay-deposit-inputs.js";
 import type { RelayIntent, RelayQuote } from "../../protocol/ring-rpc/ring-rpc-types.js";
 import { PreparedRelay } from "../../rpc/relay.js";
+import { expectedDeposit } from "../../rpc/relay-message.js";
 import { ringIntentMismatch } from "../workflow/selection.js";
 import { assetLabel } from "./transfer.js";
 
@@ -310,15 +311,25 @@ export class PreparedRingDeposit {
         blindingSecret: prepared.#blindingSecret,
         auditEphemeralKey: prepared.#ephemeralSecret,
       });
+      const expected = await expectedDeposit({
+        ringProgramId: prepared.#ringProgramId,
+        feePayer: params.quote.feePayer,
+        tree: prepared.#tree,
+        depositor: signerAddress(prepared.#depositor),
+        deposit: prepared.#deposit,
+      });
       return Object.freeze({
-        relay: new PreparedRelay({
-          ring: params.ringProgramId,
-          quote: params.quote,
-          intent: {
-            operation: "deposit",
-            proofInputs: base64.decode(payload) as RelayIntent["proofInputs"],
+        relay: new PreparedRelay(
+          {
+            ring: params.ringProgramId,
+            quote: params.quote,
+            intent: {
+              operation: "deposit",
+              proofInputs: base64.decode(payload) as RelayIntent["proofInputs"],
+            },
           },
-        }),
+          expected,
+        ),
         ...(prepared.viewingHistory === undefined
           ? {}
           : { viewingHistory: prepared.viewingHistory }),
