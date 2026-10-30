@@ -173,6 +173,8 @@ fn a_relayed_authority_transfer_moves_the_escrowed_members_note() -> Result<()> 
         }],
     };
 
+    let quote = ring_rpc.quote(env, RelayOperation::Delegate)?;
+
     // The service opens the member's deposit under its escrowed key at its next backfill.
     let pending = wait_for("the service to open the escrowed note", || {
         let request = AuthorityTransferRequest::new(AuthorityTransferAttestation {
@@ -181,13 +183,12 @@ fn a_relayed_authority_transfer_moves_the_escrowed_members_note() -> Result<()> 
             transfer: transfer.clone(),
         })
         .sign(&delegate)?;
-        Ok(
-            match env.run(PreparedAuthorityTransfer::new(request).send(&ring_rpc.relay)) {
-                Ok(RelaySent::SignMessage(pending)) => Probe::Ready(pending),
-                Ok(RelaySent::Submitted(_)) => bail!("the delegate signs the move"),
-                Err(error) => Probe::Retry(error.into()),
-            },
-        )
+        let prepared = PreparedAuthorityTransfer::new(request, &quote)?;
+        Ok(match env.run(prepared.send(&ring_rpc.relay)) {
+            Ok(RelaySent::SignMessage(pending)) => Probe::Ready(pending),
+            Ok(RelaySent::Submitted(_)) => bail!("the delegate signs the move"),
+            Err(error) => Probe::Retry(error.into()),
+        })
     })?;
     let relay_id = pending.relay_id().clone();
     env.run(pending.sign(&ring_rpc.relay, &delegate))?;

@@ -55,4 +55,5 @@ hex = { workspace = true }
 serde_json = { workspace = true }
 solana-rpc-client = { workspace = true }
 solana-rpc-client-api = { workspace = true }
+solana-system-interface = { workspace = true }
 spl-token-2022-interface = { workspace = true }

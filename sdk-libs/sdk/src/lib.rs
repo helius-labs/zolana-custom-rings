@@ -30,6 +30,8 @@ mod records;
 mod register_key;
 #[path = "rpc/relay.rs"]
 mod relay;
+#[path = "validation/relay_message.rs"]
+mod relay_message;
 #[path = "codec/request.rs"]
 mod request;
 #[path = "operations/utxo_selection.rs"]
@@ -86,6 +88,7 @@ pub use crate::{
     },
     register_key::{EscrowedRecipients, KeyEscrowAuthority, KeyRegistration, SealedEscrow},
     relay::{PendingSignature, PreparedAuthorityTransfer, PreparedRelay, RelaySent, RingRelay},
+    relay_message::{MessageMismatch, VerifiedMessage},
     select::{select_merge_where, select_spend_where},
     storage::{InitializeStorage, StorageApplyProof, UpdateStorage, UpdateStorageAuthority},
     submission::{

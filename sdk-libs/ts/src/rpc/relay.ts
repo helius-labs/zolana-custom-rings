@@ -1,16 +1,8 @@
 /** The Ring RPC relay a wallet sends its transfer through, Rust `relay`. */
-import {
-  type Address,
-  getBase58Decoder,
-  getBase64Encoder,
-  getCompiledTransactionMessageDecoder,
-  getCompiledTransactionMessageEncoder,
-  type TransactionMessageBytes,
-  type TransactionPartialSigner,
-} from "@solana/kit";
+import { getBase58Decoder, getBase64Encoder, type TransactionPartialSigner } from "@solana/kit";
 
-import type { RequestContext, Signature } from "@heliuslabs/zolana/interface";
-import { concatBytes, equalBytes, indexerScalars, sha256 } from "@heliuslabs/zolana/internal";
+import type { RequestContext } from "@heliuslabs/zolana/interface";
+import { concatBytes, indexerScalars, sha256 } from "@heliuslabs/zolana/internal";
 import type { indexerTypes } from "@heliuslabs/zolana/internal";
 
 import { RingError } from "../protocol/error.js";
@@ -21,9 +13,17 @@ import {
 import type {
   PrepareAuthorityTransferRequest,
   PrepareRelayRequest,
+  RelayQuote,
   RelayStatus,
   RelayStep,
 } from "../protocol/ring-rpc/ring-rpc-types.js";
+import {
+  checkRelayMessage,
+  type ExpectedRelayMessage,
+  expectedDelegate,
+  mismatch,
+  type VerifiedRelayMessage,
+} from "./relay-message.js";
 import type { RingRpc } from "./ring-rpc.js";
 
 type Hash = indexerTypes.Hash;
@@ -57,10 +57,13 @@ function wireRelayId(wire: Readonly<Record<string, unknown>>): Hash {
 /** Rust `PreparedRelay`. */
 export class PreparedRelay {
   readonly request: PrepareRelayRequest;
+  /** `undefined` on the rails that sign inside the proof. */
+  readonly #expected: ExpectedRelayMessage | undefined;
 
   /** @internal */
-  constructor(request: PrepareRelayRequest) {
+  constructor(request: PrepareRelayRequest, expected?: ExpectedRelayMessage) {
     this.request = request;
+    this.#expected = expected;
     Object.freeze(this);
   }
 
@@ -69,16 +72,19 @@ export class PreparedRelay {
   }
 
   async send(relay: RingRelayClient, context?: RequestContext): Promise<RelaySent> {
-    return accepted(await relay.prepareRelay(this.request, context), this.relayId());
+    const step = await relay.prepareRelay(this.request, context);
+    return accepted({ step, relayId: this.relayId(), expected: this.#expected });
   }
 }
 
-/** Rust `PreparedAuthorityTransfer`, the delegate signs the message Ring RPC returns. */
+/** Rust `PreparedAuthorityTransfer`, the delegate signs only a message the quoted fee payer pays. */
 export class PreparedAuthorityTransfer {
   readonly request: PrepareAuthorityTransferRequest;
+  readonly quote: RelayQuote;
 
-  constructor(request: PrepareAuthorityTransferRequest) {
+  constructor(request: PrepareAuthorityTransferRequest, quote: RelayQuote) {
     this.request = request;
+    this.quote = quote;
     Object.freeze(this);
   }
 
@@ -88,14 +94,24 @@ export class PreparedAuthorityTransfer {
   }
 
   async send(relay: RingAuthorityRelayClient, context?: RequestContext): Promise<RelaySent> {
-    return accepted(await relay.prepareAuthorityTransfer(this.request, context), this.relayId());
+    const expected = await expectedDelegate(this.request, this.quote);
+    const step = await relay.prepareAuthorityTransfer(this.request, context);
+    return accepted({ step, relayId: this.relayId(), expected });
   }
 }
 
-function accepted(step: RelayStep, expected: Hash): RelaySent {
-  if (step.relayId !== expected) throw new RingError("RING_RELAY_ID_MISMATCH");
-  if (step.step === "submitted") return Object.freeze({ step: "submitted", relayId: expected });
-  return new PendingRelaySignature(expected, base64.encode(step.message) as Uint8Array);
+function accepted({
+  step,
+  relayId,
+  expected,
+}: Readonly<{
+  step: RelayStep;
+  relayId: Hash;
+  expected: ExpectedRelayMessage | undefined;
+}>): RelaySent {
+  if (step.relayId !== relayId) throw new RingError("RING_RELAY_ID_MISMATCH");
+  if (step.step === "submitted") return Object.freeze({ step: "submitted", relayId });
+  return new PendingRelaySignature(relayId, base64.encode(step.message) as Uint8Array, expected);
 }
 
 /** Rust `RelaySent`, a `signMessage` step waits for its signer. */
@@ -112,55 +128,32 @@ export class PendingRelaySignature {
   readonly step = "signMessage";
   readonly relayId: Hash;
   readonly #message: Uint8Array;
+  readonly #expected: ExpectedRelayMessage | undefined;
 
   /** @internal */
-  constructor(relayId: Hash, message: Uint8Array) {
+  constructor(relayId: Hash, message: Uint8Array, expected?: ExpectedRelayMessage) {
     this.relayId = relayId;
     this.#message = message;
+    this.#expected = expected;
     Object.freeze(this);
   }
 
-  /** Signs only a v1 message that names `signer` among its signers. */
+  /** Rust `PendingSignature::verify`, the expectation comes from the wallet's own request. */
+  verify(): VerifiedRelayMessage {
+    if (this.#expected === undefined) throw mismatch("Unrequested");
+    return checkRelayMessage(this.#expected, this.#message);
+  }
+
   async sign(
     relay: RingRelayClient,
     signer: TransactionPartialSigner,
     context?: RequestContext,
   ): Promise<RelayStatus> {
-    const messageBytes = this.#message as unknown as TransactionMessageBytes;
-    if (!namesSigner(this.#message, signer.address))
-      throw new RingError("RING_RELAY_MESSAGE_INVALID");
-    const transaction = { messageBytes, signatures: {} } as unknown as Parameters<
-      TransactionPartialSigner["signTransactions"]
-    >[0][number];
-    const [signatures] = await signer.signTransactions(
-      [transaction],
-      context?.signal === undefined ? undefined : { abortSignal: context.signal },
-    );
-    const signature = signatures?.[signer.address];
-    if (signature === undefined) throw new RingError("RING_RELAY_MESSAGE_INVALID");
+    const verified = this.verify();
+    const signature = await verified.sign(signer, context);
     return relay.submitRelay(
-      {
-        relayId: this.relayId,
-        signer: signer.address,
-        signature: base58.decode(signature) as Signature,
-      },
+      { relayId: this.relayId, signer: verified.signer, signature },
       context,
     );
-  }
-}
-
-/** A canonical v1 message whose signer region holds `signer`. */
-function namesSigner(bytes: Uint8Array, signer: Address): boolean {
-  try {
-    const message = getCompiledTransactionMessageDecoder().decode(bytes);
-    const index = message.staticAccounts.indexOf(signer);
-    return (
-      message.version === 1 &&
-      index >= 0 &&
-      index < message.header.numSignerAccounts &&
-      equalBytes(new Uint8Array(getCompiledTransactionMessageEncoder().encode(message)), bytes)
-    );
-  } catch {
-    return false;
   }
 }

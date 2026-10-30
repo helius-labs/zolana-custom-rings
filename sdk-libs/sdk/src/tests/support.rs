@@ -674,3 +674,59 @@ impl Registry {
         view
     }
 }
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct MessageCase {
+    pub name: String,
+    pub message: Base64String,
+    /// A `MessageMismatch` variant, or `Accepted`.
+    pub verdict: String,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct MessageVector<R> {
+    pub description: String,
+    pub request: R,
+    pub cases: Vec<MessageCase>,
+}
+
+pub(crate) fn verdict(checked: Result<crate::VerifiedMessage, crate::MessageMismatch>) -> String {
+    checked.map_or_else(
+        |mismatch| format!("{mismatch:?}"),
+        |_| "Accepted".to_owned(),
+    )
+}
+
+/// Compiled as Ring RPC compiles its relay messages.
+pub(crate) fn relay_message(
+    fee_payer: &Address,
+    instructions: &[solana_instruction::Instruction],
+    units: u32,
+) -> Base64String {
+    spr_client::compile_message(
+        fee_payer,
+        instructions,
+        solana_message::Hash::new_from_array([0x7b; 32]),
+        spr_client::ComputeBudgetConfig::new(units),
+    )
+    .unwrap()
+    .serialize()
+    .into()
+}
+
+/// `UPDATE_RELAY_MESSAGES=1` rewrites the file from `fresh`, the committed file is the one read.
+pub(crate) fn pinned_vector<R>(name: &str, fresh: MessageVector<R>) -> MessageVector<R>
+where
+    R: serde::Serialize + serde::de::DeserializeOwned,
+{
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-vectors/rpc")
+        .join(name);
+    if std::env::var_os("UPDATE_RELAY_MESSAGES").is_some() {
+        let json = serde_json::to_string_pretty(&fresh).unwrap();
+        std::fs::write(&path, json + "\n").unwrap();
+    }
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}

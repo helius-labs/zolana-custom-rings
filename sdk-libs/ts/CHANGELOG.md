@@ -38,6 +38,7 @@ Breaking
 - `openRingDepositOpening` requires a `ConfirmedDeposit` → take it from `ConfirmedDeposit.fromTransaction` or from the `deposits` of a confirmed deposit's `ConfirmedRingTransaction`.
 - Custom-ring auditor envelopes use X25519 keys → create a new auditor configuration with `X25519Keypair`/`X25519PublicKey` before using this version.
 - Ring deposit audit capsules carry a `RING_DEPOSIT_OPENING_LENGTH` (96) byte opening that also discloses the owner key of every deposit, `RingDepositOpening` requires it as `ownerKey`, `openRingDepositOpening` always returns it, `DepositProofRequest` requires `ownerKeys` and `createdRingUtxos` opens a confidential ring's deposits too → re-prove audited deposits with this version, a capsule sealed by an earlier version no longer decodes.
+- `PendingRelaySignature.sign` signs only a message that holds exactly the deposit or authority transfer the wallet requested, paid by the quoted fee payer, and fails with `RING_RELAY_MESSAGE_INVALID` naming the `RelayMessageMismatch` in `details.mismatch` otherwise, `PendingRelaySignature.verify` returns that check's `VerifiedRelayMessage`, and `PreparedAuthorityTransfer` takes the relay quote → pass the `RelayQuote` of a `delegate` operation as the second argument of `new PreparedAuthorityTransfer`.
 
 Added
 
