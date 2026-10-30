@@ -21,7 +21,7 @@ use zolana_ring_client::rpc::{
     RelayStatus, RelayStep, SubmitRelayRequest, GET_RELAY_QUOTE, GET_RELAY_STATUS, PREPARE_RELAY,
     SUBMIT_RELAY,
 };
-use zolana_ring_rpc::{relay_module, FeePayerSubmit, Relay, RelayParts, ServedRings, Store};
+use zolana_ring_rpc::{relay_module, Relay, RelayParts, ServedRings, Store};
 
 use relay_fixture::{
     anonymous_rail, owner, proof_inputs, signed_request, signers_verify, RecordingChain,
@@ -46,7 +46,7 @@ impl Fixture {
         let relay = Relay::new(RelayParts {
             store: Store::open("sqlite::memory:", 1).await.expect("store"),
             prover: prover.clone(),
-            submit: Arc::new(FeePayerSubmit::new(fee_payer, chain.clone())),
+            fee_payer,
             chain: chain.clone(),
             rings: ServedRings::One(RING),
         });

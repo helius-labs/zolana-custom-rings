@@ -374,11 +374,9 @@ pub(crate) mod tests {
     use crate::{
         database::Store,
         hub::ServiceIdentity,
+        landing::{ChainOutcome, ChainSubmit, LatestBlockhash},
         relay::{RelayParts, ServedRings},
-        relay_chain::{ChainOutcome, RelayChain},
         relay_prover::{DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver},
-        relay_submit::{RelaySubmit, RelayTransaction},
-        storage_chain::LatestBlockhash,
         upstream::{
             DepositHistory, DepositPage, MergeAuditRequest, RecordsTip, RingConfiguration,
             RingHistoryPage, TransactionPage,
@@ -389,7 +387,9 @@ pub(crate) mod tests {
     pub(crate) const RING: Address = Address::new_from_array([8; 32]);
     pub(crate) const GENESIS: [u8; 32] = [3; 32];
     pub(crate) const MINT: Address = Address::new_from_array([6; 32]);
-    const FEE_PAYER: Address = Address::new_from_array([5; 32]);
+    pub(crate) fn fee_payer() -> Keypair {
+        Keypair::new_from_array([5; 32])
+    }
     const LAST_VALID_BLOCK_HEIGHT: u64 = 100;
 
     pub(crate) struct EscrowRingSource {
@@ -504,7 +504,7 @@ pub(crate) mod tests {
             let blockhash = Hash::new_from_array([u8::try_from(owners.len()).expect("builds"); 32]);
             Ok(BuiltMerge {
                 message: compile_message(
-                    &FEE_PAYER,
+                    &fee_payer().pubkey(),
                     &[],
                     blockhash,
                     ComputeBudgetConfig::new(400_000),
@@ -515,31 +515,12 @@ pub(crate) mod tests {
         }
     }
 
-    #[derive(Default)]
-    pub(crate) struct RecordingRelay {
-        sent: Mutex<usize>,
-        down: Mutex<bool>,
-    }
-
-    #[async_trait]
-    impl RelaySubmit for RecordingRelay {
-        fn fee_payer(&self) -> Address {
-            FEE_PAYER
-        }
-
-        async fn submit(&self, _transaction: RelayTransaction) -> Result<Signature, RingRpcError> {
-            if *self.down.lock().expect("down") {
-                return Err(RingRpcError::Upstream(ClientError::Rpc("down".to_owned())));
-            }
-            *self.sent.lock().expect("sent") += 1;
-            Ok(Signature::from([9; 64]))
-        }
-    }
-
-    /// No outcome until a test sets one.
+    /// No outcome until a test sets one, a send fails while `down`.
     pub(crate) struct ScriptedChain {
         height: Mutex<u64>,
         outcome: Mutex<Option<ChainOutcome>>,
+        sent: Mutex<usize>,
+        down: Mutex<bool>,
     }
 
     impl Default for ScriptedChain {
@@ -547,12 +528,14 @@ pub(crate) mod tests {
             Self {
                 height: Mutex::new(1),
                 outcome: Mutex::new(None),
+                sent: Mutex::new(0),
+                down: Mutex::new(false),
             }
         }
     }
 
     #[async_trait]
-    impl RelayChain for ScriptedChain {
+    impl ChainSubmit for ScriptedChain {
         async fn slot(&self) -> Result<u64, RingRpcError> {
             Ok(1)
         }
@@ -566,6 +549,10 @@ pub(crate) mod tests {
         }
 
         async fn send(&self, _transaction: &VersionedTransaction) -> Result<(), RingRpcError> {
+            if *self.down.lock().expect("down") {
+                return Err(RingRpcError::Upstream(ClientError::Rpc("down".to_owned())));
+            }
+            *self.sent.lock().expect("sent") += 1;
             Ok(())
         }
 
@@ -612,7 +599,6 @@ pub(crate) mod tests {
     pub(crate) struct Fixture {
         pub(crate) hub: Arc<Hub<EscrowRingSource>>,
         builder: Arc<RecordingBuilder>,
-        relay: Arc<RecordingRelay>,
         chain: Arc<ScriptedChain>,
     }
 
@@ -622,17 +608,15 @@ pub(crate) mod tests {
         }
 
         async fn on(store: Store) -> Self {
-            let relay = Arc::new(RecordingRelay::default());
             let chain = Arc::new(ScriptedChain::default());
             let parts = RelayParts {
                 store,
                 prover: Arc::new(UnusedProver),
-                submit: relay.clone(),
+                fee_payer: fee_payer(),
                 chain: chain.clone(),
                 rings: ServedRings::One(RING),
             };
             Self {
-                relay,
                 chain,
                 ..Self::serving(None, Some(parts)).await
             }
@@ -669,7 +653,6 @@ pub(crate) mod tests {
             Self {
                 hub: Arc::new(hub),
                 builder: Arc::default(),
-                relay: Arc::default(),
                 chain: Arc::default(),
             }
         }
@@ -792,7 +775,7 @@ pub(crate) mod tests {
         fixture.settle(&wallet, 1).await;
 
         assert_eq!(fixture.merge_due().await.len(), 1);
-        assert_eq!(*fixture.relay.sent.lock().expect("sent"), 1);
+        assert_eq!(*fixture.chain.sent.lock().expect("sent"), 1);
         assert_eq!(
             *fixture.builder.owners.lock().expect("owners"),
             vec![(wallet.pubkey(), 3)]
@@ -809,7 +792,7 @@ pub(crate) mod tests {
         fixture.settle(&settled, 1).await;
 
         assert!(fixture.merge_due().await.is_empty());
-        assert_eq!(*fixture.relay.sent.lock().expect("sent"), 0);
+        assert_eq!(*fixture.chain.sent.lock().expect("sent"), 0);
     }
 
     #[tokio::test]
@@ -825,7 +808,7 @@ pub(crate) mod tests {
         fixture.track().await;
 
         assert_eq!(fixture.merge_due().await.len(), 1);
-        assert_eq!(*fixture.relay.sent.lock().expect("sent"), 2);
+        assert_eq!(*fixture.chain.sent.lock().expect("sent"), 2);
     }
 
     #[tokio::test]
@@ -860,7 +843,7 @@ pub(crate) mod tests {
         let wallet = Keypair::new_from_array([11; 32]);
         before.escrow_notes(&wallet, 3);
         before.settle(&wallet, 1).await;
-        *before.relay.down.lock().expect("down") = true;
+        *before.chain.down.lock().expect("down") = true;
         assert!(before.merge_due().await.is_empty());
 
         let after = Fixture::on(store).await;
@@ -869,6 +852,6 @@ pub(crate) mod tests {
         after.track().await;
 
         assert!(after.builder.owners.lock().expect("owners").is_empty());
-        assert_eq!(*after.relay.sent.lock().expect("sent"), 1);
+        assert_eq!(*after.chain.sent.lock().expect("sent"), 1);
     }
 }

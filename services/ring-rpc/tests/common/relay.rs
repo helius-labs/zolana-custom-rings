@@ -1,6 +1,9 @@
 //! Relay fakes and the sealed transfer a wallet leaves for Ring RPC.
 
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Mutex,
+};
 
 use async_trait::async_trait;
 use custom_ring_interface::cosign::CoSignDemand;
@@ -10,7 +13,7 @@ use solana_instruction::{AccountMeta, Instruction};
 use solana_signature::Signature;
 use solana_signer::Signer;
 use solana_transaction::versioned::VersionedTransaction;
-use spr_client::ComputeBudgetConfig;
+use spr_client::{ClientError, ComputeBudgetConfig};
 use spr_event::MessageData;
 use spr_interface::{
     instruction::instruction_data::transact::{OwnerTag, TransactOutput},
@@ -25,12 +28,13 @@ use zolana_ring_client::rpc::{
     PrepareRelayRequest, ProofInputBytes, RelayIntent, RelayProofInputs, RelayQuote, RelayRail,
 };
 use zolana_ring_rpc::{
-    ChainOutcome, DelegateSeal, LatestBlockhash, ProvenRelay, RelayChain, RelayParties,
-    RelayPayload, RelayProofRequest, RelayProver, RingRpcError,
+    ChainOutcome, ChainSubmit, DelegateSeal, LatestBlockhash, ProvenRelay, RelayError,
+    RelayParties, RelayPayload, RelayProofRequest, RelayProver, RingRpcError,
 };
 use zolana_ring_transaction::{AnonymousPlan, TaggedPayment};
 
 pub const SLOT: u64 = 1_000;
+pub const LAST_VALID_BLOCK_HEIGHT: u64 = 500;
 const OWNER_SEED: [u8; 32] = [5; 32];
 
 #[derive(Default)]
@@ -88,9 +92,22 @@ impl RelayProver for RecordingProver {
     }
 }
 
-#[derive(Default)]
+/// Every sent transaction lands, a send past `LAST_VALID_BLOCK_HEIGHT` is refused.
 pub struct RecordingChain {
     pub sent: Mutex<Vec<VersionedTransaction>>,
+    pub height: AtomicU64,
+    /// The next send lands and its reply is lost.
+    pub reply_lost: AtomicBool,
+}
+
+impl Default for RecordingChain {
+    fn default() -> Self {
+        Self {
+            sent: Mutex::default(),
+            height: AtomicU64::new(400),
+            reply_lost: AtomicBool::new(false),
+        }
+    }
 }
 
 impl RecordingChain {
@@ -100,22 +117,33 @@ impl RecordingChain {
 }
 
 #[async_trait]
-impl RelayChain for RecordingChain {
+impl ChainSubmit for RecordingChain {
     async fn slot(&self) -> Result<u64, RingRpcError> {
         Ok(SLOT)
     }
 
     async fn latest_blockhash(&self) -> Result<LatestBlockhash, RingRpcError> {
-        Ok((Hash::new_from_array([8; 32]), 500).into())
+        Ok((Hash::new_from_array([8; 32]), LAST_VALID_BLOCK_HEIGHT).into())
     }
 
     async fn block_height(&self) -> Result<u64, RingRpcError> {
-        Ok(400)
+        Ok(self.height.load(Ordering::Relaxed))
     }
 
     async fn send(&self, transaction: &VersionedTransaction) -> Result<(), RingRpcError> {
+        if self.height.load(Ordering::Relaxed) > LAST_VALID_BLOCK_HEIGHT {
+            return Err(RelayError::SendRefused {
+                reason: "Blockhash not found".to_owned(),
+            }
+            .into());
+        }
         self.sent.lock().expect("sent").push(transaction.clone());
-        Ok(())
+        match self.reply_lost.swap(false, Ordering::Relaxed) {
+            true => Err(RingRpcError::Upstream(ClientError::Rpc(
+                "the send reply was lost".to_owned(),
+            ))),
+            false => Ok(()),
+        }
     }
 
     async fn outcome(&self, signature: Signature) -> Result<Option<ChainOutcome>, RingRpcError> {

@@ -15,7 +15,7 @@ use crate::{
     managed_merge::{BuiltMerge, MergeBuilder, OwnerMerge},
 };
 
-/// `payer` must be the fee payer `RelaySubmit` signs as.
+/// `payer` must be the relay fee payer.
 pub struct RingSdkMergeBuilder<R, I> {
     pub client: RingClient<R, I>,
     pub payer: Address,

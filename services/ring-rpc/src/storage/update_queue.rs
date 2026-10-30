@@ -7,9 +7,12 @@ use solana_signature::Signature;
 use zolana_ring_client::rpc::{RecordUpdateStatus, SubmitRecordUpdateRequest};
 use zolana_ring_policy::{ListSet, Member};
 
-use crate::record_update::{
-    AwaitingEnrolment, CheckedUpdate, QueuedUpdate, RecordUpdateRefusal, UpdateSigner,
-    MAX_BATCH_ATTEMPTS,
+use crate::{
+    landing::Attempt,
+    record_update::{
+        AwaitingEnrolment, CheckedUpdate, QueuedUpdate, RecordUpdateRefusal, UpdateSigner,
+        MAX_BATCH_ATTEMPTS,
+    },
 };
 
 const AWAITING: &str = "awaiting";
@@ -39,17 +42,15 @@ pub(crate) struct NewUpdate<'a> {
 /// Recorded and not yet settled, its updates wait on its signature.
 pub(crate) struct OpenBatch {
     pub id: i64,
-    pub signature: Signature,
-    pub last_valid_block_height: u64,
+    pub attempt: Attempt,
 }
 
 #[must_use]
 pub(crate) struct NewBatch<'a> {
     pub registry: Address,
-    pub signature: Signature,
+    pub attempt: Attempt,
     /// The registry revision the `Update` names.
     pub revision: u64,
-    pub last_valid_block_height: u64,
     pub updates: &'a [&'a QueuedUpdate],
 }
 
@@ -200,8 +201,10 @@ impl<'a> UpdateQueue<'a> {
         };
         Ok(Some(OpenBatch {
             id: row.try_get("", "id")?,
-            signature: signature(&row)?,
-            last_valid_block_height: unsigned(&row, "last_valid_block_height")?,
+            attempt: Attempt {
+                signature: signature(&row)?,
+                last_valid_block_height: unsigned(&row, "last_valid_block_height")?,
+            },
         }))
     }
 
@@ -365,9 +368,9 @@ impl<'a> UpdateQueue<'a> {
                    status) VALUES($1,$2,$3,$4,$5) RETURNING id";
         let values = vec![
             bytes(batch.registry.as_array()),
-            batch.signature.as_ref().to_vec().into(),
+            batch.attempt.signature.as_ref().to_vec().into(),
             integer(batch.revision)?,
-            integer(batch.last_valid_block_height)?,
+            integer(batch.attempt.last_valid_block_height)?,
             SUBMITTED.into(),
         ];
         let id: i64 = transaction

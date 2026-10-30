@@ -12,6 +12,7 @@ use crate::relay_submit::CollectedSignature;
 #[derive(Clone)]
 pub(crate) struct RelayRecord {
     pub message: VersionedMessage,
+    /// Holds the fee payer's once no signer is awaited.
     pub signatures: Vec<CollectedSignature>,
     /// Signers the message still lacks.
     pub awaiting: Vec<Address>,
@@ -29,8 +30,7 @@ pub(crate) struct RelayRecord {
 )]
 pub(crate) enum RelayState {
     AwaitingSignature,
-    /// Every signature collected, the send not yet recorded.
-    Signed,
+    /// Stored before its first send.
     Sent {
         signature: SerializableSignature,
     },
@@ -71,7 +71,7 @@ struct StoredSignature {
     signature: SerializableSignature,
 }
 
-const PENDING: [&str; 3] = ["awaitingSignature", "signed", "sent"];
+const PENDING: [&str; 2] = ["awaitingSignature", "sent"];
 const CONFIRMED: &str = "confirmed";
 const FAILED: &str = "failed";
 
@@ -79,8 +79,7 @@ impl RelayState {
     fn status(&self) -> &'static str {
         match self {
             Self::AwaitingSignature => PENDING[0],
-            Self::Signed => PENDING[1],
-            Self::Sent { .. } => PENDING[2],
+            Self::Sent { .. } => PENDING[1],
             Self::Confirmed { .. } => CONFIRMED,
             Self::Failed { .. } => FAILED,
         }
@@ -130,7 +129,7 @@ impl<'a, C: ConnectionTrait> RelayStore<'a, C> {
     }
 
     pub async fn pending(&self) -> Result<Vec<RelayId>, DbErr> {
-        let sql = "SELECT relay_id FROM relay_relays WHERE status IN ($1,$2,$3)";
+        let sql = "SELECT relay_id FROM relay_relays WHERE status IN ($1,$2)";
         let values = PENDING.map(Value::from).to_vec();
         self.db
             .query_all(self.statement(sql, values))

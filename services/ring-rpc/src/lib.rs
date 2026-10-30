@@ -31,6 +31,8 @@ mod grants;
 mod hub;
 #[path = "security/keys.rs"]
 mod keys;
+#[path = "rpc/landing.rs"]
+mod landing;
 #[path = "config/limits.rs"]
 mod limits;
 #[path = "operations/managed_merge.rs"]
@@ -51,8 +53,6 @@ mod record_update;
 mod record_writer;
 #[path = "operations/relay.rs"]
 mod relay;
-#[path = "rpc/relay_chain.rs"]
-mod relay_chain;
 #[path = "operations/relay_prover.rs"]
 mod relay_prover;
 #[path = "operations/relay_services.rs"]
@@ -101,6 +101,7 @@ pub use error::{GrantRefusal, RingRpcError};
 pub use escrow_merge::RingSdkMergeBuilder;
 pub use hub::{Clock, Hub, HubBuilder, NotReady, ServiceIdentity};
 pub use keys::{KeySource, GRANT_ROW_KEY_INFO};
+pub use landing::{ChainOutcome, ChainSubmit, LatestBlockhash, SolanaChain};
 pub use managed_merge::{
     BuiltMerge, ManagedMerge, ManagedMergeInit, MergeBuilder, MergeTarget, OwnerMerge,
     MANAGED_MERGE_INTERVAL,
@@ -115,14 +116,13 @@ pub use record_writer::{RecordWriter, RECORD_FLUSH_INTERVAL};
 pub use relay::{
     Relay, RelayError, RelayParts, RelayPayload, ServedRings, QUOTE_SLOTS, RELAY_TRACK_INTERVAL,
 };
-pub use relay_chain::{ChainOutcome, FeePayerSubmit, RelayChain, SolanaRelayChain};
 pub use relay_prover::{
     DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver, SdkRelayProver,
 };
 pub use relay_services::{RelayServices, RelayServicesInit};
-pub use relay_submit::{CollectedSignature, RelaySubmit, RelayTransaction};
+pub use relay_submit::CollectedSignature;
 pub use server::{relay_module, rpc_module, run_server, BindPolicy, ServerError, ServerOptions};
-pub use storage_chain::{LatestBlockhash, LiveStorageChain, StorageChain, TransactionOutcome};
+pub use storage_chain::{LiveStorageChain, StorageChain};
 pub use upstream::{
     ChainSource, DepositHistory, DepositPage, MergeAuditRequest, RecordsTip, RingConfiguration,
     RingHistoryPage, TransactionPage, TransactionSource, Upstreams,

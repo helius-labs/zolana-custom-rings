@@ -2,16 +2,16 @@ use std::sync::Arc;
 
 use custom_ring_sdk::RingClient;
 use solana_keypair::Keypair;
+use solana_signer::Signer;
 use spr_client::{AsyncProverClient, AsyncSolanaRpc, AsyncZolanaClient, AsyncZolanaIndexer};
 
 use crate::{
     database::Store,
     escrow_merge::RingSdkMergeBuilder,
+    landing::SolanaChain,
     managed_merge::MergeBuilder,
     relay::{RelayParts, ServedRings},
-    relay_chain::{FeePayerSubmit, SolanaRelayChain},
     relay_prover::SdkRelayProver,
-    relay_submit::RelaySubmit,
 };
 
 /// The relay and the managed merge pay through one fee payer.
@@ -45,18 +45,16 @@ impl RelayServicesInit<'_> {
             );
             RingClient::new(zolana, AsyncProverClient::new(self.prover_url.to_owned()))
         };
-        let chain = Arc::new(SolanaRelayChain::new(AsyncSolanaRpc::new(self.rpc_url)));
-        let submit = Arc::new(FeePayerSubmit::new(self.fee_payer, chain.clone()));
         let builder = Arc::new(RingSdkMergeBuilder {
             client: ring_client(),
-            payer: submit.fee_payer(),
+            payer: self.fee_payer.pubkey(),
         });
         RelayServices {
             parts: RelayParts {
                 store: self.store,
                 prover: Arc::new(SdkRelayProver::new(ring_client())),
-                submit,
-                chain,
+                fee_payer: self.fee_payer,
+                chain: Arc::new(SolanaChain::new(self.rpc_url)),
                 rings: self.rings,
             },
             merge: MergeParts { builder },
