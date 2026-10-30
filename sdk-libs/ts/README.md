@@ -49,8 +49,7 @@ The auditor key lives in a Ring RPC. The Ring's policy authority grants view acc
 Helius can host that RPC; the authority can host it itself. The forester is
 shared with the default Ring.
 
-A Ring is confidential or anonymous, and an anonymous Ring spends
-through the Ring RPC relay. A Ring is audit-only or carries a
+A Ring is confidential or anonymous. A Ring is audit-only or carries a
 policy, a rule table over the list bits of the member records in the Ring's
 storage registry. The tier is fixed when the Ring account is created.
 
@@ -67,7 +66,10 @@ Set a Ring up in this order.
    `getSetRingActivationInstructionAsync` from `@heliuslabs/zolana/instructions`.
 5. `AuthorityRecordUpdate` fills the lists through `RingRpc.submitRecordUpdate`.
 
-A wallet spends through Ring RPC and reads no Merkle path and no record.
+A wallet sends its operations through the Ring RPC relay by default, or
+proves and sends them itself.
+
+Through the relay the wallet reads no Merkle path and no record.
 `prepareRingEntryRelay`, `prepareRingTransferRelay`, `prepareRingExitRelay`
 and `prepareRingWithdrawalRelay` take the quote of `RingRpc.getRelayQuote`,
 the nullifier key and the sender's signer, as `anonymous` on an anonymous Ring
@@ -78,9 +80,27 @@ depositor signs, and `prepareRingMergeRelay` relays a merge of the wallet's
 smallest notes. `RingRpc` reads
 decrypted Ring transactions for a granted reader.
 
-The `prove` methods of `CustomRingTransfer`, `AnonymousTransfer`,
-`DelegateTransfer` and `PreparedRingDeposit` read member records and their
-Merkle paths themselves, and serve operators and tests.
+Without Ring RPC the `CustomRingClient` reads the records and Merkle paths
+from the indexer and proves, and the wallet signs and sends from a fee payer
+it chooses. `createRingTransferSubmission`, `createRingExitSubmission`,
+`createRingEntrySubmission`, `createRingWithdrawalSubmission`,
+`createRingDepositSubmission`, `createRingMergeSubmission` and
+`createRingDelegateSubmission` return a `RingTransactionSubmission`, and its
+`send` takes the transport of `createKitRingSubmissionTransport`. A rejected
+proof whose root left its registry proves again under the live root. A spend
+with `inProofOwner` signs inside the proof, and only the fee payer and a
+demanded co-signer sign the transaction. Without it each input owner signs. A
+withdrawal creates its recipient's missing associated token account in the
+same transaction. On an anonymous Ring a spend
+takes `anonymous`, the hidden owner's signer and `ViewingHistory`, and the
+wallet stores `viewingHistory` before `send`. The fee payer and any co-signer
+must differ from the hidden owner. On every Ring they must also differ from the
+owner of a merge. `CustomRingClient` does not prove the anonymous rail's SPP proof, so an
+anonymous spend takes a client that also implements the
+`AnonymousRingTransactProver` of `@heliuslabs/zolana-custom-rings/client`.
+The `build*Transaction` functions return one unsigned transaction. A spend or
+deposit on an anonymous Ring goes through its submission, which returns the
+viewing history.
 
 Connect to a hosted Ring RPC with its service base URL and your API key:
 

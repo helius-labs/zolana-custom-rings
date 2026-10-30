@@ -1,6 +1,6 @@
 # Custom rings
 
-A custom ring enforces your own compliance rules on private transfers in the Solana Privacy Program (SPP). The ring program moves a ring note only after it verifies the proofs and approvals its settings demand. Ring RPC proves, co-signs, pays for and sends wallet operations. This document describes each control, who can change it, what each party is trusted with, and the decisions behind them.
+A custom ring enforces your own compliance rules on private transfers in the Solana Privacy Program (SPP). The ring program moves a ring note only after it verifies the proofs and approvals its settings demand. Ring RPC proves, co-signs, pays for and sends wallet operations, and a wallet can also prove and send its own. This document describes each control, who can change it, what each party is trusted with, and the decisions behind them.
 
 The docs form one ladder from this overview down to the code. Each rung says only what the rung above cannot.
 
@@ -101,7 +101,7 @@ These limits bind only the operations the ring requires co-signing for. Ring RPC
 3. **Ring RPC:** our hosted service. Holds the auditor key, writes records, relays and pays for wallet operations, co-signs under limits, merges escrowed notes and serves readers.
 4. **Ring indexer:** projects every storage tree from confirmed blocks, serves record openings, and forwards every other call to Photon.
 5. **Ring prover:** the zolana prover with the ring circuits added.
-6. **SDKs and CLI:** the Rust and TypeScript SDKs build ring operations, and wallets send them through Ring RPC. The operator CLI creates, deploys and governs rings.
+6. **SDKs and CLI:** the Rust and TypeScript SDKs build ring operations. A wallet sends them through Ring RPC by default, or reads the records and Merkle paths from the ring indexer, proves and sends them itself. The operator CLI creates, deploys and governs rings.
 
 Zolana owns SPP: its programs, its circuits and its rails. Those circuits are audited, and this repository never refactors them. The ring imports zolana gadgets unchanged and keeps its own copy of any gadget it must change. A new SPP circuit enters zolana as new files only.
 
@@ -246,6 +246,8 @@ A deposit moves SOL or tokens from a wallet's public balance into up to 8 ring n
    2. Pays fees and submits the deposit to the **Ring Program**.
    3. Follows the deposit to confirmation. The recipient's **Wallet** finds its notes by view tag.
 
+Without Ring RPC the **Wallet** reads the records itself, generates the deposit proof, and pays for and submits the deposit.
+
 On every ring the sealed opening names each note's owner key, and the deposit proof binds that key to the note's owner commitment.
 
 ## 4. Transfer
@@ -269,6 +271,8 @@ A unified flow for anonymous and confidential transfers, exits and withdrawals.
    4. Co-signs within the limits when the transfer demands a co-signer.
    5. Pays fees, submits the transaction to Solana and follows it to confirmation.
 
+Without Ring RPC the **Wallet** does step 2 itself and pays from a fee payer it chooses. A demanded co-signer still signs. On the anonymous rail that payer and any co-signer must differ from the hidden owner, and the ring program accepts any such payer.
+
 The SDKs refuse a shape that does not fit one transaction. A relayed wide confidential policy payout does not fit, so the sender splits it or merges first. A relayed transfer carries withdrawals only. A transfer with a deposit leg goes out in the owner's own transaction, and on an anonymous ring its payer funds the leg. The SDKs fund a transfer from one tree, so one payment moves at most what the wallet holds in one tree.
 
 ## 5. User merge
@@ -283,7 +287,7 @@ A merge combines notes of the same wallet, token and ring into one note with the
    4. Pays fees and submits the merge to the **Ring Program**.
    5. Indexes the result.
 
-The payer and the co-signer must differ from the owner on every ring, so a merge always relays. A merge runs no policy rule.
+The payer and the co-signer must differ from the owner on every ring. Without Ring RPC the **Wallet** generates both proofs and pays from a key other than its own. A merge runs no policy rule.
 
 ## 6. Managed merge
 
@@ -311,6 +315,8 @@ An authority transfer moves a wallet's funds to recipients within the same ring,
    4. Generates the delegate-rail proofs, including the recipients' key-escrow checks.
 3. **Delegate:** signs the transaction.
 4. **Ring RPC:** co-signs when the move demands a co-signer, pays fees, submits the transfer to the **Ring Program** and indexes the result.
+
+A **Delegate** that holds the source's nullifier secret can generate the proofs and send the move without Ring RPC.
 
 ## 8. Reader access grants and revocation
 

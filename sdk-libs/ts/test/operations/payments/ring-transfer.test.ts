@@ -1,6 +1,11 @@
 import { EMPTY_MINT_POLICY } from "../../../src/protocol/membership/mint-policy.js";
 import { policyWithdrawalHash } from "../../../src/proof/withdrawals.js";
-import { AccountRole, type Address } from "@solana/kit";
+import {
+  AccountRole,
+  generateKeyPairSigner,
+  signTransactionWithSigners,
+  type Address,
+} from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -53,6 +58,7 @@ import {
 } from "../../../src/protocol/membership/policy.js";
 import { buildRingDelegateTransferTransaction } from "../../../src/operations/management/delegate.js";
 import { buildRingTransferTransaction } from "../../../src/operations/payments/transfer.js";
+import { RingProgramError, createRingTransferSubmission } from "../../../src/index.js";
 import { signingKeySpendSigner } from "../../../src/operations/payments/anonymous.js";
 import { RingOutputRail } from "../../../src/operations/payments/output-rail.js";
 import {
@@ -1175,6 +1181,59 @@ describe("ring transfer builder", () => {
     const signed = await ringTransfer({ amount: 300n, notes: 4, ring, cosigner: coSigner });
     await signed.build;
     expect(signed.requests).toHaveLength(1);
+  });
+});
+
+describe("direct confidential spend", () => {
+  it("sends on the in-proof rail from the wallet's own payer and proves again after a stale root", async () => {
+    const signing = SigningKey.generate();
+    const sender = ShieldedKeypair.fromKeypair(signing);
+    const fixture = await ringFixture({ table: EMPTY_TABLE });
+    const payer = await generateKeyPairSigner();
+    const wallet = new Wallet({ identity: sender.shieldedAddress() });
+    wallet._replace({
+      utxos: [
+        {
+          utxo: new Utxo({
+            owner: sender.signingPublicKey(),
+            asset: SOL_MINT,
+            amount: 100n,
+            blinding: randomBlinding(),
+            ringProgramId: fixture.ringProgramId,
+          }),
+          outputContext: { hash: small(1), tree: fixture.client.tree, leafIndex: 0n },
+          nullifier: small(100),
+          spent: false,
+        },
+      ],
+      transactions: [],
+      nullifiers: new Set(),
+    });
+    const submission = await createRingTransferSubmission({
+      client: { ...fixture.client, getLatestBlockhash: async () => BLOCKHASH },
+      ringProgramId: fixture.ringProgramId,
+      wallet,
+      keys: walletKeys(sender),
+      feePayer: payer.address,
+      inProofOwner: signingKeySpendSigner(signing),
+      recipient: ShieldedKeypair.generate().shieldedAddress(),
+      amount: 30n,
+    });
+    let polled = 0;
+    const result = await submission.send({
+      sign: (transaction) => signTransactionWithSigners([payer], transaction),
+      send: async () => undefined,
+      status: async () =>
+        ++polled === 1
+          ? { kind: "failed", instructionIndex: 0, customCode: RingProgramError.rootNotServed }
+          : { kind: "confirmed", slot: 9n },
+    });
+
+    expect(result).toMatchObject({ kind: "confirmed", attempts: 2 });
+    expect(fixture.sppCalls.map((call) => call.circuit.kind)).toEqual([
+      "ringConfidentialEddsa",
+      "ringConfidentialEddsa",
+    ]);
   });
 });
 
