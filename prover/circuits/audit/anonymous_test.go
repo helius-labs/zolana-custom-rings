@@ -115,16 +115,22 @@ func TestAnonymousAmountsStayBelowTwoTo64(t *testing.T) {
 	}
 }
 
-// Dummies inside the count prove only behind every spent UTXO.
-func TestAnonymousCommitmentInputsKeepDummiesLast(t *testing.T) {
-	shape := audit.AnonymousAuditShape{InputClass: 4, Outputs: 2}
-	c := compileAnonymous(t, shape)
-	trailing := ringaudit.NewAnonymousAudit(t, shape).AtInputCount(3)
-	c.requireSolved(t, trailing.Circuit(t))
-	gap := trailing
-	gap.Inputs = slices.Clone(trailing.Inputs)
-	gap.Inputs[1], gap.Inputs[2] = gap.Inputs[2], gap.Inputs[1]
-	c.refuse(t, gap.Circuit(t))
+// A dummy ahead of a spent UTXO moves the note off its nullifier.
+func TestAnonymousInputsKeepDummiesLast(t *testing.T) {
+	for _, shape := range []audit.AnonymousAuditShape{{InputClass: 4, Outputs: 2}, entryShape} {
+		t.Run(anonymousKeyName(shape), func(t *testing.T) {
+			c := compileAnonymous(t, shape)
+			trailing := ringaudit.NewAnonymousAudit(t, shape).AtInputCount(3)
+			c.requireSolved(t, trailing.Circuit(t))
+			gap := trailing
+			gap.Inputs = slices.Clone(trailing.Inputs)
+			gap.Inputs[1], gap.Inputs[2] = gap.Inputs[2], gap.Inputs[1]
+			if gap.PrivateTxHash(t).Cmp(trailing.PrivateTxHash(t)) != 0 {
+				t.Fatal("the gap changed SPP's private transaction hash")
+			}
+			c.refuse(t, gap.Circuit(t))
+		})
+	}
 }
 
 // A spent hash below 2^254 - q has a second 126-bit split, the prefix of hash + q, the canonical bound refuses it.
