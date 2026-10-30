@@ -10,7 +10,7 @@ Every commitment and statement of a custom ring is a Poseidon hash over BN254. T
 
 - `HashChain([x_0, ..., x_n])` is the left fold `h = x_0`, then `h = Poseidon(h, x_i)`. An empty list hashes to `0`.
 - `NonZeroHashChain(xs)` is `HashChain` over the nonzero elements of `xs`, and `0` when none is nonzero.
-- `HashChain4([x_0, ..., x_n])` is `h = x_0`, then `h = Poseidon(h, g_0, g_1, g_2)` per group of three of `x_1..`, with the last group padded by zeros. `[a]` hashes to `a`. It hashes no length, so every statement that uses it has a fixed element count per key.
+- `HashChain4([x_0, ..., x_n])` is `h = x_0`, then `h = Poseidon(h, g_0, g_1, g_2)` per group of three of `x_1..`, with the last group padded by zeros. `[a]` hashes to `a`. It hashes no length. A transfer's disclosure chain follows its layout and, on the anonymous rail, its spent note count, so the ring program refuses every zero disclosure field. Every other use has a fixed element count per key.
 - `HashPrefix4(xs, n)` is `HashChain4` of the first `n` elements. A circuit selects `n` by a one-hot flag set over the key's range.
 
 ## Bytes to fields
@@ -72,7 +72,16 @@ The recipient rebuilds the slot secret from `X25519(u_sk, tx_viewing_u)`, the au
 | Mint policy write | `0` when the write keeps the mint settings, else `2^192 + mint policy field`. `withdrawal_threshold` and every asset limit field are `0` when the write keeps them. |
 | Queue chain | `chain(-1) = chain_start`, `chain(p) = Poseidon(chain(p - 1), entry_p)` |
 
-`policy_hash` is in [EncodedRuleTable](../../spec.md#encodedruletable).
+## Policy table hash
+
+```text
+fields      = [CRTB, 12, (list_id_i, registry_i) × 8, rule_count, rule_j × 16]   // zero padded to 44
+acc_0       = 0
+acc_{c + 1} = Poseidon(acc_c, fields[11 c .. 11 c + 11])
+policy_hash = acc_4
+```
+
+`12` is the table version. `registry_i` is `0` for the ring's own records and `hash_bytes(address)` for a curator. Each `rule_j` is the 32-byte row `Rule::encoded` writes in `program-libs/policy/src/rule_table/mod.rs`, zero past `rule_count`.
 
 ## Domain tags
 
