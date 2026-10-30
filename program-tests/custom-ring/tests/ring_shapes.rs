@@ -313,12 +313,18 @@ impl ShapeRing<'_> {
     fn in_proof_owners(&self, coverage: &mut Coverage) -> Result<()> {
         for outputs in DELIVERED_AUDIT_CAPACITIES {
             restart_prover()?;
+            let shape = Shape::new(1, outputs);
             let transfer = ShapeTransfer {
-                shape: Shape::new(1, outputs),
+                shape,
                 inputs: self.utxos(1, coverage)?,
                 spend: Spend::InProofOwner,
             };
-            self.settled(transfer, coverage)?;
+            // The policy disclosure pushes only the sixteen output transfer past the size ceiling.
+            if self.column == Column::ConfidentialPolicy && shape == Shape::IN1_OUT16 {
+                self.settle(transfer, coverage)?;
+            } else {
+                self.settled(transfer, coverage)?;
+            }
         }
         Ok(())
     }
