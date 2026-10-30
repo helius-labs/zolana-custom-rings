@@ -261,6 +261,67 @@ mod tests {
     }
 
     #[test]
+    fn record_update_refusal_codes_are_stable() {
+        use RecordUpdateRefusal::*;
+        for refusal in [
+            Disabled,
+            EntryCount,
+            InvalidEntry,
+            Signature,
+            Expired,
+            UnknownRing,
+            RegistryNotServed,
+            Unauthorized,
+            EscrowProof,
+            UnknownUpdate,
+            WrongCluster,
+            EscrowOnAnonymousRing,
+            EscrowRegistered,
+            BatchFailed,
+            ReaderGrantsInDatabase,
+            EnrolmentLists,
+            NotPolicyAuthority,
+            EnrolmentBatch,
+            EnrolmentRefused,
+            UnknownEnrolment,
+            EnrolmentWindow,
+            RecordsNotCreated,
+            AuthorityLapsed,
+            InvalidLimits,
+            LimitsWithoutRecord,
+        ] {
+            let code = match refusal {
+                Disabled => -32140,
+                EntryCount => -32141,
+                InvalidEntry => -32142,
+                Signature => -32143,
+                Expired => -32144,
+                UnknownRing => -32145,
+                RegistryNotServed => -32146,
+                Unauthorized => -32147,
+                EscrowProof => -32148,
+                UnknownUpdate => -32149,
+                WrongCluster => -32190,
+                EscrowOnAnonymousRing => -32191,
+                EscrowRegistered => -32192,
+                BatchFailed => -32193,
+                ReaderGrantsInDatabase => -32230,
+                EnrolmentLists => -32240,
+                NotPolicyAuthority => -32241,
+                EnrolmentBatch => -32242,
+                EnrolmentRefused => -32243,
+                UnknownEnrolment => -32244,
+                EnrolmentWindow => -32245,
+                RecordsNotCreated => -32260,
+                AuthorityLapsed => -32275,
+                InvalidLimits => -32276,
+                LimitsWithoutRecord => -32277,
+            };
+            assert_eq!(refusal.code(), code);
+        }
+    }
+
+    #[test]
     fn exhausted_merge_scan_has_an_explicit_rpc_error() {
         let response =
             ErrorObjectOwned::from(RingRpcError::Origin(AuditError::MergeAuditWorkBudget));

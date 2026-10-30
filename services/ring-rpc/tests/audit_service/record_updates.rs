@@ -1,4 +1,4 @@
-//! Record updates refuse a forged escrow proof, a second escrow key, an enrolment past its window or awaiting the reader list in database mode, send only a block entry as an immediate update, hold an enrolment for its allow entry, and page the enrolments that await the config authority.
+//! Record updates refuse a forged escrow proof, a second escrow key, an enrolment past its window or awaiting the reader list in database mode, unpaired or too long mint limits and limits for an unrecorded asset, and an authority write whose signer lost the policy role, send only a block entry as an immediate update, send an authority grant at once, hold an enrolment for its allow entry, and page the enrolments that await the config authority.
 
 use std::sync::atomic::AtomicU64;
 
@@ -25,10 +25,11 @@ use zolana_ring_indexer::rpc::{
     RingRecordWriteView,
 };
 use zolana_ring_member_registry::ApplyProofInputs;
-use zolana_ring_policy::{ListId, Member, MintPolicy};
+use zolana_ring_policy::{AssetLimits, ListId, Member, MintPolicy};
 use zolana_ring_rpc::{
     LatestBlockhash, ReaderGrantStore, RecordUpdateRefusal, RecordWriter, StorageChain, Store,
     Subscriber, TransactionOutcome, BATCH_WINDOW_SLOTS, MAX_ENROLMENT_WINDOW_SLOTS,
+    MAX_LIMIT_WINDOW_SLOTS,
 };
 
 use super::*;
@@ -44,7 +45,7 @@ fn wallet() -> Keypair {
 
 struct StubChain {
     slot: AtomicU64,
-    config: RingConfiguration,
+    config: Mutex<RingConfiguration>,
     accounts: Mutex<HashMap<Address, Account>>,
     sent: Mutex<Vec<VersionedTransaction>>,
     outcome: Mutex<TransactionOutcome>,
@@ -66,7 +67,7 @@ impl StorageChain for StubChain {
     }
 
     async fn ring_config(&self, ring: Address) -> Result<Option<RingConfiguration>, RingRpcError> {
-        Ok((ring == RING).then_some(self.config))
+        Ok((ring == RING).then_some(*self.config.lock().unwrap()))
     }
 
     async fn member_openings(
@@ -210,7 +211,7 @@ impl RecordsSetup<'_> {
         let escrow = escrow_fixture();
         let chain = Arc::new(StubChain {
             slot: AtomicU64::new(NOW),
-            config: RingConfiguration {
+            config: Mutex::new(RingConfiguration {
                 auditor_pubkey: X25519Pubkey::from_bytes(
                     hex_bytes(&escrow["auditorPk"])
                         .try_into()
@@ -223,7 +224,7 @@ impl RecordsSetup<'_> {
                 },
                 mode: RingMode::Confidential,
                 delegate: None,
-            },
+            }),
             accounts: Mutex::default(),
             sent: Mutex::default(),
             outcome: Mutex::new(TransactionOutcome::Unknown),
@@ -277,13 +278,17 @@ impl Records {
 
     /// The member's record holds an escrow key under the root the policy mirrors.
     fn escrowed(&self, member: [u8; 32]) {
-        let entry = QueueEntry {
+        self.recorded(QueueEntry {
             member,
             mask: 0,
             value: 0,
             escrow_key: [0x0e; 32],
             mint_policy: None,
-        };
+        });
+    }
+
+    /// The entry lands under the root the policy mirrors.
+    fn recorded(&self, entry: QueueEntry) {
         self.chain.records.apply(entry);
         let mut accounts = self.chain.accounts.lock().unwrap();
         let account = accounts
@@ -775,4 +780,157 @@ async fn database_mode_refuses_an_enrolment_awaiting_a_tree_reader_list() {
         refusal(awaiting),
         RecordUpdateRefusal::ReaderGrantsInDatabase.code()
     );
+}
+
+fn list_write(member: [u8; 32], list: ListId) -> RecordUpdateEntry {
+    let bit = list.record_bit();
+    RecordUpdateEntry::Write(RingListWriteView {
+        mint_policy: None,
+        member: Hash(member),
+        mask: bit,
+        value: bit,
+    })
+}
+
+#[tokio::test]
+async fn an_authority_grant_goes_out_without_waiting_for_the_wallet_batch_window() {
+    let records = Records::new().await;
+    let member = [0x0c; 32];
+    records
+        .submit(signed(
+            &authority(),
+            vec![list_write(member, ListId::Allow)],
+        ))
+        .await
+        .expect("queued");
+
+    let flushed = records.flushed().await;
+
+    assert_eq!(flushed.mode, tag::UPDATE);
+    assert_eq!(flushed.members, [member]);
+}
+
+#[tokio::test]
+async fn an_authority_write_queued_before_a_policy_rotation_is_refused_and_a_wallet_write_applies()
+{
+    let records = Records::new().await;
+    records.serves_own(ListId::Allow);
+    let enrolling = Keypair::new();
+    let enrolled = *Member::owner_tag(enrolling.pubkey().as_array())
+        .expect("member")
+        .as_bytes();
+    let enrolment = records
+        .submit(viewing_enrolment(&enrolling, ListId::Allow))
+        .await
+        .expect("awaiting");
+    let approval = records
+        .submit(signed(
+            &authority(),
+            vec![list_write(enrolled, ListId::Allow)],
+        ))
+        .await
+        .expect("queued");
+    let wallet = Keypair::new();
+    let member = *Member::owner_tag(wallet.pubkey().as_array())
+        .expect("member")
+        .as_bytes();
+    records
+        .submit(signed(
+            &wallet,
+            vec![list_write(member, ListId::RingViewing)],
+        ))
+        .await
+        .expect("queued");
+
+    records.chain.config.lock().unwrap().roles.policy = Keypair::new().pubkey();
+    records
+        .chain
+        .slot
+        .store(NOW + BATCH_WINDOW_SLOTS, Ordering::Relaxed);
+    let flushed = records.flushed().await;
+
+    assert_eq!(flushed.members, [member]);
+    assert_eq!(
+        records.status(&approval).await,
+        RecordUpdateStatus::Refused {
+            reason: RecordUpdateRefusal::AuthorityLapsed.to_string()
+        }
+    );
+    // The approval lapsed, the enrolment it joined waits for the new policy authority.
+    assert_eq!(
+        records.status(&enrolment).await,
+        RecordUpdateStatus::AwaitingAuthority
+    );
+}
+
+#[tokio::test]
+async fn an_invalid_mint_limits_update_is_refused_at_admission() {
+    let records = Records::new().await;
+    let asset = *Member::asset(&Address::new_from_array([0x3a; 32]))
+        .expect("asset member")
+        .as_bytes();
+    let limits_update = |limits| RecordUpdate {
+        genesis_hash: Hash(GENESIS),
+        ring: RING.into(),
+        entries: vec![RecordUpdateEntry::Write(RingListWriteView {
+            mint_policy: Some(MintPolicy {
+                limits,
+                ..MintPolicy::EMPTY
+            }),
+            member: Hash(asset),
+            mask: 0,
+            value: 0,
+        })],
+        valid_until_slot: NOW + 1_000,
+        awaited_lists: 0,
+    };
+    let sender_window = |sender_window_slots| AssetLimits {
+        sender_cap: 10,
+        sender_window_slots,
+        ..AssetLimits::EMPTY
+    };
+    // Refused ahead of the signature check, an unpaired cap hashes to no statement.
+    for limits in [
+        AssetLimits {
+            sender_cap: 10,
+            ..AssetLimits::EMPTY
+        },
+        AssetLimits {
+            volume_window_slots: 10,
+            ..AssetLimits::EMPTY
+        },
+        sender_window(MAX_LIMIT_WINDOW_SLOTS + 1),
+    ] {
+        let unsigned = SubmitRecordUpdateRequest {
+            registry: REGISTRY.into(),
+            update: limits_update(limits),
+            signer: authority().pubkey().into(),
+            signature: Signature::default().into(),
+        };
+        assert_eq!(
+            refusal(records.submit(unsigned).await),
+            RecordUpdateRefusal::InvalidLimits.code(),
+            "{limits:?}"
+        );
+    }
+    let longest = || {
+        signed_update(
+            &authority(),
+            limits_update(sender_window(MAX_LIMIT_WINDOW_SLOTS)),
+        )
+    };
+    assert_eq!(
+        refusal(records.submit(longest()).await),
+        RecordUpdateRefusal::LimitsWithoutRecord.code()
+    );
+
+    records.recorded(QueueEntry {
+        member: asset,
+        mint_policy: Some(MintPolicy {
+            threshold: 5,
+            ..MintPolicy::EMPTY
+        }),
+        ..QueueEntry::default()
+    });
+    records.submit(longest()).await.expect("queued");
 }
