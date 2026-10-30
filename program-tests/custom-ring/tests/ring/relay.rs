@@ -8,7 +8,7 @@ use custom_ring_test_validator::{
 };
 use zolana_ring_client::rpc::{
     AuthorityPayment, AuthorityTransfer, AuthorityTransferAttestation, AuthorityTransferRequest,
-    MergeSettings, MergeSettingsAttestation, MergeSettingsRequest, RelayOperation,
+    MergeSettings, MergeSettingsAttestation, MergeSettingsRequest, RelayId, RelayOperation,
 };
 
 use super::*;
@@ -231,16 +231,8 @@ fn a_managed_merge_pass_settles_the_wallet_toward_its_target() -> Result<()> {
         })
     })?;
 
-    let [signature] = <[Signature; 1]>::try_from(sent).map_err(|_| anyhow!("one merge"))?;
-    let landed = wait_for("the merge to land", || {
-        Ok(
-            match env.client.rpc().client().get_signature_status(&signature)? {
-                Some(landed) => Probe::Ready(landed),
-                None => Probe::NotYet,
-            },
-        )
-    })?;
-    ensure!(landed.is_ok(), "the merge failed {landed:?}");
+    let [relay_id] = <[RelayId; 1]>::try_from(sent).map_err(|_| anyhow!("one merge"))?;
+    let signature = ring_rpc.confirmed(env, &relay_id)?;
     assert_eq!(relayed.recovered(member, signature)?, [2 * DEPOSIT]);
     Ok(())
 }

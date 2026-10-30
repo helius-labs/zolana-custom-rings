@@ -122,6 +122,13 @@ impl AuditStore {
             .extend(nullifiers);
     }
 
+    pub(crate) fn is_spent(&self, nullifier: &[u8; 32]) -> bool {
+        self.spent
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(nullifier)
+    }
+
     pub(crate) fn spendable(
         &self,
         notes: SpendableNotes<'_>,

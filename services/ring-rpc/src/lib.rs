@@ -35,6 +35,8 @@ mod keys;
 mod limits;
 #[path = "operations/managed_merge.rs"]
 mod managed_merge;
+#[path = "storage/merge_inputs.rs"]
+mod merge_inputs;
 #[path = "storage/merge_settings.rs"]
 mod merge_settings;
 #[path = "config/metering.rs"]

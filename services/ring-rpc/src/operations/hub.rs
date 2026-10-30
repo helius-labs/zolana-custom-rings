@@ -336,14 +336,15 @@ impl<S: TransactionSource> Hub<S> {
 
     /// Pays through the relay fee payer, `None` without relay services.
     pub fn managed_merge(self: &Arc<Self>) -> Option<ManagedMerge<S>> {
-        self.merge.as_ref().map(|merge| {
+        let (merge, relay) = self.merge.as_ref().zip(self.relay.as_ref())?;
+        Some(
             ManagedMergeInit {
                 hub: self.clone(),
                 builder: merge.builder.clone(),
-                relay: merge.submit.clone(),
+                relay: relay.clone(),
             }
-            .build()
-        })
+            .build(),
+        )
     }
 
     pub fn local_view_tag(&self) -> Option<[u8; 32]> {
