@@ -78,6 +78,10 @@ depositor signs, and `prepareRingMergeRelay` relays a merge of the wallet's
 smallest notes. `RingRpc` reads
 decrypted Ring transactions for a granted reader.
 
+The `prove` methods of `CustomRingTransfer`, `AnonymousTransfer`,
+`DelegateTransfer` and `PreparedRingDeposit` read member records and their
+Merkle paths themselves, and serve operators and tests.
+
 Connect to a hosted Ring RPC with its service base URL and your API key:
 
 ```ts
