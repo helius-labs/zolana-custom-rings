@@ -11,11 +11,11 @@ export const RING_PROVING_KEY_SHA256S: Readonly<Record<string, string>> = Object
   "custom_ring_apply_records_8.key":
     "1674abaf675446989e7418b0467eebe24f6c71d26f76dbbaf78e12b536ee79fd",
   "custom_ring_audit_anonymous_entry_v2_8_2.key":
-    "66779c2d322fd9af9eb6a2b17072937c7ad0d1a380d311731382661e9f35f2d9",
+    "e464a09206e60759c624e7d8df0ec9a6e7185643faaa049106f829e94108e0c8",
   "custom_ring_audit_anonymous_entry_v2_8_4.key":
-    "be91b35eacc1bc7235965e2f845787bced25b0d7a9085c9878292a1a78e19c43",
+    "141e7db2a5a48099b4c5d93241bf71ecb6233ed07c3aeb7f4235fdafddc3a3cd",
   "custom_ring_audit_anonymous_entry_v2_8_8.key":
-    "4709eaa8651a7665ad3a4f960846a87e167c6723b6d818ddb50d5ada0e64f7e8",
+    "e6cf0d9d651211fe08976974e8f3c1ab2ea9bfe9e861b3dc60dd935eb2c1c1af",
   "custom_ring_audit_anonymous_v2_16_2.key":
     "b81a5378693b45cb311b27cf4d4271efedc56a4b71d883c2366ec4c7d687311e",
   "custom_ring_audit_anonymous_v2_16_4.key":

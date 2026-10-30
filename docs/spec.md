@@ -49,7 +49,7 @@ An asset rule over the allowlist admits only listed assets to deposits and trans
 
 ### 1.5. Outflow limits per transfer
 
-An asset's record can hold a cap and a co-sign bound. The policy proof keeps one transfer's outflow of the asset at or below the cap, and demands a co-signer above the bound. An asset with no record has neither. Limits over time are Ring RPC's, see 3.2. Differs from the PR 15 draft: per-transfer outflow limits live in the policy proof. [Co-signing](design/co-signing.md)
+An asset's record can hold a cap and a co-sign bound. The policy proof keeps one transfer's outflow of the asset at or below the cap, and demands a co-signer above the bound. An asset with no record has neither. The outflow is the asset's outputs to another owner or another ring plus its withdrawals, less its deposits. Limits over time are Ring RPC's, see 3.2. Differs from the PR 15 draft: per-transfer outflow limits live in the policy proof. [Co-signing](design/co-signing.md)
 
 ### 1.6. Auditor
 
@@ -88,7 +88,7 @@ A reader accesses decrypted activity through Ring RPC without holding the audito
 
 Ring RPC co-signs only within limits the policy authority writes to each asset's record:
 
-1. **Sender limit:** what one sender moves of the asset within a window.
+1. **Sender limit:** what one sender outputs to another owner or another ring and withdraws of the asset within a window. A deposit does not lower it.
 2. **Volume limit:** what the ring transfers, takes in and pays out of the asset within a window.
 3. **Deposit and withdrawal limits:** what the ring takes in and pays out in public deposits and withdrawals, each with its own window.
 
@@ -142,7 +142,7 @@ Ring RPC keeps one key file per role. The auditor key opens ring activity. The s
 
 1. **Storage authority:** trusted for every record. The tree proof verifies the update, not the record. A write the authority signs directly skips every Ring RPC check, the wallet's signature and the escrow proof included.
 2. **Policy authority:** trusted to set policy rules, lists, limits and ring-wide grants, and to bind the records. Each other role is trusted for its own control.
-3. **Ring RPC:** trusted to protect the auditor key and every proof input a wallet hands it. It is trusted to enforce reader grants and co-signer limits, and to write records as signed. A depositor or the delegate signs the message Ring RPC builds. The ring SDKs sign it only when the quoted fee payer pays and the one instruction is the ring operation the request asked for. With derived keys Ring RPC relays and pays only for a ring whose config names an auditor key it derives, and its rate limits bound what it pays. No two Ring RPC processes serve one ring.
+3. **Ring RPC:** trusted to protect the auditor key and every proof input a wallet hands it. It is trusted to enforce reader grants and co-signer limits, and to write records as signed. A depositor or the delegate signs the message Ring RPC builds. The ring SDKs sign it only when the quoted fee payer pays and the one instruction is the ring operation the request asked for. With derived keys Ring RPC relays and pays only for a ring whose config names an auditor key it derives, and its rate limits bound what it pays. No two Ring RPC processes serve one ring. A relayed transfer or merge hands Ring RPC the owner's nullifier secret, and with it Ring RPC links that owner's spends. A wallet keeps the secret from Ring RPC only when it escrows no key and proves and sends every spend itself.
 4. **Curator:** a ring trusts the authority of its one curator tree.
 5. **Delegate:** trusted to move escrowed members' funds within the ring under the configured controls.
 6. **Upgrade authority:** trusted to create the ring and to deploy upgrades that keep the program's guarantees. An upgrade can replace every check. Only the operator tools refuse an upgrade over a ring account the new release cannot read.

@@ -1,5 +1,5 @@
 {
-  "release": "https://github.com/helius-labs/zolana-custom-rings/releases/download/ring-production-keys-v3",
+  "release": "https://github.com/helius-labs/zolana-custom-rings/releases/download/ring-production-keys-v4",
   "keys": {
     "custom_ring_apply_records_1.key": {
       "sha256": "259ac113a38e72fc7a29e91327743bea5475d097da9c8b6158e620402a56bf89",
@@ -27,18 +27,18 @@
       "source": "release"
     },
     "custom_ring_audit_anonymous_entry_v2_8_2.key": {
-      "sha256": "66779c2d322fd9af9eb6a2b17072937c7ad0d1a380d311731382661e9f35f2d9",
-      "size": 31030829,
+      "sha256": "e464a09206e60759c624e7d8df0ec9a6e7185643faaa049106f829e94108e0c8",
+      "size": 31032037,
       "source": "release"
     },
     "custom_ring_audit_anonymous_entry_v2_8_4.key": {
-      "sha256": "be91b35eacc1bc7235965e2f845787bced25b0d7a9085c9878292a1a78e19c43",
-      "size": 33127074,
+      "sha256": "141e7db2a5a48099b4c5d93241bf71ecb6233ed07c3aeb7f4235fdafddc3a3cd",
+      "size": 33128334,
       "source": "release"
     },
     "custom_ring_audit_anonymous_entry_v2_8_8.key": {
-      "sha256": "4709eaa8651a7665ad3a4f960846a87e167c6723b6d818ddb50d5ada0e64f7e8",
-      "size": 37436527,
+      "sha256": "e6cf0d9d651211fe08976974e8f3c1ab2ea9bfe9e861b3dc60dd935eb2c1c1af",
+      "size": 37437831,
       "source": "release"
     },
     "custom_ring_audit_anonymous_v2_16_2.key": {

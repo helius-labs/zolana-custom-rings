@@ -28,7 +28,7 @@ import (
 // 3. A ring output's owner is the identity of the owner key the disclosure opens.
 // 4. Every UTXO's amount lies below 2^64, the disclosure opens every UTXO's asset and amount and leaves a dummy slot zero.
 // 5. Every exit discloses its full opening to the auditor, SeedOut opens the disclosure exactly when a UTXO exits.
-// 6. Every spent UTXO lies below the published input count, ahead of every dummy on a commitment key, and belongs to the hidden sender.
+// 6. Every spent UTXO lies below the published input count, ahead of every dummy, and belongs to the hidden sender.
 // 7. A commitment key spends notes of the ring only and discloses spent UTXO 0's hash and the prefix of every other spent hash, an entry key opens every spent UTXO under one nullifier key with no data.
 // 8. Every UTXO's blinding is SPP's TXOB blinding over the seed tx_viewing_sk fixes.
 // 9. private_tx_hash reopens over the same slots, the sender commitment opens to the sender the inputs prove.
@@ -173,14 +173,16 @@ func (c *AnonymousAuditCircuit) spend(api frontend.API, rc frontend.Rangechecker
 		if !c.Shape.FullOpenings {
 			// 5. A disclosed hash names a note of the ring, an audited output whose opening the auditor holds.
 			abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: opened.Utxo, A: input.RingProgramID, B: c.RingProgramID})
-			if i > 0 {
-				// 6. A UTXO follows only a UTXO, keeping an even count's closing half zero.
-				abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: opened.Utxo, V: api.Sub(1, previousUtxo)})
-			}
-			previousUtxo = opened.Utxo
+		}
+		if i > 0 {
+			// 6. A UTXO follows only a UTXO as in SPP, so spent UTXO k owns nullifier k.
+			abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: opened.Utxo, V: api.Sub(1, previousUtxo)})
+		}
+		previousUtxo = opened.Utxo
+		if !c.Shape.FullOpenings {
 			continue
 		}
-		// 5. The auditor rebuilds an entry input from its opening, under input 0's nullifier key and with no data.
+		// 7. The auditor rebuilds an entry input from its opening, under input 0's nullifier key and with no data.
 		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: opened.Utxo, A: input.NullifierPk, B: c.Inputs[0].NullifierPk})
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: opened.Utxo, V: input.DataHash})
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: opened.Utxo, V: input.RingDataHash})
