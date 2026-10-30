@@ -2,7 +2,10 @@ use std::future::Future;
 
 use solana_address::Address;
 use zolana_ring_client::{
-    rpc::{AuditedMergesPage, AuditedUtxoView, DecryptedTransaction, DecryptedTransactionsPage},
+    rpc::{
+        AuditedMergesPage, AuditedUtxoView, GetDecryptedTransactionsResponse,
+        GetWalletActivityResponse, WalletActivity, WalletActivityPage,
+    },
     ReaderKey,
 };
 use zolana_ring_policy::{ListId, Member};
@@ -60,18 +63,22 @@ impl WalletScope {
         })
     }
 
-    fn party(&self, item: &DecryptedTransaction) -> bool {
-        let sender = item
-            .sender
-            .as_ref()
-            .is_some_and(|sender| sender.owner_key.0 == self.wallet);
-        let signer = item.signers.iter().any(|signer| signer.0 == self.wallet);
-        let owner = item
-            .outputs
-            .iter()
-            .filter_map(|output| output.utxo.as_ref())
-            .any(|utxo| utxo.owner_key.0 == self.wallet);
-        sender || signer || owner
+    pub(crate) fn activity(
+        self,
+        response: GetDecryptedTransactionsResponse,
+    ) -> GetWalletActivityResponse {
+        GetWalletActivityResponse {
+            context: response.context,
+            value: WalletActivityPage {
+                items: response
+                    .value
+                    .items
+                    .into_iter()
+                    .filter_map(|item| WalletActivity::of(self.wallet, item))
+                    .collect(),
+                cursor: response.value.cursor,
+            },
+        }
     }
 }
 
@@ -81,14 +88,6 @@ impl ReadScope {
             Some(wallet) => Self::Wallet(WalletScope::new(wallet)?),
             None => Self::Ring,
         })
-    }
-
-    pub(crate) fn transactions(self, page: &mut DecryptedTransactionsPage) {
-        if let Self::Wallet(scope) = self {
-            page.items.retain(|item| scope.party(item));
-            // A skipped row names no party.
-            page.skipped.clear();
-        }
     }
 
     pub(crate) fn merges(self, page: &mut AuditedMergesPage) {
