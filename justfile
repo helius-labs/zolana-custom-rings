@@ -510,29 +510,43 @@ _test-ts-live test-script *args: build-ring-program _spp-programs build-photon b
       solana airdrop 100 "$fee_payer" --url {{localnet-rpc-url}} >/dev/null
       relay_args=(--fee-payer-key-file "$ring_dir/fee-payer.secret")
     fi
-    # `init` creates the ring's records through the record writer.
-    nohup "$ring_rpc" serve --port {{localnet-ring-rpc-port}} \
-      --indexer-url {{localnet-ring-indexer-url}} --rpc-url {{localnet-rpc-url}} \
-      --root-secret-file "$ring_dir/root.secret" \
-      --allow-origin "$ring_origin" --webauthn-rp-id localhost \
-      --store-url "sqlite://$PWD/$workdir/ring-rpc.sqlite?mode=rwc" \
-      --prover-url {{localnet-prover-url}} \
-      ${relay_args[@]+"${relay_args[@]}"} \
-      > "$workdir/ring-rpc.log" 2>&1 &
-    printf 'waiting for ring rpc %s ' "$ring_rpc_url"
-    for _ in $(seq 1 60); do
-      if curl -sf --max-time 5 "$ring_rpc_url/health" >/dev/null 2>&1; then break; fi
-      printf '.'
-      sleep 1
-    done
-    if ! curl -sf --max-time 5 "$ring_rpc_url/health" >/dev/null 2>&1; then
+    serve_ring_rpc() {
+      local reader_grants="$1" port={{localnet-ring-rpc-port}}
+      held() { lsof -t -i "tcp:$port" -s tcp:listen 2>/dev/null; }
+      held | xargs kill 2>/dev/null || true
+      for _ in $(seq 1 50); do
+        held >/dev/null || break
+        sleep 0.2
+      done
+      if held >/dev/null; then
+        echo "port $port is still held" >&2
+        exit 1
+      fi
+      nohup "$ring_rpc" serve --port "$port" \
+        --indexer-url {{localnet-ring-indexer-url}} --rpc-url {{localnet-rpc-url}} \
+        --root-secret-file "$ring_dir/root.secret" \
+        --allow-origin "$ring_origin" --webauthn-rp-id localhost \
+        --store-url "sqlite://$PWD/$workdir/ring-rpc.sqlite?mode=rwc" \
+        --prover-url {{localnet-prover-url}} --reader-grants "$reader_grants" \
+        ${relay_args[@]+"${relay_args[@]}"} \
+        > "$workdir/ring-rpc-$reader_grants.log" 2>&1 &
+      printf 'waiting for ring rpc %s ' "$ring_rpc_url"
+      for _ in $(seq 1 60); do
+        if curl -sf --max-time 5 "$ring_rpc_url/health" >/dev/null 2>&1; then
+          echo " ready"
+          return 0
+        fi
+        printf '.'
+        sleep 1
+      done
       echo " timed out"
-      echo "the ring rpc did not answer, see $workdir/ring-rpc.log" >&2
+      echo "the ring rpc did not answer, see $workdir/ring-rpc-$reader_grants.log" >&2
       exit 1
-    fi
-    echo " ready"
+    }
+    # `init` creates the ring's records through the record writer.
+    serve_ring_rpc tree
     # The service logs the storage authority it pays every records write from.
-    storage_authority="$(sed -n 's/.*storage authority \([1-9A-HJ-NP-Za-km-z]*\).*/\1/p' "$workdir/ring-rpc.log")"
+    storage_authority="$(sed -n 's/.*storage authority \([1-9A-HJ-NP-Za-km-z]*\).*/\1/p' "$workdir/ring-rpc-tree.log")"
     test -n "$storage_authority"
     solana airdrop 100 "$storage_authority" --url {{localnet-rpc-url}} >/dev/null
     # This recipe started the service, its key needs no pin.
@@ -543,6 +557,8 @@ _test-ts-live test-script *args: build-ring-program _spp-programs build-photon b
       reader grant "$ring_authority"
     # The ring-status probe, otherwise exercised only against a hosted rpc.
     "$ring_cli" --config "$ring_dir/ring.toml" rpc-check
+    # The suites' rings have no records registry to list a reader in.
+    serve_ring_rpc database
 
     # The root and workspace npm runs each strip one `--`.
     ZOLANA_LOCALNET_URL="{{localnet-rpc-url}}" \

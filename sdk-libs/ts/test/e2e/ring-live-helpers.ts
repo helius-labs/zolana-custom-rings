@@ -24,6 +24,7 @@ import { LocalKeys, ShieldedKeypair, SigningKey, Wallet, type Bytes32 } from "@h
 import { type RuleTable } from "../../src/ring/advanced.js";
 import {
   RingProgramBinary,
+  RingReaderGrantRequest,
   RingRpc,
   deployRingProgram,
   initializeRingInstruction,
@@ -202,6 +203,12 @@ export async function readableRing(
     ...kind,
   });
   const target = await ringReadTarget(ringRpc, ringProgramId);
+  await ringRpc.setReaderGrant(
+    await RingReaderGrantRequest.forGrant(target, {
+      reader: authority.address,
+      action: "grant",
+    }).sign(authority),
+  );
   return { client, ringProgramId, authority, ringRpc, target };
 }
 
