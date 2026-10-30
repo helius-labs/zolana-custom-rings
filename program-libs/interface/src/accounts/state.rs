@@ -172,17 +172,17 @@ impl RingRoles {
 
     /// `ZeroRoleKey` or `DuplicateRoleKey` unless every key and the delegate are nonzero and distinct.
     pub fn check(&self, delegate: Option<&Address>) -> Result<(), CustomRingError> {
-        let keys: Vec<&Address> = [&self.admin, &self.policy, &self.pauser, &self.cosign_admin]
-            .into_iter()
-            .chain(delegate)
-            .collect();
-        if keys.iter().any(|key| **key == Address::default()) {
+        let keys = || {
+            [&self.admin, &self.policy, &self.pauser, &self.cosign_admin]
+                .into_iter()
+                .chain(delegate)
+        };
+        if keys().any(|key| *key == Address::default()) {
             return Err(CustomRingError::ZeroRoleKey);
         }
-        if keys
-            .iter()
+        if keys()
             .enumerate()
-            .any(|(index, key)| keys[..index].contains(key))
+            .any(|(index, key)| keys().take(index).any(|earlier| earlier == key))
         {
             return Err(CustomRingError::DuplicateRoleKey);
         }
