@@ -31,6 +31,7 @@ mod record_update;
 mod relay;
 mod relay_deposit;
 mod relay_proof;
+mod wallet_activity;
 
 pub use authority_transfer::*;
 pub use enrolment::*;
@@ -40,6 +41,7 @@ pub use record_update::*;
 pub use relay::*;
 pub use relay_deposit::*;
 pub use relay_proof::*;
+pub use wallet_activity::*;
 
 use crate::{
     AuditError, AuditedInput, AuditedOutput, AuditedTransaction, AuditedUtxo, InputOpening,
@@ -52,6 +54,7 @@ pub const CREATE_AUDITOR_KEY: &str = "createAuditorKey";
 pub const RING_STATUS: &str = "ringStatus";
 pub const RING_DEPOSITS: &str = "ringDeposits";
 pub const GET_DECRYPTED_TRANSACTIONS: &str = "getDecryptedTransactions";
+pub const GET_WALLET_ACTIVITY: &str = "getWalletActivity";
 pub const GET_AUDITED_MERGES: &str = "getAuditedMerges";
 pub const GET_AUDITED_UTXOS: &str = "getAuditedUtxos";
 pub const GET_RELAY_QUOTE: &str = "getRelayQuote";
@@ -640,6 +643,7 @@ pub trait Attestation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PagedRead {
     DecryptedTransactions,
+    WalletActivity,
     AuditedMerges,
 }
 
@@ -1005,6 +1009,7 @@ impl PagedRead {
     pub const fn method(self) -> &'static str {
         match self {
             Self::DecryptedTransactions => GET_DECRYPTED_TRANSACTIONS,
+            Self::WalletActivity => GET_WALLET_ACTIVITY,
             Self::AuditedMerges => GET_AUDITED_MERGES,
         }
     }
