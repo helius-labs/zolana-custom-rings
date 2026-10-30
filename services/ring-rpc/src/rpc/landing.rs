@@ -1,25 +1,16 @@
-use std::sync::Arc;
-
 use async_trait::async_trait;
-use solana_address::Address;
 use solana_commitment_config::CommitmentLevel;
-use solana_keypair::Keypair;
+use solana_hash::Hash;
 use solana_signature::Signature;
-use solana_signer::{PresignerError, Signer, SignerError};
 use solana_transaction::versioned::VersionedTransaction;
 use solana_transaction_error::TransactionError;
 use solana_transaction_status_client_types::TransactionConfirmationStatus;
-use spr_client::{sign_transaction, AsyncRpc, ClientError, RpcSendTransactionConfig};
+use spr_client::{AsyncRpc, AsyncSolanaRpc, ClientError, RpcSendTransactionConfig};
 
-use crate::{
-    error::RingRpcError,
-    relay::RelayError,
-    relay_submit::{CollectedSignature, RelaySubmit, RelayTransaction},
-    storage_chain::LatestBlockhash,
-};
+use crate::{error::RingRpcError, relay::RelayError};
 
 #[async_trait]
-pub trait RelayChain: Send + Sync {
+pub trait ChainSubmit: Send + Sync {
     async fn slot(&self) -> Result<u64, RingRpcError>;
 
     async fn latest_blockhash(&self) -> Result<LatestBlockhash, RingRpcError>;
@@ -39,27 +30,66 @@ pub enum ChainOutcome {
     Failed { reason: String },
 }
 
-pub struct SolanaRelayChain<R> {
-    rpc: R,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LatestBlockhash {
+    pub blockhash: Hash,
+    pub last_valid_block_height: u64,
 }
 
-/// Signs as the fee payer, every other signature arrives collected.
-pub struct FeePayerSubmit {
-    fee_payer: Keypair,
-    chain: Arc<dyn RelayChain>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Attempt {
+    pub signature: Signature,
+    pub last_valid_block_height: u64,
 }
 
-/// A collected signature, refused unless it signs the message.
-struct Presigned(CollectedSignature);
+#[must_use]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Landing {
+    Pending,
+    Landed(ChainOutcome),
+    /// Final, the blockhash can no longer land the signature.
+    Expired,
+}
 
-impl<R: AsyncRpc> SolanaRelayChain<R> {
-    pub fn new(rpc: R) -> Self {
-        Self { rpc }
+pub struct SolanaChain {
+    rpc: AsyncSolanaRpc,
+}
+
+impl From<(Hash, u64)> for LatestBlockhash {
+    fn from((blockhash, last_valid_block_height): (Hash, u64)) -> Self {
+        Self {
+            blockhash,
+            last_valid_block_height,
+        }
+    }
+}
+
+impl Attempt {
+    pub async fn landing(self, chain: &dyn ChainSubmit) -> Result<Landing, RingRpcError> {
+        if let Some(outcome) = chain.outcome(self.signature).await? {
+            return Ok(Landing::Landed(outcome));
+        }
+        if chain.block_height().await? <= self.last_valid_block_height {
+            return Ok(Landing::Pending);
+        }
+        // The signature can land between the first lookup and the height read.
+        Ok(chain
+            .outcome(self.signature)
+            .await?
+            .map_or(Landing::Expired, Landing::Landed))
+    }
+}
+
+impl SolanaChain {
+    pub fn new(rpc_url: &str) -> Self {
+        Self {
+            rpc: AsyncSolanaRpc::new(rpc_url),
+        }
     }
 }
 
 #[async_trait]
-impl<R: AsyncRpc> RelayChain for SolanaRelayChain<R> {
+impl ChainSubmit for SolanaChain {
     async fn slot(&self) -> Result<u64, RingRpcError> {
         Ok(self.rpc.get_slot().await?)
     }
@@ -99,7 +129,14 @@ impl<R: AsyncRpc> RelayChain for SolanaRelayChain<R> {
     }
 
     async fn outcome(&self, signature: Signature) -> Result<Option<ChainOutcome>, RingRpcError> {
-        let statuses = self.rpc.get_signature_statuses(vec![signature]).await?;
+        // Without history a landed signature reads as expired once the status cache drops it.
+        let statuses = self
+            .rpc
+            .client()
+            .get_signature_statuses_with_history(&[signature])
+            .await
+            .map_err(|error| ClientError::Rpc(format!("get_signature_statuses: {error}")))?
+            .value;
         let Some(Some(status)) = statuses.into_iter().next() else {
             return Ok(None);
         };
@@ -117,46 +154,5 @@ impl<R: AsyncRpc> RelayChain for SolanaRelayChain<R> {
                 reason: error.to_string(),
             },
         }))
-    }
-}
-
-impl FeePayerSubmit {
-    pub fn new(fee_payer: Keypair, chain: Arc<dyn RelayChain>) -> Self {
-        Self { fee_payer, chain }
-    }
-}
-
-#[async_trait]
-impl RelaySubmit for FeePayerSubmit {
-    fn fee_payer(&self) -> Address {
-        self.fee_payer.pubkey()
-    }
-
-    async fn submit(&self, transaction: RelayTransaction) -> Result<Signature, RingRpcError> {
-        let presigned: Vec<Presigned> = transaction.signatures.into_iter().map(Presigned).collect();
-        let signed = {
-            let mut signers: Vec<&dyn Signer> = vec![&self.fee_payer];
-            signers.extend(presigned.iter().map(|signer| signer as &dyn Signer));
-            sign_transaction(transaction.message, &signers)?
-        };
-        self.chain.send(&signed).await?;
-        Ok(signed.signatures[0])
-    }
-}
-
-impl Signer for Presigned {
-    fn try_pubkey(&self) -> Result<Address, SignerError> {
-        Ok(self.0.signer)
-    }
-
-    fn try_sign_message(&self, message: &[u8]) -> Result<Signature, SignerError> {
-        match self.0.signature.verify(self.0.signer.as_ref(), message) {
-            true => Ok(self.0.signature),
-            false => Err(PresignerError::VerificationFailure.into()),
-        }
-    }
-
-    fn is_interactive(&self) -> bool {
-        false
     }
 }

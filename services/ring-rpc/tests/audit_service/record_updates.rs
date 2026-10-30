@@ -1,6 +1,6 @@
-//! Record updates refuse a forged escrow proof, a second escrow key, an enrolment past its window or awaiting the reader list in database mode, unpaired or too long mint limits and limits for an unrecorded asset, and an authority write whose signer lost the policy role, send only a block entry as an immediate update, send an authority grant at once, hold an enrolment for its allow entry, and page the enrolments that await the config authority.
+//! Record updates refuse a forged escrow proof, a second escrow key, an enrolment past its window or awaiting the reader list in database mode, unpaired or too long mint limits and limits for an unrecorded asset, and an authority write whose signer lost the policy role, send only a block entry as an immediate update, send an authority grant at once, hold an enrolment for its allow entry, page the enrolments that await the config authority, apply a batch that lands after its status lookup once, and requeue an expired batch once.
 
-use std::sync::atomic::AtomicU64;
+use std::{collections::VecDeque, sync::atomic::AtomicU64};
 
 use bytemuck::Zeroable;
 use custom_ring_interface::{
@@ -27,8 +27,9 @@ use zolana_ring_indexer::rpc::{
 use zolana_ring_member_registry::ApplyProofInputs;
 use zolana_ring_policy::{AssetLimits, ListId, Member, MintPolicy};
 use zolana_ring_rpc::{
-    LatestBlockhash, ReaderGrantStore, RecordUpdateRefusal, RecordWriter, StorageChain, Store,
-    TransactionOutcome, BATCH_WINDOW_SLOTS, MAX_ENROLMENT_WINDOW_SLOTS, MAX_LIMIT_WINDOW_SLOTS,
+    ChainOutcome, ChainSubmit, LatestBlockhash, ReaderGrantStore, RecordUpdateRefusal,
+    RecordWriter, StorageChain, Store, BATCH_WINDOW_SLOTS, MAX_ENROLMENT_WINDOW_SLOTS,
+    MAX_LIMIT_WINDOW_SLOTS,
 };
 
 use super::*;
@@ -36,6 +37,7 @@ use super::*;
 const REGISTRY: Address = Address::new_from_array([0x52; 32]);
 const NOW: u64 = 100;
 const NEW_ROOT: [u8; 32] = [0x77; 32];
+const BLOCKHASH_HEIGHTS: u64 = 150;
 
 /// The fixture escrow proof binds the owner identity of the wallet.
 fn wallet() -> Keypair {
@@ -44,23 +46,47 @@ fn wallet() -> Keypair {
 
 struct StubChain {
     slot: AtomicU64,
+    height: AtomicU64,
     config: Mutex<RingConfiguration>,
     accounts: Mutex<HashMap<Address, Account>>,
     sent: Mutex<Vec<VersionedTransaction>>,
-    outcome: Mutex<TransactionOutcome>,
+    outcome: Mutex<Option<ChainOutcome>>,
+    /// Answered ahead of `outcome`, one lookup each.
+    lookups: Mutex<VecDeque<Option<ChainOutcome>>>,
     records: super::Records,
 }
 
 #[async_trait::async_trait]
-impl StorageChain for StubChain {
+impl ChainSubmit for StubChain {
     async fn slot(&self) -> Result<u64, RingRpcError> {
         Ok(self.slot.load(Ordering::Relaxed))
     }
 
     async fn block_height(&self) -> Result<u64, RingRpcError> {
-        Ok(NOW)
+        Ok(self.height.load(Ordering::Relaxed))
     }
 
+    async fn latest_blockhash(&self) -> Result<LatestBlockhash, RingRpcError> {
+        let height = self.height.load(Ordering::Relaxed);
+        Ok(LatestBlockhash {
+            blockhash: solana_hash::Hash::new_from_array([height as u8; 32]),
+            last_valid_block_height: height + BLOCKHASH_HEIGHTS,
+        })
+    }
+
+    async fn send(&self, transaction: &VersionedTransaction) -> Result<(), RingRpcError> {
+        self.sent.lock().unwrap().push(transaction.clone());
+        Ok(())
+    }
+
+    async fn outcome(&self, _signature: Signature) -> Result<Option<ChainOutcome>, RingRpcError> {
+        let scripted = self.lookups.lock().unwrap().pop_front();
+        Ok(scripted.unwrap_or_else(|| self.outcome.lock().unwrap().clone()))
+    }
+}
+
+#[async_trait::async_trait]
+impl StorageChain for StubChain {
     async fn account(&self, address: Address) -> Result<Option<Account>, RingRpcError> {
         Ok(self.accounts.lock().unwrap().get(&address).cloned())
     }
@@ -152,22 +178,6 @@ impl StorageChain for StubChain {
             ..ApplyRecordsIxData::zeroed()
         })
     }
-
-    async fn latest_blockhash(&self) -> Result<LatestBlockhash, RingRpcError> {
-        Ok(LatestBlockhash {
-            blockhash: solana_hash::Hash::new_from_array([1; 32]),
-            last_valid_block_height: NOW + 150,
-        })
-    }
-
-    async fn send(&self, transaction: &VersionedTransaction) -> Result<Signature, RingRpcError> {
-        self.sent.lock().unwrap().push(transaction.clone());
-        Ok(transaction.signatures[0])
-    }
-
-    async fn outcome(&self, _signature: Signature) -> Result<TransactionOutcome, RingRpcError> {
-        Ok(*self.outcome.lock().unwrap())
-    }
 }
 
 struct Records {
@@ -206,6 +216,7 @@ impl RecordsSetup<'_> {
         let escrow = escrow_fixture();
         let chain = Arc::new(StubChain {
             slot: AtomicU64::new(NOW),
+            height: AtomicU64::new(NOW),
             config: Mutex::new(RingConfiguration {
                 auditor_pubkey: X25519Pubkey::from_bytes(
                     hex_bytes(&escrow["auditorPk"])
@@ -222,7 +233,8 @@ impl RecordsSetup<'_> {
             }),
             accounts: Mutex::default(),
             sent: Mutex::default(),
-            outcome: Mutex::new(TransactionOutcome::Unknown),
+            outcome: Mutex::new(None),
+            lookups: Mutex::default(),
             records: super::Records::listing(&[]),
         });
         let store = Store::open("sqlite::memory:", 1).await.expect("store");
@@ -329,6 +341,7 @@ impl Records {
             .expect("update data")
             .writes;
         Flushed {
+            signature: transaction.signatures[0],
             mode: *mode,
             members: writes
                 .iter()
@@ -341,6 +354,7 @@ impl Records {
 }
 
 struct Flushed {
+    signature: Signature,
     mode: u8,
     /// The members the `Update` writes, in order.
     members: Vec<[u8; 32]>,
@@ -520,7 +534,7 @@ async fn a_wallet_reader_revocation_goes_out_graced_and_a_block_entry_immediate_
     assert_eq!(flushed.members, [member.0]);
     assert_eq!(flushed.data.len(), 1);
 
-    *records.chain.outcome.lock().unwrap() = TransactionOutcome::Succeeded;
+    *records.chain.outcome.lock().unwrap() = Some(ChainOutcome::Confirmed { slot: NOW });
     records.writer.flush().await.expect("settle");
     records
         .chain
@@ -661,7 +675,7 @@ async fn a_wallet_enrolment_awaits_the_config_authority_then_lands_with_its_allo
     ));
     assert_eq!(flushed.members, [member.0, member.0]);
 
-    *records.chain.outcome.lock().unwrap() = TransactionOutcome::Succeeded;
+    *records.chain.outcome.lock().unwrap() = Some(ChainOutcome::Confirmed { slot: NOW });
     records.writer.flush().await.expect("settle");
     assert!(matches!(
         records.status(&enrolment).await,
@@ -924,4 +938,62 @@ async fn an_invalid_mint_limits_update_is_refused_at_admission() {
         ..QueueEntry::default()
     });
     records.submit(longest()).await.expect("queued");
+}
+
+#[tokio::test]
+async fn a_batch_that_lands_after_its_status_lookup_applies_once_past_expiry() {
+    let records = Records::new().await;
+    let update = records
+        .submit(signed(
+            &authority(),
+            vec![list_write([0x0c; 32], ListId::Allow)],
+        ))
+        .await
+        .expect("queued");
+    records.flushed().await;
+
+    // The batch lands between the status lookup and the height read.
+    records
+        .chain
+        .height
+        .store(NOW + BLOCKHASH_HEIGHTS + 1, Ordering::Relaxed);
+    records.chain.lookups.lock().unwrap().push_back(None);
+    *records.chain.outcome.lock().unwrap() = Some(ChainOutcome::Confirmed { slot: NOW });
+    records.writer.flush().await.expect("settle");
+    records.writer.flush().await.expect("next flush");
+
+    assert!(records.chain.sent.lock().unwrap().is_empty());
+    assert!(matches!(
+        records.status(&update).await,
+        RecordUpdateStatus::Applied { .. }
+    ));
+}
+
+#[tokio::test]
+async fn an_expired_batch_is_requeued_and_resent_once() {
+    let records = Records::new().await;
+    let update = records
+        .submit(signed(
+            &authority(),
+            vec![list_write([0x0c; 32], ListId::Allow)],
+        ))
+        .await
+        .expect("queued");
+    let first = records.flushed().await;
+
+    records
+        .chain
+        .height
+        .store(NOW + BLOCKHASH_HEIGHTS + 1, Ordering::Relaxed);
+    records.writer.flush().await.expect("requeue");
+    let resent = records.flushed().await;
+    records.writer.flush().await.expect("pending resend");
+
+    assert_eq!(resent.members, first.members);
+    assert!(records.chain.sent.lock().unwrap().is_empty());
+    let RecordUpdateStatus::Submitted { signature } = records.status(&update).await else {
+        panic!("the resent batch is pending");
+    };
+    assert_eq!(signature.0, resent.signature);
+    assert_ne!(resent.signature, first.signature);
 }

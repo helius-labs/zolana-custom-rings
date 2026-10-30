@@ -1,17 +1,17 @@
-//! The relay co-signs within its asset's sender window cap and refuses an outflow beyond it or a proof naming another co-signer.
+//! The relay co-signs within its asset's sender window cap and refuses an outflow beyond it or a proof naming another co-signer, and keeps the reservation of a transfer that landed before a lost send reply.
 
 use jsonrpsee::RpcModule;
 use spr_keypair::{ShieldedKeypair, SigningKey};
 use zolana_ring_client::rpc::{
-    GetRelayQuoteRequest, RelayProofInputs, RelayQuote, RelayRail, RelayStep, GET_RELAY_QUOTE,
-    PREPARE_RELAY,
+    GetRelayQuoteRequest, GetRelayStatusRequest, PrepareRelayRequest, RelayProofInputs, RelayQuote,
+    RelayRail, RelayStatus, RelayStep, GET_RELAY_QUOTE, GET_RELAY_STATUS, PREPARE_RELAY,
 };
 use zolana_ring_policy::{AssetLimits, MintPolicy};
-use zolana_ring_rpc::{FeePayerSubmit, RelayError, RelayParts, ServedRings};
+use zolana_ring_rpc::{RelayError, RelayParts, ServedRings};
 
 use super::relay_fixture::{
     anonymous_rail, owner, proof_inputs, signed_request, signers_verify, RecordingChain,
-    RecordingProver,
+    RecordingProver, LAST_VALID_BLOCK_HEIGHT, SLOT,
 };
 use super::*;
 
@@ -58,10 +58,7 @@ impl CappedRelay {
                     co_signer: Some(named.unwrap_or(co_signer)),
                     ..RecordingProver::default()
                 }),
-                submit: Arc::new(FeePayerSubmit::new(
-                    Keypair::new_from_array([31; 32]),
-                    chain.clone(),
-                )),
+                fee_payer: Keypair::new_from_array([31; 32]),
                 chain: chain.clone(),
                 rings: ServedRings::One(RING),
             })
@@ -85,6 +82,15 @@ impl CappedRelay {
             quote,
             rail,
         }
+    }
+
+    /// The transfer of `seed` spends the whole SENDER_CAP.
+    fn spending_cap(&self, seed: u8) -> PrepareRelayRequest {
+        let mut inputs = proof_inputs(RING, (self.rail)());
+        inputs.outputs[0].ring_program_id = None;
+        inputs.outputs[0].amount = SENDER_CAP;
+        inputs.blinding_seed = [seed; 32];
+        signed_request(self.quote.clone(), &inputs)
     }
 
     /// `outflow` fits SENDER_CAP once and passes it twice.
@@ -150,4 +156,45 @@ async fn a_proof_naming_another_co_signer_is_refused_unsent() {
 
     assert_eq!(refusal(refused), RelayError::CoSignRefused.code());
     assert!(relay.chain.sent().is_empty());
+}
+
+#[tokio::test]
+async fn a_transfer_that_landed_before_a_lost_send_reply_keeps_its_reservation() {
+    let relay = CappedRelay::new(|| RelayRail::Confidential).await;
+    let landed = relay.spending_cap(1);
+    let relay_id = landed.relay_id().expect("relay id");
+    relay.chain.reply_lost.store(true, Ordering::Relaxed);
+    let interrupted = relay
+        .module
+        .call::<_, RelayStep>(PREPARE_RELAY, as_object(&landed))
+        .await;
+    assert!(interrupted.is_err());
+
+    relay
+        .chain
+        .height
+        .store(LAST_VALID_BLOCK_HEIGHT + 1, Ordering::Relaxed);
+    let status: RelayStatus = relay
+        .module
+        .call(
+            GET_RELAY_STATUS,
+            as_object(GetRelayStatusRequest { relay_id }),
+        )
+        .await
+        .expect("status");
+
+    let [sent] = relay.chain.sent().try_into().expect("one sent transaction");
+    assert_eq!(
+        status,
+        RelayStatus::Confirmed {
+            signature: sent.signatures[0].into(),
+            slot: SLOT + 1,
+        }
+    );
+    // A freed reservation would let a second full cap through.
+    let beyond = relay
+        .module
+        .call::<_, RelayStep>(PREPARE_RELAY, as_object(relay.spending_cap(2)))
+        .await;
+    assert_eq!(refusal(beyond), RelayError::CoSignRefused.code());
 }

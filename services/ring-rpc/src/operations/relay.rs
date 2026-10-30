@@ -7,8 +7,10 @@ use sea_orm::{DatabaseConnection, TransactionTrait};
 use sha2::{Digest, Sha256};
 use solana_address::Address;
 use solana_instruction::Instruction;
+use solana_keypair::Keypair;
 use solana_message::VersionedMessage;
 use solana_signature::Signature;
+use solana_signer::Signer;
 use spr_client::compile_message;
 use spr_keypair::PublicKey;
 use spr_transaction::{instructions::transact::SettlementTransfer, SOL_MINT};
@@ -28,12 +30,11 @@ use crate::{
     },
     database::Store,
     error::{redacted, RingRpcError},
+    landing::{Attempt, ChainOutcome, ChainSubmit, Landing, LatestBlockhash},
     merge_inputs::{HoldInputs, MergeInputs},
-    relay_chain::{ChainOutcome, RelayChain},
     relay_prover::{DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver},
-    relay_submit::{CollectedSignature, RelaySubmit, RelayTransaction},
+    relay_submit::{presigned_transaction, CollectedSignature},
     relays::{RelayRecord, RelayState, RelayStore},
-    storage_chain::LatestBlockhash,
 };
 
 /// Longest quote window, one blockhash lifetime.
@@ -94,8 +95,9 @@ pub enum ServedRings {
 pub struct RelayParts {
     pub store: Store,
     pub prover: Arc<dyn RelayProver>,
-    pub submit: Arc<dyn RelaySubmit>,
-    pub chain: Arc<dyn RelayChain>,
+    /// The SPP payer every relayed message names.
+    pub fee_payer: Keypair,
+    pub chain: Arc<dyn ChainSubmit>,
     pub rings: ServedRings,
 }
 
@@ -103,8 +105,8 @@ pub struct RelayParts {
 pub struct Relay {
     store: Store,
     prover: Arc<dyn RelayProver>,
-    submit: Arc<dyn RelaySubmit>,
-    chain: Arc<dyn RelayChain>,
+    fee_payer: Keypair,
+    chain: Arc<dyn ChainSubmit>,
     rings: ServedRings,
     co_signer: Arc<dyn CoSignPolicy>,
     proofs: Semaphore,
@@ -187,7 +189,7 @@ impl Relay {
         Self {
             store: parts.store,
             prover: parts.prover,
-            submit: parts.submit,
+            fee_payer: parts.fee_payer,
             chain: parts.chain,
             rings: parts.rings,
             co_signer: Arc::new(RefusingCoSigner),
@@ -203,7 +205,7 @@ impl Relay {
     }
 
     pub fn fee_payer(&self) -> Address {
-        self.submit.fee_payer()
+        self.fee_payer.pubkey()
     }
 
     fn parties(&self) -> RelayParties {
@@ -334,13 +336,11 @@ impl Relay {
             message,
             signatures: co_signed.signature.into_iter().collect(),
             co_signature: co_signed.signature.map(|collected| collected.signature),
-            state: match co_signed.signers.is_empty() {
-                true => RelayState::Signed,
-                false => RelayState::AwaitingSignature,
-            },
+            state: RelayState::AwaitingSignature,
             awaiting: co_signed.signers,
             last_valid_block_height,
         };
+        self.sign_when_complete(&mut record);
         let _transition = self.transitions.lock().await;
         let inserted = self.relays().insert(&relay_id, &record).await;
         if !matches!(inserted, Ok(true)) {
@@ -353,9 +353,7 @@ impl Relay {
                 &stored.ok_or(RingRpcError::StateUnavailable)?,
             ));
         }
-        if record.state == RelayState::Signed {
-            self.send(&relay_id, &mut record).await?;
-        }
+        self.first_send(&relay_id, &mut record).await?;
         Ok(step(relay_id, &record))
     }
 
@@ -376,8 +374,9 @@ impl Relay {
             awaiting: Vec::new(),
             co_signature: merge.co_signature.map(|collected| collected.signature),
             last_valid_block_height: merge.last_valid_block_height,
-            state: RelayState::Signed,
+            state: RelayState::AwaitingSignature,
         };
+        self.sign_when_complete(&mut record);
         let _transition = self.transitions.lock().await;
         let hold = HoldInputs {
             ring: &merge.ring,
@@ -394,7 +393,7 @@ impl Relay {
                 return Err(error);
             }
         }
-        self.send(&relay_id, &mut record).await?;
+        self.first_send(&relay_id, &mut record).await?;
         Ok(relay_id)
     }
 
@@ -445,13 +444,12 @@ impl Relay {
             record
                 .signatures
                 .push(CollectedSignature { signer, signature });
-            if record.awaiting.is_empty() {
-                record.state = RelayState::Signed;
-            }
+            self.sign_when_complete(&mut record);
             self.relays().update(&request.relay_id, &record).await?;
+            self.first_send(&request.relay_id, &mut record).await?;
         }
         self.advance(&request.relay_id, &mut record).await?;
-        relay_status(&record.state)
+        Ok(relay_status(&record.state))
     }
 
     pub async fn status(
@@ -461,7 +459,7 @@ impl Relay {
         let _transition = self.transitions.lock().await;
         let mut record = self.record(&request.relay_id).await?;
         self.advance(&request.relay_id, &mut record).await?;
-        relay_status(&record.state)
+        Ok(relay_status(&record.state))
     }
 
     /// A restart resumes every relay it left pending.
@@ -477,11 +475,13 @@ impl Relay {
     pub(crate) async fn track(&self) -> Result<(), RingRpcError> {
         for relay_id in self.relays().pending().await? {
             let _transition = self.transitions.lock().await;
-            let advanced = match self.record(&relay_id).await {
-                Ok(mut record) => self.advance(&relay_id, &mut record).await,
-                Err(error) => Err(error),
-            };
-            if let Err(error) = advanced {
+            let tracked = async {
+                let mut record = self.record(&relay_id).await?;
+                self.advance(&relay_id, &mut record).await?;
+                self.resend(&record).await
+            }
+            .await;
+            if let Err(error) = tracked {
                 warn!("relay {} did not advance {}", relay_id.0, redacted(&error));
             }
         }
@@ -499,68 +499,88 @@ impl Relay {
             .ok_or_else(|| RelayError::UnknownRelay.into())
     }
 
-    async fn send(&self, relay_id: &RelayId, record: &mut RelayRecord) -> Result<(), RingRpcError> {
-        let transaction = RelayTransaction {
-            message: record.message.clone(),
-            signatures: record.signatures.clone(),
+    /// Fixes the relay's one signature, every later send repeats it.
+    fn sign_when_complete(&self, record: &mut RelayRecord) {
+        if record.state != RelayState::AwaitingSignature || !record.awaiting.is_empty() {
+            return;
+        }
+        let signature = self.fee_payer.sign_message(&record.message.serialize());
+        record.signatures.push(CollectedSignature {
+            signer: self.fee_payer(),
+            signature,
+        });
+        record.state = RelayState::Sent {
+            signature: signature.into(),
         };
-        match self.submit.submit(transaction).await {
-            Ok(signature) => {
-                record.state = RelayState::Sent {
-                    signature: signature.into(),
-                };
-                Ok(self.relays().update(relay_id, record).await?)
-            }
+    }
+
+    /// A refused preflight forwards nothing and ends the relay.
+    async fn first_send(
+        &self,
+        relay_id: &RelayId,
+        record: &mut RelayRecord,
+    ) -> Result<(), RingRpcError> {
+        if !matches!(record.state, RelayState::Sent { .. }) {
+            return Ok(());
+        }
+        let transaction = presigned_transaction(&record.message, &record.signatures)?;
+        match self.chain.send(&transaction).await {
             Err(RingRpcError::Relay(RelayError::SendRefused { reason })) => {
                 record.state = RelayState::Failed { reason };
                 self.close(relay_id, record).await
             }
-            Err(error) => Err(error),
+            sent => sent,
         }
     }
 
-    /// Past its last valid block height a relay that has not landed fails.
+    /// A refusal leaves the relay open, an earlier send can still land.
+    async fn resend(&self, record: &RelayRecord) -> Result<(), RingRpcError> {
+        match record.state {
+            RelayState::Sent { .. } => {
+                let transaction = presigned_transaction(&record.message, &record.signatures)?;
+                self.chain.send(&transaction).await
+            }
+            _ => Ok(()),
+        }
+    }
+
     async fn advance(
         &self,
         relay_id: &RelayId,
         record: &mut RelayRecord,
     ) -> Result<(), RingRpcError> {
         let last_valid_block_height = record.last_valid_block_height;
-        let expired = || async {
-            Ok::<_, RingRpcError>(self.chain.block_height().await? > last_valid_block_height)
-        };
-        match record.state.clone() {
-            RelayState::AwaitingSignature if expired().await? => {
-                record.state = RelayState::Failed {
+        record.state = match record.state.clone() {
+            RelayState::AwaitingSignature
+                if self.chain.block_height().await? > last_valid_block_height =>
+            {
+                RelayState::Failed {
                     reason: EXPIRED.to_owned(),
-                };
-                self.close(relay_id, record).await
+                }
             }
-            // A resend lands as already processed or fails its preflight past expiry.
-            RelayState::Signed => self.send(relay_id, record).await,
             RelayState::Sent { signature } => {
-                let outcome = match self.chain.outcome(signature.0).await? {
-                    Some(outcome) => outcome,
-                    // The transaction can land between the first lookup and the expiry check.
-                    None if expired().await? => {
-                        self.chain.outcome(signature.0).await?.unwrap_or_else(|| {
-                            ChainOutcome::Failed {
-                                reason: EXPIRED.to_owned(),
-                            }
-                        })
+                let attempt = Attempt {
+                    signature: signature.0,
+                    last_valid_block_height,
+                };
+                match attempt.landing(self.chain.as_ref()).await? {
+                    Landing::Pending => return Ok(()),
+                    Landing::Landed(ChainOutcome::Confirmed { slot }) => {
+                        RelayState::Confirmed { signature, slot }
                     }
-                    None => return Ok(()),
-                };
-                record.state = match outcome {
-                    ChainOutcome::Confirmed { slot } => RelayState::Confirmed { signature, slot },
-                    ChainOutcome::Failed { reason } => RelayState::Failed { reason },
-                };
-                self.close(relay_id, record).await
+                    Landing::Landed(ChainOutcome::Failed { reason }) => {
+                        RelayState::Failed { reason }
+                    }
+                    Landing::Expired => RelayState::Failed {
+                        reason: EXPIRED.to_owned(),
+                    },
+                }
             }
             RelayState::AwaitingSignature
             | RelayState::Confirmed { .. }
-            | RelayState::Failed { .. } => Ok(()),
-        }
+            | RelayState::Failed { .. } => return Ok(()),
+        };
+        self.close(relay_id, record).await
     }
 
     /// Settles the co-signer for the final state before the store keeps it.
@@ -767,11 +787,9 @@ fn step(relay_id: RelayId, record: &RelayRecord) -> RelayStep {
     }
 }
 
-/// `Signed` is unreachable after `advance`.
-fn relay_status(state: &RelayState) -> Result<RelayStatus, RingRpcError> {
-    Ok(match state {
+fn relay_status(state: &RelayState) -> RelayStatus {
+    match state {
         RelayState::AwaitingSignature => RelayStatus::AwaitingSignature,
-        RelayState::Signed => return Err(RingRpcError::StateUnavailable),
         RelayState::Sent { signature } => RelayStatus::Sent {
             signature: signature.clone(),
         },
@@ -782,7 +800,7 @@ fn relay_status(state: &RelayState) -> Result<RelayStatus, RingRpcError> {
         RelayState::Failed { reason } => RelayStatus::Failed {
             reason: reason.clone(),
         },
-    })
+    }
 }
 
 /// One flow per asset.

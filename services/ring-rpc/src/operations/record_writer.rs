@@ -12,7 +12,6 @@ use log::warn;
 use sea_orm::DbErr;
 use solana_address::Address;
 use solana_keypair::Keypair;
-use solana_signature::Signature;
 use solana_signer::Signer;
 use spr_client::{compile_message, sign_transaction, ComputeBudgetConfig};
 use spr_indexer_api::Hash;
@@ -30,12 +29,13 @@ use crate::{
     config::ReaderGrantStore,
     database::Store,
     error::{redacted, RingRpcError},
+    landing::{Attempt, ChainOutcome, Landing},
     record_update::{
         escrowed_members, limits_within_bounds, ApplyInputsCheck, BatchPlan, CheckedUpdate,
         EnrolmentApproval, EscrowUniqueness, ModeDecision, QueuedCheck, RecordUpdateCheck,
         RecordUpdateRefusal, UpdateContext,
     },
-    storage_chain::{StorageChain, TransactionOutcome},
+    storage_chain::StorageChain,
     update_queue::{AwaitingPage, BatchOutcome, NewBatch, NewUpdate, OpenBatch, UpdateQueue},
     upstream::VerifiedOpenings,
 };
@@ -103,10 +103,20 @@ impl RecordWriter {
             ComputeBudgetConfig::new(CREATE_COMPUTE_UNITS),
         )?;
         let transaction = sign_transaction(message, &[&self.authority])?;
-        let signature = self.chain.send(&transaction).await?;
-        self.confirmed(signature, latest.last_valid_block_height)
-            .await?;
-        Ok(registry)
+        let attempt = Attempt {
+            signature: transaction.signatures[0],
+            last_valid_block_height: latest.last_valid_block_height,
+        };
+        self.chain.send(&transaction).await?;
+        loop {
+            match attempt.landing(self.chain.as_ref()).await? {
+                Landing::Pending => tokio::time::sleep(CONFIRM_POLL_INTERVAL).await,
+                Landing::Landed(ChainOutcome::Confirmed { .. }) => return Ok(registry),
+                Landing::Landed(ChainOutcome::Failed { .. }) | Landing::Expired => {
+                    return Err(RecordUpdateRefusal::RecordsNotCreated.into())
+                }
+            }
+        }
     }
 
     /// A resubmitted update returns the id it was queued under.
@@ -364,9 +374,11 @@ impl RecordWriter {
         queue
             .record_batch(NewBatch {
                 registry,
-                signature: transaction.signatures[0],
+                attempt: Attempt {
+                    signature: transaction.signatures[0],
+                    last_valid_block_height: latest.last_valid_block_height,
+                },
                 revision: checked.revision.value(),
-                last_valid_block_height: latest.last_valid_block_height,
                 updates: batch,
             })
             .await?;
@@ -374,40 +386,15 @@ impl RecordWriter {
         Ok(())
     }
 
-    /// An unknown signature requeues only once its blockhash can no longer land.
     async fn settle(&self, batch: OpenBatch) -> Result<(), RingRpcError> {
-        let outcome = match self.chain.outcome(batch.signature).await? {
-            TransactionOutcome::Succeeded => BatchOutcome::Applied,
-            TransactionOutcome::Failed => BatchOutcome::Requeued,
-            TransactionOutcome::Unknown => {
-                if self.chain.block_height().await? <= batch.last_valid_block_height {
-                    return Ok(());
-                }
+        let outcome = match batch.attempt.landing(self.chain.as_ref()).await? {
+            Landing::Pending => return Ok(()),
+            Landing::Landed(ChainOutcome::Confirmed { .. }) => BatchOutcome::Applied,
+            Landing::Landed(ChainOutcome::Failed { .. }) | Landing::Expired => {
                 BatchOutcome::Requeued
             }
         };
         Ok(self.queue().settle(batch.id, outcome).await?)
-    }
-
-    async fn confirmed(
-        &self,
-        signature: Signature,
-        last_valid_block_height: u64,
-    ) -> Result<(), RingRpcError> {
-        loop {
-            match self.chain.outcome(signature).await? {
-                TransactionOutcome::Succeeded => return Ok(()),
-                TransactionOutcome::Failed => {
-                    return Err(RecordUpdateRefusal::RecordsNotCreated.into())
-                }
-                TransactionOutcome::Unknown
-                    if self.chain.block_height().await? > last_valid_block_height =>
-                {
-                    return Err(RecordUpdateRefusal::RecordsNotCreated.into())
-                }
-                TransactionOutcome::Unknown => tokio::time::sleep(CONFIRM_POLL_INTERVAL).await,
-            }
-        }
     }
 
     /// Refuses an escrow key for a member whose record or pending update holds one.

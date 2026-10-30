@@ -160,7 +160,7 @@ mod tests {
     use super::*;
     use crate::{
         database::Store,
-        managed_merge::tests::{Fixture, RecordingRelay, ScriptedChain, GENESIS, MINT, RING},
+        managed_merge::tests::{fee_payer, Fixture, ScriptedChain, GENESIS, MINT, RING},
         relay::{RelayParts, RelayPayload, ServedRings},
         relay_prover::{DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver},
     };
@@ -247,7 +247,7 @@ mod tests {
         let relay = RelayParts {
             store: Store::open("sqlite::memory:", 1).await.expect("store"),
             prover: prover.clone(),
-            submit: Arc::new(RecordingRelay::default()),
+            fee_payer: fee_payer(),
             chain: Arc::new(ScriptedChain::default()),
             rings: ServedRings::One(RING),
         };
