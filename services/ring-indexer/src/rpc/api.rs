@@ -27,10 +27,7 @@ use zolana_ring_indexer::{
         RingMemberRecordView, RingQueueEntryView, RingRecordPathView, RingRecordWriteView,
         RingRegistryRootView, RingRootEntryView, MAX_RING_MEMBER_PAGE_LIMIT,
     },
-    tree::{
-        Canopy, MemberRecord, OpeningCheck, RecordOpening, RecordTree,
-        RecordWriteProofInput,
-    },
+    tree::{Canopy, MemberRecord, OpeningCheck, RecordOpening, RecordTree, RecordWriteProofInput},
 };
 
 use crate::{
