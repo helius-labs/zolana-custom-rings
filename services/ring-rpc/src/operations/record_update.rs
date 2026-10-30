@@ -18,21 +18,19 @@ use zolana_ring_client::{
 };
 use zolana_ring_indexer::rpc::{GetStorageApplyProofInputsResponse, RingListWriteView};
 use zolana_ring_member_registry::{ApplyProofInputs, RecordWriteProofInput};
-use zolana_ring_policy::{AssetLimits, ListId, ListSet, Member, MintPolicy};
+use zolana_ring_policy::{AssetLimits, ListId, ListSet, Member, MintPolicy, RuleSource, RuleTable};
 
 use crate::{config::ReaderGrantStore, error::RingRpcError, upstream::RingConfiguration};
 
-/// Slots a graced update waits for more writes before it goes out short.
-pub const BATCH_WINDOW_SLOTS: u64 = 40;
+pub use zolana_ring_client::rpc::BATCH_WINDOW_SLOTS;
 /// Failed or expired batches an update rides in before it turns refused.
 pub const MAX_BATCH_ATTEMPTS: u64 = 3;
 /// One day of 250 ms slots.
 pub const MAX_ENROLMENT_WINDOW_SLOTS: u64 = 4 * 60 * 60 * 24;
 /// Thirty days of 250 ms slots.
 pub const MAX_LIMIT_WINDOW_SLOTS: u64 = 4 * 60 * 60 * 24 * 30;
-const REVOKING_SETS: u64 = ListSet::of(&[ListId::Block, ListId::Frozen]).record_bits();
-// A graced reader revocation stops reads at once, grants open under the newest registry root.
-const REVOKING_CLEARS: u64 = ListSet::of(&[ListId::Allow, ListId::Approval]).record_bits();
+/// Written by wallets, read by grants under the newest registry root.
+const GRACED_LISTS: ListSet = ListSet::single(ListId::Reader);
 
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 #[repr(i32)]
@@ -158,7 +156,15 @@ pub(crate) enum UpdateSigner {
 pub(crate) struct QueuedCheck<'a> {
     pub update: &'a QueuedUpdate,
     pub slot: u64,
+    /// `None` while the ring account is unread.
     pub policy_authority: Option<Address>,
+}
+
+#[must_use]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum QueuedState {
+    Live,
+    Deferred,
 }
 
 /// `queue` holds no update past its valid until slot.
@@ -199,6 +205,8 @@ pub(crate) struct CheckedInputs {
 pub(crate) struct ModeDecision<'a> {
     pub inputs: &'a ApplyProofInputs,
     pub registry: &'a StorageRegistry,
+    /// The current table of every ring the batch writes for.
+    pub tables: &'a [RuleTable],
     pub slot: u64,
 }
 
@@ -244,7 +252,7 @@ impl RecordUpdateCheck<'_> {
         }
         // 3. Every entry is the signer's to write and every escrow key is sealed to the ring auditor.
         let update_signer = UpdateSigner::of(request)?;
-        if !update_signer.holds_role(Some(context.config.roles.policy)) {
+        if !update_signer.holds_role(context.config.roles.policy) {
             return Err(RecordUpdateRefusal::Unauthorized);
         }
         for entry in entries {
@@ -362,24 +370,27 @@ impl UpdateSigner {
     }
 
     /// A wallet write outlives a policy rotation, an authority write lapses with the role.
-    pub fn holds_role(self, policy_authority: Option<Address>) -> bool {
+    pub fn holds_role(self, policy_authority: Address) -> bool {
         match self {
             Self::Wallet(_) => true,
-            Self::PolicyAuthority(signer) => policy_authority == Some(signer),
+            Self::PolicyAuthority(signer) => policy_authority == signer,
         }
     }
 }
 
 impl QueuedCheck<'_> {
     /// No update goes out past its valid until slot or after its signer lost the role it signed as.
-    pub fn check(self) -> Result<(), RecordUpdateRefusal> {
+    pub fn check(self) -> Result<QueuedState, RecordUpdateRefusal> {
         if self.slot > self.update.valid_until_slot {
             return Err(RecordUpdateRefusal::Expired);
         }
-        if !self.update.signer.holds_role(self.policy_authority) {
+        let Some(policy_authority) = self.policy_authority else {
+            return Ok(QueuedState::Deferred);
+        };
+        if !self.update.signer.holds_role(policy_authority) {
             return Err(RecordUpdateRefusal::AuthorityLapsed);
         }
-        Ok(())
+        Ok(QueuedState::Live)
     }
 }
 
@@ -513,7 +524,12 @@ impl ApplyInputsCheck<'_> {
 impl ModeDecision<'_> {
     /// `None` waits for the oldest retired root to expire.
     pub fn decide(self) -> Option<UpdateMode> {
-        if self.inputs.writes.iter().any(revokes) {
+        if self
+            .inputs
+            .writes
+            .iter()
+            .any(|write| self.tables.iter().any(|table| revokes(table, write)))
+        {
             return Some(UpdateMode::Immediate);
         }
         // A graced update over an unexpired oldest root fails on chain.
@@ -632,16 +648,28 @@ fn authority_write(entry: &RecordUpdateEntry) -> bool {
         if lists_within(write.mask, ListSet::AUTHORITY_WRITES))
 }
 
-fn revokes(write: &RecordWriteProofInput) -> bool {
-    revokes_lists(&write.entry)
+fn revokes(table: &RuleTable, write: &RecordWriteProofInput) -> bool {
+    revokes_lists(table, &write.entry)
         || write
             .entry
             .mint_policy
             .is_some_and(|new| restricts(write.old_mint_policy, new))
 }
 
-fn revokes_lists(entry: &QueueEntry) -> bool {
-    entry.value & REVOKING_SETS != 0 || entry.mask & !entry.value & REVOKING_CLEARS != 0
+/// A clear of a list a rule accepts on, or a set of one it accepts off, can refuse an admitted subject.
+fn revokes_lists(table: &RuleTable, entry: &QueueEntry) -> bool {
+    let (accepted_on, accepted_off) =
+        table
+            .rules()
+            .iter()
+            .fold((ListSet::EMPTY, ListSet::EMPTY), |(on, off), rule| {
+                let RuleSource::Lists { present, absent } = rule.source;
+                (on.union(present), off.union(absent))
+            });
+    let graced = GRACED_LISTS.record_bits();
+    let cleared = entry.mask & !entry.value & !graced;
+    let set = entry.mask & entry.value & !graced;
+    cleared & accepted_on.record_bits() != 0 || set & accepted_off.record_bits() != 0
 }
 
 /// Zero turns a cap or co-sign bound off, so a bound set from zero restricts.
@@ -655,4 +683,46 @@ fn restricts(old: MintPolicy, new: MintPolicy) -> bool {
 
 fn invalid_entry<E>(_: E) -> RecordUpdateRefusal {
     RecordUpdateRefusal::InvalidEntry
+}
+
+#[cfg(test)]
+mod tests {
+    use zolana_ring_policy::{Rule, Subject};
+
+    use super::*;
+
+    fn set(list_id: ListId) -> QueueEntry {
+        QueueEntry {
+            member: [1; 32],
+            mask: list_id.record_bit(),
+            value: list_id.record_bit(),
+            ..QueueEntry::default()
+        }
+    }
+
+    fn cleared(list_id: ListId) -> QueueEntry {
+        QueueEntry {
+            value: 0,
+            ..set(list_id)
+        }
+    }
+
+    #[test]
+    fn a_forbid_rule_set_and_an_allow_rule_clear_are_both_urgent() {
+        let table = RuleTable::builder()
+            .rule(Rule::require(Subject::OutputOwner, ListId::Allow))
+            .rule(Rule::forbid(Subject::Sender, ListId::Approval))
+            .rule(Rule::require(Subject::Sender, ListId::Reader))
+            .build();
+
+        assert!(revokes_lists(&table, &set(ListId::Approval)));
+        assert!(revokes_lists(&table, &cleared(ListId::Allow)));
+        // Each write only widens what its rule admits.
+        assert!(!revokes_lists(&table, &set(ListId::Allow)));
+        assert!(!revokes_lists(&table, &cleared(ListId::Approval)));
+        // No rule reads Block.
+        assert!(!revokes_lists(&table, &set(ListId::Block)));
+        // A wallet writes the reader bit of its grants.
+        assert!(!revokes_lists(&table, &cleared(ListId::Reader)));
+    }
 }

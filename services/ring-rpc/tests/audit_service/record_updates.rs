@@ -1,4 +1,4 @@
-//! Record updates refuse a forged escrow proof, a second escrow key, an enrolment past its window or awaiting the reader list in database mode, unpaired or too long mint limits and limits for an unrecorded asset, and an authority write whose signer lost the policy role, send only a block entry as an immediate update, send an authority grant at once, hold an enrolment for its allow entry, and page the enrolments that await the config authority.
+//! Record updates refuse a forged escrow proof, a second escrow key, an enrolment past its window or awaiting the reader list in database mode, unpaired or too long mint limits and limits for an unrecorded asset, and an authority write whose signer lost the policy role, send only an entry the rules refuse on as an immediate update, send an authority grant at once, hold every update while the ring account is unread, keep an update signed for the cli window through the longest graced wait, hold an enrolment for its allow entry, and page the enrolments that await the config authority.
 
 use std::sync::atomic::AtomicU64;
 
@@ -6,7 +6,8 @@ use bytemuck::Zeroable;
 use custom_ring_interface::{
     storage::StorageRegistry,
     storage_instruction::{tag, StorageUpdateIxData, StorageWriteData},
-    ApplyRecordsIxData, RingPolicy, SourceSlot, QUAD_HEIGHT, RING_POLICY, STORAGE_PROGRAM_ID,
+    ApplyRecordsIxData, RingPolicy, SourceSlot, GRACE_SLOTS, QUAD_HEIGHT, RING_POLICY,
+    ROOT_HISTORY, STORAGE_PROGRAM_ID,
 };
 use custom_ring_sdk::CustomRing;
 use jsonrpsee::MethodsError;
@@ -17,7 +18,8 @@ use zolana_ring_client::rpc::{
     EscrowRegistration, GetPendingEnrolmentsRequest, GetPendingEnrolmentsResponse,
     GetRecordUpdateStatusRequest, ReadTarget, ReaderAccess, RecordUpdate, RecordUpdateEntry,
     RecordUpdateStatus, SubmitRecordUpdateRequest, SubmitRecordUpdateResponse, WalletGrant,
-    GET_PENDING_ENROLMENTS, PENDING_ENROLMENTS_PAGE_LIMIT, SUBMIT_RECORD_UPDATE,
+    GET_PENDING_ENROLMENTS, PENDING_ENROLMENTS_PAGE_LIMIT, RECORD_UPDATE_SLOTS,
+    SUBMIT_RECORD_UPDATE,
 };
 use zolana_ring_indexer::rpc::{
     GetStorageApplyProofInputsRequest, GetStorageApplyProofInputsResponse,
@@ -25,7 +27,7 @@ use zolana_ring_indexer::rpc::{
     RingRecordWriteView,
 };
 use zolana_ring_member_registry::ApplyProofInputs;
-use zolana_ring_policy::{AssetLimits, ListId, Member, MintPolicy};
+use zolana_ring_policy::{AssetLimits, ListId, Member, MintPolicy, Rule, RuleTable, Subject};
 use zolana_ring_rpc::{
     LatestBlockhash, ReaderGrantStore, RecordUpdateRefusal, RecordWriter, StorageChain, Store,
     TransactionOutcome, BATCH_WINDOW_SLOTS, MAX_ENROLMENT_WINDOW_SLOTS, MAX_LIMIT_WINDOW_SLOTS,
@@ -65,8 +67,14 @@ impl StorageChain for StubChain {
         Ok(self.accounts.lock().unwrap().get(&address).cloned())
     }
 
+    /// Read from the ring account, `None` while it is unread.
     async fn ring_config(&self, ring: Address) -> Result<Option<RingConfiguration>, RingRpcError> {
-        Ok((ring == RING).then_some(*self.config.lock().unwrap()))
+        let read = self
+            .accounts
+            .lock()
+            .unwrap()
+            .contains_key(&CustomRing::new(RING).policy_pda());
+        Ok((ring == RING && read).then_some(*self.config.lock().unwrap()))
     }
 
     async fn member_openings(
@@ -239,6 +247,7 @@ impl RecordsSetup<'_> {
         let mut policy = RingPolicy::zeroed();
         policy.discriminator = RING_POLICY;
         policy.records = REGISTRY;
+        policy.roles.policy = authority().pubkey();
         chain.accounts.lock().unwrap().extend([
             (
                 CustomRing::new(RING).policy_pda(),
@@ -291,15 +300,34 @@ impl Records {
 
     /// The ring's own records serve `list_id` to its policy.
     fn serves_own(&self, list_id: ListId) {
+        self.policy(|policy| {
+            policy.sources[list_id.slot()] = SourceSlot {
+                list_id: list_id as u8,
+                registry: Address::default(),
+            }
+        });
+    }
+
+    /// The policy reads `table`, each list from the ring's own records.
+    fn reads(&self, table: RuleTable) {
+        for list_id in table.referenced().iter() {
+            self.serves_own(list_id);
+        }
+        self.policy(|policy| policy.rules = table.encode());
+    }
+
+    /// The ring account and its decoded config name `key` the policy authority.
+    fn rotate_policy_authority(&self, key: Address) {
+        self.chain.config.lock().unwrap().roles.policy = key;
+        self.policy(|policy| policy.roles.policy = key);
+    }
+
+    fn policy(&self, write: impl FnOnce(&mut RingPolicy)) {
         let mut accounts = self.chain.accounts.lock().unwrap();
         let account = accounts
             .get_mut(&CustomRing::new(RING).policy_pda())
             .expect("policy");
-        let policy: &mut RingPolicy = bytemuck::from_bytes_mut(&mut account.data);
-        policy.sources[list_id.slot()] = SourceSlot {
-            list_id: list_id as u8,
-            registry: Address::default(),
-        };
+        write(bytemuck::from_bytes_mut(&mut account.data));
     }
 
     async fn status(&self, update: &SubmitRecordUpdateResponse) -> RecordUpdateStatus {
@@ -487,6 +515,11 @@ async fn a_second_escrow_key_for_one_member_is_refused() {
 #[tokio::test]
 async fn a_wallet_reader_revocation_goes_out_graced_and_a_block_entry_immediate_alone() {
     let records = Records::new().await;
+    records.reads(
+        RuleTable::builder()
+            .rule(Rule::forbid(Subject::Sender, ListId::Block))
+            .build(),
+    );
     let blocked = ListId::Block.record_bit();
     let member = Hash([0x0c; 32]);
     let wallet = wallet();
@@ -833,7 +866,7 @@ async fn an_authority_write_queued_before_a_policy_rotation_is_refused_and_a_wal
         .await
         .expect("queued");
 
-    records.chain.config.lock().unwrap().roles.policy = Keypair::new().pubkey();
+    records.rotate_policy_authority(Keypair::new().pubkey());
     records
         .chain
         .slot
@@ -924,4 +957,71 @@ async fn an_invalid_mint_limits_update_is_refused_at_admission() {
         ..QueueEntry::default()
     });
     records.submit(longest()).await.expect("queued");
+}
+
+#[tokio::test]
+async fn an_unread_ring_account_holds_its_updates_until_a_later_pass() {
+    let records = Records::new().await;
+    let member = [0x0c; 32];
+    let queued = records
+        .submit(signed(
+            &authority(),
+            vec![list_write(member, ListId::Allow)],
+        ))
+        .await
+        .expect("queued");
+    let policy_pda = CustomRing::new(RING).policy_pda();
+    let policy = records
+        .chain
+        .accounts
+        .lock()
+        .unwrap()
+        .remove(&policy_pda)
+        .expect("policy");
+
+    records.writer.flush().await.expect("flush");
+
+    assert!(records.chain.sent.lock().unwrap().is_empty());
+    assert_eq!(records.status(&queued).await, RecordUpdateStatus::Queued);
+    records
+        .chain
+        .accounts
+        .lock()
+        .unwrap()
+        .insert(policy_pda, policy);
+    assert_eq!(records.flushed().await.members, [member]);
+}
+
+#[tokio::test]
+async fn an_update_signed_for_the_cli_window_outlives_the_longest_graced_wait() {
+    let records = Records::new().await;
+    let wallet = wallet();
+    let member = *Member::owner_tag(wallet.pubkey().as_array())
+        .expect("member")
+        .as_bytes();
+    records
+        .submit(signed_until(
+            &wallet,
+            vec![list_write(member, ListId::RingViewing)],
+            NOW + RECORD_UPDATE_SLOTS,
+        ))
+        .await
+        .expect("queued");
+    // The aged batch waits a full grace period for the oldest kept root.
+    let sendable = NOW + BATCH_WINDOW_SLOTS + GRACE_SLOTS;
+    {
+        let mut accounts = records.chain.accounts.lock().unwrap();
+        let account = accounts.get_mut(&REGISTRY).expect("registry");
+        let registry: &mut StorageRegistry = bytemuck::from_bytes_mut(&mut account.data);
+        registry.roots[ROOT_HISTORY - 1].expires_at = sendable.to_le_bytes();
+    }
+    records.chain.slot.store(sendable - 1, Ordering::Relaxed);
+    records.writer.flush().await.expect("flush");
+    assert!(records.chain.sent.lock().unwrap().is_empty());
+
+    records.chain.slot.store(sendable, Ordering::Relaxed);
+
+    let flushed = records.flushed().await;
+    assert_eq!(flushed.mode, tag::UPDATE);
+    assert_eq!(flushed.members, [member]);
 }

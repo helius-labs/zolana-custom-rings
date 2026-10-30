@@ -1,9 +1,8 @@
 //! Loaded ring context and transaction landing.
 
-use super::*;
+use zolana_ring_client::rpc::RECORD_UPDATE_SLOTS;
 
-/// Slots a signed record update stays acceptable to the writer.
-const RECORD_UPDATE_SLOTS: u64 = 150;
+use super::*;
 
 pub struct Context {
     pub config_path: PathBuf,
