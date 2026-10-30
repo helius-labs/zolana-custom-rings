@@ -1,3 +1,10 @@
+// Proves that the auditor can see the owner, token and total of a merge and
+// every merged note. The shielded pool's merge gives the auditor nothing, so
+// the ring adds its own proof.
+//
+// Read after shared/envelope.go, shared/disclosure.go, registry/opening.go.
+// Read before prover/ring/ring.go.
+
 package circuits
 
 import (

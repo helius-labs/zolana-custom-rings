@@ -1,3 +1,10 @@
+// Proves that a ciphertext is encrypted to the ring's auditor key, so the
+// auditor can always open what the proof binds. Each envelope needs a fresh
+// one-time key, a reused key repeats the keystream.
+//
+// Read after shared/disclosure.go, ringgadget/bytes.go, shared/derivation.go.
+// Read before audit/audit.go, deposit.go, merge.go.
+
 package shared
 
 import (

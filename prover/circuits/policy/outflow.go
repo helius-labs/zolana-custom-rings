@@ -1,3 +1,9 @@
+// Counts how much of each token a transfer sends away from the sender,
+// withdrawals included, and holds it within the token's cap. A transfer above
+// the co-sign limit is marked as needing co-signer approval.
+//
+// Read after policy/rules.go, policy/subjects.go. Read before policy/member.go.
+
 package policy
 
 import (

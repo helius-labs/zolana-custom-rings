@@ -1,3 +1,10 @@
+// Proves that a batch of queued record updates was applied to the registry.
+// Updates apply in queue order with none skipped or added, and the records stay
+// sorted by member, as proofs of a missing record need.
+//
+// Read after registry/registry.go, ringgadget/count.go, shared/width.go. Read
+// before policy/record_pool.go, prover/ring/ring.go.
+
 package registry
 
 import (

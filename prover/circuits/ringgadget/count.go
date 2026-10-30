@@ -1,3 +1,10 @@
+// Helpers for circuits with a fixed number of slots and a smaller real count.
+// The count must be in range, the used slots come first, and only the used
+// slots enter the hash the program rebuilds.
+//
+// Read first. Read before audit/layout.go, policy/table.go,
+// registry/apply_records.go.
+
 package ringgadget
 
 import (

@@ -1,3 +1,9 @@
+// Helpers that give every number exactly one encoding. Without them a prover
+// could show one value in two forms and pass an equality or ordering check it
+// should fail.
+//
+// Read first. Read before registry/opening.go, policy/record_pool.go.
+
 package ringgadget
 
 import (

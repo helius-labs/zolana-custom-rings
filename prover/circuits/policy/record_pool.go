@@ -1,3 +1,10 @@
+// Finds the registry record of every member and token a policy checks, or
+// proves that it has none. A member without a record is on no list and has no
+// limits.
+//
+// Read after registry/shared_path.go, registry/apply_records.go,
+// ringgadget/canonical.go. Read before policy/policy.go, policy/subjects.go.
+
 package policy
 
 import (

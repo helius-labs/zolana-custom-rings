@@ -1,3 +1,10 @@
+// Proves that a delegate transfer obeys the ring's rules. The delegate moves a
+// member's funds without the member's signature, so the proof checks that every
+// moved note belongs to that one member.
+//
+// Read after policy/policy.go, policy/transaction.go, policy/rules.go. Read
+// before prover/ring/ring.go.
+
 package policy
 
 import (

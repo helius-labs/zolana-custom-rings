@@ -1,3 +1,10 @@
+// Ties a policy proof to the shielded pool proof of the same transfer. Both
+// proofs rebuild the same transaction hash, so the policy checks the notes the
+// pool creates.
+//
+// Read after shared/utxo.go, policy/policy.go. Read before
+// policy/withdrawals.go, policy/rules.go, policy/delegate.go.
+
 package policy
 
 import (

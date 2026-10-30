@@ -1,3 +1,10 @@
+// Holds the hashes that ring proofs, the programs and the SDKs must compute the
+// same way. Each kind of hash starts with its own tag, so a value made for one
+// purpose cannot pass as another.
+//
+// Read first. Read before shared/disclosure.go, shared/envelope.go,
+// audit/audit.go.
+
 // Package shared holds the ring derivations, the auditor envelope and the SPP openings two or more ring circuits share.
 package shared
 

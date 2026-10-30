@@ -1,3 +1,10 @@
+// Reads the ring's policy table inside a proof. The table must be the one the
+// program checked and hashed at its last policy update, and each row decodes in
+// only one way.
+//
+// Read after ringgadget/count.go, shared/derivation.go. Read before
+// policy/policy.go, policy/subjects.go, policy/rules.go.
+
 package policy
 
 import (

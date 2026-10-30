@@ -1,3 +1,9 @@
+// Proves that a member's own transfer obeys the ring's rules on who may send,
+// who may receive and how much the sender may pay out.
+//
+// Read after policy/policy.go, policy/withdrawals.go, policy/outflow.go. Read
+// before prover/ring/ring.go.
+
 package policy
 
 import (

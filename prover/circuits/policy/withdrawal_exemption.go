@@ -1,3 +1,9 @@
+// Proves that each withdrawn token stays within its withdrawal limit in the
+// registry, so the program can skip the co-signer for those withdrawals. A
+// token with no record has a zero limit.
+//
+// Read after registry/opening.go. Read before prover/ring/ring.go.
+
 package policy
 
 import (

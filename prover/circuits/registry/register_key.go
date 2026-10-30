@@ -1,3 +1,9 @@
+// Proves that the auditor can recover the secret behind the nullifier key a
+// member registers for escrow. Ring RPC checks the proof off chain before it
+// writes the key, the chain does not check it.
+//
+// Read after shared/envelope.go. Read before prover/ring/ring.go.
+
 package registry
 
 import (

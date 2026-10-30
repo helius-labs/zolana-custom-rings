@@ -1,3 +1,10 @@
+// Holds the public statement that the member and delegate policy proofs share
+// with the program. Every value a rule reads ties back to the statement, so the
+// proof checks the transfer the program settles.
+//
+// Read after policy/table.go, policy/record_pool.go. Read before
+// policy/transaction.go, policy/member.go, policy/delegate.go.
+
 // Package policy proves a custom ring's policy over a transaction SPP proves.
 package policy
 

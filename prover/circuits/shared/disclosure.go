@@ -1,3 +1,9 @@
+// Packs and masks the fields a disclosure shows the auditor. A salt used twice
+// under one key repeats the mask, so every disclosure needs a fresh salt.
+//
+// Read after ringgadget/bytes.go, shared/derivation.go. Read before
+// shared/envelope.go, audit/layout.go, merge.go.
+
 package shared
 
 import (

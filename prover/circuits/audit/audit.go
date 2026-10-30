@@ -1,3 +1,10 @@
+// Holds what every auditor proof shares. The auditor receives one secret per
+// transfer and opens every note and disclosure of the transfer with it, and
+// each proof matches exactly one shielded pool transfer.
+//
+// Read after shared/envelope.go, shared/derivation.go, shared/utxo.go. Read
+// before audit/layout.go, audit/delivered.go, audit/anonymous.go.
+
 // Package audit proves what a ring auditor reads from a ring transfer.
 package audit
 

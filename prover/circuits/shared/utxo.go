@@ -1,3 +1,10 @@
+// Rebuilds each note's commitment exactly as the shielded pool does. Ring
+// proofs tie to the pool's transfer through these commitments, so any
+// difference breaks the link.
+//
+// Read first. Read before audit/audit.go, audit/anonymous.go,
+// policy/transaction.go.
+
 package shared
 
 import (

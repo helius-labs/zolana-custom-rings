@@ -1,3 +1,10 @@
+// Finds the lists and limits of the sender, every recipient and every token.
+// Lists can come from a curator's registry, but limits and escrow keys always
+// come from the ring's own registry.
+//
+// Read after policy/record_pool.go, policy/table.go. Read before
+// policy/rules.go, policy/outflow.go.
+
 package policy
 
 import (

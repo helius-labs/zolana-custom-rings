@@ -1,3 +1,10 @@
+// Reads the registry record of a member or token, or proves that it has none. A
+// missing record reads as empty, and a prover cannot call a record missing when
+// it exists.
+//
+// Read after registry/registry.go, ringgadget/canonical.go. Read before
+// policy/withdrawal_exemption.go, deposit.go, merge.go.
+
 package registry
 
 import (

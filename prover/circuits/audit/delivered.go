@@ -1,3 +1,10 @@
+// Proves that each recipient and the auditor can open the notes of a
+// confidential or delegate transfer. A false encrypted note would leave the
+// recipient with funds it cannot spend.
+//
+// Read after audit/audit.go, audit/layout.go, ringgadget/bytes.go. Read before
+// prover/ring/ring.go.
+
 package audit
 
 import (

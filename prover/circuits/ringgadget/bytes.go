@@ -1,3 +1,10 @@
+// Helpers that turn numbers into bytes for disclosures and hashes. A number too
+// large for its byte length fails the proof, so each amount has exactly one
+// byte form.
+//
+// Read first. Read before shared/disclosure.go, shared/envelope.go,
+// audit/delivered.go.
+
 // Package ringgadget holds the generic gadgets the ring circuits add to zolana's gadget package.
 package ringgadget
 

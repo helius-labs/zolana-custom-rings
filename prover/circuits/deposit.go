@@ -1,3 +1,9 @@
+// Proves that the auditor can open every deposited note and that the ring
+// accepts the deposited token.
+//
+// Read after shared/envelope.go, registry/opening.go, policy/deposit.go. Read
+// before prover/ring/ring.go.
+
 // Package circuits proves a ring deposit and an anonymous ring merge.
 package circuits
 

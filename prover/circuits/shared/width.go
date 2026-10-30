@@ -1,3 +1,8 @@
+// Checks that a circuit is built only at a size the ring ships keys for. A
+// circuit of any other size would have no verifier on chain.
+//
+// Read first. Read before registry/apply_records.go.
+
 package shared
 
 import (

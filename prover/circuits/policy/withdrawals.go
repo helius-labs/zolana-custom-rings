@@ -1,3 +1,8 @@
+// Brings public withdrawals under the ring's rules. The proof checks the same
+// list of withdrawals the program pays, so no withdrawal escapes the rules.
+//
+// Read after policy/transaction.go. Read before policy/member.go.
+
 package policy
 
 import (

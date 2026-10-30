@@ -1,3 +1,9 @@
+// Proves that the auditor can see who sent an anonymous transfer and what notes
+// they spent, while the chain sees neither.
+//
+// Read after audit/audit.go, audit/layout.go, shared/utxo.go. Read before
+// prover/ring/ring.go.
+
 package audit
 
 import (

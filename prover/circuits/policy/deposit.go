@@ -1,3 +1,8 @@
+// Applies the ring's token rules to a deposit. A deposit has no separate policy
+// proof, so the deposit proof runs these checks itself.
+//
+// Read after policy/rules.go, registry/opening.go. Read before deposit.go.
+
 package policy
 
 import (
