@@ -335,12 +335,16 @@ ring-rpc-derived:
     set -euo pipefail
     mkdir -p target/ring-localnet
     secret="target/ring-localnet/root.secret"
+    service_key="target/ring-localnet/service.key"
     if [ ! -f "$secret" ]; then
         cargo run -q -p zolana-ring-rpc -- keygen --out "$secret" --kind root
     fi
+    if [ ! -f "$service_key" ]; then
+        cargo run -q -p zolana-ring-rpc -- keygen --out "$service_key" --kind service
+    fi
     cargo run -q -p zolana-ring-rpc -- serve --port {{localnet-ring-rpc-port}} \
         --indexer-url {{localnet-ring-indexer-url}} --rpc-url {{localnet-rpc-url}} \
-        --root-secret-file "$secret"
+        --root-secret-file "$secret" --service-key-file "$service_key"
 
 # === Release and deploy ===
 
@@ -503,6 +507,12 @@ _test-ts-live test-script *args: build-ring-program _spp-programs build-photon b
     TOML
     # Derived mode, the suites deploy their own rings and take each auditor key from the service.
     "$ring_rpc" keygen --kind root --out "$ring_dir/root.secret"
+    "$ring_rpc" keygen --kind service --out "$ring_dir/service.key" >/dev/null
+    "$ring_rpc" keygen --kind grant-rows --out "$ring_dir/grant-rows.key" >/dev/null
+    # The record writer pays every records write from the storage authority.
+    storage_authority="$("$ring_rpc" keygen --kind storage-authority \
+      --out "$ring_dir/storage-authority.key" | sed -n 's/^storage authority *//p')"
+    solana airdrop 100 "$storage_authority" --url {{localnet-rpc-url}} >/dev/null
     relay_args=()
     if [[ -n "{{ts-live-relay}}" ]]; then
       fee_payer="$("$ring_rpc" keygen --kind fee-payer --out "$ring_dir/fee-payer.secret" \
@@ -524,7 +534,9 @@ _test-ts-live test-script *args: build-ring-program _spp-programs build-photon b
       fi
       nohup "$ring_rpc" serve --port "$port" \
         --indexer-url {{localnet-ring-indexer-url}} --rpc-url {{localnet-rpc-url}} \
-        --root-secret-file "$ring_dir/root.secret" \
+        --root-secret-file "$ring_dir/root.secret" --service-key-file "$ring_dir/service.key" \
+        --storage-authority-key-file "$ring_dir/storage-authority.key" \
+        --grant-rows-key-file "$ring_dir/grant-rows.key" \
         --allow-origin "$ring_origin" --webauthn-rp-id localhost \
         --store-url "sqlite://$PWD/$workdir/ring-rpc.sqlite?mode=rwc" \
         --prover-url {{localnet-prover-url}} --reader-grants "$reader_grants" \
@@ -545,10 +557,6 @@ _test-ts-live test-script *args: build-ring-program _spp-programs build-photon b
     }
     # `init` creates the ring's records through the record writer.
     serve_ring_rpc tree
-    # The service logs the storage authority it pays every records write from.
-    storage_authority="$(sed -n 's/.*storage authority \([1-9A-HJ-NP-Za-km-z]*\).*/\1/p' "$workdir/ring-rpc-tree.log")"
-    test -n "$storage_authority"
-    solana airdrop 100 "$storage_authority" --url {{localnet-rpc-url}} >/dev/null
     # This recipe started the service, its key needs no pin.
     "$ring_cli" --config "$ring_dir/ring.toml" \
       init --auditor-pubkey-file "auditor.key.pub" --trust-ring-rpc

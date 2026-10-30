@@ -11,7 +11,8 @@
 # <service>-<branch>-<sha12>, built and pushed here when the tag is absent.
 # The prover task fetches the SPP transfer proving keys at start. The ring RPC
 # runs in derived mode, one root secret serves every ring
-# that takes its auditor key from it at `init`. Both services sit behind one
+# that takes its auditor key from it at `init`, and a service key secret of its
+# own signs its attestations. Both services sit behind one
 # network load balancer and a CloudFront distribution each, so they are reached
 # over HTTPS on a stable amazon hostname.
 #
@@ -30,7 +31,7 @@
 set -euo pipefail
 
 usage() {
-    sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//' >&2
+    sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//' >&2
     exit 2
 }
 
@@ -52,6 +53,7 @@ cluster="$prefix"
 role="$prefix-exec"
 log_group="/$prefix"
 secret="$prefix/root-secret"
+service_secret="$prefix/service-key"
 security_group="$prefix-sg"
 load_balancer="$prefix"
 prover_port=3001
@@ -213,10 +215,11 @@ target_group_arn() {
 # The root secret is created once and never rotated by this script, a rotation
 # would change every derived auditor key.
 ensure_secret() {
-    if ! aws_ secretsmanager describe-secret --secret-id "$secret" >/dev/null 2>&1; then
-        aws_ secretsmanager create-secret --name "$secret" --secret-string "$(openssl rand -hex 32)" --tags "$tag_spec" >/dev/null
+    local name="$1"
+    if ! aws_ secretsmanager describe-secret --secret-id "$name" >/dev/null 2>&1; then
+        aws_ secretsmanager create-secret --name "$name" --secret-string "$(openssl rand -hex 32)" --tags "$tag_spec" >/dev/null
     fi
-    aws_ secretsmanager describe-secret --secret-id "$secret" --query ARN --output text
+    aws_ secretsmanager describe-secret --secret-id "$name" --query ARN --output text
 }
 
 register_prover() {
@@ -243,22 +246,23 @@ register_prover() {
 }
 
 register_ring_rpc() {
-    local image="$1" role_arn="$2" secret_arn="$3" indexer="$4" rpc="$5"
+    local image="$1" role_arn="$2" secret_arn="$3" service_arn="$4" indexer="$5" rpc="$6"
     aws_ ecs register-task-definition --family "$prefix-ring-rpc" --tags "$ecs_tag_spec" \
         --requires-compatibilities FARGATE --network-mode awsvpc --cpu 512 --memory 1024 \
         --execution-role-arn "$role_arn" --runtime-platform cpuArchitecture=X86_64,operatingSystemFamily=LINUX \
-        --container-definitions "$(jq -n --arg image "$image" --arg secret "$secret_arn" \
+        --container-definitions "$(jq -n --arg image "$image" --arg secret "$secret_arn" --arg service "$service_arn" \
             --arg indexer "$indexer" --arg rpc "$rpc" --arg origins "${RINGS_TEST_ORIGINS:-*}" \
             --arg rp "${RINGS_TEST_RP_ID:-}" --arg group "$log_group" --arg region "$region" --argjson port "$ring_rpc_port" '[
             {name: "ring-rpc", image: $image, essential: true,
              entryPoint: ["/bin/sh", "-c"],
-             command: ["umask 077 && printf %s \"$ROOT_SECRET\" > /var/lib/ring-rpc/root.key && exec ring-rpc serve"],
-             secrets: [{name: "ROOT_SECRET", valueFrom: $secret}],
+             command: ["umask 077 && printf %s \"$ROOT_SECRET\" > /var/lib/ring-rpc/root.key && printf %s \"$SERVICE_KEY\" > /var/lib/ring-rpc/service.key && exec ring-rpc serve"],
+             secrets: [{name: "ROOT_SECRET", valueFrom: $secret}, {name: "SERVICE_KEY", valueFrom: $service}],
              environment: ([
                {name: "RING_RPC_BIND", value: "0.0.0.0"}, {name: "RING_RPC_INSECURE_PUBLIC_BIND", value: "true"},
                {name: "RING_RPC_PORT", value: ($port|tostring)},
                {name: "RING_RPC_INDEXER_URL", value: $indexer}, {name: "RING_RPC_SOLANA_RPC_URL", value: $rpc},
                {name: "RING_RPC_ROOT_SECRET_FILE", value: "/var/lib/ring-rpc/root.key"},
+               {name: "RING_RPC_SERVICE_KEY_FILE", value: "/var/lib/ring-rpc/service.key"},
                {name: "RING_RPC_ALLOW_ORIGINS", value: $origins}]
                + (if $rp == "" then [] else [{name: "RING_RPC_WEBAUTHN_RP_ID", value: $rp}] end)),
              portMappings: [{containerPort: $port, protocol: "tcp"}],
@@ -311,7 +315,7 @@ up() {
 
     log "== network, load balancer, role, logs, cluster, secret"
     read -r vpc subnets <<< "$(vpc_and_subnets)"
-    local sg role_arn secret_arn
+    local sg role_arn secret_arn service_arn
     sg="$(ensure_security_group "$vpc")"
     local dns
     dns="$(ensure_load_balancer "$vpc" "$subnets")"
@@ -320,12 +324,13 @@ up() {
         || aws_ logs create-log-group --log-group-name "$log_group" --tags "$prefix=1"
     aws_ ecs describe-clusters --clusters "$cluster" --query "clusters[?status=='ACTIVE']" --output text | grep -q . \
         || aws_ ecs create-cluster --cluster-name "$cluster" --tags "$ecs_tag_spec" >/dev/null
-    secret_arn="$(ensure_secret)"
+    secret_arn="$(ensure_secret "$secret")"
+    service_arn="$(ensure_secret "$service_secret")"
 
     log "== services"
     local prover_td ring_rpc_td
     prover_td="$(register_prover "$registry/zolana-ring-prover:$prover_tag" "$role_arn")"
-    ring_rpc_td="$(register_ring_rpc "$registry/zolana-ring-rpc:$ring_rpc_tag" "$role_arn" "$secret_arn" "$indexer" "$rpc")"
+    ring_rpc_td="$(register_ring_rpc "$registry/zolana-ring-rpc:$ring_rpc_tag" "$role_arn" "$secret_arn" "$service_arn" "$indexer" "$rpc")"
     ensure_service "$prefix-prover" "$prover_td" "$subnets" "$sg" prover "$prover_port"
     ensure_service "$prefix-ring-rpc" "$ring_rpc_td" "$subnets" "$sg" ring-rpc "$ring_rpc_port"
     log "== https"
@@ -381,7 +386,9 @@ down() {
     sg="$(aws_ ec2 describe-security-groups --filters "Name=group-name,Values=$security_group" --query 'SecurityGroups[0].GroupId' --output text)"
     [[ "$sg" == None || -z "$sg" ]] || { sleep 20; aws_ ec2 delete-security-group --group-id "$sg"; }
     aws_ logs delete-log-group --log-group-name "$log_group" 2>/dev/null || true
-    aws_ secretsmanager delete-secret --secret-id "$secret" --force-delete-without-recovery >/dev/null 2>&1 || true
+    for name in "$secret" "$service_secret"; do
+        aws_ secretsmanager delete-secret --secret-id "$name" --force-delete-without-recovery >/dev/null 2>&1 || true
+    done
     if aws_ iam get-role --role-name "$role" >/dev/null 2>&1; then
         aws_ iam detach-role-policy --role-name "$role" --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
         aws_ iam delete-role-policy --role-name "$role" --policy-name secrets

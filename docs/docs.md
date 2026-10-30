@@ -426,16 +426,18 @@ ring-indexer --db-url 'sqlite://ring-indexer.db?mode=rwc' --rpc-url http://127.0
 - The indexer trusts its Solana RPC for blocks and accounts. Clients check every opening against a root they read from the chain.
 - It binds all interfaces without authentication. Put it behind the deployment's access control.
 
-Ring RPC holds the auditor key. It runs with one key for one ring, or derives one key per ring from a root secret.
+Ring RPC holds the auditor key. It runs with one key for one ring, or derives one key per ring from a root secret. The service key, the storage authority, the co-signer, the grant rows key and the fee payer each have their own key file.
 
 ```bash
 ring-rpc keygen --out keys/auditor.key
+ring-rpc keygen --kind service --out keys/service.key
 ring-rpc serve --port 8785 --indexer-url <ring indexer> --rpc-url <solana> \
-  --auditor-key-file keys/auditor.key --ring-program-id <id>
+  --auditor-key-file keys/auditor.key --service-key-file keys/service.key --ring-program-id <id>
 ```
 
 - `--indexer-url` must be the ring indexer. Ring RPC calls its record methods for key escrow and merge audits.
 - A key file holds exactly 64 lowercase hex characters, owner-only. `keygen` writes it that way.
+- `serve` refuses to start when two roles share one key, or when a feature it turns on has no key file.
 - The service binds loopback unless `--insecure-public-bind` is set. Passkey readers need `--allow-origin` and `--webauthn-rp-id`.
 - Nonces and rate windows live in memory. Run one process per key.
 
