@@ -19,8 +19,8 @@ use zolana_ring_client::{
         ReaderGrantAttestation, RingChainStatus, SetReaderGrantRequest, SkippedReason,
         SkippedTransaction, AUDIT_PAGE_LIMIT,
     },
-    AuditError, AuditedTransaction, CreatedUtxos, MergeAuditPage, ReaderKey, RingOrigin,
-    TransactionAudit,
+    AuditError, AuditedTransaction, CreatedUtxos, DepositNote, MergeAuditPage, ReaderKey,
+    RingOrigin, TransactionAudit,
 };
 use zolana_ring_indexer::rpc::{
     GetStorageMemberRecordsRequest, RingMemberOpening, MAX_RING_MEMBER_PAGE_LIMIT,
@@ -588,7 +588,16 @@ impl<S: TransactionSource> AuditService<S> {
                                 event_index,
                             };
                             store.record(created_in, created.utxos);
-                            store.hold(created_in, created.unowned);
+                            match mode {
+                                // Only an escrow ring's backfill names a held owner.
+                                RingMode::ConfidentialEscrow => {
+                                    store.hold(created_in, created.unowned)
+                                }
+                                RingMode::Confidential | RingMode::Anonymous => store.record(
+                                    created_in,
+                                    created.unowned.iter().map(DepositNote::deposited),
+                                ),
+                            }
                         }
                         Err(error) => log::warn!(
                             "ring {} event {}:{event_index} opened no UTXOs because {}",

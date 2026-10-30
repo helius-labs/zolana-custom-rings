@@ -77,9 +77,9 @@ escrow, and [member records](member-records.md) for key registration.
 ## Deposits
 
 Every ring deposit is an audited deposit. Each deposited output carries a
-capsule that encrypts its owner hash and blinding to the auditor, and on an
-anonymous ring also its owner key. The proof binds the exact SPP deposit, the
-destination tree and every capsule. The deposited mint and amount are public.
+capsule that encrypts its owner hash, blinding and owner key to the auditor.
+The proof binds the exact SPP deposit, the destination tree and every capsule.
+The deposited mint and amount are public.
 Under key escrow the proof also shows each deposited owner's escrow record.
 
 ## Merges

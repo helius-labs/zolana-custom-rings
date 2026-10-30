@@ -1121,7 +1121,7 @@ fn audited_deposit(
     let opening = DepositOpening {
         owner_hash: member.owner_hash(),
         blinding: zeroize::Zeroizing::new(blinding),
-        owner_key: Some(member.owner_key),
+        owner_key: member.owner_key,
     };
     let owner_utxo_hash =
         spr_transaction::owner_utxo_hash(&opening.owner_hash, &opening.blinding).unwrap();

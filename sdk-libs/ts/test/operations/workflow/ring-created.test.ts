@@ -67,17 +67,17 @@ function deposits(auditor: X25519Keypair) {
   const anonymous = ShieldedKeypair.generate();
   const confidential = ShieldedKeypair.generate();
   const blinding = field(5n);
-  const ownerKey = anonymous.signingPublicKey().ed25519();
+  const ownerKeys = [
+    anonymous.signingPublicKey().ed25519(),
+    confidential.signingPublicKey().confidentialViewTag(),
+  ];
   const sealed = sealRingDepositOpenings(
-    [
-      {
-        ownerHash: anonymous.ownerHash(),
-        blinding,
-        ownerKey,
-        recipientCiphertext: Uint8Array.of(1),
-      },
-      { ownerHash: confidential.ownerHash(), blinding, recipientCiphertext: Uint8Array.of(2) },
-    ],
+    [anonymous, confidential].map((keypair, index) => ({
+      ownerHash: keypair.ownerHash(),
+      blinding,
+      ownerKey: ownerKeys[index]!,
+      recipientCiphertext: Uint8Array.of(index + 1),
+    })),
     auditor.publicKey(),
   );
   const owners = [anonymous, confidential].map((keypair) =>
@@ -112,22 +112,26 @@ function deposits(auditor: X25519Keypair) {
         capsule,
       }),
     })),
-    utxo: {
-      ownerKey,
-      owner: { kind: "deposited", ownerHash: anonymous.ownerHash() },
-      asset: SOL_ASSET,
-      mint: SOL_MINT,
-      amount: 1n,
-      blinding,
-      dataHash: ZERO,
-      ringDataHash: ZERO,
-      treeId: TREE_ID,
-    },
+    created: [anonymous, confidential].map((keypair, index) => ({
+      commitment: commitments[index],
+      slotIndex: index,
+      utxo: {
+        ownerKey: ownerKeys[index],
+        owner: { kind: "deposited", ownerHash: keypair.ownerHash() },
+        asset: SOL_ASSET,
+        mint: SOL_MINT,
+        amount: 1n,
+        blinding,
+        dataHash: ZERO,
+        ringDataHash: ZERO,
+        treeId: TREE_ID,
+      },
+    })),
   };
 }
 
 describe("createdRingUtxos", () => {
-  it("opens the anonymous deposit's UTXO by its owner hash and passes over a confidential one", () => {
+  it("opens every deposit's UTXO by its owner hash and disclosed owner key", () => {
     const auditor = X25519Keypair.generate();
     const deposit = deposits(auditor);
     try {
@@ -141,9 +145,7 @@ describe("createdRingUtxos", () => {
           ringProgramId: RING,
           auditor,
         });
-      expect(created(deposit.outputSlots)).toEqual([
-        { commitment: deposit.commitments[0], slotIndex: 0, utxo: deposit.utxo },
-      ]);
+      expect(created(deposit.outputSlots)).toEqual(deposit.created);
       const moved = deposit.outputSlots.map((slot, index) =>
         index === 0 ? { ...slot, outputContext: outputContext(deposit.commitments[1]!, 0n) } : slot,
       );
@@ -190,7 +192,7 @@ describe("createdRingUtxos", () => {
         scannedThrough: Uint8Array.of(1),
       });
       expect(scanned).toEqual({
-        utxos: [{ commitment: deposit.commitments[0], slotIndex: 0, utxo: deposit.utxo }],
+        utxos: deposit.created,
       });
       const foreign = await scan({
         transactions: [{ ...indexed, ringProgramId: address("11111111111111111111111111111111") }],

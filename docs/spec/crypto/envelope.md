@@ -56,7 +56,7 @@ The cipher carries no authentication tag. Integrity comes from `hash_bytes(ciphe
 | Deposit | `CRING/dep1` | per note `fe32(owner_hash) \|\| fe32(blinding) \|\| owner_key`, 96 bytes, one stream for the batch | `hash_bytes` of each 96-byte slot |
 | Merge | `CRING/mrg1` | the 32-byte disclosure key of [Merge disclosure](disclosure.md#merge-disclosure) | `hash_bytes(ciphertext)` |
 
-The deposit owner key is the Ed25519 key on an anonymous ring and 32 zero bytes otherwise.
+The deposit owner key is the key whose `solana_owner_identity` is the note's `owner_pk_hash`.
 
 ## Deposit capsule
 

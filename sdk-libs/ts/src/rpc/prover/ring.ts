@@ -221,8 +221,7 @@ export interface DepositProofRequest {
   readonly count: number;
   readonly anonymous: boolean;
   readonly ownerPkHashes: readonly Bytes32[];
-  /** Absent keys assign zeros, only an anonymous deposit names them. */
-  readonly ownerKeys?: readonly Bytes32[];
+  readonly ownerKeys: readonly Bytes32[];
   readonly nullifierPks: readonly Bytes32[];
   readonly blindingSecrets: readonly Bytes32[];
   readonly ctHashes: readonly Bytes32[];
@@ -434,13 +433,9 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
           depositCapacity(request.count),
           "ownerPkHashes",
         ),
-        ...(request.ownerKeys === undefined
-          ? {}
-          : {
-              ownerKeys: sized(request.ownerKeys, depositCapacity(request.count), "ownerKeys").map(
-                (key, i) => hexBytes(key, 32, `ownerKeys[${i}]`),
-              ),
-            }),
+        ownerKeys: sized(request.ownerKeys, depositCapacity(request.count), "ownerKeys").map(
+          (key, i) => hexBytes(key, 32, `ownerKeys[${i}]`),
+        ),
         nullifierPks: fields(request.nullifierPks, depositCapacity(request.count), "nullifierPks"),
         blindingSecrets: fields(
           request.blindingSecrets,

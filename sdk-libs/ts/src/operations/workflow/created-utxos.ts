@@ -76,7 +76,7 @@ export async function scanCreatedRingUtxos(
   });
 }
 
-/** Rust `CreatedUtxos::open`, none for a transfer and for a confidential ring's deposit or merge. */
+/** Rust `CreatedUtxos::open`, none for a transfer. */
 export function createdRingUtxos(
   input: Readonly<{
     confirmed: ConfirmedRingTransaction;
@@ -129,14 +129,15 @@ function depositUtxos(
       throw new RingError("RING_AUDIT_MESSAGE", { details: { reason: "deposit opening" } });
     const opening = openRingDepositOpening(capsule, input.auditor, output.ownerUtxoHash, binding);
     try {
-      const created = createdDepositUtxo({
-        ringProgramId: input.ringProgramId,
-        slotIndex,
-        slot,
-        output,
-        opening,
-      });
-      if (created !== undefined) utxos.push(created);
+      utxos.push(
+        createdDepositUtxo({
+          ringProgramId: input.ringProgramId,
+          slotIndex,
+          slot,
+          output,
+          opening,
+        }),
+      );
     } finally {
       opening.ownerHash.fill(0);
       opening.blinding.fill(0);
@@ -145,7 +146,7 @@ function depositUtxos(
   return Object.freeze(utxos);
 }
 
-/** @internal The UTXO an opened deposit slot creates, `undefined` unless its capsule names the owner key. */
+/** @internal */
 export function createdDepositUtxo(
   input: Readonly<{
     ringProgramId: Address;
@@ -154,10 +155,8 @@ export function createdDepositUtxo(
     output: RingDepositOutput;
     opening: Omit<RingDepositOpening, "recipientCiphertext">;
   }>,
-): CreatedRingUtxo | undefined {
+): CreatedRingUtxo {
   const { output, opening, slot } = input;
-  // Only an anonymous ring's capsule names the owner key.
-  if (opening.ownerKey === undefined) return undefined;
   const utxo: KnownUtxo = Object.freeze({
     ownerKey: opening.ownerKey,
     owner: Object.freeze({ kind: "deposited", ownerHash: opening.ownerHash.slice() as Bytes32 }),
