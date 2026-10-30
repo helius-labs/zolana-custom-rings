@@ -1,7 +1,7 @@
 use std::{collections::HashSet, num::NonZeroU32, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use custom_ring_interface::{cosign::CoSignDemand, RingMode};
+use custom_ring_interface::RingMode;
 use custom_ring_sdk::{select_merge_where, RingError, MAX_RING_MERGE_INPUTS};
 use solana_address::Address;
 use solana_message::VersionedMessage;
@@ -161,14 +161,10 @@ impl<S: TransactionSource> ManagedMerge<S> {
     ) -> Result<Vec<RelayId>, RingRpcError> {
         let service = self.hub.service(Some(ring))?;
         let shared = self.hub.shared();
-        let escrowed = shared
-            .source
-            .ring_config(ring)
+        let escrowed = service
+            .served_config()
             .await?
-            .is_some_and(|config| {
-                config.mode == RingMode::ConfidentialEscrow
-                    && config.auditor_pubkey == service.auditor_pubkey()
-            });
+            .is_some_and(|config| config.mode == RingMode::ConfidentialEscrow);
         if !escrowed {
             return Ok(Vec::new());
         }
@@ -264,7 +260,6 @@ impl<S: TransactionSource> ManagedMerge<S> {
                     message: built.message.clone(),
                     sender: Member::owner_tag(&owner_key)
                         .map_err(|error| RingRpcError::MergeBuild(RingError::from(error).into()))?,
-                    demand: CoSignDemand::transact(false, &[]),
                     flows: Vec::new(),
                 })
                 .await?;
@@ -374,7 +369,7 @@ pub(crate) mod tests {
     use crate::{
         database::Store,
         hub::ServiceIdentity,
-        relay::{RelayParts, ServedRings},
+        relay::RelayParts,
         relay_chain::{ChainOutcome, RelayChain},
         relay_prover::{DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver},
         relay_submit::{RelaySubmit, RelayTransaction},
@@ -629,7 +624,6 @@ pub(crate) mod tests {
                 prover: Arc::new(UnusedProver),
                 submit: relay.clone(),
                 chain: chain.clone(),
-                rings: ServedRings::One(RING),
             };
             Self {
                 relay,

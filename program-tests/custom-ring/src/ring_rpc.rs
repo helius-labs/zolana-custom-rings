@@ -27,8 +27,8 @@ use zolana_ring_client::rpc::{
 };
 use zolana_ring_rpc::{
     run_server, BindPolicy, ChainSource, ClientLimits, Hub, LiveStorageChain, ManagedMerge,
-    RelayServices, RelayServicesInit, ServedRings, ServerOptions, ServiceIdentity, Store,
-    TransactionSource, Upstreams, STORE_CONNECTIONS,
+    RelayServices, RelayServicesInit, ServerOptions, ServiceIdentity, Store, TransactionSource,
+    Upstreams, STORE_CONNECTIONS,
 };
 
 use crate::shared::{prover_url, TestEnv, ACTOR_AIRDROP};
@@ -92,7 +92,6 @@ impl RingRpcSpec<'_> {
             rpc_url: &self.env.rpc_url,
             indexer_url: &self.env.indexer_url,
             prover_url: &prover_url(),
-            rings: ServedRings::One(self.ring),
         }
         .build();
         let ring = self.ring;

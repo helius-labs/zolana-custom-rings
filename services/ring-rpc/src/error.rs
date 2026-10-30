@@ -46,6 +46,8 @@ pub enum RingRpcError {
     StateUnavailable,
     #[error("audit service is busy")]
     Busy,
+    #[error("relay prover is busy")]
+    RelayProverBusy,
     #[error("service store failed because {0}")]
     Store(#[from] sea_orm::DbErr),
     #[error(transparent)]
@@ -168,7 +170,14 @@ impl From<RingRpcError> for ErrorObjectOwned {
             Grant(refusal) => {
                 return ErrorObjectOwned::owned(refusal.code(), refusal.to_string(), None::<()>);
             }
-            Busy => (ErrorCode::ServerIsBusy, "audit service is busy"),
+            Busy | RelayProverBusy => {
+                let message = failure.to_string();
+                return ErrorObjectOwned::owned(
+                    ErrorCode::ServerIsBusy.code(),
+                    message,
+                    None::<()>,
+                );
+            }
             Upstream(inner) => {
                 error!("upstream request failed {}", redacted(inner));
                 (ErrorCode::InternalError, "upstream request failed")

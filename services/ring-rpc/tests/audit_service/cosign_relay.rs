@@ -1,21 +1,22 @@
-//! The relay co-signs within its asset's sender window cap and refuses an outflow beyond it or a proof naming another co-signer.
+//! The relay co-signs within its asset's window caps and refuses an outflow beyond them, a proof naming another co-signer, or a ring whose auditor key it does not hold.
 
 use jsonrpsee::RpcModule;
 use spr_keypair::{ShieldedKeypair, SigningKey};
 use zolana_ring_client::rpc::{
-    GetRelayQuoteRequest, RelayProofInputs, RelayQuote, RelayRail, RelayStep, GET_RELAY_QUOTE,
-    PREPARE_RELAY,
+    GetRelayQuoteRequest, RelayProofInputs, RelayQuote, RelayRail, RelayStatus, RelayStep,
+    SubmitRelayRequest, GET_RELAY_QUOTE, PREPARE_RELAY, SUBMIT_RELAY,
 };
 use zolana_ring_policy::{AssetLimits, MintPolicy};
-use zolana_ring_rpc::{FeePayerSubmit, RelayError, RelayParts, ServedRings};
+use zolana_ring_rpc::{FeePayerSubmit, RelayError, RelayParts};
 
 use super::relay_fixture::{
-    anonymous_rail, owner, proof_inputs, signed_request, signers_verify, RecordingChain,
-    RecordingProver,
+    anonymous_rail, deposit_request, owner, proof_inputs, signed_request, signers_verify,
+    RecordingChain, RecordingProver,
 };
 use super::*;
 
 const SENDER_CAP: u64 = 1_000;
+const DEPOSIT_CAP: u64 = 1_000;
 
 struct CappedRelay {
     module: RpcModule<Arc<Hub<StaticSource>>>,
@@ -27,21 +28,17 @@ struct CappedRelay {
 
 impl CappedRelay {
     async fn new(rail: fn() -> RelayRail) -> Self {
-        Self::naming(rail, None).await
+        Self::naming(rail, None, sender_capped()).await
     }
 
     /// `named` replaces the hub's co-signer in the proof.
-    async fn naming(rail: fn() -> RelayRail, named: Option<Address>) -> Self {
+    async fn naming(rail: fn() -> RelayRail, named: Option<Address>, limits: AssetLimits) -> Self {
         let fixture = Fixture::new();
         let source = fixture.source();
         source.records.write_mint_policy(
             Member::asset(&SOL_MINT).expect("asset member"),
             MintPolicy {
-                limits: AssetLimits {
-                    sender_cap: SENDER_CAP,
-                    sender_window_slots: 100,
-                    ..AssetLimits::EMPTY
-                },
+                limits,
                 ..MintPolicy::EMPTY
             },
         );
@@ -63,7 +60,6 @@ impl CappedRelay {
                     chain.clone(),
                 )),
                 chain: chain.clone(),
-                rings: ServedRings::One(RING),
             })
             .local(RING, fixture.auditor.clone())
             .expect("hub");
@@ -108,6 +104,39 @@ impl CappedRelay {
         assert!(signers_verify(&sent));
         assert_eq!(refusal(beyond), RelayError::CoSignRefused.code());
     }
+
+    /// Prepares and signs, the caller submits.
+    async fn deposit(&self, depositor: &Keypair, amount: u64) -> SubmitRelayRequest {
+        let step: RelayStep = self
+            .module
+            .call(
+                PREPARE_RELAY,
+                as_object(deposit_request(
+                    self.quote.clone(),
+                    RING,
+                    depositor.pubkey(),
+                    amount,
+                )),
+            )
+            .await
+            .expect("prepared deposit");
+        let RelayStep::SignMessage { relay_id, message } = step else {
+            panic!("the depositor signs its funding, got {step:?}");
+        };
+        SubmitRelayRequest {
+            relay_id,
+            signer: depositor.pubkey().into(),
+            signature: depositor.sign_message(&message.0).into(),
+        }
+    }
+}
+
+fn sender_capped() -> AssetLimits {
+    AssetLimits {
+        sender_cap: SENDER_CAP,
+        sender_window_slots: 100,
+        ..AssetLimits::EMPTY
+    }
 }
 
 #[tokio::test]
@@ -134,8 +163,12 @@ async fn a_relayed_exit_to_the_sender_over_the_sender_window_cap_is_refused() {
 
 #[tokio::test]
 async fn a_proof_naming_another_co_signer_is_refused_unsent() {
-    let relay =
-        CappedRelay::naming(anonymous_rail, Some(Address::new_from_array([0x99; 32]))).await;
+    let relay = CappedRelay::naming(
+        anonymous_rail,
+        Some(Address::new_from_array([0x99; 32])),
+        sender_capped(),
+    )
+    .await;
 
     let refused = relay
         .module
@@ -150,4 +183,87 @@ async fn a_proof_naming_another_co_signer_is_refused_unsent() {
 
     assert_eq!(refusal(refused), RelayError::CoSignRefused.code());
     assert!(relay.chain.sent().is_empty());
+}
+
+#[tokio::test]
+async fn an_unsigned_relay_holds_no_allowance_and_the_signed_one_past_the_cap_is_refused() {
+    let relay = CappedRelay::naming(
+        anonymous_rail,
+        None,
+        AssetLimits {
+            deposit_cap: DEPOSIT_CAP,
+            deposit_window_slots: 100,
+            ..AssetLimits::EMPTY
+        },
+    )
+    .await;
+    let (first, second) = (
+        Keypair::new_from_array([51; 32]),
+        Keypair::new_from_array([52; 32]),
+    );
+
+    let first_signed = relay.deposit(&first, 700).await;
+    let second_signed = relay.deposit(&second, 700).await;
+
+    assert!(relay.chain.sent().is_empty());
+    let landed: RelayStatus = relay
+        .module
+        .call(SUBMIT_RELAY, as_object(first_signed))
+        .await
+        .expect("the first signed deposit fits the cap");
+    assert!(matches!(landed, RelayStatus::Sent { .. }), "{landed:?}");
+    let beyond = relay
+        .module
+        .call::<_, RelayStatus>(SUBMIT_RELAY, as_object(second_signed))
+        .await;
+    assert_eq!(refusal(beyond), RelayError::CoSignRefused.code());
+    let [sent] = relay.chain.sent().try_into().expect("one sent transaction");
+    assert_eq!(sent.message.static_account_keys()[1], first.pubkey());
+    assert!(signers_verify(&sent));
+}
+
+#[tokio::test]
+async fn a_derived_relay_refuses_a_ring_whose_auditor_key_it_does_not_hold() {
+    let fixture = Fixture::new();
+    let prover = Arc::new(RecordingProver::default());
+    let chain = Arc::new(RecordingChain::default());
+    let store = Store::open("sqlite::memory:", 1).await.expect("store");
+    let hub = Hub::builder(fixture.source(), identity(GENESIS))
+        .with_origins(origins())
+        .with_store(store.clone())
+        .with_relay(RelayParts {
+            store,
+            prover: prover.clone(),
+            submit: Arc::new(FeePayerSubmit::new(
+                Keypair::new_from_array([31; 32]),
+                chain.clone(),
+            )),
+            chain: chain.clone(),
+        })
+        .derived(RootSecret::from_bytes([7; 32]).expect("root"))
+        .expect("hub");
+    let module = rpc_module(Arc::new(hub)).expect("module");
+    let quote_request = as_object(GetRelayQuoteRequest {
+        ring: RING.into(),
+        operation: anonymous_rail().operation(),
+    });
+    let quote = RelayQuote {
+        fee_payer: Keypair::new_from_array([31; 32]).pubkey().into(),
+        valid_until_slot: super::relay_fixture::SLOT,
+    };
+
+    let quoted = module
+        .call::<_, RelayQuote>(GET_RELAY_QUOTE, quote_request)
+        .await;
+    let prepared = module
+        .call::<_, RelayStep>(
+            PREPARE_RELAY,
+            as_object(signed_request(quote, &proof_inputs(RING, anonymous_rail()))),
+        )
+        .await;
+
+    assert_eq!(refusal(quoted), RelayError::RingNotServed.code());
+    assert_eq!(refusal(prepared), RelayError::RingNotServed.code());
+    assert!(prover.requests.lock().expect("requests").is_empty());
+    assert!(chain.sent().is_empty());
 }

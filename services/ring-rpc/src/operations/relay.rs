@@ -1,5 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
+use async_trait::async_trait;
 use custom_ring_sdk::{RingError, SenderOutflow};
 use jsonrpsee::types::ErrorObjectOwned;
 use log::warn;
@@ -32,7 +33,7 @@ use crate::{
     relay_chain::{ChainOutcome, RelayChain},
     relay_prover::{DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver},
     relay_submit::{CollectedSignature, RelaySubmit, RelayTransaction},
-    relays::{RelayRecord, RelayState, RelayStore},
+    relays::{PendingCoSign, RelayRecord, RelayState, RelayStore},
     storage_chain::LatestBlockhash,
 };
 
@@ -85,10 +86,13 @@ pub enum RelayPayload {
     Merge(RelayMergeInputs),
 }
 
-pub enum ServedRings {
-    One(Address),
-    Any,
+/// Admits a ring only while its config names an auditor key the service holds.
+#[async_trait]
+pub trait ServedRings: Send + Sync {
+    async fn check(&self, ring: Address) -> Result<(), RingRpcError>;
 }
+
+struct NoRings;
 
 #[must_use]
 pub struct RelayParts {
@@ -96,7 +100,6 @@ pub struct RelayParts {
     pub prover: Arc<dyn RelayProver>,
     pub submit: Arc<dyn RelaySubmit>,
     pub chain: Arc<dyn RelayChain>,
-    pub rings: ServedRings,
 }
 
 /// One stored record per `relayId`.
@@ -105,7 +108,7 @@ pub struct Relay {
     prover: Arc<dyn RelayProver>,
     submit: Arc<dyn RelaySubmit>,
     chain: Arc<dyn RelayChain>,
-    rings: ServedRings,
+    rings: Arc<dyn ServedRings>,
     co_signer: Arc<dyn CoSignPolicy>,
     proofs: Semaphore,
     /// Every record write after the proofs, one relay state at a time.
@@ -173,12 +176,10 @@ impl From<&RelayError> for ErrorObjectOwned {
     }
 }
 
-impl ServedRings {
-    fn check(&self, ring: Address) -> Result<(), RelayError> {
-        match self {
-            Self::One(served) if *served != ring => Err(RelayError::RingNotServed),
-            Self::One(_) | Self::Any => Ok(()),
-        }
+#[async_trait]
+impl ServedRings for NoRings {
+    async fn check(&self, _ring: Address) -> Result<(), RingRpcError> {
+        Err(RelayError::RingNotServed.into())
     }
 }
 
@@ -189,7 +190,7 @@ impl Relay {
             prover: parts.prover,
             submit: parts.submit,
             chain: parts.chain,
-            rings: parts.rings,
+            rings: Arc::new(NoRings),
             co_signer: Arc::new(RefusingCoSigner),
             proofs: Semaphore::new(MAX_CONCURRENT_PROOFS),
             transitions: Mutex::new(()),
@@ -199,6 +200,13 @@ impl Relay {
     #[must_use = "use the updated relay"]
     pub fn with_co_signer(mut self, co_signer: Arc<dyn CoSignPolicy>) -> Self {
         self.co_signer = co_signer;
+        self
+    }
+
+    /// Without it the relay refuses every ring.
+    #[must_use = "use the updated relay"]
+    pub fn with_rings(mut self, rings: Arc<dyn ServedRings>) -> Self {
+        self.rings = rings;
         self
     }
 
@@ -214,7 +222,7 @@ impl Relay {
     }
 
     pub async fn quote(&self, request: &GetRelayQuoteRequest) -> Result<RelayQuote, RingRpcError> {
-        self.rings.check(request.ring.0)?;
+        self.rings.check(request.ring.0).await?;
         Ok(RelayQuote {
             fee_payer: self.fee_payer().into(),
             valid_until_slot: self.chain.slot().await? + QUOTE_SLOTS,
@@ -230,7 +238,7 @@ impl Relay {
             return Ok(step);
         }
         let ring = request.ring.0;
-        self.rings.check(ring)?;
+        self.rings.check(ring).await?;
         let payload = RelayPayload::decode(&request.intent).map_err(RelayError::from)?;
         let parties = self.parties();
         let Checked {
@@ -244,7 +252,10 @@ impl Relay {
         }
         .check()?;
         let proven = {
-            let _proof = self.proofs.try_acquire().map_err(|_| RingRpcError::Busy)?;
+            let _proof = self
+                .proofs
+                .try_acquire()
+                .map_err(|_| RingRpcError::RelayProverBusy)?;
             self.prover
                 .prove(RelayProofRequest {
                     ring,
@@ -281,10 +292,13 @@ impl Relay {
         seal: DelegateSeal<'_>,
     ) -> Result<RelayStep, RingRpcError> {
         let ring = seal.ring;
-        self.rings.check(ring)?;
+        self.rings.check(ring).await?;
         let parties = self.parties();
         let (payload, proven) = {
-            let _proof = self.proofs.try_acquire().map_err(|_| RingRpcError::Busy)?;
+            let _proof = self
+                .proofs
+                .try_acquire()
+                .map_err(|_| RingRpcError::RelayProverBusy)?;
             let payload = RelayPayload::Transfer(self.prover.seal_delegate(seal, parties).await?);
             let proven = self
                 .prover
@@ -321,26 +335,25 @@ impl Relay {
         } = self.chain.latest_blockhash().await?;
         setup.push(proven.instruction.clone());
         let message = compile_message(&fee_payer, &setup, blockhash, proven.budget)?;
-        let co_signed = CoSignStep {
-            message: &message,
+        let awaited = CoSignStep {
             payload: &payload,
             proven,
         }
-        .decide(self.co_signer.as_ref())
-        .await?;
+        .plan(self.co_signer.as_ref())?;
         // The decoded secrets zeroize before the store and send awaits.
         drop(payload);
         let mut record = RelayRecord {
             message,
-            signatures: co_signed.signature.into_iter().collect(),
-            co_signature: co_signed.signature.map(|collected| collected.signature),
-            state: match co_signed.signers.is_empty() {
-                true => RelayState::Signed,
-                false => RelayState::AwaitingSignature,
-            },
-            awaiting: co_signed.signers,
+            signatures: Vec::new(),
+            co_signature: None,
+            state: RelayState::AwaitingSignature,
+            awaiting: awaited.signers,
+            co_sign: awaited.co_sign,
             last_valid_block_height,
         };
+        if record.awaiting.is_empty() {
+            self.co_sign(&mut record).await?;
+        }
         let _transition = self.transitions.lock().await;
         let inserted = self.relays().insert(&relay_id, &record).await;
         if !matches!(inserted, Ok(true)) {
@@ -374,6 +387,7 @@ impl Relay {
             message: merge.message,
             signatures: merge.co_signature.into_iter().collect(),
             awaiting: Vec::new(),
+            co_sign: None,
             co_signature: merge.co_signature.map(|collected| collected.signature),
             last_valid_block_height: merge.last_valid_block_height,
             state: RelayState::Signed,
@@ -446,7 +460,7 @@ impl Relay {
                 .signatures
                 .push(CollectedSignature { signer, signature });
             if record.awaiting.is_empty() {
-                record.state = RelayState::Signed;
+                self.co_sign(&mut record).await?;
             }
             self.relays().update(&request.relay_id, &record).await?;
         }
@@ -485,6 +499,32 @@ impl Relay {
                 warn!("relay {} did not advance {}", relay_id.0, redacted(&error));
             }
         }
+        Ok(())
+    }
+
+    /// Runs once every other signer signed, a refusal stores nothing.
+    async fn co_sign(&self, record: &mut RelayRecord) -> Result<(), RingRpcError> {
+        if let Some(pending) = record.co_sign.take() {
+            let request = CoSignRequest {
+                ring: pending.ring,
+                message: record.message.clone(),
+                sender: pending.sender,
+                flows: pending.flows,
+            };
+            match self.co_signer.decide(&request).await? {
+                CoSignDecision::Signed(signature) => {
+                    record.signatures.push(CollectedSignature {
+                        signer: pending.signer,
+                        signature,
+                    });
+                    record.co_signature = Some(signature);
+                }
+                CoSignDecision::Refused(CoSignRefusal::Disabled | CoSignRefusal::OverLimit) => {
+                    return Err(RelayError::CoSignRefused.into())
+                }
+            }
+        }
+        record.state = RelayState::Signed;
         Ok(())
     }
 
@@ -593,26 +633,21 @@ struct ProvenStep {
 }
 
 struct CoSignStep<'a> {
-    message: &'a VersionedMessage,
     payload: &'a RelayPayload,
     proven: ProvenRelay,
 }
 
-struct CoSigned {
-    signature: Option<CollectedSignature>,
+struct Awaited {
+    co_sign: Option<PendingCoSign>,
     signers: Vec<Address>,
 }
 
 impl CoSignStep<'_> {
-    async fn decide(self, co_signer: &dyn CoSignPolicy) -> Result<CoSigned, RingRpcError> {
-        let Self {
-            message,
-            payload,
-            proven,
-        } = self;
+    fn plan(self, co_signer: &dyn CoSignPolicy) -> Result<Awaited, RingRpcError> {
+        let Self { payload, proven } = self;
         let Some(named) = proven.co_signer else {
-            return Ok(CoSigned {
-                signature: None,
+            return Ok(Awaited {
+                co_sign: None,
                 signers: proven.signers,
             });
         };
@@ -620,22 +655,15 @@ impl CoSignStep<'_> {
             .signer_named(named)
             .ok_or(RelayError::CoSignRefused)?;
         let sender = payload.sender()?;
-        let request = CoSignRequest {
-            ring: payload.ring_program_id(),
-            message: message.clone(),
-            sender,
-            demand: proven.co_sign_demand,
-            flows: payload.flows(sender)?,
-        };
-        match co_signer.decide(&request).await? {
-            CoSignDecision::Signed(signature) => Ok(CoSigned {
-                signature: Some(CollectedSignature { signer, signature }),
-                signers: proven.signers,
+        Ok(Awaited {
+            co_sign: Some(PendingCoSign {
+                signer,
+                ring: payload.ring_program_id(),
+                sender,
+                flows: payload.flows(sender)?,
             }),
-            CoSignDecision::Refused(CoSignRefusal::Disabled | CoSignRefusal::OverLimit) => {
-                Err(RelayError::CoSignRefused.into())
-            }
-        }
+            signers: proven.signers,
+        })
     }
 }
 

@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use custom_ring_interface::cosign::CoSignDemand;
 use jsonrpsee::types::ErrorObjectOwned;
 use solana_address::Address;
 use solana_message::VersionedMessage;
@@ -13,7 +12,6 @@ pub struct CoSignRequest {
     pub ring: Address,
     pub message: VersionedMessage,
     pub sender: Member,
-    pub demand: CoSignDemand,
     /// Each asset once.
     pub flows: Vec<AssetFlow>,
 }

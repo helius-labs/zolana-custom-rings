@@ -5,30 +5,42 @@ mod relay_fixture;
 
 use std::sync::Arc;
 
-use custom_ring_sdk::DepositAsset;
+use async_trait::async_trait;
 use jsonrpsee::RpcModule;
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signature::Signature;
 use solana_signer::Signer;
 use solana_transaction::versioned::VersionedTransaction;
-use spr_event::EncryptedRingDepositData;
 use spr_keypair::NullifierKey;
 use spr_transaction::{utxo::SppProofInputUtxo, WalletUtxo};
 use zolana_ring_client::rpc::{
-    GetRelayQuoteRequest, GetRelayStatusRequest, PrepareRelayRequest, ProofInputBytes,
-    RelayDepositInputs, RelayIntent, RelayMergeInputs, RelayOperation, RelayQuote, RelayRail,
-    RelayStatus, RelayStep, SubmitRelayRequest, GET_RELAY_QUOTE, GET_RELAY_STATUS, PREPARE_RELAY,
-    SUBMIT_RELAY,
+    GetRelayQuoteRequest, GetRelayStatusRequest, PrepareRelayRequest, ProofInputBytes, RelayIntent,
+    RelayMergeInputs, RelayOperation, RelayQuote, RelayRail, RelayStatus, RelayStep,
+    SubmitRelayRequest, GET_RELAY_QUOTE, GET_RELAY_STATUS, PREPARE_RELAY, SUBMIT_RELAY,
 };
-use zolana_ring_rpc::{relay_module, FeePayerSubmit, Relay, RelayParts, ServedRings, Store};
+use zolana_ring_rpc::{
+    relay_module, FeePayerSubmit, Relay, RelayError, RelayParts, RingRpcError, ServedRings, Store,
+};
 
 use relay_fixture::{
-    anonymous_rail, owner, proof_inputs, signed_request, signers_verify, RecordingChain,
+    anonymous_rail, deposit_request, proof_inputs, signed_request, signers_verify, RecordingChain,
     RecordingProver, SLOT,
 };
 
 const RING: Address = Address::new_from_array([6; 32]);
+
+struct OneRing(Address);
+
+#[async_trait]
+impl ServedRings for OneRing {
+    async fn check(&self, ring: Address) -> Result<(), RingRpcError> {
+        match ring == self.0 {
+            true => Ok(()),
+            false => Err(RelayError::RingNotServed.into()),
+        }
+    }
+}
 
 struct Fixture {
     module: RpcModule<Arc<Relay>>,
@@ -48,8 +60,8 @@ impl Fixture {
             prover: prover.clone(),
             submit: Arc::new(FeePayerSubmit::new(fee_payer, chain.clone())),
             chain: chain.clone(),
-            rings: ServedRings::One(RING),
-        });
+        })
+        .with_rings(Arc::new(OneRing(RING)));
         Self {
             module: relay_module(Arc::new(relay)).expect("module"),
             prover,
@@ -167,29 +179,7 @@ async fn a_deposit_relays_through_the_depositors_signature() {
     let fixture = Fixture::new().await;
     let quote = fixture.quote(RelayOperation::Deposit).await;
     let depositor = Keypair::new_from_array([41; 32]);
-    let deposit = RelayDepositInputs {
-        ring_program_id: RING,
-        tree: Address::new_from_array([42; 32]),
-        depositor: depositor.pubkey(),
-        recipient: owner().shielded_address().expect("address"),
-        asset: DepositAsset::Sol,
-        amount: 700,
-        view_tag: [43; 32],
-        encrypted: EncryptedRingDepositData {
-            tx_viewing_pk: [44; 33],
-            salt: [45; 16],
-            ciphertext: vec![46; 8],
-        },
-        blinding_secret: zeroize::Zeroizing::new([47; 32]),
-        audit_ephemeral_key: zeroize::Zeroizing::new([48; 32]),
-    };
-    let request = PrepareRelayRequest {
-        ring: RING.into(),
-        quote,
-        intent: RelayIntent::Deposit {
-            proof_inputs: ProofInputBytes::new(deposit.encode().expect("encode")),
-        },
-    };
+    let request = deposit_request(quote, RING, depositor.pubkey(), 700);
 
     let step: RelayStep = fixture.call(PREPARE_RELAY, &request).await;
 

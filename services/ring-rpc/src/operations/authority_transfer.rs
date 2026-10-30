@@ -142,7 +142,6 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
-    use custom_ring_interface::cosign::CoSignDemand;
     use solana_address::Address;
     use solana_instruction::{AccountMeta, Instruction};
     use solana_keypair::Keypair;
@@ -161,7 +160,7 @@ mod tests {
     use crate::{
         database::Store,
         managed_merge::tests::{Fixture, RecordingRelay, ScriptedChain, GENESIS, MINT, RING},
-        relay::{RelayParts, RelayPayload, ServedRings},
+        relay::{RelayParts, RelayPayload},
         relay_prover::{DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver},
     };
 
@@ -201,7 +200,6 @@ mod tests {
                 },
                 budget: ComputeBudgetConfig::new(400_000),
                 co_signer: None,
-                co_sign_demand: CoSignDemand::transact(false, &[]),
                 signers: vec![delegate],
             })
         }
@@ -249,7 +247,6 @@ mod tests {
             prover: prover.clone(),
             submit: Arc::new(RecordingRelay::default()),
             chain: Arc::new(ScriptedChain::default()),
-            rings: ServedRings::One(RING),
         };
         (Fixture::serving(Some(delegate), Some(relay)).await, prover)
     }

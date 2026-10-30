@@ -8,7 +8,7 @@ use crate::{
     database::Store,
     escrow_merge::RingSdkMergeBuilder,
     managed_merge::MergeBuilder,
-    relay::{RelayParts, ServedRings},
+    relay::RelayParts,
     relay_chain::{FeePayerSubmit, SolanaRelayChain},
     relay_prover::SdkRelayProver,
     relay_submit::RelaySubmit,
@@ -32,7 +32,6 @@ pub struct RelayServicesInit<'a> {
     pub rpc_url: &'a str,
     pub indexer_url: &'a str,
     pub prover_url: &'a str,
-    pub rings: ServedRings,
 }
 
 impl RelayServicesInit<'_> {
@@ -57,7 +56,6 @@ impl RelayServicesInit<'_> {
                 prover: Arc::new(SdkRelayProver::new(ring_client())),
                 submit,
                 chain,
-                rings: self.rings,
             },
             merge: MergeParts { builder },
         }
