@@ -240,7 +240,8 @@ export function sealStagedTransfer(
   input: Readonly<{
     ringProgramId: Address;
     config: RingPolicy;
-    staged: Omit<StagedTransfer, "spend"> & Readonly<{ spend: Pick<RailSpend, "rail"> }>;
+    staged: Omit<StagedTransfer, "spend"> &
+      Readonly<{ spend: Pick<RailSpend, "rail" | "inProofOwner"> }>;
   }>,
 ): SealedTransfer {
   const { ringProgramId, config, staged } = input;
@@ -265,6 +266,7 @@ export function sealStagedTransfer(
     inputs: publishedInputs.length,
     outputs: published.length,
     layout: audit,
+    ownerInProof: spend.inProofOwner !== undefined,
   });
   const auditor = config.auditorPublicKey;
   // The auditor message precedes every hash over the external data.
@@ -469,6 +471,9 @@ async function proveAssembled(
     sender,
     auditor,
     ringId,
+    privateTxHash,
+    privateTxBlinding: assembled.privateTxBlinding,
+    senderPkHash: assembled.senderPkHash,
     publicInputHash: auditStatementHash(
       ringAuditStatement(preview, {
         partyIdentities: assembled.partyIdentities ?? [zeroField(), zeroField(), zeroField()],
@@ -482,8 +487,6 @@ async function proveAssembled(
       : {
           anonymous: Object.freeze({
             partyIdentities: assembled.partyIdentities,
-            privateTxHash,
-            privateTxBlinding: assembled.privateTxBlinding,
             senderCommitment: commitment ?? zeroField(),
           }),
         }),
@@ -649,7 +652,7 @@ function previewData(
             ...(input.policy.senderCommitment === undefined
               ? {}
               : { senderCommitment: input.policy.senderCommitment }),
-            recipients: policyRecipients(input.rail, input.policy.inputs, input),
+            recipients: policyRecipients(input.rail, input.policy.inputs),
           },
         }),
     ...(input.withdrawalExemption === undefined
@@ -741,30 +744,33 @@ function provenData(
           ),
         };
   const circuit = spp.circuit;
+  // The anonymous ring's hidden owner and a confidential ring's in-proof owner both prove on SPP's anonymous rail.
+  const proofData = circuit.kind === "anonymousRingEddsa" ? circuit.proofData : undefined;
+  const commitment =
+    proofData === undefined
+      ? undefined
+      : {
+          commitment: proofData.bsb22Commitment.commitment,
+          commitmentPok: proofData.bsb22Commitment.commitmentPok,
+        };
   const anonymous =
-    circuit.kind === "anonymousRingEddsa"
+    commitment !== undefined && preview.rail === "anonymous"
       ? {
-          commitment: circuit.proofData.bsb22Commitment.commitment,
-          commitmentPok: circuit.proofData.bsb22Commitment.commitmentPok,
-          ...(circuit.proofData.defaultOwnerTag === undefined
+          ...commitment,
+          ...(proofData?.defaultOwnerTag === undefined
             ? {}
-            : { defaultOwnerTag: circuit.proofData.defaultOwnerTag }),
+            : { defaultOwnerTag: proofData.defaultOwnerTag }),
         }
       : undefined;
   const inProofOwner =
-    circuit.kind === "confidentialRingInCircuitEddsa" && preview.inProofOwner !== undefined
-      ? {
-          owner: preview.inProofOwner.owner,
-          commitment: circuit.proofData.bsb22Commitment.commitment,
-          commitmentPok: circuit.proofData.bsb22Commitment.commitmentPok,
-        }
+    commitment !== undefined && preview.inProofOwner !== undefined
+      ? { owner: preview.inProofOwner.owner, ...commitment }
       : undefined;
   if (
-    (anonymous !== undefined) !== (preview.rail === "anonymous") ||
-    (circuit.kind === "confidentialRingInCircuitEddsa") !== (preview.inProofOwner !== undefined) ||
-    (inProofOwner !== undefined &&
-      circuit.kind === "confidentialRingInCircuitEddsa" &&
-      !equalBytes(circuit.proofData.ownerPk, inProofOwner.owner))
+    (commitment !== undefined) !==
+      (preview.rail === "anonymous" || preview.inProofOwner !== undefined) ||
+    // A default owner tag would publish the in-proof owner SPP hides.
+    (inProofOwner !== undefined && proofData?.defaultOwnerTag !== undefined)
   )
     throw new RingError("RING_SPP_PROOF_MISMATCH");
   const sppProof = new Uint8Array(PLAIN_GROTH16_PROOF_LENGTH);
@@ -788,22 +794,10 @@ function provenData(
   });
 }
 
-function policyRecipients(
-  rail: RingRail,
-  policy: PolicyInputs,
-  input: Readonly<{ proofInputs: SppProofInputs; inProofOwner?: Bytes32 }>,
-): PolicyRecipients {
-  if (!publishesRecipients(rail)) return { kind: "hidden" };
-  return input.inProofOwner === undefined
+function policyRecipients(rail: RingRail, policy: PolicyInputs): PolicyRecipients {
+  return publishesRecipients(rail)
     ? { kind: "framed", recipients: policy.recipients }
-    : { kind: "published", dummies: dummySlots(input.proofInputs.outputs) };
-}
-
-function dummySlots(outputs: readonly ProofOutputUtxo[]): bigint {
-  return outputs.reduce(
-    (bits, output, slot) => (output.isDummy() ? bits | (1n << BigInt(slot)) : bits),
-    0n,
-  );
+    : { kind: "hidden" };
 }
 
 export function spendsDefaultRing(proofInputs: SppProofInputs): boolean {

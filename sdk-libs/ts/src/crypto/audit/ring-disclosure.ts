@@ -15,6 +15,7 @@ import {
   ANONYMOUS_ENTRY_OUTPUTS,
   ANONYMOUS_SLOT_BYTES,
   DELIVERED_AUDIT_CAPACITIES,
+  DELIVERED_SENDER_CLASSES,
   DELIVERED_SLOT_BYTES,
   DISCLOSURE_INPUT_AMOUNT_BYTES,
   DISCLOSURE_SENDER_KEY_BYTES,
@@ -299,7 +300,11 @@ function checkedLayout<T extends DisclosureLayout>(layout: T): T {
     flags.every((flag) => typeof flag === "boolean") &&
     counted(layout.outputs) &&
     (layout.kind === "delivered"
-      ? DELIVERED_AUDIT_CAPACITIES.includes(layout.outputs)
+      ? DELIVERED_AUDIT_CAPACITIES.includes(layout.outputs) &&
+        (layout.senderClass === undefined ||
+          DELIVERED_SENDER_CLASSES.some(
+            (entry) => entry.outputs === layout.outputs && entry.inputClass === layout.senderClass,
+          ))
       : counted(layout.inputs) &&
         (layout.key.kind === "entry"
           ? ANONYMOUS_ENTRY_OUTPUTS.includes(layout.outputs) &&
@@ -318,6 +323,7 @@ function deliveredLayout(layout: DeliveredLayout): DeliveredLayout {
     outputs: layout.outputs,
     exits: layout.exits,
     keyEscrow: layout.keyEscrow,
+    ...(layout.senderClass === undefined ? {} : { senderClass: layout.senderClass }),
   });
 }
 

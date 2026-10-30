@@ -582,6 +582,7 @@ async function buildRingSpend<R>(
         strategy,
         retry,
         route: rail.anonymous === undefined ? "confidential" : "anonymous",
+        ownerInProof: rail.inProofOwner !== undefined,
         ...(params.cosigner === undefined ? {} : { coSigner: signerAddress(params.cosigner) }),
       },
       context,
@@ -646,6 +647,7 @@ async function relayRingSpend<S, R extends RingRelayRail>(
         strategy,
         retry,
         route: anonymous === undefined ? "confidential" : "anonymous",
+        ownerInProof: anonymous === undefined,
       },
       context,
     );
@@ -726,6 +728,8 @@ async function stageRingSpend<R>(
     strategy: RingSpendStrategy<R>;
     retry: RingSubmissionBuildState;
     route: keyof typeof MODE_REFUSALS;
+    /** Ring notes only, a default-ring input would publish the owner SPP hides. */
+    ownerInProof: boolean;
     coSigner?: Address;
   }>,
   context: RequestContext | undefined,
@@ -756,7 +760,10 @@ async function stageRingSpend<R>(
       ? selectAnonymousInputs(pool, strategy.selection)
       : selectRingInputs({
           ...pool,
-          inputs: strategy.selection,
+          inputs:
+            input.ownerInProof && strategy.selection === "ring-or-default"
+              ? "ring"
+              : strategy.selection,
           maxInputs: MAX_TRANSACT_INPUTS,
         }));
   retry.reservation = retry.reservation ?? reserveEntries(params.wallet, selected, retry.lifetime);

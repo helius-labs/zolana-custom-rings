@@ -36,6 +36,14 @@ export const RING_PROVING_KEY_SHA256S: Readonly<Record<string, string>> = Object
     "f7c6e72d5b41bdf27fb3d7f6f69225e7c2d5cf4733b67ac948fa4a3bab82fadd",
   "custom_ring_audit_delivered_8.key":
     "92facd093e1e9436e92b88063c0c6766bb206cda8517c236ee6640cfda58af4f",
+  "custom_ring_audit_delivered_sender_16_8.key":
+    "5fffc98c2b0dac781f99d3e5cd9b3d98e6c85f96ff855856050925c0c5f052e2",
+  "custom_ring_audit_delivered_sender_24_4.key":
+    "4715c00597e2346b648817b8fec82397de3a35b6986ac7a72c1c088b900e84a0",
+  "custom_ring_audit_delivered_sender_48_2.key":
+    "d2e24837a1cebac149e6f5c527e3d01ab35fdb9c8da6d46d47d24b6f46da6ff8",
+  "custom_ring_audit_delivered_sender_8_16.key":
+    "fc7dffab38da3c515728d1e2644ec0ca632f918ea007703bf3c7fe8ea8cf9ddf",
   "custom_ring_deposit_1.key": "59fc582856c9285591585108e78e092097d6d519659df9e42c2e2209c2aa2fe6",
   "custom_ring_deposit_2.key": "03ab065cef986f79c346b0e9795e49352ce23a1e3be88170df5d452ec6b22628",
   "custom_ring_deposit_4.key": "1f6e192e849da02c36e6dd5b498fdeb737336829f6f2b71e5953bbaa5d0b76a6",

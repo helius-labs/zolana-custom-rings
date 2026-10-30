@@ -19,6 +19,7 @@ export {
   ANONYMOUS_MAX_INPUTS,
   ANONYMOUS_SLOT_BYTES,
   DELIVERED_AUDIT_CAPACITIES,
+  DELIVERED_SENDER_CLASSES,
   DELIVERED_SLOT_BYTES,
   DENSE_DELIVERED_SLOT_BYTES,
   DISCLOSURE_CHUNK_BYTES,
@@ -32,6 +33,7 @@ export {
   anonymousKeyClass,
   auditLayoutValue,
   deliveredFields,
+  deliveredSenderClass,
   disclosureFieldCount,
   packedChunks,
 } from "../protocol/codec/ring-disclosure-layout.js";
@@ -78,7 +80,6 @@ export {
   anonymousRecipientOutputBody,
   anonymousSenderOutputBody,
   openDeliveredBody,
-  ringOwnerDeliveredOutput,
   RingScheme,
   sealDeliveredBody,
   type DeliveredBodyOpening,

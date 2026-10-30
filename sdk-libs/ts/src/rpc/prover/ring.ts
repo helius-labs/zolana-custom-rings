@@ -161,6 +161,18 @@ export interface DeliveredAuditProofRequest extends AuditEnvelopeProofInputs {
   readonly outputs: readonly DeliveredSlotProofInputs[];
 }
 
+/** Go `DeliveredSenderAuditParams`, `inputs` fill the input class. */
+export interface DeliveredSenderAuditProofRequest extends AuditEnvelopeProofInputs {
+  readonly kind: "deliveredSenderAudit";
+  readonly publicInputHash: Bytes32;
+  readonly outputs: readonly DeliveredSlotProofInputs[];
+  /** The in-proof owner's identity. */
+  readonly sender: Bytes32;
+  readonly privateTxHash: Bytes32;
+  readonly privateTxBlinding: Bytes32;
+  readonly inputs: readonly RingSlotOpening[];
+}
+
 /** Go `AnonymousAuditParams`, `inputs` fill the input class. */
 export interface AnonymousAuditProofRequest extends AuditEnvelopeProofInputs {
   readonly partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
@@ -282,6 +294,7 @@ export interface WithdrawalExemptionProofRequest {
 export type RingProofRequest =
   | WithdrawalExemptionProofRequest
   | DeliveredAuditProofRequest
+  | DeliveredSenderAuditProofRequest
   | AnonymousAuditProofRequest
   | MemberPolicyProofRequest
   | DelegatePolicyProofRequest
@@ -295,6 +308,12 @@ export function ringProofCircuit(request: RingProofRequest): RingKeyCircuit {
   switch (request.kind) {
     case "deliveredAudit":
       return { family: "deliveredAudit", outputs: listLength(request.outputs) };
+    case "deliveredSenderAudit":
+      return {
+        family: "deliveredSenderAudit",
+        inputClass: listLength(request.inputs),
+        outputs: listLength(request.outputs),
+      };
     case "anonymousAudit":
       return {
         family: request.layout.fullOpenings ? "anonymousEntryAudit" : "anonymousAudit",
@@ -354,6 +373,16 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
         ...head,
         ...envelopeJson(request),
         outputs: request.outputs.map((output, i) => deliveredJson(output, `outputs[${i}]`)),
+      };
+    case "deliveredSenderAudit":
+      return {
+        ...head,
+        ...envelopeJson(request),
+        outputs: request.outputs.map((output, i) => deliveredJson(output, `outputs[${i}]`)),
+        sender: field(request.sender, "sender"),
+        privateTxHash: field(request.privateTxHash, "privateTxHash"),
+        privateTxBlinding: field(request.privateTxBlinding, "privateTxBlinding"),
+        inputs: request.inputs.map((input, i) => openingJson(input, `inputs[${i}]`)),
       };
     case "anonymousAudit":
       return {

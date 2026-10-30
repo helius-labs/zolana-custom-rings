@@ -9,6 +9,7 @@ import {
   ANONYMOUS_ENTRY_OUTPUTS,
   MERGE_WIDTHS,
   DELIVERED_AUDIT_CAPACITIES,
+  DELIVERED_SENDER_CLASSES,
 } from "../codec/ring-disclosure-layout.js";
 import { N_PUBLIC_SLOTS, RING_AUTHORITY_SHAPES } from "../transaction/spp.js";
 
@@ -17,6 +18,8 @@ export { RING_PROVING_KEY_SHA256S };
 /** A ring circuit by the shape its key serves, Rust `RingCircuit`. */
 export type RingKeyCircuit =
   | Readonly<{ family: "deliveredAudit"; outputs: number }>
+  /** Holds every spent UTXO to the in-proof owner the statement publishes. */
+  | Readonly<{ family: "deliveredSenderAudit"; inputClass: number; outputs: number }>
   | Readonly<{ family: "anonymousAudit"; inputClass: number; outputs: number }>
   /** Opens every spent UTXO, the key of a transfer spending a default-ring note. */
   | Readonly<{ family: "anonymousEntryAudit"; inputClass: number; outputs: number }>
@@ -65,6 +68,13 @@ export const RING_KEYS: readonly Readonly<{
           [
             { family: "deliveredAudit", outputs },
             `custom-ring-audit-delivered-${outputs}`,
+          ] as const,
+      ),
+      ...DELIVERED_SENDER_CLASSES.map(
+        ({ inputClass, outputs }) =>
+          [
+            { family: "deliveredSenderAudit", inputClass, outputs },
+            `custom-ring-audit-delivered-sender-${inputClass}-${outputs}`,
           ] as const,
       ),
       ...ANONYMOUS_AUDIT_CLASSES.flatMap(({ outputs, classes }) =>
@@ -156,6 +166,7 @@ function sameRingCircuit(left: RingKeyCircuit, right: RingKeyCircuit): boolean {
         right.withdrawals === left.withdrawals &&
         right.ownOnly === left.ownOnly
       );
+    case "deliveredSenderAudit":
     case "anonymousAudit":
     case "anonymousEntryAudit":
       return (

@@ -8,7 +8,9 @@ import type {
   AnonymousAuditProofRequest,
   AnonymousSlotProofInputs,
   DeliveredAuditProofRequest,
+  DeliveredSenderAuditProofRequest,
   DeliveredSlotProofInputs,
+  RingSlotOpening,
 } from "../rpc/prover/ring.js";
 import {
   anonymousKeyClass,
@@ -46,8 +48,6 @@ export interface SealedAudit {
 /** The anonymous audit statement's values beside the envelope, Rust `AnonymousStatement`. */
 export interface AnonymousAuditValues {
   readonly partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
-  readonly privateTxHash: Bytes32;
-  readonly privateTxBlinding: Bytes32;
   /** Zero outside a policy ring. */
   readonly senderCommitment: Bytes32;
 }
@@ -97,7 +97,10 @@ export function sealedAuditMessage(sealed: SealedAudit, auditor: X25519PublicKey
   );
 }
 
-export type AuditProofRequest = DeliveredAuditProofRequest | AnonymousAuditProofRequest;
+export type AuditProofRequest =
+  | DeliveredAuditProofRequest
+  | DeliveredSenderAuditProofRequest
+  | AnonymousAuditProofRequest;
 
 /** The audit proof's request, one layout per rail, Rust `AuditProving::prove`. */
 export function auditProofRequest(
@@ -110,6 +113,9 @@ export function auditProofRequest(
     auditor: X25519PublicKey;
     ringId: Bytes32;
     publicInputHash: Bytes32;
+    privateTxHash: Bytes32;
+    privateTxBlinding: Bytes32;
+    senderPkHash: Bytes32;
     /** Present exactly on the anonymous rail. */
     anonymous?: AnonymousAuditValues;
   }>,
@@ -133,36 +139,49 @@ export function auditProofRequest(
   switch (sealed.layout.kind) {
     case "delivered": {
       const outputs = published.map((slot) => deliveredSlot(slot, tree));
-      return Object.freeze({ kind: "deliveredAudit", outputs, ...envelope() });
+      const { senderClass } = sealed.layout;
+      if (senderClass === undefined)
+        return Object.freeze({ kind: "deliveredAudit", outputs, ...envelope() });
+      return Object.freeze({
+        kind: "deliveredSenderAudit",
+        outputs,
+        sender: input.senderPkHash,
+        privateTxHash: input.privateTxHash,
+        privateTxBlinding: input.privateTxBlinding,
+        inputs: inputOpenings(proofInputs, senderClass),
+        ...envelope(),
+      });
     }
     case "anonymous": {
       const statement = input.anonymous;
       if (statement === undefined)
         throw new RingError("RING_ANONYMOUS_SIGNER_REQUIRED", { details: { reason: "audit" } });
-      const openings = proofInputs.inputUtxos
-        .filter((spent) => !spent.isCompact())
-        .map(ringInputOpening);
       const slots = {
         outputs: published.map((slot) => anonymousSlot(slot, tree)),
-        privateTxHash: statement.privateTxHash,
-        privateTxBlinding: statement.privateTxBlinding,
+        privateTxHash: input.privateTxHash,
+        privateTxBlinding: input.privateTxBlinding,
         ...(sealed.layout.key.kind === "entry"
           ? { senderKey: input.sender.signingPublicKey.confidentialViewTag() }
           : {}),
         inputCount: sealed.layout.inputs,
-        inputs: [
-          ...openings,
-          ...Array.from(
-            { length: anonymousKeyClass(sealed.layout.key) - openings.length },
-            () => EMPTY_RING_OPENING,
-          ),
-        ],
+        inputs: inputOpenings(proofInputs, anonymousKeyClass(sealed.layout.key)),
         senderCommitment: statement.senderCommitment,
         partyIdentities: statement.partyIdentities,
       };
       return Object.freeze({ kind: "anonymousAudit", ...slots, ...envelope() });
     }
   }
+}
+
+/** Rust `AuditProving::input_openings`. */
+function inputOpenings(proofInputs: SppProofInputs, inputClass: number): RingSlotOpening[] {
+  const openings = proofInputs.inputUtxos
+    .filter((spent) => !spent.isCompact())
+    .map(ringInputOpening);
+  return [
+    ...openings,
+    ...Array.from({ length: inputClass - openings.length }, () => EMPTY_RING_OPENING),
+  ];
 }
 
 /** Rust `AuditSeal::disclosure`, the plaintext the CROD pad masks, `SeedOut` only beside an exit. */
@@ -254,7 +273,7 @@ function deliveredSlot(slot: PublishedSlot, tree: number): DeliveredSlotProofInp
   const { output, wire } = slot;
   const zero = zeroField();
   const [recipientKey, body] =
-    wire.kind === "delivered" || wire.kind === "owned"
+    wire.kind === "delivered"
       ? [wire.u, wire.body]
       : [zero, new Uint8Array(RING_DELIVERED_BODY_LEN)];
   const ring = !output.isDummy() && wire.kind !== "exit";

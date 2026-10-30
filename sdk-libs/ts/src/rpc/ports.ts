@@ -1,17 +1,15 @@
 import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import type { Bytes32, RequestContext } from "@heliuslabs/zolana";
-import type { Bytes64, Transaction } from "@heliuslabs/zolana/interface";
+import type { Transaction } from "@heliuslabs/zolana/interface";
 import type {
   BlockhashProvider,
   ChainReader,
   MergeAssembler,
   Proof,
-  ProofAuthority,
   ProvenRingTransact,
-  RingProvingConfig,
+  Prover,
   TreeContext,
 } from "@heliuslabs/zolana/client";
-import type { SppProofInputs } from "@heliuslabs/zolana/transaction";
 import type { Address, Signature } from "@solana/kit";
 
 import type {
@@ -151,32 +149,11 @@ export interface RingSealedNullifierKey {
   readonly ciphertext: Bytes32;
 }
 
-/** The hidden owner's Ed25519 signature over the transfer's `messageHash`. */
-export interface HiddenOwnerAuthorization {
-  readonly publicKey: Bytes32;
-  readonly signature: Bytes64;
-}
-
-export interface AnonymousRingTransactProofInput {
-  readonly proofInputs: SppProofInputs;
-  readonly ringProgramId: Address;
-  readonly owner: HiddenOwnerAuthorization;
-  /** The owner SPP reads from the SPL withdrawal's token account. */
-  readonly exitTokenOwner?: Address;
-  readonly keys: ProofAuthority;
-  readonly config?: RingProvingConfig;
-}
-
 export type ProvenAnonymousRingTransact = Omit<ProvenRingTransact, "data"> &
   Readonly<{ data: RingTransactInstructionData }>;
 
-/** The anonymous rail's SPP proof, absent from the pinned TS prover. */
-export interface AnonymousRingTransactProver {
-  proveAnonymousRingTransact(
-    input: AnonymousRingTransactProofInput,
-    context?: RequestContext,
-  ): Promise<ProvenAnonymousRingTransact>;
-}
+/** A confidential ring's in-proof owner also proves on it. */
+export type AnonymousRingTransactProver = Pick<Prover, "proveAnonymousRingTransact">;
 
 /** The anonymous merge disclosure proof only the nullifier key holder makes. */
 export interface RingSecretProver {
