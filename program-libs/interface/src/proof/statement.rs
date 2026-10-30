@@ -58,9 +58,18 @@ pub struct AnonymousAudit<'a> {
     pub sender_commitment: &'a [u8; 32],
 }
 
+/// The in-proof owner rail's binding, every spent UTXO is the sender's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeliveredSender<'a> {
+    pub private_tx_hash: &'a [u8; 32],
+    /// The in-proof owner's identity.
+    pub sender: [u8; 32],
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AuditKind<'a> {
-    Delivered,
+    /// `Some` on the in-proof owner rail.
+    Delivered(Option<DeliveredSender<'a>>),
     Anonymous(AnonymousAudit<'a>),
 }
 
@@ -82,7 +91,7 @@ impl AuditStatement<'_> {
         let output_chain = create_hash_chain_4_from_slice(&hashes)?;
         let disclosure_chain = create_hash_chain_4_from_slice(self.disclosure)?;
         match self.kind {
-            AuditKind::Delivered => {
+            AuditKind::Delivered(sender) => {
                 let keys: Vec<[u8; 32]> = self
                     .outputs
                     .iter()
@@ -94,6 +103,9 @@ impl AuditStatement<'_> {
                     disclosure_chain,
                     create_hash_chain_4_from_slice(&keys)?,
                 ]);
+                if let Some(sender) = sender {
+                    elements.extend([*sender.private_tx_hash, sender.sender]);
+                }
             }
             AuditKind::Anonymous(anonymous) => {
                 elements.extend([
@@ -144,7 +156,7 @@ pub struct PolicyStatement<'a> {
     pub own_root: &'a [u8; 32],
     /// Zero without a curator source.
     pub curator_root: &'a [u8; 32],
-    /// The owner signer's identity, the sender commitment on an anonymous ring, zero on the delegate rail.
+    /// The owner signer's or in-proof owner's identity, the sender commitment on an anonymous ring, zero on the delegate rail.
     pub sender: &'a [u8; 32],
     /// One owner identity per output slot, zero on a dummy and on the anonymous rail.
     pub recipients: &'a [[u8; 32]],

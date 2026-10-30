@@ -52,12 +52,10 @@ build-spp-programs:
     set -euo pipefail
     [[ -z "${ZOLANA_PREBUILT:-}" ]] || exit 0
     cd zolana
-    # The in-proof owner rail needs SPP's ring-confidential-eddsa feature.
-    SBF_TOOLS_VERSION={{sbf-tools-version}} tools/build-programs.sh \
-        --manifest-path programs/user-registry/Cargo.toml -- --locked --features bpf-entrypoint
-    SBF_TOOLS_VERSION={{sbf-tools-version}} tools/build-programs.sh \
-        --manifest-path programs/shielded-pool/Cargo.toml -- --locked \
-        --features bpf-entrypoint,ring-confidential-eddsa
+    for program in user-registry shielded-pool; do
+        SBF_TOOLS_VERSION={{sbf-tools-version}} tools/build-programs.sh \
+            --manifest-path "programs/$program/Cargo.toml" -- --locked --features bpf-entrypoint
+    done
 
 build-ring-program: build-storage-program
     #!/usr/bin/env bash

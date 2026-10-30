@@ -163,6 +163,22 @@ pub(crate) struct DeliveredAudit {
     pub outputs: Vec<DeliveredOutput>,
 }
 
+/// The in-proof owner rail's delivered audit, every spent UTXO the sender's.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DeliveredSenderAudit {
+    #[serde(flatten)]
+    pub delivered: DeliveredAudit,
+    #[serde(with = "fe")]
+    pub sender: [u8; 32],
+    #[serde(with = "fe")]
+    pub private_tx_hash: [u8; 32],
+    #[serde(with = "fe")]
+    pub private_tx_blinding: [u8; 32],
+    /// Zero padded past the published inputs to the input class.
+    pub inputs: Vec<Opening>,
+}
+
 /// The owner key is bytes, never a field.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]

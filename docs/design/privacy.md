@@ -5,7 +5,7 @@ The confidential modes and the anonymous mode differ at the sender and the recip
 ## Confidential rings
 
 - Chain observers see the sender, each recipient's viewing key and, on a policy ring, each output's owner identity.
-- The in-proof rail also publishes each output's owner key. An authority transfer shows the delegate in place of the sender.
+- The in-proof rail publishes the sender's key in the transfer data in place of an owner signer. An authority transfer shows the delegate in place of the sender.
 - They see each exit owner and each public leg's account, asset and amount.
 - They do not see amounts, assets, blindings or which notes a transfer spends.
 - Every payment to one recipient carries the same viewing key, and the zolana registry maps a registered viewing key to its owner. Payments to one recipient link to each other and name it.

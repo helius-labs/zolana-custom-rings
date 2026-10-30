@@ -8,18 +8,15 @@ import {
   type StorageRecordPool,
 } from "../../src/rpc/ports.js";
 import type {
+  AnonymousRingTransactInput,
   ChainReader,
+  PreparedOwnerSignature,
   ProofAuthority,
   ProofService,
-  ProvenRingConfidentialEddsaTransact,
+  ProvenAnonymousRingTransact,
   ProvenRingTransact,
-  RingConfidentialEddsaTransactInput,
   RpcAccount,
 } from "@heliuslabs/zolana/client";
-import type {
-  AnonymousRingTransactProofInput,
-  HiddenOwnerAuthorization,
-} from "../../src/rpc/ports.js";
 import {
   encodeRingTransactInstructionData,
   type RingTransactInstructionData,
@@ -32,7 +29,7 @@ import {
   treeAddress,
   checkedBytes,
 } from "@heliuslabs/zolana/internal";
-import { LocalKeys, transactMessageDigest } from "@heliuslabs/zolana/client";
+import { LocalKeys } from "@heliuslabs/zolana/client";
 import {
   SHIELDED_POOL_PROGRAM_ID,
   DEFAULT_TREE_ID,
@@ -152,24 +149,18 @@ export interface RingFixtureOptions {
   readonly registration?: Readonly<{ activated: boolean; paused: boolean }>;
 }
 
-/** The pinned rails beside the anonymous one a ring client proves. */
+/** The pinned rails beside SPP's anonymous one, where an in-proof owner also proves. */
 export type SppCircuit =
   | NonNullable<Parameters<typeof prepareTransfer>[1]>
-  | Readonly<{
-      kind: "ringAnonymous";
-      ring: Address;
-      owner: HiddenOwnerAuthorization;
-      exitTokenOwner?: Address;
-    }>;
+  | Readonly<{ kind: "ringAnonymous"; ring: Address; owner: PreparedOwnerSignature }>;
 
 export interface SppCall {
   readonly proofInputs: SppProofInputs;
   readonly circuit: SppCircuit;
   readonly authority: ProofAuthority;
   readonly payload: ReturnType<typeof prepareTransfer>["inputs"]["payload"];
-  /** Present exactly on the anonymous rail. */
-  readonly owner?: HiddenOwnerAuthorization;
-  readonly exitTokenOwner?: Address;
+  /** Present exactly on SPP's anonymous rail. */
+  readonly owner?: PreparedOwnerSignature;
   readonly data: RingTransactInstructionData;
 }
 
@@ -317,9 +308,7 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
         nullifierRootIndex: 9 + index,
       })),
     );
-    const pinned = complete.withProof(
-      circuit.kind === "ringConfidentialEddsa" ? COMMITTED_SPP_PROOF : SPP_PROOF,
-    );
+    const pinned = complete.withProof(SPP_PROOF);
     const data: RingTransactInstructionData =
       circuit.kind === "ringAnonymous"
         ? {
@@ -335,7 +324,7 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
                 ...(proofInputs.inputUtxos.some(
                   (spent) => !spent.isDummy() && spent.utxo.ringProgramId === undefined,
                 )
-                  ? { defaultOwnerTag: circuit.owner.publicKey }
+                  ? { defaultOwnerTag: circuit.owner.ownerPublicKey }
                   : {}),
               },
             },
@@ -347,9 +336,6 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
       authority,
       payload: prepared.inputs.payload,
       ...(circuit.kind === "ringAnonymous" ? { owner: circuit.owner } : {}),
-      ...(circuit.kind === "ringAnonymous" && circuit.exitTokenOwner !== undefined
-        ? { exitTokenOwner: circuit.exitTokenOwner }
-        : {}),
       data,
     });
     return { data, roots: complete.roots };
@@ -365,41 +351,24 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
     },
     proveRingTransact: async (proofInputs: SppProofInputs, ring: Address, keys: ProofAuthority) =>
       pinnedRail(spp(proofInputs, { kind: "ring", ring }, keys)),
-    proveRingConfidentialEddsaTransact: async (
-      input: RingConfidentialEddsaTransactInput,
-    ): Promise<ProvenRingConfidentialEddsaTransact> => {
-      if ("sign" in input.owner) throw new Error("the rail signs before the proof request");
-      const authorization = {
-        ...input.owner,
-        messageDigest: transactMessageDigest(input.proofInputs),
-      };
-      return {
-        ...pinnedRail(
-          spp(
-            input.proofInputs,
-            { kind: "ringConfidentialEddsa", ring: input.ringProgramId, authorization },
-            input.keys,
-          ),
-        ),
-        ownerSigners: [],
-      };
-    },
     proveRingAuthorityTransact: async (
       proofInputs: SppProofInputs,
       ring: Address,
       keys: ProofAuthority,
     ) => pinnedRail(spp(proofInputs, { kind: "ringAuthority", ring }, keys)),
-    proveAnonymousRingTransact: async (input: AnonymousRingTransactProofInput) =>
-      spp(
+    proveAnonymousRingTransact: async (
+      input: AnonymousRingTransactInput,
+    ): Promise<ProvenAnonymousRingTransact> => {
+      if ("sign" in input.owner) throw new Error("the rail signs before the proof request");
+      const proven = spp(
         input.proofInputs,
-        {
-          kind: "ringAnonymous",
-          ring: input.ringProgramId,
-          owner: input.owner,
-          ...(input.exitTokenOwner === undefined ? {} : { exitTokenOwner: input.exitTokenOwner }),
-        },
+        { kind: "ringAnonymous", ring: input.ringProgramId, owner: input.owner },
         input.keys,
-      ),
+      );
+      const { circuit } = proven.data;
+      if (circuit.kind !== "anonymousRingEddsa") throw new Error("not an anonymous rail circuit");
+      return { ...proven, data: { ...proven.data, circuit }, ownerSigners: [] };
+    },
     getShieldedTransactionsByTags: async () => transactionsPage(),
     getShieldedTransactionsByNullifiers: async () => transactionsPage(),
     getEncryptedUtxosByTags: async () => matchesPage(),
@@ -476,13 +445,6 @@ export const SPP_PROOF: TransactProof = Object.freeze({
     "b",
   ),
   c: filled(0x0c),
-});
-
-/** The in-proof owner rail's proof carries its BSB22 commitment. */
-const COMMITTED_SPP_PROOF = Object.freeze({
-  ...SPP_PROOF,
-  commitment: filled(0x53),
-  commitmentPok: filled(0x54),
 });
 
 export const ZERO_ADDRESS = encodeBase58(new Uint8Array(32));

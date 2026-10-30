@@ -3,8 +3,7 @@
 use std::collections::HashMap;
 
 use custom_ring_interface::{
-    ring_confidential_delivered_output_body, ring_owner_delivered_output, stream::SlotSecret,
-    RING_DELIVERED_BODY_LEN,
+    ring_confidential_delivered_output_body, stream::SlotSecret, RING_DELIVERED_BODY_LEN,
 };
 use solana_address::Address;
 use solana_signature::Signature;
@@ -99,11 +98,8 @@ impl PendingUtxo {
     }
 }
 
-/// Scheme 11 leads its payload with the recipient key, scheme 10 tags the slot with it.
-fn delivered_body(slot: &OutputSlot) -> Option<(&[u8; 32], &[u8; RING_DELIVERED_BODY_LEN])> {
-    ring_owner_delivered_output(&slot.payload).or_else(|| {
-        ring_confidential_delivered_output_body(&slot.payload).map(|body| (&slot.view_tag, body))
-    })
+fn delivered_body(slot: &OutputSlot) -> Option<&[u8; RING_DELIVERED_BODY_LEN]> {
+    ring_confidential_delivered_output_body(&slot.payload)
 }
 
 /// Keeps every candidate whose body rebuilds its published commitment, both results unchanged on error.
@@ -170,7 +166,7 @@ pub fn resolve_pending<K: ShieldedKeys + ?Sized>(
     Ok(resolved)
 }
 
-/// Every scheme 10 or 11 slot delivered to one of the wallet's viewing keys.
+/// Every scheme 10 slot published under one of the wallet's viewing keys, its owner tag.
 pub fn confidential_delivered<'a, K: ShieldedKeys + RingKeys + ?Sized>(
     shielded_keys: &K,
     transactions: &'a [ShieldedTransaction],
@@ -193,9 +189,12 @@ pub fn confidential_delivered<'a, K: ShieldedKeys + RingKeys + ?Sized>(
             continue;
         };
         for (position, slot) in tx.output_slots.iter().enumerate() {
-            let Some(&viewing_pubkey) = delivered_body(slot).and_then(|(u, _)| held.get(u)) else {
+            let Some(&viewing_pubkey) = held.get(&slot.view_tag) else {
                 continue;
             };
+            if delivered_body(slot).is_none() {
+                continue;
+            }
             let output_index =
                 u32::try_from(position).map_err(|_| TransactionError::TooManyOutputs)?;
             sites.push((tx, output_index));
@@ -258,7 +257,7 @@ pub(crate) fn open_delivered(
         let Some(slot) = tx.output_slots.get(candidate.slot_index as usize) else {
             continue;
         };
-        let Some((_, body)) = delivered_body(slot) else {
+        let Some(body) = delivered_body(slot) else {
             continue;
         };
         let context = &slot.output_context;

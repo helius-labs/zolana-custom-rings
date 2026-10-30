@@ -5,8 +5,8 @@ use std::collections::BTreeSet;
 
 use custom_ring_interface::{
     key_catalog::{RingCircuit, RING_KEYS},
-    verifying_key, AnonymousLayout, AnonymousSpend, DisclosureLayout, RingRail, APPLY_BATCH,
-    DELIVERED_AUDIT_CAPACITIES, MERGE_WIDTHS, PROVING_KEY_SHA256S,
+    verifying_key, AnonymousLayout, AnonymousSpend, DeliveredLayout, DisclosureLayout, RingRail,
+    APPLY_BATCH, DELIVERED_AUDIT_CAPACITIES, MERGE_WIDTHS, PROVING_KEY_SHA256S,
 };
 use spr_interface::shape::SPP_SUPPORTED_SHAPES;
 
@@ -60,6 +60,18 @@ fn selectable_circuits() -> BTreeSet<String> {
         let outputs = n_out as u8;
         if DELIVERED_AUDIT_CAPACITIES.contains(&n_out) {
             circuits.push(RingCircuit::DeliveredAudit { outputs });
+        }
+        if let Some(class) = DeliveredLayout::sender_class(n_out, n_in) {
+            let layout = DeliveredLayout {
+                outputs: n_out,
+                exits: false,
+                key_escrow: false,
+                sender_class: Some(class),
+            };
+            circuits.push(RingCircuit::audit(
+                DisclosureLayout::Delivered(layout),
+                outputs,
+            ));
         }
         for inputs in 1..=n_in {
             for spends_default_ring in [false, true] {

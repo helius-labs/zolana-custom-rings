@@ -158,7 +158,7 @@ impl Spend<'_> {
     fn spp_rail(&self) -> SppRail<'_> {
         match self {
             Self::Owner => SppRail::OwnerSigners,
-            Self::InProofOwner(owner) => SppRail::InProofOwner(*owner),
+            Self::InProofOwner(owner) => SppRail::Anonymous(*owner),
             Self::Anonymous(anonymous) => SppRail::Anonymous(anonymous.signer),
             Self::Delegate { .. } => SppRail::Delegate,
         }
@@ -374,6 +374,11 @@ impl<'a> Pipeline<'a> {
             u32::try_from(proof_inputs.external_data.expiry_unix_ts).unwrap_or(u32::MAX);
         proof_inputs.external_data.expiry_unix_ts = u64::from(expiry_unix_ts);
         check_distinct(&proof_inputs.input_utxos)?;
+        if matches!(spend, Spend::InProofOwner(_)) {
+            if let Some(index) = default_ring_input(&proof_inputs.input_utxos) {
+                return Err(RingError::InProofDefaultRingInput { index });
+            }
+        }
         check_membership(
             program,
             &proof_inputs.input_utxos,
@@ -591,12 +596,9 @@ impl<'a> Sealed<'a> {
             own_revision: policy.own.revision,
             curator_revision: policy.curator.map(|curator| curator.revision),
             sender_commitment,
-            recipients: match (ring_rail.publishes_recipients(), in_proof_owner) {
-                (false, _) => OwnedRecipients::Hidden,
-                (true, None) => OwnedRecipients::Framed(policy.recipients.clone()),
-                (true, Some(_)) => OwnedRecipients::Published {
-                    dummies: dummy_slots(&proof_inputs.output_utxos),
-                },
+            recipients: match ring_rail.publishes_recipients() {
+                false => OwnedRecipients::Hidden,
+                true => OwnedRecipients::Framed(policy.recipients.clone()),
             },
         });
         if anonymous.is_some() {
@@ -734,8 +736,6 @@ impl Unwitnessed<'_> {
             .and_then(|policy| policy.sender_commitment);
         let statement = party_identities.map(|party_identities| AnonymousStatement {
             party_identities,
-            private_tx_hash,
-            private_tx_blinding: frame.private_tx_blinding,
             sender_commitment: sender_commitment.unwrap_or_default(),
         });
         let viewing_history = anonymous.and_then(|anonymous| anonymous.history.clone());
@@ -790,6 +790,9 @@ impl Assembled {
             auditor: &self.auditor,
             ring_id: frame.ring_id,
             public_input_hash: self.audit_public_input_hash,
+            private_tx_hash: frame.parts.private_tx_hash,
+            private_tx_blinding: frame.private_tx_blinding,
+            sender_pk_hash: frame.sender_pk_hash,
             anonymous: self.anonymous.as_ref(),
         })
     }
@@ -1007,18 +1010,15 @@ fn zeroed_proof() -> CustomRingProof {
     bytemuck::Zeroable::zeroed()
 }
 
-fn dummy_slots(outputs: &[SppProofOutputUtxo]) -> u64 {
-    outputs
-        .iter()
-        .enumerate()
-        .filter(|(_, output)| output.is_dummy())
-        .fold(0, |bits, (slot, _)| bits | 1 << slot)
+fn spends_default_ring(inputs: &[SppProofInputUtxo]) -> bool {
+    default_ring_input(inputs).is_some()
 }
 
-fn spends_default_ring(inputs: &[SppProofInputUtxo]) -> bool {
+/// SPP's anonymous rail publishes the hidden owner of a default-ring input.
+fn default_ring_input(inputs: &[SppProofInputUtxo]) -> Option<usize> {
     inputs
         .iter()
-        .any(|input| !input.is_dummy() && input.utxo.ring_program_id.is_none())
+        .position(|input| !input.is_dummy() && input.utxo.ring_program_id.is_none())
 }
 
 fn delivered(outputs: usize, rail: RingRail) -> Result<RingDelivery, RingError> {

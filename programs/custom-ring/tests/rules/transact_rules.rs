@@ -142,7 +142,7 @@ impl Fixture {
         data
     }
 
-    /// A confidential transfer with each ring slot under `owner`.
+    /// A confidential transfer `owner` signs inside SPP's anonymous rail proof.
     pub fn in_proof_owner<'a>(
         &'a self,
         owner: &'a [u8; 32],
@@ -151,27 +151,12 @@ impl Fixture {
         policy: bool,
     ) -> RingTransactData<'a> {
         let mut data = self.transfer(RingRail::Confidential, n_in, n_out, policy);
-        data.outputs = data
-            .outputs
-            .iter()
-            .map(|output| match *output {
-                RingOutput::Delivered { hash, u, body } => RingOutput::Owned {
-                    hash,
-                    owner,
-                    u,
-                    body,
-                },
-                other => other,
-            })
-            .collect();
-        if let Some(policy) = &mut data.policy {
-            policy.recipients = PolicyRecipients::Published { dummies: 0 };
-        }
         data.in_proof_owner = Some(custom_ring_interface::InProofOwner {
             owner,
             commitment: &self.keys[3],
             commitment_pok: &self.keys[4],
         });
+        self.disclose(&mut data);
         data
     }
 

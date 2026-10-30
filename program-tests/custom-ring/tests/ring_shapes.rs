@@ -79,14 +79,16 @@ impl Coverage {
                 RingCircuit::ApplyRecords { writes } => matches!(writes, 1 | 2),
                 // Threshold exemptions are covered by the withdrawal controls suite.
                 RingCircuit::WithdrawalExemption => false,
+                // The in-proof owner tests land the sender keys, the sweep signs as owner.
+                RingCircuit::DeliveredSenderAudit { .. } => false,
                 _ => true,
             })
             // Each required key belongs to one independently runnable sweep.
             .filter(|circuit| {
                 let owner = match circuit {
-                    RingCircuit::DeliveredAudit { .. } | RingCircuit::Deposit { .. } => {
-                        Column::Confidential
-                    }
+                    RingCircuit::DeliveredAudit { .. }
+                    | RingCircuit::DeliveredSenderAudit { .. }
+                    | RingCircuit::Deposit { .. } => Column::Confidential,
                     RingCircuit::AnonymousAudit { .. }
                     | RingCircuit::AnonymousEntryAudit { .. }
                     | RingCircuit::Merge { .. } => Column::Anonymous,

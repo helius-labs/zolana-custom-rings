@@ -1353,6 +1353,53 @@ async fn the_anonymous_audit_request_of_an_exit_a_payment_and_change_keeps_its_p
     );
 }
 
+/// SPP hides the in-proof owner, the delivered audit holds both spent notes to the sender it publishes.
+#[tokio::test]
+async fn the_in_proof_owner_audit_request_publishes_the_sender_of_every_spent_note() {
+    let sender = &crate::tests::support::keypair(1);
+    let recipient = crate::tests::support::keypair(2)
+        .shielded_address()
+        .unwrap();
+    let mut transaction = ring_transaction(vec![
+        ring_utxo(sender, Mint::SOL, 10, 0),
+        ring_utxo(sender, Mint::SOL, 5, 1),
+    ]);
+    transaction
+        .transfer_with_ring(&recipient, Mint::SOL, 4, Some(ring().program_id()))
+        .unwrap();
+    let assembled = owner_transfer(sender, transaction)
+        .with_in_proof_owner(&sender.signing_key)
+        .assemble(&Chain::ring(RingSettings::new(RingMode::Confidential)).client())
+        .await
+        .unwrap();
+    let request = assembled.audit().unwrap().request().unwrap();
+    assert_eq!(
+        request.circuit,
+        custom_ring_interface::key_catalog::RingCircuit::DeliveredSenderAudit {
+            inputs: 48,
+            outputs: 2
+        }
+    );
+    let built = serde_json::to_value(
+        crate::prover::RequestBody::new(request.circuit, &request.body).unwrap(),
+    )
+    .unwrap();
+    let sender_pk_hash = sender.signing_pubkey().owner_proof_input_hash().unwrap();
+    assert_eq!(
+        built["sender"],
+        format!("0x{}", hex::encode(sender_pk_hash))
+    );
+    assert_eq!(built["inputs"].as_array().unwrap().len(), 48);
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/custom-ring-audit-delivered-sender-48-2.json");
+    if std::env::var_os("UPDATE_PROVER_JSON").is_some() {
+        std::fs::write(&path, serde_json::to_string_pretty(&built).unwrap() + "\n").unwrap();
+    }
+    let pinned: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(request_layout(&built), request_layout(&pinned));
+}
+
 /// The program refuses dual control the owner would satisfy itself.
 #[tokio::test]
 async fn an_approval_its_owner_would_co_sign_is_refused_before_proving() {

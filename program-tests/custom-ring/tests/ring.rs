@@ -412,6 +412,24 @@ fn frame(instruction: &Instruction, rail: RingRail) -> Result<RingTransactData<'
     Ok(RingTransactData::parse(body, rail)?.into_data())
 }
 
+/// SPP's anonymous rail hides `owner`, the delivered audit publishes it.
+fn assert_anonymous_spp_rail(instruction: &Instruction, owner: &[u8; 32]) -> Result<()> {
+    let data = frame(instruction, RingRail::Confidential)?;
+    ensure!(
+        matches!(
+            data.circuit(),
+            spr_interface::instruction::CircuitId::AnonymousRingEddsa(.., proof)
+                if proof.default_owner_tag.is_none()
+        ),
+        "the in-proof owner proves on SPP's anonymous rail"
+    );
+    ensure!(
+        data.in_proof_owner.map(|published| *published.owner) == Some(*owner),
+        "the frame publishes the in-proof owner"
+    );
+    Ok(())
+}
+
 fn reframed(instruction: &Instruction, frame: &RingTransactData<'_>) -> Result<Instruction> {
     Ok(Instruction {
         data: [&instruction.data[..1], frame.encode()?.as_slice()].concat(),

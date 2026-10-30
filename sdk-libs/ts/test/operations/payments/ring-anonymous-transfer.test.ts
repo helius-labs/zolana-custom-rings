@@ -35,6 +35,7 @@ import {
   ShieldedAddress,
   ShieldedKeypair,
   SigningKey,
+  solanaOwnerIdentity,
   X25519PublicKey,
 } from "@heliuslabs/zolana/keypair";
 import {
@@ -1241,9 +1242,13 @@ async function anonymousWithdrawal(
   };
 }
 
-function exitTokenOwnerOf(fixture: Fixture): Address | undefined {
-  const call = itemAt(fixture.sppCalls, 0);
-  return call.exitTokenOwner;
+/** The withdrawal destination the anonymous audit binds, the SPL token account's owner or the SOL recipient. */
+function exitPartyOf(fixture: Fixture): Bytes32 {
+  return anonymousAudit(fixture).audit.partyIdentities[2];
+}
+
+function partyIdentity(party: Address): Bytes32 {
+  return solanaOwnerIdentity(addressBytes(party)) as Bytes32;
 }
 
 describe("anonymous ring withdrawal destination", () => {
@@ -1315,10 +1320,10 @@ describe("anonymous ring withdrawal destination", () => {
       accounts: new Map([[TOKEN_ACCOUNT, tokenAccount(STRANGER)]]),
     });
     await expanded(spl.fixture, await spl.proven, "anonymous");
-    expect(exitTokenOwnerOf(spl.fixture)).toBe(STRANGER);
+    expect(exitPartyOf(spl.fixture)).toEqual(partyIdentity(STRANGER));
     const sol = await anonymousWithdrawal({ sender, destination: DESTINATION, spl: false });
     const { instruction, data } = await expanded(sol.fixture, await sol.proven, "anonymous");
-    expect(exitTokenOwnerOf(sol.fixture)).toBeUndefined();
+    expect(exitPartyOf(sol.fixture)).toEqual(partyIdentity(DESTINATION));
     await checkAccounts(instruction, {
       fixture: sol.fixture,
       data,
@@ -1344,7 +1349,7 @@ describe("anonymous ring withdrawal destination", () => {
       exitTokenOwner: STRANGER,
     });
     await expanded(fixture, await proven, "anonymous");
-    expect(exitTokenOwnerOf(fixture)).toBe(STRANGER);
+    expect(exitPartyOf(fixture)).toEqual(partyIdentity(STRANGER));
   });
 
   const splLeg = (destination: Address): SettlementTransfer => ({

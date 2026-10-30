@@ -5,17 +5,18 @@ mod common;
 use bytemuck::Zeroable;
 use custom_ring_interface::{
     encode_anonymous_recipient_output, encode_anonymous_sender_output,
-    ring_confidential_delivered_output_body, ring_owner_delivered_output,
-    CONFIDENTIAL_DATA_FREE_BODY_LEN,
+    ring_confidential_delivered_output_body, CONFIDENTIAL_DATA_FREE_BODY_LEN,
 };
 use custom_ring_interface::{
-    input_flag, shape_flag,
+    input_flag,
+    key_catalog::RingCircuit,
+    shape_flag,
     storage::{Revision, Root, StorageRegistry},
     transact_flag, AnonymousAuditKey, AnonymousLayout, AnonymousProofData, AuditBinding, AuditKind,
-    CustomRingError, CustomRingProof, DeliveredLayout, DisclosureLayout, InProofOwner, InputTrees,
-    InstructionTag, LiveRoots, ParsedTransact, PlainGroth16Proof, PolicyBinding, PolicyProof,
-    PolicyRecipients, RailSigner, RingMode, RingOutput, RingPolicy, RingRail, RingTransactData,
-    SenderBundle, Settlement, SourceSlot, RING_POLICY,
+    CustomRingError, CustomRingProof, DeliveredLayout, DeliveredSender, DisclosureLayout,
+    InProofOwner, InputTrees, InstructionTag, LiveRoots, ParsedTransact, PlainGroth16Proof,
+    PolicyBinding, PolicyProof, PolicyRecipients, RailSigner, RingMode, RingOutput, RingPolicy,
+    RingRail, RingTransactData, SenderBundle, Settlement, SourceSlot, RING_POLICY,
 };
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
@@ -25,8 +26,9 @@ use spr_event::{
     ANONYMOUS_RECIPIENT_ENCRYPTED_SCHEME_TAG, ANONYMOUS_SENDER_ENCRYPTED_SCHEME_TAG,
     CONFIDENTIAL_ENCRYPTED_SCHEME_TAG,
 };
+use spr_hasher::primitives::solana_owner_identity;
 use spr_interface::{
-    instruction::{InterfaceTransfer, OwnerTag, TreeContext},
+    instruction::{CircuitId, InterfaceTransfer, OwnerTag, TreeContext},
     shape::{Shape, SPP_SUPPORTED_SHAPES},
 };
 use zolana_ring_policy::ListId;
@@ -180,7 +182,7 @@ impl Fixture {
         self.with_disclosure(data)
     }
 
-    /// No owner signs, the ring slots and the change publish their owners, slot 3 a dummy.
+    /// No owner signs, SPP's anonymous rail hides the owner the delivered audit publishes.
     fn confidential_in_proof_owner(&self) -> RingTransactData<'_> {
         let mut data = self.base(RingRail::Confidential, 2, 4);
         data.policy = Some(PolicyProof {
@@ -189,13 +191,13 @@ impl Fixture {
             own_revision: Revision::from(5),
             curator_revision: None,
             sender_commitment: None,
-            recipients: PolicyRecipients::Published { dummies: 0b1000 },
+            recipients: PolicyRecipients::Framed(&self.fields[50..54]),
         });
         data.interface_transfers = vec![InterfaceTransfer::SolWithdrawal { amount: 4_000 }];
         data.outputs = (0..4)
             .map(|slot| match slot {
                 1 => self.exit(slot, &self.payload),
-                _ => self.owned(slot),
+                _ => self.delivered(slot),
             })
             .collect();
         data.in_proof_owner = Some(InProofOwner {
@@ -287,19 +289,6 @@ impl Fixture {
     fn delivered(&self, slot: usize) -> RingOutput<'_> {
         RingOutput::Delivered {
             hash: &self.fields[10 + slot],
-            u: &self.bytes[3 + slot],
-            body: &self.bodies[slot],
-        }
-    }
-
-    /// Slots 0 and 3 under the in-proof owner, the change and the dummy.
-    fn owned(&self, slot: usize) -> RingOutput<'_> {
-        RingOutput::Owned {
-            hash: &self.fields[10 + slot],
-            owner: match slot {
-                0 | 3 => &self.bytes[16],
-                _ => &self.bytes[17 + slot],
-            },
             u: &self.bytes[3 + slot],
             body: &self.bodies[slot],
         }
@@ -402,9 +391,8 @@ fn compute_vectors() -> ExpansionVectors {
                       a change output, the anonymous rail's scheme 2 sender bundle follows \
                       the outputs as a 32-byte tag, a nonzero u16 length and the body, and \
                       the random 16-byte salt follows the transaction viewing key. Under the \
-                      in-proof owner flag (byte 0 bit 3) each ring slot names its owner ahead \
-                      of its key and forwards under scheme 11, a dummy slot bitmap takes the \
-                      place of the recipients, and the owner key, commitment and commitment pok \
+                      in-proof owner flag (byte 0 bit 3) SPP proves the anonymous rail with no \
+                      default owner tag, and the owner key, commitment and commitment pok \
                       follow private_tx_hash. Produced by \
                       program-libs/interface/tests/transact.rs."
             .to_string(),
@@ -464,15 +452,6 @@ fn ring_transact_expansion_vector() {
                     .as_deref()
                     .and_then(ring_confidential_delivered_output_body)
                     .is_some()),
-                RingOutput::Owned { owner, u, body, .. } => {
-                    assert_eq!(output.owner_tag, OwnerTag::Inline(**owner));
-                    assert_eq!(
-                        output.data.as_deref().and_then(ring_owner_delivered_output),
-                        Some((*u, *body)),
-                        "{}",
-                        case.name
-                    );
-                }
                 RingOutput::Anonymous { tag, body, .. } => {
                     assert_eq!(output.owner_tag, OwnerTag::Inline(**tag));
                     assert_eq!(
@@ -939,6 +918,7 @@ fn every_rail_reads_its_disclosure_layout() {
             outputs: 2,
             exits: true,
             key_escrow: true,
+            sender_class: None,
         }))
     );
     assert_eq!(
@@ -947,6 +927,16 @@ fn every_rail_reads_its_disclosure_layout() {
             outputs: 8,
             exits: true,
             key_escrow: false,
+            sender_class: None,
+        }))
+    );
+    assert_eq!(
+        fixture.confidential_in_proof_owner().disclosure_layout(),
+        Ok(DisclosureLayout::Delivered(DeliveredLayout {
+            outputs: 4,
+            exits: true,
+            key_escrow: false,
+            sender_class: Some(24),
         }))
     );
     assert_eq!(
@@ -1020,6 +1010,24 @@ fn the_rail_follows_the_instruction_and_the_ring_mode() {
 }
 
 #[test]
+fn the_in_proof_owner_proves_on_spp_anonymous_rail_under_the_sender_key() {
+    let fixture = Fixture::new();
+    let data = fixture.confidential_in_proof_owner();
+    let CircuitId::AnonymousRingEddsa(2, 4, _, proof) = data.circuit() else {
+        panic!("the in-proof owner proves on SPP's anonymous rail");
+    };
+    assert_eq!(proof.default_owner_tag, None);
+    assert_eq!(proof.bsb22_commitment.commitment, fixture.bytes[20]);
+    assert_eq!(
+        RingCircuit::audit(data.disclosure_layout().unwrap(), data.n_out),
+        RingCircuit::DeliveredSenderAudit {
+            inputs: 24,
+            outputs: 4
+        }
+    );
+}
+
+#[test]
 fn the_audit_statement_reads_the_frame_salt_and_the_policy_sender() {
     let fixture = Fixture::new();
     let parsed = ParsedTransact::new(fixture.anonymous()).unwrap();
@@ -1043,7 +1051,15 @@ fn the_audit_statement_reads_the_frame_salt_and_the_policy_sender() {
     let delivered = ParsedTransact::new(fixture.confidential_delivered()).unwrap();
     assert_eq!(
         delivered.audit_statement(binding).unwrap().kind,
-        AuditKind::Delivered
+        AuditKind::Delivered(None)
+    );
+    let in_proof = ParsedTransact::new(fixture.confidential_in_proof_owner()).unwrap();
+    assert_eq!(
+        in_proof.audit_statement(binding).unwrap().kind,
+        AuditKind::Delivered(Some(DeliveredSender {
+            private_tx_hash: in_proof.data().private_tx_hash,
+            sender: solana_owner_identity(&fixture.bytes[16]).unwrap(),
+        }))
     );
 }
 

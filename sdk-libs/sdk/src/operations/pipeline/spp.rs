@@ -6,10 +6,7 @@ use spr_client::{
     attach_input_proofs,
     prover::{
         indexed::{IndexedTransferPreparation, IndexedTransferRail, PreparedIndexedTransfer},
-        transact::{
-            AnonymousEddsaTransferInputs, AnonymousRingEddsaProver, ConfidentialEddsaProver,
-            ConfidentialEddsaTransferInputs, EddsaRing,
-        },
+        transact::{AnonymousEddsaTransferInputs, AnonymousRingEddsaProver},
     },
     AsyncRpc, AsyncWitnessReader, ClientError, OwnerAuthorization, ProofAuthority, ProofCompressed,
     RingAuthorityProver, RingTransferProver, TransferInputs,
@@ -27,8 +24,7 @@ use crate::{trees::SpendTrees, RingError};
 pub(super) enum SppRail<'a> {
     /// The confidential rail, every input owner signs the transaction.
     OwnerSigners,
-    /// The confidential rail, the owner signs inside the proof.
-    InProofOwner(OwnerAuthorization<'a>),
+    /// SPP's anonymous rail, the hidden owner of the anonymous ring or the in-proof owner of a confidential one.
     Anonymous(OwnerAuthorization<'a>),
     Delegate,
 }
@@ -66,7 +62,6 @@ pub(super) struct CompleteSpp {
 enum SppInputs {
     Ring(TransferInputs),
     Authority(TransferInputs),
-    InProofOwner(Box<ConfidentialEddsaTransferInputs>),
     Anonymous {
         inputs: Box<AnonymousEddsaTransferInputs>,
         default_owner_tag: Option<[u8; 32]>,
@@ -91,10 +86,6 @@ impl SppWitness<'_> {
         if client.indexed_prover().is_some() {
             let rail = match self.rail {
                 SppRail::Anonymous(owner) => IndexedTransferRail::AnonymousRingEddsa {
-                    ring: self.ring,
-                    owner,
-                },
-                SppRail::InProofOwner(owner) => IndexedTransferRail::RingConfidentialEddsa {
                     ring: self.ring,
                     owner,
                 },
@@ -150,31 +141,6 @@ impl SppWitness<'_> {
                     private_tx_hash: result.private_tx_hash,
                 }
             }
-            SppRail::InProofOwner(owner) => {
-                let result = ConfidentialEddsaProver {
-                    inputs: spends,
-                    outputs: inputs.output_utxos.clone(),
-                    blinding_seed: inputs.blinding_seed,
-                    output_tree_id: inputs.output_tree_id,
-                    external_data: inputs.external_data.clone(),
-                    public_transfers: inputs.public_transfers()?,
-                    // The ring program refuses every owner signer on the in-proof owner rail.
-                    signer_pk_hashes: vec![[0; 32]; shape.signer_width()],
-                    allow_dummy_inputs,
-                    owner,
-                    ring: EddsaRing::Custom(self.ring),
-                    shape,
-                    cache_accounts: Default::default(),
-                }
-                .build()?;
-                CompleteSpp {
-                    inputs: SppInputs::InProofOwner(Box::new(result.inputs)),
-                    nullifiers: result.nullifiers,
-                    input_tree_indexes: result.input_tree_indexes,
-                    tree_contexts: result.tree_contexts,
-                    private_tx_hash: result.private_tx_hash,
-                }
-            }
             SppRail::OwnerSigners => {
                 let result = RingTransferProver {
                     inputs: spends,
@@ -222,7 +188,6 @@ impl SppWitness<'_> {
         };
         let transfer = match &mut complete.inputs {
             SppInputs::Ring(inputs) | SppInputs::Authority(inputs) => inputs,
-            SppInputs::InProofOwner(inputs) => &mut inputs.transfer,
             SppInputs::Anonymous { inputs, .. } => &mut inputs.transfer,
         };
         self.authority.complete_inputs(&mut transfer.inputs)?;
@@ -277,9 +242,6 @@ impl Spp {
                     }
                     SppInputs::Authority(inputs) => {
                         (client.prover().prove_ring_authority(inputs).await?, None)
-                    }
-                    SppInputs::InProofOwner(inputs) => {
-                        (client.prove_request(inputs.as_ref()).await?, None)
                     }
                     SppInputs::Anonymous {
                         inputs,

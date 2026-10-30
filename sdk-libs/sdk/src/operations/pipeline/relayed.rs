@@ -148,12 +148,12 @@ impl Relayed<'_> {
                         rail: RingRail::Confidential,
                     });
                 }
-                delivered(n_outputs, RingRail::Confidential)?;
+                let delivery = delivered(n_outputs, RingRail::Confidential)?;
                 let signature = self
                     .owner_signature
                     .ok_or(RingError::MissingInProofOwnerSignature)?;
                 (
-                    rail(RingDelivery::Owned),
+                    rail(delivery),
                     Vec::new(),
                     Spend::InProofOwner(OwnerAuthorization::Prepared {
                         owner: sender.signing_pubkey,

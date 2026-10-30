@@ -35,4 +35,5 @@ cf1e6986eaac23e72bf06d335817999a7f038f3ad71dc75ce303e836fa220337  custom-ring-po
 ce07fdfbe6a41b9e552b4a7d3bb6d07d582d53a748524f29a0d2510f7e6d6e72  custom-ring-register-key.json
 a78fc9c96788039213eeb7ffef3ed026dcae8b7bd94d034454102deb6a1fd396  custom-ring-withdrawal-exemption.json
 e450f59af81d2ebf4f82ec4c339de1eddc6396eba2a40e3fa48b33133057826b  rust/custom-ring-audit-anonymous-exit.json
+c0e5ca521f1c59c516a0f735cee38000beb622b987efa4f00595edb9d0ac6e70  rust/custom-ring-audit-delivered-sender-48-2.json
 7c332b5c83eed1f304d6b9f319967bd51b8d9deb2e3be78d1fd82cb0f6601876  rust/custom-ring-policy-member-v3-2-w0-own.json

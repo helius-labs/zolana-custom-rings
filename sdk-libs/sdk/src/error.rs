@@ -199,6 +199,8 @@ pub enum RingError {
     AnonymousSignerMismatch,
     #[error("the in-proof owner does not match the sender")]
     InProofOwnerMismatch,
+    #[error("input {index} is a default-ring note the in-proof owner rail cannot spend")]
+    InProofDefaultRingInput { index: usize },
     #[error("the confidential relay carries no owner signature")]
     MissingInProofOwnerSignature,
     #[error("public transaction signers must differ from the hidden owner")]

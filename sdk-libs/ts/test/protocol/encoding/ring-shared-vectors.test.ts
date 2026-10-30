@@ -406,7 +406,15 @@ describe("ring-statements.json", () => {
           privateTxHash: field(vector.private_tx_hash ?? ""),
           senderCommitment: field(vector.sender_commitment ?? ""),
         }
-      : { kind: "delivered" };
+      : vector.kind === "delivered_sender"
+        ? {
+            kind: "delivered",
+            sender: {
+              privateTxHash: field(vector.private_tx_hash ?? ""),
+              sender: field(vector.sender ?? ""),
+            },
+          }
+        : { kind: "delivered" };
 
   it("rebuilds every audit statement and its public input", () => {
     for (const vector of statements.audit) {

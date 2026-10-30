@@ -493,6 +493,70 @@ fn an_audit_only_ring_audits_every_transfer() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn an_audit_only_ring_audits_a_relayer_paid_transfer_its_owner_signs_in_the_proof() -> Result<()> {
+    let env = setup()?;
+    let ring_program = custom_ring_program_id()?;
+    let ring = CustomRing::new(ring_program);
+    let auditor = X25519Keypair::new();
+    let auditor_pk = auditor.pubkey();
+    RegisterRing {
+        ring,
+        payer: &env.payer,
+        auditor_pubkey: auditor_pk,
+        tier: Tier::AuditOnly,
+    }
+    .send(&env.client)?;
+    let sender = &env.sender.keypair;
+    let deposit = RingDeposit {
+        ring,
+        payer: sender,
+        recipient: DepositRecipient::Confidential(sender.shielded_address()?),
+        tree: env.tree,
+        asset: DepositAsset::Sol,
+        amount: RING_DEPOSIT_A,
+        cosigner: None,
+    };
+    let RingDepositReceipt { utxo, .. } = env.run(deposit.send(env.client.ring_client()))?;
+    let relayer = &env.payer;
+    let mut transaction = ConfidentialTransaction::new_with_ring(
+        vec![indexed_note(utxo, sender, &env, env.tree)?],
+        relayer.pubkey(),
+        ring_program,
+    )?
+    .with_output_tree_id(env.tree_id(env.tree)?)?;
+    transaction.transfer_sol(
+        &env.recipient.keypair.shielded_address()?,
+        RING_TRANSFER_AMOUNT,
+    )?;
+    let transfer = CustomRingTransfer::new(CustomRingTransferInput {
+        ring,
+        sender,
+        nullifier_key: Some(&sender.nullifier_key),
+        transaction,
+    })
+    .with_in_proof_owner(&sender.signing_key);
+
+    let proven = env.run(transfer.prove(env.client.ring_client()))?;
+    let instruction = proven.instruction()?;
+    assert_anonymous_spp_rail(&instruction, &sender.signing_key.pubkey().as_ed25519()?)?;
+    let signature = land(&env, instruction, relayer, &[])?;
+
+    let audited = AuditLookup {
+        ring: ring_program,
+        scan: RingScan::new(ring_program, auditor_pk),
+        auditor: &auditor,
+        signature,
+    }
+    .run(&env)?;
+    assert_eq!(
+        ring_amounts(&audited)?,
+        [RING_TRANSFER_AMOUNT, RING_DEPOSIT_A - RING_TRANSFER_AMOUNT],
+        "the auditor opens both outputs of the in-proof transfer"
+    );
+    Ok(())
+}
+
 /// Default-ring notes are legal ring transact inputs and outputs
 /// (`AssertRingMemberOrFree`).
 #[test]

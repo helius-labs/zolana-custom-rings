@@ -31,9 +31,9 @@ import type {
   OutputSlot,
 } from "@heliuslabs/zolana/transaction";
 import {
-  deliveredOutput,
   openDeliveredBody,
   readRingOutput,
+  RING_DELIVERED_BODY_LEN,
   RingScheme,
 } from "../../protocol/transaction/output.js";
 import {
@@ -725,11 +725,11 @@ class Transfer {
 
   private deliver(delivery: Delivery): SlotOpening | undefined {
     const { slot } = delivery;
+    const recipientU = slot.output.viewTag;
     const nullifierPk = this.nullifierPk(delivery.ownerKey, delivery.nullifierPk);
     if (nullifierPk === undefined) return ESCROW_UNKNOWN;
-    const delivered = deliveredOutput(slot.output.payload, slot.output.viewTag);
-    if (delivered === undefined) return FRAME;
-    const { u: recipientU, body } = delivered;
+    const body = encryptedBody(slot.output.payload, RingScheme.ringConfidentialDelivered);
+    if (body?.length !== RING_DELIVERED_BODY_LEN) return FRAME;
     const secret = this.deliveredSecret(slot, recipientU);
     if (secret === undefined) return Object.freeze({ ok: false, kind: "recipientKey" });
     try {

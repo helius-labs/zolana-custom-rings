@@ -180,7 +180,9 @@ fn a_relayer_pays_a_confidential_policy_transfer_its_owner_signs_in_the_proof() 
         proven.owner_signers().is_empty(),
         "the owner signs only in the proof"
     );
-    let signature = land(&env, proven.instruction()?, relayer, &[])?;
+    let instruction = proven.instruction()?;
+    assert_anonymous_spp_rail(&instruction, &sender.signing_key.pubkey().as_ed25519()?)?;
+    let signature = land(&env, instruction, relayer, &[])?;
     wait_for_indexed_transaction(env.client.indexer(), auditor_tag, signature);
     Ok(())
 }

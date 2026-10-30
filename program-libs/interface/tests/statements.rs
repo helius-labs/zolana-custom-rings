@@ -2,9 +2,9 @@
 
 use custom_ring_interface::{
     AnonymousAudit, AnonymousAuditKey, AnonymousLayout, ApplyRecordsStatement, AuditHead,
-    AuditKind, AuditLayout, AuditStatement, DeliveredLayout, DepositContext, DepositPublicInput,
-    DepositRegistry, DepositedAsset, DisclosureLayout, PolicyKey, PolicyStatement,
-    RegisterKeyStatement, RingOutput, ANONYMOUS_SLOT_BYTES, AUDIT_HEAD_ELEMENTS,
+    AuditKind, AuditLayout, AuditStatement, DeliveredLayout, DeliveredSender, DepositContext,
+    DepositPublicInput, DepositRegistry, DepositedAsset, DisclosureLayout, PolicyKey,
+    PolicyStatement, RegisterKeyStatement, RingOutput, ANONYMOUS_SLOT_BYTES, AUDIT_HEAD_ELEMENTS,
     DEPOSIT_PUBLIC_INPUT_ELEMENTS,
 };
 use custom_ring_interface::{PublicLeg, PublicSlotError, PublicSlots, SOL_ASSET_ADDRESS};
@@ -36,7 +36,7 @@ struct StatementVectors {
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 struct AuditCase {
-    /// `delivered` or `anonymous`.
+    /// `delivered`, `delivered_sender` or `anonymous`.
     kind: String,
     first_nullifier: String,
     ring_id: String,
@@ -50,6 +50,7 @@ struct AuditCase {
     outputs: Vec<OutputCase>,
     disclosure: Vec<String>,
     private_tx_hash: Option<String>,
+    sender: Option<String>,
     sender_commitment: Option<String>,
     party_identities: Option<Vec<String>>,
     elements: Vec<String>,
@@ -232,12 +233,13 @@ impl Values {
 
 fn audit_case(statement: &AuditStatement<'_>) -> AuditCase {
     let head = statement.head;
-    let anonymous = match statement.kind {
-        AuditKind::Anonymous(anonymous) => Some(anonymous),
-        AuditKind::Delivered => None,
+    let (anonymous, sender) = match statement.kind {
+        AuditKind::Anonymous(anonymous) => (Some(anonymous), None),
+        AuditKind::Delivered(sender) => (None, sender),
     };
     let kind = match statement.kind {
-        AuditKind::Delivered => "delivered",
+        AuditKind::Delivered(None) => "delivered",
+        AuditKind::Delivered(Some(_)) => "delivered_sender",
         AuditKind::Anonymous(_) => "anonymous",
     };
     AuditCase {
@@ -252,7 +254,11 @@ fn audit_case(statement: &AuditStatement<'_>) -> AuditCase {
         layout: head.layout.value(),
         outputs: statement.outputs.iter().map(output_case).collect(),
         disclosure: hexes(statement.disclosure),
-        private_tx_hash: anonymous.map(|anonymous| hex::encode(anonymous.private_tx_hash)),
+        private_tx_hash: anonymous
+            .map(|anonymous| anonymous.private_tx_hash)
+            .or(sender.map(|sender| sender.private_tx_hash))
+            .map(hex::encode),
+        sender: sender.map(|sender| hex::encode(sender.sender)),
         sender_commitment: anonymous.map(|anonymous| hex::encode(anonymous.sender_commitment)),
         party_identities: anonymous.map(|anonymous| hexes(anonymous.party_identities)),
         elements: hexes(&statement.elements().unwrap()),
@@ -263,7 +269,6 @@ fn audit_case(statement: &AuditStatement<'_>) -> AuditCase {
 fn output_case(output: &RingOutput<'_>) -> OutputCase {
     let (kind, u, body) = match output {
         RingOutput::Delivered { u, body, .. } => ("delivered", Some(*u), Some(*body)),
-        RingOutput::Owned { u, body, .. } => ("owned", Some(*u), Some(*body)),
         RingOutput::Anonymous { .. } => ("anonymous", None, None),
         RingOutput::Exit { .. } => ("exit", None, None),
     };
@@ -330,8 +335,9 @@ fn compute_vectors() -> StatementVectors {
                 outputs: 2,
                 exits: true,
                 key_escrow: true,
+                sender_class: None,
             })),
-            kind: AuditKind::Delivered,
+            kind: AuditKind::Delivered(None),
         },
         AuditStatement {
             head: values.head(AuditLayout {
@@ -343,8 +349,26 @@ fn compute_vectors() -> StatementVectors {
                 outputs: 8,
                 exits: true,
                 key_escrow: false,
+                sender_class: None,
             })),
-            kind: AuditKind::Delivered,
+            kind: AuditKind::Delivered(None),
+        },
+        AuditStatement {
+            head: values.head(AuditLayout {
+                exits: true,
+                ..AuditLayout::default()
+            }),
+            outputs: &delivered,
+            disclosure: values.disclosure(DisclosureLayout::Delivered(DeliveredLayout {
+                outputs: 8,
+                exits: true,
+                key_escrow: false,
+                sender_class: Some(16),
+            })),
+            kind: AuditKind::Delivered(Some(DeliveredSender {
+                private_tx_hash: &values.fields[3],
+                sender: solana_owner_identity(&[0x42; 32]).unwrap(),
+            })),
         },
         AuditStatement {
             head: values.head(AuditLayout {
@@ -468,7 +492,8 @@ fn compute_vectors() -> StatementVectors {
                       salt, layout] with the frame's random salt and layout = exits | key_escrow << 1 \
                       | full_openings << 3, the tails chain the published output \
                       hashes, then on the delivered rail the body hashes (zero for an exit), the \
-                      disclosure fields and pack_be(u) per delivered slot, on the anonymous rail \
+                      disclosure fields and pack_be(u) per delivered slot, then on the in-proof \
+                      owner rail private_tx_hash and the sender identity, on the anonymous rail \
                       the disclosure fields, private_tx_hash, the sender commitment and the three \
                       party identities, no tag or body of an anonymous slot. Each disclosure holds the field count of its layout, delivered with 2 \
                       escrowed outputs and with 8, anonymous of commitment class 4 and of the entry \
@@ -549,7 +574,7 @@ fn ring_statements_vector() {
         .iter()
         .map(|case| case.elements.len())
         .collect();
-    assert_eq!(lengths, [16, 16, 19, 19]);
+    assert_eq!(lengths, [16, 16, 18, 19, 19]);
     let policy: Vec<usize> = committed
         .policy
         .iter()

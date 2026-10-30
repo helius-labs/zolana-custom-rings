@@ -386,6 +386,17 @@ function write(value: unknown): RecordWriteProofInput {
 function request(item: Json): RingProofRequest {
   const circuitType = text(item["circuitType"]);
   const publicInputHash = field(item["publicInputHash"]);
+  if (circuitType.startsWith("custom-ring-audit-delivered-sender-"))
+    return {
+      kind: "deliveredSenderAudit",
+      publicInputHash,
+      ...envelope(item),
+      outputs: list(item["outputs"]).map(delivered),
+      sender: field(item["sender"]),
+      privateTxHash: field(item["privateTxHash"]),
+      privateTxBlinding: field(item["privateTxBlinding"]),
+      inputs: list(item["inputs"]).map(opening),
+    };
   if (circuitType.startsWith("custom-ring-audit-delivered-"))
     return {
       kind: "deliveredAudit",
@@ -724,6 +735,12 @@ describe("ring prover request encoding against the Rust fixtures", () => {
   });
 
   it.each(RUST_POLICY_FIXTURES)("encodes %s byte for byte", (name) => {
+    expectReencoded(record(JSON.parse(readFileSync(new URL(name, RUST_FIXTURES), "utf8"))));
+  });
+
+  // Go solves this Rust fixture, a TS body equal to it assigns the same witness.
+  it("encodes the in-proof owner's delivered sender audit byte for byte", () => {
+    const name = "custom-ring-audit-delivered-sender-48-2.json";
     expectReencoded(record(JSON.parse(readFileSync(new URL(name, RUST_FIXTURES), "utf8"))));
   });
 });

@@ -1,7 +1,7 @@
 //! Serves a wallet reader its own part of each transaction, refuses it outside its wallet and refuses a reader whose only grant is revoked, in the tree or the database.
 
 use super::*;
-use custom_ring_interface::{InProofOwner, RingOutput, RingRail, RingTransactData};
+use custom_ring_interface::{InProofOwner, RingRail, RingTransactData};
 
 async fn wallet_read(
     service: &AuditService<StaticSource>,
@@ -344,17 +344,6 @@ fn owned_in_proof(fixture: &Fixture, owner: Address) -> StaticSource {
     let mut data = RingTransactData::parse(&frame[1..], RingRail::Confidential)
         .expect("frame")
         .into_data();
-    // The in-proof rail frames each ring slot under its owner.
-    for output in &mut data.outputs {
-        if let RingOutput::Delivered { hash, u, body } = *output {
-            *output = RingOutput::Owned {
-                hash,
-                owner: u,
-                u,
-                body,
-            };
-        }
-    }
     data.in_proof_owner = Some(InProofOwner {
         owner: owner.as_array(),
         commitment: &zero,

@@ -31,6 +31,8 @@ func (k Key) extension() common.ExtensionCircuit {
 	switch k.Family {
 	case DeliveredAudit:
 		return bind[DeliveredAuditParams](k, audit.NewDeliveredAuditCircuit, k.Outputs)
+	case DeliveredSenderAudit:
+		return bind[DeliveredSenderAuditParams](k, audit.NewDeliveredSenderAuditCircuit, k.deliveredSenderShape())
 	case AnonymousAudit, AnonymousEntryAudit:
 		return bind[AnonymousAuditParams](k, audit.NewAnonymousAuditCircuit, k.anonymousShape())
 	case MemberPolicy:

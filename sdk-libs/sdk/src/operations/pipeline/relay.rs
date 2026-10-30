@@ -99,12 +99,11 @@ impl<R: Rail> WalletRelay<'_, R> {
                 owner_signature,
                 token_account_setup,
             },
-            RingDelivery::Owned => RelayIntent::Confidential {
+            RingDelivery::Delivered => RelayIntent::Confidential {
                 proof_inputs: encode(RelayRail::Confidential)?,
                 owner_signature,
                 token_account_setup,
             },
-            RingDelivery::Delivered => return Err(RingError::MissingInProofOwnerSignature),
         };
         Ok(PreparedRelay::new(PrepareRelayRequest {
             ring: SerializablePubkey(self.transfer.ring.program_id()),

@@ -62,6 +62,15 @@ type DeliveredAuditParams struct {
 	Outputs []DeliveredOutput `json:"outputs"`
 }
 
+type DeliveredSenderAuditParams struct {
+	DeliveredAuditParams
+	Sender            Field `json:"sender"`
+	PrivateTxHash     Field `json:"privateTxHash"`
+	PrivateTxBlinding Field `json:"privateTxBlinding"`
+	// Inputs fill the input class, a slot SPP spends no UTXO from carries none.
+	Inputs []Opening `json:"inputs"`
+}
+
 type AnonymousOutput struct {
 	Output   Opening `json:"output"`
 	OwnerKey Bytes   `json:"ownerKey"`

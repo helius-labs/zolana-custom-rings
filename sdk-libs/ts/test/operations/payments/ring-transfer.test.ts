@@ -661,11 +661,67 @@ describe("policy ring", () => {
           ...(fixture.coSigner === undefined ? {} : { coSigner: fixture.coSigner }),
         })
           .withInProofOwner(signingKeySpendSigner(signing))
-          .prove({ ...fixture.client, proveRingConfidentialEddsaTransact: unreachableProver }),
+          .prove({ ...fixture.client, proveAnonymousRingTransact: unreachableProver }),
       ).rejects.toThrow(ringError("RING_TRANSFER_TOO_WIDE", { inputs, outputs }));
       expect(fixture.ringRequests).toHaveLength(0);
       expect(fixture.sppCalls).toHaveLength(0);
     }
+  });
+
+  it("proves an in-proof owner on SPP's anonymous rail and publishes the sender in the delivered audit", async () => {
+    const signing = SigningKey.generate();
+    const sender = ShieldedKeypair.fromKeypair(signing);
+    const recipient = ShieldedKeypair.generate();
+    const fixture = await ringFixture({ table: EMPTY_TABLE });
+    const proven = await CustomRingTransfer.new({
+      ringProgramId: fixture.ringProgramId,
+      keys: walletKeys(sender),
+      transfer: transferTo(fixture, sender, [recipient]),
+      assets,
+    })
+      .withInProofOwner(signingKeySpendSigner(signing))
+      .prove(fixture.client);
+    const { data, call } = await expanded(fixture, proven, "confidential");
+
+    expect(call.circuit.kind).toBe("ringAnonymous");
+    expect(call.owner?.ownerPublicKey).toEqual(sender.shieldedAddress().signingPublicKey.ed25519());
+    expect(data.outputs.map((output) => output.kind)).toEqual(["delivered", "delivered"]);
+    expect(data.policy?.recipients.kind).toBe("framed");
+    expect(call.data.circuit).toMatchObject({ kind: "anonymousRingEddsa", inputs: 1, outputs: 2 });
+    expect(call.data.circuit.kind === "anonymousRingEddsa" && call.data.circuit.proofData).toEqual({
+      bsb22Commitment: { commitment: filled(0x51), commitmentPok: filled(0x52) },
+    });
+    expect(proven.accounts.ownerSigners).toEqual([]);
+    checkAudit(fixture, data, { kind: "deliveredSenderAudit" });
+    const audit = fixture.ringRequests.find((request) => request.kind === "deliveredSenderAudit");
+    if (audit?.kind !== "deliveredSenderAudit") throw new Error("no sender audit");
+    expect(audit.sender).toEqual(sender.shieldedAddress().signingPublicKey.ownerProofInputHash());
+    expect(audit.privateTxHash).toEqual(data.privateTxHash);
+    expect(audit.inputs).toHaveLength(48);
+  });
+
+  it("refuses a default-ring input on the in-proof owner rail before any proof", async () => {
+    const signing = SigningKey.generate();
+    const sender = ShieldedKeypair.fromKeypair(signing);
+    const fixture = await ringFixture();
+    const transfer = new ConfidentialTransfer(
+      sender.shieldedAddress(),
+      [noteInput(sender, 100n, fixture.ringProgramId), noteInput(sender, 50n)],
+      fixture.authority,
+    );
+    transfer.send(ShieldedKeypair.generate().shieldedAddress(), SOL_MINT, 30n);
+    await expect(
+      CustomRingTransfer.new({
+        ringProgramId: fixture.ringProgramId,
+        keys: walletKeys(sender),
+        transfer,
+        assets,
+      })
+        .withInProofOwner(signingKeySpendSigner(signing))
+        .prove(fixture.client),
+    ).rejects.toThrow(ringError("RING_IN_PROOF_DEFAULT_RING_INPUT", { index: 1 }));
+    expect(fixture.ringRequests).toHaveLength(0);
+    expect(fixture.sppCalls).toHaveLength(0);
   });
 
   it("binds every output owner's escrowed key on a registry ring and refuses an owner without one", async () => {
@@ -1231,8 +1287,8 @@ describe("direct confidential spend", () => {
 
     expect(result).toMatchObject({ kind: "confirmed", attempts: 2 });
     expect(fixture.sppCalls.map((call) => call.circuit.kind)).toEqual([
-      "ringConfidentialEddsa",
-      "ringConfidentialEddsa",
+      "ringAnonymous",
+      "ringAnonymous",
     ]);
   });
 });

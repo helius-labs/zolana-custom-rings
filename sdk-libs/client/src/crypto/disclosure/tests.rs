@@ -57,6 +57,7 @@ fn delivered() -> (AuditDisclosure, [bool; 8]) {
             outputs: 8,
             exits: true,
             key_escrow: false,
+            sender_class: None,
         },
         seed_out: Some(field(1)),
         outputs,
@@ -154,6 +155,7 @@ fn delivered_pair(key_escrow: bool, exits: bool) -> (AuditDisclosure, [bool; 2])
             outputs: 2,
             exits,
             key_escrow,
+            sender_class: None,
         },
         seed_out: exits.then(|| field(1)),
         outputs: vec![

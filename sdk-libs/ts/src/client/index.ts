@@ -19,6 +19,7 @@ export type {
   AuditEnvelopeProofInputs,
   DelegatePolicyProofRequest,
   DeliveredAuditProofRequest,
+  DeliveredSenderAuditProofRequest,
   DeliveredSlotProofInputs,
   DepositProofRequest,
   MemberPolicyProofRequest,
@@ -37,9 +38,7 @@ export type {
 } from "../rpc/prover/ring.js";
 export type { RingMergeDisclosureRequest } from "../crypto/audit/merge-disclosure.js";
 export type {
-  AnonymousRingTransactProofInput,
   AnonymousRingTransactProver,
-  HiddenOwnerAuthorization,
   ProvenAnonymousRingTransact,
   RingMemberOpening,
   RingMergeClient,

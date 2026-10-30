@@ -5,6 +5,7 @@ Every ring proof has one public input. It is the fold of a statement the program
 | Statement | Fold | Elements | Verified by |
 |---|---|---|---|
 | Audit, delivered | `HashChain4` | 16 | `Transfer`, `AuthorityTransfer` |
+| Audit, delivered sender | `HashChain4` | 18 | `Transfer` on the in-proof rail |
 | Audit, anonymous | `HashChain4` | 19 | `Transfer` |
 | Policy, member key | `HashChain4` | `18 + n_out` | `Transfer` |
 | Policy, delegate key | `HashChain4` | `17 + n_out` | `AuthorityTransfer` |
@@ -33,11 +34,14 @@ The head has 12 elements:
 Then by layout:
 
 - Delivered: `HashChain4(output hashes)`, `HashChain4(body hash per slot)`, `HashChain4(disclosure)`, `HashChain4(pack_be(u) per slot)`. A body hash is `hash_bytes(body)`, and an exit contributes `0` and two zero key fields.
+- Delivered sender: the delivered elements, then `private_tx_hash` and `sender`.
 - Anonymous: `HashChain4(output hashes)`, `HashChain4(disclosure)`, `private_tx_hash`, `sender_commitment`, `party_0`, `party_1`, `party_2`. No tag and no body enters it.
 
 The sender commitment comes from the frame, `0` without a policy. The party identities are `solana_owner_identity` of the payer, the signing co-signer and the withdrawal destination, each `0` when absent.
 
-The delivered statement carries no `private_tx_hash`. They bind the transfer through the first nullifier, the outputs, `tx_viewing_pk`, the salt and the auditor message. SPP's `external_data_hash` covers the outputs, `tx_viewing_pk`, the salt and the message, and the SPP proof binds the first nullifier as a public input.
+The delivered sender `sender` is `solana_owner_identity` of the frame's in-proof owner key. Its circuit holds every spent UTXO to `sender`, requires input 0 to be a UTXO and reopens SPP's `private_tx_hash` over the same inputs and outputs with no address input. `private_tx_blinding` stays private. The key takes one input class per capacity, 48 at 2 outputs, 24 at 4, 16 at 8 and 8 at 16.
+
+The delivered statement of the signer and authority rails carries no `private_tx_hash`. They bind the transfer through the first nullifier, the outputs, `tx_viewing_pk`, the salt and the auditor message. SPP's `external_data_hash` covers the outputs, `tx_viewing_pk`, the salt and the message, and the SPP proof binds the first nullifier as a public input.
 
 ## Policy
 

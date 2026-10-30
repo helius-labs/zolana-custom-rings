@@ -53,6 +53,15 @@ func compileDelivered(t *testing.T, capacity int) *compiledAudit {
 	return compileAudit(t, deliveredKeyName(capacity), circuit, ringaudit.NewDeliveredAudit(t, capacity).Circuit(t))
 }
 
+func compileDeliveredSender(t *testing.T, shape audit.DeliveredSenderShape) *compiledAudit {
+	t.Helper()
+	circuit, err := audit.NewDeliveredSenderAuditCircuit(shape)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return compileAudit(t, deliveredSenderKeyName(shape), circuit, ringaudit.NewDeliveredSenderAudit(t, shape).Circuit(t))
+}
+
 func compileAnonymous(t *testing.T, shape audit.AnonymousAuditShape) *compiledAudit {
 	t.Helper()
 	circuit, err := audit.NewAnonymousAuditCircuit(shape)
@@ -64,6 +73,10 @@ func compileAnonymous(t *testing.T, shape audit.AnonymousAuditShape) *compiledAu
 
 func deliveredKeyName(capacity int) string {
 	return fmt.Sprintf("custom_ring_audit_delivered_%d", capacity)
+}
+
+func deliveredSenderKeyName(shape audit.DeliveredSenderShape) string {
+	return fmt.Sprintf("custom_ring_audit_delivered_sender_%d_%d", shape.Inputs, shape.Outputs)
 }
 
 func anonymousKeyName(shape audit.AnonymousAuditShape) string {

@@ -6,8 +6,10 @@ import (
 	"testing"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
+	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
 // Each case changes one value of an honest transfer whose slot 0 is a ring output, slot 6 the exit and slot 7 a dummy.
@@ -74,5 +76,42 @@ func TestDeliveredAuditSolvesEveryLayout(t *testing.T) {
 				c.requireSolved(t, d.Circuit(t))
 			})
 		}
+	}
+}
+
+// Each case changes one value of an honest in-proof owner transfer spending two sender UTXOs.
+func TestDeliveredSenderAuditRefusals(t *testing.T) {
+	shape := audit.DeliveredSenderShapes[0]
+	c := compileDeliveredSender(t, shape)
+	other := ringtest.MustSolanaPkField(t, ringtest.Repeat(0xb2))
+	for _, tc := range []struct {
+		name   string
+		mutate func(*testing.T, *ringaudit.DeliveredSenderAudit, *audit.DeliveredSenderAuditCircuit)
+	}{
+		// The policy and the auditor would read a sender that owns no spent input.
+		{"published sender other than the input owners", func(t *testing.T, d *ringaudit.DeliveredSenderAudit, circuit *audit.DeliveredSenderAuditCircuit) {
+			circuit.Sender = other
+			circuit.PublicInputHash = spptest.MustHashChain4(t, ringaudit.DeliveredSenderStatement(t, d.AuditHead(t, d.Layout), d.StatementOutputs(t), d.Disclosure(t), d.PrivateTxHash(t), other))
+		}},
+		// SPP's hidden owner would spend a note the sender does not own.
+		{"second input of another owner", func(t *testing.T, d *ringaudit.DeliveredSenderAudit, circuit *audit.DeliveredSenderAuditCircuit) {
+			circuit.Inputs[1].OwnerPkHash = other
+		}},
+		// The statement would name no input SPP spends.
+		{"no spent UTXO", func(t *testing.T, d *ringaudit.DeliveredSenderAudit, circuit *audit.DeliveredSenderAuditCircuit) {
+			d.Inputs[0], d.Inputs[1] = d.Inputs[2], d.Inputs[3]
+			*circuit = *d.Circuit(t)
+		}},
+		// The audited inputs would be other than the ones SPP settles.
+		{"private tx hash over another blinding", func(t *testing.T, d *ringaudit.DeliveredSenderAudit, circuit *audit.DeliveredSenderAuditCircuit) {
+			circuit.PrivateTxBlinding = big.NewInt(0x5b1e)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := ringaudit.NewDeliveredSenderAudit(t, shape)
+			circuit := d.Circuit(t)
+			tc.mutate(t, &d, circuit)
+			c.refuse(t, circuit)
+		})
 	}
 }

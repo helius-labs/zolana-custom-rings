@@ -19,6 +19,7 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/crypto/aes"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
+	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
 // Properties:
@@ -29,6 +30,7 @@ import (
 // 5. Every UTXO's blinding is SPP's TXOB blinding over the seed tx_viewing_sk fixes.
 // 6. The disclosure opens a ring output's owner key and every UTXO's nullifier key, LayoutEscrow leaves the keys to the policy's escrow records.
 // 7. Every exit discloses its full opening, SeedOut and slots of 40 bytes appear exactly when a UTXO exits.
+// 8. A sender key holds every spent UTXO to the published sender and reopens SPP's private transaction hash over the same slots.
 
 type DeliveredAuditCircuit struct {
 	PublicInputHash frontend.Variable `gnark:",public"`
@@ -52,6 +54,22 @@ type delivery struct {
 	amount   []frontend.Variable
 }
 
+// DeliveredSenderAuditCircuit audits the in-proof owner rail, SPP hides the owner it verifies.
+type DeliveredSenderAuditCircuit struct {
+	DeliveredAuditCircuit
+	Shape DeliveredSenderShape `gnark:"-"`
+	// Sender is the published owner identity, bound to SPP's hidden owner through the spent UTXOs.
+	Sender            frontend.Variable
+	PrivateTxHash     frontend.Variable
+	PrivateTxBlinding frontend.Variable
+	Inputs            []shared.UtxoWires
+}
+
+type senderSpend struct {
+	sender, privateTxHash, privateTxBlinding frontend.Variable
+	inputs                                   []shared.UtxoWires
+}
+
 func NewDeliveredAuditCircuit(capacity int) (*DeliveredAuditCircuit, error) {
 	if !slices.Contains(DeliveredAuditCapacities[:], capacity) {
 		return nil, fmt.Errorf("audit: unsupported delivered audit capacity %d, want one of %v", capacity, DeliveredAuditCapacities)
@@ -59,7 +77,29 @@ func NewDeliveredAuditCircuit(capacity int) (*DeliveredAuditCircuit, error) {
 	return &DeliveredAuditCircuit{Capacity: capacity, Outputs: make([]DeliveryWires, capacity)}, nil
 }
 
+func NewDeliveredSenderAuditCircuit(shape DeliveredSenderShape) (*DeliveredSenderAuditCircuit, error) {
+	if !slices.Contains(DeliveredSenderShapes[:], shape) {
+		return nil, fmt.Errorf("audit: unsupported delivered sender shape %+v, want one of %v", shape, DeliveredSenderShapes)
+	}
+	delivered, err := NewDeliveredAuditCircuit(shape.Outputs)
+	if err != nil {
+		return nil, err
+	}
+	return &DeliveredSenderAuditCircuit{DeliveredAuditCircuit: *delivered, Shape: shape, Inputs: make([]shared.UtxoWires, shape.Inputs)}, nil
+}
+
 func (c *DeliveredAuditCircuit) Define(api frontend.API) error {
+	return c.define(api, nil)
+}
+
+func (c *DeliveredSenderAuditCircuit) Define(api frontend.API) error {
+	if err := shared.ValidateLength("audit", "input", len(c.Inputs), c.Shape.Inputs); err != nil {
+		return err
+	}
+	return c.define(api, &senderSpend{sender: c.Sender, privateTxHash: c.PrivateTxHash, privateTxBlinding: c.PrivateTxBlinding, inputs: c.Inputs})
+}
+
+func (c *DeliveredAuditCircuit) define(api frontend.API, spend *senderSpend) error {
 	if err := shared.ValidateLength("audit", "output", len(c.Outputs), c.Capacity); err != nil {
 		return err
 	}
@@ -87,15 +127,36 @@ func (c *DeliveredAuditCircuit) Define(api frontend.API) error {
 	// 5. SeedOut and the exit bytes of every slot appear exactly when a UTXO exits.
 	layout.assertExits(api, slots)
 	// 6. Only the holder of tx_viewing_sk opens the disclosure of every slot.
-	statement := c.statement(api, envelope,
+	elements := []frontend.Variable{
 		gadget.HashChain4(api, hashes),
 		gadget.HashChain4(api, bodyHashes),
 		c.disclosure(api, envelope, layout, nullifierPks, slotBytes),
 		gadget.HashChain4(api, recipientKeys),
-	)
-	// 7. The one public input commits the statement the program rebuilds.
-	api.AssertIsEqual(c.PublicInputHash, statement)
+	}
+	if spend != nil {
+		// 7. Every spent UTXO is the sender's, over the slots SPP settles.
+		elements = append(elements, spend.bind(api, slots)...)
+	}
+	// 8. The one public input commits the statement the program rebuilds.
+	api.AssertIsEqual(c.PublicInputHash, c.statement(api, envelope, elements))
 	return nil
+}
+
+// bind holds every spent UTXO to the sender, mirrored by DeliveredSender in program-libs/interface/src/proof/statement.rs.
+//
+//	private_tx_hash, sender
+func (s *senderSpend) bind(api frontend.API, slots []outputSlot) []frontend.Variable {
+	inputHashes := make([]frontend.Variable, len(s.inputs))
+	for i, input := range s.inputs {
+		_, inputHashes[i] = spentBySender(api, input, 1, s.sender, i)
+	}
+	outputHashes := make([]frontend.Variable, len(slots))
+	for i, slot := range slots {
+		outputHashes[i] = api.Mul(slot.Utxo, slot.Hash)
+	}
+	// SPP's private transaction hash reopens over the same slots with no address input, so SPP spends the audited inputs.
+	api.AssertIsEqual(s.privateTxHash, transaction.PrivateTxHashCircuit(api, inputHashes, outputHashes, nil, s.privateTxBlinding))
+	return []frontend.Variable{s.privateTxHash, s.sender}
 }
 
 // disclosure is the delivered disclosure the layout flags select, mirrored by DisclosureLayout::Delivered in program-libs/interface/src/proof/disclosure.rs.
@@ -123,9 +184,9 @@ func (c *DeliveredAuditCircuit) disclosure(api frontend.API, e auditEnvelope, la
 
 // statement is the delivered audit preimage, mirrored by AuditStatement::elements under AuditKind::Delivered in program-libs/interface/src/proof/statement.rs.
 //
-//	head ‖ output_chain, body_chain, disclosure_chain, recipient_key_chain
-func (c *DeliveredAuditCircuit) statement(api frontend.API, e auditEnvelope, outputChain, bodyChain, disclosureChain, recipientKeyChain frontend.Variable) frontend.Variable {
-	return gadget.HashChain4(api, append(e.statementHead(c.AuditWires), outputChain, bodyChain, disclosureChain, recipientKeyChain))
+//	head ‖ output_chain, body_chain, disclosure_chain, recipient_key_chain ‖ private_tx_hash, sender on a sender key
+func (c *DeliveredAuditCircuit) statement(api frontend.API, e auditEnvelope, elements []frontend.Variable) frontend.Variable {
+	return gadget.HashChain4(api, append(e.statementHead(c.AuditWires), elements...))
 }
 
 func recipientKey(api frontend.API, slot outputSlot, key [32]frontend.Variable) [32]frontend.Variable {

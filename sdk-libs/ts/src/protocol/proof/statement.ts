@@ -6,6 +6,7 @@ import {
   rightAlign,
 } from "@heliuslabs/zolana/internal";
 import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
+import { solanaOwnerIdentity } from "@heliuslabs/zolana/keypair";
 import { packBytesBe } from "../../crypto/derivation/hasher.js";
 import { auditLayoutValue, type AuditLayout } from "../codec/ring-disclosure-layout.js";
 
@@ -39,7 +40,11 @@ export interface AuditHead {
 }
 
 export type AuditKind =
-  | Readonly<{ kind: "delivered" }>
+  | Readonly<{
+      kind: "delivered";
+      /** In-proof owner rail only, Rust `DeliveredSender`. */
+      sender?: Readonly<{ privateTxHash: Bytes32; sender: Bytes32 }>;
+    }>
   | Readonly<{
       kind: "anonymous";
       privateTxHash: Bytes32;
@@ -109,6 +114,7 @@ export interface RegisterKeyStatement {
 
 /**
  * `head ‖ [output_chain, body_chain, disclosure_chain, recipient_key_chain]` delivered,
+ * `‖ [private_tx_hash, sender]` on the in-proof owner rail,
  * `head ‖ [output_chain, disclosure_chain, private_tx_hash, sender_commitment, party0,
  * party1, party2]` anonymous.
  */
@@ -125,6 +131,12 @@ export function auditStatementElements(statement: AuditStatement): readonly Byte
         chain(outputs.map(outputBodyHash)),
         disclosureChain,
         chain(outputs.flatMap(outputRecipientKeyFields)),
+        ...(kind.sender === undefined
+          ? []
+          : [
+              checkedBytes<Bytes32>(kind.sender.privateTxHash, 32, "private tx hash"),
+              checkedBytes<Bytes32>(kind.sender.sender, 32, "sender"),
+            ]),
       ];
     case "anonymous":
       return [
@@ -165,7 +177,17 @@ export function ringAuditStatement(data: RingTransactData, binding: AuditBinding
           partyIdentities: binding.partyIdentities,
           senderCommitment: data.policy?.senderCommitment ?? (new Uint8Array(32) as Bytes32),
         }
-      : { kind: layout.kind };
+      : {
+          kind: "delivered",
+          ...(layout.senderClass === undefined || data.inProofOwner === undefined
+            ? {}
+            : {
+                sender: {
+                  privateTxHash: data.privateTxHash,
+                  sender: solanaOwnerIdentity(data.inProofOwner.owner) as Bytes32,
+                },
+              }),
+        };
   return Object.freeze({
     head: Object.freeze({
       firstNullifier: RingTransactData.firstNullifier(data),

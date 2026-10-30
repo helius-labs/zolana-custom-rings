@@ -13,7 +13,7 @@ import {
   type WalletUtxo,
 } from "@heliuslabs/zolana/transaction";
 
-import { deliveredOutput } from "../protocol/transaction/output.js";
+import { readRingOutput, RingScheme } from "../protocol/transaction/output.js";
 import { customRingDepositPayload } from "../protocol/transaction/deposit-payload.js";
 import { nextScanCursor } from "../operations/audit/audit.js";
 import { openRingDelivery } from "../crypto/derivation/blinding.js";
@@ -91,10 +91,8 @@ export async function syncRingWallet(
   const report = await syncWallet(input, context);
   const { wallet, keys, client } = input;
   const tags = keys.viewingPublicKeys().map((key) => key.u());
-  // Scheme 11 slots publish under the owner's own key.
-  const ownerTag = keys.address().signingPublicKey.confidentialViewTag();
   const transactions = [
-    ...(await taggedTransactions(client, [...tags, ownerTag], context)),
+    ...(await taggedTransactions(client, tags, context)),
     ...(await taggedDeposits(client, tags, context)),
   ];
   const open = () => openRingNotes({ keys, assets: wallet.registry, transactions }, context);
@@ -230,22 +228,28 @@ async function openSlot(
   site: Site,
   context: RequestContext | undefined,
 ): Promise<Note | typeof PENDING | undefined> {
-  const delivered = deliveredOutput(site.slot.payload, site.slot.viewTag);
-  if (delivered === undefined || !isRingKeys(input.keys)) return undefined;
-  return deliveredNote({ keys: input.keys, assets: input.assets }, site, delivered, context);
+  let frame: ReturnType<typeof readRingOutput>;
+  try {
+    frame = readRingOutput(site.slot.payload);
+  } catch {
+    return undefined;
+  }
+  if (frame.encoding !== "encrypted") return undefined;
+  if (frame.scheme === RingScheme.ringConfidentialDelivered && isRingKeys(input.keys))
+    return deliveredNote({ keys: input.keys, assets: input.assets }, site, frame.body, context);
+  return undefined;
 }
 
 /** The slot secret keys the body, the asset is the registered mint that rebuilds the commitment. */
 async function deliveredNote(
   input: Readonly<{ keys: RingKeys; assets: AssetRegistry }>,
   site: Site,
-  delivered: Readonly<{ u: Bytes32; body: Uint8Array }>,
+  body: Uint8Array,
   context: RequestContext | undefined,
 ): Promise<Note | typeof PENDING | undefined> {
-  const { body } = delivered;
   const viewingPublicKey = input.keys
     .viewingPublicKeys()
-    .find((key) => equalBytes(key.u(), delivered.u));
+    .find((key) => equalBytes(key.u(), site.slot.viewTag));
   const firstNullifier = site.tx.nullifiers[0];
   if (viewingPublicKey === undefined || firstNullifier === undefined) return undefined;
   const slotSecret = await opened(context, async () => {
