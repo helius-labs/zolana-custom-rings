@@ -75,8 +75,11 @@ validator, Photon, the ring indexer and the ring prover.
 ## Use
 
 `zolana-ring new`, `deploy` and `init` create a ring, deploy its program and
-fix its auditor key, tier and policy. Members pay with `zolana-ring transfer`
-and `merge`, or through the Rust and TypeScript SDKs.
+fix its auditor key, tier and policy. `init` creates any missing admin,
+pauser and co-signer admin key file, by default in `keys/` beside `ring.toml`,
+so the role split holds only once each key leaves that machine. Members pay
+with `zolana-ring transfer` and `merge`, or through the Rust and TypeScript
+SDKs.
 
 ## Limits
 

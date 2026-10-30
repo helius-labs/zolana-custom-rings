@@ -9,6 +9,7 @@ A ring bounds what moves with three mechanisms: co-signer approval in the ring p
 - A withdrawal exemption proof waives the withdrawals class when each withdrawn asset's gross amount is at or below the asset's withdrawal threshold.
 - One co-signer whose scope covers every demanded class signs. A transfer that only crosses a co-sign bound takes any co-signer. With no co-signer account, that transfer fails.
 - The co-signer differs from every owner signer, the in-proof owner, the hidden owner and the delegate.
+- Ring RPC co-signs only with its own key. Where the demanded co-signer is an outside key, a wallet sends its transfer, deposit or merge itself, and a managed merge cannot run.
 
 ## Outflow limits, in the policy proof
 
@@ -16,13 +17,14 @@ A ring bounds what moves with three mechanisms: co-signer approval in the ring p
 - A deposit counts positive in the net and a withdrawal negative, so a withdrawal adds to the outflow.
 - The outflow stays at or below the asset's cap. A zero cap or co-sign bound turns that check off.
 - An outflow above the asset's co-sign bound sets the approval bit, and the program then demands a co-signer.
+- On an asset with a cap or a co-sign bound, a transfer cannot deposit more of it than it pays away.
 
 ## Window limits, in Ring RPC
 
 - Each asset's record holds a sender cap, a volume cap, a deposit cap and a withdrawal cap, each with its own window in slots. A zero cap is no cap.
 - The sender cap counts what one sender transfers and withdraws. The volume cap counts what the ring transfers, deposits and withdraws.
 - Ring RPC checks them when it decides whether to co-sign, and the program checks only the co-signature.
-- Ring RPC reserves flows at signing and fails closed, see [Flow 9](../spec.md#9-co-signer-limits-configuration). Its store serializes admission, so no allowance is granted twice.
+- Ring RPC reserves flows when it co-signs and fails closed, see [Flow 9](../spec.md#9-co-signer-limits-configuration). A deposit, a signer-rail spend or a delegate move holds its reservation while it waits for its signers, until its blockhash expires. Ring RPC's store serializes admission, so no allowance is granted twice.
 
 ## What passes them
 

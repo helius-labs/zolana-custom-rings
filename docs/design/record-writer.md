@@ -23,6 +23,7 @@ Ring RPC is the one writer of a ring's records. It turns signed record updates i
 - A batch revokes when it sets block or frozen, clears allow or approval, or restricts mint settings. It then goes out as an immediate update.
 - A wallet batch also goes out early when an authority batch waits behind it.
 - A grant revocation goes graced. A wallet that could force an immediate update would void every member's proof in flight.
+- A reader list clear goes graced even when a rule reads the reader list.
 - When the writer refuses an authority update whose signer lost the policy role, an enrolment that update approved waits again.
 
 ## Enrolment
@@ -36,7 +37,7 @@ Ring RPC is the one writer of a ring's records. It turns signed record updates i
 
 - The writer stores each batch and its signature before it sends the batch, and one tree has at most one open batch.
 - A restart settles the open batch by its signature.
-- An update that rides in a bounded number of failed batches is refused.
+- An update that rides in a bounded number of failed batches, or outlives its expiry, is refused. Nothing sends it again, so its signer must check that each revocation landed.
 - Run one writer for each storage authority key. Ring RPC does not enforce this.
 
 ## What the writer does not cover

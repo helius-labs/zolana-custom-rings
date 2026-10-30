@@ -1,6 +1,6 @@
 # Custom rings
 
-A custom ring enforces your own compliance rules on private transfers in the Solana Privacy Program (SPP). The ring program moves a ring note only after it verifies the proofs and approvals its settings demand. Ring RPC proves, co-signs, pays for and sends every wallet operation. This document describes each control, who can change it, what each party is trusted with, and the decisions behind them.
+A custom ring enforces your own compliance rules on private transfers in the Solana Privacy Program (SPP). The ring program moves a ring note only after it verifies the proofs and approvals its settings demand. Ring RPC proves, co-signs, pays for and sends wallet operations. This document describes each control, who can change it, what each party is trusted with, and the decisions behind them.
 
 The docs form one ladder from this overview down to the code. Each rung says only what the rung above cannot.
 
@@ -29,11 +29,11 @@ The docs form one ladder from this overview down to the code. Each rung says onl
 
 ## 1. ZK Policy
 
-The policy defines which checks a transfer must prove. `Initialize` pins the first rule table, and the policy authority then sets the rule table and writes the list entries. A rule screens the sender, every output owner or every asset, and rules join with AND. A list has no effect until a rule reads it. [Records and roots](design/records-and-roots.md)
+The policy defines which checks a transfer must prove. `Initialize` pins the first rule table, and the policy authority then sets the rule table and writes the list entries. A rule screens the sender, every output owner or every asset, and rules join with AND. Within one rule the lists join with OR, so a rule that forbids several lists refuses only a subject on all of them. A list has no effect until a rule reads it. A new rule table binds at once, and every proof made under the old one fails. A ring created without a rule table never gets one. [Records and roots](design/records-and-roots.md)
 
 ### 1.1. Allowlist
 
-An allowlist is a list of approved identities. A rule can require the sender, every recipient, or both, to be on it. A guard can exempt payments at or below a threshold, so only recipients above it must be listed. The threshold is one value for the rule, or one value per asset in the asset's record.
+An allowlist is a list of approved identities. A rule can require the sender, every recipient, or both, to be on it. A recipient rule screens every output, the sender's change and each exit included, and the owner of each withdrawal. A guard can exempt payments at or below a threshold, so only recipients above it must be listed. The threshold is one value for the rule, which limits each transfer to one asset, or one value per asset in the asset's record.
 
 ### 1.2. Blocklist
 
@@ -49,7 +49,7 @@ An asset rule over the allowlist admits only listed assets to deposits and trans
 
 ### 1.5. Outflow limits per transfer
 
-An asset's record can hold a cap and a co-sign bound. The policy proof keeps one transfer's outflow of the asset at or below the cap, and demands a co-signer above the bound. Limits over time are Ring RPC's, see 3.2. Differs from the PR 15 draft: per-transfer outflow limits live in the policy proof. [Co-signing](design/co-signing.md)
+An asset's record can hold a cap and a co-sign bound. The policy proof keeps one transfer's outflow of the asset at or below the cap, and demands a co-signer above the bound. An asset with no record has neither. Limits over time are Ring RPC's, see 3.2. Differs from the PR 15 draft: per-transfer outflow limits live in the policy proof. [Co-signing](design/co-signing.md)
 
 ### 1.6. Auditor
 
@@ -65,7 +65,7 @@ Pausing stops all activity in the ring until it's resumed: deposits, transfers, 
 
 ### 2.2. Permanent delegate
 
-A permanent delegate is a key that can move an escrowed member's funds to another escrowed member within the ring. The admin and the delegate set it once, on a confidential policy ring. From then on, the owner of every new note must escrow its key. The delegate cannot pay out of the ring. SPP governance must enable the ring's authority rail before the first move. The rules still screen the moved member as the sender, so a blocked or frozen member's funds do not move (open question 6).
+A permanent delegate is a key that can move an escrowed member's funds to another escrowed member within the ring. The admin and the delegate set it once, on a confidential policy ring. From then on, the owner of every new note must escrow its key, the owner of an exit included (open question 12). A member's public withdrawal pays any owner the rules admit. The delegate cannot pay out of the ring. SPP governance must enable the ring's authority rail before the first move. The rules still screen the moved member as the sender, so a blocked or frozen member's funds do not move (open question 6).
 
 ### 2.3. Co-signer approval
 
@@ -82,7 +82,7 @@ A co-signer is a key that the co-signer admin designates to approve selected ope
 
 ### 3.1. Readers
 
-A reader accesses decrypted activity through Ring RPC without holding the auditor key. The policy authority grants access across the ring. A wallet grants access to its own activity. A deployment keeps every grant in one store, the ring's storage tree or Ring RPC's encrypted database. Differs from the PR 15 draft: one store per deployment, never both.
+A reader accesses decrypted activity through Ring RPC without holding the auditor key. The policy authority grants access across the ring. A wallet grants access to its own activity, and its own key reads nothing without that grant. A deployment keeps every grant in one store, the ring's storage tree or Ring RPC's encrypted database. Differs from the PR 15 draft: one store per deployment, never both.
 
 ### 3.2. Co-signer limits
 
@@ -92,13 +92,13 @@ Ring RPC co-signs only within limits the policy authority writes to each asset's
 2. **Volume limit:** what the ring transfers, takes in and pays out of the asset within a window.
 3. **Deposit and withdrawal limits:** what the ring takes in and pays out in public deposits and withdrawals, each with its own window.
 
-These limits bind only the operations the ring requires co-signing for. Ring RPC enforces them when it decides whether to co-sign, and the ring program checks only that the co-signer signed. Enforcement at co-signing follows the PR 15 draft's Flow 9 and trust assumption 3. A limit binds every operation of a class, for example Transfers, only when Ring RPC is the one co-signer that covers that class. Otherwise a transfer below the co-sign bound, or one that another co-signer signs, can pass uncounted. The per-transfer cap and co-sign bound of 1.5 hold either way. Differs from the PR 15 draft: limits are set per asset, not per co-signer (open question 1).
+These limits bind only the operations the ring requires co-signing for. Ring RPC enforces them when it decides whether to co-sign, and the ring program checks only that the co-signer signed. Ring RPC refuses to co-sign an operation that moves an asset with no record. Enforcement at co-signing follows the PR 15 draft's Flow 9 and trust assumption 3. A limit binds every operation of a class, for example Transfers, only when Ring RPC is the one co-signer that covers that class. Otherwise a transfer below the co-sign bound, or one that another co-signer signs, can pass uncounted. The per-transfer cap and co-sign bound of 1.5 hold either way. Differs from the PR 15 draft: limits are set per asset, not per co-signer (open question 1).
 
 ## Components and ownership
 
 1. **Ring program:** one deployment per ring. Verifies the ring proofs and controls, then calls SPP signed by its ring PDA.
 2. **Storage program:** one shared deployment. Keeps the root history of record trees, each under one authority, and verifies the proof of each tree update. It checks no policy.
-3. **Ring RPC:** our hosted service. Holds the auditor key, writes records, relays and pays for every wallet operation, co-signs under limits, merges escrowed notes and serves readers.
+3. **Ring RPC:** our hosted service. Holds the auditor key, writes records, relays and pays for wallet operations, co-signs under limits, merges escrowed notes and serves readers.
 4. **Ring indexer:** projects every storage tree from confirmed blocks, serves record openings, and forwards every other call to Photon.
 5. **Ring prover:** the zolana prover with the ring circuits added.
 6. **SDKs and CLI:** the Rust and TypeScript SDKs build ring operations, and wallets send them through Ring RPC. The operator CLI creates, deploys and governs rings.
@@ -141,15 +141,15 @@ Ring RPC keeps one key file per role. The auditor key opens ring activity. The s
 ## Trust Assumptions
 
 1. **Storage authority:** trusted for every record. The tree proof verifies the update, not the record. A write the authority signs directly skips every Ring RPC check, the wallet's signature and the escrow proof included.
-2. **Policy authority:** trusted to set policy rules, lists, limits and ring-wide grants. Each other role is trusted for its own control.
-3. **Ring RPC:** trusted to protect the auditor key and every proof input a wallet hands it. It is trusted to enforce reader grants and co-signer limits, and to write records as signed. One Ring RPC process serves a ring.
+2. **Policy authority:** trusted to set policy rules, lists, limits and ring-wide grants, and to bind the records. Each other role is trusted for its own control.
+3. **Ring RPC:** trusted to protect the auditor key and every proof input a wallet hands it. It is trusted to enforce reader grants and co-signer limits, and to write records as signed. A depositor, a signer-rail owner or the delegate signs the transaction Ring RPC builds, and so trusts Ring RPC with all that transaction can move. With derived keys Ring RPC relays and pays for any ring, and only its rate limits bound what it pays. No two Ring RPC processes serve one ring.
 4. **Curator:** a ring trusts the authority of its one curator tree.
 5. **Delegate:** trusted to move escrowed members' funds within the ring under the configured controls.
-6. **Upgrade authority:** trusted to create the ring and to deploy upgrades that keep the program's guarantees. An upgrade can replace every check.
+6. **Upgrade authority:** trusted to create the ring and to deploy upgrades that keep the program's guarantees. An upgrade can replace every check. Only the operator tools refuse an upgrade over a ring account the new release cannot read.
 7. **Key generator:** the ring proving keys come from a single-party setup. Whoever ran it could forge every ring proof.
-8. **Revocation timing:** a revocation binds on chain the moment the storage update that writes it applies. A transaction that passed Ring RPC or a relayer before then fails on chain. Ring RPC writes every revocation the rules read as an immediate update, and a curator's revocation binds as fast as its authority writes it.
+8. **Revocation timing:** an immediate revocation binds on chain the moment its storage update applies, and a transaction that passed Ring RPC or a relayer before then fails on chain. Ring RPC sends the revocations [the record writer](design/record-writer.md) names as immediate updates. Any other revocation goes graced, so a proof under the earlier root still lands within the grace period. A curator's revocation binds as fast as its authority writes it.
 9. **Limits:** Ring RPC enforces co-signer limits only on what it co-signs. A co-signer outside Ring RPC enforces none.
-10. **Photon and chain RPC:** Photon is trusted for complete history, the chain RPC for confirmed contents.
+10. **Photon, ring indexer and chain RPC:** Photon and the ring indexer that forwards to it are trusted for complete history, the chain RPC for confirmed contents. Ring RPC verifies each record opening under the newest root. While the ring indexer lags that root, Ring RPC's tree-mode reader grant checks, its escrow and limit updates and its co-signatures on a deposit, transfer or withdrawal fail.
 11. **SPP governance:** trusted to activate the ring when SPP does not activate it at creation, and to enable its authority rail.
 
 ## Glossary
@@ -236,14 +236,14 @@ A deposit moves SOL or tokens from a wallet's public balance into up to 8 ring n
    2. Prepares the deposit notes and seals their openings to the **Auditor**.
    3. Sends the deposit request with its proof inputs to **Ring RPC**.
 2. **Ring RPC:**
-   1. Checks that the ring is active, the asset rules hold and, on a ring with a delegate, that each recipient escrows its key.
-   2. Generates the deposit proof.
-   3. Returns the transaction to the **Wallet** for signing.
+   1. Checks that the ring is active.
+   2. Generates the deposit proof. It shows the asset rules hold and, on a ring with a delegate, that each recipient escrows its key.
+   3. Co-signs when deposits demand approval.
+   4. Returns the transaction to the **Wallet** for signing.
 3. **Wallet:** signs to authorize the SOL or SPL token transfer.
 4. **Ring RPC:**
-   1. Co-signs when deposits demand approval.
-   2. Pays fees and submits the deposit to the **Ring Program**.
-   3. Follows the deposit to confirmation. The recipient's **Wallet** finds its notes by view tag.
+   1. Pays fees and submits the deposit to the **Ring Program**.
+   2. Follows the deposit to confirmation. The recipient's **Wallet** finds its notes by view tag.
 
 On every ring the sealed opening names each note's owner key, and the deposit proof binds that key to the note's owner commitment.
 
@@ -268,7 +268,7 @@ A unified flow for anonymous and confidential transfers, exits and withdrawals.
    4. Co-signs within the limits when the transfer demands a co-signer.
    5. Pays fees, submits the transaction to Solana and follows it to confirmation.
 
-The SDKs refuse a shape that does not fit one transaction. A relayed wide confidential policy payout does not fit, so the sender splits it or merges first.
+The SDKs refuse a shape that does not fit one transaction. A relayed wide confidential policy payout does not fit, so the sender splits it or merges first. A relayed transfer carries withdrawals only. A transfer with a deposit leg goes out in the owner's own transaction, and on an anonymous ring its payer funds the leg. The SDKs fund a transfer from one tree, so one payment moves at most what the wallet holds in one tree.
 
 ## 5. User merge
 
@@ -296,6 +296,8 @@ Managed merge is initiated by **Ring RPC** on a ring with a delegate. It combine
    4. Pays fees and submits the merge through its relay.
    5. Indexes the result.
 
+Ring RPC stores merge settings on any ring, and gives no error where it cannot merge.
+
 ## 7. Authority transfer
 
 An authority transfer moves a wallet's funds to recipients within the same ring, authorized by the permanent **Delegate**.
@@ -306,7 +308,8 @@ An authority transfer moves a wallet's funds to recipients within the same ring,
    2. Opens the source's escrowed nullifier secret and checks it against the source's nullifier key.
    3. Funds the payments from the source's notes and returns the change to the source.
    4. Generates the delegate-rail proofs, including the recipients' key-escrow checks.
-3. **Delegate:** signs the transaction. The **Co-signer** also signs when required.
+   5. Co-signs when the move demands a co-signer.
+3. **Delegate:** signs the transaction.
 4. **Ring RPC:** pays fees, submits the transfer to the **Ring Program** and indexes the result.
 
 ## 8. Reader access grants and revocation
@@ -332,7 +335,7 @@ The **Policy authority** configures the limits applied by the **Co-signer** that
 
 1. **Policy authority:** sets, updates or removes each asset's sender, volume, deposit and withdrawal caps and their windows, in a record update.
 2. **Ring RPC:**
-   1. Refuses a cap without its window, a window without its cap, a window past its bound, and limits for an asset with no record.
+   1. Refuses a cap without its window, a window without its cap, a window past its bound, and limits for an asset with no record. Limits for a new asset go in an update submitted after the one that creates its record lands.
    2. Applies the update as Flow 2 does.
 3. **Ring RPC**, before each co-signature:
    1. Reads the limits under the records' newest root.
@@ -379,8 +382,8 @@ The **Ring Program** checks only the required co-signer signature, never the lim
 10. Ring RPC reads one key file per role. A leaked file exposes one job.
 11. Each co-signer has its own account, and one co-signer covering every demanded class signs. The hot path loads one co-signer account by owner and discriminator, as the draft's note 2 asks.
 12. Co-signer limits live per asset in the asset record, each cap with its own window. The tree already serves per-asset data under a root the program reads.
-13. Co-signing fails closed when Ring RPC cannot read the limits. Unread limits would otherwise read as no limits.
-14. Ring RPC relays every wallet operation and pays its fees. The wallet never fetches a Merkle path, as the draft's note 4 asks.
+13. Co-signing fails closed when Ring RPC cannot read the limits or the asset has no record. Either would otherwise read as no limits.
+14. Ring RPC relays and pays for every wallet operation except a transfer with a deposit leg or an operation that needs an outside co-signer. A relayed wallet never fetches a Merkle path, as the draft's note 4 asks.
 15. The ring's in-proof owner rail enters zolana as new files, and the ring program refuses owner signers on it. Every input then belongs to the owner the policy reads as the sender.
 16. Both confidential owner rails stay. The signer rail needs no SPP feature build.
 17. This repository never refactors zolana circuits. They are audited, and a source change reopens the audit.
@@ -394,7 +397,7 @@ The **Ring Program** checks only the required co-signer signature, never the lim
 25. One Ring RPC process serves a ring. Its store serializes co-sign admission and keeps spent replay nonces across a restart, so no allowance is granted twice and no nonce is accepted twice.
 26. No instruction migrates an older ring layout. Rings are created fresh, and the repository forbids compatibility shims.
 27. `Initialize` creates the ring account, binds the records and registers the ring with SPP in one instruction. No half-created ring exists.
-28. Ring RPC creates the ring's records tree under its storage authority, and `Initialize` binds it. The ring then trusts for its records the one writer that checks every record update.
+28. Ring RPC creates the ring's records tree under its storage authority, and `Initialize` binds it. The program accepts any storage registry as the records, so whoever binds them picks the records writer, and a tree written outside Ring RPC skips its checks.
 
 ## Notes
 
@@ -416,3 +419,4 @@ The **Ring Program** checks only the required co-signer signature, never the lim
 9. Do you need relayed 16-way confidential payouts in one transaction? A relayed one needs SPP to publish less per output.
 10. An escrow key cannot change once set. Should a wallet be able to rotate it?
 11. Roots are read live from the storage registries, so a policy transfer passes the ring account plus one or two registry accounts. Do you accept this over your question 3.1, which syncs roots into the policy account?
+12. On a ring with a delegate an exit pays only an escrowed owner, though neither the delegate nor a managed merge moves default-ring notes. Should an exit pay any owner the rules admit, as a public withdrawal does?
