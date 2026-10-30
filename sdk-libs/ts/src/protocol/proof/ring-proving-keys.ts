@@ -36,10 +36,10 @@ export const RING_PROVING_KEY_SHA256S: Readonly<Record<string, string>> = Object
     "f7c6e72d5b41bdf27fb3d7f6f69225e7c2d5cf4733b67ac948fa4a3bab82fadd",
   "custom_ring_audit_delivered_8.key":
     "92facd093e1e9436e92b88063c0c6766bb206cda8517c236ee6640cfda58af4f",
-  "custom_ring_deposit_1.key": "3274744df678c076edd00616ead055db565912bed97a9811e54206d25055dc5c",
-  "custom_ring_deposit_2.key": "8088a0fe756006c0fdc762fd4760cef220f856a2c46602b9706e78cebfa4e172",
-  "custom_ring_deposit_4.key": "f0d7133940422650a8613d99892f1ee9f558cae5ddda5b58d7e93a40b6c736e1",
-  "custom_ring_deposit_8.key": "e3d3f85bc9594e61ab03ddd2e210ce8711ad8876c915fb8e3fa9054ec2186bdd",
+  "custom_ring_deposit_1.key": "59fc582856c9285591585108e78e092097d6d519659df9e42c2e2209c2aa2fe6",
+  "custom_ring_deposit_2.key": "03ab065cef986f79c346b0e9795e49352ce23a1e3be88170df5d452ec6b22628",
+  "custom_ring_deposit_4.key": "1f6e192e849da02c36e6dd5b498fdeb737336829f6f2b71e5953bbaa5d0b76a6",
+  "custom_ring_deposit_8.key": "00999a12b7dd07e311c29ba9b56297d83b537c5185ea0480fc611699e29f5522",
   "custom_ring_merge_v3_24.key": "f0f61c71f100f817efc797356143d64c386bd82096179b5d84be65db1fe101f0",
   "custom_ring_merge_v3_8.key": "7c07b069efccb6cdbb32f614d145777c1c4744fd1bddd3b61234c6f91bfa7561",
   "custom_ring_policy_delegate_v3_2x2_curator.key":

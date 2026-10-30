@@ -59,8 +59,11 @@ func TestDepositRefusals(t *testing.T) {
 		{"an anonymous owner hash of another key", ringdeposit.ModeAnonymous, func(_ *testing.T, d *ringdeposit.Deposit) {
 			d.Circuit.OwnerKeys[0][1] = 0
 		}, append([]string{"gadget.AssertEqualWhen"}, define...)},
-		{"a key disclosed by a ring that is not anonymous", ringdeposit.ModeOff, func(_ *testing.T, d *ringdeposit.Deposit) {
-			d.Circuit.OwnerKeys[0][0] = 1
+		{"a confidential owner hash of another key", ringdeposit.ModeOff, func(_ *testing.T, d *ringdeposit.Deposit) {
+			d.Circuit.OwnerKeys[0][1] = 0
+		}, append([]string{"gadget.AssertEqualWhen"}, define...)},
+		{"a padding slot with an owner key", ringdeposit.ModeOff, func(_ *testing.T, d *ringdeposit.Deposit) {
+			d.Circuit.OwnerKeys[circuits.MaxDeposits-1][0] = 1
 		}, append([]string{"gadget.AssertZeroWhen"}, define...)},
 		{"owner key bytes outside 0..255 with the same owner identity", ringdeposit.ModeAnonymous, func(_ *testing.T, d *ringdeposit.Deposit) {
 			// Moving 256 between adjacent bytes keeps the identity, the envelope's byte table refuses the encoding.

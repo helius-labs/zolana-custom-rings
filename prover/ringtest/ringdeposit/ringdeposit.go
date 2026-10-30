@@ -38,7 +38,7 @@ type Policy struct {
 	Asset int64
 }
 
-// Build deposits count owners under the CRDB blinding, escrowed on ModeRegistry and disclosing their keys on ModeAnonymous.
+// Build deposits count owners under the CRDB blinding, escrowed on ModeRegistry, every owner key disclosed.
 func Build(t testing.TB, count int, mode RingMode) *Deposit {
 	t.Helper()
 	return BuildBlinded(t, count, mode, ringprotocol.DepositBlinding)
@@ -98,13 +98,10 @@ func build(t testing.TB, count int, mode RingMode, blindingOf func(testing.TB, *
 		var key [32]byte
 		ownerPkHash, nullifierPk, secret, ctHash := big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0)
 		if i < count {
-			ownerPkHash = big.NewInt(int64(11 + i))
-			if anonymous {
-				for j := range key {
-					key[j] = byte(i + j + 1)
-				}
-				ownerPkHash = ringtest.MustSolanaPkField(t, key)
+			for j := range key {
+				key[j] = byte(i + j + 1)
 			}
+			ownerPkHash = ringtest.MustSolanaPkField(t, key)
 			nullifierPk = spptest.MustNullifierPk(t, big.NewInt(int64(51+i)))
 			secret = big.NewInt(int64(91 + i))
 			if escrow {
