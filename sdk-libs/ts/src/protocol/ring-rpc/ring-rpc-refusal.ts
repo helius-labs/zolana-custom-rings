@@ -53,6 +53,7 @@ export const RingRpcRefusal = Object.freeze({
   walletScope: -32270,
   invalidLimits: -32276,
   limitsWithoutRecord: -32277,
+  unrecordedAsset: -32296,
 } as const);
 
 export type RingRpcRefusalName = keyof typeof RingRpcRefusal;

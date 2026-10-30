@@ -23,12 +23,12 @@ use crate::{
 pub trait AssetLimitSource: Send + Sync {
     fn current_slot(&self) -> impl Future<Output = Result<u64, RingRpcError>> + Send;
 
-    /// In `assets` order, zero for an asset without a record.
+    /// In `assets` order, `None` for an asset without a record.
     fn asset_limits(
         &self,
         ring: Address,
         assets: &[Address],
-    ) -> impl Future<Output = Result<Vec<AssetLimits>, RingRpcError>> + Send;
+    ) -> impl Future<Output = Result<Vec<Option<AssetLimits>>, RingRpcError>> + Send;
 }
 
 /// Reads each asset record under the newest root of the ring's records registry.
@@ -104,7 +104,7 @@ impl<L: AssetLimitSource> CoSignPolicy for LimitedCoSigner<L> {
     }
 
     async fn decide(&self, request: &CoSignRequest) -> Result<CoSignDecision, RingRpcError> {
-        // 1. Each asset is named once and has its limits from the ring's registry.
+        // 1. Each asset is named once and has a record in the ring's registry.
         let assets: Vec<Address> = request.flows.iter().map(|flow| flow.asset).collect();
         if assets.iter().collect::<HashSet<_>>().len() != assets.len() {
             return Err(CoSignError::RepeatedAsset.into());
@@ -118,11 +118,14 @@ impl<L: AssetLimitSource> CoSignPolicy for LimitedCoSigner<L> {
             .flows
             .iter()
             .zip(limits)
-            .map(|(flow, limits)| AssetCheck {
-                flow: *flow,
-                limits,
+            .map(|(flow, recorded)| {
+                recorded.map(|limits| AssetCheck {
+                    flow: *flow,
+                    limits,
+                })
             })
-            .collect();
+            .collect::<Option<_>>()
+            .ok_or(CoSignError::UnrecordedAsset)?;
         let signature = self.signer.sign_message(&request.message.serialize());
 
         // 2. Co-signers sharing the store decide one at a time for each asset.
@@ -184,18 +187,18 @@ impl<S: TransactionSource> AssetLimitSource for RecordLimits<S> {
         Ok(self.0.source.slot().await?)
     }
 
-    /// Empty without a ring policy, refused without a records registry.
+    /// No record without a ring policy, refused without a records registry.
     async fn asset_limits(
         &self,
         ring: Address,
         assets: &[Address],
-    ) -> Result<Vec<AssetLimits>, RingRpcError> {
+    ) -> Result<Vec<Option<AssetLimits>>, RingRpcError> {
         if assets.is_empty() {
             return Ok(Vec::new());
         }
         let source = &self.0.source;
         let tip = match source.records_root(ring).await? {
-            RecordsTip::NoPolicy => return Ok(vec![AssetLimits::EMPTY; assets.len()]),
+            RecordsTip::NoPolicy => return Ok(vec![None; assets.len()]),
             RecordsTip::NoRegistry => return Err(CoSignError::LimitsUnavailable.into()),
             RecordsTip::Newest(tip) => tip,
         };
@@ -208,11 +211,7 @@ impl<S: TransactionSource> AssetLimitSource for RecordLimits<S> {
             .verified_openings(&tip, &members)
             .await?
             .iter()
-            .map(|opening| {
-                opening
-                    .record()
-                    .map_or(AssetLimits::EMPTY, |record| record.mint_policy.limits)
-            })
+            .map(|opening| opening.record().map(|record| record.mint_policy.limits))
             .collect())
     }
 }
@@ -399,7 +398,7 @@ mod tests {
         assert_eq!(decision, CoSignDecision::Refused(CoSignRefusal::OverLimit));
     }
 
-    struct FixedLimits;
+    struct FixedLimits(Option<AssetLimits>);
 
     impl AssetLimitSource for FixedLimits {
         async fn current_slot(&self) -> Result<u64, RingRpcError> {
@@ -410,8 +409,8 @@ mod tests {
             &self,
             _ring: Address,
             assets: &[Address],
-        ) -> Result<Vec<AssetLimits>, RingRpcError> {
-            Ok(vec![SENDER_LIMITS; assets.len()])
+        ) -> Result<Vec<Option<AssetLimits>>, RingRpcError> {
+            Ok(vec![self.0; assets.len()])
         }
     }
 
@@ -437,7 +436,7 @@ mod tests {
         let store = Store::open("sqlite::memory:", 1).await.expect("store");
         let co_signer = LimitedCoSignerInit {
             signer: Keypair::new_from_array([5; 32]),
-            limits: FixedLimits,
+            limits: FixedLimits(Some(SENDER_LIMITS)),
             store: Arc::new(store),
         }
         .build();
@@ -462,6 +461,22 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn a_transfer_of_an_unrecorded_asset_is_refused() {
+        let store = Store::open("sqlite::memory:", 1).await.expect("store");
+        let co_signer = LimitedCoSignerInit {
+            signer: Keypair::new_from_array([5; 32]),
+            limits: FixedLimits(None),
+            store: Arc::new(store),
+        }
+        .build();
+
+        assert!(matches!(
+            co_signer.decide(&request(1, 1)).await,
+            Err(RingRpcError::CoSign(CoSignError::UnrecordedAsset))
+        ));
+    }
+
     async fn co_signer(url: &str) -> Arc<LimitedCoSigner<FixedLimits>> {
         let store = Store::open(url, crate::database::STORE_CONNECTIONS)
             .await
@@ -469,7 +484,7 @@ mod tests {
         Arc::new(
             LimitedCoSignerInit {
                 signer: Keypair::new_from_array([5; 32]),
-                limits: FixedLimits,
+                limits: FixedLimits(Some(SENDER_LIMITS)),
                 store: Arc::new(store),
             }
             .build(),

@@ -51,6 +51,8 @@ pub enum CoSignError {
     RepeatedAsset = -32162,
     #[error("the asset limits are unreadable")]
     LimitsUnavailable = -32163,
+    #[error("the co-sign request names an asset with no record")]
+    UnrecordedAsset = -32296,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,6 +129,7 @@ mod tests {
             (OverLimit, -32161),
             (RepeatedAsset, -32162),
             (LimitsUnavailable, -32163),
+            (UnrecordedAsset, -32296),
         ] {
             assert_eq!(ErrorObjectOwned::from(error).code(), code);
         }

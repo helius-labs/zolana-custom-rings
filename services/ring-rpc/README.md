@@ -164,7 +164,7 @@ A signature reserves its flows in the `cosign_usage` table, keyed by the co-sign
 
 `keygen --kind co-signer` prints the co-signer public key for the ring's `CoSigner` record, and `serve` logs it at start.
 
-Co-signer errors are `-32160` disabled, `-32161` over a limit, `-32162` an asset named twice and `-32163` unreadable limits.
+Co-signer errors are `-32160` disabled, `-32161` over a limit, `-32162` an asset named twice, `-32163` unreadable limits and `-32296` an asset with no record.
 
 ## Managed merge
 
