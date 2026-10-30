@@ -34,7 +34,8 @@ LABEL org.opencontainers.image.title="Zolana Ring Indexer" \
       org.opencontainers.image.source="https://github.com/helius-labs/zolana-custom-rings" \
       org.opencontainers.image.licenses="Apache-2.0"
 
-ENV HOME=/var/lib/ring-indexer
+ENV HOME=/var/lib/ring-indexer \
+    RING_INDEXER_BIND=0.0.0.0
 WORKDIR /var/lib/ring-indexer
 USER ring-indexer
 
