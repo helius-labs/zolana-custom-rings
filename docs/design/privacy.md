@@ -17,7 +17,7 @@ The confidential modes and the anonymous mode differ at the sender and the recip
 - They see each exit owner, each public leg and, on a policy ring, a blinded sender commitment.
 - They do not see the sender, the recipients, the amounts, the assets or the spent notes.
 - The hiding holds only while all of these hold:
-  1. The payer does not link to the owner. A relayer pays.
+  1. The payer does not link to the owner.
   2. The transfer spends ring notes only. A default-ring spend publishes its owner.
   3. No exit or withdrawal pays a key linked to the owner.
   4. A first payment takes a request tag. The bootstrap tag is the recipient's viewing key and links every bootstrap payment to it.
