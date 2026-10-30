@@ -72,7 +72,7 @@ import {
   MAX_RING_MERGE_INPUTS,
   buildRingMergeTransaction,
   ringMergeInstruction,
-} from "../../../src/operations/payments/merge.js";
+} from "../../../src/index.js";
 import {
   emptyRingMergeDisclosure,
   mergeDisclosureFieldCount,

@@ -85,6 +85,27 @@ export type {
   RingDelegateRecoveredParams,
 } from "@heliuslabs/zolana-custom-rings";
 export { prepareRingMergeRelay, customRingDepositPayload } from "@heliuslabs/zolana-custom-rings";
+export {
+  buildRingDepositTransaction,
+  buildRingEntryTransaction,
+  buildRingExitTransaction,
+  buildRingMergeTransaction,
+  buildRingTransferTransaction,
+  buildRingWithdrawalTransaction,
+  createRingDepositSubmission,
+  createRingEntrySubmission,
+  createRingExitSubmission,
+  createRingMergeSubmission,
+  createRingTransferSubmission,
+  createRingWithdrawalSubmission,
+} from "@heliuslabs/zolana-custom-rings";
+export type {
+  AnonymousSpendOwner,
+  RingAnonymousRail,
+  RingDirectRail,
+  RingMergeTransactionParams,
+  RingOwnerRail,
+} from "@heliuslabs/zolana-custom-rings";
 export { MEMBER_REGISTRY_CAPACITY } from "@heliuslabs/zolana-custom-rings/advanced";
 export type {
   MemberRecord,

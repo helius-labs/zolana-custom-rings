@@ -1,6 +1,14 @@
 import { existsSync, readFileSync } from "node:fs";
 
-import { AccountRole, address, getAddressDecoder, type Address, type Signature } from "@solana/kit";
+import {
+  AccountRole,
+  address,
+  generateKeyPairSigner,
+  getAddressDecoder,
+  signTransactionWithSigners,
+  type Address,
+  type Signature,
+} from "@solana/kit";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
@@ -80,6 +88,7 @@ import {
   type FirstContact,
 } from "../../src/state/viewing-history.js";
 import { RingAddress } from "../../src/crypto/keys/ring-address.js";
+import { RingProgramError, createRingDepositSubmission } from "../../src/index.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 const TREE = treeAddress(0);
@@ -731,7 +740,7 @@ describe("ring deposit builder", () => {
       await expect(buildRingDepositTransaction(deposit(history))).rejects.toMatchObject({
         code: "RING_BUILD_DEPOSIT",
         causeCode: "RING_ANONYMOUS_SUBMISSION_REQUIRED",
-        cause: { details: { use: "PreparedRingDeposit" } },
+        cause: { details: { use: "createRingDepositSubmission" } },
       });
       expect(proveRing).not.toHaveBeenCalled();
       const initial = await PreparedRingDeposit.prepare(deposit(history));
@@ -745,6 +754,43 @@ describe("ring deposit builder", () => {
       expect(await publishes(next, client, first)).toBe(false);
     } finally {
       for (const held of prepared) held.destroy();
+      local.destroy();
+      owner.destroy();
+    }
+  });
+
+  it("sends an anonymous deposit as a submission that keeps its tag and proves again after a stale root", async () => {
+    const owner = ShieldedKeypair.generate();
+    const local = LocalRingKeys.fromKeypair(owner);
+    const viewing = owner.viewingKey();
+    const first = viewing.senderViewTag(0n);
+    viewing.destroy();
+    const { client, proveRing } = await fixture({ mode: "anonymous" });
+    const payer = await generateKeyPairSigner();
+    try {
+      const history = ViewingHistory.create(owner.shieldedAddress().viewingPublicKey, 0n);
+      const submission = await createRingDepositSubmission(
+        params(client, { kind: "anonymous", keys: local, history }, { feePayer: payer.address }),
+      );
+      expect(submission.viewingHistory?.current().txCount).toBe(1n);
+      const signed: string[] = [];
+      let polled = 0;
+      const result = await submission.send({
+        sign: async (transaction) => {
+          signed.push(hex(new Uint8Array(transaction.messageBytes)));
+          return signTransactionWithSigners([payer], transaction);
+        },
+        send: async () => undefined,
+        status: async () =>
+          ++polled === 1
+            ? { kind: "failed", instructionIndex: 0, customCode: RingProgramError.rootNotServed }
+            : { kind: "confirmed", slot: 4n },
+      });
+
+      expect(result).toMatchObject({ kind: "confirmed", attempts: 2 });
+      expect(proveRing).toHaveBeenCalledTimes(2);
+      expect(signed.map((message) => message.includes(hex(first)))).toEqual([true, true]);
+    } finally {
       local.destroy();
       owner.destroy();
     }

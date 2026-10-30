@@ -5,9 +5,11 @@ import { ed25519 } from "@noble/curves/ed25519.js";
 import {
   AccountRole,
   address,
+  generateKeyPairSigner,
   getBase58Encoder,
   getBase64Encoder,
   none,
+  signTransactionWithSigners,
   some,
   type Address,
 } from "@solana/kit";
@@ -86,6 +88,7 @@ import {
   prepareRingTransferRelay,
   prepareRingWithdrawalRelay,
 } from "../../../src/operations/payments/transfer.js";
+import { createRingTransferSubmission } from "../../../src/index.js";
 import type { PreparedRingRelay } from "../../../src/operations/payments/transfer-rails.js";
 import { decodeRelayProofInputs } from "../../../src/protocol/ring-rpc/relay-proof-inputs.js";
 import type { PrepareRelayRequest } from "../../../src/protocol/ring-rpc/ring-rpc-types.js";
@@ -959,22 +962,26 @@ describe("anonymous ring relay", () => {
     ).toBe(true);
   });
 
-  it("refuses every plain build on an anonymous ring before approval and names its relay", async () => {
-    const { fixture, requests, params, relay } = await anonymousSpend({
-      notes: 1,
+  it("refuses a plain build on an anonymous ring and sends the hidden owner's submission from another payer", async () => {
+    const { fixture, requests, params, relay, sender } = await anonymousSpend({
+      notes: 2,
       amount: 5n,
       defaultNotes: [10n],
     });
     await relay;
     const approvals = requests.length;
-    const { anonymous: _, ...plain } = params;
-    const built = { ...plain, feePayer: fixture.authority };
-    const recipient = ShieldedKeypair.generate().shieldedAddress();
+    const { anonymous, ...plain } = params;
+    const payer = await generateKeyPairSigner();
+    const built = { ...plain, feePayer: payer.address };
+    const recipient = await addressOf(fixture, ShieldedKeypair.generate());
     const refusals = [
       [
-        () => buildRingTransferTransaction({ ...built, recipient }),
+        () =>
+          buildRingTransferTransaction({
+            ...built,
+            recipient: ShieldedKeypair.generate().shieldedAddress(),
+          }),
         "RING_BUILD_TRANSFER",
-        "prepareRingTransferRelay",
       ],
       [
         () =>
@@ -983,23 +990,48 @@ describe("anonymous ring relay", () => {
             recipient: ShieldedKeypair.generate().shieldedAddress(),
           }),
         "RING_BUILD_TRANSFER",
-        "prepareRingExitRelay",
       ],
-      [() => buildRingEntryTransaction(built), "RING_BUILD_ENTRY", "prepareRingEntryRelay"],
+      [() => buildRingEntryTransaction(built), "RING_BUILD_ENTRY"],
       [
         () => buildRingWithdrawalTransaction({ ...built, recipient: randomAddress() }),
         "RING_BUILD_WITHDRAWAL",
-        "prepareRingWithdrawalRelay",
       ],
     ] as const;
-    for (const [build, code, use] of refusals)
+    for (const [build, code] of refusals)
       await expect(build()).rejects.toMatchObject({
         code,
-        causeCode: "RING_ANONYMOUS_RELAY_REQUIRED",
-        cause: { details: { ringProgramId: fixture.ringProgramId, use } },
+        causeCode: "RING_ANONYMOUS_SIGNER_REQUIRED",
+        cause: { details: { ringProgramId: fixture.ringProgramId } },
       });
+    const owner = {
+      signer: anonymous.signer,
+      history: anonymous.history,
+      firstContact: anonymous.firstContact,
+    };
+    await expect(
+      createRingTransferSubmission({
+        ...built,
+        feePayer: sender.keypair.shieldedAddress().solanaAddress(),
+        recipient,
+        anonymous: owner,
+      }),
+    ).rejects.toMatchObject({ causeCode: "RING_ANONYMOUS_SIGNER_LINKS_OWNER" });
     expect(requests).toHaveLength(approvals);
     noProofs(fixture);
+
+    const submission = await createRingTransferSubmission({
+      ...built,
+      recipient,
+      anonymous: owner,
+    });
+    expect(submission.viewingHistory?.current().txCount).toBe(1n);
+    const result = await submission.send({
+      sign: (transaction) => signTransactionWithSigners([payer], transaction),
+      send: async () => undefined,
+      status: async () => ({ kind: "confirmed", slot: 3n }),
+    });
+    expect(result).toMatchObject({ kind: "confirmed", attempts: 1 });
+    expect(fixture.sppCalls.map((call) => call.circuit.kind)).toEqual(["ringAnonymous"]);
   });
 
   it("takes the next tags on a second relay prepared from the stored history", async () => {

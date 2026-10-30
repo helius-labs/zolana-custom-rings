@@ -11,7 +11,9 @@ import type {
   ChainReader,
   ProofAuthority,
   ProofService,
+  ProvenRingConfidentialEddsaTransact,
   ProvenRingTransact,
+  RingConfidentialEddsaTransactInput,
   RpcAccount,
 } from "@heliuslabs/zolana/client";
 import type {
@@ -30,7 +32,7 @@ import {
   treeAddress,
   checkedBytes,
 } from "@heliuslabs/zolana/internal";
-import { LocalKeys } from "@heliuslabs/zolana/client";
+import { LocalKeys, transactMessageDigest } from "@heliuslabs/zolana/client";
 import {
   SHIELDED_POOL_PROGRAM_ID,
   DEFAULT_TREE_ID,
@@ -97,7 +99,6 @@ import { checkTransactionFits } from "../../src/operations/workflow/compile.js";
 import { ringOutputBlinding, openRingDelivery } from "../../src/crypto/derivation/blinding.js";
 import { LocalRingKeys, ringWalletKeys, type RingKeys } from "../../src/state/ring-keys.js";
 import { x25519FromU } from "../../src/crypto/keys/x25519.js";
-import { notImplemented } from "./clients.js";
 
 export const TREE_ID = DEFAULT_TREE_ID;
 export const TREE = treeAddress(TREE_ID);
@@ -316,7 +317,9 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
         nullifierRootIndex: 9 + index,
       })),
     );
-    const pinned = complete.withProof(SPP_PROOF);
+    const pinned = complete.withProof(
+      circuit.kind === "ringConfidentialEddsa" ? COMMITTED_SPP_PROOF : SPP_PROOF,
+    );
     const data: RingTransactInstructionData =
       circuit.kind === "ringAnonymous"
         ? {
@@ -362,7 +365,25 @@ export async function ringFixture(options: RingFixtureOptions = {}) {
     },
     proveRingTransact: async (proofInputs: SppProofInputs, ring: Address, keys: ProofAuthority) =>
       pinnedRail(spp(proofInputs, { kind: "ring", ring }, keys)),
-    proveRingConfidentialEddsaTransact: notImplemented("proveRingConfidentialEddsaTransact"),
+    proveRingConfidentialEddsaTransact: async (
+      input: RingConfidentialEddsaTransactInput,
+    ): Promise<ProvenRingConfidentialEddsaTransact> => {
+      if ("sign" in input.owner) throw new Error("the rail signs before the proof request");
+      const authorization = {
+        ...input.owner,
+        messageDigest: transactMessageDigest(input.proofInputs),
+      };
+      return {
+        ...pinnedRail(
+          spp(
+            input.proofInputs,
+            { kind: "ringConfidentialEddsa", ring: input.ringProgramId, authorization },
+            input.keys,
+          ),
+        ),
+        ownerSigners: [],
+      };
+    },
     proveRingAuthorityTransact: async (
       proofInputs: SppProofInputs,
       ring: Address,
@@ -455,6 +476,13 @@ export const SPP_PROOF: TransactProof = Object.freeze({
     "b",
   ),
   c: filled(0x0c),
+});
+
+/** The in-proof owner rail's proof carries its BSB22 commitment. */
+const COMMITTED_SPP_PROOF = Object.freeze({
+  ...SPP_PROOF,
+  commitment: filled(0x53),
+  commitmentPok: filled(0x54),
 });
 
 export const ZERO_ADDRESS = encodeBase58(new Uint8Array(32));

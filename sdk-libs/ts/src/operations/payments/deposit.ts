@@ -35,6 +35,7 @@ import {
   Utxo,
   ownerUtxoHash,
   approveUnattended,
+  intentHash,
   type ApprovalHandler,
   type TransactionIntent,
 } from "@heliuslabs/zolana/transaction";
@@ -71,6 +72,7 @@ import type { RelayIntent, RelayQuote } from "../../protocol/ring-rpc/ring-rpc-t
 import { PreparedRelay } from "../../rpc/relay.js";
 import { expectedDeposit } from "../../rpc/relay-message.js";
 import { ringIntentMismatch } from "../workflow/selection.js";
+import { RingTransactionSubmission, type RingSubmissionAttempt } from "../workflow/submission.js";
 import { assetLabel } from "./transfer.js";
 
 const base64 = getBase64Decoder();
@@ -289,13 +291,7 @@ export class PreparedRingDeposit {
         cosigner: undefined,
         tree: params.tree ?? params.client.tree,
       });
-      const intent: TransactionIntent = {
-        kind: "ringDeposit",
-        ringProgramId: params.ringProgramId,
-        asset: sealing.asset,
-        amount: params.amount,
-        recipient: prepared.#recipient,
-      };
+      const intent = prepared.intent();
       const approval = await (params.approve ?? approveUnattended)({
         solanaPublicKey: signerAddress(params.depositor),
         intent,
@@ -427,6 +423,17 @@ export class PreparedRingDeposit {
     } catch (cause) {
       throw wrapRingError("RING_BUILD_DEPOSIT", cause);
     }
+  }
+
+  /** @internal */
+  intent(): TransactionIntent {
+    return {
+      kind: "ringDeposit",
+      ringProgramId: this.#ringProgramId,
+      asset: this.utxo.asset,
+      amount: this.utxo.amount,
+      recipient: this.#recipient,
+    };
   }
 
   /** Wipes the blinding secret and the auditor sealing key. */
@@ -611,20 +618,58 @@ export async function buildRingDepositTransaction(
     // A plain build drops the history past its tag.
     if (prepared.viewingHistory !== undefined)
       throw new RingError("RING_ANONYMOUS_SUBMISSION_REQUIRED", {
-        details: { ringProgramId: params.ringProgramId, use: "PreparedRingDeposit" },
+        details: { ringProgramId: params.ringProgramId, use: "createRingDepositSubmission" },
       });
-    const { instruction } = await prepared.prove(params.client, context);
-    return await compileUnsignedTransaction({
-      feePayer: params.feePayer,
-      lifetime: await params.client.getLatestBlockhash(context),
-      computeUnitLimit: RING_DEPOSIT_COMPUTE_UNIT_LIMIT,
-      instructions: [instruction],
-    });
+    return (await depositAttempt(prepared, params, context)).transaction;
   } catch (cause) {
     throw wrapRingError("RING_BUILD_DEPOSIT", cause);
   } finally {
     prepared.destroy();
   }
+}
+
+/** Each attempt seals a fresh note under the same viewing history. */
+export async function createRingDepositSubmission(
+  params: RingDepositParams,
+  context?: RequestContext,
+): Promise<RingTransactionSubmission> {
+  const build = async (attemptContext?: RequestContext): Promise<RingSubmissionAttempt> => {
+    const prepared = await PreparedRingDeposit.prepare(params, attemptContext);
+    try {
+      return await depositAttempt(prepared, params, attemptContext);
+    } catch (cause) {
+      throw wrapRingError("RING_BUILD_DEPOSIT", cause);
+    } finally {
+      prepared.destroy();
+    }
+  };
+  return new RingTransactionSubmission({
+    first: await build(context),
+    build,
+    registry: params.client,
+  });
+}
+
+async function depositAttempt(
+  prepared: PreparedRingDeposit,
+  params: RingDepositParams,
+  context: RequestContext | undefined,
+): Promise<RingSubmissionAttempt> {
+  const { instruction, roots } = await prepared.prove(params.client, context);
+  const lifetime = await params.client.getLatestBlockhash(context);
+  return Object.freeze({
+    transaction: await compileUnsignedTransaction({
+      feePayer: params.feePayer,
+      lifetime,
+      computeUnitLimit: RING_DEPOSIT_COMPUTE_UNIT_LIMIT,
+      instructions: [instruction],
+    }),
+    lastValidBlockHeight: lifetime.lastValidBlockHeight,
+    intentHash: intentHash(prepared.intent()),
+    ringInstructionIndex: 0,
+    ...(roots === undefined ? {} : { roots }),
+    ...(prepared.viewingHistory === undefined ? {} : { viewingHistory: prepared.viewingHistory }),
+  });
 }
 
 async function depositSealing(
