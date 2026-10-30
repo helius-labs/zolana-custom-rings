@@ -28,7 +28,7 @@ import { MEMBER_REGISTRY_CAPACITY } from "../../protocol/membership/member-regis
 import { ringIdField } from "../../crypto/derivation/ring-stream.js";
 
 import { fetchRingPolicy } from "../../protocol/membership/config.js";
-import { ownRoot, type BoundRoot } from "../../rpc/registered-record.js";
+import { fetchBoundRoot, type BoundRoot } from "../../rpc/registered-record.js";
 import { RingError } from "../../protocol/error.js";
 import { readRingHistory, scanLimits, type ScanLimits } from "../../rpc/history.js";
 import {
@@ -116,9 +116,10 @@ export async function auditRingMerges(
     if (!Number.isSafeInteger(value) || value < 1)
       throw new RingError("RING_RPC", { details: { reason: "invalid scan limit", name, value } });
   }
-  const tip = ownRoot(
-    input.ringProgramId,
-    await fetchRingPolicy(input.client, input.ringProgramId, context),
+  const policy = await fetchRingPolicy(input.client, input.ringProgramId, context);
+  const tip = await fetchBoundRoot(
+    { client: input.client, ringProgramId: input.ringProgramId, registry: policy.records },
+    context,
   );
   const history = await confirmedMerges(input, limits, context);
   let attempts = 0;
@@ -412,7 +413,7 @@ export function recoverMergeOpening(
   });
 }
 
-/** Rust `MergeAudit::scan_records`, every record authenticated at the mirrored root until `visit` stops. */
+/** Rust `MergeAudit::scan_records`, every record authenticated at the registry's newest root until `visit` stops. */
 async function scanRecords(
   input: Readonly<{ client: RingMergeAuditReader; auditor: X25519Keypair }>,
   tip: BoundRoot,

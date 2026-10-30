@@ -4,13 +4,20 @@ import type { ChainReader } from "@heliuslabs/zolana/client";
 import { decodeRingConfig, SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana/interface";
 import { addressBytes } from "@heliuslabs/zolana/internal";
 import type { RequestContext } from "@heliuslabs/zolana/interface";
-import { ringAuthAddress, ringCoSignerPda, ringPolicyPda } from "../pda/index.js";
+import {
+  ringAuthAddress,
+  ringCoSignerPda,
+  ringPolicyPda,
+  STORAGE_PROGRAM_ID,
+} from "../pda/index.js";
 
 import {
   decodeRingCoSigner,
   decodeRingPolicy,
+  decodeStorageRegistry,
   type RingCoSigner,
   type RingPolicy,
+  type StorageRegistry,
 } from "../codec/ring-codecs.js";
 import { RingError, type RingErrorCode } from "../error.js";
 
@@ -38,6 +45,22 @@ export function fetchRingPolicy(
     missing: "RING_POLICY_MISSING",
     invalid: "RING_POLICY_INVALID",
   });
+}
+
+/** The storage program's registry at `registry`, the live roots a ring instruction reads. */
+export async function fetchStorageRegistry(
+  client: AccountReader,
+  registry: Address,
+  context?: RequestContext,
+): Promise<StorageRegistry> {
+  const stored = await client.getAccount(registry, context);
+  if (stored === undefined)
+    throw new RingError("RING_MEMBER_REGISTRY_MISSING", { details: { registry } });
+  if (stored.owner !== STORAGE_PROGRAM_ID)
+    throw new RingError("RING_MEMBER_REGISTRY_INVALID", {
+      details: { registry, owner: stored.owner },
+    });
+  return decodeStorageRegistry(stored.data);
 }
 
 /** Mirrors Rust `CustomRing::co_signer`, `undefined` when `signer` holds no record. */

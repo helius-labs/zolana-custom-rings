@@ -14,7 +14,7 @@ export { ringAuthAddress } from "@heliuslabs/zolana/internal";
 
 const encoder = new TextEncoder();
 
-const STORAGE_PROGRAM_ID = address("6cGXszer5keoaWm8Co5G9f4KGBThuGz4NsKTqYij1emg");
+export const STORAGE_PROGRAM_ID = address("6cGXszer5keoaWm8Co5G9f4KGBThuGz4NsKTqYij1emg");
 
 function ringPda(
   ringProgramId: Address,

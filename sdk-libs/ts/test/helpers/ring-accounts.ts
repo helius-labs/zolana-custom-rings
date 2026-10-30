@@ -4,7 +4,11 @@ import type { RpcAccount } from "@heliuslabs/zolana/client";
 import { Writer, addressBytes } from "@heliuslabs/zolana/internal";
 import { SHIELDED_POOL_PROGRAM_ID, StateDiscriminator } from "@heliuslabs/zolana/interface";
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import { ringAuthAddress, ringCoSignerPda } from "../../src/protocol/pda/index.js";
+import {
+  ringAuthAddress,
+  ringCoSignerPda,
+  STORAGE_PROGRAM_ID,
+} from "../../src/protocol/pda/index.js";
 import { ROOT_HISTORY } from "../../src/protocol/membership/member-registry.js";
 import type {
   RingCoSigner,
@@ -13,7 +17,11 @@ import type {
   RingSourceSlot,
   StorageRegistryRoot,
 } from "../../src/protocol/codec/ring-codecs.js";
-import { RING_POLICY_DISCRIMINATOR, RING_ROLES } from "../../src/protocol/codec/ring-codecs.js";
+import {
+  RING_POLICY_DISCRIMINATOR,
+  RING_ROLES,
+  STORAGE_REGISTRY_DISCRIMINATOR,
+} from "../../src/protocol/codec/ring-codecs.js";
 import { X25519Keypair } from "@heliuslabs/zolana/keypair";
 import {
   LIST_IDS,
@@ -73,10 +81,24 @@ export async function ringCoSignerAccount(
   return [address, ownedAccount(ringProgramId, data)];
 }
 
-/** A mirror copied from `registry`, newest root first. */
-export interface FixtureMirror {
-  readonly registry: Address;
-  readonly roots: readonly StorageRegistryRoot[];
+/** Rust `StorageRegistry` owned by the storage program, `roots` newest first. */
+export function storageRegistryAccount(
+  roots: readonly StorageRegistryRoot[],
+  authority: Address = ZERO_ADDRESS,
+): RpcAccount {
+  const writer = new Writer()
+    .u8(STORAGE_REGISTRY_DISCRIMINATOR, "discriminator")
+    .bytes(addressBytes(authority))
+    .u64(0n, "graceSlots")
+    .u32(1, "nextIndex");
+  for (let slot = 0; slot < ROOT_HISTORY; slot += 1) {
+    const root = roots[slot];
+    writer
+      .bytes(root?.hash ?? new Uint8Array(32))
+      .u64(root?.revision ?? 0n, "revision")
+      .u64(root?.expiresAt ?? 0n, "expiresAt");
+  }
+  return ownedAccount(STORAGE_PROGRAM_ID, writer.finish());
 }
 
 /** Distinct role keys a fixture fills where a test names none. */
@@ -104,8 +126,6 @@ export function ringPolicyData(
     sources?: readonly RingSourceSlot[];
     table?: RuleTable;
     generation?: number;
-    ownRoots?: FixtureMirror;
-    curatorRoots?: FixtureMirror;
   }>,
 ): Uint8Array {
   const roles = { ...FIXTURE_ROLES, ...input.roles };
@@ -125,16 +145,6 @@ export function ringPolicyData(
     .u64(input.createdSlot ?? 0n, "createdSlot")
     .bytes(addressBytes(input.records ?? ZERO_ADDRESS));
   writePolicyFields(writer, input);
-  for (const mirror of [input.ownRoots, input.curatorRoots]) {
-    writer.bytes(addressBytes(mirror?.registry ?? ZERO_ADDRESS));
-    for (let slot = 0; slot < ROOT_HISTORY; slot += 1) {
-      const root = mirror?.roots[slot];
-      writer
-        .bytes(root?.hash ?? new Uint8Array(32))
-        .u64(root?.revision ?? 0n, "revision")
-        .u64(root?.expiresAt ?? 0n, "expiresAt");
-    }
-  }
   return writer.finish();
 }
 

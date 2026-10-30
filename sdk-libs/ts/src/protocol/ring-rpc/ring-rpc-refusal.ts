@@ -14,7 +14,7 @@ export const RingRpcRefusal = Object.freeze({
   unexpectedSigner: -32111,
   signerSignature: -32112,
   sendRefused: -32113,
-  recordsUnsynced: -32130,
+  recordsUnavailable: -32130,
   grantsInTree: -32131,
   recordWritesDisabled: -32140,
   entryCount: -32141,

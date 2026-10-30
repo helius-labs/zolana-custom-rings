@@ -63,7 +63,12 @@ import { ListId, recordBit } from "../../src/protocol/membership/policy.js";
 import { BLOCKHASH } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { confirmedDepositTransaction } from "../helpers/confirmed-deposits.js";
 import { recordTree, type FixtureRecord } from "../helpers/member-registry.js";
-import { ownedAccount, ringCoSignerAccount, ringPolicyData } from "../helpers/ring-accounts.js";
+import {
+  ownedAccount,
+  ringCoSignerAccount,
+  ringPolicyData,
+  storageRegistryAccount,
+} from "../helpers/ring-accounts.js";
 import { type RingKeys } from "../../src/state/ring-keys.js";
 import {
   TransferTagging,
@@ -357,7 +362,7 @@ describe("deposit disclosure", () => {
 });
 
 describe("audited deposit instruction", () => {
-  it("prefixes the proof and the root slot and keeps the SPP deposit bytes and accounts", async () => {
+  it("prefixes the proof and the root slot, then the live registries, and keeps the SPP deposit bytes and accounts", async () => {
     const auditor = X25519Keypair.generate();
     const sealed = sealRingDepositOpenings(
       Array.from({ length: 8 }, () => ({
@@ -380,12 +385,14 @@ describe("audited deposit instruction", () => {
           ciphertext,
         },
       }));
-      const input = { ringProgramId: RING, tree: TREE, depositor: PAYER, deposits };
+      const input = { ringProgramId: RING, tree: TREE, depositor: PAYER, deposits, registries: [] };
       const proof = new Uint8Array(192).fill(7);
       const plain = await ringDepositInstruction({ ...input, proof });
+      const curator = TREE;
       const escrowed = await ringDepositInstruction({
         ...input,
         proof,
+        registries: [RECORDS, curator],
         ownRevision: 5n,
         curatorRevision: 6n,
         cosigner: RING,
@@ -399,12 +406,14 @@ describe("audited deposit instruction", () => {
       expect(escrowed.data?.slice(201, 209)).toEqual(Uint8Array.of(6, 0, 0, 0, 0, 0, 0, 0));
       expect(escrowed.data?.slice(209)).toEqual(plain.data?.slice(209));
       expect(plain.accounts?.slice(0, 1)).toEqual([{ address: ring, role: AccountRole.READONLY }]);
-      expect(escrowed.accounts?.slice(0, 3)).toEqual([
+      expect(escrowed.accounts?.slice(0, 5)).toEqual([
         { address: ring, role: AccountRole.READONLY },
+        { address: RECORDS, role: AccountRole.READONLY },
+        { address: curator, role: AccountRole.READONLY },
         { address: await ringCoSignerAddress(RING, RING), role: AccountRole.READONLY },
         { address: RING, role: AccountRole.READONLY_SIGNER },
       ]);
-      expect(escrowed.accounts?.slice(3)).toEqual(plain.accounts?.slice(1));
+      expect(escrowed.accounts?.slice(5)).toEqual(plain.accounts?.slice(1));
       await expect(
         ringDepositInstruction({ ...input, proof, deposits: [...deposits, deposits[0]!] }),
       ).rejects.toMatchObject({ code: "INTERFACE_CODEC", details: { field: "deposit count" } });
@@ -461,12 +470,12 @@ describe("ring deposit builder", () => {
               mode: input.mode,
               ...(input.coSigner === undefined ? {} : { coSigner: input.coSigner }),
               records: RECORDS,
-              ownRoots: {
-                registry: RECORDS,
-                roots: [{ hash: records.root, revision: RECORDS_REVISION, expiresAt: 0n }],
-              },
             }),
           );
+        if (account === RECORDS)
+          return storageRegistryAccount([
+            { hash: records.root, revision: RECORDS_REVISION, expiresAt: 0n },
+          ]);
         return undefined;
       },
       getStorageMemberOpenings: async (request: StorageOpeningsRequest) =>
@@ -566,7 +575,6 @@ describe("ring deposit builder", () => {
       expect(proven.roots).toEqual([
         {
           ringProgramId: RING,
-          mirror: "own",
           registry: RECORDS,
           revision: RECORDS_REVISION,
           root: recordTree([escrowedMember(recipient)]).root,
@@ -575,10 +583,10 @@ describe("ring deposit builder", () => {
       const data = proven.instruction.data ?? new Uint8Array();
       expect(data.slice(193, 201)).toEqual(Uint8Array.of(3, 0, 0, 0, 0, 0, 0, 0));
       const [registry] = await ringPolicyPda(RING);
-      expect(proven.instruction.accounts?.[0]).toEqual({
-        address: registry,
-        role: AccountRole.READONLY,
-      });
+      expect(proven.instruction.accounts?.slice(0, 2)).toEqual([
+        { address: registry, role: AccountRole.READONLY },
+        { address: RECORDS, role: AccountRole.READONLY },
+      ]);
       // The recipient opens its note from the ciphertext behind the capsule.
       const spp = data.slice(209);
       expect(spp[0]).toBe(InstructionTag.ringDeposit);

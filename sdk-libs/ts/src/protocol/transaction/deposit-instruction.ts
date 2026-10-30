@@ -31,7 +31,7 @@ export interface RingDepositSpp {
 /** `AUDITED_DEPOSIT ‖ proof ‖ own_revision ‖ curator_revision` ahead of the forwarded SPP deposit. */
 export const AUDITED_DEPOSIT_PREFIX_LENGTH = 1 + CUSTOM_RING_PROOF_LENGTH + 2 * REVISION_LENGTH;
 
-/** The accounts `[ring, co_signer?]` ahead of SPP's deposit list. */
+/** The accounts `[ring, registries, co_signer?]` ahead of SPP's deposit list. */
 export async function ringDepositInstruction(
   input: Readonly<{
     ringProgramId: Address;
@@ -39,6 +39,8 @@ export async function ringDepositInstruction(
     depositor: SignerAccount;
     deposits: readonly RingAssetDeposit[];
     proof: Uint8Array;
+    /** Read only, right after the ring account, the records first. */
+    registries: readonly Address[];
     /** Escrow or policy rings only. */
     ownRevision?: bigint;
     /** Rings with a curator source only. */
@@ -59,7 +61,12 @@ export async function ringDepositInstruction(
     .finish();
   return instruction(
     tagged(RingInstructionTag.deposit, new Uint8Array([...prefix, ...spp.data])),
-    [meta(ring, false, false), ...cosigner, ...spp.accounts],
+    [
+      meta(ring, false, false),
+      ...input.registries.map((registry) => meta(registry, false, false)),
+      ...cosigner,
+      ...spp.accounts,
+    ],
     input.ringProgramId,
   );
 }

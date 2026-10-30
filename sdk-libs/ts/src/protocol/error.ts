@@ -129,7 +129,7 @@ export const RING_ERROR_CODES = [
   "RING_RECORD_UPDATE_INVALID",
   "RING_POLICY_INVALID",
   "RING_POLICY_MISSING",
-  "RING_ROOT_NOT_MIRRORED",
+  "RING_ROOT_NOT_SERVED",
   "RING_ANONYMOUS_RELAY_REQUIRED",
   "RING_RELAY_ID_MISMATCH",
   "RING_RELAY_MESSAGE_INVALID",
@@ -244,9 +244,6 @@ export const RingProgramError = Object.freeze({
   ringPolicyAlreadyExists: 8301,
   invalidStorageRegistry: 8302,
   storageAuthorityMismatch: 8303,
-  unmirroredRegistry: 8304,
-  mirrorNotSynced: 8305,
-  mirrorRootExpired: 8306,
   ownerSignerOnInProofRail: 8350,
   invalidAssetLimits: 8390,
   depositMintAccountMissing: 8410,
@@ -254,11 +251,14 @@ export const RingProgramError = Object.freeze({
   unexpectedCuratorRevision: 8470,
   zeroRoleKey: 8471,
   duplicateRoleKey: 8472,
+  unboundRegistry: 8480,
+  rootNotServed: 8481,
+  missingRegistry: 8482,
 } as const);
 
 export type RingProgramErrorName = keyof typeof RingProgramError;
 
-/** Rust `StorageError`, a mirror refuses a root with the code its registry would. */
+/** Rust `StorageError`. */
 export const StorageProgramError = Object.freeze({
   invalidRegistry: 9000,
   unauthorized: 9001,

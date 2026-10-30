@@ -215,7 +215,7 @@ describe("ring account", () => {
     const data = account();
     const slot = 3n * (1n << 18n) + 7n;
     data.set(u64le(slot), CREATED_SLOT_OFFSET);
-    expect(data).toHaveLength(4196);
+    expect(data).toHaveLength(1060);
     expect(decodeRingPolicy(data)).toMatchObject({
       createdSlot: slot,
       roles: ROLES,
@@ -479,6 +479,5 @@ describe("policy writes", () => {
     expect(ringComputeUnitLimit(RingInstructionTag.initialize)).toBe(250_000);
     expect(ringComputeUnitLimit(RingInstructionTag.updatePolicy)).toBe(150_000);
     expect(ringComputeUnitLimit(RingInstructionTag.deposit)).toBe(1_400_000);
-    expect(ringComputeUnitLimit(RingInstructionTag.syncRoots)).toBe(50_000);
   });
 });

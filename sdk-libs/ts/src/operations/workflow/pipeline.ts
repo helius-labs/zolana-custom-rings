@@ -38,7 +38,7 @@ import {
   sealedAuditMessage,
   type SealedAudit,
 } from "../../proof/audit-proof.js";
-import type { RingPolicy } from "../../protocol/codec/ring-codecs.js";
+import { ringRootRegistries, type RingPolicy } from "../../protocol/codec/ring-codecs.js";
 import {
   readWithdrawalExemption,
   type WithdrawalExemption,
@@ -126,6 +126,8 @@ export interface RingTransactAccounts {
   readonly outputTree: Address;
   readonly ownerSigners: readonly Address[];
   readonly withdrawal?: TransactWithdrawal;
+  /** Read only, right after the ring account, the records first. */
+  readonly registries: readonly Address[];
   /** The supplied co-signer when the ring demands one, it signs beside its record. */
   readonly coSigner?: Address;
   readonly delegate?: Address;
@@ -133,7 +135,7 @@ export interface RingTransactAccounts {
 
 /** Every value a transfer's proofs bind that the chain can move before it lands, Rust `BoundState`. */
 export interface RingBoundState {
-  /** The mirrored roots the proofs bind by revision, the own root first. */
+  /** The live roots the proofs bind by revision, the own root first. */
   readonly roots?: readonly BoundRoot[];
   readonly policy?: BoundPolicy;
 }
@@ -148,7 +150,7 @@ export class ProvenRingTransfer {
   /** The supplied co-signer when the ring demands one, it signs the transaction. */
   readonly coSigner?: Address;
   readonly approvalRequired: boolean;
-  /** The mirrored roots the proofs bind, a submission proves again once one leaves the mirror. */
+  /** The live roots the proofs bind, a submission proves again once one leaves its registry. */
   readonly roots: readonly BoundRoot[];
   readonly policy?: BoundPolicy;
   /** The anonymous sender's viewing history past the transfer's tags, stored before it is sent. */
@@ -366,6 +368,10 @@ async function assembleStagedTransfer<T>(
       outputTree: treeAddress(proofInputs.outputTreeId),
       ownerSigners: staged.ownerSigners,
       ...(staged.withdrawal === undefined ? {} : { withdrawal: staged.withdrawal }),
+      registries: ringRootRegistries(
+        config,
+        withdrawalExemption === undefined ? "transfer" : "exemptTransfer",
+      ),
       ...(coSigner === undefined ? {} : { coSigner }),
       ...(spend.delegate === undefined ? {} : { delegate: spend.delegate }),
     });
@@ -554,7 +560,10 @@ export async function ringTransactInstruction(
       : {}),
     ...(accounts.withdrawal === undefined ? {} : { withdrawal: accounts.withdrawal }),
   });
-  const prefix: AccountMeta[] = [meta(ring, false, false)];
+  const prefix: AccountMeta[] = [
+    meta(ring, false, false),
+    ...accounts.registries.map((registry) => meta(registry, false, false)),
+  ];
   if (accounts.coSigner !== undefined)
     prefix.push(...(await ringCoSignerMetas(ringProgramId, accounts.coSigner)));
   if (accounts.delegate !== undefined) prefix.push(meta(accounts.delegate, true, false));

@@ -460,6 +460,7 @@ describe("policy ring", () => {
     await checkAccounts(instruction, {
       fixture,
       data,
+      registries: [fixture.ownRegistry, fixture.curatorRegistry],
       prefix: [
         readonly(await ringCoSignerAddress(fixture.ringProgramId, coSigner)),
         signer(coSigner),
@@ -495,7 +496,7 @@ describe("policy ring", () => {
     checkRingBlindings(call, data);
   });
 
-  it("refuses an opening under a root the policy mirror does not hold before any proof", async () => {
+  it("refuses an opening under a root the live registry does not hold before any proof", async () => {
     const sender = ShieldedKeypair.generate();
     const recipient = ShieldedKeypair.generate();
     const fixture = await curatedRing([sender, recipient]);
@@ -517,9 +518,9 @@ describe("policy ring", () => {
         assets,
       }).prove(client);
 
-    // The indexer's next curator revision is not yet synced into the mirror.
+    // The indexer serves a curator revision the registry account does not hold yet.
     await expect(rail(served(CURATOR_REVISION + 1n))).rejects.toThrow(
-      ringError("RING_ROOT_NOT_MIRRORED", { reason: "pool", registry: fixture.curatorRegistry }),
+      ringError("RING_ROOT_NOT_SERVED", { reason: "pool", registry: fixture.curatorRegistry }),
     );
     expect(fixture.ringRequests).toHaveLength(0);
     expect(fixture.sppCalls).toHaveLength(0);
@@ -776,6 +777,7 @@ describe("delegate rail", () => {
     await checkAccounts(instruction, {
       fixture,
       data,
+      registries: [fixture.ownRegistry],
       prefix: [signer(delegate)],
       payer: fixture.authority,
     });

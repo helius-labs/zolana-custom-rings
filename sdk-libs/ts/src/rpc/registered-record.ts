@@ -6,13 +6,7 @@ import { waitForProjection, equalBytes } from "@heliuslabs/zolana/internal";
 import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
 import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
 
-import {
-  mirrorCurrentRoot,
-  rootMirror,
-  type RingPolicy,
-  type RootMirrorKind,
-} from "../protocol/codec/ring-codecs.js";
-import { fetchRingPolicy } from "../protocol/membership/config.js";
+import { fetchRingPolicy, fetchStorageRegistry } from "../protocol/membership/config.js";
 import { RingError } from "../protocol/error.js";
 import {
   MemberOpeningRead,
@@ -25,37 +19,32 @@ import { MEMBER_REGISTRY_PROJECTION_ERRORS } from "./projection.js";
 export type RingRecordReadClient = Pick<ChainReader, "getAccount"> &
   Pick<RingRecordReader, "getStorageMemberOpenings">;
 
-/** A storage root the ring's policy mirrors, named by the revision the program reads it back by. */
+/** A storage root a proof binds, named by the revision the program reads it back by. */
 export interface BoundRoot {
   readonly ringProgramId: Address;
-  readonly mirror: RootMirrorKind;
   readonly registry: Address;
   readonly revision: bigint;
   readonly root: Bytes32;
 }
 
-/** The newest root `mirror` copied from `registry`, refused when the mirror holds another registry. */
-export function boundRoot(
+/** The newest root the live `registry` holds. */
+export async function fetchBoundRoot(
   input: Readonly<{
+    client: Pick<ChainReader, "getAccount">;
     ringProgramId: Address;
-    policy: RingPolicy;
-    mirror: RootMirrorKind;
     registry: Address;
   }>,
-): BoundRoot {
-  const current = mirrorCurrentRoot(rootMirror(input.policy, input.mirror), input.registry);
+  context?: RequestContext,
+): Promise<BoundRoot> {
+  const current = (await fetchStorageRegistry(input.client, input.registry, context)).roots[0];
+  if (current === undefined)
+    throw new RingError("RING_MEMBER_REGISTRY_INVALID", { details: { registry: input.registry } });
   return Object.freeze({
     ringProgramId: input.ringProgramId,
-    mirror: input.mirror,
     registry: input.registry,
     revision: current.revision,
     root: current.hash,
   });
-}
-
-/** The newest root of the ring's own records. */
-export function ownRoot(ringProgramId: Address, policy: RingPolicy): BoundRoot {
-  return boundRoot({ ringProgramId, policy, mirror: "own", registry: policy.records });
 }
 
 /** A member's present record under the ring's newest own root. */
@@ -90,7 +79,10 @@ export function readOwnRecords(
   return waitForProjection(
     async (attempt) => {
       const policy = await fetchRingPolicy(input.client, input.ringProgramId, attempt);
-      const root = ownRoot(input.ringProgramId, policy);
+      const root = await fetchBoundRoot(
+        { client: input.client, ringProgramId: input.ringProgramId, registry: policy.records },
+        attempt,
+      );
       const reads = await readMemberOpenings(
         { client: input.client, root, members: input.members },
         attempt,
@@ -205,7 +197,10 @@ export function readRegisteredRecord(
   return waitForProjection(
     async (attempt) => {
       const policy = await fetchRingPolicy(input.client, input.ringProgramId, attempt);
-      const root = ownRoot(input.ringProgramId, policy);
+      const root = await fetchBoundRoot(
+        { client: input.client, ringProgramId: input.ringProgramId, registry: policy.records },
+        attempt,
+      );
       const [read] = await readMemberOpenings(
         { client: input.client, root, members: [input.member] },
         attempt,
@@ -229,7 +224,7 @@ export function readRegisteredRecord(
 /** An indexer answer under a root or revision other than the bound one is refused. */
 function checkServedRoot(served: StorageRoot, bound: BoundRoot, reason: string): void {
   if (!equalBytes(served.root, bound.root) || served.revision !== bound.revision)
-    throw new RingError("RING_ROOT_NOT_MIRRORED", {
+    throw new RingError("RING_ROOT_NOT_SERVED", {
       details: { reason, registry: bound.registry, revision: served.revision.toString() },
     });
 }

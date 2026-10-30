@@ -67,6 +67,7 @@ import { ringAuthAddress, ringCoSignerMetas, ringPolicyAddress } from "../../pro
 
 import { checkSignersHideOwner } from "./anonymous.js";
 import { fetchRingPolicy } from "../../protocol/membership/config.js";
+import { ringRootRegistries } from "../../protocol/codec/ring-codecs.js";
 import { TRANSFER_DEMAND, resolveRingCoSigner } from "../../proof/cosign.js";
 import { RingError, wrapRingError } from "../../protocol/error.js";
 import {
@@ -204,7 +205,7 @@ export function createRingMergeSubmission(
 
 /**
  * `MERGE ‖ own_revision ‖ output_ring_data_hash ‖ disclosure ‖ body` with the body's
- * `proof.b` compressed, the accounts `[ring, co-signer record and signer?]` ahead of SPP's merge list.
+ * `proof.b` compressed, the accounts `[ring, registries, co-signer record and signer?]` ahead of SPP's merge list.
  */
 export async function ringMergeInstruction(
   input: Readonly<{
@@ -215,6 +216,8 @@ export async function ringMergeInstruction(
     data: MergeTransactInstructionData;
     outputRingDataHash: Bytes32;
     disclosure: RingMergeDisclosure;
+    /** Read only, right after the ring account, the records first. */
+    registries: readonly Address[];
     /** Key escrow rings only. */
     ownRevision?: bigint;
     /** The supplied co-signer when a record covers transfers. */
@@ -242,6 +245,7 @@ export async function ringMergeInstruction(
       .finish(),
     [
       meta(ring, false, false),
+      ...input.registries.map((registry) => meta(registry, false, false)),
       ...cosigner,
       meta(input.inputTree, false, true),
       meta(input.outputTree, false, true),
@@ -339,6 +343,7 @@ async function buildRingMerge(
             // Rust `AnonymousRingDataNotZero` refuses ring data on an anonymous ring.
             outputRingDataHash: ZERO_32,
             disclosure,
+            registries: ringRootRegistries(config, "merge"),
             ...(escrow === undefined ? {} : { ownRevision: escrow.root.revision }),
             ...(cosigner === undefined ? {} : { cosigner }),
           }),
