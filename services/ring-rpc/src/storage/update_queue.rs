@@ -8,7 +8,8 @@ use zolana_ring_client::rpc::{RecordUpdateStatus, SubmitRecordUpdateRequest};
 use zolana_ring_policy::{ListSet, Member};
 
 use crate::record_update::{
-    AwaitingEnrolment, CheckedUpdate, QueuedUpdate, RecordUpdateRefusal, MAX_BATCH_ATTEMPTS,
+    AwaitingEnrolment, CheckedUpdate, QueuedUpdate, RecordUpdateRefusal, UpdateSigner,
+    MAX_BATCH_ATTEMPTS,
 };
 
 const AWAITING: &str = "awaiting";
@@ -18,6 +19,8 @@ const APPLIED: &str = "applied";
 const REFUSED: &str = "refused";
 const FAILED: &str = "failed";
 const AWAITING_COLUMNS: &str = "id, request, writes, awaited, valid_until_slot";
+const WALLET_ROLE: &str = "wallet";
+const POLICY_ROLE: &str = "policy";
 
 /// Every update keyed by its statement hash.
 pub(crate) struct UpdateQueue<'a> {
@@ -88,9 +91,9 @@ impl<'a> UpdateQueue<'a> {
             None => (QUEUED, 0, Value::Bytes(None)),
         };
         let transaction = self.db.begin().await?;
-        let sql = "INSERT INTO records_updates(id,registry,ring,request,writes,urgent,queued_slot,\
-                   valid_until_slot,status,awaited,member) \
-                   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) \
+        let sql = "INSERT INTO records_updates(id,registry,ring,request,writes,signer,role,\
+                   queued_slot,valid_until_slot,status,awaited,member) \
+                   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) \
                    ON CONFLICT(id) DO NOTHING";
         let values = vec![
             id.clone(),
@@ -98,7 +101,8 @@ impl<'a> UpdateQueue<'a> {
             bytes(new.request.update.ring.0.as_array()),
             request.into(),
             StorageWriteData::encode_all(&new.update.writes).into(),
-            new.update.urgent.into(),
+            bytes(new.update.signer.address().as_array()),
+            role(new.update.signer).into(),
             integer(new.queued_slot)?,
             integer(new.request.update.valid_until_slot)?,
             status.into(),
@@ -221,7 +225,7 @@ impl<'a> UpdateQueue<'a> {
 
     /// Submit order, each joined enrolment's writes ahead of the update that approved it.
     pub async fn queued(&self, registry: Address) -> Result<Vec<QueuedUpdate>, DbErr> {
-        let sql = "SELECT id, ring, writes, urgent, queued_slot, valid_until_slot, joined \
+        let sql = "SELECT id, ring, writes, signer, role, queued_slot, valid_until_slot, joined \
                    FROM records_updates WHERE registry=$1 AND status=$2 ORDER BY seq";
         let values = vec![bytes(registry.as_array()), QUEUED.into()];
         let mut joined: Vec<([u8; 32], Vec<StorageWriteData>, u64)> = Vec::new();
@@ -247,7 +251,7 @@ impl<'a> UpdateQueue<'a> {
                 id,
                 ring: address(&row, "ring")?,
                 writes,
-                urgent: row.try_get("", "urgent")?,
+                signer: update_signer(&row)?,
                 queued_slot: unsigned(&row, "queued_slot")?,
                 valid_until_slot: until,
             });
@@ -346,15 +350,29 @@ impl<'a> UpdateQueue<'a> {
         self.exec(sql, values).await
     }
 
-    /// Refuses the enrolments joined to `id` with it.
-    pub async fn refuse(&self, id: &[u8; 32], reason: &str) -> Result<(), DbErr> {
+    /// The enrolments joined to `id` share its refusal, or await again when its approval lapsed.
+    pub async fn refuse(&self, id: &[u8; 32], refusal: RecordUpdateRefusal) -> Result<(), DbErr> {
+        let transaction = self.db.begin().await?;
+        if refusal == RecordUpdateRefusal::AuthorityLapsed {
+            let sql =
+                "UPDATE records_updates SET status=$1, joined=NULL WHERE joined=$2 AND status=$3";
+            let values = vec![AWAITING.into(), bytes(id), QUEUED.into()];
+            transaction
+                .execute(statement(&transaction, sql, values))
+                .await?;
+        }
         let sql = "UPDATE records_updates SET status=$2, reason=$3 \
                    WHERE (id=$1 OR joined=$1) AND status=$4";
-        self.exec(
-            sql,
-            vec![bytes(id), REFUSED.into(), reason.into(), QUEUED.into()],
-        )
-        .await
+        let values = vec![
+            bytes(id),
+            REFUSED.into(),
+            refusal.to_string().into(),
+            QUEUED.into(),
+        ];
+        transaction
+            .execute(statement(&transaction, sql, values))
+            .await?;
+        transaction.commit().await
     }
 
     /// Recorded before the transaction is sent, a restart settles it by its signature.
@@ -479,6 +497,22 @@ fn awaiting_enrolment(row: &QueryResult) -> Result<AwaitingEnrolment, DbErr> {
         writes: stored_writes(row)?.len(),
         valid_until_slot: unsigned(row, "valid_until_slot")?,
     })
+}
+
+pub(crate) fn role(signer: UpdateSigner) -> &'static str {
+    match signer {
+        UpdateSigner::Wallet(_) => WALLET_ROLE,
+        UpdateSigner::PolicyAuthority(_) => POLICY_ROLE,
+    }
+}
+
+fn update_signer(row: &QueryResult) -> Result<UpdateSigner, DbErr> {
+    let signer = address(row, "signer")?;
+    match row.try_get::<String>("", "role")?.as_str() {
+        WALLET_ROLE => Ok(UpdateSigner::Wallet(signer)),
+        POLICY_ROLE => Ok(UpdateSigner::PolicyAuthority(signer)),
+        _ => Err(corrupt("role")),
+    }
 }
 
 fn statement<C: ConnectionTrait>(connection: &C, sql: &str, values: Vec<Value>) -> Statement {

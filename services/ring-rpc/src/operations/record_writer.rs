@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{hash_map::Entry, HashMap},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -34,9 +34,9 @@ use crate::{
     database::Store,
     error::{redacted, GrantRefusal, RingRpcError},
     record_update::{
-        escrowed_members, ApplyInputsCheck, BatchPlan, CheckedUpdate, EnrolmentApproval,
-        EscrowUniqueness, ModeDecision, QueuedUpdate, RecordUpdateCheck, RecordUpdateRefusal,
-        UpdateContext,
+        escrowed_members, limits_within_bounds, ApplyInputsCheck, BatchPlan, CheckedUpdate,
+        EnrolmentApproval, EscrowUniqueness, ModeDecision, QueuedCheck, QueuedUpdate,
+        RecordUpdateCheck, RecordUpdateRefusal, UpdateContext,
     },
     relay::ServedRings,
     storage_chain::{StorageChain, TransactionOutcome},
@@ -132,6 +132,10 @@ impl RecordWriter {
         request: SubmitRecordUpdateRequest,
     ) -> Result<SubmitRecordUpdateResponse, RingRpcError> {
         let queue = self.queue();
+        // Precedes the id, an unpaired cap hashes to no statement.
+        if !request.update.entries.iter().all(limits_within_bounds) {
+            return Err(RecordUpdateRefusal::InvalidLimits.into());
+        }
         let id = request
             .statement()
             .and_then(|statement| Ok(statement.id()?))
@@ -164,6 +168,7 @@ impl RecordWriter {
             },
         }
         .check()?;
+        self.check_limited_assets(&update, &policy).await?;
         let _queueing = self.submits.lock().await;
         if queue.contains(&update.id.0 .0).await? {
             return Ok(SubmitRecordUpdateResponse {
@@ -307,17 +312,27 @@ impl RecordWriter {
         if let Some(batch) = queue.open_batch(registry).await? {
             return self.settle(batch).await;
         }
-        // 2. No update goes out past its valid until slot, an enrolment's own included.
+        // 2. Each live update is within its valid until slot, an enrolment's own included, and its signer holds the role it signed as.
         let slot = self.chain.slot().await?;
         queue.expire_awaiting(registry, slot).await?;
+        let queued = queue.queued(registry).await?;
+        let mut policy_authorities = HashMap::new();
+        for update in queued.iter().filter(|update| update.signer.is_authority()) {
+            if let Entry::Vacant(ring) = policy_authorities.entry(update.ring) {
+                let config = self.chain.ring_config(update.ring).await?;
+                ring.insert(config.map(|config| config.roles.policy));
+            }
+        }
         let mut live = Vec::new();
-        for update in queue.queued(registry).await? {
-            if slot > update.valid_until_slot {
-                queue
-                    .refuse(&update.id, &RecordUpdateRefusal::Expired.to_string())
-                    .await?;
-            } else {
-                live.push(update);
+        for update in queued {
+            let check = QueuedCheck {
+                update: &update,
+                slot,
+                policy_authority: policy_authorities.get(&update.ring).copied().flatten(),
+            };
+            match check.check() {
+                Ok(()) => live.push(update),
+                Err(refusal) => queue.refuse(&update.id, refusal).await?,
             }
         }
         let Some(plan) = (BatchPlan { queue: &live, slot }).decide()? else {
@@ -462,6 +477,23 @@ impl RecordWriter {
             pending: &pending,
         }
         .check()?)
+    }
+
+    async fn check_limited_assets(
+        &self,
+        update: &CheckedUpdate,
+        policy: &RingPolicy,
+    ) -> Result<(), RingRpcError> {
+        let assets = update.limited_assets()?;
+        if assets.is_empty() {
+            return Ok(());
+        }
+        let records = StorageTip::mirrored(policy).ok_or(GrantRefusal::RecordsUnsynced)?;
+        let openings = self.chain.verified_openings(&records, &assets).await?;
+        if openings.iter().any(|opening| opening.record().is_none()) {
+            return Err(RecordUpdateRefusal::LimitsWithoutRecord.into());
+        }
+        Ok(())
     }
 
     /// Sends `SyncRoots` to every subscriber whose curator mirror differs from the registry roots.

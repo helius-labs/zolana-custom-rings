@@ -16,9 +16,9 @@ use zolana_ring_client::{
     },
     storage_apply_proof_inputs, MemberOpeningRead,
 };
-use zolana_ring_indexer::rpc::GetStorageApplyProofInputsResponse;
+use zolana_ring_indexer::rpc::{GetStorageApplyProofInputsResponse, RingListWriteView};
 use zolana_ring_member_registry::{ApplyProofInputs, RecordWriteProofInput};
-use zolana_ring_policy::{ListId, ListSet, Member, MintPolicy};
+use zolana_ring_policy::{AssetLimits, ListId, ListSet, Member, MintPolicy};
 
 use crate::{config::ReaderGrantStore, error::RingRpcError, upstream::RingConfiguration};
 
@@ -28,6 +28,8 @@ pub const BATCH_WINDOW_SLOTS: u64 = 40;
 pub const MAX_BATCH_ATTEMPTS: u64 = 3;
 /// One day of 250 ms slots.
 pub const MAX_ENROLMENT_WINDOW_SLOTS: u64 = 4 * 60 * 60 * 24;
+/// Thirty days of 250 ms slots.
+pub const MAX_LIMIT_WINDOW_SLOTS: u64 = 4 * 60 * 60 * 24 * 30;
 const REVOKING_SETS: u64 = ListSet::of(&[ListId::Block, ListId::Frozen]).record_bits();
 // A graced reader revocation stops reads at once, grants open under the newest mirrored root.
 const REVOKING_CLEARS: u64 = ListSet::of(&[ListId::Allow, ListId::Approval]).record_bits();
@@ -80,6 +82,12 @@ pub enum RecordUpdateRefusal {
     // -32246 retired.
     #[error("records registry creation did not land")]
     RecordsNotCreated = -32260,
+    #[error("signer no longer holds the ring policy role")]
+    AuthorityLapsed = -32275,
+    #[error("mint limits are unpaired or exceed the window bound")]
+    InvalidLimits = -32276,
+    #[error("mint limits name an asset without a record")]
+    LimitsWithoutRecord = -32277,
 }
 
 pub(crate) struct UpdateContext<'a> {
@@ -102,7 +110,7 @@ pub(crate) struct RecordUpdateCheck<'a> {
 pub(crate) struct CheckedUpdate {
     pub id: RecordUpdateId,
     pub writes: Vec<StorageWriteData>,
-    pub urgent: bool,
+    pub signer: UpdateSigner,
     /// `Some` holds the update until the policy authority sets these lists on the signer's record.
     pub awaited: Option<AwaitedLists>,
 }
@@ -134,9 +142,23 @@ pub(crate) struct QueuedUpdate {
     pub id: [u8; 32],
     pub ring: Address,
     pub writes: Vec<StorageWriteData>,
-    pub urgent: bool,
+    pub signer: UpdateSigner,
     pub queued_slot: u64,
     pub valid_until_slot: u64,
+}
+
+/// The policy role whenever an entry is not the signer's own wallet write.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UpdateSigner {
+    Wallet(Address),
+    PolicyAuthority(Address),
+}
+
+#[must_use]
+pub(crate) struct QueuedCheck<'a> {
+    pub update: &'a QueuedUpdate,
+    pub slot: u64,
+    pub policy_authority: Option<Address>,
 }
 
 /// `queue` holds no update past its valid until slot.
@@ -146,7 +168,7 @@ pub(crate) struct BatchPlan<'a> {
     pub slot: u64,
 }
 
-/// Every update urgent or every update graced, in submit order.
+/// All authority updates or all wallet updates, in submit order.
 #[must_use]
 pub(crate) struct PlannedBatch<'a> {
     pub updates: Vec<&'a QueuedUpdate>,
@@ -178,13 +200,6 @@ pub(crate) struct ModeDecision<'a> {
     pub inputs: &'a ApplyProofInputs,
     pub registry: &'a StorageRegistry,
     pub slot: u64,
-}
-
-/// The policy authority also writes its own wallet records.
-#[derive(Clone, Copy)]
-enum RecordSigner {
-    Wallet(Member),
-    PolicyAuthority(Member),
 }
 
 /// The statement `RegisterKey` verifies, the escrow key sealed to the ring auditor.
@@ -228,11 +243,11 @@ impl RecordUpdateCheck<'_> {
             return Err(RecordUpdateRefusal::RegistryNotServed);
         }
         // 3. Every entry is the signer's to write and every escrow key is sealed to the ring auditor.
-        let record_signer = RecordSigner::new(signer, context.config.roles.policy)?;
+        let update_signer = UpdateSigner::of(request)?;
+        if !update_signer.holds_role(Some(context.config.roles.policy)) {
+            return Err(RecordUpdateRefusal::Unauthorized);
+        }
         for entry in entries {
-            if !record_signer.may_write(entry) {
-                return Err(RecordUpdateRefusal::Unauthorized);
-            }
             if let RecordUpdateEntry::Escrow(registration) = entry {
                 if context.config.mode == RingMode::Anonymous {
                     return Err(RecordUpdateRefusal::EscrowOnAnonymousRing);
@@ -247,12 +262,13 @@ impl RecordUpdateCheck<'_> {
         // 4. A wallet awaits only enrolment lists the policy reads from its own records.
         let awaited = match request.update.awaited_lists {
             0 => None,
-            bits => Some(AwaitedLists {
-                lists: awaited_lists(bits, context.policy, record_signer)?,
+            bits if signer != context.config.roles.policy => Some(AwaitedLists {
+                lists: awaited_lists(bits, context.policy)?,
                 member: *Member::owner_tag(signer.as_array())
                     .map_err(invalid_entry)?
                     .as_bytes(),
             }),
+            _ => return Err(RecordUpdateRefusal::EnrolmentLists),
         };
         if awaited.is_some()
             && request.update.valid_until_slot
@@ -279,11 +295,10 @@ impl RecordUpdateCheck<'_> {
         {
             return Err(RecordUpdateRefusal::ReaderGrantsInDatabase);
         }
-        let urgent = queued.iter().any(urgent);
         Ok(CheckedUpdate {
             id: RecordUpdateId(Hash(hash)),
             writes,
-            urgent,
+            signer: update_signer,
             awaited,
         })
     }
@@ -301,34 +316,103 @@ impl CheckedUpdate {
         }
         Ok(members)
     }
+
+    pub fn limited_assets(&self) -> Result<Vec<[u8; 32]>, RecordUpdateRefusal> {
+        let mut assets = Vec::new();
+        for write in &self.writes {
+            let entry = write.entry().map_err(invalid_entry)?;
+            if entry
+                .mint_policy
+                .is_some_and(|policy| policy.limits != AssetLimits::EMPTY)
+            {
+                assets.push(entry.member);
+            }
+        }
+        Ok(assets)
+    }
+}
+
+impl UpdateSigner {
+    /// `Unauthorized` for an entry that is neither the signer's wallet write nor an authority write.
+    pub fn of(request: &SubmitRecordUpdateRequest) -> Result<Self, RecordUpdateRefusal> {
+        let signer = request.signer.0;
+        let wallet = Member::owner_tag(signer.as_array()).map_err(invalid_entry)?;
+        request
+            .update
+            .entries
+            .iter()
+            .try_fold(Self::Wallet(signer), |role, entry| {
+                if wallet_write(entry, &wallet) {
+                    Ok(role)
+                } else if authority_write(entry) {
+                    Ok(Self::PolicyAuthority(signer))
+                } else {
+                    Err(RecordUpdateRefusal::Unauthorized)
+                }
+            })
+    }
+
+    pub const fn address(self) -> Address {
+        let (Self::Wallet(signer) | Self::PolicyAuthority(signer)) = self;
+        signer
+    }
+
+    pub const fn is_authority(self) -> bool {
+        matches!(self, Self::PolicyAuthority(_))
+    }
+
+    /// A wallet write outlives a policy rotation, an authority write lapses with the role.
+    pub fn holds_role(self, policy_authority: Option<Address>) -> bool {
+        match self {
+            Self::Wallet(_) => true,
+            Self::PolicyAuthority(signer) => policy_authority == Some(signer),
+        }
+    }
+}
+
+impl QueuedCheck<'_> {
+    /// No update goes out past its valid until slot or after its signer lost the role it signed as.
+    pub fn check(self) -> Result<(), RecordUpdateRefusal> {
+        if self.slot > self.update.valid_until_slot {
+            return Err(RecordUpdateRefusal::Expired);
+        }
+        if !self.update.signer.holds_role(self.policy_authority) {
+            return Err(RecordUpdateRefusal::AuthorityLapsed);
+        }
+        Ok(())
+    }
 }
 
 impl<'a> BatchPlan<'a> {
-    /// Urgent updates go at once ahead of graced ones on other records, graced ones once full, aged or blocking an urgent one.
+    /// Authority updates go at the next pass ahead of wallet ones on other records, wallet ones once full, aged or blocking an authority one.
     pub fn decide(self) -> Result<Option<PlannedBatch<'a>>, RecordUpdateRefusal> {
-        let urgent = self.urgent()?;
-        if !urgent.is_empty() {
-            return Ok(Some(PlannedBatch { updates: urgent }));
+        let authority = self.authority()?;
+        if !authority.is_empty() {
+            return Ok(Some(PlannedBatch { updates: authority }));
         }
-        let graced = within_batch(self.queue.iter().take_while(|update| !update.urgent));
-        let carried: usize = graced.iter().map(|update| update.writes.len()).sum();
+        let wallet = within_batch(
+            self.queue
+                .iter()
+                .take_while(|update| !update.signer.is_authority()),
+        );
+        let carried: usize = wallet.iter().map(|update| update.writes.len()).sum();
         let full = carried == APPLY_BATCH
             || self
                 .queue
-                .get(graced.len())
-                .is_some_and(|next| !next.urgent);
-        let blocking = self.queue.iter().any(|update| update.urgent);
+                .get(wallet.len())
+                .is_some_and(|next| !next.signer.is_authority());
+        let blocking = self.queue.iter().any(|update| update.signer.is_authority());
         let aged = self.queue.first().is_some_and(|oldest| {
             self.slot >= oldest.queued_slot.saturating_add(BATCH_WINDOW_SLOTS)
         });
-        Ok((!graced.is_empty() && (full || blocking || aged))
-            .then_some(PlannedBatch { updates: graced }))
+        Ok((!wallet.is_empty() && (full || blocking || aged))
+            .then_some(PlannedBatch { updates: wallet }))
     }
 
-    /// Stops at an urgent update sharing a record with an earlier graced one, each record keeps its write order.
-    fn urgent(&self) -> Result<Vec<&'a QueuedUpdate>, RecordUpdateRefusal> {
-        let mut graced_members = Vec::new();
-        let mut urgent = Vec::new();
+    /// Stops at an authority update sharing a record with an earlier wallet one, each record keeps its write order.
+    fn authority(&self) -> Result<Vec<&'a QueuedUpdate>, RecordUpdateRefusal> {
+        let mut wallet_members = Vec::new();
+        let mut authority = Vec::new();
         for update in self.queue {
             let members = update
                 .writes
@@ -336,15 +420,15 @@ impl<'a> BatchPlan<'a> {
                 .map(StorageWriteData::member)
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(invalid_entry)?;
-            if !update.urgent {
-                graced_members.extend(members);
-            } else if members.iter().any(|member| graced_members.contains(member)) {
+            if !update.signer.is_authority() {
+                wallet_members.extend(members);
+            } else if members.iter().any(|member| wallet_members.contains(member)) {
                 break;
             } else {
-                urgent.push(update);
+                authority.push(update);
             }
         }
-        Ok(within_batch(urgent))
+        Ok(within_batch(authority))
     }
 }
 
@@ -438,36 +522,6 @@ impl ModeDecision<'_> {
     }
 }
 
-impl RecordSigner {
-    fn new(signer: Address, policy_authority: Address) -> Result<Self, RecordUpdateRefusal> {
-        let wallet = Member::owner_tag(signer.as_array()).map_err(invalid_entry)?;
-        Ok(if signer == policy_authority {
-            Self::PolicyAuthority(wallet)
-        } else {
-            Self::Wallet(wallet)
-        })
-    }
-
-    /// A wallet writes its member lists, its escrow and its grants, the authority every authority list and mint setting.
-    fn may_write(self, entry: &RecordUpdateEntry) -> bool {
-        let (Self::Wallet(wallet) | Self::PolicyAuthority(wallet)) = self;
-        let own = |member: &Hash| member.0 == *wallet.as_bytes();
-        let wallet_write = match entry {
-            RecordUpdateEntry::Write(write) => {
-                own(&write.member)
-                    && write.mint_policy.is_none()
-                    && lists_within(write.mask, ListSet::MEMBER_WRITES)
-            }
-            RecordUpdateEntry::Escrow(registration) => own(&registration.member),
-            RecordUpdateEntry::WalletGrant(grant) => own(&grant.wallet),
-        };
-        let authority_write = matches!(self, Self::PolicyAuthority(_))
-            && matches!(entry, RecordUpdateEntry::Write(write)
-                if lists_within(write.mask, ListSet::AUTHORITY_WRITES));
-        wallet_write || authority_write
-    }
-}
-
 impl EscrowProof<'_> {
     fn verify(self) -> Result<(), RecordUpdateRefusal> {
         let registration = self.registration;
@@ -510,6 +564,27 @@ pub(crate) fn escrowed_members(
         .collect()
 }
 
+/// Each cap pairs with its window, and no window exceeds `MAX_LIMIT_WINDOW_SLOTS`.
+pub(crate) fn limits_within_bounds(entry: &RecordUpdateEntry) -> bool {
+    let RecordUpdateEntry::Write(RingListWriteView {
+        mint_policy: Some(policy),
+        ..
+    }) = entry
+    else {
+        return true;
+    };
+    let limits = policy.limits;
+    limits.check().is_ok()
+        && [
+            limits.sender_window_slots,
+            limits.volume_window_slots,
+            limits.deposit_window_slots,
+            limits.withdrawal_window_slots,
+        ]
+        .into_iter()
+        .all(|window_slots| window_slots <= MAX_LIMIT_WINDOW_SLOTS)
+}
+
 /// The longest prefix one `Update` carries without splitting an update.
 fn within_batch<'a>(updates: impl IntoIterator<Item = &'a QueuedUpdate>) -> Vec<&'a QueuedUpdate> {
     let mut writes = 0;
@@ -522,15 +597,10 @@ fn within_batch<'a>(updates: impl IntoIterator<Item = &'a QueuedUpdate>) -> Vec<
         .collect()
 }
 
-fn awaited_lists(
-    bits: u64,
-    policy: &RingPolicy,
-    signer: RecordSigner,
-) -> Result<ListSet, RecordUpdateRefusal> {
+fn awaited_lists(bits: u64, policy: &RingPolicy) -> Result<ListSet, RecordUpdateRefusal> {
     ListSet::from_record_bits(bits)
         .filter(|lists| {
-            matches!(signer, RecordSigner::Wallet(_))
-                && lists.is_subset(ENROLMENT_LISTS)
+            lists.is_subset(ENROLMENT_LISTS)
                 && lists
                     .iter()
                     .all(|list| policy.registry_for(list) == Some(ListRegistry::Own))
@@ -542,9 +612,24 @@ fn lists_within(mask: u64, lists: ListSet) -> bool {
     mask & !lists.record_bits() == 0
 }
 
-/// Revokes by its lists, or writes a mint whose old settings the flush reads first.
-fn urgent(entry: &QueueEntry) -> bool {
-    revokes_lists(entry) || entry.mint_policy.is_some()
+/// A wallet writes its member lists, its escrow and its grants.
+fn wallet_write(entry: &RecordUpdateEntry, wallet: &Member) -> bool {
+    let own = |member: &Hash| member.0 == *wallet.as_bytes();
+    match entry {
+        RecordUpdateEntry::Write(write) => {
+            own(&write.member)
+                && write.mint_policy.is_none()
+                && lists_within(write.mask, ListSet::MEMBER_WRITES)
+        }
+        RecordUpdateEntry::Escrow(registration) => own(&registration.member),
+        RecordUpdateEntry::WalletGrant(grant) => own(&grant.wallet),
+    }
+}
+
+/// The policy authority writes every authority list and mint setting.
+fn authority_write(entry: &RecordUpdateEntry) -> bool {
+    matches!(entry, RecordUpdateEntry::Write(write)
+        if lists_within(write.mask, ListSet::AUTHORITY_WRITES))
 }
 
 fn revokes(write: &RecordWriteProofInput) -> bool {

@@ -35,7 +35,7 @@ export const RingRpcRefusal = Object.freeze({
   wrongCluster: -32190,
   escrowOnAnonymousRing: -32191,
   escrowRegistered: -32192,
-  // -32193 and -32243 never reach clients as codes, only as refused status text.
+  // -32193, -32243 and -32275 never reach clients as codes, only as refused status text.
   tokenAccountSetup: -32200,
   depositorIsFeePayer: -32201,
   notDelegate: -32220,
@@ -50,6 +50,8 @@ export const RingRpcRefusal = Object.freeze({
   unknownEnrolment: -32244,
   enrolmentWindow: -32245,
   recordsNotCreated: -32260,
+  invalidLimits: -32276,
+  limitsWithoutRecord: -32277,
 } as const);
 
 export type RingRpcRefusalName = keyof typeof RingRpcRefusal;

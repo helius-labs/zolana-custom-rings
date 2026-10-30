@@ -5,6 +5,7 @@ mod grants;
 mod merge_0001_settings;
 mod records2_000001_attempts;
 mod records3_000001_enrolments;
+mod records4_000001_signers;
 mod records_000001_queue;
 mod relay_000001_relays;
 
@@ -21,6 +22,7 @@ impl MigratorTrait for Migrator {
             Box::new(merge_0001_settings::Migration),
             Box::new(records2_000001_attempts::Migration),
             Box::new(records3_000001_enrolments::Migration),
+            Box::new(records4_000001_signers::Migration),
         ]
     }
 }
