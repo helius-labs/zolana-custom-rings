@@ -54,8 +54,8 @@ use anyhow::{anyhow, ensure, Context, Result};
 use custom_ring_cli::{wait_for, Landing, ModeName, Probe};
 use custom_ring_interface::{
     anonymous_recipient_output_body, anonymous_sender_output_body, AnonymousProofData,
-    CustomRingError, RingMode, RingProgramConfig, RingRail, RingTransactData, CONFIG_PDA_SEED,
-    RING_PROGRAM_CONFIG,
+    CustomRingError, RingMode, RingPolicy, RingRail, RingRole, RingTransactData, RING_POLICY,
+    RING_POLICY_PDA_SEED,
 };
 use custom_ring_sdk::{
     compute_unit_limit, AnonymousTransfer, CoSignScope, CustomRing, CustomRingMerge,
@@ -74,7 +74,8 @@ use custom_ring_test_validator::{
     ring_wallet::RingWallet,
     shared::{
         custom_ring_program_id, prover_url, send, send_expecting_rejection, setup, ExpectRejection,
-        RegisterRing, RejectedTransact, TestEnv, Tier, WalletSync, USDC_ASSET_ID,
+        RegisterRing, RejectedTransact, RingRoleKeys, SendAs, TestEnv, Tier, WalletSync,
+        USDC_ASSET_ID,
     },
 };
 use solana_address::Address;
@@ -339,15 +340,16 @@ struct DelegateAppointment<'a> {
 
 impl DelegateAppointment<'_> {
     fn send(self, env: &TestEnv) -> Result<()> {
+        let admin = RingRoleKeys::of(&env.payer).admin;
         env.client.rpc().create_and_send_transaction(
             &[custom_ring_sdk::SetDelegate {
                 ring: self.ring,
-                authority: env.payer.pubkey(),
+                authority: admin.pubkey(),
                 delegate: self.delegate.pubkey(),
             }
             .instruction()],
             env.payer.pubkey(),
-            &[&env.payer, self.delegate],
+            &[&env.payer, &admin, self.delegate],
             ComputeBudgetConfig::for_instruction_count(1),
         )?;
         Ok(())

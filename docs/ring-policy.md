@@ -122,7 +122,7 @@ from its own registry.
 A policy ring pins its first table in `Initialize`, which also registers the
 ring with SPP, so a policy ring never registers without a table. `Initialize`
 refuses a table on an audit-only ring. `UpdatePolicy` replaces the table and
-the source map together, re-points one list, or rebinds the records. The config
+the source map together, re-points one list, or rebinds the records. The policy
 authority signs every `UpdatePolicy`. The program validates the table, rehashes
 it and counts the write in the ring policy's generation. A transfer proven
 against the old table fails after that write, and its notes stay unspent.

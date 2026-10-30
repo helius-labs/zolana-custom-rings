@@ -30,7 +30,7 @@ import { SOL_MINT, ownerUtxoHash } from "@heliuslabs/zolana/transaction";
 import { LocalRingKeys } from "../../src/state/ring-keys.js";
 import type { StorageMemberOpenings, StorageOpeningsRequest } from "../../src/rpc/ports.js";
 import type { RingProofRequest } from "../../src/rpc/prover/ring.js";
-import { ringCoSignerAddress, ringConfigPda, ringPolicyPda } from "../../src/protocol/pda/index.js";
+import { ringCoSignerAddress, ringPolicyPda } from "../../src/protocol/pda/index.js";
 import { depositBlinding } from "../../src/crypto/derivation/ring-domain.js";
 import {
   RING_COSIGN_DEPOSITS,
@@ -63,12 +63,7 @@ import { ListId, recordBit } from "../../src/protocol/membership/policy.js";
 import { BLOCKHASH } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { confirmedDepositTransaction } from "../helpers/confirmed-deposits.js";
 import { recordTree, type FixtureRecord } from "../helpers/member-registry.js";
-import {
-  ownedAccount,
-  ringCoSignerAccount,
-  ringPolicyData,
-  ringProgramConfigData,
-} from "../helpers/ring-accounts.js";
+import { ownedAccount, ringCoSignerAccount, ringPolicyData } from "../helpers/ring-accounts.js";
 import { type RingKeys } from "../../src/state/ring-keys.js";
 import {
   TransferTagging,
@@ -395,8 +390,7 @@ describe("audited deposit instruction", () => {
         curatorRevision: 6n,
         cosigner: RING,
       });
-      const [config] = await ringConfigPda(RING);
-      const [registry] = await ringPolicyPda(RING);
+      const [ring] = await ringPolicyPda(RING);
       expect(plain.data?.[0]).toBe(31);
       expect(plain.data?.slice(1, 193)).toEqual(proof);
       expect(plain.data?.slice(193, 209)).toEqual(new Uint8Array(16));
@@ -404,16 +398,13 @@ describe("audited deposit instruction", () => {
       expect(escrowed.data?.slice(193, 201)).toEqual(Uint8Array.of(5, 0, 0, 0, 0, 0, 0, 0));
       expect(escrowed.data?.slice(201, 209)).toEqual(Uint8Array.of(6, 0, 0, 0, 0, 0, 0, 0));
       expect(escrowed.data?.slice(209)).toEqual(plain.data?.slice(209));
-      expect(plain.accounts?.slice(0, 1)).toEqual([
-        { address: config, role: AccountRole.READONLY },
-      ]);
-      expect(escrowed.accounts?.slice(0, 4)).toEqual([
-        { address: config, role: AccountRole.READONLY },
-        { address: registry, role: AccountRole.READONLY },
+      expect(plain.accounts?.slice(0, 1)).toEqual([{ address: ring, role: AccountRole.READONLY }]);
+      expect(escrowed.accounts?.slice(0, 3)).toEqual([
+        { address: ring, role: AccountRole.READONLY },
         { address: await ringCoSignerAddress(RING, RING), role: AccountRole.READONLY },
         { address: RING, role: AccountRole.READONLY_SIGNER },
       ]);
-      expect(escrowed.accounts?.slice(4)).toEqual(plain.accounts?.slice(1));
+      expect(escrowed.accounts?.slice(3)).toEqual(plain.accounts?.slice(1));
       await expect(
         ringDepositInstruction({ ...input, proof, deposits: [...deposits, deposits[0]!] }),
       ).rejects.toMatchObject({ code: "INTERFACE_CODEC", details: { field: "deposit count" } });
@@ -446,7 +437,6 @@ describe("ring deposit builder", () => {
     }>,
   ) {
     const records = recordTree(input.members ?? []);
-    const [config, configBump] = await ringConfigPda(RING);
     const [policy, policyBump] = await ringPolicyPda(RING);
     const requests: RingProofRequest[] = [];
     const proveRing = vi.fn(async (request: RingProofRequest) => {
@@ -462,23 +452,14 @@ describe("ring deposit builder", () => {
           const [record, stored] = await ringCoSignerAccount(RING, input.coSigner);
           if (account === record) return stored;
         }
-        if (account === config)
-          return ownedAccount(
-            RING,
-            ringProgramConfigData({
-              authority: RING,
-              auditorPublicKey: auditor.publicKey().toBytes(),
-              bump: configBump,
-              hasPolicy: false,
-              mode: input.mode,
-              ...(input.coSigner === undefined ? {} : { coSigner: input.coSigner }),
-            }),
-          );
         if (account === policy)
           return ownedAccount(
             RING,
             ringPolicyData({
               bump: policyBump,
+              auditorPublicKey: auditor.publicKey().toBytes(),
+              mode: input.mode,
+              ...(input.coSigner === undefined ? {} : { coSigner: input.coSigner }),
               records: RECORDS,
               ownRoots: {
                 registry: RECORDS,
@@ -594,7 +575,7 @@ describe("ring deposit builder", () => {
       const data = proven.instruction.data ?? new Uint8Array();
       expect(data.slice(193, 201)).toEqual(Uint8Array.of(3, 0, 0, 0, 0, 0, 0, 0));
       const [registry] = await ringPolicyPda(RING);
-      expect(proven.instruction.accounts?.[1]).toEqual({
+      expect(proven.instruction.accounts?.[0]).toEqual({
         address: registry,
         role: AccountRole.READONLY,
       });
@@ -653,10 +634,10 @@ describe("ring deposit builder", () => {
       expect(request.ownerKeys?.[0]).toEqual(owner.signingPublicKey().ed25519());
       expect(request.members.every((member) => member === undefined)).toBe(true);
       expect(proven.roots).toBeUndefined();
-      const [registry] = await ringPolicyPda(RING);
-      expect(proven.instruction.accounts?.map((account) => account.address)).not.toContain(
-        registry,
-      );
+      const [ring] = await ringPolicyPda(RING);
+      expect(
+        proven.instruction.accounts?.filter((account) => account.address === ring),
+      ).toHaveLength(1);
       const spp = (proven.instruction.data ?? new Uint8Array()).slice(201);
       const [lowest, next, stored] = tags.map(hex);
       expect(hex(spp)).toContain(stored);

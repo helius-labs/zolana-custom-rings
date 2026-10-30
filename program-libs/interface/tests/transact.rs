@@ -14,8 +14,8 @@ use custom_ring_interface::{
     transact_flag, AnonymousAuditKey, AnonymousLayout, AnonymousProofData, AuditBinding, AuditKind,
     CustomRingError, CustomRingProof, DeliveredLayout, DisclosureLayout, InProofOwner, InputTrees,
     InstructionTag, ParsedTransact, PlainGroth16Proof, PolicyBinding, PolicyProof,
-    PolicyRecipients, RailSigner, RingMode, RingOutput, RingPolicy, RingProgramConfig, RingRail,
-    RingTransactData, SenderBundle, Settlement, SourceSlot, RING_PROGRAM_CONFIG,
+    PolicyRecipients, RailSigner, RingMode, RingOutput, RingPolicy, RingRail, RingTransactData,
+    SenderBundle, Settlement, SourceSlot, RING_POLICY,
 };
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
@@ -345,9 +345,9 @@ fn field(seed: u8) -> [u8; 32] {
     value
 }
 
-fn config() -> RingProgramConfig {
-    let mut config: RingProgramConfig = Zeroable::zeroed();
-    config.discriminator = RING_PROGRAM_CONFIG;
+fn config() -> Box<RingPolicy> {
+    let mut config: Box<RingPolicy> = bytemuck::zeroed_box();
+    config.discriminator = RING_POLICY;
     config.auditor_pubkey[0] = 4;
     config.auditor_pubkey[1..].copy_from_slice(&[0xa1; 32]);
     config
@@ -846,7 +846,8 @@ fn the_policy_proof_follows_the_ring_policy() {
     let policy = fixture.confidential_policy();
     let records = Address::new_from_array([2; 32]);
     let curator = Address::new_from_array([3; 32]);
-    let mut ring_policy = RingPolicy::new(254, records);
+    let mut ring_policy = config();
+    ring_policy.records = records;
     assert_eq!(
         policy.check_policy(None, 0),
         Err(CustomRingError::UnexpectedPolicyProof)
@@ -969,7 +970,7 @@ fn the_rail_follows_the_instruction_and_the_ring_mode() {
     let ring = |mode: RingMode, has_policy: u8| {
         let mut config = config();
         config.mode = mode as u8;
-        config.has_policy = has_policy;
+        config.policy_hash = [has_policy; 32];
         if mode == RingMode::ConfidentialEscrow {
             config.delegate = delegate;
         }

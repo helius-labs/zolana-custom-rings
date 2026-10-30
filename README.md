@@ -30,8 +30,10 @@ authorized delegate move a member's notes. See [ring policy](docs/ring-policy.md
 
 ## Roles
 
-The config authority sets ring controls, the auditor opens ring activity, and
-members own notes and may write their own registry records. A curator supplies
+Four role keys govern a ring. The admin rotates the roles and appoints the
+delegate, the policy authority sets the policy and the lists, the pauser pauses
+the ring and the co-signer admin sets the co-signers. The auditor opens ring
+activity, and members own notes and may write their own registry records. A curator supplies
 lists to another ring's policy. A delegate can move notes only through the
 ring's delegate checks; an authorized reader can query the ring RPC without
 holding the auditor key. See [member records](docs/member-records.md) and the

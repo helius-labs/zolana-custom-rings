@@ -8,7 +8,6 @@ import { X25519Keypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import {
   ringAuthAddress,
   ringCoSignerAddress,
-  ringConfigAddress,
   ringPolicyAddress,
 } from "../../../src/protocol/pda/index.js";
 import {
@@ -24,7 +23,7 @@ import {
   type RingKind,
   type RingPolicyTableInput,
 } from "../../../src/operations/management/admin.js";
-import { decodeRingProgramConfig } from "../../../src/protocol/codec/ring-codecs.js";
+import { RING_ROLES, decodeRingPolicy } from "../../../src/protocol/codec/ring-codecs.js";
 import { ringProgramDataAddress } from "../../../src/protocol/membership/config.js";
 import {
   ListId,
@@ -32,7 +31,7 @@ import {
   encodeRule,
   type Rule,
 } from "../../../src/protocol/membership/policy.js";
-import { ringProgramConfigData } from "../../helpers/ring-accounts.js";
+import { FIXTURE_ROLES, ringPolicyData } from "../../helpers/ring-accounts.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 const CURATOR = address("CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8");
@@ -48,6 +47,9 @@ const SIGN = 2;
 const SIGN_WRITE = 3;
 
 beforeAll(initializePoseidon);
+
+const ROLES = FIXTURE_ROLES;
+const ROLE_BYTES = RING_ROLES.flatMap((role) => [...addressBytes(ROLES[role])]);
 
 function metas(instruction: Instruction): readonly (readonly [Address, number])[] {
   return (instruction.accounts ?? []).map(({ address: account, role }) => [account, role] as const);
@@ -66,7 +68,7 @@ const RULES: readonly Rule[] = [
 ];
 
 describe("initialize and policy update", () => {
-  it("creates the config, the policy and the pool registration in one instruction", async () => {
+  it("creates the ring account and the pool registration in one instruction", async () => {
     const auditor = X25519Keypair.generate().publicKey();
     const table = buildRuleTable({ rules: RULES });
     const [rule] = table.rules;
@@ -74,7 +76,7 @@ describe("initialize and policy update", () => {
     const head = [
       [PAYER, SIGN_WRITE],
       [AUTHORITY, SIGN],
-      [await ringConfigAddress(RING), WRITE],
+      [await ringPolicyAddress(RING), WRITE],
       [SYSTEM_PROGRAM, READ],
       [RING, READ],
       [await ringProgramDataAddress(RING), READ],
@@ -88,6 +90,7 @@ describe("initialize and policy update", () => {
       authority: AUTHORITY,
       auditorPublicKey: auditor,
       kind: "policy",
+      roles: ROLES,
       policy: { records: RECORDS, storageAuthority: STORAGE_AUTHORITY, table },
     });
     expect(policy.data).toEqual(
@@ -95,6 +98,7 @@ describe("initialize and policy update", () => {
         53,
         ...auditor.toBytes(),
         1,
+        ...ROLE_BYTES,
         1,
         ...addressBytes(STORAGE_AUTHORITY),
         2,
@@ -106,19 +110,16 @@ describe("initialize and policy update", () => {
         ...encodeRule(rule),
       ),
     );
-    expect(metas(policy)).toEqual([
-      ...head,
-      [await ringPolicyAddress(RING), WRITE],
-      [RECORDS, READ],
-    ]);
+    expect(metas(policy)).toEqual([...head, [RECORDS, READ]]);
     const auditOnly = await initializeRingInstruction({
       ringProgramId: RING,
       payer: PAYER,
       authority: AUTHORITY,
       auditorPublicKey: auditor,
       kind: "auditOnly",
+      roles: ROLES,
     });
-    expect(auditOnly.data).toEqual(Uint8Array.of(53, ...auditor.toBytes(), 0, 0));
+    expect(auditOnly.data).toEqual(Uint8Array.of(53, ...auditor.toBytes(), 0, ...ROLE_BYTES, 0));
     expect(metas(auditOnly)).toEqual(head);
   });
 
@@ -131,7 +132,6 @@ describe("initialize and policy update", () => {
     expect(instruction.data).toEqual(Uint8Array.of(54, 2, ...addressBytes(STORAGE_AUTHORITY)));
     expect(metas(instruction)).toEqual([
       [AUTHORITY, SIGN],
-      [await ringConfigAddress(RING), READ],
       [await ringPolicyAddress(RING), WRITE],
       [RECORDS, READ],
     ]);
@@ -152,9 +152,28 @@ describe("ring setup", () => {
       authority: AUTHORITY,
       auditorPublicKey: auditor,
       kind,
+      roles: ROLES,
     });
     expect(instruction.programAddress).toBe(RING);
-    expect(instruction.data).toEqual(Uint8Array.of(53, ...auditor.toBytes(), byte, 0));
+    expect(instruction.data).toEqual(
+      Uint8Array.of(53, ...auditor.toBytes(), byte, ...ROLE_BYTES, 0),
+    );
+  });
+
+  it.each([
+    ["a zero key", { pauser: address("11111111111111111111111111111111") }, "ZeroRoleKey"],
+    ["one key in two roles", { pauser: FIXTURE_ROLES.admin }, "DuplicateRoleKey"],
+  ] as const)("refuses %s like Rust `RingRoles::check`", async (_case, change, reason) => {
+    await expect(
+      initializeRingInstruction({
+        ringProgramId: RING,
+        payer: PAYER,
+        authority: AUTHORITY,
+        auditorPublicKey: X25519Keypair.generate().publicKey(),
+        kind: "auditOnly",
+        roles: { ...ROLES, ...change },
+      }),
+    ).rejects.toMatchObject({ code: "RING_CONFIG_INVALID", details: { reason } });
   });
 
   it("refuses a kind the program does not know", async () => {
@@ -165,6 +184,7 @@ describe("ring setup", () => {
         authority: AUTHORITY,
         auditorPublicKey: X25519Keypair.generate().publicKey(),
         kind: "registry" as RingKind,
+        roles: ROLES,
       }),
     ).rejects.toMatchObject({ code: "RING_CONFIG_INVALID", details: { reason: "kind" } });
   });
@@ -177,6 +197,7 @@ describe("ring setup", () => {
         authority: AUTHORITY,
         auditorPublicKey: X25519PublicKey.fromBytes(Uint8Array.of(4, 1, ...new Uint8Array(31))),
         kind: "auditOnly",
+        roles: ROLES,
       }),
     ).rejects.toMatchObject({
       code: "RING_CONFIG_INVALID",
@@ -185,55 +206,66 @@ describe("ring setup", () => {
   });
 });
 
-describe("config account", () => {
-  const MODE_OFFSET = 68;
-  const CREATED_SLOT_OFFSET = 104;
-  const account = () =>
-    ringProgramConfigData({
-      authority: AUTHORITY,
-      auditorPublicKey: X25519Keypair.fromBytes(new Uint8Array(32).fill(9)).publicKey().toBytes(),
-      bump: 254,
-      hasPolicy: false,
-    });
+describe("ring account", () => {
+  const MODE_OFFSET = 2;
+  const CREATED_SLOT_OFFSET = 199;
+  const account = () => ringPolicyData({ bump: 254 });
 
-  it("reads the created slot after the delegate", () => {
+  it("reads the roles and the created slot after the auditor key", () => {
     const data = account();
     const slot = 3n * (1n << 18n) + 7n;
     data.set(u64le(slot), CREATED_SLOT_OFFSET);
-    expect(data).toHaveLength(112);
-    expect(decodeRingProgramConfig(data)).toMatchObject({ createdSlot: slot });
+    expect(data).toHaveLength(4196);
+    expect(decodeRingPolicy(data)).toMatchObject({
+      createdSlot: slot,
+      roles: ROLES,
+      hasPolicy: false,
+    });
   });
 
-  it("refuses the layout without a created slot and an unknown mode like Rust `InvalidRingMode`", () => {
+  it("refuses a short layout, a retired discriminator and an unknown mode like Rust `InvalidRingMode`", () => {
     const data = account();
-    expect(() => decodeRingProgramConfig(data.subarray(0, CREATED_SLOT_OFFSET))).toThrow(
+    expect(() => decodeRingPolicy(data.subarray(0, CREATED_SLOT_OFFSET))).toThrow(
       expect.objectContaining({
-        code: "RING_CONFIG_INVALID",
-        details: { length: CREATED_SLOT_OFFSET, discriminator: 10 },
+        code: "RING_POLICY_INVALID",
+        details: { length: CREATED_SLOT_OFFSET, discriminator: 15 },
       }),
     );
+    for (const retired of [10, 13]) {
+      const stale = account();
+      stale[0] = retired;
+      expect(() => decodeRingPolicy(stale)).toThrow(
+        expect.objectContaining({ code: "RING_POLICY_INVALID" }),
+      );
+    }
     data[MODE_OFFSET] = 3;
-    expect(() => decodeRingProgramConfig(data)).toThrow(
+    expect(() => decodeRingPolicy(data)).toThrow(
       expect.objectContaining({
-        code: "RING_CONFIG_INVALID",
+        code: "RING_POLICY_INVALID",
         details: expect.objectContaining({ mode: 3 }),
       }),
     );
   });
 });
 
-describe("config writes", () => {
-  it("hands the authority over only with both signatures", async () => {
+describe("role writes", () => {
+  it.each([
+    ["admin", 0],
+    ["policy", 1],
+    ["pauser", 2],
+    ["cosignAdmin", 3],
+  ] as const)("hands the %s role over only with both signatures", async (role, byte) => {
     const instruction = await updateRingAuthorityInstruction({
       ringProgramId: RING,
       authority: AUTHORITY,
+      role,
       newAuthority: NEXT,
     });
-    expect(instruction.data).toEqual(Uint8Array.of(6));
+    expect(instruction.data).toEqual(Uint8Array.of(6, byte));
     expect(metas(instruction)).toEqual([
       [AUTHORITY, SIGN],
       [NEXT, SIGN],
-      [await ringConfigAddress(RING), WRITE],
+      [await ringPolicyAddress(RING), WRITE],
     ]);
   });
 
@@ -246,14 +278,14 @@ describe("config writes", () => {
     expect(instruction.data).toEqual(Uint8Array.of(11, 1));
     expect(metas(instruction)).toEqual([
       [AUTHORITY, SIGN],
-      [await ringConfigAddress(RING), READ],
+      [await ringPolicyAddress(RING), READ],
       [await ringAuthAddress(RING), WRITE],
       [SHIELDED_POOL_PROGRAM_ID, READ],
     ]);
   });
 
   it("writes the co-signer's record and its clearing", async () => {
-    const config = await ringConfigAddress(RING);
+    const ring = await ringPolicyAddress(RING);
     const record = await ringCoSignerAddress(RING, NEXT);
     const cosigner = await setRingCoSignerInstruction({
       ringProgramId: RING,
@@ -266,7 +298,7 @@ describe("config writes", () => {
     expect(metas(cosigner)).toEqual([
       [PAYER, SIGN_WRITE],
       [AUTHORITY, SIGN],
-      [config, WRITE],
+      [ring, WRITE],
       [record, WRITE],
       [SYSTEM_PROGRAM, READ],
     ]);
@@ -279,7 +311,7 @@ describe("config writes", () => {
     expect(clear.data).toEqual(Uint8Array.of(21));
     expect(metas(clear)).toEqual([
       [AUTHORITY, SIGN],
-      [config, WRITE],
+      [ring, WRITE],
       [record, WRITE],
       [PAYER, WRITE],
     ]);
@@ -307,7 +339,7 @@ describe("config writes", () => {
     ).rejects.toMatchObject({ code: "RING_CO_SIGNER_INVALID", details: { reason } });
   });
 
-  it("appoints the delegate under the config authority with the delegate signing", async () => {
+  it("appoints the delegate under the admin with the delegate signing", async () => {
     const instruction = await setRingDelegateInstruction({
       ringProgramId: RING,
       authority: AUTHORITY,
@@ -316,9 +348,8 @@ describe("config writes", () => {
     expect(instruction.data).toEqual(Uint8Array.of(24));
     expect(metas(instruction)).toEqual([
       [AUTHORITY, SIGN],
-      [await ringConfigAddress(RING), WRITE],
+      [await ringPolicyAddress(RING), WRITE],
       [NEXT, SIGN],
-      [await ringPolicyAddress(RING), READ],
     ]);
   });
 });
@@ -332,6 +363,7 @@ describe("policy writes", () => {
         authority: AUTHORITY,
         auditorPublicKey: X25519Keypair.generate().publicKey(),
         kind: "policy",
+        roles: ROLES,
         policy: { records: RECORDS, storageAuthority: AUTHORITY, ...input },
       }),
     (input: RingPolicyTableInput) =>
@@ -360,7 +392,6 @@ describe("policy writes", () => {
     );
     expect(metas(instruction)).toEqual([
       [AUTHORITY, SIGN],
-      [await ringConfigAddress(RING), READ],
       [await ringPolicyAddress(RING), WRITE],
       [CURATOR, READ],
     ]);
@@ -436,7 +467,6 @@ describe("policy writes", () => {
     const own = await source({ kind: "own" });
     const head = [
       [AUTHORITY, SIGN],
-      [await ringConfigAddress(RING), READ],
       [await ringPolicyAddress(RING), WRITE],
     ];
     expect(curator.data).toEqual(Uint8Array.of(54, 1, ListId.block, 1));

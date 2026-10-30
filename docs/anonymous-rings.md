@@ -1,6 +1,6 @@
 # Anonymous rings
 
-An anonymous ring is a custom ring whose config holds `RingMode::Anonymous`. A
+An anonymous ring is a custom ring whose ring policy holds `RingMode::Anonymous`. A
 transfer of ring notes inside it hides the sender and the recipient, amount
 and asset of each ring output from a chain observer. The ring auditor reads all
 of them. Each ring output carries a view tag and an encrypted body. The audit
@@ -54,7 +54,7 @@ names its recipient to the observer.
 
 ## Creating an anonymous ring
 
-Anonymity is fixed when the config is created. With the CLI, set
+Anonymity is fixed when the ring account is created. With the CLI, set
 `mode = "anonymous"` in `ring.toml`, or select it in `zolana-ring new`, before
 the first `init`. An anonymous ring can be a policy ring or audit-only. It
 refuses key registration and so key escrow, because its auditor already holds

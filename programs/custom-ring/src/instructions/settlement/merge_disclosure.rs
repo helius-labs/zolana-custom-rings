@@ -1,6 +1,6 @@
 use custom_ring_interface::{
     key_catalog::RingCircuit, merge_disclosure_field_count, CustomRingError, MergeDisclosureRef,
-    MergePublicInput, RingProgramConfig, VIEWING_PUBKEY_TAG,
+    MergePublicInput, RingPolicy, VIEWING_PUBKEY_TAG,
 };
 use pinocchio::{Address, ProgramResult};
 use spr_interface::instruction::instruction_data::merge_transact::{
@@ -15,7 +15,7 @@ use crate::instructions::verifier::{ring_key, RingProof};
 pub(crate) struct MergeAudit<'a> {
     pub party_identities: &'a [[u8; 32]; 3],
     pub program_id: &'a Address,
-    pub config: &'a RingProgramConfig,
+    pub ring: &'a RingPolicy,
     pub anonymous: bool,
     /// `Some` on a key escrow ring alone.
     pub member_registry_root: Option<&'a [u8; 32]>,
@@ -52,7 +52,7 @@ impl MergeAudit<'_> {
             output_utxo_hash: merge.output_utxo_hash,
             first_nullifier,
             ring_id: &ring_id_field(self.program_id.as_array()).map_err(CustomRingError::from)?,
-            auditor_pk: &self.config.auditor_pubkey,
+            auditor_pk: &self.ring.auditor_pubkey,
             eph_pk: disclosure.eph_pk,
             ciphertext: disclosure.ciphertext,
             salt,

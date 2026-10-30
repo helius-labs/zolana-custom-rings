@@ -253,8 +253,11 @@ pub enum AuthorityCommand {
         #[arg(long)]
         yes: bool,
     },
-    /// Hand the ring config authority to another keypair, both keys sign.
-    TransferConfig { new_authority_keypair: PathBuf },
+    /// Hand one ring role to another keypair, the admin and the new key sign.
+    UpdateRole {
+        role: RoleName,
+        new_keypair: PathBuf,
+    },
     /// Stop every deposit, transfer and merge of the ring.
     Pause,
     /// Open the ring again after a pause.

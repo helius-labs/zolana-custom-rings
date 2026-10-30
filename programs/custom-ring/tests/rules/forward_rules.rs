@@ -18,9 +18,8 @@ use spr_interface::instruction::instruction_data::{
 
 use crate::{
     common::{
-        auditor_pubkey, config_pda, delegate_ring, off_curve_g2, on_curve_g2, policy_pda,
-        reaches_verification, refused, ring_auth, set_co_signer, CoSignerSlot, Ring, Sent, Setup,
-        PROGRAM, SYSTEM,
+        auditor_pubkey, delegate_ring, off_curve_g2, on_curve_g2, policy_pda, reaches_verification,
+        refused, ring_auth, set_co_signer, CoSignerSlot, Ring, Sent, Setup, PROGRAM, SYSTEM,
     },
     transact_rules::SPP,
 };
@@ -63,24 +62,17 @@ pub fn merge_disclosure(inputs: usize) -> MergeDisclosure {
 }
 
 fn merge_instruction(ring: &Ring, registry: Option<u64>) -> Instruction {
-    merge_instruction_with(ring, registry, &merge_data(registry, 8))
+    merge_instruction_with(ring, &merge_data(registry, 8))
 }
 
-/// The forwarded list follows the config and, with `registry`, the policy.
-pub fn merge_instruction_with(
-    ring: &Ring,
-    registry: Option<u64>,
-    data: &CustomRingMergeIxData,
-) -> Instruction {
+/// The forwarded list follows the ring account.
+pub fn merge_instruction_with(ring: &Ring, data: &CustomRingMergeIxData) -> Instruction {
     let mut spp: Vec<AccountMeta> = (0..RING_MERGE_PAYER_INDEX)
         .map(|_| AccountMeta::new(Address::new_unique(), false))
         .collect();
     spp[RING_MERGE_RING_CONFIG_INDEX] = AccountMeta::new(ring_auth(), false);
     spp.push(AccountMeta::new(ring.payer.pubkey(), true));
-    let mut accounts = vec![AccountMeta::new_readonly(config_pda(), false)];
-    if registry.is_some() {
-        accounts.push(AccountMeta::new_readonly(policy_pda(), false));
-    }
+    let mut accounts = vec![AccountMeta::new_readonly(policy_pda(), false)];
     accounts.extend(spp);
     Instruction {
         program_id: PROGRAM,
@@ -110,14 +102,14 @@ fn a_merge_outside_key_escrow_binds_no_root() {
         let mut ring = Ring::new(setup);
         let mut data = merge_data(Some(1), 8);
         data.output_ring_data_hash = [0; 32];
-        let instruction = merge_instruction_with(&ring, None, &data);
+        let instruction = merge_instruction_with(&ring, &data);
         refused(
             ring.send(instruction, &[]),
             CustomRingError::UnexpectedMemberRegistryRoot,
         );
         let mut data = merge_data(None, 8);
         data.output_ring_data_hash = [0; 32];
-        let instruction = merge_instruction_with(&ring, None, &data);
+        let instruction = merge_instruction_with(&ring, &data);
         reaches_verification(ring.send(instruction, &[]));
     }
 }
@@ -172,7 +164,7 @@ pub fn ring_deposit() -> RingDepositIxData {
     deposit_of(vec![deposit_entry(0, &auditor_pubkey())])
 }
 
-/// `registry` the own revision an escrow-mode ring binds, the policy follows the config.
+/// `registry` the own revision an escrow-mode ring binds.
 fn audited_deposit(ring: &mut Ring, registry: Option<u64>) -> Sent {
     let instruction = deposit_instruction(ring, registry, &ring_deposit());
     ring.send(instruction, &[])
@@ -205,10 +197,7 @@ pub fn deposit_instruction(
         AccountMeta::new_readonly(SYSTEM, false),
         AccountMeta::new(Address::new_unique(), false),
     ]);
-    let mut accounts = vec![AccountMeta::new_readonly(config_pda(), false)];
-    if registry.is_some() {
-        accounts.push(AccountMeta::new_readonly(policy_pda(), false));
-    }
+    let mut accounts = vec![AccountMeta::new_readonly(policy_pda(), false)];
     accounts.extend(spp);
     Instruction {
         program_id: PROGRAM,
@@ -275,9 +264,9 @@ fn a_merge_naming_the_ring_pda_past_its_slot_is_refused() {
     );
 }
 
-/// The merge's forwarded list starts after the config, no registry outside key escrow.
+/// The merge's forwarded list starts after the ring account.
 const MERGE_SPP: usize = 1;
-/// The deposit's forwarded list starts after the config.
+/// The deposit's forwarded list starts after the ring account.
 const DEPOSIT_SPP: usize = 1;
 
 #[test]

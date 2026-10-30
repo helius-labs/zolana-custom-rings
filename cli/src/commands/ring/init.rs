@@ -1,9 +1,10 @@
 //! `init`, every step skipped when the chain already holds it, so a rerun resumes.
 
-use anyhow::{anyhow, bail, ensure, Context as _, Result};
+use anyhow::{bail, ensure, Context as _, Result};
+use custom_ring_interface::{RingRole, RingRoles};
 use custom_ring_sdk::{
     CustomRingConfig, InitialPolicy, Initialize, ListRegistry, PolicyTable, PolicyUpdate,
-    RingError, RingKind, SourceOwner, SyncRoots, UpdateAuthority, UpdatePolicy,
+    RingError, RingKind, SourceOwner, SyncRoots, UpdatePolicy,
 };
 use solana_address::Address;
 use solana_keypair::Keypair;
@@ -15,16 +16,14 @@ use zolana_ring_policy::{ListId, RuleTable};
 use crate::{
     catalogue,
     config::{expand_tilde, ModeName},
-    deploy, line,
+    deploy, file, line,
     policy::{self, CompiledPolicy, PolicySpec},
     status, Context, InitArgs, Trust,
 };
 
 const PRESENT: &str = "already present";
 const CREATED: &str = "created";
-const TRANSFERRED: &str = "transferred";
-const NEEDS_UPGRADE_AUTHORITY: &str =
-    "the upgrade authority keypair is needed until the config authority holds the config";
+const NEEDS_UPGRADE_AUTHORITY: &str = "the upgrade authority keypair signs `Initialize`";
 const POLICY_DRIFT: &str =
     "the pinned policy differs from ring.toml, `zolana-ring policy set` replaces the table";
 const PARTIAL_INIT: &str =
@@ -52,10 +51,11 @@ enum KeyChoice {
 #[error("a local auditor key file against a hosted ring rpc")]
 struct StrayLocalKey;
 
-/// `Initialize` takes only the upgrade authority, a distinct config authority takes the config over next.
+/// `Initialize` names the four role keys, the upgrade authority holds none it does not name.
 #[must_use]
 struct ConfigCreation<'a> {
     deployer: Option<&'a Keypair>,
+    /// Holds the policy role and pays.
     config_authority: &'a Keypair,
     auditor_pk: X25519Pubkey,
     policy: Option<&'a CompiledPolicy>,
@@ -68,34 +68,11 @@ struct ConfigCreation<'a> {
 struct RingInitialization<'a> {
     deployer: &'a Keypair,
     config_authority: &'a Keypair,
+    roles: RingRoles,
     auditor_pk: X25519Pubkey,
     kind: RingKind,
     policy: Option<&'a CompiledPolicy>,
 }
-
-struct ConfigOutcome {
-    config: &'static str,
-    authority: &'static str,
-}
-
-#[must_use]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ConfigOwnership {
-    existing: Option<Address>,
-    upgrade_authority: Option<Address>,
-    config_authority: Address,
-}
-
-#[must_use]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ConfigState {
-    Missing,
-    HeldByUpgradeAuthority,
-    HeldByConfigAuthority,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ForeignConfigAuthority(Address);
 
 #[must_use]
 struct PolicyPin<'a> {
@@ -110,15 +87,12 @@ pub fn run(ctx: &Context, args: InitArgs) -> Result<()> {
     let policy = ctx.config.policy.as_ref().map(compile).transpose()?;
     let config_authority = ctx.funded_authority()?;
     let existing = ctx.block(ctx.ring.config(ctx.chain()))?;
-    // Only the upgrade authority creates the config, the config authority pins the rest.
-    let held = existing
-        .as_ref()
-        .is_some_and(|config| config.authority == config_authority.pubkey());
-    let upgrade_authority = match held {
-        true => None,
-        false => Some(ctx.config.upgrade_authority()?),
+    // Only the upgrade authority creates the config, the policy authority pins the rest.
+    let upgrade_authority = match existing {
+        Some(_) => None,
+        None => Some(ctx.config.upgrade_authority()?),
     };
-    if let Some(deployer) = upgrade_authority.as_ref().filter(|_| existing.is_none()) {
+    if let Some(deployer) = upgrade_authority.as_ref() {
         let program = ctx.ring.program_id();
         let data = deploy::program_data(ctx)?
             .with_context(|| format!("program {program} is not deployed, run `deploy` first"))?;
@@ -184,22 +158,20 @@ pub fn run(ctx: &Context, args: InitArgs) -> Result<()> {
         existing: existing.as_ref(),
     }
     .send(ctx)?;
-    let records = ctx
-        .block(ring.policy(ctx.chain()))?
-        .context(PARTIAL_INIT)?
-        .records;
+    let ring_config = ctx.ring_config()?;
+    let records = ring_config.account().records;
     let policy = match &policy {
-        None if created.config == CREATED => "records only, created",
+        None if created == CREATED => "records only, created",
         None => "records only",
         Some(policy) => PolicyPin {
             authority: config_authority,
             policy,
-            outcome: created.config,
+            outcome: created,
         }
         .send(ctx)?,
     };
     let spp_ring = match ctx.block(ring.registration(ctx.chain()))? {
-        Some(_) if created.config == CREATED => "registered",
+        Some(_) if created == CREATED => "registered",
         Some(_) => PRESENT,
         None => bail!(PARTIAL_INIT),
     };
@@ -216,9 +188,9 @@ pub fn run(ctx: &Context, args: InitArgs) -> Result<()> {
             ),
         );
     }
-    line("config", created.config);
-    line("authority", created.authority);
-    line("records", format_args!("{records} {}", created.config));
+    line("config", created);
+    status::print_roles(&ring_config.roles);
+    line("records", format_args!("{records} {created}"));
     line("policy", policy);
     line("spp ring", spp_ring);
     status::announce(&ctx.config);
@@ -238,17 +210,15 @@ impl KeySelection {
 }
 
 impl ConfigCreation<'_> {
-    fn send(self, ctx: &Context) -> Result<ConfigOutcome> {
-        let mismatch = |holder: Address, auditor: &X25519Pubkey| {
-            anyhow!(
-                "ring config exists under authority {holder} with auditor {}, ring.toml names another operator",
-                hex::encode(auditor.as_bytes())
-            )
-        };
+    fn send(self, ctx: &Context) -> Result<&'static str> {
+        let policy_key = self.config_authority.pubkey();
         if let Some(config) = self.existing {
-            if config.auditor_pubkey != self.auditor_pk {
-                return Err(mismatch(config.authority, &config.auditor_pubkey));
-            }
+            ensure!(
+                config.auditor_pubkey == self.auditor_pk && config.roles.policy == policy_key,
+                "ring config exists under policy authority {} with auditor {}, ring.toml names another operator",
+                config.roles.policy,
+                hex::encode(config.auditor_pubkey.as_bytes())
+            );
             // The tier is immutable, transfer dispatches on it.
             ensure!(
                 config.has_policy == self.policy.is_some(),
@@ -260,35 +230,18 @@ impl ConfigCreation<'_> {
                 "ring.toml selects the {} mode, the deployed config has another, redeploy is not a mode change",
                 self.mode
             );
-        }
-        let target = self.config_authority.pubkey();
-        let state = ConfigOwnership {
-            existing: self.existing.map(|config| config.authority),
-            upgrade_authority: self.deployer.map(Signer::pubkey),
-            config_authority: target,
-        }
-        .decide()
-        .map_err(|ForeignConfigAuthority(holder)| mismatch(holder, &self.auditor_pk))?;
-        if state == ConfigState::HeldByConfigAuthority {
-            return Ok(ConfigOutcome {
-                config: PRESENT,
-                authority: PRESENT,
-            });
+            return Ok(PRESENT);
         }
         let deployer = self.deployer.context(NEEDS_UPGRADE_AUTHORITY)?;
-        let hand_over = UpdateAuthority {
-            ring: ctx.ring,
-            authority: deployer.pubkey(),
-            new_authority: target,
-        }
-        .instruction();
-        if state == ConfigState::HeldByUpgradeAuthority {
-            ctx.send(&[self.config_authority, deployer], &[hand_over])?;
-            return Ok(ConfigOutcome {
-                config: PRESENT,
-                authority: TRANSFERRED,
-            });
-        }
+        let role_key = |role| -> Result<Address> {
+            Ok(file::read_or_create_keypair(&ctx.role_keypair_path(role)?)?.pubkey())
+        };
+        let roles = RingRoles {
+            admin: role_key(RingRole::Admin)?,
+            policy: policy_key,
+            pauser: role_key(RingRole::Pauser)?,
+            cosign_admin: role_key(RingRole::CosignAdmin)?,
+        };
         let kind = match (self.mode, self.policy.is_some()) {
             (ModeName::Confidential, false) => RingKind::AuditOnly,
             (ModeName::Confidential, true) => RingKind::Policy,
@@ -298,34 +251,13 @@ impl ConfigCreation<'_> {
         RingInitialization {
             deployer,
             config_authority: self.config_authority,
+            roles,
             auditor_pk: self.auditor_pk,
             kind,
             policy: self.policy,
         }
         .send(ctx)?;
-        let transfer = deployer.pubkey() != target;
-        if transfer {
-            ctx.send(&[self.config_authority, deployer], &[hand_over])?;
-        }
-        Ok(ConfigOutcome {
-            config: CREATED,
-            authority: if transfer { TRANSFERRED } else { PRESENT },
-        })
-    }
-}
-
-impl ConfigOwnership {
-    fn decide(self) -> Result<ConfigState, ForeignConfigAuthority> {
-        match self.existing {
-            None => Ok(ConfigState::Missing),
-            Some(holder) if holder == self.config_authority => {
-                Ok(ConfigState::HeldByConfigAuthority)
-            }
-            Some(holder) if Some(holder) == self.upgrade_authority => {
-                Ok(ConfigState::HeldByUpgradeAuthority)
-            }
-            Some(holder) => Err(ForeignConfigAuthority(holder)),
-        }
+        Ok(CREATED)
     }
 }
 
@@ -355,6 +287,7 @@ impl RingInitialization<'_> {
                 authority: self.deployer.pubkey(),
                 auditor_pubkey: self.auditor_pk,
                 kind: self.kind,
+                roles: self.roles,
                 policy: Some(InitialPolicy {
                     records,
                     table: PolicyTable {
@@ -499,60 +432,5 @@ mod tests {
             ..file
         };
         assert_eq!(hosted.decide(), Err(StrayLocalKey));
-    }
-
-    #[test]
-    fn the_config_moves_from_the_upgrade_authority_to_the_config_authority_once() {
-        let deployer = Address::new_from_array([1; 32]);
-        let target = Address::new_from_array([2; 32]);
-        let stranger = Address::new_from_array([3; 32]);
-        let missing = ConfigOwnership {
-            existing: None,
-            upgrade_authority: Some(deployer),
-            config_authority: target,
-        };
-        assert_eq!(missing.decide(), Ok(ConfigState::Missing));
-        let no_deployer = ConfigOwnership {
-            upgrade_authority: None,
-            ..missing
-        };
-        assert_eq!(no_deployer.decide(), Ok(ConfigState::Missing));
-        let deployed = ConfigOwnership {
-            existing: Some(deployer),
-            ..missing
-        };
-        assert_eq!(deployed.decide(), Ok(ConfigState::HeldByUpgradeAuthority));
-        let handed_over = ConfigOwnership {
-            existing: Some(target),
-            ..missing
-        };
-        assert_eq!(handed_over.decide(), Ok(ConfigState::HeldByConfigAuthority));
-        let handed_over_no_deployer = ConfigOwnership {
-            existing: Some(target),
-            ..no_deployer
-        };
-        assert_eq!(
-            handed_over_no_deployer.decide(),
-            Ok(ConfigState::HeldByConfigAuthority)
-        );
-        let deployed_no_deployer = ConfigOwnership {
-            existing: Some(deployer),
-            ..no_deployer
-        };
-        assert_eq!(
-            deployed_no_deployer.decide(),
-            Err(ForeignConfigAuthority(deployer))
-        );
-        let foreign = ConfigOwnership {
-            existing: Some(stranger),
-            ..missing
-        };
-        assert_eq!(foreign.decide(), Err(ForeignConfigAuthority(stranger)));
-        let one_key = ConfigOwnership {
-            existing: Some(deployer),
-            upgrade_authority: Some(deployer),
-            config_authority: deployer,
-        };
-        assert_eq!(one_key.decide(), Ok(ConfigState::HeldByConfigAuthority));
     }
 }

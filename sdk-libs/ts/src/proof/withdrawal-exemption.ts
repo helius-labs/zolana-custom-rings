@@ -1,7 +1,12 @@
 import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
-import { hashChain4, bigIntBytes, ZERO_32 } from "@heliuslabs/zolana/internal";
-import type { RingProgramConfig } from "../protocol/codec/ring-codecs.js";
-import { fetchRingPolicy } from "../protocol/membership/config.js";
+import {
+  addressBytes,
+  bigIntBytes,
+  equalBytes,
+  hashChain4,
+  ZERO_32,
+} from "@heliuslabs/zolana/internal";
+import type { RingPolicy } from "../protocol/codec/ring-codecs.js";
 import { memberOfAsset } from "../protocol/membership/policy.js";
 import { RingError } from "../protocol/error.js";
 import { domainField, RingDomain } from "../crypto/derivation/ring-domain.js";
@@ -19,7 +24,7 @@ export async function readWithdrawalExemption(
   input: Readonly<{
     client: PolicyReadClient;
     ringProgramId: Address;
-    config: RingProgramConfig;
+    config: RingPolicy;
     demand: CoSignDemand;
     approvalRequired: boolean;
     own: BoundRoot | undefined;
@@ -36,15 +41,9 @@ export async function readWithdrawalExemption(
     required(true) !== undefined
   )
     return undefined;
-  let root = input.own;
-  if (root === undefined) {
-    try {
-      root = ownRoot(ringProgramId, await fetchRingPolicy(client, ringProgramId, context));
-    } catch (error) {
-      if (error instanceof RingError && error.code === "RING_POLICY_MISSING") return undefined;
-      throw error;
-    }
-  }
+  if (input.own === undefined && equalBytes(addressBytes(config.records, "records"), ZERO_32))
+    return undefined;
+  const root = input.own ?? ownRoot(ringProgramId, config);
   const assets = demand.withdrawals.map((row) => memberOfAsset(row.mint) as Bytes32);
   const amounts = demand.withdrawals.map((row) => bigIntBytes(row.amount, 32) as Bytes32);
   if (assets.length > N_PUBLIC_SLOTS) throw new RingError("RING_MEMBER_REGISTRY_INVALID");

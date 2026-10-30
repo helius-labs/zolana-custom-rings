@@ -1,5 +1,5 @@
 use custom_ring_interface::{
-    CustomRingError, PolicySourceIxData, PolicyTableIxData, RingPolicy, SourceSlot,
+    CustomRingError, PolicySourceIxData, PolicyTableIxData, RingPolicy, RingRole, SourceSlot,
     UpdatePolicyIxData,
 };
 use pinocchio::{
@@ -11,7 +11,7 @@ use zolana_ring_policy::ListId;
 
 use crate::instructions::{
     instruction_runtime::parse,
-    loader::{load_authorized_config, load_policy_mut},
+    loader::RoleHolder,
     policy_binding::{curator_source, RecordsBinding, TableBinding},
 };
 
@@ -23,16 +23,18 @@ pub fn process_update_policy_ix(
 ) -> ProgramResult {
     let ix: UpdatePolicyIxData = parse(data)?;
     let mut iter = AccountIterator::new(accounts);
-    let authority = iter.next_signer("authority")?;
-    let config = iter.next_account("config")?;
-    let policy = iter.next_mut("policy")?;
+    let authority = iter.next_signer("policy_authority")?;
+    let ring = iter.next_mut("ring")?;
     let trailing = iter.remaining_unchecked()?;
 
-    // 1. Only the config authority rewrites the policy.
-    let config = load_authorized_config(program_id, config, authority)?;
-    let mut policy = load_policy_mut(program_id, policy)?;
+    // 1. Only the policy authority rewrites the policy.
+    let mut policy = RoleHolder {
+        program_id,
+        role: RingRole::Policy,
+        signer: authority,
+    }
+    .load_mut(ring)?;
     let write = PolicyWrite {
-        config_authority: &config.authority,
         policy: &mut policy,
         trailing,
         slot: Clock::get()?.slot,
@@ -49,7 +51,6 @@ pub fn process_update_policy_ix(
 
 #[must_use]
 struct PolicyWrite<'a> {
-    config_authority: &'a Address,
     policy: &'a mut RingPolicy,
     trailing: &'a [AccountView],
     slot: u64,
@@ -102,7 +103,7 @@ impl PolicyWrite<'_> {
         };
         RecordsBinding {
             records,
-            config_authority: self.config_authority,
+            policy_authority: &self.policy.roles.policy,
             storage_authority,
         }
         .check()?;

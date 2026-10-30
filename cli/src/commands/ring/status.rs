@@ -1,13 +1,13 @@
 use std::fmt::Write;
 
 use anyhow::Result;
-use custom_ring_interface::{RingPolicy, RootMirror};
+use custom_ring_interface::{RingPolicy, RingRoles, RootMirror};
 use custom_ring_sdk::{RingError, RingMode};
 use solana_signer::Signer;
 use spr_client::Rpc;
 
 use crate::{
-    config::{redact_text, redact_url, RingConfig, Target},
+    config::{redact_text, redact_url, RingConfig, RoleName, Target},
     controls, deploy, line,
     policy::{print_pinned, Pinned},
     release::RingProgram,
@@ -64,6 +64,12 @@ pub fn announce(config: &RingConfig) {
     line("explorer", explorer_link(config));
 }
 
+pub fn print_roles(roles: &RingRoles) {
+    for name in RoleName::ALL {
+        line(name.as_str(), roles.key(name.role()));
+    }
+}
+
 fn explorer_link(config: &RingConfig) -> String {
     let cluster = match config.target {
         Target::Devnet => "cluster=devnet".to_owned(),
@@ -99,7 +105,7 @@ fn print_chain(ctx: &Context) -> Result<()> {
         Err(RingError::MissingRingConfig) => {
             line(
                 "config",
-                format_args!("not created ({})", ring.config_pda()),
+                format_args!("not created ({})", ring.policy_pda()),
             );
             // Until the config exists, ring.toml names the tier.
             if ctx.config.policy.is_none() {
@@ -113,12 +119,9 @@ fn print_chain(ctx: &Context) -> Result<()> {
     let auditor = hex::encode(config.auditor_pubkey.as_bytes());
     line(
         "config",
-        format_args!(
-            "{} authority {} auditor {auditor}",
-            ring.config_pda(),
-            config.authority
-        ),
+        format_args!("{} auditor {auditor}", ring.policy_pda()),
     );
+    print_roles(&config.roles);
     line("mode", mode(config.mode));
     match config.co_signer_classes {
         Some(classes) => line("co-signed classes", controls::class_names(classes)),
@@ -128,13 +131,8 @@ fn print_chain(ctx: &Context) -> Result<()> {
         Some(delegate) => line("delegate", delegate),
         None => line("delegate", "none"),
     }
-    if let Some(policy) = &status.policy {
-        print_roots(policy);
-    }
-    let pinned = match &status.policy {
-        Some(policy) => Pinned::of(policy.clone())?,
-        None => None,
-    };
+    print_roots(config.account());
+    let pinned = Pinned::of(Box::new(*config.account()))?;
     if !config.has_policy {
         line("policy", "none (audit-only ring)");
     } else if let Some(pinned) = pinned {

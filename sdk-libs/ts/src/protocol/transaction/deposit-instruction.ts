@@ -15,12 +15,7 @@ import {
 } from "@heliuslabs/zolana/internal";
 import { InstructionTag } from "@heliuslabs/zolana/interface";
 import type { Address, RingAssetDeposit } from "@heliuslabs/zolana/interface";
-import {
-  ringAuthAddress,
-  ringCoSignerMetas,
-  ringConfigAddress,
-  ringPolicyAddress,
-} from "../pda/index.js";
+import { ringAuthAddress, ringCoSignerMetas, ringPolicyAddress } from "../pda/index.js";
 import { REVISION_LENGTH } from "./transact.js";
 
 import { RING_DEPOSIT_AUDIT_SLOTS, readRingDepositCapsule } from "../codec/deposit-capsule.js";
@@ -36,7 +31,7 @@ export interface RingDepositSpp {
 /** `AUDITED_DEPOSIT ‖ proof ‖ own_revision ‖ curator_revision` ahead of the forwarded SPP deposit. */
 export const AUDITED_DEPOSIT_PREFIX_LENGTH = 1 + CUSTOM_RING_PROOF_LENGTH + 2 * REVISION_LENGTH;
 
-/** The accounts `[config, policy?, co_signer?]` ahead of SPP's deposit list. */
+/** The accounts `[ring, co_signer?]` ahead of SPP's deposit list. */
 export async function ringDepositInstruction(
   input: Readonly<{
     ringProgramId: Address;
@@ -44,7 +39,7 @@ export async function ringDepositInstruction(
     depositor: SignerAccount;
     deposits: readonly RingAssetDeposit[];
     proof: Uint8Array;
-    /** Escrow or policy rings only, the policy account then follows the config. */
+    /** Escrow or policy rings only. */
     ownRevision?: bigint;
     /** Rings with a curator source only. */
     curatorRevision?: bigint;
@@ -52,10 +47,9 @@ export async function ringDepositInstruction(
     cosigner?: SignerAccount;
   }>,
 ): Promise<Instruction> {
-  const [spp, config, policy, cosigner] = await Promise.all([
+  const [spp, ring, cosigner] = await Promise.all([
     ringDepositSpp(input),
-    ringConfigAddress(input.ringProgramId),
-    input.ownRevision === undefined ? undefined : ringPolicyAddress(input.ringProgramId),
+    ringPolicyAddress(input.ringProgramId),
     input.cosigner === undefined ? [] : ringCoSignerMetas(input.ringProgramId, input.cosigner),
   ]);
   const prefix = new Writer()
@@ -65,12 +59,7 @@ export async function ringDepositInstruction(
     .finish();
   return instruction(
     tagged(RingInstructionTag.deposit, new Uint8Array([...prefix, ...spp.data])),
-    [
-      meta(config, false, false),
-      ...(policy === undefined ? [] : [meta(policy, false, false)]),
-      ...cosigner,
-      ...spp.accounts,
-    ],
+    [meta(ring, false, false), ...cosigner, ...spp.accounts],
     input.ringProgramId,
   );
 }

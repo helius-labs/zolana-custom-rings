@@ -14,8 +14,11 @@ import {
 } from "../../../src/operations/management/admin.js";
 import {
   GRACE_SLOTS,
-  RING_PROGRAM_CONFIG_DISCRIMINATOR,
-  RING_PROGRAM_CONFIG_SIZE,
+  RING_CO_SIGNER_DISCRIMINATOR,
+  RING_CO_SIGNER_SIZE,
+  RING_POLICY_DISCRIMINATOR,
+  RING_POLICY_SIZE,
+  RING_ROLE_BYTES,
 } from "../../../src/protocol/codec/ring-codecs.js";
 
 function rust(file: string): string {
@@ -94,9 +97,21 @@ describe("ring interface pins", () => {
       Number(new RegExp(`^ {4}${name} = [A-Z_]+: (\\d+),`, "mu").exec(source)?.[1]);
     const size = (name: string): number =>
       Number(new RegExp(`assert!\\(${name}::SIZE == (\\d+)\\)`, "u").exec(source)?.[1]);
-    expect([discriminator("RingProgramConfig"), size("RingProgramConfig")]).toEqual([
-      RING_PROGRAM_CONFIG_DISCRIMINATOR,
-      RING_PROGRAM_CONFIG_SIZE,
+    expect([discriminator("RingPolicy"), size("RingPolicy")]).toEqual([
+      RING_POLICY_DISCRIMINATOR,
+      RING_POLICY_SIZE,
     ]);
+    expect([discriminator("CoSigner"), size("CoSigner")]).toEqual([
+      RING_CO_SIGNER_DISCRIMINATOR,
+      RING_CO_SIGNER_SIZE,
+    ]);
+  });
+
+  it("encodes each role with the byte Rust `RingRole` decodes", () => {
+    const body = rust("accounts/state.rs").split("pub enum RingRole {")[1]?.split("}")[0] ?? "";
+    const rows = [...body.matchAll(/tag = (\d+)\)\]\s+([A-Za-z]+),/gu)].map(
+      ([, tag = "", variant = ""]) => [lowerFirst(variant), Number(tag)] as const,
+    );
+    expect(Object.fromEntries(rows)).toEqual(RING_ROLE_BYTES);
   });
 });

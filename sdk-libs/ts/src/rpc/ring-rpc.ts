@@ -346,7 +346,7 @@ export class RingAuthorityTransferRequest {
   }
 }
 
-/** Rust `ListEnrolments`, `RefuseEnrolment` or `CreateRecords`, the action the ring authority signs. */
+/** Rust `ListEnrolments`, `RefuseEnrolment` or `CreateRecords`, the action the policy authority signs. */
 export type RingEnrolmentAction =
   | Readonly<{ kind: "list"; cursor?: Hash }>
   | Readonly<{ kind: "refuse"; updateId: Hash }>
@@ -388,7 +388,7 @@ function enrolmentActionLine(action: RingEnrolmentAction): string {
   }
 }
 
-/** Rust `GetPendingEnrolmentsRequest::read` signed by the config authority, the page after `cursor`. */
+/** Rust `GetPendingEnrolmentsRequest::read` signed by the policy authority, the page after `cursor`. */
 export async function signPendingEnrolmentsRequest(
   target: RingReadTarget,
   authority: MessagePartialSigner,
@@ -405,7 +405,7 @@ export async function signPendingEnrolmentsRequest(
   });
 }
 
-/** Rust `RefuseEnrolmentRequest::refusal` signed by the config authority. */
+/** Rust `RefuseEnrolmentRequest::refusal` signed by the policy authority. */
 export async function signRefuseEnrolmentRequest(
   target: RingReadTarget,
   authority: MessagePartialSigner,
@@ -420,7 +420,7 @@ export async function signRefuseEnrolmentRequest(
   });
 }
 
-/** Rust `CreateRecordsRegistryRequest::create` signed by the config authority, or the upgrade authority while no config exists. */
+/** Rust `CreateRecordsRegistryRequest::create` signed by the policy authority, or the upgrade authority before `Initialize`. */
 export async function signCreateRecordsRegistryRequest(
   target: RingReadTarget,
   authority: MessagePartialSigner,
@@ -485,7 +485,7 @@ export function readerGrantAttestation(
   );
 }
 
-/** Mirrors Rust `ReaderGrantRequest`, the service takes a ring-wide grant only from the ring config authority. */
+/** Mirrors Rust `ReaderGrantRequest`, the service takes a ring-wide grant only from the ring's policy authority. */
 export class RingReaderGrantRequest {
   readonly #target: RingReadTarget;
   readonly #grant: RingReaderGrant;
@@ -790,7 +790,7 @@ export interface RingActivation {
 export interface RingStatus {
   readonly ringProgramId: Address;
   readonly state: RingState;
-  /** The key the ring's config names, absent until the config exists. */
+  /** The key the ring account names, absent before `Initialize`. */
   readonly configAuditorPublicKey?: X25519PublicKey;
   readonly servicePublicKey: Address;
   /** Absent until SPP holds a config for the ring. */
@@ -962,7 +962,7 @@ export class RingRpc {
     input: Readonly<{
       ringProgramId: Address;
       genesisHash: Bytes32;
-      /** The upgrade authority, or the config authority once the config exists. */
+      /** The upgrade authority, or the policy authority after `Initialize`. */
       authority: MessagePartialSigner;
       timestamp?: bigint;
     }>,
@@ -1122,7 +1122,7 @@ export class RingRpc {
     );
   }
 
-  /** One page of the enrolments that await the config authority, oldest first. */
+  /** One page of the enrolments that await the policy authority, oldest first. */
   async getPendingEnrolments(
     request: GetPendingEnrolmentsRequest,
     context?: RequestContext,

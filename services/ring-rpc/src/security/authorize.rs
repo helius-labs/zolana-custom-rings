@@ -49,7 +49,7 @@ pub enum Unauthorized {
     Replay,
     #[error("request names another cluster")]
     ClusterMismatch,
-    #[error("signer is neither the program upgrade authority nor the config authority")]
+    #[error("signer is neither the program upgrade authority nor the policy authority")]
     NotRingAuthority,
 }
 

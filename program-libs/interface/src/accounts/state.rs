@@ -3,6 +3,7 @@ use core::ops::BitOr;
 use bytemuck::{Pod, Zeroable};
 use solana_address::Address;
 use spr_hasher::HasherError;
+use wincode::{SchemaRead, SchemaWrite};
 use zolana_ring_policy::{
     registry_field, EncodedRuleTable, ListId, PolicySource, RuleTable, SourceMap,
 };
@@ -100,14 +101,11 @@ macro_rules! ring_accounts {
 }
 
 // Discriminator zero marks an uninitialized account.
-// Discriminators 1 to 9, 11 and 12 are retired, never reuse them.
+// Discriminators 1 to 13 are retired, never reuse them.
 ring_accounts! {
-    RingProgramConfig = RING_PROGRAM_CONFIG: 10, CONFIG_PDA_SEED: b"config",
-        ConfigNotInitialized, ConfigAlreadyInitialized, InvalidConfigPda,
-        |config: &RingProgramConfig| config.mode().is_ok()
-            && config.has_policy <= 1;
-    RingPolicy = RING_POLICY: 13, RING_POLICY_PDA_SEED: b"policy",
-        InvalidRingPolicy, RingPolicyAlreadyExists, InvalidRingPolicy;
+    RingPolicy = RING_POLICY: 15, RING_POLICY_PDA_SEED: b"policy",
+        InvalidRingPolicy, RingPolicyAlreadyExists, InvalidRingPolicy,
+        |ring: &RingPolicy| ring.mode().is_ok();
     CoSigner = CO_SIGNER: 14, CO_SIGNER_PDA_SEED: b"co_signer",
         InvalidCoSignerRecord, CoSignerRecordAlreadyExists, InvalidCoSignerRecord,
         |record: &CoSigner| record.scope().is_some() && record.signer != Address::default();
@@ -124,27 +122,72 @@ macro_rules! le_getters {
 }
 
 le_getters! {
-    RingProgramConfig { created_slot: u64 }
-    RingPolicy { generation: u32, generation_slot: u64 }
+    RingPolicy { created_slot: u64, generation: u32, generation_slot: u64 }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Pod, Zeroable)]
+/// Nonzero keys, pairwise distinct with the delegate.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Pod, Zeroable, SchemaRead, SchemaWrite)]
 #[repr(C)]
-pub struct RingProgramConfig {
-    pub discriminator: u8,
-    pub authority: Address,
-    /// Auditor X25519 public key as `0x04 || canonical little-endian u`.
-    pub auditor_pubkey: [u8; TAGGED_X25519_KEY_LEN],
-    pub bump: u8,
-    /// One for a policy ring.
-    pub has_policy: u8,
-    /// [`RingMode`] byte.
-    pub mode: u8,
-    pub co_signers: CoSignerCounts,
-    /// Zero without a delegate.
-    pub delegate: Address,
-    /// Little endian, the slot `Initialize` ran in.
-    pub created_slot: [u8; 8],
+pub struct RingRoles {
+    /// Rotates every role and appoints the delegate.
+    pub admin: Address,
+    /// Signs `UpdatePolicy` and the authority record updates Ring RPC accepts.
+    pub policy: Address,
+    pub pauser: Address,
+    /// Signs `SetCoSigner` and `ClearCoSigner`.
+    pub cosign_admin: Address,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, SchemaRead, SchemaWrite)]
+#[wincode(tag_encoding = "u8")]
+pub enum RingRole {
+    #[wincode(tag = 0)]
+    Admin,
+    #[wincode(tag = 1)]
+    Policy,
+    #[wincode(tag = 2)]
+    Pauser,
+    #[wincode(tag = 3)]
+    CosignAdmin,
+}
+
+impl RingRoles {
+    pub const fn key(&self, role: RingRole) -> &Address {
+        match role {
+            RingRole::Admin => &self.admin,
+            RingRole::Policy => &self.policy,
+            RingRole::Pauser => &self.pauser,
+            RingRole::CosignAdmin => &self.cosign_admin,
+        }
+    }
+
+    fn key_mut(&mut self, role: RingRole) -> &mut Address {
+        match role {
+            RingRole::Admin => &mut self.admin,
+            RingRole::Policy => &mut self.policy,
+            RingRole::Pauser => &mut self.pauser,
+            RingRole::CosignAdmin => &mut self.cosign_admin,
+        }
+    }
+
+    /// `ZeroRoleKey` or `DuplicateRoleKey` unless every key and the delegate are nonzero and distinct.
+    pub fn check(&self, delegate: Option<&Address>) -> Result<(), CustomRingError> {
+        let keys: Vec<&Address> = [&self.admin, &self.policy, &self.pauser, &self.cosign_admin]
+            .into_iter()
+            .chain(delegate)
+            .collect();
+        if keys.iter().any(|key| **key == Address::default()) {
+            return Err(CustomRingError::ZeroRoleKey);
+        }
+        if keys
+            .iter()
+            .enumerate()
+            .any(|(index, key)| keys[..index].contains(key))
+        {
+            return Err(CustomRingError::DuplicateRoleKey);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -167,20 +210,6 @@ impl TryFrom<u8> for RingMode {
             2 => Ok(Self::Anonymous),
             _ => Err(CustomRingError::InvalidRingMode),
         }
-    }
-}
-
-impl RingProgramConfig {
-    pub fn mode(&self) -> Result<RingMode, CustomRingError> {
-        RingMode::try_from(self.mode)
-    }
-
-    pub const fn has_policy(&self) -> bool {
-        self.has_policy == 1
-    }
-
-    pub fn delegate(&self) -> Option<&Address> {
-        (self.delegate != Address::default()).then_some(&self.delegate)
     }
 }
 
@@ -296,12 +325,23 @@ pub enum ListRegistry {
     Curator(Address),
 }
 
+/// One per ring, every ring instruction and transfer passes it.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
 pub struct RingPolicy {
     pub discriminator: u8,
     pub bump: u8,
-    /// The ring's own `StorageRegistry`.
+    /// [`RingMode`] byte.
+    pub mode: u8,
+    pub co_signers: CoSignerCounts,
+    pub roles: RingRoles,
+    /// Zero without a delegate.
+    pub delegate: Address,
+    /// Auditor X25519 public key as `0x04 || canonical little-endian u`.
+    pub auditor_pubkey: [u8; TAGGED_X25519_KEY_LEN],
+    /// Little endian, the slot `Initialize` ran in.
+    pub created_slot: [u8; 8],
+    /// The ring's own `StorageRegistry`, zero on an audit-only ring bound to none.
     pub records: Address,
     /// Zero without a policy.
     pub policy_hash: [u8; 32],
@@ -359,14 +399,61 @@ impl RootMirror {
     }
 }
 
-impl RingPolicy {
+#[must_use]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct NewRing {
+    pub bump: u8,
+    pub mode: RingMode,
+    pub roles: RingRoles,
+    pub auditor_pubkey: [u8; TAGGED_X25519_KEY_LEN],
+    pub created_slot: u64,
+    pub records: Address,
+}
+
+impl NewRing {
     /// Unsynced mirrors and no policy, boxed in place past the SBF stack frame.
-    pub fn new(bump: u8, records: Address) -> Box<Self> {
-        let mut policy: Box<Self> = bytemuck::zeroed_box();
-        policy.discriminator = RING_POLICY;
-        policy.bump = bump;
-        policy.records = records;
-        policy
+    pub fn account(self) -> Box<RingPolicy> {
+        let mut ring: Box<RingPolicy> = bytemuck::zeroed_box();
+        ring.discriminator = RING_POLICY;
+        ring.bump = self.bump;
+        ring.mode = self.mode as u8;
+        ring.roles = self.roles;
+        ring.auditor_pubkey = self.auditor_pubkey;
+        ring.created_slot = self.created_slot.to_le_bytes();
+        ring.records = self.records;
+        ring
+    }
+}
+
+impl RingPolicy {
+    pub fn mode(&self) -> Result<RingMode, CustomRingError> {
+        RingMode::try_from(self.mode)
+    }
+
+    /// A policy ring pins its table at `Initialize`, an audit-only ring never writes one.
+    pub fn has_policy(&self) -> bool {
+        self.written_policy_hash().is_some()
+    }
+
+    pub fn delegate(&self) -> Option<&Address> {
+        (self.delegate != Address::default()).then_some(&self.delegate)
+    }
+
+    /// `UnauthorizedAuthority` unless `signer` holds `role`.
+    pub fn check_role(&self, role: RingRole, signer: &Address) -> Result<(), CustomRingError> {
+        if self.roles.key(role) != signer {
+            return Err(CustomRingError::UnauthorizedAuthority);
+        }
+        Ok(())
+    }
+
+    /// `ZeroRoleKey` or `DuplicateRoleKey` unless `key` stays apart from the other roles and the delegate.
+    pub fn rotate_role(&mut self, role: RingRole, key: Address) -> Result<(), CustomRingError> {
+        let mut roles = self.roles;
+        *roles.key_mut(role) = key;
+        roles.check(self.delegate())?;
+        self.roles = roles;
+        Ok(())
     }
 
     /// `PolicyNotSet` before the first policy write.
@@ -486,12 +573,12 @@ fn source_map(sources: &[SourceSlot; N_SOURCE_SLOTS]) -> Result<SourceMap, Custo
     Ok(SourceMap::from_slots(slots)?)
 }
 
-const _: () = assert!(RingProgramConfig::SIZE == 112);
-const _: () = assert!(core::mem::offset_of!(RingProgramConfig, co_signers) == 69);
-const _: () = assert!(core::mem::offset_of!(RingProgramConfig, delegate) == 72);
-const _: () = assert!(core::mem::offset_of!(RingProgramConfig, created_slot) == 104);
 const _: () = assert!(core::mem::size_of::<SourceSlot>() == 33);
 const _: () = assert!(ROOT_HISTORY <= u8::MAX as usize);
-const _: () = assert!(RingPolicy::SIZE == 3991);
-const _: () = assert!(core::mem::offset_of!(RingPolicy, own_roots) == 855);
+const _: () = assert!(RingPolicy::SIZE == 4196);
+const _: () = assert!(core::mem::offset_of!(RingPolicy, roles) == 6);
+const _: () = assert!(core::mem::offset_of!(RingPolicy, delegate) == 134);
+const _: () = assert!(core::mem::offset_of!(RingPolicy, auditor_pubkey) == 166);
+const _: () = assert!(core::mem::offset_of!(RingPolicy, records) == 207);
+const _: () = assert!(core::mem::offset_of!(RingPolicy, own_roots) == 1060);
 const _: () = assert!(CoSigner::SIZE == 35);

@@ -4,12 +4,9 @@
   "HashingFailed": 8102,
   "InvalidShieldedPoolProgram": 8103,
   "MissingRingAuth": 8104,
-  "ConfigAlreadyInitialized": 8105,
-  "ConfigNotInitialized": 8106,
   "UnauthorizedAuthority": 8107,
   "InvalidAuditorPubkey": 8108,
   "InvalidSystemProgram": 8111,
-  "InvalidConfigPda": 8112,
   "UnsupportedCircuit": 8113,
   "UnauthorizedInitializer": 8114,
   "TooManyAccounts": 8115,
@@ -93,5 +90,7 @@
   "InvalidAssetLimits": 8390,
   "DepositMintAccountMissing": 8410,
   "DepositAssetIndexUnknown": 8411,
-  "UnexpectedCuratorRevision": 8470
+  "UnexpectedCuratorRevision": 8470,
+  "ZeroRoleKey": 8471,
+  "DuplicateRoleKey": 8472
 }

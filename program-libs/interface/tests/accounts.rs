@@ -1,62 +1,90 @@
 use bytemuck::Zeroable;
 use custom_ring_interface::{
-    CustomRingError, RingAccount, RingPolicy, RingProgramConfig, SourceSlot, N_SOURCE_SLOTS,
-    RING_PROGRAM_CONFIG,
+    CustomRingError, NewRing, RingAccount, RingMode, RingPolicy, RingRole, RingRoles, SourceSlot,
+    N_SOURCE_SLOTS,
 };
 use solana_address::Address;
 use zolana_ring_policy::{ListId, Rule, RuleTable, Subject};
 
 const PROGRAM: Address = Address::new_from_array([7; 32]);
 
-fn config() -> RingProgramConfig {
-    let mut config: RingProgramConfig = Zeroable::zeroed();
-    config.discriminator = RING_PROGRAM_CONFIG;
-    config.authority = Address::new_from_array([1; 32]);
-    config.auditor_pubkey = [4; 33];
-    config.bump = 255;
-    config.has_policy = 1;
-    config
+fn key(byte: u8) -> Address {
+    Address::new_from_array([byte; 32])
+}
+
+fn roles() -> RingRoles {
+    RingRoles {
+        admin: key(1),
+        policy: key(2),
+        pauser: key(3),
+        cosign_admin: key(4),
+    }
+}
+
+fn ring(records: Address) -> Box<RingPolicy> {
+    NewRing {
+        bump: 254,
+        mode: RingMode::Confidential,
+        roles: roles(),
+        auditor_pubkey: [4; 33],
+        created_slot: 0,
+        records,
+    }
+    .account()
 }
 
 #[test]
 fn decode_needs_the_owner_the_length_and_the_discriminator() {
-    let bytes = bytemuck::bytes_of(&config()).to_vec();
-    assert_eq!(
-        RingProgramConfig::decode(&PROGRAM, &PROGRAM, &bytes),
-        Some(config())
-    );
+    let ring = ring(Address::default());
+    let bytes = bytemuck::bytes_of(&*ring).to_vec();
+    assert_eq!(RingPolicy::decode(&PROGRAM, &PROGRAM, &bytes), Some(*ring));
     let other = Address::new_from_array([8; 32]);
-    assert_eq!(RingProgramConfig::decode(&other, &PROGRAM, &bytes), None);
-    assert_eq!(
-        RingProgramConfig::decode(&PROGRAM, &PROGRAM, &bytes[1..]),
-        None
-    );
-    let mut retired = bytes.clone();
-    retired[0] = 1;
-    assert_eq!(
-        RingProgramConfig::decode(&PROGRAM, &PROGRAM, &retired),
-        None
-    );
-    assert_eq!(RingPolicy::decode(&PROGRAM, &PROGRAM, &bytes), None);
+    assert_eq!(RingPolicy::decode(&other, &PROGRAM, &bytes), None);
+    assert_eq!(RingPolicy::decode(&PROGRAM, &PROGRAM, &bytes[1..]), None);
+    for retired in [10, 13] {
+        let mut stale = bytes.clone();
+        stale[0] = retired;
+        assert_eq!(RingPolicy::decode(&PROGRAM, &PROGRAM, &stale), None);
+    }
 }
 
 #[test]
 fn decode_refuses_values_no_setter_writes() {
-    let decodes = |config: &RingProgramConfig| {
-        RingProgramConfig::decode(&PROGRAM, &PROGRAM, bytemuck::bytes_of(config)).is_some()
-    };
-    let mut mode = config();
+    let mut mode = *ring(Address::default());
     mode.mode = 3;
-    assert!(!decodes(&mode));
+    assert!(RingPolicy::decode(&PROGRAM, &PROGRAM, bytemuck::bytes_of(&mode)).is_none());
     assert_eq!(mode.mode(), Err(CustomRingError::InvalidRingMode));
-    let mut policy = config();
-    policy.has_policy = 2;
-    assert!(!decodes(&policy));
+}
+
+#[test]
+fn role_keys_stay_nonzero_and_apart() {
+    assert_eq!(roles().check(None), Ok(()));
+    assert_eq!(
+        roles().check(Some(&key(2))),
+        Err(CustomRingError::DuplicateRoleKey)
+    );
+    let mut ring = ring(Address::default());
+    assert_eq!(
+        ring.rotate_role(RingRole::Pauser, key(1)),
+        Err(CustomRingError::DuplicateRoleKey)
+    );
+    assert_eq!(
+        ring.rotate_role(RingRole::Pauser, Address::default()),
+        Err(CustomRingError::ZeroRoleKey)
+    );
+    assert_eq!(ring.roles, roles());
+    ring.rotate_role(RingRole::Pauser, key(9)).unwrap();
+    assert_eq!(ring.roles.key(RingRole::Pauser), &key(9));
+    assert_eq!(ring.check_role(RingRole::Policy, &key(2)), Ok(()));
+    assert_eq!(
+        ring.check_role(RingRole::Pauser, &key(2)),
+        Err(CustomRingError::UnauthorizedAuthority)
+    );
 }
 
 #[test]
 fn a_policy_write_validates_and_repins_the_table() {
-    let mut policy = RingPolicy::new(254, Address::default());
+    let mut policy = ring(Address::default());
     assert_eq!(policy.policy_hash(), Err(CustomRingError::PolicyNotSet));
     let mut sources = [SourceSlot::zeroed(); N_SOURCE_SLOTS];
     let table = RuleTable::builder()

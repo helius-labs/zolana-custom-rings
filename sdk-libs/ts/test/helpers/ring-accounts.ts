@@ -9,10 +9,12 @@ import { ROOT_HISTORY } from "../../src/protocol/membership/member-registry.js";
 import type {
   RingCoSigner,
   RingMode,
+  RingRoles,
   RingSourceSlot,
   StorageRegistryRoot,
 } from "../../src/protocol/codec/ring-codecs.js";
-import { RING_POLICY_DISCRIMINATOR } from "../../src/protocol/codec/ring-codecs.js";
+import { RING_POLICY_DISCRIMINATOR, RING_ROLES } from "../../src/protocol/codec/ring-codecs.js";
+import { X25519Keypair } from "@heliuslabs/zolana/keypair";
 import {
   LIST_IDS,
   encodeRule,
@@ -56,37 +58,6 @@ export async function sppRingRegistration(
   return [await ringAuthAddress(input.ringProgramId), ownedAccount(SHIELDED_POOL_PROGRAM_ID, data)];
 }
 
-/** Rust `RingProgramConfig` bytes. */
-export function ringProgramConfigData(
-  input: Readonly<{
-    authority: Address;
-    auditorPublicKey: Uint8Array;
-    bump: number;
-    hasPolicy: boolean;
-    mode?: RingMode;
-    coSigner?: RingCoSigner;
-    delegate?: Address;
-    createdSlot?: bigint;
-  }>,
-): Uint8Array {
-  const writer = new Writer()
-    .u8(10, "discriminator")
-    .bytes(addressBytes(input.authority))
-    .bytes(input.auditorPublicKey, 33, "auditorPublicKey")
-    .u8(input.bump, "bump")
-    .u8(input.hasPolicy ? 1 : 0, "hasPolicy")
-    .u8(MODES.indexOf(input.mode ?? "confidential"), "mode")
-    .bytes(
-      Uint8Array.from([1, 2, 4], (bit) => (((input.coSigner?.scope ?? 0) & bit) === 0 ? 0 : 1)),
-      3,
-      "coSigners",
-    );
-  return writer
-    .bytes(addressBytes(input.delegate ?? ZERO_ADDRESS))
-    .u64(input.createdSlot ?? 0n, "createdSlot")
-    .finish();
-}
-
 /** Rust `CoSigner` at its canonical PDA. */
 export async function ringCoSignerAccount(
   ringProgramId: Address,
@@ -108,11 +79,27 @@ export interface FixtureMirror {
   readonly roots: readonly StorageRegistryRoot[];
 }
 
-/** Rust `RingPolicy` bytes. */
+/** Distinct role keys a fixture fills where a test names none. */
+export const FIXTURE_ROLES: RingRoles = Object.freeze({
+  admin: getAddressDecoder().decode(new Uint8Array(32).fill(0xa1)),
+  policy: getAddressDecoder().decode(new Uint8Array(32).fill(0xa2)),
+  pauser: getAddressDecoder().decode(new Uint8Array(32).fill(0xa3)),
+  cosignAdmin: getAddressDecoder().decode(new Uint8Array(32).fill(0xa4)),
+});
+
+const FIXTURE_AUDITOR = X25519Keypair.fromBytes(new Uint8Array(32).fill(9)).publicKey().toBytes();
+
+/** Rust `RingPolicy` bytes, a policy ring once `policyHash` is set. */
 export function ringPolicyData(
   input: Readonly<{
     bump: number;
-    records: Address;
+    records?: Address;
+    roles?: Partial<RingRoles>;
+    auditorPublicKey?: Uint8Array;
+    mode?: RingMode;
+    coSigner?: RingCoSigner;
+    delegate?: Address;
+    createdSlot?: bigint;
     policyHash?: Bytes32;
     sources?: readonly RingSourceSlot[];
     table?: RuleTable;
@@ -121,10 +108,22 @@ export function ringPolicyData(
     curatorRoots?: FixtureMirror;
   }>,
 ): Uint8Array {
+  const roles = { ...FIXTURE_ROLES, ...input.roles };
   const writer = new Writer()
     .u8(RING_POLICY_DISCRIMINATOR, "discriminator")
     .u8(input.bump, "bump")
-    .bytes(addressBytes(input.records));
+    .u8(MODES.indexOf(input.mode ?? "confidential"), "mode")
+    .bytes(
+      Uint8Array.from([1, 2, 4], (bit) => (((input.coSigner?.scope ?? 0) & bit) === 0 ? 0 : 1)),
+      3,
+      "coSigners",
+    );
+  for (const role of RING_ROLES) writer.bytes(addressBytes(roles[role]));
+  writer
+    .bytes(addressBytes(input.delegate ?? ZERO_ADDRESS))
+    .bytes(input.auditorPublicKey ?? FIXTURE_AUDITOR, 33, "auditorPublicKey")
+    .u64(input.createdSlot ?? 0n, "createdSlot")
+    .bytes(addressBytes(input.records ?? ZERO_ADDRESS));
   writePolicyFields(writer, input);
   for (const mirror of [input.ownRoots, input.curatorRoots]) {
     writer.bytes(addressBytes(mirror?.registry ?? ZERO_ADDRESS));

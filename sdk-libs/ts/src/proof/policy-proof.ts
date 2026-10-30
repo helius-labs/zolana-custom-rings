@@ -26,8 +26,7 @@ import type {
   PolicySubjectEntry,
 } from "../rpc/prover/ring.js";
 
-import type { RingProgramConfig } from "../protocol/codec/ring-codecs.js";
-import { fetchRingPolicy } from "../protocol/membership/config.js";
+import type { RingPolicy } from "../protocol/codec/ring-codecs.js";
 import { RingError } from "../protocol/error.js";
 import { ownerEscrowed, type MemberOpeningRead } from "../protocol/membership/member-opening.js";
 import {
@@ -97,7 +96,7 @@ export async function readPolicy(
     tokenOwnerHint?: Address;
     client: PolicyReadClient;
     ringProgramId: Address;
-    config: RingProgramConfig;
+    config: RingPolicy;
     rail: RingRail;
     proofInputs: SppProofInputs;
     sender: Bytes32;
@@ -105,8 +104,7 @@ export async function readPolicy(
   }>,
   context?: RequestContext,
 ): Promise<PolicyInputs> {
-  const { client, ringProgramId, proofInputs } = input;
-  const policy = await fetchRingPolicy(client, ringProgramId, context);
+  const { client, ringProgramId, proofInputs, config: policy } = input;
   const pinned = pinnedPolicy(policy);
   const own = ownRoot(ringProgramId, policy);
   const curatorRoot =

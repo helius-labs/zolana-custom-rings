@@ -155,12 +155,11 @@ export const RingProgramError = Object.freeze({
   hashingFailed: 8102,
   invalidShieldedPoolProgram: 8103,
   missingRingAuth: 8104,
-  configAlreadyInitialized: 8105,
-  configNotInitialized: 8106,
+  // 8105 and 8106 retired.
   unauthorizedAuthority: 8107,
   invalidAuditorPubkey: 8108,
   invalidSystemProgram: 8111,
-  invalidConfigPda: 8112,
+  // 8112 retired.
   unsupportedCircuit: 8113,
   unauthorizedInitializer: 8114,
   tooManyAccounts: 8115,
@@ -253,6 +252,8 @@ export const RingProgramError = Object.freeze({
   depositMintAccountMissing: 8410,
   depositAssetIndexUnknown: 8411,
   unexpectedCuratorRevision: 8470,
+  zeroRoleKey: 8471,
+  duplicateRoleKey: 8472,
 } as const);
 
 export type RingProgramErrorName = keyof typeof RingProgramError;

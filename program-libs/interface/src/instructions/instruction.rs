@@ -6,6 +6,7 @@ use zolana_ring_policy::{ListSet, ListWrite, MintPolicy, Writer};
 use crate::{
     error::CustomRingError,
     member_registry::{check_member, QueueEntry, APPLY_BATCH},
+    state::{RingRole, RingRoles},
     storage::Revision,
     TAGGED_X25519_KEY_LEN,
 };
@@ -71,7 +72,7 @@ instruction_tags! {
     // Tags 32 to 42 are retired, never reuse them.
     /// Permissionless and without data, the registry account picks the mirror.
     SyncRoots = SYNC_ROOTS: 48 => ACCOUNT_UNITS,
-    /// Signed by the upgrade authority, one budget for the config, the policy and the SPP CPI.
+    /// Signed by the upgrade authority, one budget for the ring account, its policy and the SPP CPI.
     Initialize = INITIALIZE: 53 => 2 * ACCOUNT_UNITS + POLICY_UNITS,
     UpdatePolicy = UPDATE_POLICY: 54 => POLICY_UNITS,
 }
@@ -105,8 +106,15 @@ pub struct InitializeIxData {
     /// Auditor X25519 public key as `0x04 || canonical little-endian u`.
     pub auditor_pubkey: [u8; TAGGED_X25519_KEY_LEN],
     pub kind: RingKind,
+    pub roles: RingRoles,
     /// Required on a policy ring.
     pub policy: Option<PolicyBindingIxData>,
+}
+
+/// The admin and the new key sign.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
+pub struct UpdateAuthorityIxData {
+    pub role: RingRole,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
@@ -187,7 +195,7 @@ pub struct PolicyTableIxData {
 
 #[derive(Clone, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
 pub struct PolicyBindingIxData {
-    /// The records registry may answer to it beside the config authority.
+    /// The records registry may answer to it beside the policy authority.
     pub storage_authority: Address,
     pub table: PolicyTableIxData,
 }
@@ -206,7 +214,7 @@ pub enum UpdatePolicyIxData {
     Rules(PolicyTableIxData),
     #[wincode(tag = 1)]
     Source(PolicySourceIxData),
-    /// One trailing records registry, answering to the config authority or to `storage_authority`.
+    /// One trailing records registry, answering to the policy authority or to `storage_authority`.
     #[wincode(tag = 2)]
     Records { storage_authority: Address },
 }

@@ -1,7 +1,7 @@
 use custom_ring_interface::{
     cosign::{CoSignDemand, CoSignRequirement},
     funder_account_position, AnonymousParties, CustomRingError, CustomRingProof, InputTrees,
-    PublicSlots, RailSigner, RingProgramConfig, RingTransactData, ANONYMOUS_PARTIES,
+    PublicSlots, RailSigner, RingPolicy, RingTransactData, ANONYMOUS_PARTIES,
     RING_TRANSACT_ACCOUNT_PREFIX_LEN, RING_TRANSACT_RING_CONFIG_INDEX, TRANSACT_PAYER_INDEX,
 };
 use pinocchio::{error::ProgramError, AccountView, Address};
@@ -10,12 +10,11 @@ use spr_interface::instruction::instruction_data::settlement_accounts;
 
 use crate::instructions::{
     instruction_runtime::{PlacedRingAuth, RingAuth},
-    loader::{check_funding_signer, load_anonymous_exit, load_policy, CoSignerSlot},
+    loader::{check_funding_signer, load_anonymous_exit, CoSignerSlot},
     public_legs::PublicLegs,
 };
 
-/// The ring policy follows the config, the one account every own and curator root comes from.
-const POLICY_INDEX: usize = 1;
+const RING_INDEX: usize = 0;
 
 pub(super) struct PolicyRoots<'a> {
     pub own_only: bool,
@@ -41,7 +40,7 @@ pub(super) struct TransactAccounts<'a> {
 #[must_use]
 pub(super) struct TransactCheck<'a> {
     pub program_id: &'a Address,
-    pub config: &'a RingProgramConfig,
+    pub ring: &'a RingPolicy,
     pub data: &'a RingTransactData<'a>,
     pub signer: RailSigner,
     pub slot: u64,
@@ -51,24 +50,13 @@ impl<'a> TransactCheck<'a> {
     /// The co-signer demand comes first, its slot moves the SPP list.
     #[inline(never)]
     pub fn validate(self, accounts: &[AccountView]) -> Result<TransactAccounts<'a>, ProgramError> {
-        let (config, data) = (self.config, self.data);
+        let (ring, data) = (self.ring, self.data);
         let window = settlement_accounts(&data.interface_transfers, data.circuit(), accounts)
             .ok_or(CustomRingError::InvalidSettlementAccounts)?;
         let legs = PublicLegs::new(&data.interface_transfers, window)?;
-        let ring_policy = if config.has_policy() || data.withdrawal_exemption.is_some() {
-            Some(load_policy(
-                self.program_id,
-                account_at(accounts, POLICY_INDEX)?,
-            )?)
-        } else {
-            None
-        };
         let demand = CoSignDemand::transact(data.approval_required, legs.legs());
         if let Some(exemption) = data.withdrawal_exemption {
-            let root = ring_policy
-                .as_ref()
-                .ok_or(CustomRingError::InvalidRingPolicy)?
-                .own_root(exemption.own_revision, self.slot)?;
+            let root = ring.own_root(exemption.own_revision, self.slot)?;
             crate::instructions::verifier::RingProof {
                 proof: &exemption.proof,
                 statement: custom_ring_interface::cosign::WithdrawalExemptionStatement::new(
@@ -86,11 +74,8 @@ impl<'a> TransactCheck<'a> {
             Some(_) => demand.exempt_withdrawals(),
             None => demand,
         };
-        let requirement = demand.requirement(config);
-        let binding = data.check_policy(
-            ring_policy.as_deref().filter(|_| config.has_policy()),
-            self.slot,
-        )?;
+        let requirement = demand.requirement(ring);
+        let binding = data.check_policy(Some(ring).filter(|ring| ring.has_policy()), self.slot)?;
         let prefix = self.prefix(requirement.as_ref().ok().copied().flatten());
         let policy = binding.map(|binding| PolicyRoots {
             own_only: binding.curator_root.is_none(),
@@ -217,10 +202,7 @@ impl<'a> TransactCheck<'a> {
     }
 
     fn prefix(&self, co_signer: Option<CoSignRequirement>) -> Prefix {
-        let mut next = Cursor(
-            POLICY_INDEX
-                + usize::from(self.config.has_policy() || self.data.withdrawal_exemption.is_some()),
-        );
+        let mut next = Cursor(RING_INDEX + 1);
         let co_signer = co_signer.map(|requirement| next.pair(requirement));
         let signer = match (self.signer, self.data.in_proof_owner) {
             (RailSigner::Owners, Some(owner)) => {

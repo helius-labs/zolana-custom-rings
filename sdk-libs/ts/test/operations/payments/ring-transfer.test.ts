@@ -31,11 +31,7 @@ import {
   approveRingUnattended,
   type RingApprovalRequest,
 } from "../../../src/protocol/transaction/intent.js";
-import {
-  ringCoSignerAddress,
-  ringConfigAddress,
-  ringPolicyAddress,
-} from "../../../src/protocol/pda/index.js";
+import { ringCoSignerAddress, ringPolicyAddress } from "../../../src/protocol/pda/index.js";
 import { ringIdField } from "../../../src/crypto/derivation/ring-stream.js";
 import {
   RING_COSIGN_DEPOSITS,
@@ -465,7 +461,6 @@ describe("policy ring", () => {
       fixture,
       data,
       prefix: [
-        readonly(ringPolicy.address),
         readonly(await ringCoSignerAddress(fixture.ringProgramId, coSigner)),
         signer(coSigner),
       ],
@@ -781,7 +776,7 @@ describe("delegate rail", () => {
     await checkAccounts(instruction, {
       fixture,
       data,
-      prefix: [readonly(ringPolicy.address), signer(delegate)],
+      prefix: [signer(delegate)],
       payer: fixture.authority,
     });
     const policy = fixture.ringRequests.find((request) => request.kind === "delegatePolicy");
@@ -1013,13 +1008,13 @@ describe("delegate move builder", () => {
       nullifiers: new Set(),
     });
     const requests: RingApprovalRequest[] = [];
-    const config = await ringConfigAddress(fixture.ringProgramId);
-    const reads = { config: 0, openings: 0, proofsAtApproval: [] as number[] };
+    const ring = await ringPolicyAddress(fixture.ringProgramId);
+    const reads = { ring: 0, openings: 0, proofsAtApproval: [] as number[] };
     const build = buildRingDelegateTransferTransaction({
       client: {
         ...fixture.client,
         getAccount: async (address) => {
-          if (address === config) reads.config += 1;
+          if (address === ring) reads.ring += 1;
           return fixture.client.getAccount(address);
         },
         getStorageRecordPool: async (request) => {
@@ -1052,7 +1047,7 @@ describe("delegate move builder", () => {
   it("reads the ring and seals the move once, approving between its size check and its proofs", async () => {
     const { fixture, reads, build } = await delegateMove({ amounts: [400n], notes: 4 });
     await build;
-    expect(reads).toEqual({ config: 1, openings: 1, proofsAtApproval: [0] });
+    expect(reads).toEqual({ ring: 1, openings: 1, proofsAtApproval: [0] });
     expect(fixture.sppCalls).toHaveLength(1);
   });
 

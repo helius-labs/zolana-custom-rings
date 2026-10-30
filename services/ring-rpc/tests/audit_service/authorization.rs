@@ -41,7 +41,10 @@ async fn only_granted_readers_with_the_configured_auditor_key_can_read() {
         RING,
         RingConfiguration {
             auditor_pubkey: X25519Keypair::new().pubkey(),
-            authority: authority().pubkey(),
+            roles: custom_ring_interface::RingRoles {
+                policy: authority().pubkey(),
+                ..bytemuck::Zeroable::zeroed()
+            },
             mode: RingMode::Confidential,
             delegate: None,
         },
@@ -229,7 +232,10 @@ async fn a_ring_registered_with_another_auditor_stays_closed() {
         ring,
         RingConfiguration {
             auditor_pubkey: fixture.auditor.pubkey(),
-            authority: authority().pubkey(),
+            roles: custom_ring_interface::RingRoles {
+                policy: authority().pubkey(),
+                ..bytemuck::Zeroable::zeroed()
+            },
             mode: RingMode::Confidential,
             delegate: None,
         },

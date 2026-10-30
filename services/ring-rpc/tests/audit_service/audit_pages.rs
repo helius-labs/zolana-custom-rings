@@ -621,7 +621,10 @@ async fn two_rings_read_only_their_own_transactions() {
             ring_a,
             RingConfiguration {
                 auditor_pubkey: key_a,
-                authority: authority().pubkey(),
+                roles: custom_ring_interface::RingRoles {
+                    policy: authority().pubkey(),
+                    ..bytemuck::Zeroable::zeroed()
+                },
                 mode: RingMode::Confidential,
                 delegate: None,
             },
@@ -630,7 +633,10 @@ async fn two_rings_read_only_their_own_transactions() {
             ring_b,
             RingConfiguration {
                 auditor_pubkey: key_b,
-                authority: authority().pubkey(),
+                roles: custom_ring_interface::RingRoles {
+                    policy: authority().pubkey(),
+                    ..bytemuck::Zeroable::zeroed()
+                },
                 mode: RingMode::Confidential,
                 delegate: None,
             },

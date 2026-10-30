@@ -8,7 +8,7 @@ A custom ring is a Solana program that governs its notes in the zolana shielded 
 
 A **policy** is an `EncodedRuleTable`, a source map and `policy_hash`. The table holds the rules the policy proof enforces.
 
-A **member record** is one leaf `Poseidon(member, next, lists, escrow_key, mint_policy, withdrawal_threshold, limits_0, limits_1, limits_2)` per owner or asset. `member` is `solana_owner_identity(key)` for an owner and `hash_bytes(mint)` for an asset. `lists` has one bit per list. An asset's record also holds its **mint settings**: the per-asset guard `threshold`, the outflow `cap` and `cosign_above`, the co-signer's `withdrawal_threshold`, and the `limits` the Ring RPC co-signer enforces (`program-libs/policy/src/mint.rs:12`). Only the config authority writes them. [Mint settings](spec.md#mint-settings)
+A **member record** is one leaf `Poseidon(member, next, lists, escrow_key, mint_policy, withdrawal_threshold, limits_0, limits_1, limits_2)` per owner or asset. `member` is `solana_owner_identity(key)` for an owner and `hash_bytes(mint)` for an asset. `lists` has one bit per list. An asset's record also holds its **mint settings**: the per-asset guard `threshold`, the outflow `cap` and `cosign_above`, the co-signer's `withdrawal_threshold`, and the `limits` the Ring RPC co-signer enforces (`program-libs/policy/src/mint.rs:12`). Only the policy authority writes them. [Mint settings](spec.md#mint-settings)
 
 The policy lives in the ring's `RingPolicy` PDA at seed `[b"policy"]`, alongside:
 
@@ -60,17 +60,17 @@ A policy has at most one curator, `N_FOREIGN = 1` (`program-libs/policy/src/rule
 
 ### ListID
 
-A **ListID** names one bit of a member record. Bit `id - 1` marks list `id` (`program-libs/policy/src/list.rs:49`). The config authority is the key that holds the ring config. An escrow entry of a record update seals a member's nullifier secret to the auditor.
+A **ListID** names one bit of a member record. Bit `id - 1` marks list `id` (`program-libs/policy/src/list.rs:49`). The policy authority is the `policy` role key of the ring policy. An escrow entry of a record update seals a member's nullifier secret to the auditor.
 
 | List | ID | Writer |
 | --- | --- | --- |
-| Allow | `1` | Config authority |
-| Block | `2` | Config authority |
-| Frozen | `3` | Config authority |
+| Allow | `1` | Policy authority |
+| Block | `2` | Policy authority |
+| Frozen | `3` | Policy authority |
 | RingViewing | `4` | Owner, own record |
 | Recovery | `5` | Owner, own record |
-| Reader | `6` | Config authority |
-| Approval | `7` | Config authority |
+| Reader | `6` | Policy authority |
+| Approval | `7` | Policy authority |
 | Escrow | `8` | Escrow storage write only |
 
 Rules read only the authority lists: Allow, Block, Frozen, Reader and Approval. A member therefore cannot admit itself. `EncodedRuleTable::validate` refuses any other (`MemberWrittenList`, `program-libs/policy/src/rule_table/mod.rs:631`). A curator source reads the same bit in the curator's records (`prover/circuits/policy/subjects.go:37`).
@@ -131,7 +131,7 @@ A rule with present lists stores them in `mask` with mode `Present` and its abse
 
 ### Example: a curator's blocklist with reviewed exceptions
 
-A ring uses an external curator's Block list. The ring's config authority can review a flagged recipient and add them to the ring's own Approval list. This handles false positives without changing the curator's list. See `examples/curated-blocklist-approval-exception/ring.toml`.
+A ring uses an external curator's Block list. The ring's policy authority can review a flagged recipient and add them to the ring's own Approval list. This handles false positives without changing the curator's list. See `examples/curated-blocklist-approval-exception/ring.toml`.
 
 The policy-wide Sources select:
 

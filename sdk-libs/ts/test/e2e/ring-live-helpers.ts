@@ -135,6 +135,7 @@ export async function createRing(client: CustomRingClient, ring: FreshRing): Pro
           })
         ).auditorPublicKey
       : auditor;
+  const fresh = async () => (await generateKeyPairSigner()).address;
   // A policy binds a records registry the storage program created beforehand.
   await sendInstruction(
     client,
@@ -144,6 +145,13 @@ export async function createRing(client: CustomRingClient, ring: FreshRing): Pro
       authority,
       auditorPublicKey,
       kind: ring.kind,
+      // The upgrade authority keeps the policy role, Ring RPC takes its ring-wide grants.
+      roles: {
+        admin: await fresh(),
+        policy: authority.address,
+        pauser: await fresh(),
+        cosignAdmin: await fresh(),
+      },
       ...(table === undefined
         ? {}
         : {

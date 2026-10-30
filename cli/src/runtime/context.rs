@@ -163,6 +163,26 @@ impl Context {
         Ok(payer)
     }
 
+    /// The policy role reads `config_authority_keypair`.
+    pub fn role_keypair_path(&self, role: RingRole) -> Result<PathBuf> {
+        let (configured, default) = match role {
+            RingRole::Policy => {
+                return config::expand_tilde(self.config.config_authority_keypair())
+            }
+            RingRole::Admin => (&self.config.admin_keypair, ADMIN_KEYPAIR_FILE),
+            RingRole::Pauser => (&self.config.pauser_keypair, PAUSER_KEYPAIR_FILE),
+            RingRole::CosignAdmin => (&self.config.cosign_admin_keypair, COSIGN_ADMIN_KEYPAIR_FILE),
+        };
+        match configured {
+            Some(path) => config::expand_tilde(path),
+            None => Ok(self.path(Path::new(default))),
+        }
+    }
+
+    pub fn role_keypair(&self, role: RingRole) -> Result<Keypair> {
+        file::read_keypair(&self.role_keypair_path(role)?)
+    }
+
     /// For a step that only pays fees and small rent.
     pub fn funded_authority(&self) -> Result<&Keypair> {
         let authority = self.authority()?;

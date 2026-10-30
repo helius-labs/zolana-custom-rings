@@ -5,7 +5,7 @@ conservation and tree membership, and ownership outside the delegate rail. The
 ring proves its rules over the same transaction and supplies the required
 authorization. List facts stay private.
 
-The config authority pins admission rules as data in the ring policy. A
+The policy authority pins admission rules as data in the ring policy. A
 transferring wallet must prove every rule satisfied against list state it does
 not control. A **curator** is a storage registry whose lists many rings read by
 reference.
@@ -56,7 +56,7 @@ after, and both ends of the chain over exactly the update's writes. An update
 therefore cannot drop, reorder or invent a write, and the storage program
 never hashes the tree itself.
 
-The config authority's revoking writes go out as `UpdateImmediate`, which
+The policy authority's revoking writes go out as `UpdateImmediate`, which
 retires every earlier root. [Roots and revocation](#roots-and-revocation)
 shows how a ban binds every later transfer.
 
@@ -83,7 +83,7 @@ present set is `Present` primary, and a rule with absent lists only is `Absent`
 primary with an empty alternative. `Rule::decode` refuses every other encoding,
 so one rule has one row and one hash.
 
-A rule reads only the lists the config authority writes. The program refuses a
+A rule reads only the lists the policy authority writes. The program refuses a
 table with a rule over `RingViewing`, `Recovery` or `Escrow`. Members write the
 first two, and an escrow write sets `Escrow`.
 
@@ -106,7 +106,7 @@ fails the policy write before any hash is stored.
 ## The on-chain binding
 
 The upgrade authority pins the first table with `Initialize`, which refuses a
-table on an audit-only ring and a ring that already has a policy. The config
+table on an audit-only ring and a ring that already has a policy. The policy
 authority signs every later write. `UpdatePolicy` replaces the table and the
 map, re-points one list, or rebinds the records. Each table write validates the
 table against the new map and stores both in the ring policy. It re-hashes them
@@ -139,7 +139,7 @@ cannot satisfy the audit statement while it skips the policy statement, because
 the program verifies both against the one transaction.
 
 An audit-only ring carries the SPP and audit proofs alone. The tier is the
-config's `has_policy` flag, fixed by the kind `Initialize` takes. A policy
+ring policy's `has_policy`, a nonzero `policy_hash`, fixed by the kind `Initialize` takes. A policy
 ring therefore cannot present the audit statement alone to skip its rules. The
 audit proof is the same on both tiers, so the auditor reads every transfer.
 
@@ -231,10 +231,11 @@ holds the ban, and the rule fails.
 Co-signing is a program check. Delegation and the outflow limits live in the
 ring statements, the delegate rail under its own keys.
 
-**Actors.** The upgrade authority creates the config. The config authority sets
-the delegate, writes the policy and the authority lists and re-points
-sources. It grants and revokes readers, sets the co-signers and pauses the
-ring. A member writes its own `RingViewing` and `Recovery` bits
+**Actors.** The upgrade authority creates the ring policy and names four role
+keys. The admin appoints the delegate and rotates every role. The policy
+authority writes the policy and the authority lists, re-points sources and
+grants and revokes readers. The co-signer admin sets the co-signers, and the
+pauser pauses the ring. A member writes its own `RingViewing` and `Recovery` bits
 and registers its key. The auditor holds the X25519 key fixed at `Initialize`
 and decrypts transfers, and that key cannot authorize an ownership transfer or
 a withdrawal. SPP governance activates the ring and enables the authority rail
@@ -253,9 +254,9 @@ hide behind a small deposit. The proof-bound approval bit demands a co-signer
 whatever the scope. A transfer refuses a co-signer that is one of its
 owner signers or its delegate.
 
-**Delegation** exposes the SPP authority rail behind a delegate. The config
-authority and the delegate both sign `SetDelegate`, once, and no instruction
-replaces it. `SetDelegate` needs a policy ring with a ring policy and
+**Delegation** exposes the SPP authority rail behind a delegate. The admin
+and the delegate both sign `SetDelegate`, once, and no instruction
+replaces it. `SetDelegate` needs a policy ring and a delegate that holds no role, and
 refuses an anonymous ring, which hides the owner a delegate would sign for. A
 delegate move carries an audit proof and a delegate policy proof, which applies
 the list rules and amount guards. The inputs' owner is the screened sender. The
@@ -265,7 +266,7 @@ on the rail, and SPP's authority circuit keeps every real UTXO inside the ring.
 A delegate therefore cannot withdraw or exit.
 
 **Key escrow** keeps every note the delegate may later move spendable by the
-delegate. `SetDelegate` moves the config to `ConfidentialEscrow` mode, and no instruction
+delegate. `SetDelegate` moves the ring to `ConfidentialEscrow` mode, and no instruction
 leaves it. The statement then binds `key_escrow = 1`. The record of every UTXO
 output's owner under `own_root` must hold an escrow key over that output's
 nullifier key. The escrow key also covers the ciphertext that seals the

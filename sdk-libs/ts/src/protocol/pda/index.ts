@@ -30,14 +30,6 @@ async function ringAddress(pda: Promise<ProgramDerivedAddress>): Promise<Address
   return (await pda)[0];
 }
 
-export function ringConfigPda(ringProgramId: Address): Promise<ProgramDerivedAddress> {
-  return ringPda(ringProgramId, encoder.encode("config"));
-}
-
-export function ringConfigAddress(ringProgramId: Address): Promise<Address> {
-  return ringAddress(ringConfigPda(ringProgramId));
-}
-
 export function ringCoSignerPda(
   ringProgramId: Address,
   signer: Address,

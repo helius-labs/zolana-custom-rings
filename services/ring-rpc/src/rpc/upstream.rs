@@ -1,7 +1,7 @@
 use std::{future::Future, time::Duration};
 
 use async_trait::async_trait;
-use custom_ring_interface::{RingAccount, RingMode, RingPolicy, RingProgramConfig, RootMirror};
+use custom_ring_interface::{RingAccount, RingMode, RingPolicy, RingRoles, RootMirror};
 use solana_account::Account;
 use solana_address::Address;
 use solana_commitment_config::CommitmentConfig;
@@ -225,7 +225,7 @@ pub struct Subscriber {
 #[derive(Clone, Copy)]
 pub struct RingConfiguration {
     pub auditor_pubkey: X25519Pubkey,
-    pub authority: Address,
+    pub roles: RingRoles,
     pub mode: RingMode,
     pub delegate: Option<Address>,
 }
@@ -533,7 +533,7 @@ impl TransactionSource for ChainSource {
     }
 
     async fn ring_config(&self, ring: Address) -> Result<Option<RingConfiguration>, ClientError> {
-        let (address, bump) = Address::find_program_address(&[RingProgramConfig::SEED], &ring);
+        let (address, bump) = Address::find_program_address(&[RingPolicy::SEED], &ring);
         let Some(account) = self.owned_account(address, ring).await? else {
             return Ok(None);
         };
@@ -695,7 +695,6 @@ impl<O: TransactionOrigin> ConfirmedDepositRecords<'_, O> {
     }
 }
 
-const INVALID_CONFIG: &str = "custom ring config account is invalid";
 const INVALID_POLICY: &str = "custom ring policy account is invalid";
 
 /// `bump` is the canonical bump of the address `account` was read from.
@@ -714,12 +713,12 @@ impl CanonicalAccount<'_> {
     }
 
     fn configuration(self) -> Result<RingConfiguration, ClientError> {
-        let invalid = || ClientError::Rpc(INVALID_CONFIG.to_owned());
-        let config: RingProgramConfig = self.decode().ok_or_else(invalid)?;
+        let invalid = || ClientError::Rpc(INVALID_POLICY.to_owned());
+        let config: RingPolicy = self.decode().ok_or_else(invalid)?;
         Ok(RingConfiguration {
             auditor_pubkey: X25519Pubkey::from_bytes(config.auditor_pubkey)
                 .map_err(|_| invalid())?,
-            authority: config.authority,
+            roles: config.roles,
             mode: config.mode().map_err(|_| invalid())?,
             delegate: config.delegate().copied(),
         })
@@ -739,8 +738,8 @@ mod origin_fixture;
 
 #[cfg(test)]
 mod tests {
-    use bytemuck::{bytes_of, Pod, Zeroable};
-    use custom_ring_interface::{CONFIG_PDA_SEED, RING_PROGRAM_CONFIG};
+    use bytemuck::{bytes_of, Pod};
+    use custom_ring_interface::{RING_POLICY, RING_POLICY_PDA_SEED};
 
     use super::*;
 
@@ -812,18 +811,18 @@ mod tests {
     const AUTHORITY: Address = Address::new_from_array([7; 32]);
 
     fn config_account(ring: Address, key: [u8; 33], bump: u8) -> Account {
-        let mut config = RingProgramConfig::zeroed();
-        config.discriminator = RING_PROGRAM_CONFIG;
-        config.authority = AUTHORITY;
+        let mut config: Box<RingPolicy> = bytemuck::zeroed_box();
+        config.discriminator = RING_POLICY;
+        config.roles.policy = AUTHORITY;
         config.auditor_pubkey = key;
         config.bump = bump;
-        account(ring, &config)
+        account(ring, &*config)
     }
 
     #[test]
     fn config_accounts_require_the_canonical_layout() {
         let ring = Address::new_from_array([9; 32]);
-        let bump = Address::find_program_address(&[CONFIG_PDA_SEED], &ring).1;
+        let bump = Address::find_program_address(&[RING_POLICY_PDA_SEED], &ring).1;
         let key = spr_keypair::X25519Keypair::new().pubkey();
         let valid = config_account(ring, *key.as_bytes(), bump);
         let configuration = |account: &Account, bump| {
@@ -836,7 +835,7 @@ mod tests {
         };
         let config = configuration(&valid, bump).expect("config");
         assert_eq!(config.auditor_pubkey, key);
-        assert_eq!(config.authority, AUTHORITY);
+        assert_eq!(config.roles.policy, AUTHORITY);
 
         let mut wrong_owner = valid.clone();
         wrong_owner.owner = Address::new_from_array([8; 32]);

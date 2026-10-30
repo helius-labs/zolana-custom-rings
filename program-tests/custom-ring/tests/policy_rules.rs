@@ -139,9 +139,9 @@ fn the_cli_pins_the_released_rows_and_governs_its_demo_transfers() -> Result<()>
         .run(ring.config(env.client.as_async()))?
         .ok_or_else(|| anyhow!("config after init"))?;
     assert_eq!(
-        config.authority,
+        config.roles.policy,
         demo.project.config_authority.pubkey(),
-        "the config authority holds the config"
+        "the config authority holds the policy role"
     );
     assert!(config.has_policy, "policy tier");
     let policy = policy_registry(ring, &env)?;

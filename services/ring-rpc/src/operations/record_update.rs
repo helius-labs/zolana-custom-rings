@@ -67,11 +67,11 @@ pub enum RecordUpdateRefusal {
     ReaderGrantsInDatabase = -32230,
     #[error("only a wallet may await allow, reader or approval from the ring's own records")]
     EnrolmentLists = -32240,
-    #[error("signer is not the ring config authority")]
-    NotConfigAuthority = -32241,
+    #[error("signer is not the ring policy authority")]
+    NotPolicyAuthority = -32241,
     #[error("approved enrolments and the update exceed one batch")]
     EnrolmentBatch = -32242,
-    #[error("config authority refused the enrolment")]
+    #[error("policy authority refused the enrolment")]
     EnrolmentRefused = -32243,
     #[error("no enrolment of the ring awaits the authority under the id")]
     UnknownEnrolment = -32244,
@@ -103,7 +103,7 @@ pub(crate) struct CheckedUpdate {
     pub id: RecordUpdateId,
     pub writes: Vec<StorageWriteData>,
     pub urgent: bool,
-    /// `Some` holds the update until the config authority sets these lists on the signer's record.
+    /// `Some` holds the update until the policy authority sets these lists on the signer's record.
     pub awaited: Option<AwaitedLists>,
 }
 
@@ -180,11 +180,11 @@ pub(crate) struct ModeDecision<'a> {
     pub slot: u64,
 }
 
-/// The config authority also writes its own wallet records.
+/// The policy authority also writes its own wallet records.
 #[derive(Clone, Copy)]
 enum RecordSigner {
     Wallet(Member),
-    ConfigAuthority(Member),
+    PolicyAuthority(Member),
 }
 
 /// The statement `RegisterKey` verifies, the escrow key sealed to the ring auditor.
@@ -228,7 +228,7 @@ impl RecordUpdateCheck<'_> {
             return Err(RecordUpdateRefusal::RegistryNotServed);
         }
         // 3. Every entry is the signer's to write and every escrow key is sealed to the ring auditor.
-        let record_signer = RecordSigner::new(signer, context.config.authority)?;
+        let record_signer = RecordSigner::new(signer, context.config.roles.policy)?;
         for entry in entries {
             if !record_signer.may_write(entry) {
                 return Err(RecordUpdateRefusal::Unauthorized);
@@ -439,10 +439,10 @@ impl ModeDecision<'_> {
 }
 
 impl RecordSigner {
-    fn new(signer: Address, config_authority: Address) -> Result<Self, RecordUpdateRefusal> {
+    fn new(signer: Address, policy_authority: Address) -> Result<Self, RecordUpdateRefusal> {
         let wallet = Member::owner_tag(signer.as_array()).map_err(invalid_entry)?;
-        Ok(if signer == config_authority {
-            Self::ConfigAuthority(wallet)
+        Ok(if signer == policy_authority {
+            Self::PolicyAuthority(wallet)
         } else {
             Self::Wallet(wallet)
         })
@@ -450,7 +450,7 @@ impl RecordSigner {
 
     /// A wallet writes its member lists, its escrow and its grants, the authority every authority list and mint setting.
     fn may_write(self, entry: &RecordUpdateEntry) -> bool {
-        let (Self::Wallet(wallet) | Self::ConfigAuthority(wallet)) = self;
+        let (Self::Wallet(wallet) | Self::PolicyAuthority(wallet)) = self;
         let own = |member: &Hash| member.0 == *wallet.as_bytes();
         let wallet_write = match entry {
             RecordUpdateEntry::Write(write) => {
@@ -461,7 +461,7 @@ impl RecordSigner {
             RecordUpdateEntry::Escrow(registration) => own(&registration.member),
             RecordUpdateEntry::WalletGrant(grant) => own(&grant.wallet),
         };
-        let authority_write = matches!(self, Self::ConfigAuthority(_))
+        let authority_write = matches!(self, Self::PolicyAuthority(_))
             && matches!(entry, RecordUpdateEntry::Write(write)
                 if lists_within(write.mask, ListSet::AUTHORITY_WRITES));
         wallet_write || authority_write

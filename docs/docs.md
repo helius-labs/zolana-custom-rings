@@ -10,11 +10,11 @@ The operator runs the `zolana-ring` CLI from a `ring.toml`. Members pay through 
 
 1. **Configure the ring**
    1. Run `zolana-ring new` to write `ring.toml` and a program keypair.
-   2. Choose the mode, confidential or anonymous. It is fixed once the config exists.
+   2. Choose the mode, confidential or anonymous. It is fixed once the ring account exists.
    3. Add a `[policy]` table for a policy ring, or leave it out for an audit-only ring.
 2. **Deploy and initialize**
    1. `zolana-ring deploy` deploys the program under the upgrade authority.
-   2. `zolana-ring init` fixes the auditor key, creates the config, the records and the policy, and registers the ring with SPP.
+   2. `zolana-ring init` fixes the auditor key, names the four role keys, creates the records and the ring account with its policy, and registers the ring with SPP.
    3. SPP governance activates the ring unless its protocol config activates rings on creation.
 3. **Operate**
    1. Write authority lists with `list add`, and point a list at a curator with `list set-source <list> --curator <id>`.
@@ -36,17 +36,17 @@ The operator runs the `zolana-ring` CLI from a `ring.toml`. Members pay through 
 | 1 | Ring program | The Solana program of one ring. Verifies its proofs and invokes SPP as its `ring_auth` PDA. |
 | 2 | Ring note | An SPP note tagged with the ring's program id. Only the ring program moves it. |
 | 3 | Default ring | The SPP notes of no ring. A transfer exits a ring by paying the default ring. |
-| 4 | Tier | Audit-only or policy. Fixed when the config is created. |
+| 4 | Tier | Audit-only or policy. Fixed when the ring account is created. |
 | 5 | Mode | `Confidential`, `ConfidentialEscrow` or `Anonymous`. `ConfidentialEscrow` is `Confidential` with key escrow and a delegate. |
 | 6 | Audit proof | Proves that the auditor key opens every output. Every transfer carries one. |
 | 7 | Policy proof | Proves the rule table and outflow limits. Every transfer of a policy ring carries one. |
 | 8 | Records | The ring's member records in its storage registry: one per owner or asset, with list bits, an escrow key and, for an asset, its mint settings. The chain holds the last 32 roots. |
-| 9 | List | A record bit. The config authority writes allow, block, frozen, reader and approval. A member writes ring-viewing and recovery. |
+| 9 | List | A record bit. The policy authority writes allow, block, frozen, reader and approval. A member writes ring-viewing and recovery. |
 | 10 | Rule | A list condition on the sender, every output owner or every output asset. |
 | 11 | Outflow limit | A per-transfer cap and a co-signer threshold for one mint, stored in the mint's record. |
 | 12 | Curator | A storage registry a policy reads for one or more lists. |
-| 13 | Upgrade authority | The program's Loader v3 upgrade authority. Creates the config. |
-| 14 | Config authority | Holds the config after `init`. Sets the policy, lists, readers, co-signers, pause and delegate. |
+| 13 | Upgrade authority | The program's Loader v3 upgrade authority. Creates the ring account and holds no role it does not name. |
+| 14 | Roles | Four distinct keys in the ring account. The admin rotates every role and appoints the delegate. The policy authority sets the policy, lists, mint settings and readers. The pauser pauses and resumes. The co-signer admin sets and clears co-signers. |
 | 15 | Co-signer | A key with its own record and scope. One co-signer whose scope covers every class an operation demands signs it. A transfer that needs approval and demands no class takes any co-signer. A withdrawal below the mint's withdrawal threshold can skip it with an exemption proof. |
 | 16 | Delegate | Moves escrowed members' notes inside a key-escrow ring without their signature. |
 | 17 | Auditor key | The X25519 key every transfer's audit proof seals to. Ring RPC or a local file holds it. |
@@ -88,7 +88,8 @@ subject = "output-owner"
 forbid = "block"
 ```
 
-- `authority_keypair` signs for both authorities. `upgrade_authority_keypair` and `config_authority_keypair` split them.
+- `authority_keypair` signs for the upgrade authority and the policy authority. `upgrade_authority_keypair` and `config_authority_keypair` split them, `config_authority_keypair` naming the policy authority.
+- `admin_keypair`, `pauser_keypair` and `cosign_admin_keypair` name the other role keys, by default `keys/admin.json`, `keys/pauser.json` and `keys/cosign-admin.json` beside `ring.toml`. `init` creates a missing file before it creates the ring.
 - Both cluster tables are required. `indexer` names the ring indexer, which forwards Photon calls.
 - `ring_rpc_pubkey` pins the Ring RPC service key per cluster. A pin always wins. Without one, `init` accepts a Ring RPC key only with `--trust-ring-rpc`.
 - The presence of `[policy]` selects the policy tier. An empty `[policy]` is a policy ring with an empty table, and every transfer still proves it.
@@ -162,18 +163,18 @@ zolana-ring cosigner set --signer <KEY> --scope transfers,withdrawals --threshol
 - `localnet` loads the storage program at `STORAGE_PROGRAM_ID` at genesis, from the release or from the workspace build.
 - `deploy` deploys the released program of the embedded release lock, or `--program-so`. It refuses a binary whose verifying key markers do not cover every pinned proving key, and an existing program under another upgrade authority.
 - `deploy` does not deploy the storage program. No keypair exists for `STORAGE_PROGRAM_ID`, and only a validator that loads it at genesis has it.
-- `init` skips every step the chain already agrees with. The upgrade authority signs `Initialize` and, when the two keys differ, hands the config to the config authority with `UpdateAuthority` in the next transaction.
-- `init` takes the auditor key from Ring RPC when no config and no `keys/auditor.key.pub` exist, and checks the service signature. With a hosted Ring RPC, `--local-auditor` pins `keys/auditor.key.pub` instead.
+- `init` skips every step the chain already agrees with. The upgrade authority signs `Initialize`, and `Initialize` names the four role keys. A rerun refuses a ring whose policy authority is not the `config_authority_keypair` key.
+- `init` takes the auditor key from Ring RPC when no ring account and no `keys/auditor.key.pub` exist, and checks the service signature. With a hosted Ring RPC, `--local-auditor` pins `keys/auditor.key.pub` instead.
 - `cosigner set` creates or rescopes the signer's co-signer record, then writes its withdrawal thresholds into the mints' records and clears the others. `cosigner clear` closes the signer's record and keeps the mint records.
 - `list add` and `list clear` write authority lists, and `list join` and `list leave` write the member's own lists, each through a record update Ring RPC applies.
 - `reader grant` and `reader revoke` set and clear the `reader` list of the reader's own record.
 - `delegate set --delegate-keypair <FILE>` turns a confidential policy ring into a key-escrow ring for good. SPP governance must enable the ring's authority rail, the SPP rail a delegate move runs on, before `delegate move` runs.
-- `authority transfer` moves the upgrade authority without the new key's signature. `authority transfer-config` moves the config authority, and both keys sign.
+- `authority transfer` moves the upgrade authority without the new key's signature. `authority update-role <role> <keypair>` hands `admin`, `policy`, `pauser` or `cosign-admin` to the keypair, and the admin and the new key sign. `authority pause` and `authority resume` sign with the pauser, `cosigner set` and `cosigner clear` with the co-signer admin, and `delegate set` with the admin.
 - `--fee-payer-keypair` pays member operations of an anonymous ring. The CLI refuses it when it equals the hidden owner.
 
 ## Client
 
-1. Read the ring config and check that SPP activated the ring.
+1. Read the ring account and check that SPP activated the ring.
 2. Deposit: the SDK seals each new note to the auditor and proves the deposit, or the Ring RPC relay proves it.
 3. On a key-escrow ring, register the member's key and wait for the record update to apply.
 4. Transfer: the SDK reads the policy and the records, proves the SPP, audit and policy proofs together, and builds one instruction. When only the withdrawal class demands a co-signer and every withdrawn mint stays within its withdrawal threshold, it adds a withdrawal exemption proof, and no co-signer signs. A relayed transfer sends its proof inputs to Ring RPC, which reads the records, proves and sends.
@@ -191,7 +192,7 @@ const client = await createCustomRingClient({
   proverUrl: requiredEnv("ZOLANA_PROVER_URL"),
   tree: address(requiredEnv("ZOLANA_TREE")),
 });
-const config = await fetchRingProgramConfig(client, ringProgramId);
+const ringAccount = await fetchRingPolicy(client, ringProgramId);
 const ringRpc = new RingRpc(requiredEnv("RING_RPC_URL"), { allowInsecureHttp: true });
 ```
 

@@ -15,7 +15,7 @@ import { SYSTEM_PROGRAM, addressBytes, sha256 } from "@heliuslabs/zolana/interna
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
 import { ClientError } from "@heliuslabs/zolana/client";
 import { X25519Keypair } from "@heliuslabs/zolana/keypair";
-import { ringConfigPda } from "../../../src/protocol/pda/index.js";
+import { ringPolicyPda } from "../../../src/protocol/pda/index.js";
 import {
   BPF_LOADER_UPGRADEABLE_ID,
   ringProgramDataAddress,
@@ -41,7 +41,7 @@ import {
   BLOCKHASH,
   solanaRpcReads,
 } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
-import { ownedAccount, ringProgramConfigData } from "../../helpers/ring-accounts.js";
+import { ownedAccount, ringPolicyData } from "../../helpers/ring-accounts.js";
 
 const filled = (byte: number): Bytes32 => new Uint8Array(32).fill(byte) as Bytes32;
 const addressOf = (byte: number): Address => getAddressDecoder().decode(filled(byte));
@@ -391,7 +391,7 @@ describe("deployment", () => {
       program,
       buffer,
       programData: await ringProgramDataAddress(program.address),
-      config: await ringConfigPda(program.address),
+      ring: await ringPolicyPda(program.address),
     };
   }
 
@@ -417,7 +417,7 @@ describe("deployment", () => {
     /** Sends resolve only through their abort signal. */
     readonly hangSends?: boolean;
     readonly occupiedBy?: Address;
-    readonly config?: Readonly<{ owner?: Address; data: Uint8Array }>;
+    readonly ring?: Readonly<{ owner?: Address; data: Uint8Array }>;
   }
 
   /** The extend and then the program exist once a send follows the buffer content read. */
@@ -533,10 +533,10 @@ describe("deployment", () => {
         if (account === keys.program.address && options.occupiedBy !== undefined) {
           return ownedAccount(options.occupiedBy, new Uint8Array());
         }
-        if (account === keys.config[0]) {
-          return options.config === undefined
+        if (account === keys.ring[0]) {
+          return options.ring === undefined
             ? undefined
-            : ownedAccount(options.config.owner ?? keys.program.address, options.config.data);
+            : ownedAccount(options.ring.owner ?? keys.program.address, options.ring.data);
         }
         const deployed = finished
           ? {
@@ -820,33 +820,32 @@ describe("deployment", () => {
     expect(program.address).toBe(keys.program.address);
   });
 
-  it("refuses an upgrade the on-chain config would not survive before any send", async () => {
+  it("refuses an upgrade the on-chain ring account would not survive before any send", async () => {
     const keys = await signers();
     const deployed = { authority: keys.authority.address, bytes: new Uint8Array(1_000) };
-    const config = ringProgramConfigData({
-      authority: keys.authority.address,
+    const ring = ringPolicyData({
+      roles: { admin: keys.authority.address },
       auditorPublicKey: X25519Keypair.generate().publicKey().toBytes(),
-      bump: keys.config[1],
-      hasPolicy: false,
+      bump: keys.ring[1],
     });
     const incompatible = chain(keys, {
       deployed,
-      config: { data: config.subarray(0, config.length - 1) },
+      ring: { data: ring.subarray(0, ring.length - 1) },
     });
     await expect(deployRingProgram(params(keys, incompatible))).rejects.toMatchObject({
       code: "RING_DEPLOY_PROGRAM",
       causeCode: "RING_PROGRAM_STATE_INCOMPATIBLE",
     });
     expect(incompatible.sends).toHaveLength(0);
-    // A foreign-owned account at the PDA is not a config the upgraded program loads.
+    // A foreign-owned account at the PDA is not a ring account the upgraded program loads.
     const foreign = chain(keys, {
       deployed,
-      config: { owner: SYSTEM_PROGRAM, data: new Uint8Array() },
+      ring: { owner: SYSTEM_PROGRAM, data: new Uint8Array() },
     });
     await expect(deployRingProgram(params(keys, foreign))).resolves.toMatchObject({
       kind: "upgraded",
     });
-    const compatible = chain(keys, { deployed, config: { data: config } });
+    const compatible = chain(keys, { deployed, ring: { data: ring } });
     await expect(deployRingProgram(params(keys, compatible))).resolves.toMatchObject({
       kind: "upgraded",
     });

@@ -37,8 +37,8 @@ import {
   type AnonymousPayment,
   type AnonymousSpendSigner,
 } from "./anonymous.js";
-import type { RingProgramConfig } from "../../protocol/codec/ring-codecs.js";
-import { fetchRingProgramConfig, requireActiveRing } from "../../protocol/membership/config.js";
+import type { RingPolicy } from "../../protocol/codec/ring-codecs.js";
+import { fetchRingPolicy, requireActiveRing } from "../../protocol/membership/config.js";
 import { RingError } from "../../protocol/error.js";
 import { anonymousPartyIdentities } from "../../protocol/membership/parties.js";
 import {
@@ -294,7 +294,7 @@ export class CustomRingTransfer {
     context: RequestContext | undefined,
   ): Promise<
     Readonly<{
-      config: RingProgramConfig;
+      config: RingPolicy;
       staged: Omit<StagedTransfer, "spend">;
       prepared: PreparedTransfer;
       owner: Bytes32 | undefined;
@@ -589,7 +589,7 @@ export class AnonymousTransfer {
     context: RequestContext | undefined,
   ): Promise<
     Readonly<{
-      config: RingProgramConfig;
+      config: RingPolicy;
       staged: Omit<StagedTransfer, "spend"> & Readonly<{ anonymous: AnonymousSpendValues }>;
       prepared: PreparedTransfer;
       owner: Bytes32;
@@ -852,9 +852,9 @@ async function activeConfig(
   client: Pick<RingProvingClient, "getAccount">,
   ringProgramId: Address,
   context: RequestContext | undefined,
-): Promise<RingProgramConfig> {
+): Promise<RingPolicy> {
   const [config] = await Promise.all([
-    fetchRingProgramConfig(client, ringProgramId, context),
+    fetchRingPolicy(client, ringProgramId, context),
     requireActiveRing(client, ringProgramId, context),
   ]);
   return config;

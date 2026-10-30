@@ -88,18 +88,20 @@ fn an_outflow_limit_ring_bounds_each_transfer() -> Result<()> {
     wait_for_indexed_transaction(indexer, auditor_tag, signature);
 
     // Above the threshold the chain refuses the send until the co-signer signs.
-    send(
+    let cosign_admin = RingRoleKeys::of(&env.payer).cosign_admin;
+    SendAs {
         rpc,
-        &env.payer,
-        &[custom_ring_sdk::SetCoSigner {
-            ring,
-            payer: env.payer.pubkey(),
-            authority: env.payer.pubkey(),
-            signer: cosigner.pubkey(),
-            scope: CoSignScope::WITHDRAWALS,
-        }
-        .instruction()?],
-    )?;
+        payer: &env.payer,
+        holder: &cosign_admin,
+    }
+    .send(&[custom_ring_sdk::SetCoSigner {
+        ring,
+        payer: env.payer.pubkey(),
+        authority: cosign_admin.pubkey(),
+        signer: cosigner.pubkey(),
+        scope: CoSignScope::WITHDRAWALS,
+    }
+    .instruction()?])?;
     let proven = prove(prepare(utxos[1].clone(), OVER_THRESHOLD)?)?;
     let instruction = proven.instruction()?;
     assert!(

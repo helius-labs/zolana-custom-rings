@@ -285,7 +285,10 @@ pub(crate) mod fixtures {
             let mut records = StorageRegistry::new(Address::default(), 0);
             records.roots[0].hash = tree.root().unwrap();
             records.roots[0].revision = Revision::from(u64::from(reads) + 1);
-            let mut policy = RingPolicy::new(bump, RECORDS);
+            let mut policy: Box<RingPolicy> = bytemuck::zeroed_box();
+            policy.discriminator = custom_ring_interface::RING_POLICY;
+            policy.bump = bump;
+            policy.records = RECORDS;
             policy.sync(&RECORDS, &records).unwrap();
             Ok(Some(Account {
                 lamports: 1,

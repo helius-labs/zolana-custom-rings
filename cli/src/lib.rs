@@ -91,7 +91,7 @@ use std::{
 
 use anyhow::{bail, ensure, Context as _, Result};
 use clap::{Args, FromArgMatches, Parser, Subcommand};
-use custom_ring_interface::{compute_unit_limit, CustomRingError, InstructionTag};
+use custom_ring_interface::{compute_unit_limit, CustomRingError, InstructionTag, RingRole};
 use custom_ring_sdk::{
     CustomRing, CustomRingConfig, RingError, RingMode, RingOperation, RingSubmission,
     SettledSubmission, MERGE_DEFAULT_INPUT_COUNT,
@@ -113,7 +113,10 @@ use zolana_ring_client::ReaderKey;
 
 pub use crate::{
     chain::{transaction_error, Chain, Zolana, ZolanaServices},
-    config::{CoSignClass, Mint, ModeName, RingConfig, Service, Target, ThresholdSpec, RING_TOML},
+    config::{
+        CoSignClass, Mint, ModeName, RingConfig, RoleName, Service, Target, ThresholdSpec,
+        RING_TOML,
+    },
     list::{MemberArgs, MemberList},
     policy::ListName,
     ring_rpc::{RingRpcClient, Trust},
@@ -125,6 +128,9 @@ pub const PROGRAM_KEYPAIR_FILE: &str = "keys/program-keypair.json";
 pub const AUDITOR_KEY_FILE: &str = "keys/auditor.key";
 pub const AUDITOR_PUBKEY_FILE: &str = "keys/auditor.key.pub";
 pub const SENDER_KEYPAIR_FILE: &str = "keys/sender-keypair.json";
+pub const ADMIN_KEYPAIR_FILE: &str = "keys/admin.json";
+pub const PAUSER_KEYPAIR_FILE: &str = "keys/pauser.json";
+pub const COSIGN_ADMIN_KEYPAIR_FILE: &str = "keys/cosign-admin.json";
 pub const DEFAULT_TRANSACT_AMOUNT: u64 = 100_000_000;
 /// What localnet tops an account up to.
 const LOCALNET_BALANCE: u64 = 100_000_000_000;
@@ -147,7 +153,7 @@ fn hint(error: &ClientError) -> Option<&'static str> {
     };
     [
         (CustomRingError::UnauthorizedInitializer as u32, "the program was deployed with an upgrade authority and only that key may create the config"),
-        (CustomRingError::UnauthorizedAuthority as u32, "the config is held by another authority, `status` shows it"),
+        (CustomRingError::UnauthorizedAuthority as u32, "the signer holds another ring role, `status` shows each role key"),
         (CustomRingError::InvalidPolicyRules as u32, "the program refuses the compiled rows, the program log names the refusal"),
         (ShieldedPoolError::UnauthorizedCaller as u32, "ring creation on this cluster is gated by the SPP ring creation authority"),
     ]
@@ -487,7 +493,7 @@ mod tests {
             ))
         };
         assert!(hint(&custom(CustomRingError::UnauthorizedAuthority as u32))
-            .is_some_and(|hint| hint.contains("another authority")));
+            .is_some_and(|hint| hint.contains("another ring role")));
         assert_eq!(hint(&custom(1)), None);
         assert_eq!(
             hint(&transaction_error(TransactionError::AlreadyProcessed)),

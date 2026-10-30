@@ -20,12 +20,7 @@ export type { RingErrorCode, RingProgramErrorName } from "../protocol/error.js";
 export { RingRpcRefusal } from "../protocol/ring-rpc/ring-rpc-refusal.js";
 export type { RingRpcRefusalName } from "../protocol/ring-rpc/ring-rpc-refusal.js";
 
-export {
-  ringAuthAddress,
-  ringCoSignerAddress,
-  ringConfigAddress,
-  ringPolicyAddress,
-} from "../protocol/pda/index.js";
+export { ringAuthAddress, ringCoSignerAddress, ringPolicyAddress } from "../protocol/pda/index.js";
 export {
   CUSTOM_RING_PROOF_LENGTH,
   GRACE_SLOTS,
@@ -33,19 +28,21 @@ export {
   RING_COSIGN_SCOPE_MASK,
   RING_COSIGN_TRANSFERS,
   RING_COSIGN_WITHDRAWALS,
+  RING_ROLE_BYTES,
+  RING_ROLES,
   checkedCustomRingProof,
   decodeRingCoSigner,
   decodeRingPolicy,
-  decodeRingProgramConfig,
   mirrorCurrentRoot,
   mirrorRoot,
   registryCurator,
 } from "../protocol/codec/ring-codecs.js";
 export type {
+  RingAuthorityRole,
   RingCoSigner,
   RingMode,
   RingPolicy,
-  RingProgramConfig,
+  RingRoles,
   RingSourceSlot,
   RootMirror,
   RootMirrorKind,
@@ -55,7 +52,6 @@ export {
   BPF_LOADER_UPGRADEABLE_ID,
   fetchRingCoSignerRecord,
   fetchRingPolicy,
-  fetchRingProgramConfig,
   requireActiveRing,
   ringProgramDataAddress,
 } from "../protocol/membership/config.js";

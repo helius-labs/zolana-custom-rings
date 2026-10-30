@@ -1,6 +1,6 @@
 use custom_ring_interface::{
     key_catalog::RingCircuit, AuditBinding, CustomRingError, ParsedTransact, PolicyStatement,
-    RingMode, RingProgramConfig,
+    RingMode, RingPolicy,
 };
 use pinocchio::{error::ProgramError, Address, ProgramResult};
 use zolana_ring_policy::ring_id_field;
@@ -11,7 +11,7 @@ use crate::instructions::verifier::{ring_key, RingProof};
 #[must_use]
 pub(super) struct RingStatements<'a> {
     pub program_id: &'a Address,
-    pub config: &'a RingProgramConfig,
+    pub ring: &'a RingPolicy,
     pub transfer: &'a ParsedTransact<'a>,
     pub accounts: &'a TransactAccounts<'a>,
     pub key_escrow: bool,
@@ -30,7 +30,7 @@ impl RingStatements<'_> {
                     .as_ref()
                     .unwrap_or(&[[0; 32]; 3]),
                 ring_id: &ring_id,
-                auditor_pubkey: &self.config.auditor_pubkey,
+                auditor_pubkey: &self.ring.auditor_pubkey,
                 key_escrow: self.key_escrow,
             })?
             .hash()
@@ -96,6 +96,6 @@ impl RingStatements<'_> {
 }
 
 /// `ConfidentialEscrow` mode alone, its policy proof escrows every output nullifier key.
-pub(super) fn escrows_keys(config: &RingProgramConfig) -> Result<bool, CustomRingError> {
-    Ok(config.mode()? == RingMode::ConfidentialEscrow)
+pub(super) fn escrows_keys(ring: &RingPolicy) -> Result<bool, CustomRingError> {
+    Ok(ring.mode()? == RingMode::ConfidentialEscrow)
 }

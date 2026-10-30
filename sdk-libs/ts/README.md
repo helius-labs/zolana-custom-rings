@@ -43,16 +43,16 @@ up with, are `RingError` codes. The flows retry the transient ones.
 
 Besides the permissionless default Ring, regulated entities can create custom Rings.
 Custom Rings are simple Solana programs for compliance and policy control. Each Ring deploys its own program. It has a program
-upgrade authority, a config authority, and an auditor key. The default Ring does not have an auditor key.
+upgrade authority, four role keys (admin, policy, pauser and co-signer admin), and an auditor key. The default Ring does not have an auditor key.
 
-The auditor key lives in a Ring RPC. The Ring authority grants view access.
+The auditor key lives in a Ring RPC. The Ring's policy authority grants view access.
 Helius can host that RPC; the authority can host it itself. The forester is
 shared with the default Ring.
 
 A Ring is confidential or anonymous, and an anonymous Ring spends
 through the Ring RPC relay. A Ring is audit-only or carries a
 policy, a rule table over the list bits of the member records in the Ring's
-storage registry. The tier is fixed when the Ring config is created.
+storage registry. The tier is fixed when the Ring account is created.
 
 Set a Ring up in this order.
 

@@ -36,7 +36,7 @@ use crate::{
     statement::{AnonymousAudit, AuditHead, AuditKind, AuditStatement, PolicyKey},
     storage::Revision,
     tagged_x25519, AuditorMessage, CustomRingProof, InstructionTag, PlainGroth16Proof, RingMode,
-    RingPolicy, RingProgramConfig, AUDIT_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
+    RingPolicy, AUDIT_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
 };
 
 const ZERO_FIELD: [u8; 32] = [0; 32];
@@ -68,12 +68,12 @@ pub enum RailSigner {
 }
 
 impl RailSigner {
-    pub fn new(tag: InstructionTag, config: &RingProgramConfig) -> Result<Self, CustomRingError> {
-        match RingRail::of(tag, config.mode()?)? {
+    pub fn new(tag: InstructionTag, ring: &RingPolicy) -> Result<Self, CustomRingError> {
+        match RingRail::of(tag, ring.mode()?)? {
             RingRail::Anonymous => Ok(Self::Payer),
             RingRail::Confidential => Ok(Self::Owners),
             // Only SetDelegate writes a delegate, together with `ConfidentialEscrow` mode on a policy ring.
-            RingRail::Delegate => config
+            RingRail::Delegate => ring
                 .delegate()
                 .copied()
                 .map(Self::Delegate)
@@ -91,8 +91,8 @@ impl RailSigner {
 }
 
 impl RingRail {
-    pub fn new(tag: InstructionTag, config: &RingProgramConfig) -> Result<Self, CustomRingError> {
-        RailSigner::new(tag, config).map(RailSigner::rail)
+    pub fn new(tag: InstructionTag, ring: &RingPolicy) -> Result<Self, CustomRingError> {
+        RailSigner::new(tag, ring).map(RailSigner::rail)
     }
 
     pub fn of(tag: InstructionTag, mode: RingMode) -> Result<Self, CustomRingError> {
@@ -1022,11 +1022,11 @@ impl<'a> RingTransactData<'a> {
     }
 
     /// The SPP data the program forwards, `b` decompressed for SPP's verifier.
-    pub fn expand(&self, config: &RingProgramConfig) -> Result<TransactIxData, CustomRingError> {
+    pub fn expand(&self, ring: &RingPolicy) -> Result<TransactIxData, CustomRingError> {
         let b = groth16_solana::decompression::decompress_g2(&self.spp_proof.proof_b)
             .map_err(|_| CustomRingError::InvalidSppProofPoint)?;
         self.transact_ix_data(
-            config,
+            ring,
             TransactProof {
                 a: self.spp_proof.proof_a,
                 b,
@@ -1035,12 +1035,9 @@ impl<'a> RingTransactData<'a> {
         )
     }
 
-    pub fn spp_instruction_data(
-        &self,
-        config: &RingProgramConfig,
-    ) -> Result<Vec<u8>, CustomRingError> {
+    pub fn spp_instruction_data(&self, ring: &RingPolicy) -> Result<Vec<u8>, CustomRingError> {
         let expanded = self
-            .expand(config)?
+            .expand(ring)?
             .serialize()
             .map_err(|_| CustomRingError::InvalidInstructionData)?;
         Ok([&[self.rail.spp_tag()][..], &expanded].concat())
@@ -1049,11 +1046,11 @@ impl<'a> RingTransactData<'a> {
     /// The external data hash the SPP proof binds, computable before either proof exists.
     pub fn external_data_hash(
         &self,
-        config: &RingProgramConfig,
+        ring: &RingPolicy,
         settlements: &[Settlement<'_>],
     ) -> Result<[u8; 32], CustomRingError> {
         let expanded = self
-            .transact_ix_data(config, TransactProof::zeroed())?
+            .transact_ix_data(ring, TransactProof::zeroed())?
             .serialize()
             .map_err(|_| CustomRingError::InvalidInstructionData)?;
         let (_, external_data_prefix) =
@@ -1070,10 +1067,10 @@ impl<'a> RingTransactData<'a> {
     /// The expansion under `proof`, a client sizes the transaction with a zeroed one.
     pub fn transact_ix_data(
         &self,
-        config: &RingProgramConfig,
+        ring: &RingPolicy,
         proof: TransactProof,
     ) -> Result<TransactIxData, CustomRingError> {
-        let view_tag: [u8; 32] = core::array::from_fn(|i| config.auditor_pubkey[i + 1]);
+        let view_tag: [u8; 32] = core::array::from_fn(|i| ring.auditor_pubkey[i + 1]);
         Ok(TransactIxData {
             expiry_unix_ts: u64::from(self.expiry_unix_ts),
             tx_viewing_pk: tagged_x25519(self.tx_viewing_u),

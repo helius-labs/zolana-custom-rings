@@ -4,15 +4,13 @@ import type { ChainReader } from "@heliuslabs/zolana/client";
 import { decodeRingConfig, SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana/interface";
 import { addressBytes } from "@heliuslabs/zolana/internal";
 import type { RequestContext } from "@heliuslabs/zolana/interface";
-import { ringAuthAddress, ringCoSignerPda, ringConfigPda, ringPolicyPda } from "../pda/index.js";
+import { ringAuthAddress, ringCoSignerPda, ringPolicyPda } from "../pda/index.js";
 
 import {
   decodeRingCoSigner,
   decodeRingPolicy,
-  decodeRingProgramConfig,
   type RingCoSigner,
   type RingPolicy,
-  type RingProgramConfig,
 } from "../codec/ring-codecs.js";
 import { RingError, type RingErrorCode } from "../error.js";
 
@@ -27,20 +25,6 @@ export async function ringProgramDataAddress(ringProgramId: Address): Promise<Ad
     seeds: [addressBytes(ringProgramId, "ringProgramId")],
   });
   return address;
-}
-
-/** Mirrors Rust `CustomRing::require_config`. */
-export function fetchRingProgramConfig(
-  client: AccountReader,
-  ringProgramId: Address,
-  context?: RequestContext,
-): Promise<RingProgramConfig> {
-  return readRingAccount(client, ringProgramId, context, {
-    pda: ringConfigPda,
-    decode: decodeRingProgramConfig,
-    missing: "RING_CONFIG_NOT_FOUND",
-    invalid: "RING_CONFIG_INVALID",
-  });
 }
 
 export function fetchRingPolicy(

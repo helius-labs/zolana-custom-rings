@@ -10,7 +10,7 @@ import {
   RING_COSIGN_TRANSFERS,
   RING_COSIGN_WITHDRAWALS,
   type RingCoSigner,
-  type RingProgramConfig,
+  type RingPolicy,
 } from "../protocol/codec/ring-codecs.js";
 import { RingError } from "../protocol/error.js";
 import { fetchRingCoSignerRecord } from "../protocol/membership/config.js";
@@ -56,7 +56,7 @@ export type CoSignRequirement =
 
 type RequirementInput = Readonly<{
   ringProgramId: Address;
-  config: RingProgramConfig;
+  config: RingPolicy;
   demand: CoSignDemand;
   approvalRequired: boolean;
   /** Only a verified exemption proof waives the withdrawal class. */

@@ -18,7 +18,7 @@ mod withdrawals;
 use custom_ring_interface::{
     compute_unit_limit, cosign::CoSignDemand, stream::SenderCommitment, AuditBinding,
     CustomRingError, CustomRingProof, InputTrees, InstructionTag, ParsedTransact,
-    PlainGroth16Proof, PublicLeg, PublicSlots, RingMode, RingProgramConfig, RingRail, SenderBundle,
+    PlainGroth16Proof, PublicLeg, PublicSlots, RingMode, RingPolicy, RingRail, SenderBundle,
     Settlement, CONFIDENTIAL_RING_MAX_INPUTS, DELIVERED_AUDIT_CAPACITIES,
 };
 use solana_address::Address;
@@ -109,7 +109,7 @@ pub struct RingTransfer<R: Rail> {
 #[must_use = "build or submit the proven transfer"]
 pub struct ProvenRingTransfer {
     ring: CustomRing,
-    config: Box<RingProgramConfig>,
+    config: Box<RingPolicy>,
     parts: TransactParts,
     accounts: TransactAccounts,
     bound: BoundState,
@@ -343,7 +343,7 @@ impl Preview {
 /// A transfer whose compact data is final but for its proofs.
 pub(crate) struct Assembled {
     frame: Frame,
-    config: Box<RingProgramConfig>,
+    config: Box<RingPolicy>,
     auditor: X25519Pubkey,
     spp: Spp,
     audit_public_input_hash: [u8; 32],
@@ -572,8 +572,6 @@ impl<'a> Sealed<'a> {
             output_tree: trees.output,
             owner_signers,
             interface_transfer_accounts,
-            policy: (config.has_policy || withdrawal_exemption.is_some())
-                .then(|| ring.policy_pda()),
             co_signer,
             delegate,
         };

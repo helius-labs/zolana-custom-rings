@@ -6,7 +6,7 @@ use solana_keypair::Signer;
 
 use crate::{
     common::{reaches_verification, refused, Ring, Setup},
-    transact_rules::{policy_meta, send, spp_list, Fixture},
+    transact_rules::{send, spp_list, Fixture},
 };
 
 const OWNER: [u8; 32] = [0x71; 32];
@@ -20,7 +20,7 @@ fn a_relayer_pays_a_policy_transfer_its_owner_signs_in_the_proof() {
     reaches_verification(send(
         &mut ring,
         tag::TRANSFER,
-        vec![policy_meta()],
+        Vec::new(),
         data.encode().unwrap(),
         spp,
         &[],
@@ -39,7 +39,7 @@ fn an_owner_signer_beside_the_in_proof_owner_is_refused() {
         send(
             &mut ring,
             tag::TRANSFER,
-            vec![policy_meta()],
+            Vec::new(),
             data.encode().unwrap(),
             spp,
             &[],

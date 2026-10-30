@@ -1,6 +1,6 @@
 # Auditing a ring
 
-Every ring has one auditor, an X25519 key that the ring config fixes at
+Every ring has one auditor, an X25519 key that the ring policy fixes at
 creation. The auditor reads every transfer, deposit and merge of the ring.
 The audit proof binds what the auditor reads to the notes SPP settles, and the
 ring program forwards no transfer without it. The disclosure layouts and the
@@ -101,7 +101,7 @@ escrow, an anonymous ring included, opens no record.
 
 The ring RPC holds the auditor key and serves the
 [readers](../README.md#roles). A reader is a Solana key or a passkey, and the
-config authority has no implicit read access.
+policy authority has no implicit read access.
 [Ring RPC](../zolana/docs/spec.md#ring-rpc) states the methods and how a reader
 signs a request.
 
