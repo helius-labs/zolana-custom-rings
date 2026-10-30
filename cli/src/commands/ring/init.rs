@@ -308,7 +308,7 @@ impl RingInitialization<'_> {
         ctx.send(&[self.config_authority, self.deployer], &[initialize])?;
         let mut syncs = vec![SyncRoots {
             ring: ctx.ring,
-            registry: records.records,
+            registry: records,
         }
         .instruction()];
         syncs.extend(policy::curator_syncs(ctx.ring, pinned_sources));

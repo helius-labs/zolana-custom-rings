@@ -90,28 +90,24 @@ fn a_curator_registry_of_another_authority_serves_a_list_after_sync_roots() {
 }
 
 #[test]
-fn update_policy_rebinds_the_records_to_another_registry_of_the_same_authority() {
+fn update_policy_rebinds_the_records_to_a_registry_of_any_authority() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::Policy);
     let authority = ring.holder(RingRole::Policy);
     let rebind = |records: Address| {
         UpdatePolicyIx {
             authority: authority.pubkey(),
-            update: UpdatePolicyIxData::Records {
-                storage_authority: Address::default(),
-            },
+            update: UpdatePolicyIxData::Records,
             trailing: &[records],
         }
         .instruction()
     };
-    let foreign = Address::new_from_array([0x5e; 32]);
-    ring.store_registry(foreign, &Keypair::new().pubkey(), &[root(3, [0x0f; 32])]);
     refused(
-        ring.send(rebind(foreign), &[&authority]),
-        CustomRingError::StorageAuthorityMismatch,
+        ring.send(rebind(policy_pda()), &[&authority]),
+        CustomRingError::InvalidStorageRegistry,
     );
     let records = Address::new_from_array([0x5b; 32]);
-    ring.store_registry(records, &authority.pubkey(), &[root(3, [0x0f; 32])]);
+    ring.store_registry(records, &Keypair::new().pubkey(), &[root(3, [0x0f; 32])]);
     let before: RingPolicy = ring.read(&policy_pda());
     ring.send(rebind(records), &[&authority]).unwrap();
     let after: RingPolicy = ring.read(&policy_pda());

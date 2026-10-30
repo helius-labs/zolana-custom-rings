@@ -99,7 +99,6 @@ pinned_codes! {
     InvalidRingPolicy = 8300,
     RingPolicyAlreadyExists = 8301,
     InvalidStorageRegistry = 8302,
-    StorageAuthorityMismatch = 8303,
     UnmirroredRegistry = 8304,
     MirrorNotSynced = 8305,
     MirrorRootExpired = 8306,

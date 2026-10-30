@@ -19,7 +19,7 @@ use custom_ring_cli::{localnet::GENESIS_PROGRAMS, Zolana, ZolanaServices};
 use custom_ring_interface::RingRoles;
 use custom_ring_sdk::{
     compute_unit_limit, CustomRing, InitialPolicy, Initialize, InitializeStorage, InstructionTag,
-    MemberRecords, PolicyRecords, PolicyTable, RingError, RingKind, SyncRoots,
+    MemberRecords, PolicyTable, RingError, RingKind, SyncRoots,
 };
 use solana_address::Address;
 use solana_instruction::Instruction;
@@ -375,10 +375,7 @@ impl RegisterRing<'_> {
             kind: self.tier.kind(),
             roles: RingRoleKeys::of(self.payer).roles(self.payer),
             policy: Some(InitialPolicy {
-                records: PolicyRecords {
-                    records: self.storage().registry(),
-                    storage_authority: authority,
-                },
+                records: self.storage().registry(),
                 table: PolicyTable {
                     rules,
                     shared_sources: &shared_sources,

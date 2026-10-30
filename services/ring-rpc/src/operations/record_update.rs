@@ -45,7 +45,7 @@ pub enum RecordUpdateRefusal {
     Signature = -32143,
     #[error("record update is past its valid until slot")]
     Expired = -32144,
-    #[error("ring has no config")]
+    #[error("ring has no policy account")]
     UnknownRing = -32145,
     #[error("registry is not the ring records under the writer authority")]
     RegistryNotServed = -32146,

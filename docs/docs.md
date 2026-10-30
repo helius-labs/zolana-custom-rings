@@ -278,7 +278,7 @@ const ringView = await ringRpc.getDecryptedTransactions({
 
 ### Rust
 
-`custom-ring-sdk` drives the same flows through one pipeline with three rails. Every call is async and takes a `RingClient`. The examples come from `program-tests/custom-ring`, where `env.run` blocks on a future, `env.client` is the CLI's `Zolana` client, `land` signs and settles a submission, and `env.member_record` reads a record through `MemberRecords`.
+`custom-ring-sdk` drives the same flows through one pipeline with three rails. Every call is async and takes a `RingClient`. Wallets prove through Ring RPC with `prepare_relay` of `CustomRingTransfer`, `AnonymousTransfer` and `RingDeposit`, and with `MergeRelay::prepare`. `RingTransfer::prove`, `PreparedRingDeposit::prove` and `PreparedCustomRingMerge::prove` read member records and their Merkle paths themselves, and serve operators and tests. The examples come from `program-tests/custom-ring`, where `env.run` blocks on a future, `env.client` is the CLI's `Zolana` client, `land` signs and settles a submission, and `env.member_record` reads a record through `MemberRecords`.
 
 ```rust
 let native = RingClient::new(

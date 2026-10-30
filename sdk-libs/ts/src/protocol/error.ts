@@ -243,7 +243,7 @@ export const RingProgramError = Object.freeze({
   invalidRingPolicy: 8300,
   ringPolicyAlreadyExists: 8301,
   invalidStorageRegistry: 8302,
-  storageAuthorityMismatch: 8303,
+  // 8303 retired.
   unmirroredRegistry: 8304,
   mirrorNotSynced: 8305,
   mirrorRootExpired: 8306,

@@ -15,7 +15,7 @@ import (
 
 // Properties:
 // 1. The nullifier key is Poseidon of the 31-byte nullifier secret the envelope seals to AuditorPk, so the auditor recovers the secret behind the escrowed key.
-// 2. The statement binds the member, the key, both tagged envelope keys and the ciphertext hash, and the program queues the escrow write Poseidon(nullifier_pk, ct_hash) from them.
+// 2. The statement binds the member, the key, both tagged envelope keys and the ciphertext hash, and Ring RPC checks it before the storage writer submits the escrow write Poseidon(nullifier_pk, ct_hash).
 // 3. No registry record and no UTXO owner is opened, the queue applies the write later.
 
 type RegisterKeyCircuit struct {

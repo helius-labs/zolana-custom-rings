@@ -15,9 +15,9 @@ use zolana_ring_policy::ListId;
 
 use crate::common::{
     allow_list_table, auditor_pubkey, co_signer_record, list_table, policy_pda, program_data_of,
-    refused, refused_with, ring_auth, rules_write, set_co_signer, set_delegate, within_budget,
-    ClearCoSignerIx, InitializeIx, Ring, Sent, SetCoSignerIx, Setup, UpdateAuthorityIx,
-    UpdatePolicyIx, PROGRAM, RECORDS,
+    refused, refused_with, ring_auth, rules_write, set_co_signer, set_delegate, sync_roots,
+    within_budget, ClearCoSignerIx, InitializeIx, Ring, Sent, SetCoSignerIx, Setup,
+    UpdateAuthorityIx, UpdatePolicyIx, PROGRAM, RECORDS,
 };
 use crate::transact_rules::SPP;
 
@@ -71,7 +71,6 @@ fn policy_config(ring: &Ring) -> InitializeIxData {
         kind: RingKind::Policy,
         roles: ring.roles.addresses(),
         policy: Some(PolicyBindingIxData {
-            storage_authority: Address::default(),
             table: allow_list_table(Vec::new()),
         }),
     }
@@ -393,6 +392,30 @@ fn a_policy_ring_initializes_only_with_its_policy() {
     );
 }
 
+#[test]
+fn update_policy_binds_records_late_on_an_audit_only_ring() {
+    let mut ring = uninitialized(Setup::AuditOnly);
+    let data = audit_only_config(&ring);
+    upgrade_initialize(&mut ring, data).expect("the ring starts without records");
+    refused(
+        ring.send(sync_roots(&RECORDS), &[]),
+        CustomRingError::UnmirroredRegistry,
+    );
+    let bind = UpdatePolicyIx {
+        authority: ring.roles.policy.pubkey(),
+        update: UpdatePolicyIxData::Records,
+        trailing: &[RECORDS],
+    }
+    .instruction();
+    ring.role_send(RingRole::Policy, bind)
+        .expect("the policy authority binds the records");
+    let account: RingPolicy = ring.read(&policy_pda());
+    assert_eq!(account.records, RECORDS);
+    assert_eq!(account.written_policy_hash(), None);
+    ring.send(sync_roots(&RECORDS), &[])
+        .expect("the bound records mirror their roots");
+}
+
 struct RoleWrite {
     role: RingRole,
     signer_slot: usize,
@@ -443,9 +466,7 @@ const ROLE_WRITES: [RoleWrite; 8] = [
         instruction: |_, signer, _| {
             UpdatePolicyIx {
                 authority: *signer,
-                update: UpdatePolicyIxData::Records {
-                    storage_authority: *signer,
-                },
+                update: UpdatePolicyIxData::Records,
                 trailing: &[RECORDS],
             }
             .instruction()

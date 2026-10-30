@@ -12,8 +12,8 @@ use spr_interface::instruction::{encode_instruction, tag, CreateRingConfigData};
 use crate::{
     instructions::{
         instruction_runtime::{check_system_program, parse, Pda, RingAuth},
-        loader::{validate_spp_program, UpgradeAuthorityCheck},
-        policy_binding::{RecordsBinding, TableBinding},
+        loader::{load_storage_registry, validate_spp_program, UpgradeAuthorityCheck},
+        policy_binding::TableBinding,
     },
     state::{is_x25519_key, Init},
 };
@@ -63,7 +63,6 @@ pub fn process_initialize_ix(
         Some(binding) => PolicyCreation {
             binding,
             kind: ix.kind,
-            policy_authority: &ix.roles.policy,
         }
         .records(&mut iter)?,
         None if ix.kind.has_policy() => return Err(CustomRingError::PolicyNotSet.into()),
@@ -113,7 +112,6 @@ pub fn process_initialize_ix(
 struct PolicyCreation<'a> {
     binding: &'a PolicyBindingIxData,
     kind: RingKind,
-    policy_authority: &'a Address,
 }
 
 impl PolicyCreation<'_> {
@@ -124,12 +122,7 @@ impl PolicyCreation<'_> {
         if !self.kind.has_policy() && !(table.sources.is_empty() && table.rules.is_empty()) {
             return Err(CustomRingError::PolicyOnAuditOnlyRing.into());
         }
-        RecordsBinding {
-            records,
-            policy_authority: self.policy_authority,
-            storage_authority: &self.binding.storage_authority,
-        }
-        .check()?;
+        load_storage_registry(records)?;
         Ok(*records.address())
     }
 }

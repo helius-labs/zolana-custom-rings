@@ -1,5 +1,5 @@
 use anyhow::{bail, ensure, Context as _, Result};
-use custom_ring_sdk::{CustomRing, InitializeStorage, PolicyRecords};
+use custom_ring_sdk::{CustomRing, InitializeStorage};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
 use solana_address::Address;
@@ -131,23 +131,21 @@ impl RingRpcClient {
         &self,
         target: ReadTarget,
         authority: &dyn Signer,
-    ) -> Result<PolicyRecords> {
+    ) -> Result<Address> {
         let ring = target.ring;
         let request =
             CreateRecordsRegistryRequest::create(target, authority.pubkey()).sign(authority)?;
         let created: CreateRecordsRegistryResponse = self.call(CREATE_RECORDS_REGISTRY, request)?;
-        let records = PolicyRecords {
-            records: created.registry.0,
-            storage_authority: created.storage_authority.0,
-        };
+        let records = created.registry.0;
+        let storage_authority = created.storage_authority.0;
         let expected =
-            InitializeStorage::records(CustomRing::new(ring), records.storage_authority).registry();
+            InitializeStorage::records(CustomRing::new(ring), storage_authority).registry();
         ensure!(
-            records.records == expected,
+            records == expected,
             "the ring rpc at {} named registry {} that is not the ring records under storage authority {}",
             redact_url(&self.url),
-            records.records,
-            records.storage_authority
+            records,
+            storage_authority
         );
         Ok(records)
     }

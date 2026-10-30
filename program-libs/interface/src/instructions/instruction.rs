@@ -195,8 +195,6 @@ pub struct PolicyTableIxData {
 
 #[derive(Clone, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
 pub struct PolicyBindingIxData {
-    /// The records registry may answer to it beside the policy authority.
-    pub storage_authority: Address,
     pub table: PolicyTableIxData,
 }
 
@@ -214,9 +212,9 @@ pub enum UpdatePolicyIxData {
     Rules(PolicyTableIxData),
     #[wincode(tag = 1)]
     Source(PolicySourceIxData),
-    /// One trailing records registry, answering to the policy authority or to `storage_authority`.
+    /// One trailing records registry under any authority.
     #[wincode(tag = 2)]
-    Records { storage_authority: Address },
+    Records,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]

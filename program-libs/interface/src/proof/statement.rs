@@ -64,7 +64,7 @@ pub enum AuditKind<'a> {
     Anonymous(AnonymousAudit<'a>),
 }
 
-/// Every ring transfer's audit proof, mirror `prover/server/custom_rings/circuits/base`.
+/// Every ring transfer's audit proof, mirror `prover/circuits/audit`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AuditStatement<'a> {
     pub head: AuditHead<'a>,
@@ -131,7 +131,7 @@ pub enum PolicyKey {
     Delegate,
 }
 
-/// A policy ring transfer's policy proof, mirror `prover/server/custom_rings/circuits/policy`.
+/// A policy ring transfer's policy proof, mirror `prover/circuits/policy`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PolicyStatement<'a> {
     pub withdrawal_hash: &'a [u8; 32],
@@ -188,7 +188,7 @@ impl PolicyStatement<'_> {
     }
 }
 
-/// An application of `count` queued writes, mirror `prover/server/custom_rings/circuits/registry`.
+/// An application of `count` queued writes, mirror `prover/circuits/registry`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ApplyRecordsStatement {
     pub old_root: [u8; 32],
@@ -223,7 +223,7 @@ impl ApplyRecordsStatement {
 }
 
 /// The auditor envelope of a registered nullifier key, mirror
-/// `prover/server/custom_rings/circuits/policy/register_key.go`.
+/// `prover/circuits/registry/register_key.go`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RegisterKeyStatement<'a> {
     /// The owner identity of the signing member.

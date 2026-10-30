@@ -39,7 +39,6 @@ const AUTHORITY = address("4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T");
 const NEXT = address("3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3");
 const PAYER = address("29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2");
 const RECORDS = address("7BgBvyjrZX1YKz4oh9mjb8ZScatkkwb8DzFx7LoiVkM3");
-const STORAGE_AUTHORITY = address("GjJyeC1r2RgkuoCWMyPYkCWSGSGLcz266EaAkLA27AhL");
 
 const READ = 0;
 const WRITE = 1;
@@ -91,7 +90,7 @@ describe("initialize and policy update", () => {
       auditorPublicKey: auditor,
       kind: "policy",
       roles: ROLES,
-      policy: { records: RECORDS, storageAuthority: STORAGE_AUTHORITY, table },
+      policy: { records: RECORDS, table },
     });
     expect(policy.data).toEqual(
       Uint8Array.of(
@@ -100,7 +99,6 @@ describe("initialize and policy update", () => {
         1,
         ...ROLE_BYTES,
         1,
-        ...addressBytes(STORAGE_AUTHORITY),
         2,
         ListId.allow,
         0,
@@ -127,9 +125,9 @@ describe("initialize and policy update", () => {
     const instruction = await updateRingPolicyInstruction({
       ringProgramId: RING,
       authority: AUTHORITY,
-      update: { kind: "records", records: RECORDS, storageAuthority: STORAGE_AUTHORITY },
+      update: { kind: "records", records: RECORDS },
     });
-    expect(instruction.data).toEqual(Uint8Array.of(54, 2, ...addressBytes(STORAGE_AUTHORITY)));
+    expect(instruction.data).toEqual(Uint8Array.of(54, 2));
     expect(metas(instruction)).toEqual([
       [AUTHORITY, SIGN],
       [await ringPolicyAddress(RING), WRITE],
@@ -364,7 +362,7 @@ describe("policy writes", () => {
         auditorPublicKey: X25519Keypair.generate().publicKey(),
         kind: "policy",
         roles: ROLES,
-        policy: { records: RECORDS, storageAuthority: AUTHORITY, ...input },
+        policy: { records: RECORDS, ...input },
       }),
     (input: RingPolicyTableInput) =>
       updateRingPolicyInstruction({
