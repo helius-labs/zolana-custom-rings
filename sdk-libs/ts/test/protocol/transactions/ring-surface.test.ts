@@ -31,6 +31,7 @@ describe("relayer-free wallet surface", () => {
       "createCustomRingClient",
       "syncRingWallet",
       "AnonymousSync",
+      "applyAnonymousScan",
       "readMemberRecords",
       "buildRingDepositTransaction",
       "createRingDepositSubmission",

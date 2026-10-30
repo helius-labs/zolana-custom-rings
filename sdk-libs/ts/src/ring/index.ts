@@ -200,7 +200,7 @@ export type {
   TagSelection,
   TransferTags,
 } from "../state/viewing-history.js";
-export { AnonymousSync, TAGS_PER_REQUEST } from "../state/anonymous-sync.js";
+export { AnonymousSync, applyAnonymousScan, TAGS_PER_REQUEST } from "../state/anonymous-sync.js";
 export type {
   AnonymousRingUtxo,
   AnonymousScan,

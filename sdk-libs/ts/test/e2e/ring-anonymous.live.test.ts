@@ -2,10 +2,10 @@
 import { generateKeyPairSigner, type KeyPairSigner } from "@solana/kit";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { bytesKey } from "@heliuslabs/zolana/internal";
 import type { RuleTable } from "../../src/ring/advanced.js";
 import {
   AnonymousSync,
+  applyAnonymousScan,
   createRingTransferSubmission,
   prepareRingTransferRelay,
   messageSignerSpendSigner,
@@ -72,27 +72,15 @@ async function expectAudited(ring: AnonymousRing, sender: Actor, signature: stri
 }
 
 async function syncRing(ring: AnonymousRing, actor: Member): Promise<void> {
-  const state = actor.wallet._state();
   const scan = await AnonymousSync.create(actor.keys, actor.wallet.registry)
     .withIndexerConfig({
       ...ring.client.indexerConfig,
       requireSlot: await currentSlot(ring.client),
     })
-    .withHeldNotes(state.utxos)
+    .withHeldNotes(actor.wallet.utxos())
     .fetch(ring.client, actor.history);
+  await applyAnonymousScan(actor.wallet, scan);
   actor.history = scan.history;
-  const spent = new Set(scan.spentNullifiers.map(bytesKey));
-  const known = new Set(state.utxos.map((entry) => bytesKey(entry.outputContext.hash)));
-  actor.wallet._replace({
-    ...state,
-    utxos: [
-      ...state.utxos.map((entry) =>
-        spent.has(bytesKey(entry.nullifier)) ? { ...entry, spent: true } : entry,
-      ),
-      ...scan.utxos.filter((entry) => !known.has(bytesKey(entry.outputContext.hash))),
-    ],
-    nullifiers: new Set([...state.nullifiers, ...spent]),
-  });
 }
 
 /** A member whose own deposit funds its hidden identity on the ring. */
