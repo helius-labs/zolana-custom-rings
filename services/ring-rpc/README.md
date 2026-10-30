@@ -8,18 +8,24 @@ Local mode serves one ring with one auditor key file. Generate the key before `I
 
 ```bash
 cargo run -p zolana-ring-rpc -- keygen --out keys/auditor.key
+cargo run -p zolana-ring-rpc -- keygen --kind service --out keys/service.key
 cargo run -p zolana-ring-rpc -- serve \
   --indexer-url http://127.0.0.1:8784 \
   --rpc-url http://127.0.0.1:8899 \
   --auditor-key-file keys/auditor.key \
+  --service-key-file keys/service.key \
   --ring-program-id <program-id>
 ```
 
 The command writes the secret with owner access only. It writes the X25519 public key to `keys/auditor.key.pub`.
 
-Derived mode serves a stable key for each ring and cluster, for as many rings as ask. Generate a root secret with `keygen --kind root`. Protect one root as carefully as all keys derived from it. The key comes from the root, the cluster genesis hash and the ring program id, so a new ring needs no configuration, no restart, and nothing stored. Repointing the service at another cluster changes every derived key and orphans every ring already registered.
+Derived mode serves a stable key for each ring and cluster, for as many rings as ask. Generate a root secret with `keygen --kind root`. Protect one root as carefully as all keys derived from it. The root yields auditor keys and no other key. The key comes from the root, the cluster genesis hash and the ring program id, so a new ring needs no configuration, no restart, and nothing stored. Repointing the service at another cluster changes every derived key and orphans every ring already registered.
 
-A relay pays fees with its own Ed25519 key, apart from the auditor and service keys. Generate it with `keygen --kind fee-payer`, fund it, and pass it with `--fee-payer-key-file`, a `--store-url` for the relay records and the ring prover's `--prover-url`. The service refuses a fee payer key equal to its service key.
+Every other role reads its own secret file, and `keygen --kind <role>` writes each one. The service key of `--service-key-file` signs the `createAuditorKey` answers, and every read and grant signature binds its public key. Every `serve` needs it. The storage authority of `--storage-authority-key-file` signs and pays for every records write, and `--store-url` needs it. The co-signer of `--co-signer-key-file` turns co-signing on and needs `--store-url`. The 32-byte secret of `--grant-rows-key-file` keys the reader grant rows, and `--reader-grants database` needs it. A missing file stops `serve` with an error that names its flag.
+
+A relay pays fees with its own Ed25519 key, apart from the auditor and service keys. Generate it with `keygen --kind fee-payer`, fund it, and pass it with `--fee-payer-key-file`, a `--store-url` for the relay records and the ring prover's `--prover-url`.
+
+`serve` refuses to start when two role files hold the same secret, the auditor key file and the root secret included. It compares the secrets in constant time.
 
 A ring must take its auditor key from the service before `Initialize` creates its ring account. The ring account fixes the auditor for the life of the ring, so a ring registered with any other key can never be read here, whatever the service derives for it. `ringStatus` reports which of the three cases a ring is in.
 
@@ -58,7 +64,7 @@ In `tree` mode a reader holds its grant in the ring's own storage tree, the `Sto
 
 A read that names a `wallet` returns only the rows where that wallet is the sender, a signer or an output owner, the merges it owns and the notes it owns, and no skipped rows. A ring-wide grant covers every wallet, a wallet grant only its own wallet. The wallet joins the signed attestation as a last `wallet:` line, and a read without one signs no such line.
 
-In `database` mode, which needs `--store-url`, the service keeps both grants in its own database and never reads the storage tree for a grant, so a ring whose policy mirrors no root still serves its readers. `setReaderGrant` writes a wallet grant under the wallet's raw Ed25519 signature, and a ring-wide grant, which names no wallet, under the signature of the policy authority the ring policy names. The signature covers `zolana/ring-rpc-reader-grant/v1`, the cluster, service, ring, the wallet when named, reader, action, timestamp and nonce, under the skew and nonce set of a read. Each accepted call appends one row, sealed with AES-256-GCM under a key HKDF-SHA256 derives with `zolana/ring-rpc-grant-rows/v1` from the auditor key in local mode or the root secret in derived mode. Beside its insert id, a row keeps in plaintext only the HMAC-SHA256 of the reader key under the same derivation, also the associated data. The row with the latest signed timestamp holds, the later write on a tie. A ring-wide row holds for every wallet. The record writer refuses an update that writes or awaits a `reader` list with `-32230`, because no read checks it. Write access to the database can drop a revocation row, so protect it like the service key.
+In `database` mode, which needs `--store-url`, the service keeps both grants in its own database and never reads the storage tree for a grant, so a ring whose policy mirrors no root still serves its readers. `setReaderGrant` writes a wallet grant under the wallet's raw Ed25519 signature, and a ring-wide grant, which names no wallet, under the signature of the policy authority the ring policy names. The signature covers `zolana/ring-rpc-reader-grant/v1`, the cluster, service, ring, the wallet when named, reader, action, timestamp and nonce, under the skew and nonce set of a read. Each accepted call appends one row, sealed with AES-256-GCM under a key HKDF-SHA256 derives with `zolana/ring-rpc-grant-rows/v1` from the secret of `--grant-rows-key-file`. Beside its insert id, a row keeps in plaintext only the HMAC-SHA256 of the reader key under the same derivation, also the associated data. The row with the latest signed timestamp holds, the later write on a tie. A ring-wide row holds for every wallet. The record writer refuses an update that writes or awaits a `reader` list with `-32230`, because no read checks it. Write access to the database can drop a revocation row, so protect it like the service key.
 
 Allowed WebAuthn origins need an explicit RP ID. The RP ID can be the origin host or a valid parent domain. Cross origin assertions are rejected.
 
@@ -106,7 +112,7 @@ Errors are `-32220` the signer is not the ring delegate, `-32221` the ring escro
 
 `--store-url` turns the record writer on. The store takes a `postgres://` or `sqlite://` URL. The writer proves every storage update, so the service refuses to start with a store and no `--prover-url`, or with a prover and no store. The prover must serve the ring apply keys.
 
-The writer signs and pays for every storage update with its storage authority key. The key derives from the auditor key file or the root secret under its own domain, apart from the service key, and the service logs its address at start. Fund it before the first ring. A registry the writer serves names the key as its authority, and the ring policy account names the registry as its records.
+The writer signs and pays for every storage update with the storage authority key of `--storage-authority-key-file`. `keygen --kind storage-authority` prints its address, and the service logs it at start. Fund it before the first ring. A registry the writer serves names the key as its authority, and the ring policy account names the registry as its records.
 
 `createRecordsRegistry` creates a ring's records, the `StorageRegistry` of the storage authority under the ring program id, and pays for them. The ring's policy authority signs the request, or the program's upgrade authority before `Initialize`, over `zolana/ring-rpc-enrolment/v1` with the `action:` line `create records`. A repeated request returns the same registry. The service answers once the creation confirms and fails with `-32260` when it does not land. `zolana-ring init` binds these records at `Initialize` with the storage authority the answer names.
 
@@ -148,11 +154,11 @@ The leaf commits only the hash of an escrow envelope. The ephemeral key and ciph
 
 ## Co-signer limits
 
-`LimitedCoSigner` implements the `CoSignPolicy` trait the relay calls before it submits a transaction that demands the co-signer. It reads each asset's `AssetLimits` from the asset's record in the ring's own storage registry, checks the opening against the newest own root the ring policy mirrors, and signs only when every limit holds. With `--store-url`, `serve` gives it to the relay, and a host that spawns `ManagedMerge` takes it from `Hub::co_signer`. Without a store `Hub::co_signer` refuses every co-signature. [Co-signer limits](../../docs/spec.md#co-signer-limits) in the spec gives each limit and its window.
+`LimitedCoSigner` implements the `CoSignPolicy` trait the relay calls before it submits a transaction that demands the co-signer. It reads each asset's `AssetLimits` from the asset's record in the ring's own storage registry, checks the opening against the newest own root the ring policy mirrors, and signs only when every limit holds. With `--co-signer-key-file`, `serve` gives it to the relay, and a host that spawns `ManagedMerge` takes it from `Hub::co_signer`. Without a co-signer key or a store `Hub::co_signer` refuses every co-signature. [Co-signer limits](../../docs/spec.md#co-signer-limits) in the spec gives each limit and its window.
 
 A signature reserves its flows in the `cosign_usage` table, keyed by the co-signature and the asset. `settle` keeps a confirmed reservation and deletes a failed or expired one, and a repeat of either changes nothing. The relay passes the co-signature to `settle`, since it names the transaction before the fee payer signs. A reservation the relay never settles counts until its window passes. The reservation lock lives in process memory, so run one co-signer process for each store.
 
-The co-signer key derives from the auditor key or the root secret, as the service key does, under its own HKDF domain. `serve` logs its public key for the ring's `CoSigner` record.
+`keygen --kind co-signer` prints the co-signer public key for the ring's `CoSigner` record, and `serve` logs it at start.
 
 Co-signer errors are `-32160` disabled, `-32161` over a limit, `-32162` an asset named twice and `-32163` unreadable limits.
 

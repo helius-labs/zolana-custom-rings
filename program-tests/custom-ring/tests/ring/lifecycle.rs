@@ -190,7 +190,11 @@ fn auditor_key_is_released_only_to_the_ring_authority() -> Result<()> {
     let genesis_hash = runtime
         .block_on(source.genesis_hash())
         .map_err(|e| anyhow!("genesis hash {e:?}"))?;
-    let hub = Hub::builder(source, genesis_hash)
+    let identity = ServiceIdentity {
+        genesis_hash,
+        service: Keypair::new(),
+    };
+    let hub = Hub::builder(source, identity)
         .derived(RootSecret::from_bytes([7; 32])?)
         .map_err(|e| anyhow!("hub {e:?}"))?;
     let service = hub

@@ -116,6 +116,11 @@ fn bring_up(config: &RingConfig, auditor_key: &Path, replace: bool) -> Result<()
     let (os, arch) = host_platform()?;
     let binary = release.ensure(release.binary("ring_rpc", os, arch)?)?;
     make_executable(&binary)?;
+    ServiceKey {
+        binary: &binary,
+        auditor_key,
+    }
+    .ensure()?;
     let command = serve(&binary, config, ring_rpc, auditor_key);
     start_ring_rpc(command, config, ring_rpc, &scope()?)
 }
@@ -195,6 +200,11 @@ fn bring_up_workspace(
     let next = "zolana-ring pipeline in a second terminal with the same environment";
     line("next", next);
     let ring_rpc_binary = workspace.ring_rpc()?;
+    ServiceKey {
+        binary: &ring_rpc_binary,
+        auditor_key,
+    }
+    .ensure()?;
     RING_RPC.run(&mut serve(&ring_rpc_binary, config, ring_rpc, auditor_key))
 }
 
@@ -335,8 +345,34 @@ fn serve(binary: &Path, config: &RingConfig, port: u16, auditor_key: &Path) -> C
         .args(["--indexer-url", &urls.indexer, "--rpc-url", &urls.rpc])
         .arg("--auditor-key-file")
         .arg(auditor_key)
+        .arg("--service-key-file")
+        .arg(service_key_file(auditor_key))
         .args(["--ring-program-id", &config.program_id.to_string()]);
     command
+}
+
+/// Kept across runs, a new key breaks every pin of the old one.
+struct ServiceKey<'a> {
+    binary: &'a Path,
+    auditor_key: &'a Path,
+}
+
+impl ServiceKey<'_> {
+    fn ensure(self) -> Result<()> {
+        let service_key = service_key_file(self.auditor_key);
+        if service_key.is_file() {
+            return Ok(());
+        }
+        RING_RPC.named("ring-rpc keygen").run(
+            Command::new(self.binary)
+                .args(["keygen", "--kind", "service", "--out"])
+                .arg(service_key),
+        )
+    }
+}
+
+fn service_key_file(auditor_key: &Path) -> PathBuf {
+    auditor_key.with_file_name("service.key")
 }
 
 /// Receipts of the services the cli started, the task scope when one is set.

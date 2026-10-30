@@ -355,6 +355,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::{
         database::Store,
+        hub::ServiceIdentity,
         relay::RelayParts,
         upstream::{
             DepositHistory, DepositPage, MergeAuditRequest, RecordsTip, RingConfiguration,
@@ -539,7 +540,13 @@ pub(crate) mod tests {
                 },
             };
             let store = Store::open("sqlite::memory:", 1).await.expect("store");
-            let mut builder = Hub::builder(source, GENESIS).with_store(store);
+            let identity = ServiceIdentity {
+                genesis_hash: GENESIS,
+                service: Keypair::new(),
+            };
+            let mut builder = Hub::builder(source, identity)
+                .with_store(store)
+                .with_co_signer(Keypair::new());
             if let Some(relay) = relay {
                 builder = builder.with_relay(relay);
             }
