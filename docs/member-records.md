@@ -4,7 +4,7 @@ A ring keeps its lists in member records, and a registered owner's record binds
 its escrowed nullifier key. The records form a 4-ary indexed Merkle tree in the
 ring's own `StorageRegistry`, the records `Initialize` binds. The storage
 program keeps the tree's recent roots on chain, and the ring indexer stores the
-records. Owners and the config authority sign record updates, and the Ring RPC
+records. Owners and the policy authority sign record updates, and the Ring RPC
 writer applies them in a storage update with its apply proof. The same
 transaction sends `SyncRoots`, so the ring policy mirrors the new root at once.
 A policy proof opens records under a root the mirror holds and reveals no
@@ -25,7 +25,7 @@ members.
 A record holds the member, the next member in sort order, a bitmap of lists
 an escrow key and the mint settings. Eight lists exist, and each list has one writer:
 
-- The config authority writes `Allow`, `Block`, `Frozen`, `Reader` and
+- The policy authority writes `Allow`, `Block`, `Frozen`, `Reader` and
   `Approval`.
 - The member itself writes `RingViewing` and `Recovery`.
 - Only an escrow write sets `Escrow`, and it also fills the escrow key.
@@ -60,7 +60,7 @@ fills once. The writer refuses a second escrow key for a member, and an
 anonymous ring refuses the escrow entry. See
 [Creating an anonymous ring](anonymous-rings.md#creating-an-anonymous-ring).
 
-The config authority signs record updates over authority lists and mint
+The policy authority signs record updates over authority lists and mint
 settings of any record. [Record updates](spec.md#record-updates) gives the
 batching, and which updates retire every earlier root at once.
 
@@ -124,7 +124,7 @@ opening against a root the ring policy mirrors before they prove.
 ## With the CLI and the SDKs
 
 `zolana-ring list add|clear <list> --owner <address>` or `--asset <mint>`
-signs a config authority record update. `list join|leave ring-viewing|recovery`
+signs a policy authority record update. `list join|leave ring-viewing|recovery`
 signs the member update of `keys/sender-keypair.json`. `key register` escrows
 the sender's key, and `status` prints the newest root of each mirror.
 
@@ -145,7 +145,7 @@ leaves the mirror.
 
 This layout is incompatible with earlier four-field leaves, five-field queue
 hashes and the inline mint arrays. The rule-table hash uses version 12. The
-config is 112 bytes. `SetCoSigner` carries only signer and scope. A record
+ring policy is 4196 bytes, and no config account exists. `SetCoSigner` carries only signer and scope. A record
 write adds a 97-byte optional mint-setting replacement. Transfers may append a
 200-byte withdrawal exemption proof with its own revision.
 

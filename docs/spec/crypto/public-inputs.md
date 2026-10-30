@@ -24,7 +24,7 @@ The head has 12 elements:
 | 1 | `n0` | the frame's first nullifier, SPP nullifier `0` |
 | 2 | `ring_id` | the executing program id |
 | 3, 4 | `pack_be(0x04 \|\| tx_viewing_u)` | frame, SPP `tx_viewing_pk` |
-| 5, 6 | `pack_be(auditor_pubkey)` | config |
+| 5, 6 | `pack_be(auditor_pubkey)` | ring policy |
 | 7, 8 | `pack_be(0x04 \|\| eph_u)` | frame |
 | 9 | `hash_bytes(sealed)` | frame |
 | 10 | `right_align(salt)` | frame, SPP salt |
