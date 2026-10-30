@@ -1782,15 +1782,15 @@ function decodeWithdrawals(
 ): readonly DecryptedRingWithdrawal[] {
   return Object.freeze(
     list(value, path).map((entry, index) => {
-      const at = `${path}[${index}]`;
-      const leg = record(entry, at);
+      const legPath = `${path}[${index}]`;
+      const leg = record(entry, legPath);
       return Object.freeze({
         ...(leg["screenedOwner"] === undefined
           ? {}
-          : { screenedOwner: address(leg["screenedOwner"], `${at}.screenedOwner`) }),
-        recipient: address(leg["recipient"], `${at}.recipient`),
-        asset: address(leg["asset"], `${at}.asset`),
-        amount: u64(leg["amount"], `${at}.amount`),
+          : { screenedOwner: address(leg["screenedOwner"], `${legPath}.screenedOwner`) }),
+        recipient: address(leg["recipient"], `${legPath}.recipient`),
+        asset: address(leg["asset"], `${legPath}.asset`),
+        amount: u64(leg["amount"], `${legPath}.amount`),
       });
     }),
   );
