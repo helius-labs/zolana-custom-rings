@@ -1530,6 +1530,7 @@ dependencies = [
  "solana-keypair",
  "solana-loader-v3-interface 8.0.1",
  "solana-message",
+ "solana-sbpf",
  "solana-signer",
  "solana-transaction",
  "solana-transaction-error",
