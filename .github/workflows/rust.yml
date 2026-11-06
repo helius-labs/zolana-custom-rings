@@ -239,6 +239,10 @@ jobs:
           token: ${{ secrets.PRIVATE_LIBS_TOKEN }}
       - uses: ./.github/actions/artifact
         with:
+          name: zolana_programs
+          mode: restore
+      - uses: ./.github/actions/artifact
+        with:
           name: ring_program
           mode: restore
       - run: just test-program-fast
@@ -462,7 +466,7 @@ jobs:
           cat > "$tmp/smoke.mts" <<'TS'
           import type { SprClientConfig } from "@heliuslabs/spr";
           import { createCustomRingClient, type RingTransferClient } from "@heliuslabs/zolana-custom-rings";
-          const config: SprClientConfig = { solanaRpcUrl: new URL("http://127.0.0.1:8899") };
+          const config: Omit<SprClientConfig, "provingKeys"> = { solanaRpcUrl: new URL("http://127.0.0.1:8899") };
           const client: RingTransferClient = await createCustomRingClient(config);
           void client;
           TS

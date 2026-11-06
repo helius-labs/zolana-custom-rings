@@ -1,6 +1,6 @@
 //! Rotates one ring role to a new key.
 //!
-//! The keys stay pairwise distinct and apart from the delegate, so one key holds one authority.
+//! One key may hold several roles. The delegate holds none.
 //!
 //! Read after `instructions/accounts/loader.rs`. Read before `instructions/configuration/access/set_cosigner.rs`.
 
@@ -23,7 +23,7 @@ pub fn process_update_authority_ix(
     let new_key = iter.next_signer("new_key")?;
     let ring = iter.next_mut("ring")?;
 
-    // 1. The admin signs, and the new key stays apart from every other role and the delegate.
+    // 1. The admin signs, and the new key stays apart from the delegate.
     let mut ring = RoleHolder {
         program_id,
         role: RingRole::Admin,

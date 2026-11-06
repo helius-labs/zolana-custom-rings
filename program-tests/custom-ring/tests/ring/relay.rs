@@ -2,8 +2,8 @@
 
 use anyhow::bail;
 use custom_ring_sdk::{
-    AllowedNullifiers, MergeRelay, RelaySent, RequestedAuthorityTransfer, ResolvedSource,
-    TrackingEnrollment,
+    AllowedNullifiers, FunderApproval, MergeRelay, RelaySent, RequestedAuthorityTransfer,
+    ResolvedSource, TrackingEnrollment,
 };
 use custom_ring_test_validator::{
     policy::{DEPOSIT, TRANSFER_AMOUNT},
@@ -130,7 +130,20 @@ fn a_relayed_deposit_lands_the_note_the_auditor_recovers() -> Result<()> {
         bail!("the depositor signs its funding");
     };
     let relay_id = pending.relay_id().clone();
-    env.run(pending.sign(&ring_rpc.relay, depositor))?;
+    // The sealing wallet signs nothing, the depositor signs the legs it funds.
+    let terms = pending
+        .funder_terms(depositor.pubkey())
+        .ok_or_else(|| anyhow!("the depositor funds the deposit"))?
+        .clone();
+    let config = env.run(relayed.ring.require_config(env.client.as_async()))?;
+    let funder = FunderApproval {
+        relay_id: relay_id.clone(),
+        message: pending.message().to_vec(),
+        terms,
+        config: &config,
+    }
+    .pending();
+    env.run(funder.sign(&ring_rpc.relay, depositor))?;
 
     let signature = ring_rpc.confirmed(env, &relay_id)?;
     assert_eq!(relayed.recovered(depositor, signature)?, [DEPOSIT]);

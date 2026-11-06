@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 
 use anyhow::{anyhow, Result};
 use custom_ring_cli::ModeName;
-use custom_ring_sdk::{CustomRing, DepositAsset};
+use custom_ring_sdk::{CustomRing, DepositAsset, RingError};
 use custom_ring_test_validator::{
     cli::{merged, ListWrite, RingProject, RingToml},
     policy::{
@@ -91,17 +91,22 @@ fn allow_frozen_and_block_rows_govern_every_transfer() -> Result<()> {
     let enrol = |list_id, member| write(list_id, member, true);
     let clear = |list_id, member| write(list_id, member, false);
 
-    // 1. Allow admits a transfer only with both parties enrolled.
-    let notes = RingNotes {
-        ring,
-        owner: sender,
-        amount: DEPOSIT,
-        asset: DepositAsset::Sol,
-        count: 2,
-        env: &env,
-    }
-    .deposit()?;
+    let deposit = |owner: &ShieldedKeypair, count: usize| {
+        RingNotes {
+            ring,
+            owner,
+            amount: DEPOSIT,
+            asset: DepositAsset::Sol,
+            count,
+            env: &env,
+        }
+        .deposit()
+    };
+
+    // 1. Allow refuses a deposit or a transfer until each party is enrolled.
+    deposit_refused(deposit(sender, 1))?;
     enrol(ListId::Allow, sender_member).send()?;
+    let notes = deposit(sender, 2)?;
     egress.input_utxo(sender, &notes[0]).expect_refusal()?;
     enrol(ListId::Allow, owner_member(recipient)?).send()?;
     egress.input_utxo(sender, &notes[0]).land()?;
@@ -112,23 +117,14 @@ fn allow_frozen_and_block_rows_govern_every_transfer() -> Result<()> {
     clear(ListId::Frozen, sender_member).send()?;
     egress.input_utxo(sender, &notes[1]).land()?;
 
-    // 3. Deposits are ungoverned ingress, the rows bound egress, and Block
-    //    refuses the party's own change output even once Allow admits it.
-    enrol(ListId::Block, blocked_member).send()?;
-    let note = RingNotes {
-        ring,
-        owner: &blocked,
-        amount: DEPOSIT,
-        asset: DepositAsset::Sol,
-        count: 1,
-        env: &env,
-    }
-    .deposit()?
-    .into_iter()
-    .next()
-    .ok_or_else(|| anyhow!("the Block party's note"))?;
-    egress.input_utxo(&blocked, &note).expect_refusal()?;
+    // 3. Block refuses a deposit to the party and the party's change output even once Allow admits it.
     enrol(ListId::Allow, blocked_member).send()?;
+    let note = deposit(&blocked, 1)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("the Block party's note"))?;
+    enrol(ListId::Block, blocked_member).send()?;
+    deposit_refused(deposit(&blocked, 1))?;
     egress.input_utxo(&blocked, &note).expect_refusal()?;
     clear(ListId::Block, blocked_member).send()?;
     egress.input_utxo(&blocked, &note).land()?;
@@ -206,6 +202,21 @@ fn the_cli_pins_the_released_rows_and_governs_its_demo_transfers() -> Result<()>
     );
     demo.project.remove()?;
     Ok(())
+}
+
+fn deposit_refused(deposit: Result<Vec<Utxo>>) -> Result<()> {
+    match deposit {
+        Err(error)
+            if matches!(
+                error.downcast_ref::<RingError>(),
+                Some(RingError::PolicyRuleUnsatisfied(_))
+            ) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(error.context("expected PolicyRuleUnsatisfied")),
+        Ok(_) => Err(anyhow!("the deposit landed under a refusing rule")),
+    }
 }
 
 struct Egress<'a> {

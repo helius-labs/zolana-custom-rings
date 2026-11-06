@@ -10,11 +10,11 @@ type AccountReader = Pick<ChainReader, "getMultipleAccounts">;
 
 export type RingRole = RingAuthorityRole | "participant only";
 
-/** At most one role, the program keeps the role keys distinct. */
+/** Every role the key holds, or only `participant only`. One key may hold several roles. */
 export async function ringRole(
   input: Readonly<{ rpc: AccountReader; ring: Address; reader: ReaderKey }>,
   context?: RequestContext,
-): Promise<RingRole> {
+): Promise<readonly RingRole[]> {
   const address = await ringPolicyAddress(input.ring);
   const [account] = await input.rpc.getMultipleAccounts([address], context);
   const data = owned(account, input.ring);
@@ -22,9 +22,8 @@ export async function ringRole(
     throw new RingError("RING_CONFIG_INVALID", { details: { reason: "ring has no config" } });
   }
   const { roles } = decodeRingPolicy(data);
-  return (
-    RING_ROLES.find((role) => readerKeyEquals(roles[role], input.reader)) ?? "participant only"
-  );
+  const held = RING_ROLES.filter((role) => readerKeyEquals(roles[role], input.reader));
+  return held.length === 0 ? ["participant only"] : held;
 }
 
 /** An account another program owns says nothing about this ring. */

@@ -177,11 +177,8 @@ describe("ring setup", () => {
     );
   });
 
-  it.each([
-    ["a zero key", { pauser: address("11111111111111111111111111111111") }, "ZeroRoleKey"],
-    ["one key in two roles", { pauser: FIXTURE_ROLES.admin }, "DuplicateRoleKey"],
-  ] as const)("refuses %s like Rust `RingRoles::check`", async (_case, change, reason) => {
-    await expect(
+  it("refuses a zero role key like Rust `RingRoles::check` and takes a shared one", async () => {
+    const initialize = (change: Partial<typeof ROLES>) =>
       initializeRingInstruction({
         ringProgramId: RING,
         payer: PAYER,
@@ -189,8 +186,11 @@ describe("ring setup", () => {
         auditorPublicKey: X25519Keypair.generate().publicKey(),
         kind: "auditOnly",
         roles: { ...ROLES, ...change },
-      }),
-    ).rejects.toMatchObject({ code: "RING_CONFIG_INVALID", details: { reason } });
+      });
+    await expect(
+      initialize({ pauser: address("11111111111111111111111111111111") }),
+    ).rejects.toMatchObject({ code: "RING_CONFIG_INVALID", details: { reason: "ZeroRoleKey" } });
+    await expect(initialize({ pauser: FIXTURE_ROLES.admin })).resolves.toBeDefined();
   });
 
   it("refuses a kind the program does not know", async () => {

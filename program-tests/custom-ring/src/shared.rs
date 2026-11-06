@@ -141,6 +141,14 @@ impl TestEnv {
             &[&self.payer, &self.tree_creation_authority],
             ComputeBudgetConfig::for_instruction_count(syncs.len()),
         )?;
+        // Photon reads a tree only at its start, a deposit into this tree proves its dummies there.
+        PhotonRestart {
+            photon_url: &LocalnetPorts::checkout()?.photon_url(),
+            rpc_url: &self.rpc_url,
+            log_dir: Path::new(&isolated_temp_path("zolana-custom-ring-photon-restart")),
+        }
+        .spawn()
+        .context("restart Photon past the tree creation")?;
         Ok(creation.tree)
     }
 

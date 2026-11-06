@@ -6,7 +6,7 @@
 //! The instruction guarantees:
 //!
 //! 1. Only the deployed binary's upgrade authority creates the ring, at its one canonical PDA.
-//! 2. The auditor key is canonical and of large order, and four distinct nonzero keys hold the roles.
+//! 2. The auditor key is canonical and of large order, and nonzero keys hold the four roles.
 //! 3. A policy ring stores a validated table and its hash, any other ring stores no rule.
 //! 4. The ring pins the tracking registry that storage derives from `ring_auth`, a registry of another creator fails that derivation, and each salted source of the stored table pins that registry.
 //! 5. `RingConfig` names `ring_auth` as its authority, so SPP's ring admin actions pass through the program.
@@ -75,7 +75,7 @@ pub fn process_initialize_ix(
     if !is_auditor_key(&ix.auditor_pubkey) {
         return Err(CustomRingError::InvalidAuditorPubkey.into());
     }
-    // 3. The canonical PDA holds the kind for the ring's life and four distinct nonzero role keys.
+    // 3. The canonical PDA holds the kind for the ring's life and four nonzero role keys.
     ix.roles.check(None)?;
     let bump = Pda {
         program_id,

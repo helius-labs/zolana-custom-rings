@@ -133,7 +133,9 @@ export {
   ownerDebits,
   type DebitInput,
   type DebitOutput,
+  type DebitTransfer,
   type OwnerDebit,
+  type PublicGross,
 } from "../protocol/membership/owner-debits.js";
 export {
   ApprovalTotals,
@@ -172,6 +174,7 @@ export {
 export {
   encodeRingTransactInstructionData,
   type AnonymousRingEddsaCircuit,
+  type RingAuthorityExitCircuit,
   type RingCircuitId,
   type RingTransactInstructionData,
 } from "../protocol/proof/circuit.js";
@@ -208,6 +211,7 @@ export type {
   AuditHead,
   RegisterKeyStatement,
   SignerBinding,
+  StatementOutput,
   TransferBinding,
   TransferFamily,
   TransferRoots,
@@ -287,6 +291,8 @@ export {
 } from "../protocol/indexer/indexer-codec.js";
 export type {
   RingListWriteView,
+  RingMemberRecordView,
+  RingRecordPathView,
   RingRecordWriteView,
   StorageApplyProofInputsRequest,
   StorageApplyProofInputsResponse,
@@ -300,6 +306,7 @@ export type {
   OutputSubjects,
   PinnedPolicy,
   PolicySource,
+  PolicySources,
   RecordLists,
   Rule,
   RuleAlternative,

@@ -80,15 +80,20 @@ fn decode_refuses_values_no_setter_writes() {
 }
 
 #[test]
-fn role_keys_stay_nonzero_and_apart() {
+fn role_keys_stay_nonzero_and_apart_from_the_delegate() {
     assert_eq!(roles().check(None), Ok(()));
     assert_eq!(
         roles().check(Some(&key(2))),
         Err(CustomRingError::DuplicateRoleKey)
     );
     let mut ring = ring(Address::default());
+    ring.rotate_role(RingRole::Pauser, key(1)).unwrap();
+    assert_eq!(ring.check_role(RingRole::Pauser, &key(1)), Ok(()));
+    assert_eq!(ring.check_role(RingRole::Admin, &key(1)), Ok(()));
+    ring.rotate_role(RingRole::Pauser, key(3)).unwrap();
+    ring.delegate = key(8);
     assert_eq!(
-        ring.rotate_role(RingRole::Pauser, key(1)),
+        ring.rotate_role(RingRole::Pauser, key(8)),
         Err(CustomRingError::DuplicateRoleKey)
     );
     assert_eq!(

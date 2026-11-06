@@ -30,7 +30,14 @@
     "invalidLink": true,
     "notDocumented": false
   },
-  "intentionallyNotExported": ["AccountReader", "Base64String", "Hash"],
+  "intentionallyNotExported": [
+    "AccountReader",
+    "Base64String",
+    "Hash",
+    "RecoverySession",
+    "SyncKeys",
+    "WireObject"
+  ],
   "treatWarningsAsErrors": true,
   "githubPages": true,
   "navigationLinks": {

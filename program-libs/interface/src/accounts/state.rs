@@ -246,7 +246,7 @@ impl RingPolicy {
         Ok(())
     }
 
-    /// `ZeroRoleKey` or `DuplicateRoleKey` unless `key` stays apart from the other roles and the delegate.
+    /// `ZeroRoleKey` or `DuplicateRoleKey` unless `key` is nonzero and stays apart from the delegate.
     pub fn rotate_role(&mut self, role: RingRole, key: Address) -> Result<(), CustomRingError> {
         let mut roles = self.roles;
         *roles.key_mut(role) = key;
@@ -526,7 +526,7 @@ impl LiveRoots<'_> {
     }
 }
 
-/// Nonzero keys, pairwise distinct with the delegate.
+/// Nonzero keys apart from the delegate. One key may hold several roles.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Pod, Zeroable, SchemaRead, SchemaWrite)]
 #[repr(C)]
 pub struct RingRoles {
@@ -571,20 +571,17 @@ impl RingRoles {
         }
     }
 
-    /// `ZeroRoleKey` or `DuplicateRoleKey` unless every key and the delegate are nonzero and distinct.
+    /// `ZeroRoleKey` or `DuplicateRoleKey` unless every key is nonzero and the delegate holds no role.
     pub fn check(&self, delegate: Option<&Address>) -> Result<(), CustomRingError> {
-        let keys = || {
-            [&self.admin, &self.policy, &self.pauser, &self.cosign_admin]
-                .into_iter()
-                .chain(delegate)
-        };
-        if keys().any(|key| *key == Address::default()) {
+        let roles = [&self.admin, &self.policy, &self.pauser, &self.cosign_admin];
+        if roles
+            .into_iter()
+            .chain(delegate)
+            .any(|key| *key == Address::default())
+        {
             return Err(CustomRingError::ZeroRoleKey);
         }
-        if keys()
-            .enumerate()
-            .any(|(index, key)| keys().take(index).any(|earlier| earlier == key))
-        {
+        if delegate.is_some_and(|delegate| roles.contains(&delegate)) {
             return Err(CustomRingError::DuplicateRoleKey);
         }
         Ok(())

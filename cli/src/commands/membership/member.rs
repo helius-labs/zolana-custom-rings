@@ -1,6 +1,7 @@
 use anyhow::{Context as _, Result};
 use custom_ring_interface::tracking::TrackingAuthorization;
 use custom_ring_sdk::{CustomRing, Enroll, EnrollPending};
+use solana_signature::Signature;
 use solana_signer::Signer;
 use spr_client::{BlockingIndexer, BlockingRpc};
 use spr_keypair::ShieldedKeypair;
@@ -8,7 +9,7 @@ use spr_transaction::ShieldedKeys;
 use zolana_ring_client::RingIndexer;
 use zolana_ring_keys::ListSaltHolder;
 
-use crate::{line, Context, KeyCommand, Zolana};
+use crate::{line, patiently, wait_for, Context, KeyCommand, Probe, Zolana};
 
 const SEAL_PROMPT: &str = "seal the member key to the ring auditor and enroll it?";
 
@@ -59,19 +60,37 @@ impl KeyEnrollment<'_> {
             };
             line("member key", format_args!("{} {outcome}", member.pubkey()));
         }
-        apply(ctx)
+        // The indexer can serve a registration after an apply read the queue.
+        wait_for("every member key applied", || {
+            for member in self.members {
+                if !applied(ctx.ring, &ctx.zolana, member)? {
+                    if let Some(signature) = apply_pending(ctx)? {
+                        line("enrollments", signature);
+                    }
+                    return Ok(Probe::NotYet);
+                }
+            }
+            Ok(Probe::Ready(()))
+        })
     }
 }
 
 fn apply(ctx: &Context) -> Result<()> {
-    let applied = ctx.block(EnrollPending { ring: ctx.ring }.prove(ctx.ring_client()))?;
-    let Some(instruction) = applied else {
-        line("enrollments", "none pending");
-        return Ok(());
-    };
-    let signature = ctx.send(&[ctx.funded_authority()?], &[instruction])?;
-    line("enrollments", signature);
+    match apply_pending(ctx)? {
+        Some(signature) => line("enrollments", signature),
+        None => line("enrollments", "none pending"),
+    }
     Ok(())
+}
+
+fn apply_pending(ctx: &Context) -> Result<Option<Signature>> {
+    let pending = patiently("the pending enrollments", || {
+        ctx.block(EnrollPending { ring: ctx.ring }.prove(ctx.ring_client()))
+    })?;
+    let Some(instruction) = pending else {
+        return Ok(None);
+    };
+    Ok(Some(ctx.send(&[ctx.funded_authority()?], &[instruction])?))
 }
 
 fn register(ctx: &Context, member: &ShieldedKeypair) -> Result<()> {

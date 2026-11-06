@@ -284,13 +284,13 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
         .transactions;
     assert_eq!(
         audited.len(),
-        1,
-        "exactly one auditor-tagged transaction landed (the tampered one never did)"
+        3,
+        "the two deposits and the transfer landed, the tampered one never did"
     );
     let audited = audited
-        .first()
+        .iter()
+        .find(|audited| audited.tx_signature == signature)
         .ok_or_else(|| anyhow!("audited transaction"))?;
-    assert_eq!(audited.tx_signature, signature, "audited signature");
     assert_eq!(
         audited.tx_viewing_pk, tx_viewing_pk,
         "auditor recovered the transaction's viewing key"

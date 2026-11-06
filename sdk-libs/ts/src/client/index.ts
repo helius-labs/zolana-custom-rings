@@ -13,6 +13,7 @@ export {
   ringProvingKey,
 } from "../protocol/proof/proving-keys.js";
 export type { RingKeyCircuit } from "../protocol/proof/proving-keys.js";
+export type { TransferKeyCircuit } from "../protocol/proof/transfer-shapes.js";
 export { RING_RULE_SLOTS, RING_SOURCE_SLOTS } from "../rpc/prover/types.js";
 export type { PresentRecordOpening } from "../rpc/prover/types.js";
 export type {
@@ -25,6 +26,7 @@ export type {
   EntryOpeningProofInput,
   MergeProofRequest,
   OutputOpeningProofInput,
+  PolicyOwnerEntry,
   PolicyProofInputs,
   PolicySourceProofInput,
   PolicySubjectEntry,
@@ -32,6 +34,8 @@ export type {
   RegisterKeyProofRequest,
   RingProofRequest,
   RingSlotOpening,
+  TrackingPoolProofInput,
+  TrackingWriteProofInput,
   TransferProofInputs,
 } from "../rpc/prover/ring.js";
 export type {

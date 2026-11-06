@@ -72,7 +72,6 @@ spr-keypair = { workspace = true }
 zolana-secret-file = { workspace = true }
 zolana-ring-client = { workspace = true, features = ["rpc", "solana-rpc"] }
 zolana-ring-indexer = { workspace = true }
-zolana-ring-keys = { workspace = true }
 zolana-ring-member-registry = { workspace = true }
 zolana-ring-policy = { workspace = true }
 zolana-ring-transaction = { workspace = true }

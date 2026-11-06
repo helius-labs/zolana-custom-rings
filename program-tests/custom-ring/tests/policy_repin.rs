@@ -139,7 +139,14 @@ fn the_policy_authority_re_pins_the_table_of_a_live_ring() -> Result<()> {
         .at(0)
         .assert_client(&rejection);
 
-    // 5. The grant and the denial combine with AND, neither alone admits.
+    // 5. The grant and the denial combine with AND, neither alone admits. The
+    //    sender's change output needs its own grant.
+    project.write_list(ListWrite {
+        env,
+        list_id: ListId::Approval,
+        member: sender,
+        present: true,
+    })?;
     egress.to(&clean, &utxos[0]).expect_refusal()?;
     project.write_list(ListWrite {
         env,
@@ -248,6 +255,13 @@ fn a_curated_block_list_binds_beside_the_subscribers_own_approval_list() -> Resu
         pinned.registry_for(ListId::Approval),
         Some(ListRegistry::Own)
     );
+    // A deposit and the change output to the sender need the sender's grant.
+    project.write_list(ListWrite {
+        env,
+        list_id: ListId::Approval,
+        member: sender,
+        present: true,
+    })?;
     let utxos = RingNotes {
         ring,
         owner: sender,

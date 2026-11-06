@@ -10,7 +10,7 @@ import { RingError } from "../error.js";
 /** Mirrors Rust `RingMode`, set once at creation and never cleared. */
 export type RingMode = "confidential" | "anonymous";
 
-/** Rust `RingRoles`, nonzero keys pairwise distinct with the delegate. */
+/** Rust `RingRoles`, nonzero keys apart from the delegate. One key may hold several roles. */
 export interface RingRoles {
   /** Rotates every role and appoints the delegate. */
   readonly admin: Address;

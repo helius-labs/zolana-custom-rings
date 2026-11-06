@@ -103,7 +103,7 @@ ring_errors! {
     InvalidStorageRegistry = 8302 => "storage registry account is invalid",
     InvalidAssetLimits = 8390 => "a window cap and its window are not set together",
     ZeroRoleKey = 8471 => "a ring role key is zero",
-    DuplicateRoleKey = 8472 => "one key holds two ring roles",
+    DuplicateRoleKey = 8472 => "the delegate holds a ring role",
     UnboundRegistry = 8480 => "the registry account is not the one the ring binds",
     RootNotServed = 8481 => "the registry serves no root at the revision",
     MissingRegistry = 8482 => "the instruction reads a registry it does not pass",

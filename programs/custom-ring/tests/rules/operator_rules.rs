@@ -147,14 +147,8 @@ fn initialize_refuses_a_tracking_account_off_its_seeds() {
 }
 
 #[test]
-fn initialize_refuses_a_zero_or_shared_role_key() {
+fn initialize_refuses_a_zero_role_key_and_takes_a_shared_one() {
     let mut ring = uninitialized(Setup::AuditOnly);
-    let mut shared = audit_only_config(&ring);
-    shared.roles.policy = shared.roles.admin;
-    refused(
-        upgrade_initialize(&mut ring, shared),
-        CustomRingError::DuplicateRoleKey,
-    );
     let mut zero = audit_only_config(&ring);
     zero.roles.pauser = Address::default();
     refused(
@@ -162,6 +156,15 @@ fn initialize_refuses_a_zero_or_shared_role_key() {
         CustomRingError::ZeroRoleKey,
     );
     assert_eq!(ring.lamports(&policy_pda()), 0);
+    let mut shared = audit_only_config(&ring);
+    shared.roles.policy = shared.roles.admin;
+    shared.roles.pauser = shared.roles.admin;
+    let roles = shared.roles;
+    within_budget(
+        InstructionTag::Initialize,
+        upgrade_initialize(&mut ring, shared),
+    );
+    assert_eq!(ring.read::<RingPolicy>(&policy_pda()).roles, roles);
 }
 
 #[test]
@@ -811,7 +814,7 @@ fn each_role_instruction_refuses_every_other_role_and_the_upgrade_authority() {
 }
 
 #[test]
-fn update_authority_needs_the_new_keys_signature_and_a_free_key() {
+fn update_authority_needs_the_new_keys_signature() {
     let mut ring = Ring::new(Setup::AuditOnly);
     let successor = Keypair::new();
     let admin = ring.holder(RingRole::Admin);
@@ -832,14 +835,6 @@ fn update_authority_needs_the_new_keys_signature_and_a_free_key() {
         ),
         InstructionError::Custom(u32::from(AccountError::InvalidSigner)),
     );
-    let policy = ring.holder(RingRole::Policy);
-    refused(
-        ring.send(
-            handover(&policy.pubkey(), RingRole::Pauser, true),
-            &[&admin, &policy],
-        ),
-        CustomRingError::DuplicateRoleKey,
-    );
     let mut unknown = handover(&successor.pubkey(), RingRole::Pauser, true);
     unknown.data[1] = ROLES.len() as u8;
     refused(
@@ -859,6 +854,15 @@ fn update_authority_needs_the_new_keys_signature_and_a_free_key() {
     );
     let mut rotated = ring.roles.addresses();
     rotated.pauser = successor.pubkey();
+    assert_eq!(ring.read::<RingPolicy>(&policy_pda()).roles, rotated);
+    within_budget(
+        InstructionTag::UpdateAuthority,
+        ring.send(
+            handover(&admin.pubkey(), RingRole::CosignAdmin, true),
+            &[&admin],
+        ),
+    );
+    rotated.cosign_admin = admin.pubkey();
     assert_eq!(ring.read::<RingPolicy>(&policy_pda()).roles, rotated);
 }
 

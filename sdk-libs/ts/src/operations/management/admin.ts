@@ -382,15 +382,11 @@ function checkFits(payer: SignerAccount, instruction: Instruction, computeUnitLi
   });
 }
 
-/** Mirrors Rust `RingRoles::check`, every key nonzero and distinct. */
+/** Mirrors Rust `RingRoles::check`, every key nonzero. One key may hold several roles. */
 function checkRoles(roles: RingRoles): void {
-  const keys = RING_ROLES.map((role) => roles[role]);
-  const reason = keys.some((key) => equalBytes(addressBytes(key, "role"), ZERO_32))
-    ? "ZeroRoleKey"
-    : new Set(keys).size !== keys.length
-      ? "DuplicateRoleKey"
-      : undefined;
-  if (reason !== undefined) throw new RingError("RING_CONFIG_INVALID", { details: { reason } });
+  if (RING_ROLES.some((role) => equalBytes(addressBytes(roles[role], "role"), ZERO_32))) {
+    throw new RingError("RING_CONFIG_INVALID", { details: { reason: "ZeroRoleKey" } });
+  }
 }
 
 /** Mirrors the program's `SetCoSigner` refusals before the authority signs. */
