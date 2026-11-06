@@ -1221,3 +1221,95 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
 
     Ok(())
 }
+
+/// Below the field modulus, the auditor refuses a noncanonical tail.
+const DATA_HASH: [u8; 32] = [7; 32];
+
+/// SPP takes a data hash only under its owner's signature.
+#[test]
+fn the_auditor_rebuilds_a_data_bearing_output_from_its_tail() -> Result<()> {
+    let env = setup()?;
+    let ring_program = custom_ring_program_id()?;
+    let ring = CustomRing::new(ring_program);
+    let auditor = X25519Keypair::new();
+    RegisterRing {
+        ring,
+        payer: &env.payer,
+        auditor_pubkey: auditor.pubkey(),
+        tier: Tier::AuditOnly,
+    }
+    .send(&env.client)?;
+    enroll_actors(&env, ring)?;
+    let sender = &env.sender.keypair;
+    let sender_address = sender.shielded_address()?;
+    let deposit_source = env.funded_keypair()?;
+    env.fund(deposit_source.pubkey(), RING_DEPOSIT_A)?;
+    let RingDepositReceipt { utxo, .. } = env.run(
+        RingDeposit {
+            ring,
+            payer: &deposit_source,
+            recipient: DepositRecipient::Confidential(sender_address),
+            tree: env.tree,
+            asset: DepositAsset::Sol,
+            amount: RING_DEPOSIT_A,
+            cosigner: None,
+            list_salt: None,
+        }
+        .send_with_fee_payer(env.client.ring_client(), sender),
+    )?;
+    let input = indexed_note(utxo, sender, &env, env.tree)?;
+    let mut prepared =
+        ConfidentialTransaction::new_with_ring(vec![input], sender.pubkey(), ring_program)?;
+    prepared.add_output_utxo(
+        SppProofOutputUtxo::new(Mint::SOL, RING_TRANSFER_AMOUNT, sender_address)?
+            .with_ring_program_id(ring_program)
+            .with_utxo_data(b"app".to_vec(), DATA_HASH),
+    )?;
+    let proven = env.run(
+        CustomRingTransfer::new(CustomRingTransferInput {
+            ring,
+            sender,
+            nullifier_key: Some(&sender.nullifier_key),
+            transaction: prepared,
+        })
+        .prove(env.client.ring_client()),
+    )?;
+    let slot = proven
+        .outputs
+        .iter()
+        .position(|output| output.data_hash == Some(DATA_HASH))
+        .context("the data-bearing output")?;
+    let slot = u32::try_from(slot)?;
+    let instruction = proven.instruction()?;
+    ensure!(
+        frame(&instruction, RingRail::Confidential)?.has_data,
+        "the frame carries no tails"
+    );
+    let signature = land(&env, instruction, sender, &[])?;
+
+    let audited = AuditLookup {
+        scan: RingScan::new(ring_program, auditor.pubkey()),
+        auditor: &auditor,
+        signature,
+    }
+    .run(&env)?;
+    ensure!(
+        audited.payload_errors.is_empty(),
+        "{:?}",
+        audited.payload_errors
+    );
+    let output = audited
+        .outputs
+        .iter()
+        .find(|output| output.slot_index == slot)
+        .context("the auditor opens the data-bearing slot")?;
+    let utxo = output.opening.utxo().context("a real output")?;
+    assert_eq!(utxo.data_hash, DATA_HASH);
+    assert_eq!(utxo.amount, RING_TRANSFER_AMOUNT);
+    assert_eq!(
+        KnownUtxo::opened(*utxo, output.context.tree_id).commitment(Some(ring_program))?,
+        output.context.hash,
+        "the record and tail rebuild the published commitment"
+    );
+    Ok(())
+}

@@ -196,8 +196,6 @@ export interface TransferProofInputs
   /** The distinct live input owners ascending, zero rows last, at the key's owner rows. */
   readonly rows: readonly Bytes32[];
   readonly privateTxHash: Bytes32;
-  /** SPP's blinding of the hash. */
-  readonly privateTxBlinding: Bytes32;
 }
 
 /** Go `TransferParams`, the statement's rail bits pick the rail. */
@@ -512,7 +510,6 @@ function transferJson(request: TransferProofRequest): Json {
       : { signerDataCounts: rawJson(request.signerDataCounts.toString()) }),
     rows: fields(request.rows, circuit.owners, "rows"),
     privateTxHash: field(request.privateTxHash, "privateTxHash"),
-    privateTxBlinding: field(request.privateTxBlinding, "privateTxBlinding"),
     ...trackingJson(request, shape),
     ...policyJson(request, shape),
   };

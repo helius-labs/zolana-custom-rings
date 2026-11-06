@@ -396,6 +396,7 @@ export {
   recoverTransactionViewingKey,
 } from "../operations/audit/audit.js";
 export type {
+  AuditedEntryInput,
   AuditedInput,
   AuditedInputOpening,
   AuditedRingOutput,
@@ -404,7 +405,6 @@ export type {
   AuditedUtxo,
   CreatedRingUtxo,
   InputOpening,
-  InputRing,
   KnownNote,
   KnownUtxo,
   KnownUtxoIndexOptions,

@@ -6,6 +6,8 @@ The custom ring surface of `@heliuslabs/zolana` 0.4.0-alpha moves into `@heliusl
 
 Breaking
 
+- Zero-key transfer recipients must be absent at the selected tracking root. An enrolled recipient must receive under its registered nullifier key.
+
 - `DelegateTransfer` with an `exit` output fails before any proof with `RING_EXIT_PROOF_UNAVAILABLE` as the code or the cause code → pay delegate moves inside the ring or out through a public `withdrawal` until a release proves the exit.
 - The pinned peer is `@heliuslabs/spr` 0.9.0-alpha, the package `@heliuslabs/zolana` became → install `@heliuslabs/spr` in place of `@heliuslabs/zolana`, import core names from its entry points and pass `createCustomRingClient` an `SprClientConfig` without `provingKeys`.
 - `@heliuslabs/zolana/ring` and the ring, auditor and key registry exports of the `@heliuslabs/zolana` entry points move here → import them from `@heliuslabs/zolana-custom-rings` or its `client`, `keypair` and `advanced` entry points.

@@ -21,8 +21,9 @@
 //  4. An opening record is a record followed by the secret that rebuilds its blinding.
 //  5. R counts only notes, and address bits retain the absolute positions of the constrained input domains.
 //  6. A key with no entry capacity refuses a default ring note.
-//  7. Each default ring note opens at its input position on an entry key, with its default bit set.
-//     Address and dummy positions have zero default bits and zero entry openings.
+//  7. Each default ring note has an entry record at its input position on an entry key, with its default
+//     bit set. The record holds the note's owner key, nullifier key, amount and mint, and the commitment
+//     the input section opened. Address and dummy positions have zero default bits and zero records.
 //
 // Read after audit/audit.go, audit/layout.go, shared/utxo.go, transfer/input.go.
 // Read before audit/signer_data.go, merge.go.
@@ -148,7 +149,8 @@ type EntryWires struct {
 //
 // The auditor links a spent ring note by reconstructing its nullifier from an earlier opening and
 // the owner's escrowed secret. No check here reconstructs that nullifier. An unknown note position
-// stays unresolved. A default ring note can lack an earlier ring record, so entry evidence opens it in full.
+// stays unresolved. A default ring note can lack an earlier ring record, so its entry record names the
+// note beside its spent commitment, never its blinding.
 type SpentInputs struct {
 	Slots []shared.Output
 	// The published n, R may sit below it.
@@ -181,7 +183,7 @@ func (s SpentInputs) evidence(api frontend.API, rc frontend.Rangechecker, ranges
 		ringgadget.UintBytesBE(api, realInputs, RealInputCountLen),
 		ringgadget.UintBytesBE(api, weightedBits(api, addresses), AddressInputBitsLen),
 	)
-	// 2. A default ring note can lack an earlier ring record, so the entry key must supply its opening.
+	// 2. A default ring note can lack an earlier ring record, so the entry key must supply its record.
 	if !ranges.Entry {
 		for _, slot := range s.Slots {
 			api.AssertIsEqual(slot.Exit, 0)
@@ -192,7 +194,7 @@ func (s SpentInputs) evidence(api frontend.API, rc frontend.Rangechecker, ranges
 		panic("audit: an entry key needs one evidence wire per input")
 	}
 	// 3. Exit is a note selector, so default bits cannot select addresses or dummies.
-	// Each opening keeps its input position and is zero unless the same default bit is set.
+	// Each record keeps its input position and is zero unless the same default bit is set.
 	head = slices.Concat(head, ringgadget.UintBytesBE(api, weightedBits(api, defaults), DefaultInputBitsLen))
 	entries := make([][]frontend.Variable, len(s.Slots))
 	for i, slot := range s.Slots {
@@ -201,7 +203,7 @@ func (s SpentInputs) evidence(api frontend.API, rc frontend.Rangechecker, ranges
 	return evidence{head: head, entries: entries, realInputs: realInputs}
 }
 
-// encode mirrors EntryInput::extend in program-libs/interface/src/proof/audit_stream.rs, zero off a default-ring note.
+// encode mirrors EntryRecord::extend in program-libs/interface/src/proof/audit_stream.rs, zero off a default-ring note.
 func (e EntryWires) encode(api frontend.API, rc frontend.Rangechecker, slot shared.Output) []frontend.Variable {
 	live := slot.Exit
 	// Per input owner and key, mixed owners read apart with no nullifier secret disclosed.
@@ -210,10 +212,11 @@ func (e EntryWires) encode(api frontend.API, rc frontend.Rangechecker, slot shar
 		bytes := ringgadget.FieldToBytesBEWith(api, rc, api.Mul(live, value))
 		return bytes[:]
 	}
+	// slot.Hash is the commitment private_tx_hash chains at the input position, every other field binds to its preimage.
 	return slices.Concat(
 		raw.ownerKey, field(slot.NullifierPk),
 		ringgadget.UintBytesBE(api, api.Mul(live, slot.Amount), amountLen),
-		raw.mint, field(slot.Blinding), field(slot.DataHash), field(slot.RingDataHash),
+		raw.mint, field(slot.Hash),
 	)
 }
 

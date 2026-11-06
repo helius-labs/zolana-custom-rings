@@ -19,11 +19,11 @@ A statement element enforces nothing alone. It fixes a value, and a constraint o
 2. The circuit opens each output through `audit.OpenSlots` and each input through `OpenInputs`, both through `shared.UtxoWires.Open`. Audit, policy and the tracking checks read those wires, so no two sections describe different notes.
 3. The circuit binds its private nullifiers to `input_nullifier_chain`, which the program hashes from the nullifiers it forwards to SPP. It derives the address chain from those nullifiers and the address selectors. It then reopens `private_tx_hash` over the opened inputs, the opened outputs, the address chain and the blinding. SPP's proof binds the same hash to its nullifiers and outputs, so the opened slots are the slots SPP settles.
 4. The program hands SPP the output hashes that `output_chain` covers. SPP zero-fills past `m`, and the circuit multiplies each cell past `m` by zero. Both sides read one list.
-5. SPP derives every output blinding and `private_tx_blinding` from one seed. The circuit holds each published blinding to the seed the sealed key derives. Slot 0 is always published, so the sealed key fixes SPP's seed.
+5. SPP derives every output blinding and `private_tx_blinding` from one seed. The circuit derives `private_tx_blinding` as `TXPB(n0, CRBS(tx_viewing_sk, salt))` from the sealed key and reopens `private_tx_hash` over it, so the sealed key fixes SPP's seed. SPP then holds each published blinding to that seed, a dummy's included.
 6. The program reads each registry root live from the account the ring binds. A record opening under that root therefore carries the write rules of the Storage program and of its apply circuits.
 7. SPP's external data hash covers each frame's tags, bodies and messages. It binds the submitted bytes and proves nothing about what they contain.
 
-No Go test composes the ring proof with SPP's proof. Steps 3, 4, 5 and 7 are true across the program binding.
+No Go test composes the ring proof with SPP's full proof. Steps 3, 4 and 7 are true across the program binding. Step 5 is tested against SPP's own blinding and `private_tx_hash` checks in `blinding_composition_test.go`.
 
 ## Predicate ledger
 
@@ -80,7 +80,7 @@ Tests sit under `prover/circuits/transfer` unless the entry names another path.
 ### Every live ring output reads its owner's row
 
 - The circuit holds a nonzero key to its owner's enrolled key under the tracking root, in `AssertOutputOwners`. A literal zero is refused.
-- A zero-key output to an enrolled owner passes only while no salted payee read is active. Under a salted payee read a zero key needs the payee's row absent.
+- A zero-key output requires owner absence at the accepted tracking root. A retained root can prove absence during the enrollment grace period.
 - An exit reads `Ring = 0`, so it stands outside the rule.
 - A present row opens by its leaf, and an absent owner by the leaf that brackets it, in `prover/circuits/registry/tracking.go`.
 - The tests are `TestOutputPredicateOnEveryRail`, and `TestTrackingOpeningRefusals` and `TestTrackingOpeningResolvesPresentAndAbsentOwners` in `prover/circuits/registry`.
@@ -120,9 +120,11 @@ Tests sit under `prover/circuits/transfer` unless the entry names another path.
 
 ### Every published blinding derives from the sealed key
 
-- The circuit holds each published slot's blinding to the sealed key's derivation in `AssertBlinding`, a hidden dummy included. Omission removes a suffix, so no index moves.
+- The circuit derives `private_tx_blinding` from the sealed key in `OpenEnvelope` and binds it in `bindTransaction`. SPP holds each published slot's blinding to the same seed, a hidden dummy included. Omission removes a suffix, so no index moves.
+- The ring proof solves with a changed output blinding, and SPP's derivation refuses it.
 - The circuit holds `tx_viewing_sk` to its clamped encoding, so one byte string names the key the auditor recovers.
 - The circuit proves no freshness of that key or the salt. A resend repeats the key, and the salt gives it a different keystream.
+- The tests are `TestSppSeedComposesOnEveryRail`, `TestRingRefusesAnotherSeed`, `TestRingRefusesAnotherTransactionBlinding` and `TestSppRefusesAChangedOutputBlinding`.
 - The tests in `prover/circuits/audit` are `TestSealedKeyStaysClamped` and `TestResendUnderAnotherSaltSealsAnotherStream`.
 
 ### Compact padding removes a suffix and nothing else
@@ -141,13 +143,13 @@ Tests sit under `prover/circuits/transfer` unless the entry names another path.
 - The auditor rebuilds each commitment and accepts only an exact match with the published hash. That check is the reader's, and the record proof makes it complete.
 - The tests in `prover/circuits/audit` are `TestStreamVector`, `TestStreamRangesAreTheSharedVector`, `TestEveryRecordFieldIsSealed`, `TestKindFollowsTheSlot`, `TestReaderRebuildsEverySlot`, `TestZeroAndEnrolledKeysReadApart` and `TestRecordAtAnotherSlotFailsTheReader`.
 
-### The envelope counts the spent notes and opens entry inputs
+### The envelope counts the spent notes and names entry inputs
 
 - The circuit seals `R` as the count of notes and `A` as the address bitmap, both from the slot classes. It binds `no_spend` in the statement as `R == 0`.
 - The circuit refuses a default-ring input on a key with no entry capacity, since no evidence would open it.
-- On an entry key the circuit derives the default bits from the slots, and seals each default-ring input's opening per input.
+- On an entry key the circuit derives the default bits from the slots, and seals each default-ring input's record per input. The record names the owner key, nullifier key, amount, mint and the spent commitment the input section opened.
 - No constraint binds a nullifier to an earlier record. The auditor's link is a reader check.
-- The tests in `prover/circuits/audit` are `TestRealInputCountIsSealed`, `TestInputMapsBindAbsolutePositions`, `TestInputMapRefusesWitnessClassChangeWithSealedEvidence`, `TestAddressOnlyInputsSetNoSpend`, `TestNoSpendEqualsAZeroCount`, `TestDefaultInputNeedsEntryCapacity`, `TestDefaultBitsAndEvidenceFollowTheSlots`, `TestEntryEvidenceServesMixedOwners` and `TestReaderRebuildsADefaultInput`.
+- The tests in `prover/circuits/audit` are `TestRealInputCountIsSealed`, `TestInputMapsBindAbsolutePositions`, `TestInputMapRefusesWitnessClassChangeWithSealedEvidence`, `TestAddressOnlyInputsSetNoSpend`, `TestNoSpendEqualsAZeroCount`, `TestDefaultInputNeedsEntryCapacity`, `TestDefaultBitsAndRecordsFollowTheSlots`, `TestEntryRecordsServeMixedOwners` and `TestReaderReadsADefaultInput`.
 
 ### Each owner's charged outflow stays within the asset's limits
 

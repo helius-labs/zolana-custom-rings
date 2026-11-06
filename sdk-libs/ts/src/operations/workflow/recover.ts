@@ -245,10 +245,7 @@ function applyRows(
   for (const transaction of audited) {
     for (const { nullifier, opening } of transaction.inputs)
       // Rust `InputOpening::Real`, a batch opening never hides a spend, the result stays the same at any page size.
-      if (
-        opening.kind === "unresolvedReal" ||
-        (opening.kind === "opened" && opening.ring?.kind === "ring")
-      )
+      if (opening.kind === "unresolvedReal" || opening.kind === "opened")
         found.realInputs.push(nullifier);
     // An unopened slot could hide a source UTXO.
     const [unopened] = transaction.payloadErrors;

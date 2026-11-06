@@ -369,13 +369,6 @@ func TestOutputPredicateOnEveryRail(t *testing.T) {
 	})
 	// The delegate rails screen nothing and read no salted payee.
 	t.Run("a zero key under a row", func(t *testing.T) {
-		check := func(t *testing.T, salted, delegate bool, circuit *transfer.TransferCircuit) {
-			if salted && !delegate {
-				refused(t, circuit, frame)
-				return
-			}
-			requireSolved(t, circuit)
-		}
 		for _, salted := range []bool{false, true} {
 			mutate := func(w ringtransfer.World) ringtransfer.World {
 				w = zeroToEnrolled(w)
@@ -387,19 +380,30 @@ func TestOutputPredicateOnEveryRail(t *testing.T) {
 			for _, rail := range []ringtransfer.Rail{ringtransfer.Signer, ringtransfer.InProof, ringtransfer.Delegate} {
 				w := onRail(confidential2, rail)
 				w.World = mutate(w.World)
-				check(t, salted, rail == ringtransfer.Delegate, w.Build(t).Circuit)
+				refused(t, w.Build(t).Circuit, frame)
 			}
 			for _, rail := range []ringtransfer.AnonymousRail{ringtransfer.HiddenSender, ringtransfer.PublicOwners, ringtransfer.AnonymousDelegate} {
 				w := onAnonymous(anonymous2, rail)
 				w.World = mutate(w.World)
-				check(t, salted, rail == ringtransfer.AnonymousDelegate, w.Build(t).Circuit)
+				refused(t, w.Build(t).Circuit, frame)
 			}
 		}
 	})
 	t.Run("a zero key to an owner with no row", func(t *testing.T) {
-		w := ringtransfer.Signed(confidential2)
-		w.Outputs = map[int]func(*ringaudit.Slot){1: func(slot *ringaudit.Slot) { slot.Utxo.NullifierPk = shared.ZeroNullifierPk }}
-		requireSolved(t, w.Build(t).Circuit)
+		zeroToAbsent := func(w ringtransfer.World) ringtransfer.World {
+			w.Outputs = map[int]func(*ringaudit.Slot){1: func(slot *ringaudit.Slot) { slot.Utxo.NullifierPk = shared.ZeroNullifierPk }}
+			return w
+		}
+		for _, rail := range []ringtransfer.Rail{ringtransfer.Signer, ringtransfer.InProof, ringtransfer.Delegate} {
+			w := onRail(confidential2, rail)
+			w.World = zeroToAbsent(w.World)
+			requireSolved(t, w.Build(t).Circuit)
+		}
+		for _, rail := range []ringtransfer.AnonymousRail{ringtransfer.HiddenSender, ringtransfer.PublicOwners, ringtransfer.AnonymousDelegate} {
+			w := onAnonymous(anonymous2, rail)
+			w.World = zeroToAbsent(w.World)
+			requireSolved(t, w.Build(t).Circuit)
+		}
 	})
 	t.Run("an exit to an owner with no row", func(t *testing.T) {
 		w := ringtransfer.Signed(transfer.Shape{Inputs: 24, Outputs: 4, Withdrawals: 4, Owners: 4})

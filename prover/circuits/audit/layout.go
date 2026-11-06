@@ -81,9 +81,9 @@ const (
 	// RecordLen is the bytes a transfer frame carries, mirrored by AUDIT_RECORD_LEN.
 	RecordLen = kindLen + amountLen + 3*fieldLen
 	TailLen   = 2 * fieldLen
-	// EntryInputLen mirrors ENTRY_INPUT_LEN.
-	EntryInputLen = amountLen + 6*fieldLen
-	RecordBlocks  = (RecordLen + streamBlockLen - 1) / streamBlockLen
+	// EntryRecordLen mirrors ENTRY_RECORD_LEN.
+	EntryRecordLen = amountLen + 4*fieldLen
+	RecordBlocks   = (RecordLen + streamBlockLen - 1) / streamBlockLen
 	// RecordStride mirrors RECORD_STRIDE, slot i keeps its counter and a transfer frame omits the padding.
 	RecordStride       = RecordBlocks * streamBlockLen
 	TailBlocks         = TailLen / streamBlockLen
@@ -117,7 +117,7 @@ func (r StreamRanges) EnvelopeHeadLen() int {
 
 func (r StreamRanges) entryLen() int {
 	if r.Entry {
-		return EntryInputLen
+		return EntryRecordLen
 	}
 	return 0
 }

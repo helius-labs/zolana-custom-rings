@@ -963,11 +963,7 @@ function openStream(
     if (
       envelope.evidence.kind === "entry" &&
       !envelope.evidence.inputs.every(
-        (input) =>
-          isCanonicalField(input.nullifierPk) &&
-          isCanonicalField(input.blinding) &&
-          isCanonicalField(input.dataHash) &&
-          isCanonicalField(input.ringDataHash),
+        (input) => isCanonicalField(input.nullifierPk) && isCanonicalField(input.inputCommitment),
       )
     )
       throw mismatch("Data");

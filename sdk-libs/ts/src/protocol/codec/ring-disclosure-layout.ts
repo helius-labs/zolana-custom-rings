@@ -56,8 +56,8 @@ function recordBlocks(key: AuditKey): number {
 }
 /** `be32(data_hash) ‖ be32(ring_data_hash)`. */
 export const DATA_TAIL_LEN = 64;
-/** `owner_key ‖ be32(nullifier_pk) ‖ u64be(amount) ‖ mint ‖ be32(blinding) ‖ be32(data_hash) ‖ be32(ring_data_hash)`. */
-export const ENTRY_INPUT_LEN = 200;
+/** `owner_key ‖ be32(nullifier_pk) ‖ u64be(amount) ‖ mint ‖ be32(input_commitment)`. */
+export const ENTRY_RECORD_LEN = 136;
 /** `0x04 ‖ eph_u` ahead of the auditor ciphertexts. */
 export const TAGGED_KEY_LEN = 33;
 
@@ -154,7 +154,7 @@ function headLen(key: AuditKey): number {
 }
 
 function entryLen(key: AuditKey): number {
-  return key.entry ? ENTRY_INPUT_LEN : 0;
+  return key.entry ? ENTRY_RECORD_LEN : 0;
 }
 
 /** `E`, the same at every published input count, no record's counter moves. */

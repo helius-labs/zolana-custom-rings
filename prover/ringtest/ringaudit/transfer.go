@@ -17,7 +17,9 @@ type Transfer struct {
 	FirstNullifier *big.Int
 	RingProgramID  *big.Int
 	Salt           [16]byte
-	SeedOut        *big.Int
+	// Seed is CRBS(tx_viewing_sk, salt), SPP's BlindingSeed.
+	Seed    *big.Int
+	SeedOut *big.Int
 }
 
 // newTransfer is the fixture transfer of the default keys in the ring of program address 0x90..90.
@@ -34,13 +36,21 @@ func newTransfer(t testing.TB) Transfer {
 	return tr.WithKeys(t, DefaultKeys(t))
 }
 
-// WithKeys rederives SeedOut, the CRBS blinding seed follows tx_viewing_sk.
+// WithKeys rederives Seed and SeedOut, the CRBS blinding seed follows tx_viewing_sk.
 func (tr Transfer) WithKeys(t testing.TB, keys Keys) Transfer {
 	t.Helper()
 	tr.Keys = keys
-	seedOut, err := protocol.OutputBlindingSeed(tr.FirstNullifier, ringprotocol.BlindingSeed(t, tr.Keys.txViewingSk, tr.Salt))
+	tr.Seed = ringprotocol.BlindingSeed(t, tr.Keys.txViewingSk, tr.Salt)
+	seedOut, err := protocol.OutputBlindingSeed(tr.FirstNullifier, tr.Seed)
 	tr.SeedOut = spptest.MustHash(t, seedOut, err)
 	return tr
+}
+
+// PrivateTxBlinding is the TXPB blinding SPP derives from Seed, the last preimage element of private_tx_hash.
+func (tr Transfer) PrivateTxBlinding(t testing.TB) *big.Int {
+	t.Helper()
+	blinding, err := protocol.PrivateTxBlinding(tr.FirstNullifier, tr.Seed)
+	return spptest.MustHash(t, blinding, err)
 }
 
 // WithUnrelatedKey seals under a key whose seed differs from the one the slots were built over.

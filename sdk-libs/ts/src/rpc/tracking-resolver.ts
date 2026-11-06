@@ -38,7 +38,7 @@ export type ResolvedRecipient =
       viewingPublicKey: X25519PublicKey;
       listTag: Bytes32;
     }>
-  /** Named under the zero key, an enrolled owner takes its authorization's key as above. The resolver runs no salted payee read, the payment path refuses an enrolled owner under one. */
+  /** Zero key resolution defers enrollment checks to payment validation. */
   | Readonly<{
       kind: "zeroKey";
       root: TrackingRoot;
@@ -46,7 +46,7 @@ export type ResolvedRecipient =
     }>;
 
 /**
- * Refuses what the output rule refuses outside a salted payee read.
+ * Zero key resolution defers enrollment checks to payment validation.
  *
  * Reads the authorization at `confirmed`. A rotation that lands after the read leaves the payment
  * sealed to the key read, no program check reads a viewing key.

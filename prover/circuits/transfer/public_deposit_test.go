@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringtransfer"
@@ -57,6 +58,27 @@ func TestPublicDepositIntoTheRing(t *testing.T) {
 	t.Run("a recipient key with no row", func(t *testing.T) {
 		b := signerDeposit(t, func(w *ringtransfer.World) { w.Unenrolled = []*big.Int{recipient} })
 		refused(t, b.Circuit, "transfer.AssertOutputOwners")
+	})
+	t.Run("a zero key recipient must be absent", func(t *testing.T) {
+		for _, enrolled := range []bool{false, true} {
+			b := signerDeposit(t, func(w *ringtransfer.World) {
+				*w = plain(*w)
+				w.Outputs = map[int]func(*ringaudit.Slot){0: func(slot *ringaudit.Slot) {
+					slot.Utxo.NullifierPk = shared.ZeroNullifierPk
+				}}
+				if enrolled {
+					w.Outputs[1] = func(slot *ringaudit.Slot) {
+						slot.OwnerKey = ringaudit.Recipient(t, 0, 0, 1).OwnerKey
+						slot.Utxo.OwnerPkHash = recipient
+					}
+				}
+			})
+			if enrolled {
+				refused(t, b.Circuit, "transfer.AssertOutputOwners")
+			} else {
+				requireSolved(t, b.Circuit)
+			}
+		}
 	})
 	t.Run("a recipient on a salted block list", func(t *testing.T) {
 		b := signerDeposit(t, func(w *ringtransfer.World) { w.SaltedBlock = []*big.Int{recipient} })

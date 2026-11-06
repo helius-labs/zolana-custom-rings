@@ -13,6 +13,8 @@
 // audit/signer_data.go, policy/policy.go. Then prover/ring/ring.go, outside Define.
 //
 // Both proofs reopen private_tx_hash over the note, output and address chains and the transaction blinding.
+// The ring derives that blinding from the sealed key, and SPP derives it and every output blinding from one
+// seed, so the shared hash holds SPP's output blindings to the key the auditor reads.
 // The program also binds output_chain and input_nullifier_chain from the exact frame it forwards to SPP.
 // The output chain covers published dummies. The nullifier chain fixes absolute address positions through
 // the selected address subsequence, SPP's distinct nullifiers and the dummy suffix enforced by both proofs.
@@ -36,8 +38,8 @@
 // Properties, the statement proves the following on the rail its bits select.
 //  1. Every published output and spent note opens to the commitment SPP publishes or spends, through
 //     the output chain and private_tx_hash, the same wires serve every section below.
-//  2. The auditor stream seals each live output opening, each default-ring note opening, the note count
-//     and the address bitmap under the auditor key. A ring note opens through the record that created it.
+//  2. The auditor stream seals each live output opening, each default-ring note's entry record, the note
+//     count and the address bitmap under the auditor key. A ring note opens through the record that created it.
 //  3. Every input note belongs to the bound ring, or to the default ring on an entry key. Its owner
 //     is in the published signer run, the hidden owner or the in-proof sender, the delegate rail excepted.
 //  4. A hidden owner owns the note at input zero, stays out of the run and differs from every public party.
@@ -131,7 +133,6 @@ type Sections struct {
 // transactionBinding binds the audited slots to SPP through the private transaction hash and the published nullifier digest.
 type transactionBinding struct {
 	PrivateTxHash       frontend.Variable
-	PrivateTxBlinding   frontend.Variable
 	InputNullifierChain frontend.Variable
 }
 
@@ -188,12 +189,12 @@ func (c *TransferCircuit) Define(api frontend.API) error {
 	// 1. One rail, every later predicate reads its bits.
 	c.assertRail(api)
 	rc := rangecheck.New(api)
-	// 2. The output slots open and the sealed key derives each published blinding. Every later section reads these wires, so what it proves is about the notes step 7 ties to SPP.
+	// 2. The output slots open and the sealed key derives the transaction blinding. Every later section reads these wires, so what it proves is about the notes step 7 ties to SPP.
 	w := audit.AuditWires{FirstNullifier: c.FirstNullifier, RingProgramID: c.RingProgramID, TxViewingSk: c.TxViewingSk, AuditorPk: c.AuditorPk, Salt: c.Salt, Layout: c.Layout}
 	stream := c.Shape.Stream()
 	hasData := stream.DecodeLayout(api, c.Layout)
 	envelope := w.OpenEnvelope(api, rc)
-	opened := stream.OpenSlots(api, rc, w, envelope, hasData, c.Outputs, c.OutputCount)
+	opened := stream.OpenSlots(api, rc, hasData, c.Outputs, c.OutputCount)
 	// 3. The input classes and private nullifiers bind to the exact published order. FirstNullifier ties
 	// the audit derivation to the same list, and only notes incur the ring membership check.
 	section := OpenInputs(api, c.Inputs, c.InputCount, c.InputNullifiers)
@@ -219,14 +220,15 @@ func (c *TransferCircuit) Define(api frontend.API) error {
 	audit.SignerDataCounts{Packed: c.SignerDataCounts, Members: signers.Members, Active: signers.Count.Active, Slots: opened.Slots}.Assert(api)
 	// 7. PrivateTxHash binds the opened notes and derived address subsequence to SPP. Together with
 	// step 3 and the dummy suffix, the chains fix the input classes at their absolute published positions.
-	c.bindTransaction(api, section, opened.Slots)
+	// The derived blinding fixes SPP's seed to the sealed key, and SPP's seed fixes every output blinding.
+	c.bindTransaction(api, section, opened.Slots, envelope.PrivateTxBlinding)
 	c.assertBypass(api, c.Delegate)
 	// 8. The policy screens the bound slots. The rows hold every input note owner by step 5, so no owner's funds escape the sender rules or the attribution.
 	// A ring with an own policy registry reads its root on every rail but the delegate's, no prover bit clears the thresholds.
 	g := policy.Rail{ThresholdsActive: ringgadget.IsNonZero(api, c.OwnRoot), Delegate: c.Delegate}.Gates(api, c.PolicyHash)
 	screening := c.Screen(api, rc, g, policy.Spend{Senders: rows.Members, Inputs: section.Slots, Tracking: tracking}, opened.Slots)
-	// Output keys read the same root, a zero key proves absence only under the salted payee read the screen derived.
-	AssertOutputOwners(api, tracking, opened.Slots, c.OutputEntries, screening.SaltedPayees)
+	// Zero key recipients must be absent at the accepted tracking root, including on delegate transfers.
+	AssertOutputOwners(api, tracking, opened.Slots, c.OutputEntries)
 	// The mask is equal and never at least. A short mask would drop a demanded co-signer, the program acts on these bits and derives no threshold.
 	api.AssertIsEqual(c.ApprovalMask, screening.ApprovalMask)
 	screening.AssertApprovalTotals(api, c.ApprovalTotals, c.ApprovalBlinder)
@@ -275,10 +277,10 @@ func (c *TransferCircuit) hiddenOwner(api frontend.API, section InputSection, si
 // bindTransaction follows SPP's Poseidon order of note chain, output chain, address chain and blinding.
 // AddressChain derives from the statement-bound nullifiers. SPP's uniqueness and the shared dummy suffix
 // bind the merged note and address order even though each NonZeroHashChain removes unselected slots.
-func (b transactionBinding) bindTransaction(api frontend.API, inputs InputSection, outputs []shared.Output) {
+func (b transactionBinding) bindTransaction(api frontend.API, inputs InputSection, outputs []shared.Output, blinding frontend.Variable) {
 	inputChain := gadget.NonZeroHashChain(api, inputs.Hashes)
 	outputChain := gadget.NonZeroHashChain(api, shared.UtxoHashes(api, outputs))
-	api.AssertIsEqual(b.PrivateTxHash, gadget.PoseidonHash(api, []frontend.Variable{inputChain, outputChain, inputs.AddressChain, b.PrivateTxBlinding}))
+	api.AssertIsEqual(b.PrivateTxHash, gadget.PoseidonHash(api, []frontend.Variable{inputChain, outputChain, inputs.AddressChain, blinding}))
 }
 
 // assertBypass holds the authority rail's statement off every policy registry, a curator's update then cannot fail a delegate's proof.

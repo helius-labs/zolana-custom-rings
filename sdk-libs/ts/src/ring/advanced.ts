@@ -27,7 +27,7 @@ export {
   SINGLE_ASSET_PAYOUT_INPUTS,
   SINGLE_ASSET_PAYOUT_OUTPUTS,
   DISCLOSURE_CHUNK_BYTES,
-  ENTRY_INPUT_LEN,
+  ENTRY_RECORD_LEN,
   ENVELOPE_HEAD_LEN,
   ENVELOPE_KEY_LEN,
   MAX_INPUT_CLASS,
@@ -61,7 +61,7 @@ export type {
 } from "../protocol/codec/ring-disclosure-layout.js";
 export {
   DUMMY_RECORD,
-  EMPTY_ENTRY_INPUT,
+  EMPTY_ENTRY_RECORD,
   EMPTY_TAIL,
   InputClass,
   InputMap,
@@ -77,14 +77,14 @@ export {
   encodeDataTail,
   encodeOpeningRecord,
   envelopeInputMap,
-  isEmptyEntryInput,
+  isEmptyEntryRecord,
 } from "../protocol/codec/audit-stream.js";
 export type {
   AuditEnvelope,
   AuditEvidence,
   AuditRecord,
   DataTail,
-  EntryInput,
+  EntryRecord,
   InputClassification,
   OpeningRecord,
 } from "../protocol/codec/audit-stream.js";

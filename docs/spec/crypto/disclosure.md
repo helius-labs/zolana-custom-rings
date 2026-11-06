@@ -8,7 +8,7 @@ Every published slot of a transfer whose proof verifies opens for the auditor fr
 
 - A ring output, an exit and a dummy each have one record. An exit's record opens the created default-ring note, its owner key included.
 - A spent ring note has no record. The auditor links its nullifier from an opening it already holds and the owner's enrolled secret. A note the auditor never opened stays unlinked until its opening arrives, and it withholds no output slot.
-- A spent default-ring note opens in full in the envelope of an entry key, and no secret is disclosed.
+- A spent default-ring note has an entry record in the envelope of an entry key. It names the owner, nullifier key, amount, mint and spent commitment, and discloses no blinding, data hash or secret.
 - A wrong recipient body leaves the auditor's record unchanged. Ring RPC serves the owner its opening from that record, see [auditor fallback](../../design/audit-and-recovery.md#auditor-fallback).
 
 ## Discovery
@@ -45,18 +45,18 @@ The stream has one key, one nonce and one `CTREncrypt` call in the circuit over 
 
 | Region | Start counter | Maximum blocks | Transmitted bytes |
 |---|---|---|---|
-| Envelope | `2` | `E` | `41`, or `49 + 200 n` on an entry key |
+| Envelope | `2` | `E` | `41`, or `49 + 136 n` on an entry key |
 | Record of slot `i` | `R0 + 7 i`, `R0 = 2 + E` | `7` | `105` for `i < m` |
 | Tail of slot `i` | `T0 + 4 i`, `T0 = R0 + 7 N` | `4` | `64` for `i < m` under `has_data` |
 
-`E = ceil(41 / 16)` on a key without entry capacity, and `E = ceil((49 + 200 c) / 16)` on an entry key of input class `c`.
+`E = ceil(41 / 16)` on a key without entry capacity, and `E = ceil((49 + 136 c) / 16)` on an entry key of input class `c`.
 
 ## Envelope plaintext
 
 ```text
 tx_viewing_sk || u8(R) || u64be(A)                                                  key without entry capacity
-tx_viewing_sk || u8(R) || u64be(A) || u64be(default_input_bits) || entry_input * n  entry key
-entry_input = owner_key || fe32(nullifier_pk) || u64be(amount) || mint || fe32(blinding) || fe32(data_hash) || fe32(ring_data_hash)
+tx_viewing_sk || u8(R) || u64be(A) || u64be(default_input_bits) || entry_record * n  entry key
+entry_record = owner_key || fe32(nullifier_pk) || u64be(amount) || mint || fe32(input_commitment)
 ```
 
 `R` counts the spent notes among the published inputs, and bit `k` of `A` is set exactly when input `k` is an address. Notes and addresses interleave in SPP's order, and dummies form the suffix. With `L = R + popcount(A)`:
@@ -65,14 +65,14 @@ entry_input = owner_key || fe32(nullifier_pk) || u64be(amount) || mint || fe32(b
 - No bit of `A` is set at or past `L`.
 - Input `k < L` is an address when bit `k` of `A` is set and a spent note otherwise. Input `k >= L` is a dummy.
 
-The circuit derives `R` and `A` from the same slot classes that open the inputs. It binds the nullifiers to `input_nullifier_chain`, so a reader takes no address for a spent note. The hidden rail holds input `0` to a note. Bit `k` of `default_input_bits` is set exactly when input `k` is a default-ring note, never an address or a dummy. `entry_input_k` opens that note in 200 bytes and is all zero on every other input. `mint` is the 32-byte mint address, and the proof holds the input's asset to it.
+The circuit derives `R` and `A` from the same slot classes that open the inputs. It binds the nullifiers to `input_nullifier_chain`, so a reader takes no address for a spent note. The hidden rail holds input `0` to a note. Bit `k` of `default_input_bits` is set exactly when input `k` is a default-ring note, never an address or a dummy. `entry_record_k` names that note in 136 bytes and is all zero on every other input. `mint` is the 32-byte mint address, and the proof holds the input's asset to it. `input_commitment` is input `k`'s spent UTXO hash, the value `private_tx_hash` chains, and the proof holds the owner key, nullifier key, amount and mint to it.
 
 ## Spent notes
 
 - A key without entry capacity refuses a default-ring input, since no evidence would open it.
 - The auditor recomputes SPP's nullifier of a note from the opening it already read and the owner's secret from enrollment. Under the zero nullifier key the secret is zero. The auditor then matches SPP's published list. A match links the spend.
 - No constraint binds a nullifier to an opening. A real nullifier with no match stays unresolved and never reads as padding.
-- An entry input discloses its owner key, nullifier key, amount, mint, blinding and both data hashes, and no nullifier secret. Each input carries its own owner and key, so one frame spends default-ring notes of several owners.
+- An entry record discloses its owner key, nullifier key, amount, mint and spent commitment, and no blinding, data hash or nullifier secret. The auditor reads the commitment and does not rebuild it. Each input carries its own owner and key, so one frame spends default-ring notes of several owners.
 
 ## Records
 
@@ -143,7 +143,7 @@ change_cell = mint || u64be(amount)                                             
 
 ## Opening a transfer
 
-1. The auditor computes `X25519(auditor_sk, tx_viewing_u)`, the salted [stream secret](envelope.md#shared-secret) and the stream, then recovers `tx_viewing_sk`, `R` and any entry evidence from the envelope.
+1. The auditor computes `X25519(auditor_sk, tx_viewing_u)`, the salted [stream secret](envelope.md#shared-secret) and the stream, then recovers `tx_viewing_sk`, `R` and any entry records from the envelope.
 2. It derives `seed_out = TXOS(n0, CRBS(tx_viewing_sk, salt))` and each blinding `TXOB(n0, seed_out, i)`. No frame field carries `seed_out`.
 3. It decrypts the record of slot `i` at its counter, and its tail under `has_data`.
 4. It rebuilds slot `i`'s commitment from the record, the tail, the blinding and the frame's tree id. The ring id enters on kind `1`, and zero on kind `2`. It accepts the slot only when that commitment equals the published hash at `i`. A kind `0` slot rebuilds as SPP's dummy hash under its blinding. A record moved to another slot rebuilds nothing.

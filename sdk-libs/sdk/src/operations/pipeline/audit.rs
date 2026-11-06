@@ -2,7 +2,7 @@
 
 use custom_ring_interface::{
     disclosure::AuditLayout, AuditEvidence, AuditRecord, AuditStreamLayout, AuditorMessage,
-    DataTail, DisclosureFormat, EntryInput, RecordKind, DATA_TAIL_LEN,
+    DataTail, DisclosureFormat, EntryRecord, RecordKind, DATA_TAIL_LEN,
 };
 use spr_event::MessageData;
 use spr_hasher::primitives::pack_be;
@@ -104,8 +104,8 @@ impl AuditSeal<'_> {
                 default_input_bits |= 1 << index;
             }
             inputs.push(match default_ring {
-                true => entry_input(input)?,
-                false => EntryInput::default(),
+                true => entry_record(input)?,
+                false => EntryRecord::default(),
             });
         }
         Ok(AuditEvidence::Entry {
@@ -119,16 +119,14 @@ pub(super) fn is_default_ring(input: &SppProofInputUtxo) -> bool {
     input.is_note() && input.utxo.ring_program_id.is_none()
 }
 
-/// Never the note's nullifier secret, the auditor rebuilds the commitment alone.
-fn entry_input(input: &SppProofInputUtxo) -> Result<EntryInput, RingError> {
-    Ok(EntryInput {
+/// `input_commitment` is the spent hash the proof reads into `private_tx_hash`.
+fn entry_record(input: &SppProofInputUtxo) -> Result<EntryRecord, RingError> {
+    Ok(EntryRecord {
         owner_key: owner_key(&input.utxo.owner)?,
         nullifier_pk: input.nullifier_pubkey,
         amount: input.utxo.amount,
         mint: input.utxo.asset.asset.to_bytes(),
-        blinding: input.utxo.blinding,
-        data_hash: input.data_hash.unwrap_or_default(),
-        ring_data_hash: input.ring_data_hash.unwrap_or_default(),
+        input_commitment: input.utxo_hash,
     })
 }
 

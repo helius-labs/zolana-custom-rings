@@ -7,8 +7,8 @@
 //!
 //! The encrypted head holds the viewing secret in bytes 0 through 31 and note count `R` at byte 32.
 //! The big endian address bitmap `A` occupies bytes 33 through 40. Bit `i` names absolute input slot `i`.
-//! An entry head adds the big endian default bitmap in bytes 41 through 48, openings start at byte 49.
-//! The key capacity fixes the reserved envelope blocks, the published count fixes the transmitted opening count.
+//! An entry head adds the big endian default bitmap in bytes 41 through 48, entry records start at byte 49.
+//! The key capacity fixes the reserved envelope blocks, the published count fixes the transmitted record count.
 //!
 //! Read after `program-libs/interface/src/proof/domain.rs`. Read before `program-libs/interface/src/proof/disclosure.rs`,
 //! `prover/circuits/audit/audit.go`.
@@ -28,7 +28,7 @@ pub const ENVELOPE_HEAD_LEN: usize =
 pub const DEFAULT_INPUT_BITS_LEN: usize = 8;
 pub const AUDIT_RECORD_LEN: usize = 105;
 pub const DATA_TAIL_LEN: usize = 64;
-pub const ENTRY_INPUT_LEN: usize = 200;
+pub const ENTRY_RECORD_LEN: usize = 136;
 /// The secret is the merge's seed.
 pub const OPENING_RECORD_LEN: usize = RECORD_STRIDE + FIELD_LEN;
 pub const RECIPIENT_BODY_LEN: usize = 72;
@@ -51,7 +51,7 @@ const AMOUNT_LEN: usize = 8;
 const _: () = assert!(1 + AMOUNT_LEN + 3 * FIELD_LEN == AUDIT_RECORD_LEN);
 const _: () = assert!(OPENING_RECORD_LEN.is_multiple_of(STREAM_BLOCK_LEN));
 const _: () = assert!(DATA_TAIL_LEN.is_multiple_of(STREAM_BLOCK_LEN));
-const _: () = assert!(AMOUNT_LEN + 6 * FIELD_LEN == ENTRY_INPUT_LEN);
+const _: () = assert!(AMOUNT_LEN + 4 * FIELD_LEN == ENTRY_RECORD_LEN);
 const _: () = assert!(AMOUNT_LEN + 2 * FIELD_LEN == RECIPIENT_BODY_LEN);
 const _: () = assert!(3 * FIELD_LEN + 1 == MIN_REPLY_LEN);
 
@@ -116,7 +116,7 @@ impl AuditKey {
 
     const fn entry_len(self) -> usize {
         match self.entry {
-            true => ENTRY_INPUT_LEN,
+            true => ENTRY_RECORD_LEN,
             false => 0,
         }
     }
@@ -414,27 +414,24 @@ impl DataTail {
     }
 }
 
-/// One default-ring input's opening, zero fields on any other slot, never its nullifier secret.
+/// One default-ring input's record, zero on any other slot, never its blinding or nullifier secret.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct EntryInput {
+pub struct EntryRecord {
     pub owner_key: [u8; 32],
     pub nullifier_pk: [u8; 32],
     pub amount: u64,
     pub mint: [u8; 32],
-    pub blinding: [u8; 32],
-    pub data_hash: [u8; 32],
-    pub ring_data_hash: [u8; 32],
+    /// SPP's spent UTXO hash, the value `private_tx_hash` chains.
+    pub input_commitment: [u8; 32],
 }
 
-impl EntryInput {
+impl EntryRecord {
     fn extend(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.owner_key);
         out.extend_from_slice(&self.nullifier_pk);
         out.extend_from_slice(&self.amount.to_be_bytes());
         out.extend_from_slice(&self.mint);
-        out.extend_from_slice(&self.blinding);
-        out.extend_from_slice(&self.data_hash);
-        out.extend_from_slice(&self.ring_data_hash);
+        out.extend_from_slice(&self.input_commitment);
     }
 
     fn read(bytes: &mut Bytes<'_>) -> Result<Self, CustomRingError> {
@@ -443,9 +440,7 @@ impl EntryInput {
             nullifier_pk: *bytes.array()?,
             amount: read_amount(bytes)?,
             mint: *bytes.array()?,
-            blinding: *bytes.array()?,
-            data_hash: *bytes.array()?,
-            ring_data_hash: *bytes.array()?,
+            input_commitment: *bytes.array()?,
         })
     }
 }
@@ -565,7 +560,7 @@ impl InputMap {
         (0..self.capacity()).map(move |slot| self.class_at(slot))
     }
 
-    /// Default openings select absolute note positions, never an address or a dummy.
+    /// Default bits select absolute note positions, never an address or a dummy.
     pub fn validate_default_input_bits(self, bits: u64) -> Result<(), CustomRingError> {
         if bits & self.address_input_bits() != 0
             || bits.checked_shr(self.non_dummy_count as u32).unwrap_or(0) != 0
@@ -596,7 +591,7 @@ pub enum AuditEvidence {
     Entry {
         default_input_bits: u64,
         /// One per published input.
-        inputs: Vec<EntryInput>,
+        inputs: Vec<EntryRecord>,
     },
 }
 
@@ -631,7 +626,7 @@ impl AuditEnvelope {
             AuditEvidence::None => 0,
             AuditEvidence::SingleAssetPayout { .. } => FIELD_LEN,
             AuditEvidence::Entry { inputs, .. } => {
-                DEFAULT_INPUT_BITS_LEN + ENTRY_INPUT_LEN * inputs.len()
+                DEFAULT_INPUT_BITS_LEN + ENTRY_RECORD_LEN * inputs.len()
             }
         };
         let mut out = Vec::with_capacity(ENVELOPE_HEAD_LEN + evidence_len);
@@ -654,13 +649,13 @@ impl AuditEnvelope {
 
     /// Refuses lengths and classification outside `layout`, ciphertext authentication remains with the caller.
     pub fn decode(plaintext: &[u8], layout: AuditStreamLayout) -> Result<Self, CustomRingError> {
-        // 1. The selected layout bounds both counts, read_all refuses bytes after its final opening.
+        // 1. The selected layout bounds both counts, read_all refuses bytes after its final record.
         layout.checked()?;
         read_all(plaintext, |bytes| {
             let tx_viewing_secret = *bytes.array()?;
             let real_inputs = bytes.byte()?;
             let address_input_bits = u64::from_be_bytes(*bytes.array()?);
-            // 2. Entry openings retain absolute published positions, absent capacity slots carry no bytes.
+            // 2. Entry records retain absolute published positions, absent capacity slots carry no bytes.
             let evidence = match (layout.key.format, layout.key.entry) {
                 (DisclosureFormat::SingleAssetPayout, false) => AuditEvidence::SingleAssetPayout {
                     mint: *bytes.array()?,
@@ -672,7 +667,7 @@ impl AuditEnvelope {
                 (DisclosureFormat::Standard, true) => AuditEvidence::Entry {
                     default_input_bits: u64::from_be_bytes(*bytes.array()?),
                     inputs: (0..layout.inputs)
-                        .map(|_| EntryInput::read(bytes))
+                        .map(|_| EntryRecord::read(bytes))
                         .collect::<Result<_, CustomRingError>>()?,
                 },
             };
@@ -686,14 +681,14 @@ impl AuditEnvelope {
             let inputs = envelope.input_map(layout)?;
             if let AuditEvidence::Entry {
                 default_input_bits,
-                inputs: openings,
+                inputs: records,
             } = &envelope.evidence
             {
                 inputs.validate_default_input_bits(*default_input_bits)?;
-                // 4. Unselected openings must be zero, matching the circuit's multiplication by the default note selector.
+                // 4. Unselected records must be zero, matching the circuit's multiplication by the default note selector.
                 // Selected values remain unverified here, the ring proof binds them to the input commitments.
-                for (slot, opening) in openings.iter().enumerate() {
-                    if default_input_bits & (1 << slot) == 0 && *opening != EntryInput::default() {
+                for (slot, record) in records.iter().enumerate() {
+                    if default_input_bits & (1 << slot) == 0 && *record != EntryRecord::default() {
                         return Err(CustomRingError::RingTransactLength);
                     }
                 }

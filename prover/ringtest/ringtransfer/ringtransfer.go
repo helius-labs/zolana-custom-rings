@@ -20,8 +20,6 @@ import (
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
-const privateTxBlinding = 0x5b1d
-
 // PublicSlot is one folded public slot, Gross the withdrawn total of its asset.
 type PublicSlot struct {
 	Asset *big.Int
@@ -330,7 +328,6 @@ func (w World) fill(t testing.TB, c *transfer.Sections, a ringaudit.Audit, deleg
 			c.Entries[i] = input.EntryWires()
 		}
 	}
-	c.PrivateTxBlinding = big.NewInt(privateTxBlinding)
 	c.SignerCount = len(run)
 	for k := range c.Signers {
 		c.Signers[k] = 0
@@ -432,7 +429,7 @@ func rehash(t testing.TB, c *transfer.Sections, a ringaudit.Audit) {
 		}
 	}
 	addressChain := spptest.MustNonZeroHashChain(t, addresses)
-	c.PrivateTxHash = spptest.MustPoseidon(t, 5, []*big.Int{inputs, outputs, addressChain, ringtest.AsBigInt(c.PrivateTxBlinding)})
+	c.PrivateTxHash = spptest.MustPoseidon(t, 5, []*big.Int{inputs, outputs, addressChain, a.PrivateTxBlinding(t)})
 }
 
 // values is the statement both families share.

@@ -37,8 +37,6 @@ pub enum AuditError {
     DisclosureField,
     #[error("disclosure does not fit its layout")]
     DisclosureLayout,
-    #[error("{trees} input trees do not match {inputs} published inputs")]
-    InputTreeCount { trees: usize, inputs: usize },
     #[error("audited notes answer {got} of {want} requested hashes")]
     AuditedUtxosCount { got: usize, want: usize },
     #[error("audited note does not rebuild UTXO hash {utxo_hash:?}")]
@@ -197,7 +195,6 @@ impl AuditError {
             | Self::MissingRingProgram
             | Self::DisclosureField
             | Self::DisclosureLayout
-            | Self::InputTreeCount { .. }
             | Self::AuditedUtxosCount { .. }
             | Self::AuditedUtxoMismatch { .. }
             | Self::UnopenedOutput { .. }

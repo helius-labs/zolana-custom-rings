@@ -19,8 +19,8 @@ The auditor holds one viewing key for the ring's life. Every operation proves a 
 - Notes and addresses interleave in SPP's order before the dummy suffix. Let `L = R + popcount(A)`. Input `k < L` is an address when bit `k` of `A` is set and a spent note otherwise. Input `k >= L` is padding, see [envelope plaintext](../spec/crypto/disclosure.md#envelope-plaintext).
 - The auditor recomputes a nullifier from an opening it already read and the owner's sealed secret. It then matches SPP's published list, and a match links the spend.
 - No constraint binds a nullifier to a record. A note the auditor never opened stays unlinked until the opening arrives.
-- A default-ring input has no earlier record. An entry key therefore opens it in the stream, with its owner key, nullifier key, amount, mint, blinding and data hashes.
-- An entry opening discloses no secret, and one frame can carry default-ring inputs of several owners.
+- A default-ring input has no earlier record. An entry key therefore names it in the stream, with its owner key, nullifier key, amount, mint and spent commitment.
+- An entry record discloses no blinding, data hash or secret, and one frame can carry default-ring inputs of several owners.
 
 ## Exits and withdrawals
 

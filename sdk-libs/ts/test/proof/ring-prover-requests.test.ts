@@ -64,6 +64,7 @@ import { sealSaltedAuditorStream } from "../../src/crypto/audit/audit.js";
 import { listTagOf } from "../../src/crypto/keys/list-salt.js";
 import {
   DUMMY_RECORD,
+  EMPTY_ENTRY_RECORD,
   encodeAuditEnvelope,
   encodeAuditRecord,
   encodeDataTail,
@@ -473,7 +474,6 @@ function request(item: Json): RingProofRequest {
       signers: fields(item["signers"]),
       rows: fields(item["rows"]),
       privateTxHash: field(item["privateTxHash"]),
-      privateTxBlinding: field(item["privateTxBlinding"]),
       ...trackingSection(item),
       ...policy(item),
     };
@@ -895,16 +895,6 @@ describe.runIf(HAS_GOLDENS)("ring statements rebuilt from the Go goldens", () =>
   );
 });
 
-const EMPTY_ENTRY = {
-  ownerKey: ZERO,
-  nullifierPk: ZERO,
-  amount: 0n,
-  mint: encodeBase58(ZERO),
-  blinding: ZERO,
-  dataHash: ZERO,
-  ringDataHash: ZERO,
-};
-
 /** Go `assertMint`, the mint's 31 and 1 byte chunks. */
 function mintOf(chunks: readonly Bytes32[]): Address {
   const [high, low] = chunks;
@@ -946,15 +936,13 @@ function checkTransferStatement(typed: TransferProofRequest): void {
               const entry = typed.entries[slot];
               if (entry === undefined) throw new Error("no entry");
               // A ring note's evidence stays zero.
-              if (!isUtxo(input) || amountOf(input.ringProgramId) !== 0n) return EMPTY_ENTRY;
+              if (!isUtxo(input) || amountOf(input.ringProgramId) !== 0n) return EMPTY_ENTRY_RECORD;
               return {
                 ownerKey: entry.ownerKey,
                 nullifierPk: input.nullifierPk,
                 amount: amountOf(input.amount),
                 mint: mintOf(entry.mintChunks),
-                blinding: input.blinding,
-                dataHash: input.dataHash,
-                ringDataHash: input.ringDataHash,
+                inputCommitment: openingHash(input),
               };
             }),
           }

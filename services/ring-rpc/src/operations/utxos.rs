@@ -1186,7 +1186,7 @@ impl InputParties {
             return InputParty::Padding;
         }
         if let Some(default_input) = &input.default_input {
-            return match default_input.utxo.owner_key.0 == *wallet {
+            return match default_input.owner_key.0 == *wallet {
                 true => InputParty::Own,
                 false => InputParty::Other,
             };

@@ -12,10 +12,11 @@
 // with tx_viewing_sk itself.
 //
 // One sealed key opens every blinding. SPP holds each output blinding to
-// TXOB(n0, TXOS(n0, BlindingSeed), i), with BlindingSeed a free private input. The ring holds the same
-// wire to that derivation at BlindingSeed = CRBS(tx_viewing_sk, salt). Both proofs hash the blinding
-// into the one output hash, so a Poseidon collision aside SPP's seed is the ring's, and a record
-// carries no blinding.
+// TXOB(n0, TXOS(n0, BlindingSeed), i) and its private_tx_blinding to TXPB(n0, BlindingSeed), with
+// BlindingSeed a free private input. The ring derives private_tx_blinding as TXPB(n0, CRBS(tx_viewing_sk,
+// salt)) and both proofs open the one public private_tx_hash, so a Poseidon collision aside SPP's seed is
+// the ring's. Each ring slot opens the output hash SPP publishes at its index, so SPP's derivation fixes
+// every published blinding, a dummy's included, and a record carries no blinding.
 //
 // The auditor reads a transfer in three steps.
 //  1. X25519(auditor_sk, tx_u) and the salt give the stream's key and nonce.
@@ -27,11 +28,12 @@
 // A statement built on the package proves the following.
 //  1. The stream is AES-256-CTR under a key schedule bound to the auditor key, tx_u and the salt,
 //     over the sealed tx_viewing_sk, R, A, the entry evidence, one record per slot and one tail per slot.
-//  2. Each live slot's record and tail hold the opening its published commitment hashes, and a
-//     published slot's blinding derives from the sealed key. The auditor rebuilds every commitment
-//     from the stream and the frame.
-//  3. R counts spent notes and A selects address positions among the published inputs. Entry evidence
-//     opens each default ring note at its absolute input position, with zero openings elsewhere.
+//  2. Each live slot's record and tail hold the opening its published commitment hashes, and the
+//     transaction blinding derives from the sealed key. With SPP's proof, the auditor rebuilds every
+//     output commitment from the stream and the frame.
+//  3. R counts spent notes and A selects address positions among the published inputs. An entry record
+//     names each default ring note's owner, nullifier key, amount, mint and spent commitment at its absolute
+//     input position, with zero records elsewhere.
 //  4. A slot's kind derives from the domain and ring id its hash commits, no prover bit passes a note
 //     as a dummy.
 //  5. Every transmitted ciphertext byte is bound, the envelope through its counted digest and each
@@ -79,9 +81,10 @@ type AuditWires struct {
 
 type Envelope struct {
 	// txPk is pack_be(0x04 ‖ tx_u).
-	txPk       [2]frontend.Variable
-	salt       frontend.Variable
-	outputSeed frontend.Variable
+	txPk [2]frontend.Variable
+	salt frontend.Variable
+	// PrivateTxBlinding is SPP's TXPB(n0, BlindingSeed) at the ring's seed, the last preimage element of private_tx_hash.
+	PrivateTxBlinding frontend.Variable
 }
 
 func (w AuditWires) OpenEnvelope(api frontend.API, rc frontend.Rangechecker) Envelope {
@@ -92,11 +95,11 @@ func (w AuditWires) OpenEnvelope(api frontend.API, rc frontend.Rangechecker) Env
 	// 3. tx_u is the key of tx_viewing_sk, the generator bounds every secret byte the packings read.
 	txPk := shared.PackedKey(api, x25519.ScalarMulGenerator(api, w.TxViewingSk))
 	packedTxViewingSk := [2]frontend.Variable(shared.PackBounded(api, w.TxViewingSk[:]))
-	// 4. outputSeed is SPP's TXOS(n0, BlindingSeed) at the ring's seed, its inputs are the sealed key and two values the frame publishes.
+	// 4. Through private_tx_hash the blinding fixes SPP's seed to the sealed key's, and SPP derives every output blinding from it.
 	return Envelope{
-		txPk:       [2]frontend.Variable(txPk),
-		salt:       salt,
-		outputSeed: transaction.DeriveOutputBlindingSeed(api, w.FirstNullifier, shared.BlindingSeed(api, packedTxViewingSk, salt)),
+		txPk:              [2]frontend.Variable(txPk),
+		salt:              salt,
+		PrivateTxBlinding: transaction.DerivePrivateTxBlinding(api, w.FirstNullifier, shared.BlindingSeed(api, packedTxViewingSk, salt)),
 	}
 }
 
@@ -126,7 +129,7 @@ type Opened struct {
 }
 
 // OpenSlots holds each output wire to the hash SPP publishes, so a later section reads the note that settles.
-func (s StreamShape) OpenSlots(api frontend.API, rc frontend.Rangechecker, w AuditWires, e Envelope, hasData frontend.Variable, outputs []OutputWires, outputCount frontend.Variable) Opened {
+func (s StreamShape) OpenSlots(api frontend.API, rc frontend.Rangechecker, hasData frontend.Variable, outputs []OutputWires, outputCount frontend.Variable) Opened {
 	// 1. m selects the published slots, a key's capacity may exceed it and a slot past it publishes nothing.
 	if s.SingleAssetPayout {
 		api.AssertIsEqual(outputCount, s.Outputs)
@@ -140,11 +143,9 @@ func (s StreamShape) OpenSlots(api frontend.API, rc frontend.Rangechecker, w Aud
 		active := count.Active[i]
 		// 2. An omitted slot holds no note, SPP's padded chain would miss it.
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, active), V: slot.Utxo})
-		// 3. The auditor rebuilds every commitment from the sealed key's blinding, another value leaves the slot unopened.
-		w.AssertBlinding(api, e, slot, active, i)
-		// 4. A clear has_data transmits no tail, a nonzero data hash would leave the commitment unrebuilt.
+		// 3. A clear has_data transmits no tail, a nonzero data hash would leave the commitment unrebuilt.
 		assertNoData(api, hasData, slot)
-		// 5. The plaintext reads the opened wires, SealStream seals them with no second opening to disagree.
+		// 4. The plaintext reads the opened wires, SealStream seals them with no second opening to disagree.
 		record := output.record(api, rc, slot)
 		if s.SingleAssetPayout {
 			api.AssertIsEqual(slot.Ring, 1)
@@ -159,14 +160,9 @@ func (s StreamShape) OpenSlots(api frontend.API, rc frontend.Rangechecker, w Aud
 		opened.records[i] = record
 		opened.Slots[i], hashes[i] = slot, api.Mul(active, slot.Hash)
 	}
-	// 6. The program rebuilds the chain from the hashes it forwards to SPP, one opening off them fails the statement.
+	// 5. The program rebuilds the chain from the hashes it forwards to SPP, one opening off them fails the statement.
 	opened.OutputChain = gadget.HashChain4(api, hashes)
 	return opened
-}
-
-// AssertBlinding holds a published dummy's blinding too, an all dummy transfer has no other link to SPP's seed.
-func (w AuditWires) AssertBlinding(api frontend.API, e Envelope, slot shared.Output, active frontend.Variable, i int) {
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: active, A: slot.Blinding, B: transaction.DeriveOutputBlinding(api, w.FirstNullifier, e.outputSeed, i)})
 }
 
 type Stream struct {
@@ -183,7 +179,7 @@ type Stream struct {
 // SealStream mirrors AuditEnvelope::encode and the record layout in program-libs/interface/src/proof/audit_stream.rs.
 func (w AuditWires) SealStream(api frontend.API, rc frontend.Rangechecker, e Envelope, shape StreamShape, opened Opened, spent SpentInputs) Stream {
 	ranges := shape.Ranges()
-	// 1. The envelope binds tx_viewing_sk, the note count and absolute address positions before any entry openings.
+	// 1. The envelope binds tx_viewing_sk, the note count and absolute address positions before any entry records.
 	evidence := spent.evidence(api, rc, ranges)
 	head := slices.Concat(evidence.head, opened.commonMint)
 	plaintext := slices.Concat(w.TxViewingSk[:], head, slices.Concat(evidence.entries...))

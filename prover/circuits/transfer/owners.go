@@ -5,12 +5,8 @@
 // the note it spends, so a ring cannot let a note carry a key whose secret the auditor never received.
 // Enrollment seals an owner's nullifier secret to the auditor and writes its key to the tracking tree,
 // and only two keys pass here.
-// An enrolled owner receives under the key its row holds. Any owner can receive under the zero key
-// Poseidon(0), registry/register_key.go refuses to enroll it, and its preimage is public, so anyone
-// holding the note's opening, the auditor included, can compute the nullifier. Without these checks a
-// sender could pay a note under a free key, and its spend would stay unlinked for the auditor.
-// Under a salted payee read a zero key output still proves its owner absent from the tracking root, as
-// docs/spec.md requires.
+// Only absent owners receive new ring payments under Poseidon(0).
+// The public zero secret permits nullifier derivation from the note opening.
 //
 // Read after transfer/input.go, policy/tracking.go, registry/register_key.go. Read before
 // policy/screen.go, policy/outflow.go.
@@ -20,7 +16,7 @@
 // 2. A ring input's nonzero key is its row's enrolled key, a key the tracking root does not hold fails.
 // 3. A hidden owner spends no zero key note, its public nullifier would name the owner.
 // 4. A live ring output's nonzero key is its owner's enrolled key, and a literal zero key fails.
-// 5. Under a salted payee read a zero key output leaves its owner absent under the root, else an enrolled owner may take it.
+// 5. A zero key output requires owner absence at the accepted tracking root.
 //
 // A zero key note stays spendable after its owner enrolls, property 2 skips it.
 
@@ -88,16 +84,13 @@ func (r OwnerRows) find(api frontend.API, owner frontend.Variable) (found, key f
 	return found, key
 }
 
-// AssertOutputOwners holds a live ring output to its owner's enrolled key, and a zero key to an owner with no row while saltedPayees is set.
-func AssertOutputOwners(api frontend.API, pool policy.TrackingPool, outputs []shared.Output, entries []frontend.Variable, saltedPayees frontend.Variable) {
+// AssertOutputOwners binds zero key recipients to absence at the accepted tracking root.
+func AssertOutputOwners(api frontend.API, pool policy.TrackingPool, outputs []shared.Output, entries []frontend.Variable) {
 	for o, slot := range outputs {
 		// An exit clears Ring and reads no row, the default ring enrolls nobody.
 		row := pool.Row(api, slot.Ring, slot.OwnerPkHash, entries[o])
 		zeroKey := isZeroKey(api, slot.NullifierPk)
-		// 1. The row's key equals the slot's nonzero key, an absent owner cannot receive under a key the auditor never received.
-		// 2. Under a salted payee read the row's key is zero under the zero key, an enrolled owner cannot take it. Off that read the zero key skips the row.
-		bound := api.Mul(slot.Ring, api.Sub(1, api.Mul(zeroKey, api.Sub(1, saltedPayees))))
-		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: bound, A: row.NullifierPk, B: api.Mul(api.Sub(1, zeroKey), slot.NullifierPk)})
+		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: slot.Ring, A: row.NullifierPk, B: api.Mul(api.Sub(1, zeroKey), slot.NullifierPk)})
 		// A literal zero key would read as an absent row, and nobody could spend it.
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: slot.Ring, V: api.IsZero(slot.NullifierPk)})
 	}

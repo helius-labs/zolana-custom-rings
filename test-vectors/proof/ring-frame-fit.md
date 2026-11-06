@@ -27,18 +27,18 @@ Every row is one transaction. fits: the row clears the transaction and CPI ceili
 | 1x2 | anonymous public owners | full+data | yes | 2233 | 19 | 3 | - | 1349 | 1324 | yes |  |
 | 1x2 | anonymous public owners | full+reply | yes | 2130 | 19 | 3 | - | 1246 | 1223 | yes |  |
 | 1x2 | anonymous public owners | full+2tree | yes | 2069 | 20 | 3 | - | 1152 | 1130 | yes |  |
-| 1x2 | confidential entry | min | yes | 1556 | 9 | 1 | - | 1140 | 1153 | yes |  |
-| 1x2 | confidential entry | full | yes | 2111 | 19 | 3 | 1 | 1227 | 1198 | yes |  |
-| 1x2 | confidential entry | full+spl | yes | 2479 | 26 | 3 | - | 1359 | 1202 | yes |  |
-| 1x2 | confidential entry | full+data | yes | 2313 | 19 | 3 | - | 1429 | 1396 | yes |  |
-| 1x2 | confidential entry | full+reply | yes | 2111 | 19 | 3 | - | 1227 | 1198 | yes |  |
-| 1x2 | confidential entry | full+2tree | yes | 2149 | 20 | 3 | - | 1232 | 1202 | yes |  |
-| 1x2 | anonymous entry | min | yes | 1715 | 9 | 1 | - | 1300 | 1312 | yes |  |
-| 1x2 | anonymous entry | full | yes | 2142 | 15 | 2 | 1 | 1451 | 1431 | yes |  |
-| 1x2 | anonymous entry | full+spl | yes | 2510 | 22 | 2 | - | 1583 | 1435 | yes |  |
-| 1x2 | anonymous entry | full+data | yes | 2344 | 15 | 2 | - | 1653 | 1629 | yes |  |
-| 1x2 | anonymous entry | full+reply | yes | 2241 | 15 | 2 | - | 1550 | 1528 | yes |  |
-| 1x2 | anonymous entry | full+2tree | yes | 2180 | 16 | 2 | - | 1456 | 1435 | yes |  |
+| 1x2 | confidential entry | min | yes | 1492 | 9 | 1 | - | 1076 | 1089 | yes |  |
+| 1x2 | confidential entry | full | yes | 2047 | 19 | 3 | 1 | 1163 | 1134 | yes |  |
+| 1x2 | confidential entry | full+spl | yes | 2415 | 26 | 3 | - | 1295 | 1138 | yes |  |
+| 1x2 | confidential entry | full+data | yes | 2249 | 19 | 3 | - | 1365 | 1332 | yes |  |
+| 1x2 | confidential entry | full+reply | yes | 2047 | 19 | 3 | - | 1163 | 1134 | yes |  |
+| 1x2 | confidential entry | full+2tree | yes | 2085 | 20 | 3 | - | 1168 | 1138 | yes |  |
+| 1x2 | anonymous entry | min | yes | 1651 | 9 | 1 | - | 1236 | 1248 | yes |  |
+| 1x2 | anonymous entry | full | yes | 2078 | 15 | 2 | 1 | 1387 | 1367 | yes |  |
+| 1x2 | anonymous entry | full+spl | yes | 2446 | 22 | 2 | - | 1519 | 1371 | yes |  |
+| 1x2 | anonymous entry | full+data | yes | 2280 | 15 | 2 | - | 1589 | 1565 | yes |  |
+| 1x2 | anonymous entry | full+reply | yes | 2177 | 15 | 2 | - | 1486 | 1464 | yes |  |
+| 1x2 | anonymous entry | full+2tree | yes | 2116 | 16 | 2 | - | 1392 | 1371 | yes |  |
 | 1x2 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 1x2 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
 | 1x4 | confidential signer | min | yes | 1782 | 9 | 1 | - | 1366 | 1451 | yes |  |
@@ -65,18 +65,18 @@ Every row is one transaction. fits: the row clears the transaction and CPI ceili
 | 1x4 | anonymous public owners | full+data | yes | 2933 | 19 | 3 | - | 2049 | 2092 | yes |  |
 | 1x4 | anonymous public owners | full+reply | yes | 2822 | 19 | 3 | - | 1938 | 1987 | yes |  |
 | 1x4 | anonymous public owners | full+2tree | yes | 2567 | 20 | 3 | - | 1650 | 1700 | yes |  |
-| 1x4 | confidential entry | min | yes | 1990 | 9 | 1 | - | 1574 | 1659 | yes |  |
-| 1x4 | confidential entry | full | yes | 2545 | 19 | 3 | 1 | 1661 | 1704 | yes |  |
-| 1x4 | confidential entry | full+spl | yes | 2913 | 26 | 3 | - | 1793 | 1708 | yes |  |
-| 1x4 | confidential entry | full+data | yes | 2949 | 19 | 3 | - | 2065 | 2100 | yes |  |
-| 1x4 | confidential entry | full+reply | yes | 2545 | 19 | 3 | - | 1661 | 1704 | yes |  |
-| 1x4 | confidential entry | full+2tree | yes | 2583 | 20 | 3 | - | 1666 | 1708 | yes |  |
-| 1x4 | anonymous entry | min | yes | 2213 | 9 | 1 | - | 1798 | 1882 | yes |  |
-| 1x4 | anonymous entry | full | yes | 2640 | 15 | 2 | 1 | 1949 | 2001 | yes |  |
-| 1x4 | anonymous entry | full+spl | yes | 3008 | 22 | 2 | - | 2081 | 2005 | yes |  |
-| 1x4 | anonymous entry | full+data | yes | 3044 | 15 | 2 | - | 2353 | 2397 | yes |  |
-| 1x4 | anonymous entry | full+reply | yes | 2933 | 15 | 2 | - | 2242 | 2292 | yes |  |
-| 1x4 | anonymous entry | full+2tree | yes | 2678 | 16 | 2 | - | 1954 | 2005 | yes |  |
+| 1x4 | confidential entry | min | yes | 1926 | 9 | 1 | - | 1510 | 1595 | yes |  |
+| 1x4 | confidential entry | full | yes | 2481 | 19 | 3 | 1 | 1597 | 1640 | yes |  |
+| 1x4 | confidential entry | full+spl | yes | 2849 | 26 | 3 | - | 1729 | 1644 | yes |  |
+| 1x4 | confidential entry | full+data | yes | 2885 | 19 | 3 | - | 2001 | 2036 | yes |  |
+| 1x4 | confidential entry | full+reply | yes | 2481 | 19 | 3 | - | 1597 | 1640 | yes |  |
+| 1x4 | confidential entry | full+2tree | yes | 2519 | 20 | 3 | - | 1602 | 1644 | yes |  |
+| 1x4 | anonymous entry | min | yes | 2149 | 9 | 1 | - | 1734 | 1818 | yes |  |
+| 1x4 | anonymous entry | full | yes | 2576 | 15 | 2 | 1 | 1885 | 1937 | yes |  |
+| 1x4 | anonymous entry | full+spl | yes | 2944 | 22 | 2 | - | 2017 | 1941 | yes |  |
+| 1x4 | anonymous entry | full+data | yes | 2980 | 15 | 2 | - | 2289 | 2333 | yes |  |
+| 1x4 | anonymous entry | full+reply | yes | 2869 | 15 | 2 | - | 2178 | 2228 | yes |  |
+| 1x4 | anonymous entry | full+2tree | yes | 2614 | 16 | 2 | - | 1890 | 1941 | yes |  |
 | 1x4 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 1x4 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
 | 1x8 | confidential signer | min | yes | 2650 | 9 | 1 | - | 2234 | 2463 | yes |  |
@@ -103,18 +103,18 @@ Every row is one transaction. fits: the row clears the transaction and CPI ceili
 | 1x8 | anonymous public owners | full+data | yes | 4333 | 19 | 3 | - | 3449 | 3628 | no | 237 B |
 | 1x8 | anonymous public owners | full+reply | yes | 4206 | 19 | 3 | - | 3322 | 3515 | no | 110 B |
 | 1x8 | anonymous public owners | full+2tree | yes | 3563 | 20 | 3 | - | 2646 | 2840 | yes |  |
-| 1x8 | confidential entry | min | yes | 2858 | 9 | 1 | - | 2442 | 2671 | yes |  |
-| 1x8 | confidential entry | full | yes | 3413 | 19 | 3 | 1 | 2529 | 2716 | yes |  |
-| 1x8 | confidential entry | full+spl | yes | 3781 | 26 | 3 | - | 2661 | 2720 | yes |  |
-| 1x8 | confidential entry | full+data | yes | 4221 | 19 | 3 | - | 3337 | 3508 | no | 125 B |
-| 1x8 | confidential entry | full+reply | yes | 3413 | 19 | 3 | - | 2529 | 2716 | yes |  |
-| 1x8 | confidential entry | full+2tree | yes | 3451 | 20 | 3 | - | 2534 | 2720 | yes |  |
-| 1x8 | anonymous entry | min | yes | 3209 | 9 | 1 | - | 2794 | 3022 | yes |  |
-| 1x8 | anonymous entry | full | yes | 3636 | 15 | 2 | 1 | 2945 | 3141 | yes |  |
-| 1x8 | anonymous entry | full+spl | yes | 4004 | 22 | 2 | - | 3077 | 3145 | yes |  |
-| 1x8 | anonymous entry | full+data | yes | 4444 | 15 | 2 | - | 3753 | 3933 | no | 348 B |
-| 1x8 | anonymous entry | full+reply | yes | 4317 | 15 | 2 | - | 3626 | 3820 | no | 221 B |
-| 1x8 | anonymous entry | full+2tree | yes | 3674 | 16 | 2 | - | 2950 | 3145 | yes |  |
+| 1x8 | confidential entry | min | yes | 2794 | 9 | 1 | - | 2378 | 2607 | yes |  |
+| 1x8 | confidential entry | full | yes | 3349 | 19 | 3 | 1 | 2465 | 2652 | yes |  |
+| 1x8 | confidential entry | full+spl | yes | 3717 | 26 | 3 | - | 2597 | 2656 | yes |  |
+| 1x8 | confidential entry | full+data | yes | 4157 | 19 | 3 | - | 3273 | 3444 | no | 61 B |
+| 1x8 | confidential entry | full+reply | yes | 3349 | 19 | 3 | - | 2465 | 2652 | yes |  |
+| 1x8 | confidential entry | full+2tree | yes | 3387 | 20 | 3 | - | 2470 | 2656 | yes |  |
+| 1x8 | anonymous entry | min | yes | 3145 | 9 | 1 | - | 2730 | 2958 | yes |  |
+| 1x8 | anonymous entry | full | yes | 3572 | 15 | 2 | 1 | 2881 | 3077 | yes |  |
+| 1x8 | anonymous entry | full+spl | yes | 3940 | 22 | 2 | - | 3013 | 3081 | yes |  |
+| 1x8 | anonymous entry | full+data | yes | 4380 | 15 | 2 | - | 3689 | 3869 | no | 284 B |
+| 1x8 | anonymous entry | full+reply | yes | 4253 | 15 | 2 | - | 3562 | 3756 | no | 157 B |
+| 1x8 | anonymous entry | full+2tree | yes | 3610 | 16 | 2 | - | 2886 | 3081 | yes |  |
 | 1x8 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 1x8 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
 | 2x2 | confidential signer | min | yes | 1413 | 10 | 1 | - | 964 | 978 | yes |  |
@@ -141,18 +141,18 @@ Every row is one transaction. fits: the row clears the transaction and CPI ceili
 | 2x2 | anonymous public owners | full+data | yes | 2298 | 20 | 3 | - | 1381 | 1357 | yes |  |
 | 2x2 | anonymous public owners | full+reply | yes | 2195 | 20 | 3 | - | 1278 | 1256 | yes |  |
 | 2x2 | anonymous public owners | full+2tree | yes | 2134 | 21 | 3 | - | 1184 | 1163 | yes |  |
-| 2x2 | confidential entry | min | yes | 1821 | 10 | 1 | - | 1372 | 1386 | yes |  |
-| 2x2 | confidential entry | full | yes | 2376 | 20 | 3 | 2 | 1459 | 1431 | yes |  |
-| 2x2 | confidential entry | full+spl | yes | 2744 | 27 | 3 | - | 1591 | 1435 | yes |  |
-| 2x2 | confidential entry | full+data | yes | 2578 | 20 | 3 | - | 1661 | 1629 | yes |  |
-| 2x2 | confidential entry | full+reply | yes | 2376 | 20 | 3 | - | 1459 | 1431 | yes |  |
-| 2x2 | confidential entry | full+2tree | yes | 2414 | 21 | 3 | - | 1464 | 1435 | yes |  |
-| 2x2 | anonymous entry | min | yes | 1980 | 10 | 1 | - | 1532 | 1545 | yes |  |
-| 2x2 | anonymous entry | full | yes | 2407 | 16 | 2 | 2 | 1683 | 1664 | yes |  |
-| 2x2 | anonymous entry | full+spl | yes | 2775 | 23 | 2 | - | 1815 | 1668 | yes |  |
-| 2x2 | anonymous entry | full+data | yes | 2609 | 16 | 2 | - | 1885 | 1862 | yes |  |
-| 2x2 | anonymous entry | full+reply | yes | 2506 | 16 | 2 | - | 1782 | 1761 | yes |  |
-| 2x2 | anonymous entry | full+2tree | yes | 2445 | 17 | 2 | - | 1688 | 1668 | yes |  |
+| 2x2 | confidential entry | min | yes | 1693 | 10 | 1 | - | 1244 | 1258 | yes |  |
+| 2x2 | confidential entry | full | yes | 2248 | 20 | 3 | 2 | 1331 | 1303 | yes |  |
+| 2x2 | confidential entry | full+spl | yes | 2616 | 27 | 3 | - | 1463 | 1307 | yes |  |
+| 2x2 | confidential entry | full+data | yes | 2450 | 20 | 3 | - | 1533 | 1501 | yes |  |
+| 2x2 | confidential entry | full+reply | yes | 2248 | 20 | 3 | - | 1331 | 1303 | yes |  |
+| 2x2 | confidential entry | full+2tree | yes | 2286 | 21 | 3 | - | 1336 | 1307 | yes |  |
+| 2x2 | anonymous entry | min | yes | 1852 | 10 | 1 | - | 1404 | 1417 | yes |  |
+| 2x2 | anonymous entry | full | yes | 2279 | 16 | 2 | 2 | 1555 | 1536 | yes |  |
+| 2x2 | anonymous entry | full+spl | yes | 2647 | 23 | 2 | - | 1687 | 1540 | yes |  |
+| 2x2 | anonymous entry | full+data | yes | 2481 | 16 | 2 | - | 1757 | 1734 | yes |  |
+| 2x2 | anonymous entry | full+reply | yes | 2378 | 16 | 2 | - | 1654 | 1633 | yes |  |
+| 2x2 | anonymous entry | full+2tree | yes | 2317 | 17 | 2 | - | 1560 | 1540 | yes |  |
 | 2x2 | delegate | min | yes | 1413 | 10 | 1 | - | 964 | 978 | yes |  |
 | 2x2 | delegate | full | yes | 1756 | 16 | 2 | - | 1035 | 1023 | yes |  |
 | 2x2 | delegate | full+spl | yes | 1996 | 23 | 2 | - | 1039 | 1027 | yes |  |
@@ -189,18 +189,18 @@ Every row is one transaction. fits: the row clears the transaction and CPI ceili
 | 2x4 | anonymous public owners | full+data | yes | 2998 | 20 | 3 | - | 2081 | 2125 | yes |  |
 | 2x4 | anonymous public owners | full+reply | yes | 2887 | 20 | 3 | - | 1970 | 2020 | yes |  |
 | 2x4 | anonymous public owners | full+2tree | yes | 2632 | 21 | 3 | - | 1682 | 1733 | yes |  |
-| 2x4 | confidential entry | min | yes | 2255 | 10 | 1 | - | 1806 | 1892 | yes |  |
-| 2x4 | confidential entry | full | yes | 2810 | 20 | 3 | 2 | 1893 | 1937 | yes |  |
-| 2x4 | confidential entry | full+spl | yes | 3178 | 27 | 3 | - | 2025 | 1941 | yes |  |
-| 2x4 | confidential entry | full+data | yes | 3214 | 20 | 3 | - | 2297 | 2333 | yes |  |
-| 2x4 | confidential entry | full+reply | yes | 2810 | 20 | 3 | - | 1893 | 1937 | yes |  |
-| 2x4 | confidential entry | full+2tree | yes | 2848 | 21 | 3 | - | 1898 | 1941 | yes |  |
-| 2x4 | anonymous entry | min | yes | 2478 | 10 | 1 | - | 2030 | 2115 | yes |  |
-| 2x4 | anonymous entry | full | yes | 2905 | 16 | 2 | 2 | 2181 | 2234 | yes |  |
-| 2x4 | anonymous entry | full+spl | yes | 3273 | 23 | 2 | - | 2313 | 2238 | yes |  |
-| 2x4 | anonymous entry | full+data | yes | 3309 | 16 | 2 | - | 2585 | 2630 | yes |  |
-| 2x4 | anonymous entry | full+reply | yes | 3198 | 16 | 2 | - | 2474 | 2525 | yes |  |
-| 2x4 | anonymous entry | full+2tree | yes | 2943 | 17 | 2 | - | 2186 | 2238 | yes |  |
+| 2x4 | confidential entry | min | yes | 2127 | 10 | 1 | - | 1678 | 1764 | yes |  |
+| 2x4 | confidential entry | full | yes | 2682 | 20 | 3 | 2 | 1765 | 1809 | yes |  |
+| 2x4 | confidential entry | full+spl | yes | 3050 | 27 | 3 | - | 1897 | 1813 | yes |  |
+| 2x4 | confidential entry | full+data | yes | 3086 | 20 | 3 | - | 2169 | 2205 | yes |  |
+| 2x4 | confidential entry | full+reply | yes | 2682 | 20 | 3 | - | 1765 | 1809 | yes |  |
+| 2x4 | confidential entry | full+2tree | yes | 2720 | 21 | 3 | - | 1770 | 1813 | yes |  |
+| 2x4 | anonymous entry | min | yes | 2350 | 10 | 1 | - | 1902 | 1987 | yes |  |
+| 2x4 | anonymous entry | full | yes | 2777 | 16 | 2 | 2 | 2053 | 2106 | yes |  |
+| 2x4 | anonymous entry | full+spl | yes | 3145 | 23 | 2 | - | 2185 | 2110 | yes |  |
+| 2x4 | anonymous entry | full+data | yes | 3181 | 16 | 2 | - | 2457 | 2502 | yes |  |
+| 2x4 | anonymous entry | full+reply | yes | 3070 | 16 | 2 | - | 2346 | 2397 | yes |  |
+| 2x4 | anonymous entry | full+2tree | yes | 2815 | 17 | 2 | - | 2058 | 2110 | yes |  |
 | 2x4 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 2x4 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
 | 1x16 | confidential signer | min | none | - | - | - | - | - | - | no | catalog key |
@@ -265,18 +265,18 @@ Every row is one transaction. fits: the row clears the transaction and CPI ceili
 | 2x8 | anonymous public owners | full+data | yes | 4398 | 20 | 3 | - | 3481 | 3661 | no | 302 B |
 | 2x8 | anonymous public owners | full+reply | yes | 4271 | 20 | 3 | - | 3354 | 3548 | no | 175 B |
 | 2x8 | anonymous public owners | full+2tree | yes | 3628 | 21 | 3 | - | 2678 | 2873 | yes |  |
-| 2x8 | confidential entry | min | yes | 3123 | 10 | 1 | - | 2674 | 2904 | yes |  |
-| 2x8 | confidential entry | full | yes | 3678 | 20 | 3 | 2 | 2761 | 2949 | yes |  |
-| 2x8 | confidential entry | full+spl | yes | 4046 | 27 | 3 | - | 2893 | 2953 | yes |  |
-| 2x8 | confidential entry | full+data | yes | 4486 | 20 | 3 | - | 3569 | 3741 | no | 390 B |
-| 2x8 | confidential entry | full+reply | yes | 3678 | 20 | 3 | - | 2761 | 2949 | yes |  |
-| 2x8 | confidential entry | full+2tree | yes | 3716 | 21 | 3 | - | 2766 | 2953 | yes |  |
-| 2x8 | anonymous entry | min | yes | 3474 | 10 | 1 | - | 3026 | 3255 | yes |  |
-| 2x8 | anonymous entry | full | yes | 3901 | 16 | 2 | 2 | 3177 | 3374 | yes |  |
-| 2x8 | anonymous entry | full+spl | yes | 4269 | 23 | 2 | - | 3309 | 3378 | no | 173 B |
-| 2x8 | anonymous entry | full+data | yes | 4709 | 16 | 2 | - | 3985 | 4166 | no | 613 B |
-| 2x8 | anonymous entry | full+reply | yes | 4582 | 16 | 2 | - | 3858 | 4053 | no | 486 B |
-| 2x8 | anonymous entry | full+2tree | yes | 3939 | 17 | 2 | - | 3182 | 3378 | yes |  |
+| 2x8 | confidential entry | min | yes | 2995 | 10 | 1 | - | 2546 | 2776 | yes |  |
+| 2x8 | confidential entry | full | yes | 3550 | 20 | 3 | 2 | 2633 | 2821 | yes |  |
+| 2x8 | confidential entry | full+spl | yes | 3918 | 27 | 3 | - | 2765 | 2825 | yes |  |
+| 2x8 | confidential entry | full+data | yes | 4358 | 20 | 3 | - | 3441 | 3613 | no | 262 B |
+| 2x8 | confidential entry | full+reply | yes | 3550 | 20 | 3 | - | 2633 | 2821 | yes |  |
+| 2x8 | confidential entry | full+2tree | yes | 3588 | 21 | 3 | - | 2638 | 2825 | yes |  |
+| 2x8 | anonymous entry | min | yes | 3346 | 10 | 1 | - | 2898 | 3127 | yes |  |
+| 2x8 | anonymous entry | full | yes | 3773 | 16 | 2 | 2 | 3049 | 3246 | yes |  |
+| 2x8 | anonymous entry | full+spl | yes | 4141 | 23 | 2 | - | 3181 | 3250 | no | 45 B |
+| 2x8 | anonymous entry | full+data | yes | 4581 | 16 | 2 | - | 3857 | 4038 | no | 485 B |
+| 2x8 | anonymous entry | full+reply | yes | 4454 | 16 | 2 | - | 3730 | 3925 | no | 358 B |
+| 2x8 | anonymous entry | full+2tree | yes | 3811 | 17 | 2 | - | 3054 | 3250 | yes |  |
 | 2x8 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 2x8 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
 | 3x2 | confidential signer | min | yes | 1478 | 11 | 1 | - | 996 | 1011 | yes |  |
@@ -303,18 +303,18 @@ Every row is one transaction. fits: the row clears the transaction and CPI ceili
 | 3x2 | anonymous public owners | full+data | yes | 2363 | 21 | 3 | - | 1413 | 1390 | yes |  |
 | 3x2 | anonymous public owners | full+reply | yes | 2260 | 21 | 3 | - | 1310 | 1289 | yes |  |
 | 3x2 | anonymous public owners | full+2tree | yes | 2199 | 22 | 3 | - | 1216 | 1196 | yes |  |
-| 3x2 | confidential entry | min | yes | 2086 | 11 | 1 | - | 1604 | 1619 | yes |  |
-| 3x2 | confidential entry | full | yes | 2641 | 21 | 3 | 3 | 1691 | 1664 | yes |  |
-| 3x2 | confidential entry | full+spl | yes | 3009 | 28 | 3 | - | 1823 | 1668 | yes |  |
-| 3x2 | confidential entry | full+data | yes | 2843 | 21 | 3 | - | 1893 | 1862 | yes |  |
-| 3x2 | confidential entry | full+reply | yes | 2641 | 21 | 3 | - | 1691 | 1664 | yes |  |
-| 3x2 | confidential entry | full+2tree | yes | 2679 | 22 | 3 | - | 1696 | 1668 | yes |  |
-| 3x2 | anonymous entry | min | yes | 2245 | 11 | 1 | - | 1764 | 1778 | yes |  |
-| 3x2 | anonymous entry | full | yes | 2672 | 17 | 2 | 3 | 1915 | 1897 | yes |  |
-| 3x2 | anonymous entry | full+spl | yes | 3040 | 24 | 2 | - | 2047 | 1901 | yes |  |
-| 3x2 | anonymous entry | full+data | yes | 2874 | 17 | 2 | - | 2117 | 2095 | yes |  |
-| 3x2 | anonymous entry | full+reply | yes | 2771 | 17 | 2 | - | 2014 | 1994 | yes |  |
-| 3x2 | anonymous entry | full+2tree | yes | 2710 | 18 | 2 | - | 1920 | 1901 | yes |  |
+| 3x2 | confidential entry | min | yes | 1894 | 11 | 1 | - | 1412 | 1427 | yes |  |
+| 3x2 | confidential entry | full | yes | 2449 | 21 | 3 | 3 | 1499 | 1472 | yes |  |
+| 3x2 | confidential entry | full+spl | yes | 2817 | 28 | 3 | - | 1631 | 1476 | yes |  |
+| 3x2 | confidential entry | full+data | yes | 2651 | 21 | 3 | - | 1701 | 1670 | yes |  |
+| 3x2 | confidential entry | full+reply | yes | 2449 | 21 | 3 | - | 1499 | 1472 | yes |  |
+| 3x2 | confidential entry | full+2tree | yes | 2487 | 22 | 3 | - | 1504 | 1476 | yes |  |
+| 3x2 | anonymous entry | min | yes | 2053 | 11 | 1 | - | 1572 | 1586 | yes |  |
+| 3x2 | anonymous entry | full | yes | 2480 | 17 | 2 | 3 | 1723 | 1705 | yes |  |
+| 3x2 | anonymous entry | full+spl | yes | 2848 | 24 | 2 | - | 1855 | 1709 | yes |  |
+| 3x2 | anonymous entry | full+data | yes | 2682 | 17 | 2 | - | 1925 | 1903 | yes |  |
+| 3x2 | anonymous entry | full+reply | yes | 2579 | 17 | 2 | - | 1822 | 1802 | yes |  |
+| 3x2 | anonymous entry | full+2tree | yes | 2518 | 18 | 2 | - | 1728 | 1709 | yes |  |
 | 3x2 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 3x2 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
 | 3x4 | confidential signer | min | yes | 1912 | 11 | 1 | - | 1430 | 1517 | yes |  |
@@ -341,18 +341,18 @@ Every row is one transaction. fits: the row clears the transaction and CPI ceili
 | 3x4 | anonymous public owners | full+data | yes | 3063 | 21 | 3 | - | 2113 | 2158 | yes |  |
 | 3x4 | anonymous public owners | full+reply | yes | 2952 | 21 | 3 | - | 2002 | 2053 | yes |  |
 | 3x4 | anonymous public owners | full+2tree | yes | 2697 | 22 | 3 | - | 1714 | 1766 | yes |  |
-| 3x4 | confidential entry | min | yes | 2520 | 11 | 1 | - | 2038 | 2125 | yes |  |
-| 3x4 | confidential entry | full | yes | 3075 | 21 | 3 | 3 | 2125 | 2170 | yes |  |
-| 3x4 | confidential entry | full+spl | yes | 3443 | 28 | 3 | - | 2257 | 2174 | yes |  |
-| 3x4 | confidential entry | full+data | yes | 3479 | 21 | 3 | - | 2529 | 2566 | yes |  |
-| 3x4 | confidential entry | full+reply | yes | 3075 | 21 | 3 | - | 2125 | 2170 | yes |  |
-| 3x4 | confidential entry | full+2tree | yes | 3113 | 22 | 3 | - | 2130 | 2174 | yes |  |
-| 3x4 | anonymous entry | min | yes | 2743 | 11 | 1 | - | 2262 | 2348 | yes |  |
-| 3x4 | anonymous entry | full | yes | 3170 | 17 | 2 | 3 | 2413 | 2467 | yes |  |
-| 3x4 | anonymous entry | full+spl | yes | 3538 | 24 | 2 | - | 2545 | 2471 | yes |  |
-| 3x4 | anonymous entry | full+data | yes | 3574 | 17 | 2 | - | 2817 | 2863 | yes |  |
-| 3x4 | anonymous entry | full+reply | yes | 3463 | 17 | 2 | - | 2706 | 2758 | yes |  |
-| 3x4 | anonymous entry | full+2tree | yes | 3208 | 18 | 2 | - | 2418 | 2471 | yes |  |
+| 3x4 | confidential entry | min | yes | 2328 | 11 | 1 | - | 1846 | 1933 | yes |  |
+| 3x4 | confidential entry | full | yes | 2883 | 21 | 3 | 3 | 1933 | 1978 | yes |  |
+| 3x4 | confidential entry | full+spl | yes | 3251 | 28 | 3 | - | 2065 | 1982 | yes |  |
+| 3x4 | confidential entry | full+data | yes | 3287 | 21 | 3 | - | 2337 | 2374 | yes |  |
+| 3x4 | confidential entry | full+reply | yes | 2883 | 21 | 3 | - | 1933 | 1978 | yes |  |
+| 3x4 | confidential entry | full+2tree | yes | 2921 | 22 | 3 | - | 1938 | 1982 | yes |  |
+| 3x4 | anonymous entry | min | yes | 2551 | 11 | 1 | - | 2070 | 2156 | yes |  |
+| 3x4 | anonymous entry | full | yes | 2978 | 17 | 2 | 3 | 2221 | 2275 | yes |  |
+| 3x4 | anonymous entry | full+spl | yes | 3346 | 24 | 2 | - | 2353 | 2279 | yes |  |
+| 3x4 | anonymous entry | full+data | yes | 3382 | 17 | 2 | - | 2625 | 2671 | yes |  |
+| 3x4 | anonymous entry | full+reply | yes | 3271 | 17 | 2 | - | 2514 | 2566 | yes |  |
+| 3x4 | anonymous entry | full+2tree | yes | 3016 | 18 | 2 | - | 2226 | 2279 | yes |  |
 | 3x4 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 3x4 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
 | 2x16 | confidential signer | min | none | - | - | - | - | - | - | no | catalog key |
@@ -417,18 +417,18 @@ Every row is one transaction. fits: the row clears the transaction and CPI ceili
 | 3x8 | anonymous public owners | full+data | yes | 4463 | 21 | 3 | - | 3513 | 3694 | no | 367 B |
 | 3x8 | anonymous public owners | full+reply | yes | 4336 | 21 | 3 | - | 3386 | 3581 | no | 240 B |
 | 3x8 | anonymous public owners | full+2tree | yes | 3693 | 22 | 3 | - | 2710 | 2906 | yes |  |
-| 3x8 | confidential entry | min | yes | 3388 | 11 | 1 | - | 2906 | 3137 | yes |  |
-| 3x8 | confidential entry | full | yes | 3943 | 21 | 3 | 2 | 2993 | 3182 | yes |  |
-| 3x8 | confidential entry | full+spl | yes | 4311 | 28 | 3 | - | 3125 | 3186 | no | 215 B |
-| 3x8 | confidential entry | full+data | yes | 4751 | 21 | 3 | - | 3801 | 3974 | no | 655 B |
-| 3x8 | confidential entry | full+reply | yes | 3943 | 21 | 3 | - | 2993 | 3182 | yes |  |
-| 3x8 | confidential entry | full+2tree | yes | 3981 | 22 | 3 | - | 2998 | 3186 | yes |  |
-| 3x8 | anonymous entry | min | yes | 3739 | 11 | 1 | - | 3258 | 3488 | yes |  |
-| 3x8 | anonymous entry | full | yes | 4166 | 17 | 2 | none | 3409 | 3607 | no | 70 B |
-| 3x8 | anonymous entry | full+spl | yes | 4534 | 24 | 2 | - | 3541 | 3611 | no | 438 B |
-| 3x8 | anonymous entry | full+data | yes | 4974 | 17 | 2 | - | 4217 | 4399 | no | 878 B |
-| 3x8 | anonymous entry | full+reply | yes | 4847 | 17 | 2 | - | 4090 | 4286 | no | 751 B |
-| 3x8 | anonymous entry | full+2tree | yes | 4204 | 18 | 2 | - | 3414 | 3611 | no | 108 B |
+| 3x8 | confidential entry | min | yes | 3196 | 11 | 1 | - | 2714 | 2945 | yes |  |
+| 3x8 | confidential entry | full | yes | 3751 | 21 | 3 | 3 | 2801 | 2990 | yes |  |
+| 3x8 | confidential entry | full+spl | yes | 4119 | 28 | 3 | - | 2933 | 2994 | no | 23 B |
+| 3x8 | confidential entry | full+data | yes | 4559 | 21 | 3 | - | 3609 | 3782 | no | 463 B |
+| 3x8 | confidential entry | full+reply | yes | 3751 | 21 | 3 | - | 2801 | 2990 | yes |  |
+| 3x8 | confidential entry | full+2tree | yes | 3789 | 22 | 3 | - | 2806 | 2994 | yes |  |
+| 3x8 | anonymous entry | min | yes | 3547 | 11 | 1 | - | 3066 | 3296 | yes |  |
+| 3x8 | anonymous entry | full | yes | 3974 | 17 | 2 | 1 | 3217 | 3415 | yes |  |
+| 3x8 | anonymous entry | full+spl | yes | 4342 | 24 | 2 | - | 3349 | 3419 | no | 246 B |
+| 3x8 | anonymous entry | full+data | yes | 4782 | 17 | 2 | - | 4025 | 4207 | no | 686 B |
+| 3x8 | anonymous entry | full+reply | yes | 4655 | 17 | 2 | - | 3898 | 4094 | no | 559 B |
+| 3x8 | anonymous entry | full+2tree | yes | 4012 | 18 | 2 | - | 3222 | 3419 | yes |  |
 | 3x8 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 3x8 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
 | 4x2 | confidential signer | min | yes | 1543 | 12 | 1 | - | 1028 | 1044 | yes |  |
@@ -455,18 +455,18 @@ Every row is one transaction. fits: the row clears the transaction and CPI ceili
 | 4x2 | anonymous public owners | full+data | yes | 2428 | 22 | 3 | - | 1445 | 1423 | yes |  |
 | 4x2 | anonymous public owners | full+reply | yes | 2325 | 22 | 3 | - | 1342 | 1322 | yes |  |
 | 4x2 | anonymous public owners | full+2tree | yes | 2264 | 23 | 3 | - | 1248 | 1229 | yes |  |
-| 4x2 | confidential entry | min | yes | 2351 | 12 | 1 | - | 1836 | 1852 | yes |  |
-| 4x2 | confidential entry | full | yes | 2906 | 22 | 3 | 4 | 1923 | 1897 | yes |  |
-| 4x2 | confidential entry | full+spl | yes | 3274 | 29 | 3 | - | 2055 | 1901 | yes |  |
-| 4x2 | confidential entry | full+data | yes | 3108 | 22 | 3 | - | 2125 | 2095 | yes |  |
-| 4x2 | confidential entry | full+reply | yes | 2906 | 22 | 3 | - | 1923 | 1897 | yes |  |
-| 4x2 | confidential entry | full+2tree | yes | 2944 | 23 | 3 | - | 1928 | 1901 | yes |  |
-| 4x2 | anonymous entry | min | yes | 2510 | 12 | 1 | - | 1996 | 2011 | yes |  |
-| 4x2 | anonymous entry | full | yes | 2937 | 18 | 2 | 4 | 2147 | 2130 | yes |  |
-| 4x2 | anonymous entry | full+spl | yes | 3305 | 25 | 2 | - | 2279 | 2134 | yes |  |
-| 4x2 | anonymous entry | full+data | yes | 3139 | 18 | 2 | - | 2349 | 2328 | yes |  |
-| 4x2 | anonymous entry | full+reply | yes | 3036 | 18 | 2 | - | 2246 | 2227 | yes |  |
-| 4x2 | anonymous entry | full+2tree | yes | 2975 | 19 | 2 | - | 2152 | 2134 | yes |  |
+| 4x2 | confidential entry | min | yes | 2095 | 12 | 1 | - | 1580 | 1596 | yes |  |
+| 4x2 | confidential entry | full | yes | 2650 | 22 | 3 | 4 | 1667 | 1641 | yes |  |
+| 4x2 | confidential entry | full+spl | yes | 3018 | 29 | 3 | - | 1799 | 1645 | yes |  |
+| 4x2 | confidential entry | full+data | yes | 2852 | 22 | 3 | - | 1869 | 1839 | yes |  |
+| 4x2 | confidential entry | full+reply | yes | 2650 | 22 | 3 | - | 1667 | 1641 | yes |  |
+| 4x2 | confidential entry | full+2tree | yes | 2688 | 23 | 3 | - | 1672 | 1645 | yes |  |
+| 4x2 | anonymous entry | min | yes | 2254 | 12 | 1 | - | 1740 | 1755 | yes |  |
+| 4x2 | anonymous entry | full | yes | 2681 | 18 | 2 | 4 | 1891 | 1874 | yes |  |
+| 4x2 | anonymous entry | full+spl | yes | 3049 | 25 | 2 | - | 2023 | 1878 | yes |  |
+| 4x2 | anonymous entry | full+data | yes | 2883 | 18 | 2 | - | 2093 | 2072 | yes |  |
+| 4x2 | anonymous entry | full+reply | yes | 2780 | 18 | 2 | - | 1990 | 1971 | yes |  |
+| 4x2 | anonymous entry | full+2tree | yes | 2719 | 19 | 2 | - | 1896 | 1878 | yes |  |
 | 4x2 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 4x2 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
 | 4x4 | confidential signer | min | yes | 1977 | 12 | 1 | - | 1462 | 1550 | yes |  |
@@ -493,18 +493,18 @@ Every row is one transaction. fits: the row clears the transaction and CPI ceili
 | 4x4 | anonymous public owners | full+data | yes | 3128 | 22 | 3 | - | 2145 | 2191 | yes |  |
 | 4x4 | anonymous public owners | full+reply | yes | 3017 | 22 | 3 | - | 2034 | 2086 | yes |  |
 | 4x4 | anonymous public owners | full+2tree | yes | 2762 | 23 | 3 | - | 1746 | 1799 | yes |  |
-| 4x4 | confidential entry | min | yes | 2785 | 12 | 1 | - | 2270 | 2358 | yes |  |
-| 4x4 | confidential entry | full | yes | 3340 | 22 | 3 | 4 | 2357 | 2403 | yes |  |
-| 4x4 | confidential entry | full+spl | yes | 3708 | 29 | 3 | - | 2489 | 2407 | yes |  |
-| 4x4 | confidential entry | full+data | yes | 3744 | 22 | 3 | - | 2761 | 2799 | yes |  |
-| 4x4 | confidential entry | full+reply | yes | 3340 | 22 | 3 | - | 2357 | 2403 | yes |  |
-| 4x4 | confidential entry | full+2tree | yes | 3378 | 23 | 3 | - | 2362 | 2407 | yes |  |
-| 4x4 | anonymous entry | min | yes | 3008 | 12 | 1 | - | 2494 | 2581 | yes |  |
-| 4x4 | anonymous entry | full | yes | 3435 | 18 | 2 | 4 | 2645 | 2700 | yes |  |
-| 4x4 | anonymous entry | full+spl | yes | 3803 | 25 | 2 | - | 2777 | 2704 | yes |  |
-| 4x4 | anonymous entry | full+data | yes | 3839 | 18 | 2 | - | 3049 | 3096 | yes |  |
-| 4x4 | anonymous entry | full+reply | yes | 3728 | 18 | 2 | - | 2938 | 2991 | yes |  |
-| 4x4 | anonymous entry | full+2tree | yes | 3473 | 19 | 2 | - | 2650 | 2704 | yes |  |
+| 4x4 | confidential entry | min | yes | 2529 | 12 | 1 | - | 2014 | 2102 | yes |  |
+| 4x4 | confidential entry | full | yes | 3084 | 22 | 3 | 4 | 2101 | 2147 | yes |  |
+| 4x4 | confidential entry | full+spl | yes | 3452 | 29 | 3 | - | 2233 | 2151 | yes |  |
+| 4x4 | confidential entry | full+data | yes | 3488 | 22 | 3 | - | 2505 | 2543 | yes |  |
+| 4x4 | confidential entry | full+reply | yes | 3084 | 22 | 3 | - | 2101 | 2147 | yes |  |
+| 4x4 | confidential entry | full+2tree | yes | 3122 | 23 | 3 | - | 2106 | 2151 | yes |  |
+| 4x4 | anonymous entry | min | yes | 2752 | 12 | 1 | - | 2238 | 2325 | yes |  |
+| 4x4 | anonymous entry | full | yes | 3179 | 18 | 2 | 4 | 2389 | 2444 | yes |  |
+| 4x4 | anonymous entry | full+spl | yes | 3547 | 25 | 2 | - | 2521 | 2448 | yes |  |
+| 4x4 | anonymous entry | full+data | yes | 3583 | 18 | 2 | - | 2793 | 2840 | yes |  |
+| 4x4 | anonymous entry | full+reply | yes | 3472 | 18 | 2 | - | 2682 | 2735 | yes |  |
+| 4x4 | anonymous entry | full+2tree | yes | 3217 | 19 | 2 | - | 2394 | 2448 | yes |  |
 | 4x4 | delegate | min | yes | 1977 | 12 | 1 | - | 1462 | 1550 | yes |  |
 | 4x4 | delegate | full | yes | 2320 | 18 | 2 | - | 1533 | 1595 | yes |  |
 | 4x4 | delegate | full+spl | yes | 2560 | 25 | 2 | - | 1537 | 1599 | yes |  |
@@ -541,18 +541,18 @@ Every row is one transaction. fits: the row clears the transaction and CPI ceili
 | 4x8 | anonymous public owners | full+data | yes | 4528 | 22 | 3 | - | 3545 | 3727 | no | 432 B |
 | 4x8 | anonymous public owners | full+reply | yes | 4401 | 22 | 3 | - | 3418 | 3614 | no | 305 B |
 | 4x8 | anonymous public owners | full+2tree | yes | 3758 | 23 | 3 | - | 2742 | 2939 | yes |  |
-| 4x8 | confidential entry | min | yes | 3653 | 12 | 1 | - | 3138 | 3370 | yes |  |
-| 4x8 | confidential entry | full | yes | 4208 | 22 | 3 | none | 3225 | 3415 | no | 112 B |
-| 4x8 | confidential entry | full+spl | yes | 4576 | 29 | 3 | - | 3357 | 3419 | no | 480 B |
-| 4x8 | confidential entry | full+data | yes | 5016 | 22 | 3 | - | 4033 | 4207 | no | 920 B |
-| 4x8 | confidential entry | full+reply | yes | 4208 | 22 | 3 | - | 3225 | 3415 | no | 112 B |
-| 4x8 | confidential entry | full+2tree | yes | 4246 | 23 | 3 | - | 3230 | 3419 | no | 150 B |
-| 4x8 | anonymous entry | min | yes | 4004 | 12 | 1 | - | 3490 | 3721 | yes |  |
-| 4x8 | anonymous entry | full | yes | 4431 | 18 | 2 | none | 3641 | 3840 | no | 335 B |
-| 4x8 | anonymous entry | full+spl | yes | 4799 | 25 | 2 | - | 3773 | 3844 | no | 703 B |
-| 4x8 | anonymous entry | full+data | yes | 5239 | 18 | 2 | - | 4449 | 4632 | no | 1143 B |
-| 4x8 | anonymous entry | full+reply | yes | 5112 | 18 | 2 | - | 4322 | 4519 | no | 1016 B |
-| 4x8 | anonymous entry | full+2tree | yes | 4469 | 19 | 2 | - | 3646 | 3844 | no | 373 B |
+| 4x8 | confidential entry | min | yes | 3397 | 12 | 1 | - | 2882 | 3114 | yes |  |
+| 4x8 | confidential entry | full | yes | 3952 | 22 | 3 | 2 | 2969 | 3159 | yes |  |
+| 4x8 | confidential entry | full+spl | yes | 4320 | 29 | 3 | - | 3101 | 3163 | no | 224 B |
+| 4x8 | confidential entry | full+data | yes | 4760 | 22 | 3 | - | 3777 | 3951 | no | 664 B |
+| 4x8 | confidential entry | full+reply | yes | 3952 | 22 | 3 | - | 2969 | 3159 | yes |  |
+| 4x8 | confidential entry | full+2tree | yes | 3990 | 23 | 3 | - | 2974 | 3163 | yes |  |
+| 4x8 | anonymous entry | min | yes | 3748 | 12 | 1 | - | 3234 | 3465 | yes |  |
+| 4x8 | anonymous entry | full | yes | 4175 | 18 | 2 | none | 3385 | 3584 | no | 79 B |
+| 4x8 | anonymous entry | full+spl | yes | 4543 | 25 | 2 | - | 3517 | 3588 | no | 447 B |
+| 4x8 | anonymous entry | full+data | yes | 4983 | 18 | 2 | - | 4193 | 4376 | no | 887 B |
+| 4x8 | anonymous entry | full+reply | yes | 4856 | 18 | 2 | - | 4066 | 4263 | no | 760 B |
+| 4x8 | anonymous entry | full+2tree | yes | 4213 | 19 | 2 | - | 3390 | 3588 | no | 117 B |
 | 4x8 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 4x8 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
 | 5x2 | confidential signer | min | yes | 1608 | 13 | 1 | - | 1060 | 1077 | yes |  |
@@ -579,18 +579,18 @@ Every row is one transaction. fits: the row clears the transaction and CPI ceili
 | 5x2 | anonymous public owners | full+data | yes | 2493 | 23 | 3 | - | 1477 | 1456 | yes |  |
 | 5x2 | anonymous public owners | full+reply | yes | 2390 | 23 | 3 | - | 1374 | 1355 | yes |  |
 | 5x2 | anonymous public owners | full+2tree | yes | 2329 | 24 | 3 | - | 1280 | 1262 | yes |  |
-| 5x2 | confidential entry | min | yes | 2616 | 13 | 1 | - | 2068 | 2085 | yes |  |
-| 5x2 | confidential entry | full | yes | 3171 | 23 | 3 | 5 | 2155 | 2130 | yes |  |
-| 5x2 | confidential entry | full+spl | yes | 3539 | 30 | 3 | - | 2287 | 2134 | yes |  |
-| 5x2 | confidential entry | full+data | yes | 3373 | 23 | 3 | - | 2357 | 2328 | yes |  |
-| 5x2 | confidential entry | full+reply | yes | 3171 | 23 | 3 | - | 2155 | 2130 | yes |  |
-| 5x2 | confidential entry | full+2tree | yes | 3209 | 24 | 3 | - | 2160 | 2134 | yes |  |
-| 5x2 | anonymous entry | min | yes | 2775 | 13 | 1 | - | 2228 | 2244 | yes |  |
-| 5x2 | anonymous entry | full | yes | 3202 | 19 | 2 | 5 | 2379 | 2363 | yes |  |
-| 5x2 | anonymous entry | full+spl | yes | 3570 | 26 | 2 | - | 2511 | 2367 | yes |  |
-| 5x2 | anonymous entry | full+data | yes | 3404 | 19 | 2 | - | 2581 | 2561 | yes |  |
-| 5x2 | anonymous entry | full+reply | yes | 3301 | 19 | 2 | - | 2478 | 2460 | yes |  |
-| 5x2 | anonymous entry | full+2tree | yes | 3240 | 20 | 2 | - | 2384 | 2367 | yes |  |
+| 5x2 | confidential entry | min | yes | 2296 | 13 | 1 | - | 1748 | 1765 | yes |  |
+| 5x2 | confidential entry | full | yes | 2851 | 23 | 3 | 5 | 1835 | 1810 | yes |  |
+| 5x2 | confidential entry | full+spl | yes | 3219 | 30 | 3 | - | 1967 | 1814 | yes |  |
+| 5x2 | confidential entry | full+data | yes | 3053 | 23 | 3 | - | 2037 | 2008 | yes |  |
+| 5x2 | confidential entry | full+reply | yes | 2851 | 23 | 3 | - | 1835 | 1810 | yes |  |
+| 5x2 | confidential entry | full+2tree | yes | 2889 | 24 | 3 | - | 1840 | 1814 | yes |  |
+| 5x2 | anonymous entry | min | yes | 2455 | 13 | 1 | - | 1908 | 1924 | yes |  |
+| 5x2 | anonymous entry | full | yes | 2882 | 19 | 2 | 5 | 2059 | 2043 | yes |  |
+| 5x2 | anonymous entry | full+spl | yes | 3250 | 26 | 2 | - | 2191 | 2047 | yes |  |
+| 5x2 | anonymous entry | full+data | yes | 3084 | 19 | 2 | - | 2261 | 2241 | yes |  |
+| 5x2 | anonymous entry | full+reply | yes | 2981 | 19 | 2 | - | 2158 | 2140 | yes |  |
+| 5x2 | anonymous entry | full+2tree | yes | 2920 | 20 | 2 | - | 2064 | 2047 | yes |  |
 | 5x2 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 5x2 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
 | 5x4 | confidential signer | min | yes | 2042 | 13 | 1 | - | 1494 | 1583 | yes |  |
@@ -617,18 +617,18 @@ Every row is one transaction. fits: the row clears the transaction and CPI ceili
 | 5x4 | anonymous public owners | full+data | yes | 3193 | 23 | 3 | - | 2177 | 2224 | yes |  |
 | 5x4 | anonymous public owners | full+reply | yes | 3082 | 23 | 3 | - | 2066 | 2119 | yes |  |
 | 5x4 | anonymous public owners | full+2tree | yes | 2827 | 24 | 3 | - | 1778 | 1832 | yes |  |
-| 5x4 | confidential entry | min | yes | 3050 | 13 | 1 | - | 2502 | 2591 | yes |  |
-| 5x4 | confidential entry | full | yes | 3605 | 23 | 3 | 5 | 2589 | 2636 | yes |  |
-| 5x4 | confidential entry | full+spl | yes | 3973 | 30 | 3 | - | 2721 | 2640 | yes |  |
-| 5x4 | confidential entry | full+data | yes | 4009 | 23 | 3 | - | 2993 | 3032 | yes |  |
-| 5x4 | confidential entry | full+reply | yes | 3605 | 23 | 3 | - | 2589 | 2636 | yes |  |
-| 5x4 | confidential entry | full+2tree | yes | 3643 | 24 | 3 | - | 2594 | 2640 | yes |  |
-| 5x4 | anonymous entry | min | yes | 3273 | 13 | 1 | - | 2726 | 2814 | yes |  |
-| 5x4 | anonymous entry | full | yes | 3700 | 19 | 2 | 4 | 2877 | 2933 | yes |  |
-| 5x4 | anonymous entry | full+spl | yes | 4068 | 26 | 2 | - | 3009 | 2937 | yes |  |
-| 5x4 | anonymous entry | full+data | yes | 4104 | 19 | 2 | - | 3281 | 3329 | no | 8 B |
-| 5x4 | anonymous entry | full+reply | yes | 3993 | 19 | 2 | - | 3170 | 3224 | yes |  |
-| 5x4 | anonymous entry | full+2tree | yes | 3738 | 20 | 2 | - | 2882 | 2937 | yes |  |
+| 5x4 | confidential entry | min | yes | 2730 | 13 | 1 | - | 2182 | 2271 | yes |  |
+| 5x4 | confidential entry | full | yes | 3285 | 23 | 3 | 5 | 2269 | 2316 | yes |  |
+| 5x4 | confidential entry | full+spl | yes | 3653 | 30 | 3 | - | 2401 | 2320 | yes |  |
+| 5x4 | confidential entry | full+data | yes | 3689 | 23 | 3 | - | 2673 | 2712 | yes |  |
+| 5x4 | confidential entry | full+reply | yes | 3285 | 23 | 3 | - | 2269 | 2316 | yes |  |
+| 5x4 | confidential entry | full+2tree | yes | 3323 | 24 | 3 | - | 2274 | 2320 | yes |  |
+| 5x4 | anonymous entry | min | yes | 2953 | 13 | 1 | - | 2406 | 2494 | yes |  |
+| 5x4 | anonymous entry | full | yes | 3380 | 19 | 2 | 5 | 2557 | 2613 | yes |  |
+| 5x4 | anonymous entry | full+spl | yes | 3748 | 26 | 2 | - | 2689 | 2617 | yes |  |
+| 5x4 | anonymous entry | full+data | yes | 3784 | 19 | 2 | - | 2961 | 3009 | yes |  |
+| 5x4 | anonymous entry | full+reply | yes | 3673 | 19 | 2 | - | 2850 | 2904 | yes |  |
+| 5x4 | anonymous entry | full+2tree | yes | 3418 | 20 | 2 | - | 2562 | 2617 | yes |  |
 | 5x4 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 5x4 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
 | 4x16 | confidential signer | min | none | - | - | - | - | - | - | no | catalog key |
@@ -693,18 +693,18 @@ Every row is one transaction. fits: the row clears the transaction and CPI ceili
 | 5x8 | anonymous public owners | full+data | yes | 4593 | 23 | 3 | - | 3577 | 3760 | no | 497 B |
 | 5x8 | anonymous public owners | full+reply | yes | 4466 | 23 | 3 | - | 3450 | 3647 | no | 370 B |
 | 5x8 | anonymous public owners | full+2tree | yes | 3823 | 24 | 3 | - | 2774 | 2972 | yes |  |
-| 5x8 | confidential entry | min | yes | 3918 | 13 | 1 | - | 3370 | 3603 | yes |  |
-| 5x8 | confidential entry | full | yes | 4473 | 23 | 3 | none | 3457 | 3648 | no | 377 B |
-| 5x8 | confidential entry | full+spl | yes | 4841 | 30 | 3 | - | 3589 | 3652 | no | 745 B |
-| 5x8 | confidential entry | full+data | yes | 5281 | 23 | 3 | - | 4265 | 4440 | no | 1185 B |
-| 5x8 | confidential entry | full+reply | yes | 4473 | 23 | 3 | - | 3457 | 3648 | no | 377 B |
-| 5x8 | confidential entry | full+2tree | yes | 4511 | 24 | 3 | - | 3462 | 3652 | no | 415 B |
-| 5x8 | anonymous entry | min | yes | 4269 | 13 | 1 | - | 3722 | 3954 | no | 173 B |
-| 5x8 | anonymous entry | full | yes | 4696 | 19 | 2 | none | 3873 | 4073 | no | 600 B |
-| 5x8 | anonymous entry | full+spl | yes | 5064 | 26 | 2 | - | 4005 | 4077 | no | 968 B |
-| 5x8 | anonymous entry | full+data | yes | 5504 | 19 | 2 | - | 4681 | 4865 | no | 1408 B |
-| 5x8 | anonymous entry | full+reply | yes | 5377 | 19 | 2 | - | 4554 | 4752 | no | 1281 B |
-| 5x8 | anonymous entry | full+2tree | yes | 4734 | 20 | 2 | - | 3878 | 4077 | no | 638 B |
+| 5x8 | confidential entry | min | yes | 3598 | 13 | 1 | - | 3050 | 3283 | yes |  |
+| 5x8 | confidential entry | full | yes | 4153 | 23 | 3 | none | 3137 | 3328 | no | 57 B |
+| 5x8 | confidential entry | full+spl | yes | 4521 | 30 | 3 | - | 3269 | 3332 | no | 425 B |
+| 5x8 | confidential entry | full+data | yes | 4961 | 23 | 3 | - | 3945 | 4120 | no | 865 B |
+| 5x8 | confidential entry | full+reply | yes | 4153 | 23 | 3 | - | 3137 | 3328 | no | 57 B |
+| 5x8 | confidential entry | full+2tree | yes | 4191 | 24 | 3 | - | 3142 | 3332 | no | 95 B |
+| 5x8 | anonymous entry | min | yes | 3949 | 13 | 1 | - | 3402 | 3634 | yes |  |
+| 5x8 | anonymous entry | full | yes | 4376 | 19 | 2 | none | 3553 | 3753 | no | 280 B |
+| 5x8 | anonymous entry | full+spl | yes | 4744 | 26 | 2 | - | 3685 | 3757 | no | 648 B |
+| 5x8 | anonymous entry | full+data | yes | 5184 | 19 | 2 | - | 4361 | 4545 | no | 1088 B |
+| 5x8 | anonymous entry | full+reply | yes | 5057 | 19 | 2 | - | 4234 | 4432 | no | 961 B |
+| 5x8 | anonymous entry | full+2tree | yes | 4414 | 20 | 2 | - | 3558 | 3757 | no | 318 B |
 | 5x8 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 5x8 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
 | 6x2 | confidential signer | min | yes | 1673 | 14 | 1 | - | 1092 | 1110 | yes |  |
@@ -731,18 +731,18 @@ Every row is one transaction. fits: the row clears the transaction and CPI ceili
 | 6x2 | anonymous public owners | full+data | yes | 2558 | 24 | 3 | - | 1509 | 1489 | yes |  |
 | 6x2 | anonymous public owners | full+reply | yes | 2455 | 24 | 3 | - | 1406 | 1388 | yes |  |
 | 6x2 | anonymous public owners | full+2tree | yes | 2394 | 25 | 3 | - | 1312 | 1295 | yes |  |
-| 6x2 | confidential entry | min | yes | 2881 | 14 | 1 | - | 2300 | 2318 | yes |  |
-| 6x2 | confidential entry | full | yes | 3436 | 24 | 3 | 6 | 2387 | 2363 | yes |  |
-| 6x2 | confidential entry | full+spl | yes | 3804 | 31 | 3 | - | 2519 | 2367 | yes |  |
-| 6x2 | confidential entry | full+data | yes | 3638 | 24 | 3 | - | 2589 | 2561 | yes |  |
-| 6x2 | confidential entry | full+reply | yes | 3436 | 24 | 3 | - | 2387 | 2363 | yes |  |
-| 6x2 | confidential entry | full+2tree | yes | 3474 | 25 | 3 | - | 2392 | 2367 | yes |  |
-| 6x2 | anonymous entry | min | yes | 3040 | 14 | 1 | - | 2460 | 2477 | yes |  |
-| 6x2 | anonymous entry | full | yes | 3467 | 20 | 2 | 6 | 2611 | 2596 | yes |  |
-| 6x2 | anonymous entry | full+spl | yes | 3835 | 27 | 2 | - | 2743 | 2600 | yes |  |
-| 6x2 | anonymous entry | full+data | yes | 3669 | 20 | 2 | - | 2813 | 2794 | yes |  |
-| 6x2 | anonymous entry | full+reply | yes | 3566 | 20 | 2 | - | 2710 | 2693 | yes |  |
-| 6x2 | anonymous entry | full+2tree | yes | 3505 | 21 | 2 | - | 2616 | 2600 | yes |  |
+| 6x2 | confidential entry | min | yes | 2497 | 14 | 1 | - | 1916 | 1934 | yes |  |
+| 6x2 | confidential entry | full | yes | 3052 | 24 | 3 | 6 | 2003 | 1979 | yes |  |
+| 6x2 | confidential entry | full+spl | yes | 3420 | 31 | 3 | - | 2135 | 1983 | yes |  |
+| 6x2 | confidential entry | full+data | yes | 3254 | 24 | 3 | - | 2205 | 2177 | yes |  |
+| 6x2 | confidential entry | full+reply | yes | 3052 | 24 | 3 | - | 2003 | 1979 | yes |  |
+| 6x2 | confidential entry | full+2tree | yes | 3090 | 25 | 3 | - | 2008 | 1983 | yes |  |
+| 6x2 | anonymous entry | min | yes | 2656 | 14 | 1 | - | 2076 | 2093 | yes |  |
+| 6x2 | anonymous entry | full | yes | 3083 | 20 | 2 | 6 | 2227 | 2212 | yes |  |
+| 6x2 | anonymous entry | full+spl | yes | 3451 | 27 | 2 | - | 2359 | 2216 | yes |  |
+| 6x2 | anonymous entry | full+data | yes | 3285 | 20 | 2 | - | 2429 | 2410 | yes |  |
+| 6x2 | anonymous entry | full+reply | yes | 3182 | 20 | 2 | - | 2326 | 2309 | yes |  |
+| 6x2 | anonymous entry | full+2tree | yes | 3121 | 21 | 2 | - | 2232 | 2216 | yes |  |
 | 6x2 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 6x2 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
 | 6x4 | confidential signer | min | yes | 2107 | 14 | 1 | - | 1526 | 1616 | yes |  |
@@ -769,18 +769,18 @@ Every row is one transaction. fits: the row clears the transaction and CPI ceili
 | 6x4 | anonymous public owners | full+data | yes | 3258 | 24 | 3 | - | 2209 | 2257 | yes |  |
 | 6x4 | anonymous public owners | full+reply | yes | 3147 | 24 | 3 | - | 2098 | 2152 | yes |  |
 | 6x4 | anonymous public owners | full+2tree | yes | 2892 | 25 | 3 | - | 1810 | 1865 | yes |  |
-| 6x4 | confidential entry | min | yes | 3315 | 14 | 1 | - | 2734 | 2824 | yes |  |
-| 6x4 | confidential entry | full | yes | 3870 | 24 | 3 | 3 | 2821 | 2869 | yes |  |
-| 6x4 | confidential entry | full+spl | yes | 4238 | 31 | 3 | - | 2953 | 2873 | no | 142 B |
-| 6x4 | confidential entry | full+data | yes | 4274 | 24 | 3 | - | 3225 | 3265 | no | 178 B |
-| 6x4 | confidential entry | full+reply | yes | 3870 | 24 | 3 | - | 2821 | 2869 | yes |  |
-| 6x4 | confidential entry | full+2tree | yes | 3908 | 25 | 3 | - | 2826 | 2873 | yes |  |
-| 6x4 | anonymous entry | min | yes | 3538 | 14 | 1 | - | 2958 | 3047 | yes |  |
-| 6x4 | anonymous entry | full | yes | 3965 | 20 | 2 | 1 | 3109 | 3166 | yes |  |
-| 6x4 | anonymous entry | full+spl | yes | 4333 | 27 | 2 | - | 3241 | 3170 | no | 237 B |
-| 6x4 | anonymous entry | full+data | yes | 4369 | 20 | 2 | - | 3513 | 3562 | no | 273 B |
-| 6x4 | anonymous entry | full+reply | yes | 4258 | 20 | 2 | - | 3402 | 3457 | no | 162 B |
-| 6x4 | anonymous entry | full+2tree | yes | 4003 | 21 | 2 | - | 3114 | 3170 | yes |  |
+| 6x4 | confidential entry | min | yes | 2931 | 14 | 1 | - | 2350 | 2440 | yes |  |
+| 6x4 | confidential entry | full | yes | 3486 | 24 | 3 | 6 | 2437 | 2485 | yes |  |
+| 6x4 | confidential entry | full+spl | yes | 3854 | 31 | 3 | - | 2569 | 2489 | yes |  |
+| 6x4 | confidential entry | full+data | yes | 3890 | 24 | 3 | - | 2841 | 2881 | yes |  |
+| 6x4 | confidential entry | full+reply | yes | 3486 | 24 | 3 | - | 2437 | 2485 | yes |  |
+| 6x4 | confidential entry | full+2tree | yes | 3524 | 25 | 3 | - | 2442 | 2489 | yes |  |
+| 6x4 | anonymous entry | min | yes | 3154 | 14 | 1 | - | 2574 | 2663 | yes |  |
+| 6x4 | anonymous entry | full | yes | 3581 | 20 | 2 | 5 | 2725 | 2782 | yes |  |
+| 6x4 | anonymous entry | full+spl | yes | 3949 | 27 | 2 | - | 2857 | 2786 | yes |  |
+| 6x4 | anonymous entry | full+data | yes | 3985 | 20 | 2 | - | 3129 | 3178 | yes |  |
+| 6x4 | anonymous entry | full+reply | yes | 3874 | 20 | 2 | - | 3018 | 3073 | yes |  |
+| 6x4 | anonymous entry | full+2tree | yes | 3619 | 21 | 2 | - | 2730 | 2786 | yes |  |
 | 6x4 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 6x4 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
 | 5x16 | confidential signer | min | none | - | - | - | - | - | - | no | catalog key |
@@ -845,18 +845,18 @@ Every row is one transaction. fits: the row clears the transaction and CPI ceili
 | 6x8 | anonymous public owners | full+data | yes | 4658 | 24 | 3 | - | 3609 | 3793 | no | 562 B |
 | 6x8 | anonymous public owners | full+reply | yes | 4531 | 24 | 3 | - | 3482 | 3680 | no | 435 B |
 | 6x8 | anonymous public owners | full+2tree | yes | 3888 | 25 | 3 | - | 2806 | 3005 | yes |  |
-| 6x8 | confidential entry | min | yes | 4183 | 14 | 1 | - | 3602 | 3836 | no | 87 B |
-| 6x8 | confidential entry | full | yes | 4738 | 24 | 3 | none | 3689 | 3881 | no | 642 B |
-| 6x8 | confidential entry | full+spl | yes | 5106 | 31 | 3 | - | 3821 | 3885 | no | 1010 B |
-| 6x8 | confidential entry | full+data | yes | 5546 | 24 | 3 | - | 4497 | 4673 | no | 1450 B |
-| 6x8 | confidential entry | full+reply | yes | 4738 | 24 | 3 | - | 3689 | 3881 | no | 642 B |
-| 6x8 | confidential entry | full+2tree | yes | 4776 | 25 | 3 | - | 3694 | 3885 | no | 680 B |
-| 6x8 | anonymous entry | min | yes | 4534 | 14 | 1 | - | 3954 | 4187 | no | 438 B |
-| 6x8 | anonymous entry | full | yes | 4961 | 20 | 2 | none | 4105 | 4306 | no | 865 B |
-| 6x8 | anonymous entry | full+spl | yes | 5329 | 27 | 2 | - | 4237 | 4310 | no | 1233 B |
-| 6x8 | anonymous entry | full+data | yes | 5769 | 20 | 2 | - | 4913 | 5098 | no | 1673 B |
-| 6x8 | anonymous entry | full+reply | yes | 5642 | 20 | 2 | - | 4786 | 4985 | no | 1546 B |
-| 6x8 | anonymous entry | full+2tree | yes | 4999 | 21 | 2 | - | 4110 | 4310 | no | 903 B |
+| 6x8 | confidential entry | min | yes | 3799 | 14 | 1 | - | 3218 | 3452 | yes |  |
+| 6x8 | confidential entry | full | yes | 4354 | 24 | 3 | none | 3305 | 3497 | no | 258 B |
+| 6x8 | confidential entry | full+spl | yes | 4722 | 31 | 3 | - | 3437 | 3501 | no | 626 B |
+| 6x8 | confidential entry | full+data | yes | 5162 | 24 | 3 | - | 4113 | 4289 | no | 1066 B |
+| 6x8 | confidential entry | full+reply | yes | 4354 | 24 | 3 | - | 3305 | 3497 | no | 258 B |
+| 6x8 | confidential entry | full+2tree | yes | 4392 | 25 | 3 | - | 3310 | 3501 | no | 296 B |
+| 6x8 | anonymous entry | min | yes | 4150 | 14 | 1 | - | 3570 | 3803 | no | 54 B |
+| 6x8 | anonymous entry | full | yes | 4577 | 20 | 2 | none | 3721 | 3922 | no | 481 B |
+| 6x8 | anonymous entry | full+spl | yes | 4945 | 27 | 2 | - | 3853 | 3926 | no | 849 B |
+| 6x8 | anonymous entry | full+data | yes | 5385 | 20 | 2 | - | 4529 | 4714 | no | 1289 B |
+| 6x8 | anonymous entry | full+reply | yes | 5258 | 20 | 2 | - | 4402 | 4601 | no | 1162 B |
+| 6x8 | anonymous entry | full+2tree | yes | 4615 | 21 | 2 | - | 3726 | 3926 | no | 519 B |
 | 6x8 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 6x8 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
 | 8x2 | confidential signer | min | yes | 1803 | 16 | 1 | - | 1156 | 1176 | yes |  |
@@ -883,18 +883,18 @@ Every row is one transaction. fits: the row clears the transaction and CPI ceili
 | 8x2 | anonymous public owners | full+data | yes | 2688 | 26 | 3 | - | 1573 | 1555 | yes |  |
 | 8x2 | anonymous public owners | full+reply | yes | 2585 | 26 | 3 | - | 1470 | 1454 | yes |  |
 | 8x2 | anonymous public owners | full+2tree | yes | 2524 | 27 | 3 | - | 1376 | 1361 | yes |  |
-| 8x2 | confidential entry | min | yes | 3411 | 16 | 1 | - | 2764 | 2784 | yes |  |
-| 8x2 | confidential entry | full | yes | 3966 | 26 | 3 | 2 | 2851 | 2829 | yes |  |
-| 8x2 | confidential entry | full+spl | yes | 4334 | 33 | 3 | - | 2983 | 2833 | no | 238 B |
-| 8x2 | confidential entry | full+data | yes | 4168 | 26 | 3 | - | 3053 | 3027 | no | 72 B |
-| 8x2 | confidential entry | full+reply | yes | 3966 | 26 | 3 | - | 2851 | 2829 | yes |  |
-| 8x2 | confidential entry | full+2tree | yes | 4004 | 27 | 3 | - | 2856 | 2833 | yes |  |
-| 8x2 | anonymous entry | min | yes | 3570 | 16 | 1 | - | 2924 | 2943 | yes |  |
-| 8x2 | anonymous entry | full | yes | 3997 | 22 | 2 | 1 | 3075 | 3062 | yes |  |
-| 8x2 | anonymous entry | full+spl | yes | 4365 | 29 | 2 | - | 3207 | 3066 | no | 269 B |
-| 8x2 | anonymous entry | full+data | yes | 4199 | 22 | 2 | - | 3277 | 3260 | no | 103 B |
-| 8x2 | anonymous entry | full+reply | yes | 4096 | 22 | 2 | - | 3174 | 3159 | yes |  |
-| 8x2 | anonymous entry | full+2tree | yes | 4035 | 23 | 2 | - | 3080 | 3066 | yes |  |
+| 8x2 | confidential entry | min | yes | 2899 | 16 | 1 | - | 2252 | 2272 | yes |  |
+| 8x2 | confidential entry | full | yes | 3454 | 26 | 3 | 7 | 2339 | 2317 | yes |  |
+| 8x2 | confidential entry | full+spl | yes | 3822 | 33 | 3 | - | 2471 | 2321 | yes |  |
+| 8x2 | confidential entry | full+data | yes | 3656 | 26 | 3 | - | 2541 | 2515 | yes |  |
+| 8x2 | confidential entry | full+reply | yes | 3454 | 26 | 3 | - | 2339 | 2317 | yes |  |
+| 8x2 | confidential entry | full+2tree | yes | 3492 | 27 | 3 | - | 2344 | 2321 | yes |  |
+| 8x2 | anonymous entry | min | yes | 3058 | 16 | 1 | - | 2412 | 2431 | yes |  |
+| 8x2 | anonymous entry | full | yes | 3485 | 22 | 2 | 6 | 2563 | 2550 | yes |  |
+| 8x2 | anonymous entry | full+spl | yes | 3853 | 29 | 2 | - | 2695 | 2554 | yes |  |
+| 8x2 | anonymous entry | full+data | yes | 3687 | 22 | 2 | - | 2765 | 2748 | yes |  |
+| 8x2 | anonymous entry | full+reply | yes | 3584 | 22 | 2 | - | 2662 | 2647 | yes |  |
+| 8x2 | anonymous entry | full+2tree | yes | 3523 | 23 | 2 | - | 2568 | 2554 | yes |  |
 | 8x2 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 8x2 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
 | 8x4 | confidential signer | min | yes | 2237 | 16 | 1 | - | 1590 | 1682 | yes |  |
@@ -921,18 +921,18 @@ Every row is one transaction. fits: the row clears the transaction and CPI ceili
 | 8x4 | anonymous public owners | full+data | yes | 3388 | 26 | 3 | - | 2273 | 2323 | yes |  |
 | 8x4 | anonymous public owners | full+reply | yes | 3277 | 26 | 3 | - | 2162 | 2218 | yes |  |
 | 8x4 | anonymous public owners | full+2tree | yes | 3022 | 27 | 3 | - | 1874 | 1931 | yes |  |
-| 8x4 | confidential entry | min | yes | 3845 | 16 | 1 | - | 3198 | 3290 | yes |  |
-| 8x4 | confidential entry | full | yes | 4400 | 26 | 3 | none | 3285 | 3335 | no | 304 B |
-| 8x4 | confidential entry | full+spl | yes | 4768 | 33 | 3 | - | 3417 | 3339 | no | 672 B |
-| 8x4 | confidential entry | full+data | yes | 4804 | 26 | 3 | - | 3689 | 3731 | no | 708 B |
-| 8x4 | confidential entry | full+reply | yes | 4400 | 26 | 3 | - | 3285 | 3335 | no | 304 B |
-| 8x4 | confidential entry | full+2tree | yes | 4438 | 27 | 3 | - | 3290 | 3339 | no | 342 B |
-| 8x4 | anonymous entry | min | yes | 4068 | 16 | 1 | - | 3422 | 3513 | yes |  |
-| 8x4 | anonymous entry | full | yes | 4495 | 22 | 2 | none | 3573 | 3632 | no | 399 B |
-| 8x4 | anonymous entry | full+spl | yes | 4863 | 29 | 2 | - | 3705 | 3636 | no | 767 B |
-| 8x4 | anonymous entry | full+data | yes | 4899 | 22 | 2 | - | 3977 | 4028 | no | 803 B |
-| 8x4 | anonymous entry | full+reply | yes | 4788 | 22 | 2 | - | 3866 | 3923 | no | 692 B |
-| 8x4 | anonymous entry | full+2tree | yes | 4533 | 23 | 2 | - | 3578 | 3636 | no | 437 B |
+| 8x4 | confidential entry | min | yes | 3333 | 16 | 1 | - | 2686 | 2778 | yes |  |
+| 8x4 | confidential entry | full | yes | 3888 | 26 | 3 | 3 | 2773 | 2823 | yes |  |
+| 8x4 | confidential entry | full+spl | yes | 4256 | 33 | 3 | - | 2905 | 2827 | no | 160 B |
+| 8x4 | confidential entry | full+data | yes | 4292 | 26 | 3 | - | 3177 | 3219 | no | 196 B |
+| 8x4 | confidential entry | full+reply | yes | 3888 | 26 | 3 | - | 2773 | 2823 | yes |  |
+| 8x4 | confidential entry | full+2tree | yes | 3926 | 27 | 3 | - | 2778 | 2827 | yes |  |
+| 8x4 | anonymous entry | min | yes | 3556 | 16 | 1 | - | 2910 | 3001 | yes |  |
+| 8x4 | anonymous entry | full | yes | 3983 | 22 | 2 | 1 | 3061 | 3120 | yes |  |
+| 8x4 | anonymous entry | full+spl | yes | 4351 | 29 | 2 | - | 3193 | 3124 | no | 255 B |
+| 8x4 | anonymous entry | full+data | yes | 4387 | 22 | 2 | - | 3465 | 3516 | no | 291 B |
+| 8x4 | anonymous entry | full+reply | yes | 4276 | 22 | 2 | - | 3354 | 3411 | no | 180 B |
+| 8x4 | anonymous entry | full+2tree | yes | 4021 | 23 | 2 | - | 3066 | 3124 | yes |  |
 | 8x4 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 8x4 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
 | 8x8 | confidential signer | min | yes | 3105 | 16 | 1 | - | 2458 | 2694 | yes |  |
@@ -959,18 +959,18 @@ Every row is one transaction. fits: the row clears the transaction and CPI ceili
 | 8x8 | anonymous public owners | full+data | yes | 4788 | 26 | 3 | - | 3673 | 3859 | no | 692 B |
 | 8x8 | anonymous public owners | full+reply | yes | 4661 | 26 | 3 | - | 3546 | 3746 | no | 565 B |
 | 8x8 | anonymous public owners | full+2tree | yes | 4018 | 27 | 3 | - | 2870 | 3071 | yes |  |
-| 8x8 | confidential entry | min | yes | 4713 | 16 | 1 | - | 4066 | 4302 | no | 617 B |
-| 8x8 | confidential entry | full | yes | 5268 | 26 | 3 | none | 4153 | 4347 | no | 1172 B |
-| 8x8 | confidential entry | full+spl | yes | 5636 | 33 | 3 | - | 4285 | 4351 | no | 1540 B |
-| 8x8 | confidential entry | full+data | yes | 6076 | 26 | 3 | - | 4961 | 5139 | no | 1980 B |
-| 8x8 | confidential entry | full+reply | yes | 5268 | 26 | 3 | - | 4153 | 4347 | no | 1172 B |
-| 8x8 | confidential entry | full+2tree | yes | 5306 | 27 | 3 | - | 4158 | 4351 | no | 1210 B |
-| 8x8 | anonymous entry | min | yes | 5064 | 16 | 1 | - | 4418 | 4653 | no | 968 B |
-| 8x8 | anonymous entry | full | yes | 5491 | 22 | 2 | none | 4569 | 4772 | no | 1395 B |
-| 8x8 | anonymous entry | full+spl | yes | 5859 | 29 | 2 | - | 4701 | 4776 | no | 1763 B |
-| 8x8 | anonymous entry | full+data | yes | 6299 | 22 | 2 | - | 5377 | 5564 | no | 2203 B |
-| 8x8 | anonymous entry | full+reply | yes | 6172 | 22 | 2 | - | 5250 | 5451 | no | 2076 B |
-| 8x8 | anonymous entry | full+2tree | yes | 5529 | 23 | 2 | - | 4574 | 4776 | no | 1433 B |
+| 8x8 | confidential entry | min | yes | 4201 | 16 | 1 | - | 3554 | 3790 | no | 105 B |
+| 8x8 | confidential entry | full | yes | 4756 | 26 | 3 | none | 3641 | 3835 | no | 660 B |
+| 8x8 | confidential entry | full+spl | yes | 5124 | 33 | 3 | - | 3773 | 3839 | no | 1028 B |
+| 8x8 | confidential entry | full+data | yes | 5564 | 26 | 3 | - | 4449 | 4627 | no | 1468 B |
+| 8x8 | confidential entry | full+reply | yes | 4756 | 26 | 3 | - | 3641 | 3835 | no | 660 B |
+| 8x8 | confidential entry | full+2tree | yes | 4794 | 27 | 3 | - | 3646 | 3839 | no | 698 B |
+| 8x8 | anonymous entry | min | yes | 4552 | 16 | 1 | - | 3906 | 4141 | no | 456 B |
+| 8x8 | anonymous entry | full | yes | 4979 | 22 | 2 | none | 4057 | 4260 | no | 883 B |
+| 8x8 | anonymous entry | full+spl | yes | 5347 | 29 | 2 | - | 4189 | 4264 | no | 1251 B |
+| 8x8 | anonymous entry | full+data | yes | 5787 | 22 | 2 | - | 4865 | 5052 | no | 1691 B |
+| 8x8 | anonymous entry | full+reply | yes | 5660 | 22 | 2 | - | 4738 | 4939 | no | 1564 B |
+| 8x8 | anonymous entry | full+2tree | yes | 5017 | 23 | 2 | - | 4062 | 4264 | no | 921 B |
 | 8x8 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 8x8 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
 | 8x16 | confidential signer | min | none | - | - | - | - | - | - | no | catalog key |
@@ -1527,11 +1527,11 @@ Maxima. Load max is full with data tails, every extension but the cache, two SPP
 | 1x2 | anonymous public owners | reply | 1718 | 3179 | 3110 | 4096 | 20 | 3 | 1 B |
 | 1x2 | anonymous public owners | messages | 47 | 3157 | 3087 | 4074 | 20 | 3 | 12 B |
 | 1x2 | anonymous public owners | message bytes | 1586 | 3179 | 3109 | 4096 | 20 | 3 | 1 B |
-| 1x2 | confidential entry | messages | 48 | 3172 | 3096 | 4089 | 20 | 3 | 27 B |
-| 1x2 | confidential entry | message bytes | 1605 | 3179 | 3103 | 4096 | 20 | 3 | 1 B |
-| 1x2 | anonymous entry | reply | 1607 | 3372 | 3304 | 4096 | 16 | 2 | 1 B |
-| 1x2 | anonymous entry | messages | 44 | 3359 | 3290 | 4083 | 16 | 2 | 21 B |
-| 1x2 | anonymous entry | message bytes | 1475 | 3372 | 3303 | 4096 | 16 | 2 | 1 B |
+| 1x2 | confidential entry | messages | 50 | 3176 | 3100 | 4093 | 20 | 3 | 31 B |
+| 1x2 | confidential entry | message bytes | 1669 | 3179 | 3103 | 4096 | 20 | 3 | 1 B |
+| 1x2 | anonymous entry | reply | 1671 | 3372 | 3304 | 4096 | 16 | 2 | 1 B |
+| 1x2 | anonymous entry | messages | 46 | 3363 | 3294 | 4087 | 16 | 2 | 25 B |
+| 1x2 | anonymous entry | message bytes | 1539 | 3372 | 3303 | 4096 | 16 | 2 | 1 B |
 | 1x4 | confidential signer | messages | 35 | 3158 | 3150 | 4075 | 20 | 3 | 13 B |
 | 1x4 | confidential signer | message bytes | 1177 | 3179 | 3171 | 4096 | 20 | 3 | 1 B |
 | 1x4 | confidential in-proof | messages | 35 | 3254 | 3247 | 4074 | 19 | 2 | 12 B |
@@ -1542,11 +1542,11 @@ Maxima. Load max is full with data tails, every extension but the cache, two SPP
 | 1x4 | anonymous public owners | reply | 339 | 3178 | 3177 | 4095 | 20 | 3 | 2 B |
 | 1x4 | anonymous public owners | messages | 21 | 3167 | 3165 | 4084 | 20 | 3 | 22 B |
 | 1x4 | anonymous public owners | message bytes | 692 | 3179 | 3177 | 4096 | 20 | 3 | 1 B |
-| 1x4 | confidential entry | messages | 29 | 3162 | 3154 | 4079 | 20 | 3 | 17 B |
-| 1x4 | confidential entry | message bytes | 969 | 3179 | 3171 | 4096 | 20 | 3 | 1 B |
-| 1x4 | anonymous entry | reply | 302 | 3371 | 3371 | 4095 | 16 | 2 | 2 B |
-| 1x4 | anonymous entry | messages | 18 | 3369 | 3368 | 4093 | 16 | 2 | 31 B |
-| 1x4 | anonymous entry | message bytes | 581 | 3372 | 3371 | 4096 | 16 | 2 | 1 B |
+| 1x4 | confidential entry | messages | 31 | 3166 | 3158 | 4083 | 20 | 3 | 21 B |
+| 1x4 | confidential entry | message bytes | 1033 | 3179 | 3171 | 4096 | 20 | 3 | 1 B |
+| 1x4 | anonymous entry | reply | 323 | 3370 | 3370 | 4094 | 16 | 2 | 1 B |
+| 1x4 | anonymous entry | messages | 19 | 3339 | 3338 | 4063 | 16 | 2 | 1 B |
+| 1x4 | anonymous entry | message bytes | 645 | 3372 | 3371 | 4096 | 16 | 2 | 1 B |
 | 1x8 | confidential signer | messages | none | - | - | - | - | - | 60 B |
 | 1x8 | confidential signer | message bytes | none | - | - | - | - | - | 95 B |
 | 1x8 | confidential in-proof | messages | none | - | - | - | - | - | 59 B |
@@ -1557,11 +1557,11 @@ Maxima. Load max is full with data tails, every extension but the cache, two SPP
 | 1x8 | anonymous public owners | reply | none | - | - | - | - | - | 1061 B |
 | 1x8 | anonymous public owners | messages | none | - | - | - | - | - | 1061 B |
 | 1x8 | anonymous public owners | message bytes | none | - | - | - | - | - | 1096 B |
-| 1x8 | confidential entry | messages | none | - | - | - | - | - | 268 B |
-| 1x8 | confidential entry | message bytes | none | - | - | - | - | - | 303 B |
-| 1x8 | anonymous entry | reply | none | - | - | - | - | - | 1172 B |
-| 1x8 | anonymous entry | messages | none | - | - | - | - | - | 1172 B |
-| 1x8 | anonymous entry | message bytes | none | - | - | - | - | - | 1207 B |
+| 1x8 | confidential entry | messages | none | - | - | - | - | - | 204 B |
+| 1x8 | confidential entry | message bytes | none | - | - | - | - | - | 239 B |
+| 1x8 | anonymous entry | reply | none | - | - | - | - | - | 1108 B |
+| 1x8 | anonymous entry | messages | none | - | - | - | - | - | 1108 B |
+| 1x8 | anonymous entry | message bytes | none | - | - | - | - | - | 1143 B |
 | 2x2 | confidential signer | messages | 52 | 3132 | 3057 | 4082 | 21 | 3 | 20 B |
 | 2x2 | confidential signer | message bytes | 1748 | 3146 | 3071 | 4096 | 21 | 3 | 1 B |
 | 2x2 | confidential in-proof | messages | 52 | 3228 | 3154 | 4081 | 20 | 2 | 19 B |
@@ -1572,11 +1572,11 @@ Maxima. Load max is full with data tails, every extension but the cache, two SPP
 | 2x2 | anonymous public owners | reply | 1653 | 3146 | 3078 | 4096 | 21 | 3 | 1 B |
 | 2x2 | anonymous public owners | messages | 45 | 3121 | 3052 | 4071 | 21 | 3 | 9 B |
 | 2x2 | anonymous public owners | message bytes | 1521 | 3146 | 3077 | 4096 | 21 | 3 | 1 B |
-| 2x2 | confidential entry | messages | 40 | 3132 | 3057 | 4082 | 21 | 3 | 20 B |
-| 2x2 | confidential entry | message bytes | 1340 | 3146 | 3071 | 4096 | 21 | 3 | 1 B |
-| 2x2 | anonymous entry | reply | 1342 | 3339 | 3272 | 4096 | 17 | 2 | 1 B |
-| 2x2 | anonymous entry | messages | 36 | 3319 | 3251 | 4076 | 17 | 2 | 14 B |
-| 2x2 | anonymous entry | message bytes | 1210 | 3339 | 3271 | 4096 | 17 | 2 | 1 B |
+| 2x2 | confidential entry | messages | 44 | 3140 | 3065 | 4090 | 21 | 3 | 28 B |
+| 2x2 | confidential entry | message bytes | 1468 | 3146 | 3071 | 4096 | 21 | 3 | 1 B |
+| 2x2 | anonymous entry | reply | 1470 | 3339 | 3272 | 4096 | 17 | 2 | 1 B |
+| 2x2 | anonymous entry | messages | 40 | 3327 | 3259 | 4084 | 17 | 2 | 22 B |
+| 2x2 | anonymous entry | message bytes | 1338 | 3339 | 3271 | 4096 | 17 | 2 | 1 B |
 | 2x2 | delegate | messages | 59 | 3314 | 3295 | 4068 | 17 | 2 | 6 B |
 | 2x2 | delegate | message bytes | 2000 | 3342 | 3323 | 4096 | 17 | 2 | 1 B |
 | 2x2 | anonymous delegate | reply | 1905 | 3342 | 3330 | 4096 | 17 | 2 | 1 B |
@@ -1592,11 +1592,11 @@ Maxima. Load max is full with data tails, every extension but the cache, two SPP
 | 2x4 | anonymous public owners | reply | 317 | 3144 | 3144 | 4094 | 21 | 3 | 1 B |
 | 2x4 | anonymous public owners | messages | 19 | 3131 | 3130 | 4081 | 21 | 3 | 19 B |
 | 2x4 | anonymous public owners | message bytes | 627 | 3146 | 3145 | 4096 | 21 | 3 | 1 B |
-| 2x4 | confidential entry | messages | 21 | 3122 | 3115 | 4072 | 21 | 3 | 10 B |
-| 2x4 | confidential entry | message bytes | 704 | 3146 | 3139 | 4096 | 21 | 3 | 1 B |
-| 2x4 | anonymous entry | reply | 214 | 3339 | 3340 | 4096 | 17 | 2 | 3 B |
-| 2x4 | anonymous entry | messages | 10 | 3329 | 3329 | 4086 | 17 | 2 | 24 B |
-| 2x4 | anonymous entry | message bytes | 316 | 3339 | 3339 | 4096 | 17 | 2 | 1 B |
+| 2x4 | confidential entry | messages | 25 | 3130 | 3123 | 4080 | 21 | 3 | 18 B |
+| 2x4 | confidential entry | message bytes | 832 | 3146 | 3139 | 4096 | 21 | 3 | 1 B |
+| 2x4 | anonymous entry | reply | 256 | 3337 | 3338 | 4094 | 17 | 2 | 1 B |
+| 2x4 | anonymous entry | messages | 14 | 3337 | 3337 | 4094 | 17 | 2 | 32 B |
+| 2x4 | anonymous entry | message bytes | 444 | 3339 | 3339 | 4096 | 17 | 2 | 1 B |
 | 2x8 | confidential signer | messages | none | - | - | - | - | - | 125 B |
 | 2x8 | confidential signer | message bytes | none | - | - | - | - | - | 160 B |
 | 2x8 | confidential in-proof | messages | none | - | - | - | - | - | 124 B |
@@ -1607,11 +1607,11 @@ Maxima. Load max is full with data tails, every extension but the cache, two SPP
 | 2x8 | anonymous public owners | reply | none | - | - | - | - | - | 1126 B |
 | 2x8 | anonymous public owners | messages | none | - | - | - | - | - | 1126 B |
 | 2x8 | anonymous public owners | message bytes | none | - | - | - | - | - | 1161 B |
-| 2x8 | confidential entry | messages | none | - | - | - | - | - | 533 B |
-| 2x8 | confidential entry | message bytes | none | - | - | - | - | - | 568 B |
-| 2x8 | anonymous entry | reply | none | - | - | - | - | - | 1437 B |
-| 2x8 | anonymous entry | messages | none | - | - | - | - | - | 1437 B |
-| 2x8 | anonymous entry | message bytes | none | - | - | - | - | - | 1472 B |
+| 2x8 | confidential entry | messages | none | - | - | - | - | - | 405 B |
+| 2x8 | confidential entry | message bytes | none | - | - | - | - | - | 440 B |
+| 2x8 | anonymous entry | reply | none | - | - | - | - | - | 1309 B |
+| 2x8 | anonymous entry | messages | none | - | - | - | - | - | 1309 B |
+| 2x8 | anonymous entry | message bytes | none | - | - | - | - | - | 1344 B |
 | 3x2 | confidential signer | messages | 50 | 3096 | 3022 | 4079 | 22 | 3 | 17 B |
 | 3x2 | confidential signer | message bytes | 1683 | 3113 | 3039 | 4096 | 22 | 3 | 1 B |
 | 3x2 | confidential in-proof | messages | 50 | 3192 | 3119 | 4078 | 21 | 2 | 16 B |
@@ -1622,11 +1622,11 @@ Maxima. Load max is full with data tails, every extension but the cache, two SPP
 | 3x2 | anonymous public owners | reply | 1588 | 3113 | 3046 | 4096 | 22 | 3 | 1 B |
 | 3x2 | anonymous public owners | messages | 43 | 3085 | 3017 | 4068 | 22 | 3 | 6 B |
 | 3x2 | anonymous public owners | message bytes | 1456 | 3113 | 3045 | 4096 | 22 | 3 | 1 B |
-| 3x2 | confidential entry | messages | 32 | 3092 | 3018 | 4075 | 22 | 3 | 13 B |
-| 3x2 | confidential entry | message bytes | 1075 | 3113 | 3039 | 4096 | 22 | 3 | 1 B |
-| 3x2 | anonymous entry | reply | 1077 | 3306 | 3240 | 4096 | 18 | 2 | 1 B |
-| 3x2 | anonymous entry | messages | 28 | 3279 | 3212 | 4069 | 18 | 2 | 7 B |
-| 3x2 | anonymous entry | message bytes | 945 | 3306 | 3239 | 4096 | 18 | 2 | 1 B |
+| 3x2 | confidential entry | messages | 38 | 3104 | 3030 | 4087 | 22 | 3 | 25 B |
+| 3x2 | confidential entry | message bytes | 1267 | 3113 | 3039 | 4096 | 22 | 3 | 1 B |
+| 3x2 | anonymous entry | reply | 1269 | 3306 | 3240 | 4096 | 18 | 2 | 1 B |
+| 3x2 | anonymous entry | messages | 34 | 3291 | 3224 | 4081 | 18 | 2 | 19 B |
+| 3x2 | anonymous entry | message bytes | 1137 | 3306 | 3239 | 4096 | 18 | 2 | 1 B |
 | 3x4 | confidential signer | messages | 31 | 3086 | 3080 | 4069 | 22 | 3 | 7 B |
 | 3x4 | confidential signer | message bytes | 1047 | 3113 | 3107 | 4096 | 22 | 3 | 1 B |
 | 3x4 | confidential in-proof | messages | 31 | 3182 | 3177 | 4068 | 21 | 2 | 6 B |
@@ -1637,11 +1637,11 @@ Maxima. Load max is full with data tails, every extension but the cache, two SPP
 | 3x4 | anonymous public owners | reply | 296 | 3113 | 3114 | 4096 | 22 | 3 | 3 B |
 | 3x4 | anonymous public owners | messages | 17 | 3095 | 3095 | 4078 | 22 | 3 | 16 B |
 | 3x4 | anonymous public owners | message bytes | 562 | 3113 | 3113 | 4096 | 22 | 3 | 1 B |
-| 3x4 | confidential entry | messages | 13 | 3082 | 3076 | 4065 | 22 | 3 | 3 B |
-| 3x4 | confidential entry | message bytes | 439 | 3113 | 3107 | 4096 | 22 | 3 | 1 B |
-| 3x4 | anonymous entry | reply | 125 | 3304 | 3306 | 4094 | 18 | 2 | 1 B |
-| 3x4 | anonymous entry | messages | 2 | 3289 | 3290 | 4079 | 18 | 2 | 17 B |
-| 3x4 | anonymous entry | message bytes | 51 | 3306 | 3307 | 4096 | 18 | 2 | 1 B |
+| 3x4 | confidential entry | messages | 19 | 3094 | 3088 | 4077 | 22 | 3 | 15 B |
+| 3x4 | confidential entry | message bytes | 631 | 3113 | 3107 | 4096 | 22 | 3 | 1 B |
+| 3x4 | anonymous entry | reply | 189 | 3304 | 3306 | 4094 | 18 | 2 | 1 B |
+| 3x4 | anonymous entry | messages | 8 | 3301 | 3302 | 4091 | 18 | 2 | 29 B |
+| 3x4 | anonymous entry | message bytes | 243 | 3306 | 3307 | 4096 | 18 | 2 | 1 B |
 | 3x8 | confidential signer | messages | none | - | - | - | - | - | 190 B |
 | 3x8 | confidential signer | message bytes | none | - | - | - | - | - | 225 B |
 | 3x8 | confidential in-proof | messages | none | - | - | - | - | - | 189 B |
@@ -1652,11 +1652,11 @@ Maxima. Load max is full with data tails, every extension but the cache, two SPP
 | 3x8 | anonymous public owners | reply | none | - | - | - | - | - | 1191 B |
 | 3x8 | anonymous public owners | messages | none | - | - | - | - | - | 1191 B |
 | 3x8 | anonymous public owners | message bytes | none | - | - | - | - | - | 1226 B |
-| 3x8 | confidential entry | messages | none | - | - | - | - | - | 798 B |
-| 3x8 | confidential entry | message bytes | none | - | - | - | - | - | 833 B |
-| 3x8 | anonymous entry | reply | none | - | - | - | - | - | 1702 B |
-| 3x8 | anonymous entry | messages | none | - | - | - | - | - | 1702 B |
-| 3x8 | anonymous entry | message bytes | none | - | - | - | - | - | 1737 B |
+| 3x8 | confidential entry | messages | none | - | - | - | - | - | 606 B |
+| 3x8 | confidential entry | message bytes | none | - | - | - | - | - | 641 B |
+| 3x8 | anonymous entry | reply | none | - | - | - | - | - | 1510 B |
+| 3x8 | anonymous entry | messages | none | - | - | - | - | - | 1510 B |
+| 3x8 | anonymous entry | message bytes | none | - | - | - | - | - | 1545 B |
 | 4x2 | confidential signer | messages | 48 | 3060 | 2987 | 4076 | 23 | 3 | 14 B |
 | 4x2 | confidential signer | message bytes | 1618 | 3080 | 3007 | 4096 | 23 | 3 | 1 B |
 | 4x2 | confidential in-proof | messages | 48 | 3156 | 3084 | 4075 | 22 | 2 | 13 B |
@@ -1667,11 +1667,11 @@ Maxima. Load max is full with data tails, every extension but the cache, two SPP
 | 4x2 | anonymous public owners | reply | 1523 | 3080 | 3014 | 4096 | 23 | 3 | 1 B |
 | 4x2 | anonymous public owners | messages | 41 | 3049 | 2982 | 4065 | 23 | 3 | 3 B |
 | 4x2 | anonymous public owners | message bytes | 1391 | 3080 | 3013 | 4096 | 23 | 3 | 1 B |
-| 4x2 | confidential entry | messages | 24 | 3052 | 2979 | 4068 | 23 | 3 | 6 B |
-| 4x2 | confidential entry | message bytes | 810 | 3080 | 3007 | 4096 | 23 | 3 | 1 B |
-| 4x2 | anonymous entry | reply | 812 | 3273 | 3208 | 4096 | 19 | 2 | 1 B |
-| 4x2 | anonymous entry | messages | 21 | 3273 | 3207 | 4096 | 19 | 2 | 34 B |
-| 4x2 | anonymous entry | message bytes | 680 | 3273 | 3207 | 4096 | 19 | 2 | 1 B |
+| 4x2 | confidential entry | messages | 32 | 3068 | 2995 | 4084 | 23 | 3 | 22 B |
+| 4x2 | confidential entry | message bytes | 1066 | 3080 | 3007 | 4096 | 23 | 3 | 1 B |
+| 4x2 | anonymous entry | reply | 1068 | 3273 | 3208 | 4096 | 19 | 2 | 1 B |
+| 4x2 | anonymous entry | messages | 28 | 3255 | 3189 | 4078 | 19 | 2 | 16 B |
+| 4x2 | anonymous entry | message bytes | 936 | 3273 | 3207 | 4096 | 19 | 2 | 1 B |
 | 4x4 | confidential signer | messages | 29 | 3050 | 3045 | 4066 | 23 | 3 | 4 B |
 | 4x4 | confidential signer | message bytes | 982 | 3080 | 3075 | 4096 | 23 | 3 | 1 B |
 | 4x4 | confidential in-proof | messages | 29 | 3146 | 3142 | 4065 | 22 | 2 | 3 B |
@@ -1682,11 +1682,11 @@ Maxima. Load max is full with data tails, every extension but the cache, two SPP
 | 4x4 | anonymous public owners | reply | 274 | 3079 | 3081 | 4095 | 23 | 3 | 2 B |
 | 4x4 | anonymous public owners | messages | 15 | 3059 | 3060 | 4075 | 23 | 3 | 13 B |
 | 4x4 | anonymous public owners | message bytes | 497 | 3080 | 3081 | 4096 | 23 | 3 | 1 B |
-| 4x4 | confidential entry | messages | 6 | 3076 | 3071 | 4092 | 23 | 3 | 30 B |
-| 4x4 | confidential entry | message bytes | 174 | 3080 | 3075 | 4096 | 23 | 3 | 1 B |
-| 4x4 | anonymous entry | reply | none | - | - | - | - | - | 179 B |
-| 4x4 | anonymous entry | messages | none | - | - | - | - | - | 179 B |
-| 4x4 | anonymous entry | message bytes | none | - | - | - | - | - | 214 B |
+| 4x4 | confidential entry | messages | 13 | 3058 | 3053 | 4074 | 23 | 3 | 12 B |
+| 4x4 | confidential entry | message bytes | 430 | 3080 | 3075 | 4096 | 23 | 3 | 1 B |
+| 4x4 | anonymous entry | reply | 122 | 3271 | 3274 | 4094 | 19 | 2 | 1 B |
+| 4x4 | anonymous entry | messages | 2 | 3265 | 3267 | 4088 | 19 | 2 | 26 B |
+| 4x4 | anonymous entry | message bytes | 42 | 3273 | 3275 | 4096 | 19 | 2 | 1 B |
 | 4x4 | delegate | messages | 37 | 3266 | 3317 | 4086 | 19 | 2 | 24 B |
 | 4x4 | delegate | message bytes | 1234 | 3276 | 3327 | 4096 | 19 | 2 | 1 B |
 | 4x4 | anonymous delegate | reply | 358 | 3275 | 3333 | 4095 | 19 | 2 | 2 B |
@@ -1702,11 +1702,11 @@ Maxima. Load max is full with data tails, every extension but the cache, two SPP
 | 4x8 | anonymous public owners | reply | none | - | - | - | - | - | 1256 B |
 | 4x8 | anonymous public owners | messages | none | - | - | - | - | - | 1256 B |
 | 4x8 | anonymous public owners | message bytes | none | - | - | - | - | - | 1291 B |
-| 4x8 | confidential entry | messages | none | - | - | - | - | - | 1063 B |
-| 4x8 | confidential entry | message bytes | none | - | - | - | - | - | 1098 B |
-| 4x8 | anonymous entry | reply | none | - | - | - | - | - | 1967 B |
-| 4x8 | anonymous entry | messages | none | - | - | - | - | - | 1967 B |
-| 4x8 | anonymous entry | message bytes | none | - | - | - | - | - | 2002 B |
+| 4x8 | confidential entry | messages | none | - | - | - | - | - | 807 B |
+| 4x8 | confidential entry | message bytes | none | - | - | - | - | - | 842 B |
+| 4x8 | anonymous entry | reply | none | - | - | - | - | - | 1711 B |
+| 4x8 | anonymous entry | messages | none | - | - | - | - | - | 1711 B |
+| 4x8 | anonymous entry | message bytes | none | - | - | - | - | - | 1746 B |
 | 5x2 | confidential signer | messages | 46 | 3024 | 2952 | 4073 | 24 | 3 | 11 B |
 | 5x2 | confidential signer | message bytes | 1553 | 3047 | 2975 | 4096 | 24 | 3 | 1 B |
 | 5x2 | confidential in-proof | messages | 46 | 3120 | 3049 | 4072 | 23 | 2 | 10 B |
@@ -1717,11 +1717,11 @@ Maxima. Load max is full with data tails, every extension but the cache, two SPP
 | 5x2 | anonymous public owners | reply | 1458 | 3047 | 2982 | 4096 | 24 | 3 | 1 B |
 | 5x2 | anonymous public owners | messages | 40 | 3047 | 2981 | 4096 | 24 | 3 | 34 B |
 | 5x2 | anonymous public owners | message bytes | 1326 | 3047 | 2981 | 4096 | 24 | 3 | 1 B |
-| 5x2 | confidential entry | messages | 17 | 3046 | 2974 | 4095 | 24 | 3 | 33 B |
-| 5x2 | confidential entry | message bytes | 545 | 3047 | 2975 | 4096 | 24 | 3 | 1 B |
-| 5x2 | anonymous entry | reply | 547 | 3240 | 3176 | 4096 | 20 | 2 | 1 B |
-| 5x2 | anonymous entry | messages | 13 | 3233 | 3168 | 4089 | 20 | 2 | 27 B |
-| 5x2 | anonymous entry | message bytes | 415 | 3240 | 3175 | 4096 | 20 | 2 | 1 B |
+| 5x2 | confidential entry | messages | 26 | 3032 | 2960 | 4081 | 24 | 3 | 19 B |
+| 5x2 | confidential entry | message bytes | 865 | 3047 | 2975 | 4096 | 24 | 3 | 1 B |
+| 5x2 | anonymous entry | reply | 867 | 3240 | 3176 | 4096 | 20 | 2 | 1 B |
+| 5x2 | anonymous entry | messages | 22 | 3219 | 3154 | 4075 | 20 | 2 | 13 B |
+| 5x2 | anonymous entry | message bytes | 735 | 3240 | 3175 | 4096 | 20 | 2 | 1 B |
 | 5x4 | confidential signer | messages | 27 | 3014 | 3010 | 4063 | 24 | 3 | 1 B |
 | 5x4 | confidential signer | message bytes | 917 | 3047 | 3043 | 4096 | 24 | 3 | 1 B |
 | 5x4 | confidential in-proof | messages | 28 | 3144 | 3141 | 4096 | 23 | 2 | 34 B |
@@ -1732,11 +1732,11 @@ Maxima. Load max is full with data tails, every extension but the cache, two SPP
 | 5x4 | anonymous public owners | reply | 252 | 3045 | 3048 | 4094 | 24 | 3 | 1 B |
 | 5x4 | anonymous public owners | messages | 13 | 3023 | 3025 | 4072 | 24 | 3 | 10 B |
 | 5x4 | anonymous public owners | message bytes | 432 | 3047 | 3049 | 4096 | 24 | 3 | 1 B |
-| 5x4 | confidential entry | messages | none | - | - | - | - | - | 56 B |
-| 5x4 | confidential entry | message bytes | none | - | - | - | - | - | 91 B |
-| 5x4 | anonymous entry | reply | none | - | - | - | - | - | 444 B |
-| 5x4 | anonymous entry | messages | none | - | - | - | - | - | 444 B |
-| 5x4 | anonymous entry | message bytes | none | - | - | - | - | - | 479 B |
+| 5x4 | confidential entry | messages | 7 | 3022 | 3018 | 4071 | 24 | 3 | 9 B |
+| 5x4 | confidential entry | message bytes | 229 | 3047 | 3043 | 4096 | 24 | 3 | 1 B |
+| 5x4 | anonymous entry | reply | none | - | - | - | - | - | 124 B |
+| 5x4 | anonymous entry | messages | none | - | - | - | - | - | 124 B |
+| 5x4 | anonymous entry | message bytes | none | - | - | - | - | - | 159 B |
 | 5x8 | confidential signer | messages | none | - | - | - | - | - | 320 B |
 | 5x8 | confidential signer | message bytes | none | - | - | - | - | - | 355 B |
 | 5x8 | confidential in-proof | messages | none | - | - | - | - | - | 319 B |
@@ -1747,11 +1747,11 @@ Maxima. Load max is full with data tails, every extension but the cache, two SPP
 | 5x8 | anonymous public owners | reply | none | - | - | - | - | - | 1321 B |
 | 5x8 | anonymous public owners | messages | none | - | - | - | - | - | 1321 B |
 | 5x8 | anonymous public owners | message bytes | none | - | - | - | - | - | 1356 B |
-| 5x8 | confidential entry | messages | none | - | - | - | - | - | 1328 B |
-| 5x8 | confidential entry | message bytes | none | - | - | - | - | - | 1363 B |
-| 5x8 | anonymous entry | reply | none | - | - | - | - | - | 2232 B |
-| 5x8 | anonymous entry | messages | none | - | - | - | - | - | 2232 B |
-| 5x8 | anonymous entry | message bytes | none | - | - | - | - | - | 2267 B |
+| 5x8 | confidential entry | messages | none | - | - | - | - | - | 1008 B |
+| 5x8 | confidential entry | message bytes | none | - | - | - | - | - | 1043 B |
+| 5x8 | anonymous entry | reply | none | - | - | - | - | - | 1912 B |
+| 5x8 | anonymous entry | messages | none | - | - | - | - | - | 1912 B |
+| 5x8 | anonymous entry | message bytes | none | - | - | - | - | - | 1947 B |
 | 6x2 | confidential signer | messages | 44 | 2988 | 2917 | 4070 | 25 | 3 | 8 B |
 | 6x2 | confidential signer | message bytes | 1488 | 3014 | 2943 | 4096 | 25 | 3 | 1 B |
 | 6x2 | confidential in-proof | messages | 44 | 3084 | 3014 | 4069 | 24 | 2 | 7 B |
@@ -1762,11 +1762,11 @@ Maxima. Load max is full with data tails, every extension but the cache, two SPP
 | 6x2 | anonymous public owners | reply | 1393 | 3014 | 2950 | 4096 | 25 | 3 | 1 B |
 | 6x2 | anonymous public owners | messages | 38 | 3011 | 2946 | 4093 | 25 | 3 | 31 B |
 | 6x2 | anonymous public owners | message bytes | 1261 | 3014 | 2949 | 4096 | 25 | 3 | 1 B |
-| 6x2 | confidential entry | messages | 9 | 3006 | 2935 | 4088 | 25 | 3 | 26 B |
-| 6x2 | confidential entry | message bytes | 280 | 3014 | 2943 | 4096 | 25 | 3 | 1 B |
-| 6x2 | anonymous entry | reply | 282 | 3207 | 3144 | 4096 | 21 | 2 | 1 B |
-| 6x2 | anonymous entry | messages | 5 | 3193 | 3129 | 4082 | 21 | 2 | 20 B |
-| 6x2 | anonymous entry | message bytes | 150 | 3207 | 3143 | 4096 | 21 | 2 | 1 B |
+| 6x2 | confidential entry | messages | 20 | 2996 | 2925 | 4078 | 25 | 3 | 16 B |
+| 6x2 | confidential entry | message bytes | 664 | 3014 | 2943 | 4096 | 25 | 3 | 1 B |
+| 6x2 | anonymous entry | reply | 666 | 3207 | 3144 | 4096 | 21 | 2 | 1 B |
+| 6x2 | anonymous entry | messages | 16 | 3183 | 3119 | 4072 | 21 | 2 | 10 B |
+| 6x2 | anonymous entry | message bytes | 534 | 3207 | 3143 | 4096 | 21 | 2 | 1 B |
 | 6x4 | confidential signer | messages | 26 | 3012 | 3009 | 4094 | 25 | 3 | 32 B |
 | 6x4 | confidential signer | message bytes | 852 | 3014 | 3011 | 4096 | 25 | 3 | 1 B |
 | 6x4 | confidential in-proof | messages | 26 | 3108 | 3106 | 4093 | 24 | 2 | 31 B |
@@ -1777,11 +1777,11 @@ Maxima. Load max is full with data tails, every extension but the cache, two SPP
 | 6x4 | anonymous public owners | reply | 231 | 3014 | 3018 | 4096 | 25 | 3 | 3 B |
 | 6x4 | anonymous public owners | messages | 11 | 2987 | 2990 | 4069 | 25 | 3 | 7 B |
 | 6x4 | anonymous public owners | message bytes | 367 | 3014 | 3017 | 4096 | 25 | 3 | 1 B |
-| 6x4 | confidential entry | messages | none | - | - | - | - | - | 321 B |
-| 6x4 | confidential entry | message bytes | none | - | - | - | - | - | 356 B |
-| 6x4 | anonymous entry | reply | none | - | - | - | - | - | 709 B |
-| 6x4 | anonymous entry | messages | none | - | - | - | - | - | 709 B |
-| 6x4 | anonymous entry | message bytes | none | - | - | - | - | - | 744 B |
+| 6x4 | confidential entry | messages | 1 | 2986 | 2983 | 4068 | 25 | 3 | 6 B |
+| 6x4 | confidential entry | message bytes | 28 | 3014 | 3011 | 4096 | 25 | 3 | 1 B |
+| 6x4 | anonymous entry | reply | none | - | - | - | - | - | 325 B |
+| 6x4 | anonymous entry | messages | none | - | - | - | - | - | 325 B |
+| 6x4 | anonymous entry | message bytes | none | - | - | - | - | - | 360 B |
 | 6x8 | confidential signer | messages | none | - | - | - | - | - | 385 B |
 | 6x8 | confidential signer | message bytes | none | - | - | - | - | - | 420 B |
 | 6x8 | confidential in-proof | messages | none | - | - | - | - | - | 384 B |
@@ -1792,11 +1792,11 @@ Maxima. Load max is full with data tails, every extension but the cache, two SPP
 | 6x8 | anonymous public owners | reply | none | - | - | - | - | - | 1386 B |
 | 6x8 | anonymous public owners | messages | none | - | - | - | - | - | 1386 B |
 | 6x8 | anonymous public owners | message bytes | none | - | - | - | - | - | 1421 B |
-| 6x8 | confidential entry | messages | none | - | - | - | - | - | 1593 B |
-| 6x8 | confidential entry | message bytes | none | - | - | - | - | - | 1628 B |
-| 6x8 | anonymous entry | reply | none | - | - | - | - | - | 2497 B |
-| 6x8 | anonymous entry | messages | none | - | - | - | - | - | 2497 B |
-| 6x8 | anonymous entry | message bytes | none | - | - | - | - | - | 2532 B |
+| 6x8 | confidential entry | messages | none | - | - | - | - | - | 1209 B |
+| 6x8 | confidential entry | message bytes | none | - | - | - | - | - | 1244 B |
+| 6x8 | anonymous entry | reply | none | - | - | - | - | - | 2113 B |
+| 6x8 | anonymous entry | messages | none | - | - | - | - | - | 2113 B |
+| 6x8 | anonymous entry | message bytes | none | - | - | - | - | - | 2148 B |
 | 8x2 | confidential signer | messages | 40 | 2916 | 2847 | 4064 | 27 | 3 | 2 B |
 | 8x2 | confidential signer | message bytes | 1358 | 2948 | 2879 | 4096 | 27 | 3 | 1 B |
 | 8x2 | confidential in-proof | messages | 40 | 3012 | 2944 | 4063 | 26 | 2 | 1 B |
@@ -1807,11 +1807,11 @@ Maxima. Load max is full with data tails, every extension but the cache, two SPP
 | 8x2 | anonymous public owners | reply | 1263 | 2948 | 2886 | 4096 | 27 | 3 | 1 B |
 | 8x2 | anonymous public owners | messages | 34 | 2939 | 2876 | 4087 | 27 | 3 | 25 B |
 | 8x2 | anonymous public owners | message bytes | 1131 | 2948 | 2885 | 4096 | 27 | 3 | 1 B |
-| 8x2 | confidential entry | messages | none | - | - | - | - | - | 215 B |
-| 8x2 | confidential entry | message bytes | none | - | - | - | - | - | 250 B |
-| 8x2 | anonymous entry | reply | none | - | - | - | - | - | 345 B |
-| 8x2 | anonymous entry | messages | none | - | - | - | - | - | 345 B |
-| 8x2 | anonymous entry | message bytes | none | - | - | - | - | - | 380 B |
+| 8x2 | confidential entry | messages | 8 | 2924 | 2855 | 4072 | 27 | 3 | 10 B |
+| 8x2 | confidential entry | message bytes | 262 | 2948 | 2879 | 4096 | 27 | 3 | 1 B |
+| 8x2 | anonymous entry | reply | 264 | 3141 | 3080 | 4096 | 23 | 2 | 1 B |
+| 8x2 | anonymous entry | messages | 4 | 3111 | 3049 | 4066 | 23 | 2 | 4 B |
+| 8x2 | anonymous entry | message bytes | 132 | 3141 | 3079 | 4096 | 23 | 2 | 1 B |
 | 8x4 | confidential signer | messages | 22 | 2940 | 2939 | 4088 | 27 | 3 | 26 B |
 | 8x4 | confidential signer | message bytes | 722 | 2948 | 2947 | 4096 | 27 | 3 | 1 B |
 | 8x4 | confidential in-proof | messages | 22 | 3036 | 3036 | 4087 | 26 | 2 | 25 B |
@@ -1822,11 +1822,11 @@ Maxima. Load max is full with data tails, every extension but the cache, two SPP
 | 8x4 | anonymous public owners | reply | 187 | 2946 | 2952 | 4094 | 27 | 3 | 1 B |
 | 8x4 | anonymous public owners | messages | 7 | 2915 | 2920 | 4063 | 27 | 3 | 1 B |
 | 8x4 | anonymous public owners | message bytes | 237 | 2948 | 2953 | 4096 | 27 | 3 | 1 B |
-| 8x4 | confidential entry | messages | none | - | - | - | - | - | 851 B |
-| 8x4 | confidential entry | message bytes | none | - | - | - | - | - | 886 B |
-| 8x4 | anonymous entry | reply | none | - | - | - | - | - | 1239 B |
-| 8x4 | anonymous entry | messages | none | - | - | - | - | - | 1239 B |
-| 8x4 | anonymous entry | message bytes | none | - | - | - | - | - | 1274 B |
+| 8x4 | confidential entry | messages | none | - | - | - | - | - | 339 B |
+| 8x4 | confidential entry | message bytes | none | - | - | - | - | - | 374 B |
+| 8x4 | anonymous entry | reply | none | - | - | - | - | - | 727 B |
+| 8x4 | anonymous entry | messages | none | - | - | - | - | - | 727 B |
+| 8x4 | anonymous entry | message bytes | none | - | - | - | - | - | 762 B |
 | 8x8 | confidential signer | messages | none | - | - | - | - | - | 515 B |
 | 8x8 | confidential signer | message bytes | none | - | - | - | - | - | 550 B |
 | 8x8 | confidential in-proof | messages | none | - | - | - | - | - | 514 B |
@@ -1837,11 +1837,11 @@ Maxima. Load max is full with data tails, every extension but the cache, two SPP
 | 8x8 | anonymous public owners | reply | none | - | - | - | - | - | 1516 B |
 | 8x8 | anonymous public owners | messages | none | - | - | - | - | - | 1516 B |
 | 8x8 | anonymous public owners | message bytes | none | - | - | - | - | - | 1551 B |
-| 8x8 | confidential entry | messages | none | - | - | - | - | - | 2123 B |
-| 8x8 | confidential entry | message bytes | none | - | - | - | - | - | 2158 B |
-| 8x8 | anonymous entry | reply | none | - | - | - | - | - | 3027 B |
-| 8x8 | anonymous entry | messages | none | - | - | - | - | - | 3027 B |
-| 8x8 | anonymous entry | message bytes | none | - | - | - | - | - | 3062 B |
+| 8x8 | confidential entry | messages | none | - | - | - | - | - | 1611 B |
+| 8x8 | confidential entry | message bytes | none | - | - | - | - | - | 1646 B |
+| 8x8 | anonymous entry | reply | none | - | - | - | - | - | 2515 B |
+| 8x8 | anonymous entry | messages | none | - | - | - | - | - | 2515 B |
+| 8x8 | anonymous entry | message bytes | none | - | - | - | - | - | 2550 B |
 | 12x2 | confidential signer | messages | 33 | 2807 | 2741 | 4087 | 31 | 3 | 25 B |
 | 12x2 | confidential signer | message bytes | 1097 | 2816 | 2750 | 4096 | 31 | 3 | 1 B |
 | 12x2 | confidential in-proof | messages | 33 | 2903 | 2838 | 4086 | 30 | 2 | 24 B |

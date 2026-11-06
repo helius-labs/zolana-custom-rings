@@ -1,6 +1,6 @@
 use custom_ring_interface::{
     blinding::ring_blinding_seed, AuditEvidence, AuditRecord, AuditStreamLayout, AuditorMessage,
-    DataTail, EntryInput, InputClass, InputMap, ParsedTransact, RecordKind,
+    DataTail, EntryRecord, InputClass, InputMap, ParsedTransact, RecordKind,
 };
 use solana_address::Address;
 use solana_signature::Signature;
@@ -18,7 +18,7 @@ use crate::{
     disclosure::{canonical, AuditEnvelope},
     encryption::auditor_view_tag,
     types::{
-        AuditedDefaultInput, AuditedInput, AuditedOutput, AuditedTransaction, AuditedUtxo,
+        AuditedEntryInput, AuditedInput, AuditedOutput, AuditedTransaction, AuditedUtxo,
         InputOpening, OutputOpening, OutputPayloadError, OutputPayloadErrorKind, RingOwnerTag,
     },
     AuditError,
@@ -29,7 +29,6 @@ use crate::{
 pub struct TransactionAudit<'a> {
     transaction: &'a ShieldedTransaction,
     layout: AuditStreamLayout,
-    input_trees: Option<&'a [Option<u16>]>,
 }
 
 /// The row a frame's event publishes, the co-signer audits its own message before it lands.
@@ -90,21 +89,7 @@ impl<'a> TransactionAudit<'a> {
         Self {
             transaction,
             layout,
-            input_trees: None,
         }
-    }
-
-    /// Every input commitment binds its tree id.
-    pub fn with_input_trees(mut self, trees: &'a [Option<u16>]) -> Result<Self, AuditError> {
-        let inputs = self.transaction.nullifiers.len();
-        if trees.len() != inputs {
-            return Err(AuditError::InputTreeCount {
-                trees: trees.len(),
-                inputs,
-            });
-        }
-        self.input_trees = Some(trees);
-        Ok(self)
     }
 
     /// Reads no mint registry or earlier note.
@@ -160,7 +145,6 @@ impl<'a> TransactionAudit<'a> {
             map: opened.inputs,
             evidence: &opened.evidence,
             nullifiers: &tx.nullifiers,
-            trees: self.input_trees,
         })?;
         Ok(audited)
     }
@@ -222,7 +206,6 @@ struct SpentInputs<'a> {
     map: InputMap,
     evidence: &'a AuditEvidence,
     nullifiers: &'a [[u8; 32]],
-    trees: Option<&'a [Option<u16>]>,
 }
 
 impl Transfer {
@@ -315,7 +298,6 @@ impl Transfer {
             map,
             evidence,
             nullifiers,
-            trees,
         } = spent;
         nullifiers
             .iter()
@@ -331,8 +313,7 @@ impl Transfer {
                             inputs,
                         } if default_input_bits >> index & 1 == 1 => {
                             let entry = inputs.get(index).ok_or(AuditError::DisclosureLayout)?;
-                            let tree = trees.and_then(|trees| trees.get(index).copied().flatten());
-                            InputOpening::External(Box::new(self.default_input(entry, tree)?))
+                            InputOpening::External(Box::new(entry_input(entry)?))
                         }
                         AuditEvidence::None
                         | AuditEvidence::SingleAssetPayout { .. }
@@ -346,26 +327,18 @@ impl Transfer {
             })
             .collect()
     }
+}
 
-    /// A mixed entry names each input's owner and key.
-    fn default_input(
-        &self,
-        entry: &EntryInput,
-        tree: Option<u16>,
-    ) -> Result<AuditedDefaultInput, AuditError> {
-        let utxo = AuditedUtxo {
-            owner_key: entry.owner_key,
-            nullifier_pk: entry.nullifier_pk,
-            asset: hash_bytes(&entry.mint)?,
-            mint: Some(Address::new_from_array(entry.mint)),
-            amount: entry.amount,
-            blinding: entry.blinding,
-            data_hash: entry.data_hash,
-            ring_data_hash: entry.ring_data_hash,
-        };
-        let commitment = tree.map(|tree| utxo.commitment(tree, None)).transpose()?;
-        Ok(AuditedDefaultInput { utxo, commitment })
-    }
+/// The opener refused a noncanonical nullifier key or commitment.
+fn entry_input(entry: &EntryRecord) -> Result<AuditedEntryInput, AuditError> {
+    Ok(AuditedEntryInput {
+        owner_key: entry.owner_key,
+        nullifier_pk: entry.nullifier_pk,
+        asset: hash_bytes(&entry.mint)?,
+        mint: Address::new_from_array(entry.mint),
+        amount: entry.amount,
+        commitment: entry.input_commitment,
+    })
 }
 
 impl AuditedTransaction {

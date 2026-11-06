@@ -616,7 +616,6 @@ async function readTracking(
     rowOf,
     viewingKeyOf: (member) => viewingKeys.get(bytesKey(member)),
     spenders,
-    saltedPayees: subjects.view !== undefined && subjects.view.salted !== 0,
   });
   const trackingEntry = (member: Bytes32 | undefined): number =>
     member === undefined || isZero(member) ? 0 : (position.get(bytesKey(member)) ?? 0);
@@ -676,7 +675,7 @@ export function checkInputKeys(
   }
 }
 
-/** A nonzero key needs its row, a zero key needs none under a salted payee read, Go `AssertOutputOwners`. */
+/** Zero key recipients require absence at the accepted tracking root. */
 export function checkOutputKeys(
   input: Readonly<{
     outputs: readonly (ProofOutputUtxo | undefined)[];
@@ -685,8 +684,6 @@ export function checkOutputKeys(
     viewingKeyOf: (member: Bytes32) => Bytes32 | undefined;
     /** A spending owner holds every key it ever enrolled. */
     spenders: readonly ShieldedPublicKey[];
-    /** Set while a screened frame reads a salted list. */
-    saltedPayees: boolean;
   }>,
 ): void {
   for (const output of input.outputs) {
@@ -698,7 +695,6 @@ export function checkOutputKeys(
       member,
       nullifierPk: owner.nullifierPublicKey,
       row,
-      saltedPayees: input.saltedPayees,
     });
     if (
       row === undefined ||
@@ -752,12 +748,11 @@ function checkOutputKey(
     member: Bytes32;
     nullifierPk: Bytes32;
     row: TrackingRecord | undefined;
-    saltedPayees: boolean;
   }>,
 ): void {
   const { member, nullifierPk, row } = input;
   if (equalBytes(nullifierPk, ZERO_NULLIFIER_PK)) {
-    if (row !== undefined && input.saltedPayees) throw new RingError("RING_RECIPIENT_ENROLLED");
+    if (row !== undefined) throw new RingError("RING_RECIPIENT_ENROLLED");
     return;
   }
   if (row === undefined) throw new RingError("RING_RECIPIENT_NOT_ENROLLED");

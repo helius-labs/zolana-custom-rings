@@ -971,9 +971,7 @@ impl<S: TransactionSource> AuditService<S> {
     }
 
     fn audit(&self, bound: BoundTransaction<'_>) -> Result<AuditedTransaction, AuditError> {
-        let trees = bound.origin.event.input_tree_ids(bound.transaction);
         TransactionAudit::new(bound.transaction, bound.origin.audit_frame(bound.mode)?)
-            .with_input_trees(&trees)?
             .run(&self.auditor)
     }
 

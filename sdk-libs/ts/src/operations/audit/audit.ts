@@ -38,7 +38,7 @@ import {
   type AuditEnvelope,
   type InputMap,
   type DataTail,
-  type EntryInput,
+  type EntryRecord,
 } from "../../protocol/codec/audit-stream.js";
 import {
   recordRegion,
@@ -122,18 +122,24 @@ export interface AuditedSender {
   readonly nullifierPk?: Bytes32;
 }
 
-/** The ring or the default ring a spent UTXO belongs to, by its full commitment. */
-export type InputRing =
-  | Readonly<{ kind: "ring"; commitment: Bytes32 }>
-  | Readonly<{ kind: "default"; commitment: Bytes32 }>;
-
+/** A known ring note, `AuditedInput.hash` its commitment. */
 export interface AuditedInputOpening {
   readonly asset: Bytes32;
   readonly mint?: Address;
   readonly amount: bigint;
   readonly blinding: Bytes32;
-  /** Absent without the input's tree id, every commitment binds it. */
-  readonly ring?: InputRing;
+}
+
+/** Rust `AuditedEntryInput`, the proof binds every field to `commitment`. */
+export interface AuditedEntryInput {
+  /** The raw Solana key whose owner identity the commitment binds. */
+  readonly ownerKey: Bytes32;
+  readonly nullifierPk: Bytes32;
+  /** `hashBytes(mint)`. */
+  readonly asset: Bytes32;
+  readonly mint: Address;
+  readonly amount: bigint;
+  readonly commitment: Bytes32;
 }
 
 /** Rust `InputOpening`. */
@@ -143,6 +149,8 @@ export type InputOpening =
   /** SPP's address slot, neither a spent note nor evidence of an owner. */
   | Readonly<{ kind: "address" }>
   | (Readonly<{ kind: "opened" }> & AuditedInputOpening)
+  /** A default-ring note the entry evidence names, its blinding and data hashes stay private. */
+  | (Readonly<{ kind: "external" }> & AuditedEntryInput)
   /** The evidence names a note the auditor lacks, the outputs still open. */
   | Readonly<{ kind: "unseenHash"; hash: Bytes32 }>
   /** A real spend no known note answers, never a dummy or an unspent balance. */
@@ -313,8 +321,6 @@ export interface TransactionAuditInput {
   readonly rail: RingRail;
   /** The statement's bit, refused unless it reads `R == 0`. */
   readonly noSpend: boolean;
-  /** One per published nullifier, the tree the input was spent from. */
-  readonly inputTreeIds?: readonly (number | undefined)[];
   readonly knownUtxos?: KnownUtxos;
 }
 
@@ -344,17 +350,6 @@ export function openRingTransfer(input: TransactionAuditInput): OpenedRingAudit 
   if (ring === undefined) throw unsealed("ringProgramId");
   const firstNullifier = transaction.nullifiers[0];
   if (firstNullifier === undefined) throw unsealed("nullifier");
-  if (
-    input.inputTreeIds !== undefined &&
-    input.inputTreeIds.length !== transaction.nullifiers.length
-  )
-    throw new RingError("RING_INVALID_LENGTH", {
-      details: {
-        name: "inputTreeIds",
-        expected: transaction.nullifiers.length,
-        actual: input.inputTreeIds.length,
-      },
-    });
   if (
     layout.outputs !== transaction.outputSlots.length ||
     layout.inputs !== transaction.nullifiers.length
@@ -413,7 +408,6 @@ export function openRingTransfer(input: TransactionAuditInput): OpenedRingAudit 
         position,
         inputMap,
         envelope: envelope as AuditEnvelope,
-        treeId: input.inputTreeIds?.[position],
         known: input.knownUtxos,
       }),
     );
@@ -590,7 +584,6 @@ export function auditConfirmedRingHistory(
         layout: confirmed.layout,
         rail: confirmed.rail,
         noSpend: confirmed.noSpend,
-        inputTreeIds: confirmed.inputTreeIds,
         knownUtxos: known,
       }),
     );
@@ -734,14 +727,13 @@ function readInput(
     position: number;
     inputMap: InputMap;
     envelope: AuditEnvelope;
-    treeId: number | undefined;
     known: KnownUtxos | undefined;
   }>,
 ): AuditedInput {
-  const { nullifier, position, envelope, treeId, known } = input;
+  const { nullifier, position, envelope, known } = input;
   const inputClass = input.inputMap.slot(position);
   if (inputClass === undefined) throw auditRefusal("layout");
-  // The decoder held default bits and openings to notes, a dummy or an address opens nothing.
+  // The decoder held default bits and records to notes, a dummy or an address opens nothing.
   if (inputClass === InputClass.dummy) return Object.freeze({ nullifier, opening: DUMMY_INPUT });
   if (inputClass === InputClass.address)
     return Object.freeze({ nullifier, opening: ADDRESS_INPUT });
@@ -749,7 +741,7 @@ function readInput(
   if (evidence.kind === "entry" && ((evidence.defaultInputBits >> BigInt(position)) & 1n) === 1n) {
     const entry = evidence.inputs[position];
     if (entry === undefined) throw auditRefusal("entry evidence");
-    return defaultInput({ nullifier, entry, treeId, known });
+    return entryInput({ nullifier, entry, known });
   }
   return resolvedInput(nullifier, known);
 }
@@ -761,64 +753,37 @@ function resolvedInput(nullifier: Bytes32, known: KnownUtxos | undefined): Audit
     : Object.freeze({
         nullifier,
         hash: note.commitment,
-        opening: ringInput(note.commitment, note.utxo),
+        opening: ringInput(note.utxo),
       });
 }
 
-/** The evidence names no commitment, the nullifier answers for it under a zero key or a known note. */
-function defaultInput(
+/** The proof binds the record's commitment to the spent slot, a known note under the nullifier must agree. */
+function entryInput(
   input: Readonly<{
     nullifier: Bytes32;
-    entry: EntryInput;
-    treeId: number | undefined;
+    entry: EntryRecord;
     known: KnownUtxos | undefined;
   }>,
 ): AuditedInput {
-  const { nullifier, entry, treeId, known } = input;
-  if (
-    !isCanonicalField(entry.nullifierPk) ||
-    !isCanonicalField(entry.blinding) ||
-    !isCanonicalField(entry.dataHash) ||
-    !isCanonicalField(entry.ringDataHash)
-  )
+  const { nullifier, entry, known } = input;
+  if (!isCanonicalField(entry.nullifierPk) || !isCanonicalField(entry.inputCommitment))
     throw auditRefusal("entry evidence");
-  const asset = hashBytes(addressBytes(entry.mint, "mint")) as Bytes32;
-  const base = {
-    kind: "opened" as const,
-    asset,
-    mint: entry.mint,
-    amount: entry.amount,
-    blinding: entry.blinding,
-  };
-  // An input spent from another tree has no id, every commitment binds it.
-  if (treeId === undefined) return Object.freeze({ nullifier, opening: Object.freeze(base) });
-  const commitment = knownUtxoHash(
-    openedUtxo(
-      {
-        ownerKey: entry.ownerKey,
-        nullifierPk: entry.nullifierPk,
-        asset,
-        mint: entry.mint,
-        amount: entry.amount,
-        blinding: entry.blinding,
-        dataHash: entry.dataHash,
-        ringDataHash: entry.ringDataHash,
-      },
-      treeId,
-    ),
-    ZERO_32,
-  );
-  const zeroKey = equalBytes(entry.nullifierPk, ZERO_NULLIFIER_PK);
+  const commitment = entry.inputCommitment;
   const held = known?.byNullifier?.(nullifier);
-  if (
-    (zeroKey && !equalBytes(zeroKeyNullifier(commitment, entry.blinding), nullifier)) ||
-    (held !== undefined && !equalBytes(held.commitment, commitment))
-  )
+  if (held !== undefined && !equalBytes(held.commitment, commitment))
     throw auditRefusal("entry commitment");
   return Object.freeze({
     nullifier,
     hash: commitment,
-    opening: Object.freeze({ ...base, ring: Object.freeze({ kind: "default", commitment }) }),
+    opening: Object.freeze({
+      kind: "external",
+      ownerKey: entry.ownerKey,
+      nullifierPk: entry.nullifierPk,
+      asset: hashBytes(addressBytes(entry.mint, "mint")) as Bytes32,
+      mint: entry.mint,
+      amount: entry.amount,
+      commitment,
+    }),
   });
 }
 
@@ -855,14 +820,13 @@ function senderOfKnown(
       });
 }
 
-function ringInput(commitment: Bytes32, utxo: KnownUtxo): InputOpening {
+function ringInput(utxo: KnownUtxo): InputOpening {
   return Object.freeze({
     kind: "opened",
     asset: utxo.asset,
     ...(utxo.mint === undefined ? {} : { mint: utxo.mint }),
     amount: utxo.amount,
     blinding: utxo.blinding,
-    ring: Object.freeze({ kind: "ring", commitment }),
   });
 }
 

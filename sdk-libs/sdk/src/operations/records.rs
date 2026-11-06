@@ -33,7 +33,7 @@ use zolana_ring_member_registry::{
 };
 use zolana_ring_policy::{ListSet, ListWrite, Member, MintPolicy, Writer};
 
-use crate::{pipeline::SourceGates, submission::BoundRoot, CustomRing, RingError};
+use crate::{submission::BoundRoot, CustomRing, RingError};
 
 /// Members' records under the newest root of the ring's records registry.
 #[must_use]
@@ -312,26 +312,19 @@ pub(crate) struct OutputKey<'a> {
     pub row: Option<&'a TrackingRecord>,
     pub nullifier_pk: &'a [u8; 32],
     pub slot_index: usize,
-    /// Default on a frame the policy does not screen.
-    pub gates: SourceGates,
 }
 
 impl OutputKey<'_> {
-    /// An enrolled owner takes its enrolled key, or zero off a salted payee read.
     pub(crate) fn check(self) -> Result<(), RingError> {
         let Self {
             row,
             nullifier_pk,
             slot_index,
-            gates,
         } = self;
         match (row, *nullifier_pk == ZERO_NULLIFIER_PUBKEY) {
             (None, true) => Ok(()),
             (None, false) => Err(RingError::RecipientNotEnrolled { slot_index }),
-            (Some(_), true) if gates.any_salted() => {
-                Err(RingError::EnrolledRecipientAtZeroKey { slot_index })
-            }
-            (Some(_), true) => Ok(()),
+            (Some(_), true) => Err(RingError::EnrolledRecipientAtZeroKey { slot_index }),
             (Some(record), false) if record.nullifier_pk != *nullifier_pk => {
                 Err(RingError::RecipientKeyMismatch { slot_index })
             }

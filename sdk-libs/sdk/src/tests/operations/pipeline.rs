@@ -715,14 +715,14 @@ async fn an_anonymous_entry_reports_capacity_without_ring_funding() {
     let sender = keypair(1);
     let paid = ring_address(&keypair(2));
     let client = enrolled(&[&sender, &keypair(2)]).client();
-    let utxos: Vec<_> = (0..5)
+    let utxos: Vec<_> = (0..6)
         .map(|leaf| default_ring_utxo(&sender, 1, leaf))
         .collect();
     let owner = MoveSender {
         sender: &sender,
         payer: payer(),
     };
-    let payments = (0..5).map(|_| RingPayment::new(paid.clone(), 1)).collect();
+    let payments = (0..6).map(|_| RingPayment::new(paid.clone(), 1)).collect();
     let result = owner.anonymous_move(&utxos, payments).select(&client).await;
     assert!(
         matches!(&result, Err(RingError::TransferTooWide { .. })),
@@ -2057,7 +2057,7 @@ fn ceiling_entry(reply_len: usize) -> Measure {
 }
 
 /// Sets [`ceiling_entry`] at the transaction ceiling exactly.
-const CEILING_REPLY_LEN: usize = 2338;
+const CEILING_REPLY_LEN: usize = 2402;
 
 include!("size_pins.rs");
 
@@ -2828,7 +2828,7 @@ async fn every_frame_boundary_takes_its_modelled_bytes() {
         ..relayed(Measured::ConfidentialPolicy, Shape::new(16, 8))
     };
     for (measure, bytes) in [
-        (with_reply(Measured::AnonymousEntry, 2), 4196),
+        (with_reply(Measured::AnonymousEntry, 3), 4269),
         (with_reply(Measured::Anonymous, 5), 3951),
         (
             relayed(Measured::ConfidentialPolicy, Shape::new(16, 8)),
@@ -3300,7 +3300,7 @@ async fn a_keyed_input_spends_under_its_owners_enrolled_key_and_a_zero_key_waive
 }
 
 #[tokio::test]
-async fn an_output_takes_the_tracking_rows_key_or_zero_off_a_salted_read() {
+async fn an_output_takes_the_registered_key_or_zero_for_an_absent_owner() {
     use crate::tests::support::keypair;
     let (sender, payee) = (keypair(1), keypair(2));
     let (from, to) = (
@@ -3330,7 +3330,10 @@ async fn an_output_takes_the_tracking_rows_key_or_zero_off_a_salted_read() {
         paying(&to).frame(&client(&[from])).await.err(),
         Some(RingError::RecipientNotEnrolled { .. })
     ));
-    assert!(paying(&zero).frame(&enrolled).await.is_ok());
+    assert!(matches!(
+        paying(&zero).frame(&enrolled).await.err(),
+        Some(RingError::EnrolledRecipientAtZeroKey { .. })
+    ));
     let rekeyed = spr_keypair::ShieldedAddress {
         nullifier_pubkey: from.nullifier_pubkey,
         ..to
@@ -3341,35 +3344,8 @@ async fn an_output_takes_the_tracking_rows_key_or_zero_off_a_salted_read() {
     ));
 }
 
-/// Mirror the circuit, only a salted payee read refuses an enrolled owner the zero key.
-#[test]
-fn a_salted_payee_read_alone_refuses_an_enrolled_owner_the_zero_key() {
-    use crate::{pipeline::SourceGates, records::OutputKey};
-    use zolana_ring_member_registry::TrackingRecord;
-    use zolana_ring_policy::{ListId, SourceMap};
-    let row = TrackingRecord::default();
-    let check = |gates| {
-        OutputKey {
-            row: Some(&row),
-            nullifier_pk: &ZERO_NULLIFIER_PUBKEY,
-            slot_index: 1,
-            gates,
-        }
-        .check()
-    };
-    let public = SourceMap::new(&[(ListId::Block, [0; 32])]).unwrap();
-    let salted = SourceMap::new(&[(ListId::PrivateBlock, [0; 32])]).unwrap();
-    assert!(check(SourceGates::default()).is_ok());
-    assert!(check(SourceGates::of(&public)).is_ok());
-    assert!(matches!(
-        check(SourceGates::of(&salted)),
-        Err(RingError::EnrolledRecipientAtZeroKey { slot_index: 1 })
-    ));
-}
-
-/// An old zero key address of a rotated owner resolves to the authorization's key, a salted payee read still refuses it.
 #[tokio::test]
-async fn a_zero_key_payment_to_a_rotated_owner_builds_with_its_current_key() {
+async fn a_zero_key_payment_to_an_enrolled_owner_fails_after_viewing_key_resolution() {
     use crate::{
         tests::support::{keypair, Registry},
         SaltedOwnerCheck,
@@ -3413,10 +3389,13 @@ async fn a_zero_key_payment_to_a_rotated_owner_builds_with_its_current_key() {
         ..old.recipient
     };
     let client = chain.client();
-    assert!(paying(&refreshed).frame(&client).await.is_ok());
+    assert!(matches!(
+        paying(&refreshed).frame(&client).await.err(),
+        Some(RingError::EnrolledRecipientAtZeroKey { .. })
+    ));
     assert!(matches!(
         paying(&old.recipient).frame(&client).await.err(),
-        Some(RingError::RecipientViewingKeyStale { .. })
+        Some(RingError::EnrolledRecipientAtZeroKey { .. })
     ));
 
     let rules = RuleTable::builder()

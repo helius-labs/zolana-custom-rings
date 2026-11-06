@@ -234,7 +234,7 @@ describe("resolveRingRecipient", () => {
       });
     });
 
-    it("pays a rotated owner's old zero key address under the current key, a salted payee read refuses it", async () => {
+    it("refuses a zero key payment to an enrolled owner after viewing key resolution", async () => {
       const { to, row, wallet } = await addressed();
       const rotated = ShieldedKeypair.generate().viewingPublicKey();
       const old = zeroAddressed(wallet);
@@ -243,7 +243,7 @@ describe("resolveRingRecipient", () => {
         trackingRegistry: REGISTRY,
         to: old,
       });
-      const paying = (viewing: typeof rotated, saltedPayees: boolean) =>
+      const paying = (viewing: typeof rotated) =>
         checkOutputKeys({
           outputs: [
             {
@@ -257,18 +257,16 @@ describe("resolveRingRecipient", () => {
           rowOf: () => row,
           viewingKeyOf: () => rotated.u(),
           spenders: [],
-          saltedPayees,
         });
-      paying(resolved.viewingPublicKey, false);
-      expect(() => paying(old.recipient.viewingPublicKey, false)).toThrow(
-        expect.objectContaining({ code: "RING_RECIPIENT_VIEWING_KEY_STALE" }),
+      expect(() => paying(old.recipient.viewingPublicKey)).toThrow(
+        expect.objectContaining({ code: "RING_RECIPIENT_ENROLLED" }),
       );
-      expect(() => paying(resolved.viewingPublicKey, true)).toThrow(
+      expect(() => paying(resolved.viewingPublicKey)).toThrow(
         expect.objectContaining({ code: "RING_RECIPIENT_ENROLLED" }),
       );
     });
 
-    it("lets a merge pay an enrolled owner at the zero key, a merge runs no salted payee read", async () => {
+    it("lets a merge preserve an enrolled owner's zero key", async () => {
       const { row } = await addressed();
       const client = chain(row, "present");
       const { root } = await client.getTrackingOpenings({

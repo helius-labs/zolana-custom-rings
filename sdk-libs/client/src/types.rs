@@ -115,8 +115,8 @@ pub enum InputOpening {
     Address,
     /// A spent note, never padding or unspent.
     Real,
-    /// A default-ring note whose opening the frame carries.
-    External(Box<AuditedDefaultInput>),
+    /// A default-ring note the entry record names.
+    External(Box<AuditedEntryInput>),
 }
 
 impl InputOpening {
@@ -128,7 +128,7 @@ impl InputOpening {
         }
     }
 
-    pub fn default_input(&self) -> Option<&AuditedDefaultInput> {
+    pub fn default_input(&self) -> Option<&AuditedEntryInput> {
         match self {
             Self::External(input) => Some(input.as_ref()),
             Self::Dummy | Self::Address | Self::Real => None,
@@ -136,11 +136,16 @@ impl InputOpening {
     }
 }
 
+/// Bound by the proof to the spent input at its position.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AuditedDefaultInput {
-    pub utxo: AuditedUtxo,
-    /// `None` without the input's tree id, the commitment binds it.
-    pub commitment: Option<[u8; 32]>,
+pub struct AuditedEntryInput {
+    pub owner_key: [u8; 32],
+    pub nullifier_pk: [u8; 32],
+    pub asset: [u8; 32],
+    pub mint: Address,
+    pub amount: u64,
+    /// SPP's spent UTXO hash under the note's tree.
+    pub commitment: [u8; 32],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

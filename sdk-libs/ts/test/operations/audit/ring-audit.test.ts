@@ -331,8 +331,8 @@ describe("auditRing", () => {
     expect(page.transactions[0]?.inputs[0]?.opening).toMatchObject({
       kind: "opened",
       amount: record.amount,
-      ring: { kind: "ring", commitment },
     });
+    expect(page.transactions[0]?.inputs[0]?.hash).toEqual(commitment);
   });
 
   it("reads an address input apart from the note it follows", async () => {
@@ -408,8 +408,8 @@ describe("auditRing", () => {
       expect(page.transactions[0]?.inputs[0]?.opening).toMatchObject({
         kind: "opened",
         amount: record.amount,
-        ring: { kind: "ring", commitment },
       });
+      expect(page.transactions[0]?.inputs[0]?.hash).toEqual(commitment);
     }
   });
 

@@ -3,7 +3,8 @@ use solana_signature::Signature;
 use spr_keypair::{NullifierKey, PublicKey, X25519Keypair};
 use spr_transaction::{Mint, OutputContext};
 use zolana_ring_client::{
-    AuditedDefaultInput, AuditedInput, AuditedOutput, AuditedUtxo, CreatedUtxo, KnownUtxo,
+    rpc::{DecryptedInput, InputParty},
+    AuditedEntryInput, AuditedInput, AuditedOutput, AuditedUtxo, CreatedUtxo, KnownUtxo,
     OutputPayloadError, OutputPayloadErrorKind, RingOwnerTag, UtxoOwner,
 };
 
@@ -106,6 +107,20 @@ fn utxo(owner_key: [u8; 32], amount: u64) -> AuditedUtxo {
         blinding: [6; 32],
         data_hash: [0; 32],
         ring_data_hash: [0; 32],
+    }
+}
+
+fn entry(owner_key: [u8; 32], nullifier: u8, amount: u64) -> AuditedInput {
+    AuditedInput {
+        nullifier: [nullifier; 32],
+        opening: InputOpening::External(Box::new(AuditedEntryInput {
+            owner_key,
+            nullifier_pk: [3; 32],
+            asset: asset_field(),
+            mint: mint_of_asset(),
+            amount,
+            commitment: [nullifier ^ 0x0f; 32],
+        })),
     }
 }
 
@@ -281,17 +296,44 @@ fn an_unresolved_nullifier_refuses_the_signature_until_its_note_opens() {
 #[test]
 fn an_external_input_answers_under_its_own_evidence() {
     let transaction = audited(
-        vec![AuditedInput {
-            nullifier: [0x11; 32],
-            opening: InputOpening::External(Box::new(AuditedDefaultInput {
-                utxo: utxo(ALICE, 40),
-                commitment: None,
-            })),
-        }],
+        vec![entry(ALICE, 0x11, 30), entry(BOB, 0x12, 10)],
         vec![ring_slot(0, BOB, 40)],
     );
     let read = read(&store_with(&[]), &transaction, Vec::new()).expect("rows");
-    assert_eq!(outflows(&read.flows), [(owner_identity(&ALICE), 40)]);
+    assert_eq!(outflows(&read.flows), [(owner_identity(&ALICE), 30)]);
+    assert!(read.spends_note);
+}
+
+#[test]
+fn an_entry_input_names_its_party_and_an_unresolved_spend_stays_another_party() {
+    let resolved = note(ALICE, 0x12, 40);
+    let unindexed = note(ALICE, 0x13, 25);
+    let store = store_with(&[resolved]);
+    block_on(store.spend([spend(&resolved).nullifier, spend(&unindexed).nullifier]));
+    let inputs: Vec<DecryptedInput> = [
+        entry(ALICE, 0x21, 30),
+        entry(BOB, 0x22, 10),
+        spend(&resolved),
+        spend(&unindexed),
+    ]
+    .into_iter()
+    .map(DecryptedInput::from)
+    .collect();
+    let wallet = Address::new_from_array(ALICE);
+    let parties = block_on(store.input_parties(&wallet, &inputs)).expect("parties");
+    let named: Vec<InputParty> = inputs
+        .iter()
+        .map(|input| parties.party(&wallet, input))
+        .collect();
+    assert_eq!(
+        named,
+        [
+            InputParty::Own,
+            InputParty::Other,
+            InputParty::Own,
+            InputParty::Other,
+        ]
+    );
 }
 
 #[test]

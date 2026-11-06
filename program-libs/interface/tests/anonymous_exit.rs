@@ -295,6 +295,31 @@ fn policy_withdrawals_authenticate_live_owners_and_preserve_order() {
     assert!(policy_withdrawals(&[sol, spl], &accounts, &[OWNER]).is_err());
 }
 
+/// The ring circuit range checks no leg, the program's digest over u64 settlement amounts bounds each.
+#[test]
+fn withdrawal_digest_reads_u64_settlement_amounts() {
+    use custom_ring_interface::{domain, policy_withdrawal_hash, policy_withdrawals};
+    use spr_hasher::{hash_chain::create_hash_chain_4, primitives::right_align};
+    let settled = InterfaceTransfer::SolWithdrawal { amount: u64::MAX };
+    let accounts = sol_group(Address::new_from_array(OWNER), vec![]);
+    let legs = policy_withdrawals(&[settled], &accounts, &[]).unwrap();
+    assert_eq!(legs[0].amount, u64::MAX);
+    // The amount field is the u64 right aligned, its 24 high bytes stay zero for every settlement.
+    let amount = right_align(&u64::MAX.to_be_bytes());
+    assert_eq!(amount[..24], [0; 24]);
+    let fields = [
+        domain::field(domain::WITHDRAWALS),
+        right_align(&1u64.to_be_bytes()),
+        legs[0].owner,
+        legs[0].asset,
+        amount,
+    ];
+    assert_eq!(
+        policy_withdrawal_hash(&legs).unwrap(),
+        create_hash_chain_4(fields.iter()).unwrap()
+    );
+}
+
 #[test]
 fn repeated_owners_and_mints_screen_as_their_first_leg() {
     use custom_ring_interface::{policy_withdrawals, PolicyWithdrawal};

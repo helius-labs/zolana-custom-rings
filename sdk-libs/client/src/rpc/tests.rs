@@ -5,7 +5,7 @@ use spr_transaction::OutputContext;
 
 use super::*;
 use crate::{
-    AuditedDefaultInput, InputOpening, OutputPayloadError,
+    AuditedEntryInput, InputOpening, OutputPayloadError,
     OutputPayloadErrorKind::{self, Commitment, Disclosure},
 };
 
@@ -176,6 +176,17 @@ fn utxo(seed: u8, mint: Option<Address>) -> AuditedUtxo {
         blinding: [seed + 3; 32],
         data_hash: [seed + 4; 32],
         ring_data_hash: [seed + 5; 32],
+    }
+}
+
+fn entry_input(seed: u8) -> AuditedEntryInput {
+    AuditedEntryInput {
+        owner_key: [seed; 32],
+        nullifier_pk: [seed + 1; 32],
+        asset: [seed + 2; 32],
+        mint: Address::new_from_array([4; 32]),
+        amount: u64::from(seed),
+        commitment: [seed + 3; 32],
     }
 }
 
@@ -476,17 +487,11 @@ fn anonymous_audited() -> AuditedTransaction {
             },
             AuditedInput {
                 nullifier: [11; 32],
-                opening: InputOpening::External(Box::new(AuditedDefaultInput {
-                    utxo: utxo(0x60, Some(Address::new_from_array([4; 32]))),
-                    commitment: Some([0x62; 32]),
-                })),
+                opening: InputOpening::External(Box::new(entry_input(0x60))),
             },
             AuditedInput {
                 nullifier: [10; 32],
-                opening: InputOpening::External(Box::new(AuditedDefaultInput {
-                    utxo: utxo(0x70, None),
-                    commitment: None,
-                })),
+                opening: InputOpening::External(Box::new(entry_input(0x70))),
             },
             AuditedInput {
                 nullifier: [9; 32],

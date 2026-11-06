@@ -1,4 +1,4 @@
-// Refusals of the owner predicates, a key off the enrolled row and a zero key for an enrolled owner under a salted payee read.
+// Zero key spends remain valid after enrollment.
 
 package transfer_test
 
@@ -34,7 +34,6 @@ type ownersCircuit struct {
 	Inputs, Outputs  []shared.UtxoWires
 	Delegate, Hidden frontend.Variable
 	HiddenOwner      frontend.Variable
-	SaltedPayees     frontend.Variable
 }
 
 func newOwnersCircuit(t testing.TB) *ownersCircuit {
@@ -61,7 +60,7 @@ func (c *ownersCircuit) Define(api frontend.API) error {
 	for o, output := range c.Outputs {
 		outputs[o] = output.Open(api)
 	}
-	transfer.AssertOutputOwners(api, pool, outputs, c.OutputEntries, c.SaltedPayees)
+	transfer.AssertOutputOwners(api, pool, outputs, c.OutputEntries)
 	return nil
 }
 
@@ -90,7 +89,6 @@ type ownersWorld struct {
 	rows             []*big.Int
 	inputs, outputs  []shared.UtxoWires
 	delegate, hidden bool
-	saltedPayees     bool
 	hiddenOwner      *big.Int
 	// entries overrides the fixture's row entries after filling.
 	mutate func(c *ownersCircuit)
@@ -125,7 +123,7 @@ func (w ownersWorld) build(t testing.TB) *ownersCircuit {
 		}
 	}
 	ringpolicy.FillTracking(t, &c.Tracking, tree, c.Members, outputOwners, nil, nil)
-	c.Delegate, c.Hidden, c.HiddenOwner, c.SaltedPayees = ringtest.Bit(w.delegate), ringtest.Bit(w.hidden), 0, ringtest.Bit(w.saltedPayees)
+	c.Delegate, c.Hidden, c.HiddenOwner = ringtest.Bit(w.delegate), ringtest.Bit(w.hidden), 0
 	if w.hiddenOwner != nil {
 		c.HiddenOwner = w.hiddenOwner
 	}
@@ -166,9 +164,9 @@ func TestOwnerPredicates(t *testing.T) {
 			return ownersWorld{rows: []*big.Int{carol}, inputs: []shared.UtxoWires{note(carol, big.NewInt(99), 0)}}
 		}},
 		{name: "a zero-key output to an unenrolled owner", world: func(t testing.TB) ownersWorld {
-			return ownersWorld{saltedPayees: true, outputs: []shared.UtxoWires{note(carol, zero, testRing)}}
+			return ownersWorld{outputs: []shared.UtxoWires{note(carol, zero, testRing)}}
 		}},
-		{name: "a zero-key output to an enrolled owner off a salted payee read", world: func(t testing.TB) ownersWorld {
+		{name: "a zero-key output to an enrolled owner", frame: "transfer.AssertOutputOwners", world: func(t testing.TB) ownersWorld {
 			return ownersWorld{outputs: []shared.UtxoWires{note(alice, zero, testRing), bobNote(t)}}
 		}},
 		{name: "an exit to anyone", world: func(t testing.TB) ownersWorld {
@@ -213,9 +211,6 @@ func TestOwnerPredicates(t *testing.T) {
 		}},
 		{name: "a nonzero key to an enrolled owner other than its own", frame: "transfer.AssertOutputOwners", world: func(t testing.TB) ownersWorld {
 			return ownersWorld{outputs: []shared.UtxoWires{note(alice, enrolledKey(t, bob), testRing)}}
-		}},
-		{name: "a zero key to an enrolled owner under a salted payee read", frame: "transfer.AssertOutputOwners", world: func(t testing.TB) ownersWorld {
-			return ownersWorld{saltedPayees: true, outputs: []shared.UtxoWires{note(alice, zero, testRing)}}
 		}},
 		{name: "a nonzero key to an unenrolled owner", frame: "transfer.AssertOutputOwners", world: func(t testing.TB) ownersWorld {
 			return ownersWorld{outputs: []shared.UtxoWires{note(carol, enrolledKey(t, carol), testRing)}}

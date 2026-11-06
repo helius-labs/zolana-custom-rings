@@ -1,5 +1,5 @@
 use custom_ring_interface::{
-    AuditEnvelope, AuditEvidence, AuditKey, AuditStreamLayout, CustomRingError, EntryInput,
+    AuditEnvelope, AuditEvidence, AuditKey, AuditStreamLayout, CustomRingError, EntryRecord,
     InputClass, InputClassification, InputMap,
 };
 
@@ -160,7 +160,7 @@ fn ordinary_envelope_encodes_the_high_address_bit_in_big_endian_order() {
 }
 
 #[test]
-fn entry_envelope_keeps_openings_and_stream_counters_at_capacity_offsets() {
+fn entry_envelope_keeps_records_and_stream_counters_at_capacity_offsets() {
     let layout = AuditStreamLayout {
         key: AuditKey {
             format: custom_ring_interface::DisclosureFormat::Standard,
@@ -172,10 +172,10 @@ fn entry_envelope_keeps_openings_and_stream_counters_at_capacity_offsets() {
         capacity: 4,
         has_data: true,
     };
-    let opening = EntryInput {
+    let record = EntryRecord {
         amount: 0x0102_0304_0506_0708,
         owner_key: [0x31; 32],
-        ..EntryInput::default()
+        ..EntryRecord::default()
     };
     let envelope = AuditEnvelope {
         tx_viewing_secret: [0x23; 32],
@@ -183,22 +183,22 @@ fn entry_envelope_keeps_openings_and_stream_counters_at_capacity_offsets() {
         address_input_bits: 2,
         evidence: AuditEvidence::Entry {
             default_input_bits: 4,
-            inputs: vec![EntryInput::default(), EntryInput::default(), opening],
+            inputs: vec![EntryRecord::default(), EntryRecord::default(), record],
         },
     };
     let plaintext = envelope.encode();
-    assert_eq!(plaintext.len(), 649);
+    assert_eq!(plaintext.len(), 457);
     assert_eq!(&plaintext[33..41], &[0, 0, 0, 0, 0, 0, 0, 2]);
     assert_eq!(&plaintext[41..49], &[0, 0, 0, 0, 0, 0, 0, 4]);
-    assert_eq!(&plaintext[49..449], &[0; 400]);
-    assert_eq!(&plaintext[449..481], &[0x31; 32]);
-    assert_eq!(&plaintext[513..521], &[1, 2, 3, 4, 5, 6, 7, 8]);
-    assert_eq!(layout.envelope().len, 649);
-    assert_eq!(layout.envelope().max_blocks, 54);
-    assert_eq!(layout.first_record_counter(), 56);
-    assert_eq!(layout.record(1).start_counter, 63);
-    assert_eq!(layout.first_tail_counter(), 84);
-    assert_eq!(layout.tail(1).start_counter, 88);
+    assert_eq!(&plaintext[49..321], &[0; 272]);
+    assert_eq!(&plaintext[321..353], &[0x31; 32]);
+    assert_eq!(&plaintext[385..393], &[1, 2, 3, 4, 5, 6, 7, 8]);
+    assert_eq!(layout.envelope().len, 457);
+    assert_eq!(layout.envelope().max_blocks, 38);
+    assert_eq!(layout.first_record_counter(), 40);
+    assert_eq!(layout.record(1).start_counter, 47);
+    assert_eq!(layout.first_tail_counter(), 68);
+    assert_eq!(layout.tail(1).start_counter, 72);
     assert_eq!(AuditEnvelope::decode(&plaintext, layout).unwrap(), envelope);
 
     for (offset, mask) in [(40, 1), (48, 2), (49, 1), (249, 1)] {

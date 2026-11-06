@@ -139,7 +139,7 @@ impl RecipientResolver<'_> {
         })
     }
 
-    /// An enrolled owner at the zero key resolves to it, a salted payee read refuses it at the payment.
+    /// Zero key resolution defers enrollment checks to payment validation.
     fn verify(
         &self,
         member: &[u8; 32],
@@ -498,7 +498,7 @@ mod tests {
         ));
     }
 
-    /// No salted payee read runs here, the payment refuses an enrolled zero key under one.
+    /// Payment validation refuses an enrolled recipient under the zero key.
     #[tokio::test]
     async fn a_zero_key_address_keeps_the_zero_key_and_an_enrolled_owner_takes_its_current_viewing_key(
     ) {

@@ -78,7 +78,7 @@ The chains over the slots, each zero past `m`:
 - `record_chain = HashChain4(hash_bytes(record_i))`. `record_i` is the slot's record ciphertext, 105 bytes in the standard format or 73 bytes in the single-asset payout format.
 - `tail_chain = HashChain4(hash_bytes(tail_i))` over the 64-byte data tails, and `0` when no slot carries a tail.
 
-`withdrawal_hash = HashChain4([CRPW, right_align(count), (owner, asset, right_align(amount)) per withdrawal leg])`, in settlement order. A SOL leg's owner is `solana_owner_identity(recipient)`, and an SPL leg's owner is the identity of the token account's owner. The program reads both from the live settlement accounts. The list is empty on a ring without own records and on the delegate rails.
+`withdrawal_hash = HashChain4([CRPW, right_align(count), (owner, asset, right_align(amount)) per withdrawal leg])`, in settlement order. A SOL leg's owner is `solana_owner_identity(recipient)`, and an SPL leg's owner is the identity of the token account's owner. The program reads both from the live settlement accounts, and each amount from the u64 settlement leg. The circuit range checks no leg amount, since a leg at or past `2^64` opens no digest the program builds. The list is empty on a ring without own records and on the delegate rails.
 
 No zolana ciphertext enters the statement, an exit's scheme 3 body included. The circuit holds every spent UTXO to its rail's owner predicate and reopens SPP's `private_tx_hash` as `Poseidon(input_chain, output_chain, address_chain, private_tx_blinding)`. The address chain follows the address subsequence of the statement-bound nullifiers. `private_tx_blinding` stays private.
 

@@ -104,7 +104,6 @@ type TransferParams struct {
 	SignerDataCounts    uint64          `json:"signerDataCounts,omitempty"`
 	Rows                []Field         `json:"rows"`
 	PrivateTxHash       Field           `json:"privateTxHash"`
-	PrivateTxBlinding   Field           `json:"privateTxBlinding"`
 	TrackingParams
 	PolicyParams
 }

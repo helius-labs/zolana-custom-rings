@@ -5,11 +5,14 @@
 // reads each leg from its settlement accounts and hashes the list, the proof opens the same list.
 // Without the binding a withdrawal to a blocked owner would read as a leg to anyone.
 //
+// The program builds the digest from u64 settlement amounts alone, so a leg amount at or past 2^64 opens no
+// digest the program accepts, a Poseidon collision aside.
+//
 // Read after policy/screen.go. Read before policy/rules.go.
 //
 // Properties:
 // 1. WithdrawalHash opens to WithdrawalCount legs, the program's policy_withdrawal_hash over them in order.
-// 2. A live leg holds a nonzero asset and a nonzero amount below 2^64, a leg past the count is zero.
+// 2. A live leg holds a nonzero asset and a nonzero amount, a leg past the count is zero.
 // 3. Every leg reads as a payment with Ring clear, so the rules see it gross and no input nets it.
 
 package policy
@@ -26,13 +29,12 @@ import (
 // WithdrawalWires feeds the payment rules alone, the charged outflow reads the statement's gross.
 type WithdrawalWires struct{ Owner, Asset, Amount frontend.Variable }
 
-func (p *PolicyInputs) openWithdrawals(api frontend.API, rc frontend.Rangechecker) []Payment {
+func (p *PolicyInputs) openWithdrawals(api frontend.API) []Payment {
 	count := ringgadget.SelectCount(api, p.WithdrawalCount, 0, len(p.Withdrawals)+1)
 	fields := []frontend.Variable{shared.WithdrawalsDomain, p.WithdrawalCount}
 	payments := make([]Payment, len(p.Withdrawals))
 	for i, w := range p.Withdrawals {
 		active := count.Active[i]
-		rc.Check(w.Amount, 64)
 		// A live leg is one the program builds, a nonzero amount of a nonzero asset as the rules assume of a live UTXO.
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: active, V: api.IsZero(w.Amount)})
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: active, V: api.IsZero(w.Asset)})

@@ -141,8 +141,8 @@ use spr_user_registry_interface::user_registry_program_id;
 use zolana_ring_client::{
     auditor_view_tag,
     rpc::{write_auditor_key, CreateAuditorKeyRequest},
-    AuditedTransaction, AuditedUtxo, InputOpening, OutputOpening, RecoveryStep, RingRecovery,
-    RingScan, SealedNullifierKey, SourceMember, ViewingHistory,
+    AuditedTransaction, AuditedUtxo, InputOpening, KnownUtxo, OutputOpening, RecoveryStep,
+    RingRecovery, RingScan, SealedNullifierKey, SourceMember, ViewingHistory,
 };
 use zolana_ring_keys::{RingAddress, RingPaymentRequest};
 use zolana_ring_policy::{ListId, Member, Rule, RuleTable, Subject};

@@ -68,7 +68,7 @@ pub use self::{
 pub(crate) use self::{
     anonymous::HiddenOwner,
     delegate::{delegate_rail, same_owner},
-    pool_subjects::{KnownSalts, SourceGates},
+    pool_subjects::KnownSalts,
 };
 
 use self::{
@@ -434,7 +434,6 @@ struct Frame {
     sealed: SealedAudit,
     published_inputs: usize,
     policy: PolicyInputs,
-    private_tx_blinding: [u8; 32],
     sender_pk_hash: [u8; 32],
     public_assets: [[u8; 32]; N_PUBLIC_SLOTS],
     public_amount_fields: [[u8; 32]; N_PUBLIC_SLOTS],
@@ -842,7 +841,6 @@ impl<'a> Sealed<'a> {
         let public_assets = public.asset_fields()?;
         let public_amount_fields = public.amount_fields()?;
         let public_gross = public.gross_fields();
-        let private_tx_blinding = proof_inputs.private_tx_blinding()?;
         let sender_pk_hash = sender.signing_pubkey.owner_proof_input_hash()?;
         let delegate = match spend {
             Spend::Delegate { delegate, .. } => Some(delegate),
@@ -964,7 +962,6 @@ impl<'a> Sealed<'a> {
                 sealed,
                 published_inputs,
                 policy,
-                private_tx_blinding,
                 sender_pk_hash,
                 public_assets,
                 public_amount_fields,

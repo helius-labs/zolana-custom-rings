@@ -510,8 +510,6 @@ pub(crate) struct TransferParams<'a> {
     pub rows: Vec<[u8; 32]>,
     #[serde(with = "fe")]
     pub private_tx_hash: [u8; 32],
-    #[serde(with = "fe")]
-    pub private_tx_blinding: [u8; 32],
     pub in_proof: bool,
     pub hidden: bool,
     pub delegate: bool,

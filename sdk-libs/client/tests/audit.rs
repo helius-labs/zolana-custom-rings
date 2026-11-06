@@ -32,15 +32,15 @@ use spr_transaction::{OutputContext, OutputSlot};
 use zolana_ring_client::{
     auditor_view_tag, confirmed_merge,
     history::{HistoryCursor, HistoryQuery, HistoryStream},
-    AuditError, AuditStreamSeal, AuditedTransaction, ConfirmedMerge, ConfirmedMergeDisclosure,
-    InputOpening, MergeAudit, MergeLedger, MergeRecordSeal, OutputOpening, OutputPayloadError,
-    OutputPayloadErrorKind, RingOrigin, RingOwnerTag, RingScan, TransactionAudit,
-    TransactionOrigin,
+    AuditError, AuditStreamSeal, AuditedEntryInput, AuditedTransaction, ConfirmedMerge,
+    ConfirmedMergeDisclosure, InputOpening, MergeAudit, MergeLedger, MergeRecordSeal,
+    OutputOpening, OutputPayloadError, OutputPayloadErrorKind, RingOrigin, RingOwnerTag, RingScan,
+    TransactionAudit, TransactionOrigin,
 };
 
 use history_page::{position, EventsPage};
 use transfer::{
-    audited_opening, auditor, entry_input, field, known_utxo, x25519_u, Disclosure, Frame, Output,
+    audited_opening, auditor, entry_record, field, known_utxo, x25519_u, Disclosure, Frame, Output,
     Placement, Publish, Rail, Slot, Transfer, UtxoFields,
 };
 
@@ -376,46 +376,34 @@ fn an_address_ahead_of_the_notes_reads_apart_from_them() {
 
 /// The entry bit names absolute note position 1.
 #[test]
-fn an_entry_input_opens_under_its_default_bit_and_rebuilds_its_commitment() {
+fn an_entry_input_opens_under_its_default_bit_with_its_proven_commitment() {
     let mut transfer = Transfer::fixture();
     transfer.nullifiers = vec![transfer.first_nullifier, field(0x61)];
     let outputs = delivered_outputs()[..2].to_vec();
     let spent = utxo(0xc1, MINT, 70);
-    let blinding = field(0x63);
+    let commitment = spent.commitment(Placement {
+        blinding: field(0x63),
+        ring: None,
+        tree_id: transfer.tree_id,
+    });
     let disclosure = transfer.entry_disclosure(
         &outputs,
         0b10,
-        vec![Default::default(), entry_input(&spent, blinding)],
+        vec![Default::default(), entry_record(&spent, commitment)],
     );
     let built = publish(&transfer, Rail::Anonymous, outputs, disclosure);
-    let tree = [Some(transfer.tree_id); 2];
-    let audited = TransactionAudit::new(&built.transaction, built.layout)
-        .with_input_trees(&tree)
-        .unwrap()
-        .run(&auditor())
-        .unwrap();
+    let audited = audit(&built.transaction, built.layout).unwrap();
     assert_eq!(audited.inputs[0].opening, InputOpening::Real);
-    let opened = audited.inputs[1].opening.default_input().expect("opened");
-    assert_eq!(opened.utxo.owner_key, spent.owner_key);
-    assert_eq!(opened.utxo.nullifier_pk, spent.nullifier_pk);
-    assert_eq!(opened.utxo.mint, Some(MINT));
-    assert_eq!(opened.utxo.amount, 70);
     assert_eq!(
-        opened.commitment,
-        Some(spent.commitment(Placement {
-            blinding,
-            ring: None,
-            tree_id: transfer.tree_id,
+        audited.inputs[1].opening,
+        InputOpening::External(Box::new(AuditedEntryInput {
+            owner_key: spent.owner_key,
+            nullifier_pk: spent.nullifier_pk,
+            asset: spent.asset(),
+            mint: MINT,
+            amount: 70,
+            commitment,
         }))
-    );
-    let untreed = audit(&built.transaction, built.layout).unwrap();
-    assert_eq!(
-        untreed.inputs[1]
-            .opening
-            .default_input()
-            .unwrap()
-            .commitment,
-        None
     );
 }
 

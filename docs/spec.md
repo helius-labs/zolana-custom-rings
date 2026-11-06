@@ -213,7 +213,7 @@ Ring RPC keeps one key file per role. The auditor key opens ring activity. The s
 | 24 | **Policy authority** | Authority | Sets the ring's rules, lists, mint settings and ring-wide grants. |
 | 25 | **Storage authority** | Authority | Signs the updates of one record tree. Ring RPC holds it for the ring's records. |
 | 26 | **Upgrade authority** | Authority | Deploys and upgrades the ring program and signs `Initialize`. |
-| 27 | **Auditor stream** | Ciphertext | One AES-256-CTR stream per transfer, sealed to the auditor key and proven. It carries the transaction viewing secret, the input map and the entry openings on an entry key. It also carries one record per published slot and, under `has_data`, one data tail per slot. |
+| 27 | **Auditor stream** | Ciphertext | One AES-256-CTR stream per transfer, sealed to the auditor key and proven. It carries the transaction viewing secret, the input map and the entry records on an entry key. It also carries one record per published slot and, under `has_data`, one data tail per slot. |
 | 28 | **Recipient body** | Ciphertext | A ring output's blinding, amount and mint, encrypted to its recipient's viewing key. No proof constrains it. |
 | 29 | **Change** | Output | An anonymous output to the sender, published with no recipient body. The sender bundle rebuilds it. |
 | 30 | **Sender bundle** | Ciphertext | One per anonymous transfer, encrypted to the sender's viewing key. It holds the change cells, the output seed and each recipient's viewing key. No proof constrains it. |
@@ -288,7 +288,7 @@ A deposit moves SOL or tokens from a wallet's public balance into up to 8 ring n
    3. Sends the deposit request to **Ring RPC** on the deposit relay rail. The funder signs `deposit_request_digest`, the SHA-256 of `"zolana/ring-rpc-relay-deposit"` and the proof input bytes. No owner signs.
 2. **Ring RPC:**
    1. Checks that the ring is active. Refuses a frame with a real input, with two funders, with the fee payer as funder, or with a signature the funder did not make.
-   2. Generates the transfer proof. It shows the owner and asset rules hold for each recipient and asset. It also shows that each nonzero nullifier key matches its owner's tracking row. Under a salted payee read it shows that each zero-key owner has no row.
+   2. Generates the transfer proof. It shows the owner and asset rules hold for each recipient and asset. It also shows that each nonzero nullifier key matches its owner's tracking row. It also proves each zero-key recipient absent at the accepted tracking root.
    3. Returns the transaction to the **Wallet** for signing.
 3. **Wallet:** the funder signs the transaction to authorize the SOL or SPL token transfer.
 4. **Ring RPC:**
@@ -333,7 +333,7 @@ The table names construction paths, subject to policy, key capacity and frame fi
 | Confidential in-proof owner, ring inputs, optional public co-owners | Yes | Yes | Yes | SPP verifies the owner's proof signature and each public co-owner's transaction signature. |
 | Confidential in-proof owner with a default-ring input | Refused | Refused | Refused | The ring entry proof permits the input, but the SDK paths refuse it. |
 | Anonymous hidden owner, ring inputs, optional public co-owners | Yes | Yes | Yes | Input zero belongs to the hidden owner. Its key is nonzero. Public co-owners sign. |
-| Anonymous entry, one owner, default-ring inputs only, no input data | Yes | Yes | Yes | SPP publishes the default-ring owner's identity. An entry key opens those inputs to the auditor. |
+| Anonymous entry, one owner, default-ring inputs only, no input data | Yes | Yes | Yes | SPP publishes the default-ring owner's identity. An entry key names those inputs to the auditor in entry records. |
 | Anonymous entry with public co-owners or input data | Yes | Yes | Yes | The hidden owner cannot mix its own ring and default-ring notes. Public co-owners sign. |
 | Anonymous owner mixing its own ring and default-ring inputs | Refused | Refused | Refused | SPP refuses the mixture. Use the public-owner path. |
 | Anonymous public owners, ring or default-ring inputs | Yes | Yes | No public-owner path | Every spending owner signs. Default-ring inputs select an entry key. Recipients remain hidden. |
@@ -497,7 +497,7 @@ The **Ring Program** checks only the required co-signer signature, never the lim
 33. Enrollment lives in a tracking tree apart from the policy registry, because one tree would make enrollment and revocation race on one revision. A curator source reads list bits only, so any registry other than the ring's records can serve as a curator.
 34. Reply metadata is optional and off by default. The mandatory body names neither sender nor memo, and a reply stays an unauthenticated claim.
 35. A transfer's co-signer derives each owner's debit from the frame it signs with the auditor key. Client-sent openings would widen what the co-signer learns.
-36. A note under the zero nullifier key needs no tracking row for its key, so a program-owned note needs no enrollment. The proof accepts a zero-key output to an enrolled owner only while no salted payee read is active. Under a salted payee read the payee's row must be absent, a requirement of its own since the salted read opens a payee's row by owner identity whatever the key. The SDKs accept that zero-key recipient and read its current viewing key from its authorization account. Readers mark a zero-key note `exposed_if_spent`, and automatic selection leaves it out.
+36. A note under the zero nullifier key needs no enrollment. A zero-key transfer output requires owner absence at the accepted tracking root. A retained root can prove absence during the enrollment grace period. An old zero-key note stays spendable after enrollment, and a merge preserves its key. Readers mark a zero-key note `exposed_if_spent`, and automatic selection leaves it out.
 37. A slot's discovery tag is a hint no proof constrains. One every-site scan reads no tag, so a wrong tag cannot hide a note its recipient can decrypt.
 38. A salted owner write proves the owner's row under one tracking root. In the same instruction it raises the source's tracking floor to that root's revision. Rows never leave the tracking tree, so every root a salted read accepts holds each owner with a private entry. No such owner proves absence. An owner with no applied row has no private entry, so its proven absence hides none.
 39. The input map is part of the sealed envelope and the proof derives it from the forwarded nullifiers. Notes and addresses interleave in SPP's order before the dummy suffix, and a reader never takes an address for a spent note.

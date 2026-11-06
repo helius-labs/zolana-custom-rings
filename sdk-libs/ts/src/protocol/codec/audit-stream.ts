@@ -24,7 +24,7 @@ import {
   disclosureFormat,
   DATA_TAIL_LEN,
   DEFAULT_INPUT_BITS_LEN,
-  ENTRY_INPUT_LEN,
+  ENTRY_RECORD_LEN,
   ENVELOPE_HEAD_LEN,
   ENVELOPE_KEY_LEN,
   MAX_INPUT_CLASS,
@@ -67,15 +67,14 @@ export interface DataTail {
   readonly ringDataHash: Bytes32;
 }
 
-/** One default-ring input's opening, zero fields on any other slot, never a secret, Rust `EntryInput`. */
-export interface EntryInput {
+/** Zero on any slot but a default-ring note, Rust `EntryRecord`. */
+export interface EntryRecord {
   readonly ownerKey: Bytes32;
   readonly nullifierPk: Bytes32;
   readonly amount: bigint;
   readonly mint: Address;
-  readonly blinding: Bytes32;
-  readonly dataHash: Bytes32;
-  readonly ringDataHash: Bytes32;
+  /** SPP's spent UTXO hash, the value `private_tx_hash` chains. */
+  readonly inputCommitment: Bytes32;
 }
 
 /** The envelope past its sealed key and count, Rust `AuditEvidence`. */
@@ -87,7 +86,7 @@ export type AuditEvidence =
       /** Bit `i` set when input `i` is a live default-ring note. */
       defaultInputBits: bigint;
       /** One per published input. */
-      inputs: readonly EntryInput[];
+      inputs: readonly EntryRecord[];
     }>;
 
 /** `tx_viewing_sk ‖ R ‖ A ‖ default_input_bits ‖ entries`, Rust `AuditEnvelope`. */
@@ -247,14 +246,12 @@ export const DUMMY_RECORD: AuditRecord = Object.freeze({
 
 export const EMPTY_TAIL: DataTail = Object.freeze({ dataHash: ZERO, ringDataHash: ZERO });
 
-export const EMPTY_ENTRY_INPUT: EntryInput = Object.freeze({
+export const EMPTY_ENTRY_RECORD: EntryRecord = Object.freeze({
   ownerKey: ZERO,
   nullifierPk: ZERO,
   amount: 0n,
   mint: ZERO_MINT,
-  blinding: ZERO,
-  dataHash: ZERO,
-  ringDataHash: ZERO,
+  inputCommitment: ZERO,
 });
 
 export function encodeAuditRecord(record: AuditRecord): Uint8Array {
@@ -352,11 +349,11 @@ export function encodeAuditEnvelope(envelope: AuditEnvelope): Uint8Array {
   return concatBytes(
     head,
     u64be(checkedCounter(evidence.defaultInputBits, "default input bits")),
-    ...evidence.inputs.map(encodeEntryInput),
+    ...evidence.inputs.map(encodeEntryRecord),
   );
 }
 
-/** Refuses any length other than `layout`'s, counts off the input map, a default bit off a note and a nonzero opening off a default bit. */
+/** Refuses any length other than `layout`'s, counts off the input map, a default bit off a note and a nonzero record off a default bit. */
 export function decodeAuditEnvelope(
   plaintext: Uint8Array,
   layout: AuditStreamLayout,
@@ -381,22 +378,22 @@ export function decodeAuditEnvelope(
     });
   }
   if (!layout.key.entry) return Object.freeze({ ...head, evidence: NO_EVIDENCE });
-  // 3. Entry evidence opens default-ring notes alone, every other published position stays zero.
+  // 3. Entry evidence names default-ring notes alone, every other published position stays zero.
   const entriesAt = ENVELOPE_HEAD_LEN + DEFAULT_INPUT_BITS_LEN;
   const defaultInputBits = bytesToBigInt(plaintext.subarray(ENVELOPE_HEAD_LEN, entriesAt));
   inputs.validateDefaultInputBits(defaultInputBits);
-  const openings = Array.from({ length: layout.inputs }, (_, slot) =>
-    decodeEntryInput(
+  const records = Array.from({ length: layout.inputs }, (_, slot) =>
+    decodeEntryRecord(
       plaintext.subarray(
-        entriesAt + slot * ENTRY_INPUT_LEN,
-        entriesAt + (slot + 1) * ENTRY_INPUT_LEN,
+        entriesAt + slot * ENTRY_RECORD_LEN,
+        entriesAt + (slot + 1) * ENTRY_RECORD_LEN,
       ),
     ),
   );
   if (
-    openings.some(
-      (opening, slot) =>
-        ((defaultInputBits >> BigInt(slot)) & 1n) === 0n && !isEmptyEntryInput(opening),
+    records.some(
+      (record, slot) =>
+        ((defaultInputBits >> BigInt(slot)) & 1n) === 0n && !isEmptyEntryRecord(record),
     )
   )
     throw refused();
@@ -405,39 +402,36 @@ export function decodeAuditEnvelope(
     evidence: Object.freeze({
       kind: "entry",
       defaultInputBits,
-      inputs: Object.freeze(openings),
+      inputs: Object.freeze(records),
     }),
   });
 }
 
-/** True on the all-zero entry a live ring input carries. */
-export function isEmptyEntryInput(entry: EntryInput): boolean {
-  return equalBytes(encodeEntryInput(entry), encodeEntryInput(EMPTY_ENTRY_INPUT));
+/** True on the all-zero record a ring note, an address or a dummy carries. */
+export function isEmptyEntryRecord(record: EntryRecord): boolean {
+  return equalBytes(encodeEntryRecord(record), encodeEntryRecord(EMPTY_ENTRY_RECORD));
 }
 
-function encodeEntryInput(input: EntryInput): Uint8Array {
+function encodeEntryRecord(record: EntryRecord): Uint8Array {
   return concatBytes(
-    checkedBytes<Bytes32>(input.ownerKey, FIELD_LEN, "owner key"),
-    checkedBytes<Bytes32>(input.nullifierPk, FIELD_LEN, "nullifier pk"),
-    u64be(checkedCounter(input.amount, "amount")),
-    addressBytes(input.mint, "mint"),
-    checkedBytes<Bytes32>(input.blinding, FIELD_LEN, "blinding"),
-    checkedBytes<Bytes32>(input.dataHash, FIELD_LEN, "data hash"),
-    checkedBytes<Bytes32>(input.ringDataHash, FIELD_LEN, "ring data hash"),
+    checkedBytes<Bytes32>(record.ownerKey, FIELD_LEN, "owner key"),
+    checkedBytes<Bytes32>(record.nullifierPk, FIELD_LEN, "nullifier pk"),
+    u64be(checkedCounter(record.amount, "amount")),
+    addressBytes(record.mint, "mint"),
+    checkedBytes<Bytes32>(record.inputCommitment, FIELD_LEN, "input commitment"),
   );
 }
 
-function decodeEntryInput(bytes: Uint8Array): EntryInput {
+function decodeEntryRecord(bytes: Uint8Array): EntryRecord {
   const mintAt = 2 * FIELD_LEN + AMOUNT_LEN;
+  const commitmentAt = mintAt + FIELD_LEN;
   const field = (at: number): Bytes32 => bytes.slice(at, at + FIELD_LEN) as Bytes32;
   return Object.freeze({
     ownerKey: field(0),
     nullifierPk: field(FIELD_LEN),
     amount: bytesToBigInt(bytes.subarray(2 * FIELD_LEN, mintAt)),
-    mint: encodeBase58(bytes.subarray(mintAt, mintAt + FIELD_LEN)),
-    blinding: field(mintAt + FIELD_LEN),
-    dataHash: field(mintAt + 2 * FIELD_LEN),
-    ringDataHash: field(mintAt + 3 * FIELD_LEN),
+    mint: encodeBase58(bytes.subarray(mintAt, commitmentAt)),
+    inputCommitment: field(commitmentAt),
   });
 }
 

@@ -66,9 +66,6 @@ func TestSlotPredicatesRefuseBeforeTheBinding(t *testing.T) {
 		"exit owner key off the slot's owner": func(s *ringaudit.Audit) { s.Outputs[2].OwnerKey[0] ^= 1 },
 		"mint off the slot's asset":           func(s *ringaudit.Audit) { s.Outputs[0].Mint[0] ^= 1 },
 		"exit mint off the slot's asset":      func(s *ringaudit.Audit) { s.Outputs[2].Mint[0] ^= 1 },
-		"blinding of another slot":            func(s *ringaudit.Audit) { s.Outputs[0].Utxo.Blinding = s.Blinding(t, 1) },
-		"exit blinding off the sealed key":    func(s *ringaudit.Audit) { s.Outputs[2].Utxo.Blinding = big.NewInt(0x5ec) },
-		"dummy blinding off the sealed key":   func(s *ringaudit.Audit) { s.Outputs[3].Utxo.Blinding = big.NewInt(0x5ec) },
 		"asset no mint names":                 func(s *ringaudit.Audit) { s.Outputs[0].Utxo.Asset = big.NewInt(0xdead) },
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -25,7 +25,7 @@ import type {
 } from "../rpc/prover/ring.js";
 import {
   DUMMY_RECORD,
-  EMPTY_ENTRY_INPUT,
+  EMPTY_ENTRY_RECORD,
   EMPTY_TAIL,
   InputClass,
   InputMap,
@@ -33,7 +33,7 @@ import {
   type AuditEnvelope,
   type AuditRecord,
   type DataTail,
-  type EntryInput,
+  type EntryRecord,
 } from "../protocol/codec/audit-stream.js";
 import {
   checkedStreamLayout,
@@ -156,7 +156,7 @@ function auditEnvelopeOf(
     evidence: {
       kind: "entry",
       defaultInputBits: defaultInputBits(inputs),
-      inputs: inputs.map(entryInput),
+      inputs: inputs.map(entryRecord),
     },
   };
 }
@@ -195,18 +195,16 @@ export function defaultInputBits(inputs: readonly ProofInputUtxo[]): bigint {
   );
 }
 
-/** Zero fields off a default-ring note, never a secret. */
-export function entryInput(input: ProofInputUtxo): EntryInput {
-  if (!isDefaultRingNote(input)) return EMPTY_ENTRY_INPUT;
+/** Zero off a default-ring note, the blinding and data hashes stay out of the stream. */
+export function entryRecord(input: ProofInputUtxo): EntryRecord {
+  if (!isDefaultRingNote(input)) return EMPTY_ENTRY_RECORD;
   const { utxo } = input;
   return Object.freeze({
     ownerKey: utxo.owner.confidentialViewTag() as Bytes32,
     nullifierPk: input.nullifierPublicKey,
     amount: utxo.amount,
     mint: utxo.asset,
-    blinding: utxo.blinding,
-    dataHash: input.dataHash ?? ZERO_32,
-    ringDataHash: input.ringDataHash ?? ZERO_32,
+    inputCommitment: input.hash(),
   });
 }
 

@@ -45,6 +45,7 @@ import {
 
 import {
   knownUtxoHash,
+  type AuditedEntryInput,
   type AuditedUtxo,
   type KnownUtxo,
   type OutputOpening,
@@ -1111,11 +1112,8 @@ export interface DecryptedRingWithdrawal {
   readonly amount: bigint;
 }
 
-export interface DecryptedRingDefaultInput {
-  readonly utxo: AuditedUtxo;
-  /** Absent without the input's tree id. */
-  readonly commitment?: Bytes32;
-}
+/** Rust `DecryptedDefaultInput`. */
+export type DecryptedRingDefaultInput = AuditedEntryInput;
 
 /** Nullifier index names the spent note. */
 export interface DecryptedRingInput {
@@ -1149,12 +1147,12 @@ export interface DecryptedRingTransaction {
 }
 
 export type {
+  AuditedEntryInput,
   AuditedInput,
   AuditedInputOpening,
   AuditedSender,
   AuditedUtxo,
   InputOpening,
-  InputRing,
   KnownUtxo,
   OutputOpening,
   OutputPayloadError,
@@ -2629,18 +2627,23 @@ function decodeInput(value: Record<string, unknown>, path: string): DecryptedRin
     return Object.freeze({ nullifier, class: inputClass as InputClass });
   // A default-ring note is a spent note, an address or padding opens nothing.
   if (inputClass !== InputClass.note) throw invalid(`${path}.defaultInput`);
-  const defaultInput = record(wire["defaultInput"], `${path}.defaultInput`);
+  const at = `${path}.defaultInput`;
+  const defaultInput = exactRecord(
+    wire["defaultInput"],
+    DEFAULT_INPUT_FIELDS,
+    DEFAULT_INPUT_FIELDS,
+    at,
+  );
   return Object.freeze({
     nullifier,
     class: InputClass.note,
     defaultInput: Object.freeze({
-      utxo: decodeDecryptedUtxo(
-        record(defaultInput["utxo"], `${path}.defaultInput.utxo`),
-        `${path}.defaultInput.utxo`,
-      ),
-      ...(absent(defaultInput["commitment"])
-        ? {}
-        : { commitment: hash(defaultInput["commitment"], `${path}.defaultInput.commitment`) }),
+      ownerKey: hash(defaultInput["ownerKey"], `${at}.ownerKey`),
+      nullifierPk: hash(defaultInput["nullifierPk"], `${at}.nullifierPk`),
+      asset: hash(defaultInput["asset"], `${at}.asset`),
+      mint: address(defaultInput["mint"], `${at}.mint`),
+      amount: u64(defaultInput["amount"], `${at}.amount`),
+      commitment: hash(defaultInput["commitment"], `${at}.commitment`),
     }),
   });
 }
@@ -2891,6 +2894,14 @@ const WEBAUTHN_FIELDS = new Set(["signature", "authenticatorData", "clientDataJS
 const INPUT_REQUIRED_FIELDS = new Set(["nullifier", "class"]);
 const INPUT_CLASSES: ReadonlySet<InputClass> = new Set(Object.values(InputClass));
 const INPUT_FIELDS = new Set([...INPUT_REQUIRED_FIELDS, "defaultInput"]);
+const DEFAULT_INPUT_FIELDS = new Set([
+  "ownerKey",
+  "nullifierPk",
+  "asset",
+  "mint",
+  "amount",
+  "commitment",
+]);
 const LIST_SALT_FIELDS = new Set(["listSalt"]);
 const NO_FIELDS = new Set<string>();
 const AUDITED_MERGES_PAGE_FIELDS = new Set(["opened", "cursor"]);

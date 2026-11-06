@@ -9,7 +9,7 @@ import type { SettlementTransfer } from "@heliuslabs/spr/transaction";
 
 import {
   decodeAuditEnvelope,
-  EMPTY_ENTRY_INPUT,
+  EMPTY_ENTRY_RECORD,
   encodeAuditEnvelope,
   envelopeInputMap,
   InputClass,
@@ -126,7 +126,7 @@ describe("the envelope", () => {
     );
   });
 
-  it("keeps entry openings and stream counters at capacity offsets", () => {
+  it("keeps entry records and stream counters at capacity offsets", () => {
     const layout: AuditStreamLayout = {
       key: { class: 4, entry: true },
       inputs: 3,
@@ -134,7 +134,7 @@ describe("the envelope", () => {
       capacity: 4,
       hasData: true,
     };
-    const opening = { ...EMPTY_ENTRY_INPUT, amount: 0x0102_0304_0506_0708n, ownerKey: fill(0x31) };
+    const record = { ...EMPTY_ENTRY_RECORD, amount: 0x0102_0304_0506_0708n, ownerKey: fill(0x31) };
     const envelope: AuditEnvelope = {
       txViewingSecret: fill(0x23),
       realInputs: 2,
@@ -142,25 +142,25 @@ describe("the envelope", () => {
       evidence: {
         kind: "entry",
         defaultInputBits: 4n,
-        inputs: [EMPTY_ENTRY_INPUT, EMPTY_ENTRY_INPUT, opening],
+        inputs: [EMPTY_ENTRY_RECORD, EMPTY_ENTRY_RECORD, record],
       },
     };
     const plaintext = encodeAuditEnvelope(envelope);
-    expect(plaintext).toHaveLength(649);
+    expect(plaintext).toHaveLength(457);
     expect([...plaintext.subarray(33, 41)]).toEqual([0, 0, 0, 0, 0, 0, 0, 2]);
     expect([...plaintext.subarray(41, 49)]).toEqual([0, 0, 0, 0, 0, 0, 0, 4]);
-    expect(plaintext.subarray(49, 449).every((byte) => byte === 0)).toBe(true);
-    expect(plaintext.subarray(449, 481)).toEqual(fill(0x31));
-    expect([...plaintext.subarray(513, 521)]).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(plaintext.subarray(49, 321).every((byte) => byte === 0)).toBe(true);
+    expect(plaintext.subarray(321, 353)).toEqual(fill(0x31));
+    expect([...plaintext.subarray(385, 393)]).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     const region = envelopeRegion(layout);
-    expect([region.length, region.maxBlocks]).toEqual([649, 54]);
-    expect(firstRecordCounter(layout.key)).toBe(56);
-    expect(recordRegion(layout, 1).startCounter).toBe(63);
-    expect(firstTailCounter(layout)).toBe(84);
-    expect(tailRegion(layout, 1).startCounter).toBe(88);
+    expect([region.length, region.maxBlocks]).toEqual([457, 38]);
+    expect(firstRecordCounter(layout.key)).toBe(40);
+    expect(recordRegion(layout, 1).startCounter).toBe(47);
+    expect(firstTailCounter(layout)).toBe(68);
+    expect(tailRegion(layout, 1).startCounter).toBe(72);
     expect(decodeAuditEnvelope(plaintext, layout)).toEqual(envelope);
 
-    // An address bit past `L`, a default bit on an address, an opening off a default bit.
+    // An address bit past `L`, a default bit on an address, a record off a default bit.
     for (const [offset, mask] of [
       [40, 1],
       [48, 2],
@@ -173,6 +173,9 @@ describe("the envelope", () => {
     }
     const earlierLayout = Uint8Array.of(...plaintext.subarray(0, 33), ...plaintext.subarray(41));
     expect(() => decodeAuditEnvelope(earlierLayout, layout)).toThrow(refusedLength);
+    // The 200 byte opening layout refuses.
+    const fullOpenings = Uint8Array.of(...plaintext, ...new Uint8Array(3 * 64));
+    expect(() => decodeAuditEnvelope(fullOpenings, layout)).toThrow(refusedLength);
   });
 });
 

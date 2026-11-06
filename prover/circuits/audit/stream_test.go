@@ -58,7 +58,7 @@ func TestDefaultInputNeedsEntryCapacity(t *testing.T) {
 	c.Refuse(t, s.Circuit(t))
 }
 
-func TestDefaultBitsAndEvidenceFollowTheSlots(t *testing.T) {
+func TestDefaultBitsAndRecordsFollowTheSlots(t *testing.T) {
 	c := compileSection(t, entryShape)
 	s := ringaudit.NewSection(t, entryShape)
 	realInputs, bits := s.Reader().Envelope(t, s.Stream(t))
@@ -66,22 +66,33 @@ func TestDefaultBitsAndEvidenceFollowTheSlots(t *testing.T) {
 		t.Fatalf("the reader read R = %d, default bits %b", realInputs, bits)
 	}
 	head := s.Shape.Ranges().EnvelopeHeadLen() - audit.DefaultInputBitsLen
+	records := head + audit.DefaultInputBitsLen
+	entry := records + audit.EntryRecordLen
+	ringCommitment := spptest.MustFieldBytes(t, s.Inputs[0].Utxo.Hash(t))
 	for name, edit := range map[string]func(*ringaudit.Plaintexts){
 		"default bit cleared":        func(p *ringaudit.Plaintexts) { p.Envelope[head+7] = 0 },
 		"default bit on a ring note": func(p *ringaudit.Plaintexts) { p.Envelope[head+7] = 0b11 },
-		"evidence on a ring input":   func(p *ringaudit.Plaintexts) { p.Envelope[head+audit.DefaultInputBitsLen] = 1 },
-		"another evidence amount": func(p *ringaudit.Plaintexts) {
-			p.Envelope[head+audit.DefaultInputBitsLen+audit.EntryInputLen+71] ^= 1
+		"record on a ring input":     func(p *ringaudit.Plaintexts) { p.Envelope[records] = 1 },
+		"another owner key byte":     func(p *ringaudit.Plaintexts) { p.Envelope[entry] ^= 1 },
+		"another nullifier key":      func(p *ringaudit.Plaintexts) { p.Envelope[entry+63] ^= 1 },
+		"another amount":             func(p *ringaudit.Plaintexts) { p.Envelope[entry+71] ^= 1 },
+		"another mint byte":          func(p *ringaudit.Plaintexts) { p.Envelope[entry+103] ^= 1 },
+		"another commitment":         func(p *ringaudit.Plaintexts) { p.Envelope[entry+135] ^= 1 },
+		"the ring input's commitment": func(p *ringaudit.Plaintexts) {
+			copy(p.Envelope[entry+104:entry+audit.EntryRecordLen], ringCommitment[:])
 		},
-		"another evidence blinding": func(p *ringaudit.Plaintexts) {
-			p.Envelope[head+audit.DefaultInputBitsLen+audit.EntryInputLen+135] ^= 1
+		"records and bits swapped to input 0": func(p *ringaudit.Plaintexts) {
+			first := bytes.Clone(p.Envelope[records:entry])
+			copy(p.Envelope[records:entry], p.Envelope[entry:entry+audit.EntryRecordLen])
+			copy(p.Envelope[entry:entry+audit.EntryRecordLen], first)
+			p.Envelope[head+7] = 0b01
 		},
 	} {
 		t.Run(name, func(t *testing.T) { refuseSealed(t, s, edit) })
 	}
 	for name, mutate := range map[string]func(*ringaudit.Audit){
-		"evidence naming another owner": func(s *ringaudit.Audit) { s.Inputs[1].OwnerKey[0] ^= 1 },
-		"evidence naming another mint":  func(s *ringaudit.Audit) { s.Inputs[1].Mint[0] ^= 1 },
+		"record naming another owner": func(s *ringaudit.Audit) { s.Inputs[1].OwnerKey[0] ^= 1 },
+		"record naming another mint":  func(s *ringaudit.Audit) { s.Inputs[1].Mint[0] ^= 1 },
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := ringaudit.NewSection(t, entryShape)
@@ -106,7 +117,7 @@ func TestResendUnderAnotherSaltSealsAnotherStream(t *testing.T) {
 	})
 }
 
-func TestEntryEvidenceServesMixedOwners(t *testing.T) {
+func TestEntryRecordsServeMixedOwners(t *testing.T) {
 	c := compileSection(t, entryShape)
 	s := ringaudit.NewSection(t, entryShape)
 	other := ringtest.Repeat(0xa3)
@@ -114,8 +125,8 @@ func TestEntryEvidenceServesMixedOwners(t *testing.T) {
 	c.RequireSolved(t, s.Circuit(t))
 	plaintext := s.Keys.Open(t, s.Stream(t))
 	head := s.Shape.Ranges().EnvelopeHeadLen()
-	if !bytes.Equal(plaintext[head:head+32], other[:]) || !bytes.Equal(plaintext[head+audit.EntryInputLen:head+audit.EntryInputLen+32], ringaudit.DefaultOwnerKey[:]) {
-		t.Fatal("an evidence entry names another owner")
+	if !bytes.Equal(plaintext[head:head+32], other[:]) || !bytes.Equal(plaintext[head+audit.EntryRecordLen:head+audit.EntryRecordLen+32], ringaudit.DefaultOwnerKey[:]) {
+		t.Fatal("an entry record names another owner")
 	}
 }
 
@@ -198,23 +209,25 @@ func TestReaderRebuildsEverySlot(t *testing.T) {
 	}
 }
 
-// The auditor never saw a default-ring note, its evidence alone rebuilds the commitment SPP spends.
-func TestReaderRebuildsADefaultInput(t *testing.T) {
+// The auditor never saw a default-ring note, its record names the note and the commitment SPP spends.
+func TestReaderReadsADefaultInput(t *testing.T) {
 	s := ringaudit.NewSection(t, entryShape)
 	s.Inputs[1].Utxo.DataHash = big.NewInt(0xda7a)
 	s.Inputs[1].Utxo.RingDataHash = big.NewInt(0x5ca1e)
 	compileSection(t, entryShape).RequireSolved(t, s.Circuit(t))
-	stream, reader, tree := s.Stream(t), s.Reader(), s.Inputs[1].Utxo.TreeID
-	note, err := reader.ReadEntry(t, stream, 1, tree, s.Inputs[1].Utxo.Hash(t))
-	if err != nil || note == nil || note.Amount != s.Inputs[1].Utxo.Amount {
-		t.Fatalf("read %+v, %v", note, err)
+	stream, reader, spent := s.Stream(t), s.Reader(), s.Inputs[1].Utxo
+	entry, err := reader.ReadEntry(t, stream, 1, spent.Hash(t))
+	if err != nil || entry == nil {
+		t.Fatalf("read %+v, %v", entry, err)
 	}
-	if note, err := reader.ReadEntry(t, stream, 0, tree, s.Inputs[0].Utxo.Hash(t)); err != nil || note != nil {
-		t.Fatalf("a ring input read as evidence %+v, %v", note, err)
+	if entry.OwnerKey != ringaudit.DefaultOwnerKey || entry.NullifierPk.Cmp(spent.NullifierPk) != 0 || entry.Amount != spent.Amount || entry.Mint != ringaudit.FixtureMint {
+		t.Fatalf("read %+v", entry)
 	}
-	moved := big.NewInt(0xdead)
-	if _, err := reader.ReadEntry(t, stream, 1, tree, moved); err == nil {
-		t.Fatal("the reader accepted a commitment the evidence does not rebuild")
+	if entry, err := reader.ReadEntry(t, stream, 0, s.Inputs[0].Utxo.Hash(t)); err != nil || entry != nil {
+		t.Fatalf("a ring input read as an entry %+v, %v", entry, err)
+	}
+	if _, err := reader.ReadEntry(t, stream, 1, big.NewInt(0xdead)); err == nil {
+		t.Fatal("the reader accepted a commitment the record does not name")
 	}
 }
 

@@ -820,375 +820,375 @@
       ]
     },
     {
-      "capacity_blocks": 132,
+      "capacity_blocks": 100,
       "class": 8,
       "entry": true,
-      "envelope_blocks": 104,
+      "envelope_blocks": 72,
       "envelope_len_by_input_count": [
-        249,
-        449,
-        649,
-        849,
-        1049,
-        1249,
-        1449,
-        1649
+        185,
+        321,
+        457,
+        593,
+        729,
+        865,
+        1001,
+        1137
       ],
-      "first_record_counter": 106,
-      "first_tail_counter": 134,
+      "first_record_counter": 74,
+      "first_tail_counter": 102,
       "has_data": false,
       "message_len_by_input_count": [
-        702,
-        902,
-        1102,
+        638,
+        774,
+        910,
+        1046,
+        1182,
+        1318,
+        1454,
+        1590
+      ],
+      "outputs": 4,
+      "record_len": 105,
+      "record_start_counters": [
+        74,
+        81,
+        88,
+        95
+      ],
+      "single_asset_payout": false,
+      "tail_len": 0,
+      "tail_start_counters": [
+        102,
+        106,
+        110,
+        114
+      ]
+    },
+    {
+      "capacity_blocks": 116,
+      "class": 8,
+      "entry": true,
+      "envelope_blocks": 72,
+      "envelope_len_by_input_count": [
+        185,
+        321,
+        457,
+        593,
+        729,
+        865,
+        1001,
+        1137
+      ],
+      "first_record_counter": 74,
+      "first_tail_counter": 102,
+      "has_data": true,
+      "message_len_by_input_count": [
+        894,
+        1030,
+        1166,
         1302,
-        1502,
-        1702,
-        1902,
-        2102
+        1438,
+        1574,
+        1710,
+        1846
       ],
       "outputs": 4,
       "record_len": 105,
       "record_start_counters": [
+        74,
+        81,
+        88,
+        95
+      ],
+      "single_asset_payout": false,
+      "tail_len": 64,
+      "tail_start_counters": [
+        102,
         106,
-        113,
-        120,
-        127
+        110,
+        114
+      ]
+    },
+    {
+      "capacity_blocks": 77,
+      "class": 2,
+      "entry": true,
+      "envelope_blocks": 21,
+      "envelope_len_by_input_count": [
+        185,
+        321
+      ],
+      "first_record_counter": 23,
+      "first_tail_counter": 79,
+      "has_data": false,
+      "message_len_by_input_count": [
+        1058,
+        1194
+      ],
+      "outputs": 8,
+      "record_len": 105,
+      "record_start_counters": [
+        23,
+        30,
+        37,
+        44,
+        51,
+        58,
+        65,
+        72
       ],
       "single_asset_payout": false,
       "tail_len": 0,
       "tail_start_counters": [
-        134,
-        138,
-        142,
-        146
+        79,
+        83,
+        87,
+        91,
+        95,
+        99,
+        103,
+        107
       ]
     },
     {
-      "capacity_blocks": 148,
+      "capacity_blocks": 109,
+      "class": 2,
+      "entry": true,
+      "envelope_blocks": 21,
+      "envelope_len_by_input_count": [
+        185,
+        321
+      ],
+      "first_record_counter": 23,
+      "first_tail_counter": 79,
+      "has_data": true,
+      "message_len_by_input_count": [
+        1570,
+        1706
+      ],
+      "outputs": 8,
+      "record_len": 105,
+      "record_start_counters": [
+        23,
+        30,
+        37,
+        44,
+        51,
+        58,
+        65,
+        72
+      ],
+      "single_asset_payout": false,
+      "tail_len": 64,
+      "tail_start_counters": [
+        79,
+        83,
+        87,
+        91,
+        95,
+        99,
+        103,
+        107
+      ]
+    },
+    {
+      "capacity_blocks": 102,
+      "class": 5,
+      "entry": true,
+      "envelope_blocks": 46,
+      "envelope_len_by_input_count": [
+        185,
+        321,
+        457,
+        593,
+        729
+      ],
+      "first_record_counter": 48,
+      "first_tail_counter": 104,
+      "has_data": false,
+      "message_len_by_input_count": [
+        1058,
+        1194,
+        1330,
+        1466,
+        1602
+      ],
+      "outputs": 8,
+      "record_len": 105,
+      "record_start_counters": [
+        48,
+        55,
+        62,
+        69,
+        76,
+        83,
+        90,
+        97
+      ],
+      "single_asset_payout": false,
+      "tail_len": 0,
+      "tail_start_counters": [
+        104,
+        108,
+        112,
+        116,
+        120,
+        124,
+        128,
+        132
+      ]
+    },
+    {
+      "capacity_blocks": 134,
+      "class": 5,
+      "entry": true,
+      "envelope_blocks": 46,
+      "envelope_len_by_input_count": [
+        185,
+        321,
+        457,
+        593,
+        729
+      ],
+      "first_record_counter": 48,
+      "first_tail_counter": 104,
+      "has_data": true,
+      "message_len_by_input_count": [
+        1570,
+        1706,
+        1842,
+        1978,
+        2114
+      ],
+      "outputs": 8,
+      "record_len": 105,
+      "record_start_counters": [
+        48,
+        55,
+        62,
+        69,
+        76,
+        83,
+        90,
+        97
+      ],
+      "single_asset_payout": false,
+      "tail_len": 64,
+      "tail_start_counters": [
+        104,
+        108,
+        112,
+        116,
+        120,
+        124,
+        128,
+        132
+      ]
+    },
+    {
+      "capacity_blocks": 128,
       "class": 8,
       "entry": true,
-      "envelope_blocks": 104,
+      "envelope_blocks": 72,
       "envelope_len_by_input_count": [
-        249,
-        449,
-        649,
-        849,
-        1049,
-        1249,
-        1449,
-        1649
+        185,
+        321,
+        457,
+        593,
+        729,
+        865,
+        1001,
+        1137
       ],
-      "first_record_counter": 106,
-      "first_tail_counter": 134,
-      "has_data": true,
+      "first_record_counter": 74,
+      "first_tail_counter": 130,
+      "has_data": false,
       "message_len_by_input_count": [
-        958,
-        1158,
-        1358,
-        1558,
-        1758,
-        1958,
-        2158,
-        2358
+        1058,
+        1194,
+        1330,
+        1466,
+        1602,
+        1738,
+        1874,
+        2010
       ],
-      "outputs": 4,
+      "outputs": 8,
       "record_len": 105,
       "record_start_counters": [
-        106,
-        113,
-        120,
-        127
+        74,
+        81,
+        88,
+        95,
+        102,
+        109,
+        116,
+        123
       ],
       "single_asset_payout": false,
-      "tail_len": 64,
+      "tail_len": 0,
       "tail_start_counters": [
+        130,
         134,
         138,
         142,
-        146
-      ]
-    },
-    {
-      "capacity_blocks": 85,
-      "class": 2,
-      "entry": true,
-      "envelope_blocks": 29,
-      "envelope_len_by_input_count": [
-        249,
-        449
-      ],
-      "first_record_counter": 31,
-      "first_tail_counter": 87,
-      "has_data": false,
-      "message_len_by_input_count": [
-        1122,
-        1322
-      ],
-      "outputs": 8,
-      "record_len": 105,
-      "record_start_counters": [
-        31,
-        38,
-        45,
-        52,
-        59,
-        66,
-        73,
-        80
-      ],
-      "single_asset_payout": false,
-      "tail_len": 0,
-      "tail_start_counters": [
-        87,
-        91,
-        95,
-        99,
-        103,
-        107,
-        111,
-        115
-      ]
-    },
-    {
-      "capacity_blocks": 117,
-      "class": 2,
-      "entry": true,
-      "envelope_blocks": 29,
-      "envelope_len_by_input_count": [
-        249,
-        449
-      ],
-      "first_record_counter": 31,
-      "first_tail_counter": 87,
-      "has_data": true,
-      "message_len_by_input_count": [
-        1634,
-        1834
-      ],
-      "outputs": 8,
-      "record_len": 105,
-      "record_start_counters": [
-        31,
-        38,
-        45,
-        52,
-        59,
-        66,
-        73,
-        80
-      ],
-      "single_asset_payout": false,
-      "tail_len": 64,
-      "tail_start_counters": [
-        87,
-        91,
-        95,
-        99,
-        103,
-        107,
-        111,
-        115
-      ]
-    },
-    {
-      "capacity_blocks": 122,
-      "class": 5,
-      "entry": true,
-      "envelope_blocks": 66,
-      "envelope_len_by_input_count": [
-        249,
-        449,
-        649,
-        849,
-        1049
-      ],
-      "first_record_counter": 68,
-      "first_tail_counter": 124,
-      "has_data": false,
-      "message_len_by_input_count": [
-        1122,
-        1322,
-        1522,
-        1722,
-        1922
-      ],
-      "outputs": 8,
-      "record_len": 105,
-      "record_start_counters": [
-        68,
-        75,
-        82,
-        89,
-        96,
-        103,
-        110,
-        117
-      ],
-      "single_asset_payout": false,
-      "tail_len": 0,
-      "tail_start_counters": [
-        124,
-        128,
-        132,
-        136,
-        140,
-        144,
-        148,
-        152
-      ]
-    },
-    {
-      "capacity_blocks": 154,
-      "class": 5,
-      "entry": true,
-      "envelope_blocks": 66,
-      "envelope_len_by_input_count": [
-        249,
-        449,
-        649,
-        849,
-        1049
-      ],
-      "first_record_counter": 68,
-      "first_tail_counter": 124,
-      "has_data": true,
-      "message_len_by_input_count": [
-        1634,
-        1834,
-        2034,
-        2234,
-        2434
-      ],
-      "outputs": 8,
-      "record_len": 105,
-      "record_start_counters": [
-        68,
-        75,
-        82,
-        89,
-        96,
-        103,
-        110,
-        117
-      ],
-      "single_asset_payout": false,
-      "tail_len": 64,
-      "tail_start_counters": [
-        124,
-        128,
-        132,
-        136,
-        140,
-        144,
-        148,
-        152
+        146,
+        150,
+        154,
+        158
       ]
     },
     {
       "capacity_blocks": 160,
       "class": 8,
       "entry": true,
-      "envelope_blocks": 104,
+      "envelope_blocks": 72,
       "envelope_len_by_input_count": [
-        249,
-        449,
-        649,
-        849,
-        1049,
-        1249,
-        1449,
-        1649
+        185,
+        321,
+        457,
+        593,
+        729,
+        865,
+        1001,
+        1137
       ],
-      "first_record_counter": 106,
-      "first_tail_counter": 162,
-      "has_data": false,
+      "first_record_counter": 74,
+      "first_tail_counter": 130,
+      "has_data": true,
       "message_len_by_input_count": [
-        1122,
-        1322,
-        1522,
-        1722,
-        1922,
-        2122,
-        2322,
+        1570,
+        1706,
+        1842,
+        1978,
+        2114,
+        2250,
+        2386,
         2522
       ],
       "outputs": 8,
       "record_len": 105,
       "record_start_counters": [
-        106,
-        113,
-        120,
-        127,
-        134,
-        141,
-        148,
-        155
-      ],
-      "single_asset_payout": false,
-      "tail_len": 0,
-      "tail_start_counters": [
-        162,
-        166,
-        170,
-        174,
-        178,
-        182,
-        186,
-        190
-      ]
-    },
-    {
-      "capacity_blocks": 192,
-      "class": 8,
-      "entry": true,
-      "envelope_blocks": 104,
-      "envelope_len_by_input_count": [
-        249,
-        449,
-        649,
-        849,
-        1049,
-        1249,
-        1449,
-        1649
-      ],
-      "first_record_counter": 106,
-      "first_tail_counter": 162,
-      "has_data": true,
-      "message_len_by_input_count": [
-        1634,
-        1834,
-        2034,
-        2234,
-        2434,
-        2634,
-        2834,
-        3034
-      ],
-      "outputs": 8,
-      "record_len": 105,
-      "record_start_counters": [
-        106,
-        113,
-        120,
-        127,
-        134,
-        141,
-        148,
-        155
+        74,
+        81,
+        88,
+        95,
+        102,
+        109,
+        116,
+        123
       ],
       "single_asset_payout": false,
       "tail_len": 64,
       "tail_start_counters": [
-        162,
-        166,
-        170,
-        174,
-        178,
-        182,
-        186,
-        190
+        130,
+        134,
+        138,
+        142,
+        146,
+        150,
+        154,
+        158
       ]
     },
     {

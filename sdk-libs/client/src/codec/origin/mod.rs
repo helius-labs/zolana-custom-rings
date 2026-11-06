@@ -80,22 +80,6 @@ impl ConfirmedEvent {
         self
     }
 
-    /// `None` for an input of another tree, the event names that tree by its account alone.
-    pub fn input_tree_ids(&self, transaction: &ShieldedTransaction) -> Vec<Option<u16>> {
-        let output_tree = transaction
-            .output_slots
-            .first()
-            .map(|slot| slot.output_context.tree_id)
-            .filter(|tree_id| {
-                spr_interface::pda::tree(*tree_id).to_bytes() == self.event.output_tree
-            });
-        self.event
-            .inputs
-            .iter()
-            .map(|input| output_tree.filter(|_| input.tree == self.event.output_tree))
-            .collect()
-    }
-
     /// Authenticate every field used for audit and recovery before interpreting ciphertexts.
     fn bind(&self, transaction: &mut ShieldedTransaction) -> Result<(), AuditError> {
         let event = &self.event;

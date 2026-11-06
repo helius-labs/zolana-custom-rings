@@ -7,7 +7,7 @@ use custom_ring_interface::{
     key_catalog::FrameKey,
     stream::{DeliveredSlot, SlotSecret},
     tag as ring_tag, tagged_x25519, AnonymousProofData, AuditEvidence, AuditKey, AuditRecord,
-    AuditStreamLayout, AuditorMessage, BundleLayout, CustomRingProof, DataTail, EntryInput,
+    AuditStreamLayout, AuditorMessage, BundleLayout, CustomRingProof, DataTail, EntryRecord,
     FrameExtensions, FramedSenderBundle, InProofOwner, InputClassification, InputMap, InputTrees,
     PlainGroth16Proof, RecordKind, RingOutput, RingRail, RingTransactData, SlotBody,
     AUDIT_RECORD_LEN, CONFIDENTIAL_DATA_FREE_BODY_LEN, RECIPIENT_BODY_LEN,
@@ -439,7 +439,7 @@ impl Transfer {
         &self,
         outputs: &[Output],
         default_input_bits: u64,
-        inputs: Vec<EntryInput>,
+        inputs: Vec<EntryRecord>,
     ) -> Disclosure {
         self.keyed(Keyed {
             rail: RingRail::Confidential,
@@ -662,15 +662,13 @@ pub fn known_utxo(utxo: &UtxoFields, placement: Placement) -> KnownUtxo {
     }
 }
 
-pub fn entry_input(utxo: &UtxoFields, blinding: [u8; 32]) -> EntryInput {
-    EntryInput {
+pub fn entry_record(utxo: &UtxoFields, input_commitment: [u8; 32]) -> EntryRecord {
+    EntryRecord {
         owner_key: utxo.owner_key,
         nullifier_pk: utxo.nullifier_pk,
         amount: utxo.amount,
         mint: utxo.asset_address.to_bytes(),
-        blinding,
-        data_hash: utxo.data_hash,
-        ring_data_hash: utxo.ring_data_hash,
+        input_commitment,
     }
 }
 

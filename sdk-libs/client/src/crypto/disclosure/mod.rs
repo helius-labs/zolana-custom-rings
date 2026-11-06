@@ -240,9 +240,7 @@ fn check_evidence(evidence: &AuditEvidence) -> Result<(), AuditError> {
         AuditEvidence::None | AuditEvidence::SingleAssetPayout { .. } => Ok(()),
         AuditEvidence::Entry { inputs, .. } => inputs.iter().try_for_each(|input| {
             canonical(input.nullifier_pk)?;
-            canonical(input.blinding)?;
-            canonical(input.data_hash)?;
-            canonical(input.ring_data_hash).map(drop)
+            canonical(input.input_commitment).map(drop)
         }),
     }
 }

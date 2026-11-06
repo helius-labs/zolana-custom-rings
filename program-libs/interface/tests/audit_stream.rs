@@ -3,9 +3,9 @@
 use custom_ring_interface::{
     ciphertext_digest, key_catalog::TRANSFER_SHAPES, AuditEnvelope, AuditEvidence, AuditKey,
     AuditRecord, AuditStreamLayout, AuditorMessage, BundleLayout, ChangeCell, CustomRingError,
-    DataTail, EntryInput, OpeningRecord, RecipientBody, RecordKind, SenderBundle, AUDIT_RECORD_LEN,
-    DATA_TAIL_LEN, ENTRY_INPUT_LEN, OPENING_RECORD_LEN, RECIPIENT_BODY_LEN, RECORD_STRIDE,
-    STREAM_BLOCK_LEN,
+    DataTail, EntryRecord, OpeningRecord, RecipientBody, RecordKind, SenderBundle,
+    AUDIT_RECORD_LEN, DATA_TAIL_LEN, ENTRY_RECORD_LEN, OPENING_RECORD_LEN, RECIPIENT_BODY_LEN,
+    RECORD_STRIDE, STREAM_BLOCK_LEN,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -119,8 +119,8 @@ fn the_contract_counts_each_key() {
     for (key, envelope_blocks) in [
         (key(5, false), 3),
         (key(24, false), 3),
-        (key(2, true), 29),
-        (key(8, true), 104),
+        (key(2, true), 21),
+        (key(8, true), 72),
     ] {
         assert_eq!(key.envelope_blocks(), envelope_blocks, "{key:?}");
         assert_eq!(
@@ -133,7 +133,7 @@ fn the_contract_counts_each_key() {
     assert_eq!(AUDIT_RECORD_LEN, 105);
     assert_eq!(RECORD_STRIDE, 112);
     assert_eq!(DATA_TAIL_LEN, 64);
-    assert_eq!(ENTRY_INPUT_LEN, 200);
+    assert_eq!(ENTRY_RECORD_LEN, 136);
     assert_eq!(OPENING_RECORD_LEN, 144);
     assert_eq!(RECIPIENT_BODY_LEN, 72);
 }
@@ -320,14 +320,12 @@ fn a_tail_reads_back_at_its_length() {
 
 #[test]
 fn envelopes_read_back_at_their_layout_length() {
-    let entry_input = EntryInput {
+    let entry_record = EntryRecord {
         owner_key: [0x41; 32],
         nullifier_pk: [0x42; 32],
         amount: 5,
         mint: [0x43; 32],
-        blinding: [0x44; 32],
-        data_hash: [0x45; 32],
-        ring_data_hash: [0x46; 32],
+        input_commitment: [0x44; 32],
     };
     let cases = [
         (
@@ -349,9 +347,9 @@ fn envelopes_read_back_at_their_layout_length() {
             2,
             AuditEvidence::Entry {
                 default_input_bits: 0b01,
-                inputs: vec![entry_input, EntryInput::default()],
+                inputs: vec![entry_record, EntryRecord::default()],
             },
-            49 + 2 * ENTRY_INPUT_LEN,
+            49 + 2 * ENTRY_RECORD_LEN,
         ),
     ];
     for (key, inputs, evidence, len) in cases {

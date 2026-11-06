@@ -213,7 +213,7 @@ impl PolicyRead<'_> {
         .read(client)
         .await?;
         self.check_input_keys(&tracking_pool)?;
-        let sealed = self.check_output_keys(&tracking_pool, &ring_owners, gates)?;
+        let sealed = self.check_output_keys(&tracking_pool, &ring_owners)?;
         RecipientViewingKeys {
             registry: tracking.registry,
             outputs: &sealed,
@@ -356,7 +356,6 @@ impl PolicyRead<'_> {
         &self,
         pool: &TrackingPoolRead,
         owners: &[Option<[u8; 32]>],
-        gates: SourceGates,
     ) -> Result<Vec<SealedOutput>, RingError> {
         let mut sealed = Vec::new();
         for (slot_index, (output, owner)) in self.inputs.output_utxos.iter().zip(owners).enumerate()
@@ -369,7 +368,6 @@ impl PolicyRead<'_> {
                 row,
                 nullifier_pk: &address.nullifier_pubkey,
                 slot_index,
-                gates,
             }
             .check()?;
             // A spending owner holds every key it ever enrolled.

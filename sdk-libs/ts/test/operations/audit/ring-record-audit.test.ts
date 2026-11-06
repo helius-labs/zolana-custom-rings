@@ -54,6 +54,8 @@ import {
   decodeAuditEnvelope,
   decodeAuditRecord,
   decodeCompactAuditRecord,
+  EMPTY_ENTRY_RECORD,
+  encodeAuditEnvelope,
   RecordKind,
 } from "../../../src/protocol/codec/audit-stream.js";
 import {
@@ -158,8 +160,8 @@ function audited(entry: Case, edits: StreamEdits = {}, rest: Partial<Transaction
     layout,
     rail: "confidential",
     // The statement's `no_spend` bit, an address input alone sends no note.
-    noSpend: decodeAuditEnvelope(hex(entry.envelope_plaintext), layout).realInputs === 0,
-    inputTreeIds: transaction.nullifiers.map(() => TREE_ID),
+    noSpend:
+      rest.noSpend ?? decodeAuditEnvelope(hex(entry.envelope_plaintext), layout).realInputs === 0,
     ...rest,
   });
 }
@@ -271,9 +273,9 @@ describe("the transfer reader", () => {
     expect(realInputs).toBe(2);
     expect(row.inputs[0]?.opening).toEqual({ kind: "unresolvedReal" });
     const external = row.inputs[1];
-    expect(external?.opening.kind).toBe("opened");
-    if (external?.opening.kind !== "opened") throw new Error("opened");
-    expect(external.opening.ring?.kind).toBe("default");
+    expect(external?.opening.kind).toBe("external");
+    if (external?.opening.kind !== "external") throw new Error("external");
+    expect(external.hash).toEqual(external.opening.commitment);
     const padded = envelopeOf(entry, (bytes) => {
       bytes[32] = 1;
       bytes.fill(0, 33);
@@ -288,7 +290,66 @@ describe("the transfer reader", () => {
     });
     expect(
       audited(entry, { envelope: address }).audited.inputs.map((input) => input.opening.kind),
-    ).toEqual(["address", "opened"]);
+    ).toEqual(["address", "external"]);
+  });
+
+  describe("an entry record", () => {
+    const entry = caseNamed("entry");
+    const mint = encodeBase58(new Uint8Array(32).fill(0x44));
+    const record = {
+      ownerKey: new Uint8Array(32).fill(0x31) as Bytes32,
+      nullifierPk: field(`${"00".repeat(31)}05`),
+      amount: 9n,
+      mint,
+      inputCommitment: field(`${"00".repeat(31)}21`),
+    };
+    const envelope = (first: typeof record): Uint8Array =>
+      encodeAuditEnvelope({
+        txViewingSecret: field(auditVector.tx_viewing_sk),
+        realInputs: 2,
+        addressInputBits: 0n,
+        evidence: { kind: "entry", defaultInputBits: 1n, inputs: [first, EMPTY_ENTRY_RECORD] },
+      });
+    const refusal = (reason: string) =>
+      expect.objectContaining({ code: "RING_AUDIT_MESSAGE", details: { reason } });
+    const SPENDS = { noSpend: false };
+
+    it("names the sender and the proven commitment", () => {
+      const { audited: row } = audited(entry, { envelope: envelope(record) }, SPENDS);
+      expect(row.sender).toEqual({ ownerKey: record.ownerKey, nullifierPk: record.nullifierPk });
+      expect(row.inputs[0]).toEqual({
+        nullifier: field(auditVector.first_nullifier),
+        hash: record.inputCommitment,
+        opening: {
+          kind: "external",
+          ownerKey: record.ownerKey,
+          nullifierPk: record.nullifierPk,
+          asset: hashBytes(addressBytes(mint, "mint")),
+          mint,
+          amount: 9n,
+          commitment: record.inputCommitment,
+        },
+      });
+      expect(row.inputs[1]?.opening).toEqual({ kind: "unresolvedReal" });
+    });
+
+    it("refuses a noncanonical commitment and one a known note under the nullifier contradicts", () => {
+      const noncanonical = { ...record, inputCommitment: new Uint8Array(32).fill(0xff) as Bytes32 };
+      expect(() => audited(entry, { envelope: envelope(noncanonical) }, SPENDS)).toThrow(
+        refusal("entry evidence"),
+      );
+      const other = field(`${"00".repeat(31)}22`);
+      const knownUtxos = {
+        utxo: () => undefined,
+        byNullifier: (nullifier: Bytes32) =>
+          equalBytes(nullifier, field(auditVector.first_nullifier))
+            ? { commitment: other, utxo: {} as KnownUtxo }
+            : undefined,
+      };
+      expect(() =>
+        audited(entry, { envelope: envelope(record) }, { ...SPENDS, knownUtxos }),
+      ).toThrow(refusal("entry commitment"));
+    });
   });
 });
 

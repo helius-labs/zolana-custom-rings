@@ -1,6 +1,6 @@
 use custom_ring_interface::{
-    AuditEvidence, AuditKey, AuditRecord, AuditStreamLayout, DataTail, EntryInput, InputClass,
-    RecordKind,
+    AuditEvidence, AuditKey, AuditRecord, AuditStreamLayout, DataTail, EntryRecord, InputClass,
+    RecordKind, DEFAULT_INPUT_BITS_LEN, ENTRY_RECORD_LEN, ENVELOPE_HEAD_LEN,
 };
 use spr_hasher::primitives::BN254_SCALAR_MODULUS_BE;
 
@@ -74,16 +74,14 @@ fn entry_evidence() -> AuditEvidence {
     AuditEvidence::Entry {
         default_input_bits: 0b01,
         inputs: vec![
-            EntryInput {
+            EntryRecord {
                 owner_key: [0xa1; 32],
                 nullifier_pk: field(0x5a),
                 amount: 5000,
                 mint: [0x60; 32],
-                blinding: field(0x61),
-                data_hash: [0; 32],
-                ring_data_hash: [0; 32],
+                input_commitment: field(0x61),
             },
-            EntryInput::default(),
+            EntryRecord::default(),
         ],
     }
 }
@@ -303,12 +301,10 @@ fn evidence_outside_the_field_is_refused() {
         }
         .encode()
     };
-    type Spoil = fn(&mut EntryInput);
-    let spoiled: [Spoil; 4] = [
+    type Spoil = fn(&mut EntryRecord);
+    let spoiled: [Spoil; 2] = [
         |input| input.nullifier_pk = BN254_SCALAR_MODULUS_BE,
-        |input| input.blinding = BN254_SCALAR_MODULUS_BE,
-        |input| input.data_hash = BN254_SCALAR_MODULUS_BE,
-        |input| input.ring_data_hash = BN254_SCALAR_MODULUS_BE,
+        |input| input.input_commitment = BN254_SCALAR_MODULUS_BE,
     ];
     for spoil in spoiled {
         let mut entry = entry_evidence();
@@ -324,6 +320,41 @@ fn evidence_outside_the_field_is_refused() {
     }
     let sealed = raw_envelope(&plaintext(entry_evidence()), &auditor);
     assert!(opened_envelope(&sealed, &auditor, entry_layout()).is_ok());
+}
+
+#[test]
+fn an_entry_record_of_another_length_is_refused() {
+    const FULL_OPENING_LEN: usize = 200;
+    let auditor = X25519Keypair::new();
+    let plaintext = custom_ring_interface::AuditEnvelope {
+        tx_viewing_secret: *ViewingKey::new().secret_bytes(),
+        real_inputs: 1,
+        address_input_bits: 0,
+        evidence: entry_evidence(),
+    }
+    .encode();
+    let records_at = ENVELOPE_HEAD_LEN + DEFAULT_INPUT_BITS_LEN;
+    assert_eq!(plaintext.len(), records_at + 2 * ENTRY_RECORD_LEN);
+    let widened: Vec<u8> = plaintext[records_at..]
+        .chunks(ENTRY_RECORD_LEN)
+        .flat_map(|record| [record, &[0; FULL_OPENING_LEN - ENTRY_RECORD_LEN]].concat())
+        .collect();
+    let widened = [&plaintext[..records_at], &widened].concat();
+    let short = &plaintext[..plaintext.len() - 1];
+    for malformed in [widened.as_slice(), short] {
+        let sealed = raw_envelope(malformed, &auditor);
+        assert!(matches!(
+            opened_envelope(&sealed, &auditor, entry_layout()),
+            Err(AuditError::DisclosureField)
+        ));
+    }
+    let sealed = raw_envelope(&plaintext, &auditor);
+    assert_eq!(
+        opened_envelope(&sealed, &auditor, entry_layout())
+            .unwrap()
+            .evidence,
+        entry_evidence()
+    );
 }
 
 fn interleaved_layout() -> AuditStreamLayout {
@@ -348,7 +379,7 @@ fn entry_at(default_input_bits: u64, slot: usize) -> AuditEvidence {
     let AuditEvidence::Entry { inputs, .. } = entry_evidence() else {
         unreachable!("the entry evidence");
     };
-    let mut openings = vec![EntryInput::default(); 3];
+    let mut openings = vec![EntryRecord::default(); 3];
     openings[slot] = inputs[0];
     AuditEvidence::Entry {
         default_input_bits,

@@ -43,8 +43,6 @@ type subjects struct {
 	liveInputs   []frontend.Variable
 	mintPolicies []mintPolicyWires
 	publicAssets []publicAsset
-	// saltedPayees is set while every live payee reads its tracking row for a salted list.
-	saltedPayees frontend.Variable
 }
 
 // Rail is what the statement and the key fix about a transfer's rail, the one source of every section gate.
@@ -110,7 +108,7 @@ func (p *Policy) resolveSubjects(api frontend.API, table tableView, g Gates, spe
 		view.onList = table.sources.owner(api, view.onList, salted)
 		return view
 	}
-	resolved := subjects{owners: make([]subjectView, len(payments)), assets: make([]subjectView, len(payments)), mintPolicies: make([]mintPolicyWires, len(payments)), saltedPayees: api.Mul(g.Screened, anySalted)}
+	resolved := subjects{owners: make([]subjectView, len(payments)), assets: make([]subjectView, len(payments)), mintPolicies: make([]mintPolicyWires, len(payments))}
 	resolved.senders, resolved.liveSenders = make([]subjectView, len(senders)), make([]frontend.Variable, len(senders))
 	// 3. A padded row and a dummy or unused payment close their gates and read zeros, the rule sections skip them on the same bits.
 	for j, sender := range senders {

@@ -73,15 +73,14 @@ func (i Input) EntryWires() audit.EntryWires {
 	return w
 }
 
-// entry mirrors the entry evidence, zero off a default-ring note.
+// entry mirrors the entry record, zero off a default-ring note.
 func (i Input) entry(t testing.TB) []byte {
 	t.Helper()
 	if !i.Utxo.isExit() {
-		return make([]byte, audit.EntryInputLen)
+		return make([]byte, audit.EntryRecordLen)
 	}
-	nullifierPk, blinding := spptest.MustFieldBytes(t, i.Utxo.NullifierPk), spptest.MustFieldBytes(t, i.Utxo.Blinding)
-	dataHash, ringDataHash := spptest.MustFieldBytes(t, i.Utxo.DataHash), spptest.MustFieldBytes(t, i.Utxo.RingDataHash)
-	return slices.Concat(i.OwnerKey[:], nullifierPk[:], binary.BigEndian.AppendUint64(nil, i.Utxo.Amount), i.Mint[:], blinding[:], dataHash[:], ringDataHash[:])
+	nullifierPk, commitment := spptest.MustFieldBytes(t, i.Utxo.NullifierPk), spptest.MustFieldBytes(t, i.Utxo.Hash(t))
+	return slices.Concat(i.OwnerKey[:], nullifierPk[:], binary.BigEndian.AppendUint64(nil, i.Utxo.Amount), i.Mint[:], commitment[:])
 }
 
 // Audit is one transfer's auditor stream, the fixture every transfer key seals.

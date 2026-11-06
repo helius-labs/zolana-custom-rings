@@ -103,7 +103,7 @@ pub use crate::{
     resolver::{AuthorizationCheck, RecipientResolver, ResolveError, ResolvedRecipient},
     scan::{AuditedPage, RingScan, RingScanPage, ScanPage, SkippedRow},
     types::{
-        AuditedDefaultInput, AuditedInput, AuditedOutput, AuditedTransaction, AuditedUtxo,
+        AuditedEntryInput, AuditedInput, AuditedOutput, AuditedTransaction, AuditedUtxo,
         CreatedUtxo, InputOpening, KnownUtxo, OutputOpening, OutputPayloadError,
         OutputPayloadErrorKind, RingOwnerTag, UtxoOwner,
     },

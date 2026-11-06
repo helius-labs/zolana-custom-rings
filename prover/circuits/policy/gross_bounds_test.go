@@ -12,6 +12,7 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringpolicy"
+	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
 func TestGrossAboveU64SetsWithdrawalApproval(t *testing.T) {
@@ -52,8 +53,8 @@ func TestGrossAboveU64SetsWithdrawalApproval(t *testing.T) {
 	}
 }
 
-// A rehashed leg at 2^64 with its gross inside debitBits fails only the u64 leg range check.
-func TestWithdrawalLegPastU64IsRefused(t *testing.T) {
+// The program hashes u64 settlement amounts alone, a forged leg past 2^64 opens no digest of the settlement.
+func TestWithdrawalLegBindsTheSettledAmount(t *testing.T) {
 	w := watched(1)
 	w.Own[ringpolicy.AssetA] = ringpolicy.Record{WithdrawalThreshold: math.MaxUint64}
 	w.Withdrawals = []ringpolicy.Slot{{Owner: ringpolicy.Bob, Asset: ringpolicy.AssetA, Amount: math.MaxUint64}, {Owner: ringpolicy.Bob, Asset: ringpolicy.AssetA, Amount: 1}}
@@ -66,6 +67,13 @@ func TestWithdrawalLegPastU64IsRefused(t *testing.T) {
 		return b
 	}
 	requireSolved(t, build(big.NewInt(1)))
-	past := build(new(big.Int).Lsh(big.NewInt(1), 64))
-	ringtest.RequireRefused(t, test.IsSolved(past.Assignment(), past.Assignment(), ecc.BN254.ScalarField()), "rangecheck.(*commitChecker).assertRecomposition")
+	settledHash := build(big.NewInt(1)).Policy().WithdrawalHash
+	forgedAmount := new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), 64), big.NewInt(1))
+	// The circuit range checks no leg, a digest over the forged leg solves.
+	requireSolved(t, build(forgedAmount))
+	// The program's digest over the settled u64 leg refuses the forged amount.
+	forged := build(forgedAmount)
+	forged.Policy().WithdrawalHash = settledHash
+	forged.Circuit.PublicInputHash = spptest.MustHashChain4(t, ringtest.ToBigInts(forged.Circuit.Statement()))
+	ringtest.RequireRefused(t, test.IsSolved(forged.Assignment(), forged.Assignment(), ecc.BN254.ScalarField()), "openWithdrawals")
 }

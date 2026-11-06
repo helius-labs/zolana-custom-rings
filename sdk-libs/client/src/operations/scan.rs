@@ -285,12 +285,9 @@ impl RingScan {
         let mut transactions = Vec::with_capacity(page.transactions.len());
         let mut skipped = page.skipped;
         for (transaction, confirmed) in &page.transactions {
-            let opened = confirmed.audit_frame(mode).and_then(|frame| {
-                let trees = confirmed.event.input_tree_ids(transaction);
-                TransactionAudit::new(transaction, frame)
-                    .with_input_trees(&trees)?
-                    .run(auditor)
-            });
+            let opened = confirmed
+                .audit_frame(mode)
+                .and_then(|frame| TransactionAudit::new(transaction, frame).run(auditor));
             match opened {
                 Ok(audited) => transactions.push(audited),
                 Err(error) => skipped.push(SkippedRow::of(transaction, error)?),

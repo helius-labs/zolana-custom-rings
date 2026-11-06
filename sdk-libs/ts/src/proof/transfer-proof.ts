@@ -211,7 +211,6 @@ export function transferProofRequest(
     ],
     rows: policy.rows,
     privateTxHash: input.privateTxHash,
-    privateTxBlinding: proofInputs.privateTxBlinding(),
     ...policy.tracking,
     ...policyParams(policy, input.proving),
     inProof: input.inProof,

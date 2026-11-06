@@ -45,7 +45,7 @@ func (c *SectionCircuit) Define(api frontend.API) error {
 	rc := rangecheck.New(api)
 	envelope := c.OpenEnvelope(api, rc)
 	hasData := c.Shape.DecodeLayout(api, c.Layout)
-	opened := c.Shape.OpenSlots(api, rc, c.AuditWires, envelope, hasData, c.Outputs, c.OutputCount)
+	opened := c.Shape.OpenSlots(api, rc, hasData, c.Outputs, c.OutputCount)
 	count := ringgadget.SelectCount(api, c.InputCount, 1, len(c.Inputs))
 	slots := make([]shared.Output, len(c.Inputs))
 	for i, input := range c.Inputs {
@@ -317,24 +317,28 @@ func (r AuditReader) Read(t testing.TB, stream Stream, i int, published *big.Int
 	return &note, nil
 }
 
-// ReadEntry rebuilds default input i from its evidence and accepts only an exact match, nil on any other slot.
-func (r AuditReader) ReadEntry(t testing.TB, stream Stream, i int, treeID uint16, spent *big.Int) (*Note, error) {
+// ReadEntry reads default input i's record and accepts only the spent commitment, nil on any other slot.
+func (r AuditReader) ReadEntry(t testing.TB, stream Stream, i int, spent *big.Int) (*Entry, error) {
 	t.Helper()
 	plaintext := r.Keys.Open(t, stream)
 	_, bits := r.Envelope(t, stream)
 	if bits&(1<<i) == 0 {
 		return nil, nil
 	}
-	offset := stream.Ranges.EnvelopeHeadLen() + i*audit.EntryInputLen
-	entry := plaintext[offset : offset+audit.EntryInputLen]
-	note := Note{Kind: audit.KindExit, OwnerKey: [32]byte(entry[:32]), NullifierPk: new(big.Int).SetBytes(entry[32:64]), Amount: binary.BigEndian.Uint64(entry[64:72]), Mint: [32]byte(entry[72:104]), Blinding: new(big.Int).SetBytes(entry[104:136])}
-	note.Hash = Utxo{
-		Domain: protocol.UtxoDomain, TreeID: treeID, OwnerPkHash: ringtest.MustSolanaPkField(t, note.OwnerKey), NullifierPk: note.NullifierPk,
-		Asset: ringtest.AssetField(t, note.Mint), Amount: note.Amount, Blinding: note.Blinding,
-		DataHash: new(big.Int).SetBytes(entry[136:168]), RingDataHash: new(big.Int).SetBytes(entry[168:200]), RingProgramID: big.NewInt(0),
-	}.Hash(t)
-	if note.Hash.Cmp(spent) != 0 {
-		return nil, fmt.Errorf("input %d: the evidence rebuilds no spent commitment", i)
+	offset := stream.Ranges.EnvelopeHeadLen() + i*audit.EntryRecordLen
+	record := plaintext[offset : offset+audit.EntryRecordLen]
+	entry := Entry{OwnerKey: [32]byte(record[:32]), NullifierPk: new(big.Int).SetBytes(record[32:64]), Amount: binary.BigEndian.Uint64(record[64:72]), Mint: [32]byte(record[72:104]), Commitment: new(big.Int).SetBytes(record[104:])}
+	if entry.Commitment.Cmp(spent) != 0 {
+		return nil, fmt.Errorf("input %d: the record names no spent commitment", i)
 	}
-	return &note, nil
+	return &entry, nil
+}
+
+// Entry is a default-ring input as its record names it, metadata beside the proven commitment.
+type Entry struct {
+	OwnerKey    [32]byte
+	NullifierPk *big.Int
+	Amount      uint64
+	Mint        [32]byte
+	Commitment  *big.Int
 }

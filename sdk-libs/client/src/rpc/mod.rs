@@ -507,10 +507,12 @@ impl From<InputClass> for DecryptedInputClass {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DecryptedDefaultInput {
-    pub utxo: DecryptedUtxo,
-    /// Absent without the input's tree id.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub commitment: Option<Hash>,
+    pub owner_key: SerializablePubkey,
+    pub nullifier_pk: Hash,
+    pub asset: Hash,
+    pub mint: SerializablePubkey,
+    pub amount: u64,
+    pub commitment: Hash,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -815,8 +817,12 @@ impl From<AuditedInput> for DecryptedInput {
                 .opening
                 .default_input()
                 .map(|input| DecryptedDefaultInput {
-                    utxo: input.utxo.into(),
-                    commitment: input.commitment.map(Into::into),
+                    owner_key: input.owner_key.into(),
+                    nullifier_pk: input.nullifier_pk.into(),
+                    asset: input.asset.into(),
+                    mint: input.mint.into(),
+                    amount: input.amount,
+                    commitment: input.commitment.into(),
                 }),
         }
     }

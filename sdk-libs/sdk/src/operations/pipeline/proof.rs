@@ -68,7 +68,6 @@ impl Assembled {
             signers: signer_identities(owner_run, class)?,
             rows: frame.policy.rows.clone(),
             private_tx_hash: parts.private_tx_hash,
-            private_tx_blinding: frame.private_tx_blinding,
             in_proof: parts.in_proof_owner.is_some(),
             hidden: parts.anonymous.is_some(),
             delegate: parts.rail.is_delegate(),
