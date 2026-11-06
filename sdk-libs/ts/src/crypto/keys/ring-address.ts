@@ -1,7 +1,6 @@
 /** Mirrors Rust `zolana_ring_keys::ring_address`, pinned by `test-vectors/wallet/ring_address.json`. */
 import { equalBytes } from "@noble/ciphers/utils.js";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import {
   address,
   getAddressDecoder,
@@ -11,8 +10,14 @@ import {
   type Address,
 } from "@solana/kit";
 
-import { concatBytes, U64_MAX } from "@heliuslabs/zolana/internal";
-import { ShieldedAddress, type ViewTag } from "@heliuslabs/zolana/keypair";
+import {
+  SHIELDED_ADDRESS_LENGTH,
+  concatBytes,
+  isCanonicalField,
+  U64_MAX,
+  ZERO_NULLIFIER_PK,
+} from "@heliuslabs/spr/internal";
+import { ShieldedAddress, type Bytes32, type ShieldedKeypairLike } from "@heliuslabs/spr/keypair";
 
 import { checkedCounter, RingKeyError } from "../error.js";
 
@@ -22,42 +27,62 @@ const base58Decoder = getBase58Decoder();
 const base58Encoder = getBase58Encoder();
 const encoder = new TextEncoder();
 
-export const RING_ADDRESS_VERSION = 3;
-
-export const RING_ADDRESS_CHECKSUM_DOMAIN = "zolana/ring-addr/v3";
+export const RING_ADDRESS_CHECKSUM_DOMAIN = "zolana/ring-addr";
 
 export const RING_PAYMENT_SCHEME = "zolana:";
 
-/** Rust `SHIELDED_ADDRESS_LEN`, signing key, nullifier key and tagged viewing key. */
-const SHIELDED_ADDRESS_LENGTH = 34 + 32 + 33;
 const CHECKSUM_LENGTH = 4;
-/** `version ‖ recipient ‖ ring_program_id`. */
-const BODY_LENGTH = 1 + SHIELDED_ADDRESS_LENGTH + 32;
-const PROGRAM_OFFSET = 1 + SHIELDED_ADDRESS_LENGTH;
+/** `recipient ‖ ring_program_id ‖ list_salt`. */
+const BODY_LENGTH = SHIELDED_ADDRESS_LENGTH + 32 + 32;
+const PROGRAM_OFFSET = SHIELDED_ADDRESS_LENGTH;
+const SALT_OFFSET = PROGRAM_OFFSET + 32;
 
 export const RING_ADDRESS_PAYLOAD_LENGTH = BODY_LENGTH + CHECKSUM_LENGTH;
 
-/** Shared off chain, a payment to it names its first contact tag explicitly. */
+/** Shared off chain, a transfer to it derives every tag from its slot secret. */
 export class RingAddress {
   readonly recipient: ShieldedAddress;
   readonly ringProgramId: Address;
+  /** Zero exactly under the zero key. */
+  readonly listSalt: Bytes32;
 
-  constructor(fields: Readonly<{ recipient: ShieldedAddress; ringProgramId: Address }>) {
+  constructor(
+    fields: Readonly<{ recipient: ShieldedAddress; ringProgramId: Address; listSalt: Bytes32 }>,
+  ) {
+    const zeroKey = equalBytes(fields.recipient.nullifierPublicKey, ZERO_NULLIFIER_PK);
+    const salt = fields.listSalt;
+    if (
+      !(salt instanceof Uint8Array) ||
+      salt.length !== 32 ||
+      !isCanonicalField(salt) ||
+      zeroKey !== salt.every((byte) => byte === 0)
+    )
+      throw new RingKeyError("KEYPAIR_INVALID_RING_ADDRESS_LIST_SALT");
     this.recipient = fields.recipient;
     this.ringProgramId = fields.ringProgramId;
+    this.listSalt = Uint8Array.from(salt) as Bytes32;
     Object.freeze(this);
+  }
+
+  /** Reveals the owner's list status. */
+  static async enrolled(
+    holder: Pick<ShieldedKeypairLike, "shieldedAddress">,
+    ringProgramId: Address,
+    listSalt: Bytes32,
+  ): Promise<RingAddress> {
+    return new RingAddress({ recipient: await holder.shieldedAddress(), ringProgramId, listSalt });
   }
 
   equals(other: RingAddress): boolean {
     return equalBytes(this.toBytes(), other.toBytes());
   }
 
-  /** `version ‖ recipient ‖ ring_program_id ‖ checksum`. */
+  /** `recipient ‖ ring_program_id ‖ list_salt ‖ checksum`. */
   toBytes(): Uint8Array {
     const body = concatBytes(
-      Uint8Array.of(RING_ADDRESS_VERSION),
       this.recipient.toBytes(),
       new Uint8Array(addressEncoder.encode(this.ringProgramId)),
+      this.listSalt,
     );
     return concatBytes(body, checksum(body));
   }
@@ -66,14 +91,12 @@ export class RingAddress {
     if (!(bytes instanceof Uint8Array) || bytes.length !== RING_ADDRESS_PAYLOAD_LENGTH)
       throw new RingKeyError("KEYPAIR_INVALID_RING_ADDRESS_LENGTH");
     const body = bytes.subarray(0, BODY_LENGTH);
-    const version = body[0] ?? -1;
-    if (version !== RING_ADDRESS_VERSION)
-      throw new RingKeyError("KEYPAIR_UNKNOWN_RING_ADDRESS_VERSION", { actual: version });
     if (!equalBytes(bytes.subarray(BODY_LENGTH), checksum(body)))
       throw new RingKeyError("KEYPAIR_INVALID_RING_ADDRESS_CHECKSUM");
     return new RingAddress({
-      recipient: ShieldedAddress.fromBytes(body.subarray(1, PROGRAM_OFFSET)),
-      ringProgramId: addressDecoder.decode(body.subarray(PROGRAM_OFFSET)),
+      recipient: ShieldedAddress.fromBytes(body.subarray(0, PROGRAM_OFFSET)),
+      ringProgramId: addressDecoder.decode(body.subarray(PROGRAM_OFFSET, SALT_OFFSET)),
+      listSalt: body.slice(SALT_OFFSET) as Bytes32,
     });
   }
 
@@ -101,24 +124,20 @@ function checksum(body: Uint8Array): Uint8Array {
 
 export type RingPaymentRequestFields = Readonly<{
   address: RingAddress;
-  /** The recipient's `recipientRequestViewTag`, a sender pays it until the pair is known. */
-  requestViewTag: ViewTag;
   amount?: bigint | undefined;
   mint?: Address | undefined;
   label?: string | undefined;
 }>;
 
-/** `zolana:<address>?tag=&amount=&mint=&label=`, the query part is unauthenticated. */
+/** `zolana:<address>?amount=&mint=&label=`, the query part is unauthenticated. */
 export class RingPaymentRequest {
   readonly address: RingAddress;
-  readonly requestViewTag: ViewTag;
   readonly amount: bigint | undefined;
   readonly mint: Address | undefined;
   readonly label: string | undefined;
 
   constructor(fields: RingPaymentRequestFields) {
     this.address = fields.address;
-    this.requestViewTag = checkedRequestTag(fields.requestViewTag);
     this.amount = fields.amount === undefined ? undefined : checkedCounter(fields.amount, "amount");
     this.mint = fields.mint;
     this.label = fields.label;
@@ -126,11 +145,12 @@ export class RingPaymentRequest {
   }
 
   toString(): string {
-    const query = [`tag=${bytesToHex(this.requestViewTag)}`];
+    const query: string[] = [];
     if (this.amount !== undefined) query.push(`amount=${this.amount}`);
     if (this.mint !== undefined) query.push(`mint=${this.mint}`);
     if (this.label !== undefined) query.push(`label=${encodeLabel(this.label)}`);
-    return `${RING_PAYMENT_SCHEME}${this.address.toBase58()}?${query.join("&")}`;
+    const encoded = `${RING_PAYMENT_SCHEME}${this.address.toBase58()}`;
+    return query.length === 0 ? encoded : `${encoded}?${query.join("&")}`;
   }
 
   static parse(text: string): RingPaymentRequest {
@@ -143,7 +163,6 @@ export class RingPaymentRequest {
     const encoded = separator === -1 ? rest : rest.slice(0, separator);
     const query = separator === -1 ? [] : rest.slice(separator + 1).split("&");
     const address = RingAddress.fromBase58(encoded);
-    let tag: ViewTag | undefined;
     let amount: bigint | undefined;
     let mint: Address | undefined;
     let label: string | undefined;
@@ -152,9 +171,6 @@ export class RingPaymentRequest {
       const key = equals === -1 ? part : part.slice(0, equals);
       const value = equals === -1 ? "" : part.slice(equals + 1);
       switch (key) {
-        case "tag":
-          tag = replaceOnce(tag, parseTag(value));
-          break;
         case "amount":
           amount = replaceOnce(amount, parseAmount(value));
           break;
@@ -168,26 +184,13 @@ export class RingPaymentRequest {
           throw new RingKeyError("KEYPAIR_UNKNOWN_RING_PAYMENT_KEY", { name: key });
       }
     }
-    if (tag === undefined) throw new RingKeyError("KEYPAIR_MISSING_RING_PAYMENT_TAG");
-    return new RingPaymentRequest({ address, requestViewTag: tag, amount, mint, label });
+    return new RingPaymentRequest({ address, amount, mint, label });
   }
 }
 
 function replaceOnce<T>(slot: T | undefined, value: T): T {
   if (slot !== undefined) throw new RingKeyError("KEYPAIR_DUPLICATE_RING_PAYMENT_KEY");
   return value;
-}
-
-/** Lowercase hex with a leading zero byte, the one form a derived request tag takes. */
-function parseTag(value: string): ViewTag {
-  if (!/^00[0-9a-f]{62}$/.test(value)) throw new RingKeyError("KEYPAIR_INVALID_RING_PAYMENT_TAG");
-  return hexToBytes(value) as ViewTag;
-}
-
-function checkedRequestTag(tag: ViewTag): ViewTag {
-  if (!(tag instanceof Uint8Array) || tag.length !== 32 || tag[0] !== 0)
-    throw new RingKeyError("KEYPAIR_INVALID_RING_PAYMENT_TAG");
-  return Uint8Array.from(tag) as ViewTag;
 }
 
 function parseAmount(value: string): bigint {

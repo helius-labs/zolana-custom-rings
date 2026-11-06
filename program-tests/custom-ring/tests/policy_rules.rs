@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 
 use anyhow::{anyhow, Result};
 use custom_ring_cli::ModeName;
-use custom_ring_sdk::CustomRing;
+use custom_ring_sdk::{CustomRing, DepositAsset};
 use custom_ring_test_validator::{
     cli::{merged, ListWrite, RingProject, RingToml},
     policy::{
@@ -55,6 +55,7 @@ fn allow_frozen_and_block_rows_govern_every_transfer() -> Result<()> {
         tier: Tier::policy(&RELEASED),
     }
     .send(&env.client)?;
+    custom_ring_test_validator::policy::enroll_actors(&env, ring)?;
     let pinned = policy_registry(ring, &env)?;
     assert_eq!(
         pinned.rule_table()?,
@@ -68,6 +69,12 @@ fn allow_frozen_and_block_rows_govern_every_transfer() -> Result<()> {
     let sender_member = owner_member(sender)?;
     let blocked = ShieldedKeypair::new_ed25519()?;
     env.fund(blocked.pubkey(), ACTOR_AIRDROP)?;
+    custom_ring_test_validator::policy::EnrollOwners {
+        ring,
+        owners: &[&blocked],
+        env: &env,
+    }
+    .send()?;
     let blocked_member = owner_member(&blocked)?;
     let egress = Egress {
         ring,
@@ -89,6 +96,7 @@ fn allow_frozen_and_block_rows_govern_every_transfer() -> Result<()> {
         ring,
         owner: sender,
         amount: DEPOSIT,
+        asset: DepositAsset::Sol,
         count: 2,
         env: &env,
     }
@@ -111,6 +119,7 @@ fn allow_frozen_and_block_rows_govern_every_transfer() -> Result<()> {
         ring,
         owner: &blocked,
         amount: DEPOSIT,
+        asset: DepositAsset::Sol,
         count: 1,
         env: &env,
     }
@@ -139,9 +148,9 @@ fn the_cli_pins_the_released_rows_and_governs_its_demo_transfers() -> Result<()>
         .run(ring.config(env.client.as_async()))?
         .ok_or_else(|| anyhow!("config after init"))?;
     assert_eq!(
-        config.authority,
-        demo.project.config_authority.pubkey(),
-        "the config authority holds the config"
+        config.roles.policy,
+        demo.project.policy_authority.pubkey(),
+        "the `policy_authority` key holds the policy role"
     );
     assert!(config.has_policy, "policy tier");
     let policy = policy_registry(ring, &env)?;
@@ -152,7 +161,7 @@ fn the_cli_pins_the_released_rows_and_governs_its_demo_transfers() -> Result<()>
     // 2. The demo, a granted reader, enrols both parties in Allow, the
     //    auditor opens its transfer.
     demo.grant_reader()?;
-    let output = demo.project.run(&["transact"])?;
+    let output = demo.project.run(&["transact", "--enrol-allow"])?;
     for line in ["allow       sender added", "allow       recipient added"] {
         assert!(output.contains(line), "{line} in\n{output}");
     }
@@ -189,7 +198,7 @@ fn the_cli_pins_the_released_rows_and_governs_its_demo_transfers() -> Result<()>
     demo.project.write_list(frozen(true))?;
     demo.refused_transact()?;
     demo.project.write_list(frozen(false))?;
-    demo.project.run(&["transact"])?;
+    demo.project.run(&["transact", "--enrol-allow"])?;
     assert_eq!(
         demo.audited()?.len(),
         2,
@@ -260,7 +269,7 @@ impl<'a> DemoRing<'a> {
         self.project.run(&[
             "reader",
             "grant",
-            &self.project.config_authority.pubkey().to_string(),
+            &self.project.policy_authority.pubkey().to_string(),
         ])?;
         Ok(())
     }
@@ -271,12 +280,7 @@ impl<'a> DemoRing<'a> {
         Ok(self
             .env
             .client
-            .block_on(scan.audit(
-                &self.auditor,
-                client.indexer(),
-                client.rpc(),
-                &self.env.ring_assets()?,
-            ))?
+            .block_on(scan.audit(&self.auditor, client.indexer(), client.rpc()))?
             .transactions)
     }
 
@@ -308,7 +312,7 @@ impl<'a> DemoRing<'a> {
         };
         let before = unspent()?;
         let audited_before = self.audited()?.len();
-        let refused = self.project.output(&["transact"])?;
+        let refused = self.project.output(&["transact", "--enrol-allow"])?;
         assert!(
             !refused.status.success(),
             "transact landed under a refusing rule"

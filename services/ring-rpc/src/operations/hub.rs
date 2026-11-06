@@ -4,11 +4,15 @@ use std::{
     time::{Duration, Instant},
 };
 
+use async_trait::async_trait;
+use custom_ring_sdk::{
+    PrivateStorageWrite, ProvenPrivateWrite, RingClient, RingError, RingIndexerBackend,
+};
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signature::Signature;
 use solana_signer::Signer;
-use spr_client::ClientError;
+use spr_client::{AsyncRpc, ClientError};
 use spr_keypair::X25519Keypair;
 use thiserror::Error;
 use tokio::sync::{watch, Mutex as AsyncMutex, Semaphore, SemaphorePermit};
@@ -22,17 +26,30 @@ use zolana_ring_transaction::RingAssets;
 use crate::{
     audit::{AuditService, AuditServiceInit, ASSET_REFRESH_INTERVAL},
     authorize::Unauthorized,
-    config::RootSecret,
+    config::{GrantRowsSecret, ReaderGrantStore, RootSecret},
+    cosign::{CoSignPolicy, CoSignerApproval, RefusingCoSigner},
+    cosign_limits::{LimitedCoSignerInit, RecordLimits},
+    database::Store,
     error::{redacted, RingRpcError},
-    keys::{service_keypair, AuditorKeyDerivation, KeySource},
-    limits::{
-        PublicRequest, RequestRate, MAX_CONCURRENT_AUTHENTICATIONS, MAX_CONCURRENT_DEPOSIT_SCANS,
-        MAX_CONCURRENT_READS,
-    },
+    grant_rows::{GrantRowKey, GrantRows},
+    grants::{GrantQuery, GrantSource, Grants, ReadScope, TreeGrants},
+    keyed_tasks::{KeyedTasks, MAX_CONCURRENT_KEYED_TASKS},
+    keys::{AuditorKeyDerivation, KeySource},
+    limits::{RequestRate, MAX_CONCURRENT_AUTHENTICATIONS, MAX_CONCURRENT_READS},
+    managed_merge::{ManagedMerge, ManagedMergeInit},
+    merge_settings::MergeSettingsBook,
     origins::Origins,
-    replay::ReplayGuard,
-    upstream::{DepositHistory, DepositPage, TransactionSource},
-    utxos::AuditStore,
+    record_update::RecordUpdateRefusal,
+    record_writer::{PrivateWrites, RecordWriter, SaltedOwner, WriterParts, RECORD_FLUSH_INTERVAL},
+    relay::{Relay, RelayError, RelayParts, ServedRings, RELAY_TRACK_INTERVAL},
+    relay_reservations::RelayBudget,
+    relay_services::{MergeParts, RelayServices},
+    replay::{LocalNonces, ReplayGuard},
+    spent_index::NoteSeal,
+    storage_chain::StorageChain,
+    upstream::{Finality, TransactionSource},
+    utxos::{AuditStore, Backing, MAX_CACHED_ENTRIES, UTXO_BACKFILL_INTERVAL},
+    wallet_snapshots::{SharedWalletSnapshots, WalletSnapshotCleanup, WalletSnapshotLimits},
 };
 
 const READINESS_CACHE_INTERVAL: Duration = Duration::from_secs(1);
@@ -40,7 +57,10 @@ const READINESS_CACHE_INTERVAL: Duration = Duration::from_secs(1);
 pub struct Hub<S> {
     signer: Keypair,
     shared: Arc<Shared<S>>,
-    keys: KeySource,
+    writer: Option<Arc<RecordWriter>>,
+    co_signer: Arc<dyn CoSignPolicy>,
+    relay: Option<Arc<Relay>>,
+    merge: Option<MergeParts>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,19 +110,34 @@ impl Clock {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Lane {
     Public,
-    Deposits(usize),
     Authentication,
     /// Held for a whole transfer or merge page.
     Read,
 }
 
+/// Every read and auditor key attestation binds both.
+pub struct ServiceIdentity {
+    pub genesis_hash: [u8; 32],
+    pub service: Keypair,
+}
+
 #[must_use]
 pub struct HubBuilder<S> {
     source: S,
-    genesis_hash: [u8; 32],
+    identity: ServiceIdentity,
     assets: Option<RingAssets>,
     origins: Origins,
     clock: Clock,
+    store: Option<Store>,
+    snapshot_limits: WalletSnapshotLimits,
+    storage: Option<(Arc<dyn StorageChain>, Keypair)>,
+    reader_grants: ReaderGrantStore,
+    grant_rows: Option<GrantRowsSecret>,
+    co_signer: Option<Keypair>,
+    co_signer_approval: CoSignerApproval,
+    relay_budget: RelayBudget,
+    relay: Option<RelayParts>,
+    merge: Option<MergeParts>,
 }
 
 pub(crate) struct Shared<S> {
@@ -110,15 +145,20 @@ pub(crate) struct Shared<S> {
     /// Captured at boot, every authority signature and derived key binds to it.
     pub(crate) genesis_hash: [u8; 32],
     pub(crate) service: Address,
+    keys: KeySource,
     pub(crate) clock: Clock,
     assets: AsyncMutex<AssetCache>,
     pub(crate) origins: Origins,
     pub(crate) replay: ReplayGuard,
     pub(crate) active_readers: Mutex<HashSet<(Address, ReaderKey)>>,
-    lanes: [(RequestRate, Option<Semaphore>); 4],
+    lanes: [(RequestRate, Option<Semaphore>); 3],
     readiness: AsyncMutex<ReadinessCache>,
     /// One per ring an authorized read or the backfill opened.
     stores: Mutex<HashMap<Address, Arc<AuditStore>>>,
+    wallet_snapshots: SharedWalletSnapshots,
+    snapshot_limits: WalletSnapshotLimits,
+    pub(crate) grants: Grants,
+    pub(crate) database: Option<Store>,
 }
 
 struct AssetCache {
@@ -128,8 +168,8 @@ struct AssetCache {
 
 enum RefreshState {
     Never,
-    Succeeded(Instant),
-    Failed(Instant),
+    Succeeded(tokio::time::Instant),
+    Failed(tokio::time::Instant),
 }
 
 struct ReadinessCache {
@@ -141,133 +181,81 @@ struct ReadinessCache {
 impl<S> Shared<S> {
     pub(crate) fn store(&self, ring: Address) -> Arc<AuditStore> {
         let mut stores = self.stores.lock().unwrap_or_else(PoisonError::into_inner);
-        stores.entry(ring).or_default().clone()
+        stores
+            .entry(ring)
+            .or_insert_with(|| {
+                Arc::new(
+                    AuditStore::new(self.backing(ring))
+                        .with_wallet_snapshots(self.wallet_snapshots.clone(), self.snapshot_limits),
+                )
+            })
+            .clone()
+    }
+
+    /// Beside a database the mirror is a bounded cache, storage answers what it evicted.
+    fn backing(&self, ring: Address) -> Backing {
+        let Some(store) = &self.database else {
+            return Backing::Memory;
+        };
+        let seal = self
+            .auditor(Some(ring))
+            .and_then(|(ring, auditor)| Ok(NoteSeal::derive(&auditor, ring)?));
+        match seal {
+            Ok(seal) => Backing::Database {
+                store: store.clone(),
+                ring,
+                seal: Box::new(seal),
+                capacity: MAX_CACHED_ENTRIES,
+            },
+            Err(error) => {
+                log::error!(
+                    "the projection of ring {ring} is unusable because {}",
+                    redacted(&error)
+                );
+                Backing::Unavailable
+            }
+        }
     }
 
     fn store_rings(&self) -> Vec<Address> {
         let stores = self.stores.lock().unwrap_or_else(PoisonError::into_inner);
         stores.keys().copied().collect()
     }
-}
 
-impl<S: TransactionSource> Shared<S> {
-    pub(crate) async fn cached_assets(&self) -> RingAssets {
-        self.assets.lock().await.registry.clone()
-    }
-
-    /// Delivered bodies name no mint, so a new mint arrives only through the interval refresh.
-    pub(crate) async fn due_assets(&self) -> RingAssets {
-        match self.refresh_assets().await {
-            Ok(assets) => assets,
-            Err(_) => self.cached_assets().await,
+    pub(crate) fn service(
+        self: &Arc<Self>,
+        ring: Option<Address>,
+    ) -> Result<AuditService<S>, RingRpcError> {
+        let (ring, auditor) = self.auditor(ring)?;
+        Ok(AuditServiceInit {
+            ring,
+            auditor,
+            shared: self.clone(),
         }
-    }
-
-    /// At most one registry read per interval, a failed one blocks retries until it ends.
-    pub(crate) async fn refresh_assets(&self) -> Result<RingAssets, RingRpcError> {
-        let mut cache = self.assets.lock().await;
-        let refresh_due = match cache.refresh {
-            RefreshState::Never => true,
-            RefreshState::Succeeded(at) | RefreshState::Failed(at) => {
-                at.elapsed() >= ASSET_REFRESH_INTERVAL
-            }
-        };
-        if refresh_due {
-            cache.refresh = RefreshState::Failed(Instant::now());
-            cache.registry = self.source.ring_assets().await?;
-            cache.refresh = RefreshState::Succeeded(Instant::now());
-        } else if matches!(cache.refresh, RefreshState::Failed(_)) {
-            return Err(ClientError::Rpc("asset registry is unavailable".to_owned()).into());
-        }
-        Ok(cache.registry.clone())
-    }
-}
-
-impl<S: TransactionSource> Hub<S> {
-    pub fn builder(source: S, genesis_hash: [u8; 32]) -> HubBuilder<S> {
-        HubBuilder {
-            source,
-            genesis_hash,
-            assets: None,
-            origins: Origins::default(),
-            clock: Clock::System,
-        }
-    }
-
-    /// The rate unit is spent even when every slot is taken.
-    pub(crate) fn admit(&self, lane: Lane) -> Result<Option<SemaphorePermit<'_>>, RingRpcError> {
-        let (index, request) = match lane {
-            Lane::Public => (0, PublicRequest::Standard),
-            Lane::Deposits(signatures) => (1, PublicRequest::DepositScan { signatures }),
-            Lane::Authentication => (2, PublicRequest::Standard),
-            Lane::Read => (3, PublicRequest::Standard),
-        };
-        let (rate, slots) = &self.shared.lanes[index];
-        rate.accept(Instant::now(), request)?;
-        slots
-            .as_ref()
-            .map(|slots| slots.try_acquire().map_err(|_| RingRpcError::Busy))
-            .transpose()
-    }
-
-    pub fn mode(&self) -> KeyMode {
-        match self.keys {
-            KeySource::Local { .. } => KeyMode::Local,
-            KeySource::Derived(_) => KeyMode::Derived,
-        }
-    }
-
-    /// Value entering the ring, which no auditor message announces.
-    pub async fn ring_deposits(&self, page: DepositPage) -> Result<DepositHistory, RingRpcError> {
-        Ok(self.shared.source.ring_deposits(page).await?)
-    }
-
-    pub fn service_pubkey(&self) -> Address {
-        self.signer.pubkey()
-    }
-
-    pub(crate) fn sign_attestation(&self, attestation: &[u8]) -> Signature {
-        self.signer.sign_message(attestation)
-    }
-
-    pub fn origins(&self) -> &Origins {
-        &self.shared.origins
-    }
-
-    pub fn local_view_tag(&self) -> Option<[u8; 32]> {
-        match &self.keys {
-            KeySource::Local { auditor, .. } => Some(auditor_view_tag(&auditor.pubkey())),
-            KeySource::Derived(_) => None,
-        }
+        .build())
     }
 
     /// `None` names the one ring a local key serves.
-    pub fn service(&self, ring: Option<Address>) -> Result<AuditService<S>, RingRpcError> {
-        let (ring, auditor) = match &self.keys {
+    fn auditor(&self, ring: Option<Address>) -> Result<(Address, X25519Keypair), RingRpcError> {
+        match &self.keys {
             KeySource::Local {
                 ring: served,
                 auditor,
             } => {
                 self.validate_ring(ring.unwrap_or(*served))?;
-                (*served, auditor.clone())
+                Ok((*served, auditor.clone()))
             }
             KeySource::Derived(root) => {
                 let ring = ring.ok_or(RingRpcError::RingRequired)?;
                 let auditor = AuditorKeyDerivation {
                     root,
-                    genesis_hash: &self.shared.genesis_hash,
+                    genesis_hash: &self.genesis_hash,
                     ring,
                 }
                 .derive()?;
-                (ring, auditor)
+                Ok((ring, auditor))
             }
-        };
-        Ok(AuditServiceInit {
-            ring,
-            auditor,
-            shared: self.shared.clone(),
         }
-        .build())
     }
 
     pub(crate) fn validate_ring(&self, ring: Address) -> Result<(), RingRpcError> {
@@ -279,29 +267,288 @@ impl<S: TransactionSource> Hub<S> {
         }
     }
 
+    pub(crate) fn merge_settings(&self) -> Result<MergeSettingsBook<'_>, RingRpcError> {
+        let database = self
+            .database
+            .as_ref()
+            .ok_or(RingRpcError::MergeSettingsUnavailable)?;
+        Ok(MergeSettingsBook::new(database.connection()))
+    }
+}
+
+pub(crate) struct HubRings<S>(pub(crate) Arc<Shared<S>>);
+
+#[async_trait]
+impl<S: TransactionSource + 'static> ServedRings for HubRings<S> {
+    async fn check(&self, ring: Address) -> Result<(), RingRpcError> {
+        let served = match self.0.service(Some(ring)) {
+            Ok(service) => service.served_config().await?.is_some(),
+            Err(RingRpcError::RingNotServed) => false,
+            Err(error) => return Err(error),
+        };
+        match served {
+            true => Ok(()),
+            false => Err(RelayError::RingNotServed.into()),
+        }
+    }
+
+    async fn tracking_registry(&self, ring: Address) -> Result<Address, RingRpcError> {
+        self.0
+            .source
+            .tracking_root(ring, Finality::Confirmed)
+            .await?
+            .map(|root| root.registry)
+            .ok_or_else(|| RelayError::RingNotServed.into())
+    }
+
+    async fn delegate(&self, ring: Address) -> Result<Option<Address>, RingRpcError> {
+        Ok(self
+            .0
+            .source
+            .ring_config(ring)
+            .await?
+            .and_then(|config| config.delegate))
+    }
+}
+
+impl<S: TransactionSource> Shared<S> {
+    /// The policy authority, or the upgrade authority before `Initialize`.
+    pub(crate) async fn require_ring_authority(
+        &self,
+        ring: Address,
+        signer: Address,
+    ) -> Result<(), RingRpcError> {
+        let ring_authority = match self.source.ring_config(ring).await? {
+            Some(config) => Some(config.roles.policy),
+            None => self.source.upgrade_authority(ring).await?,
+        };
+        if ring_authority != Some(signer) {
+            return Err(Unauthorized::NotRingAuthority.into());
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn read_scope(&self, query: GrantQuery) -> Result<ReadScope, RingRpcError> {
+        // A wallet signing for itself holds its own notes, a PDA owner reads through a grant.
+        if query.wallet.is_some()
+            && matches!(query.reader, ReaderKey::Ed25519(key) if Some(key.address()) == query.wallet)
+        {
+            return Ok(ReadScope::new(query.wallet));
+        }
+        if let Some(owner) = query.wallet {
+            if self
+                .source
+                .owner_grant_held(query.ring, owner, query.reader.to_bytes())
+                .await?
+            {
+                return Ok(ReadScope::new(query.wallet));
+            }
+        }
+        let granted = match &self.grants {
+            Grants::Tree => {
+                TreeGrants {
+                    source: &self.source,
+                }
+                .grants(query)
+                .await?
+            }
+            Grants::Database(rows) => rows.grants(query).await?,
+        };
+        if !granted {
+            return Err(Unauthorized::NotGranted.into());
+        }
+        Ok(ReadScope::new(query.wallet))
+    }
+
+    pub(crate) async fn cached_assets(&self) -> RingAssets {
+        self.assets.lock().await.registry.clone()
+    }
+
+    /// A failed read serves the cached registry.
+    pub(crate) async fn due_assets(&self) -> RingAssets {
+        match self.refresh_assets().await {
+            Ok(assets) => assets,
+            Err(_) => self.cached_assets().await,
+        }
+    }
+
+    pub(crate) async fn refresh_assets(&self) -> Result<RingAssets, RingRpcError> {
+        self.assets_read_within(ASSET_REFRESH_INTERVAL).await
+    }
+
+    /// At most one registry read per interval, a failed one blocks retries until it ends.
+    async fn assets_read_within(&self, interval: Duration) -> Result<RingAssets, RingRpcError> {
+        let mut cache = self.assets.lock().await;
+        let refresh_due = match cache.refresh {
+            RefreshState::Never => true,
+            RefreshState::Succeeded(at) | RefreshState::Failed(at) => at.elapsed() >= interval,
+        };
+        if refresh_due {
+            cache.refresh = RefreshState::Failed(tokio::time::Instant::now());
+            cache.registry = self.source.ring_assets().await?;
+            cache.refresh = RefreshState::Succeeded(tokio::time::Instant::now());
+        } else if matches!(cache.refresh, RefreshState::Failed(_)) {
+            return Err(ClientError::Rpc("asset registry is unavailable".to_owned()).into());
+        }
+        Ok(cache.registry.clone())
+    }
+}
+
+impl<S: TransactionSource> Hub<S> {
+    pub fn builder(source: S, identity: ServiceIdentity) -> HubBuilder<S> {
+        HubBuilder {
+            source,
+            identity,
+            assets: None,
+            origins: Origins::default(),
+            clock: Clock::System,
+            store: None,
+            snapshot_limits: WalletSnapshotLimits::default(),
+            storage: None,
+            reader_grants: ReaderGrantStore::Tree,
+            grant_rows: None,
+            co_signer: None,
+            co_signer_approval: CoSignerApproval::default(),
+            relay_budget: RelayBudget::default(),
+            relay: None,
+            merge: None,
+        }
+    }
+
+    /// The rate unit is spent even when every slot is taken.
+    pub(crate) fn admit(&self, lane: Lane) -> Result<Option<SemaphorePermit<'_>>, RingRpcError> {
+        let index = match lane {
+            Lane::Public => 0,
+            Lane::Authentication => 1,
+            Lane::Read => 2,
+        };
+        let (rate, slots) = &self.shared.lanes[index];
+        rate.accept(Instant::now())?;
+        slots
+            .as_ref()
+            .map(|slots| slots.try_acquire().map_err(|_| RingRpcError::Busy))
+            .transpose()
+    }
+
+    pub fn mode(&self) -> KeyMode {
+        match self.shared.keys {
+            KeySource::Local { .. } => KeyMode::Local,
+            KeySource::Derived(_) => KeyMode::Derived,
+        }
+    }
+
+    pub fn service_pubkey(&self) -> Address {
+        self.signer.pubkey()
+    }
+
+    pub fn record_writer(&self) -> Result<&Arc<RecordWriter>, RingRpcError> {
+        self.writer
+            .as_ref()
+            .ok_or_else(|| RecordUpdateRefusal::Disabled.into())
+    }
+
+    /// Signs under the asset record limits, refuses every co-signature without a co-signer key.
+    pub fn co_signer(&self) -> &Arc<dyn CoSignPolicy> {
+        &self.co_signer
+    }
+
+    pub(crate) fn sign_attestation(&self, attestation: &[u8]) -> Signature {
+        self.signer.sign_message(attestation)
+    }
+
+    pub fn origins(&self) -> &Origins {
+        &self.shared.origins
+    }
+
+    pub fn relay(&self) -> Option<&Arc<Relay>> {
+        self.relay.as_ref()
+    }
+
+    pub(crate) fn shared(&self) -> &Shared<S> {
+        &self.shared
+    }
+
+    /// Pays through the relay fee payer, `None` without relay services.
+    pub fn managed_merge(self: &Arc<Self>) -> Option<ManagedMerge<S>> {
+        let (merge, relay) = self.merge.as_ref().zip(self.relay.as_ref())?;
+        Some(
+            ManagedMergeInit {
+                hub: self.clone(),
+                builder: merge.builder.clone(),
+                relay: relay.clone(),
+            }
+            .build(),
+        )
+    }
+
+    pub fn local_view_tag(&self) -> Option<[u8; 32]> {
+        match &self.shared.keys {
+            KeySource::Local { auditor, .. } => Some(auditor_view_tag(&auditor.pubkey())),
+            KeySource::Derived(_) => None,
+        }
+    }
+
+    /// `None` names the one ring a local key serves.
+    pub fn service(&self, ring: Option<Address>) -> Result<AuditService<S>, RingRpcError> {
+        self.shared.service(ring)
+    }
+
     /// Every `interval`, the first at once, backfills the local ring and every ring a read opened.
-    pub async fn run_utxo_backfill(self: Arc<Self>, interval: Duration) {
+    pub async fn run_utxo_backfill(self: Arc<Self>, interval: Duration)
+    where
+        S: 'static,
+    {
+        let rings = KeyedTasks::new(MAX_CONCURRENT_KEYED_TASKS);
         let mut ticks = tokio::time::interval(interval);
         loop {
             ticks.tick().await;
-            for ring in self.backfill_rings() {
-                let backfill = match self.service(Some(ring)) {
-                    Ok(service) => service.backfill_utxos().await,
-                    Err(error) => Err(error),
-                };
-                if let Err(error) = backfill {
-                    log::warn!(
-                        "UTXO backfill of ring {ring} failed because {}",
-                        redacted(&error)
-                    );
-                }
+            if let Err(error) = self.cleanup_wallet_snapshots().await {
+                log::warn!(
+                    "wallet snapshot cleanup failed because {}",
+                    redacted(&error)
+                );
             }
+            rings.spawn_idle(self.backfill_rings(), |ring| {
+                let hub = self.clone();
+                async move { hub.backfill_ring(ring).await }
+            });
+        }
+    }
+
+    async fn cleanup_wallet_snapshots(&self) -> Result<(), RingRpcError> {
+        let now = self.shared.clock.now()?;
+        self.shared
+            .wallet_snapshots
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .cleanup(now);
+        if let Some(store) = &self.shared.database {
+            WalletSnapshotCleanup {
+                db: store.connection(),
+                now,
+            }
+            .run()
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn backfill_ring(&self, ring: Address) {
+        let backfill = match self.service(Some(ring)) {
+            Ok(service) => service.backfill_utxos().await,
+            Err(error) => Err(error),
+        };
+        if let Err(error) = backfill {
+            log::warn!(
+                "UTXO backfill of ring {ring} failed because {}",
+                redacted(&error)
+            );
         }
     }
 
     fn backfill_rings(&self) -> Vec<Address> {
         let mut rings = self.shared.store_rings();
-        if let KeySource::Local { ring, .. } = &self.keys {
+        if let KeySource::Local { ring, .. } = &self.shared.keys {
             if !rings.contains(ring) {
                 rings.push(*ring);
             }
@@ -317,7 +564,7 @@ impl<S: TransactionSource> Hub<S> {
         if source.genesis_hash().await.map_err(upstream)? != self.shared.genesis_hash {
             return Err(NotReady::Cluster);
         }
-        if let KeySource::Local { ring, auditor } = &self.keys {
+        if let KeySource::Local { ring, auditor } = &self.shared.keys {
             let config = source
                 .ring_config(*ring)
                 .await
@@ -383,7 +630,63 @@ impl<S: TransactionSource> Hub<S> {
     }
 }
 
-impl<S: TransactionSource> HubBuilder<S> {
+/// Resolves salted owners from the enrollments the auditor key opens, proves through the ring SDK.
+struct HeldPrivateWrites<S, R, I> {
+    shared: Arc<Shared<S>>,
+    client: RingClient<R, I>,
+}
+
+#[async_trait]
+impl<S, R, I> PrivateWrites for HeldPrivateWrites<S, R, I>
+where
+    S: TransactionSource + 'static,
+    R: AsyncRpc + Send + Sync + 'static,
+    I: RingIndexerBackend + Send + Sync + 'static,
+{
+    async fn salted_owner(
+        &self,
+        ring: Address,
+        written_key: [u8; 32],
+    ) -> Result<Option<SaltedOwner>, RingRpcError> {
+        self.shared
+            .service(Some(ring))?
+            .salted_owner(&written_key)
+            .await
+    }
+
+    async fn prove(&self, write: PrivateStorageWrite<'_>) -> Result<ProvenPrivateWrite, RingError> {
+        write.prove(&self.client).await
+    }
+}
+
+impl<S: TransactionSource + 'static> Hub<S> {
+    /// A record writer without it refuses every salted owner write.
+    pub fn serve_private_writes<R, I>(&self, client: RingClient<R, I>) -> Result<(), RingRpcError>
+    where
+        R: AsyncRpc + Send + Sync + 'static,
+        I: RingIndexerBackend + Send + Sync + 'static,
+    {
+        self.record_writer()?
+            .serve_private_writes(Arc::new(HeldPrivateWrites {
+                shared: self.shared.clone(),
+                client,
+            }))
+            .map_err(|_| RingRpcError::StateUnavailable)
+    }
+
+    /// Every background worker except the managed merge, its caller picks the interval.
+    pub fn spawn_workers(self: &Arc<Self>) {
+        if let Some(relay) = self.relay() {
+            tokio::spawn(relay.clone().run(RELAY_TRACK_INTERVAL));
+        }
+        tokio::spawn(self.clone().run_utxo_backfill(UTXO_BACKFILL_INTERVAL));
+        if let Ok(writer) = self.record_writer() {
+            tokio::spawn(writer.clone().run(RECORD_FLUSH_INTERVAL));
+        }
+    }
+}
+
+impl<S: TransactionSource + 'static> HubBuilder<S> {
     #[must_use = "use the updated builder"]
     pub fn with_assets(mut self, assets: RingAssets) -> Self {
         self.assets = Some(assets);
@@ -402,17 +705,112 @@ impl<S: TransactionSource> HubBuilder<S> {
         self
     }
 
+    #[must_use = "use the updated builder"]
+    pub fn with_store(mut self, store: Store) -> Self {
+        self.store = Some(store);
+        self
+    }
+
+    pub fn with_snapshot_limits(mut self, limits: WalletSnapshotLimits) -> Self {
+        self.snapshot_limits = limits;
+        self
+    }
+
+    /// The record writer runs only beside a store.
+    #[must_use = "use the updated builder"]
+    pub fn with_storage_chain(mut self, chain: Arc<dyn StorageChain>, authority: Keypair) -> Self {
+        self.storage = Some((chain, authority));
+        self
+    }
+
+    /// `Database` needs a store and a grant rows key.
+    #[must_use = "use the updated builder"]
+    pub fn with_reader_grants(mut self, store: ReaderGrantStore) -> Self {
+        self.reader_grants = store;
+        self
+    }
+
+    #[must_use = "use the updated builder"]
+    pub fn with_grant_rows_key(mut self, secret: GrantRowsSecret) -> Self {
+        self.grant_rows = Some(secret);
+        self
+    }
+
+    /// The hub refuses to build without a store.
+    #[must_use = "use the updated builder"]
+    pub fn with_co_signer(mut self, signer: Keypair) -> Self {
+        self.co_signer = Some(signer);
+        self
+    }
+
+    /// Without it the co-signer refuses every operation.
+    #[must_use = "use the updated builder"]
+    pub fn with_co_signer_approval(mut self, approval: CoSignerApproval) -> Self {
+        self.co_signer_approval = approval;
+        self
+    }
+
+    /// Without it the relay funds no enrollment and no token account.
+    #[must_use = "use the updated builder"]
+    pub const fn with_relay_budget(mut self, budget: RelayBudget) -> Self {
+        self.relay_budget = budget;
+        self
+    }
+
+    #[must_use = "use the updated builder"]
+    pub fn with_relay(mut self, relay: RelayParts) -> Self {
+        self.relay = Some(relay);
+        self
+    }
+
+    #[must_use = "use the updated builder"]
+    pub fn with_relay_services(mut self, services: RelayServices) -> Self {
+        self.relay = Some(services.parts);
+        self.merge = Some(services.merge);
+        self
+    }
+
     pub fn local(self, ring: Address, auditor: X25519Keypair) -> Result<Hub<S>, RingRpcError> {
-        let signer = service_keypair(auditor.secret_bytes().as_slice())?;
-        self.build(signer, KeySource::Local { ring, auditor })
+        self.build(KeySource::Local { ring, auditor })
     }
 
     pub fn derived(self, root: RootSecret) -> Result<Hub<S>, RingRpcError> {
-        let signer = service_keypair(root.as_bytes())?;
-        self.build(signer, KeySource::Derived(root))
+        self.build(KeySource::Derived(root))
     }
 
-    fn build(self, signer: Keypair, keys: KeySource) -> Result<Hub<S>, RingRpcError> {
+    fn build(self, keys: KeySource) -> Result<Hub<S>, RingRpcError> {
+        let ServiceIdentity {
+            genesis_hash,
+            service: signer,
+        } = self.identity;
+        let writer = self
+            .store
+            .clone()
+            .zip(self.storage)
+            .map(|(store, (chain, authority))| {
+                Arc::new(
+                    WriterParts {
+                        store,
+                        chain,
+                        authority,
+                        genesis_hash,
+                        reader_grants: self.reader_grants,
+                    }
+                    .writer(),
+                )
+            });
+        let grants = match self.reader_grants {
+            ReaderGrantStore::Tree => Grants::Tree,
+            ReaderGrantStore::Database => Grants::Database(Box::new(GrantRows::new(
+                self.store.clone().ok_or(RingRpcError::GrantStoreMissing)?,
+                GrantRowKey::derive(
+                    self.grant_rows
+                        .as_ref()
+                        .ok_or(RingRpcError::GrantRowsKeyMissing)?
+                        .as_bytes(),
+                )?,
+            ))),
+        };
         let assets = match self.assets {
             Some(assets) => assets,
             None => RingAssets::new([])?,
@@ -420,19 +818,22 @@ impl<S: TransactionSource> HubBuilder<S> {
         let lane = |count| (RequestRate::default(), Some(Semaphore::new(count)));
         let shared = Shared {
             source: self.source,
-            genesis_hash: self.genesis_hash,
+            genesis_hash,
             service: signer.pubkey(),
+            keys,
             clock: self.clock,
             assets: AsyncMutex::new(AssetCache {
                 registry: assets,
                 refresh: RefreshState::Never,
             }),
             origins: self.origins,
-            replay: ReplayGuard::default(),
+            replay: match &self.store {
+                Some(store) => ReplayGuard::Shared(store.clone()),
+                None => ReplayGuard::Local(LocalNonces::default()),
+            },
             active_readers: Mutex::new(HashSet::new()),
             lanes: [
                 (RequestRate::default(), None),
-                lane(MAX_CONCURRENT_DEPOSIT_SCANS),
                 lane(MAX_CONCURRENT_AUTHENTICATIONS),
                 lane(MAX_CONCURRENT_READS),
             ],
@@ -442,11 +843,39 @@ impl<S: TransactionSource> HubBuilder<S> {
                 in_flight: None,
             }),
             stores: Mutex::new(HashMap::new()),
+            wallet_snapshots: SharedWalletSnapshots::default(),
+            snapshot_limits: self.snapshot_limits,
+            grants,
+            database: self.store.clone(),
         };
+        let shared = Arc::new(shared);
+        let co_signer: Arc<dyn CoSignPolicy> = match self.co_signer {
+            Some(signer) => Arc::new(
+                LimitedCoSignerInit {
+                    signer,
+                    limits: RecordLimits(shared.clone()),
+                    store: Arc::new(self.store.ok_or(RingRpcError::CoSignerStoreMissing)?),
+                    approval: self.co_signer_approval,
+                }
+                .build(),
+            ),
+            None => Arc::new(RefusingCoSigner),
+        };
+        let relay = self.relay.map(|parts| {
+            Arc::new(
+                Relay::new(parts)
+                    .with_budget(self.relay_budget)
+                    .with_co_signer(co_signer.clone())
+                    .with_rings(Arc::new(HubRings(shared.clone()))),
+            )
+        });
         Ok(Hub {
             signer,
-            shared: Arc::new(shared),
-            keys,
+            shared,
+            writer,
+            co_signer,
+            relay,
+            merge: self.merge,
         })
     }
 }

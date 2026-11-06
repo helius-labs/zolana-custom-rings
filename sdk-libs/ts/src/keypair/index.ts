@@ -3,7 +3,6 @@ export {
   auditorViewTag,
   openTransactionViewingSecret,
   parseAuditorMessage,
-  sealTransactionViewingSecret,
 } from "../crypto/audit/audit.js";
 export type { AuditorEnvelope, AuditorMessage } from "../crypto/audit/audit.js";
 export {
@@ -14,7 +13,6 @@ export {
 export {
   RING_ADDRESS_CHECKSUM_DOMAIN,
   RING_ADDRESS_PAYLOAD_LENGTH,
-  RING_ADDRESS_VERSION,
   RING_PAYMENT_SCHEME,
   RingAddress,
   RingPaymentRequest,

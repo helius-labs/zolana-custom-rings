@@ -3,39 +3,43 @@ package ring
 import (
 	"encoding/json"
 	"math/big"
+	"slices"
 	"testing"
 
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/test"
 
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
-	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringdeposit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringmerge"
-	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringpolicy"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
-	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringtransfer"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 	"github.com/helius-labs/zolana/prover/server/prover/common"
 )
 
 const (
-	smallDeliveredKey common.CircuitType = "custom-ring-audit-delivered-2"
-	deliveredKey      common.CircuitType = "custom-ring-audit-delivered-8"
-	anonymousKey      common.CircuitType = "custom-ring-audit-anonymous-v2-4-2"
-	entryKey          common.CircuitType = "custom-ring-audit-anonymous-entry-v2-8-2"
-	memberKey         common.CircuitType = "custom-ring-policy-member-v3-2-w0-curator"
-	delegateKey       common.CircuitType = "custom-ring-policy-delegate-v3-2x2-curator"
-	applyKey          common.CircuitType = "custom-ring-apply-records-1"
-	batchKey          common.CircuitType = "custom-ring-apply-records-16"
-	registerKey       common.CircuitType = "custom-ring-register-key"
-	depositKey        common.CircuitType = "custom-ring-deposit-8"
-	mergeKey          common.CircuitType = "custom-ring-merge-anonymous-v2-8"
+	payoutKey    common.CircuitType = "custom-ring-transfer-payout-16-in1-w0-s1"
+	transferKey  common.CircuitType = "custom-ring-transfer-2-in24-w4-s4"
+	transfer4Key common.CircuitType = "custom-ring-transfer-4-in24-w4-s4"
+	transfer8Key common.CircuitType = "custom-ring-transfer-8-in16-w4-s4"
+	wideKey      common.CircuitType = "custom-ring-transfer-wide-8-in24-w32-s13"
+	wide40Key    common.CircuitType = "custom-ring-transfer-wide-2-in40-w4-s8"
+	entryKey     common.CircuitType = "custom-ring-transfer-entry-4-in8-w4-s8"
+	entryWideKey common.CircuitType = "custom-ring-transfer-entry-8-in8-w32-s8"
+	entry8Key    common.CircuitType = "custom-ring-transfer-entry-8-in2-w4-s2"
+	applyKey     common.CircuitType = "custom-ring-apply-records-1"
+	batchKey     common.CircuitType = "custom-ring-apply-records-16"
+	privateKey   common.CircuitType = "custom-ring-apply-records-private-1"
+	enrollKey    common.CircuitType = "custom-ring-apply-enrollments-2"
+	registerKey  common.CircuitType = "custom-ring-register-key"
+	mergeKey     common.CircuitType = "custom-ring-merge"
 )
 
 func TestHostRequestsDecodeAndSolve(t *testing.T) {
-	for _, circuit := range []common.CircuitType{smallDeliveredKey, deliveredKey, anonymousKey, entryKey, memberKey, delegateKey, applyKey, batchKey, registerKey, depositKey, mergeKey} {
+	for _, circuit := range []common.CircuitType{payoutKey, transferKey, transfer4Key, transfer8Key, wideKey, wide40Key, entryKey, entry8Key, entryWideKey, applyKey, batchKey, privateKey, enrollKey, registerKey, mergeKey} {
 		t.Run(string(circuit), func(t *testing.T) {
 			payload := mustMarshal(t, hostRequest(t, keyOf(t, circuit)))
 			circuitOf := extensionOf(t, circuit).Circuit
@@ -54,52 +58,49 @@ func TestHostRequestsDecodeAndSolve(t *testing.T) {
 	}
 }
 
+// Each apply family decodes only its own body, a request names its family by its fields.
+func TestApplyRequestsDecodeOnlyUnderTheirMode(t *testing.T) {
+	public := applyRequest(t, privateKey, 1)
+	if _, err := decode(privateKey, mustMarshal(t, public)); err == nil {
+		t.Fatal("a private key decoded a body without private fields")
+	}
+	private := requestOf[PrivateApplyRecordsParams](t, applyKey, ringregistry.PrivateBatch(t, 1, ringregistry.PrivateBlockBit))
+	if _, err := decode(applyKey, mustMarshal(t, private)); err == nil {
+		t.Fatal("a public key decoded a body with private fields")
+	}
+}
+
 func hostRequest(t testing.TB, k Key) any {
 	t.Helper()
 	switch k.Family {
-	case DeliveredAudit:
-		return requestOf[DeliveredAuditParams](t, k.Circuit, ringaudit.NewDeliveredAudit(t, k.Outputs).Circuit(t))
-	case AnonymousAudit, AnonymousEntryAudit:
-		return requestOf[AnonymousAuditParams](t, k.Circuit, ringaudit.NewAnonymousAudit(t, k.anonymousShape()).Circuit(t))
-	case MemberPolicy:
-		world, ok := ringpolicy.MemberWorlds[k.Outputs]
-		if !ok {
-			t.Fatalf("no member world for %d outputs", k.Outputs)
+	case Transfer:
+		w := ringtransfer.Signed(k.transferShape())
+		if !k.SingleAssetPayout {
+			w.Withdrawals, w.Public = fixtureLeg(t)
 		}
-		w := world()
-		w.WithdrawalCapacity, w.OwnOnly = k.Withdrawals, k.OwnOnly
-		if !k.OwnOnly {
-			w.Table.Curator = map[uint64]bool{ringregistry.AllowBit: true}
-			w.Curator = w.Own
-		}
-		for range k.Withdrawals {
-			w.Withdrawals = append(w.Withdrawals, ringpolicy.Slot{Owner: ringpolicy.Bob, Asset: ringpolicy.AssetA, Amount: 1})
-		}
-		if k.Withdrawals > 0 {
-			w.Public = []ringpolicy.PublicSlot{{Asset: ringpolicy.AssetA, Amount: -int64(k.Withdrawals)}}
-		}
-		return requestOf[MemberPolicyParams](t, k.Circuit, w.Build(t).Assignment())
-	case DelegatePolicy:
-		world := ringpolicy.Delegate(transaction.Shape{NInputs: k.Inputs, NOutputs: k.Outputs})
-		world.OwnOnly = k.OwnOnly
-		if !k.OwnOnly {
-			world.Table.Curator = map[uint64]bool{ringregistry.AllowBit: true}
-			world.Curator = world.Own
-		}
-		return requestOf[DelegatePolicyParams](t, k.Circuit, world.Build(t).Assignment())
+		w.DefaultInput = k.Entry
+		return requestOf[TransferParams](t, k.Circuit, w.Build(t).Circuit)
 	case ApplyRecords:
+		if k.Private {
+			return requestOf[PrivateApplyRecordsParams](t, k.Circuit, ringregistry.PrivateBatch(t, k.Inputs, ringregistry.PrivateBlockBit))
+		}
 		return applyRequest(t, k.Circuit, k.Inputs)
-	case WithdrawalExemption:
-		return requestOf[WithdrawalExemptionParams](t, k.Circuit, ringpolicy.Exemption(t))
+	case ApplyEnrollments:
+		return enrollmentsRequest(t, k.Circuit, k.Inputs)
 	case RegisterKey:
 		return registerKeyRequest(t, k.Circuit, big.NewInt(0x0b))
-	case Deposit:
-		return requestOf[DepositParams](t, k.Circuit, ringdeposit.BuildCapacity(t, k.Inputs, k.Inputs, ringdeposit.ModeRegistry).Circuit)
-	case AnonymousMerge:
-		return requestOf[AnonymousMergeParams](t, k.Circuit, ringmerge.Build(t, k.Inputs).Circuit)
+	case Merge:
+		return requestOf[MergeParams](t, k.Circuit, ringmerge.Build(t).Circuit)
 	}
 	t.Fatalf("no host request for ring family %d", k.Family)
 	return nil
+}
+
+// fixtureLeg withdraws one leg of the fixture asset, so every transfer request carries a withdrawal.
+func fixtureLeg(t testing.TB) ([]ringtransfer.Withdrawal, []ringtransfer.PublicSlot) {
+	t.Helper()
+	asset := ringtransfer.Asset(t)
+	return []ringtransfer.Withdrawal{{Owner: big.NewInt(0x0bb0), Asset: asset, Amount: 10}}, []ringtransfer.PublicSlot{{Asset: asset, Net: -10, Gross: 10}}
 }
 
 func keyOf(t testing.TB, circuit common.CircuitType) Key {
@@ -116,20 +117,21 @@ func keyOf(t testing.TB, circuit common.CircuitType) Key {
 // applyRequest inserts members up to the key's capacity, a full batch then rewrites one of them and skips an empty record.
 func applyRequest(t testing.TB, circuit common.CircuitType, capacity int) *ApplyRecordsParams {
 	t.Helper()
-	entry := func(member, mask, escrow int64) ringregistry.Entry {
-		return ringregistry.Entry{Member: big.NewInt(member), Mask: big.NewInt(mask), Value: big.NewInt(mask), EscrowKey: big.NewInt(escrow)}
+	entry := func(member, mask int64) ringregistry.Entry {
+		return ringregistry.Entry{Member: big.NewInt(member), Mask: big.NewInt(mask), Value: big.NewInt(mask)}
 	}
-	entries := []ringregistry.Entry{entry(0x100, ringregistry.AllowBit, 0)}
+	entries := []ringregistry.Entry{entry(0x100, ringregistry.AllowBit)}
 	if capacity > 1 {
 		entries = nil
 		for i := range capacity - 2 {
-			entries = append(entries, entry(int64(0x100+i), ringregistry.AllowBit, 0))
+			entries = append(entries, entry(int64(0x100+i), ringregistry.AllowBit))
 		}
-		empty := ringregistry.Entry{Member: big.NewInt(0x200), Mask: big.NewInt(ringregistry.AllowBit), Value: big.NewInt(0), EscrowKey: big.NewInt(0)}
-		entries = append(entries, entry(0x100, ringregistry.EscrowBit, 0xe0), empty)
+		empty := ringregistry.Entry{Member: big.NewInt(0x200), Mask: big.NewInt(ringregistry.AllowBit), Value: big.NewInt(0)}
+		entries = append(entries, entry(0x100, ringregistry.BlockBit), empty)
 	}
-	// A nonzero chain checkpoint, as a queue past its first batch carries.
-	return (registryBatch{circuit, capacity, ringregistry.New(t), entries, big.NewInt(0x5eed)}).request(t)
+	// A nonzero chain start, as `chain_start` derives from the registry and revision.
+	request, _ := (registryBatch{circuit, capacity, ringregistry.New(t), entries, big.NewInt(0x5eed)}).request(t)
+	return request
 }
 
 type registryBatch struct {
@@ -140,32 +142,56 @@ type registryBatch struct {
 	chainStart *big.Int
 }
 
-func (batch registryBatch) request(t testing.TB) *ApplyRecordsParams {
+// request also returns the restrictive bit its statement binds.
+func (batch registryBatch) request(t testing.TB) (*ApplyRecordsParams, bool) {
 	t.Helper()
 	members, entries := batch.members, batch.entries
 	p := &ApplyRecordsParams{
 		RequestHead: RequestHead{CircuitType: batch.circuit}, OldRoot: fb(members.Root()), OldNextIndex: uint32(members.NextIndex()),
-		ChainStart: fb(batch.chainStart), Count: uint8(len(entries)), Writes: make([]*RecordWrite, batch.capacity),
+		ChainStart: fb(batch.chainStart), Count: uint8(len(entries)), Writes: make([]*RecordWriteProofInput, batch.capacity),
 	}
 	chain := p.ChainStart.Int
+	wires := make([]registry.RecordWriteProofInput, len(entries))
 	for i, e := range entries {
-		w := members.Apply(t, e)
-		hash := ringtest.MustPoseidonHash(t, big.NewInt(shared.QueueWriteDomain), e.Member, e.Mask, e.Value, e.EscrowKey, big.NewInt(0), big.NewInt(0))
-		chain = ringtest.MustPoseidonHash(t, chain, hash)
-		p.Writes[i] = &RecordWrite{
-			Entry:  QueueEntry{Member: fb(e.Member), Mask: e.Mask.Uint64(), Value: e.Value.Uint64(), EscrowKey: fb(e.EscrowKey), MintPolicy: fi(0), WithdrawalThreshold: fi(0)},
-			Exists: w.Exists, OldNext: fb(w.OldNext), OldLists: w.OldLists.Uint64(), OldEscrow: fb(w.OldEscrow), OldMintPolicy: fi(0), OldWithdrawalThreshold: fi(0),
-			Index: w.Slot.Index, Path: flatPath(w.Slot),
-			LowMember: fb(w.Low.Member), LowNext: fb(w.Low.Next), LowLists: w.Low.Lists.Uint64(), LowEscrow: fb(w.Low.EscrowKey), LowMintPolicy: fi(0), LowWithdrawalThreshold: fi(0),
-			LowIndex: w.LowPath.Index, LowPath: flatPath(w.LowPath),
-		}
+		wires[i] = members.Apply(t, e).Wires()
+		chain = ringtest.MustPoseidonHash(t, chain, e.Hash(t))
+		p.Writes[i] = requestValue[RecordWriteProofInput](t, wires[i])
 	}
 	p.NewRoot, p.NewNextIndex, p.ChainEnd = fb(members.Root()), uint32(members.NextIndex()), fb(chain)
-	p.PublicInputHash = fb(spptest.MustHashChain4(t, []*big.Int{
+	fields := []*big.Int{
 		big.NewInt(shared.ApplyRecordsDomain), p.OldRoot.Int, p.NewRoot.Int, big.NewInt(int64(p.OldNextIndex)),
 		big.NewInt(int64(p.NewNextIndex)), p.ChainStart.Int, p.ChainEnd.Int, big.NewInt(int64(p.Count)),
-	}))
-	return p
+		big.NewInt(ringregistry.Restrictive(wires, len(wires))),
+	}
+	p.PublicInputHash = fb(spptest.MustHashChain4(t, fields))
+	return p, fields[len(fields)-1].Sign() != 0
+}
+
+// enrollmentsRequest inserts one owner per slot.
+func enrollmentsRequest(t testing.TB, circuit common.CircuitType, capacity int) *ApplyEnrollmentsParams {
+	t.Helper()
+	tree := ringregistry.NewTracking(t)
+	entry := func(i int) ringregistry.TrackingEntry {
+		owner := big.NewInt(0x100 + int64(i))
+		return ringregistry.TrackingEntry{Member: owner, NullifierPk: spptest.MustNullifierPk(t, owner), CtHash: big.NewInt(0xc0), ListTag: big.NewInt(0xd0)}
+	}
+	assignment, err := registry.NewApplyEnrollmentsCircuit(capacity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assignment.OldRoot, assignment.OldNextIndex, assignment.ChainStart = tree.Root(), tree.NextIndex(), big.NewInt(0x5eed)
+	chain := big.NewInt(0x5eed)
+	for i := range assignment.Writes {
+		e := entry(i)
+		assignment.Writes[i] = tree.Apply(t, e).Wires()
+		chain = ringtest.MustPoseidonHash(t, chain, e.Hash(t))
+	}
+	assignment.NewRoot, assignment.NewNextIndex, assignment.ChainEnd, assignment.Count = tree.Root(), tree.NextIndex(), chain, capacity
+	assignment.PublicInputHash = spptest.MustHashChain4(t, []*big.Int{
+		big.NewInt(shared.ApplyEnrollmentsDomain), ringtest.AsBigInt(assignment.OldRoot), ringtest.AsBigInt(assignment.NewRoot),
+		ringtest.AsBigInt(assignment.OldNextIndex), ringtest.AsBigInt(assignment.NewNextIndex), ringtest.AsBigInt(assignment.ChainStart), chain, big.NewInt(int64(capacity)),
+	})
+	return requestOf[ApplyEnrollmentsParams](t, circuit, assignment)
 }
 
 func flatPath(path ringregistry.Path) []Field {
@@ -183,23 +209,44 @@ func registerKeyRequest(t testing.TB, circuit common.CircuitType, member *big.In
 	keys := ringaudit.DefaultKeys(t)
 	secret := ringtest.Scalar(0x07)
 	secret[0] = 0
-	sealed := keys.Seal(t, secret[:], shared.NfKeyEncInfo)
-	nullifierPk := spptest.MustNullifierPk(t, new(big.Int).SetBytes(secret[1:]))
+	salt := ringtest.Scalar(0x09)
+	salt[0] = 0
+	sealed := keys.SealStream(t, slices.Concat(secret[:], salt[:]), shared.NfKeyEncInfo)
+	secretField := new(big.Int).SetBytes(secret[1:])
+	nullifierPk := spptest.MustNullifierPk(t, secretField)
+	ringID := big.NewInt(0x7711)
+	listTag := ringregistry.ListTag(t, new(big.Int).SetBytes(salt[1:]))
 	eph, auditor := keys.EphSk(), keys.AuditorPk()
 	return &RegisterKeyParams{
 		RequestHead: RequestHead{
 			CircuitType: circuit,
 			PublicInputHash: fb(spptest.MustHashChain4(t, []*big.Int{
-				big.NewInt(shared.RegisterKeyDomain), member, nullifierPk,
+				big.NewInt(shared.RegisterKeyDomain), ringID, member, nullifierPk, listTag,
 				sealed.AuditorLo, sealed.AuditorHi, sealed.EphLo, sealed.EphHi, sealed.CiphertextHash,
 			})),
 		},
-		Member: fb(member), NullifierSecret: secret[:], EphSk: eph[:], AuditorPk: auditor[:],
+		RingID: fb(ringID), Member: fb(member), NullifierSecret: secret[:], ListSalt: salt[:], EphSk: eph[:], AuditorPk: auditor[:],
 	}
 }
 
 func fi(v int64) Field    { return Field{big.NewInt(v)} }
 func fb(v *big.Int) Field { return Field{new(big.Int).Set(v)} }
+
+// fz reads nil as zero, ringregistry leaves unset settings nil.
+func fz(v *big.Int) Field {
+	if v == nil {
+		return fi(0)
+	}
+	return fb(v)
+}
+
+func limitFields(limits ringregistry.Limits) []Field {
+	fields := make([]Field, len(limits))
+	for i, limit := range limits {
+		fields[i] = fz(limit)
+	}
+	return fields
+}
 
 func fieldsOf(values []*big.Int) []Field {
 	out := make([]Field, len(values))

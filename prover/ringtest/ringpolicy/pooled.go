@@ -1,11 +1,13 @@
 package ringpolicy
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/consensys/gnark/frontend"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
 	circuitregistry "github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
@@ -27,43 +29,59 @@ func (b Witness) OwnRecord(entry policy.PoolEntry) *circuitregistry.Record {
 	return &policyWitness.OwnRecords[ringtest.AsBigInt(subject.RecordIndex).Int64()]
 }
 
-// pool opens every live subject once, each record once, and fills the pools cyclically to capacity.
-func (b Witness) pool(t testing.TB, ownTree, curatorTree *ringregistry.Registry) {
+// FillPools opens each live subject and record once and fills the pools cyclically to capacity.
+func FillPools(t testing.TB, policyWitness *policy.Policy, outputs, inputs []shared.UtxoWires, senders []frontend.Variable, ownTree, curatorTree *ringregistry.Registry, tracking *ringregistry.Tracking) {
 	t.Helper()
-	policyWitness := b.Policy()
 	own, curator := newCollector(ownTree), newCollector(curatorTree)
-	foreign := false
-	for _, source := range policyWitness.Sources {
-		foreign = foreign || ringtest.AsBigInt(source.Registry).Sign() != 0
+	foreign, saltedOwn, saltedCurated := false, false, false
+	saltedLists := ringtest.AsBigInt(policyWitness.Salted)
+	for i, source := range policyWitness.Sources {
+		curated := ringtest.AsBigInt(source.Registry).Sign() != 0
+		foreign = foreign || curated
+		if saltedLists.Bit(i) == 1 {
+			saltedOwn, saltedCurated = saltedOwn || !curated, saltedCurated || curated
+		}
 	}
 	entry := func(member frontend.Variable, active bool) policy.PoolEntry {
-		poolEntry := policy.PoolEntry{Own: own.add(member, active)}
-		if !policyWitness.OwnOnly {
-			poolEntry.Curator = []frontend.Variable{curator.add(member, active && foreign)}
-		}
-		return poolEntry
+		return policy.PoolEntry{Own: own.add(member, active), Curator: [1]frontend.Variable{curator.add(member, active && foreign)}}
 	}
-	policyWitness.SenderEntry = entry(policyWitness.SenderPkHash, true)
-	for i, out := range policyWitness.Outputs {
+	owner := func(member frontend.Variable, active bool) policy.OwnerEntry {
+		ownerEntry := policy.OwnerEntry{PoolEntry: entry(member, active), Tracking: 0, ListSalt: 0, OwnSalted: 0, CuratorSalted: [1]frontend.Variable{0}}
+		identity := ringtest.AsBigInt(member)
+		if !active || !(saltedOwn || saltedCurated) || !tracking.Opening(identity).Present {
+			return ownerEntry
+		}
+		salt := ListSaltOf(t, identity)
+		key := ringregistry.ListKey(t, identity, salt)
+		ownerEntry.ListSalt = salt
+		ownerEntry.OwnSalted = own.add(key, saltedOwn)
+		ownerEntry.CuratorSalted[0] = curator.add(key, saltedCurated)
+		return ownerEntry
+	}
+	for j, sender := range senders {
+		policyWitness.SenderEntries[j] = owner(sender, ringtest.AsBigInt(sender).Sign() != 0)
+	}
+	for i, out := range outputs {
 		active := ringtest.AsBigInt(out.Domain).Int64() == transaction.UtxoDomain
-		policyWitness.OwnerEntries[i], policyWitness.AssetEntries[i] = entry(out.OwnerPkHash, active), entry(out.Asset, active)
+		policyWitness.OwnerEntries[i], policyWitness.AssetEntries[i] = owner(out.OwnerPkHash, active), entry(out.Asset, active)
 	}
 	for i, out := range policyWitness.Withdrawals {
 		active := int64(i) < ringtest.AsBigInt(policyWitness.WithdrawalCount).Int64()
-		index := len(policyWitness.Outputs) + i
-		policyWitness.OwnerEntries[index], policyWitness.AssetEntries[index] = entry(out.Owner, active), entry(out.Asset, active)
+		index := len(outputs) + i
+		policyWitness.OwnerEntries[index], policyWitness.AssetEntries[index] = owner(out.Owner, active), entry(out.Asset, active)
 	}
 	for i := range policyWitness.PublicAssetEntries {
 		asset := policyWitness.PublicAssets[i]
 		policyWitness.PublicAssetEntries[i] = own.add(asset, ringtest.AsBigInt(asset).Sign() != 0)
 	}
-	if len(curator.records) == 0 && !policyWitness.OwnOnly {
-		curator.add(policyWitness.SenderPkHash, true)
+	for i, input := range inputs {
+		policyWitness.AssetEntries[len(policyWitness.OwnerEntries)+i] = entry(input.Asset, ringtest.AsBigInt(input.Domain).Int64() == transaction.UtxoDomain)
+	}
+	if len(curator.records) == 0 {
+		curator.add(slices.Concat(senders, []frontend.Variable{0})[0], true)
 	}
 	policyWitness.OwnProof = own.fill(t, policyWitness.OwnRecords, policyWitness.OwnSubjects)
-	if !policyWitness.OwnOnly {
-		policyWitness.CuratorProof = curator.fill(t, policyWitness.CuratorRecords, policyWitness.CuratorSubjects)
-	}
+	policyWitness.CuratorProof = curator.fill(t, policyWitness.CuratorRecords, policyWitness.CuratorSubjects)
 }
 
 func newCollector(tree *ringregistry.Registry) *recordCollector {

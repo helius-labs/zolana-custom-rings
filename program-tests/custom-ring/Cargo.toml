@@ -5,13 +5,21 @@ edition.workspace = true
 publish = false
 autotests = false
 
+[features]
+proofs = ["custom-ring-sdk/proofs"]
+
 [dependencies]
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 bincode = { workspace = true }
 custom-ring-cli = { workspace = true }
 custom-ring-interface = { workspace = true }
-custom-ring-sdk = { workspace = true }
+custom-ring-sdk = { workspace = true, features = ["solana-rpc"] }
 hex = { workspace = true }
+reqwest = { workspace = true }
+sea-orm = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 solana-address = { workspace = true }
 solana-instruction = { workspace = true }
 solana-keypair = { workspace = true }
@@ -20,6 +28,7 @@ solana-signature = { workspace = true }
 solana-signer = { workspace = true }
 solana-system-interface = { workspace = true }
 tokio = { workspace = true }
+tracing-subscriber = { workspace = true }
 # `serde` is what makes `Transaction`/`VersionedTransaction` serializable for the
 # RPC send path; declared here rather than inherited from another crate's features.
 spr-client = { workspace = true, features = ["solana-rpc"] }
@@ -31,6 +40,7 @@ spr-protocol-instructions = { workspace = true }
 spr-keypair = { workspace = true }
 spr-program-test = { workspace = true, features = ["localnet"] }
 zolana-ring-client = { workspace = true, features = ["rpc", "solana-rpc"] }
+zolana-ring-indexer = { workspace = true }
 zolana-ring-keys = { workspace = true }
 zolana-ring-policy = { workspace = true }
 zolana-ring-rpc = { workspace = true }
@@ -41,8 +51,19 @@ spr-tree = { workspace = true }
 spr-user-registry-interface = { workspace = true, features = ["solana"] }
 
 [dev-dependencies]
-serde_json = { workspace = true }
+base64 = { workspace = true }
+bytemuck = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true, features = ["http1", "server"] }
+hyper-util = { workspace = true, features = ["tokio"] }
+solana-account = { workspace = true }
+solana-transaction-status-client-types = { workspace = true }
+spr-api = { workspace = true, features = ["reqwest"] }
+spr-indexer-api = { workspace = true }
+zolana-ring-member-registry = { workspace = true }
 solana-rpc-client-api = { workspace = true }
+spr-hasher = { workspace = true }
+zeroize = { workspace = true }
 
 [[test]]
 name = "ring"

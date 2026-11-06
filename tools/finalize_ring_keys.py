@@ -48,7 +48,7 @@ def main():
             target = interface/verifier_relative_path(module)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes((temp/module).read_bytes())
-        # Obsolete verifiers are not retained as aliases for stronger statements.
+        # Only the verifiers of the exported keys stay.
         expected = {verifier_relative_path(module) for module in modules}
         for path in interface.rglob('*_verifying_key.rs'):
             if path.relative_to(interface) not in expected:
@@ -61,7 +61,7 @@ def main():
     for name in sorted(names):
         log = args.keys_dir/(name+'.log')
         if log.exists():
-            match = re.search(r'nbConstraints=(\d+)',log.read_text())
+            match = re.search(r'nbConstraints=(\d+)',re.sub(r'\x1b\[[0-9;]*m','',log.read_text()))
             if match: costs[name.removesuffix('.key')] = int(match[1])
     if len(costs)!=len(names): raise SystemExit('Missing constraint counts from setup logs')
     (ROOT/'prover/ringtest/ringkey/constraints.json').write_text(json.dumps(dict(sorted(costs.items())),indent=2)+'\n')

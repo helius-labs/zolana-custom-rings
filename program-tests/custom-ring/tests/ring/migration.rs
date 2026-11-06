@@ -17,6 +17,7 @@ fn an_old_tree_note_migrates_into_the_active_tree() -> Result<()> {
         tier: Tier::policy(&EMPTY),
     }
     .send(&env.client)?;
+    enroll_actors(&env, ring)?;
 
     let sender = &env.sender.keypair;
     let recipient = &env.recipient.keypair;
@@ -28,6 +29,7 @@ fn an_old_tree_note_migrates_into_the_active_tree() -> Result<()> {
         asset: DepositAsset::Sol,
         amount: DEFAULT_DEPOSIT,
         cosigner: None,
+        list_salt: None,
     };
     let RingDepositReceipt { utxo, .. } = env.run(deposit.send(env.client.ring_client()))?;
     let mut prepared = ConfidentialTransaction::new_with_ring(
@@ -77,7 +79,6 @@ fn an_old_tree_note_migrates_into_the_active_tree() -> Result<()> {
     }
     .send(&env)?;
     let audited = AuditLookup {
-        ring: ring_program,
         scan: RingScan::new(ring_program, auditor.pubkey()),
         auditor: &auditor,
         signature: hop.signature,

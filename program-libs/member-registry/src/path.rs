@@ -1,13 +1,134 @@
 //! The 4-ary path rule, path digit `(index >> 2l) & 3` at level `l` from the leaves
-//! up, mirror `prover/server/circuits/records`.
+//! up, mirror `prover/circuits/registry`.
+//!
+//! Each level folds four children, and the three siblings keep their ascending child order around the
+//! path's node. The circuit's one index decomposition places both the old and the new leaf of an update.
+//!
+//! Read after `program-libs/member-registry/src/lib.rs`. Read before
+//! `program-libs/member-registry/src/tree.rs`, `prover/circuits/registry/registry.go`.
 
-use custom_ring_interface::{MEMBER_REGISTRY_CAPACITY, QUAD_ARITY, QUAD_HEIGHT};
+use custom_ring_interface::{tracking::TRACKING_QUAD_HEIGHT, QUAD_ARITY, QUAD_HEIGHT};
 use spr_hasher::{Hasher, HasherError, Poseidon};
 
 use crate::RecordTreeError;
 
+/// Level `0` holds the leaves, the tree's height the root.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct NodePosition {
+    pub level: usize,
+    pub position: u64,
+}
+
+impl NodePosition {
+    /// The policy registry's root.
+    pub const ROOT: Self = Self::root(QUAD_HEIGHT);
+
+    pub const fn root(height: usize) -> Self {
+        Self {
+            level: height,
+            position: 0,
+        }
+    }
+
+    pub(crate) const fn on_path(index: u64, level: usize) -> Self {
+        Self {
+            level,
+            position: index >> (2 * level),
+        }
+    }
+
+    pub(crate) const fn digit(self) -> usize {
+        (self.position & 3) as usize
+    }
+
+    /// Its subtree holds no record, its node is `ZERO_SUBTREES[level]`.
+    pub const fn is_empty(self, next_index: u64) -> bool {
+        self.position << (2 * self.level) >= next_index
+    }
+}
+
+/// A leaf index and the three siblings of every level in ascending child order, leaf level first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QuadPathOf<const H: usize> {
+    pub index: u64,
+    pub siblings: [[[u8; 32]; QUAD_ARITY - 1]; H],
+}
+
+pub type QuadPath = QuadPathOf<QUAD_HEIGHT>;
+pub type TrackingPath = QuadPathOf<TRACKING_QUAD_HEIGHT>;
+
+impl<const H: usize> Default for QuadPathOf<H> {
+    fn default() -> Self {
+        Self {
+            index: 0,
+            siblings: [[[0; 32]; QUAD_ARITY - 1]; H],
+        }
+    }
+}
+
+impl<const H: usize> QuadPathOf<H> {
+    /// The nodes an opening of leaf `index` reads, the positions a store preloads for it.
+    pub fn sibling_positions(
+        index: u64,
+    ) -> Result<[[NodePosition; QUAD_ARITY - 1]; H], RecordTreeError> {
+        check_index(index, H)?;
+        Ok(core::array::from_fn(|level| {
+            let node = NodePosition::on_path(index, level);
+            let first = node.position - node.digit() as u64;
+            core::array::from_fn(|sibling| {
+                let child = sibling + usize::from(sibling >= node.digit());
+                NodePosition {
+                    level,
+                    position: first + child as u64,
+                }
+            })
+        }))
+    }
+
+    /// The root `leaf` folds to at `index`.
+    pub fn root(&self, leaf: [u8; 32]) -> Result<[u8; 32], RecordTreeError> {
+        check_index(self.index, H)?;
+        let mut node = leaf;
+        for (level, siblings) in self.siblings.iter().enumerate() {
+            let digit = NodePosition::on_path(self.index, level).digit();
+            node = quad_node(&children(node, digit, siblings))?;
+        }
+        Ok(node)
+    }
+}
+
+/// `Poseidon(c0, c1, c2, c3)`, circom parameters with `t = 5`.
+pub fn quad_node(children: &[[u8; 32]; QUAD_ARITY]) -> Result<[u8; 32], HasherError> {
+    Poseidon::hashv(&[&children[0], &children[1], &children[2], &children[3]])
+}
+
+/// `node` at child `digit`, the siblings keep their ascending order around it.
+pub(crate) fn children(
+    node: [u8; 32],
+    digit: usize,
+    siblings: &[[u8; 32]; QUAD_ARITY - 1],
+) -> [[u8; 32]; QUAD_ARITY] {
+    core::array::from_fn(|child| match child.cmp(&digit) {
+        core::cmp::Ordering::Less => siblings[child],
+        core::cmp::Ordering::Equal => node,
+        core::cmp::Ordering::Greater => siblings[child - 1],
+    })
+}
+
+/// Leaves of a tree `height` levels tall.
+pub(crate) const fn capacity(height: usize) -> u64 {
+    1 << (2 * height)
+}
+
+pub(crate) fn check_index(index: u64, height: usize) -> Result<(), RecordTreeError> {
+    if index >= capacity(height) {
+        return Err(RecordTreeError::IndexOutOfRange);
+    }
+    Ok(())
+}
+
 /// `ZERO_SUBTREES[l]` roots an empty subtree of height `l`, the empty leaf is zero.
-pub const ZERO_SUBTREES: [[u8; 32]; QUAD_HEIGHT + 1] = [
+pub const ZERO_SUBTREES: [[u8; 32]; TRACKING_QUAD_HEIGHT + 1] = [
     [
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -63,97 +184,34 @@ pub const ZERO_SUBTREES: [[u8; 32]; QUAD_HEIGHT + 1] = [
         0x14, 0x44, 0xa6, 0xc0, 0x0c, 0x76, 0x1a, 0x32, 0x63, 0x73, 0x5d, 0x0a, 0x99, 0x14, 0x3a,
         0x51, 0xf1,
     ],
+    [
+        0x07, 0xea, 0x11, 0x8d, 0x86, 0xac, 0xe1, 0x4a, 0x8e, 0xaa, 0x26, 0xfc, 0x18, 0xb3, 0x6f,
+        0xef, 0xe7, 0xd5, 0xf5, 0xb0, 0x0e, 0x0e, 0xb9, 0xeb, 0xfd, 0x1c, 0x88, 0xf3, 0x71, 0x31,
+        0xc1, 0x78,
+    ],
+    [
+        0x0c, 0x2a, 0x4a, 0xf8, 0x1a, 0x2c, 0xd7, 0x81, 0x59, 0xce, 0x2f, 0x3d, 0x7e, 0xe0, 0x53,
+        0x67, 0xfc, 0x5b, 0x3c, 0x3e, 0x1b, 0xec, 0xea, 0x2a, 0x86, 0xd1, 0xe6, 0x6d, 0xd2, 0x7f,
+        0xfb, 0x7f,
+    ],
+    [
+        0x1a, 0x95, 0x3a, 0x71, 0x0c, 0x22, 0xf7, 0x9c, 0x36, 0x9c, 0x97, 0x6f, 0xc9, 0x98, 0x1f,
+        0xfd, 0xbf, 0xe2, 0x36, 0x69, 0x52, 0x97, 0xfe, 0xc6, 0x58, 0x86, 0xe6, 0x45, 0xe6, 0xfa,
+        0x28, 0x84,
+    ],
+    [
+        0x16, 0xb0, 0xc5, 0xe2, 0x86, 0x28, 0x6e, 0xb6, 0xc4, 0x77, 0x4a, 0xd6, 0x29, 0x2b, 0x4f,
+        0x0b, 0xdc, 0x5b, 0x36, 0xcb, 0x78, 0x90, 0xb2, 0x75, 0x44, 0x26, 0x88, 0x92, 0xae, 0x25,
+        0x5e, 0x0d,
+    ],
+    [
+        0x2d, 0xd7, 0x18, 0x64, 0x49, 0xcc, 0x82, 0x70, 0x2f, 0xb8, 0xf2, 0xd7, 0xfa, 0x86, 0xe0,
+        0x09, 0x52, 0x63, 0xf8, 0xaf, 0xb5, 0x21, 0xe1, 0x97, 0x6f, 0x49, 0x9e, 0x67, 0xa0, 0xd7,
+        0xcb, 0xb8,
+    ],
+    [
+        0x15, 0x13, 0x99, 0xc7, 0x24, 0xe1, 0x74, 0x08, 0xa7, 0xa4, 0x3c, 0xda, 0xdb, 0xa2, 0xfc,
+        0x00, 0x0d, 0xa9, 0x33, 0x9c, 0x56, 0xe4, 0xd4, 0x9c, 0x6c, 0xde, 0xe6, 0xc4, 0x35, 0x6f,
+        0xbc, 0x68,
+    ],
 ];
-
-/// Level `0` holds the leaves, level `QUAD_HEIGHT` the root.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct NodePosition {
-    pub level: usize,
-    pub position: u64,
-}
-
-impl NodePosition {
-    pub const ROOT: Self = Self {
-        level: QUAD_HEIGHT,
-        position: 0,
-    };
-
-    pub(crate) const fn on_path(index: u64, level: usize) -> Self {
-        Self {
-            level,
-            position: index >> (2 * level),
-        }
-    }
-
-    pub(crate) const fn digit(self) -> usize {
-        (self.position & 3) as usize
-    }
-
-    /// Its subtree holds no record, its node is `ZERO_SUBTREES[level]`.
-    pub const fn is_empty(self, next_index: u64) -> bool {
-        self.position << (2 * self.level) >= next_index
-    }
-}
-
-/// A leaf index and the three siblings of every level in ascending child order, leaf level first.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct QuadPath {
-    pub index: u64,
-    pub siblings: [[[u8; 32]; QUAD_ARITY - 1]; QUAD_HEIGHT],
-}
-
-impl QuadPath {
-    /// The nodes an opening of leaf `index` reads, the positions a store preloads for it.
-    pub fn sibling_positions(
-        index: u64,
-    ) -> Result<[[NodePosition; QUAD_ARITY - 1]; QUAD_HEIGHT], RecordTreeError> {
-        check_index(index)?;
-        Ok(core::array::from_fn(|level| {
-            let node = NodePosition::on_path(index, level);
-            let first = node.position - node.digit() as u64;
-            core::array::from_fn(|sibling| {
-                let child = sibling + usize::from(sibling >= node.digit());
-                NodePosition {
-                    level,
-                    position: first + child as u64,
-                }
-            })
-        }))
-    }
-
-    /// The root `leaf` folds to at `index`.
-    pub fn root(&self, leaf: [u8; 32]) -> Result<[u8; 32], RecordTreeError> {
-        check_index(self.index)?;
-        let mut node = leaf;
-        for (level, siblings) in self.siblings.iter().enumerate() {
-            let digit = NodePosition::on_path(self.index, level).digit();
-            node = quad_node(&children(node, digit, siblings))?;
-        }
-        Ok(node)
-    }
-}
-
-/// `Poseidon(c0, c1, c2, c3)`, circom parameters with `t = 5`.
-pub fn quad_node(children: &[[u8; 32]; QUAD_ARITY]) -> Result<[u8; 32], HasherError> {
-    Poseidon::hashv(&[&children[0], &children[1], &children[2], &children[3]])
-}
-
-/// `node` at child `digit`, the siblings keep their ascending order around it.
-pub(crate) fn children(
-    node: [u8; 32],
-    digit: usize,
-    siblings: &[[u8; 32]; QUAD_ARITY - 1],
-) -> [[u8; 32]; QUAD_ARITY] {
-    core::array::from_fn(|child| match child.cmp(&digit) {
-        core::cmp::Ordering::Less => siblings[child],
-        core::cmp::Ordering::Equal => node,
-        core::cmp::Ordering::Greater => siblings[child - 1],
-    })
-}
-
-pub(crate) fn check_index(index: u64) -> Result<(), RecordTreeError> {
-    if index >= MEMBER_REGISTRY_CAPACITY {
-        return Err(RecordTreeError::IndexOutOfRange);
-    }
-    Ok(())
-}

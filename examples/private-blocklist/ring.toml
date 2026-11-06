@@ -1,0 +1,33 @@
+# Each list needs its own rule, one rule over both admits an owner off either.
+# Salted keys hide a private entry only from observers without the owner's list salt.
+
+name = "private-blocklist"
+target = "localnet"
+# Replace with the id of keys/program-keypair.json, `zolana-ring new` writes one.
+program_id = "71xpmf2e94nEd9T1S32trTQnhY39xfSUeNW7GH4quTw6"
+authority_keypair = "~/.config/solana/id.json"
+
+[localnet]
+rpc = "http://127.0.0.1:8899"
+indexer = "http://127.0.0.1:8784"
+prover = "http://127.0.0.1:3001"
+ring_rpc = "http://127.0.0.1:8785"
+
+[devnet]
+rpc = "https://api.devnet.solana.com"
+indexer = "https://d2xah7tnhdhcom.cloudfront.net"
+prover = "https://d55y5ksdsm1vw.cloudfront.net"
+ring_rpc = "https://d24brah9h1i4q9.cloudfront.net"
+ring_rpc_pubkey = "C8TeRCdueRdXj3y4uFDtNywYThc3qeiH2ZGfcbYZzVSs"
+
+[policy]
+
+# each output owner must not be on the public block list
+[[policy.rules]]
+subject = "output-owner"
+forbid = "block"
+
+# each enrolled output owner must not be on the private block list
+[[policy.rules]]
+subject = "output-owner"
+forbid = "private-block"

@@ -27,7 +27,7 @@ import {
   type TransactionPlan,
   type TransactionSigner,
 } from "@solana/kit";
-import { ClientError, type Address, type Bytes32, type RequestContext } from "@heliuslabs/zolana";
+import { ClientError, type Address, type Bytes32, type RequestContext } from "@heliuslabs/spr";
 import {
   runKitRpc,
   pollUntil,
@@ -41,27 +41,19 @@ import {
   encodeBase58,
   sha256,
   equalBytes,
-} from "@heliuslabs/zolana/internal";
+} from "@heliuslabs/spr/internal";
 import {
   createIndexerPollConfig,
   type BlockhashProvider,
   type ChainReader,
   type KitRpcAccess,
   type TransactionConfirmer,
-} from "@heliuslabs/zolana/client";
-import type { SignerAccount } from "@heliuslabs/zolana/instructions";
+} from "@heliuslabs/spr/client";
+import type { SignerAccount } from "@heliuslabs/spr/instructions";
 
-import {
-  ringConfigAddress,
-  ringMemberRegistryAddress,
-  ringRecordQueueAddress,
-} from "../pda/index.js";
+import { ringPolicyAddress } from "../pda/index.js";
 import { BPF_LOADER_UPGRADEABLE_ID, ringProgramDataAddress } from "../membership/config.js";
-import {
-  decodeRingMemberRegistry,
-  decodeRingProgramConfig,
-  decodeRingRecordQueue,
-} from "../codec/ring-codecs.js";
+import { decodeRingPolicy } from "../codec/ring-codecs.js";
 import { RingError, wrapRingError } from "../error.js";
 import { checkRingElf } from "../elf.js";
 
@@ -135,7 +127,7 @@ export class RingProgramBinary {
   }
 }
 
-/** Mirrors Rust `ProgramDataInfo`. */
+/** Mirrors Rust `ProgramData`. */
 export interface RingProgramData {
   readonly lastDeploySlot: bigint;
   /** Absent once the program is immutable. */
@@ -145,7 +137,7 @@ export interface RingProgramData {
   deployedHash(length: number): Bytes32 | undefined;
 }
 
-/** Mirrors Rust `read_program_data` over the `ProgramData` account bytes. */
+/** Mirrors Rust `program_data` over the `ProgramData` account bytes. */
 export function decodeRingProgramData(data: Uint8Array): RingProgramData {
   if (data.length < PROGRAM_DATA_METADATA_SIZE) throw programDataInvalid();
   const reader = new Reader(data.subarray(0, PROGRAM_DATA_METADATA_SIZE));
@@ -538,9 +530,7 @@ async function ensureRingStateCompatible(
   context: RequestContext | undefined,
 ): Promise<void> {
   const accounts = [
-    { account: "config", address: ringConfigAddress, decode: decodeRingProgramConfig },
-    { account: "registry", address: ringMemberRegistryAddress, decode: decodeRingMemberRegistry },
-    { account: "queue", address: ringRecordQueueAddress, decode: decodeRingRecordQueue },
+    { account: "policy", address: ringPolicyAddress, decode: decodeRingPolicy },
   ] as const;
   for (const { account, address, decode } of accounts) {
     const stored = await params.client.getAccount(await address(params.ringProgramId), context);

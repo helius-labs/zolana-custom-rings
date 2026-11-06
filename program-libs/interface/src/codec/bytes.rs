@@ -1,3 +1,7 @@
+//! The byte cursor every frame parser reads through, a short read fails with the parser's own error.
+//!
+//! Read after `program-libs/interface/src/lib.rs`. Read before `program-libs/interface/src/instructions/transact.rs`.
+
 use spr_interface::instruction::{InterfaceTransfer, TreeContext};
 use wincode::{config::DefaultConfig, containers, len::FixIntLen, SchemaRead};
 

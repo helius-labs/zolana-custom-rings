@@ -1,21 +1,21 @@
-/** The ring intents beside the pinned SPP intents, Rust `TransactionIntent::RingAnonymousTransfer`. */
+/** The ring intents beside the pinned SPP intents. */
 import { sha256 } from "@noble/hashes/sha2.js";
 
-import type { Address, Bytes32 } from "@heliuslabs/zolana";
+import type { Address, Bytes32 } from "@heliuslabs/spr";
 import {
   addressBytes,
   checkIntentApproval,
   checkPreparedTransfer,
   equalBytes,
   u64be,
-} from "@heliuslabs/zolana/internal";
+} from "@heliuslabs/spr/internal";
 import {
   intentHash,
   type ApprovalRequest,
   type IntentApproval,
   type PreparedTransfer,
   type TransactionIntent,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 
 import { RingAddress } from "../../crypto/keys/ring-address.js";
 import { RingError } from "../error.js";
@@ -86,6 +86,11 @@ export function checkRingPreparedTransfer(
   intent: RingTransactionIntent,
   mismatch: (field: string) => Error,
 ): void {
+  // The ring binds an entry's change to itself, so the approved amount counts the change as entered value.
+  if (intent.kind === "ringEntry") {
+    checkPreparedTransfer({ ...prepared, senderOutputCount: 0 }, intent, mismatch);
+    return;
+  }
   checkPreparedTransfer(
     prepared,
     intent.kind === "ringAnonymousTransfer"

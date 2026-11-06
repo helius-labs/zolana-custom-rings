@@ -18,18 +18,27 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
     let auditor_pk = auditor.pubkey();
     let auditor_pubkey = *auditor_pk.as_bytes();
 
-    // 2. The SPP registration waits for the policy pin.
+    // 2. A policy ring initializes only with its policy, SPP registers it in the same instruction.
     let authority = env.payer.pubkey();
-    let configured = RegisterRing {
+    let register = RegisterRing {
         ring,
         payer: &env.payer,
         auditor_pubkey: auditor_pk,
         tier: Tier::policy(&EMPTY),
-    }
-    .configure(rpc)?;
+    };
+    register.create_records(rpc)?;
     let rejection = ExpectRejection {
         payer: &env.payer,
-        instructions: &[configured.registration(&env.client)?],
+        instructions: &[custom_ring_sdk::Initialize {
+            ring,
+            payer: authority,
+            authority,
+            auditor_pubkey: auditor_pk,
+            kind: custom_ring_sdk::RingKind::Policy,
+            roles: RingRoleKeys::of(&env.payer).roles(&env.payer),
+            policy: None,
+        }
+        .instruction()?],
     }
     .send(rpc)?;
     Rejection::custom(CustomRingError::PolicyNotSet as u32)
@@ -37,12 +46,11 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
         .assert_client(&rejection);
     assert!(
         env.run(ring.registration(env.client.as_async()))?.is_none(),
-        "no SPP ring config before the policy is pinned"
+        "no SPP ring config without the policy"
     );
-    let pinned = configured.pin(&env.client)?;
     // The ring forwards the protocol config unchecked.
-    let mut substituted = pinned.registration();
-    substituted.accounts[3].pubkey = Address::new_unique();
+    let mut substituted = register.initialize(&env.client)?;
+    substituted.accounts[6].pubkey = Address::new_unique();
     let rejection = ExpectRejection {
         payer: &env.payer,
         instructions: &[substituted],
@@ -51,31 +59,34 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
     Rejection::pool(ShieldedPoolError::InvalidProtocolConfig)
         .at(0)
         .assert_client(&rejection);
-    pinned.register(rpc)?;
+    send(rpc, &env.payer, &[register.initialize(&env.client)?])?;
+    enroll_actors(&env, ring)?;
 
     let (config_address, config_bump) =
-        Address::find_program_address(&[CONFIG_PDA_SEED], &ring_program);
-    assert_eq!(config_address, ring.config_pda(), "sdk config PDA helper");
-    let config: RingProgramConfig = fetch_state(rpc, &config_address)?;
+        Address::find_program_address(&[RING_POLICY_PDA_SEED], &ring_program);
+    assert_eq!(config_address, ring.policy_pda(), "sdk ring PDA helper");
+    let config: RingPolicy = fetch_state(rpc, &config_address)?;
+    let role_keys = RingRoleKeys::of(&env.payer);
     assert_eq!(
-        config,
-        RingProgramConfig {
-            discriminator: RING_PROGRAM_CONFIG,
-            authority,
+        (
+            config.discriminator,
+            config.roles,
+            config.auditor_pubkey,
+            config.bump,
+            config.has_policy(),
+            config.mode()?,
+        ),
+        (
+            RING_POLICY,
+            role_keys.roles(&env.payer),
             auditor_pubkey,
-            bump: config_bump,
-            has_policy: 1,
-            mode: RingMode::Confidential as u8,
-            ..config
-        },
-        "custom-ring config account"
+            config_bump,
+            true,
+            RingMode::Confidential,
+        ),
+        "custom-ring ring account"
     );
-    assert_eq!(
-        config.insert_fee(),
-        DEFAULT_INSERT_FEE,
-        "default insert fee"
-    );
-    assert_eq!(config.co_signer(), None, "no co-signer");
+    assert_eq!(config.co_signers.covered(), None, "no co-signer");
     assert_eq!(config.delegate(), None, "no delegate");
 
     // 3. Register the ring with SPP. The `RingConfig` SPP allocates IS the ring's
@@ -124,16 +135,19 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
         asset: DepositAsset::Sol,
         amount,
         cosigner: None,
+        list_salt: None,
     };
     let proven_while_open = {
         let prepared = env.run(deposit(RING_DEPOSIT_A).prepare(env.client.as_async()))?;
         env.run(prepared.prove(env.client.ring_client()))?
     };
-    send(rpc, &env.payer, &[ring.pause(authority)?])?;
-    assert!(
-        registration(&env, ring)?.paused,
-        "paused by the ring authority"
-    );
+    SendAs {
+        rpc,
+        payer: &env.payer,
+        holder: &role_keys.pauser,
+    }
+    .send(&[ring.pause(role_keys.pauser.pubkey())?])?;
+    assert!(registration(&env, ring)?.paused, "paused by the pauser");
     match env.run(deposit(RING_DEPOSIT_A).send(env.client.ring_client())) {
         Err(RingError::RingPaused) => {}
         Err(other) => return Err(anyhow!("expected RingPaused, got {other}")),
@@ -143,7 +157,12 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
     Rejection::pool(ShieldedPoolError::RingPaused)
         .at(0)
         .assert_client(&rejection);
-    send(rpc, &env.payer, &[ring.resume(authority)?])?;
+    SendAs {
+        rpc,
+        payer: &env.payer,
+        holder: &role_keys.pauser,
+    }
+    .send(&[ring.resume(role_keys.pauser.pubkey())?])?;
 
     // 4. Two ring SOL deposits give the sender the ring-owned UTXOs the transfer
     //    spends. Their blindings come back from the deposit builder, so the spend
@@ -189,17 +208,17 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
         ring_program_id: Some(ring_program),
     };
 
-    // 6. Before the real spend, a flipped byte of the sealed transaction key fails the audit
+    // 6. Before the real spend, a flipped byte of the sealed transaction key fails the ring
     //    proof and leaves the tree unchanged.
     let instruction = proven.instruction()?;
     let tampered = {
         let original = frame(&instruction, RingRail::Confidential)?;
-        let mut sealed = *original.sealed;
-        sealed[0] ^= 1;
+        let mut envelope = original.envelope.to_vec();
+        envelope[0] ^= 1;
         reframed(
             &instruction,
             &RingTransactData {
-                sealed: &sealed,
+                envelope: &envelope,
                 ..original
             },
         )?
@@ -216,7 +235,7 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
         &env.sender.keypair.pubkey(),
         &[instruction],
         blockhash,
-        ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Transact)),
+        ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Transfer)),
     )?;
     let transaction = sign_transaction(message, &[&env.sender.keypair])?;
     let transaction_size =
@@ -261,7 +280,6 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
             &auditor,
             client.indexer(),
             client.rpc(),
-            &env.ring_assets()?,
         ))?
         .transactions;
     assert_eq!(
@@ -315,7 +333,6 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
     }
     .send(&env)?;
     let audited_hop = AuditLookup {
-        ring: ring_program,
         scan: RingScan::new(ring_program, auditor.pubkey()),
         auditor: &auditor,
         signature: hop.signature,
@@ -327,17 +344,18 @@ fn auditor_sees_every_ring_transfer() -> Result<()> {
         "second hop outputs"
     );
 
-    // 11. The config authority hands over, only the new key pauses the ring.
+    // 11. The admin hands the pauser role over, only the new key pauses the ring.
     let successor = env.funded_keypair()?;
     rpc.create_and_send_transaction(
-        &[custom_ring_sdk::SetAuthority {
+        &[custom_ring_sdk::UpdateAuthority {
             ring,
-            authority,
+            admin: role_keys.admin.pubkey(),
             new_authority: successor.pubkey(),
+            role: RingRole::Pauser,
         }
-        .instruction()],
+        .instruction()?],
         authority,
-        &[&env.payer, &successor],
+        &[&env.payer, &role_keys.admin, &successor],
         ComputeBudgetConfig::for_instruction_count(1),
     )?;
     let rejection = ExpectRejection {
@@ -376,12 +394,9 @@ fn an_audit_only_ring_audits_every_transfer() -> Result<()> {
         tier: Tier::AuditOnly,
     }
     .send(&env.client)?;
-    assert!(
-        env.run(ring.registry(env.client.as_async()))?.is_none(),
-        "an audit-only ring keeps no member registry"
-    );
-    let config: RingProgramConfig = fetch_state(rpc, &ring.config_pda())?;
-    assert_eq!(config.has_policy, 0, "audit-only config flag");
+    enroll_actors(&env, ring)?;
+    let config: RingPolicy = fetch_state(rpc, &ring.policy_pda())?;
+    assert!(!config.has_policy(), "audit-only ring account");
 
     let sender = &env.sender.keypair;
     let sender_address = sender.shielded_address()?;
@@ -397,6 +412,7 @@ fn an_audit_only_ring_audits_every_transfer() -> Result<()> {
             asset: DepositAsset::Sol,
             amount,
             cosigner: None,
+            list_salt: None,
         };
         let RingDepositReceipt { utxo, .. } =
             env.run(deposit.send_with_fee_payer(env.client.ring_client(), sender))?;
@@ -431,7 +447,6 @@ fn an_audit_only_ring_audits_every_transfer() -> Result<()> {
         "the on-chain tx_viewing_pk is the sender's"
     );
     let audited = AuditLookup {
-        ring: ring_program,
         scan: RingScan::new(ring_program, auditor_pk),
         auditor: &auditor,
         signature,
@@ -465,7 +480,6 @@ fn an_audit_only_ring_audits_every_transfer() -> Result<()> {
     }
     .send(&env)?;
     let audited_hop = AuditLookup {
-        ring: ring_program,
         scan: RingScan::new(ring_program, auditor_pk),
         auditor: &auditor,
         signature: hop.signature,
@@ -475,6 +489,71 @@ fn an_audit_only_ring_audits_every_transfer() -> Result<()> {
         ring_amounts(&audited_hop)?,
         vec![SECOND_HOP_AMOUNT, RING_TRANSFER_AMOUNT - SECOND_HOP_AMOUNT],
         "second hop outputs"
+    );
+    Ok(())
+}
+
+#[test]
+fn an_audit_only_ring_audits_a_relayer_paid_transfer_its_owner_signs_in_the_proof() -> Result<()> {
+    let env = setup()?;
+    let ring_program = custom_ring_program_id()?;
+    let ring = CustomRing::new(ring_program);
+    let auditor = X25519Keypair::new();
+    let auditor_pk = auditor.pubkey();
+    RegisterRing {
+        ring,
+        payer: &env.payer,
+        auditor_pubkey: auditor_pk,
+        tier: Tier::AuditOnly,
+    }
+    .send(&env.client)?;
+    enroll_actors(&env, ring)?;
+    let sender = &env.sender.keypair;
+    let deposit = RingDeposit {
+        ring,
+        payer: sender,
+        recipient: DepositRecipient::Confidential(sender.shielded_address()?),
+        tree: env.tree,
+        asset: DepositAsset::Sol,
+        amount: RING_DEPOSIT_A,
+        cosigner: None,
+        list_salt: None,
+    };
+    let RingDepositReceipt { utxo, .. } = env.run(deposit.send(env.client.ring_client()))?;
+    let relayer = &env.payer;
+    let mut transaction = ConfidentialTransaction::new_with_ring(
+        vec![indexed_note(utxo, sender, &env, env.tree)?],
+        relayer.pubkey(),
+        ring_program,
+    )?
+    .with_output_tree_id(env.tree_id(env.tree)?)?;
+    transaction.transfer_sol(
+        &env.recipient.keypair.shielded_address()?,
+        RING_TRANSFER_AMOUNT,
+    )?;
+    let transfer = CustomRingTransfer::new(CustomRingTransferInput {
+        ring,
+        sender,
+        nullifier_key: Some(&sender.nullifier_key),
+        transaction,
+    })
+    .with_in_proof_owner(&sender.signing_key);
+
+    let proven = env.run(transfer.prove(env.client.ring_client()))?;
+    let instruction = proven.instruction()?;
+    assert_anonymous_spp_rail(&instruction, &sender.signing_key.pubkey().as_ed25519()?)?;
+    let signature = land(&env, instruction, relayer, &[])?;
+
+    let audited = AuditLookup {
+        scan: RingScan::new(ring_program, auditor_pk),
+        auditor: &auditor,
+        signature,
+    }
+    .run(&env)?;
+    assert_eq!(
+        ring_amounts(&audited)?,
+        [RING_TRANSFER_AMOUNT, RING_DEPOSIT_A - RING_TRANSFER_AMOUNT],
+        "the auditor opens both outputs of the in-proof transfer"
     );
     Ok(())
 }
@@ -497,6 +576,7 @@ fn ring_value_leaves_and_enters_through_audited_transfers() -> Result<()> {
         tier: Tier::policy(&EMPTY),
     }
     .send(&env.client)?;
+    enroll_actors(&env, ring)?;
     let sender = &env.sender.keypair;
     let recipient = &env.recipient.keypair;
     let recipient_address = recipient.shielded_address()?;
@@ -541,7 +621,6 @@ fn ring_value_leaves_and_enters_through_audited_transfers() -> Result<()> {
     assert_eq!(
         opened(
             &AuditLookup {
-                ring: ring_program,
                 scan: scan(),
                 auditor: &auditor,
                 signature: entry.signature,
@@ -607,7 +686,6 @@ fn ring_value_leaves_and_enters_through_audited_transfers() -> Result<()> {
     assert_eq!(
         opened(
             &AuditLookup {
-                ring: ring_program,
                 scan: scan(),
                 auditor: &auditor,
                 signature: exit.signature,
@@ -698,6 +776,7 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
         tier: Tier::policy(&EMPTY),
     }
     .send(&env.client)?;
+    enroll_actors(&env, ring)?;
     let usdc = env.usdc_mint;
     let usdc_deposit = |user_token| {
         DepositAsset::Spl(DepositSplAccounts {
@@ -764,7 +843,6 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
     assert_eq!(
         opened(
             &AuditLookup {
-                ring: ring_program,
                 scan: scan(),
                 auditor: &auditor,
                 signature: entry.signature,
@@ -820,7 +898,6 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
     assert_eq!(
         opened(
             &AuditLookup {
-                ring: ring_program,
                 scan: scan(),
                 auditor: &auditor,
                 signature: hop.signature,
@@ -859,6 +936,7 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
         asset: usdc_deposit(sender_usdc),
         amount: USDC_RING_DEPOSIT,
         cosigner: None,
+        list_salt: None,
     };
     let RingDepositReceipt { utxo: receipt, .. } =
         env.run(deposit.send(env.client.ring_client()))?;
@@ -908,7 +986,6 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
     assert_eq!(
         opened(
             &AuditLookup {
-                ring: ring_program,
                 scan: scan(),
                 auditor: &auditor,
                 signature: exit.signature,
@@ -943,29 +1020,30 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
     //    the withdrawal past the threshold demands the co-signer.
     let recipient_usdc = create_token_account(rpc, &env.payer, &usdc, &recipient.pubkey())?;
     let cosigner = Keypair::new();
-    send(
+    let cosign_admin = RingRoleKeys::of(&env.payer).cosign_admin;
+    SendAs {
         rpc,
-        &env.payer,
-        &[custom_ring_sdk::SetCoSigner {
-            ring,
-            authority: env.payer.pubkey(),
-            signer: cosigner.pubkey(),
-            scope: CoSignScope::WITHDRAWALS,
-        }
-        .instruction()?],
-    )?;
-    land(
+        payer: &env.payer,
+        holder: &cosign_admin,
+    }
+    .send(&[custom_ring_sdk::SetCoSigner {
+        ring,
+        payer: env.payer.pubkey(),
+        authority: cosign_admin.pubkey(),
+        signer: cosigner.pubkey(),
+        scope: CoSignScope::APPROVE_WITHDRAWAL,
+    }
+    .instruction()?])?;
+    StorageRecords::mint_policy(
+        ring,
+        Member::asset(&usdc)?,
+        zolana_ring_policy::MintPolicy {
+            withdrawal_threshold: USDC_WITHDRAW_AMOUNT - 1,
+            ..Default::default()
+        },
         &env,
-        custom_ring_sdk::AuthorityListWrite::new(ring, env.payer.pubkey()).with_mint_policy(
-            Member::asset(&usdc)?,
-            zolana_ring_policy::MintPolicy {
-                withdrawal_threshold: USDC_WITHDRAW_AMOUNT - 1,
-                ..Default::default()
-            },
-        )?,
-        &env.payer,
-        &[],
-    )?;
+    )
+    .send()?;
     let withdraw = || -> Result<ConfidentialTransaction> {
         let mut transfer = ConfidentialTransaction::new_with_ring(
             vec![exit_change.input_utxo(&env)?],
@@ -989,9 +1067,13 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
         nullifier_key: Some(&sender.nullifier_key),
         transaction: withdraw()?,
     })
-    .with_interface_transfer_accounts(vec![settlement]);
+    .with_interface_transfer_accounts(vec![settlement])
+    .with_co_signer(cosigner.pubkey());
     let unsigned = env.run(unsigned.prove(env.client.ring_client()))?;
-    assert_eq!(unsigned.co_signer, Some(cosigner.pubkey()));
+    assert_eq!(
+        unsigned.co_signers.first().copied(),
+        Some(cosigner.pubkey())
+    );
     let rejection = send_expecting_rejection(
         rpc,
         sender,
@@ -1032,7 +1114,6 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
     assert_eq!(
         opened(
             &AuditLookup {
-                ring: ring_program,
                 scan: scan(),
                 auditor: &auditor,
                 signature: withdrawal.signature,
@@ -1067,7 +1148,7 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
     // 7. The delegate re-owns the recipient's final note to the sender over the
     //    authority rail, refused until governance enables the rail.
     let delegate = Keypair::new();
-    EscrowedDelegate {
+    EnrolledDelegate {
         ring,
         delegate: &delegate,
         members: &[sender],
@@ -1108,20 +1189,10 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
     );
     let signature = land(&env, proven.instruction()?, &env.payer, &[&delegate])?;
     let indexed = wait_for_indexed_transaction(indexer, auditor_tag, signature);
-    // Key escrow keeps the owner's nullifier key out of the disclosure, the record holds it.
-    let escrowed_key = env
-        .member_record(ring, owner_member(sender)?)?
-        .nullifier_pk
-        .context("the sender's record escrows no nullifier key")?;
-    let escrowed = HashMap::from([(
-        sender.signing_pubkey().confidential_view_tag()?,
-        escrowed_key,
-    )]);
     assert_eq!(
         opened(
             &AuditLookup {
-                ring: ring_program,
-                scan: scan().with_escrowed_keys(escrowed),
+                scan: scan(),
                 auditor: &auditor,
                 signature,
             }

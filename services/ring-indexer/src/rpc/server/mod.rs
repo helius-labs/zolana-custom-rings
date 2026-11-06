@@ -28,9 +28,15 @@ use spr_indexer_api::RpcMethod;
 use spr_rpc_http::MethodPathLayer;
 use tower::{Layer, Service};
 use tower_http::cors::{Any, CorsLayer};
-use zolana_ring_indexer::rpc::method::{
-    GetRingApplyProofInputs, GetRingMemberOpenings, GetRingMemberRecord, GetRingMemberRecords,
-    GetRingMemberRegistryRoot, GetRingRecordPool, GetRingRecordQueue,
+use zolana_ring_indexer::{
+    rpc::method::{
+        GetStorageApplyProofInputs, GetStorageMemberOpenings, GetStorageMemberRecords,
+        GetStorageRecordPool,
+    },
+    tracking::method::{
+        GetPendingEnrollments, GetTrackingApplyProofInputs, GetTrackingOpenings,
+        GetTrackingRecordPool, GetTrackingRecords,
+    },
 };
 
 use crate::{
@@ -40,14 +46,16 @@ use crate::{
 };
 
 /// Served here, every other call goes to Photon untouched.
-pub const RING_METHODS: [&str; 7] = [
-    GetRingMemberRecord::NAME,
-    GetRingMemberRecords::NAME,
-    GetRingMemberOpenings::NAME,
-    GetRingRecordPool::NAME,
-    GetRingMemberRegistryRoot::NAME,
-    GetRingRecordQueue::NAME,
-    GetRingApplyProofInputs::NAME,
+pub const RING_METHODS: [&str; 9] = [
+    GetStorageMemberOpenings::NAME,
+    GetStorageMemberRecords::NAME,
+    GetStorageRecordPool::NAME,
+    GetStorageApplyProofInputs::NAME,
+    GetTrackingOpenings::NAME,
+    GetTrackingRecords::NAME,
+    GetTrackingRecordPool::NAME,
+    GetPendingEnrollments::NAME,
+    GetTrackingApplyProofInputs::NAME,
 ];
 
 const MAX_BODY_BYTES: u32 = TEN_MB_SIZE_BYTES;
@@ -142,13 +150,15 @@ fn ring_methods(lookups: Lookups) -> Result<RpcModule<Lookups>> {
     let mut module = RpcModule::new(lookups);
     register!(
         module,
-        GetRingMemberRecord => api::member_record,
-        GetRingMemberRecords => api::member_records,
-        GetRingMemberOpenings => api::member_openings,
-        GetRingRecordPool => api::record_pool,
-        GetRingMemberRegistryRoot => api::registry_root,
-        GetRingRecordQueue => api::record_queue,
-        GetRingApplyProofInputs => api::apply_proof_inputs,
+        GetStorageMemberOpenings => api::storage_member_openings,
+        GetStorageMemberRecords => api::storage_member_records,
+        GetStorageRecordPool => api::storage_record_pool,
+        GetStorageApplyProofInputs => api::storage_apply_proof_inputs,
+        GetTrackingOpenings => api::tracking_openings,
+        GetTrackingRecords => api::tracking_records,
+        GetTrackingRecordPool => api::tracking_record_pool,
+        GetPendingEnrollments => api::pending_enrollments,
+        GetTrackingApplyProofInputs => api::tracking_apply_proof_inputs,
     );
     Ok(module)
 }

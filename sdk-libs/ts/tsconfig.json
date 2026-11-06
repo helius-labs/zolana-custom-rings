@@ -16,8 +16,8 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "paths": {
-      "@heliuslabs/zolana": ["../../zolana/sdk-libs/ts/src/index.ts"],
-      "@heliuslabs/zolana/*": [
+      "@heliuslabs/spr": ["../../zolana/sdk-libs/ts/src/index.ts"],
+      "@heliuslabs/spr/*": [
         "../../zolana/sdk-libs/ts/src/*.ts",
         "../../zolana/sdk-libs/ts/src/*/index.ts"
       ]

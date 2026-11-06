@@ -1,4 +1,8 @@
-export { CustomRingClient, createCustomRingClient } from "../rpc/client.js";
+export {
+  CustomRingClient,
+  createCustomRingClient,
+  type CustomRingClientConfig,
+} from "../rpc/client.js";
 export { EMPTY_RING_OPENING, ringInputOpening, ringOutputOpening } from "../rpc/prover/assembly.js";
 export { customRingProof } from "../rpc/prover/proof.js";
 export { CUSTOM_RING_PROOF_LENGTH } from "../protocol/proof/custom-ring-proof.js";
@@ -9,23 +13,18 @@ export {
   ringProvingKey,
 } from "../protocol/proof/proving-keys.js";
 export type { RingKeyCircuit } from "../protocol/proof/proving-keys.js";
-export { ANONYMOUS_MERGE_WIDTHS } from "../protocol/codec/ring-disclosure-layout.js";
 export { RING_RULE_SLOTS, RING_SOURCE_SLOTS } from "../rpc/prover/types.js";
 export type { PresentRecordOpening } from "../rpc/prover/types.js";
 export type {
-  AnonymousAuditProofRequest,
-  AnonymousMergeProofRequest,
-  AnonymousSlotProofInputs,
+  ApplyEnrollmentsProofRequest,
   ApplyRecordsProofRequest,
+  PrivateApplyProofInput,
+  PrivateOwnerProofInput,
   AuditEnvelopeProofInputs,
-  DelegatePolicyProofRequest,
-  DeliveredAuditProofRequest,
-  DeliveredSlotProofInputs,
-  DepositProofRequest,
-  MemberPolicyProofRequest,
-  MergeInputOpening,
-  OutflowLimitProofInput,
-  PolicyOutputOpening,
+  TransferProofRequest,
+  EntryOpeningProofInput,
+  MergeProofRequest,
+  OutputOpeningProofInput,
   PolicyProofInputs,
   PolicySourceProofInput,
   PolicySubjectEntry,
@@ -33,31 +32,15 @@ export type {
   RegisterKeyProofRequest,
   RingProofRequest,
   RingSlotOpening,
-  WithdrawalExemptionProofRequest,
+  TransferProofInputs,
 } from "../rpc/prover/ring.js";
-export type { RingMergeDisclosureRequest } from "../crypto/audit/merge-disclosure.js";
 export type {
-  AnonymousRingTransactProofInput,
   AnonymousRingTransactProver,
-  HiddenOwnerAuthorization,
   ProvenAnonymousRingTransact,
-  RecordWrite,
-  RingApplyProofInputs,
   RingMemberOpening,
-  RingMemberOpenings,
-  RingMemberPage,
-  RingMemberPageRequest,
-  RingMemberProofRequest,
-  RingMemberRecordResult,
-  RingMemberRequest,
   RingMergeClient,
   RingProver,
-  RingQueueState,
-  RingRecordPool,
-  RingRecordPoolRequest,
   RingRecordReader,
-  RingRegistryRoot,
-  RingRegistryState,
   RingSealedKey,
   RingServedRecord,
   RingSealedNullifierKey,
@@ -65,4 +48,12 @@ export type {
   RingSubmissionPending,
   RingSubmissionStatus,
   RingSubmissionTransport,
+  TrackingReader,
+  StorageMemberOpenings,
+  StorageMemberPage,
+  StorageOpeningsRequest,
+  StoragePageRequest,
+  StorageRecordPool,
+  StorageRecordPoolRequest,
+  StorageRoot,
 } from "../rpc/ports.js";

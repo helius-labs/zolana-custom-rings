@@ -6,8 +6,8 @@ use std::{
     str::FromStr,
 };
 
-use anyhow::{anyhow, bail, ensure, Context as _, Result};
-use custom_ring_interface::RingMode;
+use anyhow::{anyhow, ensure, Context as _, Result};
+use custom_ring_interface::{RingMode, RingRole};
 use custom_ring_sdk::CoSignScope;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use solana_address::{error::ParseAddressError, Address};
@@ -35,8 +35,18 @@ pub struct RingConfig {
     pub authority_keypair: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upgrade_authority_keypair: Option<PathBuf>,
+    /// The policy role key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config_authority_keypair: Option<PathBuf>,
+    pub policy_authority_keypair: Option<PathBuf>,
+    /// `keys/admin.json` by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admin_keypair: Option<PathBuf>,
+    /// `keys/pauser.json` by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pauser_keypair: Option<PathBuf>,
+    /// `keys/cosign-admin.json` by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cosign_admin_keypair: Option<PathBuf>,
     /// Fixed once `init` creates the config.
     #[serde(default, skip_serializing_if = "is_default")]
     pub mode: ModeName,
@@ -98,6 +108,15 @@ named_enum! {
 }
 
 named_enum! {
+    pub enum RoleName("ring role") {
+        Admin = "admin",
+        Policy = "policy",
+        Pauser = "pauser",
+        CosignAdmin = "cosign-admin",
+    }
+}
+
+named_enum! {
     pub enum Service("service") {
         Rpc = "rpc",
         Indexer = "indexer",
@@ -138,11 +157,30 @@ pub struct Urls {
 }
 
 impl ModeName {
-    /// Key escrow is a confidential ring after `delegate set`.
     pub const fn of(mode: RingMode) -> Self {
         match mode {
-            RingMode::Confidential | RingMode::ConfidentialEscrow => Self::Confidential,
+            RingMode::Confidential => Self::Confidential,
             RingMode::Anonymous => Self::Anonymous,
+        }
+    }
+}
+
+impl RoleName {
+    pub const fn role(self) -> RingRole {
+        match self {
+            Self::Admin => RingRole::Admin,
+            Self::Policy => RingRole::Policy,
+            Self::Pauser => RingRole::Pauser,
+            Self::CosignAdmin => RingRole::CosignAdmin,
+        }
+    }
+
+    pub const fn keypair_field(self) -> &'static str {
+        match self {
+            Self::Admin => "admin_keypair",
+            Self::Policy => "policy_authority_keypair",
+            Self::Pauser => "pauser_keypair",
+            Self::CosignAdmin => "cosign_admin_keypair",
         }
     }
 }
@@ -241,7 +279,7 @@ fn is_default<T: Default + PartialEq>(value: &T) -> bool {
 }
 
 impl Urls {
-    /// `pinned` replaces the cluster's policy file and the release's enclave pin.
+    /// `pinned` replaces the cluster's policy file.
     pub fn prover_client(
         &self,
         root: &Path,
@@ -347,16 +385,16 @@ impl RingConfig {
         })
     }
 
-    pub fn config_authority(&self) -> Result<Keypair> {
-        file::read_keypair(&expand_tilde(self.config_authority_keypair())?)
+    pub fn policy_authority(&self) -> Result<Keypair> {
+        file::read_keypair(&expand_tilde(self.policy_authority_keypair())?)
     }
 
     pub fn upgrade_authority(&self) -> Result<Keypair> {
         file::read_keypair(&expand_tilde(self.upgrade_authority_keypair())?)
     }
 
-    pub fn config_authority_keypair(&self) -> &Path {
-        self.config_authority_keypair
+    pub fn policy_authority_keypair(&self) -> &Path {
+        self.policy_authority_keypair
             .as_deref()
             .unwrap_or(&self.authority_keypair)
     }
@@ -370,8 +408,11 @@ impl RingConfig {
     pub(crate) fn resolve_keypair_paths(&mut self, resolve: impl Fn(&Path) -> PathBuf) {
         self.authority_keypair = resolve(&self.authority_keypair);
         for path in [
-            &mut self.config_authority_keypair,
+            &mut self.policy_authority_keypair,
             &mut self.upgrade_authority_keypair,
+            &mut self.admin_keypair,
+            &mut self.pauser_keypair,
+            &mut self.cosign_admin_keypair,
         ]
         .into_iter()
         .flatten()
@@ -426,74 +467,9 @@ pub fn expand_tilde(path: &Path) -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(rest))
 }
 
-#[derive(Clone, Copy, Debug)]
-struct RemovedKey {
-    table: Option<&'static str>,
-    key: &'static str,
-}
-
-const REMOVED_KEYS: [RemovedKey; 3] = [
-    RemovedKey {
-        table: None,
-        key: "deposit_audit",
-    },
-    RemovedKey {
-        table: Some("policy"),
-        key: "address_tree",
-    },
-    RemovedKey {
-        table: Some("policy"),
-        key: "velocity",
-    },
-];
-
-/// Refuses a removed key by name, whatever `T` accepts.
 pub(crate) fn parse_ring_toml<T: DeserializeOwned>(path: &Path) -> Result<T> {
     let text = file::read(path)?;
-    let removed = removed_keys(&text);
-    if !removed.is_empty() {
-        let (noun, pronoun) = match removed.len() {
-            1 => ("key", "it"),
-            _ => ("keys", "them"),
-        };
-        bail!(
-            "{} keeps the removed {noun} {}, delete {pronoun}",
-            path.display(),
-            removed.join(" and ")
-        );
-    }
     toml::from_str(&text).with_context(|| format!("cannot parse {}", path.display()))
-}
-
-/// Unparsable text names none, the typed parse reports it.
-fn removed_keys(text: &str) -> Vec<String> {
-    let Ok(document) = toml::from_str::<toml::Table>(text) else {
-        return Vec::new();
-    };
-    REMOVED_KEYS
-        .into_iter()
-        .filter(|removed| removed.set_in(&document))
-        .map(|removed| removed.to_string())
-        .collect()
-}
-
-impl RemovedKey {
-    fn set_in(self, document: &toml::Table) -> bool {
-        let table = match self.table {
-            None => Some(document),
-            Some(name) => document.get(name).and_then(toml::Value::as_table),
-        };
-        table.is_some_and(|table| table.contains_key(self.key))
-    }
-}
-
-impl fmt::Display for RemovedKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.table {
-            None => write!(f, "`{}`", self.key),
-            Some(table) => write!(f, "`[{table}] {}`", self.key),
-        }
-    }
 }
 
 /// Never overrides a variable already set.
@@ -561,7 +537,7 @@ ring_rpc = "http://127.0.0.1:8785"
 
     #[test]
     fn a_cluster_tee_policy_reads_beside_ring_toml_and_a_pinned_one_replaces_it() {
-        let policy = TeePolicy::default_deployment().unwrap();
+        let policy = probe_policy();
         let dir = std::env::temp_dir().join(format!("ring-cluster-tee-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let loopback = |policy_file: Option<&str>| Urls {
@@ -595,7 +571,7 @@ ring_rpc = "http://127.0.0.1:8785"
 
     #[test]
     fn a_tee_policy_file_reads_bare_or_as_a_deployment_pin() {
-        let policy = TeePolicy::default_deployment().unwrap();
+        let policy = probe_policy();
         let bare = serde_json::to_string(&policy).unwrap();
         let dir = std::env::temp_dir().join(format!("ring-tee-policy-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -611,6 +587,13 @@ ring_rpc = "http://127.0.0.1:8785"
         std::fs::write(&unpinned, r#"{"deployment":null}"#).unwrap();
         assert!(read_tee_policy(&unpinned).is_err());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn probe_policy() -> TeePolicy {
+        TeePolicy::from_json(include_str!(
+            "../../../zolana/prover/tee/testdata/probe_policy.json"
+        ))
+        .unwrap()
     }
 
     fn prover_urls(prover: &str) -> Urls {
@@ -630,34 +613,6 @@ ring_rpc = "http://127.0.0.1:8785"
         assert_eq!(Urls::port("http://[::1]:8785/path?x=1:2"), Some(8785));
         assert_eq!(Urls::port("http://localhost"), None);
         assert_eq!(Urls::port("https://example.com/?key=1:2"), None);
-    }
-
-    #[test]
-    fn a_removed_key_is_named_before_the_unknown_field_error() {
-        assert!(removed_keys(EXAMPLE).is_empty());
-        let tree = Address::new_from_array([3; 32]);
-        let earlier = format!(
-            "deposit_audit = true\n{EXAMPLE}\n[policy]\naddress_tree = \"{tree}\"\n\n\
-             [policy.velocity]\nwindow_slots = 216000\nrows = []\n"
-        );
-        assert_eq!(
-            removed_keys(&earlier),
-            [
-                "`deposit_audit`",
-                "`[policy] address_tree`",
-                "`[policy] velocity`"
-            ]
-        );
-        let path = std::env::temp_dir().join(format!("ring-removed-{}.toml", std::process::id()));
-        file::write(&path, format!("deposit_audit = true\n{EXAMPLE}")).unwrap();
-        let refused = parse_ring_toml::<RingConfig>(&path)
-            .unwrap_err()
-            .to_string();
-        let _ = std::fs::remove_file(&path);
-        assert!(
-            refused.ends_with("keeps the removed key `deposit_audit`, delete it"),
-            "{refused}"
-        );
     }
 
     #[test]
@@ -695,16 +650,6 @@ ring_rpc = "http://127.0.0.1:8785"
     }
 
     #[test]
-    fn key_escrow_reads_as_the_confidential_ring_it_was_created_as() {
-        assert_eq!(ModeName::of(RingMode::Confidential), ModeName::Confidential);
-        assert_eq!(
-            ModeName::of(RingMode::ConfidentialEscrow),
-            ModeName::Confidential
-        );
-        assert_eq!(ModeName::of(RingMode::Anonymous), ModeName::Anonymous);
-    }
-
-    #[test]
     fn an_empty_policy_table_selects_the_policy_tier() {
         let text = EXAMPLE.replacen("\n[localnet]", "\n[policy]\n\n[localnet]", 1);
         let config: RingConfig = toml::from_str(&text).expect("parse");
@@ -720,22 +665,22 @@ ring_rpc = "http://127.0.0.1:8785"
     }
 
     #[test]
-    fn authority_paths_split_without_breaking_legacy_configs() {
+    fn authority_paths_split_or_share_one_key() {
         let split = EXAMPLE.replacen(
             "\n[localnet]",
-            "\nconfig_authority_keypair = \"config.json\"\nupgrade_authority_keypair = \"upgrade.json\"\n\n[localnet]",
+            "\npolicy_authority_keypair = \"policy.json\"\nupgrade_authority_keypair = \"upgrade.json\"\n\n[localnet]",
             1,
         );
         let config: RingConfig = toml::from_str(&split).expect("parse split authorities");
-        assert_eq!(config.config_authority_keypair(), Path::new("config.json"));
+        assert_eq!(config.policy_authority_keypair(), Path::new("policy.json"));
         assert_eq!(
             config.upgrade_authority_keypair(),
             Path::new("upgrade.json")
         );
 
-        let legacy: RingConfig = toml::from_str(EXAMPLE).expect("parse legacy authority");
-        assert_eq!(legacy.config_authority_keypair(), legacy.authority_keypair);
-        assert_eq!(legacy.upgrade_authority_keypair(), legacy.authority_keypair);
+        let shared: RingConfig = toml::from_str(EXAMPLE).expect("parse one authority");
+        assert_eq!(shared.policy_authority_keypair(), shared.authority_keypair);
+        assert_eq!(shared.upgrade_authority_keypair(), shared.authority_keypair);
     }
 
     #[test]

@@ -88,13 +88,6 @@ pub fn stop_owned_pid(scope: &Path, target: &str) {
     }
 }
 
-pub fn stop_pid(pid: &str) {
-    let _ = signal_pid(pid, "-TERM");
-    if !wait_until(TERMINATION_GRACE_PERIOD, POLL, || !signal_pid(pid, "-0")) {
-        let _ = signal_pid(pid, "-KILL");
-    }
-}
-
 pub fn answers(addr: SocketAddr) -> bool {
     TcpStream::connect_timeout(&addr, POLL).is_ok()
 }

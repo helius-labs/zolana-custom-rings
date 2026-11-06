@@ -1,8 +1,8 @@
-import { addressBytes, hashChain4, bigIntBytes } from "@heliuslabs/zolana/internal";
-import { solanaOwnerIdentity } from "@heliuslabs/zolana/keypair";
-import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
-import type { ChainReader } from "@heliuslabs/zolana/client";
-import { assetField, type SettlementTransfer } from "@heliuslabs/zolana/transaction";
+import { addressBytes, hashChain4, bigIntBytes } from "@heliuslabs/spr/internal";
+import { solanaOwnerIdentity } from "@heliuslabs/spr/keypair";
+import type { Address, Bytes32, RequestContext } from "@heliuslabs/spr/interface";
+import type { ChainReader } from "@heliuslabs/spr/client";
+import { assetField, type SettlementTransfer } from "@heliuslabs/spr/transaction";
 import { splDestination } from "../operations/payments/anonymous.js";
 import { RingError } from "../protocol/error.js";
 import { domainField, RingDomain } from "../crypto/derivation/ring-domain.js";
@@ -18,12 +18,6 @@ export function policyWithdrawalHash(legs: readonly PolicyWithdrawal[]): Bytes32
     bigIntBytes(BigInt(legs.length)) as Bytes32,
     ...legs.flatMap((w) => [w.owner, w.asset, bigIntBytes(w.amount) as Bytes32]),
   ]) as Bytes32;
-}
-export function withdrawalCapacity(count: number): number {
-  const capacity = [0, 1, 2, 4, 8, 16, 32].find((c) => count <= c);
-  if (!Number.isSafeInteger(count) || count < 0 || capacity === undefined)
-    throw new RingError("RING_TRANSACT_DATA_INVALID");
-  return capacity;
 }
 export async function readPolicyWithdrawals(
   client: Pick<ChainReader, "getAccount">,

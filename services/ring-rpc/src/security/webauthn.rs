@@ -86,7 +86,7 @@ mod tests {
 
     const ORIGIN: &str = "http://localhost:3000";
     const RELYING_PARTY: &str = "localhost";
-    const ATTESTATION: &[u8] = b"zolana/ring-rpc-read/v1 attestation";
+    const ATTESTATION: &[u8] = b"zolana/ring-rpc-read attestation";
 
     fn origins() -> Origins {
         OriginPolicy::new(vec![ORIGIN.to_owned()])

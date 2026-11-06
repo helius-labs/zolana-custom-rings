@@ -26,13 +26,12 @@ impl<'a> RingWallet<'a> {
             keys,
             ring,
             assets,
-            history: ViewingHistory::new(keys.viewing_pubkey(), 0),
+            history: ViewingHistory::new(keys.viewing_pubkey(), 0).with_ring(ring, None),
             kept: Vec::new(),
             spendable: SpendableDecryptionResult::default(),
         }
     }
 
-    /// Reads the default ring and every anonymous stream from index 0 at the indexer's tip.
     pub fn sync(&mut self, env: &TestEnv) -> Result<()> {
         let config = IndexerRpcConfig::at_slot(env.client.rpc().get_slot()?);
         let owned = UtxoScan::new(self.keys, self.assets.registry())
@@ -42,7 +41,6 @@ impl<'a> RingWallet<'a> {
             AnonymousSync::new(self.keys, &self.assets)
                 .with_full_rescan()
                 .with_indexer_config(config)
-                .with_deposit_payload(zolana_ring_client::deposit_payload)
                 .fetch(env.client.as_async().indexer(), &self.history)
                 .await
                 .map_err(anyhow::Error::from)
@@ -54,7 +52,7 @@ impl<'a> RingWallet<'a> {
             .iter()
             .flat_map(|tx| tx.nullifiers.iter().copied())
             .collect();
-        self.kept = verify_owned(self.keys, &synced.decrypted)?
+        self.kept = verify_owned(self.keys, synced.decrypted())?
             .spendable()
             .utxos()
             .filter(|utxo| {
@@ -62,7 +60,7 @@ impl<'a> RingWallet<'a> {
             })
             .cloned()
             .collect();
-        self.history = synced.history;
+        self.history = synced.history().clone();
         let notes = env
             .client
             .block_on(async {

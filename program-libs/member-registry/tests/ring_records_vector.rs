@@ -1,16 +1,25 @@
-//! Pins `test-vectors/registry/ring-records.json` for the Go circuits, Photon and the TS SDK.
+//! Pins `test-vectors/registry/ring-records.json` for the Go circuits and the TS SDK.
+//!
+//! Each update is the ordered batch `process_update_ix` in `programs/storage/src/instructions/update.rs`
+//! chains and proves. Read before `prover/circuits/registry/vectors_test.go` and
+//! `sdk-libs/ts/test/protocol/encoding/ring-shared-vectors.test.ts`.
 
 use custom_ring_interface::{
-    queue_chain, EscrowKey, QueueEntry, RecordWriteData, WriteRecordsIxData,
-    MEMBER_REGISTRY_EMPTY_ROOT,
+    key_catalog::apply_width,
+    mint_policy_write,
+    storage::{chain_start, RegistryId, Revision, StorageRegistry},
+    storage_instruction::InitializeIxData,
+    write_chain, RecordWrite, RecordWriteData, WriteRecordsIxData, MEMBER_REGISTRY_EMPTY_ROOT,
+    QUAD_HEIGHT,
 };
 use serde::{Deserialize, Serialize};
+use solana_address::Address;
 use spr_hasher::primitives::{hash_bytes, solana_owner_identity};
 use zolana_ring_member_registry::{
-    MemberRecord, MemberRegistryTree, OpeningCheck, QuadPath, RecordOpening, RecordTree,
-    RecordWriteProofInput, ZERO_SUBTREES,
+    MemberRecord, MemberRegistryTree, OpeningCheck, QuadPath, RecordOpening,
+    RecordStatementContext, RecordTracking, RecordTree, RecordWriteProofInput, ZERO_SUBTREES,
 };
-use zolana_ring_policy::{ListChange, ListId, ListSet, Writer};
+use zolana_ring_policy::{ListChange, ListId, ListSet};
 
 const VECTORS: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -22,19 +31,18 @@ struct RecordVectors {
     description: String,
     empty_root: String,
     zero_subtrees: Vec<String>,
-    applications: Vec<Application>,
+    registry: String,
+    updates: Vec<Update>,
     openings: Vec<Opening>,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
-struct Application {
+struct Update {
     name: String,
-    /// `apply_records` or `authority_write_records`.
-    instruction: String,
-    /// Queued by earlier instructions, in queue order.
-    pending: Vec<QueuedWrite>,
-    /// Queued by the instruction itself behind the pending writes.
-    authority_writes: Vec<QueuedWrite>,
+    /// The registry's revision the proof names, one per earlier update.
+    revision: u64,
+    /// Instruction order.
+    writes: Vec<BatchWrite>,
     old_root: String,
     new_root: String,
     old_next_index: u64,
@@ -43,26 +51,19 @@ struct Application {
     chain_end: String,
     count: u64,
     statement_hash: String,
-    /// Proof inputs per write, queue order.
-    writes: Vec<WriteInput>,
+    /// The public apply key's write capacity, every update writes public lists.
+    width: u8,
+    /// One per write, instruction order.
+    proof_inputs: Vec<WriteInput>,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
-struct QueuedWrite {
-    position: u64,
-    /// `member_write`, `register_key` or `authority_write`.
-    kind: String,
-    /// The member's signing key, `member` is its owner identity.
-    signer: Option<String>,
+struct BatchWrite {
     member: String,
     mask: u64,
     value: u64,
-    nullifier_pk: Option<String>,
-    eph_u: Option<String>,
-    ciphertext: Option<String>,
-    escrow_key: String,
     entry_hash: String,
-    /// `chain(position)`.
+    /// The chain after the write.
     chain: String,
 }
 
@@ -71,11 +72,9 @@ struct WriteInput {
     member: String,
     mask: u64,
     value: u64,
-    escrow_key: String,
     exists: bool,
     old_next: String,
     old_lists: u64,
-    old_escrow: String,
     slot: Path,
     low: Record,
     low_path: Path,
@@ -86,7 +85,6 @@ struct Record {
     member: String,
     next: String,
     lists: u64,
-    escrow_key: String,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
@@ -105,90 +103,12 @@ struct Opening {
     path: Path,
 }
 
-enum Queued {
-    Member {
-        signer: [u8; 32],
-        write: ListSet,
-        clear: ListSet,
-    },
-    Key {
-        signer: [u8; 32],
-        nullifier_pk: [u8; 32],
-        eph_u: [u8; 32],
-        ciphertext: [u8; 32],
-    },
-    Authority {
-        member: [u8; 32],
-        set: ListSet,
-        clear: ListSet,
-    },
-}
-
-impl Queued {
-    fn entry(&self) -> QueueEntry {
-        let lists = |set: ListSet, clear: ListSet| {
-            WriteRecordsIxData::new(ListChange { set, clear }.check().expect("list write"))
-        };
-        match self {
-            Self::Member {
-                signer,
-                write,
-                clear,
-            } => lists(*write, *clear)
-                .entry(identity(signer), Writer::Member)
-                .expect("member write"),
-            Self::Key {
-                signer,
-                nullifier_pk,
-                ciphertext,
-                ..
-            } => QueueEntry::escrow(
-                identity(signer),
-                &EscrowKey {
-                    nullifier_pk,
-                    ciphertext,
-                },
-            )
-            .expect("escrow write"),
-            Self::Authority { member, set, clear } => RecordWriteData {
-                mint_policy: [0; 33],
-                member: *member,
-                lists: lists(*set, *clear),
-            }
-            .entry()
-            .expect("authority write"),
-        }
-    }
-
-    fn vector(&self, position: u64, entry: &QueueEntry, chain: &[u8; 32]) -> QueuedWrite {
-        let (kind, signer, key) = match self {
-            Self::Member { signer, .. } => ("member_write", Some(signer), None),
-            Self::Key {
-                signer,
-                nullifier_pk,
-                eph_u,
-                ciphertext,
-            } => (
-                "register_key",
-                Some(signer),
-                Some((nullifier_pk, eph_u, ciphertext)),
-            ),
-            Self::Authority { .. } => ("authority_write", None, None),
-        };
-        QueuedWrite {
-            position,
-            kind: kind.to_string(),
-            signer: signer.map(hex::encode),
-            member: hex::encode(entry.member),
-            mask: entry.mask,
-            value: entry.value,
-            nullifier_pk: key.map(|(pk, _, _)| hex::encode(pk)),
-            eph_u: key.map(|(_, eph_u, _)| hex::encode(eph_u)),
-            ciphertext: key.map(|(_, _, ciphertext)| hex::encode(ciphertext)),
-            escrow_key: hex::encode(entry.escrow_key),
-            entry_hash: hex::encode(entry.hash().expect("entry hash")),
-            chain: hex::encode(chain),
-        }
+/// A list write with no mint settings, as `Update` instruction data carries it.
+fn list_write(member: [u8; 32], set: ListSet, clear: ListSet) -> RecordWriteData {
+    RecordWriteData {
+        mint_policy: mint_policy_write(None),
+        member,
+        lists: WriteRecordsIxData::new(ListChange { set, clear }.check().expect("list write")),
     }
 }
 
@@ -208,80 +128,79 @@ fn asset(seed: u8) -> [u8; 32] {
     hash_bytes(&[seed; 32]).expect("asset field")
 }
 
-fn key(signer_seed: u8, key_seed: u8) -> Queued {
-    Queued::Key {
-        signer: signer(signer_seed),
-        nullifier_pk: hash_bytes(&[key_seed; 32]).expect("nullifier key"),
-        eph_u: [key_seed ^ 0x66; 32],
-        ciphertext: [key_seed ^ 0x77; 32],
-    }
-}
-
 struct Registry {
-    tree: MemberRegistryTree,
-    position: u64,
-    /// `chain(tail - 1)`.
-    chain: [u8; 32],
-    /// `chain(head - 1)`.
-    chain_head: [u8; 32],
-    pending: Vec<(QueueEntry, QueuedWrite)>,
+    tree: Option<MemberRegistryTree>,
+    address: Address,
+    revision: u64,
+    state: StorageRegistry,
 }
 
 impl Registry {
-    fn new() -> Self {
+    fn new(address: Address) -> Self {
         Self {
-            tree: MemberRegistryTree::new().expect("tree"),
-            position: 0,
-            chain: [0; 32],
-            chain_head: [0; 32],
-            pending: Vec::new(),
+            tree: Some(MemberRegistryTree::new().expect("tree")),
+            address,
+            revision: 0,
+            state: StorageRegistry::new(
+                address,
+                &InitializeIxData {
+                    registry_id: RegistryId::default(),
+                    grace_slots: [0; 8],
+                    ring_id: [0; 32],
+                    tracking_registry: Address::default(),
+                },
+            ),
         }
     }
 
-    fn queue(&mut self, queued: Queued) -> (QueueEntry, QueuedWrite) {
-        let entry = queued.entry();
-        self.chain = queue_chain(&self.chain, &entry).expect("chain");
-        let vector = queued.vector(self.position, &entry, &self.chain);
-        self.position += 1;
-        (entry, vector)
-    }
-
-    fn write(&mut self, queued: Queued) {
-        let write = self.queue(queued);
-        self.pending.push(write);
-    }
-
-    /// Every pending write, then the instruction's own authority writes.
-    fn apply(&mut self, name: &str, authority: Vec<Queued>) -> Application {
-        let pending = std::mem::take(&mut self.pending);
-        let authority_writes: Vec<_> = authority
-            .into_iter()
-            .map(|queued| self.queue(queued))
-            .collect();
-        let entries: Vec<QueueEntry> = pending
+    /// Folds `batch` as `process_update_ix` does and moves the tree by it.
+    fn update(&mut self, name: &str, batch: &[RecordWriteData]) -> Update {
+        // 1. The program reads every write through `storage_entry`, the leaf write the proof hashes.
+        let entries: Vec<RecordWrite> = batch
             .iter()
-            .chain(&authority_writes)
-            .map(|(entry, _)| *entry)
+            .map(|write| write.storage_entry().expect("storage write"))
             .collect();
-        let inputs = self
+        // 2. Every update starts its own chain at the registry and revision, a proof for another
+        // registry or an applied revision then binds another chain.
+        let chain_start =
+            chain_start(&self.address, Revision::from(self.revision)).expect("chain start");
+        let mut chain = chain_start;
+        let mut writes = Vec::with_capacity(entries.len());
+        for entry in &entries {
+            chain = write_chain(&chain, entry).expect("chain");
+            writes.push(BatchWrite {
+                member: hex::encode(entry.member),
+                mask: entry.mask,
+                value: entry.value,
+                entry_hash: hex::encode(entry.hash().expect("entry hash")),
+                chain: hex::encode(chain),
+            });
+        }
+        // 3. The tree replays the same writes into the apply proof inputs and must reach the same chain end.
+        let applied = self
             .tree
-            .apply(self.chain_head, &entries)
-            .expect("application");
-        assert_eq!(inputs.chain_end, self.chain);
-        self.chain_head = self.chain;
-        let statement = inputs.statement().expect("statement");
-        let instruction = match authority_writes.is_empty() {
-            true => "apply_records",
-            false => "authority_write_records",
-        };
-        Application {
+            .take()
+            .expect("tree")
+            .apply(chain_start, &entries)
+            .expect("update");
+        self.tree = Some(applied.tree);
+        let inputs = applied.proof;
+        assert_eq!(inputs.chain_end, chain);
+        let statement = inputs
+            .statement(RecordStatementContext {
+                registry: &self.state,
+                asset_writes: &[],
+                tracking: RecordTracking::Public,
+            })
+            .expect("statement");
+        self.state.roots[0].hash = inputs.new_root;
+        self.state.next_index = statement.new_next_index.to_le_bytes();
+        let revision = self.revision;
+        self.revision += 1;
+        Update {
             name: name.to_string(),
-            instruction: instruction.to_string(),
-            pending: pending.into_iter().map(|(_, vector)| vector).collect(),
-            authority_writes: authority_writes
-                .into_iter()
-                .map(|(_, vector)| vector)
-                .collect(),
+            revision,
+            writes,
             old_root: hex::encode(inputs.old_root),
             new_root: hex::encode(inputs.new_root),
             old_next_index: inputs.old_next_index,
@@ -290,13 +209,15 @@ impl Registry {
             chain_end: hex::encode(inputs.chain_end),
             count: statement.count,
             statement_hash: hex::encode(statement.hash().expect("statement hash")),
-            writes: inputs.writes.iter().map(write_input).collect(),
+            width: apply_width(statement.count),
+            proof_inputs: inputs.writes.iter().map(write_input).collect(),
         }
     }
 
     fn opening(&self, member: &[u8; 32]) -> Opening {
-        let root = self.tree.root().expect("root");
-        let opening = self.tree.opening(member).expect("opening");
+        let tree = self.tree.as_ref().expect("tree");
+        let root = tree.root().expect("root");
+        let opening = tree.opening(member).expect("opening");
         let check = OpeningCheck {
             opening: &opening,
             root: &root,
@@ -322,11 +243,9 @@ fn write_input(input: &RecordWriteProofInput) -> WriteInput {
         member: hex::encode(input.entry.member),
         mask: input.entry.mask,
         value: input.entry.value,
-        escrow_key: hex::encode(input.entry.escrow_key),
         exists: input.exists,
         old_next: hex::encode(input.old_next),
         old_lists: input.old_lists,
-        old_escrow: hex::encode(input.old_escrow),
         slot: path_vector(&input.slot),
         low: record_vector(&input.low),
         low_path: path_vector(&input.low_path),
@@ -338,7 +257,6 @@ fn record_vector(record: &MemberRecord) -> Record {
         member: hex::encode(record.member),
         next: hex::encode(record.next),
         lists: record.lists,
-        escrow_key: hex::encode(record.escrow_key),
     }
 }
 
@@ -354,65 +272,39 @@ fn path_vector(path: &QuadPath) -> Path {
 }
 
 fn compute_vectors() -> RecordVectors {
-    use ListId::{Allow, Approval, Block, Frozen, Reader, Recovery, RingViewing};
-    let mut registry = Registry::new();
+    use ListId::{Allow, Approval, Block, Frozen, Reader, RingViewing};
+    let address = Address::new_from_array([0x52; 32]);
+    let mut registry = Registry::new(address);
     let none = ListSet::EMPTY;
-    let first = registry.apply(
+    let authority = registry.update(
         "authority_inserts_after_a_relink",
-        vec![
-            Queued::Authority {
-                member: identity(&signer(0x21)),
-                set: lists(&[Allow]),
-                clear: none,
-            },
-            Queued::Authority {
-                member: asset(0x31),
-                set: lists(&[Allow, Reader]),
-                clear: none,
-            },
-            Queued::Authority {
-                member: identity(&signer(0x22)),
-                set: lists(&[Block]),
-                clear: none,
-            },
+        &[
+            list_write(identity(&signer(0x21)), lists(&[Allow]), none),
+            list_write(asset(0x31), lists(&[Allow, Reader]), none),
+            list_write(identity(&signer(0x22)), lists(&[Block]), none),
         ],
     );
-    registry.write(Queued::Member {
-        signer: signer(0x21),
-        write: lists(&[RingViewing]),
-        clear: none,
+    let members = registry.update(
+        "member_writes_updates_and_no_op",
+        &[
+            list_write(identity(&signer(0x21)), lists(&[RingViewing]), none),
+            list_write(identity(&signer(0x24)), none, lists(&[RingViewing])),
+            list_write(identity(&signer(0x21)), none, lists(&[RingViewing])),
+        ],
+    );
+    let member_writes =
+        (0x40..0x48).map(|seed| list_write(identity(&signer(seed)), lists(&[RingViewing]), none));
+    let authority_writes = (0x50..0x58).map(|seed| {
+        let member = match seed % 2 {
+            0 => identity(&signer(seed)),
+            _ => identity(&signer(seed - 0x10)),
+        };
+        list_write(member, lists(&[Frozen, Approval]), lists(&[Allow]))
     });
-    registry.write(key(0x23, 0x61));
-    registry.write(key(0x23, 0x62));
-    registry.write(Queued::Member {
-        signer: signer(0x24),
-        write: none,
-        clear: lists(&[Recovery]),
-    });
-    registry.write(Queued::Member {
-        signer: signer(0x21),
-        write: lists(&[Recovery]),
-        clear: lists(&[RingViewing]),
-    });
-    let members = registry.apply("member_writes_updates_escrow_and_no_op", Vec::new());
-    for seed in 0x40..0x48 {
-        registry.write(Queued::Member {
-            signer: signer(seed),
-            write: lists(&[RingViewing]),
-            clear: none,
-        });
-    }
-    let authority = (0x50..0x58)
-        .map(|seed| Queued::Authority {
-            member: match seed % 2 {
-                0 => identity(&signer(seed)),
-                _ => identity(&signer(seed - 0x10)),
-            },
-            set: lists(&[Frozen, Approval]),
-            clear: lists(&[Allow]),
-        })
-        .collect();
-    let full = registry.apply("full_batch_of_member_and_authority_writes", authority);
+    let full = registry.update(
+        "full_batch_of_member_and_authority_writes",
+        &member_writes.chain(authority_writes).collect::<Vec<_>>(),
+    );
     let openings = [
         identity(&signer(0x21)),
         asset(0x31),
@@ -422,20 +314,25 @@ fn compute_vectors() -> RecordVectors {
     .map(|member| registry.opening(member))
     .collect();
     RecordVectors {
-        description: "Record queue writes as the ring program receives them and the \
-                      applications that fold them into the 4-ary member record tree. A \
-                      member or register-key write's member is owner_identity(signer), an \
-                      escrow key is Poseidon(nullifier_pk, hash_bytes(ciphertext)), an entry \
-                      hash is Poseidon(CRQW, member, mask, value, escrow_key, mint_policy_write, withdrawal_threshold) and chain(p) = \
-                      Poseidon(chain(p - 1), entry_p) from chain(-1) = 0. The writes of an \
-                      application are its pending writes then its authority writes, each with \
-                      the apply circuit's proof inputs. Paths list three siblings per level, \
-                      leaf level first, in ascending child order. Produced by \
+        description:
+            "Ordered Update batches of the storage program and the 4-ary member record tree \
+                      they move. A write is the RecordWriteData the batch carries, read through \
+                      storage_entry, with entry hash Poseidon(CRQW, member, mask, value, \
+                      mint_policy_write, withdrawal_threshold, limits_0, limits_1, limits_2). \
+                      Each update folds chain(p) = Poseidon(chain(p - 1), entry_p) from \
+                      chain(-1) = chain_start = HashChain4(CRAP, hash_bytes(registry), revision), \
+                      the revision counting earlier updates from zero. proof_inputs hold the \
+                      apply circuit's inputs per write. Paths list three siblings per level, leaf \
+                      level first, in ascending child order. Produced by \
                       program-libs/member-registry/tests/ring_records_vector.rs."
-            .to_string(),
+                .to_string(),
         empty_root: hex::encode(MEMBER_REGISTRY_EMPTY_ROOT),
-        zero_subtrees: ZERO_SUBTREES.iter().map(hex::encode).collect(),
-        applications: vec![first, members, full],
+        zero_subtrees: ZERO_SUBTREES[..=QUAD_HEIGHT]
+            .iter()
+            .map(hex::encode)
+            .collect(),
+        registry: hex::encode(address.as_array()),
+        updates: vec![authority, members, full],
         openings,
     }
 }

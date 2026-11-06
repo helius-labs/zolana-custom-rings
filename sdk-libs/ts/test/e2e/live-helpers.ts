@@ -1,4 +1,4 @@
-import type { ProofDataSource } from "@heliuslabs/zolana/client";
+import type { ProofDataSource } from "@heliuslabs/spr/client";
 import { createCustomRingClient, type CustomRingClient } from "../../src/rpc/client.js";
 import { liveHarness as sppLiveHarness } from "../../../../zolana/sdk-libs/ts/test/e2e/live-helpers.js";
 import type { LiveHarness } from "../../../../zolana/sdk-libs/ts/test/e2e/live-helpers.js";

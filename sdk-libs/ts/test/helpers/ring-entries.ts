@@ -1,20 +1,21 @@
 import { type Address } from "@solana/kit";
 import { expect, vi } from "vitest";
 
-import type { MerkleProof, NonInclusionProof, RpcAccount } from "@heliuslabs/zolana/client";
-import { SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana/interface";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import type { IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
+import type { MerkleProof, NonInclusionProof, RpcAccount } from "@heliuslabs/spr/client";
+import { SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/spr/interface";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
+import type { IndexedShieldedTransaction } from "@heliuslabs/spr/transaction";
 
 import { transactionsPage } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { filled, treeAccount } from "../../../../zolana/sdk-libs/ts/test/helpers/tree-account.js";
+import { transactionItems } from "../../../../zolana/sdk-libs/ts/test/helpers/pages.js";
 
 export interface HistoryRoot {
   readonly value: Bytes32;
   readonly index: number;
 }
 
-/** Mirrors the Rust `ProofRpc` fake, every leaf answered under the root at its position. */
+/** Every leaf answered under the root at its position. */
 export function entryProofReads(
   options: Readonly<{
     tree: Address;
@@ -29,10 +30,18 @@ export function entryProofReads(
   const nullifierRoots =
     options.nullifierRoots ??
     (options.account
-      ? [{ value: FIXTURE_HEADS.nullifierRoot, index: FIXTURE_HEADS.nullifierRootIndex }]
+      ? [
+          {
+            value: FIXTURE_HEADS.nullifierRoot,
+            index: FIXTURE_HEADS.nullifierRootIndex,
+          },
+        ]
       : [{ value: filled(2) as Bytes32, index: 4 }]);
   const root = (roots: readonly HistoryRoot[], position: number): HistoryRoot =>
-    roots[Math.min(position, roots.length - 1)] ?? { value: filled(0) as Bytes32, index: 0 };
+    roots[Math.min(position, roots.length - 1)] ?? {
+      value: filled(0) as Bytes32,
+      index: 0,
+    };
   const requests: Bytes32[][] = [];
   const merkle: Bytes32[][] = [];
   const nonInclusion: Bytes32[][] = [];
@@ -48,7 +57,11 @@ export function entryProofReads(
         ? {
             owner: SHIELDED_POOL_PROGRAM_ID,
             lamports: 1n,
-            data: treeAccount({ stateCursor: 4, written: 5, nullifierCursor: 4n }),
+            data: treeAccount({
+              stateCursor: 4,
+              written: 5,
+              nullifierCursor: 4n,
+            }),
           }
         : undefined;
     }),
@@ -59,12 +72,13 @@ export function entryProofReads(
       async (request: { nullifiers: readonly Bytes32[] }) => {
         requests.push([...request.nullifiers]);
         return transactionsPage({
-          transactions: spenders.filter((spender) =>
-            spender.nullifiers.some((spent) =>
-              request.nullifiers.some((asked) => Buffer.from(asked).equals(spent)),
+          data: transactionItems(
+            spenders.filter((spender) =>
+              spender.nullifiers.some((spent) =>
+                request.nullifiers.some((asked) => Buffer.from(asked).equals(spent)),
+              ),
             ),
           ),
-          scannedThrough: new Uint8Array([1]),
         });
       },
     ),

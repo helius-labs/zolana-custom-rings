@@ -83,4 +83,4 @@ jobs:
         run: just check-custom-ring-keys
       - name: Compile, prove and verify every catalog shape with installed keys
         working-directory: prover
-        run: go test ./ring -run 'TestRingKeysCarryTheCompiledCircuits|TestCatalogRequestsProveWithTheInstalledKeys|TestGoldenRequestsProveWithTheInstalledKeys' -timeout 75m
+        run: go test ./ring -run 'TestRingKeysCarryTheCompiledCircuits|TestCatalogRequestsProveWithTheInstalledKeys|TestGoldenRequestsProveWithTheInstalledKeys|TestInstalledAnonymousTagPredicates' -timeout 75m

@@ -1,8 +1,8 @@
 import { getAddressEncoder, type Address } from "@solana/kit";
 
-import { hashBytes, rightAlign, checkedBytes } from "@heliuslabs/zolana/internal";
-import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/keypair";
-import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import { hashBytes, rightAlign, checkedBytes } from "@heliuslabs/spr/internal";
+import type { Bytes16, Bytes32 } from "@heliuslabs/spr/keypair";
+import type { ViewingKey, X25519PublicKey } from "@heliuslabs/spr/keypair";
 import { packBytesBe } from "./hasher.js";
 
 import { u32Field } from "../error.js";
@@ -34,19 +34,82 @@ export function deliveredSlotSecret(slot: DeliveredSlot): Bytes32 {
   ]);
 }
 
+/** The sealer's and the sent row reader's view of the secret, the agreement wiped once hashed. */
+export function txKeySlotSecret(
+  input: Readonly<{
+    txViewingKey: ViewingKey;
+    recipientViewingKey: X25519PublicKey;
+    salt: Bytes16;
+    outputIndex: number;
+    firstNullifier: Bytes32;
+  }>,
+): Bytes32 {
+  const agreement = input.txViewingKey.ecdh(input.recipientViewingKey);
+  try {
+    return deliveredSlotSecret({
+      agreement,
+      txViewingKey: input.txViewingKey.publicKey(),
+      recipientViewingKey: input.recipientViewingKey,
+      salt: input.salt,
+      outputIndex: input.outputIndex,
+      firstNullifier: input.firstNullifier,
+    });
+  } finally {
+    agreement.fill(0);
+  }
+}
+
+/** The bytes of a ring slot tag a frame carries, a false match costs one trial open. */
+export const SLOT_TAG_LEN = 8;
+
+/** Leading bytes stay zero and off the frame. */
+export function slotTag(tag: Bytes32): Bytes32 {
+  return unframedSlotTag(framedSlotTag(tag));
+}
+
+export function framedSlotTag(tag: Bytes32): Uint8Array {
+  return tag.slice(32 - SLOT_TAG_LEN);
+}
+
+export function unframedSlotTag(framed: Uint8Array): Bytes32 {
+  const tag = new Uint8Array(32);
+  tag.set(framed, 32 - SLOT_TAG_LEN);
+  return tag as Bytes32;
+}
+
+/**
+ * A confidential output's tag, stable per recipient key, since the confidential rail hides
+ * amounts and leaves the recipient linkable to anyone who holds its address.
+ */
+export function confidentialSlotTag(viewingU: Bytes32): Bytes32 {
+  return slotTag(viewingU);
+}
+
+/**
+ * An anonymous payment's tag, fresh per transaction and slot, since a tag stable per recipient
+ * would link every payment to one recipient in public.
+ */
+export function anonymousSlotTag(slotSecret: Bytes32): Bytes32 {
+  return slotTag(recipientTag(slotSecret));
+}
+
+/** `Poseidon(CRRT, slot_secret)`, published for a live recipient and proven against its body's secret. */
+export function recipientTag(slotSecret: Bytes32): Bytes32 {
+  return domainHash(RingDomain.recipientTagDomain, [
+    checkedBytes<Bytes32>(slotSecret, 32, "slot secret"),
+  ]);
+}
+
+/** `Poseidon(CRST, slot_secret)` at index `m`, the domain keeps it apart from every recipient tag. */
+export function bundleTag(slotSecret: Bytes32): Bytes32 {
+  return domainHash(RingDomain.senderTagDomain, [
+    checkedBytes<Bytes32>(slotSecret, 32, "slot secret"),
+  ]);
+}
+
 /** Rust `ring_id_field`, `hash_bytes` of the ring program address. */
 export function ringIdField(ring: Address): Bytes32 {
   return hashBytes(new Uint8Array(addressEncoder.encode(ring))) as Bytes32;
-}
-
-/** `Poseidon(CRSC, sender_pk_hash, private_tx_blinding)`, binding the audit and policy proofs to one hidden sender. */
-export function senderCommitment(
-  sender: Readonly<{ senderPkHash: Bytes32; privateTxBlinding: Bytes32 }>,
-): Bytes32 {
-  return domainHash(RingDomain.senderCommitment, [
-    checkedBytes<Bytes32>(sender.senderPkHash, 32, "sender pk hash"),
-    checkedBytes<Bytes32>(sender.privateTxBlinding, 32, "private tx blinding"),
-  ]);
 }
 
 /** Packs a validated copy, the copy wiped once packed. */

@@ -21,23 +21,19 @@ func TestRingDomainsAreTheAsciiTags(t *testing.T) {
 		tag   string
 		value uint64
 	}{
-		{"CRAU", shared.AuditStatementDomain},
-		{"CRDS", shared.DeliveredSlotSecretDomain},
 		{"CRBS", shared.BlindingSeedDomain},
-		{"CRSC", shared.SenderCommitmentDomain},
-		{"CROD", shared.DisclosurePadDomain},
-		{"CRPO", shared.PolicyStatementDomain},
 		{"CRTB", shared.PolicyTableDomain},
-		{"CRQW", shared.QueueWriteDomain},
+		{"CRQW", shared.RecordWriteDomain},
 		{"CRAP", shared.ApplyRecordsDomain},
 		{"CRRG", shared.RegisterKeyDomain},
-		{"CRDP", shared.DepositStatementDomain},
 		{"CRMG", shared.MergeStatementDomain},
-		{"CRDB", shared.DepositBlindingDomain},
 		{"CRPW", shared.WithdrawalsDomain},
-		{"CRWX", shared.WithdrawalExemptionDomain},
+		{"CRTX", shared.TransferStatementDomain},
+		{"CRTK", shared.TrackingLeafDomain},
+		{"CRTQ", shared.TrackingEntryDomain},
+		{"CRTA", shared.ApplyEnrollmentsDomain},
+		{"CRPT", shared.ListTagDomain},
 		{"CR_S", shared.DomSepCRShared},
-		{"CR_MD", shared.MergeDisclosureDomain},
 	} {
 		if want := new(big.Int).SetBytes([]byte(domain.tag)).Uint64(); domain.value != want {
 			t.Errorf("%s = %#x, want %#x", domain.tag, domain.value, want)

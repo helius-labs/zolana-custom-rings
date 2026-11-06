@@ -1,7 +1,7 @@
 import { CUSTOM_RING_PROOF_LENGTH } from "../../protocol/proof/custom-ring-proof.js";
-import { ClientError } from "@heliuslabs/zolana";
-import { compressG2 } from "@heliuslabs/zolana/internal";
-import { compressProof, type Proof } from "@heliuslabs/zolana/client";
+import { ClientError } from "@heliuslabs/spr";
+import { compressG2 } from "@heliuslabs/spr/internal";
+import { compressProof, type Proof } from "@heliuslabs/spr/client";
 
 /** `a(32) || b(64) || c(32) || commitment(32) || commitmentPok(32)`, Rust `CustomRingProof`. */
 export function customRingProof(proof: Proof): Uint8Array {

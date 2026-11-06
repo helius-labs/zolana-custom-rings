@@ -52,7 +52,7 @@ func withPublicInputHash(assignment frontend.Circuit, value *big.Int) frontend.C
 	return copied.Interface().(frontend.Circuit)
 }
 
-// Every shipped shape, including nonempty withdrawals and both registry specializations,
+// Every shipped shape, including nonempty withdrawals and both apply families,
 // must produce a proof. REQUIRE_RING_KEYS makes absent release artifacts a hard CI failure.
 func TestCatalogRequestsProveWithTheInstalledKeys(t *testing.T) {
 	vectors := map[string]any{}

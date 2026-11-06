@@ -1,12 +1,12 @@
-import { X25519Keypair, ShieldedKeypair } from "@heliuslabs/zolana/keypair";
-import { LocalKeys } from "@heliuslabs/zolana/client";
+import { ShieldedKeypair } from "@heliuslabs/spr/keypair";
+import { LocalKeys } from "@heliuslabs/spr/client";
 import {
   compileUnsignedTransaction,
   reserveEntries,
   DEFAULT_RESERVATION_TTL_MS,
   treeAddress,
-} from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/internal";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 import {
   SOL_MINT,
   AssetRegistry,
@@ -15,16 +15,16 @@ import {
   Wallet,
   deserializeWallet,
   serializeWallet,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 import {
   loadPersistedWallet,
   savePersistedWallet,
   walletSnapshotCipher,
-} from "@heliuslabs/zolana/wallet";
+} from "@heliuslabs/spr/wallet";
 import { address, generateKeyPairSigner, signTransactionWithSigners } from "@solana/kit";
 import { afterEach, expect, it, vi } from "vitest";
 
-import { ringConfigPda } from "../../../src/protocol/pda/index.js";
+import { ringPolicyPda } from "../../../src/protocol/pda/index.js";
 import { buildRingTransferTransaction } from "../../../src/operations/payments/transfer.js";
 import {
   RingTransactionSubmission,
@@ -32,14 +32,19 @@ import {
 } from "../../../src/operations/workflow/submission.js";
 import { ringTransferClient } from "../../helpers/clients.js";
 import { BLOCKHASH } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
+import { trackingTree } from "../../helpers/member-registry.js";
 import {
   ownedAccount,
-  ringProgramConfigData,
+  ringPolicyData,
   sppRingRegistration,
+  trackingAuthorizations,
+  trackingRegistryAccount,
 } from "../../helpers/ring-accounts.js";
+import { TRACKING_REVISION, trackingEntry } from "../../helpers/ring-pipeline.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 const MEMO = address("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
+const TRACKING = address("Cura111111111111111111111111111111111111111");
 function field(value: number): Bytes32 {
   const bytes = new Uint8Array(32);
   bytes[31] = value;
@@ -73,29 +78,34 @@ afterEach(() => vi.restoreAllMocks());
 
 it("binds high level ring transfers to the configured nonzero tree", async () => {
   const f = funded(7);
-  const [config, bump] = await ringConfigPda(RING);
+  const [ring, bump] = await ringPolicyPda(RING);
   const authority = f.owner.shieldedAddress().solanaAddress();
   const [ringAuth, registration] = await sppRingRegistration({ authority, ringProgramId: RING });
+  const recipient = ShieldedKeypair.generate().shieldedAddress();
+  const owners = [f.owner.shieldedAddress(), recipient];
+  const tracked = trackingTree(owners.map((owner) => trackingEntry(owner)));
+  const authorizations = await trackingAuthorizations(TRACKING, owners);
   let outputTreeId: number | undefined;
   const client = ringTransferClient({
     tree: treeAddress(7),
     treeId: 7,
     getAccount: async (key) =>
-      key === config
+      key === ring
         ? ownedAccount(
             RING,
-            ringProgramConfigData({
-              authority,
-              auditorPublicKey: X25519Keypair.fromBytes(new Uint8Array(32).fill(9))
-                .publicKey()
-                .toBytes(),
-              bump,
-              hasPolicy: false,
-            }),
+            ringPolicyData({ bump, roles: { admin: authority }, tracking: TRACKING }),
           )
         : key === ringAuth
           ? registration
-          : undefined,
+          : key === TRACKING
+            ? trackingRegistryAccount({
+                root: tracked.root,
+                revision: TRACKING_REVISION,
+                nextIndex: tracked.nextIndex,
+                auditorPubkey: new Uint8Array(33),
+              })
+            : authorizations.get(key),
+    getTrackingRecordPool: async (request) => tracked.pool(request.members, request.openings),
     proveRingTransact: async (inputs) => {
       outputTreeId = inputs.outputTreeId;
       throw new Error("prover boundary reached");
@@ -116,7 +126,7 @@ it("binds high level ring transfers to the configured nonzero tree", async () =>
       wallet: f.wallet,
       keys,
       feePayer: f.owner.shieldedAddress().solanaAddress(),
-      recipient: ShieldedKeypair.generate().shieldedAddress(),
+      recipient,
       amount: 1n,
     }),
   ).rejects.toMatchObject({ code: "RING_BUILD_TRANSFER" });
@@ -147,6 +157,7 @@ it("retains unknown submissions after the lease interval and confirmation until 
       };
     },
   });
+  submission.prove();
   const send = vi.fn(async () => undefined);
   const transport = {
     sign: async (transaction: Parameters<typeof signTransactionWithSigners>[1]) =>
@@ -230,6 +241,7 @@ async function persistedFixture(count = 1) {
     send: vi.fn(async () => undefined),
     status: vi.fn(async () => ({ kind: "unknown" as const })),
   };
+  submission.prove();
   return { ...f, store, cipher, submission, transport };
 }
 
@@ -319,6 +331,30 @@ it("settles a restored expiry without building or broadcasting another payment",
   expect(f.transport.send).toHaveBeenCalledTimes(1);
 });
 
+it("fails without a rebuild once reconcile settled the record", async () => {
+  const f = await persistedFixture();
+  expect((await f.submission.sendPersisted(f)).kind).toBe("unknown");
+  const expired = { status: async () => ({ kind: "expired" as const }) };
+  await reconcileRingSubmissions({ ...f, transport: expired });
+  f.transport.status.mockResolvedValue({ kind: "expired" } as never);
+  expect(await f.submission.sendPersisted(f)).toMatchObject({ kind: "failed", attempts: 1 });
+  expect(f.transport.send).toHaveBeenCalledTimes(1);
+  expect((await loadPersistedWallet(f))?.pendingSubmissions()).toEqual([]);
+});
+
+it("refuses to write back a record reconcile settled", async () => {
+  const f = await persistedFixture();
+  expect((await f.submission.send(f.transport)).kind).toBe("unknown");
+  const expired = { status: async () => ({ kind: "expired" as const }) };
+  await reconcileRingSubmissions({ ...f, transport: expired });
+  await expect(f.submission.send(f.transport)).rejects.toMatchObject({
+    code: "RING_SUBMISSION_PENDING",
+    details: { reason: "reconciled" },
+  });
+  expect(f.wallet.pendingSubmissions()).toEqual([]);
+  expect(f.transport.send).toHaveBeenCalledTimes(1);
+});
+
 it("serializes saves with sync and leaves the newest checkpoint in the store", async () => {
   const f = await persistedFixture();
   let release: () => void = () => {};
@@ -349,7 +385,7 @@ it.each([2, 3])("upgrades version %s without losing notes or history", (version)
   const loaded = deserializeWallet(JSON.stringify(old));
   expect(loaded.utxos()).toEqual(f.wallet.utxos());
   expect(loaded.pendingSubmissions()).toEqual([]);
-  expect(JSON.parse(serializeWallet(loaded))).toMatchObject({ version: 4 });
+  expect(JSON.parse(serializeWallet(loaded))).toMatchObject({ version: 5 });
 });
 
 it("saves an existing unknown signature when persistence is attached", async () => {

@@ -1,7 +1,7 @@
 /** The SPP wire pieces the ring reads back from its own forwarded data, pinned SPP layout. */
 import { bn254 } from "@noble/curves/bn254.js";
 
-import type { Bytes16, Bytes32, Bytes128 } from "@heliuslabs/zolana";
+import type { Bytes16, Bytes32, Bytes128 } from "@heliuslabs/spr";
 import {
   bigIntToBytes,
   bytesToBigInt,
@@ -11,7 +11,7 @@ import {
   Reader,
   unsigned,
   type Writer,
-} from "@heliuslabs/zolana/internal";
+} from "@heliuslabs/spr/internal";
 import {
   CACHE_CAPACITY,
   MergeEncryptionScheme,
@@ -20,9 +20,9 @@ import {
   type MergeOutputEncryption,
   type MergeTransactInstructionData,
   type TreeContext,
-} from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/interface";
 
-import { ClientError } from "@heliuslabs/zolana/client";
+import { ClientError } from "@heliuslabs/spr/client";
 
 const BN254_BASE_MODULUS = bn254.fields.Fp.ORDER;
 

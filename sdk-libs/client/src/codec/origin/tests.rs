@@ -196,6 +196,31 @@ fn a_lookup_table_transaction_is_refused() {
         parse(&json),
         Err(AuditError::Client(ClientError::AddressLookupTable))
     ));
+    let origins = ConfirmedRingOrigins {
+        signature: Signature::from([6; 64]),
+        transaction: serde_json::from_value(json.clone()).unwrap(),
+        ring: RING,
+    }
+    .read()
+    .unwrap();
+    assert_eq!(origins.keys().copied().collect::<Vec<_>>(), [0]);
+    assert_eq!(origins[&0].pool_accounts, [OTHER]);
+    assert_eq!(origins[&0].signers, [payer]);
+    for loaded in [
+        serde_json::json!({"writable": [OTHER.to_string()], "readonly": []}),
+        serde_json::json!({"writable": [], "readonly": []}),
+        serde_json::Value::Null,
+    ] {
+        let mut missing = json.clone();
+        missing["meta"]["loadedAddresses"] = loaded;
+        assert!(ConfirmedRingOrigins {
+            signature: Signature::from([6; 64]),
+            transaction: serde_json::from_value(missing).unwrap(),
+            ring: RING,
+        }
+        .read()
+        .is_err());
+    }
 }
 
 #[test]
@@ -267,6 +292,34 @@ fn event_ordinals_separate_two_origins_in_one_transaction() {
             ]
         }
     });
+    let origins = ConfirmedRingOrigins {
+        signature,
+        transaction: serde_json::from_value(json.clone()).unwrap(),
+        ring: RING,
+    }
+    .read()
+    .unwrap();
+    assert_eq!(origins.keys().copied().collect::<Vec<_>>(), [0, 1]);
+    assert!(origins[&0].ring_invoked);
+    assert!(!origins[&1].ring_invoked);
+    assert_eq!(origins[&0].signers, [payer]);
+    let other = ConfirmedRingOrigins {
+        signature,
+        transaction: serde_json::from_value(json.clone()).unwrap(),
+        ring: OTHER,
+    }
+    .read()
+    .unwrap();
+    assert_eq!(other.keys().copied().collect::<Vec<_>>(), [0, 1]);
+    assert!(!other[&0].ring_invoked);
+    assert!(other[&1].ring_invoked);
+    assert!(ConfirmedRingOrigins {
+        signature: Signature::from([8; 64]),
+        transaction: serde_json::from_value(json.clone()).unwrap(),
+        ring: RING,
+    }
+    .read()
+    .is_err());
     let first: EncodedConfirmedTransactionWithStatusMeta =
         serde_json::from_value(json.clone()).expect("rpc shape");
     let second: EncodedConfirmedTransactionWithStatusMeta =
@@ -716,9 +769,9 @@ fn a_failed_transaction_grants_no_origin() {
 #[test]
 fn ring_transfer_outer_tags_preserve_confirmed_ring_origin() {
     for (outer_tag, inner_tag) in [
-        (custom_ring_interface::tag::TRANSACT, tag::RING_TRANSACT),
+        (custom_ring_interface::tag::TRANSFER, tag::RING_TRANSACT),
         (
-            custom_ring_interface::tag::DELEGATE_TRANSACT,
+            custom_ring_interface::tag::AUTHORITY_TRANSFER,
             tag::RING_AUTHORITY_TRANSACT,
         ),
     ] {
@@ -891,8 +944,6 @@ fn confirmed_event_binds_every_indexed_audit_and_recovery_field() {
 fn confirmed_event_wire_fixture_matches_the_shared_parser() {
     let (group, indexed) = confirmed_transfer_fixture();
     check_event_wire_fixture("confirmed-event", group, indexed);
-    let (group, indexed) = confirmed_deposit_fixture();
-    check_event_wire_fixture("confirmed-deposit-event", group, indexed);
     let (group, indexed) = confirmed_merge_fixture();
     check_event_wire_fixture("confirmed-merge-event", group, indexed);
 }
@@ -932,76 +983,10 @@ fn check_event_wire_fixture(name: &str, group: InstructionGroup, mut indexed: Sh
     assert_eq!(fixture, pinned);
 }
 
-fn confirmed_deposit_fixture() -> (InstructionGroup, ShieldedTransaction) {
-    use spr_event::{
-        encode_encrypted_ring_deposit_output, encode_event_instruction, EncryptedRingDepositData,
-        EncryptedRingDepositOutput, EventKind, GeneralEvent, OutputUtxo, SplTransfer,
-    };
-    use spr_interface::instruction::instruction_data::deposit::{
-        DepositAssetKind, RingDepositEntry,
-    };
-    let (mut group, mut indexed) = confirmed_transfer_fixture();
-    indexed.proofless = true;
-    indexed.tx_viewing_pk = None;
-    indexed.salt = None;
-    indexed.nullifiers.clear();
-    indexed.messages.clear();
-    indexed.output_slots.truncate(1);
-    let encrypted = EncryptedRingDepositData {
-        tx_viewing_pk: *spr_keypair::X25519Keypair::from_bytes(&[7; 32])
-            .pubkey()
-            .as_bytes(),
-        salt: [8; 16],
-        ciphertext: vec![99, 100],
-    };
-    let deposit = RingDepositIxData {
-        assets: vec![DepositAssetKind::Sol],
-        deposits: vec![RingDepositEntry {
-            asset_index: 0,
-            view_tag: [7; 32],
-            owner_utxo_hash: [12; 32],
-            amount: 123,
-            ring_data_hash: [13; 32],
-            encrypted: encrypted.clone(),
-        }],
-    };
-    indexed.output_slots[0].payload =
-        encode_encrypted_ring_deposit_output(EncryptedRingDepositOutput {
-            owner_utxo_hash: [12; 32],
-            asset: SOL_MINT.to_bytes(),
-            amount: 123,
-            data_hash: None,
-            ring_program_id: RING.to_bytes(),
-            ring_data_hash: [13; 32],
-            encrypted,
-        });
-    let event = GeneralEvent {
-        inputs: Vec::new(),
-        outputs: vec![OutputUtxo {
-            view_tag: [7; 32],
-            utxo_hash: [6; 32],
-            data: indexed.output_slots[0].payload.clone(),
-        }],
-        messages: Vec::new(),
-        tx_viewing_pk: [0; 33],
-        salt: [0; 16],
-        first_output_leaf_index: 42,
-        output_tree: spr_interface::pda::tree(3).to_bytes(),
-        spl_transfers: vec![SplTransfer {
-            is_deposit: true,
-            amount: 123,
-            asset: None,
-        }],
-    };
-    group.inner[0].data = [vec![tag::RING_DEPOSIT], deposit.serialize().unwrap()].concat();
-    group.inner[1].data = encode_event_instruction(EventKind::Deposit, &event);
-    (group, indexed)
-}
-
 fn confirmed_merge_fixture() -> (InstructionGroup, ShieldedTransaction) {
     use spr_event::{encode_event_instruction, EventKind, InputTreeSequence, MergeEvent};
     use spr_interface::instruction::instruction_data::{
-        merge_ring::MergeRingIxData,
+        merge_ring::{MergeRingAuthority, MergeRingIxData},
         merge_transact::{MergeOutputEncryption, MergeProof, MergeTransactIxData},
     };
     let (mut group, mut indexed) = confirmed_transfer_fixture();
@@ -1018,6 +1003,7 @@ fn confirmed_merge_fixture() -> (InstructionGroup, ShieldedTransaction) {
         });
     let data = MergeRingIxData {
         output_ring_data_hash: [13; 32],
+        authority: MergeRingAuthority::Ring,
         merge: MergeTransactIxData {
             expiry_unix_ts: u64::MAX,
             proof: MergeProof::zeroed(),
@@ -1048,57 +1034,72 @@ fn confirmed_merge_fixture() -> (InstructionGroup, ShieldedTransaction) {
 }
 
 /// Only a ring caller forwarding the exact body with the anonymous flag binds a disclosure.
-#[test]
-fn an_anonymous_merge_binds_the_disclosure_its_ring_forwarded() {
-    use custom_ring_interface::{
-        CustomRingMergeIxData, CustomRingProof, MergeDisclosure, PlainGroth16Proof,
-    };
+fn merge_proof() -> custom_ring_interface::CustomRingProof {
+    custom_ring_interface::CustomRingProof {
+        groth16: custom_ring_interface::PlainGroth16Proof {
+            proof_a: [1; 32],
+            proof_b: [2; 64],
+            proof_c: [3; 32],
+        },
+        commitment: [1; 32],
+        commitment_pok: [2; 32],
+    }
+}
+
+fn record_merge_group() -> (
+    InstructionGroup,
+    custom_ring_interface::CustomRingMergeIxData,
+) {
+    use custom_ring_interface::{CustomRingMergeIxData, SealedMergeRecord};
     use spr_interface::instruction::instruction_data::merge_ring::MergeRingIxData;
     let (mut group, _) = confirmed_merge_fixture();
     let spp = MergeRingIxData::deserialize(&group.inner[0].data[1..]).unwrap();
-    let disclosure = MergeDisclosure {
-        proof: CustomRingProof {
-            groth16: PlainGroth16Proof {
-                proof_a: [1; 32],
-                proof_b: [2; 64],
-                proof_c: [3; 32],
-            },
-            commitment: [1; 32],
-            commitment_pok: [2; 32],
-        },
-        eph_pk: [4; 33],
-        ciphertext: [5; 32],
-        fields: vec![[6; 32]; 13],
-    };
     let request = CustomRingMergeIxData {
-        registry_root_index: 0,
+        tracking_revision: Default::default(),
         output_ring_data_hash: spp.output_ring_data_hash,
-        disclosure: Some(disclosure.clone()),
-        merge: spp.merge.clone(),
+        authority: spp.authority,
+        sealed: SealedMergeRecord {
+            proof: merge_proof(),
+            eph_pk: [4; 33],
+            ciphertext: [5; custom_ring_interface::OPENING_RECORD_LEN],
+        },
+        merge: spp.merge,
     };
-    group.outer.data = [
-        vec![custom_ring_interface::tag::MERGE],
-        request.serialize().unwrap(),
-    ]
-    .concat();
-    let anonymous = ring_event_origin_in(std::slice::from_ref(&group), 0, RING).unwrap();
+    group.outer.data = [vec![ring_tag::MERGE], request.serialize().unwrap()].concat();
+    (group, request)
+}
+
+#[test]
+fn a_record_merge_binds_the_record_its_ring_forwarded() {
+    let (mut group, request) = record_merge_group();
+    let origin = ring_event_origin_in(std::slice::from_ref(&group), 0, RING).unwrap();
+    assert_eq!(origin.event.kind(), ConfirmedEventKind::Merge);
     assert_eq!(
-        anonymous.merge_disclosure,
+        origin.merge_disclosure,
         Some(ConfirmedMergeDisclosure {
-            eph_pk: disclosure.eph_pk,
-            ciphertext: disclosure.ciphertext,
-            fields: disclosure.fields,
+            eph_pk: request.sealed.eph_pk,
+            ciphertext: request.sealed.ciphertext,
         })
     );
-    let mut other = request.clone();
+    let mut other = request;
     other.merge.expiry_unix_ts ^= 1;
-    group.outer.data = [
-        vec![custom_ring_interface::tag::MERGE],
-        other.serialize().unwrap(),
-    ]
-    .concat();
+    group.outer.data = [vec![ring_tag::MERGE], other.serialize().unwrap()].concat();
     let rewritten = ring_event_origin_in(std::slice::from_ref(&group), 0, RING).unwrap();
     assert_eq!(rewritten.merge_disclosure, None);
+}
+
+#[test]
+fn a_ring_tag_equal_to_spp_merge_names_no_record_and_no_source() {
+    let (mut group, _) = record_merge_group();
+    group.outer.data[0] = tag::RING_MERGE_TRANSACT;
+    let origin = ring_event_origin_in(std::slice::from_ref(&group), 0, RING).unwrap();
+    assert_eq!(origin.merge_disclosure, None);
+    let (mut group, _) = record_merge_group();
+    group.inner[0].program_id = RING;
+    assert!(matches!(
+        ring_event_origin_in(std::slice::from_ref(&group), 0, RING),
+        Err(AuditError::InvalidEventIndex(0))
+    ));
 }
 
 #[test]
@@ -1127,7 +1128,7 @@ fn rpc_origin_binds_the_confirmed_slot() {
 }
 
 #[test]
-fn historical_policy_owners_come_from_confirmed_metadata_without_live_accounts() {
+fn policy_owners_come_from_confirmed_metadata_without_live_accounts() {
     use custom_ring_interface::{RingRail, RingTransactData};
     let vectors: serde_json::Value = serde_json::from_str(include_str!(
         "../../../../../test-vectors/proof/ring-transact-expansion.json"
@@ -1145,8 +1146,8 @@ fn historical_policy_owners_come_from_confirmed_metadata_without_live_accounts()
         },
     ];
     data.interface_transfers = transfers.clone();
-    data.policy.as_mut().unwrap().spl_withdrawal_owners = &owners;
-    let mut frame = vec![ring_tag::TRANSACT];
+    data.spl_withdrawal_owners = &owners;
+    let mut frame = vec![ring_tag::TRANSFER];
     frame.extend(data.encode().unwrap());
     let mut source = instruction(POOL, 2);
     source.data = ring_transact_bytes(transfers);
@@ -1173,4 +1174,152 @@ fn historical_policy_owners_come_from_confirmed_metadata_without_live_accounts()
     );
     source.data = ring_transact_bytes(vec![InterfaceTransfer::SolWithdrawal { amount: 8 }]);
     assert!(bind_withdrawal_owners(&source, &frame, &mut legs).is_err());
+}
+
+/// One in-proof or signer frame and its forwarded SPP data, the pool accounts ending in a SOL leg.
+fn origin_of_frame(
+    in_proof: bool,
+    interface_transfers: Vec<InterfaceTransfer>,
+) -> Result<RingOrigin, AuditError> {
+    use custom_ring_interface::{
+        CustomRingProof, FrameExtensions, InProofOwner, InputTrees, PlainGroth16Proof, RingOutput,
+        SlotBody,
+    };
+    let zero = [0u8; 32];
+    let groth16 = PlainGroth16Proof {
+        proof_a: zero,
+        proof_b: [0; 64],
+        proof_c: zero,
+    };
+    let proof = CustomRingProof {
+        groth16,
+        commitment: zero,
+        commitment_pok: zero,
+    };
+    let (hash, u) = ([1u8; 32], [2u8; 32]);
+    let body = [3u8; custom_ring_interface::RECIPIENT_BODY_LEN];
+    let record = [4u8; custom_ring_interface::AUDIT_RECORD_LEN];
+    let nullifiers = [[7u8; 32]];
+    let envelope = [0u8; 2048];
+    let output = RingOutput {
+        hash: &hash,
+        owner_tag: custom_ring_interface::stream::slot_tag(u),
+        body: SlotBody::Recipient(&body),
+        record: &record,
+        tail: None,
+    };
+    let context = TreeContext {
+        utxo_tree_root_index: 0,
+        nullifier_tree_root_index: 0,
+    };
+    let mut data = RingTransactData {
+        rail: RingRail::Confidential,
+        n_in: 1,
+        n_out: 2,
+        proof: &proof,
+        tracking_revision: Default::default(),
+        own_revision: None,
+        policy: None,
+        spl_withdrawal_owners: &[],
+        approval: Default::default(),
+        no_spend: false,
+        public_owners: false,
+        expiry_unix_ts: 0,
+        tx_viewing_u: &zero,
+        salt: &[0; 16],
+        extensions: FrameExtensions::default(),
+        interface_transfers: interface_transfers.clone(),
+        has_data: false,
+        entry: false,
+        wide_owners: false,
+        outputs: vec![output, output],
+        replies: None,
+        sender: None,
+        envelope: &[],
+        private_tx_hash: &zero,
+        anonymous: None,
+        in_proof_owner: in_proof.then_some(InProofOwner {
+            owner: &zero,
+            commitment: &zero,
+            commitment_pok: &zero,
+        }),
+        spp_proof: &groth16,
+        nullifiers: &nullifiers,
+        input_trees: InputTrees::One(context),
+    };
+    data.envelope = &envelope[..data.audit_stream().unwrap().envelope().len];
+    let frame = [vec![ring_tag::TRANSFER], data.encode().unwrap()].concat();
+    let spp = TransactIxData {
+        expiry_unix_ts: u64::MAX,
+        private_tx_hash: zero,
+        circuit: data.circuit(),
+        tx_viewing_pk: [0u8; 33],
+        salt: [0u8; 16],
+        proof: TransactProof::zeroed(),
+        inputs: Vec::new(),
+        interface_transfers,
+        data_hash: None,
+        ring_data_hash: None,
+        outputs: Vec::new(),
+        messages: Vec::new(),
+        tree_contexts: vec![context],
+    };
+    let mut source = instruction(POOL, 2);
+    source.data = [vec![tag::RING_TRANSACT], spp.serialize().unwrap()].concat();
+    source.accounts = vec![OTHER, OTHER, SOL, RECIPIENT];
+    let mut event = instruction(POOL, 3);
+    event.data = bs58::decode(event_data()).into_vec().unwrap();
+    let mut outer = instruction(RING, 1);
+    outer.data = frame;
+    ring_event_origin_in(
+        &[InstructionGroup {
+            outer,
+            inner: vec![source, event],
+        }],
+        0,
+        RING,
+    )
+}
+
+#[test]
+fn an_in_proof_withdrawal_reads_under_the_confidential_rail() {
+    let leg = vec![InterfaceTransfer::SolWithdrawal { amount: 4_200 }];
+    let signer = origin_of_frame(false, leg.clone()).expect("signer rail reads");
+    assert_eq!(signer.withdrawals.len(), 1);
+    let no_leg = origin_of_frame(true, Vec::new()).expect("in-proof without a leg reads");
+    assert!(no_leg.audit_frame(RingMode::Confidential).is_ok());
+    let in_proof = origin_of_frame(true, leg).expect("in-proof with a leg reads");
+    assert_eq!(in_proof.withdrawals.len(), 1);
+    assert!(in_proof.audit_frame(RingMode::Confidential).is_ok());
+}
+
+fn tagged_frames(committed: &str, tag_byte: u8) -> Vec<Vec<u8>> {
+    committed
+        .lines()
+        .map(|line| [vec![tag_byte], hex::decode(line.trim()).unwrap()].concat())
+        .collect()
+}
+
+#[test]
+fn a_frame_reads_under_its_tag_alone() {
+    let current = include_str!("../../../../../test-vectors/settlement/frame.hex");
+    let [first, ..] = &tagged_frames(current, ring_tag::TRANSFER)[..] else {
+        panic!("a vector frame")
+    };
+    assert!(audit_frame_of(first, RingMode::Confidential).is_ok());
+    for unassigned in [31, 43, 44, 45, 46, 47] {
+        assert!(audit_frame_of(&[unassigned], RingMode::Confidential).is_err());
+    }
+}
+
+#[test]
+fn a_failed_settlement_yields_no_origin() {
+    let settled = withdrawing_transaction(Vec::new(), Vec::new());
+    let mut failed = serde_json::to_value(&settled).unwrap();
+    failed["meta"]["err"] = serde_json::json!("AccountNotFound");
+    let failed: EncodedConfirmedTransactionWithStatusMeta = serde_json::from_value(failed).unwrap();
+    assert!(matches!(
+        confirmed_origin(failed, 0, RING),
+        Err(AuditError::Client(ClientError::TransactionFailed(_)))
+    ));
 }

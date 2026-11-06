@@ -12,7 +12,17 @@ import (
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
-// DeliveredSlotSecret mirrors shared.DeliveredSlot.Secret over X25519(tx_viewing_sk, u).
+// Recipient delivery stays outside every circuit, these mirror what Rust and TS derive for the vectors.
+const (
+	// deliveredSlotSecretDomain = "CRDS"
+	deliveredSlotSecretDomain = 0x43524453
+	// recipientTagDomain = "CRRT"
+	recipientTagDomain = 0x43525254
+	// senderTagDomain = "CRST"
+	senderTagDomain = 0x43525354
+)
+
+// DeliveredSlotSecret is Poseidon(CRDS, dh0, dh1, txpk0, txpk1, r0, r1, salt, i, n0) over X25519(tx_viewing_sk, u), the recipient rebuilds it from X25519(u_sk, tx_u).
 func DeliveredSlotSecret(t testing.TB, txViewingSk [32]byte, u [32]byte, salt [16]byte, i int, firstNullifier *big.Int) *big.Int {
 	t.Helper()
 	peer, err := ecdh.X25519().NewPublicKey(u[:])
@@ -27,7 +37,7 @@ func DeliveredSlotSecret(t testing.TB, txViewingSk [32]byte, u [32]byte, salt [1
 	dhLo, dhHi := Pack32([32]byte(agreement))
 	txLo, txHi := Pack33(Tagged(tx.PublicKey().Bytes()))
 	rLo, rHi := Pack33(Tagged(u[:]))
-	return ringtest.MustPoseidonHash(t, big.NewInt(shared.DeliveredSlotSecretDomain), dhLo, dhHi, txLo, txHi, rLo, rHi,
+	return ringtest.MustPoseidonHash(t, big.NewInt(deliveredSlotSecretDomain), dhLo, dhHi, txLo, txHi, rLo, rHi,
 		new(big.Int).SetBytes(salt[:]), big.NewInt(int64(i)), firstNullifier)
 }
 
@@ -45,14 +55,14 @@ func OutputBlinding(t testing.TB, firstNullifier, seedOut *big.Int, i int) *big.
 	return spptest.MustHash(t, blinding, err)
 }
 
-// DepositBlinding mirrors shared.DepositBlinding.
-func DepositBlinding(t testing.TB, blindingSecret *big.Int) *big.Int {
+// RecipientTag is the slot tag over its preimage.
+func RecipientTag(t testing.TB, preimage *big.Int) *big.Int {
 	t.Helper()
-	return ringtest.MustPoseidonHash(t, big.NewInt(shared.DepositBlindingDomain), blindingSecret)
+	return ringtest.MustPoseidonHash(t, big.NewInt(recipientTagDomain), preimage)
 }
 
-// SenderCommitment mirrors shared.SenderCommitment.
-func SenderCommitment(t testing.TB, senderPkHash, privateTxBlinding *big.Int) *big.Int {
+// SenderBundleTag is the bundle tag over its slot secret.
+func SenderBundleTag(t testing.TB, secret *big.Int) *big.Int {
 	t.Helper()
-	return ringtest.MustPoseidonHash(t, big.NewInt(shared.SenderCommitmentDomain), senderPkHash, privateTxBlinding)
+	return ringtest.MustPoseidonHash(t, big.NewInt(senderTagDomain), secret)
 }

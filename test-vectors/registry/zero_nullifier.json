@@ -1,0 +1,4 @@
+{
+  "description": "ZERO_NULLIFIER_PUBKEY, the nullifier public key of nullifier secret 0 = Poseidon(0). A note under it waives the tracking row only. Produced by prover/circuits/shared/zero_nullifier_test.go with WRITE_AUDIT_VECTORS=1.",
+  "nullifier_pk": "2a09a9fd93c590c26b91effbb2499f07e8f7aa12e2b4940a3aed2411cb65e11c"
+}

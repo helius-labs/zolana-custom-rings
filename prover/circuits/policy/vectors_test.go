@@ -1,3 +1,5 @@
+// Pins the table hash and rule decoding to their Rust twins over shared vectors.
+
 package policy_test
 
 import (
@@ -13,8 +15,6 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringpolicy"
-	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
-	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
 type tableRows struct {
@@ -22,6 +22,7 @@ type tableRows struct {
 		ListID   int64        `json:"list_id"`
 		Registry ringtest.Hex `json:"registry"`
 	} `json:"sources"`
+	Salted       uint64         `json:"salted"`
 	Rules        []ringtest.Hex `json:"rules"`
 	InlineAssets []ringtest.Hex `json:"inline_assets"`
 	InlineLimits []uint64       `json:"inline_limits"`
@@ -48,14 +49,21 @@ type ruleVector struct {
 	OwnRecords     []recordVector `json:"own_records"`
 	CuratorRecords []recordVector `json:"curator_records"`
 	Sender         ringtest.Hex   `json:"sender"`
-	Outputs        []struct {
+	RingInputs     []struct {
+		Owner  ringtest.Hex `json:"owner"`
+		Asset  ringtest.Hex `json:"asset"`
+		Amount uint64       `json:"amount"`
+	} `json:"ring_inputs"`
+	Outputs []struct {
+		Ring   bool         `json:"ring"`
 		Owner  ringtest.Hex `json:"owner"`
 		Asset  ringtest.Hex `json:"asset"`
 		Amount uint64       `json:"amount"`
 	} `json:"outputs"`
 	Outcome struct {
-		Kind string `json:"kind"`
-		Rule int    `json:"rule"`
+		Kind    string `json:"kind"`
+		Rule    int    `json:"rule"`
+		Subject string `json:"subject"`
 	} `json:"outcome"`
 }
 
@@ -68,10 +76,10 @@ type recordVector struct {
 type ruleParts struct {
 	Subject     string `json:"subject"`
 	Mode        string `json:"mode"`
-	Mask        uint8  `json:"mask"`
+	Mask        uint16 `json:"mask"`
 	Guard       string `json:"guard"`
 	Threshold   uint64 `json:"threshold"`
-	Alternative uint8  `json:"alternative"`
+	Alternative uint16 `json:"alternative"`
 }
 
 var (
@@ -92,12 +100,11 @@ func (c *tableCircuit) Define(api frontend.API) error {
 
 func TestPolicyTableMatchesRustVectors(t *testing.T) {
 	var vectors struct {
-		Version int           `json:"version"`
-		Cases   []tableVector `json:"cases"`
+		Cases []tableVector `json:"cases"`
 	}
 	ringtest.ReadVector(t, "policy/ring-policy-table.json", &vectors)
-	if vectors.Version != policy.PolicyTableVersion || len(vectors.Cases) == 0 {
-		t.Fatalf("version %d with %d cases, want version %d", vectors.Version, len(vectors.Cases), policy.PolicyTableVersion)
+	if len(vectors.Cases) == 0 {
+		t.Fatal("no cases")
 	}
 	split := ringtest.RegisteredHint(t, "rulePartsHint")
 	for _, v := range vectors.Cases {
@@ -161,116 +168,21 @@ func TestPolicyRulesMatchRustVectors(t *testing.T) {
 				if err := v.solve(t, len(v.Rules)); err != nil {
 					t.Fatalf("an admitted transfer is refused, %v", err)
 				}
-			case "lists", "no_asset_limit", "mixed_assets":
+			case "lists":
 				if err := v.solve(t, v.Outcome.Rule); err != nil {
 					t.Fatalf("the rules before rule %d refuse, %v", v.Outcome.Rule, err)
 				}
 				for _, rules := range []int{v.Outcome.Rule + 1, len(v.Rules)} {
-					ringtest.RequireRefused(t, v.solve(t, rules), "policy.(*PolicyInputs).assertRules")
+					section := "policy.assertPaymentRules"
+					if v.Outcome.Subject == "sender" {
+						section = "policy.assertSenderRules"
+					}
+					ringtest.RequireRefused(t, v.solve(t, rules), section)
 				}
 			default:
 				t.Fatalf("outcome %q", v.Outcome.Kind)
 			}
 		})
-	}
-}
-
-// statementVector is one policy statement program-libs/interface/tests/statements.rs writes.
-type statementVector struct {
-	Key string `json:"key"`
-	// Null on the delegate key.
-	Anonymous        *bool          `json:"anonymous"`
-	PrivateTxHash    ringtest.Hex   `json:"private_tx_hash"`
-	PolicyHash       ringtest.Hex   `json:"policy_hash"`
-	RingProgramID    ringtest.Hex   `json:"ring_id"`
-	ApprovalRequired bool           `json:"approval_required"`
-	KeyEscrow        bool           `json:"key_escrow"`
-	OwnRoot          ringtest.Hex   `json:"own_root"`
-	CuratorRoot      ringtest.Hex   `json:"curator_root"`
-	Sender           ringtest.Hex   `json:"sender"`
-	PublicAssets     []ringtest.Hex `json:"public_assets"`
-	PublicAmounts    []ringtest.Hex `json:"public_amounts"`
-	PublicInputHash  ringtest.Hex   `json:"public_input_hash"`
-}
-
-type memberStatementCircuit struct{ policy.MemberPolicyCircuit }
-
-func (c *memberStatementCircuit) Define(api frontend.API) error {
-	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.Statement()))
-	return nil
-}
-
-type delegateStatementCircuit struct{ policy.DelegatePolicyCircuit }
-
-func (c *delegateStatementCircuit) Define(api frontend.API) error {
-	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.Statement()))
-	return nil
-}
-
-func TestPolicyStatementsMatchRustVectors(t *testing.T) {
-	var vectors struct {
-		Policy []statementVector `json:"policy"`
-	}
-	ringtest.ReadVector(t, "proof/ring-statements.json", &vectors)
-	if len(vectors.Policy) == 0 {
-		t.Fatal("no policy statement vectors")
-	}
-	for _, v := range vectors.Policy {
-		name := v.Key
-		if v.Anonymous != nil && *v.Anonymous {
-			name += "_anonymous"
-		}
-		t.Run(name, func(t *testing.T) {
-			circuit, assignment := v.circuits(t)
-			ringtest.RequirePublicInputBound(t, circuit, assignment)
-		})
-	}
-}
-
-// Wires outside the vector's statement keep an honest world's values.
-func (v statementVector) circuits(t *testing.T) (frontend.Circuit, frontend.Circuit) {
-	t.Helper()
-	member := v.Key == "member" && v.Anonymous != nil
-	delegated := v.Key == "delegate" && v.Anonymous == nil && !v.ApprovalRequired && v.KeyEscrow && v.Sender.Sign() == 0
-	if !member && !delegated {
-		t.Fatalf("key %q with anonymous %v, approval %v, key escrow %v fits no key", v.Key, v.Anonymous, v.ApprovalRequired, v.KeyEscrow)
-	}
-	w := ringpolicy.Delegate(transaction.Shape{NInputs: 2, NOutputs: 2})
-	if member {
-		w = ringpolicy.Confidential()
-		w.Anonymous, w.ApprovalRequired, w.KeyEscrow = *v.Anonymous, v.ApprovalRequired, v.KeyEscrow
-	}
-	b := w.Build(t)
-	p := b.Policy()
-	p.PrivateTxHash, p.PolicyHash, p.RingProgramID = v.PrivateTxHash.Int, v.PolicyHash.Int, v.RingProgramID.Int
-	p.OwnRoot, p.CuratorRoot = v.OwnRoot.Int, v.CuratorRoot.Int
-	for k := range p.PublicAssets {
-		p.PublicAssets[k], p.PublicAmounts[k] = v.PublicAssets[k].Int, v.PublicAmounts[k].Int
-	}
-	if member {
-		b.Member.Sender = v.Sender.Int
-	}
-	b.Rebind(t)
-	if delegated {
-		v.requireHostStatement(t, b.Delegate.PublicInputHash)
-		skeleton, err := policy.NewDelegatePolicyCircuit(policy.DelegateShape{Shape: w.Shape})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return &delegateStatementCircuit{*skeleton}, &delegateStatementCircuit{*b.Delegate}
-	}
-	v.requireHostStatement(t, b.Member.PublicInputHash)
-	skeleton, err := policy.NewMemberPolicyCircuit(policy.MemberShape{Outputs: w.Outputs})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return &memberStatementCircuit{*skeleton}, &memberStatementCircuit{*b.Member}
-}
-
-func (v statementVector) requireHostStatement(t *testing.T, host frontend.Variable) {
-	t.Helper()
-	if got := ringtest.AsBigInt(host); got.Cmp(v.PublicInputHash.Int) != 0 {
-		t.Fatalf("host statement %x, the vector has %x", got, v.PublicInputHash.Int)
 	}
 }
 
@@ -288,7 +200,7 @@ func (r ruleParts) values(t *testing.T) []uint64 {
 }
 
 func (v tableRows) rows() ringpolicy.Rows {
-	var rows ringpolicy.Rows
+	rows := ringpolicy.Rows{Salted: v.Salted}
 	for _, source := range v.Sources {
 		rows.Sources = append(rows.Sources, policy.SourceWires{ListID: source.ListID, Registry: source.Registry.Int})
 	}
@@ -307,19 +219,22 @@ func (v tableRows) rows() ringpolicy.Rows {
 // solve runs the smallest member key holding the outputs under the table's first rules.
 func (v ruleVector) solve(t *testing.T, rules int) error {
 	t.Helper()
-	capacity := slices.IndexFunc(policy.MemberOutputs[:], func(outputs int) bool { return outputs >= len(v.Outputs) })
+	capacity := slices.IndexFunc(ringpolicy.OutputCapacities, func(outputs int) bool { return outputs >= len(v.Outputs) })
 	if capacity < 0 {
-		t.Fatalf("%d outputs exceed every member key", len(v.Outputs))
+		t.Fatalf("%d outputs exceed every transfer key", len(v.Outputs))
 	}
 	w := ringpolicy.World{
-		Outputs: policy.MemberOutputs[capacity],
+		Outputs: ringpolicy.OutputCapacities[capacity],
 		Sender:  memberID(t, v.Sender),
 		Own:     records(t, v.OwnRecords),
 		Curator: records(t, v.CuratorRecords),
 	}
 	for _, out := range v.Outputs {
 		owner := memberID(t, out.Owner)
-		w.Slots = append(w.Slots, ringpolicy.Slot{Owner: owner, Asset: memberID(t, out.Asset), Amount: out.Amount, Unowned: owner == 0})
+		w.Slots = append(w.Slots, ringpolicy.Slot{Owner: owner, Asset: memberID(t, out.Asset), Amount: out.Amount, Unowned: owner == 0, Exit: !out.Ring})
+	}
+	for _, input := range v.RingInputs {
+		w.Inputs = append(w.Inputs, ringpolicy.Slot{Owner: memberID(t, input.Owner), Asset: memberID(t, input.Asset), Amount: input.Amount})
 	}
 	rows := v.rows()
 	rows.Rules = rows.Rules[:rules]

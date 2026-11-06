@@ -1,0 +1,1062 @@
+{
+  "cases": [
+    {
+      "name": "a payment and change",
+      "inputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 10000,
+          "ring": true
+        }
+      ],
+      "outputs": [
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "amount": 100,
+          "ring": true
+        },
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 9900,
+          "ring": true
+        }
+      ],
+      "rows": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "debit": 100,
+          "kept": 9900,
+          "charge": 0,
+          "charged_outflow": 100
+        }
+      ],
+      "guards": [
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "guard": 100
+        },
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "guard": 0
+        }
+      ],
+      "asset_guards": [
+        {
+          "asset": 2001,
+          "guard": 100
+        }
+      ]
+    },
+    {
+      "name": "another owner funds a same-owner receipt",
+      "inputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 100,
+          "ring": true
+        },
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "amount": 5000,
+          "ring": true
+        }
+      ],
+      "outputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 5100,
+          "ring": true
+        }
+      ],
+      "rows": [
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "debit": 5000,
+          "kept": 0,
+          "charge": 0,
+          "charged_outflow": 5000
+        }
+      ],
+      "guards": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "guard": 5000
+        }
+      ],
+      "asset_guards": [
+        {
+          "asset": 2001,
+          "guard": 5000
+        }
+      ]
+    },
+    {
+      "name": "a default note counts as held and as a receipt",
+      "inputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 1000,
+          "ring": false
+        }
+      ],
+      "outputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 600,
+          "ring": true
+        },
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "amount": 400,
+          "ring": true
+        }
+      ],
+      "rows": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "debit": 400,
+          "kept": 600,
+          "charge": 0,
+          "charged_outflow": 400
+        }
+      ],
+      "guards": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "guard": 600
+        },
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "guard": 400
+        }
+      ],
+      "asset_guards": [
+        {
+          "asset": 2001,
+          "guard": 1000
+        }
+      ]
+    },
+    {
+      "name": "an exit and a withdrawal stay gross",
+      "inputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 500,
+          "ring": true
+        }
+      ],
+      "outputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 200,
+          "ring": false
+        }
+      ],
+      "withdrawals": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 300,
+          "ring": false
+        }
+      ],
+      "public": [
+        {
+          "asset": 2001,
+          "gross": 300
+        }
+      ],
+      "rows": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "debit": 500,
+          "kept": 0,
+          "charge": 0,
+          "charged_outflow": 500
+        }
+      ],
+      "guards": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "guard": 500
+        }
+      ],
+      "asset_guards": [
+        {
+          "asset": 2001,
+          "guard": 500
+        }
+      ]
+    },
+    {
+      "name": "a deposit funds the return of funds that exit",
+      "inputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 1000,
+          "ring": true
+        }
+      ],
+      "outputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 1000,
+          "ring": true
+        },
+        {
+          "owner": 1002,
+          "asset": 2001,
+          "amount": 1000,
+          "ring": false
+        }
+      ],
+      "rows": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "debit": 0,
+          "kept": 1000,
+          "charge": 1000,
+          "charged_outflow": 1000
+        }
+      ],
+      "guards": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "guard": 0
+        },
+        {
+          "owner": 1002,
+          "asset": 2001,
+          "guard": 1000
+        }
+      ],
+      "asset_guards": [
+        {
+          "asset": 2001,
+          "guard": 1000
+        }
+      ]
+    },
+    {
+      "name": "a deposit funds the return of a withdrawal",
+      "inputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 1000,
+          "ring": true
+        }
+      ],
+      "outputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 1001,
+          "ring": true
+        }
+      ],
+      "withdrawals": [
+        {
+          "owner": 1002,
+          "asset": 2001,
+          "amount": 999,
+          "ring": false
+        }
+      ],
+      "public": [
+        {
+          "asset": 2001,
+          "gross": 999
+        }
+      ],
+      "rows": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "debit": 0,
+          "kept": 1000,
+          "charge": 999,
+          "charged_outflow": 999
+        }
+      ],
+      "guards": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "guard": 1
+        },
+        {
+          "owner": 1002,
+          "asset": 2001,
+          "guard": 999
+        }
+      ],
+      "asset_guards": [
+        {
+          "asset": 2001,
+          "guard": 1000
+        }
+      ]
+    },
+    {
+      "name": "an even share",
+      "inputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 100,
+          "ring": true
+        },
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "amount": 100,
+          "ring": true
+        }
+      ],
+      "outputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 100,
+          "ring": true
+        },
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "amount": 100,
+          "ring": true
+        },
+        {
+          "owner": 1002,
+          "asset": 2001,
+          "amount": 100,
+          "ring": false
+        }
+      ],
+      "rows": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "debit": 0,
+          "kept": 100,
+          "charge": 50,
+          "charged_outflow": 50
+        },
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "debit": 0,
+          "kept": 100,
+          "charge": 50,
+          "charged_outflow": 50
+        }
+      ],
+      "guards": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "guard": 0
+        },
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "guard": 0
+        },
+        {
+          "owner": 1002,
+          "asset": 2001,
+          "guard": 100
+        }
+      ],
+      "asset_guards": [
+        {
+          "asset": 2001,
+          "guard": 100
+        }
+      ]
+    },
+    {
+      "name": "rounding telescopes to the amount",
+      "inputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 2,
+          "ring": true
+        },
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "amount": 1,
+          "ring": true
+        }
+      ],
+      "outputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 2,
+          "ring": true
+        },
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "amount": 1,
+          "ring": true
+        },
+        {
+          "owner": 1002,
+          "asset": 2001,
+          "amount": 2,
+          "ring": false
+        }
+      ],
+      "rows": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "debit": 0,
+          "kept": 2,
+          "charge": 1,
+          "charged_outflow": 1
+        },
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "debit": 0,
+          "kept": 1,
+          "charge": 1,
+          "charged_outflow": 1
+        }
+      ],
+      "guards": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "guard": 0
+        },
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "guard": 0
+        },
+        {
+          "owner": 1002,
+          "asset": 2001,
+          "guard": 2
+        }
+      ],
+      "asset_guards": [
+        {
+          "asset": 2001,
+          "guard": 2
+        }
+      ]
+    },
+    {
+      "name": "rounding over three rows",
+      "inputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 1,
+          "ring": true
+        },
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "amount": 1,
+          "ring": true
+        },
+        {
+          "owner": 1002,
+          "asset": 2001,
+          "amount": 1,
+          "ring": true
+        }
+      ],
+      "outputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 1,
+          "ring": true
+        },
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "amount": 1,
+          "ring": true
+        },
+        {
+          "owner": 1002,
+          "asset": 2001,
+          "amount": 1,
+          "ring": true
+        },
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 2,
+          "ring": false
+        }
+      ],
+      "rows": [
+        {
+          "owner": 1002,
+          "asset": 2001,
+          "debit": 0,
+          "kept": 1,
+          "charge": 1,
+          "charged_outflow": 1
+        },
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "debit": 0,
+          "kept": 1,
+          "charge": 1,
+          "charged_outflow": 1
+        }
+      ],
+      "guards": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "guard": 2
+        },
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "guard": 0
+        },
+        {
+          "owner": 1002,
+          "asset": 2001,
+          "guard": 0
+        }
+      ],
+      "asset_guards": [
+        {
+          "asset": 2001,
+          "guard": 2
+        }
+      ]
+    },
+    {
+      "name": "an owner who kept its funds is not charged",
+      "inputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 1000,
+          "ring": true
+        },
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "amount": 1000,
+          "ring": true
+        }
+      ],
+      "outputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 1000,
+          "ring": true
+        },
+        {
+          "owner": 1002,
+          "asset": 2001,
+          "amount": 1000,
+          "ring": false
+        }
+      ],
+      "rows": [
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "debit": 1000,
+          "kept": 0,
+          "charge": 0,
+          "charged_outflow": 1000
+        }
+      ],
+      "guards": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "guard": 0
+        },
+        {
+          "owner": 1002,
+          "asset": 2001,
+          "guard": 1000
+        }
+      ],
+      "asset_guards": [
+        {
+          "asset": 2001,
+          "guard": 1000
+        }
+      ]
+    },
+    {
+      "name": "public funds passing through charge only held funds",
+      "inputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 1000,
+          "ring": true
+        }
+      ],
+      "outputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 1000,
+          "ring": true
+        },
+        {
+          "owner": 1002,
+          "asset": 2001,
+          "amount": 5000,
+          "ring": false
+        }
+      ],
+      "rows": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "debit": 0,
+          "kept": 1000,
+          "charge": 1000,
+          "charged_outflow": 1000
+        }
+      ],
+      "guards": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "guard": 0
+        },
+        {
+          "owner": 1002,
+          "asset": 2001,
+          "guard": 5000
+        }
+      ],
+      "asset_guards": [
+        {
+          "asset": 2001,
+          "guard": 5000
+        }
+      ]
+    },
+    {
+      "name": "a no-spend deposit and exit charges nobody",
+      "outputs": [
+        {
+          "owner": 1002,
+          "asset": 2001,
+          "amount": 500,
+          "ring": false
+        }
+      ],
+      "guards": [
+        {
+          "owner": 1002,
+          "asset": 2001,
+          "guard": 500
+        }
+      ],
+      "asset_guards": [
+        {
+          "asset": 2001,
+          "guard": 500
+        }
+      ]
+    },
+    {
+      "name": "a deposit-funded payment with nothing leaving",
+      "inputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 1000,
+          "ring": true
+        }
+      ],
+      "outputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 1000,
+          "ring": true
+        },
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "amount": 500,
+          "ring": true
+        }
+      ],
+      "guards": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "guard": 0
+        },
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "guard": 500
+        }
+      ],
+      "asset_guards": [
+        {
+          "asset": 2001,
+          "guard": 500
+        }
+      ]
+    },
+    {
+      "name": "a mixed spend and deposit",
+      "inputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 100,
+          "ring": true
+        },
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "amount": 100,
+          "ring": true
+        }
+      ],
+      "outputs": [
+        {
+          "owner": 1002,
+          "asset": 2001,
+          "amount": 250,
+          "ring": true
+        }
+      ],
+      "rows": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "debit": 100,
+          "kept": 0,
+          "charge": 0,
+          "charged_outflow": 100
+        },
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "debit": 100,
+          "kept": 0,
+          "charge": 0,
+          "charged_outflow": 100
+        }
+      ],
+      "guards": [
+        {
+          "owner": 1002,
+          "asset": 2001,
+          "guard": 250
+        }
+      ],
+      "asset_guards": [
+        {
+          "asset": 2001,
+          "guard": 250
+        }
+      ]
+    },
+    {
+      "name": "the outflow bit reads the charge",
+      "inputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 1000,
+          "ring": true
+        }
+      ],
+      "outputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 1001,
+          "ring": true
+        }
+      ],
+      "withdrawals": [
+        {
+          "owner": 1002,
+          "asset": 2001,
+          "amount": 999,
+          "ring": false
+        }
+      ],
+      "public": [
+        {
+          "asset": 2001,
+          "gross": 999
+        }
+      ],
+      "rows": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "debit": 0,
+          "kept": 1000,
+          "charge": 999,
+          "charged_outflow": 999
+        }
+      ],
+      "guards": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "guard": 1
+        },
+        {
+          "owner": 1002,
+          "asset": 2001,
+          "guard": 999
+        }
+      ],
+      "asset_guards": [
+        {
+          "asset": 2001,
+          "guard": 1000
+        }
+      ],
+      "thresholds": [
+        {
+          "asset": 2001,
+          "cosign_above": 100,
+          "withdrawal_threshold": 0
+        }
+      ],
+      "mask": 1
+    },
+    {
+      "name": "the withdrawal bit reads the gross with no debit",
+      "inputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 1000,
+          "ring": true
+        }
+      ],
+      "outputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 1000,
+          "ring": true
+        }
+      ],
+      "public": [
+        {
+          "asset": 2001,
+          "gross": 1000
+        }
+      ],
+      "rows": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "debit": 0,
+          "kept": 1000,
+          "charge": 1000,
+          "charged_outflow": 1000
+        }
+      ],
+      "guards": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "guard": 0
+        }
+      ],
+      "asset_guards": [
+        {
+          "asset": 2001,
+          "guard": 0
+        }
+      ],
+      "thresholds": [
+        {
+          "asset": 2001,
+          "cosign_above": 0,
+          "withdrawal_threshold": 999
+        }
+      ],
+      "mask": 2
+    },
+    {
+      "name": "both bits",
+      "inputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 1000,
+          "ring": true
+        }
+      ],
+      "outputs": [
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "amount": 500,
+          "ring": true
+        }
+      ],
+      "withdrawals": [
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "amount": 500,
+          "ring": false
+        }
+      ],
+      "public": [
+        {
+          "asset": 2001,
+          "gross": 500
+        }
+      ],
+      "rows": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "debit": 1000,
+          "kept": 0,
+          "charge": 0,
+          "charged_outflow": 1000
+        }
+      ],
+      "guards": [
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "guard": 1000
+        }
+      ],
+      "asset_guards": [
+        {
+          "asset": 2001,
+          "guard": 1000
+        }
+      ],
+      "thresholds": [
+        {
+          "asset": 2001,
+          "cosign_above": 999,
+          "withdrawal_threshold": 499
+        }
+      ],
+      "mask": 3
+    },
+    {
+      "name": "bounds at the amount set no bit",
+      "inputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 1000,
+          "ring": true
+        }
+      ],
+      "outputs": [
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "amount": 500,
+          "ring": true
+        }
+      ],
+      "withdrawals": [
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "amount": 500,
+          "ring": false
+        }
+      ],
+      "public": [
+        {
+          "asset": 2001,
+          "gross": 500
+        }
+      ],
+      "rows": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "debit": 1000,
+          "kept": 0,
+          "charge": 0,
+          "charged_outflow": 1000
+        }
+      ],
+      "guards": [
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "guard": 1000
+        }
+      ],
+      "asset_guards": [
+        {
+          "asset": 2001,
+          "guard": 1000
+        }
+      ],
+      "thresholds": [
+        {
+          "asset": 2001,
+          "cosign_above": 1000,
+          "withdrawal_threshold": 500
+        }
+      ]
+    }
+  ],
+  "description": "Output 5 quantities per owner and asset. An input with ring false is a default-ring note, held and no same-ring input. An output with ring false is an exit. A withdrawal is gross. public holds the statement-bound gross per asset. rows holds nonzero outflows by ascending owner then asset, outflow = debit + charge, every other row reads no debit and no charge. guards holds guard(owner, asset) and asset_guards its sum over distinct owners. mask is the proven approval mask, bit 1 outflow past cosign_above, bit 2 gross past withdrawal_threshold, zero meaning no threshold. Produced by prover/circuits/policy/quantities_test.go with WRITE_AUDIT_VECTORS=1."
+}

@@ -7,7 +7,7 @@ members = [
     "program-libs/policy",
     "program-tests/custom-ring",
     "programs/custom-ring",
-    "programs/policy-store",
+    "programs/storage",
     "sdk-libs/client",
     "sdk-libs/indexer",
     "sdk-libs/keys",
@@ -42,6 +42,7 @@ zolana-ring-client = { path = "sdk-libs/client", version = "0.1.0" }
 zolana-ring-transaction = { path = "sdk-libs/transaction", version = "0.1.0" }
 custom-ring-sdk = { path = "sdk-libs/sdk", version = "0.1.0" }
 custom-ring-program = { path = "programs/custom-ring", version = "0.1.0" }
+storage-program = { path = "programs/storage", version = "0.1.0" }
 custom-ring-cli = { path = "cli", version = "0.1.0" }
 zolana-ring-rpc = { path = "services/ring-rpc", version = "0.1.0" }
 
@@ -50,29 +51,28 @@ zolana-ring-rpc = { path = "services/ring-rpc", version = "0.1.0" }
 time = ">=0.3, <0.3.46"
 
 # zolana crates through the submodule.
-spr-event = { path = "zolana/program-libs/event", version = "0.1.0" }
-spr-event-parser = { path = "zolana/sdk-libs/event", version = "0.1.0" }
-spr-interface = { path = "zolana/program-libs/interface", version = "0.1.1" }
-spr-user-registry-interface = { path = "zolana/program-libs/user-registry-interface", version = "0.1.0" }
-spr-tree = { path = "zolana/program-libs/tree", version = "0.1.0" }
-spr-keypair = { path = "zolana/sdk-libs/keypair", version = "0.1.0" }
-spr-instruction = { path = "zolana/sdk-libs/instruction", version = "0.1.0" }
-spr-program = { path = "zolana/sdk-libs/program", version = "0.1.0" }
-spr-protocol-instructions = { path = "zolana/protocol-ops/instructions", version = "0.1.0" }
-# The zk crates live in helius-labs/zk-tools (zk-dsl/), pinned by rev.
-spr-zk-dsl = { git = "https://github.com/helius-labs/zk-tools", rev = "a4ebd1699ffa04545e3739f16a51e764992d07d6" }
-spr-zk-gadgets = { git = "https://github.com/helius-labs/zk-tools", rev = "a4ebd1699ffa04545e3739f16a51e764992d07d6" }
-spr-zk-macros = { git = "https://github.com/helius-labs/zk-tools", rev = "a4ebd1699ffa04545e3739f16a51e764992d07d6" }
-spr-zk-macros-core = { git = "https://github.com/helius-labs/zk-tools", rev = "a4ebd1699ffa04545e3739f16a51e764992d07d6" }
-spr-api = { path = "zolana/sdk-libs/spr-api", version = "0.1.0", default-features = false }
-spr-program-test = { path = "zolana/sdk-libs/program-test", version = "0.1.0" }
-spr-transaction = { path = "zolana/sdk-libs/transaction", version = "0.1.0" }
-spr-client = { path = "zolana/sdk-libs/client", version = "0.1.0" }
-spr-gnark-ffi-prover = { path = "zolana/sdk-libs/gnark-ffi-prover", version = "0.1.0" }
-spr-gnark-ffi-prover-build = { path = "zolana/sdk-libs/gnark-ffi-prover/build-helper", version = "0.1.0" }
-spr-indexer-api = { path = "zolana/sdk-libs/indexer-api", version = "0.1.0" }
-spr-merkle-tree = { path = "zolana/protocol-ops/merkle-tree", version = "0.1.0" }
-spr-smart-account-client = { path = "zolana/protocol-ops/smart-account", version = "0.1.0" }
+spr-event = { path = "zolana/program-libs/event", version = "0.8.0" }
+spr-event-parser = { path = "zolana/sdk-libs/event", version = "0.8.0" }
+spr-interface = { path = "zolana/program-libs/interface", version = "0.8.0" }
+spr-user-registry-interface = { path = "zolana/program-libs/user-registry-interface", version = "0.8.0" }
+spr-tree = { path = "zolana/program-libs/tree", version = "0.8.0" }
+spr-keypair = { path = "zolana/sdk-libs/keypair", version = "0.8.0" }
+spr-instruction = { path = "zolana/sdk-libs/instruction", version = "0.8.0" }
+spr-program = { path = "zolana/sdk-libs/program", version = "0.8.0", default-features = false }
+spr-protocol-instructions = { path = "zolana/protocol-ops/instructions", version = "0.8.0" }
+spr-zk-dsl = "0.8.0"
+spr-zk-gadgets = "0.8.0"
+spr-zk-macros = "0.8.0"
+spr-zk-macros-core = "0.8.0"
+spr-api = { path = "zolana/sdk-libs/spr-api", version = "0.8.0", default-features = false }
+spr-program-test = { path = "zolana/sdk-libs/program-test", version = "0.8.0" }
+spr-transaction = { path = "zolana/sdk-libs/transaction", version = "0.8.0" }
+spr-client = { path = "zolana/sdk-libs/client", version = "0.8.0" }
+spr-gnark-ffi-prover = { path = "zolana/sdk-libs/gnark-ffi-prover", version = "0.8.0" }
+spr-gnark-ffi-prover-build = { path = "zolana/sdk-libs/gnark-ffi-prover/build-helper", version = "0.8.0" }
+spr-indexer-api = { path = "zolana/sdk-libs/indexer-api", version = "0.8.0" }
+spr-merkle-tree = { path = "zolana/protocol-ops/merkle-tree", version = "0.8.0" }
+spr-smart-account-client = { path = "zolana/protocol-ops/smart-account", version = "0.8.0" }
 spr-test-utils = { path = "zolana/program-tests/test-utils", version = "0.1.0" }
 spr-rpc-http = { path = "zolana/services/rpc-http", version = "0.1.0" }
 shielded-pool-program = { path = "zolana/programs/shielded-pool", version = "0.1.0" }
@@ -80,8 +80,8 @@ spr-user-registry = { path = "zolana/programs/user-registry", version = "0.1.0",
 groth16-solana = { version = "0.3.1", features = ["bsb22"] }
 
 light-array-map = "0.2.0"
-spr-account-checks = { path = "zolana/program-libs/account-checks", version = "0.1.0", default-features = false }
-spr-hasher = { path = "zolana/program-libs/hasher", version = "0.1.1", default-features = false }
+spr-account-checks = { path = "zolana/program-libs/account-checks", version = "0.8.0", default-features = false }
+spr-hasher = { path = "zolana/program-libs/hasher", version = "0.8.0", default-features = false }
 light-poseidon = "0.5"
 # Pinned to the head of the mollusk-0.15 branch (Lightprotocol/light-program-profiler).
 # Switch back to a released version once that lands upstream.
@@ -108,7 +108,6 @@ solana-commitment-config = "3.1"
 solana-compute-budget = "3.1"
 solana-compute-budget-interface = "3.0"
 solana-cpi = "3.1"
-solana-curve25519 = "4.0"
 solana-epoch-info = "3.1"
 # Pin solana-hash to 4.5.0: the agave 4.2 graph (agave-feature-set,
 # solana-message, solana-transaction) is built against 4.5.x; letting it float
@@ -334,6 +333,6 @@ opt-level = 3
 [profile.release]
 overflow-checks = true
 
-# Share the local hasher with the zk-tools git dependencies.
-[patch."https://github.com/helius-labs/zolana"]
+# Share the local hasher with the ZK crates.
+[patch.crates-io]
 spr-hasher = { path = "zolana/program-libs/hasher" }

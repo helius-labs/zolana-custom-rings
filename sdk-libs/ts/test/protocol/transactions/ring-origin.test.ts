@@ -3,24 +3,32 @@ import { readFileSync } from "node:fs";
 import { address, getBase58Decoder, type Address, type Signature } from "@solana/kit";
 import { encodeRingTransactInstructionData } from "../../../src/protocol/proof/circuit.js";
 
-import { wireDecoder, Writer, addressBytes, treeAddress } from "@heliuslabs/zolana/internal";
-import { X25519PublicKey, X25519Keypair } from "@heliuslabs/zolana/keypair";
+import {
+  encodeMergeOutputData,
+  wireDecoder,
+  Reader,
+  Writer,
+  addressBytes,
+  treeAddress,
+} from "@heliuslabs/spr/internal";
+import { X25519PublicKey, X25519Keypair } from "@heliuslabs/spr/keypair";
 import {
   InstructionTag,
   SHIELDED_POOL_CPI_AUTHORITY,
   SHIELDED_POOL_PROGRAM_ID,
   SOL_INTERFACE,
-} from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/interface";
 import type {
   Bytes16,
   Bytes32,
   Bytes33,
   Bytes128,
   InterfaceTransfer,
-} from "@heliuslabs/zolana/interface";
-import { SOL_MINT } from "@heliuslabs/zolana/transaction";
-import type { IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/interface";
+import { SOL_MINT } from "@heliuslabs/spr/transaction";
+import type { IndexedShieldedTransaction } from "@heliuslabs/spr/transaction";
 import { RingError } from "../../../src/protocol/error.js";
+import { readMergeData } from "../../../src/protocol/codec/codecs.js";
 import {
   confirmedInstructionGroups,
   confirmedRingWithdrawals,
@@ -31,6 +39,13 @@ import {
 } from "../../../src/protocol/transaction/origin.js";
 import { RingInstructionTag } from "../../../src/operations/management/admin.js";
 import { RingTransactData } from "../../../src/protocol/transaction/transact.js";
+import {
+  MergeRingAuthority,
+  decodeRingMergeRequest,
+  encodeRingMergeRequest,
+  forwardedMergeData,
+  sppMergeBody,
+} from "../../../src/crypto/audit/merge-disclosure.js";
 import { solanaRpcReads } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { ringFrame, ringInstructionData } from "../../helpers/ring-frame.js";
 
@@ -151,7 +166,10 @@ function confirmedTransaction(
     writable: readonly Address[];
     readonly: readonly Address[];
   },
-  lookup?: Readonly<{ writableIndexes: readonly number[]; readonlyIndexes: readonly number[] }>,
+  lookup?: Readonly<{
+    writableIndexes: readonly number[];
+    readonlyIndexes: readonly number[];
+  }>,
 ): unknown {
   return {
     slot: 7,
@@ -209,7 +227,10 @@ describe("confirmedInstructionGroups", () => {
     const loaded = { writable: [OTHER], readonly: [POOL] };
     expect(
       confirmedInstructionGroups(
-        confirmedTransaction(loaded, { writableIndexes: [3], readonlyIndexes: [9] }),
+        confirmedTransaction(loaded, {
+          writableIndexes: [3],
+          readonlyIndexes: [9],
+        }),
       ),
     ).toEqual(confirmedInstructionGroups(confirmedTransaction({ writable: [], readonly: [] })));
   });
@@ -222,7 +243,10 @@ describe("confirmedInstructionGroups", () => {
         { writable: [], readonly: [] },
         { writableIndexes: [3], readonlyIndexes: [9] },
       ),
-      confirmedTransaction(loaded, { writableIndexes: [3, 4], readonlyIndexes: [9] }),
+      confirmedTransaction(loaded, {
+        writableIndexes: [3, 4],
+        readonlyIndexes: [9],
+      }),
     ])
       expect(() => confirmedInstructionGroups(transaction)).toThrow(
         expect.objectContaining({ code: "RING_ORIGIN_DECODE" }),
@@ -354,11 +378,19 @@ describe("cached ring settlement wire vectors", () => {
 });
 
 /** A real `ring_transact` payload, so the tail is read against decoded transfers. */
-function transactData(transfers: readonly InterfaceTransfer[]): string {
+function transactData(
+  transfers: readonly InterfaceTransfer[],
+  circuit: Parameters<typeof encodeRingTransactInstructionData>[0]["circuit"] = {
+    kind: "confidentialRingEddsa",
+    inputs: 1,
+    outputs: 2,
+    publicAssetSlots: 1,
+  },
+): string {
   const encoded = encodeRingTransactInstructionData({
     expiryUnixTs: 0n,
     privateTxHash: zeros(32) as Bytes32,
-    circuit: { kind: "confidentialRingEddsa", inputs: 1, outputs: 2, publicAssetSlots: 1 },
+    circuit,
     txViewingPk: zeros(33) as Bytes33,
     salt: zeros(16) as Bytes16,
     proof: {
@@ -428,11 +460,8 @@ describe("confirmedRingWithdrawals", () => {
     const frame: RingTransactData = {
       ...ringFrame({ rail: "confidential", inputs: 1, outputs: 2 }),
       interfaceTransfers: transfers,
-      policy: {
-        proof: new Uint8Array(192),
-        ownRootIndex: 0,
-        splWithdrawalOwners: [addressBytes(DEPOSITOR) as Bytes32],
-      },
+      ownRevision: 0n,
+      splWithdrawalOwners: [addressBytes(DEPOSITOR) as Bytes32],
     };
     const source = poolInstruction(transfers, [
       SOL_INTERFACE,
@@ -456,7 +485,12 @@ describe("confirmedRingWithdrawals", () => {
       );
     expect(confirmedRingWithdrawals(confirmed(frame), RING)).toEqual([
       { ...SOL_LEG, screenedOwner: RECIPIENT },
-      { recipient: TOKEN_ACCOUNT, asset: MINT, amount: 9n, screenedOwner: DEPOSITOR },
+      {
+        recipient: TOKEN_ACCOUNT,
+        asset: MINT,
+        amount: 9n,
+        screenedOwner: DEPOSITOR,
+      },
     ]);
     expect(() =>
       confirmedRingWithdrawals(
@@ -467,6 +501,38 @@ describe("confirmedRingWithdrawals", () => {
         RING,
       ),
     ).toThrow();
+  });
+
+  it("reads the frame of an in-proof withdrawal under the confidential rail", () => {
+    const transfers: InterfaceTransfer[] = [{ kind: "solWithdrawal", amount: 7n }];
+    const zero = zeros(32) as Bytes32;
+    const data = getBase58Decoder().decode(
+      ringInstructionData({
+        ...ringFrame({ rail: "confidential", inputs: 1, outputs: 2 }),
+        interfaceTransfers: transfers,
+        ownRevision: 0n,
+        inProofOwner: { owner: zero, commitment: zero, commitmentPok: zero },
+      }),
+    );
+    const source = {
+      ...(poolInstruction(transfers, [SOL_INTERFACE, RECIPIENT]) as object),
+      data: transactData(transfers, {
+        kind: "anonymousRingEddsa",
+        inputs: 1,
+        outputs: 2,
+        publicAssetSlots: 1,
+        proofData: {
+          bsb22Commitment: { commitment: zero, commitmentPok: zero },
+        },
+      }),
+    };
+    const transaction = settlementTransaction(
+      [{ programIdIndex: keyIndex(RING), accounts: [], data }],
+      [source],
+    );
+    expect(confirmedRingWithdrawals(transaction, RING)).toEqual([
+      { ...SOL_LEG, screenedOwner: RECIPIENT },
+    ]);
   });
 
   it("names the recipient of a SOL withdrawal", () => {
@@ -604,7 +670,12 @@ function rpcWith(result: unknown | Error): ConstructorParameters<typeof RpcTrans
 function transferFixture(
   saltByte = 1,
   tag: number = InstructionTag.ringTransact,
-  rail: Readonly<{ anonymous?: boolean; tail?: Uint8Array; inputTree?: Address }> = {},
+  rail: Readonly<{
+    anonymous?: boolean;
+    inProof?: boolean;
+    tail?: Uint8Array;
+    inputTree?: Address;
+  }> = {},
 ) {
   const key = X25519Keypair.generate();
   const txViewingPublicKey = key.publicKey();
@@ -641,13 +712,18 @@ function transferFixture(
     expiryUnixTs: 0n,
     privateTxHash: field(12),
     circuit:
-      rail.anonymous === true
+      rail.anonymous === true || rail.inProof === true
         ? {
             kind: "anonymousRingEddsa",
             inputs: 2,
             outputs: 2,
             publicAssetSlots: 0,
-            proofData: { bsb22Commitment: { commitment: field(0), commitmentPok: field(0) } },
+            proofData: {
+              bsb22Commitment: {
+                commitment: field(0),
+                commitmentPok: field(0),
+              },
+            },
           }
         : {
             kind:
@@ -688,16 +764,29 @@ function transferFixture(
   const frame = ringFrame({
     rail:
       tag === InstructionTag.ringAuthorityTransact
-        ? "delegate"
+        ? rail.anonymous === true
+          ? "anonymousDelegate"
+          : "delegate"
         : rail.anonymous === true
           ? "anonymous"
           : "confidential",
     inputs: 2,
     outputs: 2,
   });
-  const ringData = ringInstructionData(frame);
+  const framed: RingTransactData =
+    rail.inProof === true
+      ? {
+          ...frame,
+          inProofOwner: {
+            owner: field(0),
+            commitment: field(0),
+            commitmentPok: field(0),
+          },
+        }
+      : frame;
+  const ringData = ringInstructionData(framed);
   const confirmed = confirmedEvent(RING, [PAYER], source, event, ringData);
-  return { indexed, confirmed, source, event, frame, ringData };
+  return { indexed, confirmed, source, event, frame: framed, ringData };
 }
 
 function confirmedEvent(
@@ -749,99 +838,105 @@ function confirmedEvent(
   };
 }
 
+/** The Rust codec fixture `name` as one indexed row and its confirmed instructions. */
+function rustFixture(name: string) {
+  const decode = wireDecoder((path) => new Error(`fixture ${path}`));
+  const fixture = decode.record(
+    JSON.parse(
+      readFileSync(
+        new URL(`../../../../client/tests/fixtures/${name}.json`, import.meta.url),
+        "utf8",
+      ),
+    ),
+    "fixture",
+  );
+  const source = decode.record(fixture["source"], "source");
+  const expected = decode.record(fixture["expected"], "expected");
+  const bytes = (value: unknown): Uint8Array => {
+    const hex = decode.string(value, "hex");
+    if (!/^(?:[a-f0-9]{2})*$/u.test(hex)) throw new Error("fixture hex");
+    return Uint8Array.from(Buffer.from(hex, "hex"));
+  };
+  const field = (value: unknown): Bytes32 => {
+    const result = bytes(value);
+    if (result.length !== 32) throw new Error("fixture field");
+    return result as Bytes32;
+  };
+  const ring = decode.address(fixture["ring"], "ring");
+  const sourceBytes = bytes(source["dataHex"]);
+  const viewingKey = bytes(expected["viewingKeyHex"]);
+  const hasViewingKey = viewingKey.some((byte) => byte !== 0);
+  const indexed: IndexedShieldedTransaction = {
+    slot: 7n,
+    txSignature: SIGNATURE,
+    eventIndex: 0,
+    proofless: false,
+    ringProgramId: ring,
+    ...(hasViewingKey ? { txViewingPublicKey: X25519PublicKey.fromBytes(viewingKey) } : {}),
+    // A Photon row omits a zero salt, the confirmed source bytes restore it.
+    nullifiers: decode.list(expected["nullifiersHex"], "nullifiers").map(field),
+    messages: decode.list(expected["messages"], "messages").map((value) => {
+      const item = decode.record(value, "message");
+      return {
+        viewTag: field(item["viewTagHex"]),
+        data: bytes(item["dataHex"]),
+      };
+    }),
+    outputSlots: decode.list(expected["outputs"], "outputs").map((value) => {
+      const item = decode.record(value, "output");
+      const id = decode.integer(item["treeId"], "treeId");
+      if (id > 0xffffn) throw new Error("fixture treeId");
+      const treeId = Number(id);
+      return {
+        viewTag: field(item["viewTagHex"]),
+        payload: bytes(item["payloadHex"]),
+        outputContext: {
+          hash: field(item["hashHex"]),
+          treeId,
+          tree: treeAddress(treeId),
+          leafIndex: decode.integer(item["leafIndex"], "leafIndex"),
+        },
+      };
+    }),
+  };
+  return {
+    ring,
+    accounts: decode
+      .list(source["accounts"], "accounts")
+      .map((account) => decode.address(account, "account")),
+    sourceBytes,
+    eventBytes: bytes(fixture["eventDataHex"]),
+    indexed,
+    hasViewingKey,
+    saltHex: bytes(expected["saltHex"]),
+  };
+}
+
 describe("RpcTransactionOrigin", () => {
-  it.each(["confirmed-event", "confirmed-deposit-event", "confirmed-merge-event"])(
+  it.each(["confirmed-event"])(
     "matches Rust's %s codec and rejects substituted recovery data",
     async (name) => {
-      const decode = wireDecoder((path) => new Error(`fixture ${path}`));
-      const fixture = decode.record(
-        JSON.parse(
-          readFileSync(
-            new URL(`../../../../client/tests/fixtures/${name}.json`, import.meta.url),
-            "utf8",
-          ),
-        ),
-        "fixture",
-      );
-      const source = decode.record(fixture["source"], "source");
-      const expected = decode.record(fixture["expected"], "expected");
-      const bytes = (value: unknown): Uint8Array => {
-        const hex = decode.string(value, "hex");
-        if (!/^(?:[a-f0-9]{2})*$/u.test(hex)) throw new Error("fixture hex");
-        return Uint8Array.from(Buffer.from(hex, "hex"));
-      };
-      const field = (value: unknown): Bytes32 => {
-        const result = bytes(value);
-        if (result.length !== 32) throw new Error("fixture field");
-        return result as Bytes32;
-      };
-      const ring = decode.address(fixture["ring"], "ring");
-      const sourceBytes = bytes(source["dataHex"]);
-      const viewingKey = bytes(expected["viewingKeyHex"]);
-      const hasViewingKey = viewingKey.some((byte) => byte !== 0);
-      const indexed: IndexedShieldedTransaction = {
-        slot: 7n,
-        txSignature: SIGNATURE,
-        eventIndex: 0,
-        proofless: sourceBytes[0] === InstructionTag.ringDeposit,
-        ringProgramId: ring,
-        ...(hasViewingKey ? { txViewingPublicKey: X25519PublicKey.fromBytes(viewingKey) } : {}),
-        // Photon historical rows omitted zero salts. Confirmed source bytes restore it.
-        nullifiers: decode.list(expected["nullifiersHex"], "nullifiers").map(field),
-        messages: decode.list(expected["messages"], "messages").map((value) => {
-          const item = decode.record(value, "message");
-          return {
-            viewTag: field(item["viewTagHex"]),
-            data: bytes(item["dataHex"]),
-          };
-        }),
-        outputSlots: decode.list(expected["outputs"], "outputs").map((value) => {
-          const item = decode.record(value, "output");
-          const id = decode.integer(item["treeId"], "treeId");
-          if (id > 0xffffn) throw new Error("fixture treeId");
-          const treeId = Number(id);
-          return {
-            viewTag: field(item["viewTagHex"]),
-            payload: bytes(item["payloadHex"]),
-            outputContext: {
-              hash: field(item["hashHex"]),
-              treeId,
-              tree: treeAddress(treeId),
-              leafIndex: decode.integer(item["leafIndex"], "leafIndex"),
-            },
-          };
-        }),
-      };
-      const transfer = name === "confirmed-event";
+      const { ring, accounts, sourceBytes, eventBytes, indexed, hasViewingKey, saltHex } =
+        rustFixture(name);
       const confirmed = confirmedEvent(
         ring,
-        decode
-          .list(source["accounts"], "accounts")
-          .map((account) => decode.address(account, "account")),
+        accounts,
         sourceBytes,
-        bytes(fixture["eventDataHex"]),
-        transfer
-          ? ringInstructionData(
-              ringFrame({
-                rail: "confidential",
-                inputs: indexed.nullifiers.length,
-                outputs: indexed.outputSlots.length,
-              }),
-            )
-          : undefined,
+        eventBytes,
+        ringInstructionData(
+          ringFrame({
+            rail: "confidential",
+            inputs: indexed.nullifiers.length,
+            outputs: indexed.outputSlots.length,
+          }),
+        ),
       );
       const origin = new RpcTransactionOrigin(rpcWith(confirmed));
       const bound = await origin.confirmedTransaction(indexed, ring);
-      expect(bound?.kind).toBe(
-        name === "confirmed-merge-event"
-          ? "merge"
-          : name === "confirmed-deposit-event"
-            ? "deposit"
-            : "transfer",
-      );
+      expect(bound?.kind).toBe("transfer");
       expect(bound?.transaction).toEqual({
         ...indexed,
-        ...(hasViewingKey ? { salt: bytes(expected["saltHex"]) } : {}),
+        ...(hasViewingKey ? { salt: saltHex } : {}),
       });
       const output = indexed.outputSlots[0]!;
       for (const forged of [
@@ -854,7 +949,10 @@ describe("RpcTransactionOrigin", () => {
         {
           ...indexed,
           outputSlots: [
-            { ...output, outputContext: { ...output.outputContext, leafIndex: 100n } },
+            {
+              ...output,
+              outputContext: { ...output.outputContext, leafIndex: 100n },
+            },
             ...indexed.outputSlots.slice(1),
           ],
         },
@@ -862,50 +960,106 @@ describe("RpcTransactionOrigin", () => {
         await expect(origin.confirmedTransaction(forged, ring)).rejects.toMatchObject({
           code: "RING_ORIGIN_DECODE",
         });
-      if (name === "confirmed-merge-event") {
-        // Every framing, ring hash, salt and ciphertext byte comes from settlement.
-        for (const [offset, byte] of output.payload.entries()) {
-          const payload = new Uint8Array(output.payload);
-          payload[offset] = byte ^ 1;
-          await expect(
-            origin.confirmedTransaction(
-              { ...indexed, outputSlots: [{ ...output, payload }] },
-              ring,
-            ),
-          ).rejects.toMatchObject({ code: "RING_ORIGIN_DECODE" });
-        }
-      }
     },
   );
 
   it.each([
-    [43, InstructionTag.ringTransact],
-    [44, InstructionTag.ringAuthorityTransact],
-  ])("binds a transfer under the ring's outer tag %i", async (outer, tag) => {
-    const { indexed, confirmed, frame, ringData } = transferFixture(1, tag);
+    [55, InstructionTag.ringTransact, false, "confidential"],
+    [55, InstructionTag.ringTransact, true, "anonymous"],
+    [56, InstructionTag.ringAuthorityTransact, false, "delegate"],
+    [56, InstructionTag.ringAuthorityTransact, true, "anonymousDelegate"],
+  ] as const)("binds tag %i to its rail, anonymous %s", async (outer, tag, anonymous, rail) => {
+    const { indexed, confirmed, frame, ringData } = transferFixture(1, tag, { anonymous });
     expect(ringData[0]).toBe(outer);
     await expect(
       new RpcTransactionOrigin(rpcWith(confirmed)).confirmedTransaction(indexed, RING),
     ).resolves.toMatchObject({
       kind: "transfer",
       transaction: indexed,
-      layout: RingTransactData.disclosureLayout(frame),
+      rail,
+      layout: RingTransactData.streamLayout(frame),
     });
   });
 
-  it.each([
-    [3, InstructionTag.ringTransact],
-    [25, InstructionTag.ringAuthorityTransact],
-  ])("still decodes historical transfer tag %i", async (tag, inner) => {
-    const { indexed, confirmed, ringData, frame } = transferFixture(1, inner);
-    const legacy = ringData.slice();
-    legacy[0] = tag!;
-    confirmed.transaction.message.instructions[0]!.data = getBase58Decoder().decode(legacy);
-    await expect(
-      new RpcTransactionOrigin(rpcWith(confirmed)).confirmedTransaction(indexed, RING),
-    ).resolves.toMatchObject({
-      kind: "transfer",
-      layout: RingTransactData.disclosureLayout(frame),
+  describe("tag 57", () => {
+    const vectorFrame = decodeRingMergeRequest(
+      Buffer.from(
+        readFileSync(
+          new URL("../../../../../test-vectors/merge/merge_frame.hex", import.meta.url),
+          "utf8",
+        ).trim(),
+        "hex",
+      ),
+    );
+    const tree = treeAddress(4);
+    const event = new Writer()
+      .u8(InstructionTag.emitEvent, "tag")
+      .u8(3, "kind")
+      .u32(1, "inputTrees")
+      .bytes(addressBytes(tree), 32, "inputTree")
+      .u64(0n, "inputSequence")
+      .bytes(addressBytes(tree), 32, "outputTree")
+      .u64(4n, "firstLeaf")
+      .bytes(new Uint8Array(32).fill(6), 32, "viewTag")
+      .finish();
+
+    /** The vector frame's row, its salt and ciphertext read back from the forwarded body. */
+    function bind(
+      authority: MergeRingAuthority,
+      tamper = false,
+      wrapperTag: number = RingInstructionTag.merge,
+    ) {
+      const request = { ...vectorFrame, authority };
+      const forwarded = forwardedMergeData(
+        request,
+        sppMergeBody(request.compactBody),
+        InstructionTag.ringMergeTransact,
+      );
+      const wrapper = Uint8Array.of(wrapperTag, ...encodeRingMergeRequest(request));
+      const source = forwarded.slice();
+      if (tamper) source[source.length - 1] = (source[source.length - 1] ?? 0) ^ 1;
+      const indexed = (nullifiers: readonly Bytes32[], payload: Uint8Array, hash: Bytes32) => ({
+        slot: 7n,
+        txSignature: SIGNATURE,
+        eventIndex: 0,
+        proofless: false,
+        ringProgramId: RING,
+        nullifiers,
+        messages: [],
+        outputSlots: [
+          {
+            viewTag: new Uint8Array(32).fill(6) as Bytes32,
+            payload,
+            outputContext: { hash, tree, treeId: 4, leafIndex: 4n },
+          },
+        ],
+      });
+      return { indexed, confirmed: confirmedEvent(RING, [], source, event, wrapper), source };
+    }
+
+    it.each([
+      ["ring", MergeRingAuthority.ring],
+      ["ownerSigned", MergeRingAuthority.ownerSigned],
+    ] as const)("binds the %s authority and refuses another source byte", async (_, authority) => {
+      const { confirmed, source, indexed } = bind(authority);
+      const merge = readMergeData(new Reader(source.subarray(34)));
+      const payload = encodeMergeOutputData({
+        ringDataHash: vectorFrame.outputRingDataHash,
+        salt: merge.outputEncryption.salt,
+        ciphertext: merge.outputEncryption.ciphertext,
+      });
+      const row = indexed(merge.nullifiers, payload, merge.outputUtxoHash);
+      await expect(
+        new RpcTransactionOrigin(rpcWith(confirmed)).confirmedTransaction(row, RING),
+      ).resolves.toMatchObject({ kind: "merge", authority });
+      const tampered = bind(authority, true);
+      await expect(
+        new RpcTransactionOrigin(rpcWith(tampered.confirmed)).confirmedTransaction(row, RING),
+      ).rejects.toMatchObject({ code: "RING_ORIGIN_DECODE" });
+      const sppTag = bind(authority, false, InstructionTag.ringMergeTransact);
+      await expect(
+        new RpcTransactionOrigin(rpcWith(sppTag.confirmed)).confirmedTransaction(row, RING),
+      ).rejects.toMatchObject({ code: "RING_ORIGIN_DECODE" });
     });
   });
 
@@ -916,7 +1070,7 @@ describe("RpcTransactionOrigin", () => {
       return new RpcTransactionOrigin(rpcWith(confirmed)).confirmedTransaction(indexed, RING);
     };
     for (const ringData of [
-      Uint8Array.of(3),
+      Uint8Array.of(RingInstructionTag.transfer),
       ringInstructionData(ringFrame({ rail: "confidential", inputs: 1, outputs: 2 })),
       ringInstructionData(ringFrame({ rail: "confidential", inputs: 2, outputs: 4 })),
       ringInstructionData(ringFrame({ rail: "anonymous", inputs: 2, outputs: 2 })),
@@ -982,15 +1136,32 @@ describe("RpcTransactionOrigin", () => {
     }
   });
 
+  it("binds an in-proof transfer of a confidential ring to the confidential rail", async () => {
+    const { indexed, confirmed, frame } = transferFixture(1, InstructionTag.ringTransact, {
+      inProof: true,
+    });
+    await expect(
+      new RpcTransactionOrigin(rpcWith(confirmed)).confirmedTransaction(indexed, RING),
+    ).resolves.toMatchObject({
+      kind: "transfer",
+      layout: RingTransactData.streamLayout(frame),
+    });
+  });
+
   it("reads the anonymous rail's data to its end and refuses a tail on any rail", async () => {
     const coSigner = new Uint8Array(32).fill(13);
-    const anonymous = transferFixture(1, InstructionTag.ringTransact, { anonymous: true });
+    const anonymous = transferFixture(1, InstructionTag.ringTransact, {
+      anonymous: true,
+    });
     await expect(
       new RpcTransactionOrigin(rpcWith(anonymous.confirmed)).confirmedTransaction(
         anonymous.indexed,
         RING,
       ),
-    ).resolves.toMatchObject({ kind: "transfer", transaction: anonymous.indexed });
+    ).resolves.toMatchObject({
+      kind: "transfer",
+      transaction: anonymous.indexed,
+    });
     for (const rail of [{ anonymous: true, tail: coSigner }, { tail: coSigner }]) {
       const { indexed, confirmed } = transferFixture(1, InstructionTag.ringTransact, rail);
       await expect(
@@ -1132,6 +1303,6 @@ describe("RpcTransactionOrigin", () => {
     const origin = new RpcTransactionOrigin(rpcWith(confirmed));
     await expect(
       origin.confirmedTransaction({ ...indexed, txSignature: "6".repeat(87) as Signature }, RING),
-    ).rejects.toMatchObject({ code: "RING_ORIGIN_DECODE" });
+    ).rejects.toMatchObject({ code: "RING_ORIGIN_UNAVAILABLE" });
   });
 });

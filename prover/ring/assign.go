@@ -101,7 +101,7 @@ func variable(src any) (frontend.Variable, error) {
 			return 1, nil
 		}
 		return 0, nil
-	case uint8, uint32, uint64, int:
+	case uint8, uint16, uint32, uint64, int:
 		return v, nil
 	default:
 		return nil, fmt.Errorf("unsupported type %T", src)
@@ -119,52 +119,71 @@ func newQuadPath(index uint64, flat []Field) quadPath {
 	return quadPath{Index: index, Siblings: slices.Collect(slices.Chunk(flat, registry.Arity-1))}
 }
 
-// recordView mirrors registry.QuadRecordOpening field for field.
-type recordView struct {
-	Next, EscrowKey, MintPolicy, WithdrawalThreshold Field
-	Lists                                            uint64
-	Path                                             quadPath
+// bodyView mirrors registry.RecordBody field for field.
+type bodyView struct {
+	Next, MintPolicy, WithdrawalThreshold Field
+	AssetLimits                           []Field
+	Lists                                 uint64
 }
 
-func (r RecordOpening) view() any {
-	return recordView{Next: r.Next, EscrowKey: r.EscrowKey, MintPolicy: r.MintPolicy, WithdrawalThreshold: r.WithdrawalThreshold, Lists: r.Lists, Path: newQuadPath(r.Index, r.Path)}
+// lowView mirrors registry.Record field for field.
+type lowView struct {
+	Member Field
+	bodyView
 }
 
-// memberView mirrors registry.QuadOpening field for field.
-type memberView struct {
-	Present                                                              bool
-	Next, EscrowKey, MintPolicy, WithdrawalThreshold                     Field
-	Lists                                                                uint64
-	LowMember, LowNext, LowEscrow, LowMintPolicy, LowWithdrawalThreshold Field
-	LowLists                                                             uint64
-	Path                                                                 quadPath
+// writeView mirrors registry.RecordWriteProofInput field for field.
+type writeView struct {
+	Entry   RecordWrite
+	Exists  bool
+	Old     bodyView
+	Slot    quadPath
+	Low     lowView
+	LowSlot quadPath
 }
 
-func (m MemberOpening) view() any {
-	return memberView{
-		Present: m.Present, Next: m.Next, EscrowKey: m.EscrowKey, MintPolicy: m.MintPolicy, WithdrawalThreshold: m.WithdrawalThreshold, Lists: m.Lists,
-		LowMember: m.LowMember, LowNext: m.LowNext, LowEscrow: m.LowEscrow, LowMintPolicy: m.LowMintPolicy, LowWithdrawalThreshold: m.LowWithdrawalThreshold, LowLists: m.LowLists,
-		Path: newQuadPath(m.Index, m.Path),
+// enrollmentView mirrors registry.EnrollmentWrite field for field.
+type enrollmentView struct {
+	Entry   trackingEntryView
+	Slot    quadPath
+	Low     TrackingRecordParams
+	LowSlot quadPath
+}
+
+// trackingEntryView mirrors registry.TrackingEntry field for field.
+type trackingEntryView struct {
+	Member, NullifierPk, CtHash, ListTag Field
+}
+
+func (w TrackingWrite) view() any {
+	return enrollmentView{
+		Entry:   trackingEntryView{Member: w.Member, NullifierPk: w.NullifierPk, CtHash: w.CtHash, ListTag: w.ListTag},
+		Slot:    newQuadPath(w.Index, w.Path),
+		Low:     w.LowRecord,
+		LowSlot: newQuadPath(w.LowIndex, w.LowPath),
 	}
 }
 
-// writeView mirrors registry.RecordWrite field for field.
-type writeView struct {
-	Entry                                                                QueueEntry
-	Exists                                                               bool
-	OldNext, OldEscrow, OldMintPolicy, OldWithdrawalThreshold            Field
-	OldLists                                                             uint64
-	Slot                                                                 quadPath
-	LowMember, LowNext, LowEscrow, LowMintPolicy, LowWithdrawalThreshold Field
-	LowLists                                                             uint64
-	Low                                                                  quadPath
+// privateOwnerView mirrors registry.PrivateOwner field for field.
+type privateOwnerView struct {
+	ListSalt Field
+	Record   TrackingRecordParams
+	Path     quadPath
 }
 
-func (w RecordWrite) view() any {
+func (o PrivateOwnerParams) view() any {
+	return privateOwnerView{ListSalt: o.ListSalt, Record: o.Record, Path: newQuadPath(o.Index, o.Path)}
+}
+
+func (w RecordWriteProofInput) view() any {
 	return writeView{
-		Entry: w.Entry, Exists: w.Exists, OldNext: w.OldNext, OldEscrow: w.OldEscrow, OldMintPolicy: w.OldMintPolicy, OldWithdrawalThreshold: w.OldWithdrawalThreshold, OldLists: w.OldLists,
-		Slot:      newQuadPath(w.Index, w.Path),
-		LowMember: w.LowMember, LowNext: w.LowNext, LowEscrow: w.LowEscrow, LowMintPolicy: w.LowMintPolicy, LowWithdrawalThreshold: w.LowWithdrawalThreshold, LowLists: w.LowLists,
-		Low: newQuadPath(w.LowIndex, w.LowPath),
+		Entry:  w.Entry,
+		Exists: w.Exists,
+		Old:    bodyView{Next: w.OldNext, MintPolicy: w.OldMintPolicy, WithdrawalThreshold: w.OldWithdrawalThreshold, AssetLimits: w.OldAssetLimits, Lists: w.OldLists},
+		Slot:   newQuadPath(w.Index, w.Path),
+		Low: lowView{Member: w.LowMember, bodyView: bodyView{
+			Next: w.LowNext, MintPolicy: w.LowMintPolicy, WithdrawalThreshold: w.LowWithdrawalThreshold, AssetLimits: w.LowAssetLimits, Lists: w.LowLists,
+		}},
+		LowSlot: newQuadPath(w.LowIndex, w.LowPath),
 	}
 }

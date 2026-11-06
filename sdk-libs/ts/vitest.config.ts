@@ -8,13 +8,13 @@ export default defineConfig({
   resolve: {
     // Tests and core test helpers share one instance of the core source.
     alias: [
-      { find: /^@heliuslabs\/zolana$/u, replacement: `${core}index.ts` },
+      { find: /^@heliuslabs\/spr$/u, replacement: `${core}index.ts` },
       {
-        find: /^@heliuslabs\/zolana\/(addresses|instructions|internal)$/u,
+        find: /^@heliuslabs\/spr\/(addresses|instructions|internal)$/u,
         replacement: `${core}$1.ts`,
       },
       {
-        find: /^@heliuslabs\/zolana\/(client|interface|keypair|transaction|wallet)$/u,
+        find: /^@heliuslabs\/spr\/(client|interface|keypair|program|transaction|wallet)$/u,
         replacement: `${core}$1/index.ts`,
       },
     ],

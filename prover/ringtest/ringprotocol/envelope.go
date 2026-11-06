@@ -6,21 +6,68 @@ import (
 	"crypto/ecdh"
 	"encoding/binary"
 	"math/big"
+	"slices"
 	"testing"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
-	ve "github.com/helius-labs/zolana/prover/server/circuits/encryption"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
-// SealBody is the delivered body, AES-256-CTR of be32(blinding) ‖ u64be(amount) under the stream of the slot secret.
-func SealBody(t testing.TB, slotSecret, blinding *big.Int, amount uint64) [shared.BodyLen]byte {
+const (
+	// RecipientBodyLen mirrors RECIPIENT_BODY_LEN, be32(blinding) ‖ u64be(amount) ‖ mint.
+	RecipientBodyLen = 72
+	// ChangeCellLen mirrors CHANGE_CELL_LEN, mint ‖ u64be(amount).
+	ChangeCellLen = 40
+	// recipientBodyEncInfo mirrors RECIPIENT_BODY_LABEL.
+	recipientBodyEncInfo = "CRING/rcp"
+	// senderBundleEncInfo mirrors SENDER_BUNDLE_LABEL.
+	senderBundleEncInfo = "CRING/snd"
+)
+
+// RecipientBody is the ring body plaintext.
+type RecipientBody struct {
+	Blinding *big.Int
+	Amount   uint64
+	Mint     [32]byte
+}
+
+func (b RecipientBody) Seal(t testing.TB, slotSecret *big.Int) [RecipientBodyLen]byte {
 	t.Helper()
-	blindingBytes := spptest.MustFieldBytes(t, blinding)
-	plaintext := binary.BigEndian.AppendUint64(blindingBytes[:], amount)
-	key, nonce := AuditStreamKeys(t, slotSecret)
-	return [shared.BodyLen]byte(CTREncrypt(t, key, nonce, plaintext))
+	blinding := spptest.MustFieldBytes(t, b.Blinding)
+	key, nonce := AuditStreamKeys(t, slotSecret, recipientBodyEncInfo)
+	return [RecipientBodyLen]byte(CTREncrypt(t, key, nonce, slices.Concat(blinding[:], binary.BigEndian.AppendUint64(nil, b.Amount), b.Mint[:])))
+}
+
+// ChangeCell rebuilds one bodiless slot.
+type ChangeCell struct {
+	Mint   [32]byte
+	Amount uint64
+}
+
+// SenderBundle is the sender bundle plaintext, one cell per bodiless slot and one key per other slot.
+type SenderBundle struct {
+	OutputSeed    *big.Int
+	Change        []ChangeCell
+	RecipientKeys [][32]byte
+}
+
+// SenderBundleLen mirrors BundleLayout::byte_len.
+func SenderBundleLen(outputs, change int) int {
+	return 32 + ChangeCellLen*change + 32*(outputs-change)
+}
+
+func (b SenderBundle) Seal(t testing.TB, slotSecret *big.Int) []byte {
+	t.Helper()
+	seed := spptest.MustFieldBytes(t, b.OutputSeed)
+	plaintext := seed[:]
+	for _, cell := range b.Change {
+		plaintext = slices.Concat(plaintext, cell.Mint[:], binary.BigEndian.AppendUint64(nil, cell.Amount))
+	}
+	for _, key := range b.RecipientKeys {
+		plaintext = append(plaintext, key[:]...)
+	}
+	key, nonce := AuditStreamKeys(t, slotSecret, senderBundleEncInfo)
+	return CTREncrypt(t, key, nonce, plaintext)
 }
 
 // Clamped is the RFC 7748 clamping of secret, the one encoding the circuit accepts as plaintext.
@@ -62,34 +109,29 @@ func Pack33(key [33]byte) (lo, hi *big.Int) {
 }
 
 // AuditStreamKeys mirrors shared.AuditStreamKeySchedule.
-func AuditStreamKeys(t testing.TB, secret *big.Int) (key [32]byte, nonce [12]byte) {
+func AuditStreamKeys(t testing.TB, secret *big.Int, label string) (key [32]byte, nonce [12]byte) {
 	t.Helper()
-	head := spptest.MustFieldBytes(t, ringtest.MustPoseidonHash(t, new(big.Int).SetBytes(append([]byte(shared.AuditEncInfo), 0)), secret))
-	tail := spptest.MustFieldBytes(t, ringtest.MustPoseidonHash(t, new(big.Int).SetBytes(append([]byte(shared.AuditEncInfo), 1)), secret))
+	head := spptest.MustFieldBytes(t, ringtest.MustPoseidonHash(t, new(big.Int).SetBytes(append([]byte(label), 0)), secret))
+	tail := spptest.MustFieldBytes(t, ringtest.MustPoseidonHash(t, new(big.Int).SetBytes(append([]byte(label), 1)), secret))
 	copy(key[:31], head[1:])
 	key[31] = tail[19]
 	copy(nonce[:], tail[20:])
 	return key, nonce
 }
 
-// KeySchedule mirrors ve.KeySchedule for an info string of at most 31 bytes.
-func KeySchedule(t testing.TB, secret *big.Int, info string) (key [32]byte, nonce [12]byte) {
+// EnvelopeDigest mirrors ciphertext_digest, head element 7 of a transfer statement.
+func EnvelopeDigest(t testing.TB, ciphertext []byte) *big.Int {
 	t.Helper()
-	if len(info) > 31 {
-		t.Fatalf("info %q packs into more than one field", info)
-	}
-	siloed := ringtest.MustPoseidonHash(t, Tag(ve.DomSepSilo), secret, new(big.Int).SetBytes([]byte(info)))
-	keyLo := spptest.MustFieldBytes(t, ringtest.MustPoseidonHash(t, Tag(ve.DomSepKey), siloed))
-	keyHi := spptest.MustFieldBytes(t, ringtest.MustPoseidonHash(t, Tag(ve.DomSepKey+1), siloed))
-	nonceRaw := spptest.MustFieldBytes(t, ringtest.MustPoseidonHash(t, Tag(ve.DomSepNonce), siloed))
-	copy(key[:16], keyHi[16:])
-	copy(key[16:], keyLo[16:])
-	copy(nonce[:], nonceRaw[20:])
-	return key, nonce
+	return ringtest.MustPoseidonHash(t, big.NewInt(int64(len(ciphertext))), spptest.MustHashChain4(t, PackDisclosure(ciphertext)))
 }
 
 // CTREncrypt mirrors aes.Cipher.CTREncrypt, the first keystream block counts from nonce || 2.
 func CTREncrypt(t testing.TB, key [32]byte, nonce [12]byte, plaintext []byte) []byte {
+	t.Helper()
+	return CTREncryptAt(t, key, nonce, 2, plaintext)
+}
+
+func CTREncryptAt(t testing.TB, key [32]byte, nonce [12]byte, first uint32, plaintext []byte) []byte {
 	t.Helper()
 	block, err := stdaes.NewCipher(key[:])
 	if err != nil {
@@ -97,7 +139,7 @@ func CTREncrypt(t testing.TB, key [32]byte, nonce [12]byte, plaintext []byte) []
 	}
 	var counter [16]byte
 	copy(counter[:12], nonce[:])
-	counter[15] = 2
+	binary.BigEndian.PutUint32(counter[12:], first)
 
 	ciphertext := make([]byte, len(plaintext))
 	cipher.NewCTR(block, counter[:]).XORKeyStream(ciphertext, plaintext)

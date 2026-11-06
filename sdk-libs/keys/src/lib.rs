@@ -2,13 +2,17 @@
 
 mod error;
 mod keys;
+mod list_salt;
+mod merge_seed;
 pub mod ring_address;
 mod stream_cipher;
 
 pub use error::RingKeyError;
 pub use keys::{
-    RingDeliveryRequest, RingKeys, SharedTagPair, SharedTagsRequest, ViewTagRequest, ViewTagStream,
+    RingDeliveryRequest, RingKeys, RingTagFrame, RingTagKind, RingTagProbe, RotatingRingKeys,
+    ViewTagRequest, ViewTagStream,
 };
+pub use list_salt::{ListSaltHolder, LIST_SALT_LABEL};
+pub use merge_seed::{MergeSeedHolder, MergeSeedRequest};
 pub use ring_address::{RingAddress, RingPaymentRequest};
-pub use spr_keypair::SharedViewTags;
-pub use stream_cipher::symmetric_apply_audit;
+pub use stream_cipher::{symmetric_apply_audit, RingStream};

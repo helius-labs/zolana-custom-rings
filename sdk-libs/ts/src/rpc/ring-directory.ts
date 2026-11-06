@@ -1,13 +1,13 @@
 import { getBase64Decoder, getBase64Encoder, type Base64EncodedBytes } from "@solana/kit";
-import type { KitRpcAccess } from "@heliuslabs/zolana/client";
+import type { KitRpcAccess } from "@heliuslabs/spr/client";
 import {
   ClientError,
   SHIELDED_POOL_PROGRAM_ID,
   type Address,
   type RequestContext,
-} from "@heliuslabs/zolana";
-import { runKitRpc } from "@heliuslabs/zolana/internal";
-import { decodeRingConfig, StateDiscriminator } from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr";
+import { runKitRpc } from "@heliuslabs/spr/internal";
+import { decodeRingConfig, StateDiscriminator } from "@heliuslabs/spr/interface";
 
 const base64Decoder = getBase64Decoder();
 const base64Encoder = getBase64Encoder();

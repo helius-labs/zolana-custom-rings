@@ -2,7 +2,12 @@
 
 use std::time::Duration;
 
-use custom_ring_interface::{compute_unit_limit, CustomRingError, InstructionTag, MemberRegistry};
+use custom_ring_interface::{
+    compute_unit_limit,
+    storage::{Revision, StorageRegistry},
+    tracking::TrackingRegistry,
+    CustomRingError, InstructionTag, RingPolicy,
+};
 use solana_address::Address;
 use solana_commitment_config::CommitmentLevel;
 use solana_instruction::Instruction;
@@ -16,37 +21,37 @@ use spr_client::{
     compile_message, sign_transaction, AsyncRpc, ClientError, ComputeBudgetConfig,
     RpcSendTransactionConfig,
 };
+use zolana_ring_policy::OwnerDebit;
 
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
-    heap::boxed, records::BoundQueue, AnonymousTransfer, AuthorityListWrite, CustomRing,
-    CustomRingTransfer, DelegateTransfer, PreparedRingDeposit, RecordApplication, RegisterKey,
-    RingError, RingMergeOperation,
+    address_ceiling::{FitSigners, TransactionFit},
+    heap::boxed,
+    AnonymousTransfer, CustomRing, CustomRingTransfer, DelegateTransfer, PreparedRingDeposit,
+    PublicOwnerTransfer, RingError, RingMergeOperation, SignatureHistory,
 };
 
 #[cfg(test)]
 #[path = "../tests/operations/submission.rs"]
 mod tests;
 
+/// The header the transaction sends, the size check and the send read one budget.
+pub(crate) fn send_budget(tag: InstructionTag, priority_fee: Option<u64>) -> ComputeBudgetConfig {
+    let budget = ComputeBudgetConfig::new(compute_unit_limit(tag));
+    match priority_fee {
+        Some(lamports) => budget.with_priority_fee(lamports),
+        None => budget,
+    }
+}
+
 pub(crate) fn check_transaction_size(
     payer: &Address,
     instruction: &Instruction,
     budget: ComputeBudgetConfig,
 ) -> Result<(), RingError> {
-    let size = spr_client::transaction_size(payer, core::slice::from_ref(instruction), budget)?;
-    if size.bytes > solana_message::v1::MAX_TRANSACTION_SIZE {
-        return Err(RingError::TransactionTooLarge {
-            bytes: size.bytes,
-            limit: solana_message::v1::MAX_TRANSACTION_SIZE,
-        });
-    }
-    if size.addresses > usize::from(solana_message::v1::MAX_ADDRESSES) {
-        return Err(RingError::TooManyAddresses {
-            addresses: size.addresses,
-            limit: usize::from(solana_message::v1::MAX_ADDRESSES),
-        });
-    }
-    Ok(())
+    TransactionFit::of(instruction, FitSigners::new(*payer), budget)
+        .map(drop)
+        .map_err(RingError::from)
 }
 
 const MAX_ATTEMPTS: u8 = 3;
@@ -75,11 +80,8 @@ pub enum SettledSubmission {
 pub enum RingOperation<'a> {
     Transfer(Box<CustomRingTransfer<'a>>),
     Anonymous(Box<AnonymousTransfer<'a>>),
+    PublicOwners(Box<PublicOwnerTransfer<'a>>),
     Delegate(Box<DelegateTransfer<'a>>),
-    RegisterKey(Box<RegisterKey<'a>>),
-    /// One batch, [`AuthorityListWrite::batches`] splits a larger write.
-    AuthorityListWrite(Box<AuthorityListWrite>),
-    RecordApplication(RecordApplication),
     Merge(Box<RingMergeOperation>),
     Deposit(Box<PreparedRingDeposit>),
     /// A built instruction, sent as is, its budget from its tag.
@@ -99,10 +101,8 @@ macro_rules! operations {
 operations! {
     Transfer(CustomRingTransfer<'a>) => Box::new,
     Anonymous(AnonymousTransfer<'a>) => Box::new,
+    PublicOwners(PublicOwnerTransfer<'a>) => Box::new,
     Delegate(DelegateTransfer<'a>) => Box::new,
-    RegisterKey(RegisterKey<'a>) => Box::new,
-    AuthorityListWrite(AuthorityListWrite) => Box::new,
-    RecordApplication(RecordApplication) => core::convert::identity,
     Merge(RingMergeOperation) => Box::new,
     Deposit(PreparedRingDeposit) => Box::new,
     Instruction(Instruction) => core::convert::identity,
@@ -110,34 +110,108 @@ operations! {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct BoundRoot {
-    pub ring: CustomRing,
-    /// The history slot the statement names.
-    pub index: u8,
+    /// The registry the program reads the root from.
+    pub registry: Address,
+    pub revision: Revision,
     pub root: [u8; 32],
+    pub tree: RootTree,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RootTree {
+    Storage,
+    Tracking,
 }
 
 impl BoundRoot {
-    pub(crate) fn registry(ring: CustomRing, index: u8, root: [u8; 32]) -> Self {
-        Self { ring, index, root }
+    /// The newest root of the ring's records registry.
+    pub(crate) async fn own(
+        policy: &RingPolicy,
+        rpc: &(impl AsyncRpc + ?Sized),
+    ) -> Result<Self, RingError> {
+        Self::newest_of(policy.records, rpc).await
     }
 
-    /// The newest root, never below the floor when read.
-    pub(crate) fn current(ring: CustomRing, registry: &MemberRegistry) -> Self {
-        Self::registry(ring, registry.history_cursor, registry.current_root())
+    /// The newest root of the curator registry, `None` without a curator source.
+    pub(crate) async fn curator(
+        policy: &RingPolicy,
+        rpc: &(impl AsyncRpc + ?Sized),
+    ) -> Result<Option<Self>, RingError> {
+        match policy.curator() {
+            Some(curator) => Ok(Some(Self::newest_of(curator, rpc).await?)),
+            None => Ok(None),
+        }
     }
 
     pub(crate) async fn newest(
         ring: CustomRing,
         rpc: &(impl AsyncRpc + ?Sized),
     ) -> Result<Self, RingError> {
-        Ok(Self::current(ring, &*ring.require_registry(rpc).await?))
+        Self::own(&*ring.require_policy(rpc).await?, rpc).await
     }
 
-    /// `true` once the history wraps over the slot, the program then reads another root.
-    async fn replaced(self, client: &(impl AsyncRpc + ?Sized)) -> Result<bool, RingError> {
-        let registry = self.ring.require_registry(client).await?;
-        Ok(registry.history[usize::from(self.index)].root != self.root)
+    pub(crate) async fn newest_of(
+        registry: Address,
+        rpc: &(impl AsyncRpc + ?Sized),
+    ) -> Result<Self, RingError> {
+        let newest = live_registry(registry, rpc).await?.newest();
+        Ok(Self {
+            registry,
+            revision: newest.revision,
+            root: newest.hash,
+            tree: RootTree::Storage,
+        })
     }
+
+    /// The newest root of the ring's pinned tracking registry.
+    pub(crate) async fn tracking(
+        policy: &RingPolicy,
+        rpc: &(impl AsyncRpc + ?Sized),
+    ) -> Result<Self, RingError> {
+        let newest = live_tracking(policy.tracking, rpc).await?.newest();
+        Ok(Self {
+            registry: policy.tracking,
+            revision: newest.revision,
+            root: newest.hash,
+            tree: RootTree::Tracking,
+        })
+    }
+
+    /// `true` once the registry no longer serves the root at its revision.
+    async fn replaced(self, client: &(impl AsyncRpc + ?Sized)) -> Result<bool, RingError> {
+        let served = match self.tree {
+            RootTree::Storage => {
+                let registry = live_registry(self.registry, client).await?;
+                registry.root(self.revision, client.get_slot().await?)
+            }
+            RootTree::Tracking => {
+                let registry = live_tracking(self.registry, client).await?;
+                registry.root(self.revision, client.get_slot().await?)
+            }
+        };
+        Ok(served != Ok(self.root))
+    }
+}
+
+/// `NotStorageRegistry` unless `registry` is an initialized storage registry.
+pub async fn live_registry(
+    registry: Address,
+    rpc: &(impl AsyncRpc + ?Sized),
+) -> Result<StorageRegistry, RingError> {
+    rpc.get_account(registry)
+        .await?
+        .and_then(|account| StorageRegistry::decode(&account.owner, &account.data))
+        .ok_or(RingError::NotStorageRegistry { registry })
+}
+
+async fn live_tracking(
+    registry: Address,
+    rpc: &(impl AsyncRpc + ?Sized),
+) -> Result<TrackingRegistry, RingError> {
+    rpc.get_account(registry)
+        .await?
+        .and_then(|account| TrackingRegistry::decode(&account.owner, &account.data))
+        .ok_or(RingError::NotStorageRegistry { registry })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -146,12 +220,26 @@ pub(crate) struct BoundPolicy {
     pub hash: [u8; 32],
 }
 
+/// Ring refusals a fresh proof fixes, rows parsed verbatim by the TS parity test.
+const REPROOF: [(CustomRingError, Reproof); 4] = [
+    (CustomRingError::RootNotServed, Reproof::Fixes),
+    (CustomRingError::TrackingRootBelowFloor, Reproof::Fixes),
+    (CustomRingError::UnboundRegistry, Reproof::Fixes),
+    (CustomRingError::ProofVerificationFailed, Reproof::IfMoved),
+];
+
+enum Reproof {
+    /// The program refused a root or registry the chain since replaced or raised.
+    Fixes,
+    /// Counts only once a value the proof binds moved on chain.
+    IfMoved,
+}
+
 /// Every value a proof binds that the chain can move before it lands.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct BoundState {
     pub roots: Vec<BoundRoot>,
     pub policy: Option<BoundPolicy>,
-    pub queue: Option<BoundQueue>,
 }
 
 impl BoundState {
@@ -164,17 +252,15 @@ impl BoundState {
         let Some(code) = ring_error(error) else {
             return Ok(matches!(error, TransactionError::BlockhashNotFound));
         };
-        if code == CustomRingError::ProofVerificationFailed as u32 {
-            return self.moved(client).await;
+        match REPROOF
+            .iter()
+            .find(|(stale, _)| code == *stale as u32)
+            .map(|(_, reproof)| reproof)
+        {
+            Some(Reproof::Fixes) => Ok(true),
+            Some(Reproof::IfMoved) => self.moved(client).await,
+            None => Ok(false),
         }
-        Ok([
-            CustomRingError::RootBelowFloor,
-            CustomRingError::CuratorRootStale,
-            CustomRingError::RootIndexEmpty,
-            CustomRingError::AuthorityBatchTooLarge,
-        ]
-        .into_iter()
-        .any(|stale| code == stale as u32))
     }
 
     async fn moved(&self, client: &(impl AsyncRpc + ?Sized)) -> Result<bool, RingError> {
@@ -184,17 +270,7 @@ impl BoundState {
             }
         }
         if let Some(policy) = self.policy {
-            if policy.ring.require_registry(client).await?.policy_hash != policy.hash {
-                return Ok(true);
-            }
-        }
-        if let Some(queue) = &self.queue {
-            let registry = queue.ring.require_registry(client).await?;
-            let current = queue.ring.require_queue(client).await?;
-            if current.tail() != queue.tail
-                || current.chain_tail() != queue.chain_tail
-                || registry.current_root() != queue.root
-            {
+            if policy.ring.require_policy(client).await?.policy_hash != policy.hash {
                 return Ok(true);
             }
         }
@@ -206,16 +282,24 @@ struct Proved {
     instruction: Instruction,
     budget: ComputeBudgetConfig,
     bound: BoundState,
+    charged_outflows: Vec<OwnerDebit>,
 }
 
+/// One transaction the submission owes, held from before its broadcast until its signature resolves.
 struct Attempt {
+    proved: Proved,
+    sent: Option<Sent>,
+}
+
+struct Sent {
     transaction: VersionedTransaction,
-    bound: BoundState,
     last_valid_block_height: u64,
+    /// Preflight refused it, a later lookup would read an unknown signature and lose the error.
+    refused: Option<TransactionError>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum Outcome {
+pub(crate) enum Outcome {
     Unknown,
     Confirmed {
         slot: u64,
@@ -228,6 +312,7 @@ enum Outcome {
 #[must_use]
 pub struct RingSubmission<'a> {
     operation: RingOperation<'a>,
+    priority_fee: Option<u64>,
     pending: Option<Attempt>,
     attempts: u8,
     terminal: Option<SubmissionStatus>,
@@ -237,22 +322,56 @@ impl<'a> RingSubmission<'a> {
     pub fn new(operation: impl Into<RingOperation<'a>>) -> Self {
         Self {
             operation: operation.into(),
+            priority_fee: None,
             pending: None,
             attempts: 0,
             terminal: None,
         }
     }
 
+    /// Lamports the v1 header carries, refused before proving past the size ceiling.
+    pub fn with_priority_fee(mut self, lamports: u64) -> Self {
+        self.priority_fee = Some(lamports);
+        self.operation = self.operation.with_priority_fee(lamports);
+        self
+    }
+
     pub fn pending_transaction(&self) -> Option<&VersionedTransaction> {
-        self.pending.as_ref().map(|attempt| &attempt.transaction)
+        let sent = self.pending.as_ref()?.sent.as_ref()?;
+        Some(&sent.transaction)
     }
 
     pub fn attempts(&self) -> u8 {
         self.attempts
     }
 
+    /// The notes of the deposit's latest attempt, the ones a confirmation settled, in output order.
+    pub fn deposit_utxos(&self) -> Option<&[spr_transaction::Utxo]> {
+        match &self.operation {
+            RingOperation::Deposit(deposit) => Some(deposit.utxos()),
+            _ => None,
+        }
+    }
+
+    /// Holds the attempt unsigned, `send` signs only after its charges were read here.
+    pub async fn prove<R: AsyncRpc, I: RingIndexerBackend>(
+        &mut self,
+        client: &RingClient<R, I>,
+        payer: &(dyn Signer + Sync),
+        signers: &[&(dyn Signer + Sync)],
+    ) -> Result<&[OwnerDebit], RingError> {
+        if self.pending.is_none() && self.terminal.is_none() {
+            let attempt = boxed(|| self.prepare(client, payer, signers)).await?;
+            self.pending = Some(attempt);
+        }
+        Ok(self
+            .pending
+            .as_ref()
+            .map_or(&[], |attempt| &attempt.proved.charged_outflows))
+    }
+
     /// Inputs stay reserved while the sent signature is unresolved.
-    pub async fn send<R: AsyncRpc, I: RingIndexerBackend>(
+    pub async fn send<R: AsyncRpc + SignatureHistory, I: RingIndexerBackend>(
         &mut self,
         client: &RingClient<R, I>,
         payer: &(dyn Signer + Sync),
@@ -262,72 +381,84 @@ impl<'a> RingSubmission<'a> {
             return Ok(terminal.clone());
         }
         loop {
-            let (attempt, failure) = match self.pending.take() {
-                Some(attempt) => (attempt, None),
-                None => {
-                    let public: Vec<Address> = core::iter::once(payer.pubkey())
-                        .chain(signers.iter().map(|signer| signer.pubkey()))
-                        .collect();
-                    self.operation
-                        .check_public_signers(client.zolana(), &public)
-                        .await?;
-                    let proved = boxed(|| self.operation.prove(client, payer.pubkey())).await?;
-                    check_transaction_size(&payer.pubkey(), &proved.instruction, proved.budget)?;
+            // 1. A held attempt reconciles ahead of any new proof or broadcast. Its transaction
+            // can land until its blockhash expires, and a nullifier stops no double landing of a
+            // deposit, so a new proof waits for a final status. Every RPC error below returns with
+            // the attempt still held, and the next call resumes here.
+            // A reproof keeps the operation's amounts, so its charges are the ones `prove` showed.
+            let attempt = match self.pending.take() {
+                Some(attempt) => attempt,
+                None if self.attempts == 0 => return Err(RingError::SubmissionUnproved),
+                None => boxed(|| self.prepare(client, payer, signers)).await?,
+            };
+            let attempt = self.pending.insert(attempt);
+            // 2. The signature enters the held state ahead of the bytes, a broadcast whose future
+            // is dropped or whose answer is lost stays reconcilable. Only a preflight refusal says
+            // the bytes did not land, any other send error leaves the outcome to the lookup.
+            let sent = match &mut attempt.sent {
+                Some(sent) => sent,
+                unsent => {
                     let (blockhash, last_valid_block_height) =
                         client.get_latest_blockhash().await?;
                     let message = compile_message(
                         &payer.pubkey(),
-                        &[proved.instruction],
+                        core::slice::from_ref(&attempt.proved.instruction),
                         blockhash,
-                        proved.budget,
+                        attempt.proved.budget,
                     )?;
                     // The signer list is not `Send`, it ends before the next await.
                     let transaction = {
-                        let mut all: Vec<&dyn Signer> = vec![payer];
-                        all.extend(signers.iter().map(|signer| *signer as &dyn Signer));
+                        let all: Vec<&dyn Signer> = core::iter::once(payer as &dyn Signer)
+                            .chain(signers.iter().map(|signer| *signer as &dyn Signer))
+                            .collect();
                         sign_transaction(message, &all)?
                     };
-                    self.attempts += 1;
+                    let sent = unsent.insert(Sent {
+                        transaction,
+                        last_valid_block_height,
+                        refused: None,
+                    });
                     let config = RpcSendTransactionConfig {
                         preflight_commitment: Some(CommitmentLevel::Confirmed),
                         ..RpcSendTransactionConfig::default()
                     };
-                    let failure = client
-                        .send_transaction_with_config(&transaction, config)
+                    sent.refused = client
+                        .send_transaction_with_config(&sent.transaction, config)
                         .await
                         .err()
                         .and_then(transaction_error);
-                    let attempt = Attempt {
-                        transaction,
-                        bound: proved.bound,
-                        last_valid_block_height,
-                    };
-                    (attempt, failure)
+                    sent
                 }
             };
-            let attempt = self.pending.insert(attempt);
-            let signature = attempt.transaction.signatures[0];
-            let outcome = match failure {
+            let signature = sent.transaction.signatures[0];
+            let last_valid_block_height = sent.last_valid_block_height;
+            // 3. An unknown status returns as pending below, with nothing released.
+            let observed = match sent.refused.clone() {
                 Some(error) => Outcome::Failed(error),
-                None => {
-                    outcome(client.zolana(), signature, attempt.last_valid_block_height).await?
-                }
+                None => outcome(client.zolana(), signature, last_valid_block_height).await?,
             };
-            let outcome = match outcome {
-                Outcome::Failed(error)
-                    if attempt.bound.reproof_fixes(&error, client.zolana()).await? =>
-                {
-                    Outcome::Stale(error)
+            // 4. Failed or expired is final, the transaction can no longer land.
+            let observed = match observed {
+                Outcome::Failed(error) => {
+                    match attempt
+                        .proved
+                        .bound
+                        .reproof_fixes(&error, client.zolana())
+                        .await?
+                    {
+                        true => Outcome::Stale(error),
+                        false => Outcome::Failed(error),
+                    }
                 }
-                outcome => outcome,
+                observed => observed,
             };
-            if let Some(status) = self.settle(signature, outcome) {
+            if let Some(status) = self.settle(signature, observed) {
                 return Ok(status);
             }
         }
     }
 
-    pub async fn send_until_settled<R: AsyncRpc, I: RingIndexerBackend>(
+    pub async fn send_until_settled<R: AsyncRpc + SignatureHistory, I: RingIndexerBackend>(
         &mut self,
         client: &RingClient<R, I>,
         payer: &(dyn Signer + Sync),
@@ -341,7 +472,31 @@ impl<'a> RingSubmission<'a> {
         }
     }
 
-    /// `None` proves again after a stale failure below the attempt limit.
+    /// Proves the next attempt, nothing held and every earlier signature final.
+    async fn prepare<R: AsyncRpc, I: RingIndexerBackend>(
+        &mut self,
+        client: &RingClient<R, I>,
+        payer: &(dyn Signer + Sync),
+        signers: &[&(dyn Signer + Sync)],
+    ) -> Result<Attempt, RingError> {
+        self.operation.refresh_for_retry()?;
+        let public: Vec<Address> = core::iter::once(payer.pubkey())
+            .chain(signers.iter().map(|signer| signer.pubkey()))
+            .collect();
+        self.operation
+            .check_public_signers(client.zolana(), &public)
+            .await?;
+        let proved = boxed(|| {
+            self.operation
+                .prove(client, payer.pubkey(), self.priority_fee)
+        })
+        .await?;
+        check_transaction_size(&payer.pubkey(), &proved.instruction, proved.budget)?;
+        self.attempts += 1;
+        Ok(Attempt { proved, sent: None })
+    }
+
+    /// `None` continues the loop and releases a stale failure below the attempt limit to a new proof.
     fn settle(&mut self, signature: Signature, outcome: Outcome) -> Option<SubmissionStatus> {
         let settled = match outcome {
             Outcome::Unknown => return Some(SubmissionStatus::Pending { signature }),
@@ -368,6 +523,16 @@ impl<'a> RingSubmission<'a> {
 }
 
 impl RingOperation<'_> {
+    /// A proof that failed spends its frame as one that landed does.
+    fn refresh_for_retry(&mut self) -> Result<(), RingError> {
+        if let Self::Deposit(deposit) = self {
+            if deposit.frame_spent() {
+                **deposit = deposit.fresh_attempt()?;
+            }
+        }
+        Ok(())
+    }
+
     async fn check_public_signers(
         &self,
         client: &(impl AsyncRpc + ?Sized),
@@ -382,11 +547,32 @@ impl RingOperation<'_> {
             }
             Self::Deposit(deposit) => deposit.check_public_signers(signers),
             Self::Transfer(_)
+            | Self::PublicOwners(_)
             | Self::Delegate(_)
-            | Self::RegisterKey(_)
-            | Self::AuthorityListWrite(_)
-            | Self::RecordApplication(_)
             | Self::Instruction(_) => Ok(()),
+        }
+    }
+
+    fn with_priority_fee(self, lamports: u64) -> Self {
+        match self {
+            Self::Transfer(transfer) => {
+                Self::Transfer(Box::new(transfer.with_priority_fee(lamports)))
+            }
+            Self::Anonymous(transfer) => {
+                Self::Anonymous(Box::new(transfer.with_priority_fee(lamports)))
+            }
+            Self::PublicOwners(transfer) => {
+                Self::PublicOwners(Box::new(transfer.with_priority_fee(lamports)))
+            }
+            Self::Delegate(transfer) => {
+                Self::Delegate(Box::new(transfer.with_priority_fee(lamports)))
+            }
+            Self::Merge(operation) => Self::Merge(Box::new(RingMergeOperation {
+                prepared: operation.prepared.with_priority_fee(lamports),
+                input: operation.input,
+            })),
+            Self::Deposit(deposit) => Self::Deposit(Box::new(deposit.with_priority_fee(lamports))),
+            Self::Instruction(instruction) => Self::Instruction(instruction),
         }
     }
 
@@ -394,81 +580,64 @@ impl RingOperation<'_> {
         &self,
         client: &RingClient<R, I>,
         payer: Address,
+        priority_fee: Option<u64>,
     ) -> Result<Proved, RingError> {
         let proved = |instruction, tag, bound| Proved {
             instruction,
-            budget: ComputeBudgetConfig::new(compute_unit_limit(tag)),
+            budget: send_budget(tag, priority_fee),
             bound,
+            charged_outflows: Vec::new(),
+        };
+        let charged = |proved: Proved, charged_outflows| Proved {
+            charged_outflows,
+            ..proved
         };
         Ok(match self {
             Self::Transfer(transfer) => {
                 let proven = boxed(|| transfer.prove(client)).await?;
-                proved(
-                    proven.instruction()?,
-                    InstructionTag::Transact,
-                    proven.bound(),
+                charged(
+                    proved(
+                        proven.instruction()?,
+                        InstructionTag::Transfer,
+                        proven.bound(),
+                    ),
+                    proven.charged_outflows,
                 )
             }
             Self::Anonymous(transfer) => {
                 let proven = boxed(|| transfer.prove(client)).await?;
-                proved(
-                    proven.instruction()?,
-                    InstructionTag::Transact,
-                    proven.bound(),
+                charged(
+                    proved(
+                        proven.instruction()?,
+                        InstructionTag::Transfer,
+                        proven.bound(),
+                    ),
+                    proven.charged_outflows,
+                )
+            }
+            Self::PublicOwners(transfer) => {
+                let proven = boxed(|| transfer.prove(client)).await?;
+                charged(
+                    proved(
+                        proven.instruction()?,
+                        InstructionTag::Transfer,
+                        proven.bound(),
+                    ),
+                    proven.charged_outflows,
                 )
             }
             Self::Delegate(transfer) => {
                 let proven = boxed(|| transfer.prove(client)).await?;
-                proved(
-                    proven.instruction()?,
-                    InstructionTag::DelegateTransact,
-                    proven.bound(),
-                )
-            }
-            Self::RegisterKey(registration) => {
-                let proven = boxed(|| registration.prove(client)).await?;
-                proved(
-                    proven.instruction,
-                    InstructionTag::RegisterKey,
-                    BoundState::default(),
-                )
-            }
-            Self::AuthorityListWrite(write) => {
-                let proven = boxed(|| write.prove(client)).await?;
-                proved(
-                    proven.instruction,
-                    InstructionTag::AuthorityWriteRecords,
-                    BoundState {
-                        queue: Some(proven.bound),
-                        ..BoundState::default()
-                    },
-                )
-            }
-            Self::RecordApplication(application) => {
-                let proven = boxed(|| application.prove(client))
-                    .await?
-                    .ok_or(RingError::ApplicationNotDue)?;
-                proved(
-                    proven.instruction,
-                    InstructionTag::ApplyRecords,
-                    BoundState {
-                        queue: Some(proven.bound),
-                        ..BoundState::default()
-                    },
+                charged(
+                    proved(
+                        proven.instruction()?,
+                        InstructionTag::AuthorityTransfer,
+                        proven.bound(),
+                    ),
+                    proven.charged_outflows,
                 )
             }
             Self::Merge(operation) => {
-                let budget = ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Merge));
-                let config = operation
-                    .prepared
-                    .ring()
-                    .require_config(client.zolana())
-                    .await?;
-                check_transaction_size(
-                    &payer,
-                    &operation.preview_instruction(payer, &config)?,
-                    budget,
-                )?;
                 let proven = boxed(|| {
                     operation
                         .prepared
@@ -486,14 +655,14 @@ impl RingOperation<'_> {
                 )
             }
             Self::Deposit(deposit) => {
-                let proven = boxed(|| deposit.prove_bound(client)).await?;
-                proved(
-                    proven.instruction,
-                    InstructionTag::AuditedDeposit,
-                    BoundState {
-                        roots: proven.root.into_iter().collect(),
-                        ..BoundState::default()
-                    },
+                let proven = boxed(|| deposit.prove_transfer(client)).await?;
+                charged(
+                    proved(
+                        proven.instruction()?,
+                        InstructionTag::Transfer,
+                        proven.bound(),
+                    ),
+                    proven.charged_outflows,
                 )
             }
             Self::Instruction(instruction) => {
@@ -508,9 +677,9 @@ impl RingOperation<'_> {
     }
 }
 
-/// Past expiry a fresh absent lookup releases the attempt and a failed one surfaces.
-async fn outcome(
-    client: &(impl AsyncRpc + ?Sized),
+/// Past expiry only the ledger's absent answer releases the attempt and a failed lookup surfaces.
+pub(crate) async fn outcome(
+    client: &(impl AsyncRpc + SignatureHistory + ?Sized),
     signature: Signature,
     last_valid_block_height: u64,
 ) -> Result<Outcome, RingError> {
@@ -520,10 +689,12 @@ async fn outcome(
     if client.get_block_height().await? <= last_valid_block_height {
         return Ok(Outcome::Unknown);
     }
-    // The transaction can land between the first lookup and the expiry check.
-    Ok(observe(client, signature)
-        .await?
-        .unwrap_or(Outcome::Failed(TransactionError::BlockhashNotFound)))
+    // A signature that landed between the lookups or left the status cache reads absent above. A
+    // release on that answer rebuilds the operation and debits a deposit's funder a second time.
+    let statuses = client
+        .signature_statuses_with_history(vec![signature])
+        .await?;
+    Ok(decode_status(statuses).unwrap_or(Outcome::Failed(TransactionError::BlockhashNotFound)))
 }
 
 /// `None` for a signature the cluster does not know.
@@ -535,9 +706,12 @@ async fn observe(
     Ok(decode_status(statuses))
 }
 
-fn transaction_error(error: ClientError) -> Option<TransactionError> {
+/// `AlreadyProcessed` stays in doubt, a resent request reads it after the bytes landed.
+pub(crate) fn transaction_error(error: ClientError) -> Option<TransactionError> {
     match error {
-        ClientError::SolanaRpcTransaction { source, .. } => source.get_transaction_error(),
+        ClientError::SolanaRpcTransaction { source, .. } => source
+            .get_transaction_error()
+            .filter(|error| *error != TransactionError::AlreadyProcessed),
         _ => None,
     }
 }

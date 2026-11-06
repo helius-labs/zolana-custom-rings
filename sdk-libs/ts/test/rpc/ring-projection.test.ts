@@ -1,18 +1,14 @@
 import { RingError } from "../../src/protocol/error.js";
 import { describe, expect, it, vi } from "vitest";
-import { ClientError, createIndexerPollConfig } from "@heliuslabs/zolana/client";
-import { waitForProjection } from "@heliuslabs/zolana/internal";
+import { ClientError, createIndexerPollConfig } from "@heliuslabs/spr/client";
+import { waitForProjection } from "@heliuslabs/spr/internal";
 import { MEMBER_REGISTRY_PROJECTION_ERRORS } from "../../src/rpc/projection.js";
 
 const IMMEDIATE_POLL = createIndexerPollConfig(2, 0n, 0n);
 
 describe("ring projection consistency", () => {
   it("retries member-registry races", async () => {
-    for (const code of [
-      "RING_REGISTRY_OUT_OF_SYNC",
-      "RING_REGISTRY_ROOT_CHANGED",
-      "RING_RECORD_QUEUE_CHANGED",
-    ] as const) {
+    for (const code of ["RING_REGISTRY_OUT_OF_SYNC", "RING_REGISTRY_ROOT_CHANGED"] as const) {
       const read = vi
         .fn<() => Promise<number>>()
         .mockRejectedValueOnce(new RingError(code, { details: { method: "projection" } }))

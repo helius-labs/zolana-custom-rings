@@ -18,7 +18,7 @@ bytemuck = { workspace = true }
 clap = { workspace = true }
 console = { workspace = true }
 custom-ring-interface = { workspace = true }
-custom-ring-sdk = { workspace = true }
+custom-ring-sdk = { workspace = true, features = ["solana-rpc"] }
 dialoguer = { workspace = true }
 hex = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "json"] }

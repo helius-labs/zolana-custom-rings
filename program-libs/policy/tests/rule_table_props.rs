@@ -1,13 +1,12 @@
 //! Row encoding over generated inputs.
 
 use proptest::prelude::*;
-use zolana_ring_policy::{Guard, ListSet, Rule, RuleSource, RuleTable, Subject};
+use zolana_ring_policy::{Guard, ListSet, Rule, RuleSource, RuleTable, Subject, MAX_SOURCES};
 
 fn subject() -> impl Strategy<Value = Subject> {
     prop_oneof![
         Just(Subject::OutputOwner),
         Just(Subject::Sender),
-        Just(Subject::ExitDestination),
         Just(Subject::Asset),
     ]
 }
@@ -23,11 +22,12 @@ fn guard() -> impl Strategy<Value = Guard> {
 
 fn source() -> impl Strategy<Value = RuleSource> {
     prop_oneof![
-        (any::<u8>(), any::<u8>()).prop_map(|(present, absent)| RuleSource::Lists {
-            present: ListSet::from_bits(present),
-            absent: ListSet::from_bits(absent),
-        }),
+        (lists(), lists()).prop_map(|(present, absent)| RuleSource::Lists { present, absent }),
     ]
+}
+
+fn lists() -> impl Strategy<Value = ListSet> {
+    (0u64..1 << MAX_SOURCES).prop_map(|bits| ListSet::from_record_bits(bits).unwrap())
 }
 
 fn rule() -> impl Strategy<Value = Rule> {
@@ -42,19 +42,19 @@ fn rule() -> impl Strategy<Value = Rule> {
 fn row_bytes() -> impl Strategy<Value = [u8; 32]> {
     let threshold = prop_oneof![Just(0u64), 1u64..];
     (
-        any::<u8>(),
+        0u16..1 << (MAX_SOURCES + 1),
         threshold,
         0u8..=3,
-        any::<u8>(),
+        0u16..1 << (MAX_SOURCES + 1),
         0u8..=3,
         0u8..=5,
     )
         .prop_map(|(alternative, threshold, guard_tag, mask, mode, subject)| {
             let mut row = [0u8; 32];
-            row[19] = alternative;
-            row[20..28].copy_from_slice(&threshold.to_be_bytes());
-            row[28] = guard_tag;
-            row[29] = mask;
+            row[17..19].copy_from_slice(&alternative.to_be_bytes());
+            row[19..27].copy_from_slice(&threshold.to_be_bytes());
+            row[27] = guard_tag;
+            row[28..30].copy_from_slice(&mask.to_be_bytes());
             row[30] = mode;
             row[31] = subject;
             row

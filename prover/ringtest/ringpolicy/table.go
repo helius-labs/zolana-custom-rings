@@ -14,15 +14,17 @@ import (
 
 // Rows are a table's used rows, Wires pads each list with zero rows to its capacity.
 type Rows struct {
-	Sources                           []policy.SourceWires
+	Sources []policy.SourceWires
+	// Bit i puts list i+1 at owners' salted keys.
+	Salted                            uint64
 	Rules, InlineAssets, InlineLimits []frontend.Variable
 	Limits                            []MintLimit
 }
 
 func (r Rule) Packed() *big.Int {
-	packed := new(big.Int).Lsh(new(big.Int).SetUint64(r.Alternative), 96)
-	packed.Or(packed, new(big.Int).Lsh(new(big.Int).SetUint64(r.Threshold), 32))
-	return packed.Or(packed, new(big.Int).SetUint64(r.Subject|r.Mode<<8|r.Mask<<16|r.Guard<<24))
+	packed := new(big.Int).Lsh(new(big.Int).SetUint64(r.Alternative), 104)
+	packed.Or(packed, new(big.Int).Lsh(new(big.Int).SetUint64(r.Threshold), 40))
+	return packed.Or(packed, new(big.Int).SetUint64(r.Subject|r.Mode<<8|r.Mask<<16|r.Guard<<32))
 }
 
 // TableHash mirrors EncodedRuleTable::hash, PolicyTableRate fields per call beside the accumulator.
@@ -41,12 +43,15 @@ func (r Rows) Wires() policy.Table {
 	for i := range table.Sources {
 		table.Sources[i] = pad(r.Sources, i, policy.SourceWires{ListID: 0, Registry: 0})
 	}
+	table.Salted = new(big.Int).SetUint64(r.Salted)
 	table.PolicyLen = len(r.Rules)
 	for i := range table.Rules {
 		table.Rules[i] = pad(r.Rules, i, 0)
 	}
 	return table
 }
+
+func (table Table) Wires() policy.Table { return table.rows().Wires() }
 
 // rows serves the list of record bit i from source slot i, its list id i+1.
 func (table Table) rows() Rows {
@@ -62,7 +67,7 @@ func (table Table) rows() Rows {
 		}
 		sources[slot] = policy.SourceWires{ListID: slot + 1, Registry: registry}
 	}
-	r := Rows{Sources: sources}
+	r := Rows{Sources: sources, Salted: table.Salted}
 	for _, rule := range table.Rules {
 		r.Rules = append(r.Rules, rule.Packed())
 	}

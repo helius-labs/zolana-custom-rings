@@ -1,0 +1,5 @@
+{
+  "description": "One getListSalt request a list writer signs. The target is the ring 0x07 repeated behind the service 0x02 on the cluster 0x01, the writer the Ed25519 keypair of seed 0x08 repeated, the owner 0x03 repeated, timestamp 1700000000 and nonce 0x04 repeated. message is the attestation the writer signs, wire the exact JSON text. Produced by sdk-libs/client/tests/list_salt_vector.rs.",
+  "message": "zolana/ring-rpc-list-salt\ncluster: 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi\nservice: 8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR\nring: US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\nwriter: 2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1\nowner: CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8\ntimestamp: 1700000000\nnonce: BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=",
+  "wire": "{\"ring\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\",\"writer\":\"2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1\",\"owner\":\"CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8\",\"timestamp\":1700000000,\"nonce\":\"BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=\",\"signature\":\"5h4rmuqu3XhEvgLYEh7gE2wjoZCFeb1oucQ5MNzk5V32WuqzAVcsmhpoJd4dvfonQdyuz1D1vSFGqGcWLz5q586F\"}"
+}

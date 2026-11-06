@@ -55,7 +55,7 @@ func sharedRegistry(t *testing.T) *ringregistry.Registry {
 	t.Helper()
 	members := ringregistry.New(t)
 	for i := int64(1); i <= 20; i++ {
-		members.Apply(t, entry(i*10, 1, 1, 0))
+		members.Apply(t, entry(i*10, 1, 1))
 	}
 	return members
 }

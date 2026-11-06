@@ -33,19 +33,16 @@ func TestRingSecretsMatchTheRustVectors(t *testing.T) {
 		t.Fatal(err)
 	}
 	var v struct {
-		TxViewingSecret       vectorHex `json:"tx_viewing_secret"`
-		RecipientViewingPk    vectorHex `json:"recipient_viewing_pk"`
-		Salt                  vectorHex `json:"salt"`
-		FirstNullifier        vectorHex `json:"first_nullifier"`
-		BlindingSeed          vectorHex `json:"blinding_seed"`
-		OutputBlindingSeed    vectorHex `json:"output_blinding_seed"`
-		SenderKey             vectorHex `json:"sender_key"`
-		SenderPkHash          vectorHex `json:"sender_pk_hash"`
-		PrivateTxBlinding     vectorHex `json:"private_tx_blinding"`
-		SenderCommitment      vectorHex `json:"sender_commitment"`
-		DepositBlindingSecret vectorHex `json:"deposit_blinding_secret"`
-		DepositBlinding       vectorHex `json:"deposit_blinding"`
-		Outputs               []struct {
+		TxViewingSecret    vectorHex `json:"tx_viewing_secret"`
+		RecipientViewingPk vectorHex `json:"recipient_viewing_pk"`
+		Salt               vectorHex `json:"salt"`
+		FirstNullifier     vectorHex `json:"first_nullifier"`
+		BlindingSeed       vectorHex `json:"blinding_seed"`
+		OutputBlindingSeed vectorHex `json:"output_blinding_seed"`
+		SenderKey          vectorHex `json:"sender_key"`
+		SenderPkHash       vectorHex `json:"sender_pk_hash"`
+		PrivateTxBlinding  vectorHex `json:"private_tx_blinding"`
+		Outputs            []struct {
 			OutputIndex         int       `json:"output_index"`
 			DeliveredSlotSecret vectorHex `json:"delivered_slot_secret"`
 			Blinding            vectorHex `json:"blinding"`
@@ -71,6 +68,4 @@ func TestRingSecretsMatchTheRustVectors(t *testing.T) {
 		equal("output blinding", ringprotocol.OutputBlinding(t, firstNullifier, v.OutputBlindingSeed.int(), o.OutputIndex), o.Blinding)
 	}
 	equal("sender pk hash", ringtest.MustSolanaPkField(t, [32]byte(v.SenderKey)), v.SenderPkHash)
-	equal("sender commitment", ringprotocol.SenderCommitment(t, v.SenderPkHash.int(), v.PrivateTxBlinding.int()), v.SenderCommitment)
-	equal("deposit blinding", ringprotocol.DepositBlinding(t, v.DepositBlindingSecret.int()), v.DepositBlinding)
 }

@@ -1,5 +1,5 @@
 /** What the ring reads of the pinned SPP, Rust `custom_ring_interface::spp`. */
-import { SOL_MINT, type Address, type Bytes32 } from "@heliuslabs/zolana";
+import { SOL_MINT, type Address, type Bytes32 } from "@heliuslabs/spr";
 import {
   assetField,
   bigIntToBytes,
@@ -8,12 +8,15 @@ import {
   SOL_INTERFACE,
   SPP_SUPPORTED_SHAPES,
   type SettlementTransfer,
-} from "@heliuslabs/zolana/internal";
-import { ClientError } from "@heliuslabs/zolana/client";
-import type { InterfaceTransfer, SettlementAccounts, Shape } from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/internal";
+import { ClientError } from "@heliuslabs/spr/client";
+import type { InterfaceTransfer, SettlementAccounts, Shape } from "@heliuslabs/spr/interface";
 
 /** Rust `N_PUBLIC_SLOTS`, the public asset and amount slots every SPP circuit takes. */
 export const N_PUBLIC_SLOTS = 3;
+
+/** Rust `MAX_SPP_CPI_ACCOUNTS`, the ring program's ceiling for the SPP call. */
+export const MAX_SPP_CPI_ACCOUNTS = 128;
 
 const U64_MAX = (1n << 64n) - 1n;
 
@@ -34,29 +37,26 @@ export function isRingAuthorityShape(shape: Shape): boolean {
   );
 }
 
-/** The cheapest ring authority shape holding the counts, undefined when none does. */
-export function ringAuthorityShape(inputs: number, outputs: number): Shape | undefined {
-  return RING_AUTHORITY_SHAPES.find(
-    (candidate) => inputs <= candidate.inputs && outputs <= candidate.outputs,
-  );
-}
-
 /** SPP's public slots in first-use order, Rust `PublicSlots::fold`, zero past the used slots. */
 export interface PublicSlots {
   /** `hash_bytes` of each mint, SOL under the zero address. */
   readonly assets: readonly Bytes32[];
   /** Signed nets, a withdrawal negative. */
   readonly nets: readonly bigint[];
+  /** Sum of each asset's withdrawal legs, deposits excluded. */
+  readonly gross: readonly bigint[];
 }
 
 export function publicSlots(transfers: readonly SettlementTransfer[]): PublicSlots {
   const nets = new Map<Address, bigint>();
+  const gross = new Map<Address, bigint>();
   for (const transfer of transfers) {
     if (transfer.amount === 0n) throw new ClientError("CLIENT_PROVER_INPUT");
     const asset = transfer.kind === "sol" ? SOL_MINT : transfer.mint;
     const net = (nets.get(asset) ?? 0n) + (transfer.isDeposit ? transfer.amount : -transfer.amount);
     if (net > U64_MAX || -net > U64_MAX) throw new ClientError("CLIENT_PROVER_INPUT");
     nets.set(asset, net);
+    gross.set(asset, (gross.get(asset) ?? 0n) + (transfer.isDeposit ? 0n : transfer.amount));
   }
   if (nets.size > N_PUBLIC_SLOTS) throw new ClientError("CLIENT_PROVER_INPUT");
   if ([...nets.values()].includes(0n)) throw new ClientError("CLIENT_PROVER_INPUT");
@@ -68,7 +68,16 @@ export function publicSlots(transfers: readonly SettlementTransfer[]): PublicSlo
   return Object.freeze({
     assets: pad([...nets.keys()].map(assetField), new Uint8Array(32) as Bytes32),
     nets: pad([...nets.values()], 0n),
+    gross: pad(
+      [...nets.keys()].map((asset) => gross.get(asset) ?? 0n),
+      0n,
+    ),
   });
+}
+
+/** Rust `PublicSlots::gross_fields`, each gross as a right aligned u128. */
+export function publicGrossFields(slots: PublicSlots): readonly Bytes32[] {
+  return Object.freeze(slots.gross.map((gross) => bigIntToBytes(gross) as Bytes32));
 }
 
 /** Rust `PublicSlots::amount_fields`, a withdrawal is `q - |net|`. */

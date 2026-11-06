@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use solana_address::Address;
 use solana_signature::Signature;
-use spr_indexer_api::Base64String;
+use spr_indexer_api::{Base64String, SerializableSignature};
 use thiserror::Error;
 use zolana_ring_client::{
     rpc::{Attestation, AuditorKeyAttestation, AuthorityAuth, ReadAuth, WebAuthnAssertion},
@@ -49,7 +49,7 @@ pub enum Unauthorized {
     Replay,
     #[error("request names another cluster")]
     ClusterMismatch,
-    #[error("signer is neither the program upgrade authority nor the config authority")]
+    #[error("signer is neither the program upgrade authority nor the policy authority")]
     NotRingAuthority,
 }
 
@@ -82,6 +82,17 @@ pub(crate) struct AuthorityCheck<'a> {
 pub(crate) struct AuthorityClaim {
     pub authority: Address,
     pub nonce: [u8; 32],
+}
+
+/// A wallet's raw Ed25519 signature over the attestation the service rebuilds.
+#[must_use]
+pub(crate) struct WalletCheck<'a, A> {
+    pub wallet: Address,
+    pub timestamp: u64,
+    pub nonce: &'a Base64String,
+    pub signature: &'a SerializableSignature,
+    pub attestation: &'a A,
+    pub now: u64,
 }
 
 enum Proof<'a> {
@@ -141,6 +152,20 @@ impl AuthorityCheck<'_> {
             authority: auth.authority.0,
             nonce,
         })
+    }
+}
+
+impl<A: Attestation> WalletCheck<'_, A> {
+    /// The nonce the replay guard still has to accept.
+    pub(crate) fn decide(self) -> Result<[u8; 32], Unauthorized> {
+        fresh(self.now, self.timestamp)?;
+        let nonce = nonce(self.nonce)?;
+        Ed25519Proof {
+            signer: self.wallet,
+            signature: self.signature.0.as_ref(),
+        }
+        .verify(&self.attestation.message(self.timestamp, &nonce))?;
+        Ok(nonce)
     }
 }
 
@@ -279,6 +304,7 @@ mod tests {
             target: TARGET,
             cursor: None,
             limit: None,
+            wallet: None,
         };
         ReadCheck {
             auth,

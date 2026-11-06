@@ -1,3 +1,5 @@
+// One real Groth16 proof over a pooled policy.
+
 package policy_test
 
 import (
@@ -35,11 +37,7 @@ func TestPooledPolicyGroth16(t *testing.T) {
 		if err := groth16.Verify(proof, vk, public); err != nil {
 			t.Fatal(err)
 		}
-		if pooled.Member != nil {
-			pooled.Member.PublicInputHash = 1
-		} else {
-			pooled.Delegate.PublicInputHash = 1
-		}
+		pooled.Circuit.PublicInputHash = 1
 		wrong, err := frontend.NewWitness(assignment, ecc.BN254.ScalarField(), frontend.PublicOnly())
 		if err != nil {
 			t.Fatal(err)

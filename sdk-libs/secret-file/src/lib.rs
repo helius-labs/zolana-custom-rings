@@ -112,6 +112,12 @@ pub fn create_new(
     Ok(())
 }
 
+/// Writes the owner-only form [`read_key32`] reads, an existing file stays.
+pub fn create_key32(path: &Path, key: &[u8; 32]) -> Result<(), SecretFileError> {
+    let text = Zeroizing::new(hex::encode(key));
+    create_new(path, text.as_bytes(), Visibility::Secret)
+}
+
 /// Lowercase hex of a 32-byte key.
 pub fn read_key32(path: &Path, access: Access) -> Result<Zeroizing<[u8; 32]>, SecretFileError> {
     decode_key32(&read_private(path, access, KEY_HEX_LEN)?)

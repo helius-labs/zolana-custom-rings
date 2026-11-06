@@ -1,9 +1,10 @@
-//! The fewest UTXOs of one tree whose framed transfer fits one transaction.
+//! Largest first funding with explicit consolidation.
 
 use std::collections::BTreeSet;
 
 use solana_address::Address;
 use spr_client::{AsyncRpc, Shape, SPP_SUPPORTED_SHAPES};
+use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_transaction::{TransactionError, WalletUtxo};
 
 use super::{Rail, RingTransfer};
@@ -44,36 +45,40 @@ pub(super) fn widest(payments: usize, keyed: impl Fn(Shape) -> bool) -> Option<u
         .max()
 }
 
+pub(super) fn spanned_trees<'u>(utxos: impl IntoIterator<Item = &'u WalletUtxo>) -> usize {
+    utxos
+        .into_iter()
+        .map(|utxo| utxo.tree_id)
+        .collect::<BTreeSet<_>>()
+        .len()
+}
+
 impl Funding<'_> {
-    /// One per tree, the fewest UTXOs first, then the least change.
-    pub fn candidates(&self, keep: impl Fn(&WalletUtxo) -> bool) -> Vec<Candidate> {
-        let trees: BTreeSet<u16> = self.utxos.iter().map(|utxo| utxo.tree_id).collect();
-        let mut ranked: Vec<_> = trees
-            .into_iter()
-            .filter_map(|tree| {
-                let utxos = select_spend_where(
-                    self.utxos,
-                    self.asset,
-                    self.amount,
-                    self.max_inputs,
-                    |utxo| utxo.tree_id == tree && keep(utxo),
-                )
-                .ok()?;
-                let total: u128 = utxos.iter().map(|utxo| u128::from(utxo.utxo.amount)).sum();
-                let change = total > u128::from(self.amount);
-                Some(((utxos.len(), total, tree), Candidate { utxos, change }))
-            })
-            .collect();
-        ranked.sort_unstable_by_key(|(order, _)| *order);
-        ranked.into_iter().map(|(_, candidate)| candidate).collect()
+    pub fn select(&self, keep: impl Fn(&WalletUtxo) -> bool) -> Result<Candidate, RingError> {
+        let utxos = select_spend_where(self.utxos, self.asset, self.amount, self.max_inputs, keep)
+            .map_err(|error| match error {
+                TransactionError::NoSpendableBalance { .. }
+                | TransactionError::InsufficientBalance { .. } => self.unfunded(),
+                error => error.into(),
+            })?;
+        let total: u128 = utxos.iter().map(|utxo| u128::from(utxo.utxo.amount)).sum();
+        Ok(Candidate {
+            utxos,
+            change: total > u128::from(self.amount),
+        })
     }
 
-    /// Only a size or key refusal moves on to the next attempt.
     pub async fn first_fit<R: Rail, P: AsyncRpc, I: RingIndexerBackend>(
         &self,
         attempts: Vec<Result<RingTransfer<R>, RingError>>,
         client: &RingClient<P, I>,
     ) -> Result<RingTransfer<R>, RingError> {
+        let is_shortfall = |error: &RingError| {
+            matches!(
+                error,
+                RingError::Unfunded { .. } | RingError::UnfundedPastExposure { .. }
+            )
+        };
         let mut first_refusal = None;
         for attempt in attempts {
             let refusal = match attempt {
@@ -84,20 +89,51 @@ impl Funding<'_> {
                 Err(error) => error,
             };
             match refusal {
-                RingError::TransactionTooLarge { .. }
+                RingError::Unfunded { .. }
+                | RingError::UnfundedPastExposure { .. }
+                | RingError::Transaction(
+                    TransactionError::SpendNeedsMerge { .. }
+                    | TransactionError::TooManyInputTrees { .. },
+                )
+                | RingError::TransferTooWide { .. }
                 | RingError::TooManyAddresses { .. }
                 | RingError::ShapeUnkeyed { .. }
                 | RingError::DefaultRingSpendTooWide { .. } => {
-                    first_refusal.get_or_insert(refusal);
+                    if first_refusal
+                        .as_ref()
+                        .is_none_or(|earlier| is_shortfall(earlier) && !is_shortfall(&refusal))
+                    {
+                        first_refusal = Some(refusal);
+                    }
                 }
                 error => return Err(error),
             }
         }
-        Err(first_refusal.unwrap_or(RingError::Unfunded {
-            mint: self.asset,
-            amount: self.amount,
-            max_inputs: self.max_inputs,
-        }))
+        Err(first_refusal.unwrap_or_else(|| self.unfunded()))
+    }
+
+    /// Names the zero-key funds only a public spend reaches.
+    fn unfunded(&self) -> RingError {
+        let exposed_if_spent = self
+            .utxos
+            .iter()
+            .filter(|utxo| {
+                utxo.utxo.asset.asset == self.asset
+                    && utxo.nullifier_pubkey == ZERO_NULLIFIER_PUBKEY
+            })
+            .fold(0u64, |sum, utxo| sum.saturating_add(utxo.utxo.amount));
+        match exposed_if_spent {
+            0 => RingError::Unfunded {
+                mint: self.asset,
+                amount: self.amount,
+                max_inputs: self.max_inputs,
+            },
+            exposed_if_spent => RingError::UnfundedPastExposure {
+                mint: self.asset,
+                amount: self.amount,
+                exposed_if_spent,
+            },
+        }
     }
 }
 
@@ -110,3 +146,7 @@ impl Candidate {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/operations/selection.rs"]
+mod tests;

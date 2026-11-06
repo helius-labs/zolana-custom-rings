@@ -37,12 +37,13 @@ pub struct Answers {
     pub policy: Option<PolicySpec>,
 }
 
-const POLICY_OPTIONS: [&str; 10] = [
+const POLICY_OPTIONS: [&str; 11] = [
     "participant allowlist",
     "recipient blocklist",
+    "recipient public and private blocklist",
     "sender freeze",
     "asset allowlist",
-    "blocklist with approval exception",
+    "approved recipients outside a blocklist",
     "per-mint recipient limits",
     "advanced rule",
     "remove",
@@ -235,15 +236,16 @@ impl Wizard<'_> {
             let rules = match POLICY_OPTIONS[picked] {
                 "participant allowlist" => Some(participant_allowlist()),
                 "recipient blocklist" => Some(vec![forbid(SubjectName::OutputOwner, "block")]),
+                "recipient public and private blocklist" => Some(forbid_each(
+                    SubjectName::OutputOwner,
+                    &["block", "private-block"],
+                )),
                 "sender freeze" => Some(vec![forbid(SubjectName::Sender, "frozen")]),
                 "asset allowlist" => Some(vec![self.asset_rule(target, false)?]),
-                "blocklist with approval exception" => Some(vec![simple_rule(
-                    SubjectName::OutputOwner,
-                    SourceSpec::Any(vec![
-                        Alternative::Require(named_list("approval")),
-                        Alternative::Forbid(named_list("block")),
-                    ]),
-                )]),
+                "approved recipients outside a blocklist" => Some(vec![
+                    require(SubjectName::OutputOwner, "approval"),
+                    forbid(SubjectName::OutputOwner, "block"),
+                ]),
                 "per-mint recipient limits" => Some(vec![RuleSpec {
                     limits: Some(self.asset_limits(target)?),
                     ..require(SubjectName::OutputOwner, "allow")
@@ -421,7 +423,7 @@ impl Wizard<'_> {
     }
 
     fn list(&mut self) -> Result<ListName> {
-        Ok(ListName::ALL[self.ask.pick("list", &labels(ListName::ALL), 0)?])
+        Ok(ListName::POLICY[self.ask.pick("list", &labels(ListName::POLICY), 0)?])
     }
 
     /// Scalar owner thresholds require a single mint at transfer time.
@@ -492,6 +494,11 @@ fn forbid(subject: SubjectName, list: &str) -> RuleSpec {
     simple_rule(subject, SourceSpec::Forbid(named_list(list)))
 }
 
+/// One rule per list, one rule over both admits an owner off either.
+fn forbid_each(subject: SubjectName, lists: &[&str]) -> Vec<RuleSpec> {
+    lists.iter().map(|list| forbid(subject, list)).collect()
+}
+
 fn participant_allowlist() -> Vec<RuleSpec> {
     vec![
         require(SubjectName::Sender, "allow"),
@@ -502,7 +509,10 @@ fn participant_allowlist() -> Vec<RuleSpec> {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use zolana_ring_policy::{ListId, ListSet, Rule, RuleTable, Subject};
+    use zolana_ring_policy::{
+        ListId, ListSet, MintPolicy, OutputSubjects, RecordLists, Rule, RuleTable, SourceMap,
+        Subject, TransferSubjects,
+    };
 
     use super::*;
     use crate::{
@@ -683,9 +693,59 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn the_approval_exception_asks_only_for_the_lists_it_reads() {
+    fn a_public_and_private_blocklist_refuses_an_owner_on_either_list() {
         let answers = run(script(&[
-            Answer::from("blocklist with approval exception"),
+            Answer::from("recipient public and private blocklist"),
+            Answer::from("finish"),
+            Answer::from(OWN_ENTRIES),
+            Answer::from(OWN_ENTRIES),
+        ]))
+        .expect("wizard");
+        let table = answers
+            .policy
+            .expect("policy tier")
+            .compile(Target::Localnet)
+            .expect("compiles")
+            .rules;
+        let both = ListSet::of(&[ListId::Block, ListId::PrivateBlock]);
+        assert_eq!(
+            table,
+            RuleTable::builder()
+                .forbid_each(Subject::OutputOwner, both)
+                .build()
+        );
+        let sources =
+            SourceMap::new(&[(ListId::Block, [0; 32]), (ListId::PrivateBlock, [0; 32])]).unwrap();
+        let admit = |own: u64| {
+            let lists = RecordLists {
+                own,
+                ..RecordLists::default()
+            };
+            table.admit(
+                &sources,
+                &TransferSubjects {
+                    sender: RecordLists::default(),
+                    ring_inputs: &[],
+                    outputs: &[OutputSubjects {
+                        ring: true,
+                        owner: [1; 32],
+                        asset: [2; 32],
+                        amount: 1,
+                        owner_lists: lists,
+                        asset_lists: RecordLists::default(),
+                        mint_policy: MintPolicy::EMPTY,
+                    }],
+                },
+            )
+        };
+        assert!(admit(ListId::Block.record_bit()).is_err());
+        assert!(admit(0).is_ok());
+    }
+
+    #[test]
+    fn the_approved_blocklist_asks_only_for_the_lists_it_reads() {
+        let answers = run(script(&[
+            Answer::from("approved recipients outside a blocklist"),
             Answer::from("finish"),
             Answer::from(&*format!("curator {CURATOR} manages the members")),
             Answer::from(OWN_ENTRIES),
@@ -695,11 +755,10 @@ pub(crate) mod tests {
         let compiled = policy.compile(Target::Localnet).expect("compiles");
         assert_eq!(
             compiled.rules.rules(),
-            [Rule::any_of(
-                Subject::OutputOwner,
-                ListSet::single(ListId::Approval),
-                ListSet::single(ListId::Block)
-            )]
+            [
+                Rule::require(Subject::OutputOwner, ListId::Approval),
+                Rule::forbid(Subject::OutputOwner, ListId::Block),
+            ]
         );
         assert_eq!(
             compiled.shared_sources,
@@ -779,9 +838,9 @@ pub(crate) mod tests {
             Answer::from("either-or lists"),
             Answer::from("output-owner"),
             Answer::from("require"),
+            Answer::from("allow"),
+            Answer::from("require"),
             Answer::from("approval"),
-            Answer::from("forbid"),
-            Answer::from("block"),
             Answer::from("done"),
             Answer::from("above per-mint amounts"),
             Answer::from(OTHER_MINT),

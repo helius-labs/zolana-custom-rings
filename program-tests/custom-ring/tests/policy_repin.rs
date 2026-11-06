@@ -1,27 +1,25 @@
-//! The config authority re-pins the table of a live ring on localnet +
-//! photon + prover, and a curated Block list yields to the subscriber's own
+//! The policy authority re-pins the table of a live ring on localnet +
+//! photon + prover, and a curated Block list binds beside the subscriber's own
 //! Approval list.
 
 use anyhow::{anyhow, Result};
 use custom_ring_cli::ModeName;
 use custom_ring_interface::CustomRingError;
-use custom_ring_sdk::{CustomRing, ListRegistry};
+use custom_ring_sdk::{CustomRing, DepositAsset, ListRegistry};
 use custom_ring_test_validator::{
     cli::{ListWrite, RingProject, RingToml},
     policy::{
         owner_member, policy_registry, CuratedRings, PolicyTransfer, RegistryWrite, RingNotes,
-        APPROVAL_OR_UNBLOCKED, BLOCK_ONLY, DEPOSIT, TRANSFER_AMOUNT,
+        APPROVED_AND_UNBLOCKED, BLOCK_ONLY, DEPOSIT, TRANSFER_AMOUNT,
     },
+    ring_rpc::{LocalRingRpc, RingRpcSpec},
     shared::{send_expecting_rejection, ExpectRejection, TestEnv},
 };
 use solana_signer::Signer;
-use spr_keypair::ShieldedKeypair;
+use spr_keypair::{ShieldedKeypair, X25519Keypair};
 use spr_program_test::Rejection;
 use spr_transaction::Utxo;
 use zolana_ring_policy::ListId;
-
-/// A local ring rpc, `init` reads the auditor key file and contacts nothing.
-const RING_RPC: &str = "http://127.0.0.1:1";
 
 const FORBID_BLOCK_TOML: &str = r#"[policy]
 
@@ -30,11 +28,15 @@ subject = "output-owner"
 forbid = "block"
 "#;
 
-const APPROVAL_OR_UNBLOCKED_TOML: &str = r#"[policy]
+const APPROVED_AND_UNBLOCKED_TOML: &str = r#"[policy]
 
 [[policy.rules]]
 subject = "output-owner"
-any = [{ require = "approval" }, { forbid = "block" }]
+require = "approval"
+
+[[policy.rules]]
+subject = "output-owner"
+forbid = "block"
 "#;
 
 const CURATED_BLOCK_TOML: &str = r#"[policy]
@@ -44,11 +46,15 @@ block = "$CURATOR"
 
 [[policy.rules]]
 subject = "output-owner"
-any = [{ require = "approval" }, { forbid = "block" }]
+require = "approval"
+
+[[policy.rules]]
+subject = "output-owner"
+forbid = "block"
 "#;
 
 #[test]
-fn the_config_authority_re_pins_the_table_of_a_live_ring() -> Result<()> {
+fn the_policy_authority_re_pins_the_table_of_a_live_ring() -> Result<()> {
     let rings = CuratedRings::setup()?;
     let env = &rings.env;
     let rpc = env.client.rpc();
@@ -59,7 +65,13 @@ fn the_config_authority_re_pins_the_table_of_a_live_ring() -> Result<()> {
     let egress = Egress { ring, sender, env };
 
     // 1. `init` pins the Block row from `ring.toml` at generation 1.
-    let project = init_subscriber(&rings, FORBID_BLOCK_TOML)?;
+    let Subscriber { project, ring_rpc } = init_subscriber(&rings, FORBID_BLOCK_TOML)?;
+    custom_ring_test_validator::policy::EnrollOwners {
+        ring,
+        owners: &[sender, blocked, &clean],
+        env,
+    }
+    .send()?;
     let pinned = policy_registry(ring, env)?;
     assert_eq!(pinned.rule_table()?, BLOCK_ONLY);
     assert_eq!(pinned.generation(), 1);
@@ -69,6 +81,7 @@ fn the_config_authority_re_pins_the_table_of_a_live_ring() -> Result<()> {
         ring,
         owner: sender,
         amount: DEPOSIT,
+        asset: DepositAsset::Sol,
         count: 2,
         env,
     }
@@ -90,24 +103,24 @@ fn the_config_authority_re_pins_the_table_of_a_live_ring() -> Result<()> {
 
     // 3. `policy check` reports the edited `ring.toml` until `policy set` lands
     //    generation 2, both lists on the ring's own registry.
-    let mixed = APPROVAL_OR_UNBLOCKED_TOML;
+    let both = APPROVED_AND_UNBLOCKED_TOML;
     project.write_config(RingToml {
         env,
-        ring_rpc: RING_RPC,
-        policy: Some(mixed),
+        ring_rpc: &ring_rpc.url,
+        policy: Some(both),
         mode: ModeName::Confidential,
     })?;
     assert!(
         !project.policy_check()?.status.success(),
         "policy check missed the drift"
     );
-    project.policy_set(mixed)?;
+    project.policy_set(both)?;
     assert!(
         project.policy_check()?.status.success(),
         "policy check disagrees after the re-pin"
     );
     let repinned = policy_registry(ring, env)?;
-    assert_eq!(repinned.rule_table()?, APPROVAL_OR_UNBLOCKED);
+    assert_eq!(repinned.rule_table()?, APPROVED_AND_UNBLOCKED);
     assert_eq!(repinned.generation(), 2);
     assert!(repinned.generation_slot() > pinned.generation_slot());
     assert_ne!(repinned.policy_hash, pinned.policy_hash);
@@ -126,27 +139,37 @@ fn the_config_authority_re_pins_the_table_of_a_live_ring() -> Result<()> {
         .at(0)
         .assert_client(&rejection);
 
-    // 5. Block still refuses until the ring's own Approval bit admits.
-    egress.to(blocked, &utxos[0]).expect_refusal()?;
+    // 5. The grant and the denial combine with AND, neither alone admits.
+    egress.to(&clean, &utxos[0]).expect_refusal()?;
     project.write_list(ListWrite {
         env,
         list_id: ListId::Approval,
         member: blocked,
         present: true,
     })?;
-    egress.to(blocked, &utxos[0]).land()?;
+    egress.to(blocked, &utxos[0]).expect_refusal()?;
+    project.write_list(ListWrite {
+        env,
+        list_id: ListId::Approval,
+        member: &clean,
+        present: true,
+    })?;
+    egress.to(&clean, &utxos[0]).land()?;
 
-    // 6. Only the config authority re-pins.
+    // 6. Only the policy authority re-pins.
     let stranger = env.funded_keypair()?;
     let rejection = ExpectRejection {
         payer: &stranger,
-        instructions: &[custom_ring_sdk::PolicyRules {
+        instructions: &[custom_ring_sdk::UpdatePolicy {
             ring,
             authority: stranger.pubkey(),
-            rules: &BLOCK_ONLY,
-            shared_sources: &[],
+            current: &*policy_registry(ring, env)?,
+            update: custom_ring_sdk::PolicyUpdate::Rules(custom_ring_sdk::PolicyTable {
+                rules: &BLOCK_ONLY,
+                shared_sources: &[],
+            }),
         }
-        .replace()?],
+        .instruction()?],
     }
     .send(rpc)?;
     Rejection::custom(CustomRingError::UnauthorizedAuthority as u32)
@@ -159,7 +182,7 @@ fn the_config_authority_re_pins_the_table_of_a_live_ring() -> Result<()> {
         "a refused re-pin counts no generation"
     );
     assert_eq!(unchanged.generation_slot(), repinned.generation_slot());
-    assert_eq!(unchanged.rule_table()?, APPROVAL_OR_UNBLOCKED);
+    assert_eq!(unchanged.rule_table()?, APPROVED_AND_UNBLOCKED);
 
     // 7. A source re-point on the re-pinned table counts generation 3, the
     //    unspent note lands against the curator's empty Block list.
@@ -175,16 +198,18 @@ fn the_config_authority_re_pins_the_table_of_a_live_ring() -> Result<()> {
     assert!(repointed.generation_slot() > repinned.generation_slot());
     assert_eq!(
         repointed.registry_for(ListId::Block),
-        Some(ListRegistry::Curator(rings.curator.registry_pda()))
+        Some(ListRegistry::Curator(
+            policy_registry(rings.curator, env)?.records
+        ))
     );
-    assert_eq!(repointed.rule_table()?, APPROVAL_OR_UNBLOCKED);
+    assert_eq!(repointed.rule_table()?, APPROVED_AND_UNBLOCKED);
     egress.to(&clean, &utxos[1]).land()?;
     project.remove()?;
     Ok(())
 }
 
 #[test]
-fn a_curated_block_list_yields_to_the_subscribers_own_approval_list() -> Result<()> {
+fn a_curated_block_list_binds_beside_the_subscribers_own_approval_list() -> Result<()> {
     let rings = CuratedRings::setup()?;
     let env = &rings.env;
     let ring = rings.subscriber;
@@ -192,23 +217,32 @@ fn a_curated_block_list_yields_to_the_subscribers_own_approval_list() -> Result<
     let recipient = &env.recipient.keypair;
     let egress = Egress { ring, sender, env };
     let member = owner_member(recipient)?;
-    let curator_block = |present| RegistryWrite {
-        ring: rings.curator,
-        list_id: ListId::Block,
-        member,
-        present,
-        env,
+    let curator_block = |present| {
+        RegistryWrite {
+            ring: rings.curator,
+            list_id: ListId::Block,
+            member,
+            present,
+            env,
+        }
+        .send()
     };
 
-    // 1. The subscriber pins the mixed group with Block read from the curator.
-    let project = init_subscriber(&rings, &block(CURATED_BLOCK_TOML, &rings))?;
+    // 1. The subscriber pins both rules with Block read from the curator.
+    let Subscriber {
+        project,
+        ring_rpc: _ring_rpc,
+    } = init_subscriber(&rings, &block(CURATED_BLOCK_TOML, &rings))?;
+    custom_ring_test_validator::policy::enroll_actors(env, ring)?;
     let pinned = policy_registry(ring, env)?;
-    assert_eq!(pinned.rule_table()?, APPROVAL_OR_UNBLOCKED);
+    assert_eq!(pinned.rule_table()?, APPROVED_AND_UNBLOCKED);
     assert_eq!(pinned.generation(), 1);
     assert!(pinned.generation_slot() > 0);
     assert_eq!(
         pinned.registry_for(ListId::Block),
-        Some(ListRegistry::Curator(rings.curator.registry_pda()))
+        Some(ListRegistry::Curator(
+            policy_registry(rings.curator, env)?.records
+        ))
     );
     assert_eq!(
         pinned.registry_for(ListId::Approval),
@@ -218,14 +252,14 @@ fn a_curated_block_list_yields_to_the_subscribers_own_approval_list() -> Result<
         ring,
         owner: sender,
         amount: DEPOSIT,
+        asset: DepositAsset::Sol,
         count: 2,
         env,
     }
     .deposit()?;
 
-    // 2. One curator write refuses the recipient, the subscriber's own
-    //    Approval bit admits it.
-    curator_block(true).send()?;
+    // 2. The subscriber's own Approval bit admits a recipient the curator
+    //    does not block.
     egress.to(recipient, &utxos[0]).expect_refusal()?;
     project.write_list(ListWrite {
         env,
@@ -235,18 +269,13 @@ fn a_curated_block_list_yields_to_the_subscribers_own_approval_list() -> Result<
     })?;
     egress.to(recipient, &utxos[0]).land()?;
 
-    // 3. A cleared Approval bit admits nothing, the curator's Block bit
-    //    refuses again.
-    project.write_list(ListWrite {
-        env,
-        list_id: ListId::Approval,
-        member: recipient,
-        present: false,
-    })?;
+    // 3. One curator write refuses the approved recipient, the grant lifts
+    //    no denial.
+    curator_block(true)?;
     egress.to(recipient, &utxos[1]).expect_refusal()?;
 
     // 4. The curator clearing its bit admits the recipient again.
-    curator_block(false).send()?;
+    curator_block(false)?;
     egress.to(recipient, &utxos[1]).land()?;
     project.remove()?;
     Ok(())
@@ -257,12 +286,19 @@ fn block(literal: &str, rings: &CuratedRings) -> String {
     literal.replace("$CURATOR", &rings.curator.program_id().to_string())
 }
 
-/// After `init` the project's config authority holds the config.
-fn init_subscriber(rings: &CuratedRings, policy: &str) -> Result<RingProject> {
-    let project = RingProject::create(&rings.env, &spr_keypair::X25519Keypair::new().pubkey())?;
+/// After `init` the project's `policy_authority` key holds the policy role.
+fn init_subscriber(rings: &CuratedRings, policy: &str) -> Result<Subscriber> {
+    let auditor = X25519Keypair::new();
+    let ring_rpc = RingRpcSpec {
+        env: &rings.env,
+        ring: rings.subscriber.program_id(),
+        auditor: auditor.clone(),
+    }
+    .serve()?;
+    let project = RingProject::create(&rings.env, &auditor.pubkey())?;
     project.write_config(RingToml {
         env: &rings.env,
-        ring_rpc: RING_RPC,
+        ring_rpc: &ring_rpc.url,
         policy: Some(policy),
         mode: ModeName::Confidential,
     })?;
@@ -270,7 +306,13 @@ fn init_subscriber(rings: &CuratedRings, policy: &str) -> Result<RingProject> {
     for line in ["policy      created", "spp ring    registered"] {
         assert!(init.contains(line), "{line} in\n{init}");
     }
-    Ok(project)
+    Ok(Subscriber { project, ring_rpc })
+}
+
+/// `ring_rpc` serves until the subscriber drops.
+struct Subscriber {
+    project: RingProject,
+    ring_rpc: LocalRingRpc,
 }
 
 struct Egress<'a> {

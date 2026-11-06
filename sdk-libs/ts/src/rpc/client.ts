@@ -1,54 +1,67 @@
 import {
-  ZolanaApi,
+  SprApi,
   resolveClientEndpoints,
   fromClientCause,
   checkedServiceUrl,
   ProverClient,
-} from "@heliuslabs/zolana/internal";
+} from "@heliuslabs/spr/internal";
 import {
   initializePoseidon,
-  type Address,
-  type Bytes32,
   type RequestContext,
   ClientError,
-  type ZolanaClientConfig,
-} from "@heliuslabs/zolana";
-import { ZolanaClient, type ProvingKeyReport } from "@heliuslabs/zolana/client";
+  type SprClientConfig,
+} from "@heliuslabs/spr";
+import { SprClient, type ProvingKeyReport } from "@heliuslabs/spr/client";
 
+import type {
+  PendingEnrollments,
+  PendingEnrollmentsRequest,
+  TrackingOpenings,
+  TrackingOpeningsRequest,
+  TrackingRecordPoolRequest,
+} from "../protocol/indexer/tracking-codec.js";
+import type { ServedTrackingPool } from "../protocol/membership/tracking.js";
 import { RingError } from "../protocol/error.js";
 import { RingIndexer } from "./indexer.js";
 import type {
-  RecordWrite,
-  RingApplyProofInputs,
-  RingMemberOpenings,
-  RingMemberPage,
-  RingMemberPageRequest,
-  RingMemberProofRequest,
-  RingMemberRecordResult,
   RingProver,
-  RingQueueState,
-  RingRecordPool,
-  RingRecordPoolRequest,
   RingRecordReader,
-  RingRegistryState,
+  StorageMemberOpenings,
+  StorageMemberPage,
+  StorageOpeningsRequest,
+  StoragePageRequest,
+  StorageRecordPool,
+  StorageRecordPoolRequest,
 } from "./ports.js";
 import { CustomRingProver } from "./prover/client.js";
 import { customRingProof } from "./prover/proof.js";
 import type { RingProofRequest } from "./prover/ring.js";
 
+export type CustomRingClientConfig = Omit<SprClientConfig, "provingKeys"> & {
+  readonly provingKeys?: never;
+};
+
 /** Initializes Poseidon, the constructor alone does not. */
 export async function createCustomRingClient(
-  config: ZolanaClientConfig = {},
+  config: CustomRingClientConfig = {},
 ): Promise<CustomRingClient> {
   await initializePoseidon();
   return new CustomRingClient(config);
 }
 
-export class CustomRingClient extends ZolanaClient implements RingProver, RingRecordReader {
+export class CustomRingClient extends SprClient implements RingProver, RingRecordReader {
   readonly #ringProver: CustomRingProver;
   readonly #ringIndexer: RingIndexer;
 
-  constructor(config: ZolanaClientConfig) {
+  constructor(config: CustomRingClientConfig) {
+    if (
+      typeof config === "object" &&
+      config !== null &&
+      "provingKeys" in config &&
+      config.provingKeys !== undefined
+    ) {
+      throw new ClientError("CLIENT_INVALID_CONFIG", { details: { field: "provingKeys" } });
+    }
     super(config);
     // The parent's prover keeps one attested session for both rails.
     if (!(this.proofService instanceof ProverClient)) {
@@ -62,7 +75,7 @@ export class CustomRingClient extends ZolanaClient implements RingProver, RingRe
       config.allowInsecureHttp ?? false,
     );
     this.#ringIndexer = new RingIndexer(
-      new ZolanaApi({
+      new SprApi({
         url,
         ...(config.apiKey === undefined ? {} : { apiKey: config.apiKey }),
         ...(config.fetch === undefined ? {} : { fetch: config.fetch }),
@@ -70,57 +83,46 @@ export class CustomRingClient extends ZolanaClient implements RingProver, RingRe
     );
   }
 
-  getRingMemberRecord(
-    request: RingMemberProofRequest,
+  getStorageMemberOpenings(
+    request: StorageOpeningsRequest,
     context?: RequestContext,
-  ): Promise<RingMemberRecordResult> {
-    return this.#ringIndexer.getRingMemberRecord(request, context);
+  ): Promise<StorageMemberOpenings> {
+    return this.#ringIndexer.getStorageMemberOpenings(request, context);
   }
 
-  getRingMemberRecords(
-    request: RingMemberPageRequest,
+  getStorageMemberRecords(
+    request: StoragePageRequest,
     context?: RequestContext,
-  ): Promise<RingMemberPage> {
-    return this.#ringIndexer.getRingMemberRecords(request, context);
+  ): Promise<StorageMemberPage> {
+    return this.#ringIndexer.getStorageMemberRecords(request, context);
   }
 
-  getRingMemberRegistryRoot(
-    request: Readonly<{ ringProgramId: Address }>,
+  getStorageRecordPool(
+    request: StorageRecordPoolRequest,
     context?: RequestContext,
-  ): Promise<RingRegistryState> {
-    return this.#ringIndexer.getRingMemberRegistryRoot(request, context);
+  ): Promise<StorageRecordPool> {
+    return this.#ringIndexer.getStorageRecordPool(request, context);
   }
 
-  getRingMemberOpenings(
-    request: Readonly<{
-      ringProgramId: Address;
-      members: readonly Bytes32[];
-      expectedRoot: Bytes32;
-    }>,
+  getTrackingOpenings(
+    request: TrackingOpeningsRequest,
     context?: RequestContext,
-  ): Promise<RingMemberOpenings> {
-    return this.#ringIndexer.getRingMemberOpenings(request, context);
+  ): Promise<TrackingOpenings> {
+    return this.#ringIndexer.getTrackingOpenings(request, context);
   }
 
-  getRingRecordPool(
-    request: RingRecordPoolRequest,
+  getTrackingRecordPool(
+    request: TrackingRecordPoolRequest,
     context?: RequestContext,
-  ): Promise<RingRecordPool> {
-    return this.#ringIndexer.getRingRecordPool(request, context);
+  ): Promise<ServedTrackingPool> {
+    return this.#ringIndexer.getTrackingRecordPool(request, context);
   }
 
-  getRingRecordQueue(
-    request: Readonly<{ ringProgramId: Address }>,
+  getPendingEnrollments(
+    request: PendingEnrollmentsRequest,
     context?: RequestContext,
-  ): Promise<RingQueueState> {
-    return this.#ringIndexer.getRingRecordQueue(request, context);
-  }
-
-  getRingApplyProofInputs(
-    request: Readonly<{ ringProgramId: Address; authorityWrites: readonly RecordWrite[] }>,
-    context?: RequestContext,
-  ): Promise<RingApplyProofInputs> {
-    return this.#ringIndexer.getRingApplyProofInputs(request, context);
+  ): Promise<PendingEnrollments> {
+    return this.#ringIndexer.getPendingEnrollments(request, context);
   }
 
   /** One ring proof, the 192-byte `CustomRingProof` the ring program verifies. */

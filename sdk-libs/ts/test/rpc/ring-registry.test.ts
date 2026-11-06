@@ -7,8 +7,8 @@ import {
   type Base64EncodedBytes,
 } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
-import { SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana";
-import { decodeRingConfig, StateDiscriminator } from "@heliuslabs/zolana/interface";
+import { SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/spr";
+import { decodeRingConfig, StateDiscriminator } from "@heliuslabs/spr/interface";
 import { kitReads } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { listRegisteredRings } from "../../src/rpc/ring-directory.js";
 

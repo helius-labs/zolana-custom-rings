@@ -6,6 +6,12 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
+    inputs:
+      validation:
+        description: Validation scope
+        type: choice
+        default: full
+        options: [full, sanity]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -38,6 +44,8 @@ jobs:
       ts: ${{ steps.gate.outputs.ts }}
       stack: ${{ steps.gate.outputs.stack }}
       build: ${{ steps.gate.outputs.build }}
+      sanity: ${{ steps.gate.outputs.sanity }}
+      localnet_matrix: ${{ steps.localnet.outputs.matrix }}
     steps:
       - id: filter
         if: github.event_name == 'pull_request'
@@ -67,6 +75,7 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           DRAFT: ${{ github.event.pull_request.draft }}
+          VALIDATION: ${{ inputs.validation }}
           RUST: ${{ steps.filter.outputs.rust }}
           TS: ${{ steps.filter.outputs.ts }}
           STACK: ${{ steps.filter.outputs.stack }}
@@ -84,6 +93,45 @@ jobs:
           build=false
           if [[ "$RUST" == true || "$STACK" == true ]]; then build=true; fi
           echo "build=$build" >> "$GITHUB_OUTPUT"
+          sanity=false
+          if [[ "$EVENT" == workflow_dispatch && "$VALIDATION" == sanity ]]; then sanity=true; fi
+          echo "sanity=$sanity" >> "$GITHUB_OUTPUT"
+      - id: localnet
+        env:
+          SANITY: ${{ steps.gate.outputs.sanity }}
+          FULL_MATRIX: |
+            {"include": [
+              {"name": "custom-ring lifecycle 1/3", "recipe": "test-custom-ring-validator 'not test(shapes::sweep_)' --partition slice:1/3"},
+              {"name": "custom-ring lifecycle 2/3", "recipe": "test-custom-ring-validator 'not test(shapes::sweep_)' --partition slice:2/3"},
+              {"name": "custom-ring lifecycle 3/3", "recipe": "test-custom-ring-validator 'not test(shapes::sweep_)' --partition slice:3/3"},
+              {"name": "confidential shapes", "recipe": "test-custom-ring-validator 'test(=shapes::sweep_confidential)'"},
+              {"name": "confidential policy shapes", "recipe": "test-custom-ring-validator 'test(=shapes::sweep_confidential_policy)'"},
+              {"name": "anonymous shapes", "recipe": "test-custom-ring-validator 'test(=shapes::sweep_anonymous)'"},
+              {"name": "anonymous policy shapes", "recipe": "test-custom-ring-validator 'test(=shapes::sweep_anonymous_policy)'"},
+              {"name": "delegate shapes", "recipe": "test-custom-ring-validator 'test(=shapes::sweep_delegate)'"},
+              {"name": "widest frames, confidential signer", "recipe": "test-custom-ring-validator 'test(=shapes::sweep_widest_frames_confidential_signer)'", "timeout": 300},
+              {"name": "widest frames, confidential in-proof", "recipe": "test-custom-ring-validator 'test(=shapes::sweep_widest_frames_confidential_in_proof)'", "timeout": 300},
+              {"name": "widest frames, anonymous", "recipe": "test-custom-ring-validator 'test(=shapes::sweep_widest_frames_anonymous)'", "timeout": 300},
+              {"name": "widest frames, anonymous entry", "recipe": "test-custom-ring-validator 'test(=shapes::sweep_widest_frames_anonymous_entry)'", "timeout": 300},
+              {"name": "salted shapes", "recipe": "test-custom-ring-validator 'test(=shapes::sweep_salted)'"},
+              {"name": "full capacity, confidential", "recipe": "test-custom-ring-validator 'test(=shapes::sweep_full_capacity_confidential)'", "timeout": 300},
+              {"name": "full capacity, confidential policy", "recipe": "test-custom-ring-validator 'test(=shapes::sweep_full_capacity_confidential_policy)'", "timeout": 300},
+              {"name": "full capacity, anonymous policy", "recipe": "test-custom-ring-validator 'test(=shapes::sweep_full_capacity_anonymous_policy)'", "timeout": 300},
+              {"name": "full capacity, salted", "recipe": "test-custom-ring-validator 'test(=shapes::sweep_full_capacity_salted)'", "timeout": 300},
+              {"name": "custom-ring shared sources", "recipe": "test-custom-ring-shared"},
+              {"name": "custom-ring policy rules", "recipe": "test-custom-ring-rules"},
+              {"name": "custom-ring policy re-pin", "recipe": "test-custom-ring-repin"}
+            ]}
+        run: |
+          if [[ "$SANITY" == true ]]; then
+            echo 'matrix={"include":[{"name":"release sanity","recipe":"test-custom-ring-sanity"}]}' >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo 'matrix<<LOCALNET_MATRIX'
+              echo "$FULL_MATRIX"
+              echo LOCALNET_MATRIX
+            } >> "$GITHUB_OUTPUT"
+          fi
 
   # A release image or key must come from a zolana commit on main or release/*.
   zolana-pin:
@@ -355,33 +403,10 @@ jobs:
     needs: [changes, programs, zolana-tools, photon, prover, ring-tools]
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: ${{ matrix.timeout || 60 }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - name: custom-ring lifecycle 1/3
-            recipe: test-custom-ring-validator 'not test(shapes::sweep_)' --partition slice:1/3
-          - name: custom-ring lifecycle 2/3
-            recipe: test-custom-ring-validator 'not test(shapes::sweep_)' --partition slice:2/3
-          - name: custom-ring lifecycle 3/3
-            recipe: test-custom-ring-validator 'not test(shapes::sweep_)' --partition slice:3/3
-          - name: confidential shapes
-            recipe: test-custom-ring-validator 'test(=shapes::sweep_confidential)'
-          - name: confidential policy shapes
-            recipe: test-custom-ring-validator 'test(=shapes::sweep_confidential_policy)'
-          - name: anonymous shapes
-            recipe: test-custom-ring-validator 'test(=shapes::sweep_anonymous)'
-          - name: anonymous policy shapes
-            recipe: test-custom-ring-validator 'test(=shapes::sweep_anonymous_policy)'
-          - name: delegate shapes
-            recipe: test-custom-ring-validator 'test(=shapes::sweep_delegate)'
-          - name: custom-ring shared sources
-            recipe: test-custom-ring-shared
-          - name: custom-ring policy rules
-            recipe: test-custom-ring-rules
-          - name: custom-ring policy re-pin
-            recipe: test-custom-ring-repin
+      matrix: ${{ fromJSON(needs.changes.outputs.localnet_matrix) }}
     env:
       ZOLANA_PREBUILT: "1"
       ZOLANA_XTASK_BIN: ${{ github.workspace }}/zolana/target/debug/xtask
@@ -423,9 +448,9 @@ jobs:
         run: |
           tmp="$(mktemp -d)"
           trap 'rm -rf "$tmp"' EXIT
-          npm pack --workspace @heliuslabs/zolana --pack-destination "$tmp"
+          npm pack --workspace @heliuslabs/spr --pack-destination "$tmp"
           npm pack --workspace @heliuslabs/zolana-custom-rings --pack-destination "$tmp"
-          set -- "$tmp"/heliuslabs-zolana-[0-9]*.tgz
+          set -- "$tmp"/heliuslabs-spr-[0-9]*.tgz
           test "$#" -eq 1
           core="$1"
           set -- "$tmp"/heliuslabs-zolana-custom-rings-*.tgz
@@ -435,9 +460,9 @@ jobs:
           kit_range="$(node -p "require('./sdk-libs/ts/package.json').peerDependencies['@solana/kit']")"
           npm --prefix "$tmp" install "$core" "$ring" "@solana/kit@$kit_range" --ignore-scripts
           cat > "$tmp/smoke.mts" <<'TS'
-          import type { ZolanaClientConfig } from "@heliuslabs/zolana";
+          import type { SprClientConfig } from "@heliuslabs/spr";
           import { createCustomRingClient, type RingTransferClient } from "@heliuslabs/zolana-custom-rings";
-          const config: ZolanaClientConfig = { solanaRpcUrl: new URL("http://127.0.0.1:8899") };
+          const config: SprClientConfig = { solanaRpcUrl: new URL("http://127.0.0.1:8899") };
           const client: RingTransferClient = await createCustomRingClient(config);
           void client;
           TS
@@ -452,7 +477,7 @@ jobs:
           await Promise.all(
             ["client", "keypair"].map((subpath) => import(`@heliuslabs/zolana-custom-rings/${subpath}`)),
           );
-          if (!ring.buildRingTransferTransaction || !ring.customRingDepositPayload) process.exit(1);
+          if (!ring.buildRingTransferTransaction || !ring.buildRingDepositTransaction) process.exit(1);
           await ring.createCustomRingClient({ solanaRpcUrl: "http://127.0.0.1:8899" });
           NODE
           )
@@ -460,17 +485,15 @@ jobs:
   e2e:
     name: typescript / ${{ matrix.name }}
     needs: [changes, programs, zolana-tools, photon, prover, ring-tools]
-    if: needs.changes.outputs.stack == 'true'
+    if: needs.changes.outputs.stack == 'true' && needs.changes.outputs.sanity != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: e2e ring controls
-            recipe: test-ts-ring-controls
           - name: e2e flows
-            recipe: test-ts-e2e --exclude test/e2e/ring-controls.live.test.ts
+            recipe: test-ts-e2e
     env:
       ZOLANA_PREBUILT: "1"
       ZOLANA_XTASK_BIN: ${{ github.workspace }}/zolana/target/debug/xtask
@@ -491,7 +514,7 @@ jobs:
           find target/ts-sdk-e2e -name '*.log' -print -exec tail -200 {} \; 2>/dev/null || echo "(no logs)"
 
   result:
-    name: ci result
+    name: ${{ needs.changes.outputs.sanity == 'true' && 'ci sanity result' || 'ci result' }}
     if: always()
     needs:
       - changes

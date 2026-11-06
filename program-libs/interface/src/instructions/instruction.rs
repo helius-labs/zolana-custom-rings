@@ -1,24 +1,22 @@
+//! The instruction tags, compute budgets and data of every ring instruction but the transfer.
+//!
+//! `WriteRecordsIxData::entry_within` holds a list write to its writer's lists and its value inside
+//! its mask. The apply circuit takes the chained value as given, a value past the mask would reach the tree.
+//!
+//! Read after `program-libs/interface/src/accounts/state.rs`. Read before `program-libs/interface/src/instructions/transact.rs`,
+//! `programs/custom-ring/src/lib.rs`.
+
 use bytemuck::{Pod, Zeroable};
+use solana_address::Address;
 use wincode::{containers, len::FixIntLen, SchemaRead, SchemaWrite};
-use zolana_ring_policy::{ListSet, ListWrite, Writer};
+use zolana_ring_policy::{ListSet, ListWrite, MintPolicy, Writer};
 
 use crate::{
     error::CustomRingError,
-    member_registry::{check_member, QueueEntry, APPLY_BATCH},
-    ReaderKeyBytes, AUDIT_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
+    member_registry::{check_member, RecordWrite, APPLY_BATCH},
+    state::{RingRole, RingRoles},
+    TAGGED_X25519_KEY_LEN,
 };
-
-/// Account slots of the record instructions the indexer reads.
-pub mod accounts {
-    /// The member of `WriteRecords` and `RegisterKey`, the authority of `AuthorityWriteRecords`.
-    pub const RECORD_WRITE_SIGNER: usize = 0;
-    pub const RECORD_WRITE_REGISTRY: usize = 2;
-    pub const RECORD_WRITE_QUEUE: usize = 3;
-    pub const APPLY_RECORDS_REGISTRY: usize = 0;
-    pub const APPLY_RECORDS_QUEUE: usize = 1;
-    pub const CREATE_MEMBER_REGISTRY_REGISTRY: usize = 3;
-    pub const CREATE_MEMBER_REGISTRY_QUEUE: usize = 4;
-}
 
 macro_rules! instruction_tags {
     ($($(#[$doc:meta])* $variant:ident = $tag:ident: $value:expr => $units:expr,)*) => {
@@ -58,39 +56,18 @@ const POLICY_UNITS: u32 = 150_000;
 const PROOF_UNITS: u32 = 1_400_000;
 
 instruction_tags! {
-    CreateConfig = CREATE_CONFIG: 1 => ACCOUNT_UNITS,
-    InitSppRingConfig = INIT_SPP_RING_CONFIG: 2 => ACCOUNT_UNITS,
-    /// Historical v1 frame, decoding only after the v2 upgrade.
-    LegacyTransact = LEGACY_TRANSACT: 3 => PROOF_UNITS,
-    Transact = TRANSACT: 43 => PROOF_UNITS,
-    /// Always refused, deposits go through `AuditedDeposit`.
-    Deposit = DEPOSIT: spr_interface::instruction::tag::RING_DEPOSIT => 200_000,
-    Merge = MERGE: spr_interface::instruction::tag::RING_MERGE_TRANSACT => PROOF_UNITS,
-    GrantReadAccess = GRANT_READ_ACCESS: 4 => ACCOUNT_UNITS,
-    RevokeReadAccess = REVOKE_READ_ACCESS: 5 => ACCOUNT_UNITS,
-    SetAuthority = SET_AUTHORITY: 6 => ACCOUNT_UNITS,
-    CreatePolicy = CREATE_POLICY: 7 => POLICY_UNITS,
-    // Tags 8 and 9 are retired, never reuse them.
-    SetPolicySource = SET_POLICY_SOURCE: 10 => POLICY_UNITS,
+    Transfer = TRANSFER: 55 => PROOF_UNITS,
+    Merge = MERGE: 57 => PROOF_UNITS,
+    UpdateAuthority = UPDATE_AUTHORITY: 6 => ACCOUNT_UNITS,
     SetPaused = SET_PAUSED: 11 => ACCOUNT_UNITS,
-    SetPolicyRules = SET_POLICY_RULES: 12 => POLICY_UNITS,
-    /// Ring-local tags must not collide with the forwarded SPP deposit and merge tags.
+    /// Ring-local tags must not collide with the forwarded SPP tags.
     SetCoSigner = SET_CO_SIGNER: 27 => ACCOUNT_UNITS,
-    ClearCoSigner = CLEAR_CO_SIGNER: 21 => ACCOUNT_UNITS,
-    // Tags 22, 23 and 26 are retired, never reuse them.
-    SetDelegate = SET_DELEGATE: 24 => ACCOUNT_UNITS,
-    /// Tag 3 data over the SPP authority rail, signed by the delegate.
-    LegacyDelegateTransact = LEGACY_DELEGATE_TRANSACT: 25 => PROOF_UNITS,
-    DelegateTransact = DELEGATE_TRANSACT: 44 => PROOF_UNITS,
-    CreateMemberRegistry = CREATE_MEMBER_REGISTRY: 28 => ACCOUNT_UNITS,
-    RegisterKey = REGISTER_KEY: 29 => PROOF_UNITS,
-    // Tag 30 is retired, never reuse it.
-    AuditedDeposit = AUDITED_DEPOSIT: 31 => PROOF_UNITS,
-    // Tags 32 to 38 are retired, never reuse them.
-    WriteRecords = WRITE_RECORDS: 39 => ACCOUNT_UNITS,
-    AuthorityWriteRecords = AUTHORITY_WRITE_RECORDS: 40 => PROOF_UNITS,
-    ApplyRecords = APPLY_RECORDS: 41 => PROOF_UNITS,
-    SetInsertFee = SET_INSERT_FEE: 42 => ACCOUNT_UNITS,
+    ClearCoSigner = CLEAR_CO_SIGNER: 62 => ACCOUNT_UNITS,
+    SetDelegate = SET_DELEGATE: 64 => ACCOUNT_UNITS,
+    AuthorityTransfer = AUTHORITY_TRANSFER: 56 => PROOF_UNITS,
+    /// Signed by the upgrade authority, one budget for the ring account, its policy, the tracking and SPP CPIs.
+    Initialize = INITIALIZE: 53 => 3 * ACCOUNT_UNITS + POLICY_UNITS,
+    UpdatePolicy = UPDATE_POLICY: 54 => POLICY_UNITS,
 }
 
 /// Fixed for the ring's life.
@@ -117,16 +94,20 @@ impl RingKind {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
-pub struct CreateConfigIxData {
+#[derive(Clone, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
+pub struct InitializeIxData {
     /// Auditor X25519 public key as `0x04 || canonical little-endian u`.
     pub auditor_pubkey: [u8; TAGGED_X25519_KEY_LEN],
     pub kind: RingKind,
+    pub roles: RingRoles,
+    /// Required on a policy ring.
+    pub policy: Option<PolicyBindingIxData>,
 }
 
+/// The admin and the new key sign.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
-pub struct ReaderIxData {
-    pub reader: ReaderKeyBytes,
+pub struct UpdateAuthorityIxData {
+    pub role: RingRole,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
@@ -134,20 +115,19 @@ pub struct SetPausedIxData {
     pub paused: bool,
 }
 
-/// Requires co-signing for the selected public operations.
-#[derive(Clone, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
-pub struct SetCoSignerIxData {
-    pub signer: [u8; 32],
+/// Creates or rescopes the signer's `CoSigner` record, clearing it takes no data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
+pub struct SetCoSignerRecordIxData {
+    pub signer: Address,
     /// [`CoSignScope`](crate::CoSignScope) bits.
     pub scope: u8,
 }
 
-impl SetCoSignerIxData {
-    /// The scope a stored co-signer takes.
+impl SetCoSignerRecordIxData {
     pub fn check(&self) -> Result<crate::CoSignScope, CustomRingError> {
         let scope =
             crate::CoSignScope::new(self.scope).ok_or(CustomRingError::InvalidCoSignerScope)?;
-        if self.signer == [0; 32] {
+        if self.signer == Address::default() {
             return Err(CustomRingError::InvalidCoSigner);
         }
         Ok(scope)
@@ -169,16 +149,6 @@ impl CustomRingProof {
 
 const _: () = assert!(CustomRingProof::SIZE == 192);
 
-/// `tag || proof || registry_root_index`, then the SPP deposit instruction unchanged.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
-#[repr(C)]
-pub struct AuditedDepositPrefix {
-    pub tag: u8,
-    pub proof: CustomRingProof,
-    /// The registry history slot of the bound root, zero unless the ring escrows nullifier keys.
-    pub registry_root_index: u8,
-}
-
 /// Compressed Groth16 points, `b` decompresses to SPP's raw 128 bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable, SchemaRead, SchemaWrite)]
 #[repr(C)]
@@ -188,14 +158,14 @@ pub struct PlainGroth16Proof {
     pub proof_c: [u8; 32],
 }
 
-/// `source` 0 names the ring's own registry, `k` the `k`-th trailing curator registry.
+/// `source` 0 names the ring's own records, `k` the `k`-th trailing curator registry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
 pub struct SourceSpec {
     pub list_id: u8,
     pub source: u8,
 }
 
-/// Policy parameters must reproduce the configured policy hash.
+/// The table a policy write stores, the program computes its hash.
 #[derive(Clone, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
 pub struct PolicyTableIxData {
     #[wincode(with = "containers::Vec<SourceSpec, FixIntLen<u8>>")]
@@ -204,11 +174,28 @@ pub struct PolicyTableIxData {
     pub rules: Vec<[u8; 32]>,
 }
 
-/// `source` 0 is the ring's own registry, 1 the single trailing curator member registry.
+#[derive(Clone, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
+pub struct PolicyBindingIxData {
+    pub table: PolicyTableIxData,
+}
+
+/// `source` 0 is the ring's own records, 1 the single trailing curator `StorageRegistry`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
-pub struct SetPolicySourceIxData {
+pub struct PolicySourceIxData {
     pub list_id: u8,
     pub source: u8,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
+#[wincode(tag_encoding = "u8")]
+pub enum UpdatePolicyIxData {
+    #[wincode(tag = 0)]
+    Rules(PolicyTableIxData),
+    #[wincode(tag = 1)]
+    Source(PolicySourceIxData),
+    /// One trailing records registry under any authority.
+    #[wincode(tag = 2)]
+    Records,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
@@ -218,23 +205,14 @@ pub struct WriteRecordsIxData {
     pub value: [u8; 8],
 }
 
-/// Tag 39, a member's write of its own lists.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
-#[repr(C)]
-pub struct MemberWriteIxData {
-    pub lists: WriteRecordsIxData,
-    /// Little endian, a higher insert fee refuses the write.
-    pub max_fee: [u8; 8],
-}
-
-/// One authority write inside `AuthorityWriteRecords`.
+/// One record write inside a storage update.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
 pub struct RecordWriteData {
     pub member: [u8; 32],
     pub lists: WriteRecordsIxData,
-    /// A replacement flag followed by four big-endian u64 amounts; all zero preserves settings.
-    pub mint_policy: [u8; 33],
+    /// [`mint_policy_write`] of the replacement settings.
+    pub mint_policy: MintPolicyWrite,
 }
 
 impl Default for RecordWriteData {
@@ -243,38 +221,15 @@ impl Default for RecordWriteData {
     }
 }
 
-/// Tag 41, the proof that applies every pending write.
+/// The proof that applies a storage update's writes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
 pub struct ApplyRecordsIxData {
     pub proof: CustomRingProof,
     pub new_root: [u8; 32],
     pub new_next_index: [u8; 4],
-}
-
-/// Tag 40, `count u8 || count writes || ApplyRecordsIxData`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AuthorityWriteRecordsIxData<'a> {
-    pub writes: &'a [RecordWriteData],
-    pub apply: &'a ApplyRecordsIxData,
-}
-
-/// Tag 29, the proof that seals the member's nullifier secret to the auditor.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
-#[repr(C)]
-pub struct RegisterKeyIxData {
-    pub proof: CustomRingProof,
-    pub nullifier_pk: [u8; 32],
-    pub eph_u: [u8; 32],
-    pub ciphertext: [u8; AUDIT_CIPHERTEXT_LEN],
-    /// Little endian, a higher insert fee refuses the registration.
-    pub max_fee: [u8; 8],
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
-#[repr(C)]
-pub struct SetInsertFeeIxData {
-    pub fee: [u8; 8],
+    /// The proven `ApplyRecordsStatement::restrictive`, one or zero.
+    pub restrictive: u8,
 }
 
 macro_rules! fixed_ix_data {
@@ -292,26 +247,7 @@ macro_rules! fixed_ix_data {
     )*};
 }
 
-fixed_ix_data!(
-    AuditedDepositPrefix,
-    WriteRecordsIxData,
-    MemberWriteIxData,
-    ApplyRecordsIxData,
-    RegisterKeyIxData,
-    SetInsertFeeIxData
-);
-
-impl MemberWriteIxData {
-    pub const fn max_fee(&self) -> u64 {
-        u64::from_le_bytes(self.max_fee)
-    }
-}
-
-impl RegisterKeyIxData {
-    pub const fn max_fee(&self) -> u64 {
-        u64::from_le_bytes(self.max_fee)
-    }
-}
+fixed_ix_data!(WriteRecordsIxData, ApplyRecordsIxData);
 
 impl WriteRecordsIxData {
     pub const fn new(write: ListWrite) -> Self {
@@ -329,22 +265,28 @@ impl WriteRecordsIxData {
         u64::from_le_bytes(self.value)
     }
 
-    /// The queue entry of `writer` changing `member`'s lists, only the lists `writer` owns.
-    pub fn entry(&self, member: [u8; 32], writer: Writer) -> Result<QueueEntry, CustomRingError> {
+    /// The entry of `writer` changing `member`'s lists, only the lists `writer` owns.
+    pub fn entry(&self, member: [u8; 32], writer: Writer) -> Result<RecordWrite, CustomRingError> {
+        self.entry_within(member, writer.writable())
+    }
+
+    pub(crate) fn entry_within(
+        &self,
+        member: [u8; 32],
+        writable: ListSet,
+    ) -> Result<RecordWrite, CustomRingError> {
         check_member(&member)?;
         let (mask, value) = (self.mask(), self.value());
         if mask == 0 || value & !mask != 0 {
             return Err(CustomRingError::ValueOutsideMask);
         }
-        if !ListSet::from_record_bits(mask).is_some_and(|lists| lists.is_subset(writer.writable()))
-        {
+        if !ListSet::from_record_bits(mask).is_some_and(|lists| lists.is_subset(writable)) {
             return Err(CustomRingError::ListBitNotWritable);
         }
-        Ok(QueueEntry {
+        Ok(RecordWrite {
             member,
             mask,
             value,
-            escrow_key: [0; 32],
             mint_policy: None,
         })
     }
@@ -353,67 +295,70 @@ impl WriteRecordsIxData {
 impl RecordWriteData {
     pub const SIZE: usize = core::mem::size_of::<Self>();
 
-    pub fn entry(&self) -> Result<QueueEntry, CustomRingError> {
-        check_member(&self.member)?;
-        let mut entry = if self.lists == WriteRecordsIxData::default() {
-            QueueEntry {
-                member: self.member,
-                ..QueueEntry::default()
-            }
-        } else {
-            self.lists.entry(self.member, Writer::Authority)?
-        };
-        let [tag, policy @ ..] = self.mint_policy;
-        entry.mint_policy = match tag {
-            0 if self.mint_policy == [0; 33] && entry.mask != 0 => None,
-            1 => Some(zolana_ring_policy::MintPolicy::from_bytes(policy)),
-            _ => return Err(CustomRingError::InvalidInstructionData),
-        };
-        Ok(entry)
+    pub fn entry(&self) -> Result<RecordWrite, CustomRingError> {
+        list_and_mint_entry(
+            self.member,
+            &self.lists,
+            &self.mint_policy,
+            Writer::Authority.writable(),
+        )
     }
+}
+
+pub type MintPolicyWrite = [u8; 1 + MintPolicy::LEN];
+
+/// `1 || MintPolicy::bytes` replaces the settings, all zero keeps them.
+pub fn mint_policy_write(policy: Option<MintPolicy>) -> MintPolicyWrite {
+    let mut write = [0; 1 + MintPolicy::LEN];
+    if let Some(policy) = policy {
+        write[0] = 1;
+        write[1..].copy_from_slice(&policy.bytes());
+    }
+    write
+}
+
+/// A write that keeps both the lists and the mint settings is refused.
+pub(crate) fn list_and_mint_entry(
+    member: [u8; 32],
+    lists: &WriteRecordsIxData,
+    mint_policy: &MintPolicyWrite,
+    writable: ListSet,
+) -> Result<RecordWrite, CustomRingError> {
+    check_member(&member)?;
+    let mut entry = if *lists == WriteRecordsIxData::default() {
+        RecordWrite {
+            member,
+            ..RecordWrite::default()
+        }
+    } else {
+        lists.entry_within(member, writable)?
+    };
+    let [tag, policy @ ..] = *mint_policy;
+    entry.mint_policy = match tag {
+        0 if *mint_policy == mint_policy_write(None) && entry.mask != 0 => None,
+        1 => {
+            let policy = MintPolicy::from_bytes(policy);
+            policy.limits.check()?;
+            Some(policy)
+        }
+        _ => return Err(CustomRingError::InvalidInstructionData),
+    };
+    Ok(entry)
 }
 
 impl ApplyRecordsIxData {
     pub const fn new_next_index(&self) -> u32 {
         u32::from_le_bytes(self.new_next_index)
     }
-}
 
-impl SetInsertFeeIxData {
-    pub const fn fee(&self) -> u64 {
-        u64::from_le_bytes(self.fee)
-    }
-}
-
-impl<'a> AuthorityWriteRecordsIxData<'a> {
-    pub fn parse(data: &'a [u8]) -> Result<Self, CustomRingError> {
-        let (count, rest) = data
-            .split_first()
-            .ok_or(CustomRingError::InvalidInstructionData)?;
-        let count = write_count(usize::from(*count))?;
-        let (writes, apply) = rest
-            .split_at_checked(usize::from(count) * RecordWriteData::SIZE)
-            .ok_or(CustomRingError::InvalidInstructionData)?;
-        Ok(Self {
-            writes: bytemuck::try_cast_slice(writes)
-                .map_err(|_| CustomRingError::InvalidInstructionData)?,
-            apply: ApplyRecordsIxData::parse(apply)?,
-        })
-    }
-
-    pub fn encode(&self) -> Result<Vec<u8>, CustomRingError> {
-        let count = write_count(self.writes.len())?;
-        Ok([
-            &[count][..],
-            bytemuck::cast_slice(self.writes),
-            bytemuck::bytes_of(self.apply),
-        ]
-        .concat())
+    /// `StorageUpdateIxData::parse` refuses a byte above one.
+    pub const fn restrictive(&self) -> bool {
+        self.restrictive != 0
     }
 }
 
 /// One to `APPLY_BATCH` writes, `AuthorityBatchTooLarge` past it.
-fn write_count(count: usize) -> Result<u8, CustomRingError> {
+pub(crate) fn write_count(count: usize) -> Result<u8, CustomRingError> {
     match count {
         0 => Err(CustomRingError::InvalidInstructionData),
         1..=APPLY_BATCH => Ok(count as u8),
@@ -422,11 +367,9 @@ fn write_count(count: usize) -> Result<u8, CustomRingError> {
 }
 
 const _: () = assert!(WriteRecordsIxData::SIZE == 16);
-const _: () = assert!(MemberWriteIxData::SIZE == 24);
 const _: () = assert!(core::mem::align_of::<RecordWriteData>() == 1);
-const _: () = assert!(RecordWriteData::SIZE == 81);
-const _: () = assert!(ApplyRecordsIxData::SIZE == 228);
-const _: () = assert!(RegisterKeyIxData::SIZE == 296);
+const _: () = assert!(RecordWriteData::SIZE == 145);
+const _: () = assert!(ApplyRecordsIxData::SIZE == 229);
 const _: () = assert!(APPLY_BATCH <= u8::MAX as usize);
 
 #[cfg(test)]
@@ -446,26 +389,28 @@ mod tests {
     #[test]
     fn a_member_writes_only_its_own_lists_within_the_mask() {
         let member = right_align(&[7]);
-        let recovery = ListId::Recovery.record_bit();
+        let viewing = ListId::RingViewing.record_bit();
         let allow = ListId::Allow.record_bit();
         let write = |mask, value| lists(mask, value).entry(member, Writer::Member);
-        assert!(write(recovery, recovery).is_ok());
+        assert!(write(viewing, viewing).is_ok());
         assert_eq!(
             write(allow, allow),
             Err(CustomRingError::ListBitNotWritable)
         );
+        for unwritable in ListSet::PRIVATE_LISTS.iter() {
+            assert_eq!(
+                write(unwritable.record_bit(), 0),
+                Err(CustomRingError::ListBitNotWritable)
+            );
+        }
+        assert_eq!(write(1 << 9, 0), Err(CustomRingError::ListBitNotWritable));
         assert_eq!(
-            write(ListId::Escrow.record_bit(), 0),
-            Err(CustomRingError::ListBitNotWritable)
-        );
-        assert_eq!(write(1 << 8, 0), Err(CustomRingError::ListBitNotWritable));
-        assert_eq!(
-            write(recovery, recovery | allow),
+            write(viewing, viewing | allow),
             Err(CustomRingError::ValueOutsideMask)
         );
         assert_eq!(write(0, 0), Err(CustomRingError::ValueOutsideMask));
         assert_eq!(
-            lists(recovery, 0).entry([0; 32], Writer::Member),
+            lists(viewing, 0).entry([0; 32], Writer::Member),
             Err(CustomRingError::MemberOutOfRange)
         );
     }
@@ -474,7 +419,7 @@ mod tests {
     fn the_authority_writes_only_the_authority_lists() {
         let write = |mask| {
             RecordWriteData {
-                mint_policy: [0; 33],
+                mint_policy: mint_policy_write(None),
                 member: right_align(&[9]),
                 lists: lists(mask, 0),
             }
@@ -483,10 +428,6 @@ mod tests {
         assert!(write(ListId::Block.record_bit()).is_ok());
         assert_eq!(
             write(ListId::RingViewing.record_bit()),
-            Err(CustomRingError::ListBitNotWritable)
-        );
-        assert_eq!(
-            write(ListId::Escrow.record_bit()),
             Err(CustomRingError::ListBitNotWritable)
         );
     }

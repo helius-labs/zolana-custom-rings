@@ -1,4 +1,4 @@
-//! Indexes custom ring member registries and forwards every other JSON-RPC
+//! Indexes storage registries and forwards every other JSON-RPC
 //! call to Photon.
 
 #[path = "rpc/api.rs"]
@@ -18,8 +18,15 @@ mod rpc;
 mod server;
 #[path = "storage/database.rs"]
 mod storage;
+#[path = "ingest/storage_registry.rs"]
+mod storage_registry;
+#[path = "ingest/tracking_registry.rs"]
+mod tracking_registry;
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+};
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
@@ -49,6 +56,9 @@ pub struct Args {
     /// Photon URL, it serves every call but the ring methods.
     #[arg(long)]
     pub photon_url: PhotonUrl,
+
+    #[arg(long, env = "RING_INDEXER_BIND", default_value = "127.0.0.1")]
+    pub bind: IpAddr,
 
     #[arg(long, default_value_t = 8786)]
     pub port: u16,
@@ -102,7 +112,7 @@ pub async fn run(args: Args) -> Result<()> {
         readiness,
         max_connections: args.max_connections,
     }
-    .start(SocketAddr::from(([0, 0, 0, 0], args.port)))
+    .start(SocketAddr::new(args.bind, args.port))
     .await?;
     log::info!("ring indexer listens on {address}");
     tokio::select! {
@@ -158,5 +168,7 @@ fn surfpool_fixture(rpc_url: &str) -> Result<BlockHeaders> {
 
 #[cfg(test)]
 mod replay_tests;
+#[cfg(test)]
+mod savepoint_tests;
 #[cfg(test)]
 mod tests;

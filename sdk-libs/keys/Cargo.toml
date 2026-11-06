@@ -18,7 +18,9 @@ solana-address = { workspace = true }
 thiserror = { workspace = true }
 zeroize = { workspace = true }
 spr-hasher = { workspace = true }
+spr-interface = { workspace = true }
 spr-keypair = { workspace = true }
+spr-transaction = { workspace = true }
 
 [dev-dependencies]
 serde = { workspace = true }

@@ -1,4 +1,4 @@
-import { sha256 } from "@heliuslabs/zolana/internal";
+import { sha256 } from "@heliuslabs/spr/internal";
 
 import { RingError } from "../../protocol/error.js";
 import {

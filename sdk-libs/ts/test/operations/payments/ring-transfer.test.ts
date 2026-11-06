@@ -1,6 +1,13 @@
+import { DisclosureFormat } from "../../../src/protocol/codec/ring-disclosure-layout.js";
+import { withConfirmedReads } from "../../helpers/clients.js";
 import { EMPTY_MINT_POLICY } from "../../../src/protocol/membership/mint-policy.js";
 import { policyWithdrawalHash } from "../../../src/proof/withdrawals.js";
-import { AccountRole, type Address } from "@solana/kit";
+import {
+  AccountRole,
+  generateKeyPairSigner,
+  signTransactionWithSigners,
+  type Address,
+} from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -9,38 +16,44 @@ import {
   type Bytes32,
   TRANSACTION_SIZE_LIMIT,
   transactionSize,
-} from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/interface";
 import {
   randomBlinding,
   ShieldedKeypair,
+  SigningKey,
   ViewingKey,
   X25519Keypair,
   X25519PublicKey,
-} from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/keypair";
 import {
   AssetRegistry,
   SOL_MINT,
   ConfidentialTransfer,
   WithdrawalTarget,
+  assetField,
+  createProofOutput,
   decodeConfidential,
   Utxo,
   Wallet,
-} from "@heliuslabs/zolana/transaction";
+  type PreparedTransfer,
+  type SppProofInputs,
+} from "@heliuslabs/spr/transaction";
 import {
   approveRingUnattended,
   type RingApprovalRequest,
 } from "../../../src/protocol/transaction/intent.js";
-import { ringConfigAddress, ringMemberRegistryAddress } from "../../../src/protocol/pda/index.js";
-import { ringIdField } from "../../../src/crypto/derivation/ring-stream.js";
+import { ringCoSignerAddress, ringPolicyAddress } from "../../../src/protocol/pda/index.js";
 import {
+  RING_COSIGN_APPROVE_OUTFLOW,
+  RING_COSIGN_APPROVE_WITHDRAWAL,
   RING_COSIGN_DEPOSITS,
   RING_COSIGN_TRANSFERS,
-  RING_COSIGN_WITHDRAWALS,
-  decodeRingMemberRegistry,
+  decodeRingPolicy,
 } from "../../../src/protocol/codec/ring-codecs.js";
-import { escrowKeyHash } from "../../../src/protocol/membership/member-opening.js";
-import { checkEscrowedRecipients, readMemberRecords } from "../../../src/rpc/registered-record.js";
+import { readMemberRecords } from "../../../src/rpc/registered-record.js";
 import { sealAudit } from "../../../src/proof/audit-proof.js";
+import { transferOutflows } from "../../../src/proof/policy-proof.js";
+import { ApprovalMask, ringStreamLayout } from "../../../src/protocol/transaction/transact.js";
 import type { ProvenRingTransfer } from "../../../src/operations/workflow/pipeline.js";
 import {
   ListId,
@@ -52,19 +65,22 @@ import {
 } from "../../../src/protocol/membership/policy.js";
 import { buildRingDelegateTransferTransaction } from "../../../src/operations/management/delegate.js";
 import { buildRingTransferTransaction } from "../../../src/operations/payments/transfer.js";
+import { RingProgramError, createRingTransferSubmission } from "../../../src/index.js";
+import { signingKeySpendSigner } from "../../../src/operations/payments/anonymous.js";
 import { RingOutputRail } from "../../../src/operations/payments/output-rail.js";
 import {
   CustomRingTransfer,
   DelegateTransfer,
 } from "../../../src/operations/payments/transfer-rails.js";
-import { policyStatementHash } from "../../../src/protocol/proof/statement.js";
 
 import { BLOCKHASH, kitReads } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 
 import type { FixtureRecord } from "../../helpers/member-registry.js";
 import {
+  bindingSigners,
+  screenedMembers,
   checkAccounts,
-  checkAudit,
+  checkTransferProof,
   checkDisclosure,
   checkFrameCounted,
   checkRingBlindings,
@@ -78,12 +94,15 @@ import {
   ringFixture,
   small,
   walletKeys,
+  CURATOR_REVISION,
+  OWN_REVISION,
+  TRACKING_REVISION,
+  hex,
   type Fixture,
   type RingFixtureOptions,
 } from "../../helpers/ring-pipeline.js";
+
 import {
-  publicAmountFields,
-  publicSlots,
   RING_AUTHORITY_MAX_INPUTS,
   RING_AUTHORITY_SHAPES,
 } from "../../../src/protocol/transaction/spp.js";
@@ -97,6 +116,8 @@ function transferTo(
   recipients: readonly ShieldedKeypair[],
   options: Readonly<{ amount?: bigint; each?: bigint; compact?: boolean }> = {},
 ): ConfidentialTransfer {
+  fixture.enroll(sender.shieldedAddress());
+  for (const recipient of recipients) fixture.enroll(recipient.shieldedAddress());
   const inputs = [noteInput(sender, options.amount ?? 10_000n, fixture.ringProgramId)];
   const transfer =
     options.compact === true
@@ -112,44 +133,41 @@ async function prove(
   sender: ShieldedKeypair,
   transfer: ConfidentialTransfer,
   withdrawal?: TransactWithdrawal,
+  coOwners: readonly ShieldedKeypair[] = [],
 ): Promise<ProvenRingTransfer> {
-  const rail = CustomRingTransfer.new({
-    ringProgramId: fixture.ringProgramId,
-    keys: walletKeys(sender),
-    transfer,
-    assets,
-  });
+  const rail = coOwners.reduce(
+    (built, coOwner) =>
+      built.withCoOwner({
+        owner: coOwner.shieldedAddress().solanaAddress(),
+        nullifierKey: coOwner.nullifierKey(),
+      }),
+    CustomRingTransfer.new({
+      ringProgramId: fixture.ringProgramId,
+      keys: walletKeys(sender),
+      transfer,
+      assets,
+      ...(fixture.coSigner === undefined ? {} : { coSigners: [fixture.coSigner] }),
+    }),
+  );
+  for (const coOwner of coOwners) fixture.enroll(coOwner.shieldedAddress());
   return (withdrawal === undefined ? rail : rail.withWithdrawalAccounts(withdrawal)).prove(
     fixture.client,
   );
 }
 
-/** An escrowed key record for each owner, the registry ring binds every output key. */
+/** An empty record for each owner. */
 function escrowed(owners: readonly ShieldedKeypair[]): FixtureRecord[] {
-  return owners.map((owner, index) => {
-    const address = owner.shieldedAddress();
-    const ciphertext = filled(0x60 + index);
-    return {
-      member: memberOfIdentity(address.signingPublicKey.ownerProofInputHash()),
-      lists: 0n,
-      escrowKey: escrowKeyHash({ nullifierPk: address.nullifierPublicKey, ciphertext }),
-      sealed: {
-        owner: randomAddress(),
-        nullifierPk: address.nullifierPublicKey,
-        ephemeralPublicKey: X25519Keypair.generate().publicKey(),
-        ciphertext,
-      },
-    };
-  });
+  return owners.map((owner) => ({
+    member: memberOfIdentity(owner.shieldedAddress().signingPublicKey.ownerProofInputHash()),
+    lists: 0n,
+  }));
 }
 
-async function registryOf(fixture: Fixture) {
-  const account = fixture.accounts.get(await ringMemberRegistryAddress(fixture.ringProgramId));
-  if (account === undefined) throw new Error("no registry");
-  return {
-    address: await ringMemberRegistryAddress(fixture.ringProgramId),
-    ...decodeRingMemberRegistry(account.data),
-  };
+async function policyOf(fixture: Fixture) {
+  const address = await ringPolicyAddress(fixture.ringProgramId);
+  const account = fixture.accounts.get(address);
+  if (account === undefined) throw new Error("no ring policy");
+  return { address, ...decodeRingPolicy(account.data) };
 }
 
 function readonly(address: Address) {
@@ -160,7 +178,40 @@ function signer(address: Address) {
   return { address, role: AccountRole.READONLY_SIGNER };
 }
 
+import { ringSpendTransfer } from "../../../src/operations/payments/ring-spend.js";
+import { ringProofInput } from "../../../src/operations/workflow/selection.js";
+import { ZERO_NULLIFIER_PK } from "@heliuslabs/spr/internal";
+import type { WalletUtxo } from "@heliuslabs/spr/transaction";
+
+const ownNullifier = (): Bytes32 => new Uint8Array(32).fill(0x12) as Bytes32;
+
 describe("confidential rail", () => {
+  it("delivers sixteen exact funded recipients under the common mint profile", async () => {
+    const fixture = await ringFixture();
+    const sender = ShieldedKeypair.generate();
+    const recipients = Array.from({ length: 16 }, () => ShieldedKeypair.generate());
+    const proven = await prove(
+      fixture,
+      sender,
+      transferTo(fixture, sender, recipients, { amount: 6_400n, each: 400n }),
+    );
+    const { data, call } = await expanded(fixture, proven, "confidential");
+    expect([data.nIn, data.nOut]).toEqual([1, 16]);
+    expect(data.extensions.format).toBe(DisclosureFormat.SingleAssetPayout);
+    expect(data.envelope).toHaveLength(73);
+    expect(
+      data.outputs.every(
+        (output) =>
+          output.record.length === 73 &&
+          output.body.kind === "recipient" &&
+          output.body.body.length === 48,
+      ),
+    ).toBe(true);
+    checkTransferProof(fixture, data);
+    checkDisclosure(fixture, call, data);
+    checkRingBlindings(call, data);
+  });
+
   it("delivers two outputs as proven bodies each owner opens to the committed note", async () => {
     const fixture = await ringFixture();
     const sender = ShieldedKeypair.generate();
@@ -169,7 +220,7 @@ describe("confidential rail", () => {
     const { instruction, data, call } = await expanded(fixture, proven, "confidential");
 
     expect([data.nIn, data.nOut]).toEqual([1, 2]);
-    expect(data.outputs.map((output) => output.kind)).toEqual(["delivered", "delivered"]);
+    expect(data.outputs.map((output) => output.body.kind)).toEqual(["recipient", "recipient"]);
     expect(data.policy).toBeUndefined();
     await checkAccounts(instruction, {
       fixture,
@@ -179,8 +230,8 @@ describe("confidential rail", () => {
       ownerSigners: [sender.shieldedAddress().solanaAddress()],
     });
     expect(fixture.ringRequests).toHaveLength(1);
-    checkAudit(fixture, data, { kind: "deliveredAudit" });
-    checkDisclosure(fixture, call, data, sender.shieldedAddress());
+    checkTransferProof(fixture, data);
+    checkDisclosure(fixture, call, data);
     checkRingBlindings(call, data);
     const open = (owner: ShieldedKeypair, slotIndex: number) =>
       openDelivered({
@@ -205,9 +256,9 @@ describe("confidential rail", () => {
     const { data, call } = await expanded(fixture, proven, "confidential");
 
     expect(data.nOut).toBe(8);
-    expect(data.outputs.every((output) => output.kind === "delivered")).toBe(true);
-    checkAudit(fixture, data, { kind: "deliveredAudit" });
-    checkDisclosure(fixture, call, data, sender.shieldedAddress());
+    expect(data.outputs.every((output) => output.body.kind === "recipient")).toBe(true);
+    checkTransferProof(fixture, data);
+    checkDisclosure(fixture, call, data);
     checkRingBlindings(call, data);
     const open = (recipient: ShieldedKeypair) =>
       openDelivered({
@@ -235,7 +286,7 @@ describe("confidential rail", () => {
     const proven = await prove(fixture, sender, transfer, TransactWithdrawal.sol({ recipient }));
     const { instruction, data, call } = await expanded(fixture, proven, "confidential");
 
-    expect(data.outputs.map((output) => output.kind)).toEqual(["delivered", "exit"]);
+    expect(data.outputs.map((output) => output.body.kind)).toEqual(["recipient", "exit"]);
     expect(data.interfaceTransfers).toHaveLength(1);
     await checkAccounts(instruction, {
       fixture,
@@ -248,9 +299,9 @@ describe("confidential rail", () => {
         { address: recipient, role: AccountRole.WRITABLE },
       ],
     });
-    checkDisclosure(fixture, call, data, sender.shieldedAddress());
+    checkDisclosure(fixture, call, data);
     checkRingBlindings(call, data);
-    const exit = data.outputs[1];
+    const exit = data.outputs[1]?.body;
     if (exit?.kind !== "exit") throw new Error("no exit slot");
     const viewing = outside.viewingKey();
     const opened = decodeConfidential(
@@ -291,16 +342,19 @@ describe("confidential rail", () => {
     const owner = sender.shieldedAddress().solanaAddress();
     const isOwner = ringError("RING_COSIGNER_REQUIRED", {
       reason: "coSignerIsOwner",
-      expected: owner,
+      signer: owner,
     });
     const scoped = async (signer: Address) => {
       const fixture = await ringFixture({
         coSigner: { signer, scope: RING_COSIGN_TRANSFERS },
       });
-      return { fixture, proven: prove(fixture, sender, transferTo(fixture, sender, [recipient])) };
+      return {
+        fixture,
+        proven: prove(fixture, sender, transferTo(fixture, sender, [recipient])),
+      };
     };
     const other = randomAddress();
-    expect((await (await scoped(other)).proven).coSigner).toBe(other);
+    expect((await (await scoped(other)).proven).coSigners).toEqual([other]);
     const refused = await scoped(owner);
     await expect(refused.proven).rejects.toThrow(isOwner);
     expect(refused.fixture.ringRequests).toHaveLength(0);
@@ -309,7 +363,7 @@ describe("confidential rail", () => {
     const fixture = await ringFixture({
       coSigner: {
         signer: owner,
-        scope: RING_COSIGN_WITHDRAWALS,
+        scope: RING_COSIGN_APPROVE_WITHDRAWAL,
       },
       records: [
         {
@@ -326,12 +380,11 @@ describe("confidential rail", () => {
       return prove(fixture, sender, transfer, TransactWithdrawal.sol({ recipient: target }));
     };
     const exempt = await withdraw(200n);
-    expect(exempt.coSigner).toBeUndefined();
+    expect(exempt.coSigners).toEqual([]);
     const { data } = await expanded(fixture, exempt, "confidential");
-    expect(data.withdrawalExemption).toBeDefined();
-    expect(fixture.ringRequests.some((request) => request.kind === "withdrawalExemption")).toBe(
-      true,
-    );
+    expect(data.approval & ApprovalMask.withdrawal).toBe(0);
+    expect(data.ownRevision).toBeDefined();
+    checkTransferProof(fixture, data);
     await expect(withdraw(201n)).rejects.toThrow(isOwner);
     expect(fixture.sppCalls).toHaveLength(1);
   });
@@ -352,15 +405,63 @@ describe("confidential rail", () => {
     });
   });
 
-  it("refuses compact output padding before any proof, every slot is published", async () => {
+  it("omits a compact output suffix and keeps every published slot's blinding", async () => {
     const fixture = await ringFixture();
     const sender = ShieldedKeypair.generate();
     const recipients = [ShieldedKeypair.generate(), ShieldedKeypair.generate()];
-    await expect(
-      prove(fixture, sender, transferTo(fixture, sender, recipients, { compact: true })),
-    ).rejects.toThrow(ringError("RING_DELIVERED_COMPACT_PADDING", { slotIndex: 3 }));
-    expect(fixture.ringRequests).toHaveLength(0);
-    expect(fixture.sppCalls).toHaveLength(0);
+    const proven = await prove(
+      fixture,
+      sender,
+      transferTo(fixture, sender, recipients, { compact: true }),
+    );
+    const { data, call } = await expanded(fixture, proven, "confidential");
+
+    expect([data.nOut, data.outputs.length]).toEqual([4, 3]);
+    expect(call.proofInputs.outputs.map((output) => output.isCompact())).toEqual([
+      false,
+      false,
+      false,
+      true,
+    ]);
+    checkRingBlindings(call, data);
+    const request = checkTransferProof(fixture, data);
+    expect([request.outputCount, request.outputs.length]).toEqual([3, 4]);
+    checkDisclosure(fixture, call, data);
+  });
+
+  it("refuses a compact hole, omission removes a suffix alone", () => {
+    const sender = ShieldedKeypair.generate();
+    const ring = randomAddress();
+    const live = () =>
+      createProofOutput({
+        ownerAddress: sender.shieldedAddress(),
+        asset: SOL_MINT,
+        amount: 1n,
+        ringProgramId: ring,
+      });
+    const hole = createProofOutput({
+      asset: SOL_MINT,
+      amount: 0n,
+      compact: true,
+    });
+    const firstNullifier = small(9);
+    const txViewingKey = ViewingKey.generate();
+    try {
+      const rail = new RingOutputRail(txViewingKey, firstNullifier, { kind: "delivered" });
+      expect(() =>
+        rail.encrypt({
+          prepared: {
+            firstNullifier,
+            proofOutputs: () => [live(), hole, live()],
+          } as unknown as PreparedTransfer,
+          sender: sender.shieldedAddress(),
+          assets,
+          instructionDiscriminator: 0,
+        }),
+      ).toThrow(ringError("RING_COMPACT_NOT_SUFFIX", { slotIndex: 1 }));
+    } finally {
+      txViewingKey.destroy();
+    }
   });
 
   it("refuses an anonymous ring, a paused ring and a ring SPP never activated", async () => {
@@ -405,7 +506,11 @@ describe("policy ring", () => {
         {
           member: memberOfAsset(SOL_MINT),
           lists: 0n,
-          mintPolicy: { ...EMPTY_MINT_POLICY, cap: options.cap ?? 0n, cosignAbove: 100n },
+          mintPolicy: {
+            ...EMPTY_MINT_POLICY,
+            cap: options.cap ?? 0n,
+            cosignAbove: 100n,
+          },
         },
       ],
       curator: {
@@ -424,50 +529,87 @@ describe("policy ring", () => {
     const recipient = ShieldedKeypair.generate();
     const coSigner = randomAddress();
     const fixture = await curatedRing([sender, recipient], {
-      coSigner: { signer: coSigner, scope: RING_COSIGN_DEPOSITS },
+      coSigner: { signer: coSigner, scope: RING_COSIGN_APPROVE_OUTFLOW },
     });
     const proven = await prove(fixture, sender, transferTo(fixture, sender, [recipient]));
     const { instruction, data, call } = await expanded(fixture, proven, "confidential");
 
-    expect(proven.approvalRequired).toBe(true);
-    expect(proven.coSigner).toBe(coSigner);
-    expect(data.approvalRequired).toBe(true);
-    expect(data.policy?.curatorRootIndex).toBe(0);
-    const registry = await registryOf(fixture);
+    expect(proven.coSigners).toEqual([coSigner]);
+    expect(proven.chargedOutflows).toMatchObject([
+      {
+        owner: sender.shieldedAddress().signingPublicKey.ownerProofInputHash(),
+        chargedOutflow: 400n,
+      },
+    ]);
+    expect(data.approval).toBe(ApprovalMask.outflow);
+    expect(data.ownRevision).toBe(OWN_REVISION);
+    expect(data.policy?.curatorRevision).toBe(CURATOR_REVISION);
+    expect(data.trackingRevision).toBe(TRACKING_REVISION);
+    const ringPolicy = await policyOf(fixture);
     expect(proven.policy).toEqual({
       ringProgramId: fixture.ringProgramId,
-      policyHash: registry.policyHash,
+      policyHash: ringPolicy.policyHash,
     });
     if (fixture.curatorRegistry === undefined || fixture.curatorTree === undefined)
       throw new Error("no curator");
     await checkAccounts(instruction, {
       fixture,
       data,
-      prefix: [readonly(registry.address), readonly(fixture.curatorRegistry), signer(coSigner)],
+      registries: [fixture.ownRegistry, fixture.curatorRegistry],
+      prefix: [
+        readonly(await ringCoSignerAddress(fixture.ringProgramId, coSigner)),
+        signer(coSigner),
+      ],
       payer: fixture.authority,
       ownerSigners: [sender.shieldedAddress().solanaAddress()],
     });
-    const policy = fixture.ringRequests.find((request) => request.kind === "memberPolicy");
-    const slots = publicSlots(call.proofInputs.externalData.interfaceTransfers);
-    expect(policy?.publicInputHash).toEqual(
-      policyStatementHash({
-        withdrawalHash: policyWithdrawalHash([]),
-        key: { kind: "member", anonymous: false },
-        privateTxHash: data.privateTxHash,
-        policyHash: registry.policyHash,
-        ringId: ringIdField(fixture.ringProgramId),
-        approvalRequired: true,
-        keyEscrow: false,
-        ownRoot: fixture.ownTree.root,
-        curatorRoot: fixture.curatorTree.root,
-        sender: sender.shieldedAddress().signingPublicKey.ownerProofInputHash(),
-        publicAssets: slots.assets,
-        publicAmounts: publicAmountFields(slots),
+    const request = checkTransferProof(fixture, data);
+    expect(request).toMatchObject({
+      inProof: false,
+      hidden: false,
+      delegate: false,
+      approvalMask: ApprovalMask.outflow,
+      policyHash: ringPolicy.policyHash,
+      ownRoot: fixture.ownTree.root,
+      curatorRoot: fixture.curatorTree.root,
+      sender: new Uint8Array(32) as Bytes32,
+      withdrawalHash: policyWithdrawalHash([]),
+    });
+    checkDisclosure(fixture, call, data);
+    checkRingBlindings(call, data);
+  });
+
+  it("refuses an opening under a root the live registry does not hold before any proof", async () => {
+    const sender = ShieldedKeypair.generate();
+    const recipient = ShieldedKeypair.generate();
+    const fixture = await curatedRing([sender, recipient]);
+    const served = (revision: bigint): Fixture["client"] => ({
+      ...fixture.client,
+      getStorageRecordPool: async (request) => {
+        const pool = await fixture.client.getStorageRecordPool(request);
+        return request.registry === fixture.curatorRegistry
+          ? { ...pool, root: { ...pool.root, revision } }
+          : pool;
+      },
+    });
+    const transfer = transferTo(fixture, sender, [recipient]);
+    const rail = (client: Fixture["client"]) =>
+      CustomRingTransfer.new({
+        ringProgramId: fixture.ringProgramId,
+        keys: walletKeys(sender),
+        transfer,
+        assets,
+      }).prove(client);
+
+    // The indexer serves a curator revision the registry account does not hold yet.
+    await expect(rail(served(CURATOR_REVISION + 1n))).rejects.toThrow(
+      ringError("RING_ROOT_NOT_SERVED", {
+        reason: "pool",
+        registry: fixture.curatorRegistry,
       }),
     );
-    checkAudit(fixture, data, { kind: "deliveredAudit" });
-    checkDisclosure(fixture, call, data, sender.shieldedAddress());
-    checkRingBlindings(call, data);
+    expect(fixture.ringRequests).toHaveLength(0);
+    expect(fixture.sppCalls).toHaveLength(0);
   });
 
   it("refuses an output owner off the required list before any proof, naming the rule and its slot", async () => {
@@ -495,7 +637,7 @@ describe("policy ring", () => {
     await expect(prove(fixture, sender, transferTo(fixture, sender, [recipient]))).rejects.toThrow(
       ringError("RING_COSIGNER_REQUIRED", {
         ringProgramId: fixture.ringProgramId,
-        reason: "approvalWithoutCoSigner",
+        reason: "missing",
       }),
     );
     expect(fixture.ringRequests).toHaveLength(0);
@@ -506,10 +648,13 @@ describe("policy ring", () => {
     const recipient = ShieldedKeypair.generate();
     const owner = sender.shieldedAddress().solanaAddress();
     const fixture = await curatedRing([sender, recipient], {
-      coSigner: { signer: owner, scope: RING_COSIGN_DEPOSITS },
+      coSigner: { signer: owner, scope: RING_COSIGN_APPROVE_OUTFLOW },
     });
     await expect(prove(fixture, sender, transferTo(fixture, sender, [recipient]))).rejects.toThrow(
-      ringError("RING_COSIGNER_REQUIRED", { reason: "coSignerIsOwner", expected: owner }),
+      ringError("RING_COSIGNER_REQUIRED", {
+        reason: "coSignerIsOwner",
+        signer: owner,
+      }),
     );
     expect(fixture.ringRequests).toHaveLength(0);
     expect(fixture.sppCalls).toHaveLength(0);
@@ -518,7 +663,7 @@ describe("policy ring", () => {
       sender,
       transferTo(fixture, sender, [recipient], { each: 100n }),
     );
-    expect([proven.approvalRequired, proven.coSigner]).toEqual([false, undefined]);
+    expect([proven.data.approval, proven.coSigners]).toEqual([0, []]);
   });
 
   it("refuses an outflow past the cap before any proof", async () => {
@@ -526,7 +671,7 @@ describe("policy ring", () => {
     const recipient = ShieldedKeypair.generate();
     const fixture = await curatedRing([sender, recipient], { cap: 399n });
     await expect(prove(fixture, sender, transferTo(fixture, sender, [recipient]))).rejects.toThrow(
-      ringError("RING_OUTFLOW_CAP_EXCEEDED", { cap: "399", outflow: "400" }),
+      ringError("RING_OUTFLOW_CAP_EXCEEDED", { cap: "399", chargedOutflow: "400" }),
     );
     expect(fixture.ringRequests).toHaveLength(0);
     expect(fixture.sppCalls).toHaveLength(0);
@@ -543,10 +688,9 @@ describe("policy ring", () => {
       sender,
       transferTo(fixture, sender, [recipient], { each: 100n }),
     );
-    expect(proven.approvalRequired).toBe(false);
-    expect(proven.coSigner).toBeUndefined();
+    expect(proven.coSigners).toEqual([]);
     const { data } = await expanded(fixture, proven, "confidential");
-    expect(data.approvalRequired).toBe(false);
+    expect(data.approval).toBe(0);
   });
 
   it("names the configured co-signer of transfers inside the bound", async () => {
@@ -561,69 +705,295 @@ describe("policy ring", () => {
       sender,
       transferTo(fixture, sender, [recipient], { each: 100n }),
     );
-    expect(proven.approvalRequired).toBe(false);
-    expect(proven.coSigner).toBe(coSigner);
+    expect(proven.data.approval).toBe(0);
+    expect(proven.coSigners).toEqual([coSigner]);
     await expanded(fixture, proven, "confidential");
   });
 
-  it("binds every output owner's escrowed key on a registry ring and refuses an owner without one", async () => {
-    const sender = ShieldedKeypair.generate();
-    const recipient = ShieldedKeypair.generate();
-    const fixture = await ringFixture({
-      mode: "confidentialEscrow",
-      table: EMPTY_TABLE,
-      records: escrowed([sender, recipient]),
-    });
-    const proven = await prove(fixture, sender, transferTo(fixture, sender, [recipient]));
-    const { data } = await expanded(fixture, proven, "confidential");
-    const policy = fixture.ringRequests.find((request) => request.kind === "memberPolicy");
-    if (policy?.kind !== "memberPolicy") throw new Error("no policy proof");
-    expect(policy.keyEscrow).toBe(true);
-    expect(policy.outputs.map((output) => output.ctHash !== undefined)).toEqual([true, true]);
-    expect(data.policy?.curatorRootIndex).toBeUndefined();
+  const unreachableProver = (): never => {
+    throw new Error("proved past the size check");
+  };
 
-    const unregistered = await ringFixture({
-      mode: "confidentialEscrow",
-      table: EMPTY_TABLE,
-      records: escrowed([sender]),
-    });
-    await expect(
-      prove(unregistered, sender, transferTo(unregistered, sender, [recipient])),
-    ).rejects.toThrow(ringError("RING_UNREGISTERED_OUTPUT_KEY"));
-    expect(unregistered.ringRequests).toHaveLength(0);
+  it("refuses an unkeyed in-proof owner shape on a co-signed policy ring before any proof", async () => {
+    for (const [inputs, outputs] of [[5, 16]] as const) {
+      const signing = SigningKey.generate();
+      const sender = ShieldedKeypair.fromKeypair(signing);
+      const paid = Array.from({ length: outputs - 1 }, () => ShieldedKeypair.generate());
+      const fixture = await ringFixture({
+        mode: "confidential",
+        table: EMPTY_TABLE,
+        records: escrowed([sender, ...paid]),
+        coSigner: { signer: randomAddress(), scope: RING_COSIGN_TRANSFERS },
+      });
+      for (const owner of [sender, ...paid]) fixture.enroll(owner.shieldedAddress());
+      const transfer = new ConfidentialTransfer(
+        sender.shieldedAddress(),
+        Array.from({ length: inputs }, () => noteInput(sender, 100n, fixture.ringProgramId)),
+        fixture.authority,
+      );
+      for (const recipient of paid) transfer.send(recipient.shieldedAddress(), SOL_MINT, 1n);
+      await expect(
+        CustomRingTransfer.new({
+          ringProgramId: fixture.ringProgramId,
+          keys: walletKeys(sender),
+          transfer,
+          assets,
+          ...(fixture.coSigner === undefined ? {} : { coSigners: [fixture.coSigner] }),
+        })
+          .withInProofOwner(signingKeySpendSigner(signing))
+          .prove({
+            ...fixture.client,
+            proveAnonymousRingTransact: unreachableProver,
+          }),
+      ).rejects.toThrow(ringError("RING_CATALOG_KEY_MISSING"));
+      expect(fixture.ringRequests).toHaveLength(0);
+      expect(fixture.sppCalls).toHaveLength(0);
+    }
   });
 
-  it("names the refusing rule before an owner's missing escrow on a registry ring", async () => {
+  it("proves an in-proof owner on SPP's anonymous rail and publishes the sender in the delivered audit", async () => {
+    const signing = SigningKey.generate();
+    const sender = ShieldedKeypair.fromKeypair(signing);
+    const recipient = ShieldedKeypair.generate();
+    const fixture = await ringFixture({ table: EMPTY_TABLE });
+    const proven = await CustomRingTransfer.new({
+      ringProgramId: fixture.ringProgramId,
+      keys: walletKeys(sender),
+      transfer: transferTo(fixture, sender, [recipient]),
+      assets,
+    })
+      .withInProofOwner(signingKeySpendSigner(signing))
+      .prove(fixture.client);
+    const { data, call } = await expanded(fixture, proven, "confidential");
+
+    expect(call.circuit.kind).toBe("ringAnonymous");
+    expect(call.owner?.ownerPublicKey).toEqual(sender.shieldedAddress().signingPublicKey.ed25519());
+    expect(data.outputs.map((output) => output.body.kind)).toEqual(["recipient", "recipient"]);
+    expect(call.data.circuit).toMatchObject({
+      kind: "anonymousRingEddsa",
+      inputs: 1,
+      outputs: 2,
+    });
+    expect(call.data.circuit.kind === "anonymousRingEddsa" && call.data.circuit.proofData).toEqual({
+      bsb22Commitment: {
+        commitment: filled(0x51),
+        commitmentPok: filled(0x52),
+      },
+    });
+    expect(proven.accounts.ownerSigners).toEqual([]);
+    const request = checkTransferProof(fixture, data);
+    const identity = sender.shieldedAddress().signingPublicKey.ownerProofInputHash();
+    expect([request.inProof, request.delegate]).toEqual([true, false]);
+    expect(request.sender).toEqual(identity);
+    expect(request.privateTxHash).toEqual(data.privateTxHash);
+    expect(request.inputs).toHaveLength(24);
+  });
+
+  it("refuses a default-ring input on the in-proof owner rail before any proof", async () => {
+    const signing = SigningKey.generate();
+    const sender = ShieldedKeypair.fromKeypair(signing);
+    const fixture = await ringFixture();
+    const transfer = new ConfidentialTransfer(
+      sender.shieldedAddress(),
+      [noteInput(sender, 100n, fixture.ringProgramId), noteInput(sender, 50n)],
+      fixture.authority,
+    );
+    transfer.send(ShieldedKeypair.generate().shieldedAddress(), SOL_MINT, 30n);
+    await expect(
+      CustomRingTransfer.new({
+        ringProgramId: fixture.ringProgramId,
+        keys: walletKeys(sender),
+        transfer,
+        assets,
+      })
+        .withInProofOwner(signingKeySpendSigner(signing))
+        .prove(fixture.client),
+    ).rejects.toThrow(ringError("RING_IN_PROOF_DEFAULT_RING_INPUT", { index: 1 }));
+    expect(fixture.ringRequests).toHaveLength(0);
+    expect(fixture.sppCalls).toHaveLength(0);
+  });
+
+  it("binds the tracking root on every ring and refuses an output owner with no row", async () => {
     const sender = ShieldedKeypair.generate();
     const recipient = ShieldedKeypair.generate();
-    const fixture = await ringFixture({
-      mode: "confidentialEscrow",
-      table: allowOwners(),
+    const fixture = await ringFixture({ table: EMPTY_TABLE });
+    const proven = await prove(fixture, sender, transferTo(fixture, sender, [recipient]));
+    const { data } = await expanded(fixture, proven, "confidential");
+    expect(checkTransferProof(fixture, data).trackingRoot).toEqual(fixture.trackingTree.root);
+    expect(data.policy?.curatorRevision).toBeUndefined();
+
+    const unregistered = await ringFixture({ table: EMPTY_TABLE });
+    unregistered.enroll(sender.shieldedAddress());
+    const transfer = new ConfidentialTransfer(
+      sender.shieldedAddress(),
+      [noteInput(sender, 10_000n, unregistered.ringProgramId)],
+      unregistered.authority,
+    );
+    transfer.send(recipient.shieldedAddress(), SOL_MINT, 400n);
+    await expect(prove(unregistered, sender, transfer)).rejects.toThrow(
+      ringError("RING_RECIPIENT_NOT_ENROLLED"),
+    );
+    expect(unregistered.ringRequests).toHaveLength(0);
+  });
+});
+
+describe("signer set and owner debits", () => {
+  const identity = (owner: ShieldedKeypair): Bytes32 =>
+    owner.shieldedAddress().signingPublicKey.ownerProofInputHash();
+  const ZERO = new Uint8Array(32) as Bytes32;
+
+  function mixedTransfer(
+    fixture: Fixture,
+    owners: readonly ShieldedKeypair[],
+    each: bigint,
+  ): ConfidentialTransfer {
+    const first = itemAt(owners, 0);
+    for (const owner of owners) fixture.enroll(owner.shieldedAddress());
+    return ringSpendTransfer({
+      owner: first.shieldedAddress(),
+      inputs: owners.map((owner) => noteInput(owner, each, fixture.ringProgramId)),
+      feePayer: fixture.authority,
+    });
+  }
+
+  it("spends mixed owners over a policy within Q, each one signing and screened", async () => {
+    const owners = [ShieldedKeypair.generate(), ShieldedKeypair.generate()];
+    const fixture = await ringFixture({ table: EMPTY_TABLE, records: [] });
+    const transfer = mixedTransfer(fixture, owners, 500n);
+    transfer.withShape({ inputs: 2, outputs: 2 });
+    const proven = await prove(fixture, itemAt(owners, 0), transfer, undefined, owners.slice(1));
+    const { instruction, data, call } = await expanded(fixture, proven, "confidential");
+
+    const addresses = owners.map((owner) => owner.shieldedAddress().solanaAddress());
+    await checkAccounts(instruction, {
+      fixture,
+      data,
+      registries: [fixture.ownRegistry],
+      prefix: [],
+      payer: fixture.authority,
+      ownerSigners: addresses,
+    });
+    const request = checkTransferProof(fixture, data);
+    const identities = owners.map(identity);
+    expect(bindingSigners(request)).toEqual(identities);
+    expect(new Set(screenedMembers(request, 2).map(hex))).toEqual(new Set(identities.map(hex)));
+    expect(request).toMatchObject({ sender: ZERO });
+    checkDisclosure(fixture, call, data);
+  });
+
+  it("takes the wide key past the narrow key's owner rows", async () => {
+    const owners = Array.from({ length: 5 }, () => ShieldedKeypair.generate());
+    const fixture = await ringFixture({ table: EMPTY_TABLE, records: [] });
+    const transfer = mixedTransfer(fixture, owners, 100n);
+    transfer.withShape({ inputs: 8, outputs: 2 });
+    const proven = await prove(fixture, itemAt(owners, 0), transfer, undefined, owners.slice(1));
+    expect(proven.data.wideOwners).toBe(true);
+  });
+
+  const cappedRing = (cap: bigint) =>
+    ringFixture({
+      table: EMPTY_TABLE,
       records: [
-        ...escrowed([sender]),
         {
           member: memberOfAsset(SOL_MINT),
           lists: 0n,
-          mintPolicy: { ...EMPTY_MINT_POLICY, cosignAbove: 100n },
+          mintPolicy: { ...EMPTY_MINT_POLICY, cap },
         },
       ],
-      curator: {
-        lists: [ListId.allow],
-        records: [
-          {
-            member: memberOfIdentity(
-              sender.shieldedAddress().signingPublicKey.ownerProofInputHash(),
-            ),
-            lists: 1n,
-          },
-        ],
-      },
     });
-    await expect(
-      prove(fixture, sender, transferTo(fixture, sender, [recipient], { each: 100n })),
-    ).rejects.toThrow(
-      ringError("RING_POLICY_RULE_UNSATISFIED", { subject: "owner", slotIndex: 1 }),
+
+  it("refuses the wallet's own zero key note on the rail before any proof", async () => {
+    const sender = ShieldedKeypair.generate();
+    const address = sender.shieldedAddress();
+    const fixture = await ringFixture({ table: EMPTY_TABLE, records: [] });
+    const client = fixture.client;
+    const wallet = (key: Bytes32, amount: bigint, nullifier: Bytes32): WalletUtxo => {
+      const utxo = new Utxo({
+        owner: sender.signingPublicKey(),
+        asset: SOL_MINT,
+        amount,
+        blinding: randomBlinding(),
+        ringProgramId: fixture.ringProgramId,
+      });
+      return {
+        utxo,
+        outputContext: {
+          hash: utxo.proofInput(key, client.treeId).hash(),
+          tree: client.tree,
+          leafIndex: 0n,
+        },
+        nullifier,
+        spent: false,
+      } as WalletUtxo;
+    };
+    const zeroNullifier = new Uint8Array(32).fill(0x11) as Bytes32;
+    const inputs = [
+      ringProofInput(wallet(address.nullifierPublicKey, 500n, ownNullifier()), address, client),
+      ringProofInput(wallet(ZERO_NULLIFIER_PK, 300n, zeroNullifier), address, client),
+    ];
+    fixture.enroll(address);
+    const transfer = ringSpendTransfer({
+      owner: address,
+      inputs,
+      feePayer: fixture.authority,
+    }).withOutputTreeId(client.treeId);
+    transfer.withShape({ inputs: 2, outputs: 2 });
+    await expect(prove(fixture, sender, transfer)).rejects.toThrow(
+      ringError("RING_ZERO_KEY_INPUT_UNNAMED", { index: 1 }),
     );
+    expect(fixture.ringRequests).toHaveLength(0);
+  });
+
+  it("debits each owner apart, a credit to one never covers another", async () => {
+    const payer = ShieldedKeypair.generate();
+    const funded = ShieldedKeypair.generate();
+    const transfer = async (cap: bigint) => {
+      const fixture = await cappedRing(cap);
+      const spent = mixedTransfer(fixture, [payer, funded], 500n);
+      spent.withShape({ inputs: 2, outputs: 2 });
+      // Nothing leaves the ring, the first owner still debits its whole note.
+      spent.send(funded.shieldedAddress(), SOL_MINT, 1_000n);
+      return prove(fixture, payer, spent, undefined, [funded]);
+    };
+    await expect(transfer(499n)).rejects.toThrow(
+      ringError("RING_OUTFLOW_CAP_EXCEEDED", { cap: "499", chargedOutflow: "500" }),
+    );
+    await expect(transfer(500n)).resolves.toBeDefined();
+  });
+
+  it("clamps a single owner's debit to zero when a deposit funds what returns", () => {
+    const owner = ShieldedKeypair.generate();
+    const ring = randomAddress();
+    const asset = assetField(SOL_MINT);
+    const proofInputs = {
+      inputUtxos: [noteInput(owner, 100n, ring)],
+      outputs: [
+        createProofOutput({
+          ownerAddress: owner.shieldedAddress(),
+          asset: SOL_MINT,
+          amount: 120n,
+          ringProgramId: ring,
+        }),
+        createProofOutput({
+          ownerAddress: ShieldedKeypair.generate().shieldedAddress(),
+          asset: SOL_MINT,
+          amount: 30n,
+          ringProgramId: ring,
+        }),
+      ],
+    } as unknown as SppProofInputs;
+    expect(
+      transferOutflows({
+        rows: [identity(owner)],
+        proofInputs,
+        publicSlots: {
+          assets: [asset, ZERO, ZERO],
+          nets: [50n, 0n, 0n],
+          gross: [0n, 0n, 0n],
+        },
+        policyOf: () => ({ ...EMPTY_MINT_POLICY, cap: 1n, cosignAbove: 1n }),
+      }),
+    ).toEqual({ chargedOutflows: [], approvalMask: 0 });
   });
 });
 
@@ -631,11 +1001,12 @@ describe("delegate rail", () => {
   async function delegateRing(owners: readonly ShieldedKeypair[]) {
     const delegate = randomAddress();
     const fixture = await ringFixture({
-      mode: "confidentialEscrow",
+      mode: "confidential",
       table: EMPTY_TABLE,
       delegate,
       records: escrowed(owners),
     });
+    for (const owner of owners) fixture.enroll(owner.shieldedAddress());
     return { fixture, delegate };
   }
 
@@ -669,41 +1040,38 @@ describe("delegate rail", () => {
     const source = ShieldedKeypair.generate();
     const recipient = ShieldedKeypair.generate();
     const { fixture, delegate } = await delegateRing([source, recipient]);
-    const proven = await move({ fixture, delegate, source, recipients: [recipient] }).prove(
-      fixture.client,
-    );
+    const proven = await move({
+      fixture,
+      delegate,
+      source,
+      recipients: [recipient],
+    }).prove(fixture.client);
     const { instruction, data, call } = await expanded(fixture, proven, "delegate");
 
     expect(call.circuit.kind).toBe("ringAuthority");
-    expect(data.outputs.every((output) => output.kind === "delivered")).toBe(true);
-    const registry = await registryOf(fixture);
+    expect(data.outputs.every((output) => output.body.kind === "recipient")).toBe(true);
     await checkAccounts(instruction, {
       fixture,
       data,
-      prefix: [readonly(registry.address), signer(delegate)],
+      prefix: [signer(delegate)],
       payer: fixture.authority,
     });
-    const policy = fixture.ringRequests.find((request) => request.kind === "delegatePolicy");
-    const slots = publicSlots(call.proofInputs.externalData.interfaceTransfers);
     const zero = new Uint8Array(32) as Bytes32;
-    expect(policy?.publicInputHash).toEqual(
-      policyStatementHash({
-        withdrawalHash: policyWithdrawalHash([]),
-        key: { kind: "delegate" },
-        privateTxHash: data.privateTxHash,
-        policyHash: registry.policyHash,
-        ringId: ringIdField(fixture.ringProgramId),
-        approvalRequired: false,
-        keyEscrow: true,
-        ownRoot: fixture.ownTree.root,
-        curatorRoot: zero,
-        sender: zero,
-        publicAssets: slots.assets,
-        publicAmounts: publicAmountFields(slots),
-      }),
+    const request = checkTransferProof(fixture, data);
+    expect(request).toMatchObject({
+      inProof: false,
+      delegate: true,
+      approvalMask: 0,
+      sender: zero,
+      withdrawalHash: policyWithdrawalHash([]),
+    });
+    expect([request.policyHash, request.ownRoot, request.curatorRoot].map(hex)).toEqual(
+      [zero, zero, zero].map(hex),
     );
-    checkAudit(fixture, data, { kind: "deliveredAudit" });
-    checkDisclosure(fixture, call, data, source.shieldedAddress());
+    expect(request.rows[0]).toEqual(
+      source.shieldedAddress().signingPublicKey.ownerProofInputHash(),
+    );
+    checkDisclosure(fixture, call, data);
     checkRingBlindings(call, data);
     const opened = await openDelivered({
       fixture,
@@ -714,6 +1082,67 @@ describe("delegate rail", () => {
       slotIndex: 1,
     });
     expect(opened?.utxo.amount).toBe(100n);
+  });
+
+  it("withdraws a member's note publicly on the authority rail", async () => {
+    const source = ShieldedKeypair.generate();
+    const recipient = ShieldedKeypair.generate();
+    const { fixture, delegate } = await delegateRing([source, recipient]);
+    const destination = randomAddress();
+    const proven = await DelegateTransfer.new({
+      ringProgramId: fixture.ringProgramId,
+      delegate,
+      payer: fixture.authority,
+      source: source.shieldedAddress(),
+      sourceProofs: walletKeys(source),
+      inputs: [noteInput(source, 10_000n, fixture.ringProgramId)],
+      outputs: [{ recipient: recipient.shieldedAddress(), asset: SOL_MINT, amount: 100n }],
+      withdrawal: {
+        asset: SOL_MINT,
+        amount: 200n,
+        target: WithdrawalTarget.sol({ recipient: destination }),
+        accounts: TransactWithdrawal.sol({ recipient: destination }),
+      },
+      assets,
+    }).prove(fixture.client);
+    const { instruction, data, call } = await expanded(fixture, proven, "delegate");
+
+    expect(call.data.circuit.kind).toBe("ringAuthority");
+    expect(data.interfaceTransfers).toEqual([{ kind: "solWithdrawal", amount: 200n }]);
+    await checkAccounts(instruction, {
+      fixture,
+      data,
+      prefix: [signer(delegate)],
+      payer: fixture.authority,
+      settlement: [
+        { address: SOL_INTERFACE, role: AccountRole.WRITABLE },
+        { address: destination, role: AccountRole.WRITABLE },
+      ],
+    });
+  });
+
+  it("refuses a delegate exit before any read until the exit keys are pinned", async () => {
+    const source = ShieldedKeypair.generate();
+    const outside = ShieldedKeypair.generate();
+    const { fixture, delegate } = await delegateRing([source]);
+    const reads = fixture.client.getAccount;
+    const getAccount = vi.fn(reads);
+    await expect(
+      DelegateTransfer.new({
+        ringProgramId: fixture.ringProgramId,
+        delegate,
+        payer: fixture.authority,
+        source: source.shieldedAddress(),
+        sourceProofs: walletKeys(source),
+        inputs: [noteInput(source, 10_000n, fixture.ringProgramId)],
+        outputs: [
+          { recipient: outside.shieldedAddress(), asset: SOL_MINT, amount: 100n, exit: true },
+        ],
+        assets,
+      }).prove({ ...fixture.client, getAccount }),
+    ).rejects.toMatchObject({ code: "RING_EXIT_PROOF_UNAVAILABLE" });
+    expect(getAccount).not.toHaveBeenCalled();
+    expect(fixture.sppCalls).toHaveLength(0);
   });
 
   it("takes the narrowest pinned authority shape holding a move and refuses a wider one", async () => {
@@ -733,7 +1162,12 @@ describe("delegate rail", () => {
       const { data } = await expanded(fixture, proven, "delegate");
       expect([data.nIn, data.nOut]).toEqual([shape?.inputs, shape?.outputs]);
     }
-    const wide = move({ fixture, delegate, source, recipients: Array(4).fill(recipient) });
+    const wide = move({
+      fixture,
+      delegate,
+      source,
+      recipients: Array(4).fill(recipient),
+    });
     await expect(wide.prove(fixture.client)).rejects.toThrow(
       expect.objectContaining({ code: "TRANSACTION_UNSUPPORTED_SHAPE" }),
     );
@@ -746,14 +1180,16 @@ describe("delegate rail", () => {
     await checkFrameCounted(fixture, {
       payer: fixture.authority,
       prove: (approval) =>
-        move({ fixture, delegate, source, recipients: [recipient] }).proveApproved(
-          fixture.client,
-          approval,
-        ),
+        move({
+          fixture,
+          delegate,
+          source,
+          recipients: [recipient],
+        }).proveApproved(fixture.client, approval),
     });
   });
 
-  it("refuses another delegate, a ring without one, a ring without escrow and another member's notes", async () => {
+  it("refuses another delegate, a ring without one and another member's notes", async () => {
     const source = ShieldedKeypair.generate();
     const recipient = ShieldedKeypair.generate();
     const { fixture, delegate } = await delegateRing([source, recipient]);
@@ -773,7 +1209,10 @@ describe("delegate rail", () => {
     );
     await refused(
       {
-        fixture: await ringFixture({ mode: "confidentialEscrow", table: EMPTY_TABLE }),
+        fixture: await ringFixture({
+          mode: "confidential",
+          table: EMPTY_TABLE,
+        }),
         delegate,
         source,
         recipients: [recipient],
@@ -782,38 +1221,14 @@ describe("delegate rail", () => {
     );
     await refused(
       {
-        fixture: await ringFixture({ table: EMPTY_TABLE, delegate }),
+        fixture,
         delegate,
         source,
         recipients: [recipient],
+        spender: recipient,
       },
-      { reason: "escrow" },
+      { reason: "mixedOwners" },
     );
-    await refused(
-      { fixture, delegate, source, recipients: [recipient], spender: recipient },
-      { index: 0 },
-      "RING_MIXED_OWNERS",
-    );
-  });
-
-  it("refuses the delegate as the co-signer of its move before any proof", async () => {
-    const source = ShieldedKeypair.generate();
-    const recipient = ShieldedKeypair.generate();
-    const delegate = randomAddress();
-    const fixture = await ringFixture({
-      mode: "confidentialEscrow",
-      table: EMPTY_TABLE,
-      delegate,
-      records: escrowed([source, recipient]),
-      coSigner: { signer: delegate, scope: RING_COSIGN_TRANSFERS },
-    });
-    await expect(
-      move({ fixture, delegate, source, recipients: [recipient] }).prove(fixture.client),
-    ).rejects.toThrow(
-      ringError("RING_COSIGNER_REQUIRED", { reason: "coSignerIsDelegate", expected: delegate }),
-    );
-    expect(fixture.ringRequests).toHaveLength(0);
-    expect(fixture.sppCalls).toHaveLength(0);
   });
 });
 
@@ -821,13 +1236,13 @@ describe("member records", () => {
   const identity = (keys: ShieldedKeypair): Bytes32 =>
     keys.shieldedAddress().signingPublicKey.ownerProofInputHash();
 
-  it("reads records in member order with their lists and escrowed key like Rust `MemberRecords::read`", async () => {
+  it("reads records in member order with their lists like Rust `MemberRecords::read`", async () => {
     const registered = ShieldedKeypair.generate();
     const stranger = ShieldedKeypair.generate();
     const [record] = escrowed([registered]);
     if (record === undefined) throw new Error("no record");
     const fixture = await ringFixture({
-      mode: "confidentialEscrow",
+      mode: "confidential",
       table: EMPTY_TABLE,
       records: [{ ...record, lists: recordBit(ListId.allow) }],
     });
@@ -840,53 +1255,27 @@ describe("member records", () => {
     expect(absent?.listed(ListId.allow)).toBe(false);
     expect(present?.listed(ListId.allow)).toBe(true);
     expect(present?.listed(ListId.block)).toBe(false);
-    const nullifierPk = registered.shieldedAddress().nullifierPublicKey;
-    expect(present?.escrowed(nullifierPk)?.record.member).toEqual(identity(registered));
-    expect(present?.escrowed(stranger.shieldedAddress().nullifierPublicKey)).toBeUndefined();
-  });
-
-  it("refuses the first recipient without an escrowed key on a key escrow ring alone", async () => {
-    const registered = ShieldedKeypair.generate();
-    const stranger = ShieldedKeypair.generate();
-    const check = (fixture: Fixture, recipients: readonly ShieldedKeypair[]) =>
-      checkEscrowedRecipients({
-        client: fixture.client,
-        ringProgramId: fixture.ringProgramId,
-        recipients: recipients.map((keys) => keys.shieldedAddress()),
-      });
-    const escrowing = await ringFixture({
-      mode: "confidentialEscrow",
-      table: EMPTY_TABLE,
-      records: escrowed([registered]),
-    });
-    await expect(check(escrowing, [registered])).resolves.toBeUndefined();
-    await expect(check(escrowing, [registered, stranger])).rejects.toThrow(
-      ringError("RING_UNREGISTERED_OUTPUT_KEY", {
-        owner: Buffer.from(identity(stranger)).toString("hex"),
-      }),
-    );
-    await expect(check(await ringFixture(), [registered, stranger])).resolves.toBeUndefined();
   });
 });
 
 describe("delegate move builder", () => {
   /** A move paying `amounts` out of `notes` source notes of 100, the delegate paying on one tree. */
   async function delegateMove(
-    input: Readonly<{ amounts: readonly bigint[]; notes?: number; coSigner?: boolean }>,
+    input: Readonly<{
+      amounts: readonly bigint[];
+      notes?: number;
+    }>,
   ) {
     const source = ShieldedKeypair.generate();
     const recipients = input.amounts.map(() => ShieldedKeypair.generate());
     const delegate = randomAddress();
-    const coSigner = randomAddress();
     const fixture = await ringFixture({
-      mode: "confidentialEscrow",
+      mode: "confidential",
       table: EMPTY_TABLE,
       delegate,
       records: escrowed([source, ...recipients]),
-      ...(input.coSigner === true
-        ? { coSigner: { signer: coSigner, scope: RING_COSIGN_TRANSFERS } }
-        : {}),
     });
+    for (const owner of [source, ...recipients]) fixture.enroll(owner.shieldedAddress());
     const wallet = new Wallet({ identity: source.shieldedAddress() });
     wallet._replace({
       utxos: Array.from({ length: input.notes ?? 40 }, (_, index) => ({
@@ -909,22 +1298,24 @@ describe("delegate move builder", () => {
       nullifiers: new Set(),
     });
     const requests: RingApprovalRequest[] = [];
-    const config = await ringConfigAddress(fixture.ringProgramId);
-    const reads = { config: 0, openings: 0, proofsAtApproval: [] as number[] };
+    const ring = await ringPolicyAddress(fixture.ringProgramId);
+    const reads = { ring: 0, openings: 0, proofsAtApproval: [] as number[] };
     const build = buildRingDelegateTransferTransaction({
-      client: {
+      client: withConfirmedReads({
         ...fixture.client,
         getAccount: async (address) => {
-          if (address === config) reads.config += 1;
+          if (address === ring) reads.ring += 1;
           return fixture.client.getAccount(address);
         },
-        getRingRecordPool: async (request) => {
+        getTrackingRecordPool: async (request) => {
           reads.openings += 1;
-          return fixture.client.getRingRecordPool(request);
+          return fixture.client.getTrackingRecordPool(request);
         },
         getLatestBlockhash: async () => BLOCKHASH,
-        ...kitReads({ solanaRpc: { getProgramAccounts: () => ({ send: async () => [] }) } }),
-      },
+        ...kitReads({
+          solanaRpc: { getProgramAccounts: () => ({ send: async () => [] }) },
+        }),
+      }),
       ringProgramId: fixture.ringProgramId,
       wallet,
       source: walletKeys(source),
@@ -935,7 +1326,6 @@ describe("delegate move builder", () => {
       },
       delegate,
       feePayer: delegate,
-      ...(input.coSigner === true ? { cosigner: coSigner } : {}),
       outputs: input.amounts.map((amount, index) => ({
         recipient: itemAt(recipients, index).shieldedAddress(),
         asset: SOL_MINT,
@@ -946,9 +1336,12 @@ describe("delegate move builder", () => {
   }
 
   it("reads the ring and seals the move once, approving between its size check and its proofs", async () => {
-    const { fixture, reads, build } = await delegateMove({ amounts: [400n], notes: 4 });
+    const { fixture, reads, build } = await delegateMove({
+      amounts: [400n],
+      notes: 4,
+    });
     await build;
-    expect(reads).toEqual({ config: 1, openings: 1, proofsAtApproval: [0] });
+    expect(reads).toEqual({ ring: 1, openings: 1, proofsAtApproval: [0] });
     expect(fixture.sppCalls).toHaveLength(1);
   });
 
@@ -974,12 +1367,17 @@ describe("delegate move builder", () => {
     expect(wide.requests).toEqual([]);
   });
 
-  it("lands a co-signed move of the widest authority shape in one transaction", async () => {
-    const { fixture, requests, build } = await delegateMove({ amounts: [400n], coSigner: true });
+  it("lands a move of the widest authority shape in one transaction", async () => {
+    const { fixture, requests, build } = await delegateMove({
+      amounts: [400n],
+    });
     const transaction = await build;
     expect(requests).toHaveLength(1);
     expect(transactionSize(transaction)).toBeLessThanOrEqual(TRANSACTION_SIZE_LIMIT);
-    expect(fixture.sppCalls.at(-1)?.proofInputs.checkShape()).toEqual({ inputs: 4, outputs: 4 });
+    expect(fixture.sppCalls.at(-1)?.proofInputs.checkShape()).toEqual({
+      inputs: 4,
+      outputs: 4,
+    });
   });
 });
 
@@ -995,6 +1393,9 @@ describe("ring transfer builder", () => {
   ) {
     const owner = ShieldedKeypair.generate();
     const fixture = await ringFixture(input.ring);
+    const recipient = ShieldedKeypair.generate().shieldedAddress();
+    fixture.enroll(owner.shieldedAddress());
+    fixture.enroll(recipient);
     const wallet = new Wallet({ identity: owner.shieldedAddress() });
     wallet._replace({
       utxos: Array.from({ length: input.notes }, (_, index) => ({
@@ -1027,34 +1428,35 @@ describe("ring transfer builder", () => {
         requests.push(request);
         return approveRingUnattended(request);
       },
-      recipient: ShieldedKeypair.generate().shieldedAddress(),
+      recipient,
       amount: input.amount,
-      ...(input.cosigner === undefined ? {} : { cosigner: input.cosigner }),
+      ...(input.cosigner === undefined ? {} : { cosigners: [input.cosigner] }),
     });
     return { fixture, requests, build };
   }
 
-  it("refuses a payment past one transaction before approval and any proof as too many notes", async () => {
-    const wide = await ringTransfer({ amount: 4_750n, notes: 48 });
+  it("refuses a payment past the widest confidential key before approval and any proof", async () => {
+    const wide = await ringTransfer({ amount: 4_950n, notes: 50 });
     await expect(wide.build).rejects.toMatchObject({
       code: "RING_BUILD_TRANSFER",
       causeCode: "RING_TOO_MANY_INPUTS",
-      cause: { details: { selected: 48, limit: TRANSACTION_SIZE_LIMIT } },
     });
     expect(wide.requests).toEqual([]);
     expect(wide.fixture.ringRequests).toHaveLength(0);
     expect(wide.fixture.sppCalls).toHaveLength(0);
-    const narrow = await ringTransfer({ amount: 3_950n, notes: 48 });
-    expect(transactionSize(await narrow.build)).toBeLessThanOrEqual(TRANSACTION_SIZE_LIMIT);
-    expect(narrow.requests).toHaveLength(1);
+    const widest = await ringTransfer({ amount: 2_350n, notes: 24 });
+    expect(transactionSize(await widest.build)).toBeLessThanOrEqual(TRANSACTION_SIZE_LIMIT);
+    expect(widest.requests).toHaveLength(1);
   });
 
   it("refuses a missing or another co-signer before approval and any proof", async () => {
     const coSigner = randomAddress();
-    const ring = { coSigner: { signer: coSigner, scope: RING_COSIGN_TRANSFERS } };
+    const ring = {
+      coSigner: { signer: coSigner, scope: RING_COSIGN_TRANSFERS },
+    };
     for (const [cosigner, reason] of [
       [undefined, "missing"],
-      [randomAddress(), "mismatch"],
+      [randomAddress(), "noRecord"],
     ] as const) {
       const refused = await ringTransfer({
         amount: 300n,
@@ -1065,26 +1467,109 @@ describe("ring transfer builder", () => {
       await expect(refused.build).rejects.toMatchObject({
         code: "RING_BUILD_TRANSFER",
         causeCode: "RING_COSIGNER_REQUIRED",
-        cause: { details: { reason, expected: coSigner } },
+        cause: { details: { reason } },
       });
       expect(refused.requests).toEqual([]);
       expect(refused.fixture.ringRequests).toHaveLength(0);
       expect(refused.fixture.sppCalls).toHaveLength(0);
     }
-    const signed = await ringTransfer({ amount: 300n, notes: 4, ring, cosigner: coSigner });
+    const signed = await ringTransfer({
+      amount: 300n,
+      notes: 4,
+      ring,
+      cosigner: coSigner,
+    });
     await signed.build;
     expect(signed.requests).toHaveLength(1);
   });
 });
 
+describe("direct confidential spend", () => {
+  it("sends on the in-proof rail from the wallet's own payer and proves again after a stale root", async () => {
+    const signing = SigningKey.generate();
+    const sender = ShieldedKeypair.fromKeypair(signing);
+    const fixture = await ringFixture({ table: EMPTY_TABLE });
+    const recipient = ShieldedKeypair.generate().shieldedAddress();
+    fixture.enroll(sender.shieldedAddress());
+    fixture.enroll(recipient);
+    const payer = await generateKeyPairSigner();
+    const wallet = new Wallet({ identity: sender.shieldedAddress() });
+    wallet._replace({
+      utxos: [
+        {
+          utxo: new Utxo({
+            owner: sender.signingPublicKey(),
+            asset: SOL_MINT,
+            amount: 100n,
+            blinding: randomBlinding(),
+            ringProgramId: fixture.ringProgramId,
+          }),
+          outputContext: {
+            hash: small(1),
+            tree: fixture.client.tree,
+            leafIndex: 0n,
+          },
+          nullifier: small(100),
+          spent: false,
+        },
+      ],
+      transactions: [],
+      nullifiers: new Set(),
+    });
+    const submission = await createRingTransferSubmission({
+      client: { ...fixture.client, getLatestBlockhash: async () => BLOCKHASH },
+      ringProgramId: fixture.ringProgramId,
+      wallet,
+      keys: walletKeys(sender),
+      feePayer: payer.address,
+      inProofOwner: signingKeySpendSigner(signing),
+      recipient,
+      amount: 30n,
+    });
+    submission.prove();
+    let polled = 0;
+    const result = await submission.send({
+      sign: (transaction) => signTransactionWithSigners([payer], transaction),
+      send: async () => undefined,
+      status: async () =>
+        ++polled === 1
+          ? {
+              kind: "failed",
+              instructionIndex: 0,
+              customCode: RingProgramError.rootNotServed,
+            }
+          : { kind: "confirmed", slot: 9n },
+    });
+
+    expect(result).toMatchObject({ kind: "confirmed", attempts: 2 });
+    expect(fixture.sppCalls.map((call) => call.circuit.kind)).toEqual([
+      "ringAnonymous",
+      "ringAnonymous",
+    ]);
+  });
+});
+
 describe("audit seal", () => {
-  it("makes no ephemeral key for a disclosure it refuses", () => {
-    const sender = ShieldedKeypair.generate();
-    const proofInputs = new ConfidentialTransfer(
+  const layout = ringStreamLayout({
+    rail: "confidential",
+    nIn: 1,
+    nOut: 2,
+    inputs: 1,
+    outputs: 2,
+    entry: false,
+    hasData: false,
+    publicOwners: false,
+  });
+  const signed = (sender: ShieldedKeypair) =>
+    new ConfidentialTransfer(
       sender.shieldedAddress(),
       [noteInput(sender, 10n)],
       randomAddress(),
     ).sign(sender, new AssetRegistry());
+
+  it("makes no ephemeral key for a disclosure it refuses", () => {
+    const sender = ShieldedKeypair.generate();
+    const proofInputs = signed(sender);
     const txViewingKey = ViewingKey.generate();
     const auditor = X25519Keypair.generate();
     const generate = vi.spyOn(X25519Keypair, "generate");
@@ -1094,17 +1579,56 @@ describe("audit seal", () => {
           rail: new RingOutputRail(txViewingKey, proofInputs.firstNullifier(), {
             kind: "delivered",
           }),
-          audit: { exits: false, keyEscrow: false, fullOpenings: false },
-          layout: { kind: "delivered", outputs: 2, exits: false, keyEscrow: false },
+          layout,
           published: [],
-          proofInputs,
-          sender: sender.shieldedAddress(),
+          inputs: proofInputs.inputUtxos,
           auditor: auditor.publicKey(),
         }),
       ).toThrow(expect.objectContaining({ code: "KEYPAIR_DISCLOSURE_SHAPE" }));
       expect(generate).not.toHaveBeenCalled();
     } finally {
       generate.mockRestore();
+      auditor.destroy();
+    }
+  });
+
+  it("draws a new salt and a new keystream for every build of one transfer", () => {
+    const sender = ShieldedKeypair.generate();
+    const proofInputs = signed(sender);
+    const txViewingKey = ViewingKey.generate();
+    const auditor = X25519Keypair.generate();
+    const build = () => {
+      const rail = new RingOutputRail(txViewingKey, proofInputs.firstNullifier(), {
+        kind: "delivered",
+      });
+      return {
+        salt: rail.salt,
+        sealed: sealAudit({
+          rail,
+          layout,
+          published: proofInputs.outputs.map((output, slotIndex) => ({
+            output,
+            slotIndex,
+            wire: {
+              hash: new Uint8Array(32) as Bytes32,
+              ownerTag: new Uint8Array(32) as Bytes32,
+              body: { kind: "none" as const },
+            },
+          })),
+          inputs: proofInputs.inputUtxos,
+          auditor: auditor.publicKey(),
+        }),
+      };
+    };
+    const first = build();
+    const second = build();
+    try {
+      expect(first.salt).not.toEqual(second.salt);
+      // One plaintext under one key and two salts, a repeated salt would repeat these bytes.
+      expect(first.sealed.envelope).not.toEqual(second.sealed.envelope);
+    } finally {
+      first.sealed.ephemeralSecret.fill(0);
+      second.sealed.ephemeralSecret.fill(0);
       auditor.destroy();
     }
   });

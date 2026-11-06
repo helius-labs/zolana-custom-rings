@@ -7,13 +7,18 @@ license = "Apache-2.0"
 repository = "https://github.com/helius-labs/zolana"
 publish = false
 
+[features]
+test-fixtures = []
+
 [[bin]]
 name = "ring-rpc"
 path = "src/main.rs"
 
 [dependencies]
+aes-gcm = { workspace = true }
 async-trait = { workspace = true }
 custom-ring-interface = { workspace = true }
+custom-ring-sdk = { workspace = true, features = ["solana-rpc"] }
 anyhow = { workspace = true }
 clap = { workspace = true }
 hex = { workspace = true }
@@ -25,41 +30,55 @@ p256 = { workspace = true }
 psl = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
+sea-orm = { workspace = true }
+sea-orm-migration = { workspace = true, features = ["sqlx-sqlite"] }
 base64 = { workspace = true }
+bytemuck = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-solana-address = { workspace = true }
+solana-address = { workspace = true, features = ["curve25519"] }
 solana-account = { workspace = true }
+solana-hash = { workspace = true }
 solana-keypair = { workspace = true }
 solana-loader-v3-interface = { workspace = true }
+solana-message = { workspace = true }
 solana-signer = { workspace = true }
 solana-commitment-config = { workspace = true }
 solana-rpc-client = { workspace = true }
+solana-rpc-client-api = { workspace = true }
 solana-signature = { workspace = true, features = ["verify"] }
+solana-instruction = { workspace = true }
+spl-token-2022-interface = { workspace = true }
+solana-transaction = { workspace = true }
+solana-transaction-error = { workspace = true }
+solana-transaction-status-client-types = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["signal", "sync", "time"] }
 tower = { workspace = true, features = ["timeout"] }
 tower-http = { workspace = true }
 tracing-subscriber = { workspace = true }
+wincode = { workspace = true }
 zeroize = { workspace = true }
 spr-api = { workspace = true, features = ["reqwest"] }
 spr-client = { workspace = true, features = ["solana-rpc"] }
+spr-event = { workspace = true }
+spr-hasher = { workspace = true }
 spr-indexer-api = { workspace = true }
 spr-rpc-http = { workspace = true }
+spr-instruction = { workspace = true }
 spr-interface = { workspace = true }
 spr-keypair = { workspace = true }
 zolana-secret-file = { workspace = true }
 zolana-ring-client = { workspace = true, features = ["rpc", "solana-rpc"] }
 zolana-ring-indexer = { workspace = true }
+zolana-ring-keys = { workspace = true }
+zolana-ring-member-registry = { workspace = true }
 zolana-ring-policy = { workspace = true }
 zolana-ring-transaction = { workspace = true }
 spr-transaction = { workspace = true }
 
 [dev-dependencies]
-borsh = { workspace = true }
-bytemuck = { workspace = true }
-spr-event = { workspace = true }
+zolana-ring-rpc = { path = ".", features = ["test-fixtures"] }
+tokio = { workspace = true, features = ["test-util"] }
 spr-event-parser = { workspace = true }
-spr-hasher = { workspace = true }
-zolana-ring-member-registry = { workspace = true }

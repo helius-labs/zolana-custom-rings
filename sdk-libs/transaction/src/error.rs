@@ -7,6 +7,8 @@ use zolana_ring_keys::RingKeyError;
 
 #[derive(Debug, Error)]
 pub enum RingRailError {
+    #[error("transaction does not meet the single asset payout profile")]
+    PayoutProfile,
     #[error(transparent)]
     Transaction(#[from] TransactionError),
     #[error(transparent)]
@@ -19,10 +21,8 @@ pub enum RingRailError {
     Hasher(#[from] HasherError),
     #[error(transparent)]
     Interface(#[from] CustomRingError),
-    #[error("output {slot_index} carries data, a ring rail slot has a fixed body")]
-    DeliveredOutputData { slot_index: usize },
-    #[error("output {slot_index} is compact padding, a ring rail publishes every slot")]
-    DeliveredCompactPadding { slot_index: usize },
+    #[error("ring output {slot_index} holds data its recipient body cannot carry")]
+    OutputDataNotCarried { slot_index: usize },
     #[error("output {slot_index} does not frame as its ring rail publishes it")]
     RingOutputFraming { slot_index: usize },
     #[error("anonymous ring output {slot_index} is not the planned payment's recipient, or a payment found no ring output")]
@@ -31,14 +31,14 @@ pub enum RingRailError {
     UnplannedRingOutput { slot_index: usize },
     #[error("output {slot_index} pays the sender after another output, the change leads")]
     AnonymousChange { slot_index: usize },
-    #[error("the anonymous transfer has no sender change at output 0")]
-    MissingSenderChange,
     #[error("exit {slot_index} pays the hidden sender, its owner tag would publish the sender")]
     RingSenderExit { slot_index: usize },
-    #[error(
-        "the anonymous change holds one SPL and one SOL output at most, a zero one only alone"
-    )]
-    AnonymousChangeCount,
     #[error("the anonymous sender bundle is not the transfer's first message")]
     SenderBundleFraming,
+    #[error(
+        "a sender bundle of {len} bytes does not match the frame's output and bodiless counts"
+    )]
+    SenderBundleLength { len: usize },
+    #[error("reply length {reply_len} is below the reply's encoding or the minimum")]
+    ReplyMetadataLength { reply_len: usize },
 }

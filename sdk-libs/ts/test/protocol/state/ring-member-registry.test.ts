@@ -2,70 +2,62 @@ import { address, type Address } from "@solana/kit";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import records from "../../../../../test-vectors/registry/ring-records.json" with { type: "json" };
+import type { RpcAccount } from "@heliuslabs/spr/client";
+import { initializePoseidon } from "@heliuslabs/spr";
 import {
-  type RingMemberOpening,
-  type RingRecordReader,
-  type RingSealedKey,
-} from "../../../src/rpc/ports.js";
-import type { RpcAccount } from "@heliuslabs/zolana/client";
-import { initializePoseidon } from "@heliuslabs/zolana";
-import { SYSTEM_PROGRAM, addressBytes } from "@heliuslabs/zolana/internal";
-import type { Bytes31, Bytes32 } from "@heliuslabs/zolana/interface";
-import {
-  NullifierKey,
-  ShieldedKeypair,
-  SigningKey,
-  X25519Keypair,
-  X25519PublicKey,
-} from "@heliuslabs/zolana/keypair";
-import type { RingProofRequest } from "../../../src/rpc/prover/ring.js";
-import {
-  ringConfigPda,
-  ringMemberRegistryPda,
-  ringRecordQueuePda,
-} from "../../../src/protocol/pda/index.js";
-import {
-  AUTHORITY_RESERVED_LEAVES,
-  MEMBER_QUEUE_LIMIT,
-  type RingMode,
-} from "../../../src/protocol/codec/ring-codecs.js";
-import { MEMBER_REGISTRY_CAPACITY } from "../../../src/protocol/membership/member-registry.js";
-import {
-  MEMBER_REGISTRY_EMPTY_ROOT,
-  escrowKeyHash,
-} from "../../../src/protocol/membership/member-opening.js";
+  addressBytes,
+  bytesToBigInt,
+  equalBytes,
+  hashBytes,
+  poseidon,
+} from "@heliuslabs/spr/internal";
+import type { Bytes31, Bytes32 } from "@heliuslabs/spr/interface";
+import { NullifierKey, ShieldedKeypair, SigningKey, X25519Keypair } from "@heliuslabs/spr/keypair";
+import { ringPolicyPda } from "../../../src/protocol/pda/index.js";
+import { MEMBER_REGISTRY_EMPTY_ROOT } from "../../../src/protocol/membership/member-opening.js";
 import { memberOfTag } from "../../../src/protocol/membership/policy.js";
 import {
-  NullifierKeyEscrow,
-  RegisterKey,
   fetchRingSealedKey,
   openNullifierKey,
   openRingSealedKey,
+  openListSalt,
   sealNullifierKey,
   sealNullifierKeyWith,
 } from "../../../src/operations/management/register-key.js";
-import { registerKeyStatementHash } from "../../../src/protocol/proof/statement.js";
-import { recordTree, type FixtureRecord } from "../../helpers/member-registry.js";
 import {
-  memberRegistryData,
+  TRACKING_QUAD_HEIGHT,
+  TRACKING_SENTINEL,
+  trackingRecordHash,
+  type TrackingRecord,
+} from "../../../src/protocol/membership/tracking.js";
+import { QUAD_ARITY } from "../../../src/protocol/membership/member-registry.js";
+import type {
+  ServedTrackingOpening,
+  TrackingOpeningsRequest,
+  TrackingSeal,
+} from "../../../src/protocol/indexer/tracking-codec.js";
+import { recordTree } from "../../helpers/member-registry.js";
+import {
   ownedAccount,
-  recordQueueData,
-  ringProgramConfigData,
+  ringPolicyData,
+  trackingRegistryAccount,
 } from "../../helpers/ring-accounts.js";
 
-// sdk-libs/client/src/crypto/encryption/mod.rs `the_sealed_key_and_its_escrow_key_match_the_pinned_vector`.
+// sdk-libs/client/src/crypto/encryption/mod.rs `the_sealed_key_matches_the_pinned_vector`.
 const AUDITOR_SK = hex("01323130373635343b3a39383f3e3d3c23222120272625242b2a29282f2e2d2c");
 const EPHEMERAL_SK = hex("011013121514171619181b1a1d1c1f1e010003020504070609080b0a0d0c0f0e");
 const NULLIFIER_SECRET = hex("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
 const NULLIFIER_PK = hex("2d1faf6cf358763421511eb637adf7b6609443d38edc4ed2b042dfbf834b03f5");
 const EPH_PK = hex("043632fe89228ea5215eea45a56704f569e3929868a8573363d015e39609f0eb63");
-const CIPHERTEXT = hex("2c2a1650e3a2a0d012a0d438341ff610ad99bd3c1cde0dd169179174880e755d");
-const KEY_HASH = hex("1c73c14786dd7354525c98368bca8dbc5f836e957c45f552f377c84e266546c4");
+const CIPHERTEXT = hex(
+  "4be6ab2544799bd0c018ff495f59e8205d6fe9d007f74e44ec739529c0b27f25d23f6f5b30bde013afd5a02f1913cb4c354c8529e12a01ad583bb6f72692d99c",
+);
 
+const LIST_SALT = Uint8Array.of(0, ...new Uint8Array(31).fill(9)) as Bytes32;
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 const AUTHORITY = address("4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T");
-const PAYER = address("3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3");
-const PROOF = Uint8Array.from({ length: 192 }, (_, index) => 255 - index);
+const TRACKING = address("6NxnStrvfxkDAnWHyvc6SVXkZvBKtpHS3Bd9WfCSgUSv");
+const REVISION = 2n;
 const AUDITOR = X25519Keypair.fromBytes(AUDITOR_SK);
 
 beforeAll(initializePoseidon);
@@ -83,120 +75,119 @@ function actor(seed: number) {
   return { keypair, shielded, signer, member: memberOfTag(addressBytes(signer)) };
 }
 
-/** The chain and indexer of a ring whose registry holds `members`. */
-async function ring(
-  members: readonly FixtureRecord[],
-  options: Readonly<{
-    mode?: RingMode;
-    insertFee?: bigint;
-    opening?: RingMemberOpening;
-    pending?: bigint;
-    nextIndex?: number;
-  }> = {},
-) {
-  const tree = recordTree(members);
-  const [[config, configBump], [registry, registryBump], [queue, queueBump]] = await Promise.all([
-    ringConfigPda(RING),
-    ringMemberRegistryPda(RING),
-    ringRecordQueuePda(RING),
-  ]);
-  const accounts = new Map<Address, RpcAccount>([
-    [
-      config,
-      ownedAccount(
-        RING,
-        ringProgramConfigData({
-          authority: AUTHORITY,
-          auditorPublicKey: AUDITOR.publicKey().toBytes(),
-          bump: configBump,
-          hasPolicy: true,
-          mode: options.mode ?? "confidentialEscrow",
-          insertFee: options.insertFee ?? 1_000_000n,
-        }),
-      ),
-    ],
-    [
-      registry,
-      ownedAccount(
-        RING,
-        memberRegistryData({
-          bump: registryBump,
-          history: [{ root: tree.root, applied: 0n, slot: 1n }],
-          nextIndex: options.nextIndex ?? tree.nextIndex,
-        }),
-      ),
-    ],
-    [
-      queue,
-      ownedAccount(
-        RING,
-        recordQueueData({
-          bump: queueBump,
-          head: 0n,
-          tail: options.pending ?? 0n,
-          chainHead: new Uint8Array(32) as Bytes32,
-        }),
-      ),
-    ],
-  ]);
-  const getRingMemberOpenings = vi.fn<RingRecordReader["getRingMemberOpenings"]>(
-    async (request) => ({
-      context: { slot: 1n, blockTime: 1n },
-      root: { root: request.expectedRoot, rootIndex: 0, applied: 0n, nextIndex: tree.nextIndex },
-      openings: request.members.map((member) => options.opening ?? tree.opening(member)),
-    }),
+/** A tracking tree holding the sentinel at leaf 0 and `row` at leaf 1. */
+function trackingTree(row: TrackingRecord) {
+  const sentinel: TrackingRecord = { ...TRACKING_SENTINEL, next: row.member };
+  const zeros: Bytes32[] = [new Uint8Array(32) as Bytes32];
+  for (let level = 0; level < TRACKING_QUAD_HEIGHT; level += 1) {
+    const below = zeros[level] as Bytes32;
+    zeros.push(poseidon(Array.from({ length: QUAD_ARITY }, () => below)) as Bytes32);
+  }
+  const above = zeros.slice(1, TRACKING_QUAD_HEIGHT).map((zero) => [zero, zero, zero]);
+  const zero = zeros[0] as Bytes32;
+  const path = (index: number, neighbour: TrackingRecord) => ({
+    index,
+    siblings: [[trackingRecordHash(neighbour), zero, zero], ...above],
+  });
+  const root = above.reduce<Bytes32>(
+    (node, siblings) => poseidon([node, ...siblings]) as Bytes32,
+    poseidon([trackingRecordHash(sentinel), trackingRecordHash(row), zero, zero]) as Bytes32,
   );
   return {
-    tree,
-    accounts: { config, registry, queue },
+    root,
+    rowPath: path(1, sentinel),
+    /** The opening of a member sorted around `row`, its low row bracketing it. */
+    absent: (member: Bytes32): ServedTrackingOpening =>
+      bytesToBigInt(member) > bytesToBigInt(row.member)
+        ? { kind: "absent", low: row, path: path(1, sentinel) }
+        : { kind: "absent", low: sentinel, path: path(0, row) },
+  };
+}
+
+/** The chain and indexer of a ring whose tracking registry holds `who`, serving `seal`. */
+async function ring(who: ReturnType<typeof enrolled>, seal: TrackingSeal | null = who.seal) {
+  const { root, rowPath, absent } = trackingTree(who.row);
+  const [policy, policyBump] = await ringPolicyPda(RING);
+  const accounts = new Map<Address, RpcAccount>([
+    [
+      policy,
+      ownedAccount(
+        RING,
+        ringPolicyData({
+          bump: policyBump,
+          roles: { policy: AUTHORITY },
+          auditorPublicKey: AUDITOR.publicKey().toBytes(),
+          mode: "confidential",
+          policyHash: new Uint8Array(32).fill(1) as Bytes32,
+          tracking: TRACKING,
+        }),
+      ),
+    ],
+    [
+      TRACKING,
+      trackingRegistryAccount({
+        root,
+        revision: REVISION,
+        nextIndex: 2,
+        auditorPubkey: AUDITOR.publicKey().toBytes(),
+      }),
+    ],
+  ]);
+  const getTrackingOpenings = vi.fn(async (request: TrackingOpeningsRequest) => ({
+    slot: 1n,
+    root: request.expectedRoot,
+    revision: REVISION,
+    openings: request.members.map((member): ServedTrackingOpening =>
+      equalBytes(member, who.row.member)
+        ? {
+            kind: "present",
+            record: who.row,
+            path: rowPath,
+            ...(seal === null ? {} : { seal }),
+          }
+        : absent(member),
+    ),
+  }));
+  return {
+    root,
     client: {
       getAccount: async (account: Address) => accounts.get(account),
-      getRingMemberOpenings,
+      getTrackingOpenings,
     },
   };
 }
 
-function escrow(nullifierKey: NullifierKey) {
-  const proveRing = vi.fn(async (_request: RingProofRequest) => PROOF);
-  return { authority: new NullifierKeyEscrow(nullifierKey, { proveRing }), proveRing };
-}
-
-/** A member whose record escrows its sealed key, served beside the record. */
-function registered(seed: number) {
+/** An owner whose applied tracking row binds its sealed key. */
+function enrolled(seed: number) {
   const who = actor(seed);
-  const envelope = sealNullifierKey(who.keypair.nullifierKey(), AUDITOR.publicKey());
+  const envelope = sealNullifierKey(who.keypair.nullifierKey(), LIST_SALT, AUDITOR.publicKey());
   envelope.ephemeralSecret.fill(0);
-  const sealed: RingSealedKey = {
+  const seal: TrackingSeal = {
     owner: who.signer,
-    nullifierPk: envelope.nullifierPublicKey,
-    ephemeralPublicKey: envelope.sealed.ephemeralPublicKey,
+    ephPk: envelope.sealed.ephemeralPublicKey.toBytes(),
     ciphertext: envelope.sealed.ciphertext,
   };
-  const record: FixtureRecord = {
+  const row: TrackingRecord = {
+    ...TRACKING_SENTINEL,
     member: who.member,
-    lists: 1n << 7n,
-    escrowKey: escrowKeyHash({ nullifierPk: sealed.nullifierPk, ciphertext: sealed.ciphertext }),
-    sealed,
+    nullifierPk: envelope.nullifierPublicKey,
+    ctHash: hashBytes(envelope.sealed.ciphertext) as Bytes32,
+    listTag: new Uint8Array(32).fill(3) as Bytes32,
   };
-  return { ...who, record, sealed };
+  return { ...who, seal, row, envelope };
 }
 
 describe("nullifier key envelope", () => {
   it("matches the Rust vector and opens only for the auditor", () => {
     const ephemeral = X25519Keypair.fromBytes(EPHEMERAL_SK);
     const nullifierKey = NullifierKey.fromSecret(NULLIFIER_SECRET as Bytes31);
-    const envelope = sealNullifierKeyWith(ephemeral, nullifierKey, AUDITOR.publicKey());
+    const envelope = sealNullifierKeyWith(ephemeral, nullifierKey, LIST_SALT, AUDITOR.publicKey());
     expect(envelope.nullifierPublicKey).toEqual(NULLIFIER_PK);
     expect(envelope.sealed.ephemeralPublicKey.toBytes()).toEqual(EPH_PK);
     expect(envelope.sealed.ciphertext).toEqual(CIPHERTEXT);
-    expect(
-      escrowKeyHash({
-        nullifierPk: envelope.nullifierPublicKey,
-        ciphertext: envelope.sealed.ciphertext,
-      }),
-    ).toEqual(KEY_HASH);
     expect(openNullifierKey(envelope.sealed, AUDITOR).secretBytes()).toEqual(NULLIFIER_SECRET);
-    const fresh = sealNullifierKey(nullifierKey, AUDITOR.publicKey());
+    expect(openListSalt(envelope.sealed, AUDITOR)).toEqual(LIST_SALT);
+    const fresh = sealNullifierKey(nullifierKey, LIST_SALT, AUDITOR.publicKey());
     expect(fresh.sealed.ciphertext).not.toEqual(CIPHERTEXT);
     expect(openNullifierKey(fresh.sealed, AUDITOR).secretBytes()).toEqual(NULLIFIER_SECRET);
   });
@@ -207,125 +198,19 @@ describe("nullifier key envelope", () => {
   });
 });
 
-describe("key registration", () => {
-  it("seals the member's key, proves the envelope and pays the insert fee it read to the authority", async () => {
-    const who = actor(7);
-    const { client, accounts } = await ring([]);
-    const { authority, proveRing } = escrow(who.keypair.nullifierKey());
-    const proven = await new RegisterKey({
-      ringProgramId: RING,
-      member: who.shielded,
-      payer: PAYER,
-      authority,
-    }).prove(client);
-    const data = proven.instruction.data ?? new Uint8Array();
-    expect(data).toHaveLength(1 + 296);
-    expect(data[0]).toBe(29);
-    expect(data.subarray(1, 193)).toEqual(PROOF);
-    const nullifierPk = data.subarray(193, 225) as Bytes32;
-    const ephU = data.subarray(225, 257) as Bytes32;
-    const ciphertext = data.subarray(257, 289) as Bytes32;
-    expect(new DataView(data.buffer, data.byteOffset + 289, 8).getBigUint64(0, true)).toBe(
-      1_000_000n,
-    );
-    expect(nullifierPk).toEqual(who.shielded.nullifierPublicKey);
-    expect(
-      proven.instruction.accounts?.map(({ address: account, role }) => [account, role]),
-    ).toEqual([
-      [who.signer, 2],
-      [accounts.config, 0],
-      [accounts.registry, 0],
-      [accounts.queue, 1],
-      [PAYER, 3],
-      [AUTHORITY, 1],
-      [SYSTEM_PROGRAM, 0],
-    ]);
-    const request = proveRing.mock.calls[0]?.[0];
-    if (request?.kind !== "registerKey") throw new Error("register key request");
-    expect(request.member).toEqual(who.member);
-    expect(request.publicInputHash).toEqual(
-      registerKeyStatementHash({
-        member: who.member,
-        nullifierPk,
-        auditorPubkey: AUDITOR.publicKey().toBytes(),
-        ephU,
-        ciphertext,
-      }),
-    );
-    expect(request.nullifierSecret.every((byte) => byte === 0)).toBe(true);
-    expect(request.ephSk.every((byte) => byte === 0)).toBe(true);
-    const sealed = {
-      ephemeralPublicKey: X25519PublicKey.fromBytes(Uint8Array.of(4, ...ephU)),
-      ciphertext,
-    };
-    expect(openNullifierKey(sealed, AUDITOR).secretBytes()).toEqual(
-      who.keypair.nullifierKey().secretBytes(),
-    );
-    authority.destroy();
-  });
-
-  it("takes no fee accounts under a zero fee and registers a present member without a key", async () => {
-    const who = actor(8);
-    const { client } = await ring([{ member: who.member, lists: 1n }], { insertFee: 0n });
-    const { authority } = escrow(who.keypair.nullifierKey());
-    const proven = await new RegisterKey({
-      ringProgramId: RING,
-      member: who.shielded,
-      payer: PAYER,
-      authority,
-    }).prove(client);
-    expect(proven.instruction.accounts).toHaveLength(4);
-  });
-
-  it.each([
-    ["an anonymous ring", "RING_ANONYMOUS_REFUSED"],
-    ["an escrow of another key", "RING_NULLIFIER_KEY_MISMATCH"],
-    ["a member whose record escrows a key", "RING_KEY_ALREADY_REGISTERED"],
-    ["an opening under another root", "RING_MEMBER_REGISTRY_INVALID"],
-    ["a queue holding the member limit", "RING_RECORD_QUEUE_FULL"],
-    ["a registry whose member leaves are taken", "RING_REGISTRY_FULL"],
-  ] as const)("refuses %s before any proof", async (refusal, causeCode) => {
-    const who = registered(9);
-    const stranger = actor(10);
-    const honest = recordTree([]);
-    const moved = honest.opening(who.member);
-    const opening: RingMemberOpening =
-      moved.kind === "absent" ? { ...moved, low: { ...moved.low, lists: 1n } } : moved;
-    const { client } = await ring(
-      refusal === "a member whose record escrows a key" ? [who.record] : [],
-      {
-        ...(refusal === "an anonymous ring" ? { mode: "anonymous" as const } : {}),
-        ...(refusal === "an opening under another root" ? { opening } : {}),
-        ...(refusal === "a queue holding the member limit" ? { pending: MEMBER_QUEUE_LIMIT } : {}),
-        ...(refusal === "a registry whose member leaves are taken"
-          ? { nextIndex: Number(MEMBER_REGISTRY_CAPACITY - AUTHORITY_RESERVED_LEAVES) }
-          : {}),
-      },
-    );
-    const key =
-      refusal === "an escrow of another key"
-        ? stranger.keypair.nullifierKey()
-        : who.keypair.nullifierKey();
-    const { authority, proveRing } = escrow(key);
-    await expect(
-      new RegisterKey({
-        ringProgramId: RING,
-        member: who.shielded,
-        payer: PAYER,
-        authority,
-      }).prove(client),
-    ).rejects.toMatchObject({ code: "RING_BUILD_KEY_REGISTRATION", causeCode });
-    expect(proveRing).not.toHaveBeenCalled();
-  });
-});
-
-describe("escrowed keys", () => {
-  it("opens a registered member's key for the auditor only", async () => {
-    const who = registered(11);
-    const { client, tree } = await ring([who.record]);
+describe("enrolled keys", () => {
+  it("opens an enrolled owner's key for the auditor only", async () => {
+    const who = enrolled(11);
+    const { client, root } = await ring(who);
     const entry = await fetchRingSealedKey({ client, ringProgramId: RING, member: who.member });
-    expect(entry.root).toEqual(tree.root);
-    expect(entry.sealed).toEqual(who.sealed);
+    expect(entry.root).toEqual(root);
+    expect(entry.record).toEqual(who.row);
+    expect(entry.sealed.ciphertext).toEqual(who.seal.ciphertext);
+    expect(entry.sealed.nullifierPk).toEqual(who.row.nullifierPk);
+    expect(client.getTrackingOpenings).toHaveBeenCalledWith(
+      { registry: TRACKING, members: [who.member], expectedRoot: root },
+      expect.anything(),
+    );
     expect(openRingSealedKey(entry, AUDITOR).secretBytes()).toEqual(
       who.keypair.nullifierKey().secretBytes(),
     );
@@ -334,17 +219,44 @@ describe("escrowed keys", () => {
     );
   });
 
-  it("refuses an envelope the record does not bind and an absent member", async () => {
-    const who = registered(12);
-    const ciphertext = Uint8Array.from(who.sealed.ciphertext) as Bytes32;
+  it("refuses a seal the row does not bind, another owner's seal and an owner with no seal", async () => {
+    const who = enrolled(12);
+    const ciphertext = Uint8Array.from(who.seal.ciphertext);
     ciphertext[0] = (ciphertext[0] ?? 0) ^ 1;
-    const altered = { ...who.sealed, ciphertext };
-    const { client } = await ring([{ ...who.record, sealed: altered }]);
-    await expect(
-      fetchRingSealedKey({ client, ringProgramId: RING, member: who.member }),
-    ).rejects.toMatchObject({ code: "RING_KEY_NOT_REGISTERED" });
+    for (const seal of [
+      { ...who.seal, ciphertext },
+      { ...who.seal, owner: actor(14).signer },
+      null,
+    ]) {
+      const { client } = await ring(who, seal);
+      await expect(
+        fetchRingSealedKey({ client, ringProgramId: RING, member: who.member }),
+      ).rejects.toMatchObject({ code: "RING_KEY_NOT_REGISTERED" });
+    }
+  });
+
+  it("refuses an unenrolled owner proven absent under the root", async () => {
+    const { client } = await ring(enrolled(15));
     await expect(
       fetchRingSealedKey({ client, ringProgramId: RING, member: actor(13).member }),
     ).rejects.toMatchObject({ code: "RING_KEY_NOT_REGISTERED" });
+  });
+
+  it("refuses a key whose row and path disagree with the root", async () => {
+    const who = enrolled(16);
+    const { client } = await ring(who);
+    const tampered = {
+      ...client,
+      getTrackingOpenings: async (request: TrackingOpeningsRequest) => {
+        const served = await client.getTrackingOpenings(request);
+        const [opening] = served.openings;
+        if (opening?.kind !== "present") throw new Error("expected a present row");
+        const record = { ...opening.record, listTag: new Uint8Array(32).fill(4) as Bytes32 };
+        return { ...served, openings: [{ ...opening, record }] };
+      },
+    };
+    await expect(
+      fetchRingSealedKey({ client: tampered, ringProgramId: RING, member: who.member }),
+    ).rejects.toMatchObject({ code: "RING_TRACKING_INVALID", details: { reason: "RootMismatch" } });
   });
 });

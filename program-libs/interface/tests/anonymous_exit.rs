@@ -215,19 +215,37 @@ fn every_withdrawal_of_a_spend_names_the_same_destination() {
 #[test]
 fn an_absent_party_is_a_zero_identity() {
     let payer = [7; 32];
+    let co_signer = Address::new_from_array([8; 32]);
     let parties = AnonymousParties {
         payer: &payer,
-        cosigner: None,
+        co_signers: &[co_signer],
+        funders: &[],
         exit_destination: Some(&OWNER),
     };
     assert_eq!(
         parties.identities(),
         Ok([
             solana_owner_identity(&payer).unwrap(),
+            solana_owner_identity(co_signer.as_array()).unwrap(),
+            [0; 32],
+            [0; 32],
+            [0; 32],
             [0; 32],
             solana_owner_identity(&OWNER).unwrap(),
         ])
     );
+}
+
+#[test]
+fn a_co_signer_past_the_fifth_is_refused() {
+    let co_signers = [Address::new_from_array([8; 32]); 6];
+    let parties = AnonymousParties {
+        payer: &[7; 32],
+        co_signers: &co_signers,
+        funders: &[],
+        exit_destination: None,
+    };
+    assert!(parties.identities().is_err());
 }
 
 #[test]
@@ -275,6 +293,33 @@ fn policy_withdrawals_authenticate_live_owners_and_preserve_order() {
     accounts[5].data = token_account(|_| {});
     accounts[5].owner = SYSTEM_PROGRAM_ID;
     assert!(policy_withdrawals(&[sol, spl], &accounts, &[OWNER]).is_err());
+}
+
+#[test]
+fn repeated_owners_and_mints_screen_as_their_first_leg() {
+    use custom_ring_interface::{policy_withdrawals, PolicyWithdrawal};
+    let spl = InterfaceTransfer::SplWithdrawal {
+        amount: 9,
+        spl_interface_bump: 0,
+    };
+    let sol = InterfaceTransfer::SolWithdrawal { amount: 7 };
+    let mut accounts = sol_group(Address::new_from_array(OWNER), vec![]);
+    accounts.extend(sol_group(Address::new_from_array(OWNER), vec![]));
+    for _ in 0..2 {
+        let mut group = spl_group(ON_CURVE, token_account(|_| {}));
+        group[spl.mint_account_position().unwrap()].address = Address::new_from_array(MINT);
+        accounts.extend(group);
+    }
+    let legs = policy_withdrawals(&[sol, sol, spl, spl], &accounts, &[OWNER, OWNER]).unwrap();
+    assert_eq!(
+        legs,
+        [
+            PolicyWithdrawal::new(&OWNER, None, 7).unwrap(),
+            PolicyWithdrawal::new(&OWNER, None, 7).unwrap(),
+            PolicyWithdrawal::new(&OWNER, Some(&MINT), 9).unwrap(),
+            PolicyWithdrawal::new(&OWNER, Some(&MINT), 9).unwrap(),
+        ]
+    );
 }
 
 #[test]

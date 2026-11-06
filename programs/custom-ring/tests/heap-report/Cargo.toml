@@ -1,0 +1,15 @@
+# Test only.
+[package]
+name = "ring-heap-report"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+custom-ring-program = { path = "../..", features = ["no-entrypoint"] }
+pinocchio = { version = "0.11", features = ["cpi"] }
+
+[workspace]

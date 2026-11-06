@@ -7,14 +7,12 @@ import {
   wireDecoder,
   Reader,
   Writer,
-  sha256,
   addressBytes,
   encodeBase58,
   treeAddress,
-  decodeRingDepositInstructionData,
   equalBytes,
   encodeMergeOutputData,
-} from "@heliuslabs/zolana/internal";
+} from "@heliuslabs/spr/internal";
 import {
   MAX_CACHE_WRITES,
   INPUT_TREES,
@@ -22,43 +20,36 @@ import {
   SHIELDED_POOL_CPI_AUTHORITY,
   SHIELDED_POOL_PROGRAM_ID,
   SOL_INTERFACE,
-} from "@heliuslabs/zolana/interface";
-import type { IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
-import { X25519PublicKey } from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/interface";
+import type { IndexedShieldedTransaction } from "@heliuslabs/spr/transaction";
+import { X25519PublicKey } from "@heliuslabs/spr/keypair";
 import type {
   Address,
   Bytes16,
   Bytes32,
   Bytes33,
-  Bytes64,
   InterfaceTransfer,
   RequestContext,
   Signature,
-} from "@heliuslabs/zolana/interface";
-import { SOL_MINT } from "@heliuslabs/zolana/transaction";
-import { CUSTOM_RING_PROOF_LENGTH } from "../proof/custom-ring-proof.js";
-import {
-  AUDITED_RING_DEPOSIT_TAG,
-  encodeRingDepositCapsule,
-  readRingDepositCapsule,
-  RING_DEPOSIT_AUDIT_SLOTS,
-  type RingDepositCapsule,
-} from "../codec/deposit-capsule.js";
-import type { DisclosureLayout } from "../codec/ring-disclosure-layout.js";
+} from "@heliuslabs/spr/interface";
+import { SOL_MINT } from "@heliuslabs/spr/transaction";
+import type { AuditStreamLayout } from "../codec/ring-disclosure-layout.js";
 
 import { RingError } from "../error.js";
 import {
-  readRingMergeDisclosure,
-  writeRingMergeDisclosure,
-  type RingMergeDisclosure,
+  decodeRingMergeRequest,
+  forwardedMergeData,
+  sppMergeBody,
+  type MergeRingAuthority,
+  type SealedMergeRecord,
 } from "../../crypto/audit/merge-disclosure.js";
-import { RingTransactData, ringRailOf } from "./transact.js";
-import { decompressG2, readMergeData, writeInterfaceTransfer } from "../codec/codecs.js";
+import { RingTransactData, landedRingRail, type RingRail } from "./transact.js";
+import { readMergeData, writeInterfaceTransfer } from "../codec/codecs.js";
 
 const base58Encoder = getBase58Encoder();
 
 /** Mirrors Rust `ConfirmedEventKind`, the confirmed instruction selects it, never indexer metadata. */
-export type ConfirmedEventKind = "deposit" | "transfer" | "merge";
+export type ConfirmedEventKind = "transfer" | "merge";
 
 /** Rust `RingOrigin` after `bind_transaction`, the indexed event bound to its confirmed instruction. */
 export type ConfirmedRingTransaction =
@@ -68,24 +59,24 @@ export type ConfirmedRingTransaction =
       /** Rust `ConfirmedEvent::input_tree_ids`, an input spent from a tree other than the output tree has no id. */
       inputTreeIds: readonly (number | undefined)[];
       /** The layout the ring program verified the audit proof under, read from its confirmed instruction. */
-      layout: DisclosureLayout;
-    }>
-  | Readonly<{
-      kind: "deposit";
-      transaction: IndexedShieldedTransaction;
-      /** The capsule bindings of the audited deposit behind the event, empty for a plain one. */
-      deposits: readonly ConfirmedDeposit[];
+      layout: AuditStreamLayout;
+      rail: RingRail;
+      /** The statement's bit, the sealed `R` is zero. */
+      noSpend: boolean;
+      hasData: boolean;
+      entry: boolean;
     }>
   | Readonly<{
       kind: "merge";
       transaction: IndexedShieldedTransaction;
-      /** The anonymous merge disclosure whose proof the direct ring caller verified. */
-      disclosure?: RingMergeDisclosure;
+      /** The record whose proof the direct ring caller verified. */
+      sealedRecord: Pick<SealedMergeRecord, "ephemeralPublicKey" | "ciphertext">;
+      authority: MergeRingAuthority;
     }>;
 
 /** Mirrors Rust `TransactionOrigin`, an unknown signature is an error, never absent. */
 export interface TransactionOrigin {
-  /** Binds indexed data to the exact confirmed transfer, deposit or merge. Other-ring events return undefined. */
+  /** Binds indexed data to the exact confirmed transfer or merge. Other-ring events return undefined. */
   confirmedTransaction(
     transaction: IndexedShieldedTransaction,
     ring: Address,
@@ -93,124 +84,28 @@ export interface TransactionOrigin {
   ): Promise<ConfirmedRingTransaction | undefined>;
 }
 
-/** The ring forwards `ringDataHash || body` with the body's `b` decompressed. */
-function confirmedMergeDisclosureOf(found: TrustedEvent): RingMergeDisclosure | undefined {
+/** Tag 57's record, its forwarded bytes the SPP data the program verified. */
+function confirmedMergeRecordOf(
+  found: TrustedEvent,
+): Pick<Extract<ConfirmedRingTransaction, { kind: "merge" }>, "sealedRecord" | "authority"> {
   const wrapper = found.wrapper;
   if (
     found.source.data[0] !== InstructionTag.ringMergeTransact ||
-    wrapper?.data[0] !== InstructionTag.ringMergeTransact
+    wrapper?.data[0] !== RingInstructionTag.merge
   )
-    return undefined;
-  const request = new Reader(wrapper.data.subarray(2));
-  const ringDataHash = request.bytes(32, "merge.ringDataHash");
-  const disclosure = readRingMergeDisclosure(request);
-  if (disclosure === undefined) return undefined;
-  const prefix = 2 + 32 + writeRingMergeDisclosure(new Writer(), disclosure).finish().length;
-  const forwarded = found.source.data;
-  if (
-    !equalBytes(forwarded.subarray(1, 33), ringDataHash) ||
-    !equalBytes(
-      forwarded.subarray(FORWARDED_MERGE_PREFIX),
-      sppMergeBody(wrapper.data.subarray(prefix)),
-    )
-  )
-    throw invalid("merge.disclosure");
-  return disclosure;
-}
-
-/** `tag || ringDataHash` ahead of the forwarded SPP merge body. */
-const FORWARDED_MERGE_PREFIX = 1 + 32;
-/** `expiry_unix_ts u64 || proof.a` ahead of `proof.b`, Rust `MERGE_B_OFFSET`. */
-const MERGE_B_OFFSET = 8 + 32;
-
-/** Rust `CustomRingMergeIxDataRef::spp_merge_body`, the compact body with `proof.b` decompressed. */
-function sppMergeBody(compact: Uint8Array): Uint8Array {
-  if (compact.length < MERGE_B_OFFSET + 64) throw invalid("merge.body");
-  let b: Uint8Array;
-  try {
-    b = decompressG2(compact.slice(MERGE_B_OFFSET, MERGE_B_OFFSET + 64) as Bytes64);
-  } catch (cause) {
-    throw new RingError("RING_ORIGIN_DECODE", { details: { path: "merge.proof.b" }, cause });
-  }
-  const body = new Uint8Array(compact.length + 64);
-  body.set(compact.subarray(0, MERGE_B_OFFSET), 0);
-  body.set(b, MERGE_B_OFFSET);
-  body.set(compact.subarray(MERGE_B_OFFSET + 64), MERGE_B_OFFSET + 128);
-  return body;
-}
-
-const CONFIRMED_DEPOSIT = Symbol("confirmed audited deposit");
-
-/** Authenticates one capsule against the successful audited deposit that published it. */
-export class ConfirmedDeposit {
-  readonly #ownerCommitment: Bytes32;
-  readonly #capsuleHash: Uint8Array;
-  private constructor(
-    token: symbol,
-    readonly slotIndex: number,
-    ownerCommitment: Uint8Array,
-    capsule: Uint8Array,
-  ) {
-    if (token !== CONFIRMED_DEPOSIT) throw invalid("confirmedDeposit");
-    if (ownerCommitment.length !== 32) throw invalid("ownerCommitment");
-    this.#ownerCommitment = ownerCommitment.slice() as Bytes32;
-    this.#capsuleHash = sha256(capsule);
-    Object.freeze(this);
-  }
-
-  /** Checks the private runtime brand, which a copied prototype cannot supply. */
-  static is(value: unknown): value is ConfirmedDeposit {
-    return typeof value === "object" && value !== null && #ownerCommitment in value;
-  }
-
-  /** Only exact successful event ancestry can mint a binding, never an indexed capsule alone. */
-  static fromTransaction(
-    transaction: unknown,
-    signature: Signature,
-    eventIndex: number,
-    ring: Address,
-  ): readonly ConfirmedDeposit[] {
-    const wire = record(transaction, "transaction");
-    if (record(wire["meta"], "meta")["err"] !== null) throw invalid("meta.err");
-    const encoded = record(wire["transaction"], "transaction.transaction");
-    if (list(encoded["signatures"], "signatures")[0] !== signature) throw invalid("signatures");
-    const found = ringEventIn(confirmedInstructionGroups(transaction), eventIndex, ring);
-    if (
-      found === undefined ||
-      found.source.data[0] !== InstructionTag.ringDeposit ||
-      found.wrapper?.data[0] !== AUDITED_RING_DEPOSIT_TAG
-    )
-      return [];
-    if (!equalBytes(found.wrapper.data.subarray(CUSTOM_RING_PROOF_LENGTH + 2), found.source.data))
-      throw invalid("auditedDeposit");
-    return ConfirmedDeposit.#decode(found.source.data);
-  }
-
-  /** The digest covers the entire capsule, including recipient ciphertext and slot. */
-  authenticate(capsule: RingDepositCapsule, ownerCommitment: Bytes32): void {
-    if (
-      capsule.slotIndex !== this.slotIndex ||
-      !equalBytes(ownerCommitment, this.#ownerCommitment) ||
-      !equalBytes(sha256(encodeRingDepositCapsule(capsule)), this.#capsuleHash)
-    ) {
-      throw new RingError("RING_AUDIT_MESSAGE", {
-        details: { reason: "unconfirmed deposit capsule" },
-      });
-    }
-  }
-
-  static #decode(data: Uint8Array): readonly ConfirmedDeposit[] {
-    const decoded = decodeRingDepositInstructionData(data.subarray(1));
-    if (decoded.deposits.length < 1 || decoded.deposits.length > RING_DEPOSIT_AUDIT_SLOTS)
-      throw invalid("deposits.length");
-    const deposits = decoded.deposits.map((deposit, slot) => {
-      const ciphertext = deposit.encrypted.ciphertext;
-      const capsule = readRingDepositCapsule(ciphertext);
-      if (capsule === undefined || capsule.slotIndex !== slot) throw invalid("deposit capsule");
-      return new ConfirmedDeposit(CONFIRMED_DEPOSIT, slot, deposit.ownerUtxoHash, ciphertext);
-    });
-    return Object.freeze(deposits);
-  }
+    throw invalid("merge.instruction");
+  const request = decodeRingMergeRequest(wrapper.data.subarray(1));
+  const forwarded = forwardedMergeData(
+    request,
+    sppMergeBody(request.compactBody),
+    InstructionTag.ringMergeTransact,
+  );
+  if (!equalBytes(forwarded, found.source.data)) throw invalid("merge.sealedRecord");
+  const { ephemeralPublicKey, ciphertext } = request.sealed;
+  return {
+    sealedRecord: Object.freeze({ ephemeralPublicKey, ciphertext }),
+    authority: request.authority,
+  };
 }
 
 export interface OriginInstruction {
@@ -229,7 +124,7 @@ export interface OriginInstructionGroup {
 
 /** Mirrors Rust `RingWithdrawal`, one public settlement leg out of the ring. */
 export interface RingWithdrawal {
-  /** Checked at execution, read from confirmed v2 policy metadata. */
+  /** Checked at execution, read from confirmed policy metadata. */
   readonly screenedOwner?: Address;
   /** The wallet of a SOL leg, the credited token account of an SPL leg. */
   readonly recipient: Address;
@@ -374,7 +269,7 @@ export function ringWithdrawalsOf(
 }
 
 /**
- * Mirrors Rust `ConfirmedInstructionGroups::from_confirmed_transaction` over a
+ * Mirrors Rust `ConfirmedInstructionGroups::try_from` over a
  * `getTransaction` JSON result.
  */
 export function confirmedInstructionGroups(
@@ -467,17 +362,10 @@ export function confirmedRingWithdrawals(
         return [];
       const withdrawals = ringWithdrawalsOf([instruction]);
       if (withdrawals.length === 0) return withdrawals;
-      const tag = parent.data[0];
-      if (tag === undefined) return withdrawals;
-      if (tag !== RingInstructionTag.transact && tag !== RingInstructionTag.delegateTransact)
-        return withdrawals;
       const source = settlementDataOf(instruction);
       if (source === undefined) return withdrawals;
-      const frame = RingTransactData.parse(
-        parent.data.subarray(1),
-        ringRailOf(tag, source.anonymous ? "anonymous" : "confidential"),
-      );
-      if (frame.policy === undefined) return withdrawals;
+      const frame = screenedFrame(parent.data, source.anonymous);
+      if (frame === undefined) return withdrawals;
       const encodeLegs = (legs: readonly InterfaceTransfer[]) => {
         const writer = new Writer();
         for (const leg of legs) writeInterfaceTransfer(writer, leg);
@@ -487,17 +375,37 @@ export function confirmedRingWithdrawals(
         throw invalid("withdrawal.transfers");
       let index = 0;
       const bound = withdrawals.map((leg) => {
-        const raw = leg.asset === SOL_MINT ? undefined : frame.policy?.splWithdrawalOwners[index++];
+        const raw = leg.asset === SOL_MINT ? undefined : frame.splWithdrawalOwners[index++];
         if (leg.asset !== SOL_MINT && raw === undefined) throw invalid("withdrawal.owner");
         return Object.freeze({
           ...leg,
           screenedOwner: raw === undefined ? leg.recipient : encodeBase58(raw),
         });
       });
-      if (index !== frame.policy.splWithdrawalOwners.length) throw invalid("withdrawal.owner");
+      if (index !== frame.splWithdrawalOwners.length) throw invalid("withdrawal.owner");
       return bound;
     }),
   );
+}
+
+/** The frame's owner section, `undefined` on a frame that carries none. */
+function screenedFrame(
+  instruction: Uint8Array,
+  sppAnonymous: boolean,
+):
+  | Readonly<{
+      interfaceTransfers: readonly InterfaceTransfer[];
+      splWithdrawalOwners: readonly Bytes32[];
+    }>
+  | undefined {
+  const tag = instruction[0];
+  if (tag !== RingInstructionTag.transfer && tag !== RingInstructionTag.authorityTransfer)
+    return undefined;
+  const frame = RingTransactData.parse(
+    instruction.subarray(1),
+    landedRingRail(instruction, sppAnonymous),
+  );
+  return frame.ownRevision === undefined ? undefined : frame;
 }
 
 /**
@@ -567,7 +475,10 @@ export class RpcTransactionOrigin implements TransactionOrigin {
       });
     const wire = record(transaction, "transaction");
     const encoded = record(wire["transaction"], "transaction.transaction");
-    if (list(encoded["signatures"], "signatures")[0] !== signature) throw invalid("signatures");
+    if (list(encoded["signatures"], "signatures")[0] !== signature)
+      throw new RingError("RING_ORIGIN_UNAVAILABLE", {
+        details: { transactionId: signature, reason: "another transaction" },
+      });
     return transaction;
   }
 }
@@ -629,6 +540,7 @@ function readConfirmedEvent(
     if (kind !== 3) throw invalid("event.kind");
     const data = new Reader(source.data.slice(1));
     const ringDataHash = data.bytes(32, "merge.ringDataHash") as Bytes32;
+    data.u8("merge.authority");
     const merge = readMergeData(data);
     data.done();
     const { salt, ciphertext } = merge.outputEncryption;
@@ -646,51 +558,7 @@ function readConfirmedEvent(
       outputs: [{ hash: merge.outputUtxoHash, viewTag, payload }],
     };
   }
-  if (tag !== InstructionTag.ringDeposit) return undefined;
-  if (kind !== 1) throw invalid("event.kind");
-  // Deposit emits a complete Borsh GeneralEvent. Counts are bounded by the instruction's u8 vectors.
-  const count = (name: string): number => {
-    const length = event.u32(name);
-    if (length > 255) throw invalid(name);
-    return length;
-  };
-  const payload = (): Uint8Array => {
-    const length = event.u32("event.data.length");
-    if (length > 0xffff) throw invalid("event.data.length");
-    return event.bytes(length, "event.data");
-  };
-  const nullifiers = Array.from({ length: count("event.inputs.length") }, () => {
-    event.bytes(40, "event.inputTreeAndSequence");
-    return event.bytes(32, "event.nullifier") as Bytes32;
-  });
-  const outputs = Array.from({ length: count("event.outputs.length") }, () => ({
-    viewTag: event.bytes(32, "event.viewTag") as Bytes32,
-    hash: event.bytes(32, "event.outputHash") as Bytes32,
-    payload: payload(),
-  }));
-  const messages = Array.from({ length: count("event.messages.length") }, () => ({
-    viewTag: event.bytes(32, "event.messageTag") as Bytes32,
-    data: payload(),
-  }));
-  if (event.bytes(49, "event.zeroViewingKeyAndSalt").some((byte) => byte !== 0))
-    throw invalid("event.depositKey");
-  const firstLeaf = event.u64("event.firstOutputLeafIndex");
-  const outputTree = encodeBase58(event.bytes(32, "event.outputTree"));
-  for (let index = 0, length = count("event.transfers.length"); index < length; index++) {
-    event.bool("event.transfer.isDeposit");
-    event.u64("event.transfer.amount");
-    event.option("event.transfer.asset", (reader) => reader.bytes(32, "event.transfer.asset"));
-  }
-  event.done();
-  return {
-    kind: "deposit",
-    inputTrees: [],
-    outputTree,
-    firstLeaf,
-    outputs,
-    messages,
-    nullifiers,
-  };
+  return undefined;
 }
 
 /** Reconstructs the exact indexed view from its successful SPP source and self-CPI event. */
@@ -700,7 +568,8 @@ function bindConfirmedTransaction(
   ring: Address,
 ): ConfirmedRingTransaction | undefined {
   if (indexed.eventIndex === undefined) throw invalid("eventIndex");
-  const found = ringEventIn(confirmedInstructionGroups(confirmed), indexed.eventIndex, ring);
+  const groups = confirmedInstructionGroups(confirmed);
+  const found = ringEventIn(groups, indexed.eventIndex, ring);
   if (found === undefined) return undefined;
   try {
     const data = readConfirmedEvent(found.source, found.event);
@@ -710,10 +579,9 @@ function bindConfirmedTransaction(
     // Solana Kit promotes RPC u64 values to bigint. Raw JSON fixtures use number/string.
     const slot = typeof rawSlot === "bigint" ? rawSlot : integer(rawSlot, "slot");
     if (slot < 0n || slot > 0xffff_ffff_ffff_ffffn) throw invalid("slot");
-    const proofless = data.kind === "deposit";
     if (
       indexed.slot !== slot ||
-      indexed.proofless !== proofless ||
+      indexed.proofless ||
       indexed.ringProgramId !== ring ||
       (data.txViewingPk === undefined
         ? indexed.txViewingPublicKey !== undefined
@@ -767,7 +635,7 @@ function bindConfirmedTransaction(
       txSignature: indexed.txSignature,
       eventIndex: indexed.eventIndex,
       ringProgramId: ring,
-      proofless,
+      proofless: false,
       ...(data.txViewingPk === undefined
         ? {}
         : { txViewingPublicKey: X25519PublicKey.fromBytes(data.txViewingPk) }),
@@ -776,38 +644,25 @@ function bindConfirmedTransaction(
       messages: Object.freeze(data.messages),
       nullifiers: Object.freeze(data.nullifiers),
     });
-    if (data.kind === "deposit")
-      return Object.freeze({
-        kind: data.kind,
-        transaction,
-        deposits: ConfirmedDeposit.fromTransaction(
-          confirmed,
-          indexed.txSignature,
-          indexed.eventIndex,
-          ring,
-        ),
-      });
     if (data.kind === "merge") {
-      const disclosure = confirmedMergeDisclosureOf(found);
       return Object.freeze({
         kind: data.kind,
         transaction,
-        ...(disclosure === undefined ? {} : { disclosure }),
+        ...confirmedMergeRecordOf(found),
       });
     }
     // Rust `ConfirmedEvent::input_tree_ids`, the event names any other tree by its account alone.
     const outputTreeId = outputSlots[0]?.outputContext.treeId;
+    const inputTreeIds = Object.freeze(
+      data.inputTrees.map((tree) => (tree === outputTree ? outputTreeId : undefined)),
+    );
+    const sppAnonymous = data.anonymous === true;
+    const published = { outputs: outputSlots.length, inputs: data.nullifiers.length };
     return Object.freeze({
       kind: data.kind,
       transaction,
-      inputTreeIds: Object.freeze(
-        data.inputTrees.map((tree) => (tree === outputTree ? outputTreeId : undefined)),
-      ),
-      layout: boundLayout(found, {
-        anonymous: data.anonymous === true,
-        outputs: outputSlots.length,
-        inputs: data.nullifiers.length,
-      }),
+      inputTreeIds,
+      ...boundFrame(found.wrapper?.data, sppAnonymous, published),
     });
   } catch (cause) {
     if (cause instanceof RingError) throw cause;
@@ -818,27 +673,40 @@ function bindConfirmedTransaction(
   }
 }
 
-/** The disclosure layout of the ring's own `Transact` or `DelegateTransact`, the frame the program verified. */
-function boundLayout(
-  found: TrustedEvent,
-  published: Readonly<{ anonymous: boolean; outputs: number; inputs: number }>,
-): DisclosureLayout {
-  const instruction = found.wrapper?.data;
-  const tag = instruction?.[0];
-  if (instruction === undefined || tag === undefined) throw invalid("transfer.instruction");
-  // Only an anonymous ring emits an anonymous transfer.
-  const rail = ringRailOf(tag, published.anonymous ? "anonymous" : "confidential");
-  const data = [RingInstructionTag.legacyTransact, RingInstructionTag.legacyDelegateTransact].some(
-    (legacy) => legacy === tag,
-  )
-    ? RingTransactData.parseLegacy(instruction.subarray(1), rail)
-    : RingTransactData.parse(instruction.subarray(1), rail);
-  if (data.outputs.length !== published.outputs || data.nullifiers.length !== published.inputs)
-    throw invalid("transfer.instruction");
-  return RingTransactData.disclosureLayout(data);
+interface PublishedCounts {
+  readonly outputs: number;
+  readonly inputs: number;
 }
 
-/** Mirrors Rust `settlement_width`, the accounts `append_interface_transfer_accounts` adds. */
+/** The frame of the ring's own `Transfer` or `AuthorityTransfer`, the one the program verified. */
+function boundFrame(
+  instruction: Uint8Array | undefined,
+  sppAnonymous: boolean,
+  published: PublishedCounts,
+): Pick<
+  Extract<ConfirmedRingTransaction, { kind: "transfer" }>,
+  "layout" | "rail" | "noSpend" | "hasData" | "entry"
+> {
+  const tag = instruction?.[0];
+  if (
+    instruction === undefined ||
+    (tag !== RingInstructionTag.transfer && tag !== RingInstructionTag.authorityTransfer)
+  )
+    throw invalid("transfer.instruction");
+  const rail = landedRingRail(instruction, sppAnonymous);
+  const data = RingTransactData.parse(instruction.subarray(1), rail);
+  if (data.outputs.length !== published.outputs || data.nullifiers.length !== published.inputs)
+    throw invalid("transfer.instruction");
+  return {
+    layout: RingTransactData.streamLayout(data),
+    rail,
+    noSpend: data.noSpend,
+    hasData: data.hasData,
+    entry: data.entry,
+  };
+}
+
+/** Mirrors Rust `InterfaceTransfer::settlement_account_count`, the accounts `append_interface_transfer_accounts` adds. */
 function settlementWidth(transfer: InterfaceTransfer): number {
   return transfer.kind === "splDeposit" || transfer.kind === "splWithdrawal" ? 5 : 2;
 }
@@ -940,7 +808,14 @@ function readTransferData(reader: Reader, accounts: readonly Address[]): Confirm
   reader.bytes(32, "privateTxHash");
   // CircuitId's u16 tags and payloads match the Rust wire format.
   const circuit = reader.u16("circuit.kind");
-  if (circuit !== 1 && circuit !== 2 && circuit !== 3 && circuit !== 5 && circuit !== 6) {
+  if (
+    circuit !== 1 &&
+    circuit !== 2 &&
+    circuit !== 3 &&
+    circuit !== 5 &&
+    circuit !== 6 &&
+    circuit !== 9
+  ) {
     throw invalid("circuit.kind");
   }
   reader.bytes(3, "circuit.shape");

@@ -25,21 +25,20 @@ fn an_outflow_limit_ring_bounds_each_transfer() -> Result<()> {
         tier: Tier::policy(&EMPTY),
     }
     .send(&env.client)?;
-    land(
+    enroll_actors(&env, ring)?;
+    StorageRecords::mint_policy(
+        ring,
+        Member::asset(&Address::new_from_array(
+            custom_ring_interface::SOL_ASSET_ADDRESS,
+        ))?,
+        zolana_ring_policy::MintPolicy {
+            cap: LIMIT_CAP,
+            cosign_above: LIMIT_COSIGN_ABOVE,
+            ..Default::default()
+        },
         &env,
-        custom_ring_sdk::AuthorityListWrite::new(ring, env.payer.pubkey()).with_mint_policy(
-            Member::asset(&Address::new_from_array(
-                custom_ring_interface::SOL_ASSET_ADDRESS,
-            ))?,
-            zolana_ring_policy::MintPolicy {
-                cap: LIMIT_CAP,
-                cosign_above: LIMIT_COSIGN_ABOVE,
-                ..Default::default()
-            },
-        )?,
-        &env.payer,
-        &[],
-    )?;
+    )
+    .send()?;
     let sender = &env.sender.keypair;
     let sender_address = sender.shielded_address()?;
     let recipient = env.recipient.keypair.shielded_address()?;
@@ -54,6 +53,7 @@ fn an_outflow_limit_ring_bounds_each_transfer() -> Result<()> {
             asset: DepositAsset::Sol,
             amount,
             cosigner: None,
+            list_salt: None,
         };
         let RingDepositReceipt { utxo, .. } = env.run(deposit.send(env.client.ring_client()))?;
         utxos.push(utxo);
@@ -67,13 +67,15 @@ fn an_outflow_limit_ring_bounds_each_transfer() -> Result<()> {
         transfer.transfer_sol(&recipient, amount)?;
         Ok(transfer)
     };
+    let cosigner = Keypair::new();
     let prove = |transaction: ConfidentialTransaction| {
         let transfer = CustomRingTransfer::new(CustomRingTransferInput {
             ring,
             sender,
             nullifier_key: Some(&sender.nullifier_key),
             transaction,
-        });
+        })
+        .with_co_signer(cosigner.pubkey());
         env.run(transfer.prove(env.client.ring_client()))
     };
 
@@ -81,32 +83,38 @@ fn an_outflow_limit_ring_bounds_each_transfer() -> Result<()> {
     let proven = prove(prepare(utxos[0].clone(), UNDER_THRESHOLD)?)?;
     let instruction = proven.instruction()?;
     assert!(
-        !frame(&instruction, RingRail::Confidential)?.approval_required,
+        frame(&instruction, RingRail::Confidential)?
+            .approval
+            .is_empty(),
         "an under-threshold send asks nobody"
     );
     let signature = land(&env, instruction, sender, &[])?;
     wait_for_indexed_transaction(indexer, auditor_tag, signature);
 
     // Above the threshold the chain refuses the send until the co-signer signs.
-    let cosigner = Keypair::new();
-    send(
+    let cosign_admin = RingRoleKeys::of(&env.payer).cosign_admin;
+    SendAs {
         rpc,
-        &env.payer,
-        &[custom_ring_sdk::SetCoSigner {
-            ring,
-            authority: env.payer.pubkey(),
-            signer: cosigner.pubkey(),
-            scope: CoSignScope::WITHDRAWALS,
-        }
-        .instruction()?],
-    )?;
+        payer: &env.payer,
+        holder: &cosign_admin,
+    }
+    .send(&[custom_ring_sdk::SetCoSigner {
+        ring,
+        payer: env.payer.pubkey(),
+        authority: cosign_admin.pubkey(),
+        signer: cosigner.pubkey(),
+        scope: CoSignScope::APPROVE_OUTFLOW,
+    }
+    .instruction()?])?;
     let proven = prove(prepare(utxos[1].clone(), OVER_THRESHOLD)?)?;
     let instruction = proven.instruction()?;
     assert!(
-        frame(&instruction, RingRail::Confidential)?.approval_required,
+        !frame(&instruction, RingRail::Confidential)?
+            .approval
+            .is_empty(),
         "an over-threshold send asks the co-signer"
     );
-    assert_eq!(proven.co_signer, Some(cosigner.pubkey()));
+    assert_eq!(proven.co_signers, vec![cosigner.pubkey()]);
     let rejection =
         send_expecting_rejection(rpc, sender, without_signer(instruction, cosigner.pubkey()))?;
     Rejection::custom(CustomRingError::MissingCoSigner as u32)
@@ -118,9 +126,13 @@ fn an_outflow_limit_ring_bounds_each_transfer() -> Result<()> {
 
     // A single send above the cap is refused before any proof.
     match prove(prepare(utxos[2].clone(), OVER_CAP)?) {
-        Err(RingError::OutflowCapExceeded { cap, outflow, .. }) => {
+        Err(RingError::OutflowCapExceeded {
+            cap,
+            charged_outflow,
+            ..
+        }) => {
             assert_eq!(cap, LIMIT_CAP);
-            assert_eq!(outflow, OVER_CAP);
+            assert_eq!(charged_outflow, u128::from(OVER_CAP));
         }
         Err(other) => return Err(anyhow!("expected the cap refusal, got {other}")),
         Ok(_) => return Err(anyhow!("the capped send was proven")),
@@ -129,7 +141,66 @@ fn an_outflow_limit_ring_bounds_each_transfer() -> Result<()> {
 }
 
 #[test]
-fn the_key_escrow_lifecycle_ends_in_a_delegate_move() -> Result<()> {
+fn a_relayer_pays_a_confidential_policy_transfer_its_owner_signs_in_the_proof() -> Result<()> {
+    let env = setup()?;
+    let ring_program = custom_ring_program_id()?;
+    let ring = CustomRing::new(ring_program);
+    let auditor = X25519Keypair::new();
+    let auditor_tag = auditor_view_tag(&auditor.pubkey());
+    RegisterRing {
+        ring,
+        payer: &env.payer,
+        auditor_pubkey: auditor.pubkey(),
+        tier: Tier::policy(&EMPTY),
+    }
+    .send(&env.client)?;
+    enroll_actors(&env, ring)?;
+    let sender = &env.sender.keypair;
+    let deposit = RingDeposit {
+        ring,
+        payer: sender,
+        recipient: DepositRecipient::Confidential(sender.shielded_address()?),
+        tree: env.tree,
+        asset: DepositAsset::Sol,
+        amount: DEFAULT_DEPOSIT,
+        cosigner: None,
+        list_salt: None,
+    };
+    let RingDepositReceipt { utxo, .. } = env.run(deposit.send(env.client.ring_client()))?;
+    let relayer = &env.payer;
+    let mut transaction = ConfidentialTransaction::new_with_ring(
+        vec![indexed_note(utxo, sender, &env, env.tree)?],
+        relayer.pubkey(),
+        ring_program,
+    )?
+    .with_output_tree_id(env.tree_id(env.tree)?)?;
+    transaction.transfer_sol(
+        &env.recipient.keypair.shielded_address()?,
+        DEFAULT_DEPOSIT / 2,
+    )?;
+    let transfer = CustomRingTransfer::new(CustomRingTransferInput {
+        ring,
+        sender,
+        nullifier_key: Some(&sender.nullifier_key),
+        transaction,
+    })
+    .with_in_proof_owner(&sender.signing_key);
+
+    let proven = env.run(transfer.prove(env.client.ring_client()))?;
+
+    assert!(
+        proven.owner_signers().is_empty(),
+        "the owner signs only in the proof"
+    );
+    let instruction = proven.instruction()?;
+    assert_anonymous_spp_rail(&instruction, &sender.signing_key.pubkey().as_ed25519()?)?;
+    let signature = land(&env, instruction, relayer, &[])?;
+    wait_for_indexed_transaction(env.client.indexer(), auditor_tag, signature);
+    Ok(())
+}
+
+#[test]
+fn the_key_enrollment_lifecycle_ends_in_a_delegate_move() -> Result<()> {
     const SEND: u64 = DEFAULT_DEPOSIT / 4;
 
     let env = setup()?;
@@ -148,6 +219,13 @@ fn the_key_escrow_lifecycle_ends_in_a_delegate_move() -> Result<()> {
     }
     .send(&env.client)?;
     let member = &env.sender.keypair;
+    // A keyed note needs its owner's tracking row.
+    EnrollOwners {
+        ring,
+        owners: &[member],
+        env: &env,
+    }
+    .send()?;
     let member_address = member.shielded_address()?;
     let deposit = |recipient: ShieldedAddress| RingDeposit {
         ring,
@@ -157,28 +235,31 @@ fn the_key_escrow_lifecycle_ends_in_a_delegate_move() -> Result<()> {
         asset: DepositAsset::Sol,
         amount: DEFAULT_DEPOSIT,
         cosigner: None,
+        list_salt: None,
     };
     let RingDepositReceipt { signature, utxo } =
         env.run(deposit(member_address).send(env.client.ring_client()))?;
     let input = indexed_note(utxo, member, &env, env.tree)?;
-    // 1. Recover the direct deposit before any transfer can disclose its
+    // Recover the direct deposit before any transfer can disclose its
     // opening.
     assert_transaction_compute_units(
         rpc,
         &signature,
         "audited ring deposit",
-        u64::from(compute_unit_limit(InstructionTag::AuditedDeposit)),
+        u64::from(compute_unit_limit(InstructionTag::Transfer)),
     )?;
     let recovery = RingRecovery::new(ring_program, &auditor).for_member(SourceMember {
         address: &member_address,
         nullifier_key: &member.nullifier_key,
     });
     let client = env.client.as_async();
-    let deposited =
+    let RecoveryStep::Complete(deposited) =
         env.client
-            .block_on(recovery.run(client.indexer(), client.rpc(), &env.ring_assets()?))?;
+            .block_on(recovery.run(client.indexer(), client.rpc(), &env.ring_assets()?))?
+    else {
+        bail!("the recovery paused at the page cap");
+    };
     assert!(deposited.unopened.is_empty());
-    assert!(deposited.unsupported_deposits.is_empty());
     assert_eq!(deposited.utxos.len(), 1);
     assert_eq!(deposited.utxos[0].utxo, input.utxo);
     assert_eq!(deposited.utxos[0].utxo.amount, DEFAULT_DEPOSIT);
@@ -198,27 +279,21 @@ fn the_key_escrow_lifecycle_ends_in_a_delegate_move() -> Result<()> {
     }
     .send(&env)?;
 
-    // 2. The member escrows its nullifier key, the auditor opens it from the
-    //    applied record.
-    register_key(&env, ring, member)?;
-    Queued::now(&env.client, ring)?.apply(&env.client, &env.payer)?;
-    let member_tag = owner_member(member)?;
-    let read = wait_for("the registered key", || {
-        Ok(match env.member_record(ring, member_tag) {
-            Ok(read) if read.sealed.is_some() => Probe::Ready(read),
-            Ok(_) => Probe::Retry(anyhow!("no sealed key yet")),
-            Err(error) => Probe::Retry(error),
-        })
-    })?;
-    let escrowed = read
-        .escrowed(&member_address.nullifier_pubkey)?
-        .context("the record escrows the member's nullifier key")?;
-    let nullifier_key = escrowed.sealed.open(&auditor)?;
+    // The auditor opens the key from the owner's enrollment.
+    let enrolled =
+        owner_enrollment(&env, ring, member.pubkey())?.context("the member's enrollment")?;
+    let nullifier_key = SealedNullifierKey {
+        eph_pk: X25519Pubkey::from_u(enrolled.eph_u)?,
+        ciphertext: enrolled.ciphertext,
+    }
+    .open(&auditor)?;
     assert_eq!(nullifier_key.pubkey()?, member_address.nullifier_pubkey);
+    let tracking: custom_ring_interface::tracking::TrackingRegistry =
+        fetch_state(env.client.rpc(), &policy_registry(ring, &env)?.tracking)?;
     assert_eq!(
-        policy_registry(ring, &env)?.next_index(),
+        tracking.next_index(),
         2,
-        "one registered member plus sentinel"
+        "one enrolled member plus sentinel"
     );
 
     let delegate = Keypair::new();
@@ -233,9 +308,12 @@ fn the_key_escrow_lifecycle_ends_in_a_delegate_move() -> Result<()> {
         nullifier_key: &nullifier_key,
     });
     let client = env.client.as_async();
-    let recovered =
+    let RecoveryStep::Complete(recovered) =
         env.client
-            .block_on(recovery.run(client.indexer(), client.rpc(), &env.ring_assets()?))?;
+            .block_on(recovery.run(client.indexer(), client.rpc(), &env.ring_assets()?))?
+    else {
+        bail!("the recovery paused at the page cap");
+    };
     assert!(recovered.unopened.is_empty(), "every audited note opens");
     let mut amounts: Vec<u64> = recovered
         .utxos
@@ -261,62 +339,52 @@ fn the_key_escrow_lifecycle_ends_in_a_delegate_move() -> Result<()> {
         Ok(transfer)
     };
 
-    // 3. Key escrow refuses an owner without an enrolled key before any prover
-    //    round, for the zero key and for an enrolled owner naming another key.
+    // A keyed output needs its owner's row and key, refused before any prover round.
     let unreachable = env.client_with(|| {
         AsyncProverClient::new("http://127.0.0.1:1".to_owned())
             .with_proof_data_source(ProofDataSource::Client)
     });
-    let refused = |to: &ShieldedAddress| -> Result<Member> {
+    let refused = |to: &ShieldedAddress| -> Result<RingError> {
         let transfer = CustomRingTransfer::new(CustomRingTransferInput {
             ring,
             sender: member,
             nullifier_key: Some(&member.nullifier_key),
             transaction: pay(to)?,
         });
-        match unreachable.block_on(transfer.prove(unreachable.ring_client())) {
-            Err(RingError::UnregisteredOutputKey { owner }) => Ok(owner),
-            other => Err(anyhow!(
-                "expected UnregisteredOutputKey, got {:?}",
-                other.err()
-            )),
-        }
+        unreachable
+            .block_on(transfer.prove(unreachable.ring_client()))
+            .err()
+            .context("a refused output key")
     };
+    let recipient_slot = usize::try_from(RECIPIENT_SLOT)?;
     let unregistered = env.recipient.keypair.shielded_address()?;
-    let unregistered_owner =
-        Member::from_bytes(unregistered.signing_pubkey.owner_proof_input_hash()?)?;
-    assert_eq!(refused(&unregistered)?, unregistered_owner);
-    let zero_key = ShieldedAddress {
-        nullifier_pubkey: ZERO_NULLIFIER_PUBKEY,
-        ..unregistered
-    };
-    assert_eq!(refused(&zero_key)?, unregistered_owner);
-    let mismatched = ShieldedAddress {
+    match refused(&unregistered)? {
+        RingError::RecipientNotEnrolled { slot_index } => assert_eq!(slot_index, recipient_slot),
+        other => bail!("expected RecipientNotEnrolled, got {other}"),
+    }
+    // No rule reads a salted list on the payee, the zero key passes every key check and stops at the prover.
+    match refused(&ShieldedAddress {
         nullifier_pubkey: ZERO_NULLIFIER_PUBKEY,
         ..member_address
+    })? {
+        RingError::Client(_) => {}
+        other => bail!("expected the unreachable prover, got {other}"),
+    }
+    let mismatched = ShieldedAddress {
+        nullifier_pubkey: unregistered.nullifier_pubkey,
+        ..member_address
     };
-    assert_eq!(
-        refused(&mismatched)?,
-        Member::from_bytes(member_address.signing_pubkey.owner_proof_input_hash()?)?
-    );
-    match env.run(
-        custom_ring_sdk::EscrowedRecipients {
-            ring,
-            recipients: &[member_address, unregistered],
-        }
-        .check(env.client.as_async()),
-    ) {
-        Err(RingError::UnregisteredOutputKey { owner }) => assert_eq!(owner, unregistered_owner),
-        other => return Err(anyhow!("expected UnregisteredOutputKey, got {other:?}")),
+    assert_ne!(mismatched.nullifier_pubkey, ZERO_NULLIFIER_PUBKEY);
+    assert_ne!(mismatched.nullifier_pubkey, member_address.nullifier_pubkey);
+    match refused(&mismatched)? {
+        RingError::RecipientKeyMismatch { slot_index } => assert_eq!(slot_index, recipient_slot),
+        other => bail!("expected RecipientKeyMismatch, got {other}"),
     }
 
-    // 4. A deposit binds the recipient's record under key escrow, one to an owner
-    //    without an escrowed key is refused before proving.
+    // A deposit to an owner without a row is refused before proving.
     match env.run(deposit(unregistered).send(env.client.ring_client())) {
-        Err(RingError::UnregisteredOutputKey { owner }) => {
-            assert_eq!(owner, unregistered_owner)
-        }
-        Err(other) => return Err(anyhow!("expected UnregisteredOutputKey, got {other}")),
+        Err(RingError::RecipientNotEnrolled { slot_index: 0 }) => {}
+        Err(other) => return Err(anyhow!("expected RecipientNotEnrolled, got {other}")),
         Ok(_) => return Err(anyhow!("a deposit to an unregistered owner landed")),
     }
     let RingDepositReceipt { signature, .. } =
@@ -324,11 +392,11 @@ fn the_key_escrow_lifecycle_ends_in_a_delegate_move() -> Result<()> {
     assert_transaction_compute_units(
         rpc,
         &signature,
-        "escrowed audited deposit",
-        u64::from(compute_unit_limit(InstructionTag::AuditedDeposit)),
+        "enrolled audited deposit",
+        u64::from(compute_unit_limit(InstructionTag::Transfer)),
     )?;
 
-    // 5. The delegate moves the enrolled member's note back to the member.
+    // The delegate moves the enrolled member's note back to the member.
     let moved_nullifier = moved.nullifier;
     let proven = DelegateTransfer::new(DelegateTransferInput {
         ring,

@@ -1,20 +1,29 @@
 import { getAddressDecoder, type Address } from "@solana/kit";
 
-import type { RpcAccount } from "@heliuslabs/zolana/client";
-import { Writer, addressBytes } from "@heliuslabs/zolana/internal";
-import { SHIELDED_POOL_PROGRAM_ID, StateDiscriminator } from "@heliuslabs/zolana/interface";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import { ringAuthAddress } from "../../src/protocol/pda/index.js";
+import type { RpcAccount } from "@heliuslabs/spr/client";
+import { Writer, addressBytes } from "@heliuslabs/spr/internal";
+import { SHIELDED_POOL_PROGRAM_ID, StateDiscriminator } from "@heliuslabs/spr/interface";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 import {
-  APPLY_BATCH,
-  MEMBER_REGISTRY_ROOT_HISTORY,
-} from "../../src/protocol/membership/member-registry.js";
+  ringAuthAddress,
+  ringCoSignerPda,
+  STORAGE_PROGRAM_ID,
+  trackingAuthorizationPda,
+} from "../../src/protocol/pda/index.js";
+import { ROOT_HISTORY } from "../../src/protocol/membership/member-registry.js";
 import type {
   RingCoSigner,
   RingMode,
+  RingRoles,
   RingSourceSlot,
-  RingRootEntry,
+  StorageRegistryRoot,
 } from "../../src/protocol/codec/ring-codecs.js";
+import {
+  RING_POLICY_DISCRIMINATOR,
+  RING_ROLES,
+  STORAGE_REGISTRY_DISCRIMINATOR,
+} from "../../src/protocol/codec/ring-codecs.js";
+import { X25519Keypair, type ShieldedAddress } from "@heliuslabs/spr/keypair";
 import {
   LIST_IDS,
   encodeRule,
@@ -24,7 +33,7 @@ import {
 
 export const ZERO_ADDRESS = getAddressDecoder().decode(new Uint8Array(32));
 
-const MODES: readonly RingMode[] = ["confidential", "confidentialEscrow", "anonymous"];
+const MODE_BYTES: Readonly<Record<RingMode, number>> = { confidential: 0, anonymous: 2 };
 
 export function ownedAccount(owner: Address, data: Uint8Array): RpcAccount {
   return { owner, lamports: 1n, data };
@@ -58,103 +67,179 @@ export async function sppRingRegistration(
   return [await ringAuthAddress(input.ringProgramId), ownedAccount(SHIELDED_POOL_PROGRAM_ID, data)];
 }
 
-/** Rust `RingProgramConfig` bytes. */
-export function ringProgramConfigData(
+/** Rust `CoSigner` at its canonical PDA. */
+export async function ringCoSignerAccount(
+  ringProgramId: Address,
+  coSigner: RingCoSigner,
+): Promise<readonly [Address, RpcAccount]> {
+  const [address, bump] = await ringCoSignerPda(ringProgramId, coSigner.signer);
+  const data = new Writer()
+    .u8(14, "discriminator")
+    .bytes(addressBytes(coSigner.signer))
+    .u8(coSigner.scope, "scope")
+    .u8(bump, "bump")
+    .finish();
+  return [address, ownedAccount(ringProgramId, data)];
+}
+
+/** Rust `TrackingRegistry`, the newest root in slot 0. */
+export function trackingRegistryAccount(
   input: Readonly<{
-    authority: Address;
-    auditorPublicKey: Uint8Array;
+    root: Bytes32;
+    revision: bigint;
+    nextIndex: number;
+    auditorPubkey: Uint8Array;
+  }>,
+): RpcAccount {
+  const writer = new Writer()
+    .u8(3, "discriminator")
+    .bytes(new Uint8Array(32), 32, "ringId")
+    .bytes(input.auditorPubkey, 33, "auditorPubkey")
+    .u64(BigInt(input.nextIndex), "nextIndex");
+  for (let slot = 0; slot < ROOT_HISTORY; slot += 1)
+    writer
+      .bytes(slot === 0 ? input.root : new Uint8Array(32), 32, "hash")
+      .u64(slot === 0 ? input.revision : 0n, "revision")
+      .u64(0n, "expiresAt");
+  return ownedAccount(STORAGE_PROGRAM_ID, writer.finish());
+}
+
+/** Rust `TrackingAuthorization` of an applied enrollment at its PDA, the seal fields filled. */
+export async function trackingAuthorizationAccount(
+  input: Readonly<{
+    registry: Address;
+    owner: Address;
+    nullifierPk: Uint8Array;
+    listTag: Uint8Array;
+    viewingU: Uint8Array;
+  }>,
+): Promise<readonly [Address, RpcAccount]> {
+  const data = new Writer()
+    .u8(4, "discriminator")
+    .bytes(addressBytes(input.registry))
+    .bytes(addressBytes(input.owner))
+    .bytes(input.nullifierPk, 32, "nullifierPk")
+    .bytes(input.listTag, 32, "listTag")
+    .bytes(input.viewingU, 32, "viewingU")
+    .bytes(new Uint8Array(32).fill(0x22), 32, "ephU")
+    .bytes(new Uint8Array(64).fill(0x33), 64, "ciphertext")
+    .u8(1, "applied")
+    .finish();
+  const [address] = await trackingAuthorizationPda(input.registry, input.owner);
+  return [address, ownedAccount(STORAGE_PROGRAM_ID, data)];
+}
+
+/** Each enrolled owner's authorization at its PDA, keyed by address, the zero list tag. */
+export async function trackingAuthorizations(
+  registry: Address,
+  owners: readonly ShieldedAddress[],
+): Promise<ReadonlyMap<Address, RpcAccount>> {
+  return new Map(
+    await Promise.all(
+      owners.map((owner) =>
+        trackingAuthorizationAccount({
+          registry,
+          owner: owner.solanaAddress(),
+          nullifierPk: owner.nullifierPublicKey,
+          listTag: new Uint8Array(32),
+          viewingU: owner.viewingPublicKey.u(),
+        }),
+      ),
+    ),
+  );
+}
+
+/** Rust `StorageRegistry` owned by the storage program, `roots` newest first. */
+export function storageRegistryAccount(
+  roots: readonly StorageRegistryRoot[],
+  authority: Address = ZERO_ADDRESS,
+  source: Readonly<{
+    trackingRegistry?: Address;
+    trackingFloor?: bigint;
+  }> = {},
+): RpcAccount {
+  const writer = new Writer()
+    .u8(STORAGE_REGISTRY_DISCRIMINATOR, "discriminator")
+    .bytes(addressBytes(authority))
+    .u64(0n, "graceSlots")
+    .u32(1, "nextIndex")
+    .bytes(new Uint8Array(32), 32, "ringId")
+    .bytes(addressBytes(source.trackingRegistry ?? ZERO_ADDRESS))
+    .u64(source.trackingFloor ?? 0n, "trackingFloor");
+  for (let slot = 0; slot < ROOT_HISTORY; slot += 1) {
+    const root = roots[slot];
+    writer
+      .bytes(root?.hash ?? new Uint8Array(32))
+      .u64(root?.revision ?? 0n, "revision")
+      .u64(root?.expiresAt ?? 0n, "expiresAt");
+  }
+  return ownedAccount(STORAGE_PROGRAM_ID, writer.finish());
+}
+
+/** Distinct role keys a fixture fills where a test names none. */
+export const FIXTURE_ROLES: RingRoles = Object.freeze({
+  admin: getAddressDecoder().decode(new Uint8Array(32).fill(0xa1)),
+  policy: getAddressDecoder().decode(new Uint8Array(32).fill(0xa2)),
+  pauser: getAddressDecoder().decode(new Uint8Array(32).fill(0xa3)),
+  cosignAdmin: getAddressDecoder().decode(new Uint8Array(32).fill(0xa4)),
+});
+
+const FIXTURE_AUDITOR = X25519Keypair.fromBytes(new Uint8Array(32).fill(9)).publicKey().toBytes();
+
+/** Rust `RingPolicy` bytes, a policy ring once `policyHash` is set. */
+export function ringPolicyData(
+  input: Readonly<{
     bump: number;
-    hasPolicy: boolean;
+    records?: Address;
+    tracking?: Address;
+    roles?: Partial<RingRoles>;
+    auditorPublicKey?: Uint8Array;
     mode?: RingMode;
-    insertFee?: bigint;
     coSigner?: RingCoSigner;
     delegate?: Address;
     createdSlot?: bigint;
-  }>,
-): Uint8Array {
-  const writer = new Writer()
-    .u8(10, "discriminator")
-    .bytes(addressBytes(input.authority))
-    .bytes(input.auditorPublicKey, 33, "auditorPublicKey")
-    .u8(input.bump, "bump")
-    .u8(input.hasPolicy ? 1 : 0, "hasPolicy")
-    .u8(MODES.indexOf(input.mode ?? "confidential"), "mode")
-    .u64(input.insertFee ?? 0n, "insertFee")
-    .bytes(addressBytes(input.coSigner?.signer ?? ZERO_ADDRESS))
-    .u8(input.coSigner?.scope ?? 0, "coSignScope");
-  return writer
-    .bytes(addressBytes(input.delegate ?? ZERO_ADDRESS))
-    .u64(input.createdSlot ?? 0n, "createdSlot")
-    .finish();
-}
-
-/** Rust `MemberRegistry` bytes, the newest root at `historyCursor`. */
-export function memberRegistryData(
-  input: Readonly<{
-    bump: number;
-    history: readonly (RingRootEntry | undefined)[];
-    historyCursor?: number;
-    nextIndex: number;
-    floor?: bigint;
-    priorFloor?: bigint;
-    floorSlot?: bigint;
     policyHash?: Bytes32;
     sources?: readonly RingSourceSlot[];
     table?: RuleTable;
     generation?: number;
   }>,
 ): Uint8Array {
+  const roles = { ...FIXTURE_ROLES, ...input.roles };
   const writer = new Writer()
-    .u8(11, "discriminator")
+    .u8(RING_POLICY_DISCRIMINATOR, "discriminator")
     .u8(input.bump, "bump")
-    .u8(input.historyCursor ?? 0, "historyCursor")
-    .u32(input.nextIndex, "nextIndex")
-    .u64(input.floor ?? 0n, "floor")
-    .u64(input.priorFloor ?? 0n, "priorFloor")
-    .u64(input.floorSlot ?? 0n, "floorSlot");
-  for (let slot = 0; slot < MEMBER_REGISTRY_ROOT_HISTORY; slot += 1) {
-    const entry = input.history[slot];
-    writer
-      .bytes(entry?.root ?? new Uint8Array(32))
-      .u64(entry?.applied ?? 0n, "applied")
-      .u64(entry?.slot ?? 0n, "slot");
-  }
+    .u8(MODE_BYTES[input.mode ?? "confidential"], "mode")
+    .bytes(
+      Uint8Array.from([1, 2, 4], (bit) => (((input.coSigner?.scope ?? 0) & bit) === 0 ? 0 : 1)),
+      3,
+      "coSigners",
+    );
+  for (const role of RING_ROLES) writer.bytes(addressBytes(roles[role]));
+  writer
+    .bytes(addressBytes(input.delegate ?? ZERO_ADDRESS))
+    .bytes(input.auditorPublicKey ?? FIXTURE_AUDITOR, 33, "auditorPublicKey")
+    .u64(input.createdSlot ?? 0n, "createdSlot")
+    .bytes(addressBytes(input.records ?? ZERO_ADDRESS))
+    .bytes(addressBytes(input.tracking ?? ZERO_ADDRESS));
+  writePolicyFields(writer, input);
+  return writer.finish();
+}
+
+function writePolicyFields(
+  writer: Writer,
+  input: Readonly<{
+    policyHash?: Bytes32;
+    sources?: readonly RingSourceSlot[];
+    table?: RuleTable;
+    generation?: number;
+  }>,
+): Writer {
   writer.bytes(input.policyHash ?? new Uint8Array(32));
   const sources = input.sources ?? LIST_IDS.map(() => ({ listId: 0, registry: ZERO_ADDRESS }));
   for (const source of sources)
     writer.u8(source.listId, "listId").bytes(addressBytes(source.registry));
-  const table = input.table ?? { rules: [] };
-  counted(writer, table.rules.map(encodeRule), 16);
-  return writer
-    .u32(input.generation ?? 0, "generation")
-    .u64(0n, "generationSlot")
-    .finish();
-}
-
-/** Rust `RecordQueue` bytes, every queued position's checkpoint at `position mod APPLY_BATCH`. */
-export function recordQueueData(
-  input: Readonly<{
-    bump: number;
-    head: bigint;
-    tail: bigint;
-    chainHead: Bytes32;
-    checkpoints?: readonly Readonly<{ position: bigint; chain: Bytes32; slot: bigint }>[];
-    nextApplySlot?: bigint;
-  }>,
-): Uint8Array {
-  const writer = new Writer()
-    .u8(12, "discriminator")
-    .u8(input.bump, "bump")
-    .u64(input.head, "head")
-    .u64(input.tail, "tail")
-    .bytes(input.chainHead, 32, "chainHead");
-  for (let slot = 0; slot < APPLY_BATCH; slot += 1) {
-    const checkpoint = input.checkpoints?.find(
-      (entry) => entry.position % BigInt(APPLY_BATCH) === BigInt(slot),
-    );
-    writer.bytes(checkpoint?.chain ?? new Uint8Array(32)).u64(checkpoint?.slot ?? 0n, "slot");
-  }
-  return writer.u64(input.nextApplySlot ?? 0n, "nextApplySlot").finish();
+  counted(writer, (input.table ?? { rules: [] }).rules.map(encodeRule), 16);
+  return writer.u32(input.generation ?? 0, "generation").u64(0n, "generationSlot");
 }
 
 function counted(writer: Writer, rows: readonly Uint8Array[], slots: number): void {

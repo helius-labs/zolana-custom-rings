@@ -1,6 +1,6 @@
-import { poseidon } from "@heliuslabs/zolana/internal";
-import { STATE_HEIGHT } from "@heliuslabs/zolana/interface";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import { poseidon } from "@heliuslabs/spr/internal";
+import { STATE_HEIGHT } from "@heliuslabs/spr/interface";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 
 /** A state tree holding the given leaves, every other leaf empty, as the program hashes it. */
 export interface StateTree {

@@ -147,7 +147,11 @@ block = "{CURATOR}"
 
 [[rules]]
 subject = "output-owner"
-any = [{{ forbid = "block" }}, {{ require = "approval" }}]
+any = [{{ require = "allow" }}, {{ require = "approval" }}]
+
+[[rules]]
+subject = "output-owner"
+forbid = "block"
 
 [[rules]]
 subject = "asset"
@@ -163,7 +167,7 @@ above = 1000000
         let text = document(&spec);
         for expected in [
             "[policy.sources.devnet]\n# the block list reads the member registry of the named curator ring\nblock = ",
-            "# each output owner must be on the approval list or must not be on the block list\n[[policy.rules]]\nsubject = \"output-owner\"\nany = [{ forbid = \"block\" }, { require = \"approval\" }]\n",
+            "# each output owner must be on the allow list or must be on the approval list\n[[policy.rules]]\nsubject = \"output-owner\"\nany = [{ require = \"allow\" }, { require = \"approval\" }]\n",
             "# each asset must be on the allow list\n[[policy.rules]]\nsubject = \"asset\"\nrequire = \"allow\"",
             "when the amount is above 1000000\n[[policy.rules]]\nsubject = \"output-owner\"\nrequire = \"allow\"\nabove = 1000000\n",
         ] {
@@ -182,10 +186,9 @@ above = 1000000
         );
         assert_eq!(
             compiled.rules.rules()[0],
-            Rule::any_of(
+            Rule::require_any(
                 Subject::OutputOwner,
-                ListSet::single(ListId::Approval),
-                ListSet::single(ListId::Block)
+                ListSet::of(&[ListId::Allow, ListId::Approval])
             )
         );
     }

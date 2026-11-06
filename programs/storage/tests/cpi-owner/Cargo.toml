@@ -1,0 +1,14 @@
+# Test only, a program owner that enrolls through CPI, out of the workspace.
+[package]
+name = "storage-cpi-owner"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+pinocchio = { version = "0.11", features = ["cpi"] }
+
+[workspace]

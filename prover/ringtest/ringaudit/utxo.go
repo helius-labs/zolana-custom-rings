@@ -41,14 +41,14 @@ func (u Utxo) isUtxo() bool {
 	return u.Domain == protocol.UtxoDomain
 }
 
+// IsUtxo is set for a spendable or created note, a dummy carries no obligation.
+func (u Utxo) IsUtxo() bool {
+	return u.isUtxo()
+}
+
 // isExit is a UTXO leaving the ring for the default ring.
 func (u Utxo) isExit() bool {
 	return u.isUtxo() && u.RingProgramID.Sign() == 0
-}
-
-// isRingOutput is a UTXO that stays in a ring.
-func (u Utxo) isRingOutput() bool {
-	return u.isUtxo() && u.RingProgramID.Sign() != 0
 }
 
 // Owner mirrors the owner hash shared.UtxoWires.Open derives, zero off a UTXO.
@@ -84,12 +84,4 @@ func (u Utxo) Wires() shared.UtxoWires {
 		Asset: u.Asset, Amount: new(big.Int).SetUint64(u.Amount), Blinding: u.Blinding,
 		DataHash: u.DataHash, RingDataHash: u.RingDataHash, RingProgramID: u.RingProgramID,
 	}
-}
-
-// live masks a field the disclosure opens only on a UTXO.
-func live(u Utxo, value *big.Int) *big.Int {
-	if !u.isUtxo() {
-		return big.NewInt(0)
-	}
-	return value
 }

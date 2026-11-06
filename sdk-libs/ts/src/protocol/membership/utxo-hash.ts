@@ -1,16 +1,14 @@
 /** SPP UTXO commitments over field values a ring reads from a disclosure, pinned SPP layout. */
-import type { Address, Bytes32 } from "@heliuslabs/zolana";
+import type { Bytes32 } from "@heliuslabs/spr";
 import {
   checked,
   checkU64,
   commitmentPoseidon,
-  decodeAddress,
-  hashBytes,
   rightAlign,
   ZERO_32,
-} from "@heliuslabs/zolana/internal";
-import { DUMMY_DOMAIN, treeIdField, UTXO_DOMAIN } from "@heliuslabs/zolana/interface";
-import { TransactionError, type TreeId } from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/internal";
+import { DUMMY_DOMAIN, treeIdField, UTXO_DOMAIN } from "@heliuslabs/spr/interface";
+import { TransactionError, type TreeId } from "@heliuslabs/spr/transaction";
 
 interface CommitmentFields {
   readonly owner: Bytes32;
@@ -21,21 +19,11 @@ interface CommitmentFields {
   readonly ringDataHash?: Bytes32;
 }
 
-/** A ring commitment under the ring id field, `hashBytes` of the ring program id. */
-export type RingIdCommitmentInput = CommitmentFields & {
-  readonly asset: Address;
-  readonly ringId: Bytes32;
-};
-
 /** A commitment of field values, `assetField` the `hashBytes` of a mint no registry may know. */
 export type FieldCommitmentInput = CommitmentFields & {
   readonly assetField: Bytes32;
   readonly ringId: Bytes32;
 };
-
-export function ringIdUtxoHash(input: RingIdCommitmentInput): Bytes32 {
-  return commitment(input, hashBytes(decodeAddress(input.asset)) as Bytes32);
-}
 
 export function fieldUtxoHash(input: FieldCommitmentInput): Bytes32 {
   return commitment(input, checked<Bytes32>(input.assetField, 32, "asset field"));

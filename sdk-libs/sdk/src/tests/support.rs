@@ -8,14 +8,16 @@ use std::{
 use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
 use custom_ring_interface::{
-    AppliedAt, CoSignScope, EscrowKey, MemberRegistry, QueueEntry, RecordQueue, RingMode,
-    RingProgramConfig, SourceSlot, CONFIG_PDA_SEED, DEFAULT_INSERT_FEE, MEMBER_REGISTRY_PDA_SEED,
-    N_SOURCE_SLOTS, RECORD_QUEUE_PDA_SEED, RING_PROGRAM_CONFIG,
+    storage::{RegistryId, Revision, StorageRegistry},
+    storage_instruction::{InitializeIxData, InitializeTrackingIxData},
+    tracking::{TrackingAuthorization, TrackingRegistry},
+    CoSignScope, CoSigner, CoSignerCounts, NewRing, PolicyUpdate, RingMode, RingPolicy, RingRoles,
+    SourceSlot, CO_SIGNER, N_SOURCE_SLOTS, RING_POLICY_PDA_SEED, STORAGE_PROGRAM_ID,
 };
 use solana_account::Account;
 use solana_address::Address;
 use spr_client::{
-    rpc::STATE_TREE_HEIGHT, AsyncProverClient, AsyncRpc, AsyncWitnessReader, AsyncZolanaClient,
+    rpc::STATE_TREE_HEIGHT, AsyncProverClient, AsyncRpc, AsyncSprClient, AsyncWitnessReader,
     ClientError, Context, GetMerkleProofsResponse, IndexerRpcConfig, InputWitnesses, MerkleContext,
     MerkleProof, ProofDataSource,
 };
@@ -29,17 +31,26 @@ use spr_interface::{
     },
     RING_AUTH_PDA_SEED, SHIELDED_POOL_PROGRAM_ID,
 };
+use spr_keypair::ShieldedAddress;
 use spr_keypair::{random_blinding, NullifierKey, ShieldedKeypair, SigningKey, X25519Keypair};
 use spr_transaction::{utxo::SppProofInputUtxo, Data, Mint, Utxo, WalletUtxo};
-use spr_tree::{TreeAccount, UTXO_TREE_HEIGHT};
-use zolana_ring_client::{AsyncRingIndexer, RingIndexerError, ViewingHistory};
-use zolana_ring_indexer::rpc::{
-    GetRingMemberOpeningsRequest, GetRingMemberOpeningsResponse, GetRingRecordPoolRequest,
-    GetRingRecordPoolResponse, RingIndexedMemberRecordView, RingMemberOpening,
-    RingMemberRecordView, RingRecordPathView, RingRegistryRootView,
+use spr_tree::{TreeAccount, TreeFeeSchedule, UTXO_TREE_HEIGHT};
+use zolana_ring_client::{AsyncRingIndexer, RingIndexerError};
+use zolana_ring_indexer::{
+    rpc::{
+        GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse,
+        GetStorageRecordPoolRequest, GetStorageRecordPoolResponse, RingIndexedMemberRecordView,
+        RingMemberOpening, RingMemberRecordView, RingRecordPathView, StorageRootView,
+    },
+    tracking::{
+        GetTrackingOpeningsRequest, GetTrackingOpeningsResponse, GetTrackingRecordPoolRequest,
+        GetTrackingRecordPoolResponse, RingIndexedTrackingRecordView, RingTrackingOpening,
+        RingTrackingRecordView,
+    },
 };
 use zolana_ring_member_registry::{
-    Canopy, MemberRecord, MemberRegistryTree, RecordOpening, RecordTree,
+    Canopy, MemberRecord, MemberRegistryTree, RecordOpening, RecordTree, TrackingOpening,
+    TrackingRecord, TrackingTree,
 };
 use zolana_ring_policy::{Member, RuleTable};
 
@@ -47,6 +58,12 @@ use crate::client::RingClient;
 use crate::{trees::PoolTree, CustomRing, REDACTED};
 
 pub(crate) const SLOT: u64 = 2_359_301;
+/// The ring's own `StorageRegistry`, its newest root at `REVISION`.
+pub(crate) const RECORDS: Address = Address::new_from_array([0x5a; 32]);
+pub(crate) const REVISION: u64 = 1;
+pub(crate) const TRACKING: Address = Address::new_from_array([0x5b; 32]);
+/// Every `keypair(seed)` below it holds a tracking row under its own nullifier key.
+const ENROLLED_SEEDS: u8 = 64;
 pub(crate) const TREE_ID: u16 = 0;
 
 pub(crate) fn program() -> Address {
@@ -71,10 +88,6 @@ pub(crate) fn auditor() -> X25519Keypair {
 
 pub(crate) fn keypair(seed: u8) -> ShieldedKeypair {
     ShieldedKeypair::from_keypair(SigningKey::from_ed25519_bytes(&[seed; 32])).unwrap()
-}
-
-pub(crate) fn history(owner: &ShieldedKeypair) -> ViewingHistory {
-    ViewingHistory::new(owner.viewing_pubkey(), 0)
 }
 
 pub(crate) fn owner_identity(owner: &ShieldedKeypair) -> Member {
@@ -181,7 +194,7 @@ impl LeafTree {
     }
 }
 
-fn tree_account(tree: PoolTree) -> Account {
+fn tree_account(tree: PoolTree, fees: TreeFeeSchedule) -> Account {
     let mut data = vec![0u8; TreeAccount::account_size()];
     let params = nullifier_tree_params();
     TreeAccount::init(
@@ -191,7 +204,7 @@ fn tree_account(tree: PoolTree) -> Account {
         tree.address.to_bytes(),
         tree.id,
         params,
-        default_tree_fees(params.input_queue_zkp_batch_size).unwrap(),
+        fees,
     )
     .unwrap();
     Account {
@@ -223,24 +236,41 @@ impl RingSettings {
         }
     }
 
-    pub(crate) fn config(&self) -> RingProgramConfig {
-        let mut config = RingProgramConfig::zeroed();
-        config.discriminator = RING_PROGRAM_CONFIG;
-        config.authority = authority();
-        config.auditor_pubkey = *auditor().pubkey().as_bytes();
-        config.bump = Address::find_program_address(&[CONFIG_PDA_SEED], &program()).1;
-        config.has_policy = u8::from(self.has_policy);
-        config.mode = self.mode as u8;
-        config.insert_fee = DEFAULT_INSERT_FEE.to_le_bytes();
-        config.created_slot = self.created_slot.to_le_bytes();
-        if let Some((signer, scope)) = self.co_signer {
-            config.co_signer = signer;
-            config.co_sign_scope = scope.bits();
+    /// A policy ring's hash is a stand-in until `with_registry` pins its table.
+    pub(crate) fn config(&self) -> Box<RingPolicy> {
+        let mut config = NewRing {
+            bump: Address::find_program_address(&[RING_POLICY_PDA_SEED], &program()).1,
+            mode: self.mode,
+            roles: RingRoles {
+                admin: authority(),
+                policy: Address::new_from_array([0xa2; 32]),
+                pauser: Address::new_from_array([0xa3; 32]),
+                cosign_admin: Address::new_from_array([0xa4; 32]),
+            },
+            auditor_pubkey: *auditor().pubkey().as_bytes(),
+            created_slot: self.created_slot,
+            records: Address::default(),
+            tracking: TRACKING,
+        }
+        .account();
+        if self.has_policy {
+            config.policy_hash = [0x11; 32];
+        }
+        if let Some((_, scope)) = self.co_signer {
+            config.co_signers = CoSignerCounts::default().added(scope).expect("one record");
         }
         if let Some(delegate) = self.delegate {
             config.delegate = delegate;
         }
         config
+    }
+}
+
+fn policy_update(sources: [SourceSlot; N_SOURCE_SLOTS], rules: &RuleTable) -> PolicyUpdate {
+    PolicyUpdate {
+        sources,
+        rules: rules.encode(),
+        slot: SLOT,
     }
 }
 
@@ -253,9 +283,14 @@ pub(crate) struct Chain {
     /// Leaves the indexer serves that the tree's account lacks.
     unsettled: HashMap<[u8; 32], u64>,
     registry: Option<Arc<Registry>>,
+    /// A second registry address the same tree answers for.
+    curator: Option<Address>,
     /// The leaves of every Merkle proof request.
     pub proof_requests: Arc<Mutex<Vec<Vec<[u8; 32]>>>>,
     pub witness_requests: Arc<Mutex<Vec<Vec<[u8; 32]>>>>,
+    /// The ring of every record opening or pool request.
+    pub record_requests: Arc<Mutex<Vec<SerializablePubkey>>>,
+    tracking: Option<Arc<TrackingFixture>>,
 }
 
 impl Chain {
@@ -269,8 +304,28 @@ impl Chain {
             activated: 1,
             bump: Address::find_program_address(&[RING_AUTH_PDA_SEED], &program()).1,
         };
-        Self::default()
-            .with(ring().config_pda(), account(program(), &settings.config()))
+        let chain = Self::default().with_tracking_fixture(TrackingFixture::enrolled());
+        let chain = match settings.co_signer {
+            Some((signer, scope)) => chain.with(
+                ring().co_signer_pda(&signer),
+                account(
+                    program(),
+                    &CoSigner {
+                        discriminator: CO_SIGNER,
+                        signer,
+                        scope: scope.bits(),
+                        bump: Address::find_program_address(
+                            &[CoSigner::SEED, signer.as_ref()],
+                            &program(),
+                        )
+                        .1,
+                    },
+                ),
+            ),
+            None => chain,
+        };
+        chain
+            .with(ring().policy_pda(), account(program(), &*settings.config()))
             .with(
                 ring().ring_auth_pda(),
                 account(
@@ -287,36 +342,96 @@ impl Chain {
     }
 
     pub(crate) fn with_tree(self, id: u16) -> Self {
+        self.with_tree_fees(id, default_tree_fees())
+    }
+
+    pub(crate) fn with_tree_fees(self, id: u16, fees: TreeFeeSchedule) -> Self {
         let tree = PoolTree {
             address: spr_interface::pda::tree(id),
             id,
         };
-        self.with(tree.address, tree_account(tree))
+        self.with(tree.address, tree_account(tree, fees))
     }
 
-    /// The ring's own registry pinning `rules`, every list read from it.
+    /// The ring account pinning `rules`, every list read from the ring's records.
     pub(crate) fn with_registry(self, registry: Registry, rules: &RuleTable) -> Self {
-        let account = registry.account(rules);
+        let policy = registry.policy(self.ring_account(), rules);
+        self.with_records(registry)
+            .with(ring().policy_pda(), policy)
+    }
+
+    /// `rules` read the Block list from a curator registry the same tree answers for.
+    pub(crate) fn with_curator(self, curator: Address, rules: &RuleTable) -> Self {
+        use zolana_ring_policy::ListId;
+        let mut ring_account = self.ring_account();
+        let mut sources = [SourceSlot::zeroed(); N_SOURCE_SLOTS];
+        for list in rules.referenced().iter() {
+            sources[list.slot()].list_id = list as u8;
+        }
+        sources[ListId::Block.slot()].registry = curator;
+        ring_account
+            .set_policy(policy_update(sources, rules))
+            .unwrap();
+        let records = self
+            .registry
+            .as_ref()
+            .expect("the records precede the curator")
+            .records();
+        Self {
+            curator: Some(curator),
+            ..self
+        }
+        .with(ring().policy_pda(), account(program(), &*ring_account))
+        .with(curator, records)
+    }
+
+    /// The ring's records registry alone, the ring stays audit-only.
+    pub(crate) fn with_records(self, registry: Registry) -> Self {
+        let mut ring_account = self.ring_account();
+        ring_account.records = RECORDS;
+        let records = registry.records();
         Self {
             registry: Some(Arc::new(registry)),
             ..self
         }
-        .with(ring().registry_pda(), account)
+        .with(ring().policy_pda(), account(program(), &*ring_account))
+        .with(RECORDS, records)
     }
 
-    pub(crate) fn with_queue(
+    fn ring_account(&self) -> Box<RingPolicy> {
+        self.accounts
+            .get(&ring().policy_pda())
+            .map(|account| Box::new(*bytemuck::from_bytes::<RingPolicy>(&account.data)))
+            .expect("Chain::ring writes the ring account")
+    }
+
+    /// `addresses` alone hold tracking rows, a test of the output predicate names its keys.
+    pub(crate) fn with_tracking(self, addresses: &[ShieldedAddress]) -> Self {
+        self.with_tracking_fixture(Arc::new(TrackingFixture::of(addresses)))
+    }
+
+    /// One tag on every row, a test of a salt names the tag it hashes to.
+    pub(crate) fn with_tracking_tag(
         self,
-        entries: &[QueueEntry],
-        queued_at: u64,
-        next_apply_slot: u64,
+        addresses: &[ShieldedAddress],
+        list_tag: [u8; 32],
     ) -> Self {
-        let bump = Address::find_program_address(&[RECORD_QUEUE_PDA_SEED], &program()).1;
-        let mut queue = RecordQueue::new(bump);
-        for entry in entries {
-            queue.push(entry, queued_at).unwrap();
+        self.with_tracking_fixture(Arc::new(TrackingFixture::tagged(addresses, list_tag)))
+    }
+
+    /// The tree's registry and each enrolled owner's authorization holding its address viewing key.
+    fn with_tracking_fixture(self, tracking: Arc<TrackingFixture>) -> Self {
+        let chain = tracking
+            .authorizations
+            .iter()
+            .fold(self, |chain, (address, account)| {
+                chain.with(*address, account.clone())
+            });
+        Self {
+            tracking: Some(Arc::clone(&tracking)),
+            ..chain
         }
-        queue.next_apply_slot = next_apply_slot.to_le_bytes();
-        self.with(ring().queue_pda(), account(program(), &queue))
+        .with(TRACKING, tracking.account())
     }
 
     /// The indexed route, the prover fetches the input proofs and no witness is read here.
@@ -331,10 +446,7 @@ impl Chain {
 
     fn client_on(self, source: ProofDataSource) -> RingClient<Chain, Chain> {
         let prover = || AsyncProverClient::local().with_proof_data_source(source);
-        RingClient::new(
-            AsyncZolanaClient::new(self.clone(), self, prover()),
-            prover(),
-        )
+        RingClient::new(AsyncSprClient::new(self.clone(), self, prover()), prover())
     }
 }
 
@@ -408,17 +520,19 @@ impl AsyncRpc for Chain {
 
 #[async_trait]
 impl AsyncRingIndexer for Chain {
-    async fn get_ring_member_openings(
+    async fn get_storage_member_openings(
         &self,
-        request: GetRingMemberOpeningsRequest,
-    ) -> Result<GetRingMemberOpeningsResponse, RingIndexerError> {
+        request: GetStorageMemberOpeningsRequest,
+    ) -> Result<GetStorageMemberOpeningsResponse, RingIndexerError> {
+        self.record_requests.lock().unwrap().push(request.registry);
         let registry = self
             .registry
             .as_ref()
+            .filter(|_| request.registry == RECORDS.into())
             .ok_or(ClientError::UnsupportedRpcMethod(
-                "get_ring_member_openings",
+                "get_storage_member_openings",
             ))?;
-        Ok(GetRingMemberOpeningsResponse {
+        Ok(GetStorageMemberOpeningsResponse {
             context: spr_indexer_api::Context {
                 block_time: 0,
                 slot: SLOT,
@@ -432,14 +546,19 @@ impl AsyncRingIndexer for Chain {
         })
     }
 
-    async fn get_ring_record_pool(
+    async fn get_storage_record_pool(
         &self,
-        request: GetRingRecordPoolRequest,
-    ) -> Result<GetRingRecordPoolResponse, RingIndexerError> {
+        request: GetStorageRecordPoolRequest,
+    ) -> Result<GetStorageRecordPoolResponse, RingIndexerError> {
+        self.record_requests.lock().unwrap().push(request.registry);
         let registry = self
             .registry
             .as_ref()
-            .ok_or(ClientError::UnsupportedRpcMethod("get_ring_record_pool"))?;
+            .filter(|_| {
+                request.registry == RECORDS.into()
+                    || self.curator.map(Into::into) == Some(request.registry)
+            })
+            .ok_or(ClientError::UnsupportedRpcMethod("get_storage_record_pool"))?;
         let members: Vec<[u8; 32]> = request.members.iter().map(|member| member.0).collect();
         let pool = registry
             .tree
@@ -448,7 +567,7 @@ impl AsyncRingIndexer for Chain {
                 Canopy::covering(request.openings as usize).unwrap(),
             )
             .unwrap();
-        Ok(GetRingRecordPoolResponse {
+        Ok(GetStorageRecordPoolResponse {
             context: spr_indexer_api::Context {
                 block_time: 0,
                 slot: SLOT,
@@ -474,6 +593,203 @@ impl AsyncRingIndexer for Chain {
                 .collect(),
         })
     }
+
+    async fn get_tracking_openings(
+        &self,
+        request: GetTrackingOpeningsRequest,
+    ) -> Result<GetTrackingOpeningsResponse, RingIndexerError> {
+        let tracking = self.tracking()?;
+        Ok(GetTrackingOpeningsResponse {
+            context: spr_indexer_api::Context {
+                block_time: 0,
+                slot: SLOT,
+            },
+            root: tracking.root_view(),
+            openings: request
+                .members
+                .iter()
+                .map(|member| tracking.opening(&member.0))
+                .collect(),
+        })
+    }
+
+    async fn get_tracking_record_pool(
+        &self,
+        request: GetTrackingRecordPoolRequest,
+    ) -> Result<GetTrackingRecordPoolResponse, RingIndexerError> {
+        let tracking = self.tracking()?;
+        let members: Vec<[u8; 32]> = request.members.iter().map(|member| member.0).collect();
+        let pool = tracking
+            .tree
+            .record_pool(
+                &members,
+                Canopy::covering_tracking(request.openings as usize).unwrap(),
+            )
+            .unwrap();
+        Ok(GetTrackingRecordPoolResponse {
+            context: spr_indexer_api::Context {
+                block_time: 0,
+                slot: SLOT,
+            },
+            root: tracking.root_view(),
+            records: pool
+                .records
+                .iter()
+                .zip(&pool.proof.paths)
+                .map(|(record, path)| RingIndexedTrackingRecordView {
+                    record: record_view(record),
+                    path: RingRecordPathView {
+                        index: path.index,
+                        siblings: path.siblings.iter().map(|level| level.map(Hash)).collect(),
+                    },
+                })
+                .collect(),
+            canopy: pool.proof.canopy.into_iter().map(Hash).collect(),
+            subjects: pool
+                .subjects
+                .iter()
+                .map(|subject| subject.record_index)
+                .collect(),
+        })
+    }
+}
+
+impl Chain {
+    fn tracking(&self) -> Result<&TrackingFixture, RingIndexerError> {
+        self.tracking
+            .as_deref()
+            .ok_or(ClientError::UnsupportedRpcMethod("get_tracking_openings").into())
+    }
+}
+
+struct TrackingFixture {
+    tree: TrackingTree,
+    authorizations: Vec<(Address, Account)>,
+}
+
+impl TrackingFixture {
+    fn enrolled() -> Arc<Self> {
+        static FIXTURE: std::sync::OnceLock<Arc<TrackingFixture>> = std::sync::OnceLock::new();
+        Arc::clone(FIXTURE.get_or_init(|| {
+            let addresses: Vec<_> = (0..ENROLLED_SEEDS)
+                .map(|seed| keypair(seed).shielded_address().unwrap())
+                .collect();
+            Arc::new(Self::of(&addresses))
+        }))
+    }
+
+    /// Records in leaf order, each owner's own key.
+    fn of(addresses: &[ShieldedAddress]) -> Self {
+        Self::tagged(addresses, [0x06; 32])
+    }
+
+    fn tagged(addresses: &[ShieldedAddress], list_tag: [u8; 32]) -> Self {
+        let mut members: Vec<([u8; 32], ShieldedAddress)> = addresses
+            .iter()
+            .map(|address| {
+                (
+                    address.signing_pubkey.owner_proof_input_hash().unwrap(),
+                    *address,
+                )
+            })
+            .collect();
+        members.sort_by_key(|(member, _)| *member);
+        let mut records = vec![TrackingRecord {
+            next: members
+                .first()
+                .map_or(TrackingRecord::SENTINEL.next, |(member, _)| *member),
+            ..TrackingRecord::SENTINEL
+        }];
+        let mut authorizations = Vec::with_capacity(members.len());
+        for (position, (member, address)) in members.iter().enumerate() {
+            records.push(TrackingRecord {
+                member: *member,
+                next: members
+                    .get(position + 1)
+                    .map_or(TrackingRecord::SENTINEL.next, |(next, _)| *next),
+                nullifier_pk: address.nullifier_pubkey,
+                ct_hash: [0x05; 32],
+                list_tag,
+            });
+            let owner =
+                Address::new_from_array(address.signing_pubkey.confidential_view_tag().unwrap());
+            let authorization = TrackingAuthorization {
+                discriminator: TrackingAuthorization::DISCRIMINATOR,
+                registry: TRACKING,
+                owner,
+                nullifier_pk: address.nullifier_pubkey,
+                list_tag,
+                viewing_u: address.viewing_pubkey.u(),
+                eph_u: [0; 32],
+                ciphertext: [0; 64],
+                applied: 1,
+            };
+            authorizations.push((
+                TrackingAuthorization::find_address(&TRACKING, &owner).0,
+                account(STORAGE_PROGRAM_ID, &authorization),
+            ));
+        }
+        Self {
+            tree: TrackingTree::from_records(records).unwrap(),
+            authorizations,
+        }
+    }
+
+    fn account(&self) -> Account {
+        let mut registry = TrackingRegistry::new(&InitializeTrackingIxData {
+            ring_id: ring().ring_id().unwrap(),
+            auditor_pubkey: *auditor().pubkey().as_bytes(),
+        });
+        registry.roots[0].hash = self.tree.root().unwrap();
+        registry.roots[0].revision = Revision::from(REVISION);
+        account(STORAGE_PROGRAM_ID, &registry)
+    }
+
+    fn root_view(&self) -> StorageRootView {
+        StorageRootView {
+            root: Hash(self.tree.root().unwrap()),
+            revision: REVISION,
+            next_index: self.tree.records().len() as u64,
+        }
+    }
+
+    fn opening(&self, member: &[u8; 32]) -> RingTrackingOpening {
+        let (present, record, path) = match self.tree.opening(member).unwrap() {
+            TrackingOpening::Present { record, path } => (true, record, path),
+            TrackingOpening::Absent { low, path } => (false, low, path),
+        };
+        RingTrackingOpening {
+            present,
+            record: record_view(&record),
+            path: RingRecordPathView {
+                index: path.index,
+                siblings: path.siblings.iter().map(|level| level.map(Hash)).collect(),
+            },
+        }
+    }
+}
+
+fn record_view(record: &TrackingRecord) -> RingTrackingRecordView {
+    RingTrackingRecordView {
+        member: Hash(record.member),
+        next: Hash(record.next),
+        nullifier_pk: Hash(record.nullifier_pk),
+        ct_hash: Hash(record.ct_hash),
+        list_tag: Hash(record.list_tag),
+        seal: None,
+    }
+}
+
+/// `note` under the zero key, its commitment and nullifier follow.
+pub(crate) fn zero_key(mut note: WalletUtxo) -> WalletUtxo {
+    let key = NullifierKey::from_secret([0; 31]);
+    note.nullifier_pubkey = spr_interface::ZERO_NULLIFIER_PUBKEY;
+    note.utxo_hash = note
+        .utxo
+        .hash(&note.nullifier_pubkey, &[0; 32], &[0; 32], note.tree_id)
+        .unwrap();
+    note.nullifier = key.nullifier(&note.utxo_hash, &note.utxo.blinding).unwrap();
+    note
 }
 
 /// No test proves on the client route.
@@ -492,41 +808,21 @@ impl AsyncWitnessReader for Chain {
     }
 }
 
-/// The ring's own record tree, every member escrowing its nullifier key.
 pub(crate) struct Registry {
     tree: MemberRegistryTree,
-    views: HashMap<[u8; 32], RingMemberRecordView>,
 }
 
 impl Registry {
     /// Each owner with `lists` set, ordered as the linked records require.
     pub(crate) fn new(owners: &[(&ShieldedKeypair, u64)]) -> Self {
-        let sealed = [0x5a; 32];
-        let mut members: Vec<_> = owners
+        let mut members: Vec<([u8; 32], u64)> = owners
             .iter()
             .map(|(owner, lists)| {
                 let address = owner.shielded_address().unwrap();
-                let member = address.signing_pubkey.owner_proof_input_hash().unwrap();
-                let escrow_key = EscrowKey {
-                    nullifier_pk: &address.nullifier_pubkey,
-                    ciphertext: &sealed,
-                }
-                .hash()
-                .unwrap();
-                let view = RingMemberRecordView {
-                    mint_policy: Default::default(),
-                    member: Hash(member),
-                    next: Hash([0; 32]),
-                    lists: *lists,
-                    escrow_key: Hash(escrow_key),
-                    owner_pubkey: Some(SerializablePubkey(Address::new_from_array(
-                        address.signing_pubkey.as_ed25519().unwrap(),
-                    ))),
-                    nullifier_pk: Some(Hash(address.nullifier_pubkey)),
-                    eph_pk: Some(Base64String(auditor().pubkey().as_bytes().to_vec())),
-                    ciphertext: Some(Base64String(sealed.to_vec())),
-                };
-                (member, view)
+                (
+                    address.signing_pubkey.owner_proof_input_hash().unwrap(),
+                    *lists,
+                )
             })
             .collect();
         members.sort_by_key(|(member, _)| *member);
@@ -536,74 +832,73 @@ impl Registry {
                 .map_or(MemberRecord::SENTINEL.next, |(member, _)| *member),
             ..MemberRecord::SENTINEL
         }];
-        let mut views = HashMap::new();
-        for (position, (member, mut view)) in members.iter().cloned().enumerate() {
-            let next = members
-                .get(position + 1)
-                .map_or(MemberRecord::SENTINEL.next, |(next, _)| *next);
-            view.next = Hash(next);
+        for (position, (member, lists)) in members.iter().enumerate() {
             records.push(MemberRecord {
                 mint_policy: Default::default(),
-                member,
-                next,
-                lists: view.lists,
-                escrow_key: view.escrow_key.0,
+                member: *member,
+                next: members
+                    .get(position + 1)
+                    .map_or(MemberRecord::SENTINEL.next, |(next, _)| *next),
+                lists: *lists,
             });
-            views.insert(member, view);
         }
         Self {
             tree: MemberRegistryTree::from_records(records).unwrap(),
-            views,
         }
     }
 
-    pub(crate) fn with_mint(
-        mut self,
-        mint: Address,
-        policy: zolana_ring_policy::MintPolicy,
-    ) -> Self {
-        self.tree
+    pub(crate) fn with_mint(self, mint: Address, policy: zolana_ring_policy::MintPolicy) -> Self {
+        let tree = self
+            .tree
             .apply(
                 [0; 32],
-                &[custom_ring_interface::QueueEntry {
+                &[custom_ring_interface::RecordWrite {
                     member: *zolana_ring_policy::Member::asset(&mint).unwrap().as_bytes(),
                     mask: 0,
                     value: 0,
-                    escrow_key: [0; 32],
                     mint_policy: Some(policy),
                 }],
             )
-            .unwrap();
-        self
+            .unwrap()
+            .tree;
+        Self { tree }
     }
 
     pub(crate) fn root(&self) -> [u8; 32] {
         self.tree.root().unwrap()
     }
 
-    fn account(&self, rules: &RuleTable) -> Account {
-        let bump = Address::find_program_address(&[MEMBER_REGISTRY_PDA_SEED], &program()).1;
-        let mut registry = MemberRegistry::new(bump, SLOT);
-        registry.push_root(
-            self.root(),
-            AppliedAt {
-                applied: 0,
-                slot: SLOT,
+    /// The `RECORDS` registry at `REVISION`.
+    fn records(&self) -> Account {
+        let mut records = StorageRegistry::new(
+            authority(),
+            &InitializeIxData {
+                registry_id: RegistryId([0; 32]),
+                grace_slots: 0u64.to_le_bytes(),
+                ring_id: ring().ring_id().unwrap(),
+                tracking_registry: Address::default(),
             },
         );
+        records.roots[0].hash = self.root();
+        records.roots[0].revision = Revision::from(REVISION);
+        account(STORAGE_PROGRAM_ID, &records)
+    }
+
+    /// `rules` over the records.
+    fn policy(&self, mut policy: Box<RingPolicy>, rules: &RuleTable) -> Account {
+        policy.records = RECORDS;
         let mut sources = [SourceSlot::zeroed(); N_SOURCE_SLOTS];
         for list in rules.referenced().iter() {
             sources[list.slot()].list_id = list as u8;
         }
-        registry.set_policy(sources, rules.encode(), SLOT).unwrap();
-        account(program(), &registry)
+        policy.set_policy(policy_update(sources, rules)).unwrap();
+        account(program(), &*policy)
     }
 
-    fn root_view(&self) -> RingRegistryRootView {
-        RingRegistryRootView {
+    fn root_view(&self) -> StorageRootView {
+        StorageRootView {
             root: Hash(self.root()),
-            root_index: 1,
-            applied: 0,
+            revision: REVISION,
             next_index: self.tree.records().len() as u64,
         }
     }
@@ -625,23 +920,67 @@ impl Registry {
     }
 
     fn view(&self, record: &MemberRecord) -> RingMemberRecordView {
-        let mut view = self
-            .views
-            .get(&record.member)
-            .cloned()
-            .unwrap_or(RingMemberRecordView {
-                member: Hash(record.member),
-                next: Hash(record.next),
-                lists: record.lists,
-                escrow_key: Hash(record.escrow_key),
-                mint_policy: record.mint_policy,
-                owner_pubkey: None,
-                nullifier_pk: None,
-                eph_pk: None,
-                ciphertext: None,
-            });
-        view.next = Hash(record.next);
-        view.mint_policy = record.mint_policy;
-        view
+        RingMemberRecordView {
+            member: Hash(record.member),
+            next: Hash(record.next),
+            lists: record.lists,
+            mint_policy: record.mint_policy,
+        }
     }
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct MessageCase {
+    pub name: String,
+    pub message: Base64String,
+    /// A `MessageMismatch` variant, or `Accepted`.
+    pub verdict: String,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct MessageVector<R> {
+    pub description: String,
+    pub request: R,
+    pub cases: Vec<MessageCase>,
+}
+
+pub(crate) fn verdict(checked: Result<crate::VerifiedMessage, crate::MessageMismatch>) -> String {
+    checked.map_or_else(
+        |mismatch| format!("{mismatch:?}"),
+        |_| "Accepted".to_owned(),
+    )
+}
+
+/// Compiled as Ring RPC compiles its relay messages.
+pub(crate) fn relay_message(
+    fee_payer: &Address,
+    instructions: &[solana_instruction::Instruction],
+    units: u32,
+) -> Base64String {
+    spr_client::compile_message(
+        fee_payer,
+        instructions,
+        solana_message::Hash::new_from_array([0x7b; 32]),
+        spr_client::ComputeBudgetConfig::new(units),
+    )
+    .unwrap()
+    .serialize()
+    .into()
+}
+
+/// `UPDATE_RELAY_MESSAGES=1` rewrites the file from `fresh`, the committed file is the one read.
+pub(crate) fn pinned_vector<V>(name: &str, fresh: V) -> V
+where
+    V: serde::Serialize + serde::de::DeserializeOwned,
+{
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-vectors/rpc")
+        .join(name);
+    if std::env::var_os("UPDATE_RELAY_MESSAGES").is_some() {
+        let json = serde_json::to_string_pretty(&fresh).unwrap();
+        std::fs::write(&path, json + "\n").unwrap();
+    }
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }

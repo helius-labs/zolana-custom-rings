@@ -11,21 +11,22 @@ default = []
 solana-rpc = [
     "spr-client/solana-rpc",
     "dep:solana-commitment-config",
-    "dep:solana-rpc-client-api",
     "dep:solana-transaction-status-client-types",
 ]
 rpc = [
     "dep:base64",
-    "dep:bytemuck",
     "dep:rand",
     "dep:solana-signer",
+    "dep:spr-instruction",
+    "dep:wincode",
     "dep:zolana-secret-file",
+    "solana-signature/verify",
 ]
 
 [dependencies]
 async-trait = { workspace = true }
 base64 = { workspace = true, optional = true }
-bytemuck = { workspace = true, optional = true }
+bytemuck = { workspace = true }
 p256 = { workspace = true }
 hex = { workspace = true }
 custom-ring-interface = { workspace = true }
@@ -36,19 +37,22 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 solana-account = { workspace = true }
 solana-address = { workspace = true, features = ["curve25519"] }
+solana-instruction = { workspace = true }
 solana-commitment-config = { workspace = true, optional = true }
-solana-rpc-client-api = { workspace = true, optional = true }
+solana-rpc-client-api = { workspace = true }
 solana-signature = { workspace = true }
 solana-signer = { workspace = true, optional = true }
 solana-transaction-status-client-types = { workspace = true, optional = true }
 thiserror = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
+wincode = { workspace = true, optional = true }
 zeroize = { workspace = true }
 borsh = { workspace = true }
 spr-api = { workspace = true }
 spr-client = { workspace = true }
 spr-event = { workspace = true }
 spr-event-parser = { workspace = true }
+spr-instruction = { workspace = true, optional = true }
 spr-interface = { workspace = true }
 spr-hasher = { workspace = true }
 spr-indexer-api = { workspace = true }
@@ -59,13 +63,15 @@ zolana-ring-member-registry = { workspace = true }
 zolana-ring-policy = { workspace = true }
 zolana-ring-transaction = { workspace = true }
 zolana-secret-file = { workspace = true, optional = true }
-spr-transaction = { workspace = true }
+spr-transaction = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 http = { workspace = true }
 bs58 = { workspace = true }
+solana-hash = { workspace = true }
 solana-keypair = { workspace = true }
 solana-signature = { workspace = true, features = ["verify"] }
+solana-transaction = { workspace = true }
 solana-transaction-status-client-types = { workspace = true }
 tokio = { workspace = true }
 zolana-ring-client = { path = ".", features = ["rpc", "solana-rpc"] }

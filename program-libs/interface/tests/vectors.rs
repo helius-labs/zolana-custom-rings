@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use custom_ring_interface::blinding::ring_blinding_seed;
 use custom_ring_interface::{
     domain,
-    stream::{DeliveredSlot, SenderCommitment, SlotSecret},
+    stream::{DeliveredSlot, SlotSecret},
 };
 use serde_json::{json, Value};
 use spr_hasher::primitives::solana_owner_identity;
@@ -30,22 +30,24 @@ fn ring_derivation_vectors() {
 
 #[test]
 fn domains_are_their_ascii_tags() {
-    let table: [(u32, &[u8; 4]); 15] = [
-        (domain::AUDIT_STATEMENT, b"CRAU"),
+    let table: [(u32, &[u8; 4]); 17] = [
+        (domain::TRANSFER_STATEMENT, b"CRTX"),
         (domain::DELIVERED_SLOT_SECRET, b"CRDS"),
         (domain::BLINDING_SEED, b"CRBS"),
-        (domain::SENDER_COMMITMENT, b"CRSC"),
-        (domain::DISCLOSURE_PAD, b"CROD"),
-        (domain::POLICY_STATEMENT, b"CRPO"),
+        (domain::AUDIT_SHARED_SECRET, b"CR_S"),
         (domain::POLICY_TABLE, b"CRTB"),
-        (domain::QUEUE_WRITE, b"CRQW"),
+        (domain::RECORD_WRITE, b"CRQW"),
+        (domain::TRACKING_LEAF, b"CRTK"),
+        (domain::TRACKING_ENTRY, b"CRTQ"),
+        (domain::APPLY_ENROLLMENTS, b"CRTA"),
+        (domain::RECIPIENT_TAG, b"CRRT"),
+        (domain::SENDER_TAG, b"CRST"),
         (domain::APPLY_RECORDS, b"CRAP"),
         (domain::REGISTER_KEY, b"CRRG"),
-        (domain::DEPOSIT_BLINDING, b"CRDB"),
-        (domain::DEPOSIT_STATEMENT, b"CRDP"),
         (domain::MERGE_STATEMENT, b"CRMG"),
         (domain::WITHDRAWALS, b"CRPW"),
-        (domain::WITHDRAWAL_EXEMPTION, b"CRWX"),
+        (domain::RECORD_UPDATE, b"CRRU"),
+        (domain::WALLET_GRANT, b"CRWG"),
     ];
     for (value, ascii) in table {
         assert_eq!(
@@ -77,7 +79,6 @@ struct Scenario {
     salt: [u8; 16],
     first_nullifier: [u8; 32],
     sender_key: [u8; 32],
-    deposit_blinding_secret: [u8; 32],
 }
 
 impl Scenario {
@@ -91,7 +92,6 @@ impl Scenario {
             salt: pattern(0x3e),
             first_nullifier: field(0x2b),
             sender_key: pattern(0x61),
-            deposit_blinding_secret: field(0x08),
         }
     }
 
@@ -120,14 +120,6 @@ impl Scenario {
         let sender_pk_hash = solana_owner_identity(&self.sender_key).expect("sender pk hash");
         let private_tx_blinding = derive_private_tx_blinding(&self.first_nullifier, &blinding_seed)
             .expect("private tx blinding");
-        let sender_commitment = SenderCommitment {
-            sender_pk_hash,
-            private_tx_blinding,
-        }
-        .derive()
-        .expect("sender commitment");
-        let deposit_blinding =
-            domain::deposit_blinding(&self.deposit_blinding_secret).expect("deposit blinding");
         json!({
             "description": "Ring output blindings of one transaction. blinding_seed is \
                 Poseidon(CRBS, pack_be(tx_viewing_secret), salt), every output blinding \
@@ -135,8 +127,7 @@ impl Scenario {
                 output_blinding_seed = Poseidon(TXOS, first_nullifier, blinding_seed). A \
                 delivered slot secret is Poseidon(CRDS, pack_be(agreement), pack_be(tx_viewing_pk), \
                 pack_be(recipient_viewing_pk), salt, output_index, first_nullifier) with agreement \
-                = X25519(tx_viewing_secret, recipient_viewing_pk). The deposit blinding is Poseidon(CRDB, deposit_blinding_secret). The sender commitment is \
-                Poseidon(CRSC, sender_pk_hash, private_tx_blinding) with sender_pk_hash = \
+                = X25519(tx_viewing_secret, recipient_viewing_pk). sender_pk_hash = \
                 owner_identity(sender_key) and private_tx_blinding = Poseidon(TXPB, \
                 first_nullifier, blinding_seed). Produced by \
                 program-libs/interface/tests/vectors.rs print_ring_secret_vectors.",
@@ -153,9 +144,6 @@ impl Scenario {
             "sender_key": hex::encode(self.sender_key),
             "sender_pk_hash": hex::encode(sender_pk_hash),
             "private_tx_blinding": hex::encode(private_tx_blinding),
-            "sender_commitment": hex::encode(sender_commitment),
-            "deposit_blinding_secret": hex::encode(self.deposit_blinding_secret),
-            "deposit_blinding": hex::encode(deposit_blinding),
         })
     }
 

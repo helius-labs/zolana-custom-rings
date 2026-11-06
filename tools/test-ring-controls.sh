@@ -22,7 +22,9 @@ export PROVER_BIN="$repo_root/target/prover-server"
 for binary in "$ZOLANA_CLI_BIN" "$PROVER_BIN" "$SURFPOOL_BIN"; do
   [[ -x "$binary" ]] || { echo "Missing executable $binary" >&2; exit 1; }
 done
-for artifact in target/deploy/custom_ring_program zolana/target/deploy/shielded_pool_program \
+for artifact in target/deploy/custom_ring_program target/deploy/storage_program \
+  target/deploy/storage_cpi_owner \
+  zolana/target/deploy/shielded_pool_program \
   zolana/target/deploy/spr_user_registry zolana/target/deploy/squads_smart_account_program; do
   [[ -s "$artifact.so" ]] || {
     echo "Build $artifact.so with the just localnet test recipe" >&2
@@ -61,7 +63,7 @@ done
 
 # The ring keys are verified in place, the transfer keys download beside them once.
 lock="prover/ring/proving-keys.lock"
-keys_dir="$repo_root/zolana/prover/server/proving-keys"
+keys_dir="${ZOLANA_SPP_KEYS_DIR:-$repo_root/zolana/prover/server/proving-keys}"
 for key in $(jq -r '.keys | keys[] | select(startswith("custom_ring_"))' "$lock"); do
   file="$keys_dir/$key"
   expected="$(jq -er --arg name "$key" '.keys[$name].sha256' "$lock")"
@@ -79,7 +81,10 @@ cleanup() {
   "$ZOLANA_CLI_BIN" dev start --local --stop \
     --rpc-port "$ZOLANA_LOCALNET_RPC_PORT" --photon-port "$ZOLANA_LOCALNET_PHOTON_PORT" \
     --prover-port "$prover_port" || true
-  lsof -ti "tcp:$ring_indexer_port" -sTCP:LISTEN 2>/dev/null | xargs kill 2>/dev/null || true
+  # The harness starts these two itself, the CLI holds no receipt for them.
+  for port in "$ring_indexer_port" "$ZOLANA_LOCALNET_PHOTON_PORT"; do
+    lsof -ti "tcp:$port" -sTCP:LISTEN 2>/dev/null | xargs kill 2>/dev/null || true
+  done
   echo "Ring test logs: $ZOLANA_PROCESS_SCOPE_DIR"
 }
 trap cleanup EXIT

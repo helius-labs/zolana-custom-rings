@@ -1,3 +1,9 @@
+// Packs bytes into field elements. Where a statement hashes one the program rebuilds it, a chunk or
+// pad off the mirror fails the statement. A byte above 8 bits would alias a packed element, so each
+// caller holds that bound where its bytes are produced.
+//
+// Read after ringgadget/bytes.go, shared/derivation.go. Read before shared/envelope.go, audit/audit.go.
+
 package shared
 
 import (
@@ -24,14 +30,4 @@ func Zeros(n int) []frontend.Variable {
 		out[i] = 0
 	}
 	return out
-}
-
-// DisclosurePad needs a fresh salt per key, a reused salt repeats the pad.
-func DisclosurePad(api frontend.API, domain uint64, key [2]frontend.Variable, salt frontend.Variable, n int) []frontend.Variable {
-	seed := gadget.PoseidonHash(api, []frontend.Variable{domain, key[0], key[1], salt})
-	pad := make([]frontend.Variable, n)
-	for i := range pad {
-		pad[i] = gadget.PoseidonHash(api, []frontend.Variable{seed, i})
-	}
-	return pad
 }

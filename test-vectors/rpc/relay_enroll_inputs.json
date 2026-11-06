@@ -1,0 +1,15 @@
+{
+  "description": "One RelayEnrollInputs with its ring program id of bytes 0x01, owner of 0x02, tracking registry of 0x03 and instruction data 06 07 08, encoded in wincode, with the digest its owner signs. enroll_wire, delegate_wire, deposit_wire and merge_wire are prepareRelay requests carrying proofInputs 03 04 05 and a signature of 64 bytes of 0x07, deposit_request_digest and merge_request_digest are what the depositor and the owner sign over those proofInputs. Produced by sdk-libs/client/tests/relay_enroll_vector.rs.",
+  "ring_program_id": "0101010101010101010101010101010101010101010101010101010101010101",
+  "owner": "0202020202020202020202020202020202020202020202020202020202020202",
+  "tracking_registry": "0303030303030303030303030303030303030303030303030303030303030303",
+  "instruction_data": "060708",
+  "encoded": "0101010101010101010101010101010101010101010101010101010101010101020202020202020202020202020202020202020202020202020202020202020203030303030303030303030303030303030303030303030303030303030303030300000000000000060708",
+  "request_digest": "54c9430e3a04547b208f19ff087fc99eafaa350d12da8dba5c0e895e5c2de0cc",
+  "enroll_wire": "{\"ring\":\"4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi\",\"quote\":{\"feePayer\":\"8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR\",\"validUntilSlot\":4242},\"intent\":{\"operation\":\"enroll\",\"proofInputs\":\"AwQF\",\"ownerSignature\":\"99eUso3aSbE9tqGSTXzo3TLfKb9RkMTURrHKQ1K7Zh3BbeqPevr5E1iCbpTjqHuTFLtfxTTD5ekfVuZFzQyEQf8\"}}",
+  "delegate_wire": "{\"ring\":\"4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi\",\"quote\":{\"feePayer\":\"8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR\",\"validUntilSlot\":4242},\"intent\":{\"operation\":\"delegate\",\"proofInputs\":\"AwQF\",\"delegateSignature\":\"99eUso3aSbE9tqGSTXzo3TLfKb9RkMTURrHKQ1K7Zh3BbeqPevr5E1iCbpTjqHuTFLtfxTTD5ekfVuZFzQyEQf8\"}}",
+  "deposit_wire": "{\"ring\":\"4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi\",\"quote\":{\"feePayer\":\"8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR\",\"validUntilSlot\":4242},\"intent\":{\"operation\":\"deposit\",\"proofInputs\":\"AwQF\",\"depositorSignature\":\"99eUso3aSbE9tqGSTXzo3TLfKb9RkMTURrHKQ1K7Zh3BbeqPevr5E1iCbpTjqHuTFLtfxTTD5ekfVuZFzQyEQf8\"}}",
+  "merge_wire": "{\"ring\":\"4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi\",\"quote\":{\"feePayer\":\"8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR\",\"validUntilSlot\":4242},\"intent\":{\"operation\":\"merge\",\"proofInputs\":\"AwQF\",\"ownerSignature\":\"99eUso3aSbE9tqGSTXzo3TLfKb9RkMTURrHKQ1K7Zh3BbeqPevr5E1iCbpTjqHuTFLtfxTTD5ekfVuZFzQyEQf8\"}}",
+  "deposit_request_digest": "28ae6dc9e07e8683c2af146a53e2ca1fcac2d276d9472fa8526751bb40ed56d5",
+  "merge_request_digest": "41fde11a7f50fe0fe83f6a3ab698ec03cbb50392b27006d043d6239116700441"
+}

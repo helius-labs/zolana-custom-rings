@@ -3,9 +3,8 @@
 use std::collections::{BTreeMap, HashSet};
 
 use anyhow::{anyhow, ensure, Result};
-use custom_ring_interface::ANONYMOUS_MERGE_WIDTHS;
 use custom_ring_sdk::select_merge_where;
-use custom_ring_sdk::{CustomRingMerge, MergeProofInput, RingMergeOperation, RingMode};
+use custom_ring_sdk::{FittedMerge, MergeProofInput, RingMergeOperation, MAX_RING_MERGE_INPUTS};
 use solana_address::Address;
 use solana_signer::Signer;
 use spr_interface::pda;
@@ -13,13 +12,8 @@ use spr_keypair::ShieldedKeypair;
 use spr_transaction::{SpendableDecryptionResult, WalletUtxo, SOL_MINT};
 
 use crate::{
-    assets,
-    fund::MIN_AUTHORITY_BALANCE,
-    line,
-    member::KeyEnrolment,
-    transact::{CoSigner, Demand},
-    wallet::WalletScan,
-    Context, MergeArgs,
+    assets, fund::MIN_AUTHORITY_BALANCE, line, member::KeyEnrollment, wallet::WalletScan, Context,
+    MergeArgs,
 };
 
 pub fn run(ctx: &Context, args: MergeArgs) -> Result<()> {
@@ -27,11 +21,10 @@ pub fn run(ctx: &Context, args: MergeArgs) -> Result<()> {
     let sender = ShieldedKeypair::from_keypair(&ctx.sender()?)?;
     let mint = args.mint.map_or(SOL_MINT, |mint| mint.0);
     let assets = assets::resolve(ctx.rpc(), mint)?.assets;
-    let cosigner = CoSigner::read(ctx, &args.cosigner)?;
-    let merge_cosigner = cosigner.sign(&config, Demand::Transfer)?;
+    let held = ctx.ring_keys(&sender)?;
     let scan = || {
         WalletScan {
-            keys: &sender,
+            keys: &held,
             assets: &assets,
             config: &config,
         }
@@ -45,36 +38,37 @@ pub fn run(ctx: &Context, args: MergeArgs) -> Result<()> {
     if !spendable.unknown_mints.is_empty() {
         line("unregistered mints", spendable.unknown_mints.len());
     }
-    let count = match config.mode {
-        RingMode::Anonymous => (args.count as usize).min(widest_anonymous_merge()),
-        RingMode::Confidential | RingMode::ConfidentialEscrow => args.count as usize,
-    };
+    let count = (args.count as usize).min(MAX_RING_MERGE_INPUTS);
     let selected = select(&spendable, ctx.ring.program_id(), mint, count)?;
-    let (input_count, tree_id) = (selected.len(), selected[0].tree_id);
+    let tree_id = selected[0].tree_id;
     let tree = pda::tree(tree_id);
-    let prepared = CustomRingMerge::new(ctx.ring, selected, None)?
-        .with_output_tree_id(tree_id)
-        .encrypt(&sender)?;
-    let (output_hash, merged_amount) = (prepared.output().hash(tree_id)?, prepared.output().amount);
-    let merge = RingMergeOperation::new(
-        prepared,
-        MergeProofInput {
-            nullifier_key: sender.nullifier_key.clone(),
-            input_tree: tree,
-            output_tree: tree,
-        },
-    );
+    let proof_input = MergeProofInput {
+        nullifier_key: sender.nullifier_key.clone(),
+        input_tree: tree,
+        output_tree: tree,
+    };
     let payer = ctx.member_payer(config.mode, sender.pubkey())?;
-    ctx.fund(payer.pubkey(), MIN_AUTHORITY_BALANCE)?;
-    // The merge proves the owner's escrowed key.
-    if config.mode != RingMode::Anonymous {
-        KeyEnrolment {
-            funder: payer,
-            members: &[&sender],
+    let prepared = ctx.zolana.block_on(
+        FittedMerge {
+            ring: ctx.ring,
+            inputs: selected,
+            output_tree_id: tree_id,
+            keys: &held,
+            proof_input: &proof_input,
+            payer: payer.pubkey(),
         }
-        .ensure(ctx)?;
+        .prepare(ctx.zolana.as_async()),
+    )?;
+    let input_count = prepared.published_inputs();
+    let (output_hash, merged_amount) = (prepared.output().hash(tree_id)?, prepared.output().amount);
+    let merge = RingMergeOperation::new(prepared, proof_input);
+    ctx.fund(payer.pubkey(), MIN_AUTHORITY_BALANCE)?;
+    // A keyed merge proves the owner's tracking row.
+    KeyEnrollment {
+        members: &[&sender],
     }
-    let signature = ctx.submit(merge, payer, merge_cosigner.as_slice())?;
+    .ensure(ctx)?;
+    let signature = ctx.submit(merge, payer, &[])?;
     ctx.wait_for_indexed(signature)?;
     let merged = scan()?;
     ensure!(
@@ -88,10 +82,6 @@ pub fn run(ctx: &Context, args: MergeArgs) -> Result<()> {
     line("tree", tree);
     println!("merge preserves value and binds its ciphertext to registered auditor recovery");
     Ok(())
-}
-
-fn widest_anonymous_merge() -> usize {
-    ANONYMOUS_MERGE_WIDTHS.into_iter().max().unwrap_or_default()
 }
 
 /// The smallest clean notes of the tree holding the most of them, at most `count`.

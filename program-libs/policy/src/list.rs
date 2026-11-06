@@ -1,3 +1,10 @@
+//! The nine lists, their writers and the polarity a rule reads each by, one bit each in a member record.
+//!
+//! A bit position is a circuit constant. The writer split and `RuleTable::validate` keep a list its
+//! members write out of every rule, so an owner admits itself to nothing.
+//!
+//! Read after `program-libs/policy/src/lib.rs`. Read before `program-libs/policy/src/member.rs`, `program-libs/policy/src/rule_table/mod.rs`.
+
 use thiserror::Error;
 
 use crate::MAX_SOURCES;
@@ -51,10 +58,11 @@ lists! {
     Block = 2, "block" => Authority,
     Frozen = 3, "frozen" => Authority,
     RingViewing = 4, "ring-viewing" => Member,
-    Recovery = 5, "recovery" => Member,
+    PrivateBlock = 5, "private-block" => Authority,
     Reader = 6, "reader" => Authority,
     Approval = 7, "approval" => Authority,
-    Escrow = 8, "escrow" => Member,
+    PrivateAllow = 8, "private-allow" => Authority,
+    PrivateFrozen = 9, "private-frozen" => Authority,
 }
 
 impl ListId {
@@ -63,7 +71,7 @@ impl ListId {
         self as usize - 1
     }
 
-    const fn mask_bit(self) -> u8 {
+    const fn mask_bit(self) -> u16 {
         1 << self.slot()
     }
 
@@ -74,14 +82,42 @@ impl ListId {
 
 /// A set of lists, bit `i` is list `i + 1`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ListSet(u8);
+pub struct ListSet(u16);
 
 impl ListSet {
     pub const EMPTY: Self = Self(0);
-    /// A member's own record write, its escrow bit comes only from a registered key.
-    pub const MEMBER_WRITES: Self =
-        Self::written_by(Writer::Member).difference(Self::single(ListId::Escrow));
+    pub const MEMBER_LISTS: Self = Self::written_by(Writer::Member);
+    pub const MEMBER_WRITES: Self = Self::MEMBER_LISTS;
     pub const AUTHORITY_WRITES: Self = Self::written_by(Writer::Authority);
+    /// The lists a rule reads, a reader grant moves no funds.
+    pub const POLICY_LISTS: Self = Self::AUTHORITY_WRITES.difference(Self::single(ListId::Reader));
+    /// A rule reads these by presence, a set bit grants.
+    pub const GRANT_LISTS: Self =
+        Self::of(&[ListId::Allow, ListId::Approval, ListId::PrivateAllow]);
+    /// A rule reads these by absence, a set bit denies.
+    pub const DENY_LISTS: Self = Self::of(&[
+        ListId::Block,
+        ListId::Frozen,
+        ListId::PrivateBlock,
+        ListId::PrivateFrozen,
+    ]);
+    /// Always salted.
+    pub const PRIVATE_LISTS: Self = Self::of(&[
+        ListId::PrivateAllow,
+        ListId::PrivateBlock,
+        ListId::PrivateFrozen,
+    ]);
+    /// A bit past these names no list.
+    const NAMED: Self = Self(((1u32 << MAX_SOURCES) - 1) as u16);
+    pub const STORAGE_WRITES: Self = Self::AUTHORITY_WRITES.union(Self::MEMBER_WRITES);
+
+    /// The private lists a source map serves, `mapped` reads one slot and hashes nothing.
+    pub fn salted_among(mapped: impl Fn(ListId) -> bool) -> Self {
+        Self::PRIVATE_LISTS
+            .iter()
+            .filter(|list_id| mapped(*list_id))
+            .fold(Self::EMPTY, |set, list_id| set.union(Self::single(list_id)))
+    }
 
     pub const fn written_by(writer: Writer) -> Self {
         let mut set = Self::EMPTY;
@@ -95,12 +131,17 @@ impl ListSet {
         set
     }
 
-    /// `None` when a record bit at or above 8 is set, no list owns it.
+    /// `None` when a bit past the named lists is set, no list owns it.
     pub const fn from_record_bits(bits: u64) -> Option<Self> {
-        if bits > u8::MAX as u64 {
+        if bits & !Self::NAMED.record_bits() != 0 {
             return None;
         }
-        Some(Self(bits as u8))
+        Some(Self(bits as u16))
+    }
+
+    /// Drops bits past the named lists, a rule reads the low `MAX_SOURCES` record bits alone.
+    pub const fn named_in(bits: u64) -> Self {
+        Self((bits & Self::NAMED.record_bits()) as u16)
     }
 
     pub const fn of(lists: &[ListId]) -> Self {
@@ -117,15 +158,11 @@ impl ListSet {
         Self(list_id.mask_bit())
     }
 
-    pub const fn from_bits(bits: u8) -> Self {
-        Self(bits)
-    }
-
-    pub const fn bits(self) -> u8 {
+    pub const fn bits(self) -> u16 {
         self.0
     }
 
-    /// The low byte of a record's `lists` bitmap, the bits a `ListId` names.
+    /// The low bits of a record's `lists` bitmap, the bits a `ListId` names.
     pub const fn record_bits(self) -> u64 {
         self.0 as u64
     }
@@ -166,14 +203,20 @@ impl ListSet {
     }
 }
 
-/// Every bit of a `ListSet` names a list.
+/// Every list has a bit in a `ListSet`.
 const _: () = {
-    assert!(MAX_SOURCES == u8::BITS as usize);
+    assert!(MAX_SOURCES <= u16::BITS as usize);
     let mut i = 0;
     while i < MAX_SOURCES {
         assert!(ListId::ALL[i].slot() == i);
         i += 1;
     }
+};
+
+/// A rule reads each policy list by one polarity, `RuleTable::validate` refuses the other.
+const _: () = {
+    assert!(ListSet::GRANT_LISTS.union(ListSet::DENY_LISTS).bits() == ListSet::POLICY_LISTS.bits());
+    assert!(!ListSet::GRANT_LISTS.intersects(ListSet::DENY_LISTS));
 };
 
 impl TryFrom<u8> for ListId {
@@ -245,24 +288,37 @@ mod tests {
 
     #[test]
     fn record_writes_split_the_lists_between_the_member_and_the_authority() {
-        assert_eq!(
-            ListSet::MEMBER_WRITES,
-            ListSet::of(&[ListId::RingViewing, ListId::Recovery])
-        );
+        assert_eq!(ListSet::MEMBER_LISTS, ListSet::single(ListId::RingViewing));
         assert_eq!(
             ListSet::AUTHORITY_WRITES,
             ListSet::of(&[
                 ListId::Allow,
                 ListId::Block,
                 ListId::Frozen,
+                ListId::PrivateBlock,
                 ListId::Reader,
                 ListId::Approval,
+                ListId::PrivateAllow,
+                ListId::PrivateFrozen,
             ])
         );
-        assert!(!ListSet::MEMBER_WRITES.intersects(ListSet::AUTHORITY_WRITES));
-        assert!(!ListSet::MEMBER_WRITES
-            .union(ListSet::AUTHORITY_WRITES)
-            .contains(ListId::Escrow));
+        assert!(!ListSet::MEMBER_LISTS.intersects(ListSet::AUTHORITY_WRITES));
+    }
+
+    #[test]
+    fn a_rule_reads_the_authority_lists_but_the_reader_list() {
+        assert_eq!(
+            ListSet::POLICY_LISTS,
+            ListSet::of(&[
+                ListId::Allow,
+                ListId::Block,
+                ListId::Frozen,
+                ListId::PrivateBlock,
+                ListId::Approval,
+                ListId::PrivateAllow,
+                ListId::PrivateFrozen,
+            ])
+        );
     }
 
     #[test]
@@ -276,11 +332,11 @@ mod tests {
         assert_eq!((write.mask(), write.value()), (0b11, 0b01));
         let member = ListChange {
             set: ListSet::EMPTY,
-            clear: ListSet::single(ListId::Recovery),
+            clear: ListSet::single(ListId::RingViewing),
         }
         .check()
         .unwrap();
-        assert_eq!((member.mask(), member.value()), (0b1_0000, 0));
+        assert_eq!((member.mask(), member.value()), (0b1000, 0));
     }
 
     #[test]
@@ -296,11 +352,10 @@ mod tests {
 
     #[test]
     fn record_bits_past_the_named_lists_have_no_set() {
-        assert_eq!(
-            ListSet::from_record_bits(0xff),
-            Some(ListSet::from_bits(0xff))
-        );
-        assert_eq!(ListSet::from_record_bits(0x100), None);
+        let named = ListSet::from_record_bits(0x1ff).unwrap();
+        assert_eq!(named.len(), MAX_SOURCES);
+        assert_eq!(ListSet::from_record_bits(0x200), None);
+        assert_eq!(ListSet::named_in(0x3ff), named);
     }
 
     #[test]
@@ -327,12 +382,11 @@ mod tests {
         assert!(set.contains(ListId::Frozen));
         assert!(!set.contains(ListId::Block));
         assert!(set.intersects(ListSet::single(ListId::Allow)));
-        assert!(!set.intersects(ListSet::of(&[ListId::Block, ListId::Escrow])));
+        assert!(!set.intersects(ListSet::of(&[ListId::Block, ListId::PrivateAllow])));
         assert_eq!(
-            set.union(ListSet::single(ListId::Escrow)).bits(),
+            set.union(ListSet::single(ListId::PrivateAllow)).bits(),
             0b1000_0101
         );
         assert!(ListSet::EMPTY.is_empty());
-        assert_eq!(ListSet::from_bits(u8::MAX).len(), MAX_SOURCES);
     }
 }

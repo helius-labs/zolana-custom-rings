@@ -16,17 +16,22 @@ import (
 // ReadVector decodes test-vectors/name, a file the Rust tests write.
 func ReadVector(t testing.TB, name string, into any) {
 	t.Helper()
-	_, source, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("locate vector.go")
-	}
-	raw, err := os.ReadFile(filepath.Join(filepath.Dir(source), "../../test-vectors", name))
+	raw, err := os.ReadFile(vectorPath(t, name))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := json.Unmarshal(raw, into); err != nil {
 		t.Fatalf("%s, %v", name, err)
 	}
+}
+
+func vectorPath(t testing.TB, name string) string {
+	t.Helper()
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate vector.go")
+	}
+	return filepath.Join(filepath.Dir(source), "../../test-vectors", name)
 }
 
 // Hex is a field element written as 64 big-endian hex digits.
@@ -75,4 +80,36 @@ func VectorWires(t testing.TB, value string, n int) []frontend.Variable {
 		wires[i] = int(b)
 	}
 	return wires
+}
+
+// WriteVectorsEnv rewrites a pinned vector from the Go host, every other language reads it.
+const WriteVectorsEnv = "WRITE_AUDIT_VECTORS"
+
+// PinVector requires test-vectors/name to hold value, rewriting it first under WriteVectorsEnv.
+func PinVector(t testing.TB, name string, value any) {
+	t.Helper()
+	path := vectorPath(t, name)
+	encoded, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded = append(encoded, '\n')
+	if os.Getenv(WriteVectorsEnv) != "" {
+		if err := os.WriteFile(path, encoded, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != string(encoded) {
+		t.Fatalf("the host disagrees with test-vectors/%s, rewrite it with %s=1", name, WriteVectorsEnv)
+	}
+}
+
+func FieldHex(value *big.Int) string {
+	var bytes [32]byte
+	value.FillBytes(bytes[:])
+	return hex.EncodeToString(bytes[:])
 }

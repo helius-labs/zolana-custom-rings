@@ -102,12 +102,12 @@ pub(crate) struct PolicyRows {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum PolicyError {
-    #[error("asset allowlists use registry lists, replace assets with require or forbid")]
-    InlineAssetsRemoved,
     #[error("unknown list {name}")]
     UnknownList { name: String },
     #[error("the {name} list is written by its members, a rule cannot read it")]
     MemberWrittenList { name: String },
+    #[error("the {name} list grants reads, a rule cannot read it")]
+    ListNotPolicyReadable { name: String },
     #[error("a rule names no source, give one of require, forbid or any")]
     NoSourceForm,
     #[error("a rule names several sources, give one of require, forbid or any")]
@@ -167,8 +167,6 @@ struct RawRule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     any: Option<Vec<Alternative>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    assets: Option<Vec<Base58Address>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     above: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     limits: Option<Vec<AssetLimitSpec>>,
@@ -187,12 +185,25 @@ serde_via_str!(ListName);
 
 impl ListName {
     /// The authority-written lists in `ListId::ALL` order, a lib test pins the set.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 8] = [
         Self(ListId::Allow),
         Self(ListId::Block),
         Self(ListId::Frozen),
+        Self(ListId::PrivateBlock),
         Self(ListId::Reader),
         Self(ListId::Approval),
+        Self(ListId::PrivateAllow),
+        Self(ListId::PrivateFrozen),
+    ];
+    /// The lists a rule reads in `ListId::ALL` order, a lib test pins the set.
+    pub const POLICY: [Self; 7] = [
+        Self(ListId::Allow),
+        Self(ListId::Block),
+        Self(ListId::Frozen),
+        Self(ListId::PrivateBlock),
+        Self(ListId::Approval),
+        Self(ListId::PrivateAllow),
+        Self(ListId::PrivateFrozen),
     ];
 
     pub const fn id(self) -> ListId {
@@ -204,11 +215,10 @@ impl ListName {
     }
 
     pub fn of(list_id: ListId) -> Result<Self, PolicyError> {
+        let name = list_id.name().to_owned();
         match list_id.writer() {
             Writer::Authority => Ok(Self(list_id)),
-            _ => Err(PolicyError::MemberWrittenList {
-                name: list_id.name().to_owned(),
-            }),
+            Writer::Member => Err(PolicyError::MemberWrittenList { name }),
         }
     }
 }
@@ -272,9 +282,6 @@ impl TryFrom<RawRule> for RuleSpec {
         if raw.above.is_some() && raw.limits.is_some() {
             return Err(PolicyError::SeveralGuardForms);
         }
-        if raw.assets.is_some() {
-            return Err(PolicyError::InlineAssetsRemoved);
-        }
         let source = one_form([
             raw.require.map(SourceSpec::Require),
             raw.forbid.map(SourceSpec::Forbid),
@@ -282,6 +289,15 @@ impl TryFrom<RawRule> for RuleSpec {
         ])?;
         if matches!(&source, SourceSpec::Any(alternatives) if alternatives.is_empty()) {
             return Err(PolicyError::EmptyAny);
+        }
+        if let Some(list) = source
+            .lists()
+            .into_iter()
+            .find(|list| !ListSet::POLICY_LISTS.contains(list.id()))
+        {
+            return Err(PolicyError::ListNotPolicyReadable {
+                name: list.to_string(),
+            });
         }
         Ok(Self {
             subject: raw.subject,
@@ -299,7 +315,6 @@ impl From<RuleSpec> for RawRule {
             require: None,
             forbid: None,
             any: None,
-            assets: None,
             above: rule.above,
             limits: rule.limits,
         };
@@ -546,10 +561,12 @@ impl PolicyRows {
     }
     fn build(&self, rule_count: usize) -> Result<RuleTable, RuleTableError> {
         let builder = RuleTable::builder();
-        self.rules[..rule_count]
+        let table = self.rules[..rule_count]
             .iter()
             .fold(builder, |builder, rule| builder.rule(*rule))
-            .try_build()
+            .try_build()?;
+        table.validate()?;
+        Ok(table)
     }
 }
 
@@ -590,7 +607,6 @@ pub fn describe(rule: &Rule) -> String {
         Subject::OutputOwner => "each output owner",
         Subject::Sender => "the sender",
         Subject::Asset => "each asset",
-        Subject::ExitDestination => "each exit destination",
     };
     let condition = match rule.source {
         RuleSource::Lists { .. } => rule
@@ -632,20 +648,50 @@ mod tests {
     fn list_names_are_the_authority_written_lists_in_slot_order() {
         assert_eq!(
             ListName::ALL.map(ListName::as_str),
-            ["allow", "block", "frozen", "reader", "approval"]
+            [
+                "allow",
+                "block",
+                "frozen",
+                "private-block",
+                "reader",
+                "approval",
+                "private-allow",
+                "private-frozen"
+            ]
         );
         for name in ListName::ALL {
             assert_eq!(name.as_str().parse::<ListName>(), Ok(name));
         }
         assert!(matches!(
-            "escrow".parse::<ListName>(),
-            Err(PolicyError::MemberWrittenList { name }) if name == "escrow"
+            "ring-viewing".parse::<ListName>(),
+            Err(PolicyError::MemberWrittenList { name }) if name == "ring-viewing"
         ));
         assert!(matches!(
             "Allow".parse::<ListName>(),
             Err(PolicyError::UnknownList { name }) if name == "Allow"
         ));
+        assert!(matches!(
+            "recovery".parse::<ListName>(),
+            Err(PolicyError::UnknownList { name }) if name == "recovery"
+        ));
         assert!(ListName(ListId::Allow) < ListName(ListId::Approval));
+    }
+
+    #[test]
+    fn a_rule_refuses_the_reader_list_a_list_argument_takes() {
+        assert_eq!(
+            ListName::POLICY.map(ListName::id).to_vec(),
+            ListSet::POLICY_LISTS.iter().collect::<Vec<_>>()
+        );
+        for form in [
+            "require = \"reader\"",
+            "forbid = \"reader\"",
+            "any = [{ require = \"allow\" }, { forbid = \"reader\" }]",
+        ] {
+            let text = format!("[[rules]]\nsubject = \"sender\"\n{form}\n");
+            let refusal = spec(&text).expect_err("reader is no policy list");
+            assert!(refusal.to_string().contains("grants reads"), "{refusal}");
+        }
     }
 
     #[test]
@@ -716,11 +762,11 @@ block = "{CURATOR}"
 
 [[rules]]
 subject = "output-owner"
-any = [{{ forbid = "block" }}, {{ require = "approval" }}]
+any = [{{ require = "allow" }}, {{ require = "approval" }}]
 
 [[rules]]
 subject = "sender"
-forbid = "frozen"
+forbid = "block"
 
 [[rules]]
 subject = "asset"
@@ -737,13 +783,12 @@ above = 1000000
         assert_eq!(rows.len(), 4);
         assert_eq!(
             rows[0],
-            Rule::any_of(
+            Rule::require_any(
                 Subject::OutputOwner,
-                ListSet::single(ListId::Approval),
-                ListSet::single(ListId::Block)
+                ListSet::of(&[ListId::Allow, ListId::Approval])
             )
         );
-        assert_eq!(rows[1], Rule::forbid(Subject::Sender, ListId::Frozen));
+        assert_eq!(rows[1], Rule::forbid(Subject::Sender, ListId::Block));
         assert_eq!(rows[2], Rule::require(Subject::Asset, ListId::Allow));
         assert_eq!(
             rows[3],
@@ -759,6 +804,35 @@ above = 1000000
         );
         assert!(policy.curator(ListId::Block).is_some());
         assert!(policy.curator(ListId::Allow).is_none());
+    }
+
+    #[test]
+    fn a_table_the_program_refuses_does_not_compile() {
+        for (form, message) in [
+            (
+                "any = [{ forbid = \"block\" }, { forbid = \"frozen\" }]",
+                RuleTableError::MultiListAbsence,
+            ),
+            ("require = \"block\"", RuleTableError::InvertedPolarity),
+            ("forbid = \"allow\"", RuleTableError::InvertedPolarity),
+            (
+                "any = [{ require = \"approval\" }, { forbid = \"block\" }]",
+                RuleTableError::MixedPolarity,
+            ),
+        ] {
+            let text = format!(
+                "[[rules]]\nsubject = \"sender\"\nforbid = \"frozen\"\n\n\
+                 [[rules]]\nsubject = \"output-owner\"\n{form}\n"
+            );
+            assert!(
+                matches!(
+                    compiled(&text),
+                    Err(PolicyError::Refused { rule: 1, message: refused })
+                        if refused == message.message()
+                ),
+                "{form}"
+            );
+        }
     }
 
     #[test]
@@ -818,9 +892,9 @@ limits = [
         assert!(both
             .to_string()
             .contains(&PolicyError::SeveralSourceForms.to_string()));
-        let unknown = spec("[[rules]]\nsubject = \"sender\"\nrequire = \"escrow\"\n")
-            .expect_err("member-written list");
-        assert!(unknown.to_string().contains("written by its members"));
+        let unknown = spec("[[rules]]\nsubject = \"sender\"\nrequire = \"nope\"\n")
+            .expect_err("unknown list");
+        assert!(unknown.to_string().contains("unknown list nope"));
         let subject = spec("[[rules]]\nsubject = \"owner\"\nrequire = \"allow\"\n")
             .expect_err("unknown subject");
         assert!(subject.to_string().contains("unknown subject owner"));
@@ -891,10 +965,6 @@ limits = [
              [[rules]]\nsubject = \"output-owner\"\nrequire = \"allow\"\nabove = 7\n",
         );
         assert!(guard_without_asset.is_ok());
-        assert!(spec(&format!(
-            "[[rules]]\nsubject = \"sender\"\nassets = [\"{MINT}\"]\n"
-        ))
-        .is_err());
         assert_eq!(
             PolicyError::Refused {
                 rule: 2,

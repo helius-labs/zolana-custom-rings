@@ -1,0 +1,43 @@
+{
+  "opens": [
+    {
+      "ciphertext": "4caef6baabb4484ff196c2cc7b0b9f5a1a4786175b0cb84c035ca79d67f2026bd5e46795176ae83b9b20f7182bf9e20174d4be53e4ae6a9c3cec796f0da3abce94487571c1cac0eb367229b393f2d7ced72cfa46ed044a8c36969e4597d9954fdf",
+      "name": "the shortest reply",
+      "nullifierPk": "070e3205f38ff4b34e8d5a6dc6937a1f99ea25f3bc45e403cdc8890bb8d62c9f",
+      "ownerKey": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "replyLen": 97,
+      "viewingU": "84da9bedd212dd7aedecb0fa71a67074d100c6b42793d8acc08cbf40a5794654"
+    },
+    {
+      "ciphertext": "4caef6baabb4484ff196c2cc7b0b9f5a1a4786175b0cb84c035ca79d67f2026bd5e46795176ae83b9b20f7182bf9e20174d4be53e4ae6a9c3cec796f0da3abce94487571c1cac0eb367229b393f2d7ced72cfa46ed044a8c36969e4597d9954fdfbc828045393f2d47",
+      "name": "zero padding past the record",
+      "nullifierPk": "070e3205f38ff4b34e8d5a6dc6937a1f99ea25f3bc45e403cdc8890bb8d62c9f",
+      "ownerKey": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "replyLen": 105,
+      "viewingU": "84da9bedd212dd7aedecb0fa71a67074d100c6b42793d8acc08cbf40a5794654"
+    },
+    {
+      "ciphertext": "4caef6baabb4484ff196c2cc7b0b9f5a1a4786175b0cb84c035ca79d67f2026bd5e46795176ae83b9b20f7182bf9e20174d4be53e4ae6a9c3cec796f0da3abce94487571c1cac0eb367229b393f2d7ced72cfa46ed044a8c36969e4597d9954fdebf8e80ee929486ec3f7b68482cbdb3ac5ff1c80dacc8a6b276eacfce32f39e97",
+      "name": "a memo",
+      "nullifierPk": "070e3205f38ff4b34e8d5a6dc6937a1f99ea25f3bc45e403cdc8890bb8d62c9f",
+      "ownerKey": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "replyLen": 129,
+      "viewingU": "84da9bedd212dd7aedecb0fa71a67074d100c6b42793d8acc08cbf40a5794654"
+    }
+  ],
+  "refused": [
+    {
+      "ciphertext": "c8746d5779a695351c7a72360aadef2ecb4740a37c9f60e0c3d018ddc28b443fd5e46795176ae83b9b20f7182bf9e20174d4be53e4ae6a9c3cec796f0da3abce94487571c1cac0eb367229b393f2d7ced72cfa46ed044a8c36969e4597d9954fdf",
+      "name": "a zero viewing key"
+    },
+    {
+      "ciphertext": "258b92a886596acae3858dc9f55210d134b8bf5c83609f1f3c2fe7223d74bb40d5e46795176ae83b9b20f7182bf9e20174d4be53e4ae6a9c3cec796f0da3abce94487571c1cac0eb367229b393f2d7ced72cfa46ed044a8c36969e4597d9954fdf",
+      "name": "the field modulus as a viewing key"
+    },
+    {
+      "ciphertext": "4caef6baabb4484ff196c2cc7b0b9f5a1a4786175b0cb84c035ca79d67f2026bd5e46795176ae83b9b20f7182bf9e20174d4be53e4ae6a9c3cec796f0da3abce94487571c1cac0eb367229b393f2d7ced72cfa46ed044a8c36969e4597d9954fdfbc828045393f2d46",
+      "name": "a nonzero padding byte"
+    }
+  ],
+  "slotSecret": "0303030303030303030303030303030303030303030303030303030303030303"
+}

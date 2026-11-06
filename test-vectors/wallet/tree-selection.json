@@ -1,0 +1,160 @@
+{
+  "description": "Largest first funding within the input and tree limits.",
+  "cases": [
+    {
+      "name": "the tree covering with one note wins over two notes",
+      "amount": 10,
+      "maxInputs": 5,
+      "notes": [
+        {
+          "tree": 0,
+          "amount": 6
+        },
+        {
+          "tree": 1,
+          "amount": 6
+        },
+        {
+          "tree": 1,
+          "amount": 4
+        },
+        {
+          "tree": 2,
+          "amount": 10
+        },
+        {
+          "tree": 2,
+          "amount": 1
+        }
+      ],
+      "selected": [
+        {
+          "tree": 2,
+          "amount": 10
+        }
+      ]
+    },
+    {
+      "name": "largest notes take precedence over least change",
+      "amount": 11,
+      "maxInputs": 5,
+      "notes": [
+        {
+          "tree": 0,
+          "amount": 6
+        },
+        {
+          "tree": 1,
+          "amount": 7
+        },
+        {
+          "tree": 2,
+          "amount": 3
+        },
+        {
+          "tree": 3,
+          "amount": 5
+        }
+      ],
+      "selected": [
+        {
+          "tree": 0,
+          "amount": 6
+        },
+        {
+          "tree": 1,
+          "amount": 7
+        }
+      ]
+    },
+    {
+      "name": "large notes fund a fragmented wallet",
+      "amount": 120,
+      "maxInputs": 2,
+      "notes": [
+        {
+          "tree": 0,
+          "amount": 40
+        },
+        {
+          "tree": 0,
+          "amount": 30
+        },
+        {
+          "tree": 1,
+          "amount": 40
+        },
+        {
+          "tree": 1,
+          "amount": 30
+        },
+        {
+          "tree": 2,
+          "amount": 40
+        },
+        {
+          "tree": 2,
+          "amount": 30
+        },
+        {
+          "tree": 3,
+          "amount": 40
+        },
+        {
+          "tree": 3,
+          "amount": 30
+        },
+        {
+          "tree": 4,
+          "amount": 40
+        },
+        {
+          "tree": 4,
+          "amount": 30
+        },
+        {
+          "tree": 5,
+          "amount": 40
+        },
+        {
+          "tree": 5,
+          "amount": 30
+        },
+        {
+          "tree": 6,
+          "amount": 40
+        },
+        {
+          "tree": 6,
+          "amount": 30
+        },
+        {
+          "tree": 7,
+          "amount": 40
+        },
+        {
+          "tree": 7,
+          "amount": 30
+        },
+        {
+          "tree": 8,
+          "amount": 60
+        },
+        {
+          "tree": 9,
+          "amount": 60
+        }
+      ],
+      "selected": [
+        {
+          "tree": 8,
+          "amount": 60
+        },
+        {
+          "tree": 9,
+          "amount": 60
+        }
+      ]
+    }
+  ]
+}

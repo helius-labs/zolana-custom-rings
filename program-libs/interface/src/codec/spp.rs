@@ -1,4 +1,10 @@
 //! What the ring reads of the pinned SPP account lists and public legs, pinned by `tests/spp.rs`.
+//!
+//! SPP reads its lists by position and folds its legs in one order. A wrong index or stride here
+//! would verify the ring proof against accounts SPP does not settle.
+//!
+//! Read after `program-libs/interface/src/lib.rs`. Read before `program-libs/interface/src/instructions/withdrawals.rs`,
+//! `programs/custom-ring/src/instructions/verification/public_legs.rs`.
 
 use arrayvec::ArrayVec;
 use solana_address::Address;
@@ -11,16 +17,14 @@ use spr_interface::{
 };
 use thiserror::Error;
 
+use crate::CoSignScope;
+
 /// The fee payer in every SPP transact account list.
 pub const TRANSACT_PAYER_INDEX: usize = 0;
 /// The signed `RingConfig` in an SPP ring transact account list.
 pub const RING_TRANSACT_RING_CONFIG_INDEX: usize = 4;
 /// Accounts before the input trees in an SPP ring transact account list.
 pub const RING_TRANSACT_ACCOUNT_PREFIX_LEN: usize = RING_TRANSACT_RING_CONFIG_INDEX + 1;
-/// The funding signer in an SPP ring deposit account list.
-pub const RING_DEPOSIT_DEPOSITOR_INDEX: usize = 1;
-/// The signed `RingConfig` in an SPP ring deposit account list.
-pub const RING_DEPOSIT_RING_CONFIG_INDEX: usize = 2;
 /// The signed `RingConfig` in an SPP ring merge account list.
 pub const RING_MERGE_RING_CONFIG_INDEX: usize = 2;
 /// The funding signer in an SPP ring merge account list.
@@ -49,16 +53,31 @@ pub struct PublicLeg {
     pub mint: Option<[u8; 32]>,
 }
 
+/// Pinocchio's `MAX_CPI_ACCOUNTS`, the ring program's ceiling for the SPP call.
+pub const MAX_SPP_CPI_ACCOUNTS: usize = 128;
+
 /// Assets in first-seen leg order, the fold SPP's `assign_public_amounts_and_assets` runs.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicSlots {
     slots: ArrayVec<PublicSlot, N_PUBLIC_SLOTS>,
+    classes: CoSignScope,
+}
+
+impl Default for PublicSlots {
+    fn default() -> Self {
+        Self {
+            slots: ArrayVec::new(),
+            classes: CoSignScope::NONE,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PublicSlot {
     asset: [u8; 32],
     net: i128,
+    /// Sum of the asset's withdrawal legs, deposits excluded.
+    gross: u128,
 }
 
 impl PublicSlots {
@@ -68,6 +87,11 @@ impl PublicSlots {
         let mut slots = Self::default();
         for leg in legs {
             let PublicLeg { transfer, mint } = leg?;
+            slots.classes = slots.classes
+                | match transfer.is_deposit() {
+                    true => CoSignScope::DEPOSITS,
+                    false => CoSignScope::WITHDRAWALS,
+                };
             slots.add(mint.unwrap_or(SOL_ASSET_ADDRESS), signed_amount(transfer))?;
         }
         if let Some(slot) = slots.slots.iter().find(|slot| slot.net == 0) {
@@ -82,6 +106,10 @@ impl PublicSlots {
 
     pub fn is_empty(&self) -> bool {
         self.slots.is_empty()
+    }
+
+    pub const fn classes(&self) -> CoSignScope {
+        self.classes
     }
 
     /// Zero past the used slots.
@@ -102,6 +130,15 @@ impl PublicSlots {
     }
 
     /// Zero past the used slots.
+    pub fn gross(&self) -> [u128; N_PUBLIC_SLOTS] {
+        core::array::from_fn(|index| self.slots.get(index).map_or(0, |slot| slot.gross))
+    }
+
+    pub fn gross_fields(&self) -> [[u8; 32]; N_PUBLIC_SLOTS] {
+        self.gross().map(|gross| right_align(&gross.to_be_bytes()))
+    }
+
+    /// Zero past the used slots.
     pub fn amount_fields(&self) -> Result<[[u8; 32]; N_PUBLIC_SLOTS], PublicSlotError> {
         let mut fields = [[0u8; 32]; N_PUBLIC_SLOTS];
         for (field, slot) in fields.iter_mut().zip(&self.slots) {
@@ -116,7 +153,14 @@ impl PublicSlots {
             Some(slot) => *slot = slot.credit(amount)?,
             None => self
                 .slots
-                .try_push(PublicSlot { asset, net: 0 }.credit(amount)?)
+                .try_push(
+                    PublicSlot {
+                        asset,
+                        net: 0,
+                        gross: 0,
+                    }
+                    .credit(amount)?,
+                )
                 .map_err(|_| PublicSlotError::TooManyAssets { asset })?,
         }
         Ok(())
@@ -131,7 +175,12 @@ impl PublicSlot {
             .checked_add(amount)
             .filter(|net| u64::try_from(net.unsigned_abs()).is_ok())
             .ok_or(PublicSlotError::AmountOverflow { asset: self.asset })?;
-        Ok(Self { net, ..self })
+        // A u128 sum of u64 legs never overflows.
+        let gross = match amount.is_negative() {
+            true => self.gross + amount.unsigned_abs(),
+            false => self.gross,
+        };
+        Ok(Self { net, gross, ..self })
     }
 }
 
@@ -193,13 +242,4 @@ pub const fn funder_account_position(transfer: &InterfaceTransfer) -> Option<usi
         InterfaceTransfer::SplDeposit { .. } => Some(2),
         InterfaceTransfer::SolWithdrawal { .. } | InterfaceTransfer::SplWithdrawal { .. } => None,
     }
-}
-
-pub fn merge_ring_instruction_data(output_ring_data_hash: &[u8; 32], merge: &[u8]) -> Vec<u8> {
-    [
-        &[spr_interface::instruction::tag::RING_MERGE_TRANSACT][..],
-        output_ring_data_hash,
-        merge,
-    ]
-    .concat()
 }

@@ -1,0 +1,113 @@
+{
+  "cases": [
+    {
+      "name": "a payment and change",
+      "slots": 4,
+      "blinder": "0000000000000000000000000000000000000000000000000000000000000051",
+      "commitment": "0dcbb422cbfdff12fac0f90fa27d5bc6de39f5262365ab85fa7d1d3390d8f397"
+    },
+    {
+      "name": "another owner funds a same-owner receipt",
+      "slots": 4,
+      "blinder": "0000000000000000000000000000000000000000000000000000000000000051",
+      "commitment": "28271d6fb640b5eabf1c823b80916b7f9beac4cae6790c4924626ab362936571"
+    },
+    {
+      "name": "a default note counts as held and as a receipt",
+      "slots": 4,
+      "blinder": "0000000000000000000000000000000000000000000000000000000000000051",
+      "commitment": "1e1e1298457b80b8b2fc7d8bdd06a18a33efda98e71cdb64c7f457c57027a2f8"
+    },
+    {
+      "name": "an exit and a withdrawal stay gross",
+      "slots": 4,
+      "blinder": "0000000000000000000000000000000000000000000000000000000000000051",
+      "commitment": "0c41f429da28401c499eb70dfae7b625912598c51ca77c2783d6c9eff901ab5f"
+    },
+    {
+      "name": "a deposit funds the return of funds that exit",
+      "slots": 4,
+      "blinder": "0000000000000000000000000000000000000000000000000000000000000051",
+      "commitment": "1d36a7ef35da57030f8bfb5116f077a7f2c3af1a7d0ff18b01e9189f5184b586"
+    },
+    {
+      "name": "a deposit funds the return of a withdrawal",
+      "slots": 4,
+      "blinder": "0000000000000000000000000000000000000000000000000000000000000051",
+      "commitment": "088cabf788dda23e7bff8e0233345e9185b471cc3e9cdc61cb3986298a7a2f23"
+    },
+    {
+      "name": "an even share",
+      "slots": 4,
+      "blinder": "0000000000000000000000000000000000000000000000000000000000000051",
+      "commitment": "16df70f95ded65c51bbefa6a11249fd1d9e599f18555e9c0cba3a477c00a7616"
+    },
+    {
+      "name": "rounding telescopes to the amount",
+      "slots": 4,
+      "blinder": "0000000000000000000000000000000000000000000000000000000000000051",
+      "commitment": "0aa6c05ac4987fee4d96192d686b6aeb1cef4f0d2efbe5cee820b86ed7023eb4"
+    },
+    {
+      "name": "rounding over three rows",
+      "slots": 4,
+      "blinder": "0000000000000000000000000000000000000000000000000000000000000051",
+      "commitment": "2bec1441432c9a47e9aedf406e467d0135093b91b943e077218af6c376f38fbf"
+    },
+    {
+      "name": "an owner who kept its funds is not charged",
+      "slots": 4,
+      "blinder": "0000000000000000000000000000000000000000000000000000000000000051",
+      "commitment": "1d36a7ef35da57030f8bfb5116f077a7f2c3af1a7d0ff18b01e9189f5184b586"
+    },
+    {
+      "name": "public funds passing through charge only held funds",
+      "slots": 4,
+      "blinder": "0000000000000000000000000000000000000000000000000000000000000051",
+      "commitment": "1d36a7ef35da57030f8bfb5116f077a7f2c3af1a7d0ff18b01e9189f5184b586"
+    },
+    {
+      "name": "a no-spend deposit and exit charges nobody",
+      "slots": 4,
+      "blinder": "0000000000000000000000000000000000000000000000000000000000000051",
+      "commitment": "234b54ad292b68a52b5dae30299c5132b2df86d43b98233a9eadc197ba0a12f0"
+    },
+    {
+      "name": "a deposit-funded payment with nothing leaving",
+      "slots": 4,
+      "blinder": "0000000000000000000000000000000000000000000000000000000000000051",
+      "commitment": "23ed8637a1b05234959d0e0a36826cd5c86a8dda4ebdd3381848dc7069215fb4"
+    },
+    {
+      "name": "a mixed spend and deposit",
+      "slots": 4,
+      "blinder": "0000000000000000000000000000000000000000000000000000000000000051",
+      "commitment": "08e588b9d92bdf1224406506e1230a85b2798e2a08bee45f14f31fefd9451418"
+    },
+    {
+      "name": "the outflow bit reads the charge",
+      "slots": 4,
+      "blinder": "0000000000000000000000000000000000000000000000000000000000000051",
+      "commitment": "088cabf788dda23e7bff8e0233345e9185b471cc3e9cdc61cb3986298a7a2f23"
+    },
+    {
+      "name": "the withdrawal bit reads the gross with no debit",
+      "slots": 4,
+      "blinder": "0000000000000000000000000000000000000000000000000000000000000051",
+      "commitment": "122e6def35f7bc69fa83fb793de0f12ac71da2fe9d420716596868649b493fe4"
+    },
+    {
+      "name": "both bits",
+      "slots": 4,
+      "blinder": "0000000000000000000000000000000000000000000000000000000000000051",
+      "commitment": "1619c391443de8daac89788775bbbc6526c914d294b41d45af47f9a5053c0c90"
+    },
+    {
+      "name": "bounds at the amount set no bit",
+      "slots": 4,
+      "blinder": "0000000000000000000000000000000000000000000000000000000000000051",
+      "commitment": "1619c391443de8daac89788775bbbc6526c914d294b41d45af47f9a5053c0c90"
+    }
+  ],
+  "description": "HashChain4(CRAO, blinder, layout) over each policy/quantities.json case. The layout is asset, peak and charged outflow per output slot, then asset, peak of debits, sum of debits and gross per public slot, zeros past the live slots. Produced by prover/circuits/policy/approval_totals_test.go with WRITE_AUDIT_VECTORS=1."
+}

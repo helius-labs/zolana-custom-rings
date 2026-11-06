@@ -1,5 +1,7 @@
 //! Slot secrets and the sender commitment of ring transfers, mirrored by the
 //! Go package `prover/circuits/shared`.
+//!
+//! Read after `program-libs/interface/src/codec/output.rs`. Read before `program-libs/interface/src/proof/key_catalog.rs`.
 
 use spr_hasher::{
     primitives::{is_canonical_bn254_scalar_be, pack_be, right_align},
@@ -8,6 +10,9 @@ use spr_hasher::{
 use thiserror::Error;
 
 use crate::{domain, TAGGED_X25519_KEY_LEN, VIEWING_PUBKEY_TAG};
+
+/// The bytes of a ring slot tag a frame carries, a false match costs one trial open.
+pub const SLOT_TAG_LEN: usize = 8;
 
 #[derive(Debug, Error, PartialEq)]
 pub enum StreamError {
@@ -64,23 +69,45 @@ impl SlotSecret {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
-}
 
-/// `Poseidon(CRSC, sender_pk_hash, private_tx_blinding)`, binding the audit and
-/// policy proofs to one hidden sender.
-pub struct SenderCommitment {
-    pub sender_pk_hash: [u8; 32],
-    pub private_tx_blinding: [u8; 32],
-}
-
-impl SenderCommitment {
-    pub fn derive(self) -> Result<[u8; 32], HasherError> {
-        Poseidon::hashv(&[
-            &domain::field(domain::SENDER_COMMITMENT),
-            &self.sender_pk_hash,
-            &self.private_tx_blinding,
-        ])
+    /// `Poseidon(CRRT, secret)`, the published output of the secret that also keys the body.
+    pub fn recipient_tag(&self) -> Result<[u8; 32], HasherError> {
+        Poseidon::hashv(&[&domain::field(domain::RECIPIENT_TAG), &self.0])
     }
+
+    /// `Poseidon(CRST, secret)` under the secret at index `m`.
+    pub fn sender_tag(&self) -> Result<[u8; 32], HasherError> {
+        Poseidon::hashv(&[&domain::field(domain::SENDER_TAG), &self.0])
+    }
+
+    /// An anonymous payment's tag, fresh per transaction and slot, since a tag stable per
+    /// recipient would link every payment to one recipient in public.
+    pub fn anonymous_slot_tag(&self) -> Result<[u8; 32], HasherError> {
+        self.recipient_tag().map(slot_tag)
+    }
+}
+
+/// A confidential output's tag, stable per recipient key, since the confidential rail hides
+/// amounts and leaves the recipient linkable to anyone who holds its address.
+pub fn confidential_slot_tag(viewing_u: [u8; 32]) -> [u8; 32] {
+    slot_tag(viewing_u)
+}
+
+/// A ring slot's tag reaches the indexer alone, its leading bytes stay zero and off the frame.
+pub fn slot_tag(tag: [u8; 32]) -> [u8; 32] {
+    unframed_slot_tag(&framed_slot_tag(&tag))
+}
+
+pub fn framed_slot_tag(tag: &[u8; 32]) -> [u8; SLOT_TAG_LEN] {
+    let mut framed = [0; SLOT_TAG_LEN];
+    framed.copy_from_slice(&tag[32 - SLOT_TAG_LEN..]);
+    framed
+}
+
+pub fn unframed_slot_tag(framed: &[u8; SLOT_TAG_LEN]) -> [u8; 32] {
+    let mut tag = [0; 32];
+    tag[32 - SLOT_TAG_LEN..].copy_from_slice(framed);
+    tag
 }
 
 fn tagged_key_fields(key: &[u8; TAGGED_X25519_KEY_LEN]) -> Result<[[u8; 32]; 2], StreamError> {
@@ -101,6 +128,22 @@ fn canonical(value: [u8; 32]) -> Result<[u8; 32], StreamError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_tags_of_one_secret_differ_by_domain() {
+        let secret = SlotSecret::new(right_align(&[9])).unwrap();
+        let recipient = secret.recipient_tag().unwrap();
+        assert_eq!(
+            recipient,
+            Poseidon::hashv(&[&right_align(b"CRRT"), secret.as_bytes()]).unwrap()
+        );
+        assert_eq!(
+            secret.sender_tag().unwrap(),
+            Poseidon::hashv(&[&right_align(b"CRST"), secret.as_bytes()]).unwrap()
+        );
+        assert_ne!(recipient, secret.sender_tag().unwrap());
+        assert!(is_canonical_bn254_scalar_be(&recipient));
+    }
 
     #[test]
     fn untagged_viewing_keys_are_refused() {

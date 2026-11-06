@@ -1,21 +1,22 @@
-use std::{future::Future, time::Duration};
+use std::{future::Future, num::NonZeroU32, time::Duration};
 
 use async_trait::async_trait;
-use custom_ring_interface::{ReadAccessRecord, RingAccount, RingMode, RingProgramConfig};
+use custom_ring_interface::{
+    storage::StorageRegistry,
+    tracking::{TrackingAuthorization, TrackingRegistry, TRACKING_CAPACITY},
+    CoSignScope, OwnerGrant, ReaderKeyBytes, RingAccount, RingMode, RingPolicy, RingRoles,
+};
+use custom_ring_sdk::{CustomRing, RingError};
 use solana_account::Account;
 use solana_address::Address;
 use solana_commitment_config::CommitmentConfig;
 use solana_loader_v3_interface::get_program_data_address;
-use solana_rpc_client::{
-    nonblocking::rpc_client::RpcClient as NonblockingRpcClient,
-    rpc_client::GetConfirmedSignaturesForAddress2Config,
-};
+use solana_rpc_client::nonblocking::rpc_client::RpcClient as NonblockingRpcClient;
 use solana_signature::Signature;
-use spr_api::ZolanaApi;
+use spr_api::SprApi;
 use spr_client::{
-    rpc::ProgramAccountsFilter, AsyncRpc, AsyncSolanaRpc, AsyncZolanaIndexer, ClientError,
-    GetShieldedTransactionsByTagsResponse, IndexedShieldedTransaction, IndexerRpcConfig,
-    RingHistoryOptions,
+    rpc::ProgramAccountsFilter, AsyncRpc, AsyncSolanaRpc, AsyncSprIndexer, ClientError,
+    GetShieldedTransactionsByTagsResponse, IndexerRpcConfig, RingHistoryOptions,
 };
 use spr_interface::{
     pda,
@@ -23,35 +24,53 @@ use spr_interface::{
     BPF_LOADER_UPGRADEABLE_ID, PROGRAM_ID_PUBKEY,
 };
 use spr_keypair::X25519Pubkey;
-use spr_transaction::{AssetRegistry, Mint, SOL_MINT};
-use std::num::NonZeroUsize;
+use spr_transaction::{AssetRegistry, Mint, ShieldedTransaction, SOL_MINT};
 use zolana_ring_client::{
-    program_data, ring_deposits_in, AsyncRingIndexer, AuditError, ConfirmedEventKind, MergeAudit,
-    MergeAuditPage, ReaderKey, RingIndexerError, RingOrigin, TransactionOrigin,
+    history::HistoryPosition, program_data, AsyncRingIndexer, AuditError, MemberOpeningRead,
+    MergeAudit, MergeAuditPage, RingIndexerError, RingOrigin, StorageTip, TransactionOrigin,
 };
 use zolana_ring_indexer::rpc::{
-    GetRingMemberOpeningsRequest, GetRingMemberOpeningsResponse, GetRingMemberRecordsRequest,
-    GetRingMemberRecordsResponse, GetRingRecordQueueRequest, GetRingRecordQueueResponse,
+    GetStorageMemberOpeningsRequest, GetStorageMemberOpeningsResponse,
+    GetStorageMemberRecordsRequest, GetStorageMemberRecordsResponse,
 };
 use zolana_ring_transaction::RingAssets;
 
-use zolana_ring_client::rpc::{DepositRecord, RingChainStatus, RingDepositsResponse};
+use zolana_ring_client::rpc::{RingChainStatus, WalletEnrollment};
+use zolana_ring_indexer::tracking::{GetTrackingRecordsRequest, GetTrackingRecordsResponse};
 
-use crate::audit::Page;
-
-const MAX_MERGE_MEMBER_PAGES: NonZeroUsize = NonZeroUsize::new(100).unwrap();
-const MAX_MERGE_CANDIDATE_ATTEMPTS: NonZeroUsize = NonZeroUsize::new(100_000).unwrap();
+use crate::{
+    audit::Page,
+    cosign::CoSignError,
+    error::RingRpcError,
+    finalized_history::{
+        FinalizedHistory, FinalizedPage, FinalizedUpstreams, HistorySelection, OriginRead,
+    },
+};
 
 pub trait TransactionSource: Send + Sync {
+    /// The authorities of the registries a salted list reads.
+    fn salted_list_writers(
+        &self,
+        _ring: Address,
+    ) -> impl Future<Output = Result<Vec<Address>, ClientError>> + Send {
+        async { Ok(Vec::new()) }
+    }
+
     fn transactions_by_tag(
         &self,
-        request: TransactionPage<'_>,
+        request: TransactionPage,
     ) -> impl Future<Output = Result<GetShieldedTransactionsByTagsResponse, ClientError>> + Send;
+
+    /// The events of one finalized ring signature, each bound to its confirmed origin.
+    fn ring_frame(
+        &self,
+        frame: RingFrame,
+    ) -> impl Future<Output = Result<Vec<ShieldedTransaction>, ClientError>> + Send;
 
     /// Rows strictly after the requested position, in history order.
     fn ring_history(
         &self,
-        request: RingHistoryPage<'_>,
+        request: RingHistoryPage,
     ) -> impl Future<Output = Result<GetShieldedTransactionsByTagsResponse, ClientError>> + Send;
 
     fn merge_audit_page<'a>(
@@ -66,11 +85,6 @@ pub trait TransactionSource: Send + Sync {
         ring: Address,
     ) -> impl Future<Output = Result<RingOrigin, AuditError>> + Send;
 
-    fn ring_deposits(
-        &self,
-        page: DepositPage,
-    ) -> impl Future<Output = Result<DepositHistory, ClientError>> + Send;
-
     fn ring_config(
         &self,
         ring: Address,
@@ -81,26 +95,22 @@ pub trait TransactionSource: Send + Sync {
         ring: Address,
     ) -> impl Future<Output = Result<RingChainStatus, ClientError>> + Send;
 
-    fn ring_member_records(
-        &self,
-        request: GetRingMemberRecordsRequest,
-    ) -> impl Future<Output = Result<GetRingMemberRecordsResponse, RingIndexerError>> + Send;
+    fn slot(&self) -> impl Future<Output = Result<u64, ClientError>> + Send;
 
-    fn ring_member_openings(
-        &self,
-        request: GetRingMemberOpeningsRequest,
-    ) -> impl Future<Output = Result<GetRingMemberOpeningsResponse, RingIndexerError>> + Send;
-
-    /// The pending writes, positions `head..tail`.
-    fn ring_record_queue(
+    fn records_root(
         &self,
         ring: Address,
-    ) -> impl Future<Output = Result<GetRingRecordQueueResponse, RingIndexerError>> + Send;
+    ) -> impl Future<Output = Result<RecordsTip, ClientError>> + Send;
 
-    fn reader_granted(
+    fn storage_member_openings(
         &self,
-        request: ReaderGrant,
-    ) -> impl Future<Output = Result<bool, ClientError>> + Send;
+        request: GetStorageMemberOpeningsRequest,
+    ) -> impl Future<Output = Result<GetStorageMemberOpeningsResponse, RingIndexerError>> + Send;
+
+    fn storage_member_records(
+        &self,
+        request: GetStorageMemberRecordsRequest,
+    ) -> impl Future<Output = Result<GetStorageMemberRecordsResponse, RingIndexerError>> + Send;
 
     /// `None` for a program that is immutable or not deployed.
     fn upgrade_authority(
@@ -114,18 +124,151 @@ pub trait TransactionSource: Send + Sync {
     fn genesis_hash(&self) -> impl Future<Output = Result<[u8; 32], ClientError>> + Send;
 
     fn ring_assets(&self) -> impl Future<Output = Result<RingAssets, ClientError>> + Send;
+
+    /// The id a tree's commitments hash under.
+    fn tree_id(&self, tree: Address) -> impl Future<Output = Result<u16, RingError>> + Send;
+
+    /// The classes the ring's record of `signer` holds.
+    fn co_signer_scope(
+        &self,
+        _ring: Address,
+        _signer: Address,
+    ) -> impl Future<Output = Result<Option<CoSignScope>, RingRpcError>> + Send {
+        async { Ok(None) }
+    }
+
+    /// The newest root of the ring's pinned tracking registry at `finality`, `None` reads no
+    /// owner's secret.
+    fn tracking_root(
+        &self,
+        _ring: Address,
+        _finality: Finality,
+    ) -> impl Future<Output = Result<Option<TrackingRoot>, ClientError>> + Send {
+        async { Ok(None) }
+    }
+
+    /// Unverified, `TrackingScan` checks every page against the registry root.
+    fn tracking_records(
+        &self,
+        _request: GetTrackingRecordsRequest,
+    ) -> impl Future<Output = Result<GetTrackingRecordsResponse, RingIndexerError>> + Send {
+        async { Err(ClientError::Rpc("no tracking records".to_owned()).into()) }
+    }
+
+    /// The owner's own authorization under the ring's pinned registry, read from the account.
+    fn tracking_enrollment(
+        &self,
+        _ring: Address,
+        _owner: Address,
+    ) -> impl Future<Output = Result<WalletEnrollment, ClientError>> + Send {
+        async { Ok(WalletEnrollment::NotEnrolled) }
+    }
+
+    /// Whether the owner's own `OwnerGrant` account names `reader`, a PDA grants through CPI.
+    fn owner_grant_held(
+        &self,
+        _ring: Address,
+        _owner: Address,
+        _reader: ReaderKeyBytes,
+    ) -> impl Future<Output = Result<bool, ClientError>> + Send {
+        async { Ok(false) }
+    }
 }
 
-#[must_use]
-pub struct TransactionPage<'a> {
-    pub tag: [u8; 32],
-    pub page: &'a Page,
+/// Unverified, callers read openings through `VerifiedOpenings`.
+pub(crate) trait OpeningFetch: Sync {
+    fn fetch_openings(
+        &self,
+        request: GetStorageMemberOpeningsRequest,
+    ) -> impl Future<Output = Result<GetStorageMemberOpeningsResponse, RingRpcError>> + Send;
 }
 
+impl<S: TransactionSource> OpeningFetch for S {
+    async fn fetch_openings(
+        &self,
+        request: GetStorageMemberOpeningsRequest,
+    ) -> Result<GetStorageMemberOpeningsResponse, RingRpcError> {
+        Ok(self.storage_member_openings(request).await?)
+    }
+}
+
+/// No source overrides the opening check.
+#[async_trait]
+pub(crate) trait VerifiedOpenings: OpeningFetch {
+    /// Refused unless every opening verifies under `tip`.
+    async fn verified_openings(
+        &self,
+        tip: &StorageTip,
+        members: &[[u8; 32]],
+    ) -> Result<Vec<MemberOpeningRead>, RingRpcError>;
+}
+
+#[async_trait]
+impl<S: OpeningFetch + ?Sized> VerifiedOpenings for S {
+    async fn verified_openings(
+        &self,
+        tip: &StorageTip,
+        members: &[[u8; 32]],
+    ) -> Result<Vec<MemberOpeningRead>, RingRpcError> {
+        let response = self.fetch_openings(tip.openings_request(members)).await?;
+        tip.verify_openings(&response, members)
+            .map_err(|_| RingRpcError::InvalidIndexerResponse)
+    }
+}
+
+/// Only a finalized root feeds the stored projection, a retired root stays served past the
+/// finalization lag.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Finality {
+    Confirmed,
+    Finalized,
+}
+
+/// The newest root of a pinned tracking registry and the leaf count under it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TrackingRoot {
+    pub registry: Address,
+    pub root: [u8; 32],
+    pub revision: u64,
+    pub next_index: u64,
+}
+
+/// A pending enrollment grants nothing, and past capacity it never applies.
+fn enrollment_of(
+    authorization: Option<&TrackingAuthorization>,
+    tree_full: bool,
+) -> WalletEnrollment {
+    match authorization {
+        None => WalletEnrollment::NotEnrolled,
+        Some(held) if !held.is_pending() => WalletEnrollment::Applied,
+        Some(_) if tree_full => WalletEnrollment::PendingPastCapacity,
+        Some(_) => WalletEnrollment::Pending,
+    }
+}
+
+#[derive(Clone, Copy)]
 #[must_use]
-pub struct RingHistoryPage<'a> {
+pub struct TransactionPage {
     pub ring: Address,
-    pub page: &'a Page,
+    pub tag: [u8; 32],
+    pub position: HistoryPosition,
+    pub limit: NonZeroU32,
+}
+
+/// A frame the history already returned, read again by its signature.
+#[derive(Clone, Copy, Debug)]
+pub struct RingFrame {
+    pub ring: Address,
+    pub signature: Signature,
+    pub slot: u64,
+}
+
+#[derive(Clone, Copy)]
+#[must_use]
+pub struct RingHistoryPage {
+    pub ring: Address,
+    pub position: HistoryPosition,
+    pub limit: NonZeroU32,
 }
 
 #[must_use]
@@ -135,52 +278,24 @@ pub struct MergeAuditRequest<'a> {
     pub page: &'a Page,
 }
 
-#[derive(Clone, Copy)]
-#[must_use]
-pub struct DepositPage {
-    pub ring: Address,
-    /// Signatures examined, which is not the number of deposits found.
-    pub limit: usize,
-    /// Resume bound, the oldest signature the previous page examined.
-    pub before: Option<Signature>,
-}
-
-pub struct DepositHistory {
-    pub deposits: Vec<DepositRecord>,
-    /// Absent once the ring has no older history.
-    pub cursor: Option<Signature>,
-    /// Slot of the oldest signature examined, absent when the page examined
-    /// nothing.
-    pub oldest_slot: Option<u64>,
-}
-
-impl From<DepositHistory> for RingDepositsResponse {
-    fn from(history: DepositHistory) -> Self {
-        Self {
-            deposits: history.deposits,
-            cursor: history
-                .cursor
-                .map(|signature| signature.as_ref().to_vec().into()),
-            oldest_slot: history.oldest_slot,
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-#[must_use]
-pub struct ReaderGrant {
-    pub ring: Address,
-    pub reader: ReaderKey,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecordsTip {
+    NoPolicy,
+    /// The ring's records address holds no initialized storage registry.
+    NoRegistry,
+    Newest(StorageTip),
 }
 
 #[derive(Clone, Copy)]
 pub struct RingConfiguration {
     pub auditor_pubkey: X25519Pubkey,
-    pub authority: Address,
+    pub roles: RingRoles,
     pub mode: RingMode,
+    pub delegate: Option<Address>,
 }
 
 #[must_use]
+#[derive(Clone, Copy)]
 pub struct Upstreams<'a> {
     pub indexer_url: &'a str,
     pub rpc_url: &'a str,
@@ -188,105 +303,78 @@ pub struct Upstreams<'a> {
 }
 
 pub struct ChainSource {
-    indexer: AsyncZolanaIndexer,
+    history: FinalizedHistory,
+    indexer: AsyncSprIndexer,
     rpc: AsyncSolanaRpc,
 }
 
-/// Ring history in strict cursor order, the merge audit reads its registry through it too.
+/// The merge audit reads ring history and its registry through one source.
 struct HistorySource<'a> {
-    rpc: &'a AsyncSolanaRpc,
-    indexer: &'a AsyncZolanaIndexer,
-}
-
-/// Photon orders tag and ring history by the fixed-width cursor it returns, the fields in order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct HistoryPosition {
-    slot: u64,
-    signature: [u8; 64],
-    event_index: u16,
+    source: &'a ChainSource,
 }
 
 #[async_trait]
 impl AsyncRpc for HistorySource<'_> {
     async fn get_account(&self, address: Address) -> Result<Option<Account>, ClientError> {
-        self.rpc.get_account(address).await
+        self.source.rpc.get_account(address).await
     }
 
     async fn get_shielded_transactions_by_ring(
         &self,
         options: RingHistoryOptions,
-        config: Option<IndexerRpcConfig>,
+        _config: Option<IndexerRpcConfig>,
     ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
-        let cursor = options.cursor.clone();
-        let response = self
-            .indexer
-            .get_shielded_transactions_by_ring(options, config)
-            .await?;
-        validate_history_order(cursor.as_deref(), &response)?;
-        Ok(response)
+        let position = match options.pagination_token {
+            Some(token) => HistoryPosition::resume(token),
+            None => options
+                .filters
+                .slot
+                .floor()
+                .map_or_else(HistoryPosition::default, HistoryPosition::after_slot),
+        };
+        if options.filters.slot.lt.is_some() || options.filters.slot.lte.is_some() {
+            return Err(ClientError::Rpc(
+                "finalized history rejects an upper slot bound".into(),
+            ));
+        }
+        let limit = options
+            .limit
+            .and_then(NonZeroU32::new)
+            .ok_or_else(|| ClientError::Rpc("finalized history requires a page limit".into()))?;
+        self.source
+            .ring_history(RingHistoryPage {
+                ring: options.ring_program_id,
+                position,
+                limit,
+            })
+            .await
+    }
+}
+
+impl TransactionOrigin for HistorySource<'_> {
+    async fn origin(
+        &self,
+        signature: Signature,
+        event_index: u16,
+        ring: Address,
+    ) -> Result<RingOrigin, AuditError> {
+        self.source
+            .transaction_origin(signature, event_index, ring)
+            .await
     }
 }
 
 #[async_trait]
 impl AsyncRingIndexer for HistorySource<'_> {
-    async fn get_ring_member_records(
+    async fn get_storage_member_records(
         &self,
-        request: GetRingMemberRecordsRequest,
-    ) -> Result<GetRingMemberRecordsResponse, RingIndexerError> {
-        self.indexer.get_ring_member_records(request).await
+        request: GetStorageMemberRecordsRequest,
+    ) -> Result<GetStorageMemberRecordsResponse, RingIndexerError> {
+        self.source
+            .indexer
+            .get_storage_member_records(request)
+            .await
     }
-}
-
-impl HistoryPosition {
-    fn parse(cursor: &[u8]) -> Option<Self> {
-        let (&2, body) = cursor.split_first()? else {
-            return None;
-        };
-        let (&slot, body) = body.split_first_chunk::<8>()?;
-        let (&signature, body) = body.split_first_chunk::<64>()?;
-        let (&event_index, []) = body.split_first_chunk::<2>()? else {
-            return None;
-        };
-        Some(Self {
-            slot: u64::from_be_bytes(slot),
-            signature,
-            event_index: u16::from_be_bytes(event_index),
-        })
-    }
-}
-
-/// Rows past the cursor in strict order, the next cursor on the last row, the frontier never behind.
-fn validate_history_order(
-    cursor: Option<&[u8]>,
-    response: &GetShieldedTransactionsByTagsResponse,
-) -> Result<(), ClientError> {
-    let invalid = || ClientError::Indexer("invalid history cursor or row order".to_owned());
-    let parse = |cursor: &[u8]| HistoryPosition::parse(cursor).ok_or_else(invalid);
-    let mut previous = cursor.map(parse).transpose()?;
-    for tx in &response.transactions {
-        let position = HistoryPosition {
-            slot: tx.slot,
-            signature: *tx.tx_signature.as_array(),
-            event_index: tx.event_index.ok_or_else(invalid)?,
-        };
-        if previous.is_some_and(|previous| position <= previous) {
-            return Err(invalid());
-        }
-        previous = Some(position);
-    }
-    if let Some(next) = response.next_cursor.as_deref() {
-        if Some(parse(next)?) != previous {
-            return Err(invalid());
-        }
-    }
-    if let Some(frontier) = response.scanned_through.as_deref() {
-        if previous
-            .is_some_and(|previous| parse(frontier).is_ok_and(|frontier| frontier < previous))
-        {
-            return Err(invalid());
-        }
-    }
-    Ok(())
 }
 
 impl ChainSource {
@@ -296,10 +384,8 @@ impl ChainSource {
             .build()
             .map_err(|error| ClientError::Rpc(format!("http client: {error}")))?;
         Ok(Self {
-            indexer: AsyncZolanaIndexer::with_api(ZolanaApi::with_client(
-                upstreams.indexer_url,
-                http,
-            )),
+            history: FinalizedHistory::default(),
+            indexer: AsyncSprIndexer::with_api(SprApi::with_client(upstreams.indexer_url, http)),
             rpc: AsyncSolanaRpc::with_client(
                 NonblockingRpcClient::new_with_timeout_and_commitment(
                     upstreams.rpc_url.to_owned(),
@@ -315,10 +401,24 @@ impl ChainSource {
     }
 
     fn history(&self) -> HistorySource<'_> {
-        HistorySource {
-            rpc: &self.rpc,
-            indexer: &self.indexer,
-        }
+        HistorySource { source: self }
+    }
+
+    async fn account_at(
+        &self,
+        address: Address,
+        finality: Finality,
+    ) -> Result<Option<Account>, ClientError> {
+        let commitment = match finality {
+            Finality::Confirmed => CommitmentConfig::confirmed(),
+            Finality::Finalized => CommitmentConfig::finalized(),
+        };
+        self.rpc
+            .client()
+            .get_account_with_commitment(&address, commitment)
+            .await
+            .map(|response| response.value)
+            .map_err(|error| ClientError::Rpc(format!("get_account {address}: {error}")))
     }
 
     /// A foreign owner means the account does not exist for its program, not
@@ -337,99 +437,68 @@ impl ChainSource {
 }
 
 impl TransactionSource for ChainSource {
+    async fn tree_id(&self, tree: Address) -> Result<u16, RingError> {
+        custom_ring_sdk::tree_id(&self.rpc, tree).await
+    }
+
     async fn merge_audit_page<'a>(
         &'a self,
         request: MergeAuditRequest<'a>,
     ) -> Result<MergeAuditPage, AuditError> {
         MergeAudit::new(request.ring, request.auditor)
-            .with_cursor(request.page.cursor().map(ToOwned::to_owned))
+            .with_cursor(request.page.history_cursor())
             .with_page_size(request.page.limit())
-            // Either cap fails the read with MergeAuditWorkBudget, never a partial page.
-            .with_max_member_pages(MAX_MERGE_MEMBER_PAGES)
-            .with_max_candidate_attempts(MAX_MERGE_CANDIDATE_ATTEMPTS)
-            .page(&self.history(), &self.rpc)
+            .page(&self.history(), &self.history())
             .await
     }
 
     async fn transactions_by_tag(
         &self,
-        request: TransactionPage<'_>,
+        request: TransactionPage,
     ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
-        let cursor = request.page.cursor().map(ToOwned::to_owned);
-        let response = self
-            .indexer
-            .get_shielded_transactions_by_tags(
-                vec![request.tag],
-                cursor.clone(),
-                Some(request.page.limit().get()),
-                None,
+        self.history
+            .page(
+                FinalizedPage {
+                    ring: request.ring,
+                    position: request.position,
+                    limit: request.limit,
+                    selection: HistorySelection::Tag(request.tag),
+                },
+                &FinalizedUpstreams {
+                    rpc: &self.rpc,
+                    indexer: &self.indexer,
+                },
             )
-            .await?;
-        validate_history_order(cursor.as_deref(), &response)?;
-        Ok(response)
+            .await
+    }
+
+    async fn ring_frame(&self, frame: RingFrame) -> Result<Vec<ShieldedTransaction>, ClientError> {
+        FinalizedUpstreams {
+            rpc: &self.rpc,
+            indexer: &self.indexer,
+        }
+        .frame(frame)
+        .await
     }
 
     async fn ring_history(
         &self,
-        request: RingHistoryPage<'_>,
+        request: RingHistoryPage,
     ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
-        let options = RingHistoryOptions {
-            ring_program_id: request.ring,
-            cursor: request.page.cursor().map(ToOwned::to_owned),
-            limit: Some(request.page.limit().get()),
-        };
-        self.history()
-            .get_shielded_transactions_by_ring(options, None)
-            .await
-    }
-
-    /// The ring's own signatures name the candidates, and every deposit field
-    /// this reports is public.
-    async fn ring_deposits(&self, page: DepositPage) -> Result<DepositHistory, ClientError> {
-        let ring = page.ring;
-        let signatures = self
-            .rpc
-            .client()
-            .get_signatures_for_address_with_config(
-                &ring,
-                GetConfirmedSignaturesForAddress2Config {
-                    before: page.before,
-                    until: None,
-                    limit: Some(page.limit),
-                    commitment: Some(CommitmentConfig::confirmed()),
+        self.history
+            .page(
+                FinalizedPage {
+                    ring: request.ring,
+                    position: request.position,
+                    limit: request.limit,
+                    selection: HistorySelection::Ring,
+                },
+                &FinalizedUpstreams {
+                    rpc: &self.rpc,
+                    indexer: &self.indexer,
                 },
             )
             .await
-            .map_err(|error| ClientError::Rpc(format!("signatures for {ring}: {error}")))?;
-        // A short page means the ring has no older history.
-        let more = signatures.len() == page.limit;
-        let mut deposits = Vec::new();
-        let mut oldest = None;
-        for entry in signatures {
-            let signature = confirmed_signature(&entry.signature)?;
-            oldest = Some((signature, entry.slot));
-            if entry.err.is_some() {
-                continue;
-            }
-            let response = self
-                .indexer
-                .get_shielded_transactions_by_signature(signature, None)
-                .await?;
-            for indexed in response.transactions {
-                let records = ConfirmedDepositRecords {
-                    origin: &self.rpc,
-                    signature,
-                    ring,
-                    indexed,
-                };
-                deposits.extend(records.read().await?);
-            }
-        }
-        Ok(DepositHistory {
-            deposits,
-            cursor: oldest.map(|(signature, _)| signature).filter(|_| more),
-            oldest_slot: oldest.map(|(_, slot)| slot),
-        })
     }
 
     async fn transaction_origin(
@@ -438,11 +507,19 @@ impl TransactionSource for ChainSource {
         event_index: u16,
         ring: Address,
     ) -> Result<RingOrigin, AuditError> {
-        self.rpc.origin(signature, event_index, ring).await
+        FinalizedUpstreams {
+            rpc: &self.rpc,
+            indexer: &self.indexer,
+        }
+        .origins(OriginRead { ring, signature })
+        .await?
+        .origins
+        .remove(&event_index)
+        .ok_or(AuditError::InvalidEventIndex(event_index))
     }
 
     async fn ring_config(&self, ring: Address) -> Result<Option<RingConfiguration>, ClientError> {
-        let (address, bump) = Address::find_program_address(&[RingProgramConfig::SEED], &ring);
+        let (address, bump) = Address::find_program_address(&[RingPolicy::SEED], &ring);
         let Some(account) = self.owned_account(address, ring).await? else {
             return Ok(None);
         };
@@ -455,33 +532,28 @@ impl TransactionSource for ChainSource {
         .map(Some)
     }
 
+    async fn salted_list_writers(&self, ring: Address) -> Result<Vec<Address>, ClientError> {
+        let (address, _) = Address::find_program_address(&[RingPolicy::SEED], &ring);
+        let Some(account) = self.owned_account(address, ring).await? else {
+            return Ok(Vec::new());
+        };
+        let policy = RingPolicy::decode(&account.owner, &ring, &account.data)
+            .ok_or_else(|| ClientError::Rpc(INVALID_POLICY.to_owned()))?;
+        let mut writers = Vec::new();
+        for registry in policy.salted_registries() {
+            let account = self.rpc.get_account(registry).await?;
+            writers.extend(
+                account
+                    .as_ref()
+                    .and_then(|account| StorageRegistry::decode(&account.owner, &account.data))
+                    .map(|registry| registry.authority),
+            );
+        }
+        Ok(writers)
+    }
+
     async fn ring_chain_status(&self, ring: Address) -> Result<RingChainStatus, ClientError> {
         RingChainStatus::read(&self.rpc, ring).await
-    }
-
-    async fn ring_member_records(
-        &self,
-        request: GetRingMemberRecordsRequest,
-    ) -> Result<GetRingMemberRecordsResponse, RingIndexerError> {
-        self.indexer.get_ring_member_records(request).await
-    }
-
-    async fn ring_member_openings(
-        &self,
-        request: GetRingMemberOpeningsRequest,
-    ) -> Result<GetRingMemberOpeningsResponse, RingIndexerError> {
-        self.indexer.get_ring_member_openings(request).await
-    }
-
-    async fn ring_record_queue(
-        &self,
-        ring: Address,
-    ) -> Result<GetRingRecordQueueResponse, RingIndexerError> {
-        self.indexer
-            .get_ring_record_queue(GetRingRecordQueueRequest {
-                ring_program_id: ring.into(),
-            })
-            .await
     }
 
     async fn upgrade_authority(&self, program: Address) -> Result<Option<Address>, ClientError> {
@@ -497,18 +569,151 @@ impl TransactionSource for ChainSource {
             .filter(|key| *key != Address::default()))
     }
 
-    async fn reader_granted(&self, request: ReaderGrant) -> Result<bool, ClientError> {
-        let address = request.reader.record_address(&request.ring);
-        let Some(account) = self.rpc.get_account(address).await? else {
+    async fn slot(&self) -> Result<u64, ClientError> {
+        self.rpc.get_slot().await
+    }
+
+    async fn records_root(&self, ring: Address) -> Result<RecordsTip, ClientError> {
+        let (address, bump) = Address::find_program_address(&[RingPolicy::SEED], &ring);
+        let Some(account) = self.owned_account(address, ring).await? else {
+            return Ok(RecordsTip::NoPolicy);
+        };
+        let records = CanonicalAccount {
+            account: &account,
+            ring,
+            bump,
+        }
+        .decode::<RingPolicy>()
+        .ok_or_else(|| ClientError::Rpc(INVALID_POLICY.to_owned()))?
+        .records;
+        Ok(self
+            .rpc
+            .get_account(records)
+            .await?
+            .and_then(|account| StorageRegistry::decode(&account.owner, &account.data))
+            .map_or(RecordsTip::NoRegistry, |registry| {
+                RecordsTip::Newest(StorageTip::newest(records, &registry))
+            }))
+    }
+
+    async fn co_signer_scope(
+        &self,
+        ring: Address,
+        signer: Address,
+    ) -> Result<Option<CoSignScope>, RingRpcError> {
+        let record = CustomRing::new(ring)
+            .co_signer(&HistorySource { source: self }, &signer)
+            .await
+            .map_err(|_| CoSignError::LimitsUnavailable)?;
+        Ok(record.map(|record| record.scope))
+    }
+
+    /// The pin and the registry it names are read at one finality.
+    async fn tracking_root(
+        &self,
+        ring: Address,
+        finality: Finality,
+    ) -> Result<Option<TrackingRoot>, ClientError> {
+        let (address, bump) = Address::find_program_address(&[RingPolicy::SEED], &ring);
+        let Some(account) = self
+            .account_at(address, finality)
+            .await?
+            .filter(|account| account.owner == ring)
+        else {
+            return Ok(None);
+        };
+        let tracking = CanonicalAccount {
+            account: &account,
+            ring,
+            bump,
+        }
+        .decode::<RingPolicy>()
+        .ok_or_else(|| ClientError::Rpc(INVALID_POLICY.to_owned()))?
+        .tracking;
+        // The pin names the registry, an account it does not decode to serves no root.
+        Ok(self
+            .account_at(tracking, finality)
+            .await?
+            .and_then(|account| TrackingRegistry::decode(&account.owner, &account.data))
+            .map(|registry| {
+                let newest = registry.newest();
+                TrackingRoot {
+                    registry: tracking,
+                    root: newest.hash,
+                    revision: newest.revision.value(),
+                    next_index: registry.next_index(),
+                }
+            }))
+    }
+
+    async fn tracking_records(
+        &self,
+        request: GetTrackingRecordsRequest,
+    ) -> Result<GetTrackingRecordsResponse, RingIndexerError> {
+        self.indexer.get_tracking_records(request).await
+    }
+
+    async fn tracking_enrollment(
+        &self,
+        ring: Address,
+        owner: Address,
+    ) -> Result<WalletEnrollment, ClientError> {
+        let Some(root) = self.tracking_root(ring, Finality::Confirmed).await? else {
+            return Ok(WalletEnrollment::NotEnrolled);
+        };
+        let (address, _) = TrackingAuthorization::find_address(&root.registry, &owner);
+        let authorization = self
+            .rpc
+            .get_account(address)
+            .await?
+            .and_then(|account| TrackingAuthorization::decode(&account.owner, &account.data));
+        Ok(enrollment_of(
+            authorization.as_ref(),
+            root.next_index >= TRACKING_CAPACITY,
+        ))
+    }
+
+    async fn owner_grant_held(
+        &self,
+        ring: Address,
+        owner: Address,
+        reader: ReaderKeyBytes,
+    ) -> Result<bool, ClientError> {
+        let Some(root) = self.tracking_root(ring, Finality::Confirmed).await? else {
             return Ok(false);
         };
-        check_reader(&account, request)?;
-        Ok(true)
+        let (address, _) = OwnerGrant::find_address(&root.registry, &owner, &reader);
+        Ok(self
+            .rpc
+            .get_account(address)
+            .await?
+            .and_then(|account| OwnerGrant::decode(&account.owner, &account.data))
+            .is_some_and(|grant| grant.is_active()))
+    }
+
+    async fn storage_member_openings(
+        &self,
+        request: GetStorageMemberOpeningsRequest,
+    ) -> Result<GetStorageMemberOpeningsResponse, RingIndexerError> {
+        self.indexer.get_storage_member_openings(request).await
+    }
+
+    async fn storage_member_records(
+        &self,
+        request: GetStorageMemberRecordsRequest,
+    ) -> Result<GetStorageMemberRecordsResponse, RingIndexerError> {
+        self.indexer.get_storage_member_records(request).await
     }
 
     async fn health(&self) -> Result<(), ClientError> {
         self.indexer
-            .get_shielded_transactions_by_tags(vec![[0; 32]], None, Some(1), None)
+            .get_shielded_transactions_by_tags(
+                vec![[0; 32]],
+                None,
+                Some(1),
+                HistoryPosition::default().filters(),
+                None,
+            )
             .await?;
         self.rpc.health().await
     }
@@ -547,68 +752,7 @@ impl TransactionSource for ChainSource {
     }
 }
 
-/// A malformed signature must stop the page before its cursor can advance.
-fn confirmed_signature(value: &str) -> Result<Signature, ClientError> {
-    value
-        .parse()
-        .map_err(|_| ClientError::Rpc("confirmed ring signature is invalid".to_owned()))
-}
-
-/// Public deposit metadata needs the same settlement binding as private recovery.
-#[must_use]
-struct ConfirmedDepositRecords<'a, O> {
-    origin: &'a O,
-    signature: Signature,
-    ring: Address,
-    indexed: IndexedShieldedTransaction,
-}
-
-impl<O: TransactionOrigin> ConfirmedDepositRecords<'_, O> {
-    async fn read(self) -> Result<Vec<DepositRecord>, ClientError> {
-        let Self {
-            origin,
-            signature,
-            ring,
-            mut indexed,
-        } = self;
-        let transaction = &mut indexed.transaction;
-        let failure = |error: AuditError| {
-            ClientError::Rpc(format!("confirmed deposit event refused because {error}"))
-        };
-        if transaction.tx_signature != signature
-            || transaction.event_index != Some(indexed.event_index)
-        {
-            return Err(failure(AuditError::ConfirmedEventMismatch));
-        }
-        let confirmed = origin
-            .origin(signature, indexed.event_index, ring)
-            .await
-            .map_err(failure)?;
-        if !confirmed.ring_invoked || confirmed.event.kind() != ConfirmedEventKind::Deposit {
-            return Ok(Vec::new());
-        }
-        confirmed
-            .bind_transaction(transaction, ring)
-            .map_err(failure)?;
-        let slots = transaction
-            .output_slots
-            .iter()
-            .map(|slot| (slot.view_tag, slot.payload.clone()));
-        Ok(ring_deposits_in(slots, ring)
-            .into_iter()
-            .map(|found| DepositRecord {
-                signature: signature.into(),
-                slot: transaction.slot,
-                depositor: found.depositor.into(),
-                asset: found.asset.to_bytes().into(),
-                amount: found.amount,
-            })
-            .collect())
-    }
-}
-
-const INVALID_CONFIG: &str = "custom ring config account is invalid";
-const INVALID_READER: &str = "custom ring reader account is invalid";
+const INVALID_POLICY: &str = "custom ring policy account is invalid";
 
 /// `bump` is the canonical bump of the address `account` was read from.
 #[derive(Clone, Copy)]
@@ -626,100 +770,28 @@ impl CanonicalAccount<'_> {
     }
 
     fn configuration(self) -> Result<RingConfiguration, ClientError> {
-        let invalid = || ClientError::Rpc(INVALID_CONFIG.to_owned());
-        let config: RingProgramConfig = self.decode().ok_or_else(invalid)?;
+        let invalid = || ClientError::Rpc(INVALID_POLICY.to_owned());
+        let config: RingPolicy = self.decode().ok_or_else(invalid)?;
         Ok(RingConfiguration {
             auditor_pubkey: X25519Pubkey::from_bytes(config.auditor_pubkey)
                 .map_err(|_| invalid())?,
-            authority: config.authority,
+            roles: config.roles,
             mode: config.mode().map_err(|_| invalid())?,
+            delegate: config.delegate().copied(),
         })
     }
 }
 
-fn check_reader(account: &Account, grant: ReaderGrant) -> Result<(), ClientError> {
-    let invalid = || ClientError::Rpc(INVALID_READER.to_owned());
-    let reader = grant.reader.to_bytes();
-    let seed_hash = ReadAccessRecord::seed_hash(&reader).map_err(|_| invalid())?;
-    let seeds: &[&[u8]] = &[ReadAccessRecord::SEED, &seed_hash];
-    let bump = Address::find_program_address(seeds, &grant.ring).1;
-    let record: ReadAccessRecord = CanonicalAccount {
-        account,
-        ring: grant.ring,
-        bump,
-    }
-    .decode()
-    .ok_or_else(invalid)?;
-    (record.reader == reader).then_some(()).ok_or_else(invalid)
-}
-
 #[cfg(test)]
 #[path = "../../../../sdk-libs/client/tests/common/origin.rs"]
-mod origin_fixture;
+pub(crate) mod origin_fixture;
 
 #[cfg(test)]
 mod tests {
-    use bytemuck::{bytes_of, Pod, Zeroable};
-    use custom_ring_interface::{CONFIG_PDA_SEED, READ_ACCESS_RECORD, RING_PROGRAM_CONFIG};
-    use solana_keypair::Keypair;
-    use solana_signer::Signer;
+    use bytemuck::{bytes_of, Pod};
+    use custom_ring_interface::{RING_POLICY, RING_POLICY_PDA_SEED};
 
     use super::*;
-
-    #[test]
-    fn malformed_confirmed_signature_aborts_a_deposit_page() {
-        assert!(confirmed_signature("not a Solana signature").is_err());
-        let valid = Signature::from([7; 64]);
-        assert_eq!(confirmed_signature(&valid.to_string()).unwrap(), valid);
-    }
-
-    #[test]
-    fn history_pages_reject_repeated_or_reordered_indexer_rows() {
-        use spr_transaction::ShieldedTransaction;
-
-        let position = |slot: u64, signature: &Signature, event_index: u16| {
-            let mut cursor = vec![2];
-            cursor.extend_from_slice(&slot.to_be_bytes());
-            cursor.extend_from_slice(signature.as_array());
-            cursor.extend_from_slice(&event_index.to_be_bytes());
-            cursor
-        };
-        let tx = |slot: u64, event_index: u16| ShieldedTransaction {
-            slot,
-            tx_signature: Signature::from([7; 64]),
-            event_index: Some(event_index),
-            tx_viewing_pk: None,
-            salt: None,
-            output_slots: vec![],
-            messages: vec![],
-            nullifiers: vec![],
-            proofless: false,
-            ring_config: None,
-            ring_program_id: None,
-        };
-        let first = tx(9, 1);
-        let second = tx(9, 2);
-        let mut response = GetShieldedTransactionsByTagsResponse {
-            context: spr_client::Context {
-                slot: 9,
-                block_time: 0,
-            },
-            transactions: vec![first.clone(), second.clone()],
-            next_cursor: Some(position(9, &second.tx_signature, 2)),
-            scanned_through: None,
-            output_tree_id: None,
-        };
-        assert!(validate_history_order(None, &response).is_ok());
-        let previous = position(9, &first.tx_signature, 1);
-        assert!(validate_history_order(Some(&previous), &response).is_err());
-        response.transactions = vec![first.clone(), first.clone()];
-        assert!(validate_history_order(None, &response).is_err());
-        response.transactions = vec![second.clone(), first];
-        assert!(validate_history_order(None, &response).is_err());
-        response.transactions = vec![second];
-        response.next_cursor = Some(previous);
-        assert!(validate_history_order(None, &response).is_err());
-    }
 
     fn account<T: Pod>(owner: Address, value: &T) -> Account {
         Account {
@@ -734,18 +806,18 @@ mod tests {
     const AUTHORITY: Address = Address::new_from_array([7; 32]);
 
     fn config_account(ring: Address, key: [u8; 33], bump: u8) -> Account {
-        let mut config = RingProgramConfig::zeroed();
-        config.discriminator = RING_PROGRAM_CONFIG;
-        config.authority = AUTHORITY;
+        let mut config: Box<RingPolicy> = bytemuck::zeroed_box();
+        config.discriminator = RING_POLICY;
+        config.roles.policy = AUTHORITY;
         config.auditor_pubkey = key;
         config.bump = bump;
-        account(ring, &config)
+        account(ring, &*config)
     }
 
     #[test]
     fn config_accounts_require_the_canonical_layout() {
         let ring = Address::new_from_array([9; 32]);
-        let bump = Address::find_program_address(&[CONFIG_PDA_SEED], &ring).1;
+        let bump = Address::find_program_address(&[RING_POLICY_PDA_SEED], &ring).1;
         let key = spr_keypair::X25519Keypair::new().pubkey();
         let valid = config_account(ring, *key.as_bytes(), bump);
         let configuration = |account: &Account, bump| {
@@ -758,7 +830,7 @@ mod tests {
         };
         let config = configuration(&valid, bump).expect("config");
         assert_eq!(config.auditor_pubkey, key);
-        assert_eq!(config.authority, AUTHORITY);
+        assert_eq!(config.roles.policy, AUTHORITY);
 
         let mut wrong_owner = valid.clone();
         wrong_owner.owner = Address::new_from_array([8; 32]);
@@ -774,137 +846,5 @@ mod tests {
             let invalid = config_account(ring, invalid_key, bump);
             assert!(configuration(&invalid, bump).is_err());
         }
-    }
-
-    fn reader_account(ring: Address, reader: ReaderKey, bump: u8) -> Account {
-        let mut record = ReadAccessRecord::zeroed();
-        record.discriminator = READ_ACCESS_RECORD;
-        record.reader = reader.to_bytes();
-        record.bump = bump;
-        account(ring, &record)
-    }
-
-    #[test]
-    fn reader_accounts_bind_both_reader_schemes() {
-        let ring = Address::new_from_array([9; 32]);
-        let readers = [
-            ReaderKey::ed25519(Keypair::new().pubkey()).expect("Ed25519 reader"),
-            ReaderKey::p256(
-                zolana_ring_client::P256ReaderKey::from_bytes(
-                    hex::decode(
-                        "036b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296",
-                    )
-                    .unwrap()
-                    .try_into()
-                    .unwrap(),
-                )
-                .unwrap(),
-            )
-            .expect("P256 reader"),
-        ];
-        for reader in readers {
-            let grant = ReaderGrant { ring, reader };
-            let bump = Address::find_program_address(
-                &[
-                    ReadAccessRecord::SEED,
-                    &ReadAccessRecord::seed_hash(&reader.to_bytes()).expect("seed"),
-                ],
-                &ring,
-            )
-            .1;
-            let valid = reader_account(ring, reader, bump);
-            assert!(check_reader(&valid, grant).is_ok());
-
-            let mut wrong_reader = valid.clone();
-            wrong_reader.data[1] ^= 1;
-            let wrong_bump = reader_account(ring, reader, bump.wrapping_add(1));
-            for invalid in [&wrong_reader, &wrong_bump] {
-                assert!(check_reader(invalid, grant).is_err());
-            }
-        }
-    }
-
-    struct ConfirmedOrigin(RingOrigin);
-
-    impl TransactionOrigin for ConfirmedOrigin {
-        async fn origin(&self, _: Signature, _: u16, _: Address) -> Result<RingOrigin, AuditError> {
-            Ok(self.0.clone())
-        }
-    }
-
-    #[tokio::test]
-    async fn public_deposit_history_rejects_forged_amount_asset_context_and_signature() {
-        use spr_transaction::{OutputContext, OutputSlot, ShieldedTransaction};
-        let fixture: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../sdk-libs/client/tests/fixtures/confirmed-deposit-event.json"
-        ))
-        .unwrap();
-        let ring: Address = fixture["ring"].as_str().unwrap().parse().unwrap();
-        let output = &fixture["expected"]["outputs"][0];
-        let bytes = |key: &str| hex::decode(output[key].as_str().unwrap()).unwrap();
-        let signature = Signature::from([7; 64]);
-        let indexed = IndexedShieldedTransaction {
-            event_index: 0,
-            transaction: ShieldedTransaction {
-                slot: 99,
-                tx_signature: signature,
-                event_index: Some(0),
-                tx_viewing_pk: None,
-                salt: None,
-                proofless: true,
-                ring_config: None,
-                ring_program_id: Some(ring),
-                messages: Vec::new(),
-                nullifiers: Vec::new(),
-                output_slots: vec![OutputSlot {
-                    view_tag: bytes("viewTagHex").try_into().unwrap(),
-                    output_context: OutputContext {
-                        hash: bytes("hashHex").try_into().unwrap(),
-                        tree_id: output["treeId"].as_u64().unwrap() as u16,
-                        leaf_index: output["leafIndex"].as_u64().unwrap(),
-                    },
-                    payload: bytes("payloadHex"),
-                }],
-            },
-        };
-        let origin = ConfirmedOrigin(RingOrigin {
-            ring_invoked: true,
-            event: super::origin_fixture::event(&indexed.transaction).with_slot(99),
-            signers: Vec::new(),
-            withdrawals: Vec::new(),
-            deposits: Vec::new(),
-            merge_disclosure: None,
-            transact: None,
-        });
-        let records = |origin, indexed| ConfirmedDepositRecords {
-            origin,
-            signature,
-            ring,
-            indexed,
-        };
-        let opened = records(&origin, indexed.clone()).read().await.unwrap();
-        assert_eq!(opened.len(), 1);
-        assert_eq!(opened[0].amount, 123);
-        type Mutation = fn(&mut IndexedShieldedTransaction);
-        let mutations: &[Mutation] = &[
-            |tx| tx.transaction.tx_signature = Signature::from([8; 64]),
-            |tx| tx.transaction.event_index = Some(1),
-            |tx| tx.transaction.slot += 1,
-            |tx| tx.transaction.proofless = false,
-            |tx| tx.transaction.output_slots[0].output_context.leaf_index += 1,
-            // Borsh outer tag + Vec length + scheme, then owner hash and asset.
-            |tx| tx.transaction.output_slots[0].payload[6 + 32] ^= 1,
-            |tx| tx.transaction.output_slots[0].payload[6 + 32 + 32] ^= 1,
-        ];
-        for mutate in mutations {
-            let mut forged = indexed.clone();
-            mutate(&mut forged);
-            assert!(records(&origin, forged).read().await.is_err());
-        }
-        let foreign = ConfirmedOrigin(RingOrigin {
-            ring_invoked: false,
-            ..origin.0.clone()
-        });
-        assert!(records(&foreign, indexed).read().await.unwrap().is_empty());
     }
 }

@@ -1,59 +1,57 @@
-import type { MintPolicy } from "../protocol/membership/mint-policy.js";
-import { ClientError, type Address, type Bytes32, type RequestContext } from "@heliuslabs/zolana";
+import { ClientError, type Bytes32, type RequestContext } from "@heliuslabs/spr";
 import {
   ApiError,
-  decodeBase64,
-  decodeX25519,
+  equalBytes,
   indexerScalars,
-  invalidResponse,
   wrapIndexer,
-  type ZolanaApi,
-  type indexerTypes,
-} from "@heliuslabs/zolana/internal";
+  type SprApi,
+} from "@heliuslabs/spr/internal";
 
 import {
-  getRingApplyProofInputsMethod,
-  getRingMemberOpeningsMethod,
-  getRingMemberRecordMethod,
-  getRingMemberRecordsMethod,
-  getRingMemberRegistryRootMethod,
-  getRingRecordPoolMethod,
-  getRingRecordQueueMethod,
+  getStorageMemberOpeningsMethod,
+  getStorageMemberRecordsMethod,
+  getStorageRecordPoolMethod,
 } from "./indexer-methods.js";
 import type {
   RingMemberRecordView as WireRingMemberRecordView,
   RingMemberOpeningView as WireRingMemberOpeningView,
   RingRecordPathView as WireRingRecordPathView,
-  RingRegistryRootView as WireRingRegistryRootView,
+  StorageMemberOpeningsResponse as WireStorageMemberOpenings,
+  StorageRecordPoolResponse as WireStorageRecordPool,
+  StorageRootView as WireStorageRootView,
 } from "../protocol/indexer/indexer-types.js";
 import {
   QUAD_ARITY,
   canopyLevels,
   type MemberRecord,
   type QuadPath,
-  type QueueEntry,
   type RecordOpening,
 } from "../protocol/membership/member-registry.js";
+import {
+  getPendingEnrollmentsMethod,
+  getTrackingOpeningsMethod,
+  getTrackingRecordPoolMethod,
+  type PendingEnrollments,
+  type PendingEnrollmentsRequest,
+  type TrackingOpenings,
+  type TrackingOpeningsRequest,
+  type TrackingRecordPoolRequest,
+} from "../protocol/indexer/tracking-codec.js";
+import type { ServedTrackingPool } from "../protocol/membership/tracking.js";
 import type {
-  RecordWrite,
-  RingApplyProofInputs,
   RingMemberOpening,
-  RingMemberOpenings,
-  RingMemberPage,
-  RingMemberPageRequest,
-  RingMemberProofRequest,
-  RingMemberRecordResult,
-  RingQueueState,
-  RingRecordPool,
-  RingRecordPoolRequest,
   RingRecordReader,
-  RingRegistryRoot,
-  RingRegistryState,
+  TrackingReader,
   RingServedRecord,
+  StorageMemberOpenings,
+  StorageMemberPage,
+  StorageOpeningsRequest,
+  StoragePageRequest,
+  StorageRecordPool,
+  StorageRecordPoolRequest,
+  StorageRoot,
 } from "./ports.js";
 import { RingError, type RingErrorCode } from "../protocol/error.js";
-
-type Hash = indexerTypes.Hash;
 
 const { hash, hashBytes } = indexerScalars;
 
@@ -62,73 +60,99 @@ const RING_PROJECTION_CODES: ReadonlyMap<number, RingErrorCode> = new Map([
   [-32070, "RING_REGISTRY_OUT_OF_SYNC"],
   [-32071, "RING_REGISTRY_ROOT_CHANGED"],
   [-32075, "RING_REGISTRY_PAGE_GAP"],
-  [-32076, "RING_RECORD_QUEUE_CHANGED"],
 ]);
 
-export class RingIndexer implements RingRecordReader {
-  readonly #api: ZolanaApi;
+export class RingIndexer implements RingRecordReader, TrackingReader {
+  readonly #api: SprApi;
 
-  constructor(api: ZolanaApi) {
+  constructor(api: SprApi) {
     this.#api = api;
   }
 
-  async getRingMemberRecord(
-    request: RingMemberProofRequest,
+  async getStorageMemberOpenings(
+    request: StorageOpeningsRequest,
     context?: RequestContext,
-  ): Promise<RingMemberRecordResult> {
-    const method = "getRingMemberRecord";
+  ): Promise<StorageMemberOpenings> {
+    const method = "getStorageMemberOpenings";
     try {
-      const wire = memberRequest(request);
-      const response = await this.#api.call(getRingMemberRecordMethod, wire, context);
-      if (
-        response.root.root !== wire.expectedRoot ||
-        response.root.nextIndex !== wire.expectedNextIndex ||
-        (response.opening.present && response.opening.record.member !== wire.member)
-      )
-        throw new ClientError("CLIENT_INVALID_RPC_RESPONSE", { details: { method, path: "$" } });
+      const wire = openingsRequest(request);
+      const response = await this.#api.call(
+        getStorageMemberOpeningsMethod,
+        { registry: request.registry, ...wire },
+        context,
+      );
       return Object.freeze({
-        context: response.context,
-        root: registryRoot(response.root),
-        opening: memberOpening(response.opening, method, "opening"),
+        ...servedOpenings(response, wire, method),
+        root: storageRoot(response.root),
       });
     } catch (cause) {
       throw ringIndexerError(cause, method);
     }
   }
 
-  async getRingMemberRecords(
-    request: RingMemberPageRequest,
+  async getTrackingOpenings(
+    request: TrackingOpeningsRequest,
     context?: RequestContext,
-  ): Promise<RingMemberPage> {
-    const method = "getRingMemberRecords";
+  ): Promise<TrackingOpenings> {
+    const method = "getTrackingOpenings";
+    try {
+      const response = await this.#api.call(getTrackingOpeningsMethod, request, context);
+      if (
+        !equalBytes(response.root, request.expectedRoot) ||
+        response.openings.length !== request.members.length
+      )
+        throw new ClientError("CLIENT_INVALID_RPC_RESPONSE", { details: { method, path: "$" } });
+      return response;
+    } catch (cause) {
+      throw ringIndexerError(cause, method);
+    }
+  }
+
+  async getTrackingRecordPool(
+    request: TrackingRecordPoolRequest,
+    context?: RequestContext,
+  ): Promise<ServedTrackingPool> {
+    const method = "getTrackingRecordPool";
+    try {
+      return await this.#api.call(getTrackingRecordPoolMethod, request, context);
+    } catch (cause) {
+      throw ringIndexerError(cause, method);
+    }
+  }
+
+  async getPendingEnrollments(
+    request: PendingEnrollmentsRequest,
+    context?: RequestContext,
+  ): Promise<PendingEnrollments> {
+    const method = "getPendingEnrollments";
+    try {
+      return await this.#api.call(getPendingEnrollmentsMethod, request, context);
+    } catch (cause) {
+      throw ringIndexerError(cause, method);
+    }
+  }
+
+  async getStorageMemberRecords(
+    request: StoragePageRequest,
+    context?: RequestContext,
+  ): Promise<StorageMemberPage> {
+    const method = "getStorageMemberRecords";
     try {
       const wire = {
-        ringProgramId: request.ringProgramId,
+        registry: request.registry,
         expectedRoot: hash(request.expectedRoot),
-        expectedNextIndex: BigInt(request.expectedNextIndex),
         startIndex: BigInt(request.startIndex),
         limit: request.limit,
       };
-      const response = await this.#api.call(getRingMemberRecordsMethod, wire, context);
-      const end = Math.min(request.startIndex + request.limit, request.expectedNextIndex);
-      if (
-        response.root.root !== wire.expectedRoot ||
-        response.root.nextIndex !== wire.expectedNextIndex ||
-        response.records.length !== end - request.startIndex ||
-        response.records.some(
-          (entry, index) => entry.path.index !== BigInt(request.startIndex + index),
-        ) ||
-        response.nextLeafIndex !== (end < request.expectedNextIndex ? BigInt(end) : null)
-      )
-        throw new ClientError("CLIENT_INVALID_RPC_RESPONSE", { details: { method, path: "$" } });
+      const response = await this.#api.call(getStorageMemberRecordsMethod, wire, context);
+      if (response.root.root !== wire.expectedRoot)
+        throw new ClientError("CLIENT_INVALID_RPC_RESPONSE", {
+          details: { method, path: "$.root" },
+        });
       return Object.freeze({
         context: response.context,
-        root: registryRoot(response.root),
-        records: Object.freeze(
-          response.records.map((entry, index) =>
-            servedRecord(entry, method, `records[${String(index)}]`),
-          ),
-        ),
+        root: storageRoot(response.root),
+        records: Object.freeze(response.records.map(servedRecord)),
         nextLeafIndex: response.nextLeafIndex === null ? undefined : Number(response.nextLeafIndex),
       });
     } catch (cause) {
@@ -136,189 +160,21 @@ export class RingIndexer implements RingRecordReader {
     }
   }
 
-  async getRingMemberRegistryRoot(
-    request: Readonly<{ ringProgramId: Address }>,
+  async getStorageRecordPool(
+    request: StorageRecordPoolRequest,
     context?: RequestContext,
-  ): Promise<RingRegistryState> {
-    const method = "getRingMemberRegistryRoot";
+  ): Promise<StorageRecordPool> {
+    const method = "getStorageRecordPool";
     try {
-      const response = await this.#api.call(getRingMemberRegistryRootMethod, request, context);
-      return Object.freeze({
-        context: response.context,
-        history: Object.freeze(
-          response.history.map((entry) =>
-            entry === null
-              ? undefined
-              : Object.freeze({
-                  root: hashBytes(entry.root),
-                  applied: entry.applied,
-                  slot: entry.slot,
-                }),
-          ),
-        ),
-        historyCursor: response.historyCursor,
-        nextIndex: Number(response.nextIndex),
-        floor: response.floor,
-        priorFloor: response.priorFloor,
-        floorSlot: response.floorSlot,
-        ...(response.appendPath === null ? {} : { appendPath: recordPath(response.appendPath) }),
-      });
-    } catch (cause) {
-      throw ringIndexerError(cause, method);
-    }
-  }
-
-  async getRingMemberOpenings(
-    request: Readonly<{
-      ringProgramId: Address;
-      members: readonly Bytes32[];
-      expectedRoot: Bytes32;
-    }>,
-    context?: RequestContext,
-  ): Promise<RingMemberOpenings> {
-    const method = "getRingMemberOpenings";
-    try {
-      const expectedRoot = hash(request.expectedRoot);
+      const wire = { ...openingsRequest(request), openings: request.openings };
       const response = await this.#api.call(
-        getRingMemberOpeningsMethod,
-        {
-          ringProgramId: request.ringProgramId,
-          members: request.members.map((member) => hash(member)),
-          expectedRoot,
-        },
-        context,
-      );
-      if (
-        response.root.root !== expectedRoot ||
-        response.openings.length !== request.members.length
-      )
-        throw new ClientError("CLIENT_INVALID_RPC_RESPONSE", { details: { method, path: "$" } });
-      return Object.freeze({
-        context: response.context,
-        root: registryRoot(response.root),
-        openings: Object.freeze(
-          response.openings.map((opening, index) =>
-            memberOpening(opening, method, `openings[${String(index)}]`),
-          ),
-        ),
-      });
-    } catch (cause) {
-      throw ringIndexerError(cause, method);
-    }
-  }
-
-  async getRingRecordPool(
-    request: RingRecordPoolRequest,
-    context?: RequestContext,
-  ): Promise<RingRecordPool> {
-    const method = "getRingRecordPool";
-    try {
-      const expectedRoot = hash(request.expectedRoot);
-      const response = await this.#api.call(
-        getRingRecordPoolMethod,
-        {
-          ringProgramId: request.ringProgramId,
-          members: request.members.map((member) => hash(member)),
-          expectedRoot,
-          openings: request.openings,
-        },
-        context,
-      );
-      if (
-        response.root.root !== expectedRoot ||
-        response.records.length < 1 ||
-        response.records.length > request.openings ||
-        response.canopy.length !== QUAD_ARITY ** canopyLevels(request.openings) ||
-        response.subjects.length !== request.members.length
-      )
-        throw new ClientError("CLIENT_INVALID_RPC_RESPONSE", { details: { method, path: "$" } });
-      return Object.freeze({
-        context: response.context,
-        root: registryRoot(response.root),
-        records: Object.freeze(
-          response.records.map((entry, index) =>
-            servedRecord(entry, method, `records[${String(index)}]`),
-          ),
-        ),
-        canopy: Object.freeze(response.canopy.map(hashBytes)),
-        subjects: Object.freeze([...response.subjects]),
-      });
-    } catch (cause) {
-      throw ringIndexerError(cause, method);
-    }
-  }
-
-  async getRingRecordQueue(
-    request: Readonly<{ ringProgramId: Address }>,
-    context?: RequestContext,
-  ): Promise<RingQueueState> {
-    const method = "getRingRecordQueue";
-    try {
-      const response = await this.#api.call(getRingRecordQueueMethod, request, context);
-      return Object.freeze({
-        context: response.context,
-        head: response.head,
-        tail: response.tail,
-        chainHead: hashBytes(response.chainHead),
-        entries: Object.freeze(
-          response.entries.map((entry) =>
-            Object.freeze({
-              position: entry.position,
-              entry: queueEntry(entry),
-              slot: entry.slot,
-            }),
-          ),
-        ),
-      });
-    } catch (cause) {
-      throw ringIndexerError(cause, method);
-    }
-  }
-
-  async getRingApplyProofInputs(
-    request: Readonly<{ ringProgramId: Address; authorityWrites: readonly RecordWrite[] }>,
-    context?: RequestContext,
-  ): Promise<RingApplyProofInputs> {
-    const method = "getRingApplyProofInputs";
-    try {
-      const response = await this.#api.call(
-        getRingApplyProofInputsMethod,
-        {
-          ringProgramId: request.ringProgramId,
-          authorityWrites: request.authorityWrites.map((write) => ({
-            member: hash(write.member),
-            mask: write.mask,
-            value: write.value,
-            mintPolicy: write.mintPolicy ?? null,
-          })),
-        },
+        getStorageRecordPoolMethod,
+        { registry: request.registry, ...wire },
         context,
       );
       return Object.freeze({
-        context: response.context,
-        inputs: Object.freeze({
-          oldRoot: hashBytes(response.oldRoot),
-          newRoot: hashBytes(response.newRoot),
-          oldNextIndex: Number(response.oldNextIndex),
-          newNextIndex: Number(response.newNextIndex),
-          chainStart: hashBytes(response.chainStart),
-          chainEnd: hashBytes(response.chainEnd),
-          writes: Object.freeze(
-            response.writes.map((write) =>
-              Object.freeze({
-                entry: queueEntry(write),
-                exists: write.exists,
-                oldNext: hashBytes(write.oldNext),
-                oldLists: write.oldLists,
-                oldEscrow: hashBytes(write.oldEscrow),
-                oldMintPolicy: write.oldMintPolicy,
-                slot: recordPath(write.slot),
-                low: memberRecord(write.low),
-                lowPath: recordPath(write.lowPath),
-              }),
-            ),
-          ),
-        }),
+        ...servedPool(response, wire, method),
+        root: storageRoot(response.root),
       });
     } catch (cause) {
       throw ringIndexerError(cause, method);
@@ -326,20 +182,57 @@ export class RingIndexer implements RingRecordReader {
   }
 }
 
-function memberRequest(request: RingMemberProofRequest) {
-  return Object.freeze({
-    ringProgramId: request.ringProgramId,
-    member: hash(request.member),
+function openingsRequest(
+  request: Readonly<{ members: readonly Bytes32[]; expectedRoot: Bytes32 }>,
+) {
+  return {
+    members: request.members.map((member) => hash(member)),
     expectedRoot: hash(request.expectedRoot),
-    expectedNextIndex: BigInt(request.expectedNextIndex),
-  });
+  };
 }
 
-function registryRoot(root: WireRingRegistryRootView): RingRegistryRoot {
+type OpeningsWire = ReturnType<typeof openingsRequest>;
+
+/** The served root is the expected one and every member has its opening. */
+function servedOpenings(
+  response: WireStorageMemberOpenings,
+  wire: OpeningsWire,
+  method: string,
+): Omit<StorageMemberOpenings, "root"> {
+  if (response.root.root !== wire.expectedRoot || response.openings.length !== wire.members.length)
+    throw new ClientError("CLIENT_INVALID_RPC_RESPONSE", { details: { method, path: "$" } });
+  return {
+    context: response.context,
+    openings: Object.freeze(response.openings.map(memberOpening)),
+  };
+}
+
+/** The served root is the expected one and the pool fits the openings asked for. */
+function servedPool(
+  response: WireStorageRecordPool,
+  wire: OpeningsWire & Readonly<{ openings: number }>,
+  method: string,
+): Omit<StorageRecordPool, "root"> {
+  if (
+    response.root.root !== wire.expectedRoot ||
+    response.records.length < 1 ||
+    response.records.length > wire.openings ||
+    response.canopy.length !== QUAD_ARITY ** canopyLevels(wire.openings) ||
+    response.subjects.length !== wire.members.length
+  )
+    throw new ClientError("CLIENT_INVALID_RPC_RESPONSE", { details: { method, path: "$" } });
+  return {
+    context: response.context,
+    records: Object.freeze(response.records.map(servedRecord)),
+    canopy: Object.freeze(response.canopy.map(hashBytes)),
+    subjects: Object.freeze([...response.subjects]),
+  };
+}
+
+function storageRoot(root: WireStorageRootView): StorageRoot {
   return Object.freeze({
     root: hashBytes(root.root),
-    rootIndex: root.rootIndex,
-    applied: root.applied,
+    revision: root.revision,
     nextIndex: Number(root.nextIndex),
   });
 }
@@ -356,81 +249,21 @@ function memberRecord(record: WireRingMemberRecordView): MemberRecord {
     member: hashBytes(record.member),
     next: hashBytes(record.next),
     lists: record.lists,
-    escrowKey: hashBytes(record.escrowKey),
     mintPolicy: record.mintPolicy,
   });
 }
 
-function queueEntry(
-  entry: Readonly<{
-    member: Hash;
-    mask: bigint;
-    value: bigint;
-    escrowKey: Hash;
-    mintPolicy: MintPolicy | null;
-  }>,
-): QueueEntry {
-  return Object.freeze({
-    member: hashBytes(entry.member),
-    mask: entry.mask,
-    value: entry.value,
-    escrowKey: hashBytes(entry.escrowKey),
-    ...(entry.mintPolicy === null ? {} : { mintPolicy: entry.mintPolicy }),
-  });
-}
-
-/** A sealed key is served whole or not at all. */
-function memberOpening(
-  opening: WireRingMemberOpeningView,
-  method: string,
-  path: string,
-): RingMemberOpening {
-  const { record } = opening;
-  const sealed = [record.ownerPubkey, record.nullifierPk, record.ephPk, record.ciphertext];
-  const present = sealed.filter((value) => value !== null && value !== undefined).length;
-  if (present !== 0 && present !== sealed.length)
-    throw new ClientError("CLIENT_INVALID_RPC_RESPONSE", {
-      details: { method, path: `${path}.record` },
-    });
-  const sealedKey =
-    record.ownerPubkey == null ||
-    record.nullifierPk == null ||
-    record.ephPk === null ||
-    record.ciphertext === null
-      ? undefined
-      : Object.freeze({
-          owner: record.ownerPubkey,
-          nullifierPk: hashBytes(record.nullifierPk),
-          ephemeralPublicKey: decodeX25519(record.ephPk, method, `${path}.record.ephPk`),
-          ciphertext: decodeCiphertext(record.ciphertext, method, `${path}.record.ciphertext`),
-        });
+function memberOpening(opening: WireRingMemberOpeningView): RingMemberOpening {
   const opened: RecordOpening = opening.present
-    ? { kind: "present", record: memberRecord(record), path: recordPath(opening.path) }
-    : { kind: "absent", low: memberRecord(record), path: recordPath(opening.path) };
-  return Object.freeze({ ...opened, ...(sealedKey === undefined ? {} : { sealedKey }) });
+    ? { kind: "present", record: memberRecord(opening.record), path: recordPath(opening.path) }
+    : { kind: "absent", low: memberRecord(opening.record), path: recordPath(opening.path) };
+  return Object.freeze(opened);
 }
 
 function servedRecord(
   entry: Readonly<{ record: WireRingMemberRecordView; path: WireRingRecordPathView }>,
-  method: string,
-  path: string,
 ): RingServedRecord {
-  const opening = memberOpening(
-    { present: true, record: entry.record, path: entry.path },
-    method,
-    path,
-  );
-  return Object.freeze({
-    record: memberRecord(entry.record),
-    path: opening.path,
-    ...(opening.sealedKey === undefined ? {} : { sealedKey: opening.sealedKey }),
-  });
-}
-
-function decodeCiphertext(value: string, method: string, path: string): Bytes32 {
-  const bytes = decodeBase64(value, path);
-  if (bytes.length !== 32) throw invalidResponse(method, path, 32, bytes.length);
-  return bytes as Bytes32;
+  return Object.freeze({ record: memberRecord(entry.record), path: recordPath(entry.path) });
 }
 
 function ringIndexerError(cause: unknown, method: string): Error {

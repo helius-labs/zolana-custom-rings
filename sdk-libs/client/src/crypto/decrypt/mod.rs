@@ -1,91 +1,96 @@
-//! Opens a ring transfer for its auditor from the disclosure and the blindings its keys derive.
-
-use std::{
-    borrow::Borrow,
-    cmp::Ordering,
-    collections::{HashMap, HashSet},
-};
-
 use custom_ring_interface::{
-    blinding::ring_blinding_seed,
-    ring_confidential_delivered_output_body,
-    stream::{DeliveredSlot, SlotSecret},
-    AuditorMessage, DisclosureLayout, InputPrefix,
+    blinding::ring_blinding_seed, AuditEvidence, AuditRecord, AuditStreamLayout, AuditorMessage,
+    DataTail, EntryInput, InputClass, InputMap, ParsedTransact, RecordKind,
 };
 use solana_address::Address;
+use solana_signature::Signature;
 use spr_client::ProofInputUtxo;
-use spr_event::confidential_encrypted_output_body;
-use spr_hasher::primitives::right_align;
-use spr_interface::tree_slot::tree_id_field;
+use spr_event::MessageData;
+use spr_hasher::primitives::{hash_bytes, right_align};
+use spr_interface::{instruction::instruction_data::OwnerTag, tree_slot::tree_id_field};
 use spr_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
 use spr_transaction::{
     utxo::{derive_output_blinding_seed, derive_transact_output_blinding, DUMMY_DOMAIN},
-    OutputSlot, ShieldedTransaction,
+    OutputContext, OutputSlot, ShieldedTransaction,
 };
-use zeroize::Zeroizing;
-use zolana_ring_transaction::{RingAssets, RingDeliveredBody};
 
 use crate::{
-    disclosure::{
-        AnonymousDisclosure, AnonymousInputs, AnonymousOutputOpening, AuditDisclosure,
-        AuditEnvelope, DeliveredOutputOpening, DisclosurePad, PublishedOutputs,
-    },
+    disclosure::{canonical, AuditEnvelope},
     encryption::auditor_view_tag,
-    known::KnownUtxoIndex,
     types::{
-        AuditedInput, AuditedInputOpening, AuditedOutput, AuditedSender, AuditedTransaction,
-        AuditedUtxo, InputOpening, InputRing, KnownUtxo, OutputOpening, OutputPayloadError,
-        OutputPayloadErrorKind, RingOwnerTag,
+        AuditedDefaultInput, AuditedInput, AuditedOutput, AuditedTransaction, AuditedUtxo,
+        InputOpening, OutputOpening, OutputPayloadError, OutputPayloadErrorKind, RingOwnerTag,
     },
     AuditError,
 };
 
-/// Takes the transaction as given, [`crate::RingScan::audit`] binds it to its confirmed event.
+/// Only [`crate::RingScan::audit`] binds the transaction to its confirmed event.
 #[must_use = "run the audit explicitly"]
 pub struct TransactionAudit<'a> {
     transaction: &'a ShieldedTransaction,
-    layout: DisclosureLayout,
+    layout: AuditStreamLayout,
     input_trees: Option<&'a [Option<u16>]>,
-    known_utxos: Option<&'a dyn KnownUtxos>,
-    escrowed_keys: Option<&'a dyn EscrowedKeys>,
 }
 
-pub trait KnownUtxos {
-    fn utxo(&self, commitment: &[u8; 32]) -> Option<KnownUtxo>;
-    /// The commitments of the notes of `owner_key` that carry `prefix`.
-    fn with_prefix(&self, owner_key: &[u8; 32], prefix: InputPrefix) -> Vec<[u8; 32]>;
+/// The row a frame's event publishes, the co-signer audits its own message before it lands.
+#[must_use]
+pub struct FramedRow<'a, 'f> {
+    pub parsed: &'a ParsedTransact<'f>,
+    pub ring: Address,
+    pub auditor: &'a X25519Pubkey,
+    pub output_tree_id: u16,
 }
 
-impl<T: Borrow<KnownUtxo>> KnownUtxos for KnownUtxoIndex<T> {
-    fn utxo(&self, commitment: &[u8; 32]) -> Option<KnownUtxo> {
-        self.get(commitment).map(|record| *record.borrow())
-    }
-
-    fn with_prefix(&self, owner_key: &[u8; 32], prefix: InputPrefix) -> Vec<[u8; 32]> {
-        self.prefixed(owner_key, prefix).to_vec()
-    }
-}
-
-/// The nullifier key each registered owner escrows, keyed by its raw Solana key.
-pub trait EscrowedKeys {
-    fn nullifier_pk(&self, owner_key: &[u8; 32]) -> Option<[u8; 32]>;
-}
-
-impl EscrowedKeys for HashMap<[u8; 32], [u8; 32]> {
-    fn nullifier_pk(&self, owner_key: &[u8; 32]) -> Option<[u8; 32]> {
-        self.get(owner_key).copied()
+impl FramedRow<'_, '_> {
+    pub fn row(self) -> Result<ShieldedTransaction, AuditError> {
+        let data = self.parsed.data();
+        let output_slots = data
+            .outputs
+            .iter()
+            .zip(data.slot_replies())
+            .map(|(output, reply)| {
+                let published = output
+                    .transact_output(reply)
+                    .map_err(|_| AuditError::DisclosureField)?;
+                let OwnerTag::Inline(view_tag) = published.owner_tag else {
+                    return Err(AuditError::DisclosureField);
+                };
+                Ok(OutputSlot {
+                    view_tag,
+                    output_context: OutputContext {
+                        hash: published.utxo_hash,
+                        tree_id: self.output_tree_id,
+                        leaf_index: 0,
+                    },
+                    payload: published.data.unwrap_or_default(),
+                })
+            })
+            .collect::<Result<Vec<_>, AuditError>>()?;
+        Ok(ShieldedTransaction {
+            slot: 0,
+            tx_signature: Signature::default(),
+            event_index: None,
+            tx_viewing_pk: Some(X25519Pubkey::from_u(*data.tx_viewing_u)?),
+            salt: Some(*data.salt),
+            output_slots,
+            messages: vec![MessageData {
+                view_tag: auditor_view_tag(self.auditor),
+                data: data.auditor_message(),
+            }],
+            nullifiers: data.nullifiers.to_vec(),
+            proofless: false,
+            ring_config: None,
+            ring_program_id: Some(self.ring),
+        })
     }
 }
 
 impl<'a> TransactionAudit<'a> {
-    /// `layout` comes from [`crate::RingOrigin::disclosure_layout`].
-    pub fn new(transaction: &'a ShieldedTransaction, layout: DisclosureLayout) -> Self {
+    pub fn new(transaction: &'a ShieldedTransaction, layout: AuditStreamLayout) -> Self {
         Self {
             transaction,
             layout,
             input_trees: None,
-            known_utxos: None,
-            escrowed_keys: None,
         }
     }
 
@@ -102,155 +107,84 @@ impl<'a> TransactionAudit<'a> {
         Ok(self)
     }
 
-    /// Opens a commitment-layout input and resolves an entry input's ring.
-    pub fn with_known_utxos(mut self, known: &'a dyn KnownUtxos) -> Self {
-        self.known_utxos = Some(known);
-        self
-    }
-
-    /// The output nullifier keys a key-escrow ring leaves out of its disclosure.
-    pub fn with_escrowed_keys(mut self, keys: &'a dyn EscrowedKeys) -> Self {
-        self.escrowed_keys = Some(keys);
-        self
-    }
-
-    pub fn run(
-        self,
-        auditor: &X25519Keypair,
-        assets: &RingAssets,
-    ) -> Result<AuditedTransaction, AuditError> {
+    /// Reads no mint registry or earlier note.
+    pub fn run(self, auditor: &X25519Keypair) -> Result<AuditedTransaction, AuditError> {
         let tx = self.transaction;
+        let layout = self.layout;
         let tx_viewing_pk = tx.tx_viewing_pk.ok_or(AuditError::MissingTxViewingPk)?;
         let salt = tx.salt.ok_or(AuditError::MissingSalt)?;
         let ring = tx.ring_program_id.ok_or(AuditError::MissingRingProgram)?;
         let first_nullifier = *tx.nullifiers.first().ok_or(AuditError::MissingNullifier)?;
         let data = auditor_message(tx, &auditor.pubkey())?;
-        let exits: Vec<bool> = tx.output_slots.iter().map(is_exit).collect();
-        let layout = self.layout;
-        check_published(layout, tx, &exits)?;
+        check_published(layout, tx)?;
         let message = AuditorMessage::parse(data, layout)
             .ok_or(AuditError::AuditorMessageLength(data.len()))?;
-        let tx_key = AuditEnvelope {
+        let opened = AuditEnvelope {
             eph_u: X25519Pubkey::from_bytes(*message.eph_pk)?.u(),
-            sealed: *message.sealed,
+            salt: &salt,
+            ciphertext: message.envelope,
         }
-        .open(auditor)?;
+        .open(auditor, layout)?;
+        let tx_key = &opened.tx_viewing_key;
         // The audit proof binds the envelope to the published key.
         if tx_key.pubkey() != tx_viewing_pk {
             return Err(AuditError::TxViewingKeyMismatch);
         }
-        let plaintext =
-            Zeroizing::new(DisclosurePad::new(&tx_key, &salt)?.decrypt(message.disclosure)?);
-        let disclosure = AuditDisclosure::decode(
-            PublishedOutputs {
-                layout,
-                exits: &exits,
-            },
-            &plaintext,
-        )?;
+        let transfer = Transfer::new(ring, first_nullifier, tx_key, &salt)?;
         let mut audited = AuditedTransaction {
             tx_signature: tx.tx_signature,
             slot: tx.slot,
             tx_viewing_pk,
+            real_inputs: opened.inputs.note_count(),
             outputs: Vec::new(),
             payload_errors: Vec::new(),
-            sender: None,
             inputs: Vec::new(),
         };
-        let seed_out = derive_output_blinding_seed(
-            &first_nullifier,
-            &ring_blinding_seed(&tx_key.secret_bytes(), &salt)?,
-        )?;
-        let transfer = |disclosed: Option<[u8; 32]>| {
-            if disclosed.is_some_and(|disclosed| disclosed != seed_out) {
-                return Err(AuditError::SeedOutMismatch);
-            }
-            Ok(Transfer {
-                ring,
-                tx_key: &tx_key,
-                tx_viewing_pk,
-                salt,
-                first_nullifier,
-                seed_out,
-                assets,
-                escrowed: self.escrowed_keys,
-            })
-        };
-        let slots = (0u32..)
-            .zip(&tx.output_slots)
-            .map(|(index, output)| Slot { index, output });
-        match disclosure {
-            AuditDisclosure::Delivered {
-                seed_out, outputs, ..
-            } => {
-                let transfer = transfer(seed_out)?;
-                for (slot, opening) in slots.zip(outputs) {
-                    audited.record(slot, transfer.delivered(slot, opening)?);
-                }
-            }
-            AuditDisclosure::Anonymous(disclosure) => {
-                let transfer = transfer(disclosure.seed_out)?;
-                for (slot, opening) in slots.zip(&disclosure.outputs) {
-                    audited.record(slot, transfer.anonymous(slot, *opening)?);
-                }
-                let spent = transfer.inputs(SpentInputs {
-                    disclosure: &disclosure,
-                    nullifiers: &tx.nullifiers,
-                    trees: self.input_trees,
-                    known: self.known_utxos,
-                })?;
-                audited.sender = Some(spent.sender);
-                audited.inputs = spent.inputs;
-            }
+        for (index, output) in (0u32..).zip(&tx.output_slots) {
+            let slot = Slot { index, output };
+            let position = index as usize;
+            let truncated = || AuditError::AuditorMessageLength(data.len());
+            let record =
+                opened.record(position, message.record(position).ok_or_else(truncated)?)?;
+            let tail = match layout.has_data {
+                true => opened.tail(position, message.tail(position).ok_or_else(truncated)?)?,
+                false => DataTail::default(),
+            };
+            audited.place(
+                index,
+                output.output_context.clone(),
+                transfer.slot(slot, record, tail)?,
+            );
         }
+        audited.inputs = transfer.inputs(SpentInputs {
+            map: opened.inputs,
+            evidence: &opened.evidence,
+            nullifiers: &tx.nullifiers,
+            trees: self.input_trees,
+        })?;
         Ok(audited)
     }
 }
 
-fn check_published(
-    layout: DisclosureLayout,
-    tx: &ShieldedTransaction,
-    exits: &[bool],
-) -> Result<(), AuditError> {
-    let (outputs, inputs, flagged) = match layout {
-        DisclosureLayout::Delivered(delivered) => (delivered.outputs, None, delivered.exits),
-        DisclosureLayout::Anonymous(anonymous) => {
-            (anonymous.outputs, Some(anonymous.inputs), anonymous.exits)
-        }
-    };
-    let consistent = outputs == tx.output_slots.len()
-        && inputs.is_none_or(|inputs| inputs == tx.nullifiers.len())
-        && flagged == exits.contains(&true);
+fn check_published(layout: AuditStreamLayout, tx: &ShieldedTransaction) -> Result<(), AuditError> {
+    let consistent =
+        layout.outputs == tx.output_slots.len() && layout.inputs == tx.nullifiers.len();
     match consistent {
         true => Ok(()),
         false => Err(AuditError::DisclosureLayout),
     }
 }
 
+/// The program keeps the auditor message last, the tag of any earlier message is free frame bytes.
 fn auditor_message<'a>(
     tx: &'a ShieldedTransaction,
     auditor_pk: &X25519Pubkey,
 ) -> Result<&'a [u8], AuditError> {
-    let view_tag = auditor_view_tag(auditor_pk);
-    let mut tagged = tx
-        .messages
-        .iter()
-        .enumerate()
-        .filter(|(_, message)| message.view_tag == view_tag);
-    let (index, message) = tagged.next().ok_or(AuditError::MissingAuditorMessage)?;
-    if tagged.next().is_some() {
-        return Err(AuditError::DuplicateAuditorMessage);
-    }
-    let count = tx.messages.len();
-    if index + 1 != count {
-        return Err(AuditError::AuditorMessageNotLast { index, count });
-    }
-    Ok(&message.data)
-}
-
-/// The ring program encodes every exit under scheme 3, every other slot under its layout's scheme.
-fn is_exit(slot: &OutputSlot) -> bool {
-    confidential_encrypted_output_body(&slot.payload).is_some()
+    tx.messages
+        .last()
+        .filter(|message| message.view_tag == auditor_view_tag(auditor_pk))
+        .map(|message| message.data.as_slice())
+        .ok_or(AuditError::MissingAuditorMessage)
 }
 
 #[derive(Clone, Copy)]
@@ -259,239 +193,111 @@ struct Slot<'a> {
     output: &'a OutputSlot,
 }
 
-impl<'a> Slot<'a> {
+impl Slot<'_> {
     fn owner_tag(self) -> [u8; 32] {
         self.output.view_tag
-    }
-
-    fn body(self) -> Option<&'a [u8; custom_ring_interface::RING_DELIVERED_BODY_LEN]> {
-        ring_confidential_delivered_output_body(&self.output.payload)
     }
 
     fn tree_id(self) -> u16 {
         self.output.output_context.tree_id
     }
+
+    fn rebuilt(self, commitment: [u8; 32], opening: OutputOpening) -> SlotOpening {
+        match commitment == self.output.output_context.hash {
+            true => Ok(opening),
+            false => Err(OutputPayloadErrorKind::Commitment),
+        }
+    }
 }
 
 type SlotOpening = Result<OutputOpening, OutputPayloadErrorKind>;
 
-struct Transfer<'a> {
+struct Transfer {
     ring: Address,
-    tx_key: &'a ViewingKey,
-    tx_viewing_pk: X25519Pubkey,
-    salt: [u8; 16],
     first_nullifier: [u8; 32],
     seed_out: [u8; 32],
-    assets: &'a RingAssets,
-    escrowed: Option<&'a dyn EscrowedKeys>,
-}
-
-struct Spent {
-    sender: AuditedSender,
-    inputs: Vec<AuditedInput>,
-}
-
-struct Delivery<'a> {
-    slot: Slot<'a>,
-    owner_key: [u8; 32],
-    nullifier_pk: Option<[u8; 32]>,
-}
-
-struct DeliveredExit {
-    nullifier_pk: Option<[u8; 32]>,
-    asset: [u8; 32],
-    amount: u64,
 }
 
 struct SpentInputs<'a> {
-    disclosure: &'a AnonymousDisclosure,
+    map: InputMap,
+    evidence: &'a AuditEvidence,
     nullifiers: &'a [[u8; 32]],
     trees: Option<&'a [Option<u16>]>,
-    known: Option<&'a dyn KnownUtxos>,
 }
 
-impl Transfer<'_> {
-    fn delivered(
-        &self,
-        slot: Slot<'_>,
-        opening: DeliveredOutputOpening,
-    ) -> Result<SlotOpening, AuditError> {
-        match opening {
-            DeliveredOutputOpening::Ring {
-                owner_key,
-                nullifier_pk,
-            } => self.deliver(Delivery {
-                slot,
-                owner_key,
-                nullifier_pk,
-            }),
-            DeliveredOutputOpening::Exit {
-                nullifier_pk,
-                asset,
-                amount,
-            } => self.exit(
-                slot,
-                DeliveredExit {
-                    nullifier_pk,
-                    asset,
-                    amount,
-                },
-            ),
-            DeliveredOutputOpening::Dummy => self.verify(slot, OutputOpening::Dummy),
-        }
-    }
-
-    fn anonymous(
-        &self,
-        slot: Slot<'_>,
-        opening: AnonymousOutputOpening,
-    ) -> Result<SlotOpening, AuditError> {
-        match opening {
-            AnonymousOutputOpening::Ring {
-                owner_key,
-                nullifier_pk,
-                asset,
-                amount,
-            } => {
-                let utxo = AuditedUtxo {
-                    owner_key,
-                    nullifier_pk,
-                    asset,
-                    mint: self.mint(&asset),
-                    amount,
-                    blinding: self.blinding(slot)?,
-                    data_hash: [0; 32],
-                    ring_data_hash: [0; 32],
-                };
-                self.verify(
-                    slot,
-                    OutputOpening::Ring {
-                        utxo,
-                        owner_tag: RingOwnerTag::View(slot.owner_tag()),
-                    },
-                )
-            }
-            AnonymousOutputOpening::Exit {
-                nullifier_pk,
-                asset,
-                amount,
-            } => self.exit(
-                slot,
-                DeliveredExit {
-                    nullifier_pk: Some(nullifier_pk),
-                    asset,
-                    amount,
-                },
-            ),
-            AnonymousOutputOpening::Dummy => self.verify(slot, OutputOpening::Dummy),
-            AnonymousOutputOpening::Unreadable => Ok(Err(OutputPayloadErrorKind::Disclosure)),
-        }
-    }
-
-    fn deliver(&self, delivery: Delivery<'_>) -> Result<SlotOpening, AuditError> {
-        let Delivery {
-            slot,
-            owner_key,
-            nullifier_pk,
-        } = delivery;
-        let recipient_u = slot.owner_tag();
-        let Some(nullifier_pk) = self.nullifier_pk(&owner_key, nullifier_pk) else {
-            return Ok(Err(OutputPayloadErrorKind::EscrowUnknown));
-        };
-        let Some(body) = slot.body() else {
-            return Ok(Err(OutputPayloadErrorKind::Frame));
-        };
-        let Some(secret) = self.delivered_secret(slot, recipient_u)? else {
-            return Ok(Err(OutputPayloadErrorKind::RecipientKey));
-        };
-        let body = RingDeliveredBody::open(body, &secret)?;
-        let blinding = self.blinding(slot)?;
-        if body.blinding != blinding {
-            return Ok(Err(OutputPayloadErrorKind::Commitment));
-        }
-        for (asset, mint) in self.assets.fields() {
-            let utxo = AuditedUtxo {
-                owner_key,
-                nullifier_pk,
-                asset: *asset,
-                mint: Some(mint.asset),
-                amount: body.amount,
-                blinding,
-                data_hash: [0; 32],
-                ring_data_hash: [0; 32],
-            };
-            if utxo.commitment(slot.tree_id(), Some(self.ring))? == slot.output.output_context.hash
-            {
-                return Ok(Ok(OutputOpening::Ring {
-                    utxo,
-                    owner_tag: RingOwnerTag::Recipient(recipient_u),
-                }));
-            }
-        }
-        // A mint missing from the held assets reads as a foreign body.
-        Ok(Err(OutputPayloadErrorKind::Commitment))
-    }
-
-    fn exit(&self, slot: Slot<'_>, exit: DeliveredExit) -> Result<SlotOpening, AuditError> {
-        let owner_key = slot.owner_tag();
-        let Some(nullifier_pk) = self.nullifier_pk(&owner_key, exit.nullifier_pk) else {
-            return Ok(Err(OutputPayloadErrorKind::EscrowUnknown));
-        };
-        let utxo = AuditedUtxo {
-            owner_key,
-            nullifier_pk,
-            asset: exit.asset,
-            mint: self.mint(&exit.asset),
-            amount: exit.amount,
-            blinding: self.blinding(slot)?,
-            data_hash: [0; 32],
-            ring_data_hash: [0; 32],
-        };
-        self.verify(slot, OutputOpening::Exit(utxo))
-    }
-
-    fn verify(&self, slot: Slot<'_>, opening: OutputOpening) -> Result<SlotOpening, AuditError> {
-        let tree_id = slot.tree_id();
-        let commitment = match &opening {
-            OutputOpening::Ring { utxo, .. } => utxo.commitment(tree_id, Some(self.ring))?,
-            OutputOpening::Exit(utxo) => utxo.commitment(tree_id, None)?,
-            OutputOpening::Dummy => ProofInputUtxo {
-                domain: right_align(&DUMMY_DOMAIN.to_be_bytes()),
-                tree_id: tree_id_field(tree_id),
-                blinding: self.blinding(slot)?,
-                ..ProofInputUtxo::default()
-            }
-            .hash()?,
-        };
-        Ok(match commitment == slot.output.output_context.hash {
-            true => Ok(opening),
-            false => Err(OutputPayloadErrorKind::Commitment),
+impl Transfer {
+    fn new(
+        ring: Address,
+        first_nullifier: [u8; 32],
+        tx_key: &ViewingKey,
+        salt: &[u8; 16],
+    ) -> Result<Self, AuditError> {
+        Ok(Self {
+            ring,
+            first_nullifier,
+            seed_out: derive_output_blinding_seed(
+                &first_nullifier,
+                &ring_blinding_seed(&tx_key.secret_bytes(), salt)?,
+            )?,
         })
     }
 
-    fn delivered_secret(
+    fn slot(
         &self,
         slot: Slot<'_>,
-        recipient_u: [u8; 32],
-    ) -> Result<Option<SlotSecret>, AuditError> {
-        let Ok(recipient) = X25519Pubkey::from_u(recipient_u) else {
-            return Ok(None);
+        record: AuditRecord,
+        tail: DataTail,
+    ) -> Result<SlotOpening, AuditError> {
+        let ring = match record.kind {
+            RecordKind::Dummy => return self.verify_dummy(slot),
+            RecordKind::Ring => Some(self.ring),
+            RecordKind::Exit => None,
         };
-        let Ok(agreement) = self.tx_key.ecdh(&recipient) else {
-            return Ok(None);
+        let AuditRecord {
+            owner_key,
+            mint,
+            amount,
+            nullifier_pk,
+            ..
+        } = record;
+        if canonical(nullifier_pk).is_err()
+            || canonical(tail.data_hash).is_err()
+            || canonical(tail.ring_data_hash).is_err()
+        {
+            return Ok(Err(OutputPayloadErrorKind::Disclosure));
+        }
+        let utxo = AuditedUtxo {
+            owner_key,
+            nullifier_pk,
+            asset: hash_bytes(&mint)?,
+            mint: Some(Address::new_from_array(mint)),
+            amount,
+            blinding: self.blinding(slot)?,
+            data_hash: tail.data_hash,
+            ring_data_hash: tail.ring_data_hash,
         };
-        let agreement = Zeroizing::new(agreement);
-        Ok(Some(
-            DeliveredSlot {
-                agreement: &agreement,
-                tx_viewing_pk: self.tx_viewing_pk.as_bytes(),
-                recipient_viewing_pk: recipient.as_bytes(),
-                salt: &self.salt,
-                output_index: slot.index,
-                first_nullifier: &self.first_nullifier,
-            }
-            .secret()?,
+        let commitment = utxo.commitment(slot.tree_id(), ring)?;
+        Ok(slot.rebuilt(
+            commitment,
+            match ring {
+                Some(_) => OutputOpening::Ring {
+                    utxo,
+                    owner_tag: RingOwnerTag(slot.owner_tag()),
+                },
+                None => OutputOpening::Exit(utxo),
+            },
         ))
+    }
+
+    fn verify_dummy(&self, slot: Slot<'_>) -> Result<SlotOpening, AuditError> {
+        let commitment = ProofInputUtxo {
+            domain: right_align(&DUMMY_DOMAIN.to_be_bytes()),
+            tree_id: tree_id_field(slot.tree_id()),
+            blinding: self.blinding(slot)?,
+            ..ProofInputUtxo::default()
+        }
+        .hash()?;
+        Ok(slot.rebuilt(commitment, OutputOpening::Dummy))
     }
 
     /// SPP's TXOB blinding under the seed the transaction key derives.
@@ -503,228 +309,93 @@ impl Transfer<'_> {
         )?)
     }
 
-    fn nullifier_pk(&self, owner_key: &[u8; 32], disclosed: Option<[u8; 32]>) -> Option<[u8; 32]> {
-        disclosed.or_else(|| self.escrowed?.nullifier_pk(owner_key))
-    }
-
-    fn mint(&self, asset: &[u8; 32]) -> Option<Address> {
-        self.assets.by_field(asset).map(|mint| mint.asset)
-    }
-
-    fn inputs(&self, spent: SpentInputs<'_>) -> Result<Spent, AuditError> {
+    /// The proven map classifies each position, its default bits name notes alone.
+    fn inputs(&self, spent: SpentInputs<'_>) -> Result<Vec<AuditedInput>, AuditError> {
         let SpentInputs {
-            disclosure,
+            map,
+            evidence,
             nullifiers,
             trees,
-            known,
         } = spent;
-        match &disclosure.inputs {
-            AnonymousInputs::Commitments { first, prefixes } => {
-                let unseen = || AuditError::UnseenInput { commitment: *first };
-                // The circuit proves spent UTXO 0 real and every spent UTXO under one owner key.
-                let known = known.ok_or_else(unseen)?;
-                let zero = known.utxo(first).ok_or_else(unseen)?;
-                let later = PrefixedInputs {
-                    known,
-                    sender: zero.owner_key,
-                    first: *first,
-                    ring: self.ring,
-                }
-                .open(prefixes)?;
-                let openings =
-                    core::iter::once(InputOpening::Opened(ring_input(*first, zero))).chain(later);
-                Ok(Spent {
-                    sender: AuditedSender {
-                        owner_key: zero.owner_key,
-                        nullifier_pk: zero.owner.nullifier_pk(),
+        nullifiers
+            .iter()
+            .enumerate()
+            .map(|(index, nullifier)| {
+                let class = map.slot(index).ok_or(AuditError::DisclosureLayout)?;
+                let opening = match class {
+                    InputClass::Dummy => InputOpening::Dummy,
+                    InputClass::Address => InputOpening::Address,
+                    InputClass::Note => match evidence {
+                        AuditEvidence::Entry {
+                            default_input_bits,
+                            inputs,
+                        } if default_input_bits >> index & 1 == 1 => {
+                            let entry = inputs.get(index).ok_or(AuditError::DisclosureLayout)?;
+                            let tree = trees.and_then(|trees| trees.get(index).copied().flatten());
+                            InputOpening::External(Box::new(self.default_input(entry, tree)?))
+                        }
+                        AuditEvidence::None
+                        | AuditEvidence::SingleAssetPayout { .. }
+                        | AuditEvidence::Entry { .. } => InputOpening::Real,
                     },
-                    inputs: nullifiers
-                        .iter()
-                        .zip(openings)
-                        .map(|(nullifier, opening)| AuditedInput {
-                            nullifier: *nullifier,
-                            opening,
-                        })
-                        .collect(),
+                };
+                Ok(AuditedInput {
+                    nullifier: *nullifier,
+                    opening,
                 })
-            }
-            AnonymousInputs::Openings {
-                sender_key,
-                sender_nullifier_pk,
-                inputs: openings,
-            } => {
-                let inputs = nullifiers
-                    .iter()
-                    .zip(openings)
-                    .enumerate()
-                    .map(|(index, (nullifier, opening))| {
-                        let Some(opening) = opening else {
-                            return Ok(AuditedInput {
-                                nullifier: *nullifier,
-                                opening: InputOpening::Dummy,
-                            });
-                        };
-                        let utxo = AuditedUtxo {
-                            owner_key: *sender_key,
-                            nullifier_pk: *sender_nullifier_pk,
-                            asset: opening.asset,
-                            mint: self.mint(&opening.asset),
-                            amount: opening.amount,
-                            blinding: opening.blinding,
-                            data_hash: [0; 32],
-                            ring_data_hash: [0; 32],
-                        };
-                        let tree = trees.and_then(|trees| trees.get(index).copied().flatten());
-                        Ok::<_, AuditError>(AuditedInput {
-                            nullifier: *nullifier,
-                            opening: InputOpening::Opened(AuditedInputOpening {
-                                asset: utxo.asset,
-                                mint: utxo.mint,
-                                amount: utxo.amount,
-                                blinding: utxo.blinding,
-                                ring: tree
-                                    .map(|tree| self.input_ring(&utxo, tree, known))
-                                    .transpose()?,
-                            }),
-                        })
-                    })
-                    .collect::<Result<_, AuditError>>()?;
-                Ok(Spent {
-                    sender: AuditedSender {
-                        owner_key: *sender_key,
-                        nullifier_pk: Some(*sender_nullifier_pk),
-                    },
-                    inputs,
-                })
-            }
-        }
+            })
+            .collect()
     }
 
-    fn input_ring(
+    /// A mixed entry names each input's owner and key.
+    fn default_input(
         &self,
-        utxo: &AuditedUtxo,
-        tree_id: u16,
-        known: Option<&dyn KnownUtxos>,
-    ) -> Result<InputRing, AuditError> {
-        let ring = utxo.commitment(tree_id, Some(self.ring))?;
-        let default = utxo.commitment(tree_id, None)?;
-        let found = |commitment| known.is_some_and(|known| known.utxo(commitment).is_some());
-        Ok(match (found(&ring), found(&default)) {
-            (true, false) => InputRing::Ring { commitment: ring },
-            (false, true) => InputRing::Default {
-                commitment: default,
-            },
-            _ => InputRing::Unresolved { ring, default },
-        })
-    }
-}
-
-struct PrefixedInputs<'a> {
-    known: &'a dyn KnownUtxos,
-    sender: [u8; 32],
-    first: [u8; 32],
-    ring: Address,
-}
-
-impl PrefixedInputs<'_> {
-    fn open(self, prefixes: &[Option<InputPrefix>]) -> Result<Vec<InputOpening>, AuditError> {
-        let mut groups: Vec<(InputPrefix, Vec<usize>)> = Vec::new();
-        for (position, prefix) in prefixes.iter().enumerate() {
-            let Some(prefix) = *prefix else {
-                continue;
-            };
-            match groups.iter_mut().find(|(group, _)| *group == prefix) {
-                Some((_, positions)) => positions.push(position),
-                None => groups.push((prefix, vec![position])),
-            }
-        }
-        let mut openings = vec![InputOpening::Dummy; prefixes.len()];
-        for (prefix, positions) in groups {
-            let assigned = self.notes(prefix).assign(positions.len())?;
-            for (position, opening) in positions.into_iter().zip(assigned) {
-                openings[position] = opening;
-            }
-        }
-        Ok(openings)
-    }
-
-    /// The circuit binds a later input to the sender and to its prefix.
-    fn notes(&self, prefix: InputPrefix) -> PrefixNotes {
-        let mut seen = HashSet::new();
-        PrefixNotes {
-            prefix,
-            notes: self
-                .known
-                .with_prefix(&self.sender, prefix)
-                .into_iter()
-                .filter_map(|commitment| Some((commitment, self.known.utxo(&commitment)?)))
-                .filter(|(commitment, utxo)| {
-                    *commitment != self.first
-                        && utxo.owner_key == self.sender
-                        && InputPrefix::of(commitment) == Some(prefix)
-                        && utxo
-                            .commitment(Some(self.ring))
-                            .is_ok_and(|ring| ring == *commitment)
-                        && seen.insert(*commitment)
-                })
-                .collect(),
-        }
-    }
-}
-
-struct PrefixNotes {
-    prefix: InputPrefix,
-    notes: Vec<([u8; 32], KnownUtxo)>,
-}
-
-impl PrefixNotes {
-    fn assign(self, inputs: usize) -> Result<Vec<InputOpening>, AuditError> {
-        match self.notes.len().cmp(&inputs) {
-            Ordering::Less => Err(AuditError::UnseenInputPrefix {
-                prefix: self.prefix.get(),
-            }),
-            Ordering::Equal => Ok(self
-                .notes
-                .into_iter()
-                .map(|(commitment, utxo)| InputOpening::Opened(ring_input(commitment, utxo)))
-                .collect()),
-            Ordering::Greater => {
-                let candidates: Vec<[u8; 32]> = self
-                    .notes
-                    .iter()
-                    .map(|(commitment, _)| *commitment)
-                    .collect();
-                Ok(vec![InputOpening::Ambiguous { candidates }; inputs])
-            }
-        }
-    }
-}
-
-fn ring_input(commitment: [u8; 32], utxo: KnownUtxo) -> AuditedInputOpening {
-    AuditedInputOpening {
-        asset: utxo.asset,
-        mint: utxo.mint,
-        amount: utxo.amount,
-        blinding: utxo.blinding,
-        ring: Some(InputRing::Ring { commitment }),
+        entry: &EntryInput,
+        tree: Option<u16>,
+    ) -> Result<AuditedDefaultInput, AuditError> {
+        let utxo = AuditedUtxo {
+            owner_key: entry.owner_key,
+            nullifier_pk: entry.nullifier_pk,
+            asset: hash_bytes(&entry.mint)?,
+            mint: Some(Address::new_from_array(entry.mint)),
+            amount: entry.amount,
+            blinding: entry.blinding,
+            data_hash: entry.data_hash,
+            ring_data_hash: entry.ring_data_hash,
+        };
+        let commitment = tree.map(|tree| utxo.commitment(tree, None)).transpose()?;
+        Ok(AuditedDefaultInput { utxo, commitment })
     }
 }
 
 impl AuditedTransaction {
-    fn record(&mut self, slot: Slot<'_>, opened: SlotOpening) {
+    /// A slot appears once, in published order.
+    fn place(&mut self, slot_index: u32, context: OutputContext, opened: SlotOpening) {
+        self.outputs
+            .retain(|output| output.slot_index != slot_index);
+        self.payload_errors
+            .retain(|error| error.slot_index != slot_index);
         match opened {
-            Ok(opening) => self.outputs.push(AuditedOutput {
-                slot_index: slot.index,
-                context: slot.output.output_context.clone(),
-                opening,
-            }),
-            Err(kind) => self.payload_errors.push(OutputPayloadError {
-                slot_index: slot.index,
-                kind,
-            }),
+            Ok(opening) => {
+                let at = self
+                    .outputs
+                    .partition_point(|output| output.slot_index < slot_index);
+                self.outputs.insert(
+                    at,
+                    AuditedOutput {
+                        slot_index,
+                        context,
+                        opening,
+                    },
+                );
+            }
+            Err(kind) => {
+                let at = self
+                    .payload_errors
+                    .partition_point(|error| error.slot_index < slot_index);
+                self.payload_errors
+                    .insert(at, OutputPayloadError { slot_index, kind });
+            }
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

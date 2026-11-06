@@ -2,11 +2,9 @@ package ringaudit
 
 import (
 	"math/big"
-	"slices"
 	"testing"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
@@ -18,98 +16,109 @@ type AuditHead struct {
 	RingProgramID  *big.Int
 	TxViewingU     [32]byte
 	AuditorPubkey  [33]byte
-	EphU           [32]byte
-	Sealed         []byte
-	Salt           [16]byte
-	// Layout is the raw statement value, Layout.Value of the transfer's flags.
-	Layout int64
+	// Envelope is the transmitted envelope ciphertext, its digest head element 7.
+	Envelope []byte
+	Salt     [16]byte
+	Layout   int64
 }
 
-func (h AuditHead) Elements(t testing.TB) []*big.Int {
+// ElementsUnder is the head under domain.
+func (h AuditHead) ElementsUnder(t testing.TB, domain int64) []*big.Int {
 	t.Helper()
 	txLo, txHi := ringprotocol.Pack33(ringprotocol.Tagged(h.TxViewingU[:]))
 	auditorLo, auditorHi := ringprotocol.Pack33(h.AuditorPubkey)
-	ephLo, ephHi := ringprotocol.Pack33(ringprotocol.Tagged(h.EphU[:]))
 	return []*big.Int{
-		big.NewInt(shared.AuditStatementDomain), h.FirstNullifier, h.RingProgramID, txLo, txHi,
-		auditorLo, auditorHi, ephLo, ephHi, ringtest.HashBytes(t, h.Sealed), new(big.Int).SetBytes(h.Salt[:]), big.NewInt(h.Layout),
+		big.NewInt(domain), h.FirstNullifier, h.RingProgramID, txLo, txHi,
+		auditorLo, auditorHi, ringprotocol.EnvelopeDigest(t, h.Envelope), new(big.Int).SetBytes(h.Salt[:]), big.NewInt(h.Layout),
 	}
 }
 
-// Layout is a transfer's layout flags, mirrors the Layout flags of package audit.
-type Layout struct {
-	Exits        bool
-	Escrow       bool
-	Reserved     bool
-	FullOpenings bool
-}
-
-func (l Layout) Value() int64 {
-	return ringtest.Bit(l.Exits)*audit.LayoutExits | ringtest.Bit(l.Escrow)*audit.LayoutEscrow |
-		ringtest.Bit(l.Reserved)*audit.LayoutReserved | ringtest.Bit(l.FullOpenings)*audit.LayoutFullOpenings
-}
-
-func hasExit(utxos []Utxo) bool {
-	return slices.ContainsFunc(utxos, Utxo.isExit)
-}
-
-// StatementOutput is one published output as an audit statement reads it.
+// StatementOutput is one output slot as an audit statement reads it, an omitted one reads zero.
 type StatementOutput struct {
-	Hash *big.Int
-	// Exit chains zero for its body and recipient key.
-	Exit bool
-	U    [32]byte
-	Body []byte
+	Hash   *big.Int
+	Record []byte
+	// Tail is nil while has_data is clear.
+	Tail    []byte
+	Omitted bool
 }
 
-// AnonymousTail is what only an anonymous audit statement binds.
-type AnonymousTail struct {
-	PrivateTxHash    *big.Int
-	SenderCommitment *big.Int
-	PartyIdentities  [3]*big.Int
-}
-
-// DeliveredStatement mirrors AuditKind::Delivered.
-func DeliveredStatement(t testing.TB, head AuditHead, outputs []StatementOutput, disclosure []*big.Int) []*big.Int {
+// SignerChain mirrors transfer.OpenSigners over a run of the key's slots, zero at a count of zero.
+func SignerChain(t testing.TB, signers []*big.Int, slots int) *big.Int {
 	t.Helper()
-	var keys []*big.Int
-	for _, output := range outputs {
-		lo, hi := ringprotocol.Pack32(output.U)
-		if output.Exit {
-			lo, hi = big.NewInt(0), big.NewInt(0)
+	if len(signers) == 0 {
+		return big.NewInt(0)
+	}
+	cells := make([]*big.Int, slots)
+	for i := range cells {
+		cells[i] = big.NewInt(0)
+	}
+	copy(cells, signers)
+	return spptest.MustHashChain4(t, cells)
+}
+
+// SignerDataCounts mirrors audit.SignerDataCounts over a run within its entries and the opened output slots.
+func SignerDataCounts(run []*big.Int, slots []Utxo) *big.Int {
+	packed := big.NewInt(0)
+	for entry, signer := range run {
+		count := int64(0)
+		for _, slot := range slots {
+			if slot.IsUtxo() && slot.DataHash.Sign() != 0 && slot.OwnerPkHash.Cmp(signer) == 0 {
+				count++
+			}
 		}
-		keys = append(keys, lo, hi)
+		packed.Add(packed, new(big.Int).Lsh(big.NewInt(count), uint(entry*audit.SignerDataEntryBits)))
 	}
-	return append(head.Elements(t),
-		outputChain(t, outputs), bodyChain(t, outputs), spptest.MustHashChain4(t, disclosure), spptest.MustHashChain4(t, keys))
+	return packed
 }
 
-// AnonymousStatement mirrors AuditKind::Anonymous.
-func AnonymousStatement(t testing.TB, head AuditHead, outputs []StatementOutput, disclosure []*big.Int, tail AnonymousTail) []*big.Int {
-	t.Helper()
-	return append(head.Elements(t),
-		outputChain(t, outputs), spptest.MustHashChain4(t, disclosure), tail.PrivateTxHash, tail.SenderCommitment,
-		tail.PartyIdentities[0], tail.PartyIdentities[1], tail.PartyIdentities[2])
-}
-
-func outputChain(t testing.TB, outputs []StatementOutput) *big.Int {
-	t.Helper()
-	hashes := make([]*big.Int, len(outputs))
-	for i, output := range outputs {
-		hashes[i] = output.Hash
+func OutputCount(outputs []StatementOutput) int {
+	count := 0
+	for _, output := range outputs {
+		if !output.Omitted {
+			count++
+		}
 	}
-	return spptest.MustHashChain4(t, hashes)
+	return count
 }
 
-// bodyChain chains hash_bytes(body), zero on an exit.
-func bodyChain(t testing.TB, outputs []StatementOutput) *big.Int {
+func OutputChain(t testing.TB, outputs []StatementOutput) *big.Int {
 	t.Helper()
 	hashes := make([]*big.Int, len(outputs))
 	for i, output := range outputs {
 		hashes[i] = big.NewInt(0)
-		if !output.Exit {
-			hashes[i] = ringtest.HashBytes(t, output.Body)
+		if !output.Omitted {
+			hashes[i] = output.Hash
 		}
+	}
+	return spptest.MustHashChain4(t, hashes)
+}
+
+// RecordChain mirrors record_chain, zero past m.
+func RecordChain(t testing.TB, outputs []StatementOutput) *big.Int {
+	t.Helper()
+	hashes := make([]*big.Int, len(outputs))
+	for i, output := range outputs {
+		hashes[i] = big.NewInt(0)
+		if !output.Omitted {
+			hashes[i] = ringtest.HashBytes(t, output.Record)
+		}
+	}
+	return spptest.MustHashChain4(t, hashes)
+}
+
+// TailChain mirrors tail_chain, zero while no slot carries a tail.
+func TailChain(t testing.TB, outputs []StatementOutput) *big.Int {
+	t.Helper()
+	hashes := make([]*big.Int, len(outputs))
+	carried := false
+	for i, output := range outputs {
+		hashes[i] = big.NewInt(0)
+		if !output.Omitted && output.Tail != nil {
+			hashes[i], carried = ringtest.HashBytes(t, output.Tail), true
+		}
+	}
+	if !carried {
+		return big.NewInt(0)
 	}
 	return spptest.MustHashChain4(t, hashes)
 }

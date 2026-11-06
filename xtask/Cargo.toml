@@ -8,8 +8,16 @@ publish = false
 
 [dependencies]
 anyhow = { workspace = true }
+bytemuck = { workspace = true }
 custom-ring-interface = { workspace = true }
 hex = { workspace = true }
 serde_json = { workspace = true }
+solana-address = { workspace = true }
+solana-instruction = { workspace = true }
+solana-message = { workspace = true }
+spr-client = { workspace = true }
+spr-interface = { workspace = true }
+spr-program = { workspace = true }
+spr-transaction = { workspace = true }
 xtask = { path = "../zolana/xtask" }
 zolana-cli-common = { workspace = true }

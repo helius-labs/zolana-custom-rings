@@ -1,0 +1,33 @@
+{
+  "body": "6bfa004b8c2557126045ed554a3dd7284463c5d39623a97cb7e660771cd4296e9dd4306fd8d2e1c3eeb6e2cfee04d0e579021318da63bd4cce09357ff28b2a34e8793601f094feb4",
+  "body_amount": 31,
+  "body_blinding": "1fbf7826244b3fc62c8a17a93aae8199401ae503b62fcb983d19ea98c777e331",
+  "body_index": 1,
+  "body_mint": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+  "body_slot_secret": "2be7d18f6f8725616076b3090f59b35f56f22601e22428141f3345d01006f3bb",
+  "body_tag": "1ccc1b85459c76d3c5ab69b519e708210684e8663b7c323debe01ca183599557",
+  "bundle": "a01d27c2f74d4f73ed09ed5dcc00dd269133e99f277c725a612c2fb69ccc29cbe662217baa6a7d33853104c55f13ccd45af452be81c30fb5cdd7a88236ccabe31012b638abe6612d22629682048bbdba68bc063f2957609f0d713ddde8dd4e80c3894494a4e6011ea941cf29ca692f9ec29b9f25ae1a952ee5989d112b331c87f2b54d1dabb389f8d5ec1b834b2d1a98efc9f210d39176a5b259477ad4124ed257a0d1344bcd8f0a",
+  "bundle_digest": "0a3d4eb7187ad63a30755165f5d39fc5979d92411ec0009bc2d2bab456652a7c",
+  "bundle_slot_secret": "1a240138254b8ffb02c059065ea6d7ae0c51a314c0d1a0a381dba3437fa5e7f9",
+  "bundle_tag": "0d4adf56c2cca185dab82279c767e2de888d48ea3fde86473f0cf619503bd336",
+  "change_amount": 15,
+  "change_mint": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+  "description": "One ring body and one sender bundle of an honest 4 slot frame, change in slot 0, payments in slots 1 and 3, an exit in slot 2. Body plaintext be32(blinding) || u64be(amount) || mint under label CRING/rcp and the CRDS slot secret of recipient_key and index. Bundle plaintext output_seed || (mint || u64be(amount)) per bodiless slot || recipient_u per body-bearing slot under label CRING/snd and the CRDS slot secret of sender_viewing_key and index m, recipient_u zero on exit. bundle_digest = ciphertext_digest(bundle). body_tag = Poseidon(CRRT, body_slot_secret), bundle_tag = Poseidon(CRST, bundle_slot_secret), dummy_tag = Poseidon(CRRT, dummy_tag_preimage). body, bundle and bundle_digest produced by prover/ringtest/ringprotocol/anonymous_bodies_vector_test.go with WRITE_AUDIT_VECTORS=1, slot secrets and tags stay pinned in the file.",
+  "dummy_tag": "1a5c53546a3bde03963939933be1b13b80e375438ee781cc222cf7c5710984b3",
+  "dummy_tag_preimage": "0000000000000000000000000000000000000000000000000000000000000d00",
+  "first_nullifier": "0000000000000000000000000000000000000000000000000000000000001f1f",
+  "output_count": 4,
+  "output_seed": "1f8bd51789fa7d05da8aa4af6881487bd9a08798446498dc6f7f9a545dfdeeff",
+  "recipient_keys": [
+    "25884d18d7d920b659ef8e4dfb469618bd863b8ea42960420de1ed79834c3406",
+    "",
+    "bc7d2c70bbbaa5da20d0ae93ed02530960f0e34cd388c137db752490b6c8215a"
+  ],
+  "recipient_tag_domain": "43525254",
+  "recipient_viewing_sk": "00545756515053525d5c5f5e59585b5a45444746414043424d4c4f4e49484b4a",
+  "salt": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+  "sender_tag_domain": "43525354",
+  "sender_viewing_key": "6bbcab2e7c70e0bb7de720ecec9306f1fa2d2d8b24dfa9538b244165d692ab76",
+  "sender_viewing_sk": "00767574737271707f7e7d7c7b7a797867666564636261606f6e6d6c6b6a6968",
+  "tx_viewing_sk": "001013121514171619181b1a1d1c1f1e010003020504070609080b0a0d0c0f4e"
+}

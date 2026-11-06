@@ -51,8 +51,10 @@ impl RingRelease {
         Ok(())
     }
 
-    fn parse(lock: &str) -> Result<Self> {
-        serde_json::from_str(lock).context("the embedded release lock does not parse")
+    pub(crate) fn parse(lock: &str) -> Result<Self> {
+        serde_json::from_str::<Option<Self>>(lock)
+            .context("the embedded release lock does not parse")?
+            .context("no packaged ring release is embedded, use a workspace build or generate a complete release with ring-xtask create-release")
     }
 
     pub fn program(&self) -> Result<&Asset> {
@@ -69,6 +71,15 @@ impl RingRelease {
             format!(
                 "release {} ships no key for {}, use a complete custom-rings release",
                 self.tag, key.name
+            )
+        })
+    }
+
+    pub fn genesis_program(&self, section: &str) -> Result<&Asset> {
+        self.assets.get(section).with_context(|| {
+            format!(
+                "release {} ships no {section}, use a complete custom-rings release",
+                self.tag
             )
         })
     }
@@ -124,21 +135,42 @@ mod tests {
     const FULL_LOCK: &str = r#"{
         "release_tag": "v1",
         "ring_program": {"asset": "custom-ring-program-v1.so", "size": 1, "sha256": "x"},
-        "audit_delivered_2_key": {"asset": "custom-ring-audit-delivered-2-key-v1.key", "size": 1, "sha256": "x"},
         "register_key": {"asset": "custom-ring-register-key-v1.key", "size": 1, "sha256": "x"}
     }"#;
 
     #[test]
+    fn an_unreleased_build_refuses_packaged_artifacts() {
+        let error = RingRelease::parse("null").unwrap_err().to_string();
+        assert!(
+            error.contains("no packaged ring release is embedded"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn the_embedded_release_is_absent_or_matches_the_verifiers() {
+        let release: Option<RingRelease> = serde_json::from_str(LOCK_JSON).unwrap();
+        if let Some(release) = release {
+            release
+                .validate_keys(custom_ring_interface::proving_key_hashes())
+                .unwrap();
+            release.program().unwrap();
+            release.genesis_program("storage_program").unwrap();
+        }
+    }
+
+    #[test]
     fn release_keys_must_be_complete_and_match_the_compiled_verifiers() {
-        let audit = RING_KEYS[0];
-        let file = audit.file_name();
+        let transfer = RING_KEYS[0];
+        let file = transfer.file_name();
         let pins = |hash: [u8; 32]| [(file.as_str(), hash)];
         let mut lock: serde_json::Value = serde_json::from_str(FULL_LOCK).unwrap();
-        lock[audit.section()]["sha256"] = serde_json::json!(hex::encode([5; 32]));
+        lock[transfer.section()] =
+            serde_json::json!({"asset": file, "size": 1, "sha256": hex::encode([5; 32])});
         let release = RingRelease::parse(&lock.to_string()).unwrap();
         release.validate_keys(pins([5; 32])).unwrap();
         assert!(release.validate_keys(pins([6; 32])).is_err());
-        lock.as_object_mut().unwrap().remove(&audit.section());
+        lock.as_object_mut().unwrap().remove(&transfer.section());
         let partial = RingRelease::parse(&lock.to_string()).unwrap();
         assert!(partial.validate_keys(pins([5; 32])).is_err());
         assert!(release
@@ -156,7 +188,7 @@ mod tests {
         );
         let key = release.key(RING_KEYS[0]).expect_err("no key").to_string();
         assert!(
-            key.contains("ships no key for custom-ring-audit-delivered-2"),
+            key.contains(&format!("ships no key for {}", RING_KEYS[0].name)),
             "{key}"
         );
         assert_eq!(
@@ -188,7 +220,7 @@ mod tests {
         for missing in RING_KEYS.into_iter().filter(|key| {
             !matches!(
                 key.section().as_str(),
-                "audit_delivered_2_key" | "register_key"
+                "transfer_confidential_2_in24_w4_key" | "register_key"
             )
         }) {
             let error = partial.key(missing).expect_err("missing").to_string();

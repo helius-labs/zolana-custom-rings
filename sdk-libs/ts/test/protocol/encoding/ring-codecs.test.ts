@@ -4,26 +4,43 @@ import {
   generateKeyPairSigner,
   getAddressDecoder,
   getBase58Decoder,
+  type Address,
   type MessagePartialSigner,
 } from "@solana/kit";
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
-import { solanaOwnerIdentity, addressBytes, sha256, ZERO_32 } from "@heliuslabs/zolana/internal";
-import type { Bytes32, Bytes33, Bytes64 } from "@heliuslabs/zolana/interface";
-import { ownerHash, X25519Keypair } from "@heliuslabs/zolana/keypair";
-import { SOL_MINT, assetField } from "@heliuslabs/zolana/transaction";
+import { initializePoseidon } from "@heliuslabs/spr";
+import { solanaOwnerIdentity, addressBytes, sha256, ZERO_32 } from "@heliuslabs/spr/internal";
+import {
+  MAX_MERGE_INPUTS,
+  type Bytes32,
+  type Bytes33,
+  type Bytes64,
+} from "@heliuslabs/spr/interface";
+import { ownerHash, X25519Keypair } from "@heliuslabs/spr/keypair";
+import { SOL_MINT, assetField } from "@heliuslabs/spr/transaction";
 import { ringIdField } from "../../../src/crypto/derivation/ring-stream.js";
+import {
+  decodeStorageApplyProofInputs,
+  encodeStorageApplyProofInputsRequest,
+} from "../../../src/protocol/indexer/indexer-codec.js";
+import {
+  decodeMergeSettings,
+  encodeMergeSettings,
+  encodeSetMergeSettingsRequest,
+} from "../../../src/protocol/ring-rpc/ring-rpc-codec.js";
+import {
+  RING_AUTHORITY_MAX_INPUTS,
+  RING_AUTHORITY_SHAPES,
+  isRingAuthorityShape,
+} from "../../../src/protocol/transaction/spp.js";
 import { knownUtxoHash, type KnownUtxo } from "../../../src/operations/audit/audit.js";
 import { passkeyReader } from "../../../src/crypto/keys/passkey.js";
-import { memberOfTag } from "../../../src/protocol/membership/policy.js";
 import {
   P256ReaderKey,
   checkedReaderKey,
-  decodeReadAccessRecord,
   parseReaderKey,
-  readAccessRecordAddress,
   readerKeyBytes,
   readerKeyEquals,
   readerKeyFromBytes,
@@ -109,6 +126,7 @@ function decryptedItem(overrides: Readonly<Record<string, unknown>> = {}): Recor
     txViewingPk: X25519_BASE64,
     outputs: [],
     payloadErrors: [],
+    realInputs: 0,
     nullifiers: [],
     signers: [],
     withdrawals: [],
@@ -145,56 +163,31 @@ function rustItem(name: string): Record<string, unknown> {
   return structuredClone(value.items[0]!);
 }
 
+/** Rust `DecryptedInput` of a fixture row, named by commitment and the last row unseen. */
+function anonymousItem(): Record<string, unknown> {
+  return rustItem("decrypted_anonymous_page.json");
+}
+
 describe("ring status", () => {
   const configKey = X25519Keypair.fromBytes(new Uint8Array(32).fill(9)).publicKey();
-  const history = Array.from({ length: 32 }, (_, index) => {
-    if (index === 0) return { root: addressOf(1), applied: 0, slot: 100 };
-    if (index === 1) return { root: addressOf(5), applied: 3, slot: 120 };
-    return null;
-  });
   const status = (overrides: Readonly<Record<string, unknown>> = {}) => ({
     ringProgramId: addressOf(7),
     state: "served",
     configAuditorPubkey: Buffer.from(configKey.toBytes()).toString("base64"),
     servicePubkey: addressOf(22),
     activation: { activated: true, paused: false },
-    registry: {
-      history,
-      historyCursor: 1,
-      nextIndex: 3,
-      floor: 3,
-      priorFloor: 0,
-      floorSlot: 120,
-      queueHead: 3,
-      queueTail: 5,
-    },
     ...overrides,
   });
 
-  it("reads the config key, the activation and the registry's history, floor and queue", async () => {
+  it("reads the config key and the activation", async () => {
     const read = await rpcWith(status()).ringStatus(addressOf(7));
     expect(read.state).toBe("served");
     expect(read.configAuditorPublicKey?.equals(configKey)).toBe(true);
     expect(read.servicePublicKey).toBe(addressOf(22));
     expect(read.activation).toEqual({ activated: true, paused: false });
-    expect(read.registry?.history).toHaveLength(32);
-    expect(read.registry?.history.slice(0, 3)).toEqual([
-      { root: filled(1, 32), applied: 0n, slot: 100n },
-      { root: filled(5, 32), applied: 3n, slot: 120n },
-      undefined,
-    ]);
-    expect(read.registry).toMatchObject({
-      historyCursor: 1,
-      nextIndex: 3,
-      floor: 3n,
-      priorFloor: 0n,
-      floorSlot: 120n,
-      queueHead: 3n,
-      queueTail: 5n,
-    });
   });
 
-  it("leaves the config key, the activation and the registry absent before the ring creates them", async () => {
+  it("leaves the config key and the activation absent before the ring creates them", async () => {
     const read = await rpcWith({
       ringProgramId: addressOf(7),
       state: "uninitialized",
@@ -203,27 +196,11 @@ describe("ring status", () => {
     expect(read.state).toBe("uninitialized");
     expect(read.configAuditorPublicKey).toBeUndefined();
     expect(read.activation).toBeUndefined();
-    expect(read.registry).toBeUndefined();
   });
 
   it.each<readonly [string, Readonly<Record<string, unknown>>, string]>([
     ["another ring", { ringProgramId: addressOf(8) }, "result.ringProgramId"],
     ["a malformed service address", { servicePubkey: "not-base58!" }, "result.servicePubkey"],
-    [
-      "a short root history",
-      { registry: { ...status().registry, history: history.slice(1) } },
-      "result.registry.history",
-    ],
-    [
-      "a queue head past its tail",
-      { registry: { ...status().registry, queueHead: 6 } },
-      "result.registry",
-    ],
-    [
-      "a history cursor past the history",
-      { registry: { ...status().registry, historyCursor: 32 } },
-      "result.registry",
-    ],
     [
       "a non-boolean pause flag",
       { activation: { activated: true, paused: 1 } },
@@ -376,6 +353,24 @@ describe("ring rpc gateway", () => {
 
     expect(error).toMatchObject({ code: "RING_RPC_TRANSPORT" });
     expect(JSON.stringify(error)).not.toContain("secret-key");
+  });
+
+  it("names a rate limit and an unknown api key apart from a transport failure", async () => {
+    const refusal = async (status: number) =>
+      new RingRpc("https://gateway.example", {
+        fetch: () => Promise.resolve(new Response("{}", { status })),
+      })
+        .health()
+        .then(
+          () => undefined,
+          (cause: unknown) => cause,
+        );
+
+    expect(await refusal(429)).toMatchObject({ code: "RING_RPC_RATE_LIMITED" });
+    expect(await refusal(401)).toMatchObject({
+      code: "RING_RPC_CONFIG",
+      details: { field: "apiKey" },
+    });
   });
 });
 
@@ -596,7 +591,10 @@ describe("signed ring request validation", () => {
     async (_name, overrides, code) => {
       const { rpc, fetch } = offlineRpc();
       await expect(
-        Reflect.apply(rpc.createAuditorKeySigned, rpc, [{ ...signedAuditorKey(), ...overrides }]),
+        Reflect.apply(rpc.createAuditorKeySigned, rpc, [
+          { ...signedAuditorKey(), ...overrides },
+          PAYER,
+        ]),
       ).rejects.toMatchObject({ code });
       expect(fetch).not.toHaveBeenCalled();
     },
@@ -616,7 +614,9 @@ describe("signed ring request validation", () => {
     await expect(Reflect.apply(rpc.readSigned, rpc, [null])).rejects.toMatchObject({
       code: "RING_RPC",
     });
-    await expect(Reflect.apply(rpc.createAuditorKeySigned, rpc, [null])).rejects.toMatchObject({
+    await expect(
+      Reflect.apply(rpc.createAuditorKeySigned, rpc, [null, PAYER]),
+    ).rejects.toMatchObject({
       code: "RING_RPC",
     });
     expect(fetch).not.toHaveBeenCalled();
@@ -628,7 +628,7 @@ describe("signed ring request validation", () => {
       Reflect.apply(rpc.readSigned, rpc, [Object.create(signedRead())]),
     ).rejects.toMatchObject({ code: "RING_RPC" });
     await expect(
-      Reflect.apply(rpc.createAuditorKeySigned, rpc, [Object.create(signedAuditorKey())]),
+      Reflect.apply(rpc.createAuditorKeySigned, rpc, [Object.create(signedAuditorKey()), PAYER]),
     ).rejects.toMatchObject({ code: "RING_RPC" });
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -662,28 +662,18 @@ describe("signed ring request validation", () => {
 describe("ring audited merges", () => {
   it("reads signed audited merge pages and rejects malformed field values", async () => {
     await initializePoseidon();
-    const ownerMember = getBase58Decoder().decode(memberOfTag(addressBytes(RING)));
-    const value = {
-      opened: [
-        {
-          txSignature: signatureOf(1),
-          eventIndex: 2,
-          outputCommitment: addressOf(3),
-          ownerMember,
-          ownerPubkey: RING,
-          mint: SOL_MINT,
-          amount: 7,
-          blinding: addressOf(5),
-          ringDataHash: addressOf(6),
-          inputNullifiers: [addressOf(7), addressOf(8)],
-          nullifier: addressOf(9),
-        },
-      ],
-      unresolved: [
-        { txSignature: signatureOf(10), eventIndex: 3, outputCommitment: addressOf(11) },
-      ],
-      cursor: "AQIE",
+    const opened = {
+      slot: 8,
+      txSignature: signatureOf(1),
+      eventIndex: 2,
+      outputCommitment: addressOf(3),
+      ownerKey: RING,
+      asset: getAddressDecoder().decode(assetField(SOL_MINT)),
+      mint: SOL_MINT,
+      amount: 7,
+      realNullifiers: [addressOf(7), addressOf(8)],
     };
+    const value = { opened: [opened], cursor: "AQIE" };
     const merges = (body: unknown) => rpcWith({ context: { slot: 9, blockTime: 10 }, value: body });
     const reader = messageSignerReader(await generateKeyPairSigner());
     const page = await merges(value).getAuditedMerges({
@@ -694,16 +684,19 @@ describe("ring audited merges", () => {
       timestamp: 1_700_000_000n,
     });
     expect(page.cursor).toEqual(Uint8Array.of(1, 2, 4));
-    expect(page.opened[0]).toMatchObject({
-      signature: signatureOf(1),
-      eventIndex: 2,
-      amount: 7n,
-      mint: SOL_MINT,
-      ownerPublicKey: RING,
-      inputNullifiers: [filled(7, 32), filled(8, 32)],
-      keys: { kind: "escrowed", nullifier: filled(9, 32) },
-    });
-    expect(page.unresolved[0]).toMatchObject({ signature: signatureOf(10), eventIndex: 3 });
+    expect(page.opened).toEqual([
+      {
+        slot: 8n,
+        signature: signatureOf(1),
+        eventIndex: 2,
+        outputCommitment: filled(3, 32),
+        ownerKey: addressBytes(RING),
+        asset: assetField(SOL_MINT),
+        mint: SOL_MINT,
+        amount: 7n,
+        realNullifiers: [filled(7, 32), filled(8, 32)],
+      },
+    ]);
     await expect(
       merges({ ...value, cursor: "AQID" }).getAuditedMerges({
         target: RING_TARGET,
@@ -712,34 +705,38 @@ describe("ring audited merges", () => {
       }),
     ).rejects.toMatchObject({ code: "RING_RPC" });
     await expect(
-      merges(value).getAuditedMerges({ target: RING_TARGET, signer: reader, limit: 1n }),
+      merges({ ...value, opened: [opened, opened] }).getAuditedMerges({
+        target: RING_TARGET,
+        signer: reader,
+        limit: 1n,
+      }),
     ).rejects.toMatchObject({ code: "RING_RPC" });
-    // An anonymous merge discloses one spent commitment per circuit slot and no nullifier.
-    const { nullifier: _escrowed, ...disclosed } = value.opened[0]!;
-    const commitments = Array.from({ length: 8 }, (_, index) =>
-      addressOf(index < 2 ? 20 + index : 0),
-    );
-    const anonymous = await merges({
-      ...value,
-      opened: [{ ...disclosed, inputCommitments: commitments }],
-    }).getAuditedMerges({ target: RING_TARGET, signer: reader });
-    const keys = anonymous.opened[0]?.keys;
-    expect(keys?.kind).toBe("disclosed");
-    expect(keys?.kind === "disclosed" && keys.inputCommitments).toHaveLength(8);
     // The program accepts a one-input merge.
     const single = await merges({
       ...value,
-      opened: [{ ...value.opened[0]!, inputNullifiers: [addressOf(7)] }],
+      opened: [{ ...opened, realNullifiers: [addressOf(7)] }],
     }).getAuditedMerges({ target: RING_TARGET, signer: reader });
-    expect(single.opened[0]?.inputNullifiers).toEqual([filled(7, 32)]);
+    expect(single.opened[0]?.realNullifiers).toEqual([filled(7, 32)]);
+    const { mint: _mint, ...unnamed } = opened;
     for (const bad of [
-      { ...value, opened: [disclosed] },
-      { ...value, opened: [{ ...value.opened[0]!, inputCommitments: commitments }] },
-      { ...value, opened: [{ ...disclosed, inputCommitments: commitments.slice(0, 2) }] },
-      { ...value, opened: [{ ...value.opened[0]!, inputNullifiers: [] }] },
-      { ...value, opened: [{ ...value.opened[0]!, eventIndex: 65536 }] },
-      { ...value, opened: [{ ...value.opened[0]!, ownerMember: addressOf(255) }] },
-      { ...value, opened: [{ ...value.opened[0]!, ownerPubkey: addressOf(12) }] },
+      { ...value, opened: [unnamed] },
+      { ...value, unresolved: [] },
+      { ...value, opened: [{ ...opened, inputCommitments: [] }] },
+      {
+        ...value,
+        opened: [
+          {
+            ...opened,
+            realNullifiers: Array.from({ length: MAX_MERGE_INPUTS + 1 }, () => addressOf(7)),
+          },
+        ],
+      },
+      { ...value, opened: [{ ...opened, realNullifiers: [addressOf(255)] }] },
+      { ...value, opened: [{ ...opened, eventIndex: 65536 }] },
+      { ...value, opened: [{ ...opened, asset: addressOf(255) }] },
+      { ...value, opened: [{ ...opened, mint: addressOf(12) }] },
+      { ...value, opened: [{ ...opened, blinding: addressOf(5) }] },
+      { ...value, opened: [{ ...opened, nullifier: addressOf(9) }] },
     ])
       await expect(
         merges(bad).getAuditedMerges({ target: RING_TARGET, signer: reader }),
@@ -759,20 +756,17 @@ describe("ring reader keys", () => {
   const KEYS = [
     {
       key: ED25519 as ReaderKey,
-      record: address("Btd87zUBTFhLjF6ZKUTdpXgVAGmrXYHhsKpSdCtUFE2p"),
       bytes: `01${Buffer.from(ed25519.getPublicKey(filled(23, 32))).toString("hex")}00`,
     },
     {
       key: P256ReaderKey.fromBytes(hex(P256_HEX) as Bytes33) as ReaderKey,
-      record: address("HNpuU7MthQAioAdziSbVyS7YaHABC7e8b36PU6yFQ78D"),
       bytes: `00${P256_HEX}`,
     },
   ];
 
-  it("encodes both key kinds and derives the record like Rust `ReaderKey`", async () => {
-    for (const { key, record, bytes } of KEYS) {
+  it("encodes both key kinds like Rust `ReaderKey`", () => {
+    for (const { key, bytes } of KEYS) {
       expect(Buffer.from(readerKeyBytes(key)).toString("hex")).toBe(bytes);
-      expect(await readAccessRecordAddress(RING, key)).toBe(record);
       expect(readerKeyEquals(parseReaderKey(readerKeyToString(key)), key)).toBe(true);
       expect(readerKeyEquals(readerKeyFromBytes(hex(bytes)), key)).toBe(true);
     }
@@ -802,18 +796,6 @@ describe("ring reader keys", () => {
     expect(() => readerKeyFromBytes(scheme)).toThrow("RING_READER_KEY");
     expect(() => parseReaderKey("not-a-key")).toThrow("RING_READER_KEY");
     expect(() => parseReaderKey("04".repeat(33))).toThrow("RING_READER_KEY");
-  });
-
-  it("decodes the record the program writes and rejects anything else", () => {
-    for (const { key, bytes } of KEYS) {
-      const record = decodeReadAccessRecord(Uint8Array.from([2, ...hex(bytes), 254]));
-      expect(readerKeyEquals(record.reader, key)).toBe(true);
-      expect(record.bump).toBe(254);
-    }
-    expect(() => decodeReadAccessRecord(Uint8Array.from([1, ...filled(23, 34), 254]))).toThrow(
-      "RING_READ_ACCESS_RECORD_INVALID",
-    );
-    expect(() => decodeReadAccessRecord(filled(2, 35))).toThrow("RING_READ_ACCESS_RECORD_INVALID");
   });
 });
 
@@ -874,7 +856,7 @@ describe("ring read attestation", () => {
       limit: 5n,
     });
     expect(new TextDecoder().decode(message)).toBe(
-      "zolana/ring-rpc-read/v2\nmethod: getDecryptedTransactions\ncluster: 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi\nservice: 8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR\nring: US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\ntimestamp: 1700000000\nnonce: BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=\nlimit: 5\ncursor: AQID",
+      "zolana/ring-rpc-read\nmethod: getDecryptedTransactions\ncluster: 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi\nservice: 8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR\nring: US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\ntimestamp: 1700000000\nnonce: BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=\nlimit: 5\ncursor: AQID",
     );
   });
 
@@ -886,7 +868,7 @@ describe("ring read attestation", () => {
       nonce: filled(7, 32) as Bytes32,
     });
     expect(new TextDecoder().decode(message)).toBe(
-      "zolana/ring-rpc-auditor-key-request/v1\ngenesis: cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN\nring: LbUiWL3xVV8hTFYBVdbTNrpDo41NKS6o3LHHuDzjfcY\ntimestamp: 1700000000\nnonce: BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
+      "zolana/ring-rpc-auditor-key-request\ngenesis: cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN\nring: LbUiWL3xVV8hTFYBVdbTNrpDo41NKS6o3LHHuDzjfcY\ntimestamp: 1700000000\nnonce: BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
     );
   });
 
@@ -898,7 +880,7 @@ describe("ring read attestation", () => {
       nonce: filled(4, 32) as Bytes32,
     });
     expect(new TextDecoder().decode(message)).toBe(
-      "zolana/ring-rpc-read/v2\nmethod: getAuditedMerges\ncluster: 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi\nservice: 8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR\nring: US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\ntimestamp: 1\nnonce: BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=\nlimit: 0\ncursor: ",
+      "zolana/ring-rpc-read\nmethod: getAuditedMerges\ncluster: 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi\nservice: 8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR\nring: US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\ntimestamp: 1\nnonce: BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=\nlimit: 0\ncursor: ",
     );
   });
 
@@ -966,7 +948,7 @@ describe("audited UTXO read", () => {
       utxoHashes: hashes,
     });
     expect(new TextDecoder().decode(message)).toBe(
-      "zolana/ring-rpc-audited-utxos/v1\ncluster: 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi\nservice: 8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR\nring: US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\ntimestamp: 1700000000\nnonce: BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=\nutxos: +Biv03ptw7yS+0RzEBEncAbbTvpukCPNdGjAIzXSKk0=",
+      "zolana/ring-rpc-audited-utxos\ncluster: 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi\nservice: 8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR\nring: US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\ntimestamp: 1700000000\nnonce: BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=\nutxos: +Biv03ptw7yS+0RzEBEncAbbTvpukCPNdGjAIzXSKk0=",
     );
   });
 
@@ -1245,133 +1227,110 @@ describe("ring read request", () => {
           dataHash: filled(0x14, 32),
           ringDataHash: filled(0x15, 32),
         },
-        ownerTag: { kind: "recipient", u: filled(6, 32) },
+        ownerTag: { kind: "view", tag: filled(6, 32) },
       },
     });
     const exit = item.outputs[1]!.opening;
     expect(exit.kind === "exit" && exit.utxo.mint).toBeUndefined();
     expect(item.payloadErrors).toEqual([{ slotIndex: 3, kind: "commitment" }]);
-    expect(item.sender).toBeUndefined();
+    expect(item.realInputs).toBe(0);
     expect(item.inputs).toEqual([]);
     expect(item.nullifiers).toEqual([filled(12, 32)]);
+    expect(item.spenders).toEqual([addressOf(13)]);
     expect(item.signers).toEqual([addressOf(13)]);
     expect(item.withdrawals).toEqual([
       { recipient: addressOf(10), asset: addressOf(4), amount: 5n },
     ]);
   });
 
-  it("reads the anonymous page with its sender, tags and every input ring kind", async () => {
-    const item = await readItem(rustItem("decrypted_anonymous_page.json"));
-    expect(item.sender).toEqual({ ownerKey: filled(0x50, 32), nullifierPk: filled(0x51, 32) });
-    const ring = item.outputs[0]!.opening;
-    expect(ring.kind === "ring" && ring.ownerTag).toEqual({ kind: "view", tag: filled(0x31, 32) });
-    expect(item.inputs.map((input) => input.nullifier)).toEqual(item.nullifiers);
+  it("reads the wallet activity the Rust ring rpc serializes for its sender and a recipient", async () => {
+    const activityPage = rustPage("wallet_activity_page.json");
+    const { fetch, bodies } = capturingFetch(activityPage);
+    const page = await new RingRpc("http://ring.example", {
+      fetch,
+      allowInsecureHttp: true,
+    }).getWalletActivity({
+      target: RING_TARGET,
+      signer: await anyReader(),
+      wallet: addressOf(0x50),
+    });
+    const params = bodies[0]?.["params"] as Record<string, unknown>;
+    expect(bodies[0]?.["method"]).toBe("getWalletActivity");
+    expect(params["wallet"]).toBe(addressOf(0x50));
+    const [sent, received] = page.items;
+    if (sent?.view.role !== "sender") throw new Error("a sender view");
+    expect(sent.view.inputs).toHaveLength(4);
     expect(
-      item.inputs.map(({ opening }) => (opening.kind === "opened" ? opening.ring : opening.kind)),
-    ).toEqual([
-      { kind: "ring", commitment: filled(0x62, 32) },
-      { kind: "unresolved", ring: filled(0x72, 32), default: filled(0x73, 32) },
-      { kind: "default", commitment: filled(0x82, 32) },
-      undefined,
-      "dummy",
-      "ambiguous",
-    ]);
-    expect(item.inputs[3]?.opening).toMatchObject({ amount: 0x90n, mint: addressOf(4) });
-    expect(item.inputs[5]?.opening).toEqual({
-      kind: "ambiguous",
-      candidates: [filled(0xa0, 32), filled(0xa1, 32)],
+      sent.view.inputs.every((input) => input.class === "note" || input.defaultInput === undefined),
+    ).toBe(true);
+    expect(sent.view.outputs.map((output) => output.slotIndex)).toEqual([0, 1, 2]);
+    expect(received?.view).toEqual({
+      role: "recipient",
+      outputs: [sent.view.outputs[0]],
+      withdrawals: [],
     });
   });
 
-  it("reads a sender whose spent UTXO 0 is a deposit and refuses an output UTXO without its key", async () => {
-    const deposited = rustItem("decrypted_anonymous_page.json");
-    delete (deposited["sender"] as Record<string, unknown>)["nullifierPk"];
-    expect((await readItem(deposited)).sender).toEqual({ ownerKey: filled(0x50, 32) });
-    const keyless = rustItem("decrypted_anonymous_page.json");
-    delete (outputAt(keyless, 0)["utxo"] as Record<string, unknown>)["nullifierPk"];
-    await expect(readItem(keyless)).rejects.toMatchObject({ code: "RING_RPC" });
+  it("reads each published input of the anonymous page with its real count", async () => {
+    const item = await readItem(anonymousItem());
+    expect(item.realInputs).toBe(3);
+    expect(item.inputs.map((input) => input.nullifier)).toEqual(item.nullifiers);
+    expect(item.inputs.filter((input) => input.defaultInput !== undefined)).toHaveLength(2);
+  });
+
+  it("reads an address input apart from the notes it precedes", async () => {
+    const wire = anonymousItem();
+    (wire["inputs"] as Record<string, unknown>[])[0]!["class"] = "address";
+    wire["realInputs"] = 2;
+    const item = await readItem(wire);
+    expect(item.inputs.map((input) => input.class)).toEqual(["address", "note", "note", "dummy"]);
   });
 
   it.each<readonly [string, (item: Record<string, unknown>) => void, string]>([
-    [
-      "a slot opened twice",
-      (item) => (item["payloadErrors"] = [{ slotIndex: 0, kind: "frame" }]),
-      "payloadErrors",
-    ],
-    [
-      "a gap in the published slots",
-      (item) => (item["outputs"] = (item["outputs"] as unknown[]).slice(1)),
-      "payloadErrors",
-    ],
-    [
-      "a ring output without its view tag",
-      (item) => delete outputAt(item, 0)["tag"],
-      "outputs[0].kind",
-    ],
-    [
-      "a ring output with a view tag and a recipient key",
-      (item) => (outputAt(item, 0)["recipientU"] = addressOf(6)),
-      "outputs[0].kind",
-    ],
-    [
-      "an exit with a recipient key",
-      (item) => (outputAt(item, 1)["recipientU"] = addressOf(6)),
-      "outputs[1].kind",
-    ],
-    [
-      "a dummy with a UTXO",
-      (item) => (outputAt(item, 2)["utxo"] = outputAt(item, 1)["utxo"]),
-      "outputs[2].kind",
-    ],
-    [
-      "an unknown output kind",
-      (item) => (outputAt(item, 2)["kind"] = "padding"),
-      "outputs[2].kind",
-    ],
-    ["a tag without a hidden sender", (item) => delete item["sender"], "inputs"],
-    [
-      "an input per published nullifier missing",
-      (item) => (item["inputs"] = (item["inputs"] as unknown[]).slice(1)),
-      "inputs",
-    ],
+    ["a real count past the nullifiers", (item) => (item["realInputs"] = 9), "realInputs"],
+    ["an input missing", (item) => (item["inputs"] as unknown[]).pop(), "inputs"],
     [
       "an input under another nullifier",
-      (item) => ((item["inputs"] as Record<string, unknown>[])[0]!["nullifier"] = addressOf(99)),
+      (item) => ((item["nullifiers"] as unknown[])[0] = addressOf(9)),
       "inputs",
     ],
     [
-      "an anonymous ring output under a recipient key",
+      "padding that opens a default note",
       (item) => {
-        const output = outputAt(item, 0);
-        delete output["tag"];
-        output["recipientU"] = addressOf(6);
+        const [padding, opened] = (item["inputs"] as Record<string, unknown>[])
+          .slice(-1)
+          .concat((item["inputs"] as Record<string, unknown>[]).slice(1, 2));
+        if (padding === undefined || opened === undefined) throw new Error("no inputs");
+        padding["class"] = "dummy";
+        padding["defaultInput"] = opened["defaultInput"];
       },
-      "outputs.tag",
+      "inputs[3].defaultInput",
     ],
     [
-      "an ambiguous input with an opening",
-      (item) => {
-        const inputs = item["inputs"] as Record<string, unknown>[];
-        inputs[5]!["opening"] = inputs[0]!["opening"];
-      },
-      "inputs[5].candidates",
+      "an address that opens a default note",
+      (item) => ((item["inputs"] as Record<string, unknown>[])[1]!["class"] = "address"),
+      "inputs[1].defaultInput",
     ],
     [
-      "an empty candidate list",
-      (item) => ((item["inputs"] as Record<string, unknown>[])[5]!["candidates"] = []),
-      "inputs[5].candidates",
+      "an address counted in the real count",
+      (item) => ((item["inputs"] as Record<string, unknown>[])[0]!["class"] = "address"),
+      "inputs",
     ],
     [
-      "an unknown input ring kind",
-      (item) =>
-        (((item["inputs"] as Record<string, unknown>[])[0]!["opening"] as Record<string, unknown>)[
-          "ring"
-        ] = { kind: "pool", commitment: addressOf(1) }),
-      "inputs[0].opening.ring.kind",
+      "a note past a dummy",
+      (item) => ((item["inputs"] as Record<string, unknown>[])[0]!["class"] = "dummy"),
+      "inputs",
+    ],
+    ["a ring output with no tag", (item) => delete outputAt(item, 0)["tag"], "outputs[0].kind"],
+    ["an exit with a tag", (item) => (outputAt(item, 1)["tag"] = addressOf(9)), "outputs[1].kind"],
+    [
+      "a dummy with an opening",
+      (item) => (outputAt(item, 2)["utxo"] = outputAt(item, 0)["utxo"]),
+      "outputs[2].kind",
     ],
     ["an event index past u16", (item) => (item["eventIndex"] = 65536), "eventIndex"],
   ])("refuses %s", async (_name, edit, path) => {
-    const item = rustItem("decrypted_anonymous_page.json");
+    const item = anonymousItem();
     edit(item);
     await expect(readItem(item)).rejects.toMatchObject({ code: "RING_RPC", details: { path } });
   });
@@ -1381,7 +1340,7 @@ describe("ring read request", () => {
       new URL("../../../../../test-vectors/rpc/ring_rpc_payload_errors.json", import.meta.url),
       "utf8",
     ),
-  ) as { kinds: unknown; foreign_body_and_low_order_key: { slotIndex: number; kind: string }[] };
+  ) as { kinds: unknown; commitment_and_disclosure: { slotIndex: number; kind: string }[] };
 
   /** A delivered transfer of six slots, the vector's slots failed and every other a dummy. */
   const erroredItem = (payloadErrors: readonly unknown[]) =>
@@ -1396,8 +1355,8 @@ describe("ring read request", () => {
 
   it("reads every payload error kind the shared vector names", async () => {
     expect(RUST_PAYLOAD_ERRORS.kinds).toEqual(RING_PAYLOAD_ERROR_KINDS);
-    const item = await readItem(erroredItem(RUST_PAYLOAD_ERRORS.foreign_body_and_low_order_key));
-    expect(item.payloadErrors).toEqual(RUST_PAYLOAD_ERRORS.foreign_body_and_low_order_key);
+    const item = await readItem(erroredItem(RUST_PAYLOAD_ERRORS.commitment_and_disclosure));
+    expect(item.payloadErrors).toEqual(RUST_PAYLOAD_ERRORS.commitment_and_disclosure);
   });
 
   it.each<readonly [string, readonly unknown[]]>([
@@ -1405,20 +1364,20 @@ describe("ring read request", () => {
       "an unknown kind",
       [
         { slotIndex: 2, kind: "decrypt" },
-        { slotIndex: 5, kind: "recipientKey" },
+        { slotIndex: 5, kind: "commitment" },
       ],
     ],
     [
       "a slot past the published ones",
       [
-        { slotIndex: 2, kind: "frame" },
-        { slotIndex: 6, kind: "frame" },
+        { slotIndex: 2, kind: "disclosure" },
+        { slotIndex: 6, kind: "disclosure" },
       ],
     ],
     [
       "one slot twice",
       [
-        { slotIndex: 2, kind: "frame" },
+        { slotIndex: 2, kind: "disclosure" },
         { slotIndex: 2, kind: "commitment" },
       ],
     ],
@@ -1498,15 +1457,17 @@ describe("ring read request", () => {
   const servicePublicKey = getAddressDecoder().decode(ed25519.getPublicKey(serviceSecret));
   const auditor = X25519Keypair.fromBytes(new Uint8Array(32).fill(9)).publicKey();
   const genesisHash = filled(4, 32) as Bytes32;
-  const auditorKeyResult = (signature: Uint8Array) => ({
+  const auditorKeyResult = (signature: Uint8Array, service: Address = servicePublicKey) => ({
     ringProgramId: RING,
     auditorPubkey: Buffer.from(auditor.toBytes()).toString("base64"),
     auditorViewTag: getAddressDecoder().decode(auditor.u()),
-    servicePubkey: servicePublicKey,
+    servicePubkey: service,
     signature: getBase58Decoder().decode(signature),
   });
   /** A ring rpc whose statement covers the cluster and nonce of each request it answers. */
-  const statementFetch = (): {
+  const statementFetch = (
+    secret: Uint8Array = serviceSecret,
+  ): {
     fetch: typeof globalThis.fetch;
     bodies: Record<string, unknown>[];
   } => {
@@ -1525,7 +1486,10 @@ describe("ring read request", () => {
         JSON.stringify({
           jsonrpc: "2.0",
           id: 1,
-          result: auditorKeyResult(ed25519.sign(statement, serviceSecret)),
+          result: auditorKeyResult(
+            ed25519.sign(statement, secret),
+            getAddressDecoder().decode(ed25519.getPublicKey(secret)),
+          ),
         }),
         JSON_HEADERS,
       );
@@ -1587,15 +1551,15 @@ describe("ring read request", () => {
       auditorPublicKey: auditor,
       nonce: filled(3, 32) as Bytes32,
     });
-    expect(otherRequest.subarray(0, 26)).toEqual(
-      new TextEncoder().encode("zolana/ring-auditor-key/v2"),
+    expect(otherRequest.subarray(0, 23)).toEqual(
+      new TextEncoder().encode("zolana/ring-auditor-key"),
     );
-    expect(otherRequest).toHaveLength(26 + 32 + 32 + 33 + 32);
+    expect(otherRequest).toHaveLength(23 + 32 + 32 + 33 + 32);
     const authority = await generateKeyPairSigner();
     const key = await new RingRpc("http://ring.example", {
       fetch: statementFetch().fetch,
       allowInsecureHttp: true,
-    }).createAuditorKey({ ringProgramId: RING, genesisHash, authority });
+    }).createAuditorKey({ ringProgramId: RING, genesisHash, authority, servicePublicKey });
     expect(key.auditorPublicKey.equals(auditor)).toBe(true);
     expect(key.auditorViewTag).toEqual(auditor.u());
     expect(key.servicePublicKey).toBe(servicePublicKey);
@@ -1604,13 +1568,25 @@ describe("ring read request", () => {
       new RingRpc("http://ring.example", {
         fetch: capturingFetch(auditorKeyResult(filled(1, 64))).fetch,
         allowInsecureHttp: true,
-      }).createAuditorKey({ ringProgramId: RING, genesisHash, authority }),
+      }).createAuditorKey({ ringProgramId: RING, genesisHash, authority, servicePublicKey }),
     ).rejects.toMatchObject({ code: "RING_RPC" });
     await expect(
       new RingRpc("http://ring.example", {
         fetch: capturingFetch(auditorKeyResult(ed25519.sign(otherRequest, serviceSecret))).fetch,
         allowInsecureHttp: true,
-      }).createAuditorKey({ ringProgramId: RING, genesisHash, authority }),
+      }).createAuditorKey({ ringProgramId: RING, genesisHash, authority, servicePublicKey }),
+    ).rejects.toMatchObject({ code: "RING_RPC" });
+  });
+
+  it("refuses an auditor key attested under a service key the caller did not pin", async () => {
+    const authority = await generateKeyPairSigner();
+    const answered = new RingRpc("http://ring.example", {
+      fetch: statementFetch(filled(8, 32)).fetch,
+      allowInsecureHttp: true,
+    });
+
+    await expect(
+      answered.createAuditorKey({ ringProgramId: RING, genesisHash, authority, servicePublicKey }),
     ).rejects.toMatchObject({ code: "RING_RPC" });
   });
 
@@ -1624,6 +1600,7 @@ describe("ring read request", () => {
       ringProgramId: RING,
       genesisHash,
       authority,
+      servicePublicKey,
       timestamp: 1_700_000_000n,
     });
 
@@ -1655,5 +1632,66 @@ describe("ring read request", () => {
         addressBytes(authority.address),
       ),
     ).toBe(true);
+  });
+});
+
+describe("merge settings", () => {
+  const settings = { mint: SOL_MINT, targetNoteCount: 4, minAverageAmount: 9n };
+
+  it("writes the Rust request fields and reads the Rust response", () => {
+    const owner = "11111111111111111111111111111112" as Address;
+    const request = encodeSetMergeSettingsRequest({
+      ring: owner,
+      owner,
+      settings,
+      timestamp: 7n,
+      nonce: "AAAA" as never,
+      signature: "1".repeat(64) as never,
+    });
+    expect(Object.keys(request)).toEqual([
+      "ring",
+      "owner",
+      "settings",
+      "timestamp",
+      "nonce",
+      "signature",
+    ]);
+    expect(decodeMergeSettings(encodeMergeSettings(settings))).toEqual(settings);
+  });
+
+  it("refuses a note count past u32", () => {
+    expect(() =>
+      decodeMergeSettings({ ...encodeMergeSettings(settings), targetNoteCount: 2 ** 32 }),
+    ).toThrow();
+  });
+});
+
+describe("storage apply proof inputs", () => {
+  it("writes each write under the Rust `StorageWriteView` keys", () => {
+    const registry = "11111111111111111111111111111112" as Address;
+    const request = encodeStorageApplyProofInputsRequest({
+      registry,
+      writes: [{ member: registry as never, mask: 1n, value: 1n, mintPolicy: null }],
+    });
+    expect(request["registry"]).toBe(registry);
+    expect(Object.keys((request["writes"] as readonly object[])[0] ?? {})).toEqual([
+      "member",
+      "mask",
+      "value",
+      "mintPolicy",
+    ]);
+  });
+
+  it("refuses a response missing a field", () => {
+    expect(() => decodeStorageApplyProofInputs({ revision: 1 })).toThrow();
+  });
+});
+
+describe("isRingAuthorityShape", () => {
+  it("holds the authority widths and no other", () => {
+    const [shape] = RING_AUTHORITY_SHAPES;
+    if (shape === undefined) throw new Error("no authority shape");
+    expect(isRingAuthorityShape(shape)).toBe(true);
+    expect(isRingAuthorityShape({ ...shape, inputs: RING_AUTHORITY_MAX_INPUTS + 1 })).toBe(false);
   });
 });

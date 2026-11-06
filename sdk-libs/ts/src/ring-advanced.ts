@@ -2,7 +2,7 @@ export * from "./ring/advanced.js";
 export {
   APPLY_BATCH,
   MEMBER_REGISTRY_CAPACITY,
-  MEMBER_REGISTRY_ROOT_HISTORY,
+  ROOT_HISTORY,
   QUAD_ARITY,
   QUAD_HEIGHT,
 } from "./protocol/membership/member-registry.js";
@@ -11,10 +11,15 @@ export type {
   MemberRecord,
   PoolSubject,
   QuadPath,
-  QueueEntry,
+  RecordWrite,
   RecordOpening,
   RecordPool,
   RecordWriteProofInput,
 } from "./protocol/membership/member-registry.js";
 
-export { EMPTY_MINT_POLICY, type MintPolicy } from "./protocol/membership/mint-policy.js";
+export {
+  EMPTY_ASSET_LIMITS,
+  EMPTY_MINT_POLICY,
+  type AssetLimits,
+  type MintPolicy,
+} from "./protocol/membership/mint-policy.js";

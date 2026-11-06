@@ -2,7 +2,7 @@ import {
   createProofOutput,
   type ProofOutputInit,
   type ProofOutputUtxo,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 
 export function withOutputFields(
   output: ProofOutputUtxo,

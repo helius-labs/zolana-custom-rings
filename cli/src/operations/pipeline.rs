@@ -8,7 +8,7 @@ use zolana_ring_client::ReaderKey;
 
 use crate::{
     controls, defaults, deploy, init, line, localnet, probe, ring_rpc, transact, Context,
-    DeployArgs, InitArgs, ReaderCommand,
+    DeployArgs, InitArgs, ReaderCommand, Target, TransactArgs,
 };
 
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -34,5 +34,11 @@ pub fn run(ctx: &mut Context, args: DeployArgs) -> Result<()> {
     }
     let reader = ReaderKey::ed25519(ctx.authority()?.pubkey())?;
     controls::reader(ctx, ReaderCommand::Grant { reader })?;
-    transact::run(ctx, defaults())
+    transact::run(
+        ctx,
+        TransactArgs {
+            enrol_allow: ctx.config.target == Target::Localnet,
+            ..defaults()
+        },
+    )
 }

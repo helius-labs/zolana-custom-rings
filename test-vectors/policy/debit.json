@@ -1,0 +1,143 @@
+{
+  "cases": [
+    {
+      "name": "single owner pays",
+      "inputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 300,
+          "ring": true
+        }
+      ],
+      "outputs": [
+        {
+          "owner": 1002,
+          "asset": 2001,
+          "amount": 200,
+          "ring": true
+        },
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 100,
+          "ring": true
+        }
+      ],
+      "debits": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "debit": 200
+        }
+      ]
+    },
+    {
+      "name": "an exit to the owner leaves the ring",
+      "inputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 300,
+          "ring": true
+        }
+      ],
+      "outputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 200,
+          "ring": false
+        },
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 100,
+          "ring": true
+        }
+      ],
+      "debits": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "debit": 200
+        }
+      ]
+    },
+    {
+      "name": "credits stay with their owner",
+      "inputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 300,
+          "ring": true
+        },
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "amount": 100,
+          "ring": true
+        }
+      ],
+      "outputs": [
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "amount": 400,
+          "ring": true
+        }
+      ],
+      "debits": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "debit": 300
+        },
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "debit": 0
+        }
+      ]
+    },
+    {
+      "name": "two owners pay one payee",
+      "inputs": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "amount": 250,
+          "ring": true
+        },
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "amount": 150,
+          "ring": true
+        }
+      ],
+      "outputs": [
+        {
+          "owner": 1002,
+          "asset": 2001,
+          "amount": 400,
+          "ring": true
+        }
+      ],
+      "debits": [
+        {
+          "owner": 1001,
+          "asset": 2001,
+          "debit": 250
+        },
+        {
+          "owner": 1003,
+          "asset": 2001,
+          "debit": 150
+        }
+      ]
+    }
+  ],
+  "description": "debit(owner, asset) = max(0, owned inputs - ring outputs returned to that owner), keyed by owner identity, an exit reads ring false and counts as leaving, a credit never moves between owners. Each case's largest debit settles at a cap of itself and refuses at one below in the transfer circuit. owner and asset are decimal identities of the fixture. Produced by prover/circuits/policy/debit_vector_test.go with WRITE_AUDIT_VECTORS=1."
+}

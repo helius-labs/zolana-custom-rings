@@ -29,10 +29,19 @@ func extensionOf(t testing.TB, circuit common.CircuitType) common.ExtensionCircu
 // requestOf is the inverse of assign, the request a client sends for assignment.
 func requestOf[P any](t testing.TB, circuit common.CircuitType, assignment frontend.Circuit) *P {
 	t.Helper()
+	params := requestValue[P](t, assignment)
+	reflect.ValueOf(params).Elem().FieldByName("CircuitType").SetString(string(circuit))
+	return params
+}
+
+func requestValue[P any](t testing.TB, source any) *P {
+	t.Helper()
 	params := new(P)
-	dst := reflect.ValueOf(params).Elem()
-	dst.FieldByName("CircuitType").SetString(string(circuit))
-	if err := errors.Join(unfill(dst, reflect.ValueOf(assignment).Elem(), "")...); err != nil {
+	value := reflect.ValueOf(source)
+	if value.Kind() == reflect.Pointer {
+		value = value.Elem()
+	}
+	if err := errors.Join(unfill(reflect.ValueOf(params).Elem(), value, "")...); err != nil {
 		t.Fatal(err)
 	}
 	return params
@@ -42,15 +51,29 @@ type unviewed interface {
 	request() any
 }
 
+// interfaceOf is nil on an unexported embedded view, the struct case of unfill fills its fields.
+func interfaceOf(v reflect.Value) any {
+	if !v.CanInterface() {
+		return nil
+	}
+	return v.Interface()
+}
+
 func unfill(dst, src reflect.Value, path string) []error {
 	if dst.Kind() == reflect.Pointer {
 		dst.Set(reflect.New(dst.Type().Elem()))
 		return unfill(dst.Elem(), src, path)
 	}
-	if v, ok := dst.Interface().(viewed); ok {
+	if v, ok := interfaceOf(dst).(viewed); ok {
 		view := reflect.New(reflect.TypeOf(v.view())).Elem()
 		errs := unfill(view, src, path)
-		dst.Set(reflect.ValueOf(view.Interface().(unviewed).request()))
+		if request, ok := view.Interface().(unviewed); ok {
+			dst.Set(reflect.ValueOf(request.request()))
+		} else if view.Type().ConvertibleTo(dst.Type()) {
+			dst.Set(view.Convert(dst.Type()))
+		} else {
+			errs = append(errs, fmt.Errorf("cannot restore request at %s", path))
+		}
 		return errs
 	}
 	if src.Kind() == reflect.Interface {
@@ -115,24 +138,25 @@ func (v quadPath) flat() []Field {
 	return flat
 }
 
-func (v recordView) request() any {
-	return RecordOpening{Next: v.Next, Lists: v.Lists, EscrowKey: v.EscrowKey, MintPolicy: v.MintPolicy, WithdrawalThreshold: v.WithdrawalThreshold, Index: v.Path.Index, Path: v.Path.flat()}
-}
-
-func (v memberView) request() any {
-	return MemberOpening{
-		Present:       v.Present,
-		RecordOpening: RecordOpening{Next: v.Next, Lists: v.Lists, EscrowKey: v.EscrowKey, MintPolicy: v.MintPolicy, WithdrawalThreshold: v.WithdrawalThreshold, Index: v.Path.Index, Path: v.Path.flat()},
-		LowMember:     v.LowMember, LowNext: v.LowNext, LowLists: v.LowLists, LowEscrow: v.LowEscrow, LowMintPolicy: v.LowMintPolicy, LowWithdrawalThreshold: v.LowWithdrawalThreshold,
+func (v enrollmentView) request() any {
+	e := v.Entry
+	return TrackingWrite{
+		Member: e.Member, NullifierPk: e.NullifierPk, CtHash: e.CtHash, ListTag: e.ListTag,
+		Index: v.Slot.Index, Path: v.Slot.flat(), LowRecord: v.Low, LowIndex: v.LowSlot.Index, LowPath: v.LowSlot.flat(),
 	}
 }
 
+func (v privateOwnerView) request() any {
+	return PrivateOwnerParams{ListSalt: v.ListSalt, Record: v.Record, Index: v.Path.Index, Path: v.Path.flat()}
+}
+
 func (v writeView) request() any {
-	return RecordWrite{
-		Entry: v.Entry, Exists: v.Exists, OldNext: v.OldNext, OldLists: v.OldLists, OldEscrow: v.OldEscrow, OldMintPolicy: v.OldMintPolicy, OldWithdrawalThreshold: v.OldWithdrawalThreshold,
+	old, low := v.Old, v.Low
+	return RecordWriteProofInput{
+		Entry: v.Entry, Exists: v.Exists, OldNext: old.Next, OldLists: old.Lists, OldMintPolicy: old.MintPolicy, OldWithdrawalThreshold: old.WithdrawalThreshold, OldAssetLimits: old.AssetLimits,
 		Index: v.Slot.Index, Path: v.Slot.flat(),
-		LowMember: v.LowMember, LowNext: v.LowNext, LowLists: v.LowLists, LowEscrow: v.LowEscrow, LowMintPolicy: v.LowMintPolicy, LowWithdrawalThreshold: v.LowWithdrawalThreshold,
-		LowIndex: v.Low.Index, LowPath: v.Low.flat(),
+		LowMember: low.Member, LowNext: low.Next, LowLists: low.Lists, LowMintPolicy: low.MintPolicy, LowWithdrawalThreshold: low.WithdrawalThreshold, LowAssetLimits: low.AssetLimits,
+		LowIndex: v.LowSlot.Index, LowPath: v.LowSlot.flat(),
 	}
 }
 

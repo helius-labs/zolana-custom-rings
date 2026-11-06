@@ -24,9 +24,9 @@ const RING_CLI: &str = concat!(
     "/../../target/debug/zolana-ring"
 );
 
-/// The harness payer deploys, `config_authority` holds the config.
+/// The harness payer deploys, `policy_authority` holds the policy role.
 pub struct RingProject {
-    pub config_authority: Keypair,
+    pub policy_authority: Keypair,
     dir: PathBuf,
     program_id: Address,
 }
@@ -83,17 +83,17 @@ impl RingProject {
         let dir = PathBuf::from(isolated_temp_path("zolana-ring-cli"));
         let keys = dir.join("keys");
         std::fs::create_dir_all(&keys)?;
-        let config_authority = Keypair::new();
+        let policy_authority = Keypair::new();
         solana_keypair::write_keypair_file(&env.payer, dir.join("upgrade.json"))
             .map_err(|e| anyhow!("write upgrade keypair {e}"))?;
-        solana_keypair::write_keypair_file(&config_authority, dir.join("config.json"))
-            .map_err(|e| anyhow!("write config keypair {e}"))?;
+        solana_keypair::write_keypair_file(&policy_authority, dir.join("policy.json"))
+            .map_err(|e| anyhow!("write policy keypair {e}"))?;
         std::fs::write(
             keys.join("auditor.key.pub"),
             format!("{}\n", hex::encode(auditor.as_bytes())),
         )?;
         Ok(Self {
-            config_authority,
+            policy_authority,
             dir,
             program_id: custom_ring_program_id()?,
         })
@@ -108,14 +108,14 @@ impl RingProject {
             self.dir.join("ring.toml"),
             format!(
                 "name = \"cli\"\ntarget = \"localnet\"\nprogram_id = \"{}\"\nmode = \"{}\"\n\
-                 authority_keypair = \"{}\"\nconfig_authority_keypair = \"{}\"\n\n{policy}\
+                 authority_keypair = \"{}\"\npolicy_authority_keypair = \"{}\"\n\n{policy}\
                  [localnet]\nrpc = \"{}\"\nindexer = \"{}\"\nprover = \"{}\"\nring_rpc = \"{}\"\n\n\
                  [devnet]\nrpc = \"https://api.devnet.solana.com\"\nindexer = \"http://indexer.invalid\"\n\
                  prover = \"http://prover.invalid\"\nring_rpc = \"http://ring.invalid\"\n",
                 self.program_id,
                 toml.mode,
                 self.dir.join("upgrade.json").display(),
-                self.dir.join("config.json").display(),
+                self.dir.join("policy.json").display(),
                 toml.env.rpc_url,
                 toml.env.indexer_url,
                 prover_url(),
@@ -125,7 +125,7 @@ impl RingProject {
         Ok(())
     }
 
-    /// Re-pins under the config authority.
+    /// Re-pins under the policy authority.
     pub fn policy_set(&self, block: &str) -> Result<String> {
         let path = self.dir.join("ring.toml");
         let text = std::fs::read_to_string(&path)?;

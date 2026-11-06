@@ -1,24 +1,21 @@
 import type { MintPolicy } from "./mint-policy.js";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 
 /** Rust `QUAD_ARITY` and `QUAD_HEIGHT`, the 4-ary record tree of a ring's member registry. */
 export const QUAD_ARITY = 4;
 export const QUAD_HEIGHT = 10;
 /** Rust `MEMBER_REGISTRY_CAPACITY`, `4^10` leaves. */
 export const MEMBER_REGISTRY_CAPACITY = 1n << BigInt(2 * QUAD_HEIGHT);
-/** Rust `ROOT_HISTORY`, the registry roots a proof may bind. */
-export const MEMBER_REGISTRY_ROOT_HISTORY = 32;
-/** Rust `APPLY_BATCH`, the writes the larger apply key proves and the record queue holds. */
+/** Rust `ROOT_HISTORY`, the roots a registry keeps. */
+export const ROOT_HISTORY = 32;
+/** Rust `APPLY_BATCH`, the writes the larger apply key proves. */
 export const APPLY_BATCH = 16;
 
-/** One leaf, `Poseidon(member, next, lists, escrow_key, mint_policy, withdrawal_threshold)`, Rust `MemberRecord`. */
 export interface MemberRecord {
   readonly member: Bytes32;
   readonly next: Bytes32;
   /** Bit `id - 1` marks list `id`. */
   readonly lists: bigint;
-  /** Zero until the member registers a key. */
-  readonly escrowKey: Bytes32;
   readonly mintPolicy: MintPolicy;
 }
 
@@ -55,25 +52,23 @@ export type RecordOpening =
   | Readonly<{ kind: "present"; record: MemberRecord; path: QuadPath }>
   | Readonly<{ kind: "absent"; low: MemberRecord; path: QuadPath }>;
 
-/** One queued masked write, `lists' = (lists & !mask) | value`, the escrow key fills once. */
-export interface QueueEntry {
+/** `lists' = (lists & !mask) | value`. */
+export interface RecordWrite {
   readonly member: Bytes32;
   readonly mask: bigint;
   readonly value: bigint;
-  readonly escrowKey: Bytes32;
   readonly mintPolicy?: MintPolicy;
 }
 
-/** One queued write's apply proof input, Rust `RecordWriteProofInput`. */
+/** One write's apply proof input, Rust `RecordWriteProofInput`. */
 export interface RecordWriteProofInput {
-  readonly entry: QueueEntry;
+  readonly entry: RecordWrite;
   readonly exists: boolean;
   /** An absent member reads its low record's `next` and empty lists. */
   readonly oldNext: Bytes32;
   readonly oldLists: bigint;
-  readonly oldEscrow: Bytes32;
   readonly oldMintPolicy: MintPolicy;
-  /** The record's leaf, for an absent member the leaf at `next_index`. */
+  /** The record's leaf, for an absent member the leaf at `next_index`, the low leaf for a no-op on a full tree. */
   readonly slot: QuadPath;
   /** An absent member's low record and its path before the relink, empty for a present member. */
   readonly low: MemberRecord;
@@ -86,10 +81,10 @@ export interface ApplyProofInputs {
   readonly newRoot: Bytes32;
   readonly oldNextIndex: number;
   readonly newNextIndex: number;
-  /** `chain(head - 1)`. */
+  /** `chain_start` of the registry and revision. */
   readonly chainStart: Bytes32;
-  /** `chain(tail - 1)`. */
+  /** The chain past the last write. */
   readonly chainEnd: Bytes32;
-  /** Queue order. */
+  /** Instruction order. */
   readonly writes: readonly RecordWriteProofInput[];
 }

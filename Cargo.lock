@@ -1497,6 +1497,7 @@ dependencies = [
  "serde_json",
  "solana-address 2.6.1",
  "solana-bn254",
+ "solana-message",
  "solana-program-error",
  "spl-token-2022-interface 2.1.0",
  "spr-event",
@@ -1507,6 +1508,7 @@ dependencies = [
  "spr-transaction",
  "thiserror 2.0.20",
  "wincode",
+ "x25519-dalek",
  "zolana-ring-policy",
 ]
 
@@ -1526,17 +1528,20 @@ dependencies = [
  "solana-account 4.3.2",
  "solana-address 2.6.1",
  "solana-bn254",
- "solana-curve25519 4.0.1",
+ "solana-clock",
  "solana-instruction",
  "solana-keypair",
  "solana-loader-v3-interface 8.0.1",
  "solana-message",
+ "solana-sbpf",
  "solana-signer",
  "solana-transaction",
  "solana-transaction-error",
+ "spl-token-2022-interface 2.1.0",
  "spr-account-checks",
  "spr-hasher",
  "spr-interface",
+ "spr-tree",
  "wincode",
  "x25519-dalek",
  "zolana-ring-policy",
@@ -1553,6 +1558,7 @@ dependencies = [
  "futures",
  "hex",
  "http",
+ "num-bigint 0.4.8",
  "serde",
  "serde_json",
  "solana-account 4.3.2",
@@ -1565,6 +1571,7 @@ dependencies = [
  "solana-rpc-client-api",
  "solana-signature",
  "solana-signer",
+ "solana-system-interface 3.2.0",
  "solana-transaction",
  "solana-transaction-error",
  "solana-transaction-status-client-types",
@@ -1596,12 +1603,22 @@ name = "custom-ring-test-validator"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
+ "base64 0.22.1",
  "bincode 2.0.1",
+ "bytemuck",
  "custom-ring-cli",
  "custom-ring-interface",
  "custom-ring-sdk",
  "hex",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "reqwest",
+ "sea-orm",
+ "serde",
  "serde_json",
+ "solana-account 4.3.2",
  "solana-address 2.6.1",
  "solana-instruction",
  "solana-keypair",
@@ -1610,7 +1627,11 @@ dependencies = [
  "solana-signature",
  "solana-signer",
  "solana-system-interface 3.2.0",
+ "solana-transaction-status-client-types",
+ "spr-api",
  "spr-client",
+ "spr-hasher",
+ "spr-indexer-api",
  "spr-interface",
  "spr-keypair",
  "spr-program",
@@ -1621,8 +1642,12 @@ dependencies = [
  "spr-tree",
  "spr-user-registry-interface",
  "tokio",
+ "tracing-subscriber",
+ "zeroize",
  "zolana-ring-client",
+ "zolana-ring-indexer",
  "zolana-ring-keys",
+ "zolana-ring-member-registry",
  "zolana-ring-policy",
  "zolana-ring-rpc",
  "zolana-ring-transaction",
@@ -3911,28 +3936,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
-name = "policy-store-program"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "custom-ring-interface",
- "hex",
- "litesvm",
- "pinocchio 0.11.2",
- "pinocchio-system",
- "serde_json",
- "solana-address 2.6.1",
- "solana-instruction",
- "solana-keypair",
- "solana-transaction-error",
- "spr-account-checks",
- "spr-client",
- "spr-hasher",
- "spr-interface",
- "zolana-ring-policy",
-]
-
-[[package]]
 name = "poly1305"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4457,17 +4460,20 @@ dependencies = [
  "solana-signature",
  "solana-transaction",
  "solana-transaction-status-client-types",
+ "spr-client",
  "spr-indexer-api",
- "spr-interface",
+ "spr-keypair",
  "spr-rpc-http",
  "thiserror 2.0.20",
  "tokio",
  "tower",
  "tower-http 0.7.1",
  "tracing-subscriber",
+ "zolana-ring-client",
  "zolana-ring-indexer",
  "zolana-ring-member-registry",
  "zolana-ring-policy",
+ "zolana-ring-rpc",
 ]
 
 [[package]]
@@ -4475,9 +4481,17 @@ name = "ring-xtask"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytemuck",
  "custom-ring-interface",
  "hex",
  "serde_json",
+ "solana-address 2.6.1",
+ "solana-instruction",
+ "solana-message",
+ "spr-client",
+ "spr-interface",
+ "spr-program",
+ "spr-transaction",
  "xtask",
  "zolana-cli-common",
 ]
@@ -7244,7 +7258,7 @@ dependencies = [
 
 [[package]]
 name = "spr-account-checks"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "solana-account-view 2.0.0",
  "solana-address 2.6.1",
@@ -7254,7 +7268,7 @@ dependencies = [
 
 [[package]]
 name = "spr-api"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "http",
  "reqwest",
@@ -7268,7 +7282,7 @@ dependencies = [
 
 [[package]]
 name = "spr-client"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -7284,6 +7298,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "solana-account 4.3.2",
  "solana-address 2.6.1",
  "solana-bn254",
@@ -7319,7 +7334,7 @@ dependencies = [
 
 [[package]]
 name = "spr-event"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "borsh",
  "wincode",
@@ -7327,7 +7342,7 @@ dependencies = [
 
 [[package]]
 name = "spr-event-parser"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "borsh",
  "solana-pubkey 4.2.1",
@@ -7337,7 +7352,7 @@ dependencies = [
 
 [[package]]
 name = "spr-hasher"
-version = "0.1.1"
+version = "0.8.0"
 dependencies = [
  "ark-bn254 0.6.0",
  "ark-ff 0.6.0",
@@ -7351,7 +7366,7 @@ dependencies = [
 
 [[package]]
 name = "spr-indexer-api"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "base64 0.22.1",
  "bs58",
@@ -7363,7 +7378,7 @@ dependencies = [
 
 [[package]]
 name = "spr-instruction"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "pinocchio 0.11.2",
  "solana-address 2.6.1",
@@ -7377,7 +7392,7 @@ dependencies = [
 
 [[package]]
 name = "spr-interface"
-version = "0.1.1"
+version = "0.8.0"
 dependencies = [
  "arrayvec",
  "borsh",
@@ -7395,7 +7410,7 @@ dependencies = [
 
 [[package]]
 name = "spr-keypair"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "aes",
  "bs58",
@@ -7419,7 +7434,7 @@ dependencies = [
 
 [[package]]
 name = "spr-merkle-tree"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "num-bigint 0.4.8",
  "num-traits",
@@ -7429,7 +7444,7 @@ dependencies = [
 
 [[package]]
 name = "spr-program"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "solana-address 2.6.1",
  "spr-hasher",
@@ -7441,7 +7456,7 @@ dependencies = [
 
 [[package]]
 name = "spr-program-test"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "base64 0.22.1",
  "litesvm",
@@ -7475,7 +7490,7 @@ dependencies = [
 
 [[package]]
 name = "spr-protocol-instructions"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "solana-address 2.6.1",
  "solana-instruction",
@@ -7486,13 +7501,14 @@ dependencies = [
 
 [[package]]
 name = "spr-prover-tee"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "aes-gcm",
  "ciborium",
  "ciborium-ll",
  "coset",
  "dcap-qvl",
+ "ed25519-dalek",
  "form_urlencoded",
  "hex",
  "hpke",
@@ -7520,7 +7536,7 @@ dependencies = [
 
 [[package]]
 name = "spr-smart-account-client"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "borsh",
  "solana-instruction",
@@ -7570,7 +7586,7 @@ dependencies = [
 
 [[package]]
 name = "spr-transaction"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "borsh",
  "num-bigint 0.4.8",
@@ -7584,11 +7600,12 @@ dependencies = [
  "spr-keypair",
  "thiserror 2.0.20",
  "wincode",
+ "zeroize",
 ]
 
 [[package]]
 name = "spr-tree"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "borsh",
  "bytemuck",
@@ -7602,7 +7619,7 @@ dependencies = [
 
 [[package]]
 name = "spr-user-registry-interface"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "borsh",
  "solana-instruction",
@@ -7611,8 +7628,9 @@ dependencies = [
 
 [[package]]
 name = "spr-zk-dsl"
-version = "0.1.0"
-source = "git+https://github.com/helius-labs/zk-tools?rev=a4ebd1699ffa04545e3739f16a51e764992d07d6#a4ebd1699ffa04545e3739f16a51e764992d07d6"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c2b7827bc52b59c75dffdbe689b67821dac31817128017858d9e3f816167599"
 dependencies = [
  "getrandom 0.2.17",
  "solana-address 2.6.1",
@@ -7776,6 +7794,26 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "storage-program"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "custom-ring-interface",
+ "hex",
+ "litesvm",
+ "pinocchio 0.11.2",
+ "pinocchio-system",
+ "serde_json",
+ "solana-address 2.6.1",
+ "solana-clock",
+ "solana-instruction",
+ "solana-keypair",
+ "solana-transaction-error",
+ "spr-client",
+ "zolana-ring-policy",
+]
 
 [[package]]
 name = "stringprep"
@@ -9118,10 +9156,13 @@ dependencies = [
  "solana-account 4.3.2",
  "solana-address 2.6.1",
  "solana-commitment-config",
+ "solana-hash",
+ "solana-instruction",
  "solana-keypair",
  "solana-rpc-client-api",
  "solana-signature",
  "solana-signer",
+ "solana-transaction",
  "solana-transaction-status-client-types",
  "spr-api",
  "spr-client",
@@ -9129,11 +9170,13 @@ dependencies = [
  "spr-event-parser",
  "spr-hasher",
  "spr-indexer-api",
+ "spr-instruction",
  "spr-interface",
  "spr-keypair",
  "spr-transaction",
  "thiserror 2.0.20",
  "tokio",
+ "wincode",
  "zeroize",
  "zolana-ring-client",
  "zolana-ring-indexer",
@@ -9150,7 +9193,6 @@ version = "0.1.0"
 dependencies = [
  "custom-ring-interface",
  "serde",
- "solana-address 2.6.1",
  "spr-indexer-api",
  "thiserror 2.0.20",
  "zolana-ring-member-registry",
@@ -9172,7 +9214,9 @@ dependencies = [
  "sha2 0.10.9",
  "solana-address 2.6.1",
  "spr-hasher",
+ "spr-interface",
  "spr-keypair",
+ "spr-transaction",
  "thiserror 2.0.20",
  "zeroize",
 ]
@@ -9181,10 +9225,12 @@ dependencies = [
 name = "zolana-ring-member-registry"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "custom-ring-interface",
  "hex",
  "serde",
  "serde_json",
+ "solana-address 2.6.1",
  "spr-hasher",
  "thiserror 2.0.20",
  "zolana-ring-policy",
@@ -9209,13 +9255,14 @@ dependencies = [
 name = "zolana-ring-rpc"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "anyhow",
  "async-trait",
  "base64 0.22.1",
- "borsh",
  "bytemuck",
  "clap",
  "custom-ring-interface",
+ "custom-ring-sdk",
  "hex",
  "hkdf",
  "hyper",
@@ -9225,23 +9272,34 @@ dependencies = [
  "psl",
  "rand 0.8.8",
  "reqwest",
+ "sea-orm",
+ "sea-orm-migration",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "solana-account 4.3.2",
  "solana-address 2.6.1",
  "solana-commitment-config",
+ "solana-hash",
+ "solana-instruction",
  "solana-keypair",
  "solana-loader-v3-interface 8.0.1",
+ "solana-message",
  "solana-rpc-client",
+ "solana-rpc-client-api",
  "solana-signature",
  "solana-signer",
+ "solana-transaction",
+ "solana-transaction-error",
+ "solana-transaction-status-client-types",
+ "spl-token-2022-interface 2.1.0",
  "spr-api",
  "spr-client",
  "spr-event",
  "spr-event-parser",
  "spr-hasher",
  "spr-indexer-api",
+ "spr-instruction",
  "spr-interface",
  "spr-keypair",
  "spr-rpc-http",
@@ -9251,11 +9309,14 @@ dependencies = [
  "tower",
  "tower-http 0.7.1",
  "tracing-subscriber",
+ "wincode",
  "zeroize",
  "zolana-ring-client",
  "zolana-ring-indexer",
+ "zolana-ring-keys",
  "zolana-ring-member-registry",
  "zolana-ring-policy",
+ "zolana-ring-rpc",
  "zolana-ring-transaction",
  "zolana-secret-file",
 ]

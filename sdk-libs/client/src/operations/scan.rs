@@ -1,24 +1,26 @@
 //! Photon matches the auditor tag on outputs and messages alike, the message match is re-applied.
 
 use std::{
-    collections::{HashMap, HashSet},
     future::Future,
     num::{NonZeroU32, NonZeroUsize},
 };
 
 use custom_ring_interface::RingMode;
 use solana_address::Address;
-use spr_client::{AsyncRpc, ClientError, IndexerRpcConfig, RingHistoryOptions};
+use solana_signature::Signature;
+use spr_client::{
+    rpc::{GetShieldedTransactionsByTagsResponse, HistoryFilters, PaginationToken},
+    AsyncRpc, ClientError, IndexerRpcConfig, RingHistoryOptions,
+};
 use spr_keypair::{X25519Keypair, X25519Pubkey};
 use spr_transaction::ShieldedTransaction;
-use zolana_ring_transaction::RingAssets;
 
 use crate::{
     decrypt::TransactionAudit,
     encryption::auditor_view_tag,
-    known::KnownUtxoIndex,
+    error::RowDisposition,
+    history::{HistoryCursor, HistoryPosition, HistoryQuery, HistoryStream, PageEnd},
     origin::{ConfirmedEventKind, RingOrigin, TransactionOrigin},
-    paging::next_page,
     types::AuditedTransaction,
     AuditError,
 };
@@ -26,71 +28,100 @@ use crate::{
 /// One bounded read, `next_cursor` is live only when the page cap stopped it.
 pub struct ScanPage<T> {
     pub transactions: Vec<T>,
-    pub next_cursor: Option<Vec<u8>>,
+    pub next_cursor: Option<HistoryCursor>,
+    pub skipped: Vec<SkippedRow>,
+}
+
+/// A row that opened nothing, the read goes past it.
+#[derive(Debug)]
+pub struct SkippedRow {
+    pub tx_signature: Signature,
+    pub event_index: u16,
+    pub error: AuditError,
 }
 
 pub type RingScanPage = ScanPage<ShieldedTransaction>;
 pub type AuditedPage = ScanPage<AuditedTransaction>;
 
-pub(crate) struct Page {
+/// What a bounded read reached, `next` is live only when the cap stopped it.
+pub(crate) struct PagesRead {
     pub transactions: Vec<ShieldedTransaction>,
-    pub end: PageEnd,
+    pub next: Option<PaginationToken>,
 }
 
-/// Reads until the frontier or the cap, a stalled cursor or a frontierless terminal page fails.
+/// Reads until the terminal page or the cap, a page that does not answer its request fails.
 pub(crate) struct Pages {
-    pub cursor: Option<Vec<u8>>,
+    pub position: HistoryPosition,
     pub max_pages: NonZeroUsize,
     pub page_size: NonZeroU32,
 }
 
 impl Pages {
-    pub(crate) async fn read<F, Fut>(self, mut fetch: F) -> Result<RingScanPage, AuditError>
+    pub(crate) async fn read<F, Fut>(self, mut fetch: F) -> Result<PagesRead, AuditError>
     where
-        F: FnMut(Option<Vec<u8>>) -> Fut,
-        Fut: Future<Output = Result<Page, ClientError>>,
+        F: FnMut(Option<PaginationToken>, HistoryFilters) -> Fut,
+        Fut: Future<Output = Result<GetShieldedTransactionsByTagsResponse, ClientError>>,
     {
         let Self {
-            mut cursor,
+            mut position,
             max_pages,
             page_size,
         } = self;
         let mut transactions = Vec::new();
-        let mut seen = HashSet::new();
         for _ in 0..max_pages.get() {
-            let page = fetch(cursor.clone()).await?;
-            if page.transactions.len() as u64 > u64::from(page_size.get()) {
-                return Err(AuditError::PageOverflow);
-            }
-            // A row served again under another cursor is the same event.
-            transactions.extend(
-                page.transactions
-                    .into_iter()
-                    .filter(|tx| seen.insert((tx.tx_signature, tx.event_index))),
-            );
-            cursor = page.end.next(&cursor)?;
-            if cursor.is_none() {
+            let page = fetch(position.token(), position.filters()).await?;
+            let end = position
+                .advance(&page, page_size.get())
+                .map_err(|_| AuditError::InvalidHistoryPage)?;
+            transactions.extend(page.data.into_iter().flat_map(|item| item.events));
+            if let PageEnd::Terminal(_) = end {
                 break;
             }
         }
-        Ok(ScanPage {
+        Ok(PagesRead {
             transactions,
-            next_cursor: cursor,
+            next: position.token(),
         })
     }
 }
 
-pub(crate) struct PageEnd {
-    pub next_cursor: Option<Vec<u8>>,
-    pub scanned_through: Option<Vec<u8>>,
+impl SkippedRow {
+    /// `Err` when `error` must stop the read instead.
+    pub(crate) fn of(row: &ShieldedTransaction, error: AuditError) -> Result<Self, AuditError> {
+        match error.disposition() {
+            RowDisposition::Retry => Err(error),
+            RowDisposition::Invalid => Ok(Self {
+                tx_signature: row.tx_signature,
+                event_index: row.event_index.ok_or(AuditError::MissingEventIndex)?,
+                error,
+            }),
+        }
+    }
 }
 
-impl PageEnd {
-    /// `None` only past a page that states its scan frontier.
-    pub(crate) fn next(self, cursor: &Option<Vec<u8>>) -> Result<Option<Vec<u8>>, AuditError> {
-        match next_page(cursor, self.next_cursor, &self.scanned_through)? {
-            None if self.scanned_through.is_none() => Err(AuditError::ScanFrontierMissing),
-            next => Ok(next),
+pub(crate) struct RowOrigins<'a, O> {
+    pub origin: &'a O,
+    pub ring: Address,
+    pub skipped: Vec<SkippedRow>,
+}
+
+impl<O: TransactionOrigin> RowOrigins<'_, O> {
+    /// `None` once the row is in `skipped`.
+    pub(crate) async fn read(
+        &mut self,
+        row: &ShieldedTransaction,
+    ) -> Result<Option<RingOrigin>, AuditError> {
+        let event_index = row.event_index.ok_or(AuditError::MissingEventIndex)?;
+        match self
+            .origin
+            .origin(row.tx_signature, event_index, self.ring)
+            .await
+        {
+            Ok(confirmed) => Ok(Some(confirmed)),
+            Err(error) => {
+                self.skipped.push(SkippedRow::of(row, error)?);
+                Ok(None)
+            }
         }
     }
 }
@@ -104,7 +135,7 @@ pub(crate) const RING_HISTORY_MAX_PAGES: NonZeroUsize = NonZeroUsize::new(4096).
 pub(crate) struct RingHistory<'a> {
     pub ring: Address,
     pub kinds: &'a [ConfirmedEventKind],
-    pub cursor: Option<Vec<u8>>,
+    pub cursor: Option<HistoryCursor>,
     pub page_size: NonZeroU32,
     pub max_pages: NonZeroUsize,
     pub indexer_config: Option<IndexerRpcConfig>,
@@ -124,40 +155,40 @@ impl RingHistory<'_> {
             max_pages,
             indexer_config,
         } = self;
+        let query = HistoryQuery {
+            ring,
+            stream: HistoryStream::Ring,
+        };
         let page = Pages {
-            cursor,
+            position: query.position(cursor)?,
             max_pages,
             page_size,
         }
-        .read(|cursor| async move {
+        .read(|pagination_token, filters| async move {
             let options = RingHistoryOptions {
                 ring_program_id: ring,
-                cursor,
+                pagination_token,
                 limit: Some(page_size.get()),
+                filters,
             };
-            let page = indexer
+            indexer
                 .get_shielded_transactions_by_ring(options, indexer_config)
-                .await?;
-            Ok(Page {
-                transactions: page.transactions,
-                end: PageEnd {
-                    next_cursor: page.next_cursor,
-                    scanned_through: page.scanned_through,
-                },
-            })
+                .await
         })
         .await?;
         let mut bound = Vec::new();
+        let mut origins = RowOrigins {
+            origin,
+            ring,
+            skipped: Vec::new(),
+        };
         for mut transaction in page.transactions {
             if transaction.ring_program_id != Some(ring) {
                 continue;
             }
-            let event_index = transaction
-                .event_index
-                .ok_or(AuditError::MissingEventIndex)?;
-            let confirmed = origin
-                .origin(transaction.tx_signature, event_index, ring)
-                .await?;
+            let Some(confirmed) = origins.read(&transaction).await? else {
+                continue;
+            };
             if !confirmed.ring_invoked || !kinds.contains(&confirmed.event.kind()) {
                 continue;
             }
@@ -166,7 +197,8 @@ impl RingHistory<'_> {
         }
         Ok(ScanPage {
             transactions: bound,
-            next_cursor: page.next_cursor,
+            next_cursor: page.next.map(|token| HistoryCursor { query, token }),
+            skipped: origins.skipped,
         })
     }
 }
@@ -177,12 +209,10 @@ pub struct RingScan {
     ring_program_id: Address,
     auditor_key: X25519Pubkey,
     mode: RingMode,
-    cursor: Option<Vec<u8>>,
+    cursor: Option<HistoryCursor>,
     page_size: NonZeroU32,
     max_pages: NonZeroUsize,
     indexer_config: Option<IndexerRpcConfig>,
-    known: KnownUtxoIndex,
-    escrowed: HashMap<[u8; 32], [u8; 32]>,
 }
 
 impl RingScan {
@@ -195,8 +225,6 @@ impl RingScan {
             page_size: DEFAULT_PAGE_SIZE,
             max_pages: DEFAULT_MAX_PAGES,
             indexer_config: None,
-            known: KnownUtxoIndex::default(),
-            escrowed: HashMap::new(),
         }
     }
 
@@ -206,7 +234,7 @@ impl RingScan {
         self
     }
 
-    pub fn with_cursor(mut self, cursor: Vec<u8>) -> Self {
+    pub fn with_cursor(mut self, cursor: HistoryCursor) -> Self {
         self.cursor = Some(cursor);
         self
     }
@@ -227,23 +255,6 @@ impl RingScan {
         self
     }
 
-    /// Notes opened before by commitment, earlier pages and [`crate::CreatedUtxos`] alike.
-    pub fn with_known_utxos(mut self, utxos: KnownUtxoIndex) -> Self {
-        self.known = utxos;
-        self
-    }
-
-    /// Each owner key's nullifier key as the ring's escrow records hold it.
-    pub fn with_escrowed_keys(mut self, keys: HashMap<[u8; 32], [u8; 32]>) -> Self {
-        self.escrowed = keys;
-        self
-    }
-
-    pub(crate) fn indexer_config(mut self, config: Option<IndexerRpcConfig>) -> Self {
-        self.indexer_config = config;
-        self
-    }
-
     pub async fn run<I: AsyncRpc, O: TransactionOrigin>(
         self,
         indexer: &I,
@@ -257,40 +268,38 @@ impl RingScan {
                 .map(|(transaction, _)| transaction)
                 .collect(),
             next_cursor: page.next_cursor,
+            skipped: page.skipped,
         })
     }
 
-    /// An input resolves within the page and the known notes.
+    /// Reads no earlier page.
     pub async fn audit<I: AsyncRpc, O: TransactionOrigin>(
         mut self,
         auditor: &X25519Keypair,
         indexer: &I,
         origin: &O,
-        assets: &RingAssets,
     ) -> Result<AuditedPage, AuditError> {
         self.auditor_key = auditor.pubkey();
         let mode = self.mode;
-        let mut known = core::mem::take(&mut self.known);
-        let escrowed = core::mem::take(&mut self.escrowed);
         let page = self.confirmed(indexer, origin).await?;
         let mut transactions = Vec::with_capacity(page.transactions.len());
+        let mut skipped = page.skipped;
         for (transaction, confirmed) in &page.transactions {
-            let trees = confirmed.event.input_tree_ids(transaction);
-            let audited = TransactionAudit::new(transaction, confirmed.disclosure_layout(mode)?)
-                .with_input_trees(&trees)?
-                .with_known_utxos(&known)
-                .with_escrowed_keys(&escrowed)
-                .run(auditor, assets)?;
-            known.extend(
-                audited
-                    .utxos()
-                    .map(|created| (created.commitment, created.utxo)),
-            );
-            transactions.push(audited);
+            let opened = confirmed.audit_frame(mode).and_then(|frame| {
+                let trees = confirmed.event.input_tree_ids(transaction);
+                TransactionAudit::new(transaction, frame)
+                    .with_input_trees(&trees)?
+                    .run(auditor)
+            });
+            match opened {
+                Ok(audited) => transactions.push(audited),
+                Err(error) => skipped.push(SkippedRow::of(transaction, error)?),
+            }
         }
         Ok(ScanPage {
             transactions,
             next_cursor: page.next_cursor,
+            skipped,
         })
     }
 
@@ -301,39 +310,41 @@ impl RingScan {
         origin: &O,
     ) -> Result<ScanPage<(ShieldedTransaction, RingOrigin)>, AuditError> {
         let view_tag = auditor_view_tag(&self.auditor_key);
+        let query = HistoryQuery {
+            ring: self.ring_program_id,
+            stream: HistoryStream::Tags,
+        };
         let page = Pages {
-            cursor: self.cursor,
+            position: query.position(self.cursor)?,
             max_pages: self.max_pages,
             page_size: self.page_size,
         }
-        .read(|cursor| async move {
-            let page = indexer
+        .read(|pagination_token, filters| async move {
+            indexer
                 .get_shielded_transactions_by_tags(
                     vec![view_tag],
-                    cursor,
+                    pagination_token,
                     Some(self.page_size.get()),
+                    filters,
                     self.indexer_config,
                 )
-                .await?;
-            Ok(Page {
-                transactions: page.transactions,
-                end: PageEnd {
-                    next_cursor: page.next_cursor,
-                    scanned_through: page.scanned_through,
-                },
-            })
+                .await
         })
         .await?;
         let mut transactions = Vec::new();
+        let mut origins = RowOrigins {
+            origin,
+            ring: self.ring_program_id,
+            skipped: Vec::new(),
+        };
         for mut tx in page.transactions {
             // A row of another ring never reaches the origin read.
             if tx.ring_program_id != Some(self.ring_program_id) {
                 continue;
             }
-            let event_index = tx.event_index.ok_or(AuditError::MissingEventIndex)?;
-            let confirmed = origin
-                .origin(tx.tx_signature, event_index, self.ring_program_id)
-                .await?;
+            let Some(confirmed) = origins.read(&tx).await? else {
+                continue;
+            };
             if confirmed.requires_audit() {
                 confirmed.bind_transaction(&mut tx, self.ring_program_id)?;
                 if !tx
@@ -348,86 +359,22 @@ impl RingScan {
         }
         Ok(ScanPage {
             transactions,
-            next_cursor: page.next_cursor,
+            next_cursor: page.next.map(|token| HistoryCursor { query, token }),
+            skipped: origins.skipped,
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use spr_client::rpc::{Context, TransactionEvents};
+
     use super::*;
 
-    /// Per page, its next cursor and where the scan reached.
-    type Served = (Option<Vec<u8>>, Option<Vec<u8>>);
-
-    struct Read {
-        page: RingScanPage,
-        pages: usize,
-    }
-
-    /// Serves `pages_served` in order, a cursor names the page index.
-    async fn read(pages_served: &[Served], max_pages: usize) -> Result<Read, AuditError> {
-        let fetched = std::cell::Cell::new(0);
-        let page = Pages {
-            cursor: None,
-            max_pages: NonZeroUsize::new(max_pages).unwrap(),
-            page_size: DEFAULT_PAGE_SIZE,
-        }
-        .read(|cursor| {
-            fetched.set(fetched.get() + 1);
-            async move {
-                let index = cursor.map_or(0, |cursor| usize::from(cursor[0]));
-                let (next_cursor, scanned_through) = pages_served[index].clone();
-                Ok(Page {
-                    transactions: Vec::new(),
-                    end: PageEnd {
-                        next_cursor,
-                        scanned_through,
-                    },
-                })
-            }
-        })
-        .await?;
-        Ok(Read {
-            page,
-            pages: fetched.get(),
-        })
-    }
-
-    #[tokio::test]
-    async fn the_last_page_at_the_cap_completes_the_read() {
-        let served = [(Some(vec![1]), None), (Some(vec![2]), Some(vec![2]))];
-        let Read { page, pages } = read(&served, 2).await.unwrap();
-        assert_eq!((page.next_cursor, pages), (None, 2));
-    }
-
-    #[tokio::test]
-    async fn the_cap_returns_the_live_cursor() {
-        let served = [(Some(vec![1]), None), (Some(vec![2]), None)];
-        let Read { page, pages } = read(&served, 2).await.unwrap();
-        assert_eq!((page.next_cursor, pages), (Some(vec![2]), 2));
-    }
-
-    #[tokio::test]
-    async fn a_terminal_page_without_a_frontier_fails_the_scan() {
-        let served = [(Some(vec![1]), None), (None, None)];
-        assert!(matches!(
-            read(&served, 4).await,
-            Err(AuditError::ScanFrontierMissing)
-        ));
-    }
-
-    #[tokio::test]
-    async fn a_terminal_page_with_a_frontier_completes_the_scan() {
-        let served = [(Some(vec![1]), None), (None, Some(vec![1]))];
-        let Read { page, pages } = read(&served, 4).await.unwrap();
-        assert_eq!((page.next_cursor, pages), (None, 2));
-    }
-
-    fn row(signature: u8) -> ShieldedTransaction {
+    fn row(slot: u64, signature: u8) -> ShieldedTransaction {
         ShieldedTransaction {
-            slot: 1,
-            tx_signature: solana_signature::Signature::from([signature; 64]),
+            slot,
+            tx_signature: Signature::from([signature; 64]),
             event_index: Some(0),
             tx_viewing_pk: None,
             salt: None,
@@ -440,54 +387,98 @@ mod tests {
         }
     }
 
-    /// Serves two pages of rows, the second states the frontier.
-    async fn read_rows(rows: [Vec<u8>; 2], page_size: u32) -> Result<RingScanPage, AuditError> {
-        Pages {
-            cursor: None,
-            max_pages: NonZeroUsize::new(4).unwrap(),
+    /// Rows of one page, the token names the last when `more` holds.
+    fn served(rows: Vec<ShieldedTransaction>, more: bool) -> GetShieldedTransactionsByTagsResponse {
+        let pagination_token = rows
+            .last()
+            .filter(|_| more)
+            .map(|last| PaginationToken::new(last.slot, last.tx_signature));
+        GetShieldedTransactionsByTagsResponse {
+            context: Context {
+                block_time: 0,
+                slot: 9,
+            },
+            output_tree_id: None,
+            data: rows
+                .into_iter()
+                .map(|row| TransactionEvents {
+                    slot: row.slot,
+                    signature: row.tx_signature,
+                    events: vec![row],
+                })
+                .collect(),
+            pagination_token,
+        }
+    }
+
+    async fn read(
+        pages: Vec<GetShieldedTransactionsByTagsResponse>,
+        page_size: u32,
+        max_pages: usize,
+    ) -> (Result<PagesRead, AuditError>, usize) {
+        let fetched = std::cell::Cell::new(0);
+        let result = Pages {
+            position: HistoryPosition::default(),
+            max_pages: NonZeroUsize::new(max_pages).unwrap(),
             page_size: NonZeroU32::new(page_size).unwrap(),
         }
-        .read(|cursor| {
-            let index = cursor.map_or(0, |cursor| usize::from(cursor[0]));
-            let transactions = rows[index].iter().copied().map(row).collect();
-            async move {
-                Ok(Page {
-                    transactions,
-                    end: PageEnd {
-                        next_cursor: (index == 0).then(|| vec![1]),
-                        scanned_through: (index == 1).then(|| vec![1]),
-                    },
-                })
-            }
+        .read(|_, _| {
+            let page = pages[fetched.get()].clone();
+            fetched.set(fetched.get() + 1);
+            async move { Ok(page) }
         })
-        .await
+        .await;
+        (result, fetched.get())
+    }
+
+    #[tokio::test]
+    async fn the_last_page_at_the_cap_completes_the_read() {
+        let pages = vec![
+            served(vec![row(1, 1)], true),
+            served(vec![row(1, 2)], false),
+        ];
+        let (read, fetched) = read(pages, 2, 2).await;
+        let read = read.unwrap();
+        assert_eq!((read.next, read.transactions.len(), fetched), (None, 2, 2));
+    }
+
+    #[tokio::test]
+    async fn the_cap_returns_the_live_token() {
+        let pages = vec![served(vec![row(1, 1)], true), served(vec![row(1, 2)], true)];
+        let (read, fetched) = read(pages, 2, 2).await;
+        assert_eq!(
+            (read.unwrap().next, fetched),
+            (Some(PaginationToken::new(1, Signature::from([2; 64]))), 2)
+        );
+    }
+
+    #[tokio::test]
+    async fn an_empty_terminal_page_completes_the_read() {
+        let (read, fetched) = read(vec![served(Vec::new(), false)], 2, 4).await;
+        assert_eq!((read.unwrap().next, fetched), (None, 1));
     }
 
     #[tokio::test]
     async fn a_page_longer_than_its_limit_fails_the_read() {
-        assert!(matches!(
-            read_rows([vec![1, 2], vec![]], 1).await,
-            Err(AuditError::PageOverflow)
-        ));
+        let pages = vec![served(vec![row(1, 1), row(1, 2)], false)];
+        let (read, _) = read(pages, 1, 4).await;
+        assert!(matches!(read, Err(AuditError::InvalidHistoryPage)));
     }
 
     #[tokio::test]
-    async fn a_row_served_again_is_read_once() {
-        let page = read_rows([vec![1], vec![1, 2]], 2).await.unwrap();
-        let signatures: Vec<u8> = page
-            .transactions
-            .iter()
-            .map(|tx| tx.tx_signature.as_ref()[0])
-            .collect();
-        assert_eq!(signatures, [1, 2]);
+    async fn a_row_served_again_fails_the_read() {
+        let pages = vec![
+            served(vec![row(1, 1)], true),
+            served(vec![row(1, 1), row(1, 2)], false),
+        ];
+        let (read, _) = read(pages, 2, 4).await;
+        assert!(matches!(read, Err(AuditError::InvalidHistoryPage)));
     }
 
     #[tokio::test]
-    async fn a_cursor_that_does_not_move_fails() {
-        let served = [(Some(vec![1]), None), (Some(vec![1]), None)];
-        assert!(matches!(
-            read(&served, 4).await,
-            Err(AuditError::Client(ClientError::IndexerCursorNotAdvanced))
-        ));
+    async fn a_token_that_does_not_move_fails_the_read() {
+        let repeated = served(vec![row(1, 1)], true);
+        let (read, _) = read(vec![repeated.clone(), repeated], 2, 4).await;
+        assert!(matches!(read, Err(AuditError::InvalidHistoryPage)));
     }
 }

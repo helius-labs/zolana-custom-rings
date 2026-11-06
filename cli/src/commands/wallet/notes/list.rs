@@ -2,25 +2,22 @@
 
 use anyhow::{bail, ensure, Context as _, Result};
 use clap::{builder::PossibleValue, Args, ValueEnum};
-use custom_ring_interface::{
-    CustomRingError, ListRegistry, RecordQueue, APPLY_DELAY_SLOTS, MEMBER_QUEUE_LIMIT,
-};
+use custom_ring_interface::ListRegistry;
 use custom_ring_sdk::{
-    AuthorityListWrite, CustomRing, MemberListWrite, MemberRecords, RecordApplication, RingError,
-    RingMode, SetSourceOwner, SourceOwner,
+    AuthorityRecordUpdate, MemberRecords, OwnerSaltCheck, PolicyUpdate, SaltedOwnerCheck,
+    SourceOwner, UpdatePolicy, WalletRecordUpdate,
 };
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
-use spr_client::Rpc;
+use zolana_ring_keys::{RingAddress, RingKeyError};
 use zolana_ring_policy::{ListId, ListSet, ListWrite, ListWriteError, Member};
 
 use crate::{
     catalogue::{check_curator, Catalogue},
     line,
     policy::{self, Pinned},
-    records::{self, insert_fee, queue, write_budget, PendingWrites, Queued, Stage},
-    transact::SENDER_FEE_BUDGET,
+    records,
     ui::{self, icon},
     Context, EntryArgs, ListCommand,
 };
@@ -34,9 +31,24 @@ pub struct MemberArgs {
     /// A mint the list screens, repeatable.
     #[arg(long = "asset", value_name = "MINT")]
     assets: Vec<Address>,
+    /// A member on a private list, its ring address or its owner key with the salt read from Ring RPC, repeatable.
+    #[arg(long = "salted-owner", value_name = "RING_ADDRESS_OR_OWNER", value_parser = parse_salted_owner)]
+    salted_owners: Vec<SaltedOwner>,
 }
 
-/// The escrow bit comes only from `key register`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SaltedOwner {
+    Address(Box<RingAddress>),
+    Key(Address),
+}
+
+fn parse_salted_owner(text: &str) -> Result<SaltedOwner, RingKeyError> {
+    match RingAddress::from_base58(text) {
+        Ok(address) => Ok(SaltedOwner::Address(Box::new(address))),
+        Err(refused) => text.parse().map(SaltedOwner::Key).map_err(|_| refused),
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MemberList(ListId);
 
@@ -60,20 +72,6 @@ pub(crate) struct ListUpdate<'a> {
     pub change: ListChange,
 }
 
-#[derive(Clone, Copy, Debug)]
-struct MemberLists {
-    applied: u64,
-    queued: u64,
-}
-
-/// The authority's writes in queue order.
-#[must_use]
-struct ListWrites<'a> {
-    ring: CustomRing,
-    authority: Address,
-    changes: &'a [(Member, ListWrite)],
-}
-
 pub fn run(ctx: &Context, command: ListCommand) -> Result<()> {
     match command {
         ListCommand::Add(entry) => entry.write(ctx, ListChange::Set),
@@ -85,22 +83,72 @@ pub fn run(ctx: &Context, command: ListCommand) -> Result<()> {
             own,
         } => {
             let source = match curator.filter(|_| !own) {
-                Some(curator) => SourceOwner::Shared(
-                    Catalogue::load(ctx.catalogue.as_deref())?
-                        .resolve(ctx.config.target, &curator)?,
-                ),
+                Some(curator) => {
+                    let curator = Catalogue::load(ctx.catalogue.as_deref())?
+                        .resolve(ctx.config.target, &curator)?;
+                    check_curator(ctx, curator, list_id.id())?;
+                    SourceOwner::Curator(policy::curator_records(ctx, curator)?)
+                }
                 None => SourceOwner::Own,
             };
             set_source(ctx, list_id.id(), source)
         }
-        ListCommand::Apply => apply(ctx),
         ListCommand::Join { list } => list.write(ctx, ListChange::Set),
         ListCommand::Leave { list } => list.write(ctx, ListChange::Clear),
     }
 }
 
 impl MemberArgs {
-    pub(crate) fn subjects(&self) -> Result<Vec<Subject>> {
+    /// A private list reads only an owner's salted key, a public one never does.
+    pub(crate) fn subjects(
+        &self,
+        list_id: ListId,
+        ring: Address,
+        read_salt: &dyn Fn(&Address) -> Result<[u8; 32]>,
+    ) -> Result<Vec<Subject>> {
+        if !ListSet::PRIVATE_LISTS.contains(list_id) {
+            ensure!(
+                self.salted_owners.is_empty(),
+                "the {} list is public, name its owners with --owner",
+                list_id.name()
+            );
+            return self.public_subjects();
+        }
+        ensure!(
+            self.owners.is_empty() && self.assets.is_empty(),
+            "the {} list keys owners by their salt, name them with --salted-owner",
+            list_id.name()
+        );
+        self.salted_owners
+            .iter()
+            .map(|salted| {
+                let (owner, list_salt) = match salted {
+                    SaltedOwner::Address(address) => {
+                        ensure!(
+                            address.ring_program_id == ring,
+                            "a ring address of ring {} cannot name a member of ring {ring}",
+                            address.ring_program_id
+                        );
+                        ensure!(
+                            address.list_salt != [0; 32],
+                            "a ring address with no salt has no tracking row and no private record"
+                        );
+                        (
+                            address.recipient.signing_pubkey.as_ed25519()?,
+                            address.list_salt,
+                        )
+                    }
+                    SaltedOwner::Key(owner) => (owner.to_bytes(), read_salt(owner)?),
+                };
+                Ok(Subject {
+                    member: Member::salted(&Member::owner_tag(&owner)?, &list_salt)?,
+                    label: format!("salted owner {}", Address::new_from_array(owner)),
+                })
+            })
+            .collect()
+    }
+
+    fn public_subjects(&self) -> Result<Vec<Subject>> {
         let owners = self.owners.iter().map(|tag| {
             Ok(Subject {
                 member: Member::owner_tag(tag.as_array())?,
@@ -119,7 +167,7 @@ impl MemberArgs {
 
 impl MemberList {
     /// In `ListId::ALL` order.
-    pub const ALL: [Self; 2] = [Self(ListId::RingViewing), Self(ListId::Recovery)];
+    pub const ALL: [Self; 1] = [Self(ListId::RingViewing)];
 
     pub const fn id(self) -> ListId {
         self.0
@@ -127,14 +175,12 @@ impl MemberList {
 
     fn write(self, ctx: &Context, change: ListChange) -> Result<()> {
         let list_id = self.0;
-        let config = ctx.ring_config()?;
         let sender = ctx.sender()?;
         let member = Member::owner_tag(sender.pubkey().as_array())?;
         line(
             "member",
             format_args!("{} {}", list_id.name(), sender.pubkey()),
         );
-        let pending = PendingWrites::read(ctx)?;
         let read = records::read_one(
             &ctx.zolana,
             MemberRecords {
@@ -142,44 +188,17 @@ impl MemberList {
                 members: &[member],
             },
         )?;
-        let lists = MemberLists {
-            applied: read.record().map_or(0, |record| record.lists),
-            queued: pending.record_after(&member, read.record()).lists,
-        };
-        let payer = record_payer(ctx, &sender)?;
-        let queued = match change.stage(list_id, lists) {
-            Stage::Applied => {
-                line("list", "already there");
-                return Ok(());
-            }
-            Stage::Queued => {
-                line("list", "already queued");
-                ctx.fund(payer.pubkey(), SENDER_FEE_BUDGET)?;
-                Queued::now(&ctx.zolana, ctx.ring)?
-            }
-            Stage::Unsent => {
-                let write = MemberListWrite {
-                    ring: ctx.ring,
-                    payer: payer.pubkey(),
-                    member: sender.pubkey(),
-                    lists: change.write(list_id)?,
-                };
-                ctx.fund(payer.pubkey(), write_budget(&config, &sender.pubkey()))?;
-                warn_link(ctx, sender.pubkey());
-                let signers: Vec<&dyn Signer> = match payer.pubkey() == sender.pubkey() {
-                    true => vec![&sender],
-                    false => vec![payer, &sender],
-                };
-                ctx.send(&signers, &[write.instruction(&config)?])?;
-                line("list", change.outcome());
-                let fee = insert_fee(&config, &sender.pubkey());
-                line("insert fee", format_args!("{fee} lamports"));
-                Queued::now(&ctx.zolana, ctx.ring)?
-            }
-        };
-        warn_link(ctx, payer.pubkey());
-        queued.apply(&ctx.zolana, payer)?;
-        line("queue", "applied");
+        if read.listed(list_id) == change.present() {
+            line("list", "already there");
+            return Ok(());
+        }
+        let update = WalletRecordUpdate::new(ctx.record_update_target()?, sender.pubkey())?
+            .with_lists(change.write(list_id)?)?
+            .sign(&sender)?;
+        warn_link(ctx, sender.pubkey());
+        let revision = ctx.ring_rpc().apply_record_update(update)?;
+        line("list", change.outcome());
+        line("revision", revision);
         Ok(())
     }
 }
@@ -208,18 +227,6 @@ impl ListChange {
         matches!(self, Self::Set)
     }
 
-    /// A write lands after every pending one, only the state the queue leaves counts.
-    fn stage(self, list_id: ListId, lists: MemberLists) -> Stage {
-        let holds = |lists: u64| (lists & list_id.record_bit() != 0) == self.present();
-        if !holds(lists.queued) {
-            Stage::Unsent
-        } else if holds(lists.applied) {
-            Stage::Applied
-        } else {
-            Stage::Queued
-        }
-    }
-
     const fn outcome(self) -> &'static str {
         match self {
             Self::Set => "added",
@@ -229,11 +236,56 @@ impl ListChange {
 }
 
 impl EntryArgs {
+    /// Checked against the chain, a salted entry under any other salt is one no proof reads.
+    fn checked_subjects(&self, ctx: &Context) -> Result<Vec<Subject>> {
+        let list_id = self.list_id.id();
+        let read_salt = |owner: &Address| -> Result<[u8; 32]> {
+            let list_salt = ctx
+                .ring_rpc()
+                .list_salt(ctx.ring_rpc_target()?, *owner, ctx.authority()?)?
+                .with_context(|| format!("{owner} has no tracking row and no private record"))?;
+            ctx.zolana
+                .block_on(
+                    OwnerSaltCheck {
+                        ring: ctx.ring,
+                        owner,
+                        list_salt: &list_salt,
+                    }
+                    .run(ctx.zolana.as_async()),
+                )
+                .with_context(|| format!("the salt Ring RPC returned opens no tag of {owner}"))?;
+            Ok(list_salt)
+        };
+        let subjects = self
+            .members
+            .subjects(list_id, ctx.ring.program_id(), &read_salt)?;
+        for salted in &self.members.salted_owners {
+            let SaltedOwner::Address(address) = salted else {
+                continue;
+            };
+            ctx.zolana
+                .block_on(
+                    SaltedOwnerCheck {
+                        ring: ctx.ring,
+                        address,
+                    }
+                    .run(ctx.zolana.as_async()),
+                )
+                .with_context(|| {
+                    format!(
+                        "the salt of {} does not reach a list entry",
+                        address.to_base58()
+                    )
+                })?;
+        }
+        Ok(subjects)
+    }
+
     fn write(self, ctx: &Context, change: ListChange) -> Result<()> {
         let list_id = self.list_id.id();
-        let subjects = self.members.subjects()?;
+        let subjects = self.checked_subjects(ctx)?;
         let outcomes = ListUpdate {
-            authority: ctx.funded_authority()?,
+            authority: ctx.authority()?,
             list_id,
             subjects: &subjects,
             change,
@@ -251,22 +303,25 @@ impl EntryArgs {
 
     fn show(self, ctx: &Context) -> Result<()> {
         let list_id = self.list_id.id();
-        let subjects = self.members.subjects()?;
-        let (ring, source) = match policy::pinned(ctx)?.registry.registry_for(list_id) {
-            Some(ListRegistry::Curator(registry)) => (
-                curator_ring(ctx, registry)?,
-                format!("curator registry {registry}"),
-            ),
-            _ => (ctx.ring, "own registry".to_owned()),
-        };
+        let subjects = self.checked_subjects(ctx)?;
         let members: Vec<Member> = subjects.iter().map(|subject| subject.member).collect();
-        let reads = records::read(
-            &ctx.zolana,
-            MemberRecords {
-                ring,
-                members: &members,
-            },
-        )?;
+        let pinned = policy::pinned(ctx)?;
+        let (source, reads) = match pinned.account.registry_for(list_id) {
+            Some(ListRegistry::Curator(registry)) => (
+                format!("curator registry {registry}"),
+                records::read_curator(ctx, &pinned.account, &members)?,
+            ),
+            _ => (
+                format!("own records {}", pinned.account.records),
+                records::read(
+                    &ctx.zolana,
+                    MemberRecords {
+                        ring: ctx.ring,
+                        members: &members,
+                    },
+                )?,
+            ),
+        };
         line("source", source);
         for (subject, read) in subjects.iter().zip(&reads) {
             line(
@@ -289,7 +344,7 @@ impl ListUpdate<'_> {
     pub(crate) fn send(self, ctx: &Context) -> Result<Vec<&'static str>> {
         let list_id = self.list_id;
         if let Some(ListRegistry::Curator(registry)) =
-            policy::pinned(ctx)?.registry.registry_for(list_id)
+            policy::pinned(ctx)?.account.registry_for(list_id)
         {
             bail!(
                 "the {} list reads curator registry {registry}, write it on the curator ring",
@@ -304,152 +359,69 @@ impl ListUpdate<'_> {
                 members: &members,
             },
         )?;
-        let mut writes = Vec::new();
+        let mut update =
+            AuthorityRecordUpdate::new(ctx.record_update_target()?, self.authority.pubkey());
+        let mut changed = false;
         let mut outcomes = Vec::with_capacity(self.subjects.len());
         for (subject, read) in self.subjects.iter().zip(&reads) {
             if read.listed(list_id) == self.change.present() {
                 outcomes.push("already there");
                 continue;
             }
-            writes.push((subject.member, self.change.write(list_id)?));
+            update = update.with_write(subject.member, self.change.write(list_id)?)?;
+            changed = true;
             outcomes.push(self.change.outcome());
         }
-        ListWrites {
-            ring: ctx.ring,
-            authority: self.authority.pubkey(),
-            changes: &writes,
+        if changed {
+            ctx.ring_rpc()
+                .apply_record_update(update.sign(self.authority)?)?;
         }
-        .send(
-            || Ok(queue(&ctx.zolana, ctx.ring)?.pending()),
-            |batch| ctx.submit(batch, self.authority, &[]).map(drop),
-        )?;
         Ok(outcomes)
     }
-}
-
-impl ListWrites<'_> {
-    /// The queue is re-read before each batch, its pending writes share the proof.
-    fn send(
-        self,
-        mut pending: impl FnMut() -> Result<u64>,
-        mut send: impl FnMut(AuthorityListWrite) -> Result<()>,
-    ) -> Result<()> {
-        let mut sent = 0;
-        while sent < self.changes.len() {
-            let rest = self.changes[sent..].iter().try_fold(
-                AuthorityListWrite::new(self.ring, self.authority),
-                |write, (member, lists)| write.with_write(*member, *lists),
-            )?;
-            let batch = rest
-                .batches(pending()?)
-                .into_iter()
-                .next()
-                .context("no batch takes the remaining writes")?;
-            sent += batch.writes().len();
-            send(batch)?;
-        }
-        Ok(())
-    }
-}
-
-/// A policy source names the curator by its registry account.
-fn curator_ring(ctx: &Context, registry: Address) -> Result<CustomRing> {
-    let account = ctx
-        .rpc()
-        .get_account(registry)?
-        .with_context(|| format!("curator registry {registry} does not exist"))?;
-    let curator = CustomRing::new(account.owner);
-    ensure!(
-        curator.registry_pda() == registry,
-        "{registry} is not the member registry of {}",
-        account.owner
-    );
-    Ok(curator)
 }
 
 /// The registry a source names, as the policy stores it.
 pub(crate) fn expected_registry(source: SourceOwner) -> ListRegistry {
     match source {
         SourceOwner::Own => ListRegistry::Own,
-        SourceOwner::Shared(curator) => ListRegistry::Curator(curator.registry_pda()),
+        SourceOwner::Curator(registry) => ListRegistry::Curator(registry),
     }
 }
 
 fn set_source(ctx: &Context, list_id: ListId, source: SourceOwner) -> Result<()> {
-    let Pinned { registry, .. } = policy::pinned(ctx)?;
-    if let SourceOwner::Shared(curator) = source {
-        check_curator(ctx, curator, list_id)?;
-    }
+    let Pinned { account, .. } = policy::pinned(ctx)?;
     let authority = ctx.funded_authority()?;
-    let outcome = if registry.registry_for(list_id) == Some(expected_registry(source)) {
+    let outcome = if account.registry_for(list_id) == Some(expected_registry(source)) {
         "already present"
     } else {
-        let point = SetSourceOwner {
+        let point = UpdatePolicy {
             ring: ctx.ring,
             authority: authority.pubkey(),
-            list_id,
-            source,
+            current: &account,
+            update: PolicyUpdate::Source { list_id, source },
         }
         .instruction()?;
         ctx.send(&[authority], &[point])?;
         "created"
     };
     let registry = policy::pinned(ctx)?
-        .registry
+        .account
         .registry_for(list_id)
         .with_context(|| format!("the policy does not reference the {} list", list_id.name()))?;
     let (glyph, reads) = match source {
-        SourceOwner::Own => (icon::LISTS, "its own registry".to_owned()),
-        SourceOwner::Shared(curator) => {
-            (icon::CURATOR, format!("curator {}", curator.program_id()))
-        }
+        SourceOwner::Own => (icon::LISTS, "its own records".to_owned()),
+        SourceOwner::Curator(registry) => (icon::CURATOR, format!("curator registry {registry}")),
     };
     ui::heading(glyph, &format!("the {} list reads {reads}", list_id.name()));
     line("source", outcome);
     line(
         "registry",
         match registry {
-            ListRegistry::Own => ctx.ring.registry_pda(),
+            ListRegistry::Own => account.records,
             ListRegistry::Curator(registry) => registry,
         },
     );
     Ok(())
-}
-
-/// Anyone may apply a due queue, the sender pays.
-fn apply(ctx: &Context) -> Result<()> {
-    let queue = queue(&ctx.zolana, ctx.ring)?;
-    line("pending", queue.pending());
-    match queue.apply_due(ctx.rpc().get_slot()?) {
-        Ok(()) => {
-            let sender = ctx.sender()?;
-            let payer = record_payer(ctx, &sender)?;
-            ctx.fund(payer.pubkey(), SENDER_FEE_BUDGET)?;
-            warn_link(ctx, payer.pubkey());
-            let signature = ctx.submit(RecordApplication::new(ctx.ring), payer, &[])?;
-            line("queue", "applied");
-            line("application", signature);
-        }
-        Err(CustomRingError::ApplyNotDue) => line("queue", not_due(&queue)),
-        Err(CustomRingError::ApplyTooSoon) => line(
-            "queue",
-            format_args!(
-                "due, the next application lands from slot {}",
-                queue.next_apply_slot()
-            ),
-        ),
-        Err(error) => return Err(RingError::from(error).into()),
-    }
-    Ok(())
-}
-
-/// An anonymous ring's hidden owner never pays, the fee payer does.
-fn record_payer<'a>(ctx: &'a Context, member: &'a Keypair) -> Result<&'a Keypair> {
-    let mode = ctx.ring_config()?.mode;
-    match mode {
-        RingMode::Anonymous => ctx.member_payer(mode, member.pubkey()),
-        RingMode::Confidential | RingMode::ConfidentialEscrow => Ok(member),
-    }
 }
 
 fn warn_link(ctx: &Context, signer: Address) {
@@ -457,15 +429,6 @@ fn warn_link(ctx: &Context, signer: Address) {
     ui::warn(format!(
         "{signer} signs, the chain links that key to ring {ring}"
     ));
-}
-
-fn not_due(queue: &RecordQueue) -> String {
-    match queue.pending() {
-        0 => "empty".to_owned(),
-        pending => format!(
-            "{pending} pending, due at {MEMBER_QUEUE_LIMIT} or once the oldest is {APPLY_DELAY_SLOTS} slots old"
-        ),
-    }
 }
 
 #[cfg(test)]
@@ -491,7 +454,68 @@ mod tests {
             }
             _ => panic!("a member command"),
         };
-        Ok(members.subjects().expect("members"))
+        Ok(members
+            .subjects(ListId::Block, Address::new_from_array([0x11; 32]), &|_| {
+                bail!("no read")
+            })
+            .expect("members"))
+    }
+
+    /// A private list keys an owner by its salt, the same key the circuit derives.
+    #[test]
+    fn a_private_list_writes_the_salted_key_and_refuses_a_plain_owner() {
+        let ring = Address::new_from_array([0x11; 32]);
+        let wallet = spr_keypair::ShieldedKeypair::from_keypair(
+            spr_keypair::SigningKey::from_ed25519_bytes(&[7; 32]),
+        )
+        .unwrap();
+        let address = RingAddress::enrolled(&wallet, ring).unwrap();
+        let args = |owners: Vec<Address>, addresses: Vec<RingAddress>| MemberArgs {
+            owners,
+            assets: Vec::new(),
+            salted_owners: addresses
+                .into_iter()
+                .map(|address| SaltedOwner::Address(Box::new(address)))
+                .collect(),
+        };
+        let no_read = |_: &Address| -> Result<[u8; 32]> { bail!("no read") };
+        let salted = args(Vec::new(), vec![address.clone()])
+            .subjects(ListId::PrivateBlock, ring, &no_read)
+            .unwrap();
+        let owner = address.recipient.signing_pubkey.as_ed25519().unwrap();
+        assert_eq!(
+            salted[0].member,
+            Member::salted(&Member::owner_tag(&owner).unwrap(), &address.list_salt).unwrap()
+        );
+        assert_ne!(salted[0].member, Member::owner_tag(&owner).unwrap());
+
+        let by_key = MemberArgs {
+            owners: Vec::new(),
+            assets: Vec::new(),
+            salted_owners: vec![SaltedOwner::Key(Address::new_from_array(owner))],
+        };
+        let read = by_key
+            .subjects(ListId::PrivateBlock, ring, &|_| Ok(address.list_salt))
+            .unwrap();
+        assert_eq!(read[0].member, salted[0].member);
+        assert!(by_key
+            .subjects(ListId::PrivateBlock, ring, &no_read)
+            .is_err());
+
+        let plain = TAG.parse().unwrap();
+        assert!(args(vec![plain], Vec::new())
+            .subjects(ListId::PrivateAllow, ring, &no_read)
+            .is_err());
+        assert!(args(Vec::new(), vec![address.clone()])
+            .subjects(ListId::Block, ring, &no_read)
+            .is_err());
+        assert!(args(Vec::new(), vec![address])
+            .subjects(
+                ListId::PrivateBlock,
+                Address::new_from_array([0x12; 32]),
+                &no_read
+            )
+            .is_err());
     }
 
     fn subject(member: Member, label: String) -> Subject {
@@ -528,24 +552,9 @@ mod tests {
         for list in MemberList::ALL {
             assert!(join(list.0.name()).is_ok(), "{}", list.0.name());
         }
-        for list in ["allow", "escrow", "block"] {
+        for list in ["allow", "block"] {
             assert!(join(list).is_err(), "{list}");
         }
-    }
-
-    #[test]
-    fn a_member_write_the_queue_already_holds_is_not_sent_again() {
-        let bit = ListId::RingViewing.record_bit();
-        let stage = |change: ListChange, applied, queued| {
-            change.stage(ListId::RingViewing, MemberLists { applied, queued })
-        };
-        assert_eq!(stage(ListChange::Set, 0, bit), Stage::Queued);
-        assert_eq!(stage(ListChange::Set, bit, bit), Stage::Applied);
-        assert_eq!(stage(ListChange::Set, 0, 0), Stage::Unsent);
-        assert_eq!(stage(ListChange::Clear, bit, 0), Stage::Queued);
-        // A pending join undoes an applied leave, the leave goes out again.
-        assert_eq!(stage(ListChange::Clear, 0, bit), Stage::Unsent);
-        assert_eq!(stage(ListChange::Set, bit, 0), Stage::Unsent);
     }
 
     #[test]
@@ -558,86 +567,13 @@ mod tests {
         assert_eq!(lists, written);
     }
 
-    fn allow() -> ListWrite {
-        ListChange::Set.write(ListId::Allow).unwrap()
-    }
-
-    struct Batches {
-        sizes: Vec<usize>,
-        order: Vec<Member>,
-    }
-
-    fn batches(writes: &[(Member, ListWrite)], pending: &[u64]) -> Batches {
-        let mut pending = pending.iter().copied();
-        let mut batches = Batches {
-            sizes: Vec::new(),
-            order: Vec::new(),
-        };
-        ListWrites {
-            ring: CustomRing::new(Address::new_from_array([9; 32])),
-            authority: Address::new_from_array([3; 32]),
-            changes: writes,
-        }
-        .send(
-            || Ok(pending.next().expect("one queue read per batch")),
-            |batch| {
-                batches.sizes.push(batch.writes().len());
-                batches.order.extend(
-                    batch
-                        .writes()
-                        .iter()
-                        .map(|write| Member::from_bytes(write.member).unwrap()),
-                );
-                Ok(())
-            },
-        )
-        .unwrap();
-        batches
-    }
-
-    #[test]
-    fn list_write_splits_at_one_batch() {
-        let writes: Vec<(Member, ListWrite)> = (1..=20u8)
-            .map(|byte| (Member::owner_tag(&[byte; 32]).unwrap(), allow()))
-            .collect();
-        assert_eq!(batches(&writes[..16], &[0]).sizes, [16]);
-        assert_eq!(batches(&writes, &[0, 0]).sizes, [16, 4]);
-        // The first batch takes the room the pending member writes leave, its proof applies them.
-        assert_eq!(batches(&writes, &[8, 0]).sizes, [8, 12]);
-        // A member write queued between two batches shrinks the next.
-        let interleaved = batches(&writes, &[10, 6, 0]);
-        assert_eq!(interleaved.sizes, [6, 10, 4]);
-        let members: Vec<Member> = writes.iter().map(|(member, _)| *member).collect();
-        assert_eq!(
-            interleaved.order, members,
-            "the writes keep their order across batches"
-        );
-    }
-
-    #[test]
-    fn a_list_write_names_each_member_once() {
-        let member = Member::owner_tag(&[1; 32]).unwrap();
-        let writes = [(member, allow()), (member, allow())];
-        let refused = ListWrites {
-            ring: CustomRing::new(Address::new_from_array([9; 32])),
-            authority: Address::new_from_array([3; 32]),
-            changes: &writes,
-        }
-        .send(|| Ok(0), |_| Ok(()))
-        .unwrap_err();
-        assert!(matches!(
-            refused.downcast_ref::<RingError>(),
-            Some(RingError::DuplicateListWrite { .. })
-        ));
-    }
-
     #[test]
     fn a_source_names_the_registry_account() {
-        let curator = CustomRing::new(Address::new_from_array([4; 32]));
+        let curator = Address::new_from_array([4; 32]);
         assert_eq!(expected_registry(SourceOwner::Own), ListRegistry::Own);
         assert_eq!(
-            expected_registry(SourceOwner::Shared(curator)),
-            ListRegistry::Curator(curator.registry_pda())
+            expected_registry(SourceOwner::Curator(curator)),
+            ListRegistry::Curator(curator)
         );
     }
 }

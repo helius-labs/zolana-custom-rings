@@ -1,37 +1,58 @@
-import { type RingRecordReader } from "./ports.js";
-import { type PresentRecordOpening } from "./prover/types.js";
+import { type RingMemberOpening, type RingRecordReader, type StorageRoot } from "./ports.js";
 import { MAX_RING_MEMBER_BATCH } from "../protocol/indexer/indexer-limits.js";
-import type { ChainReader } from "@heliuslabs/zolana/client";
-import { waitForProjection, equalBytes } from "@heliuslabs/zolana/internal";
-import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
-import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
+import type { ChainReader } from "@heliuslabs/spr/client";
+import { equalBytes, waitForProjection } from "@heliuslabs/spr/internal";
+import type { Address, Bytes32, RequestContext } from "@heliuslabs/spr/interface";
 
-import { registryCurrentRoot } from "../protocol/codec/ring-codecs.js";
-import { fetchRingMemberRegistry, fetchRingProgramConfig } from "../protocol/membership/config.js";
+import { fetchRingPolicy, fetchStorageRegistry } from "../protocol/membership/config.js";
 import { RingError } from "../protocol/error.js";
-import {
-  MemberOpeningRead,
-  ownerEscrowed,
-  verifyRecordPool,
-} from "../protocol/membership/member-opening.js";
+import { MemberOpeningRead, verifyRecordPool } from "../protocol/membership/member-opening.js";
 import type { RecordPool } from "../protocol/membership/member-registry.js";
 import { MEMBER_REGISTRY_PROJECTION_ERRORS } from "./projection.js";
 
 export type RingRecordReadClient = Pick<ChainReader, "getAccount"> &
-  Pick<RingRecordReader, "getRingMemberOpenings">;
+  Pick<RingRecordReader, "getStorageMemberOpenings">;
 
-/** A member's present record under the registry's newest root. */
-export interface RegisteredRecord {
+/** A storage root a proof binds, named by the revision the program reads it back by. */
+export interface BoundRoot {
+  readonly ringProgramId: Address;
+  readonly registry: Address;
+  readonly revision: bigint;
   readonly root: Bytes32;
-  /** The root's history slot, the program reads the bound root back through it. */
-  readonly index: number;
-  readonly record: PresentRecordOpening;
-  /** `hash_bytes` of the escrowed key ciphertext, the record's escrow key binds it. */
-  readonly ctHash: Bytes32;
 }
 
-/** Members' records under the registry's newest root, in member order, Rust `MemberRecords::read`. */
-export function readMemberRecords(
+/** The newest root the live `registry` holds. */
+export async function fetchBoundRoot(
+  input: Readonly<{
+    client: Pick<ChainReader, "getAccount">;
+    ringProgramId: Address;
+    registry: Address;
+  }>,
+  context?: RequestContext,
+): Promise<BoundRoot> {
+  const root = await fetchRegistryRoot(input, context);
+  return Object.freeze({ ...root, ringProgramId: input.ringProgramId });
+}
+
+/** No ring proof binds the root. */
+export async function fetchRegistryRoot(
+  input: Readonly<{ client: Pick<ChainReader, "getAccount">; registry: Address }>,
+  context?: RequestContext,
+): Promise<RegistryRoot> {
+  const current = (await fetchStorageRegistry(input.client, input.registry, context)).roots[0];
+  if (current === undefined)
+    throw new RingError("RING_MEMBER_REGISTRY_INVALID", { details: { registry: input.registry } });
+  return Object.freeze({
+    registry: input.registry,
+    revision: current.revision,
+    root: current.hash,
+  });
+}
+
+export type RegistryRoot = Omit<BoundRoot, "ringProgramId">;
+
+/** Members' records under the ring's newest own root, in member order, Rust `MemberRecords::read`. */
+export async function readMemberRecords(
   input: Readonly<{
     client: RingRecordReadClient;
     ringProgramId: Address;
@@ -39,64 +60,54 @@ export function readMemberRecords(
   }>,
   context?: RequestContext,
 ): Promise<readonly MemberOpeningRead[]> {
+  return (await readOwnRecords(input, context)).reads;
+}
+
+/** @internal `readMemberRecords` with the root the reads verify under. */
+export function readOwnRecords(
+  input: Readonly<{
+    client: RingRecordReadClient;
+    ringProgramId: Address;
+    members: readonly Bytes32[];
+  }>,
+  context?: RequestContext,
+): Promise<Readonly<{ root: BoundRoot; reads: readonly MemberOpeningRead[] }>> {
   return waitForProjection(
-    async (attempt) => (await readNewest(input, attempt)).reads,
+    async (attempt) => {
+      const policy = await fetchRingPolicy(input.client, input.ringProgramId, attempt);
+      const root = await fetchBoundRoot(
+        { client: input.client, ringProgramId: input.ringProgramId, registry: policy.records },
+        attempt,
+      );
+      const reads = await readMemberOpenings(
+        { client: input.client, root, members: input.members },
+        attempt,
+      );
+      return { root, reads };
+    },
     MEMBER_REGISTRY_PROJECTION_ERRORS,
     context,
   );
 }
 
-/** Under key escrow the first recipient without an escrowed nullifier key is refused, Rust `EscrowedRecipients::check`. */
-export async function checkEscrowedRecipients(
-  input: Readonly<{
-    client: RingRecordReadClient;
-    ringProgramId: Address;
-    recipients: readonly ShieldedAddress[];
-  }>,
-  context?: RequestContext,
-): Promise<void> {
-  const config = await fetchRingProgramConfig(input.client, input.ringProgramId, context);
-  if (config.mode !== "confidentialEscrow") return;
-  const owners = input.recipients.map((recipient) =>
-    recipient.signingPublicKey.ownerProofInputHash(),
-  );
-  const reads = await readMemberRecords(
-    { client: input.client, ringProgramId: input.ringProgramId, members: owners },
-    context,
-  );
-  input.recipients.forEach((recipient, index) => {
-    const owner = owners[index];
-    if (owner !== undefined) ownerEscrowed(owner, reads[index], recipient.nullifierPublicKey);
-  });
-}
-
 /** One opening per member in member order, each verified against `root`, Rust `RecordReads::read`. */
-export async function readMemberOpenings(
+export function readMemberOpenings(
   input: Readonly<{
-    client: Pick<RingRecordReader, "getRingMemberOpenings">;
-    ringProgramId: Address;
-    root: Bytes32;
+    client: Pick<RingRecordReader, "getStorageMemberOpenings">;
+    root: RegistryRoot;
     members: readonly Bytes32[];
   }>,
   context?: RequestContext,
 ): Promise<readonly MemberOpeningRead[]> {
-  const reads: MemberOpeningRead[] = [];
-  for (let offset = 0; offset < input.members.length; offset += MAX_RING_MEMBER_BATCH) {
-    const chunk = input.members.slice(offset, offset + MAX_RING_MEMBER_BATCH);
-    const response = await input.client.getRingMemberOpenings(
-      { ringProgramId: input.ringProgramId, members: chunk, expectedRoot: input.root },
+  const { root } = input;
+  return openingsInBatches(input.members, root.root, async (members) => {
+    const served = await input.client.getStorageMemberOpenings(
+      { registry: root.registry, members, expectedRoot: root.root },
       context,
     );
-    if (response.openings.length !== chunk.length || !equalBytes(response.root.root, input.root))
-      throw new RingError("RING_MEMBER_REGISTRY_INVALID", { details: { reason: "openings" } });
-    chunk.forEach((member, index) => {
-      const opening = response.openings[index];
-      if (opening === undefined)
-        throw new RingError("RING_MEMBER_REGISTRY_INVALID", { details: { reason: "openings" } });
-      reads.push(MemberOpeningRead.verify(opening, input.root, member));
-    });
-  }
-  return reads;
+    checkServedRoot(served.root, root, "openings");
+    return served.openings;
+  });
 }
 
 /** A pool verified under its root, with every member's read in member order. */
@@ -109,24 +120,22 @@ export interface RecordPoolRead {
 /** `members` under `root` in one pool of `openings` records. */
 export async function readRecordPool(
   input: Readonly<{
-    client: Pick<RingRecordReader, "getRingRecordPool">;
-    ringProgramId: Address;
-    root: Bytes32;
+    client: Pick<RingRecordReader, "getStorageRecordPool">;
+    root: BoundRoot;
     members: readonly Bytes32[];
     openings: number;
   }>,
   context?: RequestContext,
 ): Promise<RecordPoolRead> {
-  const { members, openings } = input;
+  const { members, openings, root } = input;
   if (members.length < 1 || members.length > openings)
     throw new RingError("RING_MEMBER_REGISTRY_INVALID", { details: { reason: "poolCapacity" } });
-  const served = await input.client.getRingRecordPool(
-    { ringProgramId: input.ringProgramId, members, expectedRoot: input.root, openings },
+  const served = await input.client.getStorageRecordPool(
+    { registry: root.registry, members, expectedRoot: root.root, openings },
     context,
   );
-  if (!equalBytes(served.root.root, input.root))
-    throw new RingError("RING_MEMBER_REGISTRY_INVALID", { details: { reason: "pool" } });
-  const reads = verifyRecordPool(served, input.root, members, openings);
+  checkServedRoot(served.root, root, "pool");
+  const reads = verifyRecordPool(served, root.root, members, openings);
   const records = cyclic(served.records, openings);
   return Object.freeze({
     pool: Object.freeze({
@@ -146,64 +155,33 @@ export async function readRecordPool(
   });
 }
 
-/** The indexer's opening checked against the chain's newest root, Rust `MemberMerge::read`. */
-export function readRegisteredRecord(
-  input: Readonly<{
-    client: Pick<ChainReader, "getAccount"> & Pick<RingRecordReader, "getRingMemberRecord">;
-    ringProgramId: Address;
-    member: Bytes32;
-    /** The nullifier key the record must escrow. */
-    escrowed: Bytes32;
-  }>,
-  context?: RequestContext,
-): Promise<RegisteredRecord> {
-  return waitForProjection(
-    async (attempt) => {
-      const registry = await fetchRingMemberRegistry(input.client, input.ringProgramId, attempt);
-      const { root } = registryCurrentRoot(registry);
-      const read = await input.client.getRingMemberRecord(
-        {
-          ringProgramId: input.ringProgramId,
-          member: input.member,
-          expectedRoot: root,
-          expectedNextIndex: registry.nextIndex,
-        },
-        attempt,
-      );
-      const escrowed = ownerEscrowed(
-        input.member,
-        MemberOpeningRead.verify(read.opening, root, input.member),
-        input.escrowed,
-      );
-      return Object.freeze({
-        root,
-        index: registry.historyCursor,
-        record: Object.freeze({
-          kind: "present" as const,
-          record: escrowed.record,
-          path: escrowed.path,
-        }),
-        ctHash: escrowed.ctHash,
-      });
-    },
-    MEMBER_REGISTRY_PROJECTION_ERRORS,
-    context,
-  );
+/** An indexer answer under a root or revision other than the bound one is refused. */
+function checkServedRoot(served: StorageRoot, bound: RegistryRoot, reason: string): void {
+  if (!equalBytes(served.root, bound.root) || served.revision !== bound.revision)
+    throw new RingError("RING_ROOT_NOT_SERVED", {
+      details: { reason, registry: bound.registry, revision: served.revision.toString() },
+    });
 }
 
-/** @internal The registry's newest root, its history slot and every member's read under it. */
-export async function readNewest(
-  input: Readonly<{
-    client: RingRecordReadClient;
-    ringProgramId: Address;
-    members: readonly Bytes32[];
-  }>,
-  context: RequestContext | undefined,
-): Promise<Readonly<{ root: Bytes32; reads: readonly MemberOpeningRead[] }>> {
-  const registry = await fetchRingMemberRegistry(input.client, input.ringProgramId, context);
-  const { root } = registryCurrentRoot(registry);
-  const reads = await readMemberOpenings({ ...input, root }, context);
-  return { root, reads };
+async function openingsInBatches(
+  members: readonly Bytes32[],
+  root: Bytes32,
+  fetch: (members: readonly Bytes32[]) => Promise<readonly RingMemberOpening[]>,
+): Promise<readonly MemberOpeningRead[]> {
+  const reads: MemberOpeningRead[] = [];
+  for (let offset = 0; offset < members.length; offset += MAX_RING_MEMBER_BATCH) {
+    const chunk = members.slice(offset, offset + MAX_RING_MEMBER_BATCH);
+    const openings = await fetch(chunk);
+    if (openings.length !== chunk.length)
+      throw new RingError("RING_MEMBER_REGISTRY_INVALID", { details: { reason: "openings" } });
+    chunk.forEach((member, index) => {
+      const opening = openings[index];
+      if (opening === undefined)
+        throw new RingError("RING_MEMBER_REGISTRY_INVALID", { details: { reason: "openings" } });
+      reads.push(MemberOpeningRead.verify(opening, root, member));
+    });
+  }
+  return reads;
 }
 
 function cyclic<T>(values: readonly T[], length: number): readonly T[] {

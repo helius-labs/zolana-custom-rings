@@ -5,24 +5,23 @@ use std::{fmt, str::FromStr};
 use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use sha2::{Digest, Sha256};
 use solana_address::Address;
+use spr_hasher::primitives::is_canonical_bn254_scalar_be;
+use spr_interface::ZERO_NULLIFIER_PUBKEY;
+use spr_keypair::shielded::{ShieldedAddress, SHIELDED_ADDRESS_LEN};
+use spr_transaction::ShieldedKeys;
 
-use spr_keypair::{
-    shielded::{ShieldedAddress, SHIELDED_ADDRESS_LEN},
-    viewing_key::ViewTag,
-};
+use crate::{ListSaltHolder, RingKeyError};
 
-use crate::RingKeyError;
-
-pub const RING_ADDRESS_VERSION: u8 = 3;
-
-pub const RING_ADDRESS_CHECKSUM_DOMAIN: &[u8] = b"zolana/ring-addr/v3";
+pub const RING_ADDRESS_CHECKSUM_DOMAIN: &[u8] = b"zolana/ring-addr";
 
 pub const RING_PAYMENT_SCHEME: &str = "zolana:";
 
 const CHECKSUM_LEN: usize = 4;
 
-/// `version ‖ recipient ‖ ring_program_id`.
-const BODY_LEN: usize = 1 + SHIELDED_ADDRESS_LEN + 32;
+const LIST_SALT_LEN: usize = 32;
+
+/// `recipient ‖ ring_program_id ‖ list_salt`.
+const BODY_LEN: usize = SHIELDED_ADDRESS_LEN + 32 + LIST_SALT_LEN;
 
 pub const RING_ADDRESS_PAYLOAD_LEN: usize = BODY_LEN + CHECKSUM_LEN;
 
@@ -33,11 +32,12 @@ const LABEL_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'_')
     .remove(b'~');
 
-/// Shared off chain, never published, a payment to it without a request takes the bootstrap tag.
 #[derive(Clone, PartialEq, Eq)]
 pub struct RingAddress {
     pub recipient: ShieldedAddress,
     pub ring_program_id: Address,
+    /// A published address reveals its private list key and status to every reader.
+    pub list_salt: [u8; 32],
 }
 
 impl fmt::Debug for RingAddress {
@@ -49,15 +49,43 @@ impl fmt::Debug for RingAddress {
 }
 
 impl RingAddress {
-    /// `version ‖ recipient ‖ ring_program_id ‖ checksum`.
+    /// The holder's current viewing key, a rotated holder names its newest.
+    pub fn enrolled<H: ShieldedKeys + ListSaltHolder + ?Sized>(
+        holder: &H,
+        ring_program_id: Address,
+    ) -> Result<Self, RingKeyError> {
+        let recipient = holder.address()?;
+        let list_salt = holder.list_salt(&ring_program_id)?;
+        Self::check_list_salt(&recipient, &list_salt)?;
+        Ok(Self {
+            recipient,
+            ring_program_id,
+            list_salt,
+        })
+    }
+
+    /// A zero nullifier key has salt zero and every other key a nonzero canonical one.
+    pub fn check_list_salt(
+        recipient: &ShieldedAddress,
+        list_salt: &[u8; 32],
+    ) -> Result<(), RingKeyError> {
+        let zero_key = recipient.nullifier_pubkey == ZERO_NULLIFIER_PUBKEY;
+        let zero_salt = *list_salt == [0; LIST_SALT_LEN];
+        match zero_key == zero_salt && is_canonical_bn254_scalar_be(list_salt) {
+            true => Ok(()),
+            false => Err(RingKeyError::InvalidRingAddressListSalt),
+        }
+    }
+
+    /// `recipient ‖ ring_program_id ‖ list_salt ‖ checksum`.
     pub fn to_bytes(&self) -> [u8; RING_ADDRESS_PAYLOAD_LEN] {
         let mut bytes = [0u8; RING_ADDRESS_PAYLOAD_LEN];
         let (body, tail) = bytes.split_at_mut(BODY_LEN);
-        let (version, rest) = body.split_at_mut(1);
-        let (recipient, program) = rest.split_at_mut(SHIELDED_ADDRESS_LEN);
-        version[0] = RING_ADDRESS_VERSION;
+        let (recipient, rest) = body.split_at_mut(SHIELDED_ADDRESS_LEN);
+        let (program, salt) = rest.split_at_mut(32);
         recipient.copy_from_slice(&self.recipient.to_bytes());
         program.copy_from_slice(self.ring_program_id.as_array());
+        salt.copy_from_slice(&self.list_salt);
         tail.copy_from_slice(&checksum(body));
         bytes
     }
@@ -67,24 +95,24 @@ impl RingAddress {
             .try_into()
             .map_err(|_| RingKeyError::InvalidRingAddressLength)?;
         let (body, checksum_bytes) = bytes.split_at(BODY_LEN);
-        let (&version, rest) = body
-            .split_first()
-            .ok_or(RingKeyError::InvalidRingAddressLength)?;
-        if version != RING_ADDRESS_VERSION {
-            return Err(RingKeyError::UnknownRingAddressVersion(version));
-        }
         if *checksum_bytes != checksum(body) {
             return Err(RingKeyError::InvalidRingAddressChecksum);
         }
-        let (recipient, program) = rest
+        let (recipient, rest) = body
             .split_first_chunk::<SHIELDED_ADDRESS_LEN>()
             .ok_or(RingKeyError::InvalidRingAddressLength)?;
-        let program: [u8; 32] = program
+        let (program, salt) = rest
+            .split_first_chunk::<32>()
+            .ok_or(RingKeyError::InvalidRingAddressLength)?;
+        let list_salt: [u8; LIST_SALT_LEN] = salt
             .try_into()
             .map_err(|_| RingKeyError::InvalidRingAddressLength)?;
+        let recipient = ShieldedAddress::from_bytes(recipient)?;
+        Self::check_list_salt(&recipient, &list_salt)?;
         Ok(Self {
-            recipient: ShieldedAddress::from_bytes(recipient)?,
-            ring_program_id: Address::new_from_array(program),
+            recipient,
+            ring_program_id: Address::new_from_array(*program),
+            list_salt,
         })
     }
 
@@ -113,12 +141,10 @@ fn checksum(body: &[u8]) -> [u8; CHECKSUM_LEN] {
     core::array::from_fn(|i| digest[i])
 }
 
-/// `zolana:<address>?tag=&amount=&mint=&label=`, the query part is unauthenticated.
+/// `zolana:<address>?amount=&mint=&label=`, the query part is unauthenticated.
 #[derive(Clone, PartialEq, Eq)]
 pub struct RingPaymentRequest {
     pub address: RingAddress,
-    /// The recipient's `recipient_request_view_tag`, a sender pays it until the pair is known.
-    pub request_view_tag: ViewTag,
     pub amount: Option<u64>,
     pub mint: Option<Address>,
     pub label: Option<String>,
@@ -136,10 +162,9 @@ impl fmt::Debug for RingPaymentRequest {
 }
 
 impl RingPaymentRequest {
-    pub fn new(address: RingAddress, request_view_tag: ViewTag) -> Self {
+    pub fn new(address: RingAddress) -> Self {
         Self {
             address,
-            request_view_tag,
             amount: None,
             mint: None,
             label: None,
@@ -151,9 +176,11 @@ impl fmt::Display for RingPaymentRequest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(RING_PAYMENT_SCHEME)?;
         formatter.write_str(&self.address.to_base58())?;
-        write!(formatter, "?tag={}", hex::encode(self.request_view_tag))?;
+        let mut separator = '?';
         let mut write = |key: &str, value: fmt::Arguments<'_>| -> fmt::Result {
-            write!(formatter, "&{key}={value}")
+            write!(formatter, "{separator}{key}={value}")?;
+            separator = '&';
+            Ok(())
         };
         if let Some(amount) = self.amount {
             write("amount", format_args!("{amount}"))?;
@@ -184,11 +211,10 @@ impl FromStr for RingPaymentRequest {
             None => (rest, None),
         };
         let address = RingAddress::from_base58(address)?;
-        let (mut tag, mut amount, mut mint, mut label) = (None, None, None, None);
+        let (mut amount, mut mint, mut label) = (None, None, None);
         for part in query.into_iter().flat_map(|query| query.split('&')) {
             let (key, value) = part.split_once('=').unwrap_or((part, ""));
             match key {
-                "tag" => replace_once(&mut tag, parse_tag(value)?)?,
                 "amount" => replace_once(&mut amount, parse_amount(value)?)?,
                 "mint" => replace_once(&mut mint, parse_mint(value)?)?,
                 "label" => replace_once(&mut label, parse_label(value)?)?,
@@ -197,7 +223,6 @@ impl FromStr for RingPaymentRequest {
         }
         Ok(Self {
             address,
-            request_view_tag: tag.ok_or(RingKeyError::MissingRingPaymentTag)?,
             amount,
             mint,
             label,
@@ -210,16 +235,6 @@ fn replace_once<T>(slot: &mut Option<T>, value: T) -> Result<(), RingKeyError> {
         return Err(RingKeyError::DuplicateRingPaymentKey);
     }
     Ok(())
-}
-
-/// Lowercase hex led by a zero byte, the one form a derived request tag takes.
-fn parse_tag(value: &str) -> Result<ViewTag, RingKeyError> {
-    let mut tag = ViewTag::default();
-    hex::decode_to_slice(value, &mut tag).map_err(|_| RingKeyError::InvalidRingPaymentTag)?;
-    match tag[0] == 0 && hex::encode(tag) == value {
-        true => Ok(tag),
-        false => Err(RingKeyError::InvalidRingPaymentTag),
-    }
 }
 
 fn parse_amount(value: &str) -> Result<u64, RingKeyError> {

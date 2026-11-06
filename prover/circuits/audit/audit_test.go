@@ -1,120 +1,24 @@
 package audit_test
 
 import (
-	"errors"
 	"fmt"
-	"math/big"
-	"reflect"
 	"testing"
 
-	"github.com/consensys/gnark-crypto/ecc"
-	"github.com/consensys/gnark/constraint"
-	cs_bn254 "github.com/consensys/gnark/constraint/bn254"
-	"github.com/consensys/gnark/constraint/solver"
-	"github.com/consensys/gnark/frontend"
-
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
-	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringkey"
-	"github.com/helius-labs/zolana/prover/server/prover-test/hintattack"
-	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
-type compiledAudit struct {
-	cs constraint.ConstraintSystem
-	// statementCID is the constraint binding the public input, a refusal must fail elsewhere.
-	statementCID int
-}
+var compiledSections = map[string]*ringkey.Bound{}
 
-var compiledAudits = map[string]*compiledAudit{}
-
-// compileAudit compiles circuit once per name and locates the public input binding with the honest assignment.
-func compileAudit(t *testing.T, name string, circuit, honest frontend.Circuit) *compiledAudit {
+func compileSection(t *testing.T, shape audit.StreamShape) *ringkey.Bound {
 	t.Helper()
-	if c, ok := compiledAudits[name]; ok {
+	name := fmt.Sprintf("%+v", shape)
+	if c, ok := compiledSections[name]; ok {
 		return c
 	}
-	c := &compiledAudit{cs: ringkey.Compile(t, circuit)}
-	c.requireSolved(t, honest)
-	publicInput := reflect.ValueOf(honest).Elem().FieldByName("PublicInputHash")
-	setPublicInput(honest, new(big.Int).Add(ringtest.AsBigInt(publicInput.Interface()), big.NewInt(1)))
-	c.statementCID = c.unsatisfied(t, honest).CID
-	compiledAudits[name] = c
+	honest := ringaudit.NewSection(t, shape)
+	c := ringkey.Bind(t, ringaudit.NewSectionCircuit(shape), honest.Circuit(t))
+	compiledSections[name] = c
 	return c
-}
-
-func compileDelivered(t *testing.T, capacity int) *compiledAudit {
-	t.Helper()
-	circuit, err := audit.NewDeliveredAuditCircuit(capacity)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return compileAudit(t, deliveredKeyName(capacity), circuit, ringaudit.NewDeliveredAudit(t, capacity).Circuit(t))
-}
-
-func compileAnonymous(t *testing.T, shape audit.AnonymousAuditShape) *compiledAudit {
-	t.Helper()
-	circuit, err := audit.NewAnonymousAuditCircuit(shape)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return compileAudit(t, anonymousKeyName(shape), circuit, ringaudit.NewAnonymousAudit(t, shape).Circuit(t))
-}
-
-func deliveredKeyName(capacity int) string {
-	return fmt.Sprintf("custom_ring_audit_delivered_%d", capacity)
-}
-
-func anonymousKeyName(shape audit.AnonymousAuditShape) string {
-	if shape.FullOpenings {
-		return fmt.Sprintf("custom_ring_audit_anonymous_entry_v2_%d_%d", shape.InputClass, shape.Outputs)
-	}
-	return fmt.Sprintf("custom_ring_audit_anonymous_v2_%d_%d", shape.InputClass, shape.Outputs)
-}
-
-func (c *compiledAudit) requireSolved(t *testing.T, assignment frontend.Circuit) {
-	t.Helper()
-	if err := c.solve(t, assignment); err != nil {
-		t.Fatalf("honest witness refused: %v", err)
-	}
-}
-
-// refuse requires a constraint other than the public input binding to fail, the host statement matches the mutation.
-func (c *compiledAudit) refuse(t *testing.T, assignment frontend.Circuit, options ...solver.Option) {
-	t.Helper()
-	if unsatisfied := c.unsatisfied(t, assignment, options...); unsatisfied.CID == c.statementCID {
-		t.Fatalf("refused by the public input binding only, the host statement drifted: %v", unsatisfied)
-	}
-}
-
-// refuseStatementOf requires the public input binding to refuse assignment under the program's statement.
-func (c *compiledAudit) refuseStatementOf(t *testing.T, assignment frontend.Circuit, statement []*big.Int) {
-	t.Helper()
-	setPublicInput(assignment, spptest.MustHashChain4(t, statement))
-	if unsatisfied := c.unsatisfied(t, assignment); unsatisfied.CID != c.statementCID {
-		t.Fatalf("refused before the public input binding: %v", unsatisfied)
-	}
-}
-
-func setPublicInput(assignment frontend.Circuit, value *big.Int) {
-	reflect.ValueOf(assignment).Elem().FieldByName("PublicInputHash").Set(reflect.ValueOf(value))
-}
-
-func (c *compiledAudit) unsatisfied(t *testing.T, assignment frontend.Circuit, options ...solver.Option) *cs_bn254.UnsatisfiedConstraintError {
-	t.Helper()
-	err := c.solve(t, assignment, options...)
-	hintattack.RequireConstraintRejection(t, err)
-	var unsatisfied *cs_bn254.UnsatisfiedConstraintError
-	errors.As(err, &unsatisfied)
-	return unsatisfied
-}
-
-func (c *compiledAudit) solve(t *testing.T, assignment frontend.Circuit, options ...solver.Option) error {
-	t.Helper()
-	witness, err := frontend.NewWitness(assignment, ecc.BN254.ScalarField())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return c.cs.IsSolved(witness, append(options, hintattack.SkipMissingLookupQueries(t))...)
 }

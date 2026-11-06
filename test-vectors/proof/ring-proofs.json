@@ -1,2754 +1,866 @@
 {
-  "custom-ring-apply-records-1": {
-    "statement": "0x0a4611ce2b890938ca03909b705c5d3b152926d2b648a1ac2bb1158d899eefc7",
+  "custom-ring-apply-enrollments-1": {
+    "statement": "0x00be4a1c216b7eff66397d45f2c3e5954dec0dc40393814ceeabea932333bae0",
     "proof": {
       "ar": [
-        "0x0e1b139dfde3a2970a261a630e1e257494bd13dcf234f3072712ac068b534aa4",
-        "0x2b23499bc08391c9e9758599e4acb7ca8f42c650ae9c2b44ce25baddeaeee992"
+        "0x21d3432f81ba89a81024a837b8aeb021f94451709061b55462a2c53a39480380",
+        "0x0298a3094791a8f438876b425075f072addd0e0ed5cd3755bfc03908af717b39"
       ],
       "bs": [
         [
-          "0x0492a4b03c84b394e99780f7089b8fc3543b83de971a08bc5925b166d83ad4a4",
-          "0x1b9bf8da32230c70f89bd483f8bf29903dffb0d594f63971f9a97adfcfc08483"
+          "0x09d07c3b0abea7dd4572551a81f1761963fe5b5f82f75e7b20c8f98cc08d632f",
+          "0x1a2d88f5525a3ad8426cc17570259966636b8bdcbc4befa394bdd639fccc009c"
         ],
         [
-          "0x28f739ab6c4dd98c70a111423af7cb887b38a96d1ba4444bbf535042ae1bcf20",
-          "0x2fc8e42805e69f1e22da3ee8a9a484443f2358f36eb273452dc8c518dbf4ba14"
+          "0x199a181b00387930bb857040b94522b157d2bfc05c4a3e9c8bca8bb113a4e16d",
+          "0x1b704d9aea7e8032e7747ec3c754ae717a767abc142295a723c41586fac534d8"
         ]
       ],
       "krs": [
-        "0x2824657bc023f4a5c8b8f02613e67041a1236a86cb7d0150c5727b786e75e17a",
-        "0x21b0dd57cfa8db82c012d80e4dede6062a1e82c601248dd94116ef0f41ed3375"
+        "0x26d087a844c56fe46f464894c272d4f3acc95eadae84fb383e98d4c5f928d037",
+        "0x05d276f7ce721dec9a95a0466e84f679f73cb58f869cd90e9f2583b17474f1d8"
       ],
       "proofCommitment": [
-        "0x230bff320a32228a7804a356b9d5785ec0f56445e13bfbc624d748116dd951cd",
-        "0x19c58335120358f1a4e09a429ca5c862a0d08c5ce39dde87351340b21c411bdd"
+        "0x2506019e053a9c7f1b9d14853d91a9cde6739317cbb7c2bb578c7a9ac4324f62",
+        "0x2329e89dd3069314ebae82a3d87d0b78769b24f504455c14985e7c515a11ac05"
       ],
       "proofCommitmentPok": [
-        "0x046a97270c67bd2befab7cb599be59b4c68d05308ae4e78a52065e1820b8cfae",
-        "0x05ef05b158ab9ef51f1360852b7e9fc46d366aca31056568a608294841e20fd6"
+        "0x03cb977d1df3b529754bd4db7014209af235ab706457ba730cff0f79ca8d4a1e",
+        "0x16bcc123fab408c7f36e3b28302d760e259494deac8913bcb747d5bbd04db2b9"
       ],
-      "provingKeySha256": "93b42a0b73215a5d240997895f7b2158f8ce4ca68e120f86e788498a76dab312"
+      "provingKeySha256": "791f47ad50cc81c6473ebb6036a01c784e07c8825401ed8a51b3be83a7ed809c"
+    }
+  },
+  "custom-ring-apply-enrollments-16": {
+    "statement": "0x1e3d6c94b322cb770f345e8eedcfcc906e5dbf90bb402941ddf56dfc30ca9db6",
+    "proof": {
+      "ar": [
+        "0x0ba0592a4502018a740bbed5d77c833ff073bba4efc10b99b090c33ece28665e",
+        "0x07a2ac63849ac4785c26d9e1e16fe1ed912a6c9d91e760f123d702452294fdb6"
+      ],
+      "bs": [
+        [
+          "0x134c7e75d6a2d7a64fdeafbad846891f702767c2582047bf1fd8f323bea2f553",
+          "0x2fe0f8e10a91341c75b366796f6548eafec71f87bd947485f8a76bb9f8014b5a"
+        ],
+        [
+          "0x2cf399ab7cb6e9d08ff8b802a8fbb12787343c45a35dd4ad758f0534cc2757e7",
+          "0x20b75909251d689f39a7845a83987c898f743f25019016c5d40e836c845c57f8"
+        ]
+      ],
+      "krs": [
+        "0x2e95b1ebef2debb25c2e502fc221af07a5015624efa7b3a574835ea76725d888",
+        "0x1d164f4f28b554a03738e7bee2ac55409b94e2b90823a06191547f17d0cff355"
+      ],
+      "proofCommitment": [
+        "0x18040ab6fc06c19f956fbe0fbd014d048425869765631b32c36f91d096bddd77",
+        "0x1d67a15500f42098b5db8a28d702ea782752ca3e415d035ebc52ab0df191b429"
+      ],
+      "proofCommitmentPok": [
+        "0x0782ceb0d99787105b4ac188b6eead2395909e1e8769846496307db38fa3f58e",
+        "0x2fe5bde905fd1a5f8d9abf542e81b2f1788e05d59c79d5c9e5caa3cf64d5fab3"
+      ],
+      "provingKeySha256": "cfdababa9b2d069838b3df4208e633bc4ab0819501eb7f4695f8c5ce1a6e5126"
+    }
+  },
+  "custom-ring-apply-enrollments-2": {
+    "statement": "0x018c567c61cae8488d6be645fe2a8af328819fc8788872048e7ac160bc2d7411",
+    "proof": {
+      "ar": [
+        "0x13b61a2bbe3830133e21de5f10b37be88062f2c78873d4f8f5760c6ade5b0ff5",
+        "0x1c64fafb8c70a38534eec437a00527733811c85d28d397f7f4efa475a2c9e271"
+      ],
+      "bs": [
+        [
+          "0x20979a589d48c741b4075c41c89748864fb49d094d98af23cbd92d987c5189b1",
+          "0x02bc61fb7284badd5bfcea26b2b417e6ff8312beee343c9dfcc3a70abfd33b96"
+        ],
+        [
+          "0x2fb1cadcdfc2afdcbfa4ec44c274b23304b4293f890af95a17f924b561059a02",
+          "0x0105519c12b347c6b28f99e3a38f66db7e7f3f8f587f271983ef8f077d1f8772"
+        ]
+      ],
+      "krs": [
+        "0x1009b4c5d42ad329f2f2a8becd4bf0772ee583e4865f634e767455b3e8afd767",
+        "0x26908172b3b4e19966213f93ace5710a83b49cc1885d0b95a46b9b7f65ebc238"
+      ],
+      "proofCommitment": [
+        "0x222ff7851f532fd3f71418f2846c846898e0e2200e86426ae7f0733f4c1b8185",
+        "0x1343dfa5f8bc302852040365217852427c8dbfe21687402cec7c7070a19c9cac"
+      ],
+      "proofCommitmentPok": [
+        "0x19c142770691b08bfafb9898938971274140cffc343c7b8081665324c50c6411",
+        "0x11e6aa4f76a8c2c45d737be2cfbf18677d7926c059189b16c9c1ae4c0d2a615f"
+      ],
+      "provingKeySha256": "4ebc264d5365198282b541413268fde0c621977d26b57cefa12433569c99f42b"
+    }
+  },
+  "custom-ring-apply-enrollments-4": {
+    "statement": "0x24554a36a850caee92073f6fc1800cfe2741ce0b59e1bd175036b4d3f3296e07",
+    "proof": {
+      "ar": [
+        "0x19d2292474c9dd3d28cc6c412072d9a8a289bf7d004bf4544b92a4b3eff4c66d",
+        "0x1c6f246f2b857ae5a63b376f1c7ae20587b58b3ff9897f099463788b35db033f"
+      ],
+      "bs": [
+        [
+          "0x2eb2f2395d96e341c91181d92212e5a2afbfb7d7c8a5456bd1a8a1fb3627697c",
+          "0x1ba56279295fb38261c0c900a1b7e356a576dc7b2148c6ae892e2aceb237f4cb"
+        ],
+        [
+          "0x2a561254dda5e19c9dd807e8ebbfb45c3d4c29e8bbcd205ba1740b5e9d251393",
+          "0x0ed93edf6778d0f34a20f1f460ca0e1b7067df3e9b74f9037d73030394560160"
+        ]
+      ],
+      "krs": [
+        "0x20d484cdcbba271ba1a6df993aa85dccfd86e75f7656aca7d3ad75b80eca93a0",
+        "0x1feb9aecff816c3ec7ebacacd12f9fca00b752cdebcfcb29abe45520b23a7103"
+      ],
+      "proofCommitment": [
+        "0x1b26059cdb1c3bd792fd14dffe2543dfc48ec13675f5d01a1d56522280c05b85",
+        "0x2131eac7bb73fc8ff2940952a42d96fb8c9f813a07d206f76ee13d742ec10dd8"
+      ],
+      "proofCommitmentPok": [
+        "0x03df0fd7304c4c54b57dbb9c3789c06c88d149cfdf1e84f7dea0d4063b18379c",
+        "0x2ae282e0799e6c89f5c71d1e1e3dab6e7c23b76723665f2a3fd70e5c9ab324c5"
+      ],
+      "provingKeySha256": "94c13ab7f90d1c30f3c0d0a096e0cf2016fae104b468576f6855e3b9cd100104"
+    }
+  },
+  "custom-ring-apply-enrollments-8": {
+    "statement": "0x27e16b31bfaf832241045c7f5da24cf2dec1e80aa68c6065f24c13985f197f4c",
+    "proof": {
+      "ar": [
+        "0x1fccce92342a9885fa7e4ec4cf9781bd861638096bda3e47d5624dcc7d53ffd0",
+        "0x22a03410dec789995f2f232f66d9b7e28e68e9645608e2303151c2ddbf225456"
+      ],
+      "bs": [
+        [
+          "0x0159224710751a6ff3b7edebc36263448ce43d3c78415d40195d669e610e2cbc",
+          "0x24bdff203dacca70419dd5bbc83889053cfba8e12b37b6a5c27abf0da9f51a1a"
+        ],
+        [
+          "0x2ea0aa7039efb329e0b5da099d4954cdd19196ffe8bda21ccd4836636020c20a",
+          "0x1fe42ce55b6086d6d273a9cb2e879c1b78dbbf71cf9c0b5f460843b72b52c131"
+        ]
+      ],
+      "krs": [
+        "0x1f58a445168ea92c3aaa0e8180a4e4277e2e984724d1302790b3933b566ab3a8",
+        "0x0b24067f141ffd0ee374647cb1edfda053f39b72f721cc15df812916e3805a1d"
+      ],
+      "proofCommitment": [
+        "0x07947446e1e9df58dcc671fe90ee041d7f253a7fd02468e4beaae84e9dda6800",
+        "0x15055cc7872a92170d9544aa602e5c32e6489beb2a8a5d99f168839707856e09"
+      ],
+      "proofCommitmentPok": [
+        "0x304ef4924f4f10280df4078be9ecdeff47990e34f18997282a285e6057cd33fd",
+        "0x16b5a223d34175630373f3c424e1473351ef5a1be0bc4acc33ad5ef4793b2bd0"
+      ],
+      "provingKeySha256": "26e5c227ec683bdbe88b948296213e60a212a449af9543b797c1df714e1b734c"
+    }
+  },
+  "custom-ring-apply-records-1": {
+    "statement": "0x1d6e7c21edbdd4d3bc59e3719dbd34af4eba762360e43986aa1c806044aaa976",
+    "proof": {
+      "ar": [
+        "0x1ba9fdfaf92e156c6a9f741ab2425f21381dbe7ac5f5cab7016a94146609164d",
+        "0x2a82db7a44daddc17646c6bad979a33755094abc03c79bb3ac0d9edf6a75e6f9"
+      ],
+      "bs": [
+        [
+          "0x159f250bcd7b9dd95400a2d7003dc34d8733ef03633110fbda9c2d1026f4469e",
+          "0x2b16c8c08924bdc1d035fe6e9d3483447e78bcac4b1b1abdc53cf28902976f8b"
+        ],
+        [
+          "0x2807dc3a4bde8f9e3b6083f822d09c88cf5b6c3df98e9bed2a9cf599e3d61df4",
+          "0x28f2e8eaed49a5fbdf069426185c4192447381b3e2d16b3c7e4f10b3a2358910"
+        ]
+      ],
+      "krs": [
+        "0x1637e5b67a19cc3b55e18497ff6918d5716924e6115a3f06a619793f28cfbaae",
+        "0x11d39918fbee16179f20f4c802989f3a7555135a8dca6339de2b8a14c97f5d15"
+      ],
+      "proofCommitment": [
+        "0x06a969102e915a5b687cb99ca219e831c091f297fc0a650c021e0c8084a36f4b",
+        "0x00bde9deeb5a2532cb43d9484e190c6990e6e82e8cedff210ea63ae3d4a8129f"
+      ],
+      "proofCommitmentPok": [
+        "0x206d7381b2e598a078069a9ca11fc0d386c46473cf1111a220003b8b0351f309",
+        "0x120d646b58ce335e5de652bd2e17971f1da981ec2f56abda90d88a9427dc091e"
+      ],
+      "provingKeySha256": "2a0d502150607af7f73c71900fd96c39acbbec261aec558e76e909f3ba2227a1"
     }
   },
   "custom-ring-apply-records-16": {
-    "statement": "0x23d5965f416934f87b203554abb95d249904cede06c6cd36526cff9bc3dd126a",
+    "statement": "0x27575cbd5a3d03a2124700f26b8673a5c572c0eba6a2764db23d536d0ccacff3",
     "proof": {
       "ar": [
-        "0x2e80299df6e7b71f2b2c8b2edf53f6a681dc34ce3d6fd35c8d90a915613910e9",
-        "0x16bf959bdab9e872d8b0b8c8646972ada867e1748ef1da38e3bbdb6105c1782e"
+        "0x2ad105acc58160ad95c026d2606413fe91532b28cdb957516229744065a18f2c",
+        "0x1558e16771bf12b291b508c9cce4bc9746381d0a389bded425ba716c8276783b"
       ],
       "bs": [
         [
-          "0x1ddeccd7db8018870eb7edf089e31da4c47ca097ddacbd5fbc07ddf3d1563a3b",
-          "0x2bd30c732a02e3f9ab90f2996af5c07817d1c6383356d697fa914298edb109d1"
+          "0x1cddcf120e30bc07daa1f96611bcb3641cd755bcdf3cecdd86895ed761e524d8",
+          "0x1493feb8bb9d7989cd54818de01ec4c8b67420ee6987b1a56710a0f1a12d121c"
         ],
         [
-          "0x2e1441e012284bbf90fbca900e6c2fc474c94d5101f18311c2cd34ed89354d36",
-          "0x22e20609e0c9ff7cce24587474df96464fc1ea6ea3675e3a8656865280ee4c91"
+          "0x01e7878d92baa4a259f292765600aacfd0debff06b36d846df50c0316982ecd9",
+          "0x1bcbc2a393e2dea35a6b899944f1c00efde1c31061ab80872756163972be45df"
         ]
       ],
       "krs": [
-        "0x03803e1bcfeb88097792d01ea49f6c4a589cfb957fd1039068daae4585fe1cbf",
-        "0x12ac48b2635ddf7f669ddbdbf82b0c2afa9949edf3c06cf2ac4c7a525574c1a3"
+        "0x2f1021911cc91a4d4f279d960d47b562f36de8485504af9535911a80c942a3a1",
+        "0x007230ae3322ab584737e37e08bcd9f07bd7ba21a3f81d3fd11e3c84e7b3a363"
       ],
       "proofCommitment": [
-        "0x21fa3b6e3006b08aac3cf0aa19b23c4f8915b87e588c85cdff5c288af2f9a854",
-        "0x09218fe19b59b56c1373d81b8f5ff303e335f74961ca9b4c6180c7ef12b42179"
+        "0x13d08008bb30d0575e32c2957ecb7c6df4e2bb2b2ca36513af7168b415a05a55",
+        "0x27d22b7fc306fa535f26ba8756cc46c402c3269cf916861bab8d41d2385f2430"
       ],
       "proofCommitmentPok": [
-        "0x1aa9e86a691e2b6adfc10cd7fc54232bf9fdb6713298bc7c5fa720f6b1519b84",
-        "0x06a78e2f1a0cb57acd0298726e7d4be2d7ec0889ab6b276dc77676911f4eb7c4"
+        "0x2274668ac9c932681610d700e0c4bdfa119901aadab077d687085ceb59db8b28",
+        "0x17b244f954860d49dfcaa2f7dbf8a79b0634c0fa5f9ea051bcbb97e842165f5a"
       ],
-      "provingKeySha256": "ec91e5dc71e4346ebf132d77dba14123bdc734c0f50e6e941598d271e48a6160"
+      "provingKeySha256": "e8b656d817802e95392fe70b5b8afbbf057fcf09353bba6606ebd5c4019f080c"
     }
   },
   "custom-ring-apply-records-2": {
-    "statement": "0x152b6e2801f8892454d0562c5472f4fd7ff971937b46d04410014e0cda791d76",
+    "statement": "0x078b448e0f6c6ccadf88c27a1de1852160656f23773a5dabfd6fd71bdf65d29f",
     "proof": {
       "ar": [
-        "0x178aa316d5146d8b2133fac37f15caa77b10e5b962488255ab3f0e10b7d98267",
-        "0x1ba754d0ec4a5a37752cccfd91bb0cc41989de911619d7ec5a472e9423955d51"
+        "0x0bc07762980e24d11f81041e5ac5f1ea26a6095be8b3c954173cba3c7486d95f",
+        "0x210cc9b7dc5d226342c2c34348b2ea0820f9276cddefe31244288fb902f79f04"
       ],
       "bs": [
         [
-          "0x02987b6b2cf8800925e0055c945e6fa00b2d145f0facd97b9f5114f8a0828c62",
-          "0x0d818a2d52b62b329913640fc32cb16f4ec41f80e1785e7f4f255c956cf0728d"
+          "0x1b9d9132df190a9069d0ca3deb5745bca8b6a8782918a2ae283bd22e426aafc6",
+          "0x1db2858e9277b09fcb78c5b351404c8d702d782cce556ded8f6355659fcb7afb"
         ],
         [
-          "0x0897e8742e0925a85bb8c7b144d443bc120c1025f421643c891f7b0aa8bd95e4",
-          "0x15aa8f59a1632e23352c09c3fa9ea085c43327f8288aca9cfafcc8edefe303f4"
+          "0x03a75904c5471d9dd3a3c769c0e99b9a57a6d04162f96615b719169b0f045830",
+          "0x066322ef19ff57b7d29c71b31dcae5e21cf15b4046022bee0f011152ae43dc18"
         ]
       ],
       "krs": [
-        "0x211fb0f6702a5bc08aec2d3890e8543d6f8dabcdb307e39a327d4ef7cdca889f",
-        "0x2973d10099b59540f52ba8d679213fe82d5b7ddf8f54c59631eef50a39a38b5b"
+        "0x21aa9660175f21e9b8faa54d1a6f1a8e71edaf0ccd0d04a457533fdeafa43c23",
+        "0x02ce8a1b5093a6890c234bf5af341866c00cc09e0e37dbc9616ba26c46ffcb79"
       ],
       "proofCommitment": [
-        "0x10c366382c36e43cd413cafb1168ee13a82fbb87575c947f60a7f74bb7e124e0",
-        "0x04357ebfae5babbf9c425f3a27674bbbaa692cc541cea390633624dd1de0ac57"
+        "0x286c1d167142db3b9b7f3b234aa4065d10d7b51766a2fd0c0a112126e1819cf0",
+        "0x214f96bb4199754c1e7f851296d30d547daae3f7fac22d4a7d083a4b6e0d3f65"
       ],
       "proofCommitmentPok": [
-        "0x090dda8ae9b9b45a8034c286f48c337050fd915b4d9d795b1210ed03fbf1e551",
-        "0x21777169d05c5d1c0420b05e429e5a1127c82781ce8d6f85fae054ffeee6a8f8"
+        "0x023f50d6f2ccddc5dea5bfb7fc67516b05df7c27e7696a6c7ea39430f197dbc2",
+        "0x1a0361c829a61bb0ac8c35fd2c4e223846a84d5ee81aefd616f8656b44b25bb6"
       ],
-      "provingKeySha256": "bc56094f853e7706003d81d83f43b2b9281a560a6cc8c430b0ed4d2400776cef"
+      "provingKeySha256": "db8b8d117061735f2c8a095045f7459215eee51a435b26481eefc4fcc92053b2"
     }
   },
   "custom-ring-apply-records-4": {
-    "statement": "0x1d2ad10aca52879e3a0baf73ed057d2fb14e6d47901c1f00e11968992f872dc1",
+    "statement": "0x1099a1fbdf29a0aafe25075bd3e83e380a55df327f292c950393aefde0db8be4",
     "proof": {
       "ar": [
-        "0x28435edead478ffe08321b8ccb295f81170901c4bc75eb1e29ab7fff2c1c3cd2",
-        "0x18467f7106f7d104621c627dd596cb76bc5c9a77e5b8483d54ab53f1a789a683"
+        "0x0c2193b5123818f5fe7846d6599c7f83ddb763e4109dfaeb7f700c9c67e22878",
+        "0x21684a5226b8d23c6278c20bf3c848d3d7920dace13d50d3340039916b18a705"
       ],
       "bs": [
         [
-          "0x1e868c6ba92b1700289f5b5c7d85d368e8fea63edfdb48c69b8cdf53b54bb2a0",
-          "0x0de3bef19102cfb585ad133b28e037a7554ee48abc65a8c8a44465b680c19597"
+          "0x2c1e129f4bb6a042a8a53a6b5cd5bb4271ba3b9f59df694450e7246033cb7c2e",
+          "0x1095c7f5477b1fb1053ab129480144ae5208c57d2fff610ddc6bf232cdf1a82f"
         ],
         [
-          "0x27c7bf72436dc88bf53acffecb5120516165d0bb5b6636df79ba055fe1f58ae7",
-          "0x23c053e90032977b2734e1130dbd5317df1e85d3428ac0210e2c4370f66a4af4"
+          "0x1e668d5d063c11cc55bdddb11867e98bb5d139ad9f9db0ffe2440428f13bb414",
+          "0x242117a4577bad0ba4b36b306de78c07ef485ff4cf8b051c8c13d9dc128c730c"
         ]
       ],
       "krs": [
-        "0x0657f7614df68e74920a172d15da5273f2d904071130ef72a29c9477a5d7de75",
-        "0x09040f0b26da32dfc1a7f3a99bd2880f7935f541ef18871b99292cd6b4d99b15"
+        "0x04c801ad3da830c0084ad7168d2949919fe7850f5cab12fa4035ce8cf536aaed",
+        "0x1e9a90090d25e64ac78f98f065d6ed0298efcd058c843f6f1f03bb8b4eee4704"
       ],
       "proofCommitment": [
-        "0x1e1c02a21a2b06071392a063b708f5eeaabbbe88b0a215714b021e31c243175a",
-        "0x178f87e8d213fe9199d3a65455118eb6521abe53e15eda0252a7aa87c017a101"
+        "0x04682964b7fa4b263ede813383c246543b95ed736b8f2e4c78844809fc6f5a1d",
+        "0x1a11bf2ce89b3ba99d72ea983a28abadc4b0053ff931d11c775197d9b3af9e66"
       ],
       "proofCommitmentPok": [
-        "0x22b590ea3304e2a4a33bf55a01b78be565f79ad611dba4566d5d21ace5ea60c9",
-        "0x2a6497f17306dc5cb8a67b1257413e2dd374e279d07201e9d8af5cb1b0fc20ee"
+        "0x069dff8bae134dccc616332400f5a54bd50fcb844b5ee4a934f91b4593a36372",
+        "0x2a4c2535682214ff4bd75b9bbc188bddb23b75b0594e4d9f45827aef046793ad"
       ],
-      "provingKeySha256": "a94d5adcdc70c46615eb691fd5331ead3b5ae67191d1d5d19666badfbdfd0d2b"
+      "provingKeySha256": "eea8fe6084d3f89bb06950d87480a8382301e8ab2acdb8295e6afe1e1da12ef1"
     }
   },
   "custom-ring-apply-records-8": {
-    "statement": "0x012c31a5f3aa79ff7f7aeb69fd16422fe72f18db5a20e617d8916dc110d4760a",
+    "statement": "0x1b72342d7b3b44ac76874e208b0246263017aab99b05ea7a361f1363e508c954",
     "proof": {
       "ar": [
-        "0x19f46c6ca415efa9a860cb5f571690923e9d4f9da119a830f2c1abff275782cf",
-        "0x09e83aee5fda817bcca72dcdc03caf6bd092758d841e7a502673cd97cafb8d00"
+        "0x0aa62a03ab4aa15e4c42e9bee4571f0f6046486304d3b265194230a316eb4929",
+        "0x3014aad33bd2bbc9a99f8c21ff5b200eb26af4f7d6d96061f67574e7e0661b2c"
       ],
       "bs": [
         [
-          "0x24bfa5a50beb426d4c4175d0b43bfda6f4abc3e498076fee6d347c0b437ab167",
-          "0x2176537f639ee769716d37a75414580b3d06da11179a0b32fa3ef561c1d32afd"
+          "0x14ae722d83d2ef6b69c6613a45f443e3c7c643655c7880f39aa98906986286c8",
+          "0x2f949ba67e7c120c1b4fe8e871f78dda5e37c76e7e41e44d1da0ba4afc3b29b7"
         ],
         [
-          "0x1f21e6c7acf193a7ee55c6c6b7257daa7525117c83bbad726759ee0f04bfe2f6",
-          "0x2d3087c47f96d8a07c7c2529216e67003948593f5511192000934d432ba300fe"
+          "0x186bb5d8fe736181bbc7c040e05d890ef6c9f628a80c1319d21bb75ba28f8139",
+          "0x111d59e564b1c1daebaf39b6d5971cf08d00d5228e9ac54e88d9158a20dfc4da"
         ]
       ],
       "krs": [
-        "0x180af532d01fa7f88a587aeed6aef52c27702b3d24a8137a5556fa4784dfac71",
-        "0x112356c07d56c3f9492212ddc49571a0ce856e797be3b366429e2abc777270e9"
+        "0x2d91f4b0a4b2431867efc7a0c18a75bf783e5d96be23bc49072759616020bd40",
+        "0x1f483ae48b0d368e8045653907660d5df88a3cc34e7b5b96e3d4e7668bf9580c"
       ],
       "proofCommitment": [
-        "0x1dedc5ba7d93c4c8825dd901366369581ff602f8de6365464b399755486e7adc",
-        "0x181cb9977b8601f88cfe04441e1122dc90aa7d808d12072d391393b2a01befd7"
+        "0x0f76e63b457a955cbbd60237ea29de90969e4f3a7484b5e5437640df5307ecbf",
+        "0x186e0bb2ce6f1779889603a6c469310e8df9d9a7d42794fffccfa3987bd770fc"
       ],
       "proofCommitmentPok": [
-        "0x00ae616d47ed9191721a0abb342aa9617ba4c2be5a2fef8d9f59c5136606dd9b",
-        "0x0f6434734f215bcccd4ec92606a6c0b01a1f73e49ba19f103b4bf71fe9decdc1"
+        "0x2ea1a54ec1ca48218f09d111cc1bbba7336b614cafbd1a65eda8a6fdaf03d556",
+        "0x16034697099936b3a125adbaca8b65bdcba2e87b84c912883f7561ae819b572e"
       ],
-      "provingKeySha256": "ddac9ce96b1040b3893b4f22967f2e04f541fb901869491a4960588edbda92c5"
+      "provingKeySha256": "9d294f5191307d6cceec311966e5c7ad9cf45700a647ce751c0fcb2a62116137"
     }
   },
-  "custom-ring-audit-anonymous-entry-v2-8-2": {
-    "statement": "0x158c3b7b43531d438cbd1606d05e038d57f7b99560024b97fdbfb3b2a75c1d87",
+  "custom-ring-apply-records-private-1": {
+    "statement": "0x2c97ac404f8969d7e526097939d6d29d0981354157ae21dd953b2dcbadba22bd",
     "proof": {
       "ar": [
-        "0x00f04efb5371f728c9968f6a4410a975f5fd67e60643c2e49ae903c30eb98af7",
-        "0x0b458018661ebf6e1744639370673bb8bc98c9f43a2836ad34bcfc691757247a"
+        "0x22136f9ca2f3f59806c4b2f2f61e90b95ae627ab983be4ff8b8eae55710d159e",
+        "0x1c9a42370445e522ff2028932485d19e507079a12f4a4dcc37dbefb17fe5d5c0"
       ],
       "bs": [
         [
-          "0x064b029345791f5559b9c5b6ac47347e89ca3f093416ac20d72fccbfc4c2f99e",
-          "0x22cd44be0bebecf1b3e98c8228c7013542daf072ac2e797cafe40d67469d1ef0"
+          "0x2f251096293f6068a93b1b7b824b74f7c500aa3b97fa2c563e3cd457d718b0f9",
+          "0x20fad007993be9b2b7a67403fd8a2b20786ef209ba85605039ffd3dee4670a0c"
         ],
         [
-          "0x1af21e2502fa85f6f03641a9372917cabef2bc6585ab03c143f132b2cb4557b7",
-          "0x01962316e43e3818b3e201826cce2d00820b0513a99589838787c35520698ebf"
+          "0x18911a3c897046f8a334420f87abd66cd5396253f2aaa07b9a5951571fd97770",
+          "0x22bd5528dbf972328675ed6e754a2e1420622d1085729317759d0e9cda81070e"
         ]
       ],
       "krs": [
-        "0x1ace3dcb5600f155af9c626fb0bdb73457a21427a412d13229752587f00c214c",
-        "0x00acf437bf1ea2cfb1032def72e2201f98936631f5e1f8b89a853b253d70febe"
+        "0x02ea2f5637fb8ac95b51df08a42dd19f86dee37a31fd83514e7e91280e6d3c90",
+        "0x1649cd38b70a996c0abfea9b12eafcd679925ee6c60eb6ea41dabe98b890d98c"
       ],
       "proofCommitment": [
-        "0x2f5ff89088de2ba0e3db87317a21985fa2d2ff45090353e4eeacbd2fabfbc8c4",
-        "0x2b82072b8df2e1f5746e0ad4b6ba89098e25188f80ee6ca8a3d7c3fe7b36552a"
+        "0x2e5624c606e9db186c3337ad87b3ae93943f67508a5c1b4efd35ffd6fa45b079",
+        "0x27e0af61a77221db76e4341343d21a88b7ab8ce78f8eef220421ab824e9a082a"
       ],
       "proofCommitmentPok": [
-        "0x0154df8e913f92e1f26418ae6ab2e2ca0cb029c640debc22f3ef7e1299a69331",
-        "0x02685580f771030b8bdfcc968d9033e0af48b8d0c4a4bb1673dac28dc5bd2fc9"
+        "0x1e325b95af949bc71f0f95037c2b292e3b2c77ec49251c10230d5e778047d7d6",
+        "0x12191d0abc20101c301529692bc0620613e0b4a74624d5e978980ad61612923d"
       ],
-      "provingKeySha256": "ae68de8a0210c63c959874380608149580ce5de150ae71a1c79ce769ce9f995e"
+      "provingKeySha256": "801f7a2cf2233d1b8d3d85f746ef8ef0b2c6997b1b7bdde6ba49247f6ea47eee"
     }
   },
-  "custom-ring-audit-anonymous-entry-v2-8-4": {
-    "statement": "0x271f47b0d1f4c23cb08a4710d35cf4566a2553b251bb4ca1286ceaadae6d0844",
+  "custom-ring-apply-records-private-16": {
+    "statement": "0x2c97ac404f8969d7e526097939d6d29d0981354157ae21dd953b2dcbadba22bd",
     "proof": {
       "ar": [
-        "0x1a5a3988d4c3a1de1d2a86403228862cfe6dd8776fe80af2d3c3e0b12cafa70d",
-        "0x12dd6fd4829038ad7399e47cfd6be5a714b673001ebfb1eb004296609a51c1d2"
+        "0x297756bbb9efbb4d042a846d11ced9ffb0fd4814ce81849fc2dc92a378464732",
+        "0x066441254b6d1c3e04cfc64143e1601bf1a42771317fa9ab68e9feaa7568582c"
       ],
       "bs": [
         [
-          "0x0fccc8fcadf94c455d79b171d394c2a88f832604783eebea2dfa6e42058747f4",
-          "0x16e156f18f86157ae7133a376a6be9dd5c4596183721d2b6d638d13bf4d0c548"
+          "0x1e26cf71e099d54bfb09782346f3c068e099ecbb00a57843ed155548dd40f16f",
+          "0x1f64ff520be0623625ef5a2af0c6f8f9d5158f6194fd9ac617085b3b986f9b97"
         ],
         [
-          "0x05380003976d7611aea50f91da3b01c2d02ab23990609150a9d8bde61fb7b0ae",
-          "0x0ce25354fc9685227d436000c05979a464f6b557dfbcdf34ffa172cbf9a87012"
+          "0x2a0ac66e45e19b4a55a47775a1ce7a87146decd5d2262e0c8d1bbe6e08435579",
+          "0x0a3112dcf5aa27d5c6d0053645923a9fd93d54d69afe2072254aa2addfc1f0c0"
         ]
       ],
       "krs": [
-        "0x12965509e1eb4bfd992d34f6d063aa704299cfb03087ac8bdda650edba35e9dc",
-        "0x02607e74c51b4e44829398fa700f6393a5063c3393a12092074f8d03bd54bf48"
+        "0x024ca681bd084dd3ffb8f013ea87a950501b5bc8fe7eea745ecf0dfc1c715513",
+        "0x24808ce9915472695058e8f3976ffdc5156a46106870ec0c1449a3a0b3316f1e"
       ],
       "proofCommitment": [
-        "0x215401cbba274d3a9203d17c2197194ece8658d1a30c47ac12f20f502627e6e0",
-        "0x26d2fa7f081aa59e7b014b03481a1d813c1f9c133d3d85f26b7d4b3f33ddca28"
+        "0x2dc00497262375124b5da7b08a578efe03f32c91862bb996a6c73ddded04ba5b",
+        "0x02385a7c86c844cd2baf44b4be52cd66b68513e19fb0519431c6e4b94ccd81d5"
       ],
       "proofCommitmentPok": [
-        "0x117d0b27b8b54733b8c0b4b2749ca215bc0ddbb119c3dcdcd907784ff519e97a",
-        "0x2c8815c719c94a21f28629b97cc9ea6a9250cab5ec2b745eb497a2f46eddb210"
+        "0x29bf76e820ebb2af038d0b1da0c420a9cc2d645c53344e77227c3643b02462af",
+        "0x0a3a028304f53aee1ec496fb43f61ed3c7edbc8f63286dd38d135a42b70edea7"
       ],
-      "provingKeySha256": "fb9971dc393fd8a938e19afde2f0d10696db6854df666b7c91b2703d7a9df818"
+      "provingKeySha256": "2607ca45731c9431a298a2ca05481a5851cc5262ae0f9f5efedf300850a4e036"
     }
   },
-  "custom-ring-audit-anonymous-entry-v2-8-8": {
-    "statement": "0x07be998eb4bc80d78fb1e32ea8fd7ecd2be9f96d8ffa9e7a6810a1d563509946",
+  "custom-ring-apply-records-private-2": {
+    "statement": "0x2c97ac404f8969d7e526097939d6d29d0981354157ae21dd953b2dcbadba22bd",
     "proof": {
       "ar": [
-        "0x0e65e342f9f260e1f829c6d456c38bd0968dac0256731918fccce25d3bbaf592",
-        "0x24e6fa4aafdd532bde009ee5b45421909baf39d073455ac7b75cbd6a5c2076db"
+        "0x21a4c158da44150ecc5f0d487c9c1d1b34d5addf7c34a4e6ea1cf38d9d85b5e7",
+        "0x1b45d182880ac999ff9eed6a330d19d12bdfe59ec91a32ef68b117730cbc420c"
       ],
       "bs": [
         [
-          "0x09ecaa9941c38a4388b580235b3e36d1faf7f2c8220af08a454f4da1d4fe2b3d",
-          "0x261af53da69204f550d30773933acb72b8d2307264a95fb57019e6f529220263"
+          "0x2e2514d25ff88d8b02e87d90730779ffcd1ce68937b4080a5810e23fa46173c4",
+          "0x14c3e34ec859b5bdb81dc19447e0d550cc677780b4b6c8b60a94fec77e0d44c1"
         ],
         [
-          "0x0000d8f78591b778c0ce03d114a35c3bf897af3d4d9925fc58e4a542923b6735",
-          "0x1a83aaf6a42a9a915c1e8b907084769e34ad2098f19ce795b01be992ad8ace77"
+          "0x089c87a04816904294f13d9a8b6b60ddc3b20a2a651b7c99d78c8f71b38300c1",
+          "0x2714683f37fa54b8a1fc4ac0a070439f773fdaac1cd334e4e37525c130931b76"
         ]
       ],
       "krs": [
-        "0x271a2a35c2acc88c0a25cf4c1bb65ad59f2a148e0716f038e1d73d68f78425bc",
-        "0x1de4e7a68ff974609357b77f827c5a3695a7fd0e581d5a07191abec38ac7c223"
+        "0x16bc8f9738e05f6721d847dcf852db2b4b9adffcab658b9bd02b7eacedfeb534",
+        "0x25d508e8d90cbe5da4dc401f3abc4ff8a50dbf8899b9b4d0720f6dfbf68a76af"
       ],
       "proofCommitment": [
-        "0x0e4002634ada1e4dc646f2d01347a046b747985b2e4a4e8873dda69f0ea61db5",
-        "0x2b9e8c5727aa48fbbe0bb188233eed31d9cb3a8241bf708e8f32fdaca0df6b74"
+        "0x2cf4eb6ee9c7074a53337472c7ae5ed0c19d1b56f411da6544b7d0ddd3e41c02",
+        "0x1f43665ec3190ce3be9a676c4fdd45add394741e4042117f6884744fbd38262c"
       ],
       "proofCommitmentPok": [
-        "0x2583d266b56995518da17c81d17b0bb6b323c598a5ab7e4083e8cf6ae6565bb4",
-        "0x0eb34da2650eac42c9b69bfa9e622222f501d24bfcdefa4a706f148d37a89e1a"
+        "0x3056cffade562260bccf4ce85c96cab3ae42c074811be51c9b9adf9805d99915",
+        "0x2bb9e45f86bb8535197b053c425ca1a0b3ce8780d6229e637070f23e6b2e13f7"
       ],
-      "provingKeySha256": "42315d298d206bf1882b848786dd9ef40bccabe9f8f98347022218784d57e206"
+      "provingKeySha256": "c8d4fa963e06292af94fcace8f9b890abfc31b5adc92945f9fdae20ff3882d71"
     }
   },
-  "custom-ring-audit-anonymous-v2-16-2": {
-    "statement": "0x0aa10efe4a1fdd088d05937d27673ea18305c02a3bd79255cb3f48b6b60132f0",
+  "custom-ring-apply-records-private-4": {
+    "statement": "0x2c97ac404f8969d7e526097939d6d29d0981354157ae21dd953b2dcbadba22bd",
     "proof": {
       "ar": [
-        "0x2ef6e5e35164c0f03bc1b308ec3973d8f8da4ed9c74e3b036d85d8c255c4e00f",
-        "0x1cf9da370bdfb83fa536770be6eca130f6f41ed2c5855854da69ae3adb1ce6aa"
+        "0x17fb69a8065bd8db79500dc1dad3ee45947244ff45015918f635fc135419ac8b",
+        "0x270d5556870e4ecb2a26d10bc7e3e6b4b8d1756e0fa404b8fa86c60fb7cb87fa"
       ],
       "bs": [
         [
-          "0x1594654ccceed53098f663af66382a674ce642f20ac2646631f5b454047a80d6",
-          "0x2313fe50dab308de3a7d565a5ed612c4c50d17a322c42aba4cc104369ecfc91a"
+          "0x17a4b36091c54604ff7c00553ae58cb43747efb806e0732d622184cf3c23965b",
+          "0x06fcb2314877069fa152e3f1007ef8764f435bf2411bf50afe8e7e044940330f"
         ],
         [
-          "0x0cd4e18f3a630570e68e8fcf94a58ca241476684471da0d73945aa9cff3cd51d",
-          "0x100f6d0a55bccc0a20135df2cc426ef267ba2b0f875b9aa90319ca9b69e0fc76"
+          "0x1418c1aed7b749ee47b349d99dff392c292548f68ebc34ee6d765945a98ebdb0",
+          "0x0ac722f5fa759eb0341f467a4cbe0da2a89476f732ae5457bdde6d9ae048ed53"
         ]
       ],
       "krs": [
-        "0x1a291369f60fba207a062ecda5da1d7221077249701dd6b50ea1ecea5cb1bf2f",
-        "0x0dec287f8a6a9063cfd02c3f9a095da9893e952f62c0323c50cd50121af27561"
+        "0x0e1cb6a5b0a460a80aa445d6e4caa76f5eed0358b8f645b2572715f79ac50b82",
+        "0x25d311c10bf565db994ee811bfaebec13673ff4b92d939c12e079454ac035da5"
       ],
       "proofCommitment": [
-        "0x1994ed28b87c6442d6408e4aa65ad57f500c7725756d62c9b1671300193d4463",
-        "0x1003a2819be522e64562553e83b721552fc3b35bcdf26b039a5e4dfde628e54d"
+        "0x00d84312e928d783b51827bf5ce3fc261a1a98148105cdd0ce2e655d842599b5",
+        "0x130bfff7ea986a281b76f07e5be6d6000154e4709428d5073b2d6d8cd2cca747"
       ],
       "proofCommitmentPok": [
-        "0x01c743be8c598e091bc2721f938ec3911207c00747690a63fa8c9dae81dab46f",
-        "0x1f3560f6d517002adeb565acfe4739d0f730192d2a7ed79c55fa9840ff32e85d"
+        "0x1a9a7e0319d66793f1d4b09f016dab4455dbd0b9925e12e4f9570b3efb79d2e6",
+        "0x0ebb5481a101eb95e5c8f5aa8b7582c32e2d7a205496cef0d1138a0e498e8bff"
       ],
-      "provingKeySha256": "6c93b1cb2f0bf7785beec1bb32c08abb764bd992c1c5781c9d8dffe1ac82731a"
+      "provingKeySha256": "9c01d1685b7d409c7d6ca1d9fdd18c453953b894ab4c95035956318ebe6e1dba"
     }
   },
-  "custom-ring-audit-anonymous-v2-16-4": {
-    "statement": "0x0fe434a0938b3b2bc485df52f39528d7004acf9ccf0d91793af8dbcb08f1d85f",
+  "custom-ring-apply-records-private-8": {
+    "statement": "0x2c97ac404f8969d7e526097939d6d29d0981354157ae21dd953b2dcbadba22bd",
     "proof": {
       "ar": [
-        "0x2c4cf0a5f8b1599d42cc11483e7a36982aae4c3b62606660980bedab72b998f2",
-        "0x23b7a9f1d2b88d0242fc6fcbe395b1e0c0e84ee55f86acc99675dacbdb012166"
+        "0x1cce786f58a62a985c1fc700131149c51704b928dbc65e202ff73175f115173e",
+        "0x1d9df157755c96c2cd72c218852916594f28574e10e0c866b6d1c64982314cd0"
       ],
       "bs": [
         [
-          "0x178b5d0b1ba6c660468c8be90be1a855d1f5556b00e2ed18a9b1bde1d2370d73",
-          "0x2ab57b6b2631854d6dcfb90381163c2c830db4c2c0a65399daff8061da5fbb74"
+          "0x2433c802913dd379f1679746ceaed78b8b172713ac2f3764c6ab9d9453638aba",
+          "0x05d362ba8fcac977f71bb98de791d906945850a0d36909448d56f36f14829496"
         ],
         [
-          "0x0ad824570cbdf5a4fa16ddd090188ad5ec3f62ce7342171d7e427c79a217bf7e",
-          "0x06dce1ee522426ca7a1dfec3104e3b42394bada550852d18afaa19ee9b484a56"
+          "0x2624b3d236bc86e33187da81196e51a196d8ff5f6ee6b45db9257df26c0dc4ae",
+          "0x1d255f490ea655d7dae15c1e8fa71d9192e741999e6c70ec37d35e0e70391acc"
         ]
       ],
       "krs": [
-        "0x296e601e0658c9c1bd888b9c76f87539370f47012b652f1baff196130ec3a3d1",
-        "0x0be1561db7b653bbbf2332b8ed846d0c196cad56376a99d4eac0cbcaad6abb71"
+        "0x1d47f2914c50c414e51d24626efef64cc05c38eaa322a9590b8be716fc5a744c",
+        "0x0772dca37db49a3a6097127d3451886e426916ac93df6745583fa003519dfb1f"
       ],
       "proofCommitment": [
-        "0x2e565170964878fb016673a6a4d386a122cfc99790dba0b99807991729830e97",
-        "0x1ee920efe79e7763dcb3d73ca3d8ba0fd372c1f0cf1fafde698c12b75d949397"
+        "0x18b2188341861bb61a90800a938d764c1078a4ed1510061af3f62b8890e94274",
+        "0x0a21743f98f0910b02b0554b364357d96316bcb423f23a6e77dd7c495da004eb"
       ],
       "proofCommitmentPok": [
-        "0x2900a484a6cf217b9786c4fc67192b297aa09d873fec72d264b7e6ba46df7254",
-        "0x0a5d8de955537bade9500979f6af96c11244d31ad2ce1a1465331338cd51dcde"
+        "0x1d69eb13090633d844fc22564aa717606bb23185fa39fe6f4d411db83f967ea4",
+        "0x22f78835c2e8703a8f1ab7afc2f390ff8b99513676cc1e38edc093761abfc9e5"
       ],
-      "provingKeySha256": "8c09da13d6e7c4fe321aadd0d8dc6bb3b08b82c64ef8893b383a18f83ecf8bff"
+      "provingKeySha256": "df3cda7a7a82d90d0c28f779e46124f79dd91947ce2fb5bee2ab8e00b5555455"
     }
   },
-  "custom-ring-audit-anonymous-v2-4-2": {
-    "statement": "0x0aa10efe4a1fdd088d05937d27673ea18305c02a3bd79255cb3f48b6b60132f0",
+  "custom-ring-merge": {
+    "statement": "0x1e9dedb170de66a86a1adf5b08c77cc160af6d355c24f20470cec48bf4e6fdc4",
     "proof": {
       "ar": [
-        "0x16d409f7bfaffe1099b407a393a1d06b4e214e40b16b7dc4bb9c827a1d48e709",
-        "0x2b95043813a794d7182ee33eee8f323afdac75db5103fa96c355e9905b47c5fc"
+        "0x1e9680689cc8d27e571ce6de2798dc9cff2358a2baa2b5db004ce37f8fbdc82e",
+        "0x0fc75823d18954f5fc9c60da9e4b243b3f87785d04d56d82f4a80f52ecc67599"
       ],
       "bs": [
         [
-          "0x2f2c5500eaa14a7a046505fbd73d13ed4aace29efe6f934ff2f4d79cae23258a",
-          "0x226d5e14ccba624c866bf713cceea503c2627056d84cf2a70b9a07d67602ef65"
+          "0x063b67578a687543d815fe3e4c55e7655aaa63a2334b940d58490f9a857f4d4e",
+          "0x2bb72cde9e87338fc9ffe4488bf486b3d331fe219a5bcbdf9f9b1b5161abfbf0"
         ],
         [
-          "0x0c1c52ba25aa9fde9a0c30e4adc5404c232e6c09cb91e0236c503afe42f7f384",
-          "0x046248a1c78cc7bd015e96d88b359d6ef6b52cbe43a0e60d14262f5ed1673351"
+          "0x23fd497125220c87c1fa2c39784b13f71e3e6190b889e3025e91b03070ba5968",
+          "0x03cec7d49f3575021702695eab4cd5326129b17f9508e7d7a70222587ad058a3"
         ]
       ],
       "krs": [
-        "0x067e199f1c4d4b0af38332e7386eaf8116e1761f9134f7ae1baa494f511ce5cc",
-        "0x1c3a0649d800b9070cad1d4c9d146c300eddc0dc5791f007579ab934d0d40d98"
+        "0x16a6de22f5c1ee88eae26e6e6bb6207788eae80b796de0ce46b4f00a43729e1a",
+        "0x2bbf66445b840ec889d5ff6ef232adb64c51c5223e9eeb83b13b50cceec25aea"
       ],
       "proofCommitment": [
-        "0x2e1f88cb813f416997295e723b68beb6d9f179b0bfa54c3c8f82921d2924a561",
-        "0x1fe72289af34697a33f229ff4625994d6b6b4b94dfbf264da61226ec4d72371b"
+        "0x1ece2ed802eb7897bac115db5e8c3e755a1f6c6c1275aaa8d50f90fe8017abef",
+        "0x1b8b2d3476929c51216a222586e26c3535a29ab9da51db9ba0b22e6e5f86353b"
       ],
       "proofCommitmentPok": [
-        "0x0c77acf2636f1f3d9a370f4bb2d26c33c831b0b0a80cafc4354a08f8826b52a3",
-        "0x14673c1202634ee086bf818339437470eed607e35d4ba797798c06bf6f198cf3"
+        "0x17b3eea3a612f87d41c44d0dfa5c8c118e21f235888b887bd625481e3f9ccd2b",
+        "0x0795fb82a4279f3b5234f5ab2fc6332b9537b7bc9a185f5b5f24b7bbff88cf66"
       ],
-      "provingKeySha256": "27d5e8a439f9605671733644883be3996c844465d86e0eb8d63f590ff42dd06a"
-    }
-  },
-  "custom-ring-audit-anonymous-v2-4-4": {
-    "statement": "0x0fe434a0938b3b2bc485df52f39528d7004acf9ccf0d91793af8dbcb08f1d85f",
-    "proof": {
-      "ar": [
-        "0x225b70317021dd596cad0a885245005bea78ec33f586bd59c7d195369f089b8a",
-        "0x151b19cf05036f86e5b67ee684cf0305762718d5bf823e34df9af75703342a88"
-      ],
-      "bs": [
-        [
-          "0x01fa9360dbf5a0e9f284ec8feeb7457833112557db391ee8a63ce71cde724efc",
-          "0x2756828a708252ce515f85e0aaff8f7c58f3737fad91817d45e19fd730281c3b"
-        ],
-        [
-          "0x098a35b645a1a7cee95767c412cdeb14b977a696bac33edefd0f90152728a069",
-          "0x2c254e655379beb36208764d28908724ec8821270501dce3954adda9a9d5c8ee"
-        ]
-      ],
-      "krs": [
-        "0x201630d6ef248f7eb7f14ad0bea876a3193d6b676b15c56a6e98481a4356ba99",
-        "0x0fa66f1626c4ef817a5bc8e3e69c8825fcbf5151e72734ae008019016543ca90"
-      ],
-      "proofCommitment": [
-        "0x0fa3d60e04c1dd6115c13c3e29772787bb64a7365379b5ae54e8c1c40755f81a",
-        "0x25542c18092d88dba466b1aef3054e702ceb9c69e26357b17562f9814fd0b9a9"
-      ],
-      "proofCommitmentPok": [
-        "0x04e5d94262faae3d258ded286c83f7e4ce58aef92eed1e36cf19dbc11e576335",
-        "0x21a29697e0435276feccc5d29e4d9dfb51360029b0161cb6e2c7f4c494d25aad"
-      ],
-      "provingKeySha256": "5199a6f4f8b068c65e348e0fd278e66c495c52b273d400120694d2c05aa2e2db"
-    }
-  },
-  "custom-ring-audit-anonymous-v2-4-8": {
-    "statement": "0x25dc70f02b7def3953c863674645587aaad5a11fe49283ba7332c5a23d64e2f0",
-    "proof": {
-      "ar": [
-        "0x0c414da860ee3072342a5822af1e775c442caa7d97b2d2089fa681fa0596ab29",
-        "0x20290b5f8613c87aba45852d80799f1503d5510d3bbd8c72300afb7810478dee"
-      ],
-      "bs": [
-        [
-          "0x20c120f26ef13dd2fc4b36d25901d26efc570cd0133bd0768034840558510832",
-          "0x2007f2ff0ae373234376a96aa6df314d0f5af8d9beaa6f608f94ff3b96b6ad2d"
-        ],
-        [
-          "0x234ef44fb4acb234a5771229a61f9d4b2b07d76db1850a559f95f71dec6336cb",
-          "0x03a10f4fbbe2863669edfd5ee003bc935a00ed5837c2e642e4b687f5b0ce2a10"
-        ]
-      ],
-      "krs": [
-        "0x00fdbc482b128cce2880ce86bbb2c67254706c63f6656fbcd0912ffc949f15f3",
-        "0x231c792dbab3986a210d76abe809b97c58394c74e88817c453c835596d8b91e0"
-      ],
-      "proofCommitment": [
-        "0x2e225f0a4577d083075dd3bd9b3ab3536a728e471714e614f330371851fc2428",
-        "0x140b713993cb13f391cad62cd19cb03f942ca7f49dcf6530c9a9e38756cbb9d3"
-      ],
-      "proofCommitmentPok": [
-        "0x07101784132253e2f6048002446ee16704003d72474b10fa704df9f439364a58",
-        "0x191d2e6c32e1e974943c68a1d3c5fd78fbc6ad264d502a034dcc53d75602c17d"
-      ],
-      "provingKeySha256": "49301fc05332b596faeb52ca6aef75309a3df29ca5a07013e7437ae277b53345"
-    }
-  },
-  "custom-ring-audit-anonymous-v2-8-8": {
-    "statement": "0x25dc70f02b7def3953c863674645587aaad5a11fe49283ba7332c5a23d64e2f0",
-    "proof": {
-      "ar": [
-        "0x0e7110aa2f70da6059c602771d5e5f7e3d433ea5a00c0e46f768f2aeadb24992",
-        "0x191924afd1a918d4969ceebb2764c4cacef4d3a5c5c7118530f9b2828253f1dd"
-      ],
-      "bs": [
-        [
-          "0x18af3893a901341e146676ac977c1cfa6668b292658308565b663c3e46326f91",
-          "0x0f469819822168b16345e620d9b21058b316a90f940c1b4c856da4882a67b636"
-        ],
-        [
-          "0x03415d2712d602e6192f38ac0a09b9c68a8e424fcc423bec7bbe378faf1cbbe2",
-          "0x270f6d3916f412691f6e4c8891a3e1e849220879d0f1f0f3d3919616fd34123e"
-        ]
-      ],
-      "krs": [
-        "0x03d3897d3db317d7077d0b0429ef2734510b549a9b2a012fa72fe95594291b32",
-        "0x24b15e250813941dc97d998a216285261254fb92432b4cf3cb4c8708058719cd"
-      ],
-      "proofCommitment": [
-        "0x2c3271c518bb52b452463eb8182868139fd9f8f5e32936628b4b3c938e74338c",
-        "0x0ed7bd3192ffe0d1ed70c0f06a85871752d25d3d0f8f5e577fd8d9d46ea8cf80"
-      ],
-      "proofCommitmentPok": [
-        "0x0a6527cead100bea01ce7c2d698ac3a90cd8d4323b374fccd50a973e6b6f05e4",
-        "0x0cd409897aa2dc557480f793b868d6e29b53f12636b6117b436ba0cea61a91ab"
-      ],
-      "provingKeySha256": "75eec96eb53636b1b5db299b8f5b36aec91fcfbcddd50eb65de35f2342299279"
-    }
-  },
-  "custom-ring-audit-delivered-16": {
-    "statement": "0x2cc00f3e5952eca9c0a41b12f84a787cfd0d8287ea43cd8bac4141f436d091af",
-    "proof": {
-      "ar": [
-        "0x19165b806c2e49f7b2d2fe9ab65f5348201189e92731a22929f6a20791765315",
-        "0x2cbb66c631bb4b2b067a3bc49e6ea8186eb1198ada1ef37daccff42b881fb6c1"
-      ],
-      "bs": [
-        [
-          "0x2bb0bee1d5b44b7051eb9f40e65d4fcf2a77c96b84c21e0a825598511e3f8080",
-          "0x040a00cc5fde50d26a7b045a5142106638f76eb10f12fa67014811bd19c634a9"
-        ],
-        [
-          "0x0ac5b680e1db731b9b4b938f18a4fa74b23cd61a51879b00a29af5a3b144cd2e",
-          "0x2ba9c0937c36dba636ebb3e18b76f6607f8f77db6a6016bf8ec0c5af9099937e"
-        ]
-      ],
-      "krs": [
-        "0x28f154be3f85d29819a1ad1cedb0abf52873ebc91a51a1705f56b963a63dc27e",
-        "0x04e4c8b083868360b6a84d121c25cff71d75876ed5b0f9fea6b88feb79baba8a"
-      ],
-      "proofCommitment": [
-        "0x03bcee8d33b88ecd76110b437dacc58712f199fc75c9ae3103a62223c95704c9",
-        "0x0285c6a60712fa6d53de0262794dc8bd72e281183f59b549a9e9671741c7b69a"
-      ],
-      "proofCommitmentPok": [
-        "0x14f9b9e5bfc534f91df36b6231540aee520ea9811af0e6a0e5353e31be4f8420",
-        "0x2f682db9e0c2e49251f56ad90a3c538b5a9e24d0eda5d3cd589d9afccf4a2752"
-      ],
-      "provingKeySha256": "d772c7121b3b513e751c49d4d2aaada7a1090ab00340241d3eafbfc5e070ad46"
-    }
-  },
-  "custom-ring-audit-delivered-2": {
-    "statement": "0x2d31bc4de55d09f720626822510067c8abf65d66ba055d202d0abbc33b1e58ef",
-    "proof": {
-      "ar": [
-        "0x00a32ac676abf9e212f38501bb5cdde792333c951a0c3bc659968f186154b6b0",
-        "0x02a48679235c0ae2cfc71fe60942efb56c027ea2b696106e9bc9037eed1badc1"
-      ],
-      "bs": [
-        [
-          "0x273ad160b50531c798219b2794a328a49402e30d4cb226e6eecab4e605b93432",
-          "0x19f3e56ac060f98da2be9b401acfdb125255315793eac2d7d1a571f4dc27b2a7"
-        ],
-        [
-          "0x14cb6e44c3ecd8ed7308e940fb1f8c702849bc864b1529dc8573969fd9e538d9",
-          "0x03cbcf3248c5522fab0a620ebe7cd17d94210fbb247dfca9d6d1b2b16fa8d52b"
-        ]
-      ],
-      "krs": [
-        "0x1e0a6561373401ef092ec7586eea2112d6bf53b2eeced271ccbcdcb77f26fdc5",
-        "0x0f2caf89ae5d71d6db300449732fece3fae110cf0d0fed97bb74eb2d749329fb"
-      ],
-      "proofCommitment": [
-        "0x0dde8fafe6bacbae6a25c36b7fdd44cdafaefabce506d73e67451cb5d79c00dc",
-        "0x0d34673d23a7d21a026fa3ffef857eaa0246495e03d19be6d04870a30b3204bf"
-      ],
-      "proofCommitmentPok": [
-        "0x09e85b50d105c28d7774b4b33edbb95b267f1eaae5e42bfaf669ebd368b726d6",
-        "0x07c3d6f7f775b28684c4f3e0c609a37266d71f6cc07343375e96a637b01962b7"
-      ],
-      "provingKeySha256": "951770333cb613485e33ab4260666e92de405ad25e7c8bc8006f7fb09da9995b"
-    }
-  },
-  "custom-ring-audit-delivered-4": {
-    "statement": "0x1f08c779dc15997aefaa1214c2d4abb712bbbf56b5a24f3f4b4351ef93cd6f8c",
-    "proof": {
-      "ar": [
-        "0x21c2fe329b40d04b55e343232d1411c48036e3494a8d2d9452a434f34f17a067",
-        "0x1f842d66d0b0b78cd3eddb773e2a0c59c496405494c414e1702be8062f6ad19c"
-      ],
-      "bs": [
-        [
-          "0x1bd7281c05376257595d4b0908ccd522c2cf1055816104ef10368680c860c8b3",
-          "0x071f65b37fefa9f2ce2bf57341d16adcf5e6d9c3b3d14ec1d06cb9fa51118367"
-        ],
-        [
-          "0x2a8da45b44d9413ae39e3b96d3e48ad51c2c38f35a0441b96d6e06a2e2cec393",
-          "0x10377ffdadf6e3f34011f17967dfcb3605be0d97b6ed0ec255940e3d93610c47"
-        ]
-      ],
-      "krs": [
-        "0x162b4566df4b7a93d3ab745ee1ce1535b2ec9aad3b68c1dbce746ed8901ed92c",
-        "0x06d4f47e3ccbcaea1631e5dccc09d97227df422da0d5ba28ed90ac2c107301f3"
-      ],
-      "proofCommitment": [
-        "0x05725a00949276ea6bc71db32647029c6756930f02654021445ae5d1f22f4670",
-        "0x1828a48ef5d8b61e408fcd89f4eee9edd02d676ffa7e59b0557fa52e664cc602"
-      ],
-      "proofCommitmentPok": [
-        "0x1860fbc964a969be411375db2ba22a2d0a361082a2db2ca52b9f5257a497a85f",
-        "0x1b44274adbd1268e0b6f029813073df7fb97ff500f41195b276a310c9fa35a5a"
-      ],
-      "provingKeySha256": "54df827e8466094db91ff9cd5a5a02df8b3443a7a726be757df175c9d8e77e90"
-    }
-  },
-  "custom-ring-audit-delivered-8": {
-    "statement": "0x007121c383b09f3810550bbd92118a772b30bc2cb535cc0347a2f5e50273c48d",
-    "proof": {
-      "ar": [
-        "0x26a20fe8ad848c7089b23f4b79a3dec2642698071a0ae05e87e6baba1c560e24",
-        "0x1ce4d7cdefaaeca833cc72d614f5167c7c4241df6044f998fe6ed9f9c83f632d"
-      ],
-      "bs": [
-        [
-          "0x2394d535061f11a2521512f841d3ff4fdf367c8c5b493965e41b6154dbb44ae4",
-          "0x003d916e955ac75e1e2c449be6f5378758f6f1f3790dca759e68aaf6571b2188"
-        ],
-        [
-          "0x0eed0c4e365fd6a8e41c6212dd8ad9321c1c55cf3c8b548bf229a8e8fd00c34e",
-          "0x202709616a5b5cf903dc3745de73df40c6efe0e630aa2e93b794e0bd4856aad1"
-        ]
-      ],
-      "krs": [
-        "0x0bdf7e1284e4d5f3c2ca6ca30997becb1e8622d7bd78d961a4c3f2b70aa64968",
-        "0x1e260bd6d8ffa5cdf839edb573f4755a073d138a6fc0fbb58c908196569463a6"
-      ],
-      "proofCommitment": [
-        "0x2a92a53b8c00eca16072b8db4eec7af673d4fe5d172ae1355a11fe5020d5e2d8",
-        "0x29d68d4a802b41f5e96a93e72122913fbc94addd03dfde513dd150d4f20c3f35"
-      ],
-      "proofCommitmentPok": [
-        "0x22480900560d5def6fec6b293050200878d9a1b251da82bcb01d1bbe370a502a",
-        "0x0d91c26fdc5b66567d9405176059d285b235b6ceb00939b03b6aad05dc9cce2e"
-      ],
-      "provingKeySha256": "09856badc833f291d494a2e90c90333a19b88de7b0de92cf1ea3ec377b8aac57"
-    }
-  },
-  "custom-ring-deposit-1": {
-    "statement": "0x0bcf3aa5e30bc939fd310bc406072a9ae6ea23f16e7dad6afeb3112864a4817c",
-    "proof": {
-      "ar": [
-        "0x1d37917edf46ef7c499bb84baacd8f90a4cd074a9c286a685e650fe16b2d2eb8",
-        "0x146691edb2038e16d4b6c9b35fb209bf669f7d9d5b8b9a5ad1e1961a7b6041dc"
-      ],
-      "bs": [
-        [
-          "0x21d3ac151878f2a7a35738af75f450f1f46bfcc00aaae15b1f2d9a62ddb51a10",
-          "0x299dce446ce4aae04e03fdea58c58072635554d43d4b1a07580d2f0609a29c72"
-        ],
-        [
-          "0x0fcb373329ea003692442e8951015facbfe7637ce39cb6331ead710a80659c2a",
-          "0x23e4defd8523e7a96cd8ecc83f7ce8393ca432edd15813e4fd5942f4ecf41a3c"
-        ]
-      ],
-      "krs": [
-        "0x12afbc9c3b928a13ff5b0371d5b0b2127e28117b002272c16e78eecf45ee104c",
-        "0x221cbe8ba083ba509120e2570ce0ae379e0cfbc7ee8b0f6ad175650d13553a9e"
-      ],
-      "proofCommitment": [
-        "0x234339a0f298bd3b85afe8117f0663bbee1e069bb3d20ff7d33c3649761287ef",
-        "0x2be4c82dcb5d476d2a97ec75968d6299aa73539c91a38d5dcb635a81035c2d2a"
-      ],
-      "proofCommitmentPok": [
-        "0x14cb6a48d9cdd093f72d2bfa739efb660636bc6651a45b77f83df63e18c01389",
-        "0x161689b25e125fce588580707a502ff974937a708baf3fca1a4da9b8683b306b"
-      ],
-      "provingKeySha256": "10e13f59fe80e4072c4a0a80e16b44b78895a82918ff4a8e155c7bc0577dc0a8"
-    }
-  },
-  "custom-ring-deposit-2": {
-    "statement": "0x11f66e04fbc65064776c356f3eed4dc965d791b409ba4d79de1dbc0c2b128163",
-    "proof": {
-      "ar": [
-        "0x1effc4ecc7484f76f80d23f3ab117010a89e52e23fbbc5d554b747edc4722d4a",
-        "0x047a69460665987fcbe9e807e01bd0edab462253bf18d4cd880b6b526f3e5ec9"
-      ],
-      "bs": [
-        [
-          "0x2657067988c804031cc06c8b67dbd10744a7e1d420b48c152bfdc742297f1019",
-          "0x27d3081a8389172c3b1d1df13a0980b30962eaddc000c49dd2dab5a5f856a0f2"
-        ],
-        [
-          "0x0aeb9466941cddbb40f7168efcda9e440fa26939af6dea8d3574b5d0a93ee442",
-          "0x05cff7a8b21a2e139ead09b29658e4b6d663999b71a0d5235b95188a34c9ad39"
-        ]
-      ],
-      "krs": [
-        "0x0089169bdc2c8e5d94278c37c26b47cca2af07e44ad2d662c2ecc58c7f582aff",
-        "0x0e0cd7900a2ffb7d5744374b46336a5380cb6a54769f12dace6a8e71a9c30c88"
-      ],
-      "proofCommitment": [
-        "0x07bd3a8bf13f2c027b1481b7da3f0fc3e287401e21ce15dd79d29671886bcf3d",
-        "0x27d254872b69c1fd02b62d3587d63cb31e3f8b92c1438ee23f2f4e052e79b086"
-      ],
-      "proofCommitmentPok": [
-        "0x0ca6287e26b973ad83b550b8a4226eeb256ee95ca6ab26f7f7070e3428689b5b",
-        "0x1ef0250d3ce2603b012b7d8223097714c95f399518925f1f211345e980726140"
-      ],
-      "provingKeySha256": "dce2b781641eeea34c93cbdc2252cbf41fd709b4aae03e2ebec6bb90af05960f"
-    }
-  },
-  "custom-ring-deposit-4": {
-    "statement": "0x2721d560fef175c078f326a897bd936e509d4d9debf052cc53b7c1445550aa6c",
-    "proof": {
-      "ar": [
-        "0x2d6f3395ab88f6e2f72ba4bd8a8434ac4a105c0637664d85292a03010bd72e5d",
-        "0x2dda57276397f3990d6f226f91d2302078175a8d189f5f4eb778ba452b6a3266"
-      ],
-      "bs": [
-        [
-          "0x05f49d79295e76e1e02ca26a527789bb37b287591ad6c3b24144030d790142c1",
-          "0x0ccdc77646091893107019c5e8fd223829b5bf1c404575ef661e6db1f9ba9db0"
-        ],
-        [
-          "0x22d30b759a734fd06055c3e8fe8819dc42486986ad2842442764b27582bbfb35",
-          "0x19bb7cb1cdc9593fff42dd80e7079dddbc8c0341f4a9cfe18edfab8730507de4"
-        ]
-      ],
-      "krs": [
-        "0x1ec490fbfc0f4600386510a8c81c1666a5eb30decdb019aee029d84c34e6d487",
-        "0x1c2aa1089be8972c296e33825dfb0c5a1dea5e6cb4f35a95cb663e0c94d6f6a2"
-      ],
-      "proofCommitment": [
-        "0x2d215cc651231ce6f4f8329ef5b7d3522fd9c04b44a061bf5968831abb6744f7",
-        "0x14d79523e7c970896058c27c1b72058371a97218a7879afc99d9c4418e896602"
-      ],
-      "proofCommitmentPok": [
-        "0x2d651205f9f8a93e64314dff6cc417577f8bd92ad66b4330f264335aa7f0139d",
-        "0x301a18ea429661df035e908159f47e562a3a338b46d9756061cb06fcbfd70c74"
-      ],
-      "provingKeySha256": "8e3506e4e8defbea9e0d7ed84387ad805a76619678f85d29e14e80dc3039fb84"
-    }
-  },
-  "custom-ring-deposit-8": {
-    "statement": "0x090ec6c3d7b24bb437315d7c7d2aed0c9ae9af2a5d8de43ebc288daead5dd4c7",
-    "proof": {
-      "ar": [
-        "0x06cd4f8f620f9efabfb5511a1703ae2370683ac5f281e1d60386826599d22333",
-        "0x0e761f90f87631edf3d9c6cd3434a165e78d4f7d9e9dc0cf219faa58488f832e"
-      ],
-      "bs": [
-        [
-          "0x10638dfe8500aa8bc2ca1a0d5bbd856174f2e5061117a224673ec13ac9308be5",
-          "0x0815a3344df5ae03f72de35f05ce5d54b99361dd34fa1ce19994b1589165daa2"
-        ],
-        [
-          "0x018f1023c1232456c0950edbf93c3fb8a41262924685e9eb7ad137456b911eb6",
-          "0x21b35bf81ce80d024211210c34310162ff686ca39a8ebe10603b7621fee99cdb"
-        ]
-      ],
-      "krs": [
-        "0x2eb3450ea2f9a7fabb2353112d122731508008b2b43fcc534077317067775b00",
-        "0x2d89d8348d626347c439ba98b146b89dc0348aa5710d709630b5881459671b71"
-      ],
-      "proofCommitment": [
-        "0x077c7472f57f1ed841d76482c0a69910f584d6785bf37b79a3ab787ac22a8fe2",
-        "0x20b6a1e81eb381dc6e58787d9d6a21aef09aabf4418876f3756ac3d51612e60c"
-      ],
-      "proofCommitmentPok": [
-        "0x23b8e3a4dcda1130e24bc6f189a818051fd22a12309afc13018f396c31275b55",
-        "0x2891a4631cb87220bf389e5756f310037d11ec2da105416a8dd05f9daf7f0231"
-      ],
-      "provingKeySha256": "9ec8c893887eb538bb35c8a7c307008bafe13b7333eb00c421ba197b68e84614"
-    }
-  },
-  "custom-ring-merge-anonymous-v2-24": {
-    "statement": "0x16c71c33111a886249904b6ec565abd5650fbd18006feadc89c37c08f2510233",
-    "proof": {
-      "ar": [
-        "0x07db1921500a347b1de2791d360f8d92d98633d4d40c4a868f35e320714ef9ca",
-        "0x297d83860f5e7049747e8d891f46869f2dc4b7aed8f91741985e1f3cd9bfa8bb"
-      ],
-      "bs": [
-        [
-          "0x100d9e1b7c8aeb5ff5043067d1179566a93dfeba2283015b23b4621753089807",
-          "0x28e053729758abea19c8d69fca7fb38b0fdb795ed49625a274395ce7a7020c0f"
-        ],
-        [
-          "0x0b7efd28ffaadccd881cd643f3aa0d377fd4129af2a4b4a2903676c330296e90",
-          "0x14c2d05cc3e28a6aac9d674e2a61d73879bbe13581e98edc26f3c9252f32556e"
-        ]
-      ],
-      "krs": [
-        "0x1f619917f991f6e806271830ee9d622eccea1b0c4583c49d1cfa611de91b5f3f",
-        "0x137c7e89ea2d071066662959f5faf82207dcc231d52239e63c0aba830c86f9b3"
-      ],
-      "proofCommitment": [
-        "0x0d31c5208fcb015314c1d24b701870807c10a2f539f784224973e34b478a4242",
-        "0x1e28efc960c90efa873f1859d0875332e544291fa1363dd0d1b6332b858bfe07"
-      ],
-      "proofCommitmentPok": [
-        "0x0ab266abc1550a265055e69a93bbc0ee55fb5fb7f6675973fe6d13670833b5ed",
-        "0x26f0d013c35dda33c985732fac6c2ff3bc11cc00198e6a4492b62f644f4ebc9a"
-      ],
-      "provingKeySha256": "fc7707fd089d38038374385f6404d80de2b034f1f816e5d21779c58bcd90e697"
-    }
-  },
-  "custom-ring-merge-anonymous-v2-8": {
-    "statement": "0x17a05d61b0ec7854e7158e6c1466b9fcd24688d103260dd7754e9e737f3e6d04",
-    "proof": {
-      "ar": [
-        "0x1c3bcb64a7c355f17f6554272dc6852c7039c58b66fc203228fc22fa2a88bc74",
-        "0x2f9db495da1d0ffa7485f018372dfd202c57a5aeb70e2523a1f898a5c23c9b63"
-      ],
-      "bs": [
-        [
-          "0x18e710037db803449f13f2dfafa168b7f96e39d621f1ae60c394d9d81d664710",
-          "0x25c20487c1f8dfe14c1a4df13f0619f2b3009d40226d67f473ee389282961a75"
-        ],
-        [
-          "0x2a4cbadbad7775e7a9a7c2d0e090403e212bb9c5ad7c922b4f0e5a49269d3710",
-          "0x2acfbae81a7bf41f1723180e5df265354d69fba8f28fb1b49244fac1b6473fde"
-        ]
-      ],
-      "krs": [
-        "0x2c752c82c31f6c47563359a8c4f719b8db3d06e9bcb18a8036e0579eae58ca62",
-        "0x2fc5ba7dff1983525fb773dc62df7bf603a06cd2c80409fcb9e08edfb132695f"
-      ],
-      "proofCommitment": [
-        "0x057b252f1c05cb2c822aa51668269784005d4fbfcaaead49cf50b80eb86ff59a",
-        "0x00722e351923533b60b8925c7c85de6d6c7616f006791bdf8824ea2e03376513"
-      ],
-      "proofCommitmentPok": [
-        "0x09534e22d80fe7922b511ad57d777e2aa6bc7058e4943b8bb952a15a23da3afa",
-        "0x26fea6d3c9b8d06132892ab6883bd665289cbf1d7ef68e567aa94f03201046cb"
-      ],
-      "provingKeySha256": "d235d3897ed3aef58e8d0ae06b8887b8691bed43bb962c167d9472fef4cfcc66"
-    }
-  },
-  "custom-ring-policy-delegate-v3-2x2-curator": {
-    "statement": "0x0e8cadb15de8942f374b03fdec3fc7c6685367be0f478eb6acd722edd95f861f",
-    "proof": {
-      "ar": [
-        "0x04650b0f7cf0e0e3a88a4c8b529067ca02ea26bac5bc1be85271e310f34d7db3",
-        "0x03939fcc5d4232bfebc1e4ce483c2f01ef902dfa7d68f7cc89912b929dfd452f"
-      ],
-      "bs": [
-        [
-          "0x30231bbbe92f01740a38768b8656c27bf703a681bd621f190a40b51dfa9f8a4e",
-          "0x1ace070e5addb169d3e51b0f80b9e74cbd904a4e6025e2f490a9db5ef6d6da50"
-        ],
-        [
-          "0x22d6aeabe7970515543a92fd8cb88be5a88738266fc05b88b6556e4c018986ec",
-          "0x04bbd59615a96dfb25c604448dd000def0344bbe44b0c36bda586b623a9a6297"
-        ]
-      ],
-      "krs": [
-        "0x1ee6d2602d11df3e77389090e658e989b99dc20a30d78fc413988e823c6e0b19",
-        "0x182c486434f3430b517006d19c289f83c1cfcb49d0f1853a39c606bfb71421ca"
-      ],
-      "proofCommitment": [
-        "0x024d24f5f783df6a9d0cb943da997f6227ed6756e5e67919bd63a5223d353f37",
-        "0x0e78ad2fb99c4e1aa38d60058cea5bc07323b0d21822e71f6ece6432a657e663"
-      ],
-      "proofCommitmentPok": [
-        "0x02d8caca5802a3723c31a57925765368e99d430f9beea9e1361d4d0ce9166a44",
-        "0x1de1eee252f9a7dae243f2b7282a1d36bbf705d987a510a1e397a8939e9e9b2c"
-      ],
-      "provingKeySha256": "2ff47434a19c6671b5f7c7eeeb7fd0b5fe836a05e0dc0b236114158cc991d6af"
-    }
-  },
-  "custom-ring-policy-delegate-v3-2x2-own": {
-    "statement": "0x2b78750350738ce2ed12e4949f335574b8051f70fd9f3afe49242f637be5368a",
-    "proof": {
-      "ar": [
-        "0x1284240e5f1249821b914e99fcab1690a93f4cc467dddda88a5d6e60203a2aba",
-        "0x28b7dd4c341df8aaf082d92b72d5dc01f46a40cf248b5d528c1b49c5e12590aa"
-      ],
-      "bs": [
-        [
-          "0x01f1c7bd5e0a86618147e800c8ee50d6500b2e66f901711f822e8af17053d9b9",
-          "0x257a4cbdb317077908657f33951fbd8c3af5d5ccfe6145d93b55a38ff620e1c5"
-        ],
-        [
-          "0x004753b3a2b615cbe0d99dbc3c88d5967cfc2b1245708e1374a335cef1088c09",
-          "0x0a179fedcfa05285fd974188c521aa1c12e404fad64110b3c784e8289e917050"
-        ]
-      ],
-      "krs": [
-        "0x1f3f8345d29266ff7ce2ce48b58794771a80af5fe3d5b43786a4f3bc36294693",
-        "0x17d84972326e448e987f9d793b6a455eb98d312b0a965bd6bbb652ba8bd03fb1"
-      ],
-      "proofCommitment": [
-        "0x1fa5350864a78840670734be6135c39390ef2d5a36e4702b076307eb3cefc74a",
-        "0x1858cc39306e680122aff78a2f7d094f60cff875acc9b2c6c881e4437a62a320"
-      ],
-      "proofCommitmentPok": [
-        "0x17888ab0f7c3d95a9e2d55e1e75b0758e54ab8cebbbe3a59ed082297a347176e",
-        "0x14de31b680644a66faba59095958694224ad2d66be02f7f3e5f0a8327456e44e"
-      ],
-      "provingKeySha256": "b6779ec30236d7d3e6a07970bc71fbd33dac6632d0278e769f3879b77542f9f4"
-    }
-  },
-  "custom-ring-policy-delegate-v3-4x4-curator": {
-    "statement": "0x033205c35f5be01ddecaf8366c1d2d68d14eaec2d587938a729428802249c142",
-    "proof": {
-      "ar": [
-        "0x0b7c05ed234a111a6412b990ff4fb119c0397ed8873fba72b05496c858c95f81",
-        "0x0d0243e64f0d048f1cd166e57af4715aae446907daeab27177a81c9da83ad0d1"
-      ],
-      "bs": [
-        [
-          "0x255391f2ce86fe7cdbabdc20a46c1d34f5615a94ec544894d4319b625fd59748",
-          "0x1ed46aec56e7e55f37008972e7df0081b2a4d5345788dc4910d8fd4e403b79b0"
-        ],
-        [
-          "0x1bb6537ca27a2b18ce8ce51273d13e4edd144ee866e1f9ca5b3bc56415a8bd01",
-          "0x02455d6e32c08b887716fafa51844b7195b1d8b2de634d0a0f5cb4509bd2a87a"
-        ]
-      ],
-      "krs": [
-        "0x2daea7a5d90c564b815024c3188f94857223a3f0a53764729e74a529d4099623",
-        "0x244c2134b5e8fcdc4e121ba29603174ec10425b33a9a4f6d9f62be278c4c0165"
-      ],
-      "proofCommitment": [
-        "0x0f4b4129841fb95effb8ee52c5b8f305f444ab61f17865235d6d232bdb2a4645",
-        "0x18c73e8e1def2d4a1d81b1a65d0d5550f16ae3e37319be2bc967c63dd057511a"
-      ],
-      "proofCommitmentPok": [
-        "0x0a22de9d8284ab5a369c65ce263b13b6210c816b207bca8472355f3c847ea463",
-        "0x1c45700ae7c10f7acb724755fb31224d35988ba54e4203adadbec426f69f45d8"
-      ],
-      "provingKeySha256": "f01b9bb2992a3c217e2986f17183f28dfe598f0815d2db8704967012521489e6"
-    }
-  },
-  "custom-ring-policy-delegate-v3-4x4-own": {
-    "statement": "0x205992e75646c66d4f7d8791c3f5ba0be2587de27cdc16ba4081b1b6823ed32e",
-    "proof": {
-      "ar": [
-        "0x1ae28cdc55b348bad99d7af8f1178eb659f25eb5017ca510cd7d153671d5adc3",
-        "0x27cbb35c9d703dc2120c1136dbd5e2055c6a838cc72251fdab0cce1e7d14c4ce"
-      ],
-      "bs": [
-        [
-          "0x13004a447fa10e231e5d237c9716814705e63fce58eeb8fc34e1bad6bd52b866",
-          "0x0cd151458ed299deae030cb719c24e2f47dc58e83d66536cfef31324af751ad0"
-        ],
-        [
-          "0x2fbc6dbd446f1261026608bf1d4c5d98fdcd9a91a9582faff6c877e4e1778cea",
-          "0x024df27c6e33705c8b9fe91dd4a7fc17eda4ffec87ad16a55c694c70d932d129"
-        ]
-      ],
-      "krs": [
-        "0x24ea687a150c4ac40291c31cb1d2477718a9b3e43bb04293f038874133d390e6",
-        "0x1adf9655be9bfa6a0380e16c469de5fdc1a06fac557b819d1a54c9a9793df401"
-      ],
-      "proofCommitment": [
-        "0x303a8b226b33b5abc1a7d75ee58ba5a4dad565f59fe15d54cc148aee595760c4",
-        "0x0fd09445654b33a572fc7a93f38ce8b74f4b47e843123638d0872ed67ba42b94"
-      ],
-      "proofCommitmentPok": [
-        "0x140162fb8289b1b6f00e4ab4067ae4700dd68f814d22ef8a38949f7412a86777",
-        "0x14f420f87c0b8f0e7898895a98dff7b1a28c243b9bb4c6dd6e76eaf2df8466f1"
-      ],
-      "provingKeySha256": "aa488e74676a9a56953b6871c15a0384b8d8cbebe36f5cc1d9043eba20a688a0"
-    }
-  },
-  "custom-ring-policy-member-v3-16-w0-curator": {
-    "statement": "0x1a8587b5b2ab4b1a9009f343c1e48eafe0e1c59de0bf0d0bf9608681318f93af",
-    "proof": {
-      "ar": [
-        "0x0a1c9f6c6ef9510838152333d1c7f95db0cc4ae3d9fdb4e605fc328d27f81928",
-        "0x0b20d7ee76a07626b6f78f63a0c90bd92622a469448708cd9a1194ba94268da1"
-      ],
-      "bs": [
-        [
-          "0x1e335297d7be5c5a3dc69e6a61fbc0c373f0490ead0f5612e6295c5af09c4df0",
-          "0x06c9887667b42b6c9ea102770d20b37eb29dc09f53c4976b696516dafe6908fd"
-        ],
-        [
-          "0x03bf215b4b90cf89e0fd66537c3d592d80eb82be9ddc93c62cd2ad7206d17eb7",
-          "0x1e49ccd5da41f74562727e888f403e7150508255f0058ffa0679be209ada55d2"
-        ]
-      ],
-      "krs": [
-        "0x12bfaa433389217690a6fddf4963cb40de8ebebc4785931c59debc5edab15fc5",
-        "0x198c0d5c4b8dca0cd1ab0265016b0089be94f90bd7a2ec75098985e47e6dddb1"
-      ],
-      "proofCommitment": [
-        "0x127484c679ec1466b7713e6940dc8f8ef1089bc57f00bb69cf78a1c71d703c15",
-        "0x046be60e900fb7964a988ba152accd30db0d352f0030f434586fd6eb415906fc"
-      ],
-      "proofCommitmentPok": [
-        "0x1079d2cc929ab606112376450ff82d5fb4bf598284c862d16bc41f3050978a5f",
-        "0x13194938e50dc416803706e2de315e850bb9c249b5dac5285b1f31ac63281a83"
-      ],
-      "provingKeySha256": "c9918b549dc57d685e9cec36b348ad7d3cba23fadee280c93099bf11031e48d3"
-    }
-  },
-  "custom-ring-policy-member-v3-16-w0-own": {
-    "statement": "0x02092b074ad862418ba430dec2b39e41849373d85038ee71ce032848a887a59b",
-    "proof": {
-      "ar": [
-        "0x06808c60477685f8beb83aa018e0993a8d267d5074e5919ee707fd1ff1ce1075",
-        "0x2f78b591269e4f874fa7173bf7de19b1cb56790f77c9866ad823d2711487ce6d"
-      ],
-      "bs": [
-        [
-          "0x111e3e88fd8c4a2b0650c78f93adec6a829161a5e1ba77228008111b378c1d3f",
-          "0x1918061a7f7951cd6c14d7fcefb8076229bcff1771c2fa9052b3f71fa341e41b"
-        ],
-        [
-          "0x1ba88a811bc0b7d390841b9ee2c72a2002e819a731f0f0bd2a5abc06c8221949",
-          "0x1f318579ffd473912f88be9c28f2f5cb815dd0d15110ab7fe2f8bd7c87509412"
-        ]
-      ],
-      "krs": [
-        "0x104f9f045bc2205756dcf8218a3c5df4e932b8fc92bc4869d20ffca9d8a29bae",
-        "0x047d717358cf3a28ac09d9e87d49e02d555cc25b367dd6f6167c7ee63d2e2c56"
-      ],
-      "proofCommitment": [
-        "0x29decdd076ad3442d3e4b9bdeeec3f0635560f34fd40ad6a6163d080041e34bb",
-        "0x045ad4a034d06ddb9d78ee5bb4cd385b342f78d6fc85fd5bea4c22d887293339"
-      ],
-      "proofCommitmentPok": [
-        "0x067a90ae4eb65c269fe678adf5b5a18ac9789492ccbefd9a619929c795b98f0c",
-        "0x02ba69f823156570f611d7cbe7c07a526e00e387936039c2d673dab779aaede9"
-      ],
-      "provingKeySha256": "8019e03bcce4fe467380ffe22e2121dabac48cf56f9c6b58feb44bc81b09a58d"
-    }
-  },
-  "custom-ring-policy-member-v3-16-w1-curator": {
-    "statement": "0x256591a36505337adceee4c81be26ed5d6ca19351539239067b4ca5b7e2f5537",
-    "proof": {
-      "ar": [
-        "0x17f7cba6bc775476a67f459b3d9a84765341e80660f6ad9114cf2b8cf58bf432",
-        "0x230e1c573657d416d9d831da97cc8b7e8c309242a2a2f4939456ba4869e74f94"
-      ],
-      "bs": [
-        [
-          "0x2ceafb3f3898847e03c3b5e3645eb865ebeb8db91c3dac12a0946da52a7f49ae",
-          "0x063874014e80fc0ec46a25c12526cb9482ce80bdb4addfd285c042bf6e8ee8dd"
-        ],
-        [
-          "0x1766ffba2daea1bdd95d35baa0d54addbb4b5f9f123ec04c8428353760ac7b55",
-          "0x0d953843bc9a0b4eb5204be6d39c0e587c814d21f006e8d41db4a42bc4661fa1"
-        ]
-      ],
-      "krs": [
-        "0x2558cd6d0e076bbbfdc8f1d30eeb2643d2af5290c255064c260bbb5acd2c1c53",
-        "0x2ae9dd7e8444ae78fce3be5d048f197a316a31657565cd29841d2bbd93848329"
-      ],
-      "proofCommitment": [
-        "0x29663a0295d1f06c6ea7f64b0e54bad8555c27bb795d5c23e39f3c756691d41f",
-        "0x13b270f4d8ac2e5d8913b4492ec220099193a4424ba9b2680ec4f5301a363255"
-      ],
-      "proofCommitmentPok": [
-        "0x1d23c505f90f5c8b8c5970b48e88d6caf363eaf08dbdf23ce4bc5de8b0105ff2",
-        "0x131fb40436799cc892709220309148a2244f2e708d69f85b8c2e7ce7beb274ed"
-      ],
-      "provingKeySha256": "ddd7a2f06dee73c264d350c563aa804c52fa0039b3fd4bf171ab130db5b85327"
-    }
-  },
-  "custom-ring-policy-member-v3-16-w1-own": {
-    "statement": "0x11888bd3bace033a235d7d83f3ea78f9ef3e8cb03230957e0ae524e63f80b1ec",
-    "proof": {
-      "ar": [
-        "0x071ce0f7af5abaf05a87b2168c8eacae8298bada0bfcc89c4339ba449144ca21",
-        "0x29477ad0237b2d65fce17a31ef4d4e21a8a91e6cf933e824a685abd1d63bc7b6"
-      ],
-      "bs": [
-        [
-          "0x2b1f96f0815c512cfac0a70ef86912df8dd23a5257cc3c9f54e0f800b6a66f3d",
-          "0x1a582a6f6348e77c14288eb160e2866298203a43aeb6e33c667261ff8b9b92b3"
-        ],
-        [
-          "0x2b3773b68dfe33b5dc052b780216d90e3ba29e1b3bbd7c1b2cdbc55ba42f5f09",
-          "0x130747c0786a3cc9cc932c00fa060d82da7e14ca9649fbc0abeaab558d75522e"
-        ]
-      ],
-      "krs": [
-        "0x2abe94ef47fd922261ac589cf8aed93e48bfd9a13ea40be9141d9d942fe7047e",
-        "0x00de97bf26b13be63e13380c680f05e6e539981a19f46c1a909f4316737c35d3"
-      ],
-      "proofCommitment": [
-        "0x1c09e4e09ab415aa0803710dcd78a03fab4b33a9300bbb33c1077b2e0fb35111",
-        "0x19b8989addd2298d393d0de924361f8eb8aee19b791b03ac5f701d5b36a3aa23"
-      ],
-      "proofCommitmentPok": [
-        "0x01066e5ca1853e97ffffe12af5863c958be2b868da2f9e38cd2cd15f195a2f9c",
-        "0x04668cc74995a0e87bba8881c60d219571e6f607cb4279560e0929ed91d6b1ab"
-      ],
-      "provingKeySha256": "b07ee3945831b4113049745770238ab125a69d16da519c0223e9750513a1067a"
-    }
-  },
-  "custom-ring-policy-member-v3-16-w16-curator": {
-    "statement": "0x09a04a8ccb8a4e73789e617c627a8835a8ba48405a024a61780e7c032fd6e4b4",
-    "proof": {
-      "ar": [
-        "0x02bb567cbb7341f4c2235f14a53ec76bec78a369215b734ab970e404532d8161",
-        "0x0bd629c61864e17655883e30d4402621decf2d9a9d37eca5017bd4bd7296f92c"
-      ],
-      "bs": [
-        [
-          "0x07e5dbc890d1a81d10e129162f99aab41e333af42b536a3977f102c71cac439a",
-          "0x1fe399b9a89ba9cc7b7606101e2e74b63527f4ba86bdb0657831055df6a5714c"
-        ],
-        [
-          "0x24c66cc47cae037ac685689ea6b5cbc61e2f34df4b31547af95161e443cad341",
-          "0x17c000912284d7afef58f8c8d5d51a198b4a3f6d47c4a460843f624bc5e820b2"
-        ]
-      ],
-      "krs": [
-        "0x24a3ac8e1be7f968d06c6c1913cb914fe4bfb651883cf073e8b1822f65263c9c",
-        "0x18c940969fac34dd7ecb9ca2c44cf67682f385432b52a1c5cfa6e48507680a4a"
-      ],
-      "proofCommitment": [
-        "0x23619536a80e031b200ec4ae00016d0530d3625921a16dddf85733eebf57f3e5",
-        "0x01f09836bf941a09cd35831a7928613ff379ecab75204ede87f36516feb34b84"
-      ],
-      "proofCommitmentPok": [
-        "0x15a5e09a75ada523f1161d836b932eaff1d821afe5e8ecbe9702f81727e86ce9",
-        "0x0e431d550a5ab86347224131c2e67df368134cde995f75d1f333e8acaf46f5e9"
-      ],
-      "provingKeySha256": "2af48bdc9496af6150ab5466c4055cbbaf5fea358abe45359dae5583b85067b5"
-    }
-  },
-  "custom-ring-policy-member-v3-16-w16-own": {
-    "statement": "0x2db2d7631960bc1448d4fe4bd1455421968e0fbf2deb4fd6ce80d2c302c4f5de",
-    "proof": {
-      "ar": [
-        "0x1684aa6d6ed109a50c0f47838548658d04f86ffd40e3d1b7bc1698fd497ac636",
-        "0x236b0807af71706c5d0f501d11d4fc3ca639ee7a89473f596b83db9466556985"
-      ],
-      "bs": [
-        [
-          "0x2cb162c0e6b8abd9fa635f31953549720d21792119fdc08640366c78a6609cfd",
-          "0x291bba96c09cbd93880ad1a7e542582c472960b50ded8aa313d92298ec1f7ba4"
-        ],
-        [
-          "0x2910ee1d70c9dc28005272e0cacabbc3899ac7b8d73ce758f08da8fecc37404e",
-          "0x1695c88a6cedc86e5746796d447014aa4d8e7924e5d94e191d6798ab37e4e342"
-        ]
-      ],
-      "krs": [
-        "0x0f550d715ea43fe610fbe6435484517b94559c08d93e24c5a3d038503461e4c4",
-        "0x12ab27e8c50b78f763e92efa347019244bd22287f67b5ad9533b1bc3566e9ef5"
-      ],
-      "proofCommitment": [
-        "0x0fd6a1093228e2888dab8269b923deb79e70a11160ea1829d895b8feaa2c774c",
-        "0x211c5c3841103b647e53f9733f2fdbcaf45ef24f052b661d5367d28830e078c7"
-      ],
-      "proofCommitmentPok": [
-        "0x01e18c1a405d22f0621055d1c07f382b1fb7d989e8676ceb4e31fce5f4e03cff",
-        "0x0a746f45641c493c644376a0c09af494bd0efa8cc47a2d713282faf07755faa8"
-      ],
-      "provingKeySha256": "a8586eebd5bcb21b7f5bad752bec302cd512cfa44b957e4ace082261a3460c54"
-    }
-  },
-  "custom-ring-policy-member-v3-16-w2-curator": {
-    "statement": "0x00d0ab4110dd2c73608018633b852bee3795ed6e2483d3ef9ccc5625dc12234f",
-    "proof": {
-      "ar": [
-        "0x2395c981853166c21927903e2fbc2b4a335b7524edd7d3bd30298a3f757fde29",
-        "0x2bd226cafacc915dda5a2eb164dc2becf276720fa55a57269c0ed068aadfdfd3"
-      ],
-      "bs": [
-        [
-          "0x14b68dd21e361f208417329d751b2ad8c3a9e0a61d3b80662f00a19fdff280f9",
-          "0x1159a9fc4590a2db508faf8a431fa83a824783fc2456c24ce98aa64caeab515a"
-        ],
-        [
-          "0x11986030ccfc915364898493dc96720b1a7996199a34b4af10c7cac758f2e816",
-          "0x04d0013e886864f68652ae6dafd4c26363f9648743b2f517621d652b638621a8"
-        ]
-      ],
-      "krs": [
-        "0x2960a485d4e667f4992b3e31e74e5cb2aa5cf0548cfd1d7504453663876c91b7",
-        "0x19b4c8d95ad17114b969b44d5a2c6eea948590e0b4f3a32c770356c6bb87b821"
-      ],
-      "proofCommitment": [
-        "0x14b332d5a4d3ade20ac955c0bc23371a97f61518ac2f6fdac69510acd0dba02f",
-        "0x0b5215b82ed20b910637f5b36add4687c011edebc4af927ff0d389d117008c7e"
-      ],
-      "proofCommitmentPok": [
-        "0x0f3f59f33076376947fca74b0ce75df3c8f397c7e85de41c1ffdc2064e4fa4d2",
-        "0x0b74f2aba7a98be6fa285789644bddd05353f584420b6427a7ff784f9da203db"
-      ],
-      "provingKeySha256": "455d54dbb08888c573e8f1c9e866cdd87dac19dd72cb7bd6bdae1003f3fe73ac"
-    }
-  },
-  "custom-ring-policy-member-v3-16-w2-own": {
-    "statement": "0x052f5f760d59b0dda31a5c22da731099bbce8734e87d66af3d984917e408b152",
-    "proof": {
-      "ar": [
-        "0x13e95bfe495b2f20d2e62ef31e73b12f65b8bd7b49a27376830087c7817d9ac2",
-        "0x1589a7e26f7185c990785064ef3c4de06a72c0f1b9e2cee00995b41eeddcf104"
-      ],
-      "bs": [
-        [
-          "0x30137f89980891e94f4cdd187c6cba20acf8af7f9aa32c10b513f63dc25b37f4",
-          "0x0a2c25c6b3e06e864bcdf6e5b9cb9abbe273cb7008d9223d9e5388e4bd71ceb6"
-        ],
-        [
-          "0x0883c8dc60b1b42722061020a637f87a53bcf688fc39f56ddeab522027d2db3f",
-          "0x1fde367143121a85d03ac9f976fab7e6b279ab3c09315d08e3041c4e40d6aa00"
-        ]
-      ],
-      "krs": [
-        "0x2ba7ec3e16803022ea57599111eeafacdfc3298ee79d16e36eaae1babe6552b3",
-        "0x232bd085c5bc62743b48a83414a6b0ef429b45185edca479851b2378404f1dc4"
-      ],
-      "proofCommitment": [
-        "0x248c764973f7467afe297dc766b38d3f1eb04b132041964053e1bec495d053e1",
-        "0x1f3fcbd0f7713cd45c5c161b9eab9954b421bdce924f296b4b53e06415a50649"
-      ],
-      "proofCommitmentPok": [
-        "0x1b737d8c527bf1e0e89e5d5ece86445408050cec1eac38064be5d84352942890",
-        "0x01f3a8bfe4e105de0f59b3c67743754db79493d9b8408b664f9c2c1271350c2e"
-      ],
-      "provingKeySha256": "417141d498a4d529cf9a864b211318e8fd103cb80df0ea294bcde2199d43e139"
-    }
-  },
-  "custom-ring-policy-member-v3-16-w32-curator": {
-    "statement": "0x0cda9b8cb2df168a4a4d4204cc028b887ebd3b46f377e183606e5d4086638c82",
-    "proof": {
-      "ar": [
-        "0x1e00b638f9fc6f3b987a50c092e8aec6e11f54081f187aaf3ad7a93e3176935e",
-        "0x25fefa4e8e04264a4246b9db1b64bf251da16bf6a92c21cd1a4d5ec4355d7af2"
-      ],
-      "bs": [
-        [
-          "0x0fcc846893767c479f04b97b737ac655f1e0f12840166e3cddf272879834f84a",
-          "0x2b090643c37ea5d5b2d4c8ee98b74369cb7932f7e9c44cd9af202ab0e3ca47bd"
-        ],
-        [
-          "0x23885310c50c4fe26e2d3e4a790ecf5d74f442845150787b6d6727cded520729",
-          "0x29d6ffd6847c8ba039335345643e70e8ce6156bce3f715d52116796d9d4fed49"
-        ]
-      ],
-      "krs": [
-        "0x0661a88c2ea22abda780193927fbd92b075cffabd41394049a5208cc6c69e7f6",
-        "0x0ed7862e0ae753d8fb3594b7ad86ebea820a882f50283ba26a9c0f49e101d5a1"
-      ],
-      "proofCommitment": [
-        "0x2641f95df9a2bbc43bb3dd20a24d4495312a40f7c94f579a84145003ee7ef7ca",
-        "0x096f94493c8a3ff0a77d82f73a25e3a7f42db72d0f32646eee23ece0e078a208"
-      ],
-      "proofCommitmentPok": [
-        "0x25d03695c6d96f7c662b18999113250eb800e126bf96b36c5af732cae6a9d143",
-        "0x08927c39129d4bd912e2bbe312bb5db16223f047dcc98cbed1ae986f59a52050"
-      ],
-      "provingKeySha256": "aff7490614337a151520b3000290503bb274f8bd5996ea1e4444426704ece492"
-    }
-  },
-  "custom-ring-policy-member-v3-16-w32-own": {
-    "statement": "0x0a551a74fd4fc70a6d8ebe5293d27ebbc793b7b21215b207dd2d97592f847458",
-    "proof": {
-      "ar": [
-        "0x14df9e789ec1b2d4dd0bd374ecc72d11b8fc67f2e5e635492412334a024f5f5e",
-        "0x2bb1f09484c388c8dde70c02bb2287828279ecbde55f8ed3081355f33fdf539e"
-      ],
-      "bs": [
-        [
-          "0x1a7001b75ce0a34a2530f997ba879f447b92271cc9df1eb0371308274865d621",
-          "0x0783665087fac8e242f69a236c2928de7df45de7e2d2330e0f1cb87348d92bc2"
-        ],
-        [
-          "0x2f5b7c51d6d775a958a173f99ef2215c67155493c9dd370605520097c079c0d6",
-          "0x11cbd795ab7acba6ce3bbad0f9f6e9e031af92cb119dc1b95b5627e236fff3c0"
-        ]
-      ],
-      "krs": [
-        "0x13d435b095e493a97d54228c60887e694e683ea702e9338f5876d04374541a35",
-        "0x1f5afcfb6c01cd782254c31d3a76346035a86fe5c48031862dc55b8b748825ca"
-      ],
-      "proofCommitment": [
-        "0x2600fb7833a4eae6d1035f4558e2cb793b507a0e166acf42d53a78e734d76e63",
-        "0x150c41e937c5b8d218ef6c2e097b1c57204624f269a7e395eaa5d923e24b63c0"
-      ],
-      "proofCommitmentPok": [
-        "0x0c14a6f6b8151d693fdd58f1109173608d311de5e1f84e39034589678840b9d5",
-        "0x09f81c030a627c06439a91e0efb3fa1ab3d1144c9cf7bb14e9a393ca7706d887"
-      ],
-      "provingKeySha256": "4d8e014a82c54dd8649e46082b40183d7931e39387e2974f1feb00547ca47c27"
-    }
-  },
-  "custom-ring-policy-member-v3-16-w4-curator": {
-    "statement": "0x1627f450101cbd2fa4b36ff6e927a8d679980fa5596920f1f59c4e7a8c60e248",
-    "proof": {
-      "ar": [
-        "0x198a6376bd47c30ce8bce4eb01a2d5099adb522fe355ab62117803023fece481",
-        "0x24de590c26178eb243fdb206f9f073a27a85e398b9934e3e1381413457c0f627"
-      ],
-      "bs": [
-        [
-          "0x16fe8c28d5810cc4d61c0618f438ddc256a9374d2be4f0c044f074ea056b947b",
-          "0x07af801b2e228f6441e22f1404478502f8241bed172047137f5dc707301632c9"
-        ],
-        [
-          "0x0fd54747b49052d200da3e441c092423120216c9a7dd49ce3c19d32c543edc4f",
-          "0x2637abf7e035b9662f363264fb2401a278252c9042afd9479c968e3bb4b3ed42"
-        ]
-      ],
-      "krs": [
-        "0x1c740becb14729e5ec3a0b7300db33e19498184b99d21b3078db79f269b7d072",
-        "0x20e105d02181f37f0c1695c73f6ae2768f253c8d21471214930d959fcb27e3dd"
-      ],
-      "proofCommitment": [
-        "0x123ff7769de32b7b3534c24736741605e51c272790462fbfc4d291730f841518",
-        "0x174427cb29f1046cc377f4b4a45197c82410118d6ed14fc4a87cb6fc54c323b9"
-      ],
-      "proofCommitmentPok": [
-        "0x16232a646bbecb6849f444ca11d67f727f4cbcbf4d3469bd0e3d5c904e0b94d0",
-        "0x23ce53c08ae621597f0a93740ea57edfdcd7695c45f1cd727443e5ab824ecf11"
-      ],
-      "provingKeySha256": "1a496289a2821aa79c8ce6db805b708c9a6b76d40e1d5fd4e31c87093ab8723d"
-    }
-  },
-  "custom-ring-policy-member-v3-16-w4-own": {
-    "statement": "0x14840a48c793c7cde1d9f41b14b32be5c8612aac3b5e6d61fe4a01ebebb06978",
-    "proof": {
-      "ar": [
-        "0x2dd48528353674cce6c105b095a025ccba31f648997672b771103fa5b9aa9b90",
-        "0x0e8270f23a764507e23e662f1bb8317175dde149b68fd9813607397e3637213f"
-      ],
-      "bs": [
-        [
-          "0x1f4cd0aaf39e0ca1a3f75696df74a21764d1f2bb52c60af4c94515c7b02c4b8d",
-          "0x0cc9bcdc1d2856c1022b21132bca940d086f70d4408109b4f890e196c427bb53"
-        ],
-        [
-          "0x2ce716626e4ff1761649649afffba3366790b7a65f43e1c0ee99f6ecd568f980",
-          "0x1b62074f2f8087f2a8ad8614bea412ca2771fc33221847a570c6cfd967908736"
-        ]
-      ],
-      "krs": [
-        "0x09554f357db0b5ecbc429018a59ecdd5bb0638ea8a422a10883df6bb36662fd6",
-        "0x07ff8713da39998167149995b4318a6c31ff4f084a80d65024ef9e66db520ff9"
-      ],
-      "proofCommitment": [
-        "0x302103b8361a2f3174e36748eacf7f9df22c6be1c0a80a92854ba61b75768c03",
-        "0x1c051fd845ab1de3047dfd2d068f4c6cd76d5df517797ed264df7f9d623f783a"
-      ],
-      "proofCommitmentPok": [
-        "0x04ccf94fe2cc635ff10e4c1925ead1208d54efc429c3e5dfda20f38d8fca7e46",
-        "0x20a19e9388c99b46165c2a5405efb2c45b9a166919ab11c5b5fd0e4ec9496e01"
-      ],
-      "provingKeySha256": "7e34904c76546ccd13e1df6679705fea3da4576911dac81031cf0a75250e279e"
-    }
-  },
-  "custom-ring-policy-member-v3-16-w8-curator": {
-    "statement": "0x27f0994364f992b76d15935dc7f6325eb8a2709b3c57a156b8e1d490a8967a05",
-    "proof": {
-      "ar": [
-        "0x135dbf65abbf2bef28c8ead0db7af06633de8f6d9d3f80424c95a67c4449d01a",
-        "0x28793b783499c199fd8b4f526302eab9e07869db20c4cd959aafbba2b2cfb0f3"
-      ],
-      "bs": [
-        [
-          "0x15c7988069b1f2321217791be27c6331f193ae589721316e05fa544fe1eca849",
-          "0x20b1d33b47880a1c046021d523161791a8a74add4096b65dc2e8a13e2ebc41ff"
-        ],
-        [
-          "0x24b410c4e0dc9d16d521966ce5e2be511c2d5b579641f0844dfd4a7d0878bce6",
-          "0x14c0931f0166a7370335f1096e402d7794c618d5bb7391985b3f3e9c011ac1e3"
-        ]
-      ],
-      "krs": [
-        "0x29b082fd78ee4adbf5150ef2a7a984c76dc9ff6759a8e94eeedb018eda50962a",
-        "0x0eba3ec16e7e929fe6e49163c01569fd5129da55f6470e775a49aff9e93613a6"
-      ],
-      "proofCommitment": [
-        "0x2f63a11f8e6db410f2c30bff14f3c40c7814efaddebf7fb18bcb974cf048cbdb",
-        "0x0622b5e91bf563d899b2c58cad6e7b749f3bb19325e05492ed15f0e482de61bf"
-      ],
-      "proofCommitmentPok": [
-        "0x2e2265a74a86336b0c977b0fdf9d7818f730fbaf1e6653de0971aaacbe0ebf41",
-        "0x1d40d6e2a84a2a08193f9704a6e54853ff20d0b52e7ff2ebdf9021d74d32fd64"
-      ],
-      "provingKeySha256": "fd29ae507bfa056e6ea9bdb9c56f8ebae51b8c5eaa13860219a829c4cdfe81bb"
-    }
-  },
-  "custom-ring-policy-member-v3-16-w8-own": {
-    "statement": "0x01f08571d0ddf36d5d1b27c5359fb23e6346d4923b89b2300beb585111a1d34f",
-    "proof": {
-      "ar": [
-        "0x0108dc347c77881131dfb11c0a5b8e88a9eacc72c7ab16aa2d7b38551b921994",
-        "0x0142dc0b249d976fa04a7953571f236673de3ab199530295c61d275f8ef781a1"
-      ],
-      "bs": [
-        [
-          "0x2935d5a7e3b1f94b62460df9750cc59080835363401a11a4bdcfb7086d8e9697",
-          "0x159036ea6def2c0329cbb3692a73c208049b2c2f56db94e32b08d51e04d9ca74"
-        ],
-        [
-          "0x2c99f2320297b90043b6569a0bee411d76662d139d3f2b0ccb39ee4af64e2e9a",
-          "0x21edaa81a35c8ff15d776f6afa9a725996b0515877b6071f00a59b02d5b91caa"
-        ]
-      ],
-      "krs": [
-        "0x100772303cfc5e4fa1617f54c209ea049fb468da3c237551d2764a71a09eb8be",
-        "0x2c3b85c3db4fc9c25e8c4202d0a22975843dc0728b3967c872411bcafae15614"
-      ],
-      "proofCommitment": [
-        "0x1cc52a237df21637473a3387600d53eb5eafd69ee3cf13a081eab07ac52fe89a",
-        "0x17926bc5f217f7ae87df00f0028323c7b29af7922bd5342ce58cefae687d4ea2"
-      ],
-      "proofCommitmentPok": [
-        "0x05f83fc3ea105c38b6989c24eed7b302cbeeb827700103dfba65f753f56d63ad",
-        "0x1a6727d557fcf067a976bd04975f3777f84d1b02c09d69ca340406ade24070e2"
-      ],
-      "provingKeySha256": "b63ff6e664874f600edb4ec192359da1bdc60d8f274344ea0801e6df0d019632"
-    }
-  },
-  "custom-ring-policy-member-v3-2-w0-curator": {
-    "statement": "0x14bae192957d0901700dc67eeaf447ddc1273020d03ee739f42863f01ac15c6f",
-    "proof": {
-      "ar": [
-        "0x2da5011a36d6fba624d97dda549b75afcf674c94e575d1c0a8f77216831f5cd8",
-        "0x06d27af54933f548519a1b52f58df3f1a8b55d2d6eb737d949483f43dac8a8f5"
-      ],
-      "bs": [
-        [
-          "0x1a1f435223ee6f25660f17bd26758c53a706e665cc2b607c2591bd61867f995e",
-          "0x267bd2e622b11e736c0a817532e753f3c13499b5e0186a7235f4f2ecb116f4ff"
-        ],
-        [
-          "0x2790027d2c6ef8a1042221154cb0bf85c82c4dfc841d5aab734a86c26a070524",
-          "0x21998f30985d15471dd244b90d91e177092f50d1a973355ddf17ca73a33ae779"
-        ]
-      ],
-      "krs": [
-        "0x16064a0e166eed992ce85e10774abdb82d8d49fddf6b9ae56756509db2df8076",
-        "0x23dfab55abfc54173a66a3af5b7ba41567fb07528bf31e7124d9b6474e65188e"
-      ],
-      "proofCommitment": [
-        "0x22c23bb7bf258491f7d15a6edc963ae22ded5c848113981f2ed6b872962dd951",
-        "0x2690cde71768f6e5a0f459080083ff891cc346030a88226d0a30016369058d69"
-      ],
-      "proofCommitmentPok": [
-        "0x09ac06e9f09211232c40b2588c9ea8a939d279075fc3d65908898cc70a8acbd5",
-        "0x244315d903d86ea0c35d6a76762fddbb158428b0b55369d17a6d522cfd024de1"
-      ],
-      "provingKeySha256": "6e892f9e9b411bc36832805c0a7d4fe494db73b8d85c9f5ecf23cd6f896cafe1"
-    }
-  },
-  "custom-ring-policy-member-v3-2-w0-own": {
-    "statement": "0x20e229a8be0461de0bb40af27992ffb3c09afac388435dc7baef30de68e02dfb",
-    "proof": {
-      "ar": [
-        "0x1606950a1319d4b0f2ca2b22f3eec07c9f86cca7d56f59615b5daa5f29c94b5a",
-        "0x1134983b2f1fbf83abe65ece668a117b5fa79b81c4fd7c82ebc335c20b59cc79"
-      ],
-      "bs": [
-        [
-          "0x2445b4592da64e37d7964341bb2f9e94c6997b26e0488ae0319c7a75c5969847",
-          "0x1315e181fd2d6eb0ca266f8f40b97b79e327ce7015e46cb9473b57cb937ff86e"
-        ],
-        [
-          "0x137b0a5e63659b2cb9b009008b016617ada334388d30f49bcd654fd597c53c55",
-          "0x2e3b67f0ce05ceca569acd8964efe91ce36e30081ec6df88b2e1475f52bec0cc"
-        ]
-      ],
-      "krs": [
-        "0x02d8a6fbb5d205fcf263e7639adb935bfb5de318240910bf8c2092e8da568816",
-        "0x301113293e220527bba2a1821adfa9b7f81e226ada011ebfa97360d9b7d3ce2b"
-      ],
-      "proofCommitment": [
-        "0x17fba5e065ee0749672afe97a7f8c788a1c399185d3b918dbb75b8f43a5462a1",
-        "0x1d17dde6193f2e6da617ab4cc6cf73f466e972d4c5f35c411a24d10f97fc30de"
-      ],
-      "proofCommitmentPok": [
-        "0x1f83364d4fc5c42347a509c86ff43439c99fa3ab322ec007c919d0d74e76c24f",
-        "0x03b437948a04bd714a62f37021240df9f0abe39f46ca9121a542ba31b4dd96ca"
-      ],
-      "provingKeySha256": "6013b075e46bf9da4ae8371bbc1a8dd161473e9a692288ddc9863eafe05ee024"
-    }
-  },
-  "custom-ring-policy-member-v3-2-w1-curator": {
-    "statement": "0x2d0a3d8e88891a5048a5a5880f1882e828ac8abec3e3f8a0774645fef5e4a36b",
-    "proof": {
-      "ar": [
-        "0x2c4b34d9c156a650cdd35b43d459b6e8b781d80285f5fb8c4a779a80ec6e14af",
-        "0x0a0e06ad15a1b7ab672d3f8395856563dc8452578877928f5a926fdc6c382c25"
-      ],
-      "bs": [
-        [
-          "0x2ef5139de0984043abacb8ff43197923bd07b7fe7a251140f0fa2aee6f61c3d6",
-          "0x09f7217e55634c40546a297920988a3832a153b2fec768982602bd4c479c47eb"
-        ],
-        [
-          "0x2ef98353c296e0223bb18ab6ffff690f33ecef269665f0c83ed109a511590a02",
-          "0x1c4d4c600fd6a8e2658981c8b147aba57ba02348bab4c5aa4b39fc632dabf221"
-        ]
-      ],
-      "krs": [
-        "0x1169d13dbb8ba2623ac140f14cd0f070300c147420c75142409ab613b34b38a1",
-        "0x22d28d354550c47f3d0bd189036a5a3c5852cee3dd4da82d17365e5a0d72a39b"
-      ],
-      "proofCommitment": [
-        "0x25bfead7d9a3e104bab0fa0bfcbdb6fdac8bc76aa1fdf199bce943a8f47e94fd",
-        "0x017f6973129eaf99a9919d34d455e8bfea0199a868bffbc8d3a2fe1d84c3bdb6"
-      ],
-      "proofCommitmentPok": [
-        "0x20edf4472699b60bf572629c520e19bc8455148b33589e588b82d08a9f09605e",
-        "0x1a7b4fc74852fae7b01cbec10a58c27d4d13e71492b3efdcf351ddf65c6e245d"
-      ],
-      "provingKeySha256": "7fd8aff41752fba7fec46e17beae84c581211a287b682842dca9bdd7173a4f82"
-    }
-  },
-  "custom-ring-policy-member-v3-2-w1-own": {
-    "statement": "0x2ef79e1473350d59805bf3464eb9f56988b51cc4a729ff249088aae8bd96fb44",
-    "proof": {
-      "ar": [
-        "0x25341423bf031f832e3ddd665eaf60df6cab469553e43603a7251556e3307ac7",
-        "0x2791f2da1526bb7a1aa241d5b18581f53a08c40bfe82bcfe13501c25314b39cc"
-      ],
-      "bs": [
-        [
-          "0x2993f6630e42aa5b874deafdc570c7f42bc7f7bcf380cf237ab104702a701f5f",
-          "0x0a83dc422f15900141b631501cfc1f25b6454276c85ee88462a772076556b61f"
-        ],
-        [
-          "0x124ef16a8fdfafc4373d883ba940ab130d26c6fdfaa9c0ff693597789f839ef4",
-          "0x2103d67e445e5ff5ec5beb4c02a3b04317de9c91c6ba23311dfb2c9ac26716a1"
-        ]
-      ],
-      "krs": [
-        "0x01e3bae4a20d2f7a8aaa17f1a1fad41bb967badb0dccd1b17b7943dd3c876571",
-        "0x27e176f32d8169a56457a0ee7e6a9e0b72deaa612f979ed8d55246f250eeeeab"
-      ],
-      "proofCommitment": [
-        "0x1bec7a0129d65e2c0fcf711e34984ff59a73a22b61d9316d0f24a44caa0a375d",
-        "0x119b970b7d2e414ad1e1c6d4318bb916c09c9fec41dd05887ec4f41390fc6193"
-      ],
-      "proofCommitmentPok": [
-        "0x112ca845a9f732e328d424fff4c420ae6e744d727435132b9045c8202d828849",
-        "0x0e3b532c5e2f0f57dc0e6923f59b721202ca3c445aee47be0060dcb6b6d649bc"
-      ],
-      "provingKeySha256": "c7b215a28286b5cd9b61b938fd88a70011858a2fd23412ae704c25a85699f4bb"
-    }
-  },
-  "custom-ring-policy-member-v3-2-w16-curator": {
-    "statement": "0x30513685a36c1573daf923456e6c8acf8eafda46109cff8aeb192603f937d2e7",
-    "proof": {
-      "ar": [
-        "0x0e306baca456e57d34463720fb331ccac1157efdd4e3cc0316cd8771f0f269cf",
-        "0x1a024dc1b1290ac95f1696f56c009ad6e84f42049ed2c046c021ac74525cbfa7"
-      ],
-      "bs": [
-        [
-          "0x21db8bd62464eed1e42c3462e42c468d8c23f22f0f34f95fac5573d409293da2",
-          "0x26492a294519143112505aaf71b44b45419626c9658f18562f94ab7a1daf1c26"
-        ],
-        [
-          "0x2d7afb71aee7910a10ed6a4fdc61cf2923ff4aa8e87d8489433c129333dc61c8",
-          "0x17e17b8d0aae808c40827d95bc178f7c6a4d451837908e68e9f8624bb2759f4f"
-        ]
-      ],
-      "krs": [
-        "0x04495d6ae35082d4f1b67726ea467d04424dbac5cb63a0cf0fec694bf9b16a2c",
-        "0x0269db244d9af877f6420c78029824ede933d3e8769b7771d6f7a9bb797f3507"
-      ],
-      "proofCommitment": [
-        "0x1accf460cbcdc5d1c536b048919918a2978da089ccc76f9379dff727af40d503",
-        "0x240c6d4fa2830e6199036325769ca3c12885e1e076a1d9594ecbfc3157be73f9"
-      ],
-      "proofCommitmentPok": [
-        "0x2684e95fb0dc8161e1af627af28acf4473f1e7a7db13c7fa864999e0f473d27a",
-        "0x0dd24653253171e60372ddf1816b9f9213894b8960d7fcf76f4c9ae9147ba934"
-      ],
-      "provingKeySha256": "6d6413470db56ba4c05a9f749dbc2f59fd4a910072611748f129f0d93f58a05c"
-    }
-  },
-  "custom-ring-policy-member-v3-2-w16-own": {
-    "statement": "0x2a60eed522139a81d1a97ed5f960aca12bc1bdcb062b4ba0b15ca081cee29c84",
-    "proof": {
-      "ar": [
-        "0x1aad9d695318dcde025effc05a0302fa6a70975f5718e1006ebee617004856b8",
-        "0x22f36e0948930952266fa0aee93996fbb2ce4ada5162ead00215266a30207f0f"
-      ],
-      "bs": [
-        [
-          "0x07f316c8a71ab9681cd6172b124154c23153593d338e2fe02c0bf62c02258681",
-          "0x1d2ec15dcb2365d42340bcaa2f2e841857390db1fa1750d99394c194b9e48f7e"
-        ],
-        [
-          "0x22138ef0dd1f1deedf480a55be6bea16947241f6a781e4bc6faa6280770d6faf",
-          "0x1c2eb30d0f09976ada77aba4a44f9b88e10f22e7608d834cbcd45da5185f2d70"
-        ]
-      ],
-      "krs": [
-        "0x105d2180dd21aefeb787ee11f952ffdc50ee0277b93ec259dd6d977bf8d08f22",
-        "0x2e7daa74239bc5f9e161252c994503442b27701baf096c8d825d31f3a790767c"
-      ],
-      "proofCommitment": [
-        "0x06cac0ca2371abdc46728d54d74dea13b92a4860862239a340bcec80bc0253a6",
-        "0x1ff47440000ce505969adb4e4c7d610e4eae8e09f4679f51c0e024445ef9f415"
-      ],
-      "proofCommitmentPok": [
-        "0x1333dd7feef4ade012cee726ebcd4ced09142a9050e9c23761baf5ce8ac420da",
-        "0x02aef409a155bf786e7d2d8d8abd78abc7a2c84fafb541f35e69f1e99d50495e"
-      ],
-      "provingKeySha256": "b75765feb3ba4922854a6aad106ce0bbe1417f10b19bb4a385891dcbed96a6e4"
-    }
-  },
-  "custom-ring-policy-member-v3-2-w2-curator": {
-    "statement": "0x2b6b739e79f49d4418bcc311ea29bc589b737feadf9d8053f831d6d8272f15b0",
-    "proof": {
-      "ar": [
-        "0x241c0d1f158e5258c58dbdc51a4b3b6fc8a69593b2c97803a0af62892ec118d0",
-        "0x19a24528850b12b43548b898dbc100293b9cf2214b0907e03a8716b0d232e99c"
-      ],
-      "bs": [
-        [
-          "0x0790ba0c8a2aae24141f062347b9fbdb7f3b67ae44e2629eef9a4ef3294fb0a4",
-          "0x118127ed3ba7e8c412226ac023e8bc2da16182aafe68c711cb3a7b6ad0d9ff5b"
-        ],
-        [
-          "0x15b40e6b330782aa6ee9cd77de318242ca6accd8b2f2c821127c77648d667c5f",
-          "0x1f8842fba256a90765858a76916dfce4e997f9a86fa20c96acd0f3c764560b68"
-        ]
-      ],
-      "krs": [
-        "0x0f0e716badcf30e2428243decae06a7b1ecc4d9ad832c28d26c5909aba89ae4d",
-        "0x0dd0f3125e95b674c8cfe794c218d18edf11a0899a623fb5dfc5732cadc93280"
-      ],
-      "proofCommitment": [
-        "0x09950d7ed6dbdf568190024f55f3e72874df83bc1aa27318a781f09c165f0148",
-        "0x16f5f09d46e62db9592965dbb5c2673d71d3ea414affc195b83bff0f90b08c89"
-      ],
-      "proofCommitmentPok": [
-        "0x2c68c290b68adfe66e0977166c7394ca82b1dd5c49a63ad3eb4207928d274ae9",
-        "0x2ec5634b55fc54138ac55693283be821505693a96ca9bd793e15c353d5573bc4"
-      ],
-      "provingKeySha256": "2a2fb1edd09ed77f8e9845165290d468cd8a6027ca79521c077d8bff60156cc2"
-    }
-  },
-  "custom-ring-policy-member-v3-2-w2-own": {
-    "statement": "0x29af7c009ffd064564905a86bd6c9db5e897cd4c5bb79989bd32be7bbaf7b5a2",
-    "proof": {
-      "ar": [
-        "0x12740a33c15d5320b97ea033f0498fe22fff59cd08d73f536bfda1094d7398e8",
-        "0x06892139a3727f5df3d688516987e4d6e339606a25a1e1ab4bf71cdd0fe3d1dd"
-      ],
-      "bs": [
-        [
-          "0x106a5d5c3797b9dd619166f35fa9edc792836061c52770cf27c68d8d7f39e733",
-          "0x1b5c72da3ae1a6bfb90686accdf0aeef7bb69c147cc3c46b11976f124d4b1030"
-        ],
-        [
-          "0x12f77cc877ef075c13c7eb89f415a70aab326a90f575fe56446e6c5011d2ba88",
-          "0x09f8ffbc141455667680aabeec7bd395f87e6f4ed5820392e6b383ebf0c0bf95"
-        ]
-      ],
-      "krs": [
-        "0x246671d6cedb7a711cb3bda7e2a1c4ae2e7de7595d2b5293b1a16f090d8f694a",
-        "0x01aa04f5280aae1bdc116d90638011aa0e7a6b2a6eff156d3f3f6be02beff0a3"
-      ],
-      "proofCommitment": [
-        "0x28357464696942172073874ae7423d35542d174e0065152d39304c816afbe9c5",
-        "0x19dfae198d239f9bca14b7091969b3bb67b955ad8348c84fd947332da05fc9ac"
-      ],
-      "proofCommitmentPok": [
-        "0x1ecc0aaf93fec98f08ebc1aba24ee65460c0be2e7f74b7da8f037201020893b8",
-        "0x1a80ebe240f4b7a23748c49e2197fb9dec479674bc0ef0667de61c4b0fb8589a"
-      ],
-      "provingKeySha256": "da0f8eb59268a3cca501995965905c63eb171f67c5c64ca0e07b8bb0666ce7c8"
-    }
-  },
-  "custom-ring-policy-member-v3-2-w32-curator": {
-    "statement": "0x1cb5613b2b074748ff678d54fad0d29f6e45dd33ec94c37598a5d1335681dca2",
-    "proof": {
-      "ar": [
-        "0x29e16647a45afe5fb12f229d7c0627d0b85a142d080411b42d13aa6006d084a9",
-        "0x17a9b0978bf47dbcadf6188dbb491c4d663075ea649dfffe5c368a2db6fb87b1"
-      ],
-      "bs": [
-        [
-          "0x17d6915902723cccca33334d9d38d0e18299d80b04511c40687c8f27d0c05c27",
-          "0x2fe2a05d0e026e2c8f44ae0311bdbc75ad9750c16ad1267c58a2f4f755bf2139"
-        ],
-        [
-          "0x0bcb5805cff52a804058bb37138e3152d4c853261263c7ade67ab985172a1653",
-          "0x086580d9884d64910a58714716d273c12020e4b9582a96a37afc334a1654e944"
-        ]
-      ],
-      "krs": [
-        "0x20d7ae18f30cb4710c0ade4f3296c1ed23b197a880aaf6ffc34176a7c74fa3bd",
-        "0x1ecabff046e9e9bdb625bc3a7d873927c05e4c3fde285e3432a85c89ff86058d"
-      ],
-      "proofCommitment": [
-        "0x2a98d35830855e9e9460360ae3462ddfb03c8ad999c9d5810af44bc4695dbc08",
-        "0x28d2ddcef5453163ab3e24deb646e93961607c451be0ed2c6978ed0b5a55fee6"
-      ],
-      "proofCommitmentPok": [
-        "0x2c21c9bf9067070810382eb50032efb532b84c91e8402be99455d2df69b4e7c7",
-        "0x2a1c8b4d10a43c676231b68d5e27bb7bf4bface63222a4c9d1b67dbcaa1b5eff"
-      ],
-      "provingKeySha256": "18e946116b96187915216561df05e9d9e2fa5313261681660c2575c027eb6f82"
-    }
-  },
-  "custom-ring-policy-member-v3-2-w32-own": {
-    "statement": "0x12c157dcbe6cfc1c1f0118e12016a366d9af95befa5e16fd9cccc5105bf9bc30",
-    "proof": {
-      "ar": [
-        "0x2f7b34dd376869c569d75886aedec491f6162fa8946de19cff8918b2a7ecc03f",
-        "0x0bf5ed7323430f7dfd8ca80b892bbade321471faa5183fc4a32b37b83ac60c42"
-      ],
-      "bs": [
-        [
-          "0x2f427c4df57f7deaf06cda3367b285ab63ff1a50aaf8d9819eb133dcbd3c02a3",
-          "0x0dbd4c53194e321e9c2946b13558200f24d3088378bc165a3933584170207d73"
-        ],
-        [
-          "0x09ae9041f6051374b1cd8eeadfd642590844a71f41a8478d309903df67985358",
-          "0x0127b387288001bd3537464e7557fbee39552039e463b7a3a291ac80ac6857bc"
-        ]
-      ],
-      "krs": [
-        "0x0b75b868ad40664e483647859680e8470bf1c0dd1151824c1487dece3c935cb8",
-        "0x2ec0da3b6906036b466fad6b3a63c23bfa0101e84244a31ecd4e2abc649f89b9"
-      ],
-      "proofCommitment": [
-        "0x29f9b5eeb757627b2f5c144b43cdbe4d1d034bbb85580139129a05255c0dabe8",
-        "0x2e56375b2fc76b66106516b649c8097790359abd487bf7f71cfc2602c712c330"
-      ],
-      "proofCommitmentPok": [
-        "0x2262d7f3a56556a955a27bf4ec45b8a5c8fa2f416d0b1da3836bdb523976cef6",
-        "0x00c2b0449b7a2a3c4f6f6a262eddd98db9908cd368f4c1ced9cf4364bc136ae2"
-      ],
-      "provingKeySha256": "2ba19a02548d412b823671e36f81a8453913138849b5637e3e7aede3c89dc0e8"
-    }
-  },
-  "custom-ring-policy-member-v3-2-w4-curator": {
-    "statement": "0x0f5bbbb6688e03a32bc9460d4c73cfb238e052cbae65046a3c609122729e2dd4",
-    "proof": {
-      "ar": [
-        "0x2af0287864611560fa861eb33d871360d8386688a0eca131b24978703e739a14",
-        "0x14db2957b1649e6fa9c84102a33849f5ef2db2d340446f5b8e90fd476525c684"
-      ],
-      "bs": [
-        [
-          "0x064a4e2be8f88f2c432749d06a7786548c48f2c907939ec87df88c3671a8b252",
-          "0x207fdad96fd2a40a8e53973a1d5f177b7545e8e6870d743d1e791db0b4a5a0ed"
-        ],
-        [
-          "0x1ff65b011640b4bbc320f95bfeedf622f2f73164712fdb00cad1a38b45112d7b",
-          "0x1fd872735c190fb037e2d4ffa5129d43238a8f114759cf3eca9e36e1cd93fde3"
-        ]
-      ],
-      "krs": [
-        "0x1c0a98a3554abe00aba28092db1c9b726b3b1d23ca56dd1adb17e2476b590a28",
-        "0x070c88345c5ad5b977cfa9a17fdeed01143e487554572e6d687aeb272a2d1619"
-      ],
-      "proofCommitment": [
-        "0x16ba22f09478faa2c6d6b7eeb0318f5885da22e4b9e54f7e16c378cd17ef7b92",
-        "0x063ebed0e8d42d69e52822f00672486eab3595e38f0dce3011a50cbd3f69a135"
-      ],
-      "proofCommitmentPok": [
-        "0x26c4a0c9f359ae48a2d545b2231bdcda5626bad74775f2e0afb20114823ebfb9",
-        "0x24dd6d314051a49f8f0b68dce7d7ba34ba851e3aae232ad9e4474a1d3e30d699"
-      ],
-      "provingKeySha256": "bfa8b1bc7217d96a9802e5b4ba7c3e9b02f06415aa30f819b7a890885cec417b"
-    }
-  },
-  "custom-ring-policy-member-v3-2-w4-own": {
-    "statement": "0x1e415ff973d4aa965d562fe931bd82b330c68fa4192ae7e04ec14307ecc8b313",
-    "proof": {
-      "ar": [
-        "0x0efbbf7f9cdb7a431dec52315d2b82de073aee89a1ba0879886546b2c4c2b6fb",
-        "0x22b2d2db913857f91033c5b5c6704698cfbc1a892532989ea1b769ae6c9fec57"
-      ],
-      "bs": [
-        [
-          "0x18bb372edefbc02b7f686402fd54c8e90ebb424d692afba57bccf695a3218266",
-          "0x0497d194c4bfc15a4c173fed68a5e75eeb1b8262dd9d6fcd5a77e94010810eb9"
-        ],
-        [
-          "0x1cac3c69bebd9f81dd705f9e4de291065d42019be885edfd3055f0bef14bfefc",
-          "0x157ea2472a6ea0d12468e478284c3a7f86607539aaed300aa7558119d33a05b1"
-        ]
-      ],
-      "krs": [
-        "0x1653a1e0d4d57a67b03f82e50b04efedf667d779d6dd698a1e9e60fc0af348cb",
-        "0x22f36f4dd78866d4c8f47ceb7ccbe0e00269548417ef78b38871b9e973a860c8"
-      ],
-      "proofCommitment": [
-        "0x292ca2bfaf99a2b2f973af16f6e289cc5c4e71548be1992a80cd4839be28b6de",
-        "0x12c62e224e00963e6de4e3d733e095a67bbce0ccb6fee1fb477f222d96c2eaa5"
-      ],
-      "proofCommitmentPok": [
-        "0x0e65079b970167d911756b4d52a6b0e64f763e779c0be9cd386c819b8f265b79",
-        "0x3043ff98f7cdb00d75fd6a1b0d3e058ae3d24af9328a5ffc609078a0630713be"
-      ],
-      "provingKeySha256": "15fe7376c8c318e867c95103855f3a934932c345dabe8fdfe820f150ef980a89"
-    }
-  },
-  "custom-ring-policy-member-v3-2-w8-curator": {
-    "statement": "0x054b301f8b5e1d2d6d9fc4042b1953017e609a0d6d0bfb719146af58e0d27a75",
-    "proof": {
-      "ar": [
-        "0x18dc92c24731f2403d64373b79549360c6888ea16ed0ce13c97282f1648cd09f",
-        "0x2e4be1f8cad70b46e7a0fbc7233c923eb070b780d20922169e929e497bd6700a"
-      ],
-      "bs": [
-        [
-          "0x2d97881df4bb376b58460ed4f57cd99b456a0ead7c79b1a1b2e55da802ee8e9a",
-          "0x29dc0a4592b8cbb07fac0b19761f3d76fe86c28f129a20f80de0e96460616b65"
-        ],
-        [
-          "0x1591396da263205038adf1d4dbc9ee97948b2eb4cca498b7dc7e4916ca6b483b",
-          "0x1e284122d44b3a478f59c4d54b75784d9f5d2a8d425fc690ebd611d73f9a3e6c"
-        ]
-      ],
-      "krs": [
-        "0x0fdaa600d1fcd337a4c645089bf3dcdb4a06c87b8411fb23103c2573f57a35a3",
-        "0x14e652d6c486b65ea39aa3266d235c360d17b6b8b0280e5a9b1f64a6c754ad20"
-      ],
-      "proofCommitment": [
-        "0x0a921f93fa0356eb6ec11655dab2a81c78e919275b470569f5a48253f8f92aaa",
-        "0x03743794f5566d0f241acd6d86735fde76c467dc03a22f57be475738933de3ab"
-      ],
-      "proofCommitmentPok": [
-        "0x1a066c850a4c6d0fc18cd9ea5c887fbb941c1fcb93709e1830b48f82ee6478d9",
-        "0x0fe89151f736bff909f6e83d727545710d431ad07cd6461ad56d8589b692f7f2"
-      ],
-      "provingKeySha256": "1ced82402c3a88fe1988e5b91c74f074124637a7f5d63625509346a2588ea111"
-    }
-  },
-  "custom-ring-policy-member-v3-2-w8-own": {
-    "statement": "0x07d181fe48a96275062fdd955eafa5669e509d08f17a5253f493331b9db56bda",
-    "proof": {
-      "ar": [
-        "0x0bcecb7249cd4299090290c0706f243431a574ca87bad64114096d9797e0e1f3",
-        "0x0ebb93d2aa75f2e8c6e4bd35eeb4dcdd59f90a5ed0a319a3aae5423f88411360"
-      ],
-      "bs": [
-        [
-          "0x19fcf613ff0850559c95a537d7f45512cfbc662ce834b225b769a3567ee02ed2",
-          "0x122381e957d377e76451b4cccc46b6e01215fdb008379a272f61571184f74f36"
-        ],
-        [
-          "0x03a60aa079a64f5008796d0ae95685a44fff3bb64b281c557c4e053aef910b09",
-          "0x1a4ce3c67ff5c5bb76685952dbe3d8ff31866c02e531f53dd0ca0c80cc9ee936"
-        ]
-      ],
-      "krs": [
-        "0x3056fd7cabf2212afb33a5b72fc6375694fce317e809e2b948198e967b54ccd6",
-        "0x212ea9d6a64f8dcabef66044da54823b4eb7d6849307d85dfe4e46bd8bc71e17"
-      ],
-      "proofCommitment": [
-        "0x1628ad10f677986552d4efdef49c5352eda842374f7cec5bc3c7b444cb18ebb5",
-        "0x06cb03e81e03838f5a272722898ea4042074b96091ebf614a64727a898afd915"
-      ],
-      "proofCommitmentPok": [
-        "0x213c31115d504d363cccc514e428029b0a441ba776a60940d1d0e03f6d8eee54",
-        "0x15619d6aeb62396a51ce28f89a4a46228edd1c26eb3b5f530d684f1acd429f20"
-      ],
-      "provingKeySha256": "61e7a8c1919f379881ff25e439ae280a4523bffab8248e23ff05d6786a05ec3e"
-    }
-  },
-  "custom-ring-policy-member-v3-4-w0-curator": {
-    "statement": "0x11fe2fa99417e2c513b75578733f39fbc523f3704c189bbca7e9aa9b3862698d",
-    "proof": {
-      "ar": [
-        "0x271203414436b91900122190509d0e4487a7ba56b13144737156b7718fcacdb6",
-        "0x218bcb5b11d04ce9c88686257c98d84c029cbba72212534645482ff213c4388f"
-      ],
-      "bs": [
-        [
-          "0x0d0f06799f5a6251b27c47f68a3e0a657df27102e2f37355395953acda177a02",
-          "0x140be15b08b8581c8254933ca9f0758386b49d74d40434dd884dd3e1afa12605"
-        ],
-        [
-          "0x07f279de4c06ffd7687dc33847324fbf94e423107a9b25893079554f7810b56f",
-          "0x0f5be56782fad39c35f2ee0a72727639f65310847dddec419311fc006afe0abc"
-        ]
-      ],
-      "krs": [
-        "0x0e60473a7210b957e592b1cbe30fb3f7216f687a56f078f76d287953940753a2",
-        "0x02bbbc328e6e574ce50be5ef96c8e207a4d8a09f6332d33236e1938d135e6485"
-      ],
-      "proofCommitment": [
-        "0x0f25980c1fd635b8f36d4ae20e01084562e19b469e7869a9ce37192e9050fe8a",
-        "0x020eec51a75740206eecaf2f7afc9749f4cc31c1001e938c9844e49e7a061c80"
-      ],
-      "proofCommitmentPok": [
-        "0x2855521d81dd1129d56a30e78307d5d97ce88322829d9718d52a4ba7fb6527d6",
-        "0x06f2f35cc0a37ba2cacf6cd07d80bd8e866f0399a4a92e0faa07e8af682bc32a"
-      ],
-      "provingKeySha256": "60f80e95f79d69ec3188dad8a46e23a3d0f4aacc03aaf6d44636d56d604eff05"
-    }
-  },
-  "custom-ring-policy-member-v3-4-w0-own": {
-    "statement": "0x13cef80e26d7dcb3d54e8ba55a981cdcae822b0460dcadcb2681e800dd4f81bd",
-    "proof": {
-      "ar": [
-        "0x0d7d0d7e1b088fffe9a85dee26ac93da87f6053b469443b3c1c841305253b0d1",
-        "0x177c30d3a8054d4379104ad6b2c633dc831049188f82309847471d8c89da2643"
-      ],
-      "bs": [
-        [
-          "0x12efb042af627ba0d6d9da3b16d3cd2c3d4d6ca52e36d29a7f54b70f5d7843d6",
-          "0x1ee9fbdf6029fec3c213391e7ca7def99ab972e9e071ed4a420f870ef9415df1"
-        ],
-        [
-          "0x0be040f0b6b4e379c08b9ba3f4d1b15affaf420f142ad97b4176d1005b3aa27a",
-          "0x26a860d8399a18b5035818724abbb9e5862a20392b5c4cfdf78fb12be85662ca"
-        ]
-      ],
-      "krs": [
-        "0x2fc07b67dc9b71d3647e8571c97308e9aea6967cbb53cf23af9bc886271c0456",
-        "0x0b98bb706f4bbfe3b93e2c2fd1065f768001499622fc583d32cb7c9daa961f06"
-      ],
-      "proofCommitment": [
-        "0x25cddf1c8b09e60b073d09872a59eab7de6cf62b865112f5a2c43d57866aecde",
-        "0x0d79d5432d536c719d872b679f2651be1c483135c56433e5bdbd34ede5067db9"
-      ],
-      "proofCommitmentPok": [
-        "0x0bd68c377d0e05b177571807a64320a5910e0805116e8175e598d1597d8b36e1",
-        "0x171820c32052b22f4368312178660ef30d5a4dceeb749096637440d60240f976"
-      ],
-      "provingKeySha256": "a54b385d6a570b61483c0b470b5c897dbb4a29610dcbecc3c50c386d79db39fb"
-    }
-  },
-  "custom-ring-policy-member-v3-4-w1-curator": {
-    "statement": "0x282ee35e61724db7f2bc921a9531d0d5db63b013b31bbb5380c1ac32f8f627af",
-    "proof": {
-      "ar": [
-        "0x05ee9797c060be6a53f2e3561fc0ba2646862dd32dc9fe3b57b59365b2a95486",
-        "0x0a27a61252ed28e1ce344060eeeaa6ba7311a29040e0731d003d78893452ec30"
-      ],
-      "bs": [
-        [
-          "0x302e7ab1c879c2f1832309840955a78db09f0d6a21181c96eb813a9c42d7316d",
-          "0x08526222384941fecbeb377676cfaf5ddcc834c18d901da7e95ee3797b26a3c7"
-        ],
-        [
-          "0x152a774b16e496918b99b3a6f57d720dfd38e853571018c177011e3a86c07ce8",
-          "0x0123a6a94183823d1997b8915efae44d1ca31ae490ea953f8b567752ba2af7b3"
-        ]
-      ],
-      "krs": [
-        "0x0767d395a1c21ce4eed1da41be4a9966cab34bd95505a77685aef2270caa8f4c",
-        "0x2b13f9c7939dcac81689d609aec00d860828bf0bc110877cd3c7679aac0b0c0c"
-      ],
-      "proofCommitment": [
-        "0x2c74709d1c37e33e3fd681b6df2306d7cb280ed42c04d1964d2d2693940d71ae",
-        "0x1659284e56591940394dbe1573409532fc979f17424f0a104a5561f6c5e56fce"
-      ],
-      "proofCommitmentPok": [
-        "0x2de500d759197102158338d67e00c0e65f306888e0d0123ac0087ace61937cc6",
-        "0x06602c7d734b3e58366ebc3c3769c56ff9c9fb157b7203d404f55e0a96a92e6d"
-      ],
-      "provingKeySha256": "7efa4066055423072477ac8df38d685a04004e894919ed967b954e94270bda97"
-    }
-  },
-  "custom-ring-policy-member-v3-4-w1-own": {
-    "statement": "0x0e07d9c065f8b0ca605d0e2572cfa1cf621163477a6e4e2dad51fb016cafa5f6",
-    "proof": {
-      "ar": [
-        "0x1529b4b63eeb08275f9347ec0fb98880d7ca7f6f5cf9d73005c651c5ce9b1e80",
-        "0x0157941835a9f6a777e6f5ad25b3f46681773b3287724efdd48e51dad360a76c"
-      ],
-      "bs": [
-        [
-          "0x0577f464ebf1f8f06d362190630be35a6c8ceaf3b39f73acf982ed7b337f5694",
-          "0x14b591048b32209688f5ea0a809d3fb3c06b589a56e19984b46c5625d2d9aa7c"
-        ],
-        [
-          "0x23c5a9d43b4fc21bfb701a4634a30df2d923f440970ce36b2891185cdb457e42",
-          "0x1156d4e500b3a53d9d88cd5a967e6698207a7331959f2b78396b0c2e9b41840e"
-        ]
-      ],
-      "krs": [
-        "0x1b48d754aa8fb177dd9141e895371af37d3895f3a0560d566bda9d00dd2e5fb3",
-        "0x237f9c911620fd24ed529d1bc0ae1614a75fff0ea8066984de5d21182bf0cc81"
-      ],
-      "proofCommitment": [
-        "0x2c8340f92e9d476144d32b01745521e676e620a58cee9316872cccf1a0a1953d",
-        "0x047c5f4532bc33eddb2aee31ef12f1b932dcf6962b583c5e5c6f8bc2bf263a05"
-      ],
-      "proofCommitmentPok": [
-        "0x2c17e0e7971bd535098805fbd0aa820c9f7f4147902744a9d5c84b212b438d49",
-        "0x2f66e97703258da1c8bd810961c5eef7433fac5414adda838c0e45fba9004490"
-      ],
-      "provingKeySha256": "1a7ca9cefc09a8de94ceca8c69070101dff88077b7507371a3da08876324f39b"
-    }
-  },
-  "custom-ring-policy-member-v3-4-w16-curator": {
-    "statement": "0x0120b92f3778035e5a2450eecde634e00a2ca8ee733fad7a65742c27dc5f14bd",
-    "proof": {
-      "ar": [
-        "0x22e7daa80e8cd7c02d216f654f60152e1b41baaed8f74f88599956b58a0eae70",
-        "0x176fc0e830338f22462132eea8657774564a458a03678d21bed4c0c9ef6ef35d"
-      ],
-      "bs": [
-        [
-          "0x0506cbb4b699ad33cedf2dc4798fab504130cc55f9def7e1381375dceb528199",
-          "0x00aec1a9d4718c2c764c6943e4eb355e63a000a53bcf2efdf0772a4fcf438c67"
-        ],
-        [
-          "0x1263111520fb6269208ddc862efc136e3d93b3e2349cb74522ac4d3ee4f50d50",
-          "0x0ed7fbe21174a33f7829966f017c7d19bbbf211303b81598afa31adc673887aa"
-        ]
-      ],
-      "krs": [
-        "0x18af673325e9ad876d43c7ee7a5b091dd7e9872f193a2703f26b542819250cf6",
-        "0x23ae38a7ab60cbf8933ac1e53c02ac99d0e20bd58a2b4d49638544bd11e748a1"
-      ],
-      "proofCommitment": [
-        "0x0fbdf60da8a7e7f8d5aaa3da3acc8365f8eddd24c979fddbf0826db5e171927d",
-        "0x29c9990fea16e144124ddea4d7531a9a6d3fec798c24d10a8561fe9dbbf82797"
-      ],
-      "proofCommitmentPok": [
-        "0x210dbe380cc1cb4b6f4f57ab4df3a33bbf9aa05de435ed767966cc29d103bbb5",
-        "0x2e37a1848e0f764f86f6aec4941a33bae3c2dc99849210d5fceebd34ceaa335c"
-      ],
-      "provingKeySha256": "dec116edc56a7b5656064e0f8ac9a1c2bc5a60b320e98da661e4b230089981ae"
-    }
-  },
-  "custom-ring-policy-member-v3-4-w16-own": {
-    "statement": "0x1b972787fb0471581d6ead7b559fc655c8d03468550637dc58b33e22f38433fb",
-    "proof": {
-      "ar": [
-        "0x22cc09f87d91ec651c772fdc32eeab63501e51995ea1a4141427f13235786728",
-        "0x0b6de30cfffcf5ce59af559a9f360f7d2064b394ced8d2dfbb50bfe99bea05e0"
-      ],
-      "bs": [
-        [
-          "0x09ea38766de14cd2e3ce621912c19430c4799442c230abfdb536dd3d1870a4f4",
-          "0x21e8b4645239918262fd5d7a9b92f716484cc4cf2fa4fd61bf18765906c77fbf"
-        ],
-        [
-          "0x26b026a76f097505cee0e214d3a15f6c3ed102c01e971bca8a102e343d2b8e0a",
-          "0x2922423ced32a3a32e0d7a0bdad91c6b85b1406e705645f95342bc06c2344b2d"
-        ]
-      ],
-      "krs": [
-        "0x1f65fdb2800a8edd299776bca2fcc95476ca5f25e4cefdbc4fde95452737f76c",
-        "0x105e16ab1001dbeb3336d1282422e8ac16f70dd77099a0223e5be464b9859742"
-      ],
-      "proofCommitment": [
-        "0x27e6f86e755c3bc4a2103be6562848df40c5b4aa53667c539dad7e69de803bc3",
-        "0x2a6854809633e007276c1a4a0950b96c3475cf7bc19499e5c5daec6fcb4203f3"
-      ],
-      "proofCommitmentPok": [
-        "0x000f45be85df4accc2526472a9cb6a9cea6301b66daac13551a1a76674ab7106",
-        "0x139b0bbec491474a29be01ea0e203831856cb6d4c9760e8a36a8180570feda69"
-      ],
-      "provingKeySha256": "6885e75f5a4232190bd91e6ffca01d9df1070c486d73ffbd298b965e0f0f310b"
-    }
-  },
-  "custom-ring-policy-member-v3-4-w2-curator": {
-    "statement": "0x1ff20eafb13a6d832ef4d59111c4bb10674f0a1c5a2cda22a71b957bb00e07a9",
-    "proof": {
-      "ar": [
-        "0x104e3df5e6867cb4b51d04105d9c7e7a43333a7c97ec37ad94173964e069d6f4",
-        "0x08236326fa7e9d9ac4408d05471aa044b8a8a36e8bcc9261b8c2453d3c5394d1"
-      ],
-      "bs": [
-        [
-          "0x2bb69974a4791f9f9d23e6a534aa8acbff4750d09e5ca3f2c6af037854a22ef5",
-          "0x0391b296bb7de5a8a61fcf11f766381807c37a948cd09e17af5c9d9787c2df80"
-        ],
-        [
-          "0x0913de926f0b9d1b62ae3ebb4e0ab8ac6637494a100366498f58ab4572aa4090",
-          "0x081d537ea0d85ecb7b3ac43d5df4ef17755944502b46bf6082ea2f9f0600e3a5"
-        ]
-      ],
-      "krs": [
-        "0x182c7bf5f3501c6fae16419ca97a93160313be5c25dade7d71eed00b5e37e4ea",
-        "0x24b153ca6b967c24e22a5ead15107cb60c6183741216854a1ce363c21c499e9a"
-      ],
-      "proofCommitment": [
-        "0x03eff897017caed63d7206422c8bab20c4be8afec690f707e725906bd1ebc774",
-        "0x127dba57005a73953f05f7833c9e346556de8a4fca3eb882f81cc2c4d5c96b60"
-      ],
-      "proofCommitmentPok": [
-        "0x0e7a976e8305b2acce92112590b94bcaf919d3c2361065655038dc697eafe109",
-        "0x2bbeefb23e368863de74ee6524dce6a97af7f4e1c3fb5d3e6daa00661e6d5ef0"
-      ],
-      "provingKeySha256": "fd54535656997a1c717c788d9ec1c8c3610359b63522821f59a34d04319b1334"
-    }
-  },
-  "custom-ring-policy-member-v3-4-w2-own": {
-    "statement": "0x06ca6b893dac4f0a564fb28ebc58c9d9a0ac3912c27c850abd2d928e86d0e0f7",
-    "proof": {
-      "ar": [
-        "0x1fd16377e602f381b9678fa466d708e742ea9f4d00546b1c62d2f786a2436f12",
-        "0x17642827635c999eab0b8909c4a3d68fc6e77cf455f9e5ed23b16895be81e51b"
-      ],
-      "bs": [
-        [
-          "0x28aa72b448ce52acbdb6b7d39409b6f179394da85835274ab2a1814c841e8a0c",
-          "0x19bde7e949e8c48e2781729ea1cf6eb1027b224242cc2ded57f07fe3a477a5c2"
-        ],
-        [
-          "0x30033c38e06ce5ff3a82c26adb6a60d4ab1c4249d34687ab72c5f1596ec98716",
-          "0x0719b0549fd77efd4204b5fc2e5926202be3a043becb4ff6e8e4a7acb1afeb41"
-        ]
-      ],
-      "krs": [
-        "0x123235b145bce29b26e23c6088f8f424db83ae31f883e94de018e46117e437c8",
-        "0x1a250746da4e5af976ee73c54410c78acc5e32edef7b84373fa9f8b920e00dd5"
-      ],
-      "proofCommitment": [
-        "0x2224ac52d893f63592b53904d784d38f0e6de21aeee7d33a1eb258459ba07539",
-        "0x0902cd8c585d768d76d96045e562e193b1e63705feb5614950a61fa0cf6fd698"
-      ],
-      "proofCommitmentPok": [
-        "0x23788a5ef30967f28f1cda9a6ad04dea2dc91d57743d00171dac734b8da88bb9",
-        "0x25b7ff8db7f944816ff21de8f279433df6f20db5e349424baead61ea774b42d2"
-      ],
-      "provingKeySha256": "2308eacdd4f2869ca6fc5e5b457d2558ca537506f4b3c18e7f8d650234fbc125"
-    }
-  },
-  "custom-ring-policy-member-v3-4-w32-curator": {
-    "statement": "0x22dbb707497a893be2a31408ef56dc79c38635c801e97e7f70bb95e7e6a23386",
-    "proof": {
-      "ar": [
-        "0x01b86624bc99f18a0d6ec447e1217fb4d83a300d026bcbd13451a6dc5473bc96",
-        "0x25a273faa9b6e3df36b1fe189eb3b070d2ac80dadb2515c9d77b03efa0a5fbbc"
-      ],
-      "bs": [
-        [
-          "0x2928a9c78e7c45f95ddaa966f19855454893ff7a6f0c394247b6dc9ed4b552a6",
-          "0x038235d1c06fc3035b6deb53603e063cd9a0dd10169ca5b319dd4ba9bf87d6c5"
-        ],
-        [
-          "0x1af6bee62c5122baecd69e2ff2181b78dfb1fb8782df89f97eb7d7331afe5d03",
-          "0x097df076c4afb06371933aa6367ff293dfe7daebdd597c49c0f2081a94568932"
-        ]
-      ],
-      "krs": [
-        "0x0a7545d6c2585d9f49c212e12d2c7bf6af93c57301351df769595e478af11d60",
-        "0x2f63c8abe097567fbf91f4f10426f5ed21cee65e7ca8a8f303fec27f0a91f36c"
-      ],
-      "proofCommitment": [
-        "0x0a18f493e30a2392528cd7537cb5f75ebf8eaa4499ce952075efda57d3df800e",
-        "0x05497cb3337151215a790bf05f604fef7f1a20244a992aa1190201cddb0e764e"
-      ],
-      "proofCommitmentPok": [
-        "0x0a78ebcd4a23d143b18f32c802df0210a8b36b8bd1dcff3a2056a28ebfc8462c",
-        "0x23d3f4f7310048a6ca696e44e29bba94d0fca3a9fec801dce1c38037a9c57081"
-      ],
-      "provingKeySha256": "f6691d08d8f9a84d332dd63bf3caaa3562cf02997dec71927414f6f6260aa218"
-    }
-  },
-  "custom-ring-policy-member-v3-4-w32-own": {
-    "statement": "0x0d88d1a69fe7416aa50221944364b43f4bd56aea638dd8f99cd6c0e380f45d45",
-    "proof": {
-      "ar": [
-        "0x16b91341874190693c5067536c3dcaf2853269102fd718eda9b43c7f106c2e05",
-        "0x00718ef52f3cab2b5683a893f48386fc61ae6ffe11150553467ef8369944f8a2"
-      ],
-      "bs": [
-        [
-          "0x24ee0875bbf96a643d75540382a77301d88c91fa02cdecbb5fbf8e253dfbd875",
-          "0x0dc4b6a835be191bae9740e88e97e0e714b8a50295b7939fe4a526f6d45ca17b"
-        ],
-        [
-          "0x0fe337a98f6e8f9d4d20b0f36bdff0cb77fc6d847376f7bf695bee9b42d0efb1",
-          "0x29b1d5484948ce40babbd3732ce60a8d6060a7aff9ebf393e4c4b8a4dcc21e6f"
-        ]
-      ],
-      "krs": [
-        "0x0c5f5ccc36cc5ec27369822d69456d4d3c82d1d7e68579db3fd0c396ec67966d",
-        "0x25f48a1aed26e2af558d6809f963db06d2ef4360e167a1c5f67b80aca644282c"
-      ],
-      "proofCommitment": [
-        "0x1f48fd855ffe9d5b00d00d3b11db8656f714420957e8f8576f75caa28c29f0f8",
-        "0x129fe2884be5a9fc1de3a52d90e1c3c39b32e7c6b65901c83791c0bf2948dd49"
-      ],
-      "proofCommitmentPok": [
-        "0x19f1cfad59edfc359ff622a5ddf74283c4827a17a602a9b2eb36791063dcfb21",
-        "0x2f36f898869feca3cb22b20be163327d5abcb5125eba9adb68e496902686a3fb"
-      ],
-      "provingKeySha256": "ef685aa3fb2432514e9c49d2665fedee760c39b70cb9cb2c39b2eeb66ca87b7d"
-    }
-  },
-  "custom-ring-policy-member-v3-4-w4-curator": {
-    "statement": "0x226abcba3924bcfb961125f5dd1aec3b30972e64638153383a3ddfb562ea6411",
-    "proof": {
-      "ar": [
-        "0x04d9e4f0e3c7e6eadb75f13a658f8651a387a279e3a0336a7071fac1ac089aec",
-        "0x15231173a2e8f843fc3fa14d1dff5bbb59b9eea5cfade4c18ec57104aa15994f"
-      ],
-      "bs": [
-        [
-          "0x2ba1b4b3bfa4723aa374e29ffa7fd7ac18c2b9d859f04ce51e3e5270a8442b12",
-          "0x28d5ad35f19698737d55ddc9961cef1017b563aaab8e200441be5e863a7771b2"
-        ],
-        [
-          "0x11a905629daf5bcb05a7abfaf43cd7eac3aae5beeacd6d1fed1967d54a423172",
-          "0x011e70258aa7d43803e42f86d65ac2bf2ecb804bdf0db894c838b2f2b2f99185"
-        ]
-      ],
-      "krs": [
-        "0x1e166d0e9d6e263fff903b76edb1a5418e84587a3ff7c85fd428f5bb68688b53",
-        "0x2a0ce887d82c8f4166a18ef58388fd56491dd4271a3ea6134d9c602fe7bbd0b2"
-      ],
-      "proofCommitment": [
-        "0x23fbcca0d240183862e56132df6baee46e5b528f4def8f8624f97f47e7c8f0da",
-        "0x09d0c6c4cc8caa5d3adfde9132fd49445aa07f33bdb5029bda8caed207e6f982"
-      ],
-      "proofCommitmentPok": [
-        "0x220b6851809d1705ae2ece89ccdce9050f6fc68922b401df044071664fed2703",
-        "0x13174ff1a4b94bc005fd8694fe89e2de9b112be99f4e88a1a4abd86f002f06ab"
-      ],
-      "provingKeySha256": "ac6fba2fad12e22a1dcdd4759153e46c69d5fcb79dfd444955348586232ccf52"
-    }
-  },
-  "custom-ring-policy-member-v3-4-w4-own": {
-    "statement": "0x251608fda2e73a8085cabd98c9062b05c1aafeda8f2b6fb31c267ed043b88ec6",
-    "proof": {
-      "ar": [
-        "0x13a267de0908d3457094cee8e7ec6ebbae2f70f61279c2e6274ee68fb3b45273",
-        "0x08a4b24b64d75a4abb98205a58ab6738cedf188ff01fb89273bc97bcb0de04a0"
-      ],
-      "bs": [
-        [
-          "0x226acf9a67c26ce021c44e2deaf9f8243ae599b4dc25d0c9c854ae2d344fbef8",
-          "0x0fa34a5c901c7431d30ac694972e9a112a57ca786c85952bb020bb2a96033a49"
-        ],
-        [
-          "0x10b06121862ad1252551f83f94989fbdeb79249f886db03393542ae5ff74b805",
-          "0x1b2bf57092fbabaa2b07e0968256c07599e538b7abf5b3f2aab8a2c08f2ee7d3"
-        ]
-      ],
-      "krs": [
-        "0x15aa6204d8d1695f6fb85a66ec0bb88a260458cfbc2b25c674144d33dc161927",
-        "0x10c9c8f642d54173c27c511ace10848f0524114da60acedff2cd32e4b5ca7526"
-      ],
-      "proofCommitment": [
-        "0x03f92b8cfd1ed53dba71c7d1181d01bd47233bd2217d452e9c5776628dfba9ff",
-        "0x1d7d121911fe862f11a501d477ae9011a15bea48839a87d9169fd23554c53730"
-      ],
-      "proofCommitmentPok": [
-        "0x2ac4a72f166b2be7d5ab62dd8cf0aeb2df88603974333ac42568af7fee5e2d7d",
-        "0x1ba0ff4f89143c88623378903666cd2d953eb0ba449c30b55ff4479a54153170"
-      ],
-      "provingKeySha256": "236f84e1e0330d811fe314d799625def7d6da357d735dac53c969e12aecbf63f"
-    }
-  },
-  "custom-ring-policy-member-v3-4-w8-curator": {
-    "statement": "0x2e39ca75384adf5e2a5ca730dfa7bc73a8e601a6fdff67e712a8eb5500c49e45",
-    "proof": {
-      "ar": [
-        "0x1eccded7d4263d1e4f5a8cdb54eee768484c8bb2fdd4eb18dabe72a5e16155dd",
-        "0x247dafbf2f941474530d60a644be246dfc8310cbe37e31a611aed0f99902f5a4"
-      ],
-      "bs": [
-        [
-          "0x2e135a1ae3bd11961329cf686c6fdceaae98a394f88839f3c29484d8a5746552",
-          "0x14d18c1ead9e83285e730311050b4445df3930f494b5de3e5b5d98f9c8e42125"
-        ],
-        [
-          "0x24a3998bcb327db966ea1f4e55b9fa487c0621be36c802f4616e30cbd5014784",
-          "0x0e63f41c5ab867921033bf20c63596326361576d64a1bc2e2493e95dbda3c80c"
-        ]
-      ],
-      "krs": [
-        "0x0e15b0c28c0396524314d871e11d2311872a4880196a7d1d82459b36c203a28d",
-        "0x1ff3515f521ad54d72fd6441fce45457874cd293709bfb769d62e06d9ae11635"
-      ],
-      "proofCommitment": [
-        "0x0c74c7297ba6a3c4cd4e293729b2835278fc621812e111eddeb4d29a9889055b",
-        "0x27261a647b03ce496af671cf63b6e03cdb789d6e7c5bd27f6be7e70b8fbd78c5"
-      ],
-      "proofCommitmentPok": [
-        "0x25fe728e776c4173ec3b4b5fbb5b4e68aa5f05f23bb3182f08341e972a86e321",
-        "0x1d34efaf9050f156df82cdd141104f05b4af187fa882708081fcaf9a71fa2c1b"
-      ],
-      "provingKeySha256": "b143cee6fbccba8cd5dc1267c47b7932e5ed838618d1f3a4ef8443b860905d3d"
-    }
-  },
-  "custom-ring-policy-member-v3-4-w8-own": {
-    "statement": "0x16911f86c6c35b4593d541f5de66bd8ed3e1defb941548bed9ed021fa68ef4a2",
-    "proof": {
-      "ar": [
-        "0x169a2c16b988f3fd37fb8cf6b7bf42d27e946e9c701c6f023b49c272f7b9c553",
-        "0x0e366ca8e9cdc8507ce4462e04753ae006c1a2729bafe05fe2ce9643a4afe4ec"
-      ],
-      "bs": [
-        [
-          "0x0ebd24049ebdd9a49c0bf2f414b8492b5796c1dd9e878b9a9b23a71dfc4d4ca5",
-          "0x15141d3e850fca7d063cdc926366203e1a95cc3e9d9525440966e0a8d802194f"
-        ],
-        [
-          "0x22e98f13b327fba2c234ab7754d0ee43bc825fc65f1490671ce7f171f7390329",
-          "0x02650feadf4674562fa4f930559668ac67f221af43cb3f3b1a9629f2537a2d53"
-        ]
-      ],
-      "krs": [
-        "0x274eed1dc234be2bade223db2aa281a77b2a28617890ced9a1956d264ec701f2",
-        "0x2292bb53f3fa473b4c8f46db6c5f7562548309410055657d57f68acc34b201e5"
-      ],
-      "proofCommitment": [
-        "0x2e0c65527d32da4f97ca8a1e50e9e02dec51c3e960b639e0028d811e07985346",
-        "0x0512d52e7238f0b12d13753f9b37f597c1925cc84191edc011ce21d65607e07b"
-      ],
-      "proofCommitmentPok": [
-        "0x00e6c026bae33a9eae791561752ec9de9f83523536784d92bd3474ae5efd8100",
-        "0x24b70c4a466aac798fbf4f51c59a9846c76b97b95ac02b923e80d3be4bcf3628"
-      ],
-      "provingKeySha256": "e43c843c28d31b2c5c845eed8e9d944518c4f77d23b8ebea5fe52d3b95487213"
-    }
-  },
-  "custom-ring-policy-member-v3-8-w0-curator": {
-    "statement": "0x1177dc129ce74f70b6d27a5ac4ef67f5422befee5044fa726d4da3b919c8e406",
-    "proof": {
-      "ar": [
-        "0x1a54a7aede5e85927a7064b98eb844bf955d8b39258110131d7580a3c2983655",
-        "0x1c5a1ef2398361bf9be005aa880531a38e86df794cfbfe7420840c4cae43ff56"
-      ],
-      "bs": [
-        [
-          "0x060ea87e2791182296f8ae970c545bbec16ea994566fc16e0da41877efed2258",
-          "0x1d4f6bbe5bd07f58878c71e264a6c9bebde6293d8fe914e8434059127d2e8f30"
-        ],
-        [
-          "0x16581b2bd060374b3b58ae03ce7f03b5aed7c4d0f109ac97017615be16b5caef",
-          "0x1cab55b6418b3e13752338392721d683ae94f8f1a6311ad041b2f42e85be76af"
-        ]
-      ],
-      "krs": [
-        "0x100a834695bde63dbfa016a4b2b870a081b75b2a71bbc095d2a9a084726e2862",
-        "0x238647a8052b39c3fe5e3528b34c7a34cd241b5da0eda1690cfa010cadd47b3a"
-      ],
-      "proofCommitment": [
-        "0x2c43bcb109be65a69ebfda1c1eb6a6b61867b3a04f622499fb07b6dce6e0b26c",
-        "0x02aa60040637b4e2a4fee08fda221a01fec566721eda7e900d35dccc28e51260"
-      ],
-      "proofCommitmentPok": [
-        "0x0c9bc9c85718ea19dec2b22b007353a9b6a49bc6a82cc2d4eff3cd758d7a2857",
-        "0x1644b8650505e5c0169a6a60de6bfa74290885234c4e9e6187a29fa9aeffc5fe"
-      ],
-      "provingKeySha256": "5bd329f2af518b02cf7987679d0b53b7e82b30e86bedd806b8e000f71b4573bb"
-    }
-  },
-  "custom-ring-policy-member-v3-8-w0-own": {
-    "statement": "0x24490fc728db53e69934f6f0dcdb86f68bfd4b646107de7d2849e6bbd7b85c46",
-    "proof": {
-      "ar": [
-        "0x2ee25d132b5730a830b6a2e01616dfca8eac4b89ca6f88d427e0e11c973025d6",
-        "0x2250c8d105abdf8c51fed5e8287413c4bc163db6769c54a1a0a12157b092c0c4"
-      ],
-      "bs": [
-        [
-          "0x2487a6c1e5551d868806b732470477c89cc187f19ba088018c0f65b68f984ce9",
-          "0x0fcead0dc749b2d47d441c214517547640758faa3da417970677238980d1e4d0"
-        ],
-        [
-          "0x2fbb8ae86d5efe5e63009329b53026c48b1d6a6693dafa72b1831ee2602970d3",
-          "0x06a0dab277ddd571c125a518e6d17c53ce514975833074187906c8fa4ff08036"
-        ]
-      ],
-      "krs": [
-        "0x133e0ecbb4322e21bb75eee31b52187afe6d3f3dbb9102ed6de9144b8964d5f6",
-        "0x0a22c316a0c99303bcbe5fbcb702f4d64318341dfef7135b3b88b9ed129f5a12"
-      ],
-      "proofCommitment": [
-        "0x278da87b44b416e01a460968d36c54a1c6d36919c8336a10fa10b051ed1159ff",
-        "0x265268c2221c9e2f896676b60c5c21b5c447fe8b4986b1cc78eac0fd071a19d7"
-      ],
-      "proofCommitmentPok": [
-        "0x0f128bbc530dd394fc91f840b326bc0948d6430b3e1917e8a8fa77f52d2ec9d3",
-        "0x16acd1bbd5812c850e9592f3277a43dabdf9cea6bc622c8c1170c6e984d0f5aa"
-      ],
-      "provingKeySha256": "2646d027f8fe7c50163150170fc2068ebc7954c71e360ed834baeee4f7c3dadd"
-    }
-  },
-  "custom-ring-policy-member-v3-8-w1-curator": {
-    "statement": "0x017c193adfd585408ca0211c4297047ec93780c9c8a3056a09efb1211e48f25c",
-    "proof": {
-      "ar": [
-        "0x2cd38a8b99eee5f3535f3f2174747d5c12be1cadef74e4af249bc56dbfb98a27",
-        "0x298af3a646e22116b118072b75e5a3c63ec242c7c7dbe1cd5bc34189d0317d2e"
-      ],
-      "bs": [
-        [
-          "0x0dbaab966e8aaa32e00793a9493e5e4cb3e8bd2f57a57e059548439ec98d0399",
-          "0x080776300e36b3c7652552189c3a723aa014c8d42c209c5e81c221923ad60251"
-        ],
-        [
-          "0x04a45197c91dd4f62f51584735ee0896b9ebb7694875b3f857c76ac819be7756",
-          "0x0b5087dbb1479825cd9f35b5f6205a47eef520b5360d6c5f78407232975ad03d"
-        ]
-      ],
-      "krs": [
-        "0x103afa0a8b52b179cdbdba8273a90c81fb4ada7e296a104cffe920d42b6624b3",
-        "0x25642fdcf1827b42e4be6c4f696a559a9dd651754e1844fce88ac2b1823b2a15"
-      ],
-      "proofCommitment": [
-        "0x173bd358f8cdf8d888d0d4e3bcd7795c1b9c2fbb5e71a51f8f59daa23902554b",
-        "0x2ca9ee031dd468a6fcb1dbb3b4472e9baccef84e4f455c4c0d2aac5d584448d0"
-      ],
-      "proofCommitmentPok": [
-        "0x115896ac22d94d245c684df8f7acfada1c55d91d31009d923f25146209aa68f4",
-        "0x14b2bd865528dbb9e1b6504bfda3a3b830fd1eae178b5c68d45f137b1c07b1b8"
-      ],
-      "provingKeySha256": "179026b61ddfcfaac040c1489be545012cc8325dc40cf5974fe60fb39d1bc225"
-    }
-  },
-  "custom-ring-policy-member-v3-8-w1-own": {
-    "statement": "0x16d4560f6cd524ce7e02107ea7110da82a7af9e49ac000d790ab0ffb59407263",
-    "proof": {
-      "ar": [
-        "0x1e045183e26009de00a70cdb83e7ad1c2b966b76501fe55c63ea9e60c023b9a5",
-        "0x05c9d991bbf220e488f80c03ac035bbc1e9ecc72cfc8183695ed7f21fb5b78ea"
-      ],
-      "bs": [
-        [
-          "0x212504a93dd1b915a420b3d49c0511cfe27df99ff424eb76b6d81a7c2e2f0b51",
-          "0x21ad583a15dc1556865c95d3440efa88e797d603b31760e4a64055cd197af952"
-        ],
-        [
-          "0x1847234386d183d6dfc70dca64d02dcc2ad6b26c03033975f9810593ab7f1914",
-          "0x18df5d88a33f5f3af676ab03c3321e695bf4c838e03f8cfd22ee8aa79e844022"
-        ]
-      ],
-      "krs": [
-        "0x2291b93b1192cde06bd2f3df1a13af0e50bb1a28ba394ca0044b0bee5272c417",
-        "0x15cb05696a7132f337b6f525b05906932e03aff139285421787ae6c72e3d70e0"
-      ],
-      "proofCommitment": [
-        "0x016c7682ab33c1c4298d674ab2fb286967ba7ab251ea9d2999783dae4aeaeb7f",
-        "0x1f365025ed80804aa765d33ecd9210257bb76d092c66de866d15dc936177c7f0"
-      ],
-      "proofCommitmentPok": [
-        "0x24979ff7d9dd7d7d3eff00e2f6fbe876c2dc72b7774e3ef19b25947cda1f618f",
-        "0x2aced79245a05139b170d79fdfed5e03dd472ede7d0716c684fcee3375878c08"
-      ],
-      "provingKeySha256": "ffd08ae3eaf0c0c4e1e4175f369f5953b18c21512e4e11a18953ceda3437dd84"
-    }
-  },
-  "custom-ring-policy-member-v3-8-w16-curator": {
-    "statement": "0x1f219c86fa36a9bf6ed2d232871b3b35c3f2cb183f9e963d2e05826febffeb6b",
-    "proof": {
-      "ar": [
-        "0x065e73bc3453e30d9f5376798c2e690c5e35504b7e5110a3089dc3b523fe1446",
-        "0x0bb05348f08f9dbe86e954edf2c1be44fbe77a67b7654f3bb8e2e7c38ffc5226"
-      ],
-      "bs": [
-        [
-          "0x1ae66dde574b744f11c7018c3017fe6e101629339b0329e905598c71993b5e3b",
-          "0x04dc0f86d1a3ad5d6b8a58dc7deb391a2f58e214c10ff23045a4b921981901ad"
-        ],
-        [
-          "0x1f5df115400fb554fd215bcd8cddea769c28f48429cacf61d951215fb4a2febf",
-          "0x0ca2ae4efd0a375c557c335ce0666460212c79a8e8a731b7188be35e196c4982"
-        ]
-      ],
-      "krs": [
-        "0x110c13cc467840972efd4732e397c17a64d4e6ff432b7be134e2e5efe331b319",
-        "0x0699e5d8dc1a20facbd05c47eb1192f31f627b88f80dd9cfe5cc91244b108ca7"
-      ],
-      "proofCommitment": [
-        "0x054762b3b76e661d16d06e266325774f0ddf353f6ba8ec9d8b775392de19a9d8",
-        "0x011197fd18326c8f9614afc9439184ea3ef4b2feece64c6081e056cd10288e7b"
-      ],
-      "proofCommitmentPok": [
-        "0x19e7c1bd028b772179929b88d1f33206d7bb75b0d04f36d972bd16e0e6dfe37b",
-        "0x1abedfc1fcfc99d93c97c81604069f7557e3661455f19ff994c7ea6d40a2996a"
-      ],
-      "provingKeySha256": "7c76fc337b1b3b9384949b605bb5ab7a646a0d619f8d65c113fa8687febc1586"
-    }
-  },
-  "custom-ring-policy-member-v3-8-w16-own": {
-    "statement": "0x11800bc2926b318744948e1337d5f4ce3e37fc89d76055bd15d34df0e2f6da3e",
-    "proof": {
-      "ar": [
-        "0x2a8838f4f3b8e6f0799dc2aaacd35a5f0740ed4c7a1f20ba9e052094833c8a37",
-        "0x0c5381206fd195752dd9082a45600f2d7efadf0600fa5ebc8a1fc24bed8a29eb"
-      ],
-      "bs": [
-        [
-          "0x1ef141c69f3ec319b0f9519c1d71a016b82ea17b876fa45569375607a5a5573f",
-          "0x095cc8ec56d63057ce4e31c5968947460f8e7553c7512637450887477cefca9b"
-        ],
-        [
-          "0x11a12a635bcdd3671ece533e9aeaaf11d418a5a29596d99c0ae6329ad3892f25",
-          "0x2124537e0282a6da6596e29ae926ac8eaecaf589a6ca1fe3063a2306aad9e481"
-        ]
-      ],
-      "krs": [
-        "0x18b5ebdb9b40f98c00ac7f6141159b4b0684c201e8746b8a282b8b207db29c4b",
-        "0x034a01aaa774c7dab2bb88abf81c005824004de63e76120c644936278a68c561"
-      ],
-      "proofCommitment": [
-        "0x1440c605f764f4ff336568cbbce6942ab568b6990d71ac7e2c6f9a0eed544587",
-        "0x148de009034656bdbb70aa67eeb18a67997fa3e43088a58a47abda54abcd8dfa"
-      ],
-      "proofCommitmentPok": [
-        "0x1e64d3ae206fdcf15589ac6de00718d4313c0aac7cfb0ff6b6089d718ca670a1",
-        "0x21db36d888d64c0e32798869064b7786e49328895feae453fdcce7ca27c3e479"
-      ],
-      "provingKeySha256": "f0f8ee6a5954574a58543480ccf7898e02125e3761f04d1f3b64cf3bcdc10059"
-    }
-  },
-  "custom-ring-policy-member-v3-8-w2-curator": {
-    "statement": "0x1806eea48b105cb5ec566ade34e7c0d77c65d8220e7bb63c4cd7607b195defd8",
-    "proof": {
-      "ar": [
-        "0x041a77a965f7846261dba61ff868fad6c69d96a1f15e4d311e04bc88680d6c2a",
-        "0x2d8499459d3410c4eee41063f0dae46ad5a3e138b7800e228d166cf8273d4c2e"
-      ],
-      "bs": [
-        [
-          "0x1c1657612b2b7dad70f0e3c33db91af778e9eb9317ae02a31f4d80c8020e1b2d",
-          "0x2376dcd051b1659890074602e2f878db408ccbfb4a687dfbb4a647ab50a4b65d"
-        ],
-        [
-          "0x1f5744da1bf85acc7ed3b87720825c54b9991a2f4447bca21d706122f0fc2e76",
-          "0x28ed433e99b67eb508b407e8e89639bc718a8d0138d628dbd6a483a164c2dc02"
-        ]
-      ],
-      "krs": [
-        "0x25cd7f3a900559e4f62f996e88daa22c940264244c2b5d2ee85a7d817dfa68cd",
-        "0x005d06f26c8d4fd00bb1ca0a5c9a99bb9c75954931313b80367c384796f28c59"
-      ],
-      "proofCommitment": [
-        "0x29f4be3552b4c743b64504b5266e65d3f590cb6c2c867eb31d3886b18bf312b7",
-        "0x2480f803ec7126cbeefa8abe11e468c444aaf32bc2a3a08d544550a2fff2f2cc"
-      ],
-      "proofCommitmentPok": [
-        "0x233d35badfea72c960c2c65491216f89920a044c6f75e2aa973bcf5e8f65becc",
-        "0x18e41d6da9e6cb3f0cd57b6ab35e9a58e3ca33fc428a1542d0fc701ddaf40fd5"
-      ],
-      "provingKeySha256": "98136213fa094ee879f485a0dd3411b76ab0019fa29d9bb65ac77dd414404b36"
-    }
-  },
-  "custom-ring-policy-member-v3-8-w2-own": {
-    "statement": "0x19973f08bca353c283c6d73f99be6c8c621516969d6425d3b9ed86c186dd368b",
-    "proof": {
-      "ar": [
-        "0x0c363057d7cda6617442919e959c2520fcace392e01140c48c79d56f4795d576",
-        "0x0d2b383ab57b7499387b6ef71fa66acd4dbdae0694bd73383a308645b3402aa5"
-      ],
-      "bs": [
-        [
-          "0x02e9d6fc1d879b096465a50518ae5e372fdf8d26edb9c1466105f84f0474f7f6",
-          "0x2ec11686761dfb655f0e2d762eec1024328af3e2b565ee421214c0fbc79e2833"
-        ],
-        [
-          "0x101ced45ba9e1c5fa65650ad0f7452e4dc905e7b8d74ad75f742ec71f5baf088",
-          "0x1023eb79075f885d7e29745785517bb4553fd61fb997adac910955fb9b290e4d"
-        ]
-      ],
-      "krs": [
-        "0x09a2c420feb097e05f189b4f0d02702dde5ed1393644bbc3a56a53c8909a7b33",
-        "0x2a9b10a488a95995f2cb02e070c2c4c97ba814acd1554adab4591bb6d8d482e8"
-      ],
-      "proofCommitment": [
-        "0x0098077ac09825ec774e077a25d33cb35a95f58ffb272087281592fb64f3b99f",
-        "0x2f18b66fdabcb27bbee7928c724f33d8e77bade84c7b790d048406e04c0d8b3f"
-      ],
-      "proofCommitmentPok": [
-        "0x0af2dca182711006f5954d9c91656f24c3881435750ef809bcf4b2e768afafab",
-        "0x0e23fb08e3a16ae9b3b0dfbfc38b2b9c9ec39922a57e50a93bb8ff956500f01b"
-      ],
-      "provingKeySha256": "3680bf9ec7b6f4d6ad58ab9b5a90380a77814380137bc98301d3100362b24610"
-    }
-  },
-  "custom-ring-policy-member-v3-8-w32-curator": {
-    "statement": "0x2ca8a5d009881a7f9bc52b54e4b10357aa49018df602bbb490f4935a04bf9b92",
-    "proof": {
-      "ar": [
-        "0x02c2200e66bbf4543b5afb8fc9468179a39976be772b3fd41f1028e1e94051fb",
-        "0x08c1cee3c2bcbe1cc6dafa3a8987c70adb1335081f14c4e19275e62dcb0af498"
-      ],
-      "bs": [
-        [
-          "0x09195381c283ac78253ec47740b64c9aca508b070c1b70cbb6604d001977889b",
-          "0x0aafd7a111329b92bece0a3772534cf27ab2463d8eeb94686739c222be4aa297"
-        ],
-        [
-          "0x0b5ca8ea61240bfd7e3ae7dce0082d861a0148cb863c2a0bd875f4671dd965d9",
-          "0x156a1e714015e720b2666a40a44c12f7313a2a44ceb62f0e0c86e14e2b36bd21"
-        ]
-      ],
-      "krs": [
-        "0x01d37b70110e2915a60a34d63eddfa40de4d6e6099a141532bdbd117904e39e0",
-        "0x09b25d96f594ed46aee20a8ebdb6f219e90fdd93f6f338c7e96c17ccc00b93c0"
-      ],
-      "proofCommitment": [
-        "0x24343024d4a287b0743b2f0085c5f0e7f465c5b31138e5dd134b45950b226a1b",
-        "0x134f69b4db9fe1e474f70e89cb7763d2b298ee25b4072c3fe9c3b284a49a72de"
-      ],
-      "proofCommitmentPok": [
-        "0x110c867331cb92830481be585e3dbc3f02f7cbe1bd7e15475137cd7f3139b1c8",
-        "0x169f458e611e8baf4a788c6b23bce41dcc39f7e8bbff5744d81fb1c6bc022716"
-      ],
-      "provingKeySha256": "23dd9fcba58e8d42ddda4669443be5e6ec7edde343e8157c205e20191a1957e5"
-    }
-  },
-  "custom-ring-policy-member-v3-8-w32-own": {
-    "statement": "0x270826c3ac6f1ecb8a21efbcf3240d51e31c2f74061fa49117cf751efce9d20f",
-    "proof": {
-      "ar": [
-        "0x0e8ac47af05ec8ddb2ce8fea7f268c0e8c3b19c57e416b8d851772adebd09fab",
-        "0x0f0b99347de91647324db55240ffbd56806ead8a8f57488ad0c64d925a59be82"
-      ],
-      "bs": [
-        [
-          "0x061dba5264675188fd115de02604732d4e7188feec3865a867625b9148a77aba",
-          "0x0747abfac2894251c0813dc66fa02db78b60ede979da641dff69422e39df0aa3"
-        ],
-        [
-          "0x1f0644df9493ec365c1d72996b09b01da1891a0a0ad4139803af0c2d088ded2b",
-          "0x1f4a5c9c21b5f1b910a87f94c88bff6ca6f0e4a6ed9b3844c5e1538733938a2e"
-        ]
-      ],
-      "krs": [
-        "0x1667444cba2ddf355afecbe251fd8fc84561be5c6ee7fac96eae5d423b441c5c",
-        "0x277481e1744d48a6ebe5f6202ffa966c0038bb280a62e7ba9c53efa3e61cd972"
-      ],
-      "proofCommitment": [
-        "0x21ab879d719d348b79dd1c9785e5048b2bc2a7b918f4e69580b616ca60e4633b",
-        "0x289b2bcb50a2ab5c9dd7c0d17e132cc3633c82f5ef11024e51c4b160ed54e3d3"
-      ],
-      "proofCommitmentPok": [
-        "0x0ce18ff88fa72c4d7d518098965d11196053290ec124aadc797d84e2e31c8be9",
-        "0x0aac8d658553431893661e1b940a5b5fd0efa2e8bc7da4286dcd57bedda48b9c"
-      ],
-      "provingKeySha256": "aaf7aaec60733c96e1330ccef9f7e61f97d548908379dbad152fa694fb775acd"
-    }
-  },
-  "custom-ring-policy-member-v3-8-w4-curator": {
-    "statement": "0x0bf7ec246232ce0868912901f273d3cc59154630153ca399b2114d4b4e561a0f",
-    "proof": {
-      "ar": [
-        "0x1c993c39b686b874580933cb4762b10f227ce62f29b9882d8afd7733aec05296",
-        "0x08cdff8623293410b08c185b269e70f0a8fca0bb8c2c65cbd5baf5e935f1034f"
-      ],
-      "bs": [
-        [
-          "0x1ed31f5e9a14aeae77791e9571d8d860f6f6c43bd3bd9bbe75ca49ffb5adb30a",
-          "0x229482b09e214e2212d8c33318413e2eb47444f63d4afe3f3fe8f2a872995001"
-        ],
-        [
-          "0x1194dc61d4b8e2598c92636cdd062dbe00186c8902a3071a40b20b4ba1e73149",
-          "0x0e1a780a8bdb821656c77c3759ee1a559f8549f4a2f03451f08411431e8b3226"
-        ]
-      ],
-      "krs": [
-        "0x2fcff9ccf1938d482163c78b5b6740bea87f7fc62d7c8c08d3a6214d434bb4ee",
-        "0x0c43132eb8ef00b41025fe39b4602c0a8a46e5bf6326eeddb6bfd61a4bb75dbe"
-      ],
-      "proofCommitment": [
-        "0x185eed517b731d7554e13f5b0208adef7c213934c9f0c460e2aacf4e66aefdcd",
-        "0x15d72967b672c917838c0bc0e9f3dc6a06c8782bed330b756c57cbcbf1f81918"
-      ],
-      "proofCommitmentPok": [
-        "0x229697c3e992af06e04518f437071aa16c6c295ee291f4d7d4cd9ad993601311",
-        "0x2edbb8dab0706218633b7420b2d598f19db0adbe123ed9044ab5b1d8a1cc1fc4"
-      ],
-      "provingKeySha256": "1416f0247911bef71272a8356595cdda161a0b972676014db9bb9a68ffd706a4"
-    }
-  },
-  "custom-ring-policy-member-v3-8-w4-own": {
-    "statement": "0x1a081798db3cdded944289ded8c4d4ac626928756d1eba39c615457c0a4b9729",
-    "proof": {
-      "ar": [
-        "0x2cf92ccdf6882dd4ca55e180abfee8e3fd0d83aa1cd6cb7d5de749d2b91daf37",
-        "0x1b7e56406db5c06b22f4d5def36926e018a34df1c916b166ad6d5e5c21d42d43"
-      ],
-      "bs": [
-        [
-          "0x2a6618cef39546766a4a9ced36588c737961c6308bb9aa977abfd9d0fbed4a81",
-          "0x05238afca52eaa0cc368e7892c812e464e59fd5272a2bab0870f884c1ab0bc7a"
-        ],
-        [
-          "0x0b6dbf11675581b23781682a1ad8c31e17444937daeb8d016b552a6129911cac",
-          "0x163aab1453f2004f44a0292642745e9046a39e694775c72edf67c5be960fa49d"
-        ]
-      ],
-      "krs": [
-        "0x1788646793bd5f09108d8539db48ac425f773e6e75621d8455de777d7599fa33",
-        "0x030effa7486137804a7c2b463c514f154b41174acd1419e603053514d1d9be20"
-      ],
-      "proofCommitment": [
-        "0x028b1bfabf4ea0830c0027151ed0f2eb3b472272f77c13e2d9551c8636f1dd49",
-        "0x2ab1836e1213d163920bbdc7d7dbab70b1f4b0f9125616896a86722f468748cc"
-      ],
-      "proofCommitmentPok": [
-        "0x1f873ecc71464b453c7667dc3e49852fa5d33cd1ad048993361ded92e4e28d0a",
-        "0x1dbb5434d51b910931624358dd5839fac2608de5dbef23a975cf1dbbf8840757"
-      ],
-      "provingKeySha256": "2a7c74b0cf3e2ed93e254f676f55a411a7b551527385200afd7813a7fa50b529"
-    }
-  },
-  "custom-ring-policy-member-v3-8-w8-curator": {
-    "statement": "0x1944273fdc85ad894679225378f83d80f459de2a8a81153c1eb4123aa475dd96",
-    "proof": {
-      "ar": [
-        "0x2b242b757e6149c0491ee235979c4e78fd08138254c0ed8e2f27160423e27d92",
-        "0x0e316f55333c12bcc07c75a0c926406168f1190fbf4e31ad03ab061e42e6bb02"
-      ],
-      "bs": [
-        [
-          "0x119750ee8fe966898d7704d3e0d489255fff5a6030e9a14282bdebd2327d662b",
-          "0x1a2420ce1f7a2f64521db72ca47e203b17a71c31852518c28249f9e5c22783db"
-        ],
-        [
-          "0x09a7ec25e8ffe773e08018dfe255d6900e86d575d45aeab9f3335378618f94b8",
-          "0x0b57d895040303cf67d36ade1ea24781b33531187d309dc0afb4c0c8f6382175"
-        ]
-      ],
-      "krs": [
-        "0x12df177b6270e56e47832730b175e9f850f1e4c2cc1b307535df5035d22a2e0f",
-        "0x29dad060cc9c976cc0e32214d769ab8846e1c4222c7f996437e2da0913ed081e"
-      ],
-      "proofCommitment": [
-        "0x2a064945bbb85e682eeeb54ee7686d1b0570b1f6653931f710a76b8a1bc95dac",
-        "0x2f675d7bdcd0fcf2f7a905a1609db786b1b4a0d83e4d6868b9642b78285fe88d"
-      ],
-      "proofCommitmentPok": [
-        "0x1622e502c7db486fb97c63f3240d4c4c91b162837b173877b607a745883389b9",
-        "0x28972acae8ab4687349c3ee03499da002a684cd1817f5061f032d10359bb3066"
-      ],
-      "provingKeySha256": "20cf08c091ee2a0f10f4d76c4503738dc740ce7976f42b9cc9ca20e42382fbfd"
-    }
-  },
-  "custom-ring-policy-member-v3-8-w8-own": {
-    "statement": "0x24f9fbeb2bfb69b2e1e73fde591fa8bf5dd8ff56248770358e99b32690799e59",
-    "proof": {
-      "ar": [
-        "0x28fb972bf313a86fb8bcd5524465ab11f6a71090216dbad3d62ed0820f952660",
-        "0x000ca36bee5589b6fdea866b6ad22d7d7e7426091201cc4787f81b2862da5a53"
-      ],
-      "bs": [
-        [
-          "0x057ef58786fe7e1c8c738c099479cc4eee0d43c4229c4f32e5b292e4b5f78c2c",
-          "0x04dfaa6e82266c7b03eb2021b42cf6ec871611700deb516e2a03cb12f15fd8d2"
-        ],
-        [
-          "0x2150e5ad7e76c781b4ec28601e96d927b2cc62dce3fa2dcff39e3650f5805a21",
-          "0x168d48668ec6e7556cc0f627cca05277de3b58ef40acf1cd77142e7310fd4c4c"
-        ]
-      ],
-      "krs": [
-        "0x0bab3332c06853258109a771de02397b031e5b514087a1b71610498c50cbe59d",
-        "0x1e1d7dde59916fc25bb189cfbb04bee00f675abb5a64da41680083a7a766796a"
-      ],
-      "proofCommitment": [
-        "0x06455461df7f64ac307fe849b649bd2042ef32b8d98149bfaca4d7e57ec6756e",
-        "0x1923d29f8823ca9679289f27ebe70ea05063ec8a21290182a9ea5b640641add0"
-      ],
-      "proofCommitmentPok": [
-        "0x26b6f78e271d431d94f58f9d73c4482284a49ec38393b5b56ee06634a25b86f5",
-        "0x208caf0038487bf50e56f2a70c240f131639eb0d3ade20ff71d990f6a267b5f7"
-      ],
-      "provingKeySha256": "94821e61723c38cc3adcd99ea1feafc739906e49141d12a31459b8a9fabb7efa"
+      "provingKeySha256": "0a57638c606f92aa82c554c2a5373de98bdd71b694c2aadd183146a73b344843"
     }
   },
   "custom-ring-register-key": {
-    "statement": "0x1ba333018d0e6e87bb3402547a2905891aecf6c1e0ce54302ca211f6c4f8187f",
+    "statement": "0x0199a54af40080eac71a1c70194ae8c67d1dd8c729912e7aa00c1c291f410aac",
     "proof": {
       "ar": [
-        "0x0b5bbdc55a0729025d2b9323920b40ed296676f68da74f60970e7682c100498c",
-        "0x193b66e10b9e0f5c04bb5756879e6447606b851a78b6cb4727f3fbab458bcdd4"
+        "0x2d6e3241c9a386c7e4938fc0b1d6f8e7f11bc7091a01c94c9b18d7bd9ff219dd",
+        "0x1e85e188cacf970ca54fc014e0ece5c9b3ba3938bc87e5c7a346812267a31d6e"
       ],
       "bs": [
         [
-          "0x18df4b7e5d63f7843a052d40f1d79d51f1dd1e89683ffa4d23245e86f702718d",
-          "0x023df468c42262ecaa925089af172efdc57c15e5bcff196d3487da19d23ca362"
+          "0x1742509c1105b1483436ba6972bf6ce4e19fdbde608aecb9f7cb447f2331ce12",
+          "0x003f320cbc9e5cbb2466041a815ed6ac036ec33fc20fa5fc7c1ac28c2a8b0136"
         ],
         [
-          "0x06de47b164b8d4b87a2c08eca8f06745223abb88b69c997260a56548285fbef5",
-          "0x22fe00be020f43eace1c4aea26d42c22c9f8896a1df7144d92e7c3a4c158c972"
+          "0x10d75ac790720df137b350b99ea426e20d9f51b5c2700d292d5d4529937994e5",
+          "0x1d006ae563ba9e1efcddf8f667f4d62f15d72a6b07736af08e224eac95060d3c"
         ]
       ],
       "krs": [
-        "0x28bfecf26b178d82b2943c9c4f05057a4de645d62d31dcbbfdc58b1cae1609ce",
-        "0x26f44bcfe97049e19a02b38f63ffa9c772705a8024c287cad54bfaa67cbc36fe"
+        "0x0e2ad5e9bd7601bbb20174d9a0259ab43da02c219335469bd588f6c784596ed8",
+        "0x18b26aa795fae8e7bf34eeb58c290640e4f891bda7306ce82de324b8dc53ef7a"
       ],
       "proofCommitment": [
-        "0x06374aad640124d3119f63b883d5c8f2db4203c3f2e04693ca74af18d7d4e275",
-        "0x03c87e26dd4c0db74c0779f3d268c2125050c2bdd5d0fa2cfd0116d95b96fd9a"
+        "0x29380fa235dd3b9875a70c0a3786f47a977c9ccd01bb54c9b7e55e2855ba739d",
+        "0x058735e11c7bc18a8a3a8748c99377e5b0e655c0975379659f0812df3bc65db0"
       ],
       "proofCommitmentPok": [
-        "0x2b9fd24775c2c1046023bb7f75bb79deba2dc605f231d56fa3138df34dafb8b2",
-        "0x112584897c319d33003846391267cfe1e8201c179cdd3cfe398d8b56bdcbe94a"
+        "0x1704d35b6abb6a43d8979b4c3a8c9bec2d4906e89fb3b079d056e594ec8310aa",
+        "0x167c6600e6631c1c23093abb609a3d57bb376bf03d45d6225680ff5732891fa5"
       ],
-      "provingKeySha256": "2cdd45b0ff4ed8b700bc67bec137955a3234bea7b0a227e3e39fb81af29a598b"
+      "provingKeySha256": "90d0f3a05edf2bef59de6726aa1e3c4b08abed8dd4c627f94a169752a49fcfe6"
     }
   },
-  "custom-ring-withdrawal-exemption": {
-    "statement": "0x1955b8eb5e925b94d5a01496fbcd7fb3f52d10f718cf487d3730a6609754aae2",
+  "custom-ring-transfer-2-in24-w4-s4": {
+    "statement": "0x1700fd7c26505b27d65f899b1365dbd3888673832ecde6b83699e432f8fde1d6",
     "proof": {
       "ar": [
-        "0x01afc439daffb0939a74650c4e9d6e6c6e5bee732e50c3e1e5fe74dddbe7f22f",
-        "0x0e6ce82a5031e9ba74f9b9268d876cb17b1b1c3f5bf75e22a08429c9b0285c46"
+        "0x1146ffc0d5a3245548180de9697ba7aad360fcbbe8e6128555cb66266925aa67",
+        "0x0935d968f18310284eb1288c508afd7f937c98fd9e87ea2119c9fdd63e85cb5c"
       ],
       "bs": [
         [
-          "0x236ce80dd1166b3bc7b1740ff2b098deac52f72bab2d6ee05d601bb8d740b860",
-          "0x0bb47038c4afc6108fa84b1f2563387e2f9c7a5ad8b90b87b9d614fd94f65859"
+          "0x197b48a3a8efe4639dcd9b921695608aef4967e99fd5bad4eaa25438779149a9",
+          "0x1d87e4bb13603754717b65ab00bd0b7e66f52fd5ef9c45ef9883e82306467783"
         ],
         [
-          "0x0a633b3e980f6d892e5e67e2b2b27a70767c35fec34acd2b043768e6b4368386",
-          "0x0c7559e4e370b9353c83f40b125c7d24ec85f8c51f7bc9dead721a6b95a6dcc0"
+          "0x0dd6755bd7684e314d34b9cee661eb0eb93973eacff1a259eb4a83cea396d1d9",
+          "0x0bcc2c4439c0fec35a79cabe6f80312b62fcbd5391cb031855a97508bc9986d9"
         ]
       ],
       "krs": [
-        "0x06551de8092162f9b63127b6417b654824facdaec6bb37f4bc0bbebec2f0abda",
-        "0x151cd3feafd9af38473de625b5e1c6da5eace3ea20cf75b3bcaf6c0781c94046"
+        "0x18165e39271eb9fbdf02922ea0992cceb24752f9aa2cf21ad64274ff3d20a8d7",
+        "0x0589fcc7096ff489af733e1769f80735afe48beb787bd9c43519f84e70b025df"
       ],
       "proofCommitment": [
-        "0x2f6ef7dde104fe81235e7cdfb3d565552f20ac9430f0a6434b3a48c5b8b1b5d0",
-        "0x203c3af287ac25549467ef16355a3ca5b2dac3b0c22ec62883dcdab45a2e3713"
+        "0x30597868be78c817fa6c9e28083070c812b457fe9f511bed8890f6ba51c29e62",
+        "0x0eceb579923cc8b2f303fa0f6960198c2e50c93a4968ec0fe788463b92d8d0c2"
       ],
       "proofCommitmentPok": [
-        "0x0edc7b98c6bda8e5779cc68740cbd811827c38394edea52dc5ed679d656dc0ac",
-        "0x0c958af6ce81eb9966d60c98ae68623a8ad0b944845d8e206393b720bb323ecb"
+        "0x11a0cad4606c153d004bb5e94bf87adbc063c37d8ebcbc3e6659fc61f5fb769d",
+        "0x1450eee781d435b7db4f79132df45c2c00979ecfffa1e0787530607af718616a"
       ],
-      "provingKeySha256": "b47f4c19172eea579d3a5bc848a0f9378655c3c6c80c4ee2d9d714d885d301fb"
+      "provingKeySha256": "76f2e385f159deb30921f36b012bf16940647a1b03445cea702b00c797bd5a3a"
+    }
+  },
+  "custom-ring-transfer-4-in24-w4-s4": {
+    "statement": "0x098a07a7e4928df95c6d2338c8ac4e25ba69f44a8ebc81cc868e6aa759bf7d40",
+    "proof": {
+      "ar": [
+        "0x264ba694fa689792b4d7afc4b5ab964ab5dbc2f755435fda8605284088bc7ba7",
+        "0x11c180db0584f541795e9dc87dcb5fe0ad0832bd6fd0c56419681f85e5fb88c2"
+      ],
+      "bs": [
+        [
+          "0x0d252d8227732903181ba0f761f4f7fb61e488e67bfa1d8840b4255a7695b3ef",
+          "0x02ef0f56762761b7f5884698f3871213cb7d0b387a088f5e1a3fc01fafdeac74"
+        ],
+        [
+          "0x27e5fcfb96ca2a92e6d441a8aecfd1718d3355d27b53617e109e851e7f4affee",
+          "0x274845cbe407e6586aaf589b03f0ed8497a83f9e1d8fb6a7be8080caf97bb6bf"
+        ]
+      ],
+      "krs": [
+        "0x26ea89fcbcca34b63f58648627b117dc0f7ed6ebd00fa6f1d5587f48d3251415",
+        "0x00230142d1cbae96444bdb39aaf3bba3ad492dac221bfda652269040675b4b64"
+      ],
+      "proofCommitment": [
+        "0x0bcb72349e7331b1b50761c1a64f0213be6688c578c5907638f8c7d148baa1a5",
+        "0x2ed6a2852eb221ad071eebf529ef1e621d20d62075595e2e7a8c143aeac3501c"
+      ],
+      "proofCommitmentPok": [
+        "0x00f66a5d7d8cca3fb807d51a7d6f3799663d8bc5dd0dc89b9e6c77b6ed1c0ab1",
+        "0x00a61dbf2f573646c2401e5e1e09d192bfb46bba7cd549058f42da4b943df6d7"
+      ],
+      "provingKeySha256": "fb4a9f08dda6facb9fabfc9aff8bb2bfb9b46a5878ea3252af69b388b11826a8"
+    }
+  },
+  "custom-ring-transfer-8-in16-w4-s4": {
+    "statement": "0x1965c7ae694ff8f677f716241c9f0f88d2e504750fcbcb8876d901f436f1ddda",
+    "proof": {
+      "ar": [
+        "0x2fcad8557723320998bc7e6a341254c6e3453fc24a554efcc6320414dfe428f7",
+        "0x17d6f30760a0fe302bb20925b70d47d2a3d38e267a4f6bc3a080665e8d43e65d"
+      ],
+      "bs": [
+        [
+          "0x16d657a6b22a4f037ae2471b0e8f41e53927dd51d966d1bd7729fcb1f52f80c6",
+          "0x04689991fc38c0b9fc8656d5da46fe96db7a1f5729cb49cbf7256aeb0bc1762e"
+        ],
+        [
+          "0x17706fd941adbaeff20e5b5a1f1c0b18e936d507f476a21c5d814105c033a54f",
+          "0x0e66629c9048bdba512e23f4c218de589d6a65122e659b6ae1557a512262ac7d"
+        ]
+      ],
+      "krs": [
+        "0x2044db03fb7ce26aa9f7d7cb0112bfb99d506cce426d2bd10cff5bf64eb48411",
+        "0x0686e54e26a3bf4f54b633c669b7358bd05a2c79dc508ef1e4cc78a8ffd24353"
+      ],
+      "proofCommitment": [
+        "0x10588695f3c9ab630f217de692e2a9335a0b443b5917365ad4916d335aa7ff61",
+        "0x1936717e1e1c56db8ea1be834440f3056af06aca338d6fef4063c346091c6d09"
+      ],
+      "proofCommitmentPok": [
+        "0x1f5071b241f7b1b95ffd1743312f1429bc56b7d289baff1de4f407ef01b2b5b6",
+        "0x2e4e3053783a129f958d233e2655560cd2fc295907b5b51f3e0d70d9be6159b6"
+      ],
+      "provingKeySha256": "8ce9d01f8530c7f511062158149c52b159abd45221ea6fcb977a72749d2726c1"
+    }
+  },
+  "custom-ring-transfer-entry-4-in8-w4-s8": {
+    "statement": "0x168c0c734dc550b40666ad8f6889d16590cca7f254d20d727d6dc350280ba4a8",
+    "proof": {
+      "ar": [
+        "0x03475ef8c90eb3a5e9fdd75ae705055594308f590b7bedb845662a9a7b7c5b51",
+        "0x1a5f76890bdb8f034ba90d6ec760773ea7c4001931614030855131a5f7cfb37a"
+      ],
+      "bs": [
+        [
+          "0x2b9d02062cffb3faad987fcfa659113043a9a1c31fd25a35ae41ecc4a9fa474a",
+          "0x15478d8b2b63c7a2580ffaf32f796980344626e14e8520ef628082cf2339f431"
+        ],
+        [
+          "0x2a18d761a004deed8cfff3328c118924b59b10ba4d1196899f65e20a6b6971ad",
+          "0x1455711a82c798531c7b9a03f7d22ced01d3fc0bab0042fae569850ddd1e766a"
+        ]
+      ],
+      "krs": [
+        "0x28b26c5b1db5b7157a4ada06744deb71889a7e9bc647cd19b9ccc5cfd8d2dbcb",
+        "0x0873771467a2ffb722f814ec08b6fc80ef3ddca7643165ac7ffe1588120b4aa1"
+      ],
+      "proofCommitment": [
+        "0x2b7d971b30f085ba69040654bbbe260c15962c6c80b74f971263d88abf19003d",
+        "0x2399b87409d0401ab66a98d2b016d0f4c9ca16bba0ccbaafeb7d00cd55b064d3"
+      ],
+      "proofCommitmentPok": [
+        "0x022214f8accdd562c4830bf750a16fac10e4b516535ef56b0c5affc9d2faf211",
+        "0x27e7fc2187774bf8ad6e7d60235614f99e5f446f57c1d11e8ae400cf5e6778cb"
+      ],
+      "provingKeySha256": "dee90c9e4bd1e4e2d8a3d81c30ac53abca34023b69d97069fd8f655f157bfae5"
+    }
+  },
+  "custom-ring-transfer-entry-8-in2-w4-s2": {
+    "statement": "0x0268ab5901b6787008bb9c7d9c8ddc6b53569004a324480a51dc5dd84cf2bd6a",
+    "proof": {
+      "ar": [
+        "0x199d91fc3dfb5043349df4371d2dfe1d2d3a2afecccb842c6ed09781d64f88e3",
+        "0x0089cf342bef77f3818df57e25abb4b178a17a58d72a95f8adc5fcf3a5462575"
+      ],
+      "bs": [
+        [
+          "0x27c20088f80c8509f6e798486b86951ac391987f592e47df79434f995f422687",
+          "0x20dd25570e4687d97b685ec0b3826b91d1ed2a79604203d5d2058ec18b947b4e"
+        ],
+        [
+          "0x08309f4e9fe94f6ac90237f078ae77193db454ce8b6f8101ade17561b4b959f9",
+          "0x09a55e69311ee7ad7b1faa527ef9ea227cc92b8113cd513d88595f20fe248879"
+        ]
+      ],
+      "krs": [
+        "0x1fe45f34f26234f651960e34f18820a099da7e71c642487dd31f97e2f5c98112",
+        "0x1c49d2536d53a742c732caf7f7e0f98ab1ff468fb34ca1fec7fc6e19ce6fdca0"
+      ],
+      "proofCommitment": [
+        "0x22f0f90d2cd19b52e815ca516cedc69ee559595aeb9d7a6ccf92ebd46950680f",
+        "0x14436beccd7a1fdaf9693416969f741fd146df8a0db6601e162618797f78d6bd"
+      ],
+      "proofCommitmentPok": [
+        "0x1d29148a1f6aca305f8ce53e0f6f81a60a13619366650496e793aacfccc4b1f3",
+        "0x2cbc942d431c3994fa6c4118f6d2ed4420cd9d660194dc9686e1e7261f9eb362"
+      ],
+      "provingKeySha256": "8eab7d38fedca4ab56ad61335b2e43182d3c7e9d7513d8abf47203b6678cdf3a"
+    }
+  },
+  "custom-ring-transfer-entry-8-in5-w4-s4": {
+    "statement": "0x0476c404d643b771cb8c9cdcfa92b08aa091e4eb0a87dcd5befc8122c9af4746",
+    "proof": {
+      "ar": [
+        "0x23abae40360808bb1a88aa422446c015bf60ef558d3a75a6d782ae970938bd5b",
+        "0x17da654ffb9a40624712c57b4fc43f99dda4719c87a518b3bdefa8f5b483c586"
+      ],
+      "bs": [
+        [
+          "0x24a6e8d300395d7cb2e851ce5a2b81772d0f72be21420401efe21c35427ecd00",
+          "0x0b6deaac7b30d14f7b1a63b18847c95a204dcdc87a6ba53b6aad0066bd519421"
+        ],
+        [
+          "0x014251ed1bfc12bf1cfaaf4c1bda57876c098a1226fb183c625e1f82ccd10865",
+          "0x222ee042fbd82ffa7c163b03a607f8ab276df4d02ba0181cb309cbca4e8996ca"
+        ]
+      ],
+      "krs": [
+        "0x073dc54f1ae4253311c8468d0002a1e0d919f77e1393a756c6860d4211f4d436",
+        "0x217ff1c59780bf1a209d6498e7b4da0e2087d1c16e609267a8d3cc0974ea7c1e"
+      ],
+      "proofCommitment": [
+        "0x21a923b1dcef68827dd1431373cf7ae31ce8d654d718a886aa3f70913720b8ae",
+        "0x29af1e7fa2bc94e00b73031605275adea39e8c1c2a04140d140e9e136ade5ccf"
+      ],
+      "proofCommitmentPok": [
+        "0x24d1e784a6b9d7ff4338b83bcdacb7bf7a5f211e9d4e04bc0e87515249e35a0c",
+        "0x2c8acb067576f7a9bb9b496b1f78036567725e25b85f7ee63a06446089531ab1"
+      ],
+      "provingKeySha256": "e3c5209d15114e25638496ba5790f422ce682b5b539f0e41206dc199a4d9299c"
+    }
+  },
+  "custom-ring-transfer-entry-8-in8-w32-s8": {
+    "statement": "0x192485279902953e29cc69c08a9c96a7c8e52c0af559889ce35c37086180e293",
+    "proof": {
+      "ar": [
+        "0x0ec446f257b2fa66f8dfc99aa5a2a245d563f0aa9cfd2e25f180eea3c3addf2f",
+        "0x1d8e1a5761e832ba66c795bb5c611cda861486059027716a9a471f9aca4be2a2"
+      ],
+      "bs": [
+        [
+          "0x00eeb83fe1ba29408a8cdac5b21030afd9800f3309da745270f964d93f16d731",
+          "0x028e0f242051e1c5f922a8f8856db57ceb820781e9794794b010023b1735bd88"
+        ],
+        [
+          "0x28ea5812f584bb20b0f5f45f073b895cdc1ab372fd94073735d8aff673b89b1f",
+          "0x0f3374aec55e1920c363e72bcfa8e2022dcd5069f7521acb2f231abcf9924d0c"
+        ]
+      ],
+      "krs": [
+        "0x0a2fbfc9af9c9959339c1bf30b564a71e21929bf642160a9fcac0ae96bac8086",
+        "0x045289fb807b882552ef00b5445b9ca25ff8d041217bacf389b07bca972d8a8a"
+      ],
+      "proofCommitment": [
+        "0x193c688795db6e7cb4fde8a2f9e8b6982588eb8e76931e3fcc3c0c5ea4012db4",
+        "0x2e70b02fb3eb53361705b0a3948d91f596d49e60efcb32d4b7440446ad73bfaf"
+      ],
+      "proofCommitmentPok": [
+        "0x28b5b81bcfd599618ce4f38f45504b68f96551b05ebf92ece58491b9a8f8ba97",
+        "0x031cf06b8db6e3ff9b42f867ba95ad080250704062e6813bc23d6e47725d8248"
+      ],
+      "provingKeySha256": "19af79d5ed3521eb44710dbac56296ac15d8cdf153231156e13283fd732ecb9d"
+    }
+  },
+  "custom-ring-transfer-payout-16-in1-w0-s1": {
+    "statement": "0x0050e147cecae01b794bb6b1245e84f214d92a3435c32a3d91786ded166dbbda",
+    "proof": {
+      "ar": [
+        "0x25fff1f4f939fab3ca0948fc7c58fad011957746b1d12e21526b46e56daad87b",
+        "0x1eec892b5e2a382786d8af27c80c30ee453fc00d492e16b82d2623e2bbf61f39"
+      ],
+      "bs": [
+        [
+          "0x1cc6c1e32321aa9a0d77748904f3076863e539d73a9c12d5e7816d321fe1d008",
+          "0x010de57c90dafd407800f41ba5a03fc1cf041bafbd663912515186ec96f6dee5"
+        ],
+        [
+          "0x2b9b8e99ccb1bd57549cd99dd014822790f3ddccbbd7c9d1d6e1a8eca610adc6",
+          "0x226a4035a634a577f1653249219422f8be514c153b20063e51ae242240d6702d"
+        ]
+      ],
+      "krs": [
+        "0x0fa9be6c8de3ae53f4f69e2e8b116576f97470c30d0d1eac308164b174f4ad39",
+        "0x1b07f96aed5c10793c16aeccd8e3adcb2f50a9ddd3cf1ef12b22aaa8eaaa7ee6"
+      ],
+      "proofCommitment": [
+        "0x0b2957fac120f6d91d3d68d746767ea1f76f19d75333d7d60d80d403726b0b76",
+        "0x09d6a3fe44c1a9e89cc24d0c2c1f4c6197c85d4f477969e93180d6aa6ef94a44"
+      ],
+      "proofCommitmentPok": [
+        "0x027a9d0a3fd6afac06cfa11e0e064ab49251977be0fee7311bf2cc782b5811ed",
+        "0x1f48712a08fa8e5a7bcc53a61dad9a2c83541541cd41ac13b64ddf325c58c29f"
+      ],
+      "provingKeySha256": "6be0270266d24250f8ca921e4558b60952dbb6b89a004a81187739610d407e28"
+    }
+  },
+  "custom-ring-transfer-wide-2-in40-w4-s8": {
+    "statement": "0x2e88504f9419a5b6f29a9526aa0cb41c27afac2d593d8d7b4bec88b6827cf146",
+    "proof": {
+      "ar": [
+        "0x21791872bebcc0fb71465bfb4b11a7d1983c000b8fcedc543ed22a1fd0cf193d",
+        "0x204ce5e21c828b1fd5ef7bdf80cbe670bd4ec73fca6200aa00247254a5a1f1c7"
+      ],
+      "bs": [
+        [
+          "0x2a1ab7fc78ba2e77833e92aed351f01f50df138dd8cc654a1ad94503b57a0837",
+          "0x2e464c896dabdd80ec2f1d4c83ad6d90b95d78f7080cd29a5afeca60554d26ab"
+        ],
+        [
+          "0x1b1752651ccd043e17b939c26cfb391285b87ac73e8e48cec8613e1ed83b9b3f",
+          "0x03cd30c1e0dede84f05d84e630cb4f17606bde94a352cb8ccf923090b43612b5"
+        ]
+      ],
+      "krs": [
+        "0x0b860cbc96317e9b8a2001561545c951f294f8d15e4cea12e098ae4b0df4ec17",
+        "0x1d6fcf28fcf8b2c3e38e000befb96306f88e63b872869943a6c49f55a2978fa6"
+      ],
+      "proofCommitment": [
+        "0x20c3dba604640729e14166f43afd08dc540f6e1aee0a0532a168a586e470421b",
+        "0x2e5014e6c51933d6bfd9995a489f9d3b0b94986784df3675329e8d83d3af1910"
+      ],
+      "proofCommitmentPok": [
+        "0x273039f0eabd01f37ab757c9162414fe287f1721ef38484cd840456b5d9c4937",
+        "0x24e35a0e57e2089ef12a9c2f0c30572fcc68f7bb7d5969aca390186859c7d997"
+      ],
+      "provingKeySha256": "88fd2bafddf8b3382fbd946f653cc10defe1a0d459beb00a91ff207ba02473ca"
+    }
+  },
+  "custom-ring-transfer-wide-8-in24-w32-s13": {
+    "statement": "0x00303a1545ae8616392f1aa5541442850d08da9c19c536b555cb70142c58b3e9",
+    "proof": {
+      "ar": [
+        "0x16fd4742e9942098887ad2b56638d61cac16fcc02a719bef95f3afaf203b6b84",
+        "0x0f478451cf9a0baf489f8cbf60c397f0f1e5743f6d78225532f93281c8fa7474"
+      ],
+      "bs": [
+        [
+          "0x201d963de6a6d029acf6c6fd9286279479626b612e8cf69d56cd11b32acd85d4",
+          "0x03bad88c70c2f9601a2b8b9ddf21caec8f305c28f46e1d8467267f1e9fec8d01"
+        ],
+        [
+          "0x1f7a1c8867870cf3c2a909d450d4a0e3de1a7f982cb115baf1a519d06282ff50",
+          "0x0a98e5baba6043167cfefbbe69cc69305fcc5b2bfe5f9bcd1fe8cf4f46bb004a"
+        ]
+      ],
+      "krs": [
+        "0x05d25ee90d21c5c3807fda886ea8a890607f6b330214c11069dd8fff5d9aa5ff",
+        "0x0a8e1fa9c2d4641caf4507e2eaf4bae2c3bb1d4647d84992802d7b2963844440"
+      ],
+      "proofCommitment": [
+        "0x1fed3f73b410f614694ca8d78c60da04a1d669433691bdd04f6243e06078bc10",
+        "0x02b9276ea394a31796409ff3eab1937e19f932805f9ed089e9d196f72f287e7a"
+      ],
+      "proofCommitmentPok": [
+        "0x0d271bd1fe4dca022016c1c754c7407b468b35c8b0c6a7997c2ff2aa044043a4",
+        "0x0614515a21eb5f2e011d936dcdb86ff42486b81ae01f4499c5521c338fb4abd2"
+      ],
+      "provingKeySha256": "b5af8689f8024509c586e26380486e6336a8f5209fefbc6ff116da51005520c8"
     }
   }
 }

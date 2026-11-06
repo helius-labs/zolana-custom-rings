@@ -12,14 +12,14 @@ import {
   SigningKey,
   ViewingKey,
   type Bytes32,
-} from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/keypair";
 
 type ValidCase = Readonly<{
   name: string;
   uri: string;
   recipient: string;
   ring_program_id: string;
-  request_view_tag: string;
+  list_salt: string;
   amount: string | null;
   mint: string | null;
   label: string | null;
@@ -53,6 +53,10 @@ function rustVariant(run: () => unknown): string {
   throw new Error("expected a key error");
 }
 
+function bareUri(): string {
+  return vectors.valid.find((row) => row.name === "bare")?.uri ?? "";
+}
+
 describe("shared ring address vectors (test-vectors/wallet/ring_address.json)", () => {
   it("parses and prints every valid request", () => {
     expect(vectors.valid.length).toBeGreaterThanOrEqual(3);
@@ -61,7 +65,6 @@ describe("shared ring address vectors (test-vectors/wallet/ring_address.json)", 
       expect(request.toString(), vector.name).toBe(vector.uri);
       expect(hex(request.address.recipient.toBytes())).toBe(vector.recipient);
       expect(request.address.ringProgramId).toBe(vector.ring_program_id);
-      expect(hex(request.requestViewTag)).toBe(vector.request_view_tag);
       expect(request.amount).toBe(vector.amount === null ? undefined : BigInt(vector.amount));
       expect(request.mint).toBe(vector.mint ?? undefined);
       expect(request.label).toBe(vector.label ?? undefined);
@@ -72,7 +75,7 @@ describe("shared ring address vectors (test-vectors/wallet/ring_address.json)", 
   });
 
   it("rejects every malformed request with the Rust variant", () => {
-    expect(vectors.rejected.length).toBeGreaterThanOrEqual(17);
+    expect(vectors.rejected.length).toBeGreaterThanOrEqual(16);
     for (const vector of vectors.rejected) {
       expect(
         rustVariant(() => RingPaymentRequest.parse(vector.uri)),
@@ -81,8 +84,8 @@ describe("shared ring address vectors (test-vectors/wallet/ring_address.json)", 
     }
   });
 
-  it("builds the fixture request from the wallet keys and its request tag 0", () => {
-    const vector = vectors.valid[0];
+  it("builds the fixture request from the wallet keys", () => {
+    const vector = vectors.valid.find((row) => row.name === "bare");
     if (vector === undefined) throw new Error("no valid vector");
     const wallet = ShieldedKeypair.fromKeypair(
       SigningKey.fromEd25519Bytes(new Uint8Array(32).fill(7) as Bytes32),
@@ -96,11 +99,9 @@ describe("shared ring address vectors (test-vectors/wallet/ring_address.json)", 
         viewing.publicKey(),
       ),
       ringProgramId: ring,
+      listSalt: bytes(vector.list_salt) as Bytes32,
     });
-    const request = new RingPaymentRequest({
-      address: ringAddress,
-      requestViewTag: viewing.recipientRequestViewTag(0n),
-    });
+    const request = new RingPaymentRequest({ address: ringAddress });
     viewing.destroy();
     expect(request.toString()).toBe(vector.uri);
     expect(hex(ShieldedAddress.fromBytes(bytes(vector.recipient)).toBytes())).toBe(
@@ -108,20 +109,24 @@ describe("shared ring address vectors (test-vectors/wallet/ring_address.json)", 
     );
   });
 
-  it("refuses a request tag that no derivation takes before printing it", () => {
-    const base = RingPaymentRequest.parse(vectors.valid[0]?.uri ?? "");
-    const tag = Uint8Array.from(base.requestViewTag);
-    tag[0] = 1;
+  it("prints a bare request and refuses the retired deposit tag key", () => {
+    const base = RingPaymentRequest.parse(bareUri());
+    const bare = new RingPaymentRequest({ address: base.address, amount: 5n });
+    expect(RingPaymentRequest.parse(bare.toString()).amount).toBe(5n);
+    expect(bare.toString()).toContain("?amount=5");
+    expect(new RingPaymentRequest({ address: base.address }).toString()).not.toContain("?");
+    const tag = `00${"45".repeat(31)}`;
     expect(
-      rustVariant(() => new RingPaymentRequest({ ...base, requestViewTag: tag as Bytes32 })),
-    ).toBe("InvalidRingPaymentTag");
+      rustVariant(() =>
+        RingPaymentRequest.parse(`zolana:${base.address.toBase58()}?deposit_tag=${tag}`),
+      ),
+    ).toBe("UnknownRingPaymentKey");
   });
 
   it("round-trips every field", () => {
-    const base = RingPaymentRequest.parse(vectors.valid[0]?.uri ?? "");
+    const base = RingPaymentRequest.parse(bareUri());
     const request = new RingPaymentRequest({
       address: base.address,
-      requestViewTag: base.requestViewTag,
       amount: (1n << 64n) - 1n,
       mint: address("5i1Ty3d3n2c3hYwdeaxkhtgMMSJUCiKYdpZK9TmPc5un"),
       label: "a=b&c?d/\u00e9 !*'()",
@@ -131,6 +136,5 @@ describe("shared ring address vectors (test-vectors/wallet/ring_address.json)", 
     expect(parsed.amount).toBe(request.amount);
     expect(parsed.mint).toBe(request.mint);
     expect(parsed.label).toBe(request.label);
-    expect(parsed.requestViewTag).toEqual(request.requestViewTag);
   });
 });

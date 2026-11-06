@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
-import { compressProof, parseProof } from "@heliuslabs/zolana/client";
+import { compressProof, parseProof } from "@heliuslabs/spr/client";
 import { customRingProof } from "../../../src/rpc/prover/proof.js";
 import { CUSTOM_RING_PROOF_LENGTH } from "../../../src/protocol/proof/custom-ring-proof.js";
 import {
@@ -9,6 +9,7 @@ import {
   ringProvingKey,
 } from "../../../src/protocol/proof/proving-keys.js";
 import { RingError, wrapRingError } from "../../../src/protocol/error.js";
+import * as entry from "../../../src/index.js";
 
 const ZERO_POINT = ["0x0", "0x0"];
 const ZERO_PROOF = {
@@ -23,6 +24,50 @@ type Lockfile = { keys: Record<string, { sha256: string }> };
 const lock = JSON.parse(
   readFileSync(new URL("../../../../../prover/ring/proving-keys.lock", import.meta.url), "utf8"),
 ) as Lockfile;
+
+describe("relayer-free wallet surface", () => {
+  it("exports a path that builds, proves and sends every wallet operation without Ring RPC", () => {
+    const direct = [
+      "createCustomRingClient",
+      "syncRingWallet",
+      "AnonymousSync",
+      "AnonymousWallet",
+      "readMemberRecords",
+      "buildRingDepositTransaction",
+      "createRingDepositSubmission",
+      "PreparedRingDeposit",
+      "buildRingTransferTransaction",
+      "createRingTransferSubmission",
+      "buildRingExitTransaction",
+      "createRingExitSubmission",
+      "buildRingEntryTransaction",
+      "createRingEntrySubmission",
+      "buildRingWithdrawalTransaction",
+      "createRingWithdrawalSubmission",
+      "buildRingMergeTransaction",
+      "createRingMergeSubmission",
+      "buildRingDelegateTransferTransaction",
+      "createRingDelegateSubmission",
+      "CustomRingTransfer",
+      "AnonymousTransfer",
+      "DelegateTransfer",
+      "RingTransactionSubmission",
+      "createKitRingSubmissionTransport",
+      "reconcileRingSubmissions",
+    ] as const satisfies readonly (keyof typeof entry)[];
+    for (const name of direct) expect(typeof entry[name], name).toBe("function");
+  });
+
+  it("leaves no caller tag surface on a transfer", () => {
+    for (const name of [
+      "TransferTagging",
+      "applyAnonymousScan",
+      "recoverAnonymousNotes",
+      "confirmReplyClaim",
+    ])
+      expect(entry, name).not.toHaveProperty(name);
+  });
+});
 
 describe("ring error envelope", () => {
   it("keeps the cause reachable but out of serialization", () => {
@@ -73,9 +118,9 @@ describe("RING_PROVING_KEY_SHA256S", () => {
   it("names the key file the prover proves each ring circuit with", () => {
     expect([
       ringProvingKey({ family: "registerKey" }),
-      ringProvingKey({ family: "deposit", capacity: 8 }),
+      ringProvingKey({ family: "merge" }),
     ]).toEqual(
-      ["custom_ring_register_key.key", "custom_ring_deposit_8.key"].map((name) => ({
+      ["custom_ring_register_key.key", "custom_ring_merge.key"].map((name) => ({
         name,
         sha256: lock.keys[name]?.sha256,
       })),
@@ -92,27 +137,22 @@ describe("public package surface", () => {
       import("../../../src/ring-advanced.js"),
     ]);
     for (const name of [
-      "ringConfigAddress",
-      "createRingConfigInstruction",
-      "createMemberRegistryInstruction",
-      "initSppRingConfigInstruction",
+      "ringPolicyAddress",
+      "initializeRingInstruction",
       "ringTransactInstruction",
       "CustomRingTransfer",
       "AnonymousTransfer",
       "DelegateTransfer",
-      "createRingPolicyInstruction",
-      "setRingPolicyRulesInstruction",
-      "setRingPolicySourceInstruction",
-      "buildRingCreatePolicyTransaction",
-      "memberListWriteInstruction",
-      "AuthorityListWrite",
-      "RecordApplication",
+      "updateRingPolicyInstruction",
+      "updateRingAuthorityInstruction",
+      "buildRingUpdatePolicyTransaction",
       "deployRingProgram",
-      "RegisterKey",
+      "proveEnrollment",
       "recoverRingMemberNotes",
       "createCustomRingClient",
-      "decryptRingDepositUtxo",
-      "customRingDepositPayload",
+      "buildRingDepositTransaction",
+      "enrollInstruction",
+      "decodeTrackingAuthorization",
     ] as const) {
       expect(root[name]).toBeTypeOf("function");
     }
@@ -120,5 +160,6 @@ describe("public package surface", () => {
     expect(client.ringInputOpening).toBeTypeOf("function");
     expect(keypair.RingAddress).toBeTypeOf("function");
     expect(advanced.sealRingDisclosure).toBeTypeOf("function");
+    expect(advanced.sealRecipientBody).toBeTypeOf("function");
   });
 });

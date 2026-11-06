@@ -4,11 +4,10 @@
 use std::collections::BTreeSet;
 
 use custom_ring_interface::{
-    key_catalog::{RingCircuit, RING_KEYS},
-    verifying_key, AnonymousLayout, AnonymousSpend, DisclosureLayout, RingRail,
-    ANONYMOUS_MERGE_WIDTHS, APPLY_BATCH, DELIVERED_AUDIT_CAPACITIES, PROVING_KEY_SHA256S,
+    key_catalog::{ApplyMode, RecordPools, RingCircuit, TransferSpend, RING_KEYS},
+    verifying_key, DisclosureFormat, RingRail, APPLY_BATCH, PROVING_KEY_SHA256S,
 };
-use spr_interface::shape::SPP_SUPPORTED_SHAPES;
+use spr_interface::{shape::SPP_SUPPORTED_SHAPES, MAX_INTERFACE_TRANSFERS};
 
 const LOCK: &str = include_str!("../../../prover/ring/proving-keys.lock");
 
@@ -53,60 +52,51 @@ fn every_catalog_key_is_locked_with_its_verifying_key() {
 
 /// Every circuit the program selects for a supported shape, as the generated catalog spells it.
 fn selectable_circuits() -> BTreeSet<String> {
-    let mut circuits = vec![RingCircuit::RegisterKey, RingCircuit::WithdrawalExemption];
-    circuits.extend((1..=8).map(RingCircuit::deposit));
+    let mut circuits = vec![RingCircuit::RegisterKey];
     for shape in SPP_SUPPORTED_SHAPES {
         let (n_in, n_out) = (shape.n_inputs(), shape.n_outputs());
-        let outputs = n_out as u8;
-        if DELIVERED_AUDIT_CAPACITIES.contains(&n_out) {
-            circuits.push(RingCircuit::DeliveredAudit { outputs });
-        }
-        for inputs in 1..=n_in {
-            for spends_default_ring in [false, true] {
-                let spend = AnonymousSpend {
-                    inputs,
-                    outputs: n_out,
-                    spends_default_ring,
-                };
-                if let Some(key) = spend.audit_key() {
-                    let layout = AnonymousLayout {
-                        key,
-                        inputs,
-                        outputs: n_out,
-                        exits: false,
-                    };
-                    circuits.push(RingCircuit::audit(
-                        DisclosureLayout::Anonymous(layout),
-                        outputs,
-                    ));
+        let rails = [RingRail::Confidential, RingRail::Anonymous]
+            .into_iter()
+            .chain(shape.is_ring_authority().then_some(RingRail::Delegate));
+        for rail in rails {
+            for inputs in 1..=n_in {
+                for spends_default_ring in [false, true] {
+                    for legs in 0..=MAX_INTERFACE_TRANSFERS {
+                        for owners in 0..=n_in {
+                            for wide in [false, true] {
+                                circuits.extend(
+                                    [
+                                        DisclosureFormat::Standard,
+                                        DisclosureFormat::SingleAssetPayout,
+                                    ]
+                                    .into_iter()
+                                    .filter_map(|format| {
+                                        RingCircuit::transfer(TransferSpend {
+                                            format,
+                                            rail,
+                                            inputs,
+                                            outputs: n_out,
+                                            spends_default_ring,
+                                            legs,
+                                            owners,
+                                            pools: RecordPools::default(),
+                                            wide,
+                                        })
+                                    }),
+                                );
+                            }
+                        }
+                    }
                 }
             }
         }
-        for own_only in [false, true] {
-            for withdrawals in 0..=32 {
-                circuits.push(RingCircuit::policy(
-                    RingRail::Confidential,
-                    n_in as u8,
-                    outputs,
-                    withdrawals,
-                    own_only,
-                ));
-            }
-            if shape.is_ring_authority() {
-                circuits.push(RingCircuit::policy(
-                    RingRail::Delegate,
-                    n_in as u8,
-                    outputs,
-                    0,
-                    own_only,
-                ));
-            }
-        }
     }
-    circuits.extend((1..=APPLY_BATCH as u64).map(RingCircuit::apply_records));
-    circuits.extend(
-        ANONYMOUS_MERGE_WIDTHS.map(|width| RingCircuit::AnonymousMerge { width: width as u8 }),
-    );
+    for mode in [ApplyMode::Public, ApplyMode::Private] {
+        circuits
+            .extend((1..=APPLY_BATCH as u64).map(|count| RingCircuit::apply_records(count, mode)));
+    }
+    circuits.extend((1..=APPLY_BATCH as u64).map(RingCircuit::apply_enrollments));
+    circuits.push(RingCircuit::Merge);
     circuits
         .iter()
         .map(|circuit| format!("{circuit:?}"))

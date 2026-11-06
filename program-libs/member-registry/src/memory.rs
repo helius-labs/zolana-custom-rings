@@ -1,54 +1,62 @@
+//! A [`RecordStore`] holding every node and record in memory.
+//!
+//! Read after `program-libs/member-registry/src/tree.rs`. Read before
+//! `program-libs/member-registry/src/record.rs`, `program-libs/member-registry/src/tracking.rs`.
+
 use std::collections::BTreeMap;
 
-use custom_ring_interface::{MEMBER_REGISTRY_CAPACITY, QUAD_ARITY, QUAD_HEIGHT};
+use custom_ring_interface::{QUAD_ARITY, QUAD_HEIGHT};
 
 use crate::{
-    path::{quad_node, NodePosition, ZERO_SUBTREES},
+    path::{capacity, quad_node, NodePosition, ZERO_SUBTREES},
     record::check_member,
+    tree::IndexedLeaf,
     IndexedRecord, MemberRecord, RecordStore, RecordTreeError,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MemberRegistryTree {
+pub struct MemoryTree<L, const H: usize> {
     /// The populated prefix of each level, leaves first.
     levels: Vec<Vec<[u8; 32]>>,
-    records: Vec<MemberRecord>,
+    records: Vec<L>,
     members: BTreeMap<[u8; 32], u64>,
 }
 
-impl MemberRegistryTree {
-    /// The tree holding only the sentinel, the state `CreateMemberRegistry` starts from.
+pub type MemberRegistryTree = MemoryTree<MemberRecord, QUAD_HEIGHT>;
+
+impl<L: IndexedLeaf, const H: usize> MemoryTree<L, H> {
+    /// The tree holding only the sentinel, the state a new registry starts from.
     pub fn new() -> Result<Self, RecordTreeError> {
-        Self::from_records(vec![MemberRecord::SENTINEL])
+        Self::from_records(vec![L::SENTINEL])
     }
 
     /// Records in leaf order, the sentinel first.
-    pub fn from_records(records: Vec<MemberRecord>) -> Result<Self, RecordTreeError> {
+    pub fn from_records(records: Vec<L>) -> Result<Self, RecordTreeError> {
         let (sentinel, rest) = records
             .split_first()
             .ok_or(RecordTreeError::MissingSentinel)?;
         // Inserts relink the sentinel's next, its member and fields stay zero.
-        if sentinel.member != [0; 32] || !sentinel.is_empty() {
+        if *sentinel.member() != [0; 32] || !sentinel.is_blank() {
             return Err(RecordTreeError::MissingSentinel);
         }
-        if records.len() as u64 > MEMBER_REGISTRY_CAPACITY {
+        if records.len() as u64 > capacity(H) {
             return Err(RecordTreeError::Full);
         }
-        let mut members = BTreeMap::from([(sentinel.member, 0)]);
+        let mut members = BTreeMap::from([(*sentinel.member(), 0)]);
         for (index, record) in (1..).zip(rest) {
-            check_member(&record.member)?;
-            if members.insert(record.member, index).is_some() {
+            check_member(record.member())?;
+            if members.insert(*record.member(), index).is_some() {
                 return Err(RecordTreeError::DuplicateMember);
             }
         }
-        let mut levels = Vec::with_capacity(QUAD_HEIGHT + 1);
+        let mut levels = Vec::with_capacity(H + 1);
         levels.push(
             records
                 .iter()
-                .map(MemberRecord::hash)
+                .map(L::leaf_hash)
                 .collect::<Result<Vec<_>, _>>()?,
         );
-        for level in 0..QUAD_HEIGHT {
+        for level in 0..H {
             let parents = levels[level]
                 .chunks(QUAD_ARITY)
                 .map(|chunk| {
@@ -68,11 +76,11 @@ impl MemberRegistryTree {
     }
 
     /// Leaf order.
-    pub fn records(&self) -> &[MemberRecord] {
+    pub fn records(&self) -> &[L] {
         &self.records
     }
 
-    fn indexed(&self, index: u64) -> Result<IndexedRecord, RecordTreeError> {
+    fn indexed(&self, index: u64) -> Result<IndexedRecord<L>, RecordTreeError> {
         let record = *self
             .records
             .get(index as usize)
@@ -81,7 +89,7 @@ impl MemberRegistryTree {
     }
 }
 
-impl RecordStore for MemberRegistryTree {
+impl<L: IndexedLeaf, const H: usize> RecordStore<L, H> for MemoryTree<L, H> {
     type Error = RecordTreeError;
 
     fn next_index(&self) -> Result<u64, RecordTreeError> {
@@ -114,14 +122,14 @@ impl RecordStore for MemberRegistryTree {
         Ok(())
     }
 
-    fn record(&self, member: &[u8; 32]) -> Result<Option<IndexedRecord>, RecordTreeError> {
+    fn record(&self, member: &[u8; 32]) -> Result<Option<IndexedRecord<L>>, RecordTreeError> {
         self.members
             .get(member)
             .map(|index| self.indexed(*index))
             .transpose()
     }
 
-    fn low_record(&self, member: &[u8; 32]) -> Result<IndexedRecord, RecordTreeError> {
+    fn low_record(&self, member: &[u8; 32]) -> Result<IndexedRecord<L>, RecordTreeError> {
         let (_, index) = self
             .members
             .range(..*member)
@@ -130,18 +138,18 @@ impl RecordStore for MemberRegistryTree {
         self.indexed(*index)
     }
 
-    fn set_record(&mut self, index: u64, record: MemberRecord) -> Result<(), RecordTreeError> {
+    fn set_record(&mut self, index: u64, record: L) -> Result<(), RecordTreeError> {
         let position = index as usize;
         if position == self.records.len() {
-            if self.members.contains_key(&record.member) {
+            if self.members.contains_key(record.member()) {
                 return Err(RecordTreeError::DuplicateMember);
             }
-            self.members.insert(record.member, index);
+            self.members.insert(*record.member(), index);
             self.records.push(record);
             return Ok(());
         }
         match self.records.get_mut(position) {
-            Some(slot) if slot.member == record.member => {
+            Some(slot) if slot.member() == record.member() => {
                 *slot = record;
                 Ok(())
             }

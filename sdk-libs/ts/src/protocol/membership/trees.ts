@@ -1,10 +1,10 @@
-import type { ChainReader, TreeContext } from "@heliuslabs/zolana/client";
-import { decodeTreeId, treeAddress } from "@heliuslabs/zolana/internal";
-import { SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana/interface";
-import type { Address, RequestContext } from "@heliuslabs/zolana/interface";
-import type { TreeId } from "@heliuslabs/zolana/transaction";
+import type { ChainReader, TreeContext } from "@heliuslabs/spr/client";
+import { decodeTreeId, treeAddress } from "@heliuslabs/spr/internal";
+import { SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/spr/interface";
+import type { Address, RequestContext } from "@heliuslabs/spr/interface";
+import type { TreeId } from "@heliuslabs/spr/transaction";
 import { RingError } from "../error.js";
-import type { OutputContext } from "@heliuslabs/zolana/transaction";
+import type { OutputContext } from "@heliuslabs/spr/transaction";
 
 export async function resolveRingOutputTree(
   client: TreeContext & Pick<ChainReader, "getAccount">,

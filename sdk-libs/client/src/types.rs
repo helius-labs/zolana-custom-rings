@@ -1,5 +1,6 @@
 use core::fmt;
 
+use custom_ring_interface::InputClass;
 #[cfg(feature = "rpc")]
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
@@ -27,9 +28,9 @@ pub struct AuditedTransaction {
     /// Published order, a slot that did not open sits in `payload_errors` instead.
     pub outputs: Vec<AuditedOutput>,
     pub payload_errors: Vec<OutputPayloadError>,
-    /// `None` outside the anonymous rail.
-    pub sender: Option<AuditedSender>,
-    /// One per published nullifier of an anonymous transfer.
+    /// `R`, spent notes among the published inputs.
+    pub real_inputs: u8,
+    /// One per published nullifier.
     pub inputs: Vec<AuditedInput>,
 }
 
@@ -52,13 +53,9 @@ pub enum OutputOpening {
     Dummy,
 }
 
+/// Left free by the proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RingOwnerTag {
-    /// The recipient key's u on the delivered rails.
-    Recipient([u8; 32]),
-    /// A view tag the anonymous proof leaves free.
-    View([u8; 32]),
-}
+pub struct RingOwnerTag(pub [u8; 32]);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct AuditedUtxo {
@@ -67,7 +64,6 @@ pub struct AuditedUtxo {
     pub nullifier_pk: [u8; 32],
     /// `hash_bytes(mint)`.
     pub asset: [u8; 32],
-    /// `None` until the asset registry knows the asset.
     pub mint: Option<Address>,
     pub amount: u64,
     pub blinding: [u8; 32],
@@ -91,13 +87,7 @@ pub struct KnownUtxo {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UtxoOwner {
-    Keyed {
-        nullifier_pk: [u8; 32],
-    },
-    /// A deposit capsule discloses the owner hash alone.
-    Deposited {
-        owner_hash: [u8; 32],
-    },
+    Keyed { nullifier_pk: [u8; 32] },
 }
 
 /// A note one transaction created, at its slot.
@@ -105,15 +95,10 @@ pub enum UtxoOwner {
 pub struct CreatedUtxo {
     pub commitment: [u8; 32],
     pub slot_index: u32,
+    pub leaf_index: u64,
     pub utxo: KnownUtxo,
-}
-
-/// The sender every spent UTXO of an anonymous transfer belongs to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AuditedSender {
-    pub owner_key: [u8; 32],
-    /// Spent UTXO 0's key, every input's under the entry key, `None` when UTXO 0 was deposited.
-    pub nullifier_pk: Option<[u8; 32]>,
+    /// False on an exit, its note leaves the ring.
+    pub ring_note: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -124,47 +109,38 @@ pub struct AuditedInput {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InputOpening {
+    /// Past the notes and addresses.
     Dummy,
-    Opened(AuditedInputOpening),
-    /// More of the sender's ring notes carry the disclosed prefix than inputs name it.
-    Ambiguous {
-        candidates: Vec<[u8; 32]>,
-    },
+    /// SPP's address slot, neither a spent note nor evidence of an owner.
+    Address,
+    /// A spent note, never padding or unspent.
+    Real,
+    /// A default-ring note whose opening the frame carries.
+    External(Box<AuditedDefaultInput>),
 }
 
 impl InputOpening {
-    pub fn opened(&self) -> Option<&AuditedInputOpening> {
+    pub fn class(&self) -> InputClass {
         match self {
-            Self::Opened(opening) => Some(opening),
-            Self::Dummy | Self::Ambiguous { .. } => None,
+            Self::Dummy => InputClass::Dummy,
+            Self::Address => InputClass::Address,
+            Self::Real | Self::External(_) => InputClass::Note,
+        }
+    }
+
+    pub fn default_input(&self) -> Option<&AuditedDefaultInput> {
+        match self {
+            Self::External(input) => Some(input.as_ref()),
+            Self::Dummy | Self::Address | Self::Real => None,
         }
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct AuditedInputOpening {
-    pub asset: [u8; 32],
-    pub mint: Option<Address>,
-    pub amount: u64,
-    pub blinding: [u8; 32],
-    /// `None` without the input's tree id, every commitment binds it.
-    pub ring: Option<InputRing>,
-}
-
-/// SPP spends a UTXO of the ring or of the default ring, an entry disclosure names neither.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum InputRing {
-    Ring {
-        commitment: [u8; 32],
-    },
-    Default {
-        commitment: [u8; 32],
-    },
-    /// No known commitment told the candidates apart.
-    Unresolved {
-        ring: [u8; 32],
-        default: [u8; 32],
-    },
+pub struct AuditedDefaultInput {
+    pub utxo: AuditedUtxo,
+    /// `None` without the input's tree id, the commitment binds it.
+    pub commitment: Option<[u8; 32]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,43 +153,27 @@ pub struct OutputPayloadError {
 #[cfg_attr(feature = "rpc", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "rpc", serde(rename_all = "camelCase"))]
 pub enum OutputPayloadErrorKind {
-    /// No body of the layout's scheme and length, or no tag in the owner tag.
-    Frame,
-    /// The slot's disclosure bytes do not parse under the layout.
+    /// The slot's record holds a value outside the field.
     Disclosure,
-    /// The recipient key admits no X25519 agreement.
-    RecipientKey,
     /// The rebuilt opening hashes to another commitment.
     Commitment,
-    /// The auditor holds no escrowed key for the owner.
-    EscrowUnknown,
 }
 
 impl AuditedTransaction {
-    /// The ring and exit notes its outputs opened, the index a [`crate::KnownUtxos`] keeps.
     pub fn utxos(&self) -> impl Iterator<Item = CreatedUtxo> + '_ {
-        self.outputs.iter().filter_map(|output| {
-            output.opening.utxo().map(|utxo| CreatedUtxo {
-                commitment: output.context.hash,
-                slot_index: output.slot_index,
-                utxo: KnownUtxo::opened(*utxo, output.context.tree_id),
-            })
-        })
+        self.outputs.iter().filter_map(AuditedOutput::created)
     }
+}
 
-    /// An unknown mint leaves the opening verified, a registry refresh may name it.
-    pub fn has_unknown_assets(&self) -> bool {
-        let outputs = self
-            .outputs
-            .iter()
-            .filter_map(|output| output.opening.utxo())
-            .map(|utxo| utxo.mint);
-        let inputs = self
-            .inputs
-            .iter()
-            .filter_map(|input| input.opening.opened())
-            .map(|opening| opening.mint);
-        outputs.chain(inputs).any(|mint| mint.is_none())
+impl AuditedOutput {
+    pub fn created(&self) -> Option<CreatedUtxo> {
+        self.opening.utxo().map(|utxo| CreatedUtxo {
+            commitment: self.context.hash,
+            slot_index: self.slot_index,
+            leaf_index: self.context.leaf_index,
+            utxo: KnownUtxo::opened(*utxo, self.context.tree_id),
+            ring_note: matches!(self.opening, OutputOpening::Ring { .. }),
+        })
     }
 }
 
@@ -287,17 +247,15 @@ impl UtxoOwner {
     pub fn nullifier_pk(self) -> Option<[u8; 32]> {
         match self {
             Self::Keyed { nullifier_pk } => Some(nullifier_pk),
-            Self::Deposited { .. } => None,
         }
     }
 
-    fn hash(self, owner_key: &[u8; 32]) -> Result<[u8; 32], AuditError> {
+    pub(crate) fn hash(self, owner_key: &[u8; 32]) -> Result<[u8; 32], AuditError> {
         match self {
             Self::Keyed { nullifier_pk } => Ok(Poseidon::hashv(&[
                 &solana_owner_identity(owner_key)?,
                 &nullifier_pk,
             ])?),
-            Self::Deposited { owner_hash } => Ok(owner_hash),
         }
     }
 }
@@ -350,25 +308,6 @@ impl fmt::Debug for KnownUtxo {
             .field("data_hash", data_hash)
             .field("ring_data_hash", ring_data_hash)
             .field("tree_id", tree_id)
-            .finish()
-    }
-}
-
-impl fmt::Debug for AuditedInputOpening {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self {
-            asset,
-            mint,
-            amount,
-            blinding: _,
-            ring,
-        } = self;
-        f.debug_struct("AuditedInputOpening")
-            .field("asset", asset)
-            .field("mint", mint)
-            .field("amount", amount)
-            .field("blinding", &REDACTED)
-            .field("ring", ring)
             .finish()
     }
 }

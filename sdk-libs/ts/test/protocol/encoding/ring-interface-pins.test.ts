@@ -7,24 +7,22 @@ import {
   QUAD_ARITY,
   QUAD_HEIGHT,
 } from "../../../src/protocol/membership/member-registry.js";
-import { InstructionTag } from "@heliuslabs/zolana/interface";
+import { InstructionTag } from "@heliuslabs/spr/interface";
 import {
   RingInstructionTag,
   ringComputeUnitLimit,
 } from "../../../src/operations/management/admin.js";
 import {
-  APPLY_DELAY_SLOTS,
-  AUTHORITY_RESERVED_LEAVES,
-  DEFAULT_INSERT_FEE,
   GRACE_SLOTS,
-  MEMBER_QUEUE_LIMIT,
-  MEMBER_REGISTRY_DISCRIMINATOR,
-  MEMBER_REGISTRY_SIZE,
-  RECORD_QUEUE_DISCRIMINATOR,
-  RECORD_QUEUE_SIZE,
-  RING_PROGRAM_CONFIG_DISCRIMINATOR,
-  RING_PROGRAM_CONFIG_SIZE,
+  RING_CO_SIGNER_DISCRIMINATOR,
+  RING_CO_SIGNER_SIZE,
+  RING_POLICY_DISCRIMINATOR,
+  RING_POLICY_SIZE,
+  RING_ROLE_BYTES,
+  STORAGE_REGISTRY_DISCRIMINATOR,
+  STORAGE_REGISTRY_SIZE,
 } from "../../../src/protocol/codec/ring-codecs.js";
+import { MAX_SPP_CPI_ACCOUNTS } from "../../../src/protocol/transaction/spp.js";
 
 function rust(file: string): string {
   return readFileSync(
@@ -57,7 +55,19 @@ describe("ring interface pins", () => {
     );
     const tags = new Map(Object.entries(RingInstructionTag));
     const spp = new Map<string, number>(Object.entries(InstructionTag));
-    const rows = [...source.matchAll(/^ {4}([A-Za-z]+) = [A-Z_]+: ([\w:]+) => ([\w]+),$/gmu)];
+    const rows = [
+      ...source.matchAll(/^ {4}([A-Za-z0-9]+) = [A-Z0-9_]+: ([\w:]+) => ([\w *+]+),$/gmu),
+    ];
+    const budgetOf = (expression: string) =>
+      expression
+        .split("+")
+        .map((term) =>
+          term
+            .split("*")
+            .map((factor) => units.get(factor.trim()) ?? integer(factor.trim()))
+            .reduce((product, factor) => product * factor, 1n),
+        )
+        .reduce((sum, term) => sum + term, 0n);
     expect(rows.map(([, variant = ""]) => lowerFirst(variant)).sort()).toEqual(
       [...tags.keys()].sort(),
     );
@@ -68,11 +78,11 @@ describe("ring interface pins", () => {
       const actual = tags.get(name);
       expect(actual, name).toBe(expected);
       if (actual === undefined) continue;
-      expect(BigInt(ringComputeUnitLimit(actual)), name).toBe(units.get(budget) ?? integer(budget));
+      expect(BigInt(ringComputeUnitLimit(actual)), name).toBe(budgetOf(budget));
     }
   });
 
-  it("bounds the record queue and registry like Rust `member_registry`", () => {
+  it("bounds the record tree like Rust `member_registry`", () => {
     const constants = new Map(
       [
         ...rust("accounts/member_registry.rs").matchAll(
@@ -83,10 +93,6 @@ describe("ring interface pins", () => {
     expect(constants.get("QUAD_ARITY")).toBe(BigInt(QUAD_ARITY));
     expect(constants.get("QUAD_HEIGHT")).toBe(BigInt(QUAD_HEIGHT));
     expect(constants.get("APPLY_BATCH")).toBe(BigInt(APPLY_BATCH));
-    expect(constants.get("MEMBER_QUEUE_LIMIT")).toBe(MEMBER_QUEUE_LIMIT);
-    expect(constants.get("AUTHORITY_RESERVED_LEAVES")).toBe(AUTHORITY_RESERVED_LEAVES);
-    expect(constants.get("DEFAULT_INSERT_FEE")).toBe(DEFAULT_INSERT_FEE);
-    expect(constants.get("APPLY_DELAY_SLOTS")).toBe(APPLY_DELAY_SLOTS);
     expect(constants.get("GRACE_SLOTS")).toBe(GRACE_SLOTS);
   });
 
@@ -96,17 +102,38 @@ describe("ring interface pins", () => {
       Number(new RegExp(`^ {4}${name} = [A-Z_]+: (\\d+),`, "mu").exec(source)?.[1]);
     const size = (name: string): number =>
       Number(new RegExp(`assert!\\(${name}::SIZE == (\\d+)\\)`, "u").exec(source)?.[1]);
-    expect([discriminator("RingProgramConfig"), size("RingProgramConfig")]).toEqual([
-      RING_PROGRAM_CONFIG_DISCRIMINATOR,
-      RING_PROGRAM_CONFIG_SIZE,
+    expect([discriminator("RingPolicy"), size("RingPolicy")]).toEqual([
+      RING_POLICY_DISCRIMINATOR,
+      RING_POLICY_SIZE,
     ]);
-    expect([discriminator("MemberRegistry"), size("MemberRegistry")]).toEqual([
-      MEMBER_REGISTRY_DISCRIMINATOR,
-      MEMBER_REGISTRY_SIZE,
+    expect([discriminator("CoSigner"), size("CoSigner")]).toEqual([
+      RING_CO_SIGNER_DISCRIMINATOR,
+      RING_CO_SIGNER_SIZE,
     ]);
-    expect([discriminator("RecordQueue"), size("RecordQueue")]).toEqual([
-      RECORD_QUEUE_DISCRIMINATOR,
-      RECORD_QUEUE_SIZE,
-    ]);
+  });
+
+  it("reads the storage registry at the discriminator and size Rust asserts", () => {
+    const source = rust("accounts/storage.rs");
+    expect(Number(/pub const DISCRIMINATOR: u8 = (\d+);/u.exec(source)?.[1])).toBe(
+      STORAGE_REGISTRY_DISCRIMINATOR,
+    );
+    expect(Number(/assert!\(StorageRegistry::SIZE == (\d+)\)/u.exec(source)?.[1])).toBe(
+      STORAGE_REGISTRY_SIZE,
+    );
+  });
+
+  it("encodes each role with the byte Rust `RingRole` decodes", () => {
+    const body = rust("accounts/state.rs").split("pub enum RingRole {")[1]?.split("}")[0] ?? "";
+    const rows = [...body.matchAll(/tag = (\d+)\)\]\s+([A-Za-z]+),/gu)].map(
+      ([, tag = "", variant = ""]) => [lowerFirst(variant), Number(tag)] as const,
+    );
+    expect(Object.fromEntries(rows)).toEqual(RING_ROLE_BYTES);
+  });
+
+  it("bounds the account window one call hands SPP like Rust `MAX_SPP_CPI_ACCOUNTS`", () => {
+    const pinned = /pub const MAX_SPP_CPI_ACCOUNTS: usize = (\d+);/u.exec(
+      rust("codec/spp.rs"),
+    )?.[1];
+    expect(MAX_SPP_CPI_ACCOUNTS).toBe(Number(pinned));
   });
 });

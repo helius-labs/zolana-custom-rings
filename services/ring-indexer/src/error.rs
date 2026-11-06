@@ -10,8 +10,6 @@ pub enum RingApiError {
     RootChanged,
     #[error("member registry page has an index gap or inconsistent leaf")]
     PageGap,
-    #[error("record queue moved under the request")]
-    QueueChanged,
     #[error("invalid request ({0})")]
     InvalidRequest(String),
     #[error("internal error ({0})")]
@@ -30,7 +28,6 @@ impl From<RingApiError> for ErrorObjectOwned {
             RingApiError::OutOfSync(_) => RingRpcError::RegistryOutOfSync,
             RingApiError::RootChanged => RingRpcError::RegistryRootChanged,
             RingApiError::PageGap => RingRpcError::RegistryPageGap,
-            RingApiError::QueueChanged => RingRpcError::RecordQueueChanged,
             RingApiError::InvalidRequest(_) => {
                 return Self::owned(
                     ErrorCode::InvalidRequest.code(),

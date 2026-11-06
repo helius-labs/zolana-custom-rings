@@ -1,60 +1,74 @@
-//! Pins the anonymous classes and shapes in `test-vectors/proof/ring_keyed_shapes.json` for the Go keys test and the TS SDK.
+//! Pins the transfer key catalog and the shapes it serves in `test-vectors/proof/ring_keyed_shapes.json` for the Go keys test and the TS SDK.
 
 use custom_ring_interface::{
-    AnonymousSpend, ANONYMOUS_AUDIT_CLASSES, ANONYMOUS_ENTRY_CLASS, ANONYMOUS_ENTRY_OUTPUTS,
+    key_catalog::{RecordPools, RingCircuit, TransferSpend, TRANSFER_SHAPES},
+    RingRail,
 };
+use serde_json::{json, Value};
 use spr_interface::shape::SPP_SUPPORTED_SHAPES;
 
-fn vector() -> serde_json::Value {
-    serde_json::from_str(include_str!(
-        "../../../test-vectors/proof/ring_keyed_shapes.json"
-    ))
-    .unwrap()
-}
+const VECTORS: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../test-vectors/proof/ring_keyed_shapes.json"
+);
 
-#[test]
-fn the_anonymous_classes_are_the_shared_vector() {
-    let vector = vector();
-    let classes: Vec<(usize, Vec<usize>)> = ANONYMOUS_AUDIT_CLASSES
+fn shapes() -> Value {
+    TRANSFER_SHAPES
         .iter()
-        .map(|(outputs, classes)| (*outputs, classes.to_vec()))
-        .collect();
-    let pinned: Vec<(usize, Vec<usize>)> = vector["anonymous_audit_classes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|row| {
-            (
-                serde_json::from_value(row["outputs"].clone()).unwrap(),
-                serde_json::from_value(row["classes"].clone()).unwrap(),
-            )
+        .map(|shape| {
+            json!({"outputs": shape.outputs, "inputs": shape.inputs, "withdrawals": shape.withdrawals, "owners": shape.owners, "entry": shape.entry, "wide": shape.wide})
         })
-        .collect();
-    assert_eq!(classes, pinned);
-    let entry = &vector["anonymous_entry"];
-    assert_eq!(entry["class"], ANONYMOUS_ENTRY_CLASS);
-    assert_eq!(
-        serde_json::from_value::<Vec<usize>>(entry["outputs"].clone()).unwrap(),
-        ANONYMOUS_ENTRY_OUTPUTS
-    );
+        .collect()
 }
 
-#[test]
-fn a_class_serves_exactly_the_listed_anonymous_shapes() {
-    let pinned: Vec<[usize; 2]> =
-        serde_json::from_value(vector()["anonymous_ring"].clone()).unwrap();
-    let served: Vec<[usize; 2]> = SPP_SUPPORTED_SHAPES
+/// Every shape input counts as published.
+fn served(rail: RingRail, spends_default_ring: bool) -> Value {
+    SPP_SUPPORTED_SHAPES
         .into_iter()
         .filter(|shape| {
-            AnonymousSpend {
-                inputs: shape.n_inputs(),
-                outputs: shape.n_outputs(),
-                spends_default_ring: false,
-            }
-            .audit_key()
-            .is_some()
+            rail.supports(*shape)
+                && RingCircuit::transfer(
+                    TransferSpend {
+                        format: rail.disclosure_format(*shape),
+                        rail,
+                        inputs: shape.n_inputs(),
+                        outputs: shape.n_outputs(),
+                        spends_default_ring,
+                        legs: 0,
+                        owners: 0,
+                        pools: RecordPools::default(),
+                        wide: false,
+                    }
+                    .fitted(),
+                )
+                .is_some()
         })
-        .map(|shape| [shape.n_inputs(), shape.n_outputs()])
-        .collect();
-    assert_eq!(served, pinned);
+        .map(|shape| json!([shape.n_inputs(), shape.n_outputs()]))
+        .collect()
+}
+
+fn compute_vector() -> Value {
+    json!({
+        "description": "Per ring rail, the SPP shapes a transfer key serves when every shape input is spent, each list in the cost order of SPP_SUPPORTED_SHAPES. confidential_ring is the signer and in-proof rails, anonymous_ring the anonymous rail over ring notes, anonymous_entry_ring the anonymous rail spending a default-ring note, ring_authority the RingAuthority rail. transfer_shapes lists every transfer key, mirrored by prover/circuits/transfer. Produced by program-libs/interface/tests/keyed_shapes.rs.",
+        "confidential_ring": served(RingRail::Confidential, false),
+        "anonymous_ring": served(RingRail::Anonymous, false),
+        "anonymous_entry_ring": served(RingRail::Anonymous, true),
+        "ring_authority": served(RingRail::Delegate, false),
+        "transfer_shapes": shapes(),
+    })
+}
+
+#[test]
+fn the_keyed_shapes_are_the_shared_vector() {
+    let committed: Value =
+        serde_json::from_str(&std::fs::read_to_string(VECTORS).expect("vector file"))
+            .expect("vector json");
+    assert_eq!(committed, compute_vector());
+}
+
+#[test]
+#[ignore = "rewrites test-vectors/proof/ring_keyed_shapes.json"]
+fn write_ring_keyed_shapes_vector() {
+    let json = serde_json::to_string_pretty(&compute_vector()).expect("json");
+    std::fs::write(VECTORS, json + "\n").expect("write vector file");
 }

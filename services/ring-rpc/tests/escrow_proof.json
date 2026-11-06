@@ -1,0 +1,36 @@
+{
+  "auditorPk": "0x04708c2645c705baaf44f2ab947574174f9280df58be6fc2f6f2e8881b78a3115a",
+  "ciphertext": "0x99c0df5d4bbbb84e67396d48524ea71e08f298cc47acc0f3541e578a61efcfda",
+  "ephPk": "0x048ea960e4e1b72cdec9a6e7d86ae28cd04edb4b5c07266d3c32d9133c8ebaa966",
+  "member": "0x2b38411a54dfbbf91d0c8fc8a40335560e835d986a1ad2c77dc2f6d14faa6352",
+  "nullifierPk": "0x0db2307912bcc5b8bf63df70e4201a0ad0604a62a11fdd27493014345992ed2f",
+  "proof": {
+    "ar": [
+      "0x015aa105637f377f2042e4c68f8bf23e15848b839b4cd014d2c4f3cffa8302b4",
+      "0x2a0c661cad19e458755194830ad453ed0e5a20bc0114a8685bf36052f2f5039f"
+    ],
+    "bs": [
+      [
+        "0x0640949f93b9a92475312cc5ad5c5de951070afde3767fb9aa704b2f4755fa0e",
+        "0x1514dd04cd012afe694f7c6f5b57ac27565f52c1ed5170e8f1697930e30f0265"
+      ],
+      [
+        "0x2409d62a2c6dce2abb2cb9c7752338fdb33774d75fbea5dddc777ca4dfeb2fdb",
+        "0x095d0399fc21cd64928ebfdc5a8dbf59ea8c053c17d83f680ee45164ad3ce742"
+      ]
+    ],
+    "krs": [
+      "0x18556823dae42aadbf8aea565582543409b14033bef3691583eee2b6779fd725",
+      "0x01be414e88c7e07ccafccb20faf7c678042fda61d6cd31b3cacaada2343182b0"
+    ],
+    "proofCommitment": [
+      "0x02ef60c4ef5d73fefe2c25676bb1c74de5cbd5a37706721dbdb7da1d731916b2",
+      "0x17af07caf6ebbec1111d1dc03fa6e185361fd0d4fd7bef3003661a1dc4a4ea3d"
+    ],
+    "proofCommitmentPok": [
+      "0x06879a7b5cca3e3736985442149da7248a19a24474456d86862713a47f5982ff",
+      "0x0f0434b75bded206d0a5b3326651e9cba46a98d5c94191f0744ddfc4688dfcc5"
+    ],
+    "provingKeySha256": "90d0f3a05edf2bef59de6726aa1e3c4b08abed8dd4c627f94a169752a49fcfe6"
+  }
+}

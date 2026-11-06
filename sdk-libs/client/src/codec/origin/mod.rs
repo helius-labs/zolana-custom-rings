@@ -2,7 +2,6 @@
 
 use core::future::Future;
 
-use sha2::{Digest, Sha256};
 use solana_address::Address;
 use solana_signature::Signature;
 use spr_event::{tag, GeneralEvent};
@@ -10,7 +9,6 @@ use spr_event_parser::{
     event_parent, reconstruct_general_event, InstructionGroup, ParsedInstruction,
 };
 use spr_interface::{
-    instruction::instruction_data::deposit::RingDepositIxData,
     instruction::{settlement_accounts, InterfaceTransfer, TransactIxDataRef},
     SHIELDED_POOL_CPI_AUTHORITY, SHIELDED_POOL_PROGRAM_ID, SOL_INTERFACE,
 };
@@ -18,8 +16,8 @@ use spr_transaction::{ShieldedTransaction, SOL_MINT};
 
 use crate::AuditError;
 use custom_ring_interface::{
-    tag as ring_tag, CustomRingError, DisclosureLayout, InstructionTag, RingMode, RingRail,
-    RingTransactData,
+    tag as ring_tag, transact_flag, AuditStreamLayout, CheckedAuthorization, CustomRingError,
+    CustomRingMergeIxDataRef, InstructionTag, ParsedTransact, RingMode, RingRail, RingTransactData,
 };
 
 /// What a confirmed transaction says about its ring, its signers and the value it settled out.
@@ -31,26 +29,24 @@ pub struct RingOrigin {
     /// Fee payer first, every real input owner signs.
     pub signers: Vec<Address>,
     pub withdrawals: Vec<RingWithdrawal>,
-    /// Capsule bindings from this event's confirmed audited deposit instruction.
-    pub deposits: Vec<ConfirmedDeposit>,
     /// The anonymous merge disclosure whose proof the direct ring caller verified.
     pub merge_disclosure: Option<ConfirmedMergeDisclosure>,
     /// `tag || data` of the ring instruction that forwarded a transfer.
     pub transact: Option<Vec<u8>>,
+    /// Accounts of the SPP instruction behind `event`.
+    pub pool_accounts: Vec<Address>,
 }
 
-/// The auditor's half of a confirmed anonymous merge, bound to the forwarded SPP body.
+/// Bound to the forwarded SPP body.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConfirmedMergeDisclosure {
     pub eph_pk: [u8; custom_ring_interface::TAGGED_X25519_KEY_LEN],
-    pub ciphertext: [u8; custom_ring_interface::AUDIT_CIPHERTEXT_LEN],
-    pub fields: Vec<[u8; 32]>,
+    pub ciphertext: [u8; custom_ring_interface::OPENING_RECORD_LEN],
 }
 
 /// The confirmed instruction selects the recovery path, never indexer metadata.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConfirmedEventKind {
-    Deposit,
     Transfer,
     Merge,
 }
@@ -109,7 +105,7 @@ impl ConfirmedEvent {
             .map(|key| *key.as_bytes())
             .unwrap_or([0; 33]);
         if self.slot.is_some_and(|slot| transaction.slot != slot)
-            || transaction.proofless != (self.kind == ConfirmedEventKind::Deposit)
+            || transaction.proofless
             || viewing_key != event.tx_viewing_pk
             || transaction.salt.unwrap_or_default() != event.salt
             || transaction.messages != event.messages
@@ -148,13 +144,45 @@ impl RingOrigin {
         self.ring_invoked && self.event.kind == ConfirmedEventKind::Transfer
     }
 
-    /// The layout the program bound into the audit statement, read from the forwarding frame.
-    pub fn disclosure_layout(&self, mode: RingMode) -> Result<DisclosureLayout, AuditError> {
+    pub fn audit_frame(&self, mode: RingMode) -> Result<AuditStreamLayout, AuditError> {
         let frame = self
             .transact
             .as_deref()
             .ok_or(AuditError::MissingRingTransact)?;
-        frame_layout(mode, frame)
+        audit_frame_of(frame, mode)
+    }
+
+    /// The owner signers a confidential transfer binds, an owner of a data output among them may spend no input.
+    pub fn spenders(&self, mode: RingMode) -> Result<Vec<Address>, AuditError> {
+        let frame = self
+            .transact
+            .as_deref()
+            .ok_or(AuditError::MissingRingTransact)?;
+        let parsed = parse_frame(mode, frame)?;
+        let data = parsed.data();
+        let run = match parsed.authorization() {
+            CheckedAuthorization::ConfidentialInProof(owner) => {
+                return Ok(vec![Address::new_from_array(*owner.owner)])
+            }
+            CheckedAuthorization::ConfidentialSigner => {
+                let accounts = &self.pool_accounts;
+                let window =
+                    settlement_accounts(&data.interface_transfers, data.circuit(), accounts)
+                        .ok_or(AuditError::SettlementAccounts)?;
+                data.owner_signers(accounts, window.len())
+                    .map_err(|error| AuditError::InvalidTransactData(error.to_string()))?
+            }
+            CheckedAuthorization::AnonymousHidden(_)
+            | CheckedAuthorization::AnonymousPublic
+            | CheckedAuthorization::Delegate
+            | CheckedAuthorization::AnonymousDelegate => return Ok(Vec::new()),
+        };
+        Ok(run.iter().fold(Vec::new(), |mut spenders, owner| {
+            if !spenders.contains(owner) {
+                spenders.push(*owner);
+            }
+            spenders
+        }))
     }
 
     pub fn bind_transaction(
@@ -169,35 +197,10 @@ impl RingOrigin {
     }
 }
 
-/// An opening authenticated by successful execution of the ring's deposit proof.
-/// Only the confirmed instruction parser constructs this binding.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConfirmedDeposit {
-    slot_index: u8,
-    owner_utxo_hash: [u8; 32],
-    capsule_hash: [u8; 32],
-}
-
-impl ConfirmedDeposit {
-    pub fn slot_index(&self) -> u8 {
-        self.slot_index
-    }
-
-    pub(crate) fn matches(
-        &self,
-        capsule: custom_ring_interface::RingDepositAuditCapsule<'_>,
-        owner_utxo_hash: &[u8; 32],
-    ) -> bool {
-        self.slot_index == capsule.slot_index
-            && &self.owner_utxo_hash == owner_utxo_hash
-            && self.capsule_hash == <[u8; 32]>::from(Sha256::digest(capsule.encode()))
-    }
-}
-
 /// One public settlement leg out of the ring.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RingWithdrawal {
-    /// The policy-screened owner from confirmed v2 metadata, absent for legacy/audit-only frames.
+    /// The policy-screened owner from confirmed metadata, absent for audit-only frames.
     pub screened_owner: Option<Address>,
     /// A token account for an SPL leg, a wallet for a SOL leg.
     pub recipient: Address,
@@ -229,7 +232,6 @@ pub fn ring_event_origin_in(
         .iter()
         .any(|instruction| core::ptr::eq(*instruction, source));
     let kind = match source.data[0] {
-        tag::DEPOSIT | tag::RING_DEPOSIT => ConfirmedEventKind::Deposit,
         tag::MERGE_TRANSACT | tag::RING_MERGE_TRANSACT => ConfirmedEventKind::Merge,
         _ => ConfirmedEventKind::Transfer,
     };
@@ -249,9 +251,9 @@ pub fn ring_event_origin_in(
         event: ConfirmedEvent::new(kind, event),
         signers: Vec::new(),
         withdrawals,
-        deposits: confirmed_deposits(groups, source, ring)?,
         merge_disclosure: confirmed_merge_disclosure(groups, source, ring),
         transact,
+        pool_accounts: source.accounts.clone(),
     })
 }
 
@@ -264,32 +266,17 @@ fn bind_withdrawal_owners(
     if withdrawals.is_empty() {
         return Ok(());
     }
-    let invalid = |e: CustomRingError| AuditError::InvalidTransactData(e.to_string());
-    let (&tag, payload) = frame.split_first().ok_or(AuditError::MissingRingTransact)?;
-    if matches!(
-        tag,
-        ring_tag::LEGACY_TRANSACT | ring_tag::LEGACY_DELEGATE_TRANSACT
-    ) {
-        return Ok(());
-    }
     let (spp, _) = TransactIxDataRef::parse_with_external_data_prefix(&source.data[1..])
         .map_err(|e| AuditError::InvalidTransactData(e.to_string()))?;
-    let mode = if spp.circuit.is_anonymous() {
-        RingMode::Anonymous
-    } else {
-        RingMode::Confidential
-    };
-    let rail = InstructionTag::try_from(tag)
-        .and_then(|tag| RingRail::of(tag, mode))
-        .map_err(invalid)?;
-    let parsed = RingTransactData::parse(payload, rail).map_err(invalid)?;
-    let Some(policy) = parsed.data().policy else {
+    let parsed = parse_frame(forwarded_mode(&spp, frame), frame)?;
+    let data = parsed.data();
+    if data.policy.is_none() {
         return Ok(());
-    };
-    if parsed.data().interface_transfers != spp.interface_transfers {
+    }
+    if data.interface_transfers != spp.interface_transfers {
         return Err(AuditError::ConfirmedEventMismatch);
     }
-    let mut owners = policy.spl_withdrawal_owners.iter();
+    let mut owners = data.spl_withdrawal_owners.iter();
     for withdrawal in withdrawals {
         withdrawal.screened_owner = Some(if withdrawal.asset == SOL_MINT {
             withdrawal.recipient
@@ -318,61 +305,54 @@ fn confirmed_transact(
     (caller.program_id == ring
         && matches!(
             caller.data.first(),
-            Some(
-                &(ring_tag::TRANSACT
-                    | ring_tag::DELEGATE_TRANSACT
-                    | ring_tag::LEGACY_TRANSACT
-                    | ring_tag::LEGACY_DELEGATE_TRANSACT)
-            )
+            Some(&(ring_tag::TRANSFER | ring_tag::AUTHORITY_TRANSFER))
         ))
     .then(|| caller.data.clone())
 }
 
-pub(crate) fn frame_layout(mode: RingMode, frame: &[u8]) -> Result<DisclosureLayout, AuditError> {
+fn audit_frame_of(frame: &[u8], mode: RingMode) -> Result<AuditStreamLayout, AuditError> {
+    parse_frame(mode, frame).map(|parsed| parsed.audit_stream())
+}
+
+fn parse_frame(mode: RingMode, frame: &[u8]) -> Result<ParsedTransact<'_>, AuditError> {
     let invalid = |error: CustomRingError| AuditError::InvalidTransactData(error.to_string());
     let (&tag, data) = frame.split_first().ok_or(AuditError::MissingRingTransact)?;
     let rail = InstructionTag::try_from(tag)
         .and_then(|tag| RingRail::of(tag, mode))
         .map_err(invalid)?;
-    let parsed = if matches!(
-        tag,
-        ring_tag::LEGACY_TRANSACT | ring_tag::LEGACY_DELEGATE_TRANSACT
-    ) {
-        RingTransactData::parse_legacy(data, rail)
-    } else {
-        RingTransactData::parse(data, rail)
-    };
-    parsed.map(|parsed| parsed.layout()).map_err(invalid)
+    RingTransactData::parse(data, rail).map_err(invalid)
 }
 
-/// The ring merge forwards `output_ring_data_hash || body` behind the tag.
-const FORWARDED_MERGE_PREFIX_LEN: usize = 1 + 32;
+/// An in-proof confidential frame forwards `AnonymousRingEddsa`, only its `OWNER_IN_PROOF` flag names the rail.
+fn forwarded_mode(spp: &TransactIxDataRef<'_>, frame: &[u8]) -> RingMode {
+    let in_proof = frame
+        .get(1 + transact_flag::BYTE)
+        .is_some_and(|flags| flags & transact_flag::OWNER_IN_PROOF != 0);
+    match spp.circuit.is_anonymous() && !in_proof {
+        true => RingMode::Anonymous,
+        false => RingMode::Confidential,
+    }
+}
 
-/// A disclosure counts only when the ring forwarded the exact SPP body, the program takes one from an anonymous ring alone.
+/// A disclosure counts only when the ring forwarded the exact SPP body it proved against.
 fn confirmed_merge_disclosure(
     groups: &[InstructionGroup],
     source: &ParsedInstruction,
     ring: Address,
 ) -> Option<ConfirmedMergeDisclosure> {
-    if source.data.first() != Some(&tag::RING_MERGE_TRANSACT) {
-        return None;
-    }
     let caller = direct_caller(groups, source)?;
-    if caller.program_id != ring || caller.data.first() != Some(&custom_ring_interface::tag::MERGE)
-    {
+    if caller.program_id != ring {
         return None;
     }
-    let request =
-        custom_ring_interface::CustomRingMergeIxDataRef::from_bytes(&caller.data[1..]).ok()?;
-    let disclosure = request.disclosure?;
-    let forwarded = source.data.get(1..FORWARDED_MERGE_PREFIX_LEN)?;
-    let body = request.spp_merge_body().ok()?;
-    (forwarded == request.output_ring_data_hash.as_slice()
-        && source.data.get(FORWARDED_MERGE_PREFIX_LEN..) == Some(body.as_slice()))
-    .then(|| ConfirmedMergeDisclosure {
-        eph_pk: *disclosure.eph_pk,
-        ciphertext: *disclosure.ciphertext,
-        fields: disclosure.fields.to_vec(),
+    let (&caller_tag, request) = caller.data.split_first()?;
+    if (*source.data.first()?, caller_tag) != (tag::RING_MERGE_TRANSACT, ring_tag::MERGE) {
+        return None;
+    }
+    let request = CustomRingMergeIxDataRef::from_bytes(request).ok()?;
+    let forwarded = request.forwarded(&request.spp_merge_body().ok()?);
+    (forwarded == source.data).then_some(ConfirmedMergeDisclosure {
+        eph_pk: *request.eph_pk,
+        ciphertext: *request.ciphertext,
     })
 }
 
@@ -387,50 +367,6 @@ fn direct_caller<'a>(
             .position(|inner| core::ptr::eq(inner, source))?;
         event_parent(group, index)
     })
-}
-
-/// Bind only capsules whose proof ran in the direct caller of this exact event.
-/// A plain deposit may carry arbitrary capsule bytes and grants no binding.
-fn confirmed_deposits(
-    groups: &[InstructionGroup],
-    source: &ParsedInstruction,
-    ring: Address,
-) -> Result<Vec<ConfirmedDeposit>, AuditError> {
-    if source.data.first() != Some(&tag::RING_DEPOSIT) {
-        return Ok(Vec::new());
-    }
-    let caller = direct_caller(groups, source);
-    if !caller.is_some_and(|caller| {
-        caller.program_id == ring
-            && caller.data.first() == Some(&custom_ring_interface::tag::AUDITED_DEPOSIT)
-            && caller
-                .data
-                .get(core::mem::size_of::<custom_ring_interface::AuditedDepositPrefix>()..)
-                == Some(source.data.as_slice())
-    }) {
-        return Ok(Vec::new());
-    }
-    let deposit = RingDepositIxData::deserialize(&source.data[1..])
-        .map_err(|error| AuditError::InvalidDepositData(error.to_string()))?;
-    deposit
-        .deposits
-        .iter()
-        .enumerate()
-        .map(|(index, entry)| {
-            let capsule =
-                custom_ring_interface::RingDepositAuditCapsule::parse(&entry.encrypted.ciphertext)
-                    .map_err(|error| AuditError::InvalidDepositData(error.to_string()))?
-                    .filter(|capsule| usize::from(capsule.slot_index) == index)
-                    .ok_or_else(|| {
-                        AuditError::InvalidDepositData("missing or misplaced capsule".into())
-                    })?;
-            Ok(ConfirmedDeposit {
-                slot_index: capsule.slot_index,
-                owner_utxo_hash: entry.owner_utxo_hash,
-                capsule_hash: Sha256::digest(&entry.encrypted.ciphertext).into(),
-            })
-        })
-        .collect()
 }
 
 /// `ring_transact` needs the ring's `ring_auth` signer, so only the ring's direct callees count.
@@ -514,7 +450,7 @@ fn ring_withdrawals_of(
             &instruction.accounts,
         )
         .ok_or(AuditError::SettlementAccounts)?;
-        for transfer in data.interface_transfers {
+        for &transfer in &data.interface_transfers {
             let (group, rest) = settlement.split_at(transfer.settlement_account_count());
             settlement = rest;
             let (authority, withdrawal) = match transfer {
@@ -552,22 +488,51 @@ fn ring_withdrawals_of(
 #[cfg(all(test, feature = "solana-rpc"))]
 use rpc::confirmed_origin_for;
 #[cfg(feature = "solana-rpc")]
-pub use rpc::{confirmed_origin, ORIGIN_TRANSACTION_CONFIG};
+pub use rpc::{confirmed_origin, ConfirmedRingOrigins, ORIGIN_TRANSACTION_CONFIG};
 
 #[cfg(feature = "solana-rpc")]
 mod rpc {
+    use std::collections::BTreeMap;
+
     use solana_address::Address;
     use solana_commitment_config::CommitmentConfig;
     use solana_rpc_client_api::config::RpcTransactionConfig;
     use solana_signature::Signature;
     use solana_transaction_status_client_types::{
-        EncodedConfirmedTransactionWithStatusMeta, EncodedTransaction, UiMessage,
-        UiTransactionEncoding,
+        option_serializer::OptionSerializer, EncodedConfirmedTransactionWithStatusMeta,
+        EncodedTransaction, UiMessage, UiTransactionEncoding,
     };
     use spr_client::{AsyncSolanaRpc, Blocking, ConfirmedInstructionGroups, SolanaRpc};
 
-    use super::{ring_event_origin_in, RingOrigin, TransactionOrigin};
+    use super::{ring_event_origin_in, trusted_event_sources, RingOrigin, TransactionOrigin};
     use crate::AuditError;
+
+    pub struct ConfirmedRingOrigins {
+        pub signature: Signature,
+        pub transaction: EncodedConfirmedTransactionWithStatusMeta,
+        pub ring: Address,
+    }
+
+    impl ConfirmedRingOrigins {
+        pub fn read(mut self) -> Result<BTreeMap<u16, RingOrigin>, AuditError> {
+            validate_signature(self.signature, &self.transaction)?;
+            resolve_loaded_addresses(&mut self.transaction)?;
+            let signers = signers_of(&self.transaction);
+            let slot = self.transaction.slot;
+            let groups = ConfirmedInstructionGroups::try_from(self.transaction)?;
+            let mut origins = BTreeMap::new();
+            for (index, _) in trusted_event_sources(&groups.groups).enumerate() {
+                let index = u16::try_from(index).map_err(|_| {
+                    AuditError::InvalidConfirmedEvent("event index exceeds its range".into())
+                })?;
+                let mut origin = ring_event_origin_in(&groups.groups, index, self.ring)?;
+                origin.signers.clone_from(&signers);
+                origin.event = origin.event.with_slot(slot);
+                origins.insert(index, origin);
+            }
+            Ok(origins)
+        }
+    }
 
     /// A v1 transaction read back at a maximum version of 0 is an error, not the transaction.
     pub const ORIGIN_TRANSACTION_CONFIG: RpcTransactionConfig = RpcTransactionConfig {
@@ -599,16 +564,64 @@ mod rpc {
         event_index: u16,
         ring: Address,
     ) -> Result<RingOrigin, AuditError> {
-        if !matches!(&transaction.transaction.transaction,
+        validate_signature(signature, &transaction)?;
+        confirmed_origin(transaction, event_index, ring)
+    }
+
+    fn resolve_loaded_addresses(
+        transaction: &mut EncodedConfirmedTransactionWithStatusMeta,
+    ) -> Result<(), AuditError> {
+        let invalid =
+            || AuditError::InvalidConfirmedEvent("loaded account addresses disagree".into());
+        let EncodedTransaction::Json(encoded) = &mut transaction.transaction.transaction else {
+            return Err(invalid());
+        };
+        let UiMessage::Raw(message) = &mut encoded.message else {
+            return Err(invalid());
+        };
+        let lookups = message.address_table_lookups.as_deref().unwrap_or_default();
+        let writable = lookups
+            .iter()
+            .map(|lookup| lookup.writable_indexes.len())
+            .sum::<usize>();
+        let readonly = lookups
+            .iter()
+            .map(|lookup| lookup.readonly_indexes.len())
+            .sum::<usize>();
+        let Some(meta) = &mut transaction.transaction.meta else {
+            return Err(invalid());
+        };
+        let loaded = match &mut meta.loaded_addresses {
+            OptionSerializer::Some(loaded) => loaded,
+            OptionSerializer::None | OptionSerializer::Skip if writable == 0 && readonly == 0 => {
+                return Ok(())
+            }
+            OptionSerializer::None | OptionSerializer::Skip => return Err(invalid()),
+        };
+        if writable != loaded.writable.len() || readonly != loaded.readonly.len() {
+            return Err(invalid());
+        }
+        message.account_keys.append(&mut loaded.writable);
+        message.account_keys.append(&mut loaded.readonly);
+        message.address_table_lookups = None;
+        Ok(())
+    }
+
+    fn validate_signature(
+        signature: Signature,
+        transaction: &EncodedConfirmedTransactionWithStatusMeta,
+    ) -> Result<(), AuditError> {
+        if matches!(&transaction.transaction.transaction,
             EncodedTransaction::Json(ui)
                 if ui.signatures.first().is_some_and(|value| value == &signature.to_string()))
         {
-            return Err(unavailable(
+            Ok(())
+        } else {
+            Err(unavailable(
                 signature,
                 "confirmed transaction signature does not match the request",
-            ));
+            ))
         }
-        confirmed_origin(transaction, event_index, ring)
     }
 
     /// The first `num_required_signatures` keys, an unknown encoding names no signer.

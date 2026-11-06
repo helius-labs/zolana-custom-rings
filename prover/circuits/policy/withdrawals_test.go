@@ -1,3 +1,5 @@
+// Refusals of the withdrawal legs, a leg off the bound hash and padding that is not zero, at every capacity.
+
 package policy_test
 
 import (
@@ -9,6 +11,9 @@ import (
 	"math"
 	"testing"
 )
+
+// withdrawalCapacities are the leg capacities the padding and binding tests sweep.
+var withdrawalCapacities = []int{0, 1, 2, 4, 8, 16, 32}
 
 func withdrawalWorld() ringpolicy.World {
 	w := ringpolicy.Confidential()
@@ -27,7 +32,7 @@ func TestPolicyWithdrawals(t *testing.T) {
 		{"absent owner", func(w *ringpolicy.World) { w.Withdrawals[0].Owner = ringpolicy.Carol }, false},
 		{"blocked owner", func(w *ringpolicy.World) {
 			w.Table.Rules = append(w.Table.Rules, ringpolicy.Forbid(policy.SubjectOutputOwner, ringregistry.BlockBit))
-			w.Own[ringpolicy.Bob] = ringpolicy.Escrowed(ringregistry.AllowBit | ringregistry.BlockBit)
+			w.Own[ringpolicy.Bob] = ringpolicy.Record{Lists: ringregistry.AllowBit | ringregistry.BlockBit}
 		}, false},
 		{"withdrawn asset absent", func(w *ringpolicy.World) {
 			w.Table.Rules = append(w.Table.Rules, ringpolicy.Require(policy.SubjectAsset, ringregistry.AllowBit))
@@ -39,7 +44,7 @@ func TestPolicyWithdrawals(t *testing.T) {
 		{"split guard inclusive", func(w *ringpolicy.World) { guardSplit(w, 10) }, true},
 		{"split guard exceeded", func(w *ringpolicy.World) { guardSplit(w, 11) }, false},
 		{"deposit cannot offset guard", func(w *ringpolicy.World) { guardSplit(w, 11); w.Public[0].Amount = 300 }, false},
-		{"mixed mint scalar guard", func(w *ringpolicy.World) { guardSplit(w, 10); w.Withdrawals[0].Asset = ringpolicy.AssetB }, false},
+		{"scalar guard reads each mint apart", func(w *ringpolicy.World) { guardSplit(w, 11); w.Withdrawals[0].Asset = ringpolicy.AssetB }, true},
 		{"withdrawal outflow counted once", func(w *ringpolicy.World) {
 			w.Table.Limits = []ringpolicy.OutflowLimit{{Asset: ringpolicy.AssetA, Cap: 320}}
 		}, true},
@@ -51,26 +56,23 @@ func TestPolicyWithdrawals(t *testing.T) {
 			w.Own[ringpolicy.Bob] = ringpolicy.Record{}
 		}, false},
 	}
-	for _, own := range []bool{false, true} {
-		for _, tc := range cases {
-			t.Run(tc.name, func(t *testing.T) {
-				w := withdrawalWorld()
-				w.OwnOnly = own
-				tc.mutate(&w)
-				b := w.Build(t)
-				err := test.IsSolved(b.Assignment(), b.Assignment(), ecc.BN254.ScalarField())
-				if (err == nil) != tc.valid {
-					t.Fatalf("ownOnly=%v valid=%v: %v", own, tc.valid, err)
-				}
-			})
-		}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := withdrawalWorld()
+			tc.mutate(&w)
+			b := w.Build(t)
+			err := test.IsSolved(b.Assignment(), b.Assignment(), ecc.BN254.ScalarField())
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v: %v", tc.valid, err)
+			}
+		})
 	}
 }
 func guardSplit(w *ringpolicy.World, amount uint64) {
 	w.Table.Limits = nil
 	w.Table.Rules[0].Guard = policy.GuardAboveAmount
 	w.Table.Rules[0].Threshold = 320
-	w.Own[ringpolicy.Alice] = ringpolicy.Escrowed(0)
+	w.Own[ringpolicy.Alice] = ringpolicy.Record{Lists: 0}
 	w.Withdrawals = []ringpolicy.Slot{{Owner: ringpolicy.Alice, Asset: ringpolicy.AssetA, Amount: 10}, {Owner: ringpolicy.Alice, Asset: ringpolicy.AssetA, Amount: amount}}
 }
 func TestPolicyWithdrawalBindingAndPadding(t *testing.T) {
@@ -91,17 +93,6 @@ func TestPolicyWithdrawalBindingAndPadding(t *testing.T) {
 		}
 	}
 }
-func TestOwnOnlyRefusesCuratorSources(t *testing.T) {
-	w := withdrawalWorld()
-	w.OwnOnly = true
-	w.Table.Curator = map[uint64]bool{ringregistry.AllowBit: true}
-	w.Curator = w.Own
-	b := w.Build(t)
-	if test.IsSolved(b.Assignment(), b.Assignment(), ecc.BN254.ScalarField()) == nil {
-		t.Fatal("foreign source on own-only key")
-	}
-}
-
 func TestCuratorWithdrawalLists(t *testing.T) {
 	for _, blocked := range []bool{false, true} {
 		w := withdrawalWorld()
@@ -122,52 +113,20 @@ func TestCuratorWithdrawalLists(t *testing.T) {
 }
 
 func TestWithdrawalCapacitiesBindEveryLeg(t *testing.T) {
-	for _, capacity := range policy.WithdrawalCapacities {
-		for _, own := range []bool{false, true} {
-			w := withdrawalWorld()
-			w.WithdrawalCapacity = capacity
-			w.OwnOnly = own
-			w.Withdrawals = nil
-			for range capacity {
-				w.Withdrawals = append(w.Withdrawals, ringpolicy.Slot{Owner: ringpolicy.Bob, Asset: ringpolicy.AssetA, Amount: 1})
-			}
-			b := w.Build(t)
-			if err := test.IsSolved(b.Assignment(), b.Assignment(), ecc.BN254.ScalarField()); err != nil {
-				t.Fatalf("capacity %d own %v: %v", capacity, own, err)
-			}
-			b.Policy().WithdrawalCount = capacity + 1
-			if test.IsSolved(b.Assignment(), b.Assignment(), ecc.BN254.ScalarField()) == nil {
-				t.Fatal("count exceeded capacity")
-			}
+	for _, capacity := range withdrawalCapacities {
+		w := withdrawalWorld()
+		w.WithdrawalCapacity = capacity
+		w.Withdrawals = nil
+		for range capacity {
+			w.Withdrawals = append(w.Withdrawals, ringpolicy.Slot{Owner: ringpolicy.Bob, Asset: ringpolicy.AssetA, Amount: 1})
 		}
-	}
-}
-
-// The local specialization must retain every refusal from the general key that
-// does not require a foreign registry. This includes the comparator hint attacks
-// exercised separately by the policy suite.
-func TestOwnOnlyRetainsLocalPolicyRefusals(t *testing.T) {
-	for _, refusal := range refusals {
-		w := refusal.honest()
-		if len(w.Table.Curator) != 0 {
-			continue
+		b := w.Build(t)
+		if err := test.IsSolved(b.Assignment(), b.Assignment(), ecc.BN254.ScalarField()); err != nil {
+			t.Fatalf("capacity %d: %v", capacity, err)
 		}
-		t.Run(refusal.name, func(t *testing.T) {
-			w.OwnOnly = true
-			honest := w.Build(t)
-			if err := test.IsSolved(honest.Assignment(), honest.Assignment(), ecc.BN254.ScalarField()); err != nil {
-				t.Fatal(err)
-			}
-			if refusal.world != nil {
-				refusal.world(&w)
-			}
-			bad := w.Build(t)
-			if refusal.witness != nil {
-				refusal.witness(t, bad)
-			}
-			if test.IsSolved(bad.Assignment(), bad.Assignment(), ecc.BN254.ScalarField()) == nil {
-				t.Fatal("local specialization accepted refused policy")
-			}
-		})
+		b.Policy().WithdrawalCount = capacity + 1
+		if test.IsSolved(b.Assignment(), b.Assignment(), ecc.BN254.ScalarField()) == nil {
+			t.Fatal("count exceeded capacity")
+		}
 	}
 }

@@ -1,25 +1,19 @@
 export { P256ReaderKey } from "@heliuslabs/zolana-custom-rings";
 export {
-  RING_DEPOSIT_AUDIT_SLOTS,
   admitTransfer,
-  depositStatementElements,
-  encodeRingDepositCapsule,
   memberRecordHash,
   parseAuditorMessage,
   quadPathRoot,
-  readRegisteredRecord,
-  readRingDepositCapsule,
   registerKeyStatementHash,
   ringRail,
   ringRailOf,
-  openRecipient,
+  openRecipientBody,
   OutputBlindings,
 } from "@heliuslabs/zolana-custom-rings/advanced";
 export type {
-  AuditStatement,
-  DepositStatement,
-  DisclosureLayout,
-  PolicyStatement,
+  TransferStatement,
+  AuditStreamLayout,
+  TransferRoots,
   RegisterKeyStatement,
   RuleRefusal,
 } from "@heliuslabs/zolana-custom-rings/advanced";
@@ -27,10 +21,12 @@ export {
   RingAddress,
   RingPaymentRequest,
   openTransactionViewingSecret,
-  sealTransactionViewingSecret,
   type AuditorEnvelope,
 } from "@heliuslabs/zolana-custom-rings/keypair";
-export { openRingDisclosure, policyStatementHash } from "@heliuslabs/zolana-custom-rings/advanced";
+export {
+  openRingDisclosure,
+  transferStatementHash,
+} from "@heliuslabs/zolana-custom-rings/advanced";
 export type { RingDisclosure } from "@heliuslabs/zolana-custom-rings/advanced";
 export type {
   RingAuditReader,
@@ -40,20 +36,12 @@ export type {
 export {
   buildRingDelegateTransferTransaction,
   createRingDelegateSubmission,
-  createRingTransferSubmission,
-  createRingWithdrawalSubmission,
-  createRingExitSubmission,
-  createRingEntrySubmission,
+  prepareRingTransferRelay,
+  prepareRingWithdrawalRelay,
+  prepareRingExitRelay,
+  prepareRingEntryRelay,
   createKitRingSubmissionTransport,
-  createMemberRegistryInstruction,
-  fetchRingMemberRegistry,
-  ringMemberRegistryAddress,
-  decodeRingMemberRegistry,
-  fetchRingRecordQueue,
-  memberListWriteInstruction,
   listWrite,
-  RegisterKey,
-  NullifierKeyEscrow,
   sealNullifierKey,
   openNullifierKey,
   fetchRingSealedKey,
@@ -61,56 +49,65 @@ export {
   recoverRingMemberNotes,
   buildRingDelegateRecoveredTransaction,
   createRingDelegateRecoveredSubmission,
-  buildRingDepositTransaction,
-  createRingConfigInstruction,
-  initSppRingConfigInstruction,
-  sealRingDepositOpenings,
-  openRingDepositOpening,
-  ConfirmedDeposit,
-  ringDepositContextHash,
-  ringDepositPublicInputHash,
+  PreparedRingDeposit,
+  initializeRingInstruction,
   MemberOpeningRead,
-  checkEscrowedRecipients,
   readMemberRecords,
 } from "@heliuslabs/zolana-custom-rings";
 export type {
-  EscrowedRecord,
   RingRecordReadClient,
   RingDelegateTransferClient,
   RingDepositClient,
-  RingDepositOpening,
   RingDelegateTransferParams,
   RingTransactionSubmission,
   RingSubmissionResult,
-  RingMemberRegistry,
-  RingKeyRegistrationClient,
   RingSealedKeyClient,
   RingSealedKeyEntry,
   SealedNullifierKey,
   NullifierKeyEnvelope,
   RingRecoveryClient,
   RingRecoveryParams,
+  RingRecoveryProgress,
+  RingRecoveryStep,
   RecoveredRingNotes,
   RingDelegateRecoveredParams,
 } from "@heliuslabs/zolana-custom-rings";
+export { prepareRingMergeRelay } from "@heliuslabs/zolana-custom-rings";
 export {
+  buildRingDepositTransaction,
+  buildRingEntryTransaction,
+  buildRingExitTransaction,
   buildRingMergeTransaction,
+  buildRingTransferTransaction,
+  buildRingWithdrawalTransaction,
+  createRingDepositSubmission,
+  createRingEntrySubmission,
+  createRingExitSubmission,
   createRingMergeSubmission,
-  customRingDepositPayload,
+  createRingTransferSubmission,
+  createRingWithdrawalSubmission,
 } from "@heliuslabs/zolana-custom-rings";
+export type {
+  AnonymousSpendOwner,
+  RingAnonymousRail,
+  RingDirectRail,
+  RingMergeTransactionParams,
+  RingOwnerRail,
+  RingPublicOwnerRail,
+  PublicOwnerTransferClient,
+} from "@heliuslabs/zolana-custom-rings";
+export { PublicOwnerTransfer } from "@heliuslabs/zolana-custom-rings";
 export { MEMBER_REGISTRY_CAPACITY } from "@heliuslabs/zolana-custom-rings/advanced";
 export type {
   MemberRecord,
-  QueueEntry,
+  RecordWrite,
   RecordOpening,
   RecordWriteProofInput,
 } from "@heliuslabs/zolana-custom-rings/advanced";
 export { RING_RULE_SLOTS } from "@heliuslabs/zolana-custom-rings/client";
-export { CustomRingClient, createCustomRingClient } from "@heliuslabs/zolana-custom-rings";
 export {
-  AnonymousSync,
-  TransferTagging,
-  ViewingHistory,
-  type AnonymousScan,
-  type FirstContact,
+  CustomRingClient,
+  createCustomRingClient,
+  type CustomRingClientConfig,
 } from "@heliuslabs/zolana-custom-rings";
+export { AnonymousSync, ViewingHistory, type AnonymousScan } from "@heliuslabs/zolana-custom-rings";

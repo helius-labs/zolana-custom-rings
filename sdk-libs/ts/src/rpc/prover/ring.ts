@@ -1,20 +1,19 @@
 import {
   EMPTY_MINT_POLICY,
+  assetLimitsFields,
   mintPolicyField,
   mintPolicyWriteField,
+  type AssetLimits,
+  type MintPolicy,
 } from "../../protocol/membership/mint-policy.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 
-import { InterfaceError } from "@heliuslabs/zolana/interface";
-import {
-  bigIntBytes,
-  bytesField,
-  isZero,
-  type ExpectedProvingKey,
-} from "@heliuslabs/zolana/internal";
-import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
-import { type PresentRecordOpening } from "./types.js";
-import { ClientError } from "@heliuslabs/zolana/client";
+import { rawJson } from "../../protocol/codec/raw-json.js";
+
+import { InterfaceError } from "@heliuslabs/spr/interface";
+import { bigIntBytes, bytesField, type ExpectedProvingKey } from "@heliuslabs/spr/internal";
+import type { Bytes16, Bytes32 } from "@heliuslabs/spr/interface";
+import { ClientError } from "@heliuslabs/spr/client";
 import {
   APPLY_BATCH,
   MEMBER_REGISTRY_CAPACITY,
@@ -23,23 +22,37 @@ import {
   canopyLevels,
   type ApplyProofInputs,
   type MemberRecord,
+  type PoolSubject,
   type QuadPath,
-  type QueueEntry,
-  type RecordOpening,
+  type RecordWrite,
   type RecordPool,
   type RecordWriteProofInput,
 } from "../../protocol/membership/member-registry.js";
 import {
-  policyPoolCapacity,
+  TRACKING_CAPACITY,
+  TRACKING_QUAD_HEIGHT,
+  type TrackingEntry,
+  type TrackingOpening,
+  type TrackingRecord,
+} from "../../protocol/membership/tracking.js";
+import {
+  applyKeyWidth,
   ringCircuitType,
   ringProvingKey,
-  type PolicyKeyCircuit,
-  type PolicyPoolCapacity,
   type RingKeyCircuit,
 } from "../../protocol/proof/proving-keys.js";
-import { RING_DEPOSIT_AUDIT_SLOTS } from "../../protocol/codec/ring-deposit-capsule.js";
-import { auditLayoutValue, type AuditLayout } from "../../protocol/codec/ring-disclosure-layout.js";
-import { RING_DELIVERED_BODY_LEN } from "../../protocol/transaction/output.js";
+import {
+  transferKeys,
+  transferPoolCapacity,
+  type PolicyPoolCapacity,
+  type TransferKeyCircuit,
+} from "../../protocol/proof/transfer-shapes.js";
+import {
+  auditLayoutValue,
+  disclosureFormat,
+  type AuditLayout,
+} from "../../protocol/codec/ring-disclosure-layout.js";
+import { ANONYMOUS_PARTIES } from "../../protocol/transaction/transact.js";
 import { RING_RULE_SLOTS, RING_SOURCE_SLOTS } from "./types.js";
 import { N_PUBLIC_SLOTS } from "../../protocol/transaction/spp.js";
 
@@ -57,32 +70,29 @@ export interface RingSlotOpening {
   readonly ringProgramId: Bytes32;
 }
 
-/** Go `AuditParams`, the envelope inputs every audit proof opens with. */
+/** Go `AuditParams`, the envelope inputs every transfer proof opens with. */
 export interface AuditEnvelopeProofInputs {
   readonly firstNullifier: Bytes32;
-  readonly ringId: Bytes32;
-  /** The clamped secret the envelope seals. */
+  /** The clamped secret the envelope seals and the stream's key. */
   readonly txViewingSk: Bytes32;
-  readonly ephSk: Bytes32;
   /** The auditor's X25519 u without the tag byte. */
   readonly auditorPk: Bytes32;
   readonly salt: Bytes16;
-  /** The statement's layout element, its flags fix the published fields. */
+  /** The statement's layout element. */
   readonly layout: AuditLayout;
 }
 
-/** Go `DeliveredOutput`, a delivered slot and the body its recipient decrypts. */
-export interface DeliveredSlotProofInputs {
+/** Go `OutputOpening`, one output slot and the preimages its record names. */
+export interface OutputOpeningProofInput {
   readonly output: RingSlotOpening;
-  readonly recipientKey: Bytes32;
   readonly ownerKey: Bytes32;
-  readonly body: Uint8Array;
+  readonly mintChunks: readonly Bytes32[];
 }
 
-/** Go `AnonymousOutputWires`, the owner key zero on a dummy. */
-export interface AnonymousSlotProofInputs {
-  readonly output: RingSlotOpening;
+/** Go `EntryOpening`, zero off a default-ring input. */
+export interface EntryOpeningProofInput {
   readonly ownerKey: Bytes32;
+  readonly mintChunks: readonly Bytes32[];
 }
 
 /** Go `Source`, a zero `registry` names the ring's own registry. */
@@ -91,233 +101,258 @@ export interface PolicySourceProofInput {
   readonly registry: Bytes32;
 }
 
-/** Go `OutflowLimit`. */
-export interface OutflowLimitProofInput {
-  readonly asset: Bytes32;
-  readonly cap: Bytes32;
-  readonly cosignAbove: Bytes32;
-}
-
 /** Go `PolicyTable`, every row past its count zero. */
 export interface PolicyTableProofInputs {
   readonly sources: readonly PolicySourceProofInput[];
+  /** Bit `i` puts list `i + 1` at owners' salted keys, the mapped private lists. */
+  readonly salted: number;
   readonly policyLen: number;
   readonly rules: readonly Bytes32[];
 }
 
-/** Go `OutputOpening`, `ctHash` absent without key escrow. */
-export interface PolicyOutputOpening extends RingSlotOpening {
-  readonly ctHash?: Bytes32;
-}
-
-/** Go `PooledEntry`, `curator` absent on the own-only key. */
+/** Go `PooledEntry`, the curator index 0 without a curator registry. */
 export interface PolicySubjectEntry {
   readonly own: number;
-  readonly curator?: number;
+  readonly curator: number;
 }
 
-/** Go `PolicyParams`, one owner and one asset entry per output and withdrawal slot. */
+/** Go `PooledOwnerEntry`, a zero salt with no tracking row. */
+export interface PolicyOwnerEntry extends PolicySubjectEntry {
+  readonly tracking: number;
+  readonly listSalt: Bytes32;
+  readonly ownSalted: number;
+  readonly curatorSalted: number;
+}
+
+/** Go `PolicyParams`, one owner and one asset entry per output and withdrawal slot, both pools at the key's widths. */
 export interface PolicyProofInputs extends PolicyTableProofInputs {
   readonly withdrawalCount: number;
   readonly withdrawalHash: Bytes32;
   readonly withdrawals: readonly Readonly<{ owner: Bytes32; asset: Bytes32; amount: bigint }>[];
-  readonly privateTxHash: Bytes32;
   readonly policyHash: Bytes32;
   readonly ringId: Bytes32;
   readonly ownRoot: Bytes32;
   readonly curatorRoot: Bytes32;
   readonly publicAssets: readonly Bytes32[];
   readonly publicAmounts: readonly Bytes32[];
-  readonly addressChain: Bytes32;
-  readonly privateTxBlinding: Bytes32;
-  readonly outputs: readonly PolicyOutputOpening[];
-  readonly senderPkHash: Bytes32;
+  /** Gross withdrawals per slot as right aligned u128. */
+  readonly publicGross: readonly Bytes32[];
   readonly ownPool: RecordPool;
-  /** Absent on the own-only key. */
-  readonly curatorPool?: RecordPool;
-  readonly senderEntry: PolicySubjectEntry;
-  readonly ownerEntries: readonly PolicySubjectEntry[];
+  readonly curatorPool: RecordPool;
+  /** The pool rows of the key's owner rows. */
+  readonly senderEntries: readonly PolicyOwnerEntry[];
+  readonly ownerEntries: readonly PolicyOwnerEntry[];
   readonly assetEntries: readonly PolicySubjectEntry[];
-  /** Own subject indices, empty on the delegate key. */
   readonly publicAssetEntries: readonly number[];
 }
 
-/** Go `MergeInput`, one SPP merge slot. */
-export interface MergeInputOpening {
-  readonly domain: Bytes32;
-  readonly treeId: Bytes32;
-  readonly amount: Bytes32;
-  readonly blinding: Bytes32;
-  readonly ringDataHash: Bytes32;
+/** Go `TrackingRecordParams` rows, their shared proof and the subjects they open. */
+export interface TrackingPoolProofInput {
+  readonly records: readonly TrackingRecord[];
+  readonly canopy: readonly Bytes32[];
+  /** `paths[i]` opens `records[i]` up to the canopy, leaf level first. */
+  readonly paths: readonly QuadPath[];
+  readonly subjects: readonly PoolSubject[];
 }
 
-/** Go `DeliveredAuditParams`, every slot published. */
-export interface DeliveredAuditProofRequest extends AuditEnvelopeProofInputs {
-  readonly kind: "deliveredAudit";
-  readonly publicInputHash: Bytes32;
-  readonly outputs: readonly DeliveredSlotProofInputs[];
+/** Go `TrackingParams`, every owner row and live ring output under the frame's tracking root. */
+export interface TrackingProofInputs {
+  readonly trackingRoot: Bytes32;
+  readonly trackingPool: TrackingPoolProofInput;
+  /** Index `trackingPool.subjects`, 0 on a zero row. */
+  readonly rowEntries: readonly number[];
+  /** Index `trackingPool.subjects`, 0 off a live ring output. */
+  readonly outputEntries: readonly number[];
 }
 
-/** Go `AnonymousAuditParams`, `inputs` fill the input class. */
-export interface AnonymousAuditProofRequest extends AuditEnvelopeProofInputs {
-  readonly partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
-  readonly kind: "anonymousAudit";
+/** Go `TransferParams`, what every transfer key reads. */
+export interface TransferProofInputs
+  extends AuditEnvelopeProofInputs, PolicyProofInputs, TrackingProofInputs {
   readonly publicInputHash: Bytes32;
-  readonly outputs: readonly AnonymousSlotProofInputs[];
-  readonly privateTxHash: Bytes32;
-  readonly privateTxBlinding: Bytes32;
-  /** Present on the entry key alone. */
-  readonly senderKey?: Bytes32;
-  /** The published nullifier count, the slots past it carry no UTXO. */
+  /** The statement's proven bits. */
+  readonly approvalMask: number;
+  /** Absent reads zero, a frame that discloses nothing. */
+  readonly approvalTotals?: Bytes32;
+  /** Fresh per transaction, absent reads zero. */
+  readonly approvalBlinder?: Bytes32;
+  /** `m`, the slots past it leave the frame. */
+  readonly outputCount: number;
+  readonly outputs: readonly OutputOpeningProofInput[];
+  /** The published nullifier count, the input slots past it carry no UTXO. */
   readonly inputCount: number;
+  /** `HashChain4([inputCount, ...inputNullifiers])`, the statement element past `inputCount`. */
+  readonly inputNullifierChain: Bytes32;
+  /** The published nullifiers zero filled to the key's input class. */
+  readonly inputNullifiers: readonly Bytes32[];
+  /** At the key's input class. */
   readonly inputs: readonly RingSlotOpening[];
-  readonly senderCommitment: Bytes32;
+  /** One per input class slot on an entry key, empty otherwise. */
+  readonly entries: readonly EntryOpeningProofInput[];
+  readonly signerCount: number;
+  /** Absent reads zero, Go `SignerDataCounts`. */
+  readonly signerDataCounts?: bigint;
+  /** SPP's owner signer run, zero filled to the input class. */
+  readonly signers: readonly Bytes32[];
+  /** The distinct live input owners ascending, zero rows last, at the key's owner rows. */
+  readonly rows: readonly Bytes32[];
+  readonly privateTxHash: Bytes32;
+  /** SPP's blinding of the hash. */
+  readonly privateTxBlinding: Bytes32;
 }
 
-/** Go `MemberPolicyParams`. */
-export interface MemberPolicyProofRequest extends PolicyProofInputs {
-  readonly kind: "memberPolicy";
-  readonly publicInputHash: Bytes32;
-  readonly anonymous: boolean;
-  readonly approvalRequired: boolean;
-  readonly keyEscrow: boolean;
+/** Go `TransferParams`, the statement's rail bits pick the rail. */
+export interface TransferProofRequest extends TransferProofInputs {
+  readonly kind: "transfer";
+  readonly inProof: boolean;
+  readonly hidden: boolean;
+  readonly delegate: boolean;
+  /** The in-proof owner, zero on every other rail. */
   readonly sender: Bytes32;
-  readonly inputChain: Bytes32;
+  /** Payer, each co-signer and exit destination, zero when absent. */
+  readonly partyIdentities: readonly Bytes32[];
 }
 
-/** Go `DelegatePolicyParams`. */
-export interface DelegatePolicyProofRequest extends PolicyProofInputs {
-  readonly kind: "delegatePolicy";
-  readonly publicInputHash: Bytes32;
-  readonly inputs: readonly RingSlotOpening[];
-}
-
-/** Go `ApplyRecordsParams`, one write takes the 1-write key, more the batch key. */
+/** Go `ApplyRecordsParams`, the write count picks the width and `private` the family. */
 export interface ApplyRecordsProofRequest extends ApplyProofInputs {
   readonly kind: "applyRecords";
   readonly publicInputHash: Bytes32;
+  /** Absent on a public update, the public apply key takes no tracking field. */
+  readonly private?: PrivateApplyProofInput;
 }
 
-/** Go `KeyRegisterParams`. */
+/** Go `PrivateApplyRecordsParams` beside the shared apply fields. */
+export interface PrivateApplyProofInput {
+  /** Bit `i` marks write `i` private, never zero. */
+  readonly privateWrites: number;
+  /** The pinned tracking registry's root at the batch's tracking revision. */
+  readonly trackingRoot: Bytes32;
+  /** One per marked write, `undefined` elsewhere. */
+  readonly owners: readonly (PrivateOwnerProofInput | undefined)[];
+}
+
+/** Go `PrivateOwnerParams`, a marked write's owner row, present under a nonzero key. */
+export interface PrivateOwnerProofInput {
+  readonly listSalt: Bytes32;
+  readonly record: TrackingRecord;
+  readonly path: QuadPath;
+}
+
+/** Go `TrackingWrite`, the witness of one inserted entry. */
+export interface TrackingWriteProofInput {
+  readonly entry: TrackingEntry;
+  readonly slot: QuadPath;
+  readonly lowRecord: TrackingRecord;
+  readonly lowPath: QuadPath;
+}
+
+/** Go `ApplyEnrollmentsParams`. */
+export interface ApplyEnrollmentsProofRequest {
+  readonly kind: "applyEnrollments";
+  readonly publicInputHash: Bytes32;
+  readonly oldRoot: Bytes32;
+  readonly newRoot: Bytes32;
+  readonly oldNextIndex: bigint;
+  readonly newNextIndex: bigint;
+  readonly chainStart: Bytes32;
+  readonly chainEnd: Bytes32;
+  readonly writes: readonly TrackingWriteProofInput[];
+}
+
+/** Go `RegisterKeyParams`. */
 export interface RegisterKeyProofRequest {
   readonly kind: "registerKey";
   readonly publicInputHash: Bytes32;
+  /** The tracking registry's. */
+  readonly ringId: Bytes32;
   /** The owner identity of the signing member. */
   readonly member: Bytes32;
   /** A zero lead byte then the 31 secret bytes. */
   readonly nullifierSecret: Bytes32;
+  /** A zero lead byte then the 31 salt bytes. */
+  readonly listSalt: Bytes32;
   readonly ephSk: Bytes32;
   readonly auditorPk: Bytes32;
 }
 
-/** Go `DepositParams`, every slot list at the deposit capacity. */
-export interface DepositProofRequest {
-  readonly kind: "deposit";
+/** Go `MergeParams`, seals a ring's SPP merge output to its auditor. */
+export interface MergeProofRequest {
+  readonly kind: "merge";
   readonly publicInputHash: Bytes32;
-  readonly contextHash: Bytes32;
-  readonly count: number;
-  readonly anonymous: boolean;
-  readonly ownerPkHashes: readonly Bytes32[];
-  /** Absent keys assign zeros, only an anonymous deposit names them. */
-  readonly ownerKeys?: readonly Bytes32[];
-  readonly nullifierPks: readonly Bytes32[];
-  readonly blindingSecrets: readonly Bytes32[];
-  readonly ctHashes: readonly Bytes32[];
-  readonly members: readonly (PresentRecordOpening | undefined)[];
-  readonly ephSk: Bytes32;
-  readonly auditorPk: Bytes32;
-  readonly keyEscrow: boolean;
-  readonly memberRegistryRoot: Bytes32;
-}
-
-/** Go `MergeAnonymousParams`. */
-export interface AnonymousMergeProofRequest {
-  readonly partyIdentities: readonly [Bytes32, Bytes32, Bytes32];
-  readonly kind: "anonymousMerge";
-  readonly publicInputHash: Bytes32;
-  readonly privateTxHash: Bytes32;
   readonly outputUtxoHash: Bytes32;
   readonly firstNullifier: Bytes32;
   readonly ringProgramId: Bytes32;
   readonly auditorPk: Bytes32;
-  /** The SPP output ciphertext salt as one field. */
-  readonly salt: Bytes32;
+  readonly payer: Bytes32;
+  readonly trackingRoot: Bytes32;
   readonly ephSk: Bytes32;
-  readonly disclosureKey: Bytes32;
   readonly ownerKey: Bytes32;
-  readonly nullifierSecret: Bytes32;
+  readonly ownerPkHash: Bytes32;
   readonly mintChunks: readonly Bytes32[];
-  readonly inputs: readonly MergeInputOpening[];
+  readonly asset: Bytes32;
+  readonly amount: Bytes32;
+  readonly nullifierPk: Bytes32;
+  readonly seed: Bytes32;
   readonly outputTreeId: Bytes32;
   readonly outputRingDataHash: Bytes32;
-}
-
-export interface WithdrawalExemptionProofRequest {
-  readonly kind: "withdrawalExemption";
-  readonly publicInputHash: Bytes32;
-  readonly root: Bytes32;
-  readonly assets: readonly Bytes32[];
-  readonly amounts: readonly Bytes32[];
-  readonly entries: readonly (RecordOpening | undefined)[];
+  /** Undefined under a zero key. */
+  readonly tracking?: TrackingOpening;
 }
 
 export type RingProofRequest =
-  | WithdrawalExemptionProofRequest
-  | DeliveredAuditProofRequest
-  | AnonymousAuditProofRequest
-  | MemberPolicyProofRequest
-  | DelegatePolicyProofRequest
+  | TransferProofRequest
   | ApplyRecordsProofRequest
+  | ApplyEnrollmentsProofRequest
   | RegisterKeyProofRequest
-  | DepositProofRequest
-  | AnonymousMergeProofRequest;
+  | MergeProofRequest;
 
 /** The key a request proves under, its list widths pick the shape. */
 export function ringProofCircuit(request: RingProofRequest): RingKeyCircuit {
   switch (request.kind) {
-    case "deliveredAudit":
-      return { family: "deliveredAudit", outputs: listLength(request.outputs) };
-    case "anonymousAudit":
-      return {
-        family: request.layout.fullOpenings ? "anonymousEntryAudit" : "anonymousAudit",
-        inputClass: listLength(request.inputs),
-        outputs: listLength(request.outputs),
-      };
-    case "memberPolicy":
-    case "delegatePolicy":
-      return policyCircuit(request);
+    case "transfer":
+      return transferCircuit(request);
     case "applyRecords":
-      return { family: "applyRecords", writes: applyCapacity(listLength(request.writes)) };
-    case "withdrawalExemption":
-      return { family: "withdrawalExemption" };
+      return {
+        family: "applyRecords",
+        writes: applyCapacity(listLength(request.writes)),
+        private: request.private !== undefined,
+      };
+    case "applyEnrollments":
+      return { family: "applyEnrollments", writes: applyCapacity(listLength(request.writes)) };
     case "registerKey":
       return { family: "registerKey" };
-    case "deposit":
-      return { family: "deposit", capacity: depositCapacity(request.count) };
-    case "anonymousMerge":
-      return { family: "anonymousMerge", width: listLength(request.inputs) };
+    case "merge":
+      return { family: "merge" };
     default:
       throw new ClientError("CLIENT_INVALID_PROOF_INPUTS");
   }
 }
 
-function policyCircuit(
-  request: MemberPolicyProofRequest | DelegatePolicyProofRequest,
-): PolicyKeyCircuit {
-  const ownOnly = request.sources.every((s) => isZero(s.registry));
-  return request.kind === "memberPolicy"
-    ? {
-        family: "memberPolicy",
-        outputs: listLength(request.outputs),
-        withdrawals: listLength(request.withdrawals),
-        ownOnly,
-      }
-    : {
-        family: "delegatePolicy",
-        ownOnly,
-        inputs: listLength(request.inputs),
-        outputs: listLength(request.outputs),
-      };
+/** The transfer key the request's list widths name, Rust `RingCircuit::Transfer`. */
+function transferCircuit(request: TransferProofRequest): TransferKeyCircuit {
+  const narrow: TransferKeyCircuit = {
+    family: "transfer",
+    format: disclosureFormat(request.layout.format),
+    outputs: listLength(request.outputs),
+    class: listLength(request.inputs),
+    withdrawals: listLength(request.withdrawals),
+    owners: listLength(request.rows),
+    entry: flag(request.layout.entry),
+    wide: false,
+  };
+  // The layout carries no wide flag, the own pool's length names it.
+  const records = listLength(request.ownPool.records);
+  return (
+    transferKeys().find(
+      (key) =>
+        key.format === narrow.format &&
+        key.outputs === narrow.outputs &&
+        key.class === narrow.class &&
+        key.withdrawals === narrow.withdrawals &&
+        key.owners === narrow.owners &&
+        key.entry === narrow.entry &&
+        transferPoolCapacity(key).own === records,
+    ) ?? narrow
+  );
 }
 
 export function ringRequestKey(request: RingProofRequest): ExpectedProvingKey {
@@ -331,130 +366,63 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
     publicInputHash: field(request.publicInputHash, "publicInputHash"),
   };
   switch (request.kind) {
-    case "deliveredAudit":
-      return {
-        ...head,
-        ...envelopeJson(request),
-        outputs: request.outputs.map((output, i) => deliveredJson(output, `outputs[${i}]`)),
-      };
-    case "anonymousAudit":
-      return {
-        ...head,
-        partyIdentities: fields(request.partyIdentities, 3, "partyIdentities"),
-        ...envelopeJson(request),
-        outputs: request.outputs.map((output, i) => anonymousSlotJson(output, `outputs[${i}]`)),
-        privateTxHash: field(request.privateTxHash, "privateTxHash"),
-        privateTxBlinding: field(request.privateTxBlinding, "privateTxBlinding"),
-        ...entrySenderKey(request),
-        inputCount: integer(request.inputCount, "inputCount", 1, request.inputs.length),
-        inputs: request.inputs.map((input, i) => openingJson(input, `inputs[${i}]`)),
-        senderCommitment: field(request.senderCommitment, "senderCommitment"),
-      };
-    case "memberPolicy":
-      return {
-        ...head,
-        anonymous: flag(request.anonymous),
-        approvalRequired: flag(request.approvalRequired),
-        keyEscrow: flag(request.keyEscrow),
-        sender: field(request.sender, "sender"),
-        inputChain: field(request.inputChain, "inputChain"),
-        ...policyJson(request, policyCircuit(request)),
-      };
-    case "delegatePolicy":
-      return {
-        ...head,
-        inputs: request.inputs.map((input, i) => openingJson(input, `inputs[${i}]`)),
-        ...policyJson(request, policyCircuit(request)),
-      };
+    case "transfer":
+      return { ...head, ...transferJson(request) };
     case "applyRecords": {
       const capacity = applyCapacity(request.writes.length);
       return {
         ...head,
-        oldRoot: field(request.oldRoot, "oldRoot"),
-        newRoot: field(request.newRoot, "newRoot"),
-        oldNextIndex: integer(request.oldNextIndex, "oldNextIndex", 0, U32_MAX),
-        newNextIndex: integer(request.newNextIndex, "newNextIndex", 0, U32_MAX),
-        chainStart: field(request.chainStart, "chainStart"),
-        chainEnd: field(request.chainEnd, "chainEnd"),
+        ...applyHeadJson(request, [
+          integer(request.oldNextIndex, "oldNextIndex", 0, U32_MAX),
+          integer(request.newNextIndex, "newNextIndex", 0, U32_MAX),
+        ]),
         count: request.writes.length,
-        // A slot past the count assigns zeros.
-        writes: Array.from({ length: capacity }, (_, i) => {
-          const write = request.writes[i];
-          return write === undefined ? null : writeJson(write, `writes[${i}]`);
-        }),
+        writes: paddedWrites(request.writes, capacity, writeJson),
+        ...(request.private === undefined ? {} : privateApplyJson(request.private, capacity)),
       };
     }
-    case "withdrawalExemption":
-      if (request.entries.length !== N_PUBLIC_SLOTS)
-        throw new ClientError("CLIENT_INVALID_PROOF_INPUTS");
+    case "applyEnrollments": {
+      const capacity = applyCapacity(request.writes.length);
       return {
         ...head,
-        root: field(request.root, "root"),
-        assets: fields(request.assets, N_PUBLIC_SLOTS, "assets"),
-        amounts: fields(request.amounts, N_PUBLIC_SLOTS, "amounts"),
-        entries: request.entries.map((entry, i) =>
-          entry === undefined ? null : memberOpeningJson(entry, `entries[${i}]`),
-        ),
+        ...applyHeadJson(request, [
+          trackingNextIndex(request.oldNextIndex, "oldNextIndex"),
+          trackingNextIndex(request.newNextIndex, "newNextIndex"),
+        ]),
+        count: request.writes.length,
+        writes: paddedWrites(request.writes, capacity, trackingWriteJson),
       };
+    }
     case "registerKey":
       return {
         ...head,
+        ringId: field(request.ringId, "ringId"),
         member: field(request.member, "member"),
         nullifierSecret: hexBytes(request.nullifierSecret, 32, "nullifierSecret"),
+        listSalt: hexBytes(request.listSalt, 32, "listSalt"),
         ephSk: hexBytes(request.ephSk, 32, "ephSk"),
         auditorPk: hexBytes(request.auditorPk, 32, "auditorPk"),
       };
-    case "deposit":
+    case "merge":
       return {
         ...head,
-        contextHash: field(request.contextHash, "contextHash"),
-        count: integer(request.count, "count", 1, RING_DEPOSIT_AUDIT_SLOTS),
-        ...(flag(request.anonymous) ? { anonymous: true } : {}),
-        ownerPkHashes: fields(
-          request.ownerPkHashes,
-          depositCapacity(request.count),
-          "ownerPkHashes",
-        ),
-        ...(request.ownerKeys === undefined
-          ? {}
-          : {
-              ownerKeys: sized(request.ownerKeys, depositCapacity(request.count), "ownerKeys").map(
-                (key, i) => hexBytes(key, 32, `ownerKeys[${i}]`),
-              ),
-            }),
-        nullifierPks: fields(request.nullifierPks, depositCapacity(request.count), "nullifierPks"),
-        blindingSecrets: fields(
-          request.blindingSecrets,
-          depositCapacity(request.count),
-          "blindingSecrets",
-        ),
-        ctHashes: fields(request.ctHashes, depositCapacity(request.count), "ctHashes"),
-        members: sized(request.members, depositCapacity(request.count), "members").map(
-          (member, i) => (member === undefined ? null : recordJson(member, `members[${i}]`)),
-        ),
-        ephSk: hexBytes(request.ephSk, 32, "ephSk"),
-        auditorPk: hexBytes(request.auditorPk, 32, "auditorPk"),
-        keyEscrow: flag(request.keyEscrow),
-        memberRegistryRoot: field(request.memberRegistryRoot, "memberRegistryRoot"),
-      };
-    case "anonymousMerge":
-      return {
-        ...head,
-        partyIdentities: fields(request.partyIdentities, 3, "partyIdentities"),
-        privateTxHash: field(request.privateTxHash, "privateTxHash"),
         outputUtxoHash: field(request.outputUtxoHash, "outputUtxoHash"),
         firstNullifier: field(request.firstNullifier, "firstNullifier"),
         ringProgramId: field(request.ringProgramId, "ringProgramId"),
         auditorPk: hexBytes(request.auditorPk, 32, "auditorPk"),
-        salt: field(request.salt, "salt"),
+        payer: field(request.payer, "payer"),
+        trackingRoot: field(request.trackingRoot, "trackingRoot"),
         ephSk: hexBytes(request.ephSk, 32, "ephSk"),
-        disclosureKey: hexBytes(request.disclosureKey, 32, "disclosureKey"),
         ownerKey: hexBytes(request.ownerKey, 32, "ownerKey"),
-        nullifierSecret: field(request.nullifierSecret, "nullifierSecret"),
+        ownerPkHash: field(request.ownerPkHash, "ownerPkHash"),
         mintChunks: fields(request.mintChunks, MINT_CHUNKS, "mintChunks"),
-        inputs: request.inputs.map((input, i) => mergeInputJson(input, `inputs[${i}]`)),
+        asset: field(request.asset, "asset"),
+        amount: field(request.amount, "amount"),
+        nullifierPk: field(request.nullifierPk, "nullifierPk"),
+        seed: field(request.seed, "seed"),
         outputTreeId: field(request.outputTreeId, "outputTreeId"),
         outputRingDataHash: field(request.outputRingDataHash, "outputRingDataHash"),
+        tracking: trackingOpeningJson(request.tracking, "tracking"),
       };
   }
 }
@@ -463,15 +431,14 @@ type Json = Readonly<Record<string, unknown>>;
 
 const U8_MAX = 0xff;
 const U32_MAX = 0xffff_ffff;
-/** Go `[2]Field`, the two `hash_bytes_32` halves of the merged mint. */
+/** Go `[2]Field`, the two `hash_bytes_32` halves of a mint. */
 const MINT_CHUNKS = 2;
-const ZERO = new Uint8Array(32) as Bytes32;
 const MAX_LEAF_INDEX = Number(MEMBER_REGISTRY_CAPACITY) - 1;
-const EMPTY_POOL: PoolJson = { records: [], proof: { canopy: [], paths: [] }, subjects: [] };
+const MAX_TRACKING_INDEX = Number(TRACKING_CAPACITY) - 1;
 
-/** One write takes the 1-write key, 2 to `APPLY_BATCH` the batch key, any other count none. */
+/** A count no apply key holds keeps its own width and fails the catalog lookup. */
 function applyCapacity(count: number): number {
-  return [1, 2, 4, 8, APPLY_BATCH].find((n) => count <= n) ?? count;
+  return count >= 1 && count <= APPLY_BATCH ? applyKeyWidth(count) : count;
 }
 
 /** A list width no key serves fails here, before any encoding. */
@@ -489,12 +456,74 @@ function proofInput<T>(read: () => T): T {
   }
 }
 
+type PolicySectionShape = Readonly<{
+  rows: number;
+  outputs: number;
+  withdrawals: number;
+  /** Input slots, each reads an asset entry past the payments'. */
+  spent: number;
+  publicAssets: number;
+  pools: PolicyPoolCapacity;
+}>;
+
+function transferJson(request: TransferProofRequest): Json {
+  const circuit = transferCircuit(request);
+  const slots = request.inputs.length;
+  const shape: PolicySectionShape = {
+    rows: circuit.owners,
+    outputs: circuit.outputs,
+    withdrawals: circuit.withdrawals,
+    spent: circuit.class,
+    publicAssets: N_PUBLIC_SLOTS,
+    pools: transferPoolCapacity(circuit),
+  };
+  return {
+    ...envelopeJson(request),
+    inProof: flag(request.inProof),
+    hidden: flag(request.hidden),
+    delegate: flag(request.delegate),
+    sender: field(request.sender, "sender"),
+    partyIdentities: fields(request.partyIdentities, ANONYMOUS_PARTIES, "partyIdentities"),
+    approvalMask: integer(request.approvalMask, "approvalMask", 0, APPROVAL_MASK_MAX),
+    ...(request.approvalTotals === undefined
+      ? {}
+      : { approvalTotals: field(request.approvalTotals, "approvalTotals") }),
+    ...(request.approvalBlinder === undefined
+      ? {}
+      : { approvalBlinder: field(request.approvalBlinder, "approvalBlinder") }),
+    outputCount: integer(request.outputCount, "outputCount", 1, request.outputs.length),
+    outputs: request.outputs.map((output, i) => outputJson(output, `outputs[${i}]`)),
+    inputCount: integer(request.inputCount, "inputCount", 1, slots),
+    inputNullifierChain: field(request.inputNullifierChain, "inputNullifierChain"),
+    inputNullifiers: fields(request.inputNullifiers, slots, "inputNullifiers"),
+    inputs: request.inputs.map((input, i) => openingJson(input, `inputs[${i}]`)),
+    ...(flag(request.layout.entry)
+      ? {
+          entries: sized(request.entries, slots, "entries").map((entry, i) =>
+            entryOpeningJson(entry, `entries[${i}]`),
+          ),
+        }
+      : {}),
+    signerCount: integer(request.signerCount, "signerCount", 0, slots),
+    signers: fields(request.signers, slots, "signers"),
+    // Go reads a `uint64` number, 60 bits pass no double exact.
+    ...(request.signerDataCounts === undefined || request.signerDataCounts === 0n
+      ? {}
+      : { signerDataCounts: rawJson(request.signerDataCounts.toString()) }),
+    rows: fields(request.rows, circuit.owners, "rows"),
+    privateTxHash: field(request.privateTxHash, "privateTxHash"),
+    privateTxBlinding: field(request.privateTxBlinding, "privateTxBlinding"),
+    ...trackingJson(request, shape),
+    ...policyJson(request, shape),
+  };
+}
+
+const APPROVAL_MASK_MAX = 3;
+
 function envelopeJson(envelope: AuditEnvelopeProofInputs): Json {
   return {
     firstNullifier: field(envelope.firstNullifier, "firstNullifier"),
-    ringId: field(envelope.ringId, "ringId"),
     txViewingSk: hexBytes(envelope.txViewingSk, 32, "txViewingSk"),
-    ephSk: hexBytes(envelope.ephSk, 32, "ephSk"),
     auditorPk: hexBytes(envelope.auditorPk, 32, "auditorPk"),
     salt: hexBytes(envelope.salt, 16, "salt"),
     layout: proofInput(() => auditLayoutValue(envelope.layout)),
@@ -516,31 +545,105 @@ function openingJson(opening: RingSlotOpening, name: string): Json {
   };
 }
 
-function deliveredJson(slot: DeliveredSlotProofInputs, name: string): Json {
+function outputJson(slot: OutputOpeningProofInput, name: string): Json {
   return {
     output: openingJson(slot.output, `${name}.output`),
-    recipientKey: hexBytes(slot.recipientKey, 32, `${name}.recipientKey`),
-    ownerKey: hexBytes(slot.ownerKey, 32, `${name}.ownerKey`),
-    body: hexBytes(slot.body, RING_DELIVERED_BODY_LEN, `${name}.body`),
+    ...entryOpeningJson(slot, name),
   };
 }
 
-function anonymousSlotJson(slot: AnonymousSlotProofInputs, name: string): Json {
+function entryOpeningJson(entry: EntryOpeningProofInput, name: string): Json {
   return {
-    output: openingJson(slot.output, `${name}.output`),
-    ownerKey: hexBytes(slot.ownerKey, 32, `${name}.ownerKey`),
+    ownerKey: hexBytes(entry.ownerKey, 32, `${name}.ownerKey`),
+    mintChunks: fields(entry.mintChunks, MINT_CHUNKS, `${name}.mintChunks`),
   };
 }
 
-function policyJson(policy: PolicyProofInputs, circuit: PolicyKeyCircuit): Json {
-  const outputs = policy.outputs.length + policy.withdrawals.length;
-  const capacity = policyPoolCapacity(circuit);
-  const { curatorPool } = policy;
-  if ((curatorPool === undefined) !== (capacity.curator === 0))
-    throw new ClientError("CLIENT_INVALID_PROOF_INPUTS");
+function trackingJson(tracking: TrackingProofInputs, shape: PolicySectionShape): Json {
+  const capacity = shape.pools.tracking;
+  const { trackingPool: pool } = tracking;
+  const levels = canopyLevels(capacity);
+  const entry = (index: number, name: string): number => integer(index, name, 0, capacity - 1);
+  return {
+    trackingRoot: field(tracking.trackingRoot, "trackingRoot"),
+    trackingRecords: sized(pool.records, capacity, "trackingRecords").map((record, i) =>
+      trackingRecordJson(record, `trackingRecords[${i}]`),
+    ),
+    trackingProof: {
+      canopy: fields(pool.canopy, QUAD_ARITY ** levels, "trackingProof.canopy"),
+      paths: sized(pool.paths, capacity, "trackingProof.paths").map((path, i) =>
+        sharedPathJson(
+          path,
+          TRACKING_QUAD_HEIGHT - levels,
+          MAX_TRACKING_INDEX,
+          `trackingProof.paths[${i}]`,
+        ),
+      ),
+    },
+    trackingSubjects: subjectsJson(pool.subjects, capacity, "trackingSubjects"),
+    rowEntries: sized(tracking.rowEntries, shape.rows, "rowEntries").map((index, i) =>
+      entry(index, `rowEntries[${i}]`),
+    ),
+    outputEntries: sized(tracking.outputEntries, shape.outputs, "outputEntries").map((index, i) =>
+      entry(index, `outputEntries[${i}]`),
+    ),
+  };
+}
+
+/** Go `TrackingRecordParams` and `TrackingLeaf`, one wire shape. */
+function trackingRecordJson(record: TrackingRecord, name: string): Json {
+  return {
+    member: field(record.member, `${name}.member`),
+    next: field(record.next, `${name}.next`),
+    ...trackingFieldsJson(record, name),
+  };
+}
+
+function trackingFieldsJson(entry: TrackingEntry, name: string): Json {
+  return {
+    nullifierPk: field(entry.nullifierPk, `${name}.nullifierPk`),
+    ctHash: field(entry.ctHash, `${name}.ctHash`),
+    listTag: field(entry.listTag, `${name}.listTag`),
+  };
+}
+
+/** Go `TrackingOpening`, a padding slot and a zero key send null. */
+function trackingOpeningJson(opening: TrackingOpening | undefined, name: string): Json | null {
+  if (opening === undefined) return null;
+  const present = opening.kind === "present";
+  return {
+    present,
+    record: trackingRecordJson(present ? opening.record : opening.low, `${name}.record`),
+    path: sharedPathJson(opening.path, TRACKING_QUAD_HEIGHT, MAX_TRACKING_INDEX, `${name}.path`),
+  };
+}
+
+/** Go `SharedRegistryPath`. */
+function sharedPathJson(path: QuadPath, height: number, maxIndex: number, name: string): Json {
+  return {
+    index: integer(path.index, `${name}.index`, 0, maxIndex),
+    siblings: sized(path.siblings, height, `${name}.siblings`).map((level, l) =>
+      fields(level, QUAD_ARITY - 1, `${name}.siblings[${l}]`),
+    ),
+  };
+}
+
+function subjectsJson(
+  subjects: readonly PoolSubject[],
+  capacity: number,
+  name: string,
+): readonly Json[] {
+  return sized(subjects, capacity, name).map((subject, i) => ({
+    member: field(subject.member, `${name}[${i}].member`),
+    recordIndex: integer(subject.recordIndex, `${name}[${i}].recordIndex`, 0, capacity - 1),
+  }));
+}
+
+function policyJson(policy: PolicyProofInputs, shape: PolicySectionShape): Json {
+  const slots = shape.outputs + shape.withdrawals;
+  const capacity = shape.pools;
   const own = poolJson(policy.ownPool, capacity.own, "ownPool");
-  const curator =
-    curatorPool === undefined ? EMPTY_POOL : poolJson(curatorPool, capacity.curator, "curatorPool");
+  const curator = poolJson(policy.curatorPool, capacity.curator, "curatorPool");
   return {
     withdrawalCount: integer(
       policy.withdrawalCount,
@@ -549,51 +652,51 @@ function policyJson(policy: PolicyProofInputs, circuit: PolicyKeyCircuit): Json 
       policy.withdrawals.length,
     ),
     withdrawalHash: field(policy.withdrawalHash, "withdrawalHash"),
-    withdrawals: policy.withdrawals.map((w) => ({
+    withdrawals: sized(policy.withdrawals, shape.withdrawals, "withdrawals").map((w) => ({
       owner: field(w.owner, "withdrawal.owner"),
       asset: field(w.asset, "withdrawal.asset"),
       amount: withdrawalAmount(w.amount),
     })),
-    privateTxHash: field(policy.privateTxHash, "privateTxHash"),
     policyHash: field(policy.policyHash, "policyHash"),
     ringId: field(policy.ringId, "ringId"),
     ownRoot: field(policy.ownRoot, "ownRoot"),
     curatorRoot: field(policy.curatorRoot, "curatorRoot"),
     publicAssets: fields(policy.publicAssets, N_PUBLIC_SLOTS, "publicAssets"),
     publicAmounts: fields(policy.publicAmounts, N_PUBLIC_SLOTS, "publicAmounts"),
-    sources: sized(policy.sources, RING_SOURCE_SLOTS, "sources").map((source, i) => ({
-      listId: integer(source.listId, `sources[${i}].listId`, 0, U8_MAX),
-      registry: field(source.registry, `sources[${i}].registry`),
-    })),
-    policyLen: integer(policy.policyLen, "policyLen", 0, RING_RULE_SLOTS),
-    rules: fields(policy.rules, RING_RULE_SLOTS, "rules"),
-    addressChain: field(policy.addressChain, "addressChain"),
-    privateTxBlinding: field(policy.privateTxBlinding, "privateTxBlinding"),
-    outputs: policy.outputs.map((output, i) => ({
-      ...openingJson(output, `outputs[${i}]`),
-      ...(output.ctHash === undefined
-        ? {}
-        : { ctHash: field(output.ctHash, `outputs[${i}].ctHash`) }),
-    })),
-    senderPkHash: field(policy.senderPkHash, "senderPkHash"),
+    publicGross: fields(policy.publicGross, N_PUBLIC_SLOTS, "publicGross"),
+    ...tableJson(policy),
     ownRecords: own.records,
     curatorRecords: curator.records,
     ownProof: own.proof,
     curatorProof: curator.proof,
     ownSubjects: own.subjects,
     curatorSubjects: curator.subjects,
-    senderEntry: entryJson(policy.senderEntry, capacity, "senderEntry"),
-    ownerEntries: sized(policy.ownerEntries, outputs, "ownerEntries").map((entry, i) =>
-      entryJson(entry, capacity, `ownerEntries[${i}]`),
+    senderEntries: sized(policy.senderEntries, shape.rows, "senderEntries").map((entry, i) =>
+      ownerEntryJson(entry, capacity, `senderEntries[${i}]`),
     ),
-    assetEntries: sized(policy.assetEntries, outputs, "assetEntries").map((entry, i) =>
+    ownerEntries: sized(policy.ownerEntries, slots, "ownerEntries").map((entry, i) =>
+      ownerEntryJson(entry, capacity, `ownerEntries[${i}]`),
+    ),
+    assetEntries: sized(policy.assetEntries, slots + shape.spent, "assetEntries").map((entry, i) =>
       entryJson(entry, capacity, `assetEntries[${i}]`),
     ),
     publicAssetEntries: sized(
       policy.publicAssetEntries,
-      circuit.family === "memberPolicy" ? N_PUBLIC_SLOTS : 0,
+      shape.publicAssets,
       "publicAssetEntries",
     ).map((index, i) => integer(index, `publicAssetEntries[${i}]`, 0, capacity.own - 1)),
+  };
+}
+
+function tableJson(table: PolicyTableProofInputs): Json {
+  return {
+    sources: sized(table.sources, RING_SOURCE_SLOTS, "sources").map((source, i) => ({
+      listId: integer(source.listId, `sources[${i}].listId`, 0, U8_MAX),
+      registry: field(source.registry, `sources[${i}].registry`),
+    })),
+    salted: integer(table.salted, "salted", 0, (1 << RING_SOURCE_SLOTS) - 1),
+    policyLen: integer(table.policyLen, "policyLen", 0, RING_RULE_SLOTS),
+    rules: fields(table.rules, RING_RULE_SLOTS, "rules"),
   };
 }
 
@@ -613,80 +716,28 @@ function poolJson(pool: RecordPool, capacity: number, name: string): PoolJson {
     })),
     proof: {
       canopy: fields(pool.canopy, QUAD_ARITY ** levels, `${name}.canopy`),
-      paths: sized(pool.paths, capacity, `${name}.paths`).map((path, i) => ({
-        index: integer(path.index, `${name}.paths[${i}].index`, 0, MAX_LEAF_INDEX),
-        siblings: sized(path.siblings, QUAD_HEIGHT - levels, `${name}.paths[${i}].siblings`).map(
-          (level, l) => fields(level, QUAD_ARITY - 1, `${name}.paths[${i}].siblings[${l}]`),
-        ),
-      })),
-    },
-    subjects: sized(pool.subjects, capacity, `${name}.subjects`).map((subject, i) => ({
-      member: field(subject.member, `${name}.subjects[${i}].member`),
-      recordIndex: integer(
-        subject.recordIndex,
-        `${name}.subjects[${i}].recordIndex`,
-        0,
-        capacity - 1,
+      paths: sized(pool.paths, capacity, `${name}.paths`).map((path, i) =>
+        sharedPathJson(path, QUAD_HEIGHT - levels, MAX_LEAF_INDEX, `${name}.paths[${i}]`),
       ),
-    })),
+    },
+    subjects: subjectsJson(pool.subjects, capacity, `${name}.subjects`),
   };
 }
 
 function entryJson(entry: PolicySubjectEntry, capacity: PolicyPoolCapacity, name: string): Json {
-  if ((entry.curator === undefined) !== (capacity.curator === 0))
-    throw new ClientError("CLIENT_INVALID_PROOF_INPUTS");
   return {
     own: integer(entry.own, `${name}.own`, 0, capacity.own - 1),
-    curator:
-      entry.curator === undefined
-        ? []
-        : [integer(entry.curator, `${name}.curator`, 0, capacity.curator - 1)],
+    curator: [integer(entry.curator, `${name}.curator`, 0, capacity.curator - 1)],
   };
 }
 
-/** Go `MemberOpening`, the side the opening does not use is zero. */
-function memberOpeningJson(opening: RecordOpening | undefined, name: string): Json | null {
-  if (opening === undefined) return null;
-  if (opening.kind !== "present" && opening.kind !== "absent")
-    throw new ClientError("CLIENT_INVALID_PROOF_INPUTS");
-  const present = opening.kind === "present";
-  const record = present ? opening.record : undefined;
-  const low = present ? undefined : opening.low;
+function ownerEntryJson(entry: PolicyOwnerEntry, capacity: PolicyPoolCapacity, name: string): Json {
   return {
-    present,
-    next: field(record?.next ?? ZERO, `${name}.next`),
-    lists: u64(record?.lists ?? 0n, `${name}.lists`),
-    escrowKey: field(record?.escrowKey ?? ZERO, `${name}.escrowKey`),
-    mintPolicy: field(
-      mintPolicyField(record?.mintPolicy ?? EMPTY_MINT_POLICY),
-      `${name}.mintPolicy`,
-    ),
-    withdrawalThreshold: field(
-      bigIntBytes(record?.mintPolicy.withdrawalThreshold ?? 0n, 32) as Bytes32,
-      `${name}.withdrawalThreshold`,
-    ),
-    ...quadPathJson(opening.path, name, "index", "path"),
-    lowMember: field(low?.member ?? ZERO, `${name}.lowMember`),
-    lowNext: field(low?.next ?? ZERO, `${name}.lowNext`),
-    lowLists: u64(low?.lists ?? 0n, `${name}.lowLists`),
-    lowEscrow: field(low?.escrowKey ?? ZERO, `${name}.lowEscrow`),
-    lowMintPolicy: field(
-      mintPolicyField(low?.mintPolicy ?? EMPTY_MINT_POLICY),
-      `${name}.lowMintPolicy`,
-    ),
-    lowWithdrawalThreshold: field(
-      bigIntBytes(low?.mintPolicy.withdrawalThreshold ?? 0n, 32) as Bytes32,
-      `${name}.lowWithdrawalThreshold`,
-    ),
-  };
-}
-
-/** Go `RecordOpening`, the present record a deposit and a ring merge prove. */
-export function recordJson(opening: PresentRecordOpening, name: string): Json {
-  if (opening.kind !== "present") throw new ClientError("CLIENT_INVALID_PROOF_INPUTS");
-  return {
-    ...recordFieldsJson(opening.record, name),
-    ...quadPathJson(opening.path, name, "index", "path"),
+    ...entryJson(entry, capacity, name),
+    tracking: integer(entry.tracking, `${name}.tracking`, 0, capacity.tracking - 1),
+    listSalt: field(entry.listSalt, `${name}.listSalt`),
+    ownSalted: integer(entry.ownSalted, `${name}.ownSalted`, 0, capacity.own - 1),
+    curatorSalted: [integer(entry.curatorSalted, `${name}.curatorSalted`, 0, capacity.curator - 1)],
   };
 }
 
@@ -694,63 +745,133 @@ function recordFieldsJson(record: MemberRecord, name: string): Json {
   return {
     next: field(record.next, `${name}.next`),
     lists: u64(record.lists, `${name}.lists`),
-    escrowKey: field(record.escrowKey, `${name}.escrowKey`),
-    mintPolicy: field(mintPolicyField(record.mintPolicy), `${name}.mintPolicy`),
-    withdrawalThreshold: field(
-      bigIntBytes(record.mintPolicy.withdrawalThreshold, 32) as Bytes32,
-      `${name}.withdrawalThreshold`,
+    ...mintPolicyJson(record.mintPolicy, name, ""),
+  };
+}
+
+/** The mint policy columns of one record, `prefix` names its side in the Go struct. */
+function mintPolicyJson(policy: MintPolicy, name: string, prefix: "" | "low" | "old"): Json {
+  const key = (column: string): string =>
+    prefix === "" ? column : `${prefix}${column.charAt(0).toUpperCase()}${column.slice(1)}`;
+  return {
+    [key("mintPolicy")]: field(mintPolicyField(policy), `${name}.${key("mintPolicy")}`),
+    [key("withdrawalThreshold")]: field(
+      bigIntBytes(policy.withdrawalThreshold, 32) as Bytes32,
+      `${name}.${key("withdrawalThreshold")}`,
+    ),
+    [key("assetLimits")]: limitsJson(policy.limits, `${name}.${key("assetLimits")}`),
+  };
+}
+
+function privateApplyJson(input: PrivateApplyProofInput, capacity: number): Json {
+  return {
+    privateWrites: integer(input.privateWrites, "privateWrites", 1, (1 << capacity) - 1),
+    trackingRoot: field(input.trackingRoot, "trackingRoot"),
+    owners: paddedWrites(
+      input.owners,
+      capacity,
+      (owner, name) => ({
+        listSalt: field(owner.listSalt, `${name}.listSalt`),
+        record: trackingRecordJson(owner.record, `${name}.record`),
+        ...trackingPathJson(owner.path, name, "index", "path"),
+      }),
+      "owners",
     ),
   };
+}
+
+/** Go field order, each family checks its own next index width. */
+function applyHeadJson(
+  request: Readonly<{ oldRoot: Bytes32; newRoot: Bytes32; chainStart: Bytes32; chainEnd: Bytes32 }>,
+  [oldNextIndex, newNextIndex]: readonly [number, number],
+): Json {
+  return {
+    oldRoot: field(request.oldRoot, "oldRoot"),
+    newRoot: field(request.newRoot, "newRoot"),
+    oldNextIndex,
+    newNextIndex,
+    chainStart: field(request.chainStart, "chainStart"),
+    chainEnd: field(request.chainEnd, "chainEnd"),
+  };
+}
+
+/** A slot past the count assigns zeros. */
+function paddedWrites<T>(
+  writes: readonly (T | undefined)[],
+  capacity: number,
+  encode: (write: T, name: string) => Json,
+  list = "writes",
+): readonly (Json | null)[] {
+  if (writes.length > capacity)
+    throw new ClientError("CLIENT_INVALID_LENGTH", {
+      details: { field: list, expected: capacity, actual: writes.length },
+    });
+  return Array.from({ length: capacity }, (_, i) => {
+    const write = writes[i];
+    return write === undefined ? null : encode(write, `${list}[${i}]`);
+  });
 }
 
 function writeJson(write: RecordWriteProofInput, name: string): Json {
   return {
-    entry: queueEntryJson(write.entry, `${name}.entry`),
+    entry: recordWriteJson(write.entry, `${name}.entry`),
     exists: flag(write.exists),
     oldNext: field(write.oldNext, `${name}.oldNext`),
     oldLists: u64(write.oldLists, `${name}.oldLists`),
-    oldEscrow: field(write.oldEscrow, `${name}.oldEscrow`),
-    oldMintPolicy: field(mintPolicyField(write.oldMintPolicy), `${name}.oldMintPolicy`),
-    oldWithdrawalThreshold: field(
-      bigIntBytes(write.oldMintPolicy.withdrawalThreshold, 32) as Bytes32,
-      `${name}.oldWithdrawalThreshold`,
-    ),
+    ...mintPolicyJson(write.oldMintPolicy, name, "old"),
     ...quadPathJson(write.slot, name, "index", "path"),
     lowMember: field(write.low.member, `${name}.lowMember`),
     lowNext: field(write.low.next, `${name}.lowNext`),
     lowLists: u64(write.low.lists, `${name}.lowLists`),
-    lowEscrow: field(write.low.escrowKey, `${name}.lowEscrow`),
-    lowMintPolicy: field(mintPolicyField(write.low.mintPolicy), `${name}.lowMintPolicy`),
-    lowWithdrawalThreshold: field(
-      bigIntBytes(write.low.mintPolicy.withdrawalThreshold, 32) as Bytes32,
-      `${name}.lowWithdrawalThreshold`,
-    ),
+    ...mintPolicyJson(write.low.mintPolicy, name, "low"),
     ...quadPathJson(write.lowPath, name, "lowIndex", "lowPath"),
   };
 }
 
-function queueEntryJson(entry: QueueEntry, name: string): Json {
+function trackingWriteJson(write: TrackingWriteProofInput, name: string): Json {
+  return {
+    member: field(write.entry.member, `${name}.member`),
+    ...trackingFieldsJson(write.entry, name),
+    ...trackingPathJson(write.slot, name, "index", "path"),
+    lowRecord: trackingRecordJson(write.lowRecord, `${name}.lowRecord`),
+    ...trackingPathJson(write.lowPath, name, "lowIndex", "lowPath"),
+  };
+}
+
+/** Go `uint64`, a tracking next index stops at the tree's capacity. */
+function trackingNextIndex(value: bigint, name: string): number {
+  if (value > TRACKING_CAPACITY)
+    throw new ClientError("CLIENT_INVALID_INTEGER", { details: { field: name, length: 8 } });
+  return u64(value, name);
+}
+
+/** The flat siblings `newQuadPath` chunks, leaf level first. */
+function trackingPathJson(path: QuadPath, name: string, index: string, siblings: string): Json {
+  const levels = sized(path.siblings, TRACKING_QUAD_HEIGHT, `${name}.${siblings}`);
+  return {
+    [index]: integer(path.index, `${name}.${index}`, 0, MAX_TRACKING_INDEX),
+    [siblings]: levels.flatMap((level, l) =>
+      fields(level, QUAD_ARITY - 1, `${name}.${siblings}[${l}]`),
+    ),
+  };
+}
+
+function recordWriteJson(entry: RecordWrite, name: string): Json {
   return {
     member: field(entry.member, `${name}.member`),
     mask: u64(entry.mask, `${name}.mask`),
     value: u64(entry.value, `${name}.value`),
-    escrowKey: field(entry.escrowKey, `${name}.escrowKey`),
     mintPolicy: field(mintPolicyWriteField(entry.mintPolicy), `${name}.mintPolicy`),
     withdrawalThreshold: field(
       bigIntBytes(entry.mintPolicy?.withdrawalThreshold ?? 0n, 32) as Bytes32,
       `${name}.withdrawalThreshold`,
     ),
+    assetLimits: limitsJson((entry.mintPolicy ?? EMPTY_MINT_POLICY).limits, `${name}.assetLimits`),
   };
 }
 
-function mergeInputJson(input: MergeInputOpening, name: string): Json {
-  return {
-    domain: field(input.domain, `${name}.domain`),
-    treeId: field(input.treeId, `${name}.treeId`),
-    amount: field(input.amount, `${name}.amount`),
-    blinding: field(input.blinding, `${name}.blinding`),
-    ringDataHash: field(input.ringDataHash, `${name}.ringDataHash`),
-  };
+function limitsJson(limits: AssetLimits, name: string): string[] {
+  return assetLimitsFields(limits).map((limit, index) => field(limit, `${name}[${String(index)}]`));
 }
 
 /** Go keeps the index and the flat siblings, leaf level first, three per level in child order. */
@@ -792,13 +913,6 @@ function checkedLength(value: Uint8Array, length: number, name: string): Uint8Ar
   return value;
 }
 
-function entrySenderKey(request: AnonymousAuditProofRequest): Readonly<{ senderKey?: string }> {
-  const { senderKey } = request;
-  if ((senderKey !== undefined) !== flag(request.layout.fullOpenings))
-    throw new ClientError("CLIENT_INVALID_PROOF_INPUTS");
-  return senderKey === undefined ? {} : { senderKey: hexBytes(senderKey, 32, "senderKey") };
-}
-
 function listLength(values: readonly unknown[]): number {
   if (!Array.isArray(values)) throw new ClientError("CLIENT_INVALID_PROOF_INPUTS");
   return values.length;
@@ -838,10 +952,6 @@ function flag(value: boolean): boolean {
 
 function byteWidth(maximum: number): number {
   return maximum <= U8_MAX ? 1 : maximum <= U32_MAX ? 4 : 8;
-}
-
-function depositCapacity(count: number): number {
-  return [1, 2, 4, RING_DEPOSIT_AUDIT_SLOTS].find((n) => count <= n) ?? count;
 }
 
 /** The circuit bounds this canonical field to u64; JSON numbers cannot carry that full range. */

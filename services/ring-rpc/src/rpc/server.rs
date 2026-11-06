@@ -15,8 +15,8 @@ use jsonrpsee::{
             http::{ProxyGetRequestError, ProxyGetRequestLayer},
             rpc::RpcServiceBuilder,
         },
-        BatchRequestConfig, HttpBody, HttpRequest, HttpResponse, ServerBuilder, ServerConfig,
-        ServerHandle,
+        serve_with_graceful_shutdown, stop_channel, BatchRequestConfig, HttpBody, HttpRequest,
+        HttpResponse, Methods, ServerBuilder, ServerConfig, ServerHandle,
     },
     types::ErrorObjectOwned,
     RpcModule,
@@ -24,24 +24,36 @@ use jsonrpsee::{
 use serde::{de::DeserializeOwned, Serialize};
 use spr_rpc_http::MethodPathLayer;
 use thiserror::Error;
+use tokio::net::TcpListener;
 use tower::Service;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use zolana_ring_client::rpc::{
-    CreateAuditorKeyRequest, CreateAuditorKeyResponse, GetAuditedUtxosRequest,
-    GetDecryptedTransactionsRequest, HealthResponse, PagedRead, RingDepositsRequest,
-    RingDepositsResponse, RingState, RingStatusRequest, RingStatusResponse, CREATE_AUDITOR_KEY,
-    GET_AUDITED_MERGES, GET_AUDITED_UTXOS, GET_DECRYPTED_TRANSACTIONS, HEALTH, RING_DEPOSITS,
-    RING_STATUS,
+    CreateAuditorKeyRequest, CreateAuditorKeyResponse, CreateRecordsRegistryRequest,
+    GetAuditedMergesResponse, GetAuditedUtxosRequest, GetDecryptedTransactionsRequest,
+    GetDecryptedTransactionsResponse, GetDelegateNotesRequest, GetListSaltRequest,
+    GetPendingListApprovalsRequest, GetRecordUpdateStatusRequest, GetRelayQuoteRequest,
+    GetRelayStatusRequest, GetSpendCoverageRequest, GetWalletActivityResponse,
+    GetWalletStatusRequest, HealthResponse, PagedRead, PrepareAuthorityTransferRequest,
+    PrepareRelayRequest, RefuseListApprovalRequest, RingState, RingStatusRequest,
+    RingStatusResponse, SetMergeSettingsRequest, SetReaderGrantRequest, SubmitRecordUpdateRequest,
+    SubmitRelayRequest, CREATE_AUDITOR_KEY, CREATE_RECORDS_REGISTRY, GET_AUDITED_UTXOS,
+    GET_DELEGATE_NOTES, GET_LIST_SALT, GET_PENDING_LIST_APPROVALS, GET_RECORD_UPDATE_STATUS,
+    GET_RELAY_QUOTE, GET_RELAY_STATUS, GET_SPEND_COVERAGE, GET_WALLET_STATUS, HEALTH,
+    PREPARE_AUTHORITY_TRANSFER, PREPARE_RELAY, REFUSE_LIST_APPROVAL, RELEASE_DELEGATE_SNAPSHOT,
+    RELEASE_WALLET_SNAPSHOT, RING_STATUS, SET_MERGE_SETTINGS, SET_READER_GRANT,
+    SUBMIT_RECORD_UPDATE, SUBMIT_RELAY,
 };
 
 use crate::{
     audit::{AuditRead, Page},
+    client_identity::PeerAddress,
+    client_rate::{ClientLayer, ClientLimits, ClientRate, ClientRateLimiter},
     error::RingRpcError,
     hub::{Hub, Lane, ReadinessStatus},
-    metering::{Metering, MeteringHeaderLayer},
     origins::{OriginError, Origins},
-    upstream::{DepositPage, TransactionSource},
+    relay::Relay,
+    upstream::TransactionSource,
 };
 
 const MAX_REQUEST_BODY_SIZE: u32 = 64 * 1024;
@@ -60,6 +72,7 @@ pub struct ServerOptions {
     pub port: u16,
     pub max_connections: u32,
     pub request_timeout: Duration,
+    pub client_limits: ClientLimits,
 }
 
 #[derive(Debug, Error)]
@@ -83,7 +96,8 @@ pub async fn run_server<S: TransactionSource + 'static>(
     if options.bind_policy == BindPolicy::LoopbackOnly && !options.bind.is_loopback() {
         return Err(ServerError::PublicBind);
     }
-    let addr = SocketAddr::from((options.bind, options.port));
+    let listener = TcpListener::bind(SocketAddr::from((options.bind, options.port))).await?;
+    let limiter = Arc::new(ClientRateLimiter::new(options.client_limits.rates));
     let middleware = tower::ServiceBuilder::new()
         .layer(cors(hub.origins())?)
         .layer(tower::timeout::TimeoutLayer::new(options.request_timeout))
@@ -94,12 +108,12 @@ pub async fn run_server<S: TransactionSource + 'static>(
                 hub: hub.clone(),
             }
         }))
-        .layer(MeteringHeaderLayer)
+        .layer(ClientLayer::new(options.client_limits.identity))
         .layer(ProxyGetRequestLayer::new([("/health", HEALTH)])?)
         .layer(MethodPathLayer {
             max_body_size: MAX_REQUEST_BODY_SIZE as usize,
         });
-    let server = ServerBuilder::default()
+    let services = ServerBuilder::default()
         .set_config(
             ServerConfig::builder()
                 // A WebSocket call runs outside the timeout layer and the CORS check.
@@ -111,10 +125,42 @@ pub async fn run_server<S: TransactionSource + 'static>(
                 .build(),
         )
         .set_http_middleware(middleware)
-        .set_rpc_middleware(RpcServiceBuilder::new().layer_fn(Metering))
-        .build(addr)
-        .await?;
-    Ok(server.start(rpc_module(hub)?))
+        .set_rpc_middleware(
+            RpcServiceBuilder::new().layer_fn(move |service| ClientRate {
+                service,
+                limiter: limiter.clone(),
+            }),
+        )
+        .to_service_builder();
+    let methods = Methods::from(rpc_module(hub)?);
+    let (stop, handle) = stop_channel();
+    // An owned accept loop, the jsonrpsee server hides the peer address from middleware.
+    tokio::spawn(async move {
+        loop {
+            let (socket, peer) = tokio::select! {
+                accepted = listener.accept() => match accepted {
+                    Ok(accepted) => accepted,
+                    Err(_) => continue,
+                },
+                () = stop.clone().shutdown() => break,
+            };
+            let _ = socket.set_nodelay(true);
+            let service = services.clone().build(methods.clone(), stop.clone());
+            let connection =
+                tower::service_fn(move |request: HttpRequest<hyper::body::Incoming>| {
+                    let mut request = request.map(HttpBody::new);
+                    request.extensions_mut().insert(PeerAddress(peer));
+                    let mut service = service.clone();
+                    async move { service.call(request).await }
+                });
+            tokio::spawn(serve_with_graceful_shutdown(
+                socket,
+                connection,
+                stop.clone().shutdown(),
+            ));
+        }
+    });
+    Ok(handle)
 }
 
 fn cors(origins: &Origins) -> Result<CorsLayer, OriginError> {
@@ -135,6 +181,7 @@ fn cors(origins: &Origins) -> Result<CorsLayer, OriginError> {
 pub fn rpc_module<S: TransactionSource + 'static>(
     hub: Arc<Hub<S>>,
 ) -> Result<RpcModule<Arc<Hub<S>>>, RegisterMethodError> {
+    let relay = hub.relay().cloned();
     let mut module = RpcModule::new(hub);
     module.register_async_method(HEALTH, |_, hub, _| async move {
         Ok::<_, ErrorObjectOwned>(HealthResponse {
@@ -162,25 +209,6 @@ pub fn rpc_module<S: TransactionSource + 'static>(
     )?;
     method(
         &mut module,
-        RING_DEPOSITS,
-        |hub, request: RingDepositsRequest| async move {
-            let (limit, before) = (
-                request.page_limit(),
-                request.before().map_err(|_| RingRpcError::InvalidPage)?,
-            );
-            let ring = request.ring_program_id.0;
-            hub.validate_ring(ring)?;
-            let _scan = hub.admit(Lane::Deposits(limit))?;
-            let page = DepositPage {
-                ring,
-                limit,
-                before,
-            };
-            Ok(RingDepositsResponse::from(hub.ring_deposits(page).await?))
-        },
-    )?;
-    method(
-        &mut module,
         RING_STATUS,
         |hub, request: RingStatusRequest| async move {
             hub.admit(Lane::Public)?;
@@ -198,50 +226,18 @@ pub fn rpc_module<S: TransactionSource + 'static>(
                 config_auditor_pubkey: configured.map(Into::into),
                 service_pubkey: hub.service_pubkey().into(),
                 activation: chain.activation,
-                registry: chain.registry,
             })
         },
     )?;
-    method(
-        &mut module,
-        GET_DECRYPTED_TRANSACTIONS,
-        |hub, request: GetDecryptedTransactionsRequest| async move {
-            let authentication = hub.admit(Lane::Authentication)?;
-            let service = hub.service(request.ring_program_id.map(|ring| ring.0))?;
-            let page = Page::new(request.cursor, request.limit)?;
-            let auth = &request.auth;
-            let read = service
-                .authorize(AuditRead {
-                    read: PagedRead::DecryptedTransactions,
-                    auth,
-                    page: &page,
-                })
-                .await?;
-            // Decrypting holds a read slot, the authentication slot is free again.
-            drop(authentication);
-            let _slot = hub.admit(Lane::Read)?;
-            read.execute().await
-        },
-    )?;
-    method(
-        &mut module,
-        GET_AUDITED_MERGES,
-        |hub, request: GetDecryptedTransactionsRequest| async move {
-            let authentication = hub.admit(Lane::Authentication)?;
-            let service = hub.service(request.ring_program_id.map(|ring| ring.0))?;
-            let page = Page::new(request.cursor, request.limit)?;
-            let read = service
-                .authorize(AuditRead {
-                    read: PagedRead::AuditedMerges,
-                    auth: &request.auth,
-                    page: &page,
-                })
-                .await?;
-            drop(authentication);
-            let _slot = hub.admit(Lane::Read)?;
-            read.execute_merges().await
-        },
-    )?;
+    for read in [
+        PagedRead::DecryptedTransactions,
+        PagedRead::WalletActivity,
+        PagedRead::AuditedMerges,
+    ] {
+        method(&mut module, read.method(), move |hub, request| {
+            paged_read(hub, request, read)
+        })?;
+    }
     method(
         &mut module,
         GET_AUDITED_UTXOS,
@@ -251,27 +247,209 @@ pub fn rpc_module<S: TransactionSource + 'static>(
             service.audited_utxos(&request).await
         },
     )?;
+    method(
+        &mut module,
+        GET_WALLET_STATUS,
+        |hub, request: GetWalletStatusRequest| async move {
+            let _authentication = hub.admit(Lane::Authentication)?;
+            let service = hub.service(request.ring_program_id.map(|ring| ring.0))?;
+            service.wallet_status(&request).await
+        },
+    )?;
+    method(
+        &mut module,
+        RELEASE_WALLET_SNAPSHOT,
+        |hub, request: GetWalletStatusRequest| async move {
+            let _authentication = hub.admit(Lane::Authentication)?;
+            let service = hub.service(request.ring_program_id.map(|ring| ring.0))?;
+            service.release_wallet_snapshot(&request).await
+        },
+    )?;
+    method(
+        &mut module,
+        RELEASE_DELEGATE_SNAPSHOT,
+        |hub, request: GetDelegateNotesRequest| async move {
+            let _authentication = hub.admit(Lane::Authentication)?;
+            hub.release_delegate_snapshot(&request).await
+        },
+    )?;
+    method(
+        &mut module,
+        GET_DELEGATE_NOTES,
+        |hub, request: GetDelegateNotesRequest| async move {
+            let _authentication = hub.admit(Lane::Authentication)?;
+            hub.delegate_notes(&request).await
+        },
+    )?;
+    method(
+        &mut module,
+        GET_LIST_SALT,
+        |hub, request: GetListSaltRequest| async move {
+            let _authentication = hub.admit(Lane::Authentication)?;
+            hub.list_salt(&request).await
+        },
+    )?;
+    method(
+        &mut module,
+        GET_SPEND_COVERAGE,
+        |hub, request: GetSpendCoverageRequest| async move {
+            let _authentication = hub.admit(Lane::Authentication)?;
+            let service = hub.service(Some(request.ring.0))?;
+            service.spend_coverage(&request).await
+        },
+    )?;
+    method(
+        &mut module,
+        SUBMIT_RECORD_UPDATE,
+        |hub, request: SubmitRecordUpdateRequest| async move {
+            let _slot = hub.admit(Lane::Authentication)?;
+            hub.record_writer()?.submit(request).await
+        },
+    )?;
+    method(
+        &mut module,
+        GET_RECORD_UPDATE_STATUS,
+        |hub, request: GetRecordUpdateStatusRequest| async move {
+            hub.admit(Lane::Public)?;
+            hub.record_writer()?.status(request).await
+        },
+    )?;
+    method(
+        &mut module,
+        GET_PENDING_LIST_APPROVALS,
+        |hub, request: GetPendingListApprovalsRequest| async move {
+            let _authentication = hub.admit(Lane::Authentication)?;
+            hub.pending_list_approvals(&request).await
+        },
+    )?;
+    method(
+        &mut module,
+        REFUSE_LIST_APPROVAL,
+        |hub, request: RefuseListApprovalRequest| async move {
+            let _authentication = hub.admit(Lane::Authentication)?;
+            hub.refuse_list_approval(&request).await
+        },
+    )?;
+    method(
+        &mut module,
+        CREATE_RECORDS_REGISTRY,
+        |hub, request: CreateRecordsRegistryRequest| async move {
+            let _authentication = hub.admit(Lane::Authentication)?;
+            hub.create_records_registry(&request).await
+        },
+    )?;
+    method(
+        &mut module,
+        SET_READER_GRANT,
+        |hub, request: SetReaderGrantRequest| async move {
+            let _authentication = hub.admit(Lane::Authentication)?;
+            let service = hub.service(Some(request.ring.0))?;
+            service.set_reader_grant(&request).await
+        },
+    )?;
+    method(
+        &mut module,
+        SET_MERGE_SETTINGS,
+        |hub, request: SetMergeSettingsRequest| async move {
+            let _authentication = hub.admit(Lane::Authentication)?;
+            hub.set_merge_settings(&request).await
+        },
+    )?;
+    method(
+        &mut module,
+        PREPARE_AUTHORITY_TRANSFER,
+        |hub, request: PrepareAuthorityTransferRequest| async move {
+            let _authentication = hub.admit(Lane::Authentication)?;
+            hub.prepare_authority_transfer(&request).await
+        },
+    )?;
+    if let Some(relay) = relay {
+        module.merge(relay_module(relay)?)?;
+    }
     Ok(module)
 }
 
+pub fn relay_module(relay: Arc<Relay>) -> Result<RpcModule<Arc<Relay>>, RegisterMethodError> {
+    let mut module = RpcModule::new(relay);
+    method(
+        &mut module,
+        GET_RELAY_QUOTE,
+        |relay, request: GetRelayQuoteRequest| async move { relay.quote(&request).await },
+    )?;
+    method(
+        &mut module,
+        PREPARE_RELAY,
+        |relay, request: PrepareRelayRequest| async move { relay.prepare(&request).await },
+    )?;
+    method(
+        &mut module,
+        SUBMIT_RELAY,
+        |relay, request: SubmitRelayRequest| async move { relay.submit(&request).await },
+    )?;
+    method(
+        &mut module,
+        GET_RELAY_STATUS,
+        |relay, request: GetRelayStatusRequest| async move { relay.status(&request).await },
+    )?;
+    Ok(module)
+}
+
+#[derive(Clone, Serialize)]
+#[serde(untagged)]
+enum PagedResponse {
+    Transactions(GetDecryptedTransactionsResponse),
+    WalletActivity(GetWalletActivityResponse),
+    Merges(GetAuditedMergesResponse),
+}
+
+async fn paged_read<S: TransactionSource>(
+    hub: Arc<Hub<S>>,
+    request: GetDecryptedTransactionsRequest,
+    read: PagedRead,
+) -> Result<PagedResponse, RingRpcError> {
+    let authentication = hub.admit(Lane::Authentication)?;
+    let service = hub.service(request.ring_program_id.map(|ring| ring.0))?;
+    let page = Page::new(request.cursor, request.limit)?;
+    let authorized = service
+        .authorize(AuditRead {
+            read,
+            auth: &request.auth,
+            page: &page,
+            wallet: request.wallet.map(|wallet| wallet.0),
+        })
+        .await?;
+    // Decrypting holds a read slot, the authentication slot is free again.
+    drop(authentication);
+    let _slot = hub.admit(Lane::Read)?;
+    Ok(match read {
+        PagedRead::DecryptedTransactions => {
+            PagedResponse::Transactions(authorized.execute().await?)
+        }
+        PagedRead::WalletActivity => {
+            PagedResponse::WalletActivity(authorized.execute_wallet_activity().await?)
+        }
+        PagedRead::AuditedMerges => PagedResponse::Merges(authorized.execute_merges().await?),
+    })
+}
+
 /// Every handler error becomes a JSON-RPC error through one conversion.
-fn method<S, P, T, F, Fut>(
-    module: &mut RpcModule<Arc<Hub<S>>>,
+fn method<C, P, T, F, Fut>(
+    module: &mut RpcModule<Arc<C>>,
     name: &'static str,
     handler: F,
 ) -> Result<(), RegisterMethodError>
 where
-    S: TransactionSource + 'static,
+    C: Send + Sync + 'static,
     P: DeserializeOwned + Send + 'static,
     T: Serialize + Clone + Send + 'static,
-    F: Fn(Arc<Hub<S>>, P) -> Fut + Clone + Send + Sync + 'static,
+    F: Fn(Arc<C>, P) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<T, RingRpcError>> + Send,
 {
-    module.register_async_method(name, move |params, hub, _| {
+    module.register_async_method(name, move |params, context, _| {
         let handler = handler.clone();
         async move {
             let request = params.parse::<P>()?;
-            handler(Arc::clone(&*hub), request)
+            handler(Arc::clone(&*context), request)
                 .await
                 .map_err(ErrorObjectOwned::from)
         }
@@ -340,26 +518,33 @@ mod tests {
     };
 
     use solana_address::Address;
+    use solana_keypair::Keypair;
     use solana_signature::Signature;
     use spr_client::{ClientError, GetShieldedTransactionsByTagsResponse};
     use spr_keypair::X25519Keypair;
     use zolana_ring_client::RingIndexerError;
     use zolana_ring_client::{
-        rpc::{KeyMode, RingChainStatus, DEPOSITS_PAGE_LIMIT},
+        rpc::{KeyMode, RingChainStatus, GET_DECRYPTED_TRANSACTIONS},
         AuditError, RingOrigin,
     };
     use zolana_ring_transaction::RingAssets;
 
+    use spr_indexer_api::Hash;
+    use zolana_ring_client::rpc::RecordUpdate;
+
     use crate::{
+        client_identity::ClientIdentityPolicy,
+        client_rate::{BucketRate, ClientRates, RateLimit, NETWORK_CLIENTS},
         config::RootSecret,
         error::RingRpcError,
+        hub::ServiceIdentity,
         limits::{
-            MAX_CONCURRENT_AUTHENTICATIONS, MAX_CONCURRENT_DEPOSIT_SCANS, MAX_CONCURRENT_READS,
-            MAX_REQUEST_UNITS_PER_SECOND,
+            MAX_CONCURRENT_AUTHENTICATIONS, MAX_CONCURRENT_READS, MAX_REQUEST_UNITS_PER_SECOND,
         },
         origins::OriginPolicy,
+        record_update::RecordUpdateRefusal,
         upstream::{
-            DepositHistory, MergeAuditRequest, ReaderGrant, RingConfiguration, RingHistoryPage,
+            MergeAuditRequest, RecordsTip, RingConfiguration, RingFrame, RingHistoryPage,
             TransactionPage,
         },
     };
@@ -379,14 +564,21 @@ mod tests {
     impl TransactionSource for TestSource {
         async fn transactions_by_tag(
             &self,
-            _request: TransactionPage<'_>,
+            _request: TransactionPage,
         ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
+            Err(ClientError::Rpc("unused source".to_owned()))
+        }
+
+        async fn ring_frame(
+            &self,
+            _frame: RingFrame,
+        ) -> Result<Vec<spr_transaction::ShieldedTransaction>, ClientError> {
             Err(ClientError::Rpc("unused source".to_owned()))
         }
 
         async fn ring_history(
             &self,
-            _request: RingHistoryPage<'_>,
+            _request: RingHistoryPage,
         ) -> Result<GetShieldedTransactionsByTagsResponse, ClientError> {
             Err(ClientError::Rpc("unused source".to_owned()))
         }
@@ -410,14 +602,6 @@ mod tests {
             })
         }
 
-        async fn ring_deposits(&self, _page: DepositPage) -> Result<DepositHistory, ClientError> {
-            Ok(DepositHistory {
-                deposits: Vec::new(),
-                cursor: None,
-                oldest_slot: None,
-            })
-        }
-
         async fn ring_config(
             &self,
             _ring: Address,
@@ -429,32 +613,28 @@ mod tests {
             Ok(RingChainStatus::default())
         }
 
-        async fn ring_member_records(
+        async fn slot(&self) -> Result<u64, ClientError> {
+            Err(ClientError::Rpc("unused source".to_owned()))
+        }
+
+        async fn records_root(&self, _ring: Address) -> Result<RecordsTip, ClientError> {
+            Ok(RecordsTip::NoPolicy)
+        }
+
+        async fn storage_member_openings(
             &self,
-            _request: zolana_ring_indexer::rpc::GetRingMemberRecordsRequest,
-        ) -> Result<zolana_ring_indexer::rpc::GetRingMemberRecordsResponse, RingIndexerError>
+            _request: zolana_ring_indexer::rpc::GetStorageMemberOpeningsRequest,
+        ) -> Result<zolana_ring_indexer::rpc::GetStorageMemberOpeningsResponse, RingIndexerError>
         {
             Err(ClientError::Rpc("unused source".to_owned()).into())
         }
 
-        async fn ring_member_openings(
+        async fn storage_member_records(
             &self,
-            _request: zolana_ring_indexer::rpc::GetRingMemberOpeningsRequest,
-        ) -> Result<zolana_ring_indexer::rpc::GetRingMemberOpeningsResponse, RingIndexerError>
+            _request: zolana_ring_indexer::rpc::GetStorageMemberRecordsRequest,
+        ) -> Result<zolana_ring_indexer::rpc::GetStorageMemberRecordsResponse, RingIndexerError>
         {
             Err(ClientError::Rpc("unused source".to_owned()).into())
-        }
-
-        async fn ring_record_queue(
-            &self,
-            _ring: Address,
-        ) -> Result<zolana_ring_indexer::rpc::GetRingRecordQueueResponse, RingIndexerError>
-        {
-            Err(ClientError::Rpc("unused source".to_owned()).into())
-        }
-
-        async fn reader_granted(&self, _request: ReaderGrant) -> Result<bool, ClientError> {
-            Ok(false)
         }
 
         async fn upgrade_authority(
@@ -481,6 +661,10 @@ mod tests {
             Ok(TEST_GENESIS)
         }
 
+        async fn tree_id(&self, _tree: Address) -> Result<u16, custom_ring_sdk::RingError> {
+            Ok(1)
+        }
+
         async fn ring_assets(&self) -> Result<RingAssets, ClientError> {
             Ok(RingAssets::new([]).unwrap())
         }
@@ -495,11 +679,15 @@ mod tests {
         let auditor = X25519Keypair::new();
         source.config = Some(RingConfiguration {
             auditor_pubkey: auditor.pubkey(),
-            authority: Address::new_from_array([2; 32]),
+            roles: custom_ring_interface::RingRoles {
+                policy: Address::new_from_array([2; 32]),
+                ..bytemuck::Zeroable::zeroed()
+            },
             mode: custom_ring_interface::RingMode::Confidential,
+            delegate: None,
         });
         Arc::new(
-            Hub::builder(source, TEST_GENESIS)
+            Hub::builder(source, identity(TEST_GENESIS))
                 .with_origins(origins)
                 .local(SERVED_RING, auditor)
                 .expect("hub"),
@@ -508,10 +696,17 @@ mod tests {
 
     fn derived_hub(source: TestSource, genesis: [u8; 32]) -> Arc<Hub<TestSource>> {
         Arc::new(
-            Hub::builder(source, genesis)
+            Hub::builder(source, identity(genesis))
                 .derived(RootSecret::from_bytes([5; 32]).expect("root"))
                 .expect("hub"),
         )
+    }
+
+    fn identity(genesis_hash: [u8; 32]) -> ServiceIdentity {
+        ServiceIdentity {
+            genesis_hash,
+            service: Keypair::new(),
+        }
     }
 
     fn source() -> TestSource {
@@ -531,14 +726,6 @@ mod tests {
         map
     }
 
-    fn deposits(ring: Address) -> RingDepositsRequest {
-        RingDepositsRequest {
-            ring_program_id: ring.to_bytes().into(),
-            limit: None,
-            cursor: None,
-        }
-    }
-
     fn options(port: u16, timeout: Duration) -> ServerOptions {
         ServerOptions {
             bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -546,7 +733,143 @@ mod tests {
             port,
             max_connections: 8,
             request_timeout: timeout,
+            client_limits: ClientLimits::default(),
         }
+    }
+
+    /// A server granting each client a burst of two signed writes.
+    async fn write_limited_server(identity: ClientIdentityPolicy) -> (ServerHandle, String) {
+        let server_port = port();
+        let handle = run_server(
+            hub(source(), Origins::default()),
+            ServerOptions {
+                client_limits: ClientLimits {
+                    rates: ClientRates {
+                        signed_writes: BucketRate::new(1, 2),
+                        ..ClientRates::default()
+                    },
+                    identity,
+                },
+                ..options(server_port, Duration::from_secs(1))
+            },
+        )
+        .await
+        .expect("server");
+        (handle, format!("http://127.0.0.1:{server_port}"))
+    }
+
+    async fn submit_as(url: &str, client: &str) -> reqwest::Response {
+        let update = SubmitRecordUpdateRequest {
+            registry: Address::new_from_array([4; 32]).into(),
+            update: RecordUpdate {
+                genesis_hash: Hash(TEST_GENESIS),
+                ring: SERVED_RING.into(),
+                entries: Vec::new(),
+                valid_until_slot: 1,
+                awaited_lists: 0,
+            },
+            signer: Address::new_from_array([6; 32]).into(),
+            signature: Signature::default().into(),
+        };
+        reqwest::Client::new()
+            .post(url)
+            .header("x-forwarded-for", client)
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": SUBMIT_RECORD_UPDATE,
+                "params": update,
+            }))
+            .send()
+            .await
+            .expect("submit")
+    }
+
+    async fn error_code(response: reqwest::Response) -> serde_json::Value {
+        let body: serde_json::Value = response.json().await.expect("JSON-RPC answer");
+        body["error"]["code"].clone()
+    }
+
+    #[tokio::test]
+    async fn a_client_past_its_signed_write_rate_waits_while_another_submits() {
+        let proxy = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let (handle, url) =
+            write_limited_server(ClientIdentityPolicy::default().with_trusted_proxies([proxy]))
+                .await;
+        let served = RecordUpdateRefusal::Disabled.code();
+
+        for _ in 0..2 {
+            assert_eq!(
+                error_code(submit_as(&url, "198.51.100.1").await).await,
+                served
+            );
+        }
+        let refused = submit_as(&url, "198.51.100.1").await;
+        assert_eq!(refused.status(), StatusCode::TOO_MANY_REQUESTS);
+        let retry_after = refused
+            .headers()
+            .get("retry-after")
+            .expect("retry after")
+            .to_str()
+            .expect("ascii")
+            .parse::<u64>()
+            .expect("seconds");
+        assert!((1..=60).contains(&retry_after), "{retry_after}");
+        let body: serde_json::Value = refused.json().await.expect("refusal");
+        assert_eq!(body["error"]["code"], RateLimit::SignedWrites.code());
+        assert!(
+            body["error"]["data"]["retryAfterMs"]
+                .as_u64()
+                .expect("hint")
+                > 0
+        );
+
+        let other = submit_as(&url, "198.51.100.2").await;
+        assert_eq!(other.status(), StatusCode::OK);
+        assert_eq!(error_code(other).await, served);
+        handle.stop().expect("stop");
+        handle.stopped().await;
+    }
+
+    #[tokio::test]
+    async fn the_64s_of_one_ipv6_48_share_its_signed_write_rate() {
+        let proxy = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let (handle, url) =
+            write_limited_server(ClientIdentityPolicy::default().with_trusted_proxies([proxy]))
+                .await;
+        let served = RecordUpdateRefusal::Disabled.code();
+
+        for subnet in 0..NETWORK_CLIENTS.get() {
+            for _ in 0..2 {
+                let client = format!("2001:db8:0:{subnet:x}::1");
+                assert_eq!(error_code(submit_as(&url, &client).await).await, served);
+            }
+        }
+        assert_eq!(
+            error_code(submit_as(&url, "2001:db8:0:ffff::1").await).await,
+            RateLimit::SignedWrites.code()
+        );
+        assert_eq!(
+            error_code(submit_as(&url, "2001:db8:1::1").await).await,
+            served
+        );
+        handle.stop().expect("stop");
+        handle.stopped().await;
+    }
+
+    #[tokio::test]
+    async fn a_forwarded_header_from_an_untrusted_peer_keeps_the_peer_identity() {
+        let (handle, url) = write_limited_server(ClientIdentityPolicy::default()).await;
+
+        for _ in 0..2 {
+            submit_as(&url, "198.51.100.1").await;
+        }
+        assert_eq!(
+            error_code(submit_as(&url, "198.51.100.2").await).await,
+            RateLimit::SignedWrites.code()
+        );
+        handle.stop().expect("stop");
+        handle.stopped().await;
     }
 
     #[tokio::test]
@@ -631,67 +954,6 @@ mod tests {
         handle.stopped().await;
     }
 
-    /// A gateway bills a deposits page by the signatures it asks to examine,
-    /// and only for a successful answer.
-    #[tokio::test]
-    async fn a_deposits_page_reports_its_metering_units() {
-        let server_port = port();
-        let handle = run_server(
-            hub(source(), Origins::default()),
-            options(server_port, Duration::from_secs(1)),
-        )
-        .await
-        .expect("server");
-        let url = format!("http://127.0.0.1:{server_port}/v1/zolana/ring");
-        let client = reqwest::Client::new();
-        let units = |method: &str, params: serde_json::Value| {
-            let request = client
-                .post(format!("{url}/{method}"))
-                .json(&serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": method,
-                    "params": params,
-                }));
-            async move {
-                let response = request.send().await.expect("call");
-                let units = response
-                    .headers()
-                    .get("x-helius-metering-units")
-                    .map(|units| units.to_str().expect("ascii").to_owned());
-                let body: serde_json::Value = response.json().await.expect("JSON-RPC answer");
-                (units, body)
-            }
-        };
-
-        let mut wide = deposits(SERVED_RING);
-        wide.limit = Some(200);
-        let (wide_units, body) =
-            units(RING_DEPOSITS, serde_json::to_value(wide).expect("params")).await;
-        assert!(body["result"].is_object(), "{body}");
-        assert_eq!(wide_units.as_deref(), Some("4"));
-
-        let (default_units, _) = units(
-            RING_DEPOSITS,
-            serde_json::to_value(deposits(SERVED_RING)).expect("params"),
-        )
-        .await;
-        assert_eq!(default_units.as_deref(), Some("1"));
-
-        let (failed_units, body) = units(
-            RING_DEPOSITS,
-            serde_json::to_value(deposits(Address::new_from_array([9; 32]))).expect("params"),
-        )
-        .await;
-        assert!(body["error"].is_object(), "{body}");
-        assert_eq!(failed_units, None);
-
-        let (health_units, _) = units(HEALTH, serde_json::Value::Null).await;
-        assert_eq!(health_units, None);
-        handle.stop().expect("stop");
-        handle.stopped().await;
-    }
-
     #[tokio::test]
     async fn a_path_runs_only_the_method_it_names() {
         let server_port = port();
@@ -729,7 +991,7 @@ mod tests {
         for (path, method) in [
             ("/health", GET_DECRYPTED_TRANSACTIONS),
             ("/v1/zolana/ring/health", GET_DECRYPTED_TRANSACTIONS),
-            ("/v1/zolana/ring/ringStatus", RING_DEPOSITS),
+            ("/v1/zolana/ring/ringStatus", GET_RELAY_QUOTE),
         ] {
             let answer = call(path, named(method)).await;
             assert_eq!(answer["error"]["code"], -32601, "{path} {method}");
@@ -797,6 +1059,7 @@ mod tests {
                 port: 0,
                 max_connections: 1,
                 request_timeout: Duration::from_secs(1),
+                client_limits: ClientLimits::default(),
             },
         )
         .await;
@@ -809,6 +1072,7 @@ mod tests {
                 port: 0,
                 max_connections: 1,
                 request_timeout: Duration::from_secs(1),
+                client_limits: ClientLimits::default(),
             },
         )
         .await
@@ -858,30 +1122,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deposit_pages_are_metered_and_serve_one_ring() {
+    async fn health_and_status_answer_the_served_ring() {
         let module = rpc_module(hub(source(), Origins::default())).expect("module");
-
-        let foreign = module
-            .call::<_, RingDepositsResponse>(
-                RING_DEPOSITS,
-                params(deposits(Address::new_from_array([1; 32]))),
-            )
-            .await
-            .expect_err("another ring");
-        assert!(foreign.to_string().contains("not served"), "{foreign}");
-
-        for _ in 0..MAX_REQUEST_UNITS_PER_SECOND / DEPOSITS_PAGE_LIMIT as usize {
-            module
-                .call::<_, RingDepositsResponse>(RING_DEPOSITS, params(deposits(SERVED_RING)))
-                .await
-                .expect("page");
-        }
-        let busy = module
-            .call::<_, RingDepositsResponse>(RING_DEPOSITS, params(deposits(SERVED_RING)))
-            .await
-            .expect_err("exhausted window");
-        assert!(busy.to_string().contains("busy"), "{busy}");
-
         let health: HealthResponse = module.call(HEALTH, [(); 0]).await.expect("health");
         assert_eq!(health.mode, KeyMode::Local);
         let status: RingStatusResponse = module
@@ -940,21 +1182,6 @@ mod tests {
         assert!(matches!(hub.admit(Lane::Read), Err(RingRpcError::Busy)));
         drop(held);
         let _reopened = hub.admit(Lane::Read).expect("released slot");
-    }
-
-    #[test]
-    fn concurrent_deposit_scans_are_capped() {
-        let hub = hub(source(), Origins::default());
-        let held = (0..MAX_CONCURRENT_DEPOSIT_SCANS)
-            .map(|_| hub.admit(Lane::Deposits(1)).expect("deposit slot"))
-            .collect::<Vec<_>>();
-
-        assert!(matches!(
-            hub.admit(Lane::Deposits(1)),
-            Err(RingRpcError::Busy)
-        ));
-        drop(held);
-        let _reopened = hub.admit(Lane::Deposits(1)).expect("released slot");
     }
 
     #[test]

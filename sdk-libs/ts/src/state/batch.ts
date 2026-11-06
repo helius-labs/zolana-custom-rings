@@ -1,4 +1,4 @@
-import { WalletError } from "@heliuslabs/zolana";
+import { WalletError } from "@heliuslabs/spr";
 
 /** A key holder answers each batch with exactly one value per request. */
 export function exactlyOne<T>(values: readonly T[]): T {
@@ -19,6 +19,15 @@ export function answered<R, V>(
     if (request === undefined) throw new WalletError("WALLET_KEYS_BATCH_MISMATCH");
     return [request, value] as const;
   });
+}
+
+/** A malformed body is another key's or a forgery, it is skipped. */
+export function decoded<T>(decode: () => T | undefined): T | undefined {
+  try {
+    return decode();
+  } catch {
+    return undefined;
+  }
 }
 
 /** `seen` takes `key`, `false` when it already held it. */

@@ -19,6 +19,7 @@ pub(crate) struct TreeView {
     pub tree: PoolTree,
     /// Nullifier slots left above the state tree's capacity, queued ones counted.
     pub headroom: u64,
+    pub fee_per_tree: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,7 +48,25 @@ pub(crate) async fn read_tree(
             id: tree.tree_id(),
         },
         headroom: tree.dummy_input_headroom()?,
+        fee_per_tree: tree.fees().fee_per_tree,
     })
+}
+
+/// What SPP takes from the payer, each distinct written tree charges its own schedule once.
+pub async fn written_tree_fees(
+    rpc: &(impl AsyncRpc + ?Sized),
+    trees: impl IntoIterator<Item = Address>,
+) -> Result<u64, RingError> {
+    let mut distinct: Vec<Address> = Vec::new();
+    for tree in trees {
+        if !distinct.contains(&tree) {
+            distinct.push(tree);
+        }
+    }
+    let views = try_join_all(distinct.into_iter().map(|tree| read_tree(rpc, tree))).await?;
+    Ok(views
+        .iter()
+        .fold(0u64, |total, view| total.saturating_add(view.fee_per_tree)))
 }
 
 pub(crate) async fn spend_trees(

@@ -1,11 +1,18 @@
-use custom_ring_interface::SetPausedIxData;
+//! Pauses or resumes the ring through `ring_auth`.
+//!
+//! SPP holds the flag in `RingConfig` and reads it on all four operational rails, the delegate's included.
+//! The pause stays with the ring, SPP's governance instruction writes other flags.
+//!
+//! Read after `instructions/runtime/instruction_runtime.rs`. Read before `instructions/configuration/access/update_authority.rs`.
+
+use custom_ring_interface::{RingRole, SetPausedIxData};
 use pinocchio::{AccountView, Address, ProgramResult};
 use spr_account_checks::AccountIterator;
 use spr_interface::instruction::{encode_instruction, tag, UpdateRingConfigData};
 
 use crate::instructions::{
     instruction_runtime::{parse, RingAuth},
-    loader::{load_authorized_config, validate_spp_program},
+    loader::{validate_spp_program, RoleHolder},
 };
 
 #[inline(never)]
@@ -17,13 +24,18 @@ pub fn process_set_paused_ix(
     let SetPausedIxData { paused } = parse(data)?;
 
     let mut iter = AccountIterator::new(accounts);
-    let authority = iter.next_signer("authority")?;
-    let config = iter.next_account("config")?;
+    let pauser = iter.next_signer("pauser")?;
+    let ring = iter.next_account("ring")?;
     let ring_auth = iter.next_mut("ring_auth")?;
     let spp_program = iter.next_account("spp_program")?;
 
-    // 1. The config authority pauses or resumes the ring's SPP rail.
-    load_authorized_config(program_id, config, authority)?;
+    // 1. The pauser pauses or resumes the ring's SPP rail.
+    RoleHolder {
+        program_id,
+        role: RingRole::Pauser,
+        signer: pauser,
+    }
+    .load(ring)?;
     validate_spp_program(core::slice::from_ref(spp_program))?;
     let placed = RingAuth::derive(program_id)?.check_account(ring_auth)?;
     let data = encode_instruction(tag::UPDATE_RING_CONFIG, &UpdateRingConfigData { paused });

@@ -1,7 +1,7 @@
 import { x25519 } from "@noble/curves/ed25519.js";
 
-import type { Bytes32 } from "@heliuslabs/zolana";
-import { X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import type { Bytes32 } from "@heliuslabs/spr";
+import { X25519PublicKey } from "@heliuslabs/spr/keypair";
 
 /** The tagged key of a bare u coordinate, the inverse of `X25519PublicKey.u`. */
 export function x25519FromU(u: Bytes32): X25519PublicKey {

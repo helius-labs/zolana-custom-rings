@@ -100,10 +100,16 @@ fn localnet_bring_up_is_live() -> Result<()> {
     let indexed = env
         .client
         .indexer()
-        .get_shielded_transactions_by_tags(vec![UNUSED_VIEW_TAG], None, Some(10), None)
+        .get_shielded_transactions_by_tags(
+            vec![UNUSED_VIEW_TAG],
+            None,
+            Some(10),
+            Default::default(),
+            None,
+        )
         .map_err(|e| anyhow!("indexer {} failed {e:?}", env.indexer_url))?;
     assert!(
-        indexed.transactions.is_empty(),
+        indexed.data.is_empty(),
         "no transaction exists under the unused probe tag"
     );
     assert!(indexed.context.slot > 0, "indexer has persisted a slot");
@@ -172,8 +178,8 @@ fn localnet_bring_up_is_live() -> Result<()> {
     Ok(())
 }
 
-/// The ring rpc reads the Loader v3 upgrade authority and the config authority
-/// from the chain, so this runs against the deployed program, not a mock.
+/// The ring rpc reads the Loader v3 upgrade authority and the policy authority
+/// from the chain, the test runs against the deployed program.
 #[test]
 fn auditor_key_is_released_only_to_the_ring_authority() -> Result<()> {
     let env = setup()?;
@@ -190,7 +196,11 @@ fn auditor_key_is_released_only_to_the_ring_authority() -> Result<()> {
     let genesis_hash = runtime
         .block_on(source.genesis_hash())
         .map_err(|e| anyhow!("genesis hash {e:?}"))?;
-    let hub = Hub::builder(source, genesis_hash)
+    let identity = ServiceIdentity {
+        genesis_hash,
+        service: Keypair::new(),
+    };
+    let hub = Hub::builder(source, identity)
         .derived(RootSecret::from_bytes([7; 32])?)
         .map_err(|e| anyhow!("hub {e:?}"))?;
     let service = hub
@@ -209,7 +219,7 @@ fn auditor_key_is_released_only_to_the_ring_authority() -> Result<()> {
         other => Err(anyhow!("expected {expected:?}, got {other:?}")),
     };
     let stranger = Keypair::new();
-    let config_authority = Keypair::new();
+    let policy_authority = Keypair::new();
 
     // 1. No config yet, so only the program's upgrade authority is accepted.
     expect_refusal(
@@ -217,7 +227,7 @@ fn auditor_key_is_released_only_to_the_ring_authority() -> Result<()> {
         Unauthorized::NotRingAuthority,
     )?;
     expect_refusal(
-        authorize(&request(&config_authority, genesis_hash)?),
+        authorize(&request(&policy_authority, genesis_hash)?),
         Unauthorized::NotRingAuthority,
     )?;
     expect_refusal(
@@ -228,31 +238,28 @@ fn auditor_key_is_released_only_to_the_ring_authority() -> Result<()> {
     authorize(&released).map_err(|e| anyhow!("upgrade authority {e:?}"))?;
     expect_refusal(authorize(&released), Unauthorized::Replay)?;
 
-    // 2. Once the config exists its authority alone is accepted, even after
-    //    the deployer hands it over.
+    // 2. Once the ring exists its policy authority alone is accepted, the deployer holds no role.
+    let roles = custom_ring_interface::RingRoles {
+        policy: policy_authority.pubkey(),
+        ..RingRoleKeys::of(&env.payer).roles(&env.payer)
+    };
     rpc.create_and_send_transaction(
-        &[
-            custom_ring_sdk::CreateConfig {
-                ring,
-                payer: env.payer.pubkey(),
-                authority: env.payer.pubkey(),
-                auditor_pubkey: service.auditor_pubkey(),
-                kind: custom_ring_sdk::RingKind::Policy,
-            }
-            .instruction()?,
-            custom_ring_sdk::SetAuthority {
-                ring,
-                authority: env.payer.pubkey(),
-                new_authority: config_authority.pubkey(),
-            }
-            .instruction(),
-        ],
+        &[custom_ring_sdk::Initialize {
+            ring,
+            payer: env.payer.pubkey(),
+            authority: env.payer.pubkey(),
+            auditor_pubkey: service.auditor_pubkey(),
+            kind: custom_ring_sdk::RingKind::AuditOnly,
+            roles,
+            policy: None,
+        }
+        .instruction()?],
         env.payer.pubkey(),
-        &[&env.payer, &config_authority],
-        ComputeBudgetConfig::for_instruction_count(2),
+        &[&env.payer],
+        ComputeBudgetConfig::for_instruction_count(1),
     )?;
-    authorize(&request(&config_authority, genesis_hash)?)
-        .map_err(|e| anyhow!("config authority {e:?}"))?;
+    authorize(&request(&policy_authority, genesis_hash)?)
+        .map_err(|e| anyhow!("policy authority {e:?}"))?;
     for refused in [&env.payer, &stranger] {
         expect_refusal(
             authorize(&request(refused, genesis_hash)?),
@@ -262,30 +269,36 @@ fn auditor_key_is_released_only_to_the_ring_authority() -> Result<()> {
     Ok(())
 }
 
-/// The operator cli against the deployed program, the config authority is a
-/// second key and the rerun sees the config through a hosted-looking ring rpc.
+/// The operator cli against the deployed program, the `policy_authority` key holds the
+/// policy role and the rerun sees the ring through a hosted-looking ring rpc.
 #[test]
-fn cli_init_hands_the_config_over_and_reruns_from_the_chain() -> Result<()> {
+fn cli_init_names_the_roles_and_reruns_from_the_chain() -> Result<()> {
     let env = setup()?;
     let ring = CustomRing::new(custom_ring_program_id()?);
     let auditor = X25519Keypair::new();
+    let ring_rpc = RingRpcSpec {
+        env: &env,
+        ring: ring.program_id(),
+        auditor: auditor.clone(),
+    }
+    .serve()?;
     let project = RingProject::create(&env, &auditor.pubkey())?;
     let init = || project.run(&["init"]);
 
-    // 1. A local ring rpc lets the key file through, the config is created
-    //    under the deployer and handed over in the same run.
+    // 1. A local ring rpc lets the key file through, the deployer creates the
+    //    ring naming the `policy_authority` key as its policy authority.
     project.write_config(RingToml {
         env: &env,
-        ring_rpc: "http://127.0.0.1:1",
+        ring_rpc: &ring_rpc.url,
         policy: None,
         mode: ModeName::Confidential,
     })?;
     let first = init()?;
-    assert!(first.contains("authority   transferred"), "{first}");
+    assert!(first.contains("config      created"), "{first}");
     let config = env
         .run(ring.config(env.client.as_async()))?
         .ok_or_else(|| anyhow!("config after init"))?;
-    assert_eq!(config.authority, project.config_authority.pubkey());
+    assert_eq!(config.roles.policy, project.policy_authority.pubkey());
     assert_eq!(config.auditor_pubkey, auditor.pubkey());
 
     // 2. The rerun takes the key from the chain, so the hosted-looking rpc is
@@ -298,9 +311,8 @@ fn cli_init_hands_the_config_over_and_reruns_from_the_chain() -> Result<()> {
     })?;
     let second = init()?;
     assert!(second.contains("config      already present"), "{second}");
-    assert!(second.contains("authority   already present"), "{second}");
 
-    // 3. The config authority closes and reopens the ring through the program,
+    // 3. The pauser `init` created closes and reopens the ring through the program,
     //    the SPP flag follows each run.
     let paused = project.run(&["authority", "pause"])?;
     assert!(paused.contains("spp ring    paused"), "{paused}");

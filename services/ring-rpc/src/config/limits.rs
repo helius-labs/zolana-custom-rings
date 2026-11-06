@@ -11,15 +11,7 @@ use crate::error::RingRpcError;
 
 pub(crate) const MAX_CONCURRENT_READS: usize = 32;
 pub(crate) const MAX_CONCURRENT_AUTHENTICATIONS: usize = 32;
-pub(crate) const MAX_CONCURRENT_DEPOSIT_SCANS: usize = 4;
 pub(crate) const MAX_REQUEST_UNITS_PER_SECOND: usize = 256;
-
-#[must_use]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PublicRequest {
-    Standard,
-    DepositScan { signatures: usize },
-}
 
 pub(crate) struct RequestRate(Mutex<RequestWindow>);
 
@@ -38,7 +30,7 @@ impl Default for RequestRate {
 }
 
 impl RequestRate {
-    pub(crate) fn accept(&self, now: Instant, request: PublicRequest) -> Result<(), RingRpcError> {
+    pub(crate) fn accept(&self, now: Instant) -> Result<(), RingRpcError> {
         let mut window = self.0.lock().map_err(|_| RingRpcError::StateUnavailable)?;
         if now.duration_since(window.started_at) >= Duration::from_secs(1) {
             *window = RequestWindow {
@@ -46,14 +38,10 @@ impl RequestRate {
                 accepted: 0,
             };
         }
-        let units = match request {
-            PublicRequest::Standard => 1,
-            PublicRequest::DepositScan { signatures } => signatures.saturating_add(1),
-        };
-        if units > MAX_REQUEST_UNITS_PER_SECOND.saturating_sub(window.accepted) {
+        if window.accepted >= MAX_REQUEST_UNITS_PER_SECOND {
             return Err(RingRpcError::Busy);
         }
-        window.accepted += units;
+        window.accepted += 1;
         Ok(())
     }
 }
@@ -122,33 +110,10 @@ mod tests {
         let rate = RequestRate::default();
         let now = Instant::now();
         for _ in 0..MAX_REQUEST_UNITS_PER_SECOND {
-            rate.accept(now, PublicRequest::Standard)
-                .expect("accepted request");
+            rate.accept(now).expect("accepted request");
         }
-        assert!(matches!(
-            rate.accept(now, PublicRequest::Standard),
-            Err(RingRpcError::Busy)
-        ));
-        rate.accept(now + Duration::from_secs(1), PublicRequest::Standard)
+        assert!(matches!(rate.accept(now), Err(RingRpcError::Busy)));
+        rate.accept(now + Duration::from_secs(1))
             .expect("new window");
-    }
-
-    #[test]
-    fn deposit_scans_charge_the_sol_call_and_signature_lookups() {
-        let rate = RequestRate::default();
-        let now = Instant::now();
-        rate.accept(
-            now,
-            PublicRequest::DepositScan {
-                signatures: MAX_REQUEST_UNITS_PER_SECOND - 2,
-            },
-        )
-        .expect("scan");
-        rate.accept(now, PublicRequest::Standard)
-            .expect("remaining unit");
-        assert!(matches!(
-            rate.accept(now, PublicRequest::DepositScan { signatures: 1 }),
-            Err(RingRpcError::Busy)
-        ));
     }
 }

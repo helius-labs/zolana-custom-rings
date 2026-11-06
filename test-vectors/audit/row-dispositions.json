@@ -1,0 +1,17 @@
+{
+  "description": "What a reader does with a row whose read failed. kind is a stable failure name each SDK maps its own errors to. retry keeps the reader's position because the read failed or the RPC contradicts the program. invalid passes the row because it never opens. Read by AuditFailureKind in sdk-libs/client and the row failure classification in sdk-libs/ts.",
+  "cases": [
+    { "kind": "transport", "disposition": "retry" },
+    { "kind": "originUnavailable", "disposition": "retry" },
+    { "kind": "invalidStackHeight", "disposition": "retry" },
+    { "kind": "missingAuditorMessage", "disposition": "retry" },
+    { "kind": "indexerResponse", "disposition": "retry" },
+    { "kind": "originDecode", "disposition": "invalid" },
+    { "kind": "transactData", "disposition": "invalid" },
+    { "kind": "eventMismatch", "disposition": "invalid" },
+    { "kind": "viewingKeyMismatch", "disposition": "invalid" },
+    { "kind": "nonCanonicalViewingKey", "disposition": "invalid" },
+    { "kind": "keyMaterial", "disposition": "invalid" },
+    { "kind": "auditData", "disposition": "invalid" }
+  ]
+}

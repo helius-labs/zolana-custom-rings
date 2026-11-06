@@ -1,0 +1,3341 @@
+{
+  "version": 1,
+  "contract": "tools/closure-contract.json",
+  "assessed_at_utc": "2026-11-05T21:02:00.114577+00:00",
+  "identity": {
+    "source_head": "ad577089b53a09e07fda446f4a536f4e281ab044",
+    "source_dirty_diff_sha256": "85a0e5c35823dc5f920713c35c068682e90b79c72ba8e3b777794248374ab6cb",
+    "core_head": "cc8dad71aa3813fbdb19216a814a1de902c1cbe5",
+    "core_dirty_diff_sha256": "f1536624f7f96c96653705d83061f92179b01e892d4a511eb99ab3f42af05db7",
+    "identity_scope": "Observed integration state during evidence mapping. Logs do not independently attest each test start state."
+  },
+  "baseline_scores": {
+    "spec_coverage_percent": null,
+    "code_readiness_percent": null,
+    "reason": "The original baseline has no complete criterion assessment. Fixed weights and membership remain unchanged."
+  },
+  "current_scores": {
+    "spec_coverage_percent": null,
+    "code_readiness_percent": null,
+    "reason": "Final acceptance and exact invocation provenance remain incomplete. No percentage is inferred from suite totals."
+  },
+  "summary": {
+    "passed_criteria": 23,
+    "pending_criteria": 3,
+    "failed_criteria": 0,
+    "passing_meaning": "The mapped in-scope outcomes have runtime tests plus source predicates. Deferred release qualification earns no credit.",
+    "runtime_limit": "Source review and compilation are recorded separately from executed tests.",
+    "known_code_gap_criteria": [],
+    "typescript_mapping_provenance": "Aggregate results are observed in logs. File selection follows the parent report until the exact invocation manifest is attached."
+  },
+  "deferred_release_evidence": [
+    "Release proving keys and deployed verifier artifacts.",
+    "Missing core RingAuthorityExit artifact.",
+    "Real proof runtime qualification."
+  ],
+  "run_classification": [
+    {
+      "logs": [
+        "ring-closure-ring-ts-tests.log",
+        "ring-closure-ts-final-regressions.log"
+      ],
+      "classification": "The full run passed 1526 cases and failed 13. Both affected files then passed 51 cases. The aggregate covers 1539 cases.",
+      "single_final_full_run": false
+    },
+    {
+      "logs": [
+        "ring-closure-go-ring-tests.log",
+        "ring-closure-go-witnesses.log"
+      ],
+      "classification": "The full ring run failed stale witness comparisons. The witness regeneration test then passed.",
+      "single_final_full_run": false
+    },
+    {
+      "logs": [
+        "ring-closure-services-tests.log",
+        "ring-closure-client-regressions.log"
+      ],
+      "classification": "The earlier recovery diagnostic failure passed in the later client regression run."
+    },
+    {
+      "logs": [
+        "ring-closure-program-tests-final.log",
+        "ring-closure-catalog-test.log",
+        "ring-closure-heap-final.log"
+      ],
+      "classification": "The catalog enumeration now passes. The corrected heap fixture fails at unavailable verifier dispatch. Artifact dependent execution remains unqualified."
+    }
+  ],
+  "criteria": [
+    {
+      "id": "QUEUE-REGISTRY",
+      "status": "passed",
+      "assessment": "Registry joins and signature scope are checked inside insertion and signed list reads.",
+      "rust_runtime_tests": [
+        {
+          "name": "rpc::tests::a_signed_update_pending_approval_verifies_from_the_shared_vector",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "update_queue::tests::approval_insert_rolls_back_when_pending_scope_changes",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "record_updates::rebinding_records_keeps_pending_wallet_grants_in_the_signed_registry",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "record_updates::pending_list_approvals_page_oldest_first_after_a_cursor",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        }
+      ],
+      "typescript_suite_evidence": [],
+      "remaining_evidence": [],
+      "required_evidence_mapping": [
+        {
+          "index": 0,
+          "requirement": "Cross registry refusal after record rebinding.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 1,
+          "requirement": "Concurrent insertion refuses a changed registry.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        }
+      ],
+      "source_references": [
+        "services/ring-rpc/src/storage/update_queue.rs",
+        "sdk-libs/client/src/rpc/policy_authority.rs"
+      ],
+      "source_predicates": [
+        {
+          "path": "services/ring-rpc/src/storage/update_queue.rs",
+          "line": 168,
+          "anchor": "WHERE id=$3 AND status=$4 AND registry=$5 AND ring=$6",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        }
+      ]
+    },
+    {
+      "id": "QUEUE-CLAIM",
+      "status": "passed",
+      "assessment": "Batch claims and expiry change one transactional group. PostgreSQL races preserve the winning transition.",
+      "rust_runtime_tests": [
+        {
+          "name": "update_queue::tests::batch_claim_rolls_back_when_a_selected_member_changes",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "update_queue::tests::overlapping_expiry_and_claim_preserve_the_winning_transaction_on_postgres",
+          "outcome": "ok",
+          "log": "ring-closure-rpc-postgres-final.log"
+        },
+        {
+          "name": "update_queue::tests::expiry_and_batch_claim_keep_one_group_status",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "record_updates::a_batch_that_lands_after_its_status_lookup_applies_once_past_expiry",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        }
+      ],
+      "typescript_suite_evidence": [],
+      "remaining_evidence": [],
+      "required_evidence_mapping": [
+        {
+          "index": 0,
+          "requirement": "Race expiration against record_batch.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 1,
+          "requirement": "Change a selected head or member before claim and observe rollback.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        }
+      ],
+      "source_references": [
+        "services/ring-rpc/src/storage/update_queue.rs"
+      ],
+      "source_predicates": [
+        {
+          "path": "services/ring-rpc/src/storage/update_queue.rs",
+          "line": 523,
+          "anchor": "pub async fn record_batch",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        }
+      ]
+    },
+    {
+      "id": "QUEUE-EXPIRY",
+      "status": "passed",
+      "assessment": "Bounded expiry reads preserve live admissions. Deadline and policy changes during proving refuse submission.",
+      "rust_runtime_tests": [
+        {
+          "name": "update_queue::tests::a_ten_thousand_update_queue_plans_each_flush_from_a_bounded_read_on_postgres",
+          "outcome": "ok",
+          "log": "ring-closure-rpc-postgres-final.log"
+        },
+        {
+          "name": "update_queue::tests::expired_backlog_leaves_live_approval_reads_bounded",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "update_queue::tests::a_ten_thousand_update_queue_plans_each_flush_from_a_bounded_read",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "record_updates::a_member_that_expires_during_proving_refuses_the_batch_and_preserves_other_updates",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "record_updates::a_policy_rotation_during_proving_refuses_the_approval_and_preserves_wallet_updates",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        }
+      ],
+      "typescript_suite_evidence": [],
+      "remaining_evidence": [],
+      "required_evidence_mapping": [
+        {
+          "index": 0,
+          "requirement": "Large expired backlog preserves bounded admission work.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 1,
+          "requirement": "Deadline and authority changes during proof work refuse submission.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        }
+      ],
+      "source_references": [
+        "services/ring-rpc/src/storage/update_queue.rs"
+      ],
+      "source_predicates": [
+        {
+          "path": "services/ring-rpc/src/storage/update_queue.rs",
+          "line": 471,
+          "anchor": "pub async fn expire",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        }
+      ]
+    },
+    {
+      "id": "RECOVERY-SESSION",
+      "status": "passed",
+      "assessment": "The persisted session and wallet revision gate atomic absorption. Restart and stale revision cases pass.",
+      "rust_runtime_tests": [
+        {
+          "name": "a_crash_on_either_side_of_the_one_write_skips_no_funds",
+          "outcome": "ok",
+          "log": "ring-closure-client-regressions.log"
+        },
+        {
+          "name": "a_reply_cannot_change_an_active_recovery_scope",
+          "outcome": "ok",
+          "log": "ring-closure-client-regressions.log"
+        },
+        {
+          "name": "a_scan_cannot_overwrite_a_later_tag_key_or_sender",
+          "outcome": "ok",
+          "log": "ring-closure-client-regressions.log"
+        },
+        {
+          "name": "canonical_scan_refuses_a_stale_wallet_revision",
+          "outcome": "ok",
+          "log": "ring-closure-client-regressions.log"
+        },
+        {
+          "name": "bounded_recovery_resumes_after_restart_at_its_fixed_target",
+          "outcome": "ok",
+          "log": "ring-closure-client-regressions.log"
+        }
+      ],
+      "typescript_suite_evidence": [
+        {
+          "source": "sdk-libs/ts/test/state/ring-recovery-session.test.ts",
+          "test_names": [
+            "resumes a capped page after restart and keeps the fixed target",
+            "keeps a tag round and its counter together through capped pages",
+            "refuses a scan after a wallet revision changes",
+            "refuses a changed recovery scope and another wallet instance",
+            "excludes an unchecked opening from funding and reports incomplete coverage",
+            "checks an owned nullifier when its spend precedes its creation in the same slot",
+            "bounds foreign diagnostics and retains no foreign nullifier queue",
+            "resumes inside a compact page when its lookup budget is smaller than the page",
+            "keeps the exact compact candidate through a transient source failure",
+            "wipes opened recipient secrets when transaction key derivation fails",
+            "retains a completed target through reload and refuses an older source",
+            "uses the highest ring, tag and core checkpoint as the target floor",
+            "requires a compact source explicitly and resumes after configuration"
+          ],
+          "result_basis": "File passed in aggregate suite.",
+          "log": "ring-closure-ring-ts-tests.log",
+          "individual_test_output": false,
+          "selection_provenance": "Parent reports the full suite and selected failed-file rerun. Exact invocation manifest is pending."
+        }
+      ],
+      "remaining_evidence": [],
+      "required_evidence_mapping": [
+        {
+          "index": 0,
+          "requirement": "Rust and TypeScript recovery cases enforce the same session invariants.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 1,
+          "requirement": "Crash before and after each page or spend commit.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 2,
+          "requirement": "Stale revision, key set and cursor scope refuse.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        }
+      ],
+      "source_references": [
+        "sdk-libs/client/src/operations/anonymous_recovery.rs",
+        "sdk-libs/client/src/state/anonymous_wallet.rs"
+      ],
+      "source_predicates": [
+        {
+          "path": "sdk-libs/client/src/state/anonymous_wallet.rs",
+          "line": 367,
+          "anchor": "pub fn absorb",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        },
+        {
+          "path": "sdk-libs/client/src/operations/anonymous_recovery.rs",
+          "line": 146,
+          "anchor": "pub(crate) fn validate",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        }
+      ]
+    },
+    {
+      "id": "RECOVERY-OWNED-QUEUE",
+      "status": "passed",
+      "assessment": "The owned nullifier queue deduplicates entries. Discovery enqueues new owned outputs and spend reads consume the queue.",
+      "rust_runtime_tests": [
+        {
+          "name": "a_merge_of_the_wallets_notes_is_found_by_recovery_and_marks_them_spent",
+          "outcome": "ok",
+          "log": "ring-closure-client-regressions.log"
+        },
+        {
+          "name": "a_wiped_wallet_restores_a_merge_of_its_change_and_a_payment_from_the_seed",
+          "outcome": "ok",
+          "log": "ring-closure-client-regressions.log"
+        },
+        {
+          "name": "same_slot_spends_before_creation_survive_page_boundaries",
+          "outcome": "ok",
+          "log": "ring-closure-client-regressions.log"
+        },
+        {
+          "name": "the_stored_wallet_keeps_only_its_own_nullifiers",
+          "outcome": "ok",
+          "log": "ring-closure-client-regressions.log"
+        }
+      ],
+      "typescript_suite_evidence": [
+        {
+          "source": "sdk-libs/ts/test/state/ring-recovery-session.test.ts",
+          "test_names": [
+            "resumes a capped page after restart and keeps the fixed target",
+            "keeps a tag round and its counter together through capped pages",
+            "refuses a scan after a wallet revision changes",
+            "refuses a changed recovery scope and another wallet instance",
+            "excludes an unchecked opening from funding and reports incomplete coverage",
+            "checks an owned nullifier when its spend precedes its creation in the same slot",
+            "bounds foreign diagnostics and retains no foreign nullifier queue",
+            "resumes inside a compact page when its lookup budget is smaller than the page",
+            "keeps the exact compact candidate through a transient source failure",
+            "wipes opened recipient secrets when transaction key derivation fails",
+            "retains a completed target through reload and refuses an older source",
+            "uses the highest ring, tag and core checkpoint as the target floor",
+            "requires a compact source explicitly and resumes after configuration"
+          ],
+          "result_basis": "File passed in aggregate suite.",
+          "log": "ring-closure-ring-ts-tests.log",
+          "individual_test_output": false,
+          "selection_provenance": "Parent reports the full suite and selected failed-file rerun. Exact invocation manifest is pending."
+        }
+      ],
+      "remaining_evidence": [],
+      "required_evidence_mapping": [
+        {
+          "index": 0,
+          "requirement": "Long merge chains produce linear queue work.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 1,
+          "requirement": "Foreign history does not increase retained nullifier state.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 2,
+          "requirement": "Same slot spend before creation across pages remains spent.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        }
+      ],
+      "source_references": [
+        "sdk-libs/client/src/operations/anonymous_recovery.rs"
+      ],
+      "source_predicates": [
+        {
+          "path": "sdk-libs/client/src/operations/anonymous_recovery.rs",
+          "line": 241,
+          "anchor": "fn enqueue(",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        }
+      ]
+    },
+    {
+      "id": "RECOVERY-TARGET",
+      "status": "passed",
+      "assessment": "The fixed target constrains persisted queries and completed coverage. Unchecked inventory remains excluded from funding.",
+      "rust_runtime_tests": [
+        {
+          "name": "same_slot_spends_before_creation_survive_page_boundaries",
+          "outcome": "ok",
+          "log": "ring-closure-client-regressions.log"
+        },
+        {
+          "name": "a_restart_inside_a_split_slot_skips_nothing_and_repeats_nothing",
+          "outcome": "ok",
+          "log": "ring-closure-client-regressions.log"
+        },
+        {
+          "name": "bounded_recovery_resumes_after_restart_at_its_fixed_target",
+          "outcome": "ok",
+          "log": "ring-closure-client-regressions.log"
+        },
+        {
+          "name": "every_read_requires_the_slot_and_an_indexer_behind_it_fails_the_recovery",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        }
+      ],
+      "typescript_suite_evidence": [
+        {
+          "source": "sdk-libs/ts/test/state/ring-recovery-session.test.ts",
+          "test_names": [
+            "resumes a capped page after restart and keeps the fixed target",
+            "keeps a tag round and its counter together through capped pages",
+            "refuses a scan after a wallet revision changes",
+            "refuses a changed recovery scope and another wallet instance",
+            "excludes an unchecked opening from funding and reports incomplete coverage",
+            "checks an owned nullifier when its spend precedes its creation in the same slot",
+            "bounds foreign diagnostics and retains no foreign nullifier queue",
+            "resumes inside a compact page when its lookup budget is smaller than the page",
+            "keeps the exact compact candidate through a transient source failure",
+            "wipes opened recipient secrets when transaction key derivation fails",
+            "retains a completed target through reload and refuses an older source",
+            "uses the highest ring, tag and core checkpoint as the target floor",
+            "requires a compact source explicitly and resumes after configuration"
+          ],
+          "result_basis": "File passed in aggregate suite.",
+          "log": "ring-closure-ring-ts-tests.log",
+          "individual_test_output": false,
+          "selection_provenance": "Parent reports the full suite and selected failed-file rerun. Exact invocation manifest is pending."
+        }
+      ],
+      "remaining_evidence": [],
+      "required_evidence_mapping": [
+        {
+          "index": 0,
+          "requirement": "Concurrent arrivals do not extend the session target.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 1,
+          "requirement": "Repeated capped scans reach completion.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 2,
+          "requirement": "Incomplete coverage cannot fund a transaction.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        }
+      ],
+      "source_references": [
+        "sdk-libs/client/src/operations/anonymous_recovery.rs",
+        "sdk-libs/client/src/state/anonymous_wallet.rs"
+      ],
+      "source_predicates": [
+        {
+          "path": "sdk-libs/client/src/operations/anonymous_recovery.rs",
+          "line": 247,
+          "anchor": "fn set_target(",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        },
+        {
+          "path": "sdk-libs/client/src/state/anonymous_wallet.rs",
+          "line": 263,
+          "anchor": "pub fn funding_notes",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        }
+      ]
+    },
+    {
+      "id": "RECOVERY-PENDING",
+      "status": "passed",
+      "assessment": "Authenticated pending openings retain spent status and resolve without replaying history.",
+      "rust_runtime_tests": [
+        {
+          "name": "confidential::tests::a_pending_mint_waits_in_the_ledger_and_registers_with_no_history_read",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "a_persisted_pending_note_keeps_a_later_spend_after_registration",
+          "outcome": "ok",
+          "log": "ring-closure-client-regressions.log"
+        },
+        {
+          "name": "an_unknown_mint_keeps_the_position_moving_and_its_note_unspendable_until_registered",
+          "outcome": "ok",
+          "log": "ring-closure-client-regressions.log"
+        },
+        {
+          "name": "keyed_unknown_mint_merge_promotes_without_history_replay",
+          "outcome": "ok",
+          "log": "ring-closure-client-regressions.log"
+        }
+      ],
+      "typescript_suite_evidence": [
+        {
+          "source": "sdk-libs/ts/test/state/ring-full-scan-recovery.test.ts",
+          "test_names": [
+            "finds a note under a wrong tag only in recovery",
+            "recovers a body and a bundle under wrong tags, under a retired key too",
+            "takes every row once across a page split inside one slot and a repeated row",
+            "reads from the start and leaves the position alone past a capped read, a restart finds the rest",
+            "recovers change and no-change bundles",
+            "recovers two SPL change outputs, each from its own bundle cell",
+            "opens deposits by trial on proofless rows, whatever their tag",
+            "opens same-page merges and checks only recovered nullifiers",
+            "finds what a tag scan finds on one history",
+            "names a rebuilt mint the registry lacks and leaves its note out",
+            "finds a note under a wrong tag, the tag read misses it",
+            "reports a commitment published twice once",
+            "opens nothing from a bad body and leaves it and a foreign slot to the auditor"
+          ],
+          "result_basis": "File passed in aggregate suite.",
+          "log": "ring-closure-ring-ts-tests.log",
+          "individual_test_output": false,
+          "selection_provenance": "Parent reports the full suite and selected failed-file rerun. Exact invocation manifest is pending."
+        }
+      ],
+      "remaining_evidence": [],
+      "required_evidence_mapping": [
+        {
+          "index": 0,
+          "requirement": "A pending entry spends before registry resolution and remains spent after promotion.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 1,
+          "requirement": "A keyed merge resolves after mint registration without a history rescan.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        }
+      ],
+      "source_references": [
+        "sdk-libs/client/src/state/anonymous_wallet.rs",
+        "sdk-libs/client/src/operations/anonymous_recovery.rs"
+      ],
+      "source_predicates": [
+        {
+          "path": "sdk-libs/client/src/state/anonymous_wallet.rs",
+          "line": 326,
+          "anchor": "pub fn resolve_pending",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        }
+      ]
+    },
+    {
+      "id": "RECOVERY-COMPACT",
+      "status": "passed",
+      "assessment": "Authenticated registry lookup precedes acceptance. Persisted candidate offsets preserve progress independently of lookup cache eviction.",
+      "rust_runtime_tests": [
+        {
+          "name": "compact_assets::tests::registry_owner_and_address_are_checked",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "compact_assets::tests::source_failure_does_not_cache_absence",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "compact_assets::tests::impossible_ids_and_sol_do_not_read_registries",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "compact_assets::tests::counter_owner_address_and_range_are_checked",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "compact_assets::tests::missing_allocated_mapping_is_not_foreign",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "compact_assets::tests::cached_ids_do_not_consume_lookup_budget",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "compact_recovery_pauses_only_for_retryable_source_failures",
+          "outcome": "ok",
+          "log": "ring-closure-client-regressions.log"
+        }
+      ],
+      "typescript_suite_evidence": [
+        {
+          "source": "sdk-libs/ts/test/rpc/compact-assets.test.ts",
+          "test_names": [
+            "rejects impossible IDs without registry reads and caches authenticated results",
+            "treats a missing allocated mapping as inconsistent",
+            "pauses without another network read when the lookup budget is empty",
+            "preserves source failure without caching absence"
+          ],
+          "result_basis": "File passed in aggregate suite.",
+          "log": "ring-closure-ring-ts-tests.log",
+          "individual_test_output": false,
+          "selection_provenance": "Parent reports the full suite and selected failed-file rerun. Exact invocation manifest is pending."
+        },
+        {
+          "source": "sdk-libs/ts/test/state/ring-recovery-session.test.ts",
+          "test_names": [
+            "resumes a capped page after restart and keeps the fixed target",
+            "keeps a tag round and its counter together through capped pages",
+            "refuses a scan after a wallet revision changes",
+            "refuses a changed recovery scope and another wallet instance",
+            "excludes an unchecked opening from funding and reports incomplete coverage",
+            "checks an owned nullifier when its spend precedes its creation in the same slot",
+            "bounds foreign diagnostics and retains no foreign nullifier queue",
+            "resumes inside a compact page when its lookup budget is smaller than the page",
+            "keeps the exact compact candidate through a transient source failure",
+            "wipes opened recipient secrets when transaction key derivation fails",
+            "retains a completed target through reload and refuses an older source",
+            "uses the highest ring, tag and core checkpoint as the target floor",
+            "requires a compact source explicitly and resumes after configuration"
+          ],
+          "result_basis": "File passed in aggregate suite.",
+          "log": "ring-closure-ring-ts-tests.log",
+          "individual_test_output": false,
+          "selection_provenance": "Parent reports the full suite and selected failed-file rerun. Exact invocation manifest is pending."
+        }
+      ],
+      "remaining_evidence": [],
+      "required_evidence_mapping": [
+        {
+          "index": 0,
+          "requirement": "Foreign compact bodies do not create owned or pending entries.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 1,
+          "requirement": "Impossible asset identifiers perform no mint lookup.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 2,
+          "requirement": "A transient lookup failure resumes the same page without losing entries.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 3,
+          "requirement": "A page larger than lookup budget and cache capacity completes through repeated bounded recovery calls.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        }
+      ],
+      "source_references": [
+        "sdk-libs/client/src/operations/compact_assets.rs",
+        "sdk-libs/client/src/operations/anonymous_recovery.rs"
+      ],
+      "source_predicates": [
+        {
+          "path": "sdk-libs/client/src/operations/compact_assets.rs",
+          "line": 81,
+          "anchor": "pub async fn resolve(",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        },
+        {
+          "path": "sdk-libs/client/src/operations/anonymous_recovery.rs",
+          "line": 733,
+          "anchor": "async fn recovery_body(",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        }
+      ],
+      "bounded_resume_argument": {
+        "evidence_type": "source_argument_with_layered_runtime_tests",
+        "allowed_cache_bound": 256,
+        "effective_cache_bound": 32,
+        "recovery_case_candidates": 40,
+        "argument": "Each resolver starts with an empty cache and 32 lookups. Each insertion follows a consumed lookup. No operation resets the budget.",
+        "runtime_distinction": "The recovery case mocks resolution to test persisted candidate offsets. Separate real resolver tests check authentication, lookup budget and caching.",
+        "conclusion": "The recovery case exceeds both effective cache capacity and lookup budget. No cache eviction behavior is claimed."
+      }
+    },
+    {
+      "id": "RECOVERY-DIAGNOSTICS",
+      "status": "passed",
+      "assessment": "Diagnostic totals accumulate while samples remain bounded across serialized resumes.",
+      "rust_runtime_tests": [
+        {
+          "name": "recovery_diagnostics_keep_a_bounded_sample_across_restarts",
+          "outcome": "ok",
+          "log": "ring-closure-client-regressions.log"
+        },
+        {
+          "name": "unmatched_inputs_keep_a_bounded_sample_and_a_complete_count",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        }
+      ],
+      "typescript_suite_evidence": [
+        {
+          "source": "sdk-libs/ts/test/state/ring-recovery-session.test.ts",
+          "test_names": [
+            "resumes a capped page after restart and keeps the fixed target",
+            "keeps a tag round and its counter together through capped pages",
+            "refuses a scan after a wallet revision changes",
+            "refuses a changed recovery scope and another wallet instance",
+            "excludes an unchecked opening from funding and reports incomplete coverage",
+            "checks an owned nullifier when its spend precedes its creation in the same slot",
+            "bounds foreign diagnostics and retains no foreign nullifier queue",
+            "resumes inside a compact page when its lookup budget is smaller than the page",
+            "keeps the exact compact candidate through a transient source failure",
+            "wipes opened recipient secrets when transaction key derivation fails",
+            "retains a completed target through reload and refuses an older source",
+            "uses the highest ring, tag and core checkpoint as the target floor",
+            "requires a compact source explicitly and resumes after configuration"
+          ],
+          "result_basis": "File passed in aggregate suite.",
+          "log": "ring-closure-ring-ts-tests.log",
+          "individual_test_output": false,
+          "selection_provenance": "Parent reports the full suite and selected failed-file rerun. Exact invocation manifest is pending."
+        }
+      ],
+      "remaining_evidence": [],
+      "required_evidence_mapping": [
+        {
+          "index": 0,
+          "requirement": "A large foreign history preserves bounded serialized diagnostic state.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        }
+      ],
+      "source_references": [
+        "sdk-libs/client/src/operations/anonymous_recovery.rs"
+      ],
+      "source_predicates": [
+        {
+          "path": "sdk-libs/client/src/operations/anonymous_recovery.rs",
+          "line": 164,
+          "anchor": "self.diagnostics.unopened.len() > DIAGNOSTIC_SAMPLES",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        }
+      ]
+    },
+    {
+      "id": "PROJECTION-BOUNDS",
+      "status": "passed",
+      "assessment": "Database backlogs remain durable. Active derivations, caches and retained merge candidates stay bounded. Diagnostic continuations do not recount lifetime totals.",
+      "rust_runtime_tests": [
+        {
+          "name": "managed_merge::selection_tests::targets_use_all_amounts_and_counts_before_selection",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "managed_merge::selection_tests::singleton_trees_keep_no_candidate_notes",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "managed_merge::tests::all_mint_settings_share_two_owner_passes",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "tracking::tracking_tests::a_full_memory_pending_set_keeps_the_page_until_derivation_frees_capacity",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "utxos::spend_store_tests::a_follower_invalidates_changed_caches_without_loading_history",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "utxos::spend_store_tests::a_bounded_cache_holds_its_bound_and_storage_answers_every_evicted_row",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "utxos::spend_store_tests::coverage_continuation_does_not_read_lifetime_totals",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "utxos::spend_store_tests::coverage_pages_visit_all_faults_without_retaining_database_history",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "utxos::spend_store_tests::a_late_owner_derives_in_bounded_steps_and_resumes_after_each_restart",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        }
+      ],
+      "typescript_suite_evidence": [],
+      "remaining_evidence": [],
+      "required_evidence_mapping": [
+        {
+          "index": 0,
+          "requirement": "Backlog growth and revision reload keep bounded working sets.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 1,
+          "requirement": "Drain and retry skip no derivations.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 2,
+          "requirement": "Growing history preserves identical recovered openings.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 3,
+          "requirement": "Managed merge work remains linear in inspected entries without repeated asset scans or unbounded owner materialization.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        }
+      ],
+      "source_references": [
+        "services/ring-rpc/src/operations/utxos.rs",
+        "services/ring-rpc/src/operations/managed_merge.rs",
+        "services/ring-rpc/src/operations/spend_coverage.rs"
+      ],
+      "source_predicates": [
+        {
+          "path": "services/ring-rpc/src/operations/utxos.rs",
+          "line": 1038,
+          "anchor": "pending.len().saturating_add(added) > MAX_CACHED_ENTRIES",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        },
+        {
+          "path": "services/ring-rpc/src/operations/managed_merge.rs",
+          "line": 147,
+          "anchor": "fn select(self, target: MergeTarget)",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        },
+        {
+          "path": "services/ring-rpc/src/operations/spend_coverage.rs",
+          "line": 211,
+          "anchor": "if cursor.is_first()",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        }
+      ]
+    },
+    {
+      "id": "NODE-SEEKS",
+      "status": "passed",
+      "assessment": "Requested keys use indexed historical seeks in bounded batches and retain the caller snapshot.",
+      "rust_runtime_tests": [
+        {
+          "name": "storage::tests::postgres_historical_node_seeks_keep_the_caller_snapshot",
+          "outcome": "ok",
+          "log": "ring-closure-indexer-postgres.log"
+        },
+        {
+          "name": "storage::tests::historical_nodes_reject_malformed_stored_hashes",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "storage::tests::historical_node_plan_seeks_the_sqlite_primary_key",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "storage::tests::historical_nodes_span_batches_without_crossing_registry_or_revision",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        }
+      ],
+      "typescript_suite_evidence": [],
+      "remaining_evidence": [],
+      "required_evidence_mapping": [
+        {
+          "index": 0,
+          "requirement": "SQLite and PostgreSQL plans use the requested key and applied index.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 1,
+          "requirement": "Historical reads remain correct across concurrent updates.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        }
+      ],
+      "source_references": [
+        "services/ring-indexer/src/storage/database.rs"
+      ],
+      "source_predicates": [
+        {
+          "path": "services/ring-indexer/src/storage/database.rs",
+          "line": 471,
+          "anchor": "WITH requested(level,position)",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        },
+        {
+          "path": "services/ring-indexer/src/storage/database.rs",
+          "line": 818,
+          "anchor": "async fn postgres_historical_node_seeks_keep_the_caller_snapshot",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        }
+      ]
+    },
+    {
+      "id": "SNAPSHOT-CONTENT",
+      "status": "passed",
+      "assessment": "Captured rows and metadata commit atomically. Reads use immutable copies after live state changes.",
+      "rust_runtime_tests": [
+        {
+          "name": "utxos::spend_store_tests::wallet_pages_read_one_snapshot_on_postgres",
+          "outcome": "ok",
+          "log": "ring-closure-rpc-postgres-final.log"
+        },
+        {
+          "name": "utxos::spend_store_tests::wallet_snapshot_capacity_release_and_restart_preserve_sessions",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "utxos::spend_store_tests::wallet_snapshot_survives_a_same_slot_spend_and_change",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        }
+      ],
+      "typescript_suite_evidence": [],
+      "remaining_evidence": [],
+      "required_evidence_mapping": [
+        {
+          "index": 0,
+          "requirement": "Own wallet and other wallet mutations cannot change captured pages.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 1,
+          "requirement": "Live entry pruning preserves captured pages.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 2,
+          "requirement": "Creation failure leaves no readable partial snapshot.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        }
+      ],
+      "source_references": [
+        "services/ring-rpc/src/storage/wallet_snapshots.rs"
+      ],
+      "source_predicates": [
+        {
+          "path": "services/ring-rpc/src/storage/wallet_snapshots.rs",
+          "line": 355,
+          "anchor": "pub(crate) async fn capture(",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        }
+      ]
+    },
+    {
+      "id": "SNAPSHOT-LIFECYCLE",
+      "status": "passed",
+      "assessment": "Quota admission, authenticated release and bounded cleanup preserve snapshot lifetime. Current authorization remains required on each read.",
+      "rust_runtime_tests": [
+        {
+          "name": "rpc::wallet_snapshot::tests::changed_capture_releases_and_refuses_the_page",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "rpc::wallet_snapshot::tests::release_refuses_legacy_and_empty_cursors",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "rpc::wallet_snapshot::tests::single_page_needs_no_release",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "rpc::wallet_snapshot::tests::visitor_stop_releases_without_reading_another_page",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "rpc::wallet_snapshot::tests::terminal_page_releases_the_captured_snapshot",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "rpc::wallet_snapshot::tests::release_signature_binds_its_domain_and_cursor",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "utxos::spend_store_tests::wallet_snapshot_capacity_release_and_restart_preserve_sessions",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "utxos::spend_store_tests::wallet_snapshot_survives_a_same_slot_spend_and_change",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "utxos::spend_store_tests::wallet_snapshot_cleanup_keeps_capacity_until_all_rows_are_removed",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "reader_grants::a_revoked_grant_stops_reads",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "utxos::spend_store_tests::overlapping_wallet_snapshots_preserve_both_quotas_on_postgres",
+          "outcome": "ok",
+          "log": "ring-closure-rpc-postgres-final.log"
+        }
+      ],
+      "typescript_suite_evidence": [
+        {
+          "source": "sdk-libs/ts/test/rpc/ring-wallet-status.test.ts",
+          "test_names": [
+            "writes the lines Rust `WalletStatusAttestation::message` writes",
+            "writes the lines Rust `SpendCoverageAttestation::message` writes",
+            "reads each status and sends the wallet under a reader's signature",
+            "keeps the refusal when a wallet snapshot expires",
+            "refuses a status it does not know, never reading it as unspent",
+            "accepts a continuation without totals",
+            "reads the operator's rows under the authority's signature",
+            "separates read and release signing domains",
+            "releases after all pages are consumed",
+            "releases after a consumer stops with a separate cancellation context",
+            "refuses a changed capture and releases its original snapshot",
+            "retains both failures if reading and releasing fail",
+            "needs no release for a single page",
+            "binds the owner and cursor under a distinct release domain",
+            "releases the delegate session when its iterator returns"
+          ],
+          "result_basis": "File passed in aggregate suite.",
+          "log": "ring-closure-ring-ts-tests.log",
+          "individual_test_output": false,
+          "selection_provenance": "Parent reports the full suite and selected failed-file rerun. Exact invocation manifest is pending."
+        }
+      ],
+      "remaining_evidence": [],
+      "required_evidence_mapping": [
+        {
+          "index": 0,
+          "requirement": "Revocation blocks the next page.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 1,
+          "requirement": "Concurrent creation cannot exceed either quota.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 2,
+          "requirement": "Explicit release and TypeScript iterator return reclaim quota. Abandoned Rust handles expire.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 3,
+          "requirement": "Expired entries retain quota until bounded cleanup completes.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        }
+      ],
+      "source_references": [
+        "services/ring-rpc/src/storage/wallet_snapshots.rs",
+        "sdk-libs/client/src/rpc/wallet_snapshot.rs"
+      ],
+      "source_predicates": [
+        {
+          "path": "services/ring-rpc/src/storage/wallet_snapshots.rs",
+          "line": 121,
+          "anchor": "fn authorize(",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        },
+        {
+          "path": "services/ring-rpc/src/storage/wallet_snapshots.rs",
+          "line": 497,
+          "anchor": "pub(crate) async fn release(",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        }
+      ]
+    },
+    {
+      "id": "COSIGN-AGGREGATE",
+      "status": "passed",
+      "assessment": "Canonical exact counters and bounded Fenwick access agree with direct sums across windows, epoch boundaries and refunds.",
+      "rust_runtime_tests": [
+        {
+          "name": "cosign_limits::cosign_window_tests::the_summed_halves_read_alike_on_postgres",
+          "outcome": "ok",
+          "log": "ring-closure-rpc-postgres-final.log"
+        },
+        {
+          "name": "cosign_limits::cosign_window_tests::a_ring_total_sums_exactly_to_u64_max_and_refuses_one_past",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "cosign_limits::cosign_window_tests::refunds_preserve_small_contributions_beside_a_clipped_contribution",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "cosign_limits::cosign_window_tests::slot_zero_counts_until_the_inclusive_window_expires",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "cosign_limits::cosign_window_tests::window_enlargement_recovers_usage_across_an_epoch_boundary",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "cosign_usage::window_index::tests::node_arithmetic_refuses_overflow_and_missing_refund_value",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "cosign_usage::window_index::tests::supported_windows_have_bounded_point_and_range_work",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "cosign_limits::cosign_window_tests::all_window_measures_match_an_immutable_ledger_after_out_of_order_refunds",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "cosign_limits::cosign_window_tests::seeded_window_histories_match_direct_sums_through_refunds",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        }
+      ],
+      "typescript_suite_evidence": [],
+      "remaining_evidence": [],
+      "required_evidence_mapping": [
+        {
+          "index": 0,
+          "requirement": "Randomized comparisons with a direct usage oracle.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 1,
+          "requirement": "Epoch boundaries, slot zero and maximum windows agree with the oracle.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 2,
+          "requirement": "Large histories preserve logarithmic node access.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        }
+      ],
+      "source_references": [
+        "services/ring-rpc/src/storage/cosign_window_index.rs",
+        "services/ring-rpc/src/storage/cosign_usage.rs"
+      ],
+      "source_predicates": [
+        {
+          "path": "services/ring-rpc/src/storage/cosign_window_index.rs",
+          "line": 110,
+          "anchor": "fn checked_add(",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        },
+        {
+          "path": "services/ring-rpc/src/storage/cosign_window_index.rs",
+          "line": 159,
+          "anchor": "fn plan(self)",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        }
+      ]
+    },
+    {
+      "id": "COSIGN-LIFECYCLE",
+      "status": "passed",
+      "assessment": "Asset locks serialize reservations and refunds. Released tombstones, final slot checks and monotonic watermarks preserve exact accounting.",
+      "rust_runtime_tests": [
+        {
+          "name": "cosign_limits::cosign_window_tests::a_measure_past_u64_reserved_uncapped_reads_past_every_later_cap",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "cosign_limits::cosign_window_tests::a_late_refund_skips_pruned_epochs_and_preserves_current_usage",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "cosign_limits::cosign_window_tests::concurrent_retries_of_one_message_reserve_one_row_set_on_postgres",
+          "outcome": "ok",
+          "log": "ring-closure-rpc-postgres-final.log"
+        },
+        {
+          "name": "cosign_limits::cosign_window_tests::an_unsupported_window_fails_before_reservation",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "cosign_limits::cosign_window_tests::an_admission_slot_below_the_watermark_fails_closed",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "cosign_limits::tests::a_confirmed_message_keeps_every_row_through_a_late_failure",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "cosign_limits::cosign_window_tests::window_enlargement_recovers_usage_across_an_epoch_boundary",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "cosign_limits::tests::two_co_signers_over_one_postgres_store_grant_the_allowance_once",
+          "outcome": "ok",
+          "log": "ring-closure-rpc-postgres-final.log"
+        },
+        {
+          "name": "cosign_limits::tests::a_slot_change_never_returns_an_expired_over_limit_decision",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "cosign_limits::tests::a_changed_admission_slot_releases_the_reservation",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "cosign_limits::cosign_window_tests::a_restart_keeps_a_confirmed_reservation_through_a_late_failure",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "cosign_limits::cosign_window_tests::a_restart_keeps_every_reservation_and_a_retry_adds_none",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "cosign_limits::cosign_window_tests::concurrent_retries_of_one_message_reserve_one_row_set_on_sqlite",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "cosign_limits::cosign_window_tests::released_signatures_remain_tombstoned_after_restart",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "cosign_limits::tests::two_co_signers_over_one_sqlite_file_grant_the_allowance_once",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        }
+      ],
+      "typescript_suite_evidence": [],
+      "remaining_evidence": [],
+      "required_evidence_mapping": [
+        {
+          "index": 0,
+          "requirement": "Concurrent admissions cannot exceed an allowance.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 1,
+          "requirement": "Duplicate settlement and refund orders preserve exact usage.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 2,
+          "requirement": "Transaction failure points roll back all aggregate changes.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 3,
+          "requirement": "Disabled to enabled caps and enlarged windows include retained usage.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 4,
+          "requirement": "Refunds after cleanup do not recreate obsolete usage.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        }
+      ],
+      "source_references": [
+        "services/ring-rpc/src/storage/cosign_usage.rs",
+        "services/ring-rpc/src/operations/cosign_limits.rs"
+      ],
+      "source_predicates": [
+        {
+          "path": "services/ring-rpc/src/storage/cosign_usage.rs",
+          "line": 350,
+          "anchor": "pub async fn settle(",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        },
+        {
+          "path": "services/ring-rpc/src/storage/cosign_usage.rs",
+          "line": 178,
+          "anchor": "pub async fn slot_allowed(",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        }
+      ]
+    },
+    {
+      "id": "COMPACT-CODEC",
+      "status": "passed",
+      "assessment": "The shared solved Go payout stream is read by Rust and TypeScript. Circuit solver cases bind the common asset and refuse wrong formats.",
+      "rust_runtime_tests": [
+        {
+          "name": "disclosure::tests::compact_audit_records_open_with_the_encrypted_common_mint",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "merge_audit::tests::each_record_field_changed_fails_the_rebuild",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "key_catalog::tests::payout_key_requires_its_format_and_confidential_shape",
+          "outcome": "ok",
+          "log": "ring-closure-program-tests-final.log"
+        },
+        {
+          "name": "the_solved_go_stream_reads_back_under_the_rust_layout",
+          "outcome": "ok",
+          "log": "ring-closure-program-tests-final.log"
+        },
+        {
+          "name": "every_slot_opens_to_its_published_commitment_with_an_empty_mint_registry",
+          "outcome": "ok",
+          "log": "ring-closure-client-regressions.log"
+        },
+        {
+          "name": "each_record_field_changed_fails_the_rebuild",
+          "outcome": "ok",
+          "log": "ring-closure-client-regressions.log"
+        }
+      ],
+      "typescript_suite_evidence": [
+        {
+          "source": "sdk-libs/ts/test/crypto/ring-compact-payout.test.ts",
+          "test_names": [
+            "selects the compact recipient codec through the published scheme",
+            "binds the common mint and format to the auditor layout",
+            "requires the explicit frame format and rejects mixed recipient widths",
+            "keeps actual data length encrypted and rejects nonzero padding"
+          ],
+          "result_basis": "File passed in aggregate suite.",
+          "log": "ring-closure-ring-ts-tests.log",
+          "individual_test_output": false,
+          "selection_provenance": "Parent reports the full suite and selected failed-file rerun. Exact invocation manifest is pending."
+        },
+        {
+          "source": "sdk-libs/ts/test/protocol/encoding/ring-audit-stream.test.ts",
+          "test_names": [
+            "are the shared vector for every key",
+            "refuses an input past the class and an output past the capacity",
+            "seals what it opens",
+            "lays the record out at its contract bytes",
+            "refuses a kind off the three and a dummy with a value",
+            "carries a 144 byte opening record and a 64 byte tail",
+            "refuses an envelope off its layout",
+            "keeps a plain body fixed and bounds its encrypted data length"
+          ],
+          "result_basis": "File passed in aggregate suite.",
+          "log": "ring-closure-ring-ts-tests.log",
+          "individual_test_output": false,
+          "selection_provenance": "Parent reports the full suite and selected failed-file rerun. Exact invocation manifest is pending."
+        },
+        {
+          "source": "sdk-libs/ts/test/operations/audit/ring-record-audit.test.ts",
+          "test_names": [
+            "rebuilds every slot of every vector from the stream with no registry",
+            "reads a record at another slot as a commitment error",
+            "reads a kind off the three and a noncanonical key as a disclosure error",
+            "refuses a dummy record on a live slot by its commitment",
+            "refuses R past the frame, a default bit past the notes and a clear noSpend under R zero",
+            "names the key a forged envelope seals",
+            "reads padding past the notes, an address apart, a default bit from its evidence and an unknown note as unresolved",
+            "resolves a zero key note with no secret",
+            "recomputes an enrolled note once its secret reads",
+            "names the output and classifies padding from the seed",
+            "refuses a record off the published commitment",
+            "never reads a real nullifier as padding",
+            "opens a tag 58 record, its secret the blinding, against the owner hash and commitment",
+            "parses SPP's delegate exit circuit",
+            "binds a tag 57 merge to its forwarded data and refuses another record"
+          ],
+          "result_basis": "File passed in aggregate suite.",
+          "log": "ring-closure-ring-ts-tests.log",
+          "individual_test_output": false,
+          "selection_provenance": "Parent reports the full suite and selected failed-file rerun. Exact invocation manifest is pending."
+        }
+      ],
+      "remaining_evidence": [],
+      "required_evidence_mapping": [
+        {
+          "index": 0,
+          "requirement": "Positive circuit solver case for the accepted shape.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 1,
+          "requirement": "Wrong mint, owner, amount, output order and discriminator refuse.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 2,
+          "requirement": "Rust, Go and TypeScript deterministic codec vectors agree.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 3,
+          "requirement": "A format mismatch or invalid scheme length refuses before opening acceptance.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        }
+      ],
+      "go_suite_evidence": {
+        "log": "ring-closure-go-circuits.log",
+        "package": "prover/circuits/transfer",
+        "test_names": [
+          "TestSingleAssetPayoutSolvesAndOpensEveryRecipient",
+          "TestSingleAssetPayoutRefusesOtherAssetsAndSlots",
+          "TestSingleAssetPayoutRefusesOtherRailsAndPublicLegs",
+          "TestSingleAssetPayoutPinsItsDisclosureFormat",
+          "TestSingleAssetPayoutBindsTheCommonMintCiphertext",
+          "TestSingleAssetPayoutAllowsSenderOwnedOutput"
+        ],
+        "basis": "The package passed. Circuit solver cases do not establish real proof runtime qualification."
+      },
+      "source_references": [
+        "prover/circuits/transfer/payout_test.go",
+        "test-vectors/audit/audit-stream.json",
+        "program-libs/interface/tests/audit_stream.rs"
+      ],
+      "source_predicates": [
+        {
+          "path": "prover/circuits/transfer/payout_test.go",
+          "line": 17,
+          "anchor": "func TestSingleAssetPayoutSolvesAndOpensEveryRecipient",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        },
+        {
+          "path": "program-libs/interface/tests/audit_stream.rs",
+          "line": 561,
+          "anchor": "the_solved_go_stream_reads_back_under_the_rust_layout",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        }
+      ]
+    },
+    {
+      "id": "CIPHERTEXT-PADDING",
+      "status": "passed",
+      "assessment": "Encrypted length prefixes and zero padding preserve equal ring body width while exits keep their public layout.",
+      "rust_runtime_tests": [
+        {
+          "name": "disclosure::tests::a_tail_opens_only_at_the_counter_of_its_slot",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "disclosure::tests::a_short_tail_chunk_is_left_aligned_and_zero_padded",
+          "outcome": "ok",
+          "log": "ring-closure-program-tests-final.log"
+        },
+        {
+          "name": "disclosure::tests::the_layout_value_is_the_circuit_flags",
+          "outcome": "ok",
+          "log": "ring-closure-program-tests-final.log"
+        },
+        {
+          "name": "an_extended_recipient_body_rebuilds_its_commitment_with_its_data",
+          "outcome": "ok",
+          "log": "ring-closure-client-regressions.log"
+        },
+        {
+          "name": "a_data_bearing_note_rebuilds_from_its_tail",
+          "outcome": "ok",
+          "log": "ring-closure-client-regressions.log"
+        }
+      ],
+      "typescript_suite_evidence": [
+        {
+          "source": "sdk-libs/ts/test/crypto/ring-compact-payout.test.ts",
+          "test_names": [
+            "selects the compact recipient codec through the published scheme",
+            "binds the common mint and format to the auditor layout",
+            "requires the explicit frame format and rejects mixed recipient widths",
+            "keeps actual data length encrypted and rejects nonzero padding"
+          ],
+          "result_basis": "File passed in aggregate suite.",
+          "log": "ring-closure-ring-ts-tests.log",
+          "individual_test_output": false,
+          "selection_provenance": "Parent reports the full suite and selected failed-file rerun. Exact invocation manifest is pending."
+        },
+        {
+          "source": "sdk-libs/ts/test/protocol/transactions/ring-frame.test.ts",
+          "test_names": [
+            "puts the wide owner flag at bit 7 of the output count and the approval mask past the header",
+            "refuses an approval mask past its two bits",
+            "publishes a live slot's tag in eight bytes, an exit's whole, and refuses leading tag bytes",
+            "refuses an appended byte and a truncation",
+            "refuses a slot without its tail under has_data and a tail without it",
+            "refuses a body past its plain length without has_data and keeps it with the length prefix",
+            "refuses flags the rail forbids",
+            "refuses an application message count past SPP's list on each rail, writing and reading",
+            "carries the extensions and forwards the application message ahead of the auditor's",
+            "keeps a bodiless slot out of SPP's data and frames a recipient under ring body",
+            "selects SPP's confidential rail for public owners and the exit circuit for a delegate exit",
+            "names the rail from the tag and refuses an unknown tag",
+            "orders the confidential elements and closes on the length",
+            "carries signer data counts under bit 5 past the approval digest, only while nonzero",
+            "zero fills the output chains to the capacity and leaves the tail chain zero off has_data",
+            "carries the seven parties and both rail bits on the anonymous frame",
+            "hashes apart on any bound field",
+            "dedups the signer run by first occurrence and refuses one past the slots",
+            "frames body then reply and reads them back",
+            "refuses a length past the payload and below the plain body",
+            "keeps an exit under scheme 3 and a bodiless slot out of SPP's data"
+          ],
+          "result_basis": "The failed file passed in the final targeted rerun.",
+          "log": "ring-closure-ts-final-regressions.log",
+          "individual_test_output": false,
+          "selection_provenance": "Parent reports the full suite and selected failed-file rerun. Exact invocation manifest is pending."
+        }
+      ],
+      "remaining_evidence": [],
+      "required_evidence_mapping": [
+        {
+          "index": 0,
+          "requirement": "Unequal application data lengths produce equal ciphertext lengths within the frame.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 1,
+          "requirement": "Malformed encrypted lengths refuse.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 2,
+          "requirement": "Dummy and live body lengths agree.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        }
+      ],
+      "source_references": [
+        "program-libs/interface/src/proof/audit_stream.rs",
+        "sdk-libs/ts/test/crypto/ring-compact-payout.test.ts"
+      ],
+      "source_predicates": [
+        {
+          "path": "sdk-libs/ts/test/crypto/ring-compact-payout.test.ts",
+          "line": 117,
+          "anchor": "keeps actual data length encrypted and rejects nonzero padding",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        }
+      ]
+    },
+    {
+      "id": "CAPACITY-GUARANTEES",
+      "status": "passed",
+      "assessment": "Both complete capacity profiles pass with separate payer, co-signer and curator. The generated frame fit table matches its pinned measurement.",
+      "rust_runtime_tests": [
+        {
+          "name": "pipeline::tests::ring_fit_report_measures_every_keyed_shape_with_withdrawal_legs",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "pipeline::tests::an_anonymous_move_counts_the_sender_change_before_selection",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "pipeline::tests::confidential_payout_keeps_the_complete_transaction_within_inline_limits",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "pipeline::tests::every_frame_limit_of_the_byte_model_holds",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "pipeline::tests::every_frame_boundary_takes_its_modelled_bytes",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "pipeline::tests::confidential_payout_keeps_the_complete_transaction_within_inline_limits",
+          "outcome": "ok",
+          "log": "ring-closure-capacity-guarantees.log"
+        },
+        {
+          "name": "pipeline::tests::anonymous_payout_keeps_all_output_slots_within_inline_limits",
+          "outcome": "ok",
+          "log": "ring-closure-capacity-guarantees.log"
+        },
+        {
+          "name": "frame_fit::tests::the_table_is_the_committed_measurement",
+          "outcome": "ok",
+          "log": "ring-closure-frame-fit-test.log"
+        }
+      ],
+      "typescript_suite_evidence": [],
+      "remaining_evidence": [],
+      "required_evidence_mapping": [
+        {
+          "index": 0,
+          "requirement": "Complete v1 confidential and anonymous transaction measurements.",
+          "basis": "Both named complete profile cases passed. The final frame fit table passed its pinned measurement check.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 1,
+          "requirement": "Transaction bytes, account count and CPI instruction data each remain within their enforced limits.",
+          "basis": "Both named complete profile cases passed. The final frame fit table passed its pinned measurement check.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        }
+      ],
+      "source_references": [
+        "sdk-libs/sdk/src/tests/operations/pipeline.rs"
+      ],
+      "source_predicates": [
+        {
+          "path": "sdk-libs/sdk/src/tests/operations/pipeline.rs",
+          "line": 4526,
+          "anchor": "async fn confidential_payout_keeps_the_complete_transaction_within_inline_limits",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        }
+      ],
+      "capacity_evidence": {
+        "profiles": "Confidential sixteen delivered recipients and anonymous eight total slots, with zero or one sender change slot.",
+        "format": "Inline transaction v1 without replies or application data.",
+        "frame_fit_artifact": "ring-closure-frame-fit.md",
+        "runtime_limit": "Structural proof lengths establish size capacity. No real proof execution is claimed."
+      }
+    },
+    {
+      "id": "CAPACITY-POOLS",
+      "status": "passed",
+      "assessment": "Pool sizing includes distinct input assets at zero value and shares catalog bounds across languages.",
+      "rust_runtime_tests": [
+        {
+          "name": "pipeline::pool_subjects::tests::output_and_settlement_subjects_fit_the_wide_record_pools",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "key_catalog::tests::forty_distinct_input_assets_fit_the_largest_input_key",
+          "outcome": "ok",
+          "log": "ring-closure-program-tests-final.log"
+        },
+        {
+          "name": "key_catalog::tests::the_pools_reserve_distinct_input_assets",
+          "outcome": "ok",
+          "log": "ring-closure-program-tests-final.log"
+        },
+        {
+          "name": "pipeline::tests::distinct_zero_value_input_assets_fit_each_input_capacity",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "key_catalog_matches_circuits",
+          "outcome": "ok",
+          "log": "ring-closure-catalog-test.log"
+        }
+      ],
+      "typescript_suite_evidence": [],
+      "remaining_evidence": [],
+      "required_evidence_mapping": [
+        {
+          "index": 0,
+          "requirement": "The forty asset case fits the catalog and record pools.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 1,
+          "requirement": "Zero value input assets cannot escape pool accounting.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 2,
+          "requirement": "Cross language capacity tests agree.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        }
+      ],
+      "shared_vector": "test-vectors/policy/pool_capacity.json",
+      "source_references": [
+        "program-libs/interface/src/proof/key_catalog.rs",
+        "test-vectors/policy/pool_capacity.json"
+      ],
+      "source_predicates": [
+        {
+          "path": "program-libs/interface/src/proof/key_catalog.rs",
+          "line": 774,
+          "anchor": "fn forty_distinct_input_assets_fit_the_largest_input_key",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        }
+      ]
+    },
+    {
+      "id": "HOSTED-LEGS",
+      "status": "passed",
+      "assessment": "Request signatures and decoded final messages bind each leg. Bounded selected openings retain full checked totals and greedy refusal rules.",
+      "rust_runtime_tests": [
+        {
+          "name": "pipeline::relay::tests::delegate_message::a_delegate_message_with_a_swapped_recipient_is_refused",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "pipeline::relay::tests::delegate_message::the_authority_transfer_the_relay_builds_is_signed",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "select::bounded_tests::bounded_selection_keeps_the_greedy_tree_refusal",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "select::bounded_tests::full_totals_preserve_merge_and_balance_refusals",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "select::bounded_tests::retained_openings_follow_capacity_and_stable_ties",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "pipeline::relay::tests::delegate_message::shared_delegate_settlement_frames_bind_all_legs",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "pipeline::relay::tests::delegate_message::hosted_delegate_frames_bind_payments_exits_and_withdrawals",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        }
+      ],
+      "typescript_suite_evidence": [
+        {
+          "source": "sdk-libs/ts/test/operations/payments/ring-delegate-sources.test.ts",
+          "test_names": [
+            "refuses another member's note and its change the request does not name",
+            "refuses a victim's note under exactly the requested payment and change",
+            "funds every mint of a move across at most two trees",
+            "spends several owners' notes and pays the change to the last note's owner",
+            "returns one owner's change on two SPL mints on both rails",
+            "refuses a source named twice and no source",
+            "refuses a note of an owner the move does not name",
+            "admits no opening that fails to rebuild its nullifier under the source's key"
+          ],
+          "result_basis": "The failed file passed in the final targeted rerun.",
+          "log": "ring-closure-ts-final-regressions.log",
+          "individual_test_output": false,
+          "selection_provenance": "Parent reports the full suite and selected failed-file rerun. Exact invocation manifest is pending."
+        }
+      ],
+      "remaining_evidence": [],
+      "required_evidence_mapping": [
+        {
+          "index": 0,
+          "requirement": "Each operation has a successful request case.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 1,
+          "requirement": "Changing operation, destination, mint or amount refuses final message approval.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        }
+      ],
+      "source_references": [
+        "sdk-libs/sdk/src/tests/operations/relay.rs",
+        "services/ring-rpc/src/operations/relay_prover.rs"
+      ],
+      "source_predicates": [
+        {
+          "path": "sdk-libs/sdk/src/tests/operations/relay.rs",
+          "line": 1733,
+          "anchor": "async fn hosted_delegate_frames_bind_payments_exits_and_withdrawals",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        }
+      ]
+    },
+    {
+      "id": "DELEGATE-TREES",
+      "status": "passed",
+      "assessment": "The delegate uses canonical tree selection and accepts two selected trees while refusing excess trees.",
+      "rust_runtime_tests": [
+        {
+          "name": "pipeline::selection::tests::pays_ten_from_six_on_each_of_two_trees",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "pipeline::selection::tests::rejects_three_selected_trees_without_searching_for_an_alternative",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "pipeline::selection::tests::matches_the_shared_tree_selection_vector",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "pipeline::tests::a_second_input_tree_takes_its_account_context_and_bitmap",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        }
+      ],
+      "typescript_suite_evidence": [
+        {
+          "source": "sdk-libs/ts/test/operations/payments/ring-delegate-sources.test.ts",
+          "test_names": [
+            "refuses another member's note and its change the request does not name",
+            "refuses a victim's note under exactly the requested payment and change",
+            "funds every mint of a move across at most two trees",
+            "spends several owners' notes and pays the change to the last note's owner",
+            "returns one owner's change on two SPL mints on both rails",
+            "refuses a source named twice and no source",
+            "refuses a note of an owner the move does not name",
+            "admits no opening that fails to rebuild its nullifier under the source's key"
+          ],
+          "result_basis": "The failed file passed in the final targeted rerun.",
+          "log": "ring-closure-ts-final-regressions.log",
+          "individual_test_output": false,
+          "selection_provenance": "Parent reports the full suite and selected failed-file rerun. Exact invocation manifest is pending."
+        },
+        {
+          "source": "sdk-libs/ts/test/operations/workflow/tree-selection.test.ts",
+          "test_names": [
+            "rejects three selected trees without searching for an alternative",
+            "returns a tree refusal for a large fragmented wallet",
+            "tries default funding after a ring tree refusal",
+            "reports the default tree refusal when the ring balance is empty",
+            "selects a large default note without exact funding search",
+            "checks the tree limit across all assets",
+            "shares the input budget across assets",
+            "pays ten from six on each of two trees",
+            "takes large notes from a fragmented wallet",
+            "funds a delegate move from two trees",
+            "refuses delegate funding across three trees",
+            "leaves delegate change feasibility to transaction assembly",
+            "counts the anonymous sender change before selection",
+            "names an asset with insufficient balance"
+          ],
+          "result_basis": "File passed in aggregate suite.",
+          "log": "ring-closure-ring-ts-tests.log",
+          "individual_test_output": false,
+          "selection_provenance": "Parent reports the full suite and selected failed-file rerun. Exact invocation manifest is pending."
+        }
+      ],
+      "remaining_evidence": [],
+      "required_evidence_mapping": [
+        {
+          "index": 0,
+          "requirement": "A two tree delegate request compiles through the shared core API.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 1,
+          "requirement": "Wrong tree and account substitutions refuse.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        }
+      ],
+      "source_references": [
+        "sdk-libs/ts/src/operations/management/delegate.ts",
+        "zolana/sdk-libs/ts/src/transaction/instructions/transact.ts"
+      ],
+      "source_predicates": [
+        {
+          "path": "zolana/sdk-libs/ts/src/transaction/instructions/transact.ts",
+          "line": 1284,
+          "anchor": "prepareRingAuthorityTransfer",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        }
+      ]
+    },
+    {
+      "id": "SUPPORTED-MATRIX",
+      "status": "pending",
+      "assessment": "The final matrix and production source now agree. TypeScript entry parity typecheck and lint pass. The focused runtime run has one invalid fixture under correction.",
+      "rust_runtime_tests": [
+        {
+          "name": "pipeline::relay::tests::public_signers::a_data_recipient_of_a_relayed_in_proof_transfer_signs",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "pipeline::relay::tests::public_signers::an_exact_co_signer_of_a_relayed_in_proof_transfer_signs_and_each_attempt_draws_afresh",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "pipeline::tests::a_confidential_policy_shape_past_one_transaction_is_refused_before_proving",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "pipeline::tests::a_shape_past_a_confidential_class_is_unkeyed",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "pipeline::tests::an_anonymous_move_never_mixes_ring_and_default_ring_utxos",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "pipeline::tests::an_anonymous_spend_of_ring_and_default_ring_utxos_is_refused_before_proving",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "pipeline::tests::the_in_proof_owner_request_publishes_the_sender_of_every_spent_note",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "pipeline::tests::every_confidential_class_fits_the_signer_and_in_proof_rails_owner_paid_or_relayed",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "origin::tests::an_in_proof_withdrawal_reads_under_the_confidential_rail",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "the_in_proof_owner_proves_on_spp_anonymous_rail_under_the_sender_key",
+          "outcome": "ok",
+          "log": "ring-closure-program-tests-final.log"
+        },
+        {
+          "name": "the_in_proof_owner_is_refused_off_the_confidential_rail",
+          "outcome": "ok",
+          "log": "ring-closure-program-tests-final.log"
+        },
+        {
+          "name": "reader_grants::a_confidential_in_proof_owner_with_an_unopened_input_reads_its_own_notes_alone",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        }
+      ],
+      "typescript_suite_evidence": [],
+      "remaining_evidence": [
+        "The focused TypeScript entry parity rerun must pass after correcting the default note fixture."
+      ],
+      "required_evidence_mapping": [
+        {
+          "index": 0,
+          "requirement": "Rust, Go and TypeScript refusal cases agree with the matrix.",
+          "basis": "Evidence is partial. See remaining_evidence.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        }
+      ],
+      "source_references": [
+        "docs/spec.md"
+      ],
+      "source_predicates": [],
+      "known_code_gap": false
+    },
+    {
+      "id": "RETAINED-CONTRACTS",
+      "status": "passed",
+      "assessment": "Root grace, viewing key rotation, conservative outflow and greedy selection retain their tested behavior.",
+      "rust_runtime_tests": [
+        {
+          "name": "pipeline::selection::tests::largest_notes_fit_the_input_budget",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "pipeline::selection::tests::rejects_three_selected_trees_without_searching_for_an_alternative",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "tests::limits::a_returned_spend_beside_a_public_withdrawal_is_charged",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "a_tracking_update_serves_the_old_root_for_its_grace",
+          "outcome": "ok",
+          "log": "ring-closure-program-tests-final.log"
+        },
+        {
+          "name": "a_tracking_update_waits_while_its_eviction_would_drop_an_unexpired_root",
+          "outcome": "ok",
+          "log": "ring-closure-program-tests-final.log"
+        },
+        {
+          "name": "an_enrollment_applies_once_and_a_rotation_never_reopens_it",
+          "outcome": "ok",
+          "log": "ring-closure-program-tests-final.log"
+        },
+        {
+          "name": "replay_tests::tracking_replay::a_rotation_leaves_the_enrollment_the_pending_set_and_the_root_unchanged",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "cosign_limits::tests::a_returned_spend_beside_a_withdrawal_demands_approval_by_its_charged_outflow",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        },
+        {
+          "name": "reader_grants::a_revoked_grant_stops_reads",
+          "outcome": "ok",
+          "log": "ring-closure-services-tests.log"
+        }
+      ],
+      "typescript_suite_evidence": [],
+      "remaining_evidence": [],
+      "required_evidence_mapping": [
+        {
+          "index": 0,
+          "requirement": "Regression evidence for root grace and viewing key rotation.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 1,
+          "requirement": "Charged outflow examples agree across circuit, policy and specification.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 2,
+          "requirement": "Authorization refusals remain effective.",
+          "basis": "Named runtime tests and referenced source predicates establish the outcome.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        }
+      ],
+      "source_references": [
+        "docs/spec.md",
+        "docs/design/records-and-roots.md",
+        "docs/design/co-signing.md"
+      ],
+      "source_predicates": [
+        {
+          "path": "docs/spec.md",
+          "line": 67,
+          "anchor": "charged_j  = debit_j + charge_j",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        }
+      ]
+    },
+    {
+      "id": "EXACT-SPEC",
+      "status": "passed",
+      "assessment": "The source trace covers the accepted specification corrections. The final matrix source audit and prose gate report zero findings.",
+      "rust_runtime_tests": [
+        {
+          "name": "pipeline::tests::a_zero_key_payment_to_a_rotated_owner_builds_with_its_current_key",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        },
+        {
+          "name": "the_enrollment_is_the_shared_vector",
+          "outcome": "ok",
+          "log": "ring-closure-program-tests-final.log"
+        },
+        {
+          "name": "the_entry_binds_every_field_and_comes_from_the_account",
+          "outcome": "ok",
+          "log": "ring-closure-program-tests-final.log"
+        },
+        {
+          "name": "pipeline::relay::tests::delegate_message::shared_delegate_settlement_frames_bind_all_legs",
+          "outcome": "ok",
+          "log": "ring-closure-sdk-tests.log"
+        }
+      ],
+      "typescript_suite_evidence": [],
+      "remaining_evidence": [],
+      "required_evidence_mapping": [
+        {
+          "index": 0,
+          "requirement": "Each changed specification claim traces to a source predicate or API.",
+          "basis": "The specification reviewer traced the listed source predicates. Existing named vector cases supply the runtime agreement evidence.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 1,
+          "requirement": "Cross language vectors agree with the exact documented contract.",
+          "basis": "The specification reviewer traced the listed source predicates. Existing named vector cases supply the runtime agreement evidence.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        }
+      ],
+      "source_references": [
+        "docs/spec.md",
+        "docs/spec/crypto/hashing.md",
+        "docs/spec/crypto/public-inputs.md",
+        "docs/design/co-signing.md"
+      ],
+      "source_predicates": [
+        {
+          "path": "docs/spec/crypto/hashing.md",
+          "line": 105,
+          "anchor": "An insertion changes its predecessor",
+          "evidence_type": "source_predicate_or_assertion",
+          "runtime_execution_claim": false
+        }
+      ],
+      "review_trace": [
+        {
+          "claim": "deposit statement",
+          "path": "program-libs/interface/src/instructions/deposit.rs",
+          "line": 139,
+          "basis": "Source trace supplied by the specification reviewer."
+        },
+        {
+          "claim": "address chain",
+          "path": "prover/circuits/transfer/transfer.go",
+          "line": 281,
+          "basis": "Source trace supplied by the specification reviewer."
+        },
+        {
+          "claim": "tracking predecessor",
+          "path": "prover/circuits/registry/apply_enrollments.go",
+          "line": 96,
+          "basis": "Source trace supplied by the specification reviewer."
+        },
+        {
+          "claim": "Rust zero key resolution",
+          "path": "sdk-libs/client/src/operations/resolver.rs",
+          "line": 171,
+          "basis": "Source trace supplied by the specification reviewer."
+        },
+        {
+          "claim": "Rust authorization viewing key",
+          "path": "sdk-libs/client/src/operations/resolver.rs",
+          "line": 125,
+          "basis": "Source trace supplied by the specification reviewer."
+        },
+        {
+          "claim": "TypeScript zero key resolution",
+          "path": "sdk-libs/ts/src/rpc/tracking-resolver.ts",
+          "line": 79,
+          "basis": "Source trace supplied by the specification reviewer."
+        },
+        {
+          "claim": "TypeScript confirmed authorization",
+          "path": "sdk-libs/ts/src/rpc/tracking-resolver.ts",
+          "line": 148,
+          "basis": "Source trace supplied by the specification reviewer."
+        },
+        {
+          "claim": "hosted request legs",
+          "path": "sdk-libs/client/src/rpc/authority_transfer.rs",
+          "line": 42,
+          "basis": "Source trace supplied by the specification reviewer."
+        },
+        {
+          "claim": "hosted signed legs",
+          "path": "sdk-libs/client/src/rpc/authority_transfer.rs",
+          "line": 126,
+          "basis": "Source trace supplied by the specification reviewer."
+        },
+        {
+          "claim": "hosted operation preparation",
+          "path": "services/ring-rpc/src/operations/authority_transfer.rs",
+          "line": 346,
+          "basis": "Source trace supplied by the specification reviewer."
+        },
+        {
+          "claim": "shared signing key and released replay",
+          "path": "services/ring-rpc/src/operations/cosign_limits.rs",
+          "line": 245,
+          "basis": "Source trace supplied by the specification reviewer."
+        },
+        {
+          "claim": "projection fencing",
+          "path": "services/ring-rpc/src/storage/projection_lease.rs",
+          "line": 42,
+          "basis": "Source trace supplied by the specification reviewer."
+        }
+      ],
+      "specification_review": {
+        "reviewer": "spec_head1a",
+        "source_audit": "Zero findings reported after the matrix freeze.",
+        "runtime_claim": false
+      }
+    },
+    {
+      "id": "SOURCE-INTEGRITY",
+      "status": "pending",
+      "assessment": "The baseline remains fixed. Current implementation heads and dirty source identities are captured without declaring release qualification.",
+      "rust_runtime_tests": [],
+      "typescript_suite_evidence": [],
+      "remaining_evidence": [
+        "Verified integration fixes remain uncommitted. Final source identity and signed commit verification are pending."
+      ],
+      "required_evidence_mapping": [
+        {
+          "index": 0,
+          "requirement": "Source and dependency identities recorded at combined verification.",
+          "basis": "Evidence is partial. See remaining_evidence.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 1,
+          "requirement": "Preserved core changes match the recorded baseline or an explicitly owned core change.",
+          "basis": "Evidence is partial. See remaining_evidence.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        }
+      ],
+      "source_references": [
+        "tools/closure-contract.json"
+      ],
+      "source_predicates": []
+    },
+    {
+      "id": "COMBINED-EVIDENCE",
+      "status": "pending",
+      "assessment": "Combined checks have substantial passing evidence. Remaining program failures and final capacity checks require classification.",
+      "rust_runtime_tests": [],
+      "typescript_suite_evidence": [],
+      "remaining_evidence": [
+        "The focused TypeScript entry parity rerun remains pending.",
+        "Final source identity and the remaining exact invocation manifest are not yet attached."
+      ],
+      "required_evidence_mapping": [
+        {
+          "index": 0,
+          "requirement": "Command, exit status, source identity and dependency identity for every required check.",
+          "basis": "Evidence is partial. See remaining_evidence.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        },
+        {
+          "index": 1,
+          "requirement": "Evidence links for every criterion at the integrated source head.",
+          "basis": "Evidence is partial. See remaining_evidence.",
+          "runtime_test_collection": "rust_runtime_tests",
+          "typescript_collection": "typescript_suite_evidence",
+          "source_collection": "source_predicates and source_references"
+        }
+      ],
+      "source_references": [
+        "tools/closure-contract.json"
+      ],
+      "source_predicates": [],
+      "artifact_limit": "Missing verifier artifacts leave program execution paths unqualified. The final heap fixture test remains failed at UnsupportedCircuit 8113."
+    }
+  ],
+  "source_files": {
+    "services/ring-rpc/src/storage/update_queue.rs": {
+      "sha256": "591c87eb753501e8168edb2e503ef5daf36a72b640ca6d8e1a779181b4b1c4d0"
+    },
+    "sdk-libs/client/src/rpc/policy_authority.rs": {
+      "sha256": "c81aa89e863a9413c531467f3d3fbc2f904fd49d25c58f1bce6bdec35c88f787"
+    },
+    "sdk-libs/client/src/operations/anonymous_recovery.rs": {
+      "sha256": "5658743760b6a2acdca2efe17782264b916155a80377c482823b22140cbe6153"
+    },
+    "sdk-libs/client/src/state/anonymous_wallet.rs": {
+      "sha256": "a9ac5d462ac25e1c48c980845fc7e8f91798e42dd609fa1b097447b8a35e894f"
+    },
+    "sdk-libs/ts/test/state/ring-recovery-session.test.ts": {
+      "sha256": "78d939d75016369433fad4141abae3dce5d53ccdf894b262d60b78717e9c040c"
+    },
+    "sdk-libs/ts/test/state/ring-full-scan-recovery.test.ts": {
+      "sha256": "46114366e0da0ce3df84ac25f187764a4adc403bf59c6fa9d301e00b9c33361f"
+    },
+    "sdk-libs/client/src/operations/compact_assets.rs": {
+      "sha256": "f8ca1d5eec5d965ae07290ce318db2e30590d8a1c3290d7a96575521bca63668"
+    },
+    "sdk-libs/ts/test/rpc/compact-assets.test.ts": {
+      "sha256": "93c0bcb04c20acb3909ad165451e254900193a6b6317a43fb4016c7887cb8e0a"
+    },
+    "services/ring-rpc/src/operations/utxos.rs": {
+      "sha256": "66bec4648f0cdfc4eee7ddc333f94d870957bdcf7fe280af7cd5a350843fc1cf"
+    },
+    "services/ring-rpc/src/operations/managed_merge.rs": {
+      "sha256": "2ca8c969c49050b0186d14f9fbfd022882d78278a9445efe43609d92602caba8"
+    },
+    "services/ring-rpc/src/operations/spend_coverage.rs": {
+      "sha256": "a4519f670a302a7680576d52794e7530843c4084a17dfb41ef67f2e01d1bf8b8"
+    },
+    "services/ring-indexer/src/storage/database.rs": {
+      "sha256": "a45128db9c15f96cf28d32adf043cc24348b4f13d185b9d48d6200980ce863f2"
+    },
+    "services/ring-rpc/src/storage/wallet_snapshots.rs": {
+      "sha256": "ec3cacf087c39545753530b16afa0a36e12e45400be15cb3ffaf15e6ea85bfe2"
+    },
+    "sdk-libs/client/src/rpc/wallet_snapshot.rs": {
+      "sha256": "45868f305bb9141acd622535dc267dd0d4a85aa6fb780d023d116068617d8c78"
+    },
+    "sdk-libs/ts/test/rpc/ring-wallet-status.test.ts": {
+      "sha256": "0c83926a660bc8fcb599bb337b3f9c132a1273344d4c557a7d16f56b0bff8db9"
+    },
+    "services/ring-rpc/src/storage/cosign_window_index.rs": {
+      "sha256": "28fd8bd6e0af8380510023bec22437bea731e7a34c0a458cbaf2926d40435188"
+    },
+    "services/ring-rpc/src/storage/cosign_usage.rs": {
+      "sha256": "c62b58d067f8b179f5743c006f907bdbf87e646d5a3281006b000366f681c99d"
+    },
+    "services/ring-rpc/src/operations/cosign_limits.rs": {
+      "sha256": "e918954abece0a3c5792d779788d1a7eeab49b74b70ac208a47d71464f613049",
+      "identity_scope": "Observed during final source trace mapping. No historical test start hash is inferred."
+    },
+    "prover/circuits/transfer/payout_test.go": {
+      "sha256": "62c562499b7efc5993d92b1d4205780117cbf873d3cc25f9d174b2dbc1354951"
+    },
+    "test-vectors/audit/audit-stream.json": {
+      "sha256": "4ad14665eb2735a9a11b6674025948bc4b7aac790c8e29dcaa1819d586872b19"
+    },
+    "program-libs/interface/tests/audit_stream.rs": {
+      "sha256": "a9ce7a99650edf74862eb85a09d68b0591fdf2f83bc4e0ba515befcb0dcbb8be"
+    },
+    "sdk-libs/ts/test/crypto/ring-compact-payout.test.ts": {
+      "sha256": "538987ea29962fb55e08956f0c34ddd01e17417eb55711f499baa09b9aa41a52"
+    },
+    "sdk-libs/ts/test/protocol/encoding/ring-audit-stream.test.ts": {
+      "sha256": "8a634eeee1788ccdb9f140bfe86139a22ed577ada0a8936a1b8ec57eda1aa27b"
+    },
+    "sdk-libs/ts/test/operations/audit/ring-record-audit.test.ts": {
+      "sha256": "1d8c48002e356f0a7d40a4c4c517ef2ba9fbaefb23f09ce6c2648235b96af947"
+    },
+    "program-libs/interface/src/proof/audit_stream.rs": {
+      "sha256": "18bc3007b7d981697b4cf903edda08a938ed16f45e5cf95cf5107d0af2643aa7"
+    },
+    "sdk-libs/ts/test/protocol/transactions/ring-frame.test.ts": {
+      "sha256": "3b2a89402ca51e0a1e134c325865bacb60744a16156d0e13d010a21b6fa0178c"
+    },
+    "sdk-libs/sdk/src/tests/operations/pipeline.rs": {
+      "sha256": "2f38c0c8999968752ab738f58893acf407116b2dccbdfe10cd91a0d4c6af13ce",
+      "identity_scope": "Observed during capacity evidence mapping. No earlier test start identity is inferred."
+    },
+    "program-libs/interface/src/proof/key_catalog.rs": {
+      "sha256": "b7c1e73643aba6b12b7a8dc7f213d2f9afc0608d94e909b39f33e3419857e66a"
+    },
+    "test-vectors/policy/pool_capacity.json": {
+      "sha256": "91c7e83bce6cc049e975870da91dd38c2b96a8234af520707111ca21553a9d94"
+    },
+    "sdk-libs/sdk/src/tests/operations/relay.rs": {
+      "sha256": "430a3fbeea43e1920c1403896f63827c8bd1280160e6c59d277bf4d2f5667b25"
+    },
+    "services/ring-rpc/src/operations/relay_prover.rs": {
+      "sha256": "c27b9d43fbf16c79def0d79cf7092ff5000f3924695e691d6c51aa78fb1fca3f"
+    },
+    "sdk-libs/ts/test/operations/payments/ring-delegate-sources.test.ts": {
+      "sha256": "972bcab7310c17df77e67a0b1dd4adca76e1d1e1f0c58da7f75b0e86e9feb80b"
+    },
+    "sdk-libs/ts/src/operations/management/delegate.ts": {
+      "sha256": "610cb21e768f60eeb9ade8d8f287a3d7ae609b50d6131c5937bbc1e71268b067"
+    },
+    "zolana/sdk-libs/ts/src/transaction/instructions/transact.ts": {
+      "sha256": "5130011cd29f11ff5982bef0e197f0c27f6a32823bf61fb218d4133c82e19b6c"
+    },
+    "sdk-libs/ts/test/operations/workflow/tree-selection.test.ts": {
+      "sha256": "bba9ce120b07662698d96c4cef3678e71b1f077811d83b60014ffdcc980823ea"
+    },
+    "docs/spec.md": {
+      "sha256": "e40e269fb590b969777823d9e71bb1944fb510544c807fad6c7baa44ef1cbfe6",
+      "previous_observed_sha256": "132ddbf0e42b3ab0b6aff6695aae91a9a53c4284db5fae64e8478bb1dbcb3174",
+      "change_scope": "The parent is closing pending capacity or specification evidence."
+    },
+    "docs/design/records-and-roots.md": {
+      "sha256": "16a83fc040ebfb1503ad6c43101878c014cc87fd120c68716dc177b2dc2979e9"
+    },
+    "docs/design/co-signing.md": {
+      "sha256": "47bf11e563f5e1a0ca6b8f221fbf76fd5aa6952f73cd77cc98298687b91a9c03"
+    },
+    "docs/spec/crypto/hashing.md": {
+      "sha256": "56006bb9b052a1a3ea5cd9ad71a85a274732782ca0d9330e4aa167f1f6b5c743"
+    },
+    "docs/spec/crypto/public-inputs.md": {
+      "sha256": "7d9717bd36687e238637e46cd08768baa75068812ac169865b4c709a600265ac"
+    },
+    "tools/closure-contract.json": {
+      "sha256": "9c1f194538a4757716022bba69f976e52fcf84f1a19703531a88371071898d80"
+    },
+    "sdk-libs/ts/src/rpc/compact-assets.ts": {
+      "sha256": "ece59a7e946ad529e002312910ce0fc1336b8fd1441e35032603a023d5780387"
+    },
+    "test-vectors/proof/ring-frame-fit.md": {
+      "sha256": "f58110124f80699f008919c5cabcdb04324158f6d8aa292f9addaf45385a0bfd",
+      "identity_scope": "Observed during capacity evidence mapping. No earlier test start identity is inferred."
+    },
+    "program-libs/interface/src/instructions/deposit.rs": {
+      "sha256": "bddd42b78fe37f0d98287508864487e4223486c639dda59980f90d8818e537c9",
+      "identity_scope": "Observed during final source trace mapping. No historical test start hash is inferred."
+    },
+    "prover/circuits/transfer/transfer.go": {
+      "sha256": "21b89b4c4fddd585d36ba378cc75b8a915a86580b2903caa15b5fb98cabbc687",
+      "identity_scope": "Observed during final source trace mapping. No historical test start hash is inferred."
+    },
+    "prover/circuits/registry/apply_enrollments.go": {
+      "sha256": "d39090b4f976ee3f46fbea63d1501b247fbd60e5960a9e20bc978faeba21f3da",
+      "identity_scope": "Observed during final source trace mapping. No historical test start hash is inferred."
+    },
+    "sdk-libs/client/src/operations/resolver.rs": {
+      "sha256": "c3479905b08fdf6122ef830fa3e619f44a2c5d2b6bebdac88b66db21b09e7840",
+      "identity_scope": "Observed during final source trace mapping. No historical test start hash is inferred."
+    },
+    "sdk-libs/ts/src/rpc/tracking-resolver.ts": {
+      "sha256": "a17e6333b12afe37e9db41f97c61f78363fcb5ed7ad91398c2b1ac4e0b5c12de",
+      "identity_scope": "Observed during final source trace mapping. No historical test start hash is inferred."
+    },
+    "sdk-libs/client/src/rpc/authority_transfer.rs": {
+      "sha256": "12d1a49d3f7247566ba272892a4a3023041bdb29eac9a344134638780e8dc246",
+      "identity_scope": "Observed during final source trace mapping. No historical test start hash is inferred."
+    },
+    "services/ring-rpc/src/operations/authority_transfer.rs": {
+      "sha256": "845194bb8720c4bcc32f77f100bfb54f4629416c860a02ebf67dcbf09b4dd8ae",
+      "identity_scope": "Observed during final source trace mapping. No historical test start hash is inferred."
+    },
+    "services/ring-rpc/src/storage/projection_lease.rs": {
+      "sha256": "582bffb924311a35772529896a84f5f4bba33b9ff881ad56acfa89d2c726c309",
+      "identity_scope": "Observed during final source trace mapping. No historical test start hash is inferred."
+    }
+  },
+  "artifacts": {
+    "ring-closure-adapter-tests.log": {
+      "path": "/tmp/ring-closure-adapter-tests.log",
+      "sha256": "96b82ccbb65b883ac75de5f45aa3926be5d17894ef2f7a0f1b91956e52111ed6",
+      "bytes": 7709,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 222 filtered out; finished in 0.00s"
+      ]
+    },
+    "ring-closure-client-regressions.log": {
+      "path": "/tmp/ring-closure-client-regressions.log",
+      "sha256": "e439770f1b655c0c19b27dcae5cb25ba32312999d10cf789814e0f7184c8c833",
+      "bytes": 7282,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": [
+        "test result: ok. 63 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.29s",
+        "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s"
+      ]
+    },
+    "ring-closure-client-tests.log": {
+      "path": "/tmp/ring-closure-client-tests.log",
+      "sha256": "592f4560970a91ea803633637855223433dfe5135fad9a824587b6bfa9cec4b4",
+      "bytes": 19113,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": [
+        "test result: FAILED. 175 passed; 1 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.20s",
+        "error: test failed, to rerun pass `-p zolana-ring-client --lib`"
+      ]
+    },
+    "ring-closure-clippy.log": {
+      "path": "/tmp/ring-closure-clippy.log",
+      "sha256": "b92262b52af9839612420a0b6dca190358eb2e7e423e8963996b090d35272d4a",
+      "bytes": 525,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": []
+    },
+    "ring-closure-constraint-pins.log": {
+      "path": "/tmp/ring-closure-constraint-pins.log",
+      "sha256": "08737201b4de00e4280a211dfb7875bdeeec7829d6e0e57ac949eb7bb338d298",
+      "bytes": 68,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": [
+        "ok  \tgithub.com/helius-labs/zolana-custom-rings/prover/ring\t90.397s"
+      ]
+    },
+    "ring-closure-core-ts-build.log": {
+      "path": "/tmp/ring-closure-core-ts-build.log",
+      "sha256": "255ea6f0d3ab3cd0e8847df831f2a507c77f27570e64ae476b00a0861052bd9a",
+      "bytes": 262,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": []
+    },
+    "ring-closure-core-ts-changelog.log": {
+      "path": "/tmp/ring-closure-core-ts-changelog.log",
+      "sha256": "0f15a004708579fd59d56eaf4fa2326b9217593ed88be844d62b6c46d455ba97",
+      "bytes": 86,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": []
+    },
+    "ring-closure-core-ts-check.log": {
+      "path": "/tmp/ring-closure-core-ts-check.log",
+      "sha256": "2048d5a6ede8fa5daa0b58ae1ae252e87ac3f89ab88fc4e33cd1d5dad0c003b1",
+      "bytes": 1584,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": []
+    },
+    "ring-closure-core-ts-compile.log": {
+      "path": "/tmp/ring-closure-core-ts-compile.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": []
+    },
+    "ring-closure-core-ts-dist.log": {
+      "path": "/tmp/ring-closure-core-ts-dist.log",
+      "sha256": "ca87a3ed8b2b2d2879834a5bebaf5e803b5ca6bb3c8e9cd75df453c6bff9d96a",
+      "bytes": 104,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": []
+    },
+    "ring-closure-core-ts-lint.log": {
+      "path": "/tmp/ring-closure-core-ts-lint.log",
+      "sha256": "2d7745fc2ed68a5e06470078705f2be1a3f6fd2a918cc563d89a5fead2b23906",
+      "bytes": 126,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": []
+    },
+    "ring-closure-core-ts-pack.log": {
+      "path": "/tmp/ring-closure-core-ts-pack.log",
+      "sha256": "095dfc74b4c2f4e6f726a24d31a5366a99d92e6183c33a21395a0f1dae883906",
+      "bytes": 12790,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": []
+    },
+    "ring-closure-core-ts-tests-all.log": {
+      "path": "/tmp/ring-closure-core-ts-tests-all.log",
+      "sha256": "f9234c7566325f73beae0ebdfb332e38624f5fe68a94eb87859587e3dfcc389c",
+      "bytes": 550,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": [
+        " Test Files  86 passed (86)",
+        "      Tests  1586 passed (1586)"
+      ]
+    },
+    "ring-closure-core-ts-tests.log": {
+      "path": "/tmp/ring-closure-core-ts-tests.log",
+      "sha256": "fdc9094210894ad97e5baae15a5a429904ca4ac446553b8432367b12d720b165",
+      "bytes": 268,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": [
+        " Test Files  1 passed (1)",
+        "      Tests  19 passed (19)"
+      ]
+    },
+    "ring-closure-frame-fit.log": {
+      "path": "/tmp/ring-closure-frame-fit.log",
+      "sha256": "d5017221aa05659e6d85f5ce545d20ea5e19116a3f638e307754fcbda9d5ea52",
+      "bytes": 9728,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": []
+    },
+    "ring-closure-go-circuits.log": {
+      "path": "/tmp/ring-closure-go-circuits.log",
+      "sha256": "030a01ebb5f06b441bc5ee3281a4f60ede34053a33a0d9d8cbc5e9aae2bc2108",
+      "bytes": 552,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": [
+        "ok  \tgithub.com/helius-labs/zolana-custom-rings/prover/circuits\t64.689s",
+        "ok  \tgithub.com/helius-labs/zolana-custom-rings/prover/circuits/audit\t7.700s",
+        "ok  \tgithub.com/helius-labs/zolana-custom-rings/prover/circuits/policy\t294.902s",
+        "ok  \tgithub.com/helius-labs/zolana-custom-rings/prover/circuits/registry\t36.688s",
+        "ok  \tgithub.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget\t0.267s",
+        "ok  \tgithub.com/helius-labs/zolana-custom-rings/prover/circuits/shared\t0.266s",
+        "ok  \tgithub.com/helius-labs/zolana-custom-rings/prover/circuits/transfer\t193.307s"
+      ]
+    },
+    "ring-closure-go-requests.log": {
+      "path": "/tmp/ring-closure-go-requests.log",
+      "sha256": "c0128f7ce450c7cf2995c30420b90cb87dc72ccbdbcabc8e171a5427c6d4cd1b",
+      "bytes": 68,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": [
+        "ok  \tgithub.com/helius-labs/zolana-custom-rings/prover/ring\t14.405s"
+      ]
+    },
+    "ring-closure-go-ring-tests.log": {
+      "path": "/tmp/ring-closure-go-ring-tests.log",
+      "sha256": "0a0e60c0e68930651ef5dfa1438e8c3ffafad298aa3657a18e646b152707e7ad",
+      "bytes": 1129,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": [
+        "FAIL\tgithub.com/helius-labs/zolana-custom-rings/prover/ring\t106.484s"
+      ]
+    },
+    "ring-closure-go-vectors.log": {
+      "path": "/tmp/ring-closure-go-vectors.log",
+      "sha256": "4b30a947c748ae87e266eb7126f59a8c19bcf29372d9c5f538d3a779078847db",
+      "bytes": 717,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": [
+        "ok  \tgithub.com/helius-labs/zolana-custom-rings/prover/circuits\t2.838s",
+        "ok  \tgithub.com/helius-labs/zolana-custom-rings/prover/circuits/audit\t4.383s",
+        "ok  \tgithub.com/helius-labs/zolana-custom-rings/prover/circuits/policy\t21.790s",
+        "ok  \tgithub.com/helius-labs/zolana-custom-rings/prover/circuits/registry\t3.196s",
+        "ok  \tgithub.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget\t0.373s [no tests to run]",
+        "ok  \tgithub.com/helius-labs/zolana-custom-rings/prover/circuits/shared\t0.366s",
+        "ok  \tgithub.com/helius-labs/zolana-custom-rings/prover/circuits/transfer\t13.973s",
+        "ok  \tgithub.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol\t0.763s",
+        "ok  \tgithub.com/helius-labs/zolana-custom-rings/prover/ring\t1.200s"
+      ]
+    },
+    "ring-closure-go-witnesses.log": {
+      "path": "/tmp/ring-closure-go-witnesses.log",
+      "sha256": "cfd0b12a10e9bd204b3381d898f394d9c5a1d923a2c8cddb67ff0ed3e0398cfb",
+      "bytes": 68,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": [
+        "ok  \tgithub.com/helius-labs/zolana-custom-rings/prover/ring\t35.674s"
+      ]
+    },
+    "ring-closure-indexer-postgres.log": {
+      "path": "/tmp/ring-closure-indexer-postgres.log",
+      "sha256": "1cbf0c3abcfa0e378617aba0b3cf57481b9900efa2851a9556beb2546c8eee69",
+      "bytes": 1125,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 56 filtered out; finished in 0.23s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    },
+    "ring-closure-interface-vectors.log": {
+      "path": "/tmp/ring-closure-interface-vectors.log",
+      "sha256": "3d74727f8cdfbf1e0383dd8463f30818f7250c427634e9985b9045e051194891",
+      "bytes": 11816,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": [
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 30 filtered out; finished in 0.01s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.51s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 44 filtered out; finished in 0.02s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.36s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 17 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.61s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.21s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 58 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.01s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.27s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s"
+      ]
+    },
+    "ring-closure-program-tests-final.log": {
+      "path": "/tmp/ring-closure-program-tests-final.log",
+      "sha256": "dea454d9ece5b68fa52afee17ff6d0f1c66c95d84c5e17bf3046f6ea0bcee651",
+      "bytes": 71611,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": [
+        "test result: ok. 46 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "test result: ok. 30 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 18 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.05s",
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s",
+        "test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 7 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 8 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.29s",
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "test result: ok. 44 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.04s",
+        "test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+        "test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s",
+        "error: test failed, to rerun pass `-p custom-ring-interface --test vk_proving_key_lock`",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: FAILED. 73 passed; 51 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.21s",
+        "error: test failed, to rerun pass `-p custom-ring-program --test rules`",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s",
+        "test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.19s",
+        "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.33s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.12s",
+        "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s",
+        "test result: ok. 58 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.17s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "error: 2 targets failed:"
+      ]
+    },
+    "ring-closure-program-tests.log": {
+      "path": "/tmp/ring-closure-program-tests.log",
+      "sha256": "2c76672ef99b300a0a99011113374978bac38ea5267f5570f8aef576fd4ed0e1",
+      "bytes": 20463,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": [
+        "test result: ok. 46 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+        "test result: ok. 30 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 18 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.05s",
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s",
+        "test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 7 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 8 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.29s",
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "test result: FAILED. 43 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.05s",
+        "error: test failed, to rerun pass `-p custom-ring-interface --test transact`"
+      ]
+    },
+    "ring-closure-ring-ts-build.log": {
+      "path": "/tmp/ring-closure-ring-ts-build.log",
+      "sha256": "8840a7c3b5a0905e628dc9c85559b61d945d63b317a209de428060502da5c012",
+      "bytes": 288,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": []
+    },
+    "ring-closure-ring-ts-dist.log": {
+      "path": "/tmp/ring-closure-ring-ts-dist.log",
+      "sha256": "e45b41e73b8e62d5808dad3d4cc1a986c7d2d761b404d001ae0130c34dd89d15",
+      "bytes": 87,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": []
+    },
+    "ring-closure-ring-ts-lint.log": {
+      "path": "/tmp/ring-closure-ring-ts-lint.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": []
+    },
+    "ring-closure-ring-ts-tests.log": {
+      "path": "/tmp/ring-closure-ring-ts-tests.log",
+      "sha256": "e501c7bd3b4c21efdaa7e5f84a9e9e2c902d0738e2f652f4d8143f165df00866",
+      "bytes": 8018,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": [
+        " Test Files  2 failed | 94 passed (96)",
+        "      Tests  13 failed | 1526 passed (1539)"
+      ]
+    },
+    "ring-closure-rpc-postgres-final.log": {
+      "path": "/tmp/ring-closure-rpc-postgres-final.log",
+      "sha256": "6d8b42ed59809608cda2c597487746fc16cd6f7525cdf3781d2b973b985779d5",
+      "bytes": 1667,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": [
+        "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 246 filtered out; finished in 4.40s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 107 filtered out; finished in 0.13s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 31 filtered out; finished in 0.00s"
+      ]
+    },
+    "ring-closure-rpc-postgres.log": {
+      "path": "/tmp/ring-closure-rpc-postgres.log",
+      "sha256": "d558ac4c212cbd1471a8c9d021a2987c95ecfde4b13f3f774927f596096a0d20",
+      "bytes": 5950,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": [
+        "test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 246 filtered out; finished in 2.39s",
+        "error: test failed, to rerun pass `-p zolana-ring-rpc --lib`"
+      ]
+    },
+    "ring-closure-rust-compile.log": {
+      "path": "/tmp/ring-closure-rust-compile.log",
+      "sha256": "3364d39c23f1f4b47331a792247446551f336417df15a4768ce54c504d84ca78",
+      "bytes": 939,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": []
+    },
+    "ring-closure-sdk-tests.log": {
+      "path": "/tmp/ring-closure-sdk-tests.log",
+      "sha256": "a0797f3bc80526feded451ac2f1b51df5e30b49af3be0a8afafe21f01317d63d",
+      "bytes": 20730,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": [
+        "test result: ok. 223 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 56.30s"
+      ]
+    },
+    "ring-closure-sdk-vectors-tests.log": {
+      "path": "/tmp/ring-closure-sdk-vectors-tests.log",
+      "sha256": "55b50654a2b181c0893826d7c3ab27e88367461ced088a195cb085635db24c05",
+      "bytes": 43207,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": [
+        "test result: FAILED. 218 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out; finished in 89.79s",
+        "error: test failed, to rerun pass `-p custom-ring-sdk --lib`"
+      ]
+    },
+    "ring-closure-services-tests.log": {
+      "path": "/tmp/ring-closure-services-tests.log",
+      "sha256": "c05cae9433d9ec2e387b3fe6281e8a48d654a2b556276d8f380d608bbf12bca6",
+      "bytes": 76201,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": [
+        "test result: ok. 53 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.19s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 176 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.17s",
+        "test result: FAILED. 50 passed; 13 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s",
+        "error: test failed, to rerun pass `-p zolana-ring-client --test anonymous_sync`",
+        "test result: FAILED. 30 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s",
+        "error: test failed, to rerun pass `-p zolana-ring-client --test audit`",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s",
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.36s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 246 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 2.95s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 107 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.10s",
+        "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "error: 2 targets failed:"
+      ]
+    },
+    "ring-closure-ts-compile.log": {
+      "path": "/tmp/ring-closure-ts-compile.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": []
+    },
+    "ring-closure-ts-error-vector.log": {
+      "path": "/tmp/ring-closure-ts-error-vector.log",
+      "sha256": "5e2afabca088c71b841e740e648e561b2e7552eea7405190672aa1397dcc0e09",
+      "bytes": 293,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": [
+        " Test Files  1 passed (1)",
+        "      Tests  2 passed (2)"
+      ]
+    },
+    "ring-closure-ts-final-regressions.log": {
+      "path": "/tmp/ring-closure-ts-final-regressions.log",
+      "sha256": "4d146a3a367b69b2f7f123d640050df431814f60921058643f039c77c294f31c",
+      "bytes": 260,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": [
+        " Test Files  2 passed (2)",
+        "      Tests  51 passed (51)"
+      ]
+    },
+    "ring-closure-ts-recovery-tests.log": {
+      "path": "/tmp/ring-closure-ts-recovery-tests.log",
+      "sha256": "7e9a85d7776dd0da2b97bf1672c1072e0d938d26c90bf84dfe287f2cca342ddd",
+      "bytes": 2742,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": [
+        " Test Files  2 failed | 2 passed (4)",
+        "      Tests  2 failed | 44 passed (46)"
+      ]
+    },
+    "ring-closure-ts-snapshot-tests.log": {
+      "path": "/tmp/ring-closure-ts-snapshot-tests.log",
+      "sha256": "07fbe64758f1fd8e7ee2c571fbb41aba200aa393f88d8218455203d11e4ccb1e",
+      "bytes": 271,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": [
+        " Test Files  1 passed (1)",
+        "      Tests  15 passed (15)"
+      ]
+    },
+    "ring-closure-wallet-postgres.log": {
+      "path": "/tmp/ring-closure-wallet-postgres.log",
+      "sha256": "8de985fd8576fec260c7b7e9d31916cb0e8c7520e8590f4615fd073338d92ff3",
+      "bytes": 952,
+      "command": null,
+      "command_record": "The log does not record the complete invocation.",
+      "exit_status": null,
+      "exit_record": "Only output summaries are retained in the log.",
+      "terminal_summaries": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 252 filtered out; finished in 0.11s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 108 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 31 filtered out; finished in 0.00s"
+      ]
+    },
+    "ring-closure-capacity-guarantees.log": {
+      "path": "/tmp/ring-closure-capacity-guarantees.log",
+      "sha256": "fe5c97ac3bc776e599f401e37f77b0d3bf5521a459444cdb182bff62de9584b1",
+      "bytes": 1515,
+      "command": "cargo test -p custom-ring-sdk --lib payout_keeps -- --nocapture",
+      "command_record": "Exact invocation supplied by the parent.",
+      "exit_status": 0,
+      "exit_record": "The parent observed successful command completion. The log contains passing test summaries.",
+      "terminal_summaries": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 223 filtered out; finished in 0.82s"
+      ]
+    },
+    "ring-closure-frame-fit-test.log": {
+      "path": "/tmp/ring-closure-frame-fit-test.log",
+      "sha256": "50ce58bad1a9a0fd99aba0c5f69c71c1d9ba94dc7b1972525b1b0fa94abb69f3",
+      "bytes": 464,
+      "command": "cargo test -p ring-xtask frame_fit::tests::the_table_is_the_committed_measurement",
+      "command_record": "Exact invocation supplied by the parent.",
+      "exit_status": 0,
+      "exit_record": "The parent observed successful command completion. The log contains passing test summaries.",
+      "terminal_summaries": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 2.16s"
+      ]
+    },
+    "ring-closure-catalog-test.log": {
+      "path": "/tmp/ring-closure-catalog-test.log",
+      "sha256": "f2cd759ade454a930a3c816fdd0c42cc9be68b8a8bb6962c0015cafacad82f29",
+      "bytes": 942,
+      "command": "cargo test -p custom-ring-interface --test vk_proving_key_lock key_catalog_matches_circuits",
+      "command_record": "Exact invocation supplied by the parent.",
+      "exit_status": 0,
+      "exit_record": "The parent observed successful command completion. The log contains passing test summaries.",
+      "terminal_summaries": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.65s"
+      ]
+    },
+    "ring-closure-frame-fit.md": {
+      "path": "/tmp/ring-closure-frame-fit.md",
+      "sha256": "f58110124f80699f008919c5cabcdb04324158f6d8aa292f9addaf45385a0bfd",
+      "bytes": 171388,
+      "command": "cargo run -p ring-xtask -- frame-fit",
+      "command_record": "Exact invocation supplied by the parent.",
+      "exit_status": 0,
+      "exit_record": "The parent observed successful command completion.",
+      "pinned_artifact": "test-vectors/proof/ring-frame-fit.md",
+      "pinned_bytes_match": true
+    },
+    "ring-closure-heap-final.log": {
+      "path": "/tmp/ring-closure-heap-final.log",
+      "sha256": "4f0f706afa066ddffd72b353bbf5c2a26d90f5a8ebfc90c0577782e55b8d6322",
+      "bytes": 25095,
+      "command": "cargo test -p custom-ring-program --test rules catalog_maxima_at_the_transaction_ceiling_reach_pairing_or_refuse_excess_addresses",
+      "command_record": "Exact invocation supplied by the parent.",
+      "exit_status": 101,
+      "exit_record": "Failure observed by the parent and retained as a failure.",
+      "terminal_summaries": [
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 123 filtered out; finished in 13.45s",
+        "error: test failed, to rerun pass `-p custom-ring-program --test rules`"
+      ],
+      "classification": "The corrected fixture reaches UnsupportedCircuit 8113 because the verifier artifact is unavailable. RingShapeUnkeyed is no longer the failure.",
+      "runtime_pass": false
+    }
+  },
+  "evidence_audit": {
+    "named_rust_passes": "Matched to log output.",
+    "log_hashes": "Matched at review.",
+    "compact_resume": "The reviewer accepted the effective cache bound argument.",
+    "remaining": [
+      "Exact TypeScript invocation manifest remains pending.",
+      "Final source identities must be refreshed after current edits."
+    ]
+  },
+  "report_status": "partial_frozen_for_code_commit",
+  "report_limit": "Missing historical command or source identity metadata remains explicit and does not block the code commit.",
+  "latest_reported_dependency": {
+    "core_head": "fe36ae063c1cc9d5d1cc6dcf603c127fd23b4ea3",
+    "identity_scope": "Observed when the partial report was frozen. Earlier logs keep their original provenance limits."
+  },
+  "partial_report_frozen_at_utc": "2026-11-05T21:12:28.656671+00:00"
+}

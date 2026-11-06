@@ -1,13 +1,23 @@
-use custom_ring_interface::{CustomRingError, RingMode, RingProgramConfig};
+//! Sets the ring's permanent delegate, once.
+//!
+//! SPP's authority rail moves notes with no owner signature, and governance opens it per ring in `RingConfig`.
+//! The delegate is the ring's own gate on the rail. A delegate frame reads no policy root, owes no co-signer,
+//! carries no approval bit and takes no deposit leg. The ring proof still shows the auditor opens its slots.
+//!
+//! The instruction guarantees:
+//!
+//! 1. The admin and the delegate both sign, a mistyped address cannot enable the rail.
+//! 2. No instruction replaces or clears a set delegate.
+//! 3. The delegate stays apart from every role, and `RingPolicy::rotate_role` keeps the split.
+//!
+//! Read after `instructions/transfer/accounts.rs`. Read before `instructions/configuration/access/set_paused.rs`.
+
+use custom_ring_interface::{CustomRingError, RingRole};
 use pinocchio::{AccountView, Address, ProgramResult};
 use spr_account_checks::AccountIterator;
 
-use crate::instructions::{
-    instruction_runtime::no_data,
-    loader::{load_mut, load_registry, UpgradeAuthorityCheck},
-};
+use crate::instructions::{instruction_runtime::no_data, loader::RoleHolder};
 
-/// Only the upgrade authority appoints the delegate.
 #[inline(never)]
 pub fn process_set_delegate_ix(
     program_id: &Address,
@@ -16,36 +26,22 @@ pub fn process_set_delegate_ix(
 ) -> ProgramResult {
     no_data(data)?;
     let mut iter = AccountIterator::new(accounts);
-    let authority = iter.next_signer("authority")?;
-    let config = iter.next_mut("config")?;
+    let admin = iter.next_signer("admin")?;
+    let ring = iter.next_mut("ring")?;
     let delegate = iter.next_signer("delegate")?;
-    let registry = iter.next_account("registry")?;
-    let program = iter.next_account("program")?;
-    let program_data = iter.next_account("program_data")?;
 
-    // 1. The program's upgrade authority signs, as for `CreateConfig`.
-    UpgradeAuthorityCheck {
+    // 1. The delegate is permanent for the instructions of the deployed binary.
+    let mut ring = RoleHolder {
         program_id,
-        authority,
-        program,
-        program_data,
+        role: RingRole::Admin,
+        signer: admin,
     }
-    .verify()?;
-    // 2. The delegate is permanent for the instructions of the deployed binary.
-    let mut config = load_mut::<RingProgramConfig>(program_id, config)?;
-    if config.delegate().is_some() {
+    .load_mut(ring)?;
+    if ring.delegate().is_some() {
         return Err(CustomRingError::DelegateAlreadySet.into());
     }
-    // 3. An anonymous ring hides the owner a delegate would sign for.
-    if config.mode()? == RingMode::Anonymous {
-        return Err(CustomRingError::AnonymousRingRefused.into());
-    }
-    if !config.has_policy() {
-        return Err(CustomRingError::DelegateRequiresPolicy.into());
-    }
-    // 4. `ConfidentialEscrow` mode escrows every output nullifier key in the member registry.
-    load_registry(program_id, registry)?;
-    config.delegate = *delegate.address();
-    config.mode = RingMode::ConfidentialEscrow as u8;
+    // 2. The delegate holds no role, and the tracking rows every ring holds serve its proof the victim's key.
+    ring.roles.check(Some(delegate.address()))?;
+    ring.delegate = *delegate.address();
     Ok(())
 }

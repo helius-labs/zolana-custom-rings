@@ -1,84 +1,37 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    marker::PhantomData,
     ops::Range,
 };
 
 use anyhow::{Context, Result};
-use custom_ring_interface::{MemberRegistry, QueueEntry, RecordQueue, ROOT_HISTORY};
+use bytemuck::Pod;
+use custom_ring_interface::{
+    state::ROOT_HISTORY,
+    storage::{Revision, Root, StorageError, StorageRegistry},
+    tracking::TrackingRegistry,
+};
 use sea_orm::{
     AccessMode, ConnectionTrait, DatabaseBackend, DatabaseConnection, DatabaseTransaction,
     IsolationLevel, QueryResult, Statement, TransactionTrait, Value,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use solana_address::Address;
-use spr_indexer_api::Hash;
-use zolana_ring_indexer::{
-    records::{QueuedWrite, RegistryAccounts, SealedKey},
-    tree::{IndexedRecord, MemberRecord, NodePosition},
+use zolana_ring_indexer::tree::{
+    IndexedLeaf, IndexedRecord, MemberRecord, NodePosition, TrackingRecord,
 };
 
-use crate::block::BlockMetadata;
+use crate::{block::BlockMetadata, indexer::Quarantine};
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct RegistryState {
-    pub program: [u8; 32],
-    pub registry_address: [u8; 32],
-    pub queue_address: [u8; 32],
-    /// The record fields, the policy fields stay zero.
-    #[serde(with = "account_image")]
-    pub registry: Box<MemberRegistry>,
-    #[serde(with = "account_image")]
-    pub queue: Box<RecordQueue>,
-    /// Cleared only by a rollback.
-    pub fault: Option<String>,
-}
+mod tracking;
 
-impl RegistryState {
-    pub fn accounts(&self) -> RegistryAccounts {
-        RegistryAccounts {
-            registry: self.registry_address.into(),
-            queue: self.queue_address.into(),
-        }
-    }
-}
+pub(crate) use tracking::Enrollment;
 
+/// A read takes each row's newest version at or below `version`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct HistoryRoot {
-    pub root: [u8; 32],
-    /// Every row carries the position that wrote it, a read at a root takes the newest at or below.
-    pub applied: u64,
+pub(crate) struct TreeVersion {
+    pub version: u64,
     pub next_index: u64,
-    pub slot: u64,
-    pub history_index: u8,
-}
-
-impl HistoryRoot {
-    pub fn newest(state: &RegistryState) -> Self {
-        let index = state.registry.history_cursor;
-        let entry = state.registry.history[usize::from(index)];
-        Self {
-            root: entry.root,
-            applied: entry.applied(),
-            next_index: state.registry.next_index().into(),
-            slot: entry.slot(),
-            history_index: index,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct StoredRecord {
-    pub record: IndexedRecord,
-    pub seal: Option<SealedKey>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct StoredEntry {
-    pub position: u64,
-    pub write: QueuedWrite,
-    pub slot: u64,
-    /// `chain(position)`.
-    pub chain: [u8; 32],
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -118,22 +71,12 @@ impl RingCursor {
     }
 }
 
-/// Rows of one ring newer than `before`, `None` for a registry the block created.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct Undo {
-    pub program: [u8; 32],
-    pub before: Option<RegistryState>,
-}
-
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(crate) struct BlockUndo {
-    pub records: Vec<Undo>,
-}
-
-impl BlockUndo {
-    pub fn extend(&mut self, other: Self) {
-        self.records.extend(other.records);
-    }
+    #[serde(default)]
+    pub storage: Vec<StorageUndo>,
+    #[serde(default)]
+    pub tracking: Vec<TrackingUndo>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -143,28 +86,168 @@ pub(crate) struct BlockJournal {
     pub undo: BlockUndo,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct PendingRing {
-    pub program: [u8; 32],
-    pub slot: u64,
-    pub blockhash: Hash,
-    /// Last historical block committed with the ring's index changes.
-    pub replayed_tip: Option<BlockMetadata>,
-    /// Kept past the TTL without another account read.
-    #[serde(default)]
-    pub registry_seen: bool,
+/// A leaf a registry's table stores, versioned by the revision that wrote it.
+pub(crate) trait StoredLeaf: IndexedLeaf + Default + Send + Sync {
+    const TABLE: &'static str;
+    const COLUMNS: &'static str;
+
+    fn from_row(row: &QueryResult) -> Result<Self>;
+    /// In the order of `COLUMNS`.
+    fn values(&self) -> Result<Vec<Value>>;
 }
 
-/// Every table a ring's records project into, keyed by `program` first.
-const RECORD_TABLES: [&str; 5] = [
-    "ring_registries",
-    "ring_registry_roots",
-    "ring_records",
-    "ring_record_nodes",
-    "ring_record_queue",
-];
-const RECORD_COLUMNS: &str =
-    "leaf_index, member, next_member, lists, escrow_key, seal, mint_policy";
+impl StoredLeaf for MemberRecord {
+    const TABLE: &'static str = "ring_records";
+    const COLUMNS: &'static str = "member, next_member, lists, mint_policy";
+
+    fn from_row(row: &QueryResult) -> Result<Self> {
+        Ok(Self {
+            member: field(row, "member")?,
+            next: field(row, "next_member")?,
+            lists: uint(row, "lists")?,
+            mint_policy: read_mint_policy(row)?.unwrap_or_default(),
+        })
+    }
+
+    fn values(&self) -> Result<Vec<Value>> {
+        Ok(vec![
+            bytes(&self.member),
+            bytes(&self.next),
+            int(self.lists)?,
+            serde_json::to_string(&self.mint_policy)?.into(),
+        ])
+    }
+}
+
+impl StoredLeaf for TrackingRecord {
+    const TABLE: &'static str = "tracking_records";
+    const COLUMNS: &'static str = "member, next_member, nullifier_pk, ct_hash, list_tag";
+
+    fn from_row(row: &QueryResult) -> Result<Self> {
+        Ok(Self {
+            member: field(row, "member")?,
+            next: field(row, "next_member")?,
+            nullifier_pk: field(row, "nullifier_pk")?,
+            ct_hash: field(row, "ct_hash")?,
+            list_tag: field(row, "list_tag")?,
+        })
+    }
+
+    fn values(&self) -> Result<Vec<Value>> {
+        Ok(vec![
+            bytes(&self.member),
+            bytes(&self.next),
+            bytes(&self.nullifier_pk),
+            bytes(&self.ct_hash),
+            bytes(&self.list_tag),
+        ])
+    }
+}
+
+/// A registry account the projection mirrors, one state table and one leaf table per kind.
+pub(crate) trait ProjectedAccount: Pod + Eq + Send + Sync {
+    type Leaf: StoredLeaf;
+    const STATES: &'static str;
+
+    fn from_image(data: &[u8]) -> Option<&Self>;
+    fn roots(&self) -> &[Root; ROOT_HISTORY];
+    fn root_at(&self, revision: Revision, slot: u64) -> Result<[u8; 32], StorageError>;
+    fn leaves(&self) -> u64;
+}
+
+impl ProjectedAccount for StorageRegistry {
+    type Leaf = MemberRecord;
+    const STATES: &'static str = "storage_registries";
+
+    fn from_image(data: &[u8]) -> Option<&Self> {
+        Self::from_data(data)
+    }
+
+    fn roots(&self) -> &[Root; ROOT_HISTORY] {
+        &self.roots
+    }
+
+    fn root_at(&self, revision: Revision, slot: u64) -> Result<[u8; 32], StorageError> {
+        self.root(revision, slot)
+    }
+
+    fn leaves(&self) -> u64 {
+        u64::from(self.next_index())
+    }
+}
+
+impl ProjectedAccount for TrackingRegistry {
+    type Leaf = TrackingRecord;
+    const STATES: &'static str = "tracking_registries";
+
+    fn from_image(data: &[u8]) -> Option<&Self> {
+        Self::from_data(data)
+    }
+
+    fn roots(&self) -> &[Root; ROOT_HISTORY] {
+        &self.roots
+    }
+
+    fn root_at(&self, revision: Revision, slot: u64) -> Result<[u8; 32], StorageError> {
+        self.root(revision, slot)
+    }
+
+    fn leaves(&self) -> u64 {
+        self.next_index()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(bound(serialize = "A: ProjectedAccount", deserialize = "A: ProjectedAccount"))]
+pub(crate) struct RegistryState<A> {
+    pub registry: [u8; 32],
+    #[serde(
+        serialize_with = "account_image::serialize",
+        deserialize_with = "account_image::deserialize"
+    )]
+    pub account: Box<A>,
+    /// Cleared only by a rollback.
+    pub fault: Option<String>,
+}
+
+pub(crate) type StorageState = RegistryState<StorageRegistry>;
+pub(crate) type TrackingState = RegistryState<TrackingRegistry>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StorageRoot {
+    pub root: [u8; 32],
+    pub revision: u64,
+    pub next_index: u64,
+}
+
+impl StorageRoot {
+    pub fn current<A: ProjectedAccount>(account: &A) -> Self {
+        let current = account.roots()[0];
+        Self {
+            root: current.hash,
+            revision: current.revision.value(),
+            next_index: account.leaves(),
+        }
+    }
+
+    pub fn tree(&self) -> TreeVersion {
+        TreeVersion {
+            version: self.revision,
+            next_index: self.next_index,
+        }
+    }
+}
+
+/// Rows of one registry newer than `before`, `None` for a registry the block created.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(bound(serialize = "A: ProjectedAccount", deserialize = "A: ProjectedAccount"))]
+pub(crate) struct RegistryUndo<A> {
+    pub registry: [u8; 32],
+    pub before: Option<RegistryState<A>>,
+}
+
+pub(crate) type StorageUndo = RegistryUndo<StorageRegistry>;
+pub(crate) type TrackingUndo = RegistryUndo<TrackingRegistry>;
 
 /// Lookups read every table from one Postgres snapshot.
 pub(crate) async fn begin_read(
@@ -180,43 +263,6 @@ pub(crate) async fn begin_read(
         }
         _ => db.begin().await,
     }
-}
-
-pub(crate) async fn save_pending<C: ConnectionTrait>(conn: &C, value: &PendingRing) -> Result<()> {
-    let sql = "INSERT INTO ring_pending(program,slot,state) VALUES($1,$2,$3) \
-               ON CONFLICT(program) DO NOTHING";
-    let values = vec![bytes(&value.program), int(value.slot)?, json(value)?];
-    exec(conn, sql, values).await
-}
-
-pub(crate) async fn pending<C: ConnectionTrait>(conn: &C) -> Result<Vec<PendingRing>> {
-    read_all(conn, "SELECT state FROM ring_pending ORDER BY slot").await
-}
-
-pub(crate) async fn pending_programs<C: ConnectionTrait>(conn: &C) -> Result<BTreeSet<[u8; 32]>> {
-    programs(conn, "SELECT program FROM ring_pending").await
-}
-
-pub(crate) async fn pending_ring<C: ConnectionTrait>(
-    conn: &C,
-    program: &[u8; 32],
-) -> Result<Option<PendingRing>> {
-    let sql = "SELECT state FROM ring_pending WHERE program=$1";
-    read_json(conn, sql, vec![bytes(program)]).await
-}
-
-pub(crate) async fn checkpoint_pending<C: ConnectionTrait>(
-    conn: &C,
-    pending: &PendingRing,
-) -> Result<()> {
-    let sql = "UPDATE ring_pending SET state=$2 WHERE program=$1";
-    let values = vec![bytes(&pending.program), json(pending)?];
-    exec(conn, sql, values).await
-}
-
-pub(crate) async fn delete_pending<C: ConnectionTrait>(conn: &C, program: &[u8; 32]) -> Result<()> {
-    let sql = "DELETE FROM ring_pending WHERE program=$1";
-    exec(conn, sql, vec![bytes(program)]).await
 }
 
 pub(crate) async fn cursor<C: ConnectionTrait>(conn: &C) -> Result<Option<RingCursor>> {
@@ -254,21 +300,7 @@ pub(crate) async fn prune<C: ConnectionTrait>(conn: &C, below: u64) -> Result<()
         "DELETE FROM ring_blocks WHERE slot<$1",
         vec![int(below)?],
     )
-    .await?;
-    for program in registry_programs(conn).await? {
-        RegistryStore::new(conn, program)
-            .prune_history(below)
-            .await?;
-    }
-    Ok(())
-}
-
-pub(crate) async fn registries<C: ConnectionTrait>(conn: &C) -> Result<Vec<RegistryState>> {
-    read_all(conn, "SELECT state FROM ring_registries ORDER BY program").await
-}
-
-pub(crate) async fn registry_programs<C: ConnectionTrait>(conn: &C) -> Result<BTreeSet<[u8; 32]>> {
-    programs(conn, "SELECT program FROM ring_registries").await
+    .await
 }
 
 pub(crate) async fn rollback(tx: &DatabaseTransaction, cursor: &mut RingCursor) -> Result<()> {
@@ -277,110 +309,58 @@ pub(crate) async fn rollback(tx: &DatabaseTransaction, cursor: &mut RingCursor) 
         .as_ref()
         .context("cannot rewind before the ring index start")?;
     let journal = journal(tx, tip.slot).await?.context("ring journal gap")?;
+    for undo in journal.undo.storage.iter().rev() {
+        StorageStore::new(tx, undo.registry).restore(undo).await?;
+    }
+    for undo in journal.undo.tracking.iter().rev() {
+        TrackingStore::new(tx, undo.registry).restore(undo).await?;
+    }
     let slot = vec![int(journal.metadata.slot)?];
-    exec(tx, "DELETE FROM ring_pending WHERE slot=$1", slot.clone()).await?;
-    for undo in journal.undo.records.iter().rev() {
-        RegistryStore::new(tx, undo.program).restore(undo).await?;
-    }
-    // Partial replay must rewind with the block that advanced it.
-    for mut candidate in pending(tx).await? {
-        if candidate
-            .replayed_tip
-            .as_ref()
-            .is_some_and(|tip| tip.slot == journal.metadata.slot)
-        {
-            candidate.replayed_tip = journal
-                .previous_tip
-                .clone()
-                .filter(|tip| tip.slot >= candidate.slot);
-            checkpoint_pending(tx, &candidate).await?;
-        }
-    }
+    tracking::rollback_slot(tx, journal.metadata.slot).await?;
     exec(tx, "DELETE FROM ring_blocks WHERE slot=$1", slot).await?;
     cursor.tip = journal.previous_tip;
     cursor.scanned_slot = cursor.tip_slot();
     cursor.suspend(tx).await
 }
 
-/// One ring's projected registry, every statement binds the program as `$1`.
-pub(crate) struct RegistryStore<'c, C> {
+/// One registry's record tree, every statement binds the registry as `$1`.
+pub(crate) struct RegistryStore<'c, C, L = MemberRecord> {
     conn: &'c C,
     pub(crate) program: [u8; 32],
+    leaf: PhantomData<L>,
 }
 
-impl<'c, C: ConnectionTrait> RegistryStore<'c, C> {
+impl<'c, C: ConnectionTrait, L: StoredLeaf> RegistryStore<'c, C, L> {
     pub fn new(conn: &'c C, program: [u8; 32]) -> Self {
-        Self { conn, program }
-    }
-
-    pub async fn state(&self) -> Result<Option<RegistryState>> {
-        let sql = "SELECT state FROM ring_registries WHERE program=$1";
-        let row = self.query_one(sql, vec![]).await?;
-        row.as_ref().map(stored_state).transpose()
-    }
-
-    pub async fn save_state(&self, value: &RegistryState) -> Result<()> {
-        let sql = "INSERT INTO ring_registries(program,state) VALUES($1,$2) \
-                   ON CONFLICT(program) DO UPDATE SET state=excluded.state";
-        self.exec(sql, vec![json(value)?]).await
-    }
-
-    /// Stops the ring's projection, a rollback of the block resumes it.
-    pub async fn quarantine(&self, before: RegistryState, reason: String) -> Result<Undo> {
-        log::error!(
-            "ring {} stopped projecting its member registry ({reason})",
-            Address::new_from_array(self.program)
-        );
-        self.save_state(&RegistryState {
-            fault: Some(reason),
-            ..before.clone()
-        })
-        .await?;
-        Ok(self.undo(Some(before)))
-    }
-
-    pub fn undo(&self, before: Option<RegistryState>) -> Undo {
-        Undo {
-            program: self.program,
-            before,
+        Self {
+            conn,
+            program,
+            leaf: PhantomData,
         }
     }
 
-    pub async fn root(&self, applied: u64) -> Result<Option<HistoryRoot>> {
-        let sql = "SELECT root, applied, next_index, slot, history_index FROM ring_registry_roots \
-                   WHERE program=$1 AND applied=$2";
-        let row = self.query_one(sql, vec![int(applied)?]).await?;
-        row.as_ref().map(history_root).transpose()
-    }
-
-    pub async fn save_root(&self, entry: &HistoryRoot) -> Result<()> {
-        let sql =
-            "INSERT INTO ring_registry_roots(program,applied,root,next_index,slot,history_index) \
-                   VALUES($1,$2,$3,$4,$5,$6)";
-        let values = vec![
-            int(entry.applied)?,
-            bytes(&entry.root),
-            int(entry.next_index)?,
-            int(entry.slot)?,
-            int(entry.history_index.into())?,
-        ];
-        self.exec(sql, values).await
-    }
-
-    pub async fn record(&self, member: &[u8; 32], applied: u64) -> Result<Option<StoredRecord>> {
+    pub async fn record(
+        &self,
+        member: &[u8; 32],
+        applied: u64,
+    ) -> Result<Option<IndexedRecord<L>>> {
         let sql = format!(
-            "SELECT {RECORD_COLUMNS} FROM ring_records WHERE program=$1 AND member=$2 \
-             AND applied<=$3 ORDER BY applied DESC LIMIT 1"
+            "SELECT leaf_index, {} FROM {} WHERE program=$1 AND member=$2 \
+             AND applied<=$3 ORDER BY applied DESC LIMIT 1",
+            L::COLUMNS,
+            L::TABLE
         );
         let values = vec![bytes(member), int(applied)?];
         let row = self.query_one(&sql, values).await?;
         row.as_ref().map(stored_record).transpose()
     }
 
-    pub async fn low_record(&self, member: &[u8; 32], applied: u64) -> Result<StoredRecord> {
+    pub async fn low_record(&self, member: &[u8; 32], applied: u64) -> Result<IndexedRecord<L>> {
         let sql = format!(
-            "SELECT {RECORD_COLUMNS} FROM ring_records WHERE program=$1 AND member<$2 \
-             AND applied<=$3 ORDER BY member DESC, applied DESC LIMIT 1"
+            "SELECT leaf_index, {} FROM {} WHERE program=$1 AND member<$2 \
+             AND applied<=$3 ORDER BY member DESC, applied DESC LIMIT 1",
+            L::COLUMNS,
+            L::TABLE
         );
         let values = vec![bytes(member), int(applied)?];
         let row = self.query_one(&sql, values).await?;
@@ -392,11 +372,12 @@ impl<'c, C: ConnectionTrait> RegistryStore<'c, C> {
         &self,
         leaves: Range<u64>,
         applied: u64,
-    ) -> Result<Vec<StoredRecord>> {
+    ) -> Result<Vec<IndexedRecord<L>>> {
+        let (columns, table) = (L::COLUMNS, L::TABLE);
         let sql = format!(
-            "SELECT {RECORD_COLUMNS} FROM ring_records AS r WHERE program=$1 \
+            "SELECT leaf_index, {columns} FROM {table} AS r WHERE program=$1 \
              AND leaf_index>=$2 AND leaf_index<$3 AND applied=(SELECT MAX(applied) \
-             FROM ring_records AS m WHERE m.program=r.program AND m.leaf_index=r.leaf_index \
+             FROM {table} AS m WHERE m.program=r.program AND m.leaf_index=r.leaf_index \
              AND m.applied<=$4) ORDER BY leaf_index"
         );
         let values = vec![int(leaves.start)?, int(leaves.end)?, int(applied)?];
@@ -404,22 +385,20 @@ impl<'c, C: ConnectionTrait> RegistryStore<'c, C> {
         rows.iter().map(stored_record).collect()
     }
 
-    pub async fn save_records(&self, records: &[StoredRecord], applied: u64) -> Result<()> {
-        for stored in records {
-            let record = &stored.record.record;
-            let sql = "INSERT INTO ring_records(program,leaf_index,applied,member,next_member,\
-                       lists,escrow_key,seal,mint_policy) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)";
-            let values = vec![
-                int(stored.record.index)?,
-                int(applied)?,
-                bytes(&record.member),
-                bytes(&record.next),
-                int(record.lists)?,
-                bytes(&record.escrow_key),
-                seal_value(stored.seal.as_ref())?,
-                serde_json::to_string(&record.mint_policy)?.into(),
-            ];
-            self.exec(sql, values).await?;
+    pub async fn save_records(&self, records: &[IndexedRecord<L>], applied: u64) -> Result<()> {
+        for indexed in records {
+            let mut values = vec![int(indexed.index)?, int(applied)?];
+            values.extend(indexed.record.values()?);
+            let params = (1..=values.len() + 1)
+                .map(|param| format!("${param}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "INSERT INTO {}(program,leaf_index,applied,{}) VALUES({params})",
+                L::TABLE,
+                L::COLUMNS
+            );
+            self.exec(&sql, values).await?;
         }
         Ok(())
     }
@@ -429,45 +408,32 @@ impl<'c, C: ConnectionTrait> RegistryStore<'c, C> {
         keys: &BTreeSet<NodePosition>,
         applied: u64,
     ) -> Result<BTreeMap<NodePosition, [u8; 32]>> {
-        let mut by_level = BTreeMap::<usize, Vec<u64>>::new();
-        for key in keys {
-            by_level.entry(key.level).or_default().push(key.position);
-        }
-        let mut values = vec![int(applied)?];
-        let mut levels = Vec::new();
-        for (level, positions) in by_level {
-            values.push(int(u64::try_from(level)?)?);
-            let level_param = values.len() + 1;
-            let mut params = Vec::with_capacity(positions.len());
-            for position in positions {
-                values.push(int(position)?);
-                params.push(format!("${}", values.len() + 1));
+        const BATCH_LIMIT: usize = 256;
+
+        let applied = int(applied)?;
+        let mut keys = keys.iter();
+        let mut nodes = BTreeMap::new();
+        loop {
+            let batch: Vec<_> = keys.by_ref().take(BATCH_LIMIT).collect();
+            if batch.is_empty() {
+                return Ok(nodes);
             }
-            levels.push(format!(
-                "(level=${level_param} AND position IN ({}))",
-                params.join(",")
-            ));
-        }
-        if levels.is_empty() {
-            return Ok(BTreeMap::new());
-        }
-        let sql = format!(
-            "SELECT level, position, hash FROM ring_record_nodes AS n WHERE program=$1 \
-             AND applied=(SELECT MAX(applied) FROM ring_record_nodes AS m \
-             WHERE m.program=n.program AND m.level=n.level AND m.position=n.position \
-             AND m.applied<=$2) AND ({})",
-            levels.join(" OR ")
-        );
-        let rows = self.query_all(&sql, values).await?;
-        rows.iter()
-            .map(|row| {
-                let at = NodePosition {
-                    level: usize::try_from(uint(row, "level")?)?,
-                    position: uint(row, "position")?,
+            let statement = self.node_statement(&batch, applied.clone())?;
+            for row in self.conn.query_all(statement).await? {
+                let Some(hash) = row.try_get::<Option<Vec<u8>>>("", "hash")? else {
+                    continue;
                 };
-                Ok((at, field(row, "hash")?))
-            })
-            .collect()
+                let at = NodePosition {
+                    level: usize::try_from(uint(&row, "level")?)?,
+                    position: uint(&row, "position")?,
+                };
+                nodes.insert(
+                    at,
+                    hash.try_into()
+                        .map_err(|_| anyhow::anyhow!("invalid node hash length"))?,
+                );
+            }
+        }
     }
 
     pub async fn save_nodes(
@@ -489,107 +455,28 @@ impl<'c, C: ConnectionTrait> RegistryStore<'c, C> {
         Ok(())
     }
 
-    /// Fails on a gap in `positions`.
-    pub async fn entries(&self, positions: Range<u64>) -> Result<Vec<StoredEntry>> {
-        let sql =
-            "SELECT position, member, mask, value, escrow_key, slot, chain, seal, mint_policy \
-                   FROM ring_record_queue WHERE program=$1 AND position>=$2 AND position<$3 \
-                   ORDER BY position";
-        let values = vec![int(positions.start)?, int(positions.end)?];
-        let rows = self.query_all(sql, values).await?;
-        let entries = rows.iter().map(stored_entry).collect::<Result<Vec<_>>>()?;
-        let contiguous = entries.iter().map(|entry| entry.position).eq(positions);
-        anyhow::ensure!(contiguous, "record queue projection has a gap");
-        Ok(entries)
-    }
-
-    pub async fn save_entry(&self, entry: &StoredEntry) -> Result<()> {
-        let sql = "INSERT INTO ring_record_queue(program,position,member,mask,value,escrow_key,\
-                   slot,chain,seal,mint_policy) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)";
-        let QueueEntry {
-            member,
-            mask,
-            value,
-            escrow_key,
-            mint_policy,
-        } = entry.write.entry;
-        let values = vec![
-            int(entry.position)?,
-            bytes(&member),
-            int(mask)?,
-            int(value)?,
-            bytes(&escrow_key),
-            int(entry.slot)?,
-            bytes(&entry.chain),
-            seal_value(entry.write.seal.as_ref())?,
-            mint_policy
-                .map(|policy| serde_json::to_string(&policy))
-                .transpose()?
-                .into(),
-        ];
-        self.exec(sql, values).await
-    }
-
-    async fn restore(&self, undo: &Undo) -> Result<()> {
-        let Some(before) = &undo.before else {
-            for table in RECORD_TABLES {
-                self.exec(&format!("DELETE FROM {table} WHERE program=$1"), vec![])
-                    .await?;
-            }
-            return Ok(());
-        };
-        let applied = vec![int(before.queue.head())?];
-        for table in ["ring_registry_roots", "ring_records", "ring_record_nodes"] {
-            let sql = format!("DELETE FROM {table} WHERE program=$1 AND applied>$2");
-            self.exec(&sql, applied.clone()).await?;
+    fn node_statement(&self, keys: &[&NodePosition], applied: Value) -> Result<Statement> {
+        let mut values = vec![applied];
+        let mut requested = Vec::with_capacity(keys.len());
+        for (index, at) in keys.iter().enumerate() {
+            values.push(int(u64::try_from(at.level)?)?);
+            values.push(int(at.position)?);
+            let level_param = index * 2 + 3;
+            let position_param = level_param + 1;
+            requested.push(format!(
+                "(CAST(${level_param} AS BIGINT),CAST(${position_param} AS BIGINT))"
+            ));
         }
-        let sql = "DELETE FROM ring_record_queue WHERE program=$1 AND position>=$2";
-        self.exec(sql, vec![int(before.queue.tail())?]).await?;
-        self.save_state(before).await
-    }
-
-    /// Keeps what the history after the deepest possible rollback still reads.
-    async fn prune_history(&self, below: u64) -> Result<()> {
-        let sql = "SELECT pruned FROM ring_registries WHERE program=$1";
-        let row = self.query_one(sql, vec![]).await?;
-        let pruned = uint(&row.context("pruned ring has no registry row")?, "pruned")?;
         let sql = format!(
-            "SELECT applied FROM ring_registry_roots WHERE program=$1 AND slot<$2 \
-             ORDER BY applied DESC LIMIT {ROOT_HISTORY}"
+            "WITH requested(level,position) AS (VALUES {}) \
+             SELECT level, position, \
+             (SELECT hash FROM ring_record_nodes AS n WHERE n.program=$1 \
+             AND n.level=requested.level AND n.position=requested.position \
+             AND n.applied<=$2 ORDER BY n.applied DESC LIMIT 1) AS hash \
+             FROM requested",
+            requested.join(",")
         );
-        let rows = self.query_all(&sql, vec![int(below)?]).await?;
-        let finals = rows
-            .iter()
-            .map(|row| uint(row, "applied"))
-            .collect::<Result<Vec<_>>>()?;
-        let (Some(&final_head), Some(&oldest)) = (finals.first(), finals.get(ROOT_HISTORY - 1))
-        else {
-            return Ok(());
-        };
-        if oldest <= pruned {
-            return Ok(());
-        }
-        let sql = "DELETE FROM ring_registry_roots WHERE program=$1 AND applied<$2";
-        self.exec(sql, vec![int(oldest)?]).await?;
-        let window = vec![int(pruned)?, int(oldest)?];
-        let sql =
-            "DELETE FROM ring_record_nodes WHERE program=$1 AND (level, position, applied) IN \
-                   (SELECT old.level, old.position, old.applied FROM ring_record_nodes AS newer \
-                   JOIN ring_record_nodes AS old ON old.program=newer.program \
-                   AND old.level=newer.level AND old.position=newer.position \
-                   AND old.applied<newer.applied \
-                   WHERE newer.program=$1 AND newer.applied>$2 AND newer.applied<=$3)";
-        self.exec(sql, window.clone()).await?;
-        let sql = "DELETE FROM ring_records WHERE program=$1 AND (leaf_index, applied) IN \
-                   (SELECT old.leaf_index, old.applied FROM ring_records AS newer \
-                   JOIN ring_records AS old ON old.program=newer.program \
-                   AND old.leaf_index=newer.leaf_index AND old.applied<newer.applied \
-                   WHERE newer.program=$1 AND newer.applied>$2 AND newer.applied<=$3)";
-        self.exec(sql, window).await?;
-        let sql = "DELETE FROM ring_record_queue WHERE program=$1 AND position<$2";
-        self.exec(sql, vec![int(final_head)?]).await?;
-        let sql = "UPDATE ring_registries SET pruned=$2 WHERE program=$1";
-        self.exec(sql, vec![int(oldest)?]).await
+        Ok(self.statement(&sql, values))
     }
 
     fn statement(&self, sql: &str, values: Vec<Value>) -> Statement {
@@ -611,56 +498,129 @@ impl<'c, C: ConnectionTrait> RegistryStore<'c, C> {
     }
 }
 
-fn history_root(row: &QueryResult) -> Result<HistoryRoot> {
-    Ok(HistoryRoot {
-        root: field(row, "root")?,
-        applied: uint(row, "applied")?,
-        next_index: uint(row, "next_index")?,
-        slot: uint(row, "slot")?,
-        history_index: u8::try_from(uint(row, "history_index")?)?,
+/// Tree rows share the node and root tables under the registry address, versioned by revision.
+pub(crate) struct ProjectedStore<'c, C, A: ProjectedAccount> {
+    tree: RegistryStore<'c, C, A::Leaf>,
+}
+
+pub(crate) type StorageStore<'c, C> = ProjectedStore<'c, C, StorageRegistry>;
+pub(crate) type TrackingStore<'c, C> = ProjectedStore<'c, C, TrackingRegistry>;
+
+impl<'c, C: ConnectionTrait, A: ProjectedAccount> ProjectedStore<'c, C, A> {
+    pub fn new(conn: &'c C, registry: [u8; 32]) -> Self {
+        Self {
+            tree: RegistryStore::new(conn, registry),
+        }
+    }
+
+    pub fn tree(&self) -> &RegistryStore<'c, C, A::Leaf> {
+        &self.tree
+    }
+
+    pub async fn state(&self) -> Result<Option<RegistryState<A>>> {
+        let sql = format!("SELECT state FROM {} WHERE registry=$1", A::STATES);
+        let row = self.tree.query_one(&sql, vec![]).await?;
+        row.as_ref().map(stored_state).transpose()
+    }
+
+    pub async fn save_state(&self, value: &RegistryState<A>) -> Result<()> {
+        let sql = format!(
+            "INSERT INTO {}(registry,state) VALUES($1,$2) \
+             ON CONFLICT(registry) DO UPDATE SET state=excluded.state",
+            A::STATES
+        );
+        self.tree.exec(&sql, vec![json(value)?]).await
+    }
+
+    pub async fn root(&self, revision: u64) -> Result<Option<StorageRoot>> {
+        let sql = "SELECT root, revision, next_index FROM storage_roots \
+                   WHERE registry=$1 AND revision=$2";
+        let row = self.tree.query_one(sql, vec![int(revision)?]).await?;
+        row.as_ref()
+            .map(|row| {
+                Ok(StorageRoot {
+                    root: field(row, "root")?,
+                    revision: uint(row, "revision")?,
+                    next_index: uint(row, "next_index")?,
+                })
+            })
+            .transpose()
+    }
+
+    pub async fn save_root(&self, root: &StorageRoot) -> Result<()> {
+        let sql = "INSERT INTO storage_roots(registry,revision,root,next_index) \
+                   VALUES($1,$2,$3,$4)";
+        let values = vec![
+            int(root.revision)?,
+            bytes(&root.root),
+            int(root.next_index)?,
+        ];
+        self.tree.exec(sql, values).await
+    }
+
+    async fn restore(&self, undo: &RegistryUndo<A>) -> Result<()> {
+        let leaves = format!("{} WHERE program=$1", <A::Leaf as StoredLeaf>::TABLE);
+        let Some(before) = &undo.before else {
+            for sql in [
+                format!("DELETE FROM {leaves}"),
+                "DELETE FROM ring_record_nodes WHERE program=$1".into(),
+                "DELETE FROM storage_roots WHERE registry=$1".into(),
+                format!("DELETE FROM {} WHERE registry=$1", A::STATES),
+            ] {
+                self.tree.exec(&sql, vec![]).await?;
+            }
+            return Ok(());
+        };
+        let revision = vec![int(StorageRoot::current(&*before.account).revision)?];
+        for sql in [
+            format!("DELETE FROM {leaves} AND applied>$2"),
+            "DELETE FROM ring_record_nodes WHERE program=$1 AND applied>$2".into(),
+            "DELETE FROM storage_roots WHERE registry=$1 AND revision>$2".into(),
+        ] {
+            self.tree.exec(&sql, revision.clone()).await?;
+        }
+        self.save_state(before).await
+    }
+}
+
+impl<C: ConnectionTrait, A: ProjectedAccount> Quarantine for ProjectedStore<'_, C, A> {
+    type State = RegistryState<A>;
+    type Undo = RegistryUndo<A>;
+
+    fn undo(&self, before: Option<RegistryState<A>>) -> RegistryUndo<A> {
+        RegistryUndo {
+            registry: self.tree.program,
+            before,
+        }
+    }
+
+    /// Stops the registry's projection, a rollback of the block resumes it.
+    async fn quarantine(
+        &self,
+        before: RegistryState<A>,
+        reason: String,
+    ) -> Result<RegistryUndo<A>> {
+        log::error!(
+            "registry {} stopped projecting ({reason})",
+            Address::new_from_array(self.tree.program)
+        );
+        self.save_state(&RegistryState {
+            fault: Some(reason),
+            ..before.clone()
+        })
+        .await?;
+        Ok(self.undo(Some(before)))
+    }
+}
+
+fn stored_record<L: StoredLeaf>(row: &QueryResult) -> Result<IndexedRecord<L>> {
+    Ok(IndexedRecord {
+        index: uint(row, "leaf_index")?,
+        record: L::from_row(row)?,
     })
 }
 
-fn stored_record(row: &QueryResult) -> Result<StoredRecord> {
-    Ok(StoredRecord {
-        record: IndexedRecord {
-            index: uint(row, "leaf_index")?,
-            record: MemberRecord {
-                member: field(row, "member")?,
-                next: field(row, "next_member")?,
-                lists: uint(row, "lists")?,
-                escrow_key: field(row, "escrow_key")?,
-                mint_policy: read_mint_policy(row)?.unwrap_or_default(),
-            },
-        },
-        seal: seal(row)?,
-    })
-}
-
-fn stored_entry(row: &QueryResult) -> Result<StoredEntry> {
-    Ok(StoredEntry {
-        position: uint(row, "position")?,
-        write: QueuedWrite {
-            entry: QueueEntry {
-                member: field(row, "member")?,
-                mask: uint(row, "mask")?,
-                value: uint(row, "value")?,
-                escrow_key: field(row, "escrow_key")?,
-                mint_policy: read_mint_policy(row)?,
-            },
-            seal: seal(row)?,
-        },
-        slot: uint(row, "slot")?,
-        chain: field(row, "chain")?,
-    })
-}
-
-fn seal(row: &QueryResult) -> Result<Option<SealedKey>> {
-    let text = row.try_get::<Option<String>>("", "seal")?;
-    Ok(text.as_deref().map(serde_json::from_str).transpose()?)
-}
-
-fn field(row: &QueryResult, column: &str) -> Result<[u8; 32]> {
+fn field<const N: usize>(row: &QueryResult, column: &str) -> Result<[u8; N]> {
     row.try_get::<Vec<u8>>("", column)?
         .try_into()
         .map_err(|_| anyhow::anyhow!("{column} is not 32 bytes"))
@@ -679,7 +639,7 @@ async fn exec<C: ConnectionTrait>(conn: &C, sql: &str, values: Vec<Value>) -> Re
     Ok(())
 }
 
-fn bytes(value: &[u8; 32]) -> Value {
+fn bytes<const N: usize>(value: &[u8; N]) -> Value {
     value.to_vec().into()
 }
 
@@ -691,10 +651,6 @@ fn int(value: u64) -> Result<Value> {
     Ok(i64::try_from(value)?.into())
 }
 
-fn seal_value(seal: Option<&SealedKey>) -> Result<Value> {
-    Ok(seal.map(json).transpose()?.unwrap_or(Value::String(None)))
-}
-
 async fn read_json<T: DeserializeOwned, C: ConnectionTrait>(
     conn: &C,
     sql: &str,
@@ -702,16 +658,6 @@ async fn read_json<T: DeserializeOwned, C: ConnectionTrait>(
 ) -> Result<Option<T>> {
     let row = conn.query_one(statement(conn, sql, values)).await?;
     row.as_ref().map(stored_state).transpose()
-}
-
-async fn read_all<T: DeserializeOwned, C: ConnectionTrait>(conn: &C, sql: &str) -> Result<Vec<T>> {
-    let rows = conn.query_all(statement(conn, sql, vec![])).await?;
-    rows.iter().map(stored_state).collect()
-}
-
-async fn programs<C: ConnectionTrait>(conn: &C, sql: &str) -> Result<BTreeSet<[u8; 32]>> {
-    let rows = conn.query_all(statement(conn, sql, vec![])).await?;
-    rows.iter().map(|row| field(row, "program")).collect()
 }
 
 fn stored_state<T: DeserializeOwned>(row: &QueryResult) -> Result<T> {
@@ -722,22 +668,22 @@ fn stored_state<T: DeserializeOwned>(row: &QueryResult) -> Result<T> {
 mod account_image {
     use std::ops::Deref;
 
-    use custom_ring_interface::RingAccount;
+    use bytemuck::Pod;
     use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
     use spr_indexer_api::Base64String;
 
-    pub fn serialize<S: Serializer, A: Deref<Target = T>, T: RingAccount>(
+    pub fn serialize<S: Serializer, A: Deref<Target = T>, T: Pod>(
         value: &A,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
         Base64String(bytemuck::bytes_of(&**value).to_vec()).serialize(serializer)
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>, T: RingAccount>(
+    pub fn deserialize<'de, D: Deserializer<'de>, A: super::ProjectedAccount>(
         deserializer: D,
-    ) -> Result<Box<T>, D::Error> {
+    ) -> Result<Box<A>, D::Error> {
         let Base64String(bytes) = Base64String::deserialize(deserializer)?;
-        T::from_data(&bytes)
+        A::from_image(&bytes)
             .map(|account| Box::new(*account))
             .ok_or_else(|| D::Error::custom("invalid account image"))
     }
@@ -746,4 +692,217 @@ mod account_image {
 fn read_mint_policy(row: &QueryResult) -> Result<Option<zolana_ring_policy::MintPolicy>> {
     let value = row.try_get::<Option<String>>("", "mint_policy")?;
     Ok(value.as_deref().map(serde_json::from_str).transpose()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::database;
+
+    #[tokio::test]
+    async fn historical_nodes_span_batches_without_crossing_registry_or_revision() {
+        let db = database().await;
+        let initial: BTreeMap<_, _> = (0..513u64)
+            .map(|position| {
+                let mut hash = [0; 32];
+                hash[..8].copy_from_slice(&position.to_be_bytes());
+                (
+                    NodePosition {
+                        level: usize::try_from(position % 3).unwrap(),
+                        position,
+                    },
+                    hash,
+                )
+            })
+            .collect();
+        let changed: BTreeMap<_, _> = initial
+            .keys()
+            .filter(|at| at.position % 2 == 0)
+            .map(|at| (*at, [7; 32]))
+            .collect();
+        let future = NodePosition {
+            level: 4,
+            position: 900,
+        };
+        let missing = NodePosition {
+            level: 5,
+            position: 901,
+        };
+        let keys = initial.keys().copied().chain([future, missing]).collect();
+        let store = RegistryStore::<_, MemberRecord>::new(&db, [1; 32]);
+        store.save_nodes(&initial, 3).await.unwrap();
+        store.save_nodes(&changed, 7).await.unwrap();
+        store
+            .save_nodes(&BTreeMap::from([(future, [8; 32])]), 8)
+            .await
+            .unwrap();
+        RegistryStore::<_, MemberRecord>::new(&db, [2; 32])
+            .save_nodes(&BTreeMap::from([(missing, [9; 32])]), 1)
+            .await
+            .unwrap();
+
+        let tx = begin_read(&db).await.unwrap();
+        let snapshot = RegistryStore::<_, MemberRecord>::new(&tx, [1; 32]);
+        assert!(snapshot.nodes(&keys, 2).await.unwrap().is_empty());
+        assert_eq!(snapshot.nodes(&keys, 3).await.unwrap(), initial);
+        assert_eq!(snapshot.nodes(&keys, 6).await.unwrap(), initial);
+        let mut expected = initial;
+        expected.extend(changed);
+        assert_eq!(snapshot.nodes(&keys, 7).await.unwrap(), expected);
+        expected.insert(future, [8; 32]);
+        assert_eq!(snapshot.nodes(&keys, 8).await.unwrap(), expected);
+        assert!(snapshot
+            .nodes(&BTreeSet::new(), 8)
+            .await
+            .unwrap()
+            .is_empty());
+        tx.commit().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn historical_node_plan_seeks_the_sqlite_primary_key() {
+        let db = database().await;
+        let store = RegistryStore::<_, MemberRecord>::new(&db, [1; 32]);
+        let keys = [
+            NodePosition::root(0),
+            NodePosition {
+                level: 0,
+                position: 1,
+            },
+        ];
+        store
+            .save_nodes(&BTreeMap::from([(keys[0], [3; 32])]), 3)
+            .await
+            .unwrap();
+        let mut query = store
+            .node_statement(&keys.iter().collect::<Vec<_>>(), int(7).unwrap())
+            .unwrap();
+        query.sql.insert_str(0, "EXPLAIN QUERY PLAN ");
+        let plan: Vec<String> = db
+            .query_all(query)
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| row.try_get("", "detail").unwrap())
+            .collect();
+        let seeks: Vec<_> = plan
+            .iter()
+            .filter(|line| line.contains("SEARCH n USING INDEX"))
+            .collect();
+        assert_eq!(seeks.len(), 1, "{plan:?}");
+        for term in [
+            "sqlite_autoindex_ring_record_nodes_1",
+            "program",
+            "level",
+            "position",
+            "applied",
+        ] {
+            assert!(seeks[0].contains(term), "{plan:?}");
+        }
+        assert_eq!(
+            plan.iter()
+                .filter(|line| line.contains("ring_record_nodes"))
+                .count(),
+            1,
+            "{plan:?}"
+        );
+        assert!(!plan.iter().any(|line| line.contains("SCAN n")), "{plan:?}");
+        assert!(
+            !plan.iter().any(|line| line.contains("USE TEMP B-TREE")),
+            "{plan:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "needs RING_INDEXER_TEST_POSTGRES_URL"]
+    async fn postgres_historical_node_seeks_keep_the_caller_snapshot() {
+        let db = crate::savepoint_tests::postgres("historical_node_seeks").await;
+        let store = RegistryStore::<_, MemberRecord>::new(&db, [1; 32]);
+        store
+            .exec(
+                "INSERT INTO ring_record_nodes(program,level,position,applied,hash) \
+                 SELECT $1,0,positions.position,revisions.applied,$2 \
+                 FROM generate_series(0,512) AS positions(position) \
+                 CROSS JOIN generate_series(0,31) AS revisions(applied)",
+                vec![bytes(&[3; 32])],
+            )
+            .await
+            .unwrap();
+        db.execute_unprepared("ANALYZE ring_record_nodes")
+            .await
+            .unwrap();
+        let keys: BTreeSet<_> = (0..513)
+            .map(|position| NodePosition { level: 0, position })
+            .collect();
+        let plan_keys: Vec<_> = keys.iter().take(2).collect();
+        let mut query = store.node_statement(&plan_keys, int(31).unwrap()).unwrap();
+        query.sql.insert_str(0, "EXPLAIN (COSTS OFF) ");
+        let plan: Vec<String> = db
+            .query_all(query)
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| row.try_get("", "QUERY PLAN").unwrap())
+            .collect();
+        assert!(
+            plan.iter()
+                .any(|line| line.contains("Index Scan Backward using ring_record_nodes_pkey")),
+            "{plan:?}"
+        );
+        let conditions: Vec<_> = plan
+            .iter()
+            .filter(|line| line.contains("Index Cond:"))
+            .collect();
+        assert_eq!(conditions.len(), 1, "{plan:?}");
+        for term in ["program", "level", "position", "applied"] {
+            assert!(conditions[0].contains(term), "{plan:?}");
+        }
+        assert!(
+            !plan
+                .iter()
+                .any(|line| line.contains("Seq Scan") || line.contains("Sort")),
+            "{plan:?}"
+        );
+
+        let tx = begin_read(&db).await.unwrap();
+        let snapshot = RegistryStore::<_, MemberRecord>::new(&tx, [1; 32]);
+        let expected: BTreeMap<_, _> = keys.iter().map(|key| (*key, [3; 32])).collect();
+        assert_eq!(snapshot.nodes(&keys, 32).await.unwrap(), expected);
+        let updates: BTreeMap<_, _> = [0, 256, 512]
+            .map(|position| (NodePosition { level: 0, position }, [4; 32]))
+            .into_iter()
+            .collect();
+        let writer = db.begin().await.unwrap();
+        RegistryStore::<_, MemberRecord>::new(&writer, [1; 32])
+            .save_nodes(&updates, 32)
+            .await
+            .unwrap();
+        writer.commit().await.unwrap();
+        assert_eq!(snapshot.nodes(&keys, 32).await.unwrap(), expected);
+        tx.commit().await.unwrap();
+        let mut current = expected;
+        current.extend(updates);
+        let fresh = begin_read(&db).await.unwrap();
+        let store = RegistryStore::<_, MemberRecord>::new(&fresh, [1; 32]);
+        assert_eq!(store.nodes(&keys, 32).await.unwrap(), current);
+        fresh.commit().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn historical_nodes_reject_malformed_stored_hashes() {
+        let db = database().await;
+        let store = RegistryStore::<_, MemberRecord>::new(&db, [1; 32]);
+        store
+            .exec(
+                "INSERT INTO ring_record_nodes(program,level,position,applied,hash) \
+                 VALUES($1,$2,$3,$4,$5)",
+                vec![0i64.into(), 0i64.into(), 1i64.into(), vec![1u8].into()],
+            )
+            .await
+            .unwrap();
+        assert!(store
+            .nodes(&BTreeSet::from([NodePosition::root(0)]), 1)
+            .await
+            .is_err());
+    }
 }

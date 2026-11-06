@@ -1,10 +1,10 @@
-import { hashBytes } from "@heliuslabs/zolana/internal";
-import { initializePoseidon } from "@heliuslabs/zolana";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import { hashBytes } from "@heliuslabs/spr/internal";
+import { initializePoseidon } from "@heliuslabs/spr";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 import { getAddressDecoder, type Address } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
-import { decodeRingMemberRegistry } from "../../../src/protocol/codec/ring-codecs.js";
+import { decodeRingPolicy } from "../../../src/protocol/codec/ring-codecs.js";
 import {
   LIST_IDS,
   ListId,
@@ -18,6 +18,7 @@ import {
   memberOfAsset,
   memberOfTag,
   pinnedPolicy,
+  policySourceLists,
   policySourceOwners,
   policyTableHash,
   referencedLists,
@@ -28,7 +29,7 @@ import {
   type RuleTable,
 } from "../../../src/protocol/membership/policy.js";
 import { RingError } from "../../../src/protocol/error.js";
-import { memberRegistryData } from "../../helpers/ring-accounts.js";
+import { ringPolicyData } from "../../helpers/ring-accounts.js";
 
 await initializePoseidon();
 
@@ -50,14 +51,17 @@ function row(
 ): Bytes32 {
   const bytes = new Uint8Array(32);
   bytes[0] = input.reserved ?? 0;
-  bytes[19] = input.alternative ?? 0;
+  const alternative = input.alternative ?? 0;
+  bytes[17] = alternative >> 8;
+  bytes[18] = alternative & 0xff;
   let threshold = input.threshold ?? 0n;
-  for (let index = 27; index >= 20; index -= 1) {
+  for (let index = 26; index >= 19; index -= 1) {
     bytes[index] = Number(threshold & 0xffn);
     threshold >>= 8n;
   }
-  bytes[28] = input.guardTag ?? 0;
-  bytes[29] = input.mask;
+  bytes[27] = input.guardTag ?? 0;
+  bytes[28] = input.mask >> 8;
+  bytes[29] = input.mask & 0xff;
   bytes[30] = input.mode;
   bytes[31] = input.subject;
   return bytes as Bytes32;
@@ -66,7 +70,6 @@ function row(
 const bit = (id: ListId): number => 1 << (id - 1);
 const OUTPUT_OWNER = 1;
 const SENDER = 2;
-const EXIT = 3;
 const ASSET = 4;
 const PRESENT = 1;
 const ABSENT = 2;
@@ -138,8 +141,8 @@ describe("rule rows", () => {
   });
 
   it("orders a set in slot order", () => {
-    expect(listSet(0b1000_0101)).toEqual([ListId.allow, ListId.frozen, ListId.escrow]);
-    expect(LIST_IDS).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(listSet(0b1000_0101)).toEqual([ListId.allow, ListId.frozen, ListId.privateAllow]);
+    expect(LIST_IDS).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
   });
 
   it("refuses every row Rust refuses", () => {
@@ -160,12 +163,14 @@ describe("rule rows", () => {
         { subject: OUTPUT_OWNER, mode: PRESENT, mask: allow, threshold: 1n },
       ],
       ["UnknownGuardTag", { subject: OUTPUT_OWNER, mode: PRESENT, mask: allow, guardTag: 3 }],
-      ["ExitDestination", { subject: EXIT, mode: PRESENT, mask: allow }],
+      ["UnknownSubject", { subject: 3, mode: PRESENT, mask: allow }],
       ["ListInBothSets", { subject: OUTPUT_OWNER, mode: PRESENT, mask: allow, alternative: allow }],
       ["EmptyLists", { subject: OUTPUT_OWNER, mode: PRESENT, mask: 0 }],
       ["SenderGuard", { subject: SENDER, mode: PRESENT, mask: allow, guardTag: 1, threshold: 5n }],
       ["ZeroThreshold", { subject: OUTPUT_OWNER, mode: PRESENT, mask: allow, guardTag: 1 }],
       ["PerAssetGuardNotOwner", { subject: ASSET, mode: PRESENT, mask: 1, guardTag: 2 }],
+      ["UnknownList", { subject: SENDER, mode: ABSENT, mask: 1 << 9 }],
+      ["UnknownList", { subject: OUTPUT_OWNER, mode: PRESENT, mask: allow, alternative: 1 << 9 }],
     ];
     for (const [expected, input] of cases) {
       expect(reason(() => decodeRule(row(input)))).toBe(expected);
@@ -294,6 +299,7 @@ describe("rule encoding", () => {
     const cases: readonly [Rule, Parameters<typeof row>[0]][] = [
       [require("outputOwner", ListId.allow), { subject: OUTPUT_OWNER, mode: PRESENT, mask: 0b01 }],
       [forbid("sender", ListId.frozen), { subject: SENDER, mode: ABSENT, mask: 0b100 }],
+      [forbid("sender", ListId.privateFrozen), { subject: SENDER, mode: ABSENT, mask: 1 << 8 }],
       [
         above(require("outputOwner", ListId.approval), 2000n),
         { subject: OUTPUT_OWNER, mode: PRESENT, mask: 0b0100_0000, guardTag: 1, threshold: 2000n },
@@ -319,9 +325,6 @@ describe("rule encoding", () => {
     for (const [input, expected] of cases) {
       expect(encodeRule(input)).toEqual(row(expected));
     }
-    expect(reason(() => encodeRule(require("exitDestination", ListId.allow)))).toBe(
-      "ExitDestination",
-    );
     expect(reason(() => encodeRule(above(require("outputOwner", ListId.allow), 1n << 64n)))).toBe(
       "ThresholdRange",
     );
@@ -330,13 +333,13 @@ describe("rule encoding", () => {
   it("lists presences before absences in slot order", () => {
     expect(
       ruleAlternatives(
-        rule("outputOwner", [ListId.frozen, ListId.allow], [ListId.escrow, ListId.block]),
+        rule("outputOwner", [ListId.frozen, ListId.allow], [ListId.privateAllow, ListId.block]),
       ),
     ).toEqual([
       { listId: ListId.allow, mode: "present" },
       { listId: ListId.frozen, mode: "present" },
       { listId: ListId.block, mode: "absent" },
-      { listId: ListId.escrow, mode: "absent" },
+      { listId: ListId.privateAllow, mode: "absent" },
     ]);
     expect(ruleAlternatives(forbid("sender", ListId.frozen))).toEqual([
       { listId: ListId.frozen, mode: "absent" },
@@ -362,7 +365,6 @@ describe("rule table builder", () => {
         { rules: [rule("outputOwner", [ListId.allow], [ListId.allow, ListId.block])] },
       ],
       ["SenderGuard", { rules: [above(forbid("sender", ListId.frozen), 10n)] }],
-      ["ExitDestination", { rules: [require("exitDestination", ListId.allow)] }],
       ["ZeroThreshold", { rules: [above(require("outputOwner", ListId.approval), 0n)] }],
       ["DuplicateRule", { rules: [requireAllow, above(requireAllow, 10n)] }],
     ];
@@ -385,7 +387,7 @@ describe("rule table builder", () => {
     expect(reason(() => decodeRuleTable(stored))).toBe("DuplicateRule");
   });
 
-  it("shares member witnesses across rules without the retired ten-answer limit", () => {
+  it("shares member witnesses across rules", () => {
     expect(
       buildRuleTable({
         rules: [
@@ -454,7 +456,7 @@ describe("policy hash", () => {
       }),
     );
     expect(() => policySourceOwners(stored.slice(1))).toThrow(
-      expect.objectContaining({ details: { reason: "SlotCount", slots: 7 } }),
+      expect.objectContaining({ details: { reason: "SlotCount", slots: 8 } }),
     );
     expect(() =>
       policyTableHash(buildRuleTable({ rules: [] }), [
@@ -474,11 +476,10 @@ describe("policy hash", () => {
         : { listId: 0, registry: addressOf(filled(0)) },
     );
     const registry = (policyHash: Bytes32) =>
-      decodeRingMemberRegistry(
-        memberRegistryData({
+      decodeRingPolicy(
+        ringPolicyData({
           bump: 1,
-          history: [],
-          nextIndex: 1,
+          records: addressOf(filled(9)),
           policyHash,
           sources,
           table,
@@ -507,10 +508,11 @@ describe("list authorization", () => {
       "authority",
       "authority",
       "member",
-      "member",
       "authority",
       "authority",
-      "member",
+      "authority",
+      "authority",
+      "authority",
     ]);
   });
 
@@ -534,4 +536,25 @@ describe("list authorization", () => {
 
 it("refuses a member tag of the wrong length", () => {
   expect(reason(() => memberOfTag(new Uint8Array(31)))).toBe("tagLength");
+});
+
+describe("list directions", () => {
+  const lists = (present: readonly ListId[], absent: readonly ListId[]): Rule => ({
+    subject: "outputOwner",
+    source: { kind: "lists", present, absent },
+    guard: { kind: "always" },
+  });
+
+  it("reads a grant list by presence and a deny list by absence", () => {
+    expect(
+      policySourceLists([lists([ListId.allow, ListId.approval], [ListId.block, ListId.frozen])]),
+    ).toEqual([ListId.allow, ListId.block, ListId.frozen, ListId.approval]);
+  });
+
+  it("takes either direction on any readable list", () => {
+    expect(policySourceLists([lists([ListId.block], [ListId.allow])])).toEqual([
+      ListId.allow,
+      ListId.block,
+    ]);
+  });
 });

@@ -8,7 +8,6 @@ repository.workspace = true
 [dependencies]
 custom-ring-interface.workspace = true
 serde.workspace = true
-solana-address = { workspace = true, features = ["curve25519"] }
 thiserror.workspace = true
 spr-indexer-api.workspace = true
 zolana-ring-member-registry.workspace = true

@@ -1,244 +1,239 @@
-/** Field layouts of the auditor disclosure, Rust `custom_ring_interface::disclosure`. */
-import { InterfaceError } from "@heliuslabs/zolana/interface";
+/** Regions of the ring auditor stream, Rust `custom_ring_interface::audit_stream`. */
+import { InterfaceError } from "@heliuslabs/spr/interface";
 
-export const DELIVERED_AUDIT_CAPACITIES: readonly number[] = Object.freeze([2, 4, 8, 16]);
-/** Input classes of the anonymous commitment keys per output capacity, ascending. */
-export const ANONYMOUS_AUDIT_CLASSES: readonly Readonly<{
-  outputs: number;
-  classes: readonly number[];
-}>[] = Object.freeze([
-  Object.freeze({ outputs: 2, classes: Object.freeze([4, 16]) }),
-  Object.freeze({ outputs: 4, classes: Object.freeze([4, 16]) }),
-  Object.freeze({ outputs: 8, classes: Object.freeze([4, 8]) }),
+export const SINGLE_ASSET_PAYOUT_INPUTS = 1;
+export const SINGLE_ASSET_PAYOUT_OUTPUTS = 16;
+
+/** Rust `TRANSFER_OUTPUT_CAPACITIES`, the output counts of the confidential keys. */
+export const TRANSFER_OUTPUT_CAPACITIES: readonly number[] = Object.freeze([
+  2,
+  4,
+  8,
+  SINGLE_ASSET_PAYOUT_OUTPUTS,
 ]);
-/** Input slots of every anonymous entry key. */
-export const ANONYMOUS_ENTRY_CLASS = 8;
-/** Output capacities of the anonymous entry keys. */
-export const ANONYMOUS_ENTRY_OUTPUTS: readonly number[] = Object.freeze([2, 4, 8]);
-/** Rust `ANONYMOUS_MERGE_WIDTHS`, the merge widths whose disclosure still fits one v1 transaction. */
-export const ANONYMOUS_MERGE_WIDTHS: readonly number[] = Object.freeze([8, 24]);
-/** The widest commitment class, no anonymous key serves more inputs. */
-export const ANONYMOUS_MAX_INPUTS = Math.max(
-  ...ANONYMOUS_AUDIT_CLASSES.flatMap((entry) => entry.classes),
-);
-/** A delivered slot of a transfer with an exit, ring `owner_key ‖ 0^8`, exit `asset ‖ u64be(amount)`. */
-export const DELIVERED_SLOT_BYTES = 40;
-/** A delivered ring slot of an exit-free transfer, `owner_key`. */
-export const DENSE_DELIVERED_SLOT_BYTES = 32;
-/** `owner_key ‖ fe32(asset) ‖ u64be(amount)`, the owner key zero on an exit. */
-export const ANONYMOUS_SLOT_BYTES = 72;
-/** The hidden sender's key ahead of the entry key's output slots. */
-export const DISCLOSURE_SENDER_KEY_BYTES = 32;
-/** The first bytes of a spent hash a commitment key discloses. */
-export const INPUT_PREFIX_BYTES = 16;
-/** A prefix of a canonical hash lies below `2^INPUT_PREFIX_BITS`, two prefixes pack below the modulus. */
-export const INPUT_PREFIX_BITS = 126;
-/** One `u64be(amount)` per input slot of the entry class. */
-export const DISCLOSURE_INPUT_AMOUNT_BYTES = 8;
-/** Rust `PACK_BE_CHUNK_BYTES`, the bytes of one disclosure field. */
+/** Rust `PACK_BE_CHUNK_BYTES`, the bytes of one packed field. */
 export const DISCLOSURE_CHUNK_BYTES = 31;
+export const STREAM_BLOCK_LEN = 16;
+export const STREAM_FIRST_COUNTER = 2;
+/** The sealed `tx_viewing_sk`, the envelope's first bytes. */
+export const ENVELOPE_KEY_LEN = 32;
+/** `R`, spent notes among the published inputs, addresses excluded. */
+export const REAL_INPUT_COUNT_LEN = 1;
+/** `A` as a big-endian u64, bit `i` set when published input `i` is an address. */
+export const ADDRESS_INPUT_BITS_LEN = 8;
+/** `tx_viewing_sk ‖ R ‖ A`, the same on every key. */
+export const ENVELOPE_HEAD_LEN = ENVELOPE_KEY_LEN + REAL_INPUT_COUNT_LEN + ADDRESS_INPUT_BITS_LEN;
+/** The address and default bitmaps are u64, a wider input class needs a new layout. */
+export const MAX_INPUT_CLASS = 64;
+/** Keys with entry capacity alone, bit `i` set when input `i` is a default-ring note. */
+export const DEFAULT_INPUT_BITS_LEN = 8;
+/** `kind ‖ u64be(amount) ‖ owner_key ‖ mint ‖ be32(nullifier_pk)`. */
+export const AUDIT_RECORD_LEN = 105;
+export const COMPACT_AUDIT_RECORD_LEN = 73;
+export const RECIPIENT_BODY_LEN = 72;
+export const COMPACT_RECIPIENT_BODY_LEN = 48;
 
-/** The audit statement's layout element, Rust `AuditLayout`. */
-export interface AuditLayout {
-  /** A published output exits, `SeedOut` opens the disclosure. */
-  readonly exits: boolean;
-  /** The policy proof escrows every output nullifier key the disclosure leaves out. */
-  readonly keyEscrow: boolean;
-  /** The anonymous entry key, every spent UTXO opens in full. */
-  readonly fullOpenings: boolean;
+export enum DisclosureFormat {
+  Standard = 0,
+  SingleAssetPayout = 1,
 }
 
-/** `exits | key_escrow << 1 | full_openings << 3`, bit 2 stays clear. */
-export function auditLayoutValue(layout: AuditLayout): number {
-  const flags = [
-    [layout.exits, 0],
-    [layout.keyEscrow, 1],
-    [layout.fullOpenings, 3],
-  ] as const;
-  if (flags.some(([flag]) => typeof flag !== "boolean"))
-    throw new InterfaceError("INTERFACE_INVALID_SHAPE", { name: "layout" });
-  return flags.reduce((value, [flag, bit]) => (flag ? value | (1 << bit) : value), 0);
+export function disclosureFormat(format: DisclosureFormat | undefined): DisclosureFormat {
+  if (format === undefined || format === DisclosureFormat.Standard)
+    return DisclosureFormat.Standard;
+  if (format === DisclosureFormat.SingleAssetPayout) return format;
+  throw shapeError("format");
 }
 
-/** The key of an anonymous transfer's audit proof, Rust `AnonymousAuditKey`. */
-export type AnonymousAuditKey =
-  /** Publishes spent UTXO 0's hash and the prefix of every later one, every spent UTXO a note of the ring. */
-  | Readonly<{ kind: "commitment"; class: number }>
-  /** Opens every spent UTXO, the key of a transfer that spends a default-ring note. */
-  | Readonly<{ kind: "entry" }>;
-
-/** The input slots of the key. */
-export function anonymousKeyClass(key: AnonymousAuditKey): number {
-  return key.kind === "commitment" ? key.class : ANONYMOUS_ENTRY_CLASS;
+export function auditRecordLength(key: Pick<AuditKey, "format">): number {
+  return disclosureFormat(key.format) === DisclosureFormat.SingleAssetPayout
+    ? COMPACT_AUDIT_RECORD_LEN
+    : AUDIT_RECORD_LEN;
 }
 
-/** What picks an anonymous transfer's audit key, Rust `AnonymousSpend`. */
-export interface AnonymousSpend {
-  /** Published inputs. */
-  readonly inputs: number;
-  readonly outputs: number;
-  /** A spent UTXO is a default-ring note, the commitment keys refuse ring id zero. */
-  readonly spendsDefaultRing: boolean;
+function recordBlocks(key: AuditKey): number {
+  return Math.ceil(auditRecordLength(key) / STREAM_BLOCK_LEN);
 }
+/** `be32(data_hash) ‖ be32(ring_data_hash)`. */
+export const DATA_TAIL_LEN = 64;
+/** `owner_key ‖ be32(nullifier_pk) ‖ u64be(amount) ‖ mint ‖ be32(blinding) ‖ be32(data_hash) ‖ be32(ring_data_hash)`. */
+export const ENTRY_INPUT_LEN = 200;
+/** `0x04 ‖ eph_u` ahead of the auditor ciphertexts. */
+export const TAGGED_KEY_LEN = 33;
 
-/** `undefined` when no key serves the spend, a larger entry spend splits. */
-export function anonymousAuditKey(spend: AnonymousSpend): AnonymousAuditKey | undefined {
-  if (!spend.spendsDefaultRing) {
-    const inputClass = anonymousAuditClass(spend.inputs, spend.outputs);
-    return inputClass === undefined
-      ? undefined
-      : Object.freeze({ kind: "commitment", class: inputClass });
-  }
-  return ANONYMOUS_ENTRY_OUTPUTS.includes(spend.outputs) && spend.inputs <= ANONYMOUS_ENTRY_CLASS
-    ? Object.freeze({ kind: "entry" })
-    : undefined;
-}
-
-/** The smallest commitment class holding `inputs` for `outputs`, `undefined` when no key serves it. */
-export function anonymousAuditClass(inputs: number, outputs: number): number | undefined {
-  return ANONYMOUS_AUDIT_CLASSES.find((entry) => entry.outputs === outputs)?.classes.find(
-    (inputClass) => inputClass >= inputs,
-  );
-}
-
-export interface DeliveredLayout {
-  /** Every slot of the capacity. */
-  readonly outputs: number;
-  readonly exits: boolean;
-  readonly keyEscrow: boolean;
-}
-
-export interface AnonymousLayout {
-  readonly key: AnonymousAuditKey;
-  /** Published inputs. */
-  readonly inputs: number;
-  readonly outputs: number;
-  readonly exits: boolean;
-}
-
-/** The published fields of one transfer's disclosure, Rust `DisclosureLayout`. */
-export type DisclosureLayout =
-  /** The confidential and delegate rails. */
-  | (Readonly<{ kind: "delivered" }> & DeliveredLayout)
-  | (Readonly<{ kind: "anonymous" }> & AnonymousLayout);
-
-/** Field positions `start` up to `end`, exclusive. */
-export interface FieldRange {
-  readonly start: number;
-  readonly end: number;
-}
-
-/** Positions in a delivered disclosure. */
-export interface DeliveredFields {
-  readonly seedOut: number | undefined;
-  /** `nullifier_pk` per slot. */
-  readonly nullifierPks: FieldRange | undefined;
-  /** `pack_disclosure` of every slot, `slotBytes` each. */
-  readonly slots: FieldRange;
-  readonly slotBytes: number;
-  readonly fieldCount: number;
-}
-
-/** Positions in an anonymous disclosure. */
-export interface AnonymousFields {
-  readonly seedOut: number | undefined;
-  /** `nullifier_pk` per output. */
-  readonly nullifierPks: FieldRange;
-  /** `pack_disclosure` of `slotBytes`, the entry key's sender key ahead of one `ANONYMOUS_SLOT_BYTES` slot per output. */
-  readonly slots: FieldRange;
-  readonly slotBytes: number;
-  /** Where output slot 0 starts in the packed block, behind the entry key's sender key. */
-  readonly slotStart: number;
-  readonly inputs: AnonymousInputFields;
-  readonly fieldCount: number;
-}
-
-/** Rust `AnonymousInputFields`. */
-export type AnonymousInputFields =
-  | Readonly<{
-      kind: "commitments";
-      /** Spent UTXO 0's hash. */
-      first: number;
-      /** `inputPrefixPair` over the later published inputs. */
-      prefixPairs: FieldRange;
-    }>
-  | Readonly<{
-      kind: "openings";
-      /** The `nullifier_pk` of every spent UTXO. */
-      senderNullifierPk: number;
-      /** `pack_disclosure(u64be(amount))` over the class, zero past the inputs. */
-      amounts: FieldRange;
-      /** `asset, blinding` per published input. */
-      openings: FieldRange;
-    }>;
+export const RECORD_BLOCKS = Math.ceil(AUDIT_RECORD_LEN / STREAM_BLOCK_LEN);
+/** The padding past a record keeps slot `i` at its counter, a transfer frame omits it. */
+export const RECORD_STRIDE = RECORD_BLOCKS * STREAM_BLOCK_LEN;
+/** The secret is the deposit's blinding or the merge's seed. */
+export const OPENING_RECORD_LEN = RECORD_STRIDE + 32;
+export const TAIL_BLOCKS = DATA_TAIL_LEN / STREAM_BLOCK_LEN;
 
 /** Rust `pack_be_chunks`, the fields `length` bytes pack into. */
 export function packedChunks(length: number): number {
   return Math.ceil(length / DISCLOSURE_CHUNK_BYTES);
 }
 
-export function deliveredFields(layout: DeliveredLayout): DeliveredFields {
-  const next = new Cursor();
-  const seedOut = layout.exits ? next.one() : undefined;
-  const nullifierPks = layout.keyEscrow ? undefined : next.run(layout.outputs);
-  const slotBytes = layout.exits ? DELIVERED_SLOT_BYTES : DENSE_DELIVERED_SLOT_BYTES;
-  const slots = next.run(packedChunks(slotBytes * layout.outputs));
-  return Object.freeze({ seedOut, nullifierPks, slots, slotBytes, fieldCount: next.position });
+/** The statement's layout element, Rust `AuditLayout`. */
+export interface AuditLayout {
+  readonly format?: DisclosureFormat;
+  /** One tail per published slot, the proof holds every data hash to zero while clear. */
+  readonly hasData: boolean;
+  /** The key carries default bits and one evidence entry per published input. */
+  readonly entry: boolean;
 }
 
-export function anonymousFields(layout: AnonymousLayout): AnonymousFields {
-  const entry = layout.key.kind === "entry";
-  const next = new Cursor();
-  const seedOut = layout.exits ? next.one() : undefined;
-  const senderNullifierPk = entry ? next.one() : undefined;
-  const nullifierPks = next.run(layout.outputs);
-  const slotStart = entry ? DISCLOSURE_SENDER_KEY_BYTES : 0;
-  const slotBytes = slotStart + ANONYMOUS_SLOT_BYTES * layout.outputs;
-  const slots = next.run(packedChunks(slotBytes));
-  const inputs: AnonymousInputFields =
-    senderNullifierPk === undefined
-      ? Object.freeze({
-          kind: "commitments",
-          first: next.one(),
-          prefixPairs: next.run(Math.floor(layout.inputs / 2)),
-        })
-      : Object.freeze({
-          kind: "openings",
-          senderNullifierPk,
-          amounts: next.run(packedChunks(DISCLOSURE_INPUT_AMOUNT_BYTES * ANONYMOUS_ENTRY_CLASS)),
-          openings: next.run(2 * layout.inputs),
-        });
+/** `has_data | entry << 1`. */
+export function auditLayoutValue(layout: AuditLayout): number {
+  if (typeof layout.hasData !== "boolean" || typeof layout.entry !== "boolean")
+    throw shapeError("layout");
+  return (layout.hasData ? 1 : 0) | (layout.entry ? 2 : 0) | (disclosureFormat(layout.format) << 2);
+}
+
+/** One key's envelope, every rail of a key shares one circuit, Rust `AuditKey`. */
+export interface AuditKey {
+  readonly format?: DisclosureFormat;
+  /** The widest published input count, also `S`. */
+  readonly class: number;
+  /** Default bits and one evidence entry per published input. */
+  readonly entry: boolean;
+}
+
+/** One stretch of the auditor keystream, no counter serves two regions, Rust `StreamRegion`. */
+export interface AuditStreamRegion {
+  readonly startCounter: number;
+  readonly maxBlocks: number;
+  /** Transmitted bytes, padding and unused blocks never leave the prover. */
+  readonly length: number;
+}
+
+/** Every length of one transfer's auditor stream, a frame of any other length is refused, Rust `AuditStreamLayout`. */
+export interface AuditStreamLayout {
+  readonly key: AuditKey;
+  /** `n`, the frame's nullifier count, never the key capacity or a private live count. */
+  readonly inputs: number;
+  /** `m`, the published slots. */
+  readonly outputs: number;
+  /** `N`, the key's output capacity, records and tails span every slot of it. */
+  readonly capacity: number;
+  /** The statement's bit, one tail per published slot. */
+  readonly hasData: boolean;
+}
+
+/** Refuses an input count off the key, a key past the bitmaps and an output count off the capacity. */
+export function checkedStreamLayout(layout: AuditStreamLayout): AuditStreamLayout {
+  const { key, inputs, outputs, capacity } = layout;
+  const counted =
+    Number.isInteger(inputs) &&
+    inputs >= 1 &&
+    inputs <= key.class &&
+    key.class <= MAX_INPUT_CLASS &&
+    Number.isInteger(capacity) &&
+    Number.isInteger(outputs) &&
+    outputs >= 1 &&
+    outputs <= capacity;
+  if (!counted || typeof layout.hasData !== "boolean") throw shapeError("layout");
+  if (
+    disclosureFormat(key.format) === DisclosureFormat.SingleAssetPayout &&
+    (key.entry ||
+      layout.hasData ||
+      inputs !== SINGLE_ASSET_PAYOUT_INPUTS ||
+      key.class !== SINGLE_ASSET_PAYOUT_INPUTS ||
+      outputs !== SINGLE_ASSET_PAYOUT_OUTPUTS ||
+      capacity !== SINGLE_ASSET_PAYOUT_OUTPUTS)
+  )
+    throw shapeError("payout");
+  return layout;
+}
+
+function headLen(key: AuditKey): number {
+  return (
+    ENVELOPE_HEAD_LEN +
+    (key.entry ? DEFAULT_INPUT_BITS_LEN : 0) +
+    (disclosureFormat(key.format) === DisclosureFormat.SingleAssetPayout ? 32 : 0)
+  );
+}
+
+function entryLen(key: AuditKey): number {
+  return key.entry ? ENTRY_INPUT_LEN : 0;
+}
+
+/** `E`, the same at every published input count, no record's counter moves. */
+export function envelopeBlocks(key: AuditKey): number {
+  return Math.ceil((headLen(key) + entryLen(key) * key.class) / STREAM_BLOCK_LEN);
+}
+
+/** `R0`. */
+export function firstRecordCounter(key: AuditKey): number {
+  return STREAM_FIRST_COUNTER + envelopeBlocks(key);
+}
+
+/** `T0`, past every record of `N` slots. */
+export function firstTailCounter(layout: Pick<AuditStreamLayout, "key" | "capacity">): number {
+  return firstRecordCounter(layout.key) + layout.capacity * recordBlocks(layout.key);
+}
+
+/** Slots at or past `n` stay absent from the evidence. */
+export function envelopeRegion(layout: AuditStreamLayout): AuditStreamRegion {
   return Object.freeze({
-    seedOut,
-    nullifierPks,
-    slots,
-    slotBytes,
-    slotStart,
-    inputs,
-    fieldCount: next.position,
+    startCounter: STREAM_FIRST_COUNTER,
+    maxBlocks: envelopeBlocks(layout.key),
+    length: headLen(layout.key) + entryLen(layout.key) * layout.inputs,
   });
 }
 
-export function disclosureFieldCount(layout: DisclosureLayout): number {
-  switch (layout.kind) {
-    case "delivered":
-      return deliveredFields(layout).fieldCount;
-    case "anonymous":
-      return anonymousFields(layout).fieldCount;
-  }
+/** Its counter fixed by the slot index alone, omission moves no region. */
+export function recordRegion(layout: AuditStreamLayout, slot: number): AuditStreamRegion {
+  return Object.freeze({
+    startCounter: firstRecordCounter(layout.key) + slot * recordBlocks(layout.key),
+    maxBlocks: recordBlocks(layout.key),
+    length: recordLen(layout, slot),
+  });
 }
 
-/** Hands out consecutive field positions. */
-class Cursor {
-  position = 0;
+/** Transmits nothing past the outputs or while `hasData` is clear. */
+export function tailRegion(layout: AuditStreamLayout, slot: number): AuditStreamRegion {
+  return Object.freeze({
+    startCounter: firstTailCounter(layout) + slot * TAIL_BLOCKS,
+    maxBlocks: TAIL_BLOCKS,
+    length: tailLen(layout, slot),
+  });
+}
 
-  one(): number {
-    return this.run(1).start;
-  }
+export function recordLen(
+  layout: Pick<AuditStreamLayout, "outputs" | "key">,
+  slot: number,
+): number {
+  return slot < layout.outputs ? auditRecordLength(layout.key) : 0;
+}
 
-  run(length: number): FieldRange {
-    const start = this.position;
-    this.position += length;
-    return Object.freeze({ start, end: this.position });
-  }
+export function tailLen(
+  layout: Pick<AuditStreamLayout, "outputs" | "hasData">,
+  slot: number,
+): number {
+  return layout.hasData && slot < layout.outputs ? DATA_TAIL_LEN : 0;
+}
+
+export function recordsLen(layout: Pick<AuditStreamLayout, "outputs" | "key">): number {
+  return auditRecordLength(layout.key) * layout.outputs;
+}
+
+export function tailsLen(layout: Pick<AuditStreamLayout, "outputs" | "hasData">): number {
+  return layout.hasData ? DATA_TAIL_LEN * layout.outputs : 0;
+}
+
+/** `0x04 ‖ eph_u ‖ envelope_ct ‖ record_ct... ‖ tail_ct...`. */
+export function auditorMessageLen(layout: AuditStreamLayout): number {
+  return TAGGED_KEY_LEN + envelopeRegion(layout).length + recordsLen(layout) + tailsLen(layout);
+}
+
+/** The blocks a reader decrypts, a clear `hasData` reaches no tail. */
+export function capacityBlocks(
+  layout: Pick<AuditStreamLayout, "key" | "capacity" | "hasData">,
+): number {
+  const tails = layout.hasData ? layout.capacity * TAIL_BLOCKS : 0;
+  return envelopeBlocks(layout.key) + layout.capacity * recordBlocks(layout.key) + tails;
+}
+
+function shapeError(name: string): InterfaceError {
+  return new InterfaceError("INTERFACE_INVALID_SHAPE", { name });
 }

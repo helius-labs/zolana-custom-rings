@@ -5,9 +5,7 @@ use spr_transaction::ShieldedTransaction;
 use zolana_ring_client::{ConfirmedEvent, ConfirmedEventKind};
 
 pub fn event(transaction: &ShieldedTransaction) -> ConfirmedEvent {
-    let kind = if transaction.proofless {
-        ConfirmedEventKind::Deposit
-    } else if transaction.tx_viewing_pk.is_none() {
+    let kind = if transaction.tx_viewing_pk.is_none() {
         ConfirmedEventKind::Merge
     } else {
         ConfirmedEventKind::Transfer

@@ -1,0 +1,1298 @@
+{
+  "version": 1,
+  "scope": "Code and contract closure",
+  "source": {
+    "repository": "helius-labs/zolana-custom-rings",
+    "integration_branch": "alex/one-ring-proof-tracking",
+    "baseline_head": "1a11d1caafab827835c1f23bea921961df491697",
+    "core": {
+      "path": "zolana",
+      "gitlink": "74a9f9749015825ece8eb08f9b825987c8bd0977",
+      "checkout_head": "087edfadab94647a96710a5c3baf29d85e11058b",
+      "dirty_diff_sha256": "c41d7a8d47d2b1723a8a8bfd336c1e833e755bd08ca492c5616f1bcf220113f5",
+      "preserved_paths": [
+        "program-libs/interface/src/instruction/instruction_data/mod.rs",
+        "program-libs/interface/src/instruction/instruction_data/transact.rs",
+        "program-libs/interface/src/instruction/mod.rs"
+      ]
+    }
+  },
+  "deferred": [
+    "Release proving key generation",
+    "Deployed verifier artifacts",
+    "Real proof runtime qualification",
+    "Publishing"
+  ],
+  "accepted_limits": [
+    "Multiple local signing keys cannot share one message quota.",
+    "Authenticated SPP mint registry access can be necessary for compact recipient recovery.",
+    "Code readiness does not establish deployment readiness."
+  ],
+  "capacity_guarantees": {
+    "common": {
+      "transaction_version": 1,
+      "max_transaction_bytes": 4096,
+      "max_accounts": 64,
+      "cpi_data_limit": "Enforced core CPI instruction data limit",
+      "inline_only": true,
+      "replies": false,
+      "application_data": false,
+      "separate_payer": true,
+      "cosigners": 1,
+      "curators": 1
+    },
+    "confidential": {
+      "inputs": 1,
+      "delivered_recipients": 16,
+      "distinct_recipients": true,
+      "assets": 1,
+      "exact_funding": true
+    },
+    "anonymous": {
+      "inputs": 1,
+      "total_output_slots": 8,
+      "sender_change_counts_as_output": true,
+      "max_recipient_payments_with_sender_change": 7
+    }
+  },
+  "ownership": {
+    "queue-scope": {
+      "branch": "local/closure-queue-scope"
+    },
+    "window-index": {
+      "branch": "local/closure-window-index"
+    },
+    "snapshot-pages": {
+      "branch": "local/closure-snapshot-pages"
+    },
+    "recovery-rust": {
+      "branch": "local/closure-recovery-rust"
+    },
+    "recovery-ts": {
+      "branch": "local/closure-recovery-ts"
+    },
+    "node-seeks": {
+      "branch": "local/closure-node-seeks"
+    },
+    "compact-payout": {
+      "branch": "local/closure-compact-payout"
+    },
+    "delegate-trees": {
+      "branch": "local/closure-delegate-trees"
+    },
+    "hosted-delegate": {
+      "branch": "local/closure-hosted-delegate"
+    },
+    "capacity-pools": {
+      "branch": "local/closure-capacity-pools"
+    },
+    "projection-bounds": {
+      "branch": "local/closure-projection-bounds"
+    },
+    "closure-contract": {
+      "branch": "local/closure-closure-contract"
+    },
+    "integration": {
+      "branch": "alex/one-ring-proof-tracking"
+    },
+    "asset-resolution": {
+      "branch": "alex/one-ring-proof-tracking"
+    }
+  },
+  "coordination": {
+    "shared_recovery_contract_owner": "recovery-rust",
+    "recovery_rust_editor": "recovery-rust",
+    "recovery_typescript_editor": "recovery-ts",
+    "shared_codec_contract_owner": "compact-payout",
+    "queue_task_order": [
+      "QUEUE-REGISTRY",
+      "QUEUE-CLAIM",
+      "QUEUE-EXPIRY"
+    ],
+    "rule": "Each API owner publishes its final contract before dependent edits. Each file has one editor."
+  },
+  "scoring": {
+    "status_values": [
+      "pending",
+      "failed",
+      "passed",
+      "reopened"
+    ],
+    "baseline": {
+      "spec_coverage_percent": null,
+      "code_readiness_percent": null,
+      "status": "pending_evidence"
+    },
+    "method": "Each category weight is divided equally among its listed criteria. A passed criterion earns its share in each linked category.",
+    "rounding": "Keep exact fractions for calculation and round the final percentage to two decimal places.",
+    "passing_rule": "Every outcome and required evidence item passes on the integrated source and dependency identities.",
+    "pending_rule": "Pending evidence is unassessed. Both scores remain null until baseline assessment completes. Failed and reopened criteria earn no credit.",
+    "freeze_rule": "Category weights and criterion membership remain fixed. A new finding reopens an affected criterion.",
+    "report_rule": "Each update lists closed, remaining and reopened criteria with the resulting score delta.",
+    "completion_rule": "All criteria pass and no high or medium code finding remains. Deferred release work does not contribute to either score.",
+    "spec_coverage": [
+      {
+        "id": "SPEC-PRIVACY",
+        "label": "Audit and privacy contracts",
+        "weight_percent": 20,
+        "criteria": [
+          "COMPACT-CODEC",
+          "CIPHERTEXT-PADDING",
+          "RETAINED-CONTRACTS"
+        ]
+      },
+      {
+        "id": "SPEC-POLICY",
+        "label": "Policy and authorization contracts",
+        "weight_percent": 20,
+        "criteria": [
+          "QUEUE-REGISTRY",
+          "COSIGN-AGGREGATE",
+          "COSIGN-LIFECYCLE",
+          "RETAINED-CONTRACTS"
+        ]
+      },
+      {
+        "id": "SPEC-CAPACITY",
+        "label": "Capacity and supported combinations",
+        "weight_percent": 20,
+        "criteria": [
+          "CAPACITY-GUARANTEES",
+          "CAPACITY-POOLS",
+          "SUPPORTED-MATRIX"
+        ]
+      },
+      {
+        "id": "SPEC-OPERATIONS",
+        "label": "SDK and hosted operations",
+        "weight_percent": 15,
+        "criteria": [
+          "HOSTED-LEGS",
+          "DELEGATE-TREES",
+          "SUPPORTED-MATRIX"
+        ]
+      },
+      {
+        "id": "SPEC-RECOVERY",
+        "label": "Recovery and pagination contracts",
+        "weight_percent": 15,
+        "criteria": [
+          "RECOVERY-SESSION",
+          "RECOVERY-OWNED-QUEUE",
+          "RECOVERY-TARGET",
+          "RECOVERY-PENDING",
+          "RECOVERY-COMPACT",
+          "RECOVERY-DIAGNOSTICS",
+          "SNAPSHOT-CONTENT",
+          "SNAPSHOT-LIFECYCLE"
+        ]
+      },
+      {
+        "id": "SPEC-AGREEMENT",
+        "label": "Exact specification and cross-language agreement",
+        "weight_percent": 10,
+        "criteria": [
+          "EXACT-SPEC",
+          "COMPACT-CODEC",
+          "CAPACITY-POOLS",
+          "COMBINED-EVIDENCE"
+        ]
+      }
+    ],
+    "code_readiness": [
+      {
+        "id": "READY-LIFECYCLE",
+        "label": "Request scope and lifecycle integrity",
+        "weight_percent": 20,
+        "criteria": [
+          "QUEUE-REGISTRY",
+          "QUEUE-CLAIM",
+          "QUEUE-EXPIRY",
+          "SOURCE-INTEGRITY"
+        ]
+      },
+      {
+        "id": "READY-RECOVERY",
+        "label": "Recovery correctness and resumability",
+        "weight_percent": 20,
+        "criteria": [
+          "RECOVERY-SESSION",
+          "RECOVERY-OWNED-QUEUE",
+          "RECOVERY-TARGET",
+          "RECOVERY-PENDING",
+          "RECOVERY-COMPACT"
+        ]
+      },
+      {
+        "id": "READY-BOUNDS",
+        "label": "Bounded service and database work",
+        "weight_percent": 20,
+        "criteria": [
+          "PROJECTION-BOUNDS",
+          "NODE-SEEKS",
+          "QUEUE-EXPIRY",
+          "RECOVERY-DIAGNOSTICS"
+        ]
+      },
+      {
+        "id": "READY-COSIGN",
+        "label": "Co-sign accounting and concurrency",
+        "weight_percent": 15,
+        "criteria": [
+          "COSIGN-AGGREGATE",
+          "COSIGN-LIFECYCLE"
+        ]
+      },
+      {
+        "id": "READY-PAGINATION",
+        "label": "Stable pagination and authorization",
+        "weight_percent": 10,
+        "criteria": [
+          "SNAPSHOT-CONTENT",
+          "SNAPSHOT-LIFECYCLE"
+        ]
+      },
+      {
+        "id": "READY-INTEGRATION",
+        "label": "Codec, circuit and SDK integration",
+        "weight_percent": 10,
+        "criteria": [
+          "COMPACT-CODEC",
+          "CIPHERTEXT-PADDING",
+          "CAPACITY-GUARANTEES",
+          "CAPACITY-POOLS",
+          "HOSTED-LEGS",
+          "DELEGATE-TREES"
+        ]
+      },
+      {
+        "id": "READY-EVIDENCE",
+        "label": "Combined regression evidence",
+        "weight_percent": 5,
+        "criteria": [
+          "COMBINED-EVIDENCE"
+        ]
+      }
+    ],
+    "baseline_assessment_rule": "Assess every criterion against integrated evidence before publishing either baseline percentage. Record failures explicitly rather than treating pending as zero."
+  },
+  "evidence_contract": {
+    "required_fields": [
+      "source_head",
+      "core_head",
+      "core_dirty_diff_sha256",
+      "command",
+      "exit_status",
+      "artifact"
+    ],
+    "lane_reports_earn_credit": false,
+    "unverified_claims_earn_credit": false
+  },
+  "criteria": [
+    {
+      "id": "QUEUE-REGISTRY",
+      "owner": "queue-scope",
+      "status": "pending",
+      "outcomes": [
+        "Approval signatures include the exact registry.",
+        "Lookup, join, list and batch load use both ring and registry.",
+        "Insertion checks the registry and join scope in the same transaction.",
+        "Record rebinding cannot move a signed grant from registry A to registry B.",
+        "Inconsistent joins fail before proof work."
+      ],
+      "required_evidence": [
+        "Cross registry refusal after record rebinding.",
+        "Concurrent insertion refuses a changed registry."
+      ],
+      "evidence": []
+    },
+    {
+      "id": "QUEUE-CLAIM",
+      "owner": "queue-scope",
+      "status": "pending",
+      "outcomes": [
+        "Batch insertion and claims commit in one transaction.",
+        "Every selected head and joined member remains queued with the selected registry and joins.",
+        "A changed selection rolls back the batch and prevents submission.",
+        "Expiration and batch claims use compatible state transitions.",
+        "A landed write cannot become Refused or lose its batch link through an expiration race."
+      ],
+      "required_evidence": [
+        "Race expiration against record_batch.",
+        "Change a selected head or member before claim and observe rollback."
+      ],
+      "evidence": []
+    },
+    {
+      "id": "QUEUE-EXPIRY",
+      "owner": "queue-scope",
+      "status": "pending",
+      "outcomes": [
+        "An expiry index selects bounded heads and joined members.",
+        "Expiration updates each selected group atomically and preserves ordering.",
+        "Submission performs bounded cleanup and the existing worker drains the remainder.",
+        "The writer checks deadline and authority after proof work."
+      ],
+      "required_evidence": [
+        "Large expired backlog preserves bounded admission work.",
+        "Deadline and authority changes during proof work refuse submission."
+      ],
+      "evidence": []
+    },
+    {
+      "id": "RECOVERY-SESSION",
+      "owner": "recovery-rust",
+      "status": "pending",
+      "outcomes": [
+        "Rust fetch_wallet and TypeScript fetchWallet preserve the same recovery invariants with language specific serialized sessions.",
+        "The session binds wallet, ring, mode, exact keys, start floors and a fixed target slot.",
+        "The session persists exact query cursors, partial tag gap rounds and the active owned nullifier queue cursor.",
+        "Budget exhaustion returns Paused with resumable progress.",
+        "Wallet openings, spends, pending entries and progress commit atomically.",
+        "A stale starting wallet revision refuses the commit.",
+        "A scope or key set change cannot silently advance newly added keys."
+      ],
+      "required_evidence": [
+        "Rust and TypeScript recovery cases enforce the same session invariants.",
+        "Crash before and after each page or spend commit.",
+        "Stale revision, key set and cursor scope refuse."
+      ],
+      "evidence": []
+    },
+    {
+      "id": "RECOVERY-OWNED-QUEUE",
+      "owner": "recovery-rust",
+      "status": "pending",
+      "outcomes": [
+        "Recovery seeds unspent registered entries and authenticated pending entries.",
+        "Known spent entries remain excluded unless retry is explicit.",
+        "Each owned nullifier enters the queue once per fixed target.",
+        "New merge outputs enter the queue once.",
+        "Recovery does not retain all ring nullifiers or repeatedly scan and sort cumulative results."
+      ],
+      "required_evidence": [
+        "Long merge chains produce linear queue work.",
+        "Foreign history does not increase retained nullifier state.",
+        "Same slot spend before creation across pages remains spent."
+      ],
+      "evidence": []
+    },
+    {
+      "id": "RECOVERY-TARGET",
+      "owner": "recovery-ts",
+      "status": "pending",
+      "outcomes": [
+        "Discovery and nullifier queries stop at the fixed target slot.",
+        "Each query requires min_context_slot at the target.",
+        "The checkpoint equals the fixed target rather than a later response context.",
+        "Recovery retains the trusted indexer confirmed history contract.",
+        "Capped TypeScript scans resume instead of restarting.",
+        "Incomplete spend coverage excludes entries from automatic funding.",
+        "Incomplete coverage returns SyncIncomplete instead of a definitive insufficient balance result."
+      ],
+      "required_evidence": [
+        "Concurrent arrivals do not extend the session target.",
+        "Repeated capped scans reach completion.",
+        "Incomplete coverage cannot fund a transaction."
+      ],
+      "evidence": []
+    },
+    {
+      "id": "RECOVERY-PENDING",
+      "owner": "recovery-rust",
+      "status": "pending",
+      "outcomes": [
+        "Authenticated full openings with unknown mints remain PendingNote entries.",
+        "Pending entries retain spent status and promote after mint resolution without a rescan.",
+        "An unknown mint in a keyed merge does not require a full history rescan."
+      ],
+      "required_evidence": [
+        "A pending entry spends before registry resolution and remains spent after promotion.",
+        "A keyed merge resolves after mint registration without a history rescan."
+      ],
+      "evidence": []
+    },
+    {
+      "id": "RECOVERY-COMPACT",
+      "owner": "recovery-ts",
+      "status": "pending",
+      "outcomes": [
+        "A compact decrypted candidate cannot establish ownership or spendability before authenticated mint lookup and utxo_hash reconstruction.",
+        "Authenticated mint allocation bounds reject impossible asset identifiers.",
+        "Plausible identifier lookups and their cache remain bounded.",
+        "Random foreign decryptions do not become PendingNote entries.",
+        "An unknown local identifier alone does not block progress.",
+        "A transient mint lookup failure or exhausted budget preserves the exact page for retry.",
+        "An allocated identifier with a missing authenticated mapping returns a source consistency error.",
+        "The session persists a candidate offset within an unfinished page.",
+        "A page larger than the mint lookup budget resumes after completed candidates rather than restarting their lookups."
+      ],
+      "required_evidence": [
+        "Foreign compact bodies do not create owned or pending entries.",
+        "Impossible asset identifiers perform no mint lookup.",
+        "A transient lookup failure resumes the same page without losing entries.",
+        "A page larger than lookup budget and cache capacity completes through repeated bounded recovery calls."
+      ],
+      "evidence": []
+    },
+    {
+      "id": "RECOVERY-DIAGNOSTICS",
+      "owner": "recovery-ts",
+      "status": "pending",
+      "outcomes": [
+        "Unopened output diagnostics retain bounded samples and aggregate counts.",
+        "Foreign output history cannot increase retained diagnostic samples beyond the configured bound.",
+        "Session serialization preserves the bounds."
+      ],
+      "required_evidence": [
+        "A large foreign history preserves bounded serialized diagnostic state."
+      ],
+      "evidence": []
+    },
+    {
+      "id": "PROJECTION-BOUNDS",
+      "owner": "projection-bounds",
+      "status": "pending",
+      "outcomes": [
+        "The database pending_derivations table owns the backlog.",
+        "The active derivation set obeys MAX_LATE_OWNERS and MAX_LATE_NOTES.",
+        "The memory pending set obeys MAX_CACHED_ENTRIES.",
+        "A full pending set returns Partial before admitting an entry or moving its tracking cursor.",
+        "A changed database projection revision invalidates bounded caches without an unlimited query_all reload.",
+        "An unchanged revision preserves warm caches.",
+        "Database misses retain lookup fallback and the current checkpoint and tracking cursor.",
+        "Bounded SQL selects the earliest unread entries and due repairs.",
+        "Operator fault details use pagination.",
+        "Managed merge selection uses bounded owner entry batches without a full owner vector.",
+        "Managed merge selection does not decrypt every owner entry once per selected asset."
+      ],
+      "required_evidence": [
+        "Backlog growth and revision reload keep bounded working sets.",
+        "Drain and retry skip no derivations.",
+        "Growing history preserves identical recovered openings.",
+        "Managed merge work remains linear in inspected entries without repeated asset scans or unbounded owner materialization."
+      ],
+      "evidence": []
+    },
+    {
+      "id": "NODE-SEEKS",
+      "owner": "node-seeks",
+      "status": "pending",
+      "outcomes": [
+        "Historical node reads batch requested keys through a common table expression.",
+        "Each requested key uses an indexed applied descending seek with limit one.",
+        "Each batch contains at most 256 requested keys.",
+        "All node reads use one read snapshot.",
+        "Node lookup does not issue one remote call per node."
+      ],
+      "required_evidence": [
+        "SQLite and PostgreSQL plans use the requested key and applied index.",
+        "Historical reads remain correct across concurrent updates."
+      ],
+      "evidence": []
+    },
+    {
+      "id": "SNAPSHOT-CONTENT",
+      "owner": "snapshot-pages",
+      "status": "pending",
+      "outcomes": [
+        "One database transaction captures sealed owner rows, spend slots, revision, historyThrough, enrollment and balances.",
+        "Creation streams entries or uses INSERT SELECT.",
+        "No database transaction remains open between page requests.",
+        "The existing seal encrypts snapshot metadata under a distinct snapshot domain.",
+        "Captured pages remain immutable when live entries change or are pruned.",
+        "A failed creation exposes no usable partial snapshot.",
+        "A single page response retains no snapshot."
+      ],
+      "required_evidence": [
+        "Own wallet and other wallet mutations cannot change captured pages.",
+        "Live entry pruning preserves captured pages.",
+        "Creation failure leaves no readable partial snapshot."
+      ],
+      "evidence": []
+    },
+    {
+      "id": "SNAPSHOT-LIFECYCLE",
+      "owner": "snapshot-pages",
+      "status": "pending",
+      "outcomes": [
+        "Each page checks current authorization.",
+        "Cursor version two binds snapshot identifier, ring, wallet and position.",
+        "Responses expose snapshotExpiresAt.",
+        "Snapshots expire after 300 seconds.",
+        "Default capacity is 1024 snapshots per store and two per authenticated principal and wallet.",
+        "Expired snapshots consume quota until cleanup completes.",
+        "Capacity refusal never evicts an unexpired snapshot or truncates a wallet.",
+        "An authenticated release operation is idempotent.",
+        "SDK cleanup releases snapshots after completion or explicit close. TypeScript iterator cleanup also releases on consumer return.",
+        "The existing worker performs bounded cleanup.",
+        "Expired snapshot and capacity errors remain distinct.",
+        "Memory storage preserves the same lifecycle with memory proportional to captured wallet state.",
+        "Rust async cancellation can abandon a handle until expiry because Drop cannot await network release."
+      ],
+      "required_evidence": [
+        "Revocation blocks the next page.",
+        "Concurrent creation cannot exceed either quota.",
+        "Explicit release and TypeScript iterator return reclaim quota. Abandoned Rust handles expire.",
+        "Expired entries retain quota until bounded cleanup completes."
+      ],
+      "evidence": []
+    },
+    {
+      "id": "COSIGN-AGGREGATE",
+      "owner": "window-index",
+      "status": "pending",
+      "outcomes": [
+        "Sparse Fenwick nodes use an explicit ring or owner scope discriminator.",
+        "An epoch spans MAX_LIMIT_WINDOW_SLOTS.next_power_of_two() slots.",
+        "Ring totals cover outflow, deposits and withdrawals.",
+        "Owner totals cover outflow.",
+        "Node counters use canonical big endian u128 values and checked arithmetic without saturation.",
+        "Reservation contributions are immutable and refunds subtract the exact stored contribution.",
+        "For window W greater than zero, usage covers S.saturating_sub(W - 1) through S inclusively.",
+        "A zero window contributes no held usage and slot zero remains included for nonzero windows.",
+        "Queries touch at most two epochs and node work depends on the window bound rather than history volume.",
+        "Point updates and reads batch primary key operations."
+      ],
+      "required_evidence": [
+        "Randomized comparisons with a direct usage oracle.",
+        "Epoch boundaries, slot zero and maximum windows agree with the oracle.",
+        "Large histories preserve logarithmic node access."
+      ],
+      "evidence": []
+    },
+    {
+      "id": "COSIGN-LIFECYCLE",
+      "owner": "window-index",
+      "status": "pending",
+      "outcomes": [
+        "Reservation and refund acquire the same canonical asset locks.",
+        "Held, Confirmed and Released states preserve replay tombstones.",
+        "Finalized success leaves aggregate usage unchanged.",
+        "Failure or expiry refunds once and cannot release Confirmed usage.",
+        "One slot determines both the admission window and reservation.",
+        "Admission rejects a slot below the last committed slot.",
+        "A changed final slot rolls back with a retryable freshness error, including before an OverLimit response.",
+        "Read boundaries enforce MAX_LIMIT_WINDOW_SLOTS for directly written policies.",
+        "Disabled caps retain usage for later activation or a larger window.",
+        "Bounded cleanup removes obsolete epochs without removing replay protection.",
+        "Replicas share one signing key and message quota."
+      ],
+      "required_evidence": [
+        "Concurrent admissions cannot exceed an allowance.",
+        "Duplicate settlement and refund orders preserve exact usage.",
+        "Transaction failure points roll back all aggregate changes.",
+        "Disabled to enabled caps and enlarged windows include retained usage.",
+        "Refunds after cleanup do not recreate obsolete usage."
+      ],
+      "evidence": []
+    },
+    {
+      "id": "COMPACT-CODEC",
+      "owner": "compact-payout",
+      "status": "pending",
+      "outcomes": [
+        "A distinct discriminator selects the single asset confidential payout format, proof key and decoder.",
+        "The auditor receives the full common mint once.",
+        "Each audit output contains kind, amount, owner and nullifier key.",
+        "Each recipient body contains blinding, amount and the existing asset identifier.",
+        "The circuit constrains every live input and output to the common asset.",
+        "The format refuses entries, exits, public legs, replies and application data.",
+        "Unavailable proof keys fail closed.",
+        "The ordinary anonymous format retains its accepted output capacity.",
+        "Authenticated SPP mint registry reads support recipient recovery.",
+        "Auditor recovery remains self contained.",
+        "The explicit SPP body scheme selects the same format as frame flags, audit layout and proof dispatch."
+      ],
+      "required_evidence": [
+        "Positive circuit solver case for the accepted shape.",
+        "Wrong mint, owner, amount, output order and discriminator refuse.",
+        "Rust, Go and TypeScript deterministic codec vectors agree.",
+        "A format mismatch or invalid scheme length refuses before opening acceptance."
+      ],
+      "evidence": []
+    },
+    {
+      "id": "CIPHERTEXT-PADDING",
+      "owner": "compact-payout",
+      "status": "pending",
+      "outcomes": [
+        "General ring bodies encrypt their actual length prefix.",
+        "Every body bearing ring ciphertext in one frame has the same padded length.",
+        "Dummy bodies have the same padded length.",
+        "Exits retain their separate public layout."
+      ],
+      "required_evidence": [
+        "Unequal application data lengths produce equal ciphertext lengths within the frame.",
+        "Malformed encrypted lengths refuse.",
+        "Dummy and live body lengths agree."
+      ],
+      "evidence": []
+    },
+    {
+      "id": "CAPACITY-GUARANTEES",
+      "owner": "compact-payout",
+      "status": "pending",
+      "outcomes": [
+        "Complete transactions satisfy every guarantee in capacity_guarantees.",
+        "Measurement includes all specified signers, accounts, ciphertexts and proof bytes.",
+        "Confidential recipient capacity counts distinct delivered recipients.",
+        "Anonymous capacity counts all outputs including sender change.",
+        "Size evidence uses structural proof lengths without claiming real proof execution."
+      ],
+      "required_evidence": [
+        "Complete v1 confidential and anonymous transaction measurements.",
+        "Transaction bytes, account count and CPI instruction data each remain within their enforced limits."
+      ],
+      "evidence": []
+    },
+    {
+      "id": "CAPACITY-POOLS",
+      "owner": "capacity-pools",
+      "status": "pending",
+      "outcomes": [
+        "Record pools include the union of all distinct input assets, including zero value inputs.",
+        "The union includes output and settlement assets and owner subjects.",
+        "Rust, Go and TypeScript derive pool capacity from the same accepted catalog.",
+        "Catalog bounds cover the known forty asset counterexample."
+      ],
+      "required_evidence": [
+        "The forty asset case fits the catalog and record pools.",
+        "Zero value input assets cannot escape pool accounting.",
+        "Cross language capacity tests agree."
+      ],
+      "evidence": []
+    },
+    {
+      "id": "HOSTED-LEGS",
+      "owner": "hosted-delegate",
+      "status": "pending",
+      "outcomes": [
+        "Hosted delegate requests express ring payments, exits and withdrawals.",
+        "Attestation and final message checks bind operation, destination, mint and amount.",
+        "Request schemas and clients use the same operation semantics."
+      ],
+      "required_evidence": [
+        "Each operation has a successful request case.",
+        "Changing operation, destination, mint or amount refuses final message approval."
+      ],
+      "evidence": []
+    },
+    {
+      "id": "DELEGATE-TREES",
+      "owner": "delegate-trees",
+      "status": "pending",
+      "outcomes": [
+        "The TypeScript delegate supports two trees through the core SDK generic tree machinery.",
+        "Rust and TypeScript bind the same tree selection and account semantics."
+      ],
+      "required_evidence": [
+        "A two tree delegate request compiles through the shared core API.",
+        "Wrong tree and account substitutions refuse."
+      ],
+      "evidence": []
+    },
+    {
+      "id": "SUPPORTED-MATRIX",
+      "owner": "integration",
+      "status": "pending",
+      "outcomes": [
+        "One explicit matrix names supported SDK, hosted and proof combinations.",
+        "Unsupported in proof entry and default ring entry combinations refuse consistently before proof work.",
+        "The matrix promises accepted ring capacity rather than every SPP combination.",
+        "Fresh deployment does not require compatibility shims."
+      ],
+      "required_evidence": [
+        "Rust, Go and TypeScript refusal cases agree with the matrix."
+      ],
+      "evidence": []
+    },
+    {
+      "id": "RETAINED-CONTRACTS",
+      "owner": "integration",
+      "status": "pending",
+      "outcomes": [
+        "Tracking root grace remains a program guarantee.",
+        "Viewing key rotation updates authorization state without changing the tracking leaf.",
+        "The custom tracking tree remains active.",
+        "Charged owner outflow retains conservative withdrawal attribution.",
+        "Funding retains greedy largest first selection.",
+        "Current authorization and policy checks remain active across SDK and service paths."
+      ],
+      "required_evidence": [
+        "Regression evidence for root grace and viewing key rotation.",
+        "Charged outflow examples agree across circuit, policy and specification.",
+        "Authorization refusals remain effective."
+      ],
+      "evidence": []
+    },
+    {
+      "id": "EXACT-SPEC",
+      "owner": "integration",
+      "status": "pending",
+      "outcomes": [
+        "The specification matches the deposit statement without an unsupported standalone ring_id.",
+        "Address derivation documents its chain constraint.",
+        "The specification separates immutable record content from mutable predecessor links.",
+        "Enrolled zero key SDK behavior matches the source.",
+        "Viewing keys reside in authorization accounts rather than tracking leaves.",
+        "Hosted delegate operations match accepted requests.",
+        "RPC topology states the shared signing key limit.",
+        "Resolved questions do not leave conflicting rules.",
+        "A documentation change cannot close an unresolved code defect."
+      ],
+      "required_evidence": [
+        "Each changed specification claim traces to a source predicate or API.",
+        "Cross language vectors agree with the exact documented contract."
+      ],
+      "evidence": []
+    },
+    {
+      "id": "SOURCE-INTEGRITY",
+      "owner": "integration",
+      "status": "pending",
+      "outcomes": [
+        "All closure branches start from the fixed source head.",
+        "Existing core modifications remain intact and unstaged by unrelated lanes.",
+        "Integration records the tested source head, core head and dirty diff identity.",
+        "Each changed API and file has one editor.",
+        "Every commit is signed and nothing is pushed."
+      ],
+      "required_evidence": [
+        "Source and dependency identities recorded at combined verification.",
+        "Preserved core changes match the recorded baseline or an explicitly owned core change."
+      ],
+      "evidence": []
+    },
+    {
+      "id": "COMBINED-EVIDENCE",
+      "owner": "integration",
+      "status": "pending",
+      "outcomes": [
+        "All code lanes integrate before affected suites and deterministic regeneration run.",
+        "Only blocking compile checks run during lane implementation.",
+        "Combined checks cover affected Rust, Go and TypeScript packages.",
+        "Rust clippy runs with warnings denied and TypeScript type checking passes.",
+        "Database acceptance cases run on SQLite and PostgreSQL.",
+        "Deterministic vectors and constraint pins regenerate once after interface freeze.",
+        "Positive and refusal cases reach the intended checks.",
+        "Failures distinguish stale fixtures, missing artifacts, preverification failures and regressions.",
+        "No unresolved high or medium code finding remains.",
+        "No release proving keys are generated."
+      ],
+      "required_evidence": [
+        "Command, exit status, source identity and dependency identity for every required check.",
+        "Evidence links for every criterion at the integrated source head."
+      ],
+      "evidence": []
+    }
+  ],
+  "interfaces": {
+    "registry_scope": {
+      "owner": "queue-scope",
+      "required_request_field": "registry",
+      "requests": [
+        "GetPendingListApprovalsRequest",
+        "RefuseListApprovalRequest"
+      ],
+      "signed_list_action": "list <registry-base58>",
+      "signed_list_page_action": "list <registry-base58> after <updateId-base58>",
+      "signed_refuse_action": "refuse <registry-base58> <updateId-base58>",
+      "unchanged_signed_fields": [
+        "domain",
+        "target",
+        "authority",
+        "timestamp",
+        "nonce"
+      ],
+      "rust_scope": "ListApprovalScope { target: ReadTarget, authority: Address, registry: Address }",
+      "rust_read": "read(scope)",
+      "rust_refusal": "refusal(scope, update_id)",
+      "authority_rule": "Current policy authority can list and refuse signed old registry requests after rebinding.",
+      "create_records_signature": "unchanged"
+    },
+    "snapshot": {
+      "owner": "snapshot-pages",
+      "wallet_release_method": "releaseWalletSnapshot",
+      "wallet_release_request": "GetWalletStatusRequest with required cursor",
+      "wallet_release_domain": "zolana/ring-rpc-wallet-snapshot-release",
+      "delegate_release_method": "releaseDelegateSnapshot",
+      "delegate_release_request": "GetDelegateNotesRequest with required cursor",
+      "delegate_release_domain": "zolana/ring-rpc-delegate-snapshot-release",
+      "release_response": true,
+      "authorization": "Current authorization and the canonical ReaderKey principal apply on each read and release.",
+      "cursor_version": 2,
+      "cursor_layout": [
+        {
+          "name": "version",
+          "bytes": 1
+        },
+        {
+          "name": "ring",
+          "bytes": 32
+        },
+        {
+          "name": "wallet",
+          "bytes": 32
+        },
+        {
+          "name": "snapshot",
+          "bytes": 32
+        },
+        {
+          "name": "after",
+          "bytes": 32
+        }
+      ],
+      "expiry_response_field": "snapshotExpiresAt",
+      "expiry_response_type": "optional u64",
+      "expiry_presence": "Present on every retained page including the final page. Absent on a nonretained single page.",
+      "expired_error": -32172,
+      "capacity_error": -32173,
+      "snapshot_identity": "Unique per session without sharing.",
+      "storage": {
+        "metadata_table": "wallet_snapshots",
+        "metadata_columns": [
+          "id",
+          "ring",
+          "scope_tag",
+          "expires_at",
+          "sealed"
+        ],
+        "entry_table": "wallet_snapshot_notes",
+        "entry_columns": [
+          "snapshot_id",
+          "note_tag",
+          "sealed",
+          "spent_slot"
+        ],
+        "entry_primary_key": [
+          "snapshot_id",
+          "note_tag"
+        ],
+        "admission_table": "wallet_snapshot_admission",
+        "scope_tag": "Keyed hash of canonical principal bytes and wallet bytes.",
+        "sealed_metadata": [
+          "principal",
+          "wallet",
+          "history",
+          "enrollment",
+          "balances",
+          "expiry"
+        ],
+        "release": "Set expiry to zero and run bounded cleanup.",
+        "cleanup_max_rows": 512,
+        "metadata_removal": "Only after all captured rows are removed."
+      },
+      "capacity_configuration": {
+        "type": "NonZeroUsize",
+        "store_default": 1024,
+        "principal_wallet_default": 2,
+        "ttl_seconds": 300,
+        "ttl_configurable": false
+      }
+    },
+    "cosign": {
+      "owner": "window-index",
+      "released_reservation_error": "ReleasedReservation",
+      "released_reservation_code": -32166,
+      "typescript_refusal": "coSignReleasedReservation",
+      "epoch_width_slots": 16777216,
+      "max_range_nodes": 49,
+      "max_point_nodes": 25,
+      "reservation_contribution_cap": 18446744073709551616,
+      "node_counter_bytes": 16,
+      "node_counter_encoding": "big endian u128",
+      "totals_primary_key": [
+        "ring",
+        "asset",
+        "epoch",
+        "scope_kind",
+        "owner",
+        "node"
+      ],
+      "totals_counters": [
+        "outflow",
+        "deposited",
+        "withdrawn"
+      ],
+      "usage_states": [
+        "Held",
+        "Confirmed",
+        "Released"
+      ],
+      "admission_watermark": "last_slot"
+    },
+    "historical_nodes": {
+      "owner": "node-seeks",
+      "api": "RegistryStore::nodes(&BTreeSet<NodePosition>, applied) -> Result<BTreeMap<NodePosition, [u8; 32]>>",
+      "ordering": "applied DESC LIMIT 1",
+      "filters": [
+        "program",
+        "level",
+        "position",
+        "applied <= requested applied"
+      ],
+      "missing_nodes": "omitted",
+      "batch_limit": 256,
+      "schema_change": false
+    },
+    "delegate_trees": {
+      "owner": "delegate-trees",
+      "input_order": "First occurrence through core inputTreeIds(inputs).",
+      "max_input_trees": "MAX_INPUT_TREES",
+      "excess_error": "TRANSACTION_TOO_MANY_INPUT_TREES",
+      "validation_order": "Before random secret generation.",
+      "wire_change": false
+    },
+    "compact_encoding": {
+      "owner": "compact-payout",
+      "status": "specified",
+      "formats": {
+        "Standard": 0,
+        "SingleAssetPayout": 1
+      },
+      "extension_flag_bit": 6,
+      "audit_layout_bit": 2,
+      "proof_shape": {
+        "inputs": 1,
+        "outputs": 16,
+        "withdrawals": 0,
+        "input_owners": 1
+      },
+      "authorization": "Confidential published owner rail only.",
+      "refused": [
+        "entry",
+        "public legs",
+        "application data",
+        "replies"
+      ],
+      "outputs": "Every output is a real ring output with the same asset as the sole real input.",
+      "audit_header": [
+        {
+          "name": "txViewingSecret",
+          "bytes": 32
+        },
+        {
+          "name": "real_inputs",
+          "bytes": 1,
+          "value": 1
+        },
+        {
+          "name": "address_bits",
+          "bytes": 8
+        },
+        {
+          "name": "common_mint",
+          "bytes": 32
+        }
+      ],
+      "audit_encryption": {
+        "header_blocks": 5,
+        "header_start_counter": 2,
+        "record_start_counter": 7,
+        "record_stride_bytes": 80,
+        "record_blocks": 5
+      },
+      "audit_record": [
+        {
+          "name": "kind",
+          "bytes": 1
+        },
+        {
+          "name": "amount",
+          "bytes": 8
+        },
+        {
+          "name": "owner",
+          "bytes": 32
+        },
+        {
+          "name": "nullifier",
+          "bytes": 32
+        }
+      ],
+      "recipient_body": [
+        {
+          "name": "blinding",
+          "bytes": 32
+        },
+        {
+          "name": "amount",
+          "bytes": 8
+        },
+        {
+          "name": "asset_id",
+          "bytes": 8
+        }
+      ],
+      "recipient_integer_encoding": "big endian",
+      "standard_no_data_body_bytes": 72,
+      "standard_data_body": "Base body followed by encrypted u16 big endian extension length and extension bytes, then zero padding to the common frame width.",
+      "extension_bytes": "Optional ring hash flag, optional ring hash and application data.",
+      "decoder_rule": "Explicit format selection without fallback. Missing keys fail closed.",
+      "sender_change": "Sender change consumes one output slot and reduces delivered recipient capacity.",
+      "tracking_owner_budget": 17,
+      "record_pool_capacity_per_pool": 35,
+      "record_pool_subjects": {
+        "public_owners": 17,
+        "salted_owners": 17,
+        "assets": 1
+      },
+      "spp_ring_body_schemes": {
+        "standard": {
+          "tag": 10,
+          "minimum_body_bytes": 72
+        },
+        "single_asset_payout": {
+          "tag": 11,
+          "exact_body_bytes": 48
+        }
+      },
+      "format_agreement": "The frame flag, audit layout, proof key format and SPP body scheme must select the same format.",
+      "recovery_format": "Recovery selects the decoder from the SPP body scheme before decryption."
+    },
+    "projection_admission": {
+      "owner": "projection-bounds",
+      "admission_api": "AuditStore::admit_enrollments(admission) -> Result<(), TrackingRefusal>",
+      "memory_full": "TrackingRefusal::Incomplete before changing either cache or queue.",
+      "tracking_full": "ScanEnd::Partial without cursor advance.",
+      "database_backlog": "pending_derivations",
+      "database_active_api": "AuditStore::replace_late_owners(Vec<LateOwner>)",
+      "owner_limit": "MAX_LATE_OWNERS",
+      "per_page_entry_limit": "MAX_LATE_NOTES",
+      "memory_limit": "MAX_CACHED_ENTRIES"
+    },
+    "hosted_legs": {
+      "owner": "hosted-delegate",
+      "request": "AuthorityTransfer",
+      "existing_fields": [
+        "sources",
+        "payments"
+      ],
+      "required_fields": {
+        "exits": "AuthorityPayment[]",
+        "withdrawals": "AuthorityWithdrawal[]"
+      },
+      "withdrawal_fields": {
+        "recipient": "Address",
+        "mint": "Address",
+        "amount": "u64",
+        "tokenProgram": "optional Address"
+      },
+      "attestation_domain": "zolana/ring-rpc-authority-transfer",
+      "appended_signed_lines": [
+        "exit: <shielded recipient> <mint> <amount>",
+        "withdrawal: <recipient> <mint> <amount> <tokenProgram or ->"
+      ],
+      "ordering": "Existing source and payment lines precede ordered exit and withdrawal lines.",
+      "validation": "Match output kinds and every withdrawal settlement field. Permit ring change only to signed sources. Refuse deposits, extra legs and data.",
+      "mint_resolution": "Authenticate token program against the actual mint account.",
+      "withdrawal_recipient": "SOL uses the recipient account. SPL uses the recipient owner and derives its token account from owner, mint and token program.",
+      "mint_owner_refusal": {
+        "rust": "AuthorityTransferError::WithdrawalMint",
+        "code": -32229,
+        "message": "the withdrawal mint uses another token program",
+        "typescript": "withdrawalMint"
+      }
+    },
+    "recovery_target": {
+      "owners": [
+        "recovery-rust",
+        "recovery-ts"
+      ],
+      "target_probe": "Discard the bounded context probe cursor before starting persisted queries.",
+      "query_rule": "Every persisted query starts with slot.lte equal to the fixed target.",
+      "budget_rule": "The context probe consumes page budget.",
+      "serialization": "Language specific versioned sessions enforce the shared recovery invariants."
+    },
+    "compact_asset_resolution": {
+      "owner": "asset-resolution",
+      "rust_open": "CompactAssetRead { client, target_slot }.open() -> CompactAssetResolver",
+      "rust_resolve": "resolve(id) -> Foreign | Resolved(Mint) | Paused",
+      "rust_errors": {
+        "Source(Box<ClientError>)": "Retryable source error pauses at the exact page and candidate.",
+        "InvalidCounter": "Permanent source consistency error.",
+        "InvalidRegistry { asset_id }": "Permanent source consistency error."
+      },
+      "typescript_open": "CompactAssetResolver.open({ client, targetSlot }, context?)",
+      "typescript_resolve": "resolve(id, context?) -> Foreign | Resolved(Mint) | Paused",
+      "typescript_errors": {
+        "ClientError transport error": "Retryable source error pauses at the exact page and candidate.",
+        "CLIENT_INVALID_RPC_RESPONSE": "Permanent source consistency error."
+      },
+      "verified_mapping_cache_capacity": 256,
+      "lookup_budget_per_invocation": 32,
+      "counter_authentication": [
+        "program owner",
+        "canonical counter PDA",
+        "account discriminator",
+        "next asset identifier at least two"
+      ],
+      "counter_read_context": "Confirmed with minContextSlot equal to the recovery target.",
+      "foreign_asset_ids": "Zero or identifiers at or above the authenticated next asset identifier require no registry lookup.",
+      "builtin_asset_id": 1,
+      "reverse_lookup": "Filter getProgramAccounts by the asset identifier at the canonical layout field.",
+      "mapping_authentication": "Exactly one returned account must match the program owner, canonical registry PDA, decoded mint and asset identifier.",
+      "missing_allocated_mapping": "Permanent source consistency error.",
+      "server_cost": "Filtered program account reads can scan the server index. The client lookup budget does not bound server work.",
+      "resume": "Persist the exact page query, cursor and next candidate offset across budget pauses."
+    },
+    "rust_recovery": {
+      "owner": "recovery-rust",
+      "full_scan": "AnonymousSync::new(keys, assets).with_full_scan(ring).fetch_wallet(indexer, wallet)",
+      "page_budget": "with_page_budget(pages) -> Result<Self>",
+      "asset_source": "with_asset_rpc(&dyn AsyncRpc)",
+      "scan_status": "AnonymousScan::status() -> RecoveryStatus",
+      "scan_target": "AnonymousScan::target_slot() -> Option<u64>",
+      "states": [
+        "Paused",
+        "Complete"
+      ],
+      "wallet_status": "recovery_status()",
+      "funding_inventory": "funding_notes()",
+      "funding_check": "require_complete() -> Result<(), AnonymousError>",
+      "unchecked_state": "NoteState::PendingSpendCheck",
+      "legacy_scans": "History only fetch and full_scan remain partial capable. Absorption refuses a legacy scan while a durable session is active.",
+      "incomplete_error": "AnonymousError::SyncIncomplete"
+    },
+    "spend_coverage": {
+      "owner": "projection-bounds",
+      "method": "getSpendCoverage",
+      "request_cursor_field": "cursor",
+      "response_cursor_field": "cursor",
+      "cursor_type": "optional Base64String, omitted when absent",
+      "attestation_domain": "zolana/ring-rpc-spend-coverage",
+      "appended_signed_line": "cursor: <base64 or empty>",
+      "cursor_version": 1,
+      "cursor_bytes": 240,
+      "cursor_layout": [
+        {
+          "name": "version",
+          "bytes": 1
+        },
+        {
+          "name": "unresolved_state",
+          "bytes": 1
+        },
+        {
+          "name": "unread_state",
+          "bytes": 1
+        },
+        {
+          "name": "fault_state",
+          "bytes": 1
+        },
+        {
+          "name": "ring",
+          "bytes": 32
+        },
+        {
+          "name": "unresolved_nullifier",
+          "bytes": 32
+        },
+        {
+          "name": "unread_slot",
+          "bytes": 8,
+          "encoding": "little endian"
+        },
+        {
+          "name": "unread_signature",
+          "bytes": 64
+        },
+        {
+          "name": "unread_event",
+          "bytes": 2,
+          "encoding": "little endian"
+        },
+        {
+          "name": "fault_nullifier",
+          "bytes": 32
+        },
+        {
+          "name": "fault_signature",
+          "bytes": 64
+        },
+        {
+          "name": "fault_event",
+          "bytes": 2,
+          "encoding": "little endian"
+        }
+      ],
+      "cursor_states": {
+        "Start": 0,
+        "After": 1,
+        "Done": 2
+      },
+      "cursor_refusals": [
+        "unknown version",
+        "unknown state",
+        "wrong ring",
+        "wrong byte length"
+      ],
+      "streams": {
+        "unresolvedReal": {
+          "order": [
+            "nullifier"
+          ]
+        },
+        "unreadable": {
+          "order": [
+            "slot",
+            "signature",
+            "event"
+          ]
+        },
+        "integrityFaults": {
+          "order": [
+            "nullifier",
+            "signature",
+            "event"
+          ]
+        }
+      },
+      "page_limit_constant": "AUDIT_PAGE_LIMIT",
+      "max_rows_per_array": 100,
+      "max_storage_rows_per_stream": 101,
+      "continuation": "Strict keyset continuation preserves independent stream positions. A completed stream remains empty.",
+      "completion": "The response omits cursor only when all streams reach Done.",
+      "authorization": "Each page checks the current ring authority and signed cursor.",
+      "consistency": "One database snapshot per page. Later pages read live diagnostic state.",
+      "stored_cursor_state": false,
+      "cursor_ttl": null,
+      "totals": {
+        "response_field": "totals",
+        "rust_type": "SpendCoverageTotals",
+        "typescript_type": "RingSpendCoverageTotals",
+        "fields": {
+          "observed": "u64",
+          "padding": "u64",
+          "address": "u64",
+          "external": "u64",
+          "resolved": "u64"
+        },
+        "presence": "Present on the first traversal page and omitted on continuation pages.",
+        "nesting": "Counters reside inside totals rather than at the response root."
+      },
+      "database_cost": {
+        "history_size": "H is the number of retained spend rows for the ring.",
+        "first_page": "Exact grouped totals require O(H) work.",
+        "continuation": "Indexed detail reads remain bounded by the page limit and do not recount totals."
+      },
+      "memory_cost": "Detail selection scans the retained diagnostic collections on each page."
+    },
+    "managed_merge_selection": {
+      "owner": "projection-bounds",
+      "first_pass": "Collect scalar asset totals, entry counts and eligible counts per tree.",
+      "second_pass": "Retain the smallest nonzero keyed entries on the selected tree, up to the selected width for each asset.",
+      "entry_retention": "No candidate entries remain for an unselected tree.",
+      "asset_reads": "No repeated owner scan for each selected asset.",
+      "max_owner_passes": 2,
+      "entrypoint": "AuditStore::merge_plans(SpendableNotes, &HashMap<Address, MergeTarget>)",
+      "read_scope": "One database read snapshot or one memory read guard covers both passes and batched spend checks.",
+      "tree_choice": "Select the fullest tree, with the lowest tree identifier on ties.",
+      "width": "Apply MergeTarget to all eligible source counts and amounts, capped by MERGE_DEFAULT_INPUT_COUNT.",
+      "memory_bound": "O(distinct asset and tree counters + selected assets * MERGE_DEFAULT_INPUT_COUNT + OWNER_ROW_BATCH)"
+    }
+  }
+}

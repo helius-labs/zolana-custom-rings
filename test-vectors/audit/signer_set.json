@@ -1,0 +1,51 @@
+{
+  "cases": [
+    {
+      "name": "empty on a confidential key",
+      "slots": 24,
+      "signers": [],
+      "signer_chain": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "empty on an entry key",
+      "slots": 8,
+      "signers": [],
+      "signer_chain": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "one owner",
+      "slots": 24,
+      "signers": [
+        "0000000000000000000000000000000000000000000000000000000000000c0c"
+      ],
+      "signer_chain": "0ea1f615a1123a78c50fe608993120aeaeafc997412f9bf636afe2684bd53ae2"
+    },
+    {
+      "name": "two owners in run order",
+      "slots": 24,
+      "signers": [
+        "0000000000000000000000000000000000000000000000000000000000000c0c",
+        "0000000000000000000000000000000000000000000000000000000000000d0d"
+      ],
+      "signer_chain": "10cb9227d2c849375f225437bb88c5cd8bbd63aff52677c3597e2c93343b7efb"
+    },
+    {
+      "name": "the same owners reordered",
+      "slots": 24,
+      "signers": [
+        "0000000000000000000000000000000000000000000000000000000000000d0d",
+        "0000000000000000000000000000000000000000000000000000000000000c0c"
+      ],
+      "signer_chain": "2cc355ddf1b24fe5eadf4ab54a7dfcfad4f7a60002caf38c3f5c2e4c2f1eb660"
+    },
+    {
+      "name": "one owner on a smaller class",
+      "slots": 5,
+      "signers": [
+        "0000000000000000000000000000000000000000000000000000000000000c0c"
+      ],
+      "signer_chain": "1e2499863423e2b0deb977fe140ef36bdc198aa3be297487c48979d80b55765a"
+    }
+  ],
+  "description": "signer_chain over the SPP owner signer run. A count of zero binds chain zero and every signer slot zero on every rail, else HashChain4(identity_0 .. identity_{count-1}, 0 .. 0 up to slots). Produced by prover/circuits/transfer/statement_vector_test.go with WRITE_AUDIT_VECTORS=1."
+}

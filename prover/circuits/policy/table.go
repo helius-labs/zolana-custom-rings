@@ -1,3 +1,19 @@
+// Decodes the rule table policy_hash commits to.
+//
+// SPP has no rules. A ring's table is 16 rows of subject, mode, list masks and guard, plus one source per
+// list. The program validates a table at write time and stores it with its hash. The statement binds the
+// hash alone, so the proof carries the table as private wires and every rule section reads the decoded
+// view. A table other than the hashed one would let a prover pick its own rules.
+//
+// Read after policy/screen.go. Read before policy/subjects.go, policy/rules.go.
+//
+// Properties:
+// 1. While screened, the table is the preimage of policy_hash under the CRTB domain, in EncodedRuleTable::fields order.
+// 2. The first PolicyLen rows are active, a count past NRules has no solution.
+// 3. Each row decodes to one set of parts below 2^120, every part a bound width, and no part aliases another.
+// 4. Each list slot reads foreign or own from its Registry and salted or public from Salted.
+// 5. A rule's admission is linear in the subject's list bits and never wraps to zero.
+
 package policy
 
 import (
@@ -6,20 +22,54 @@ import (
 
 	"github.com/consensys/gnark/constraint/solver"
 	"github.com/consensys/gnark/frontend"
+	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
+// Table capacities, mirrored by program-libs/policy/src/rule_table/mod.rs.
+const (
+	NRules   = 16
+	NSources = 9
+)
+
+// Policy table hash layout, mirrored by EncodedRuleTable::hash in program-libs/policy/src/rule_table/mod.rs.
+const (
+	PolicyTableFields = 44
+	// PolicyTableRate fields join the accumulator per Poseidon call, twelve inputs is the syscall maximum.
+	PolicyTableRate = 11
+)
+
+// Every table hash call absorbs a full rate of fields.
+const _ = uint(-(PolicyTableFields % PolicyTableRate))
+
+// Rule row values, mirrored by Subject, Mode and the guard tags of Rule::encoded in program-libs/policy/src/rule_table/mod.rs.
+const (
+	SubjectOutputOwner = 1
+	SubjectSender      = 2
+	SubjectAsset       = 4
+
+	ModePresent = 1
+	ModeAbsent  = 2
+
+	GuardAlways             = 0
+	GuardAboveAmount        = 1
+	GuardAboveAmountByAsset = 2
+)
+
 type Table struct {
-	Sources   [NSources]SourceWires
+	Sources [NSources]SourceWires
+	// Bit i puts list i+1 at an owner's salted key, an asset always reads its public record.
+	Salted    frontend.Variable
 	PolicyLen frontend.Variable
 	// Each rule is its 32-byte row read as one field.
 	Rules [NRules]frontend.Variable
 }
 
 // SourceWires slot i sources list i+1, a zero Registry names the ring's own registry.
+// ListID enters the hash alone, SourceMap::from_slots in program-libs/policy/src/rule_table/mod.rs holds it to its position.
 type SourceWires struct {
 	ListID   frontend.Variable
 	Registry frontend.Variable
@@ -29,15 +79,14 @@ type tableView struct {
 	rules      [NRules]ruleFields
 	ruleActive []frontend.Variable
 	sources    sourceView
-	// assetRules is set when an active rule reads asset lists.
-	assetRules frontend.Variable
-	// scalarOwner is set when an active owner rule carries a scalar guard.
-	scalarOwner frontend.Variable
 }
 
 type sourceView struct {
-	foreign    [NSources]frontend.Variable
-	anyForeign frontend.Variable
+	foreign, salted [NSources]frontend.Variable
+	anyForeign      frontend.Variable
+	// publicForeign clear, an owner takes no curator row under its public key.
+	publicForeign            frontend.Variable
+	saltedOwn, saltedCurated frontend.Variable
 }
 
 type ruleFields struct {
@@ -47,28 +96,29 @@ type ruleFields struct {
 	admitWeight                [NSources]frontend.Variable
 	onOwner, onAsset, onSender frontend.Variable
 	scalarGuard, assetGuard    frontend.Variable
+	listBits, altBits          []frontend.Variable
 }
 
 // ruleParts mirrors Row in program-libs/policy/src/rule_table/mod.rs, read from the low byte of the big-endian field.
-var ruleParts = [...]struct{ shift, width uint }{{0, 8}, {8, 8}, {16, 8}, {24, 8}, {32, 64}, {96, 8}}
+var ruleParts = [...]struct{ shift, width uint }{{0, 8}, {8, 8}, {16, 16}, {32, 8}, {40, 64}, {104, 16}}
 
-// decode binds the table to policy_hash, the program validated it at write time (EncodedRuleTable::validate).
-func (t Table) decode(api frontend.API, rc frontend.Rangechecker, policyHash frontend.Variable) tableView {
-	// 1. The rules read the table the program hashed at its last policy write.
-	api.AssertIsEqual(policyHash, t.hash(api))
-	// 2. Each count selects its active rows, a count past its capacity selects none and fails.
+// decodeWhen binds the table to policy_hash while screened, an unscreened table binds nothing the rules read.
+func (t Table) decodeWhen(api frontend.API, rc frontend.Rangechecker, screened, policyHash frontend.Variable) tableView {
+	// The rules read the table the program hashed at its last policy write.
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: screened, A: policyHash, B: t.hash(api)})
+	return t.view(api, rc)
+}
+
+// view decodes the table, the caller binds it to policy_hash.
+func (t Table) view(api frontend.API, rc frontend.Rangechecker) tableView {
+	// 1. Each count selects its active rows, a count past its capacity selects none and fails.
 	d := tableView{
-		ruleActive:  ringgadget.SelectCount(api, t.PolicyLen, 0, NRules+1).Active,
-		sources:     t.readSources(api),
-		assetRules:  0,
-		scalarOwner: 0,
+		ruleActive: ringgadget.SelectCount(api, t.PolicyLen, 0, NRules+1).Active,
+		sources:    t.readSources(api),
 	}
-	// 3. Every rule decodes once, the flags later steps gate on fold over the active rules.
+	// 2. Every row decodes, an inactive one too. A row's activity is a gate the rule sections read.
 	for i, packed := range t.Rules {
-		rule := decodeRule(api, rc, packed)
-		d.rules[i] = rule
-		d.assetRules = api.Or(d.assetRules, api.Mul(d.ruleActive[i], rule.onAsset))
-		d.scalarOwner = api.Or(d.scalarOwner, api.Mul(d.ruleActive[i], rule.onOwner, rule.scalarGuard))
+		d.rules[i] = decodeRule(api, rc, packed)
 	}
 	return d
 }
@@ -76,11 +126,11 @@ func (t Table) decode(api frontend.API, rc frontend.Rangechecker, policyHash fro
 // Fields lists the hashed fields in EncodedRuleTable::fields order.
 func (t Table) Fields() []frontend.Variable {
 	fields := make([]frontend.Variable, 0, PolicyTableFields)
-	fields = append(fields, shared.PolicyTableDomain, PolicyTableVersion)
+	fields = append(fields, shared.PolicyTableDomain)
 	for _, source := range t.Sources {
 		fields = append(fields, source.ListID, source.Registry)
 	}
-	fields = append(fields, t.PolicyLen)
+	fields = append(fields, t.Salted, t.PolicyLen)
 	fields = append(fields, t.Rules[:]...)
 	for len(fields) < PolicyTableFields {
 		fields = append(fields, 0)
@@ -101,11 +151,34 @@ func (t Table) hash(api frontend.API) frontend.Variable {
 // readSources marks list i+1 foreign when slot i names a registry field, one curator registry serves them all.
 func (t Table) readSources(api frontend.API) sourceView {
 	var view sourceView
+	var own, curated, public [NSources]frontend.Variable
+	copy(view.salted[:], api.ToBinary(t.Salted, NSources))
 	for i, source := range t.Sources {
 		view.foreign[i] = ringgadget.IsNonZero(api, source.Registry)
+		curated[i] = api.Mul(view.salted[i], view.foreign[i])
+		own[i] = api.Sub(view.salted[i], curated[i])
+		public[i] = api.Sub(view.foreign[i], curated[i])
 	}
+	view.publicForeign = ringgadget.IsAny(api, public[:]...)
 	view.anyForeign = ringgadget.IsAny(api, view.foreign[:]...)
+	view.saltedOwn, view.saltedCurated = ringgadget.IsAny(api, own[:]...), ringgadget.IsAny(api, curated[:]...)
 	return view
+}
+
+func (s sourceView) lists(api frontend.API, own, curated [NSources]frontend.Variable) [NSources]frontend.Variable {
+	var onList [NSources]frontend.Variable
+	for i := range onList {
+		onList[i] = api.Select(s.foreign[i], curated[i], own[i])
+	}
+	return onList
+}
+
+func (s sourceView) owner(api frontend.API, public, salted [NSources]frontend.Variable) [NSources]frontend.Variable {
+	var onList [NSources]frontend.Variable
+	for i := range onList {
+		onList[i] = api.Select(s.salted[i], salted[i], public[i])
+	}
+	return onList
 }
 
 func decodeRule(api frontend.API, rc frontend.Rangechecker, packed frontend.Variable) ruleFields {
@@ -115,11 +188,11 @@ func decodeRule(api frontend.API, rc frontend.Rangechecker, packed frontend.Vari
 		panic(err)
 	}
 	subject, mode, mask, guard, threshold, alternative := parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]
-	// 2. Subject, mode, guard and threshold stay inside their widths, the recomposition stays below 2^104.
+	// 2. Subject, mode, guard and threshold stay inside their widths, the recomposition stays below 2^120.
 	for _, i := range []int{0, 1, 3, 4} {
 		rc.Check(parts[i], int(ruleParts[i].width))
 	}
-	// 3. Both list masks split into one bit per source slot, bit i marks list i+1.
+	// 3. Both list masks split into one bit per source slot, bit i marks list i+1, the split bounds each mask below 2^NSources.
 	listBits, altBits := api.ToBinary(mask, NSources), api.ToBinary(alternative, NSources)
 	recomposed := frontend.Variable(0)
 	for i, part := range ruleParts {
@@ -136,8 +209,11 @@ func decodeRule(api frontend.API, rc frontend.Rangechecker, packed frontend.Vari
 		onSender:    is(subject, SubjectSender),
 		scalarGuard: is(guard, GuardAboveAmount),
 		assetGuard:  is(guard, GuardAboveAmountByAsset),
+		listBits:    listBits,
+		altBits:     altBits,
 	}
 	// 5. A list of a present mask admits a subject on it, a list of an absent or the alternative mask a subject off it.
+	// A subject's admission is admitBase plus admitWeight per list it is on. A list then adds inPresent to a subject on it and inAbsent to a subject off it, one sum per rule and no select per list.
 	present := is(mode, ModePresent)
 	for i := range rule.admitWeight {
 		inPresent := api.Mul(present, listBits[i])

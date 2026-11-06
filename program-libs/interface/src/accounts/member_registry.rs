@@ -1,29 +1,28 @@
-//! Record tree constants and the queued record writes the program chains, the tree
+//! Record tree constants and the record writes an apply proof chains, the tree
 //! lives in `zolana-ring-member-registry`.
+//!
+//! A record holds one member's list bits and, on an asset, its mint settings. A transfer proof opens
+//! a present member by its leaf and an absent member by the leaf bracketing it, so no prover can leave
+//! out the record that convicts its subject. The sentinel and the strict member range make that
+//! bracket exist for every member.
+//!
+//! Read after `docs/design/records-and-roots.md`. Read before `program-libs/interface/src/accounts/storage.rs`,
+//! `program-libs/member-registry/src/tree.rs`, `prover/circuits/registry/apply_records.go`.
 
 use spr_hasher::{
-    primitives::{hash_bytes, right_align, BN254_SCALAR_MODULUS_BE},
+    primitives::{right_align, BN254_SCALAR_MODULUS_BE},
     Hasher, HasherError, Poseidon,
 };
-use zolana_ring_policy::{ListId, MintPolicy};
+use zolana_ring_policy::MintPolicy;
 
-use crate::{domain, error::CustomRingError, AUDIT_CIPHERTEXT_LEN};
+use crate::{domain, error::CustomRingError};
 
 pub const QUAD_ARITY: usize = 4;
 pub const QUAD_HEIGHT: usize = 10;
 pub const MEMBER_REGISTRY_CAPACITY: u64 = 1 << (2 * QUAD_HEIGHT);
 /// Writes the larger apply key proves.
 pub const APPLY_BATCH: usize = 16;
-/// Member writes pending at once, the rest of a batch is the authority's reserve.
-pub const MEMBER_QUEUE_LIMIT: u64 = 8;
-/// The last leaves, kept for authority writes once members fill the rest.
-pub const AUTHORITY_RESERVED_LEAVES: u64 = 1 << 16;
-/// The insert fee of a new ring, enough to open an empty authority account.
-pub const DEFAULT_INSERT_FEE: u64 = 1_000_000;
-pub const QUEUE_CAPACITY: usize = APPLY_BATCH;
-/// Slots before anyone applies a partial queue, and between two permissionless applications.
-pub const APPLY_DELAY_SLOTS: u64 = 150;
-/// Slots a curator root below the floor stays admissible after the floor rose.
+/// Default slot allowance for a retired policy record root.
 pub const GRACE_SLOTS: u64 = 750;
 
 /// `q - 1`, the sentinel's next, every member sorts strictly below it.
@@ -35,78 +34,53 @@ pub const FIELD_MAX: [u8; 32] = {
 
 /// Root of the tree holding only the sentinel, the first history entry of a registry.
 pub const MEMBER_REGISTRY_EMPTY_ROOT: [u8; 32] = [
-    0x07, 0x71, 0xd4, 0x15, 0xec, 0x42, 0xa4, 0x82, 0xed, 0x01, 0x69, 0x39, 0x4b, 0xd5, 0x83, 0xc8,
-    0x9f, 0x08, 0xf5, 0x37, 0x7b, 0xb2, 0x0a, 0x45, 0xb2, 0x40, 0xf7, 0xd2, 0x41, 0xcd, 0x98, 0x41,
+    0x05, 0x3b, 0x21, 0x36, 0xce, 0x0e, 0x6c, 0xff, 0xb8, 0x9c, 0xb7, 0x6c, 0x7a, 0x81, 0xb6, 0xd7,
+    0xe1, 0xbd, 0x42, 0x41, 0x59, 0xff, 0x45, 0x79, 0xf2, 0x84, 0xa7, 0xe5, 0xf1, 0x98, 0x95, 0x6d,
 ];
-
-const _: () = assert!(QUEUE_CAPACITY as u64 == 2 * MEMBER_QUEUE_LIMIT);
 
 /// The sentinel `(0, q - 1)` brackets every member in `[1, q - 2]` strictly.
 pub fn check_member(member: &[u8; 32]) -> Result<(), CustomRingError> {
+    // Big endian bytes compare as the field values do.
     if *member == [0; 32] || *member >= FIELD_MAX {
         return Err(CustomRingError::MemberOutOfRange);
     }
     Ok(())
 }
 
-/// The record field a registered key sets, `Poseidon(nullifier_pk, hash_bytes(ciphertext))`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct EscrowKey<'a> {
-    pub nullifier_pk: &'a [u8; 32],
-    pub ciphertext: &'a [u8; AUDIT_CIPHERTEXT_LEN],
-}
-
-impl EscrowKey<'_> {
-    pub fn hash(&self) -> Result<[u8; 32], HasherError> {
-        Poseidon::hashv(&[self.nullifier_pk, &hash_bytes(self.ciphertext)?])
-    }
-}
-
-/// One queued masked write, `lists' = (lists & !mask) | value`, the escrow key fills once.
+/// One masked write, `lists' = (lists & !mask) | value`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct QueueEntry {
+pub struct RecordWrite {
     pub member: [u8; 32],
     pub mask: u64,
+    /// `RecordWriteData::storage_entry` keeps it inside `mask`, the apply circuit takes it as given.
     pub value: u64,
-    pub escrow_key: [u8; 32],
-    /// Only authority writes replace mint settings; list and key writes preserve them.
+    /// Only authority writes replace mint settings, list writes preserve them.
     pub mint_policy: Option<MintPolicy>,
 }
 
-impl QueueEntry {
-    pub fn escrow(member: [u8; 32], key: &EscrowKey<'_>) -> Result<Self, CustomRingError> {
-        check_member(&member)?;
-        let bit = ListId::Escrow.record_bit();
-        Ok(Self {
-            member,
-            mask: bit,
-            value: bit,
-            escrow_key: key.hash()?,
-            mint_policy: None,
-        })
-    }
-
-    /// `Poseidon(CRQW, member, mask, value, escrow_key, mint_policy_write, withdrawal_threshold)`, mirror
+impl RecordWrite {
+    /// `Poseidon(CRQW, member, mask, value, mint_policy_write, withdrawal_threshold, limits_0, limits_1, limits_2)`, mirror
     /// `prover/circuits/registry/apply_records.go`.
     pub fn hash(&self) -> Result<[u8; 32], HasherError> {
+        let policy = self.mint_policy.unwrap_or_default();
+        let [limits_0, limits_1, limits_2] = policy.limits.fields();
         Poseidon::hashv(&[
-            &domain::field(domain::QUEUE_WRITE),
+            &domain::field(domain::RECORD_WRITE),
             &self.member,
             &right_align(&self.mask.to_be_bytes()),
             &right_align(&self.value.to_be_bytes()),
-            &self.escrow_key,
             &self.mint_policy_field(),
-            &right_align(
-                &self
-                    .mint_policy
-                    .unwrap_or_default()
-                    .withdrawal_threshold
-                    .to_be_bytes(),
-            ),
+            &right_align(&policy.withdrawal_threshold.to_be_bytes()),
+            &limits_0,
+            &limits_1,
+            &limits_2,
         ])
     }
 
     /// Bit 192 distinguishes a replacement (including clearing) from no change.
+    ///
+    /// Byte 7 of the big endian field, above the three amounts `MintPolicy::field` packs. The apply
+    /// circuit decomposes the field into 193 bits and reads the flag at the top.
     pub fn mint_policy_field(&self) -> [u8; 32] {
         self.mint_policy.map_or([0; 32], |policy| {
             let mut field = policy.field();
@@ -116,8 +90,8 @@ impl QueueEntry {
     }
 }
 
-/// `chain(p) = Poseidon(chain(p - 1), entry_p)` from `chain(-1) = 0`.
-pub fn queue_chain(previous: &[u8; 32], entry: &QueueEntry) -> Result<[u8; 32], HasherError> {
+/// `chain(p) = Poseidon(chain(p - 1), entry_p)` from `chain_start` of the registry and revision.
+pub fn write_chain(previous: &[u8; 32], entry: &RecordWrite) -> Result<[u8; 32], HasherError> {
     Poseidon::hashv(&[previous, &entry.hash()?])
 }
 
@@ -143,27 +117,5 @@ mod tests {
                 Err(CustomRingError::MemberOutOfRange)
             );
         }
-    }
-
-    #[test]
-    fn an_escrow_entry_sets_the_escrow_bit_and_the_key() {
-        let key = EscrowKey {
-            nullifier_pk: &member(4),
-            ciphertext: &[5; AUDIT_CIPHERTEXT_LEN],
-        };
-        let entry = QueueEntry::escrow(member(3), &key).unwrap();
-        let bit = ListId::Escrow.record_bit();
-        assert_eq!(
-            (entry.mask, entry.value, entry.escrow_key),
-            (bit, bit, key.hash().unwrap())
-        );
-        assert_ne!(
-            entry.hash(),
-            QueueEntry {
-                escrow_key: [0; 32],
-                ..entry
-            }
-            .hash()
-        );
     }
 }

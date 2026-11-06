@@ -28,16 +28,35 @@
 #[path = "ring_shapes.rs"]
 mod shapes;
 
+#[path = "ring/sanity.rs"]
+mod sanity;
+
+#[path = "ring/sanity_deposits.rs"]
+mod sanity_deposits;
+
+#[path = "ring/forester_stall.rs"]
+mod forester_stall;
+
+#[path = "ring/sanity_mixed_owners.rs"]
+mod sanity_mixed_owners;
+
 #[path = "ring/anonymous.rs"]
 mod anonymous;
+#[path = "ring/exemptions.rs"]
+mod exemptions;
 #[path = "ring/lifecycle.rs"]
 mod lifecycle;
 #[path = "ring/merge.rs"]
 mod merge;
 #[path = "ring/migration.rs"]
 mod migration;
+#[cfg(feature = "proofs")]
+#[path = "ring/one_key.rs"]
+mod one_key;
 #[path = "ring/policy.rs"]
 mod policy;
+#[path = "ring/relay.rs"]
+mod relay;
 #[path = "ring/transfers.rs"]
 mod transfers;
 
@@ -48,31 +67,31 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{anyhow, ensure, Context, Result};
-use custom_ring_cli::{wait_for, Landing, ModeName, Probe, Queued};
+use anyhow::{anyhow, bail, ensure, Context, Result};
+use custom_ring_cli::{wait_for, Landing, ModeName, Probe};
 use custom_ring_interface::{
-    anonymous_recipient_output_body, anonymous_sender_output_body, AnonymousProofData,
-    CustomRingError, RingMode, RingProgramConfig, RingRail, RingTransactData, CONFIG_PDA_SEED,
-    DEFAULT_INSERT_FEE, RING_PROGRAM_CONFIG,
+    ring_body_output, ring_sender_bundle_output_body, AnonymousProofData, CustomRingError,
+    RingMode, RingPolicy, RingRail, RingRole, RingTransactData, RING_POLICY, RING_POLICY_PDA_SEED,
 };
 use custom_ring_sdk::{
     compute_unit_limit, AnonymousTransfer, CoSignScope, CustomRing, CustomRingMerge,
     CustomRingTransfer, CustomRingTransferInput, DelegateOutput, DelegateTransfer,
-    DelegateTransferInput, DepositRecipient, FirstContact, InstructionTag, MergeProofInput,
-    ProvenRingTransfer, RegisterKey, RingClient, RingDeposit, RingDepositReceipt, RingError,
-    RingMergeOperation, RingOperation, RingRegistration,
+    DelegateTransferInput, DepositRecipient, InstructionTag, MergeProofInput, ProvenRingTransfer,
+    RingClient, RingDeposit, RingDepositReceipt, RingError, RingMergeOperation, RingOperation,
+    RingRegistration,
 };
 use custom_ring_test_validator::{
     cli::{merged, RingProject, RingToml},
     policy::{
-        owner_member, policy_registry, RegistryWrite, RingNotes, EMPTY, LIMIT_CAP,
-        LIMIT_COSIGN_ABOVE,
+        enroll_actors, owner_enrollment, owner_member, policy_registry, EnrollOwners,
+        RegistryWrite, RingNotes, StorageRecords, EMPTY, LIMIT_CAP, LIMIT_COSIGN_ABOVE,
     },
     ring_rpc::RingRpcSpec,
     ring_wallet::RingWallet,
     shared::{
         custom_ring_program_id, prover_url, send, send_expecting_rejection, setup, ExpectRejection,
-        RegisterRing, RejectedTransact, TestEnv, Tier, WalletSync, USDC_ASSET_ID,
+        RegisterRing, RejectedTransact, RingRoleKeys, SendAs, TestEnv, Tier, WalletSync,
+        USDC_ASSET_ID,
     },
 };
 use solana_address::Address;
@@ -82,12 +101,13 @@ use solana_message::v1::MAX_TRANSACTION_SIZE;
 use solana_signature::Signature;
 use solana_signer::Signer;
 use spr_client::{
-    compile_message, sign_transaction, AsyncProverClient, AsyncSolanaRpc, AsyncZolanaClient,
-    AsyncZolanaIndexer, ComputeBudgetConfig, ProofDataSource, Rpc, ShieldedTransaction, SolanaRpc,
-    ZolanaIndexer,
+    compile_message, sign_transaction, AsyncProverClient, AsyncSolanaRpc, AsyncSprClient,
+    AsyncSprIndexer, ComputeBudgetConfig, ProofDataSource, Rpc, ShieldedTransaction, SolanaRpc,
+    SprIndexer,
 };
 use spr_interface::{
     error::ShieldedPoolError,
+    instruction::InterfaceTransfer,
     pda,
     state::{
         discriminator::{PROTOCOL_CONFIG, RING_CONFIG, TREE_ACCOUNT_DISCRIMINATOR},
@@ -95,7 +115,7 @@ use spr_interface::{
     },
     SHIELDED_POOL_PROGRAM_ID, ZERO_NULLIFIER_PUBKEY,
 };
-use spr_keypair::{random_blinding, ShieldedAddress, ShieldedKeypair, X25519Keypair};
+use spr_keypair::{random_blinding, ShieldedAddress, ShieldedKeypair, X25519Keypair, X25519Pubkey};
 use spr_program::instruction::{
     AssetDeposit, Deposit as SppDeposit, DepositAsset, DepositSplAccounts,
     TransactInterfaceTransferAccounts, TransactSplWithdrawalAccounts, UpdateRingConfig,
@@ -121,12 +141,14 @@ use spr_user_registry_interface::user_registry_program_id;
 use zolana_ring_client::{
     auditor_view_tag,
     rpc::{write_auditor_key, CreateAuditorKeyRequest},
-    AuditedTransaction, OutputOpening, RingRecovery, RingScan, SourceMember, ViewingHistory,
+    AuditedTransaction, AuditedUtxo, InputOpening, OutputOpening, RecoveryStep, RingRecovery,
+    RingScan, SealedNullifierKey, SourceMember, ViewingHistory,
 };
 use zolana_ring_keys::{RingAddress, RingPaymentRequest};
 use zolana_ring_policy::{ListId, Member, Rule, RuleTable, Subject};
 use zolana_ring_rpc::{
-    ChainSource, Hub, RingRpcError, RootSecret, TransactionSource, Unauthorized, Upstreams,
+    ChainSource, Hub, RingRpcError, RootSecret, ServiceIdentity, TransactionSource, Unauthorized,
+    Upstreams,
 };
 
 /// Lamports moved by the two transaction-shape probes. Small enough that the
@@ -161,15 +183,9 @@ const MERGED_SPEND: u64 = 100_000_000;
 const CHANGE_SLOT: u32 = 1;
 const RECIPIENT_SLOT: u32 = 0;
 
-/// The program audit's estimate for the widest keyed transfer.
-const WIDEST_TRANSACT_ESTIMATE_CU: u64 = 720_000;
-const CUSTOM_RING_TRANSACT_CU_LIMIT: u64 = 1_000_000;
-
-// Below the requested budget a confirmed transfer can still exceed the ceiling.
-const _: () = assert!(
-    WIDEST_TRANSACT_ESTIMATE_CU <= CUSTOM_RING_TRANSACT_CU_LIMIT
-        && CUSTOM_RING_TRANSACT_CU_LIMIT < compute_unit_limit(InstructionTag::Transact) as u64
-);
+/// Every settled transfer stays at or under four fifths of the declared budget.
+const CUSTOM_RING_TRANSACT_CU_LIMIT: u64 =
+    compute_unit_limit(InstructionTag::Transfer) as u64 / 5 * 4;
 
 const DEFAULT_DEPOSIT: u64 = 4_000_000_000;
 const ENTRY_AMOUNT: u64 = 2_500_000_000;
@@ -194,20 +210,22 @@ const USDC_FINAL_CHANGE: u64 = USDC_EXIT_CHANGE - USDC_WITHDRAW_AMOUNT - USDC_FI
 
 fn cli_merge_fragments(amounts: &[u64]) -> Result<()> {
     let count = amounts.len().to_string();
-    let merged_count = amounts.len().min(
-        *custom_ring_interface::ANONYMOUS_MERGE_WIDTHS
-            .last()
-            .unwrap(),
-    );
+    let merged_count = amounts.len().min(custom_ring_sdk::MAX_RING_MERGE_INPUTS);
     let total: u64 = amounts[..merged_count].iter().sum();
     let env = setup()?;
     let tree = env.register_default_tree()?;
     let ring = CustomRing::new(custom_ring_program_id()?);
     let auditor = X25519Keypair::new();
+    let ring_rpc = RingRpcSpec {
+        env: &env,
+        ring: ring.program_id(),
+        auditor: auditor.clone(),
+    }
+    .serve()?;
     let project = RingProject::create(&env, &auditor.pubkey())?;
     project.write_config(RingToml {
         env: &env,
-        ring_rpc: "http://127.0.0.1:1",
+        ring_rpc: &ring_rpc.url,
         policy: None,
         mode: ModeName::Anonymous,
     })?;
@@ -223,27 +241,25 @@ fn cli_merge_fragments(amounts: &[u64]) -> Result<()> {
         "{empty_text}"
     );
     let sender = project.demo_sender()?;
-    let mut history = ViewingHistory::new(sender.viewing_pubkey(), 0);
-
+    EnrollOwners {
+        ring,
+        owners: &[&sender],
+        env: &env,
+    }
+    .send()?;
     for &amount in amounts {
         let deposit = RingDeposit {
             ring,
             payer: &env.payer,
-            recipient: DepositRecipient::Anonymous {
-                keys: &sender,
-                history: &history,
-            },
+            recipient: DepositRecipient::Anonymous { keys: &sender },
             tree,
             asset: DepositAsset::Sol,
             amount,
             cosigner: None,
+            list_salt: None,
         };
-        let next = deposit
-            .viewing_history()?
-            .context("an anonymous deposit advances its history")?;
         let receipt = env.run(deposit.send(env.client.ring_client()))?;
         custom_ring_cli::wait_for_indexed_transaction(&env.client, receipt.signature)?;
-        history = next;
     }
 
     let output = project.run(&[
@@ -309,19 +325,20 @@ const FROZEN_SENDERS: RuleTable = RuleTable::builder()
     .rule(Rule::forbid(Subject::Sender, ListId::Frozen))
     .build();
 
-/// Registers every member in the pinned registry before the delegate turns key escrow on.
-struct EscrowedDelegate<'a> {
+struct EnrolledDelegate<'a> {
     ring: CustomRing,
     delegate: &'a Keypair,
     members: &'a [&'a ShieldedKeypair],
 }
 
-impl EscrowedDelegate<'_> {
+impl EnrolledDelegate<'_> {
     fn set(self, env: &TestEnv) -> Result<()> {
-        for member in self.members {
-            register_key(env, self.ring, member)?;
+        EnrollOwners {
+            ring: self.ring,
+            owners: self.members,
+            env,
         }
-        Queued::now(&env.client, self.ring)?.apply(&env.client, &env.payer)?;
+        .send()?;
         DelegateAppointment {
             ring: self.ring,
             delegate: self.delegate,
@@ -330,7 +347,7 @@ impl EscrowedDelegate<'_> {
     }
 }
 
-/// The delegate signs its appointment beside the upgrade authority.
+/// The delegate signs its appointment beside the admin.
 struct DelegateAppointment<'a> {
     ring: CustomRing,
     delegate: &'a Keypair,
@@ -338,15 +355,16 @@ struct DelegateAppointment<'a> {
 
 impl DelegateAppointment<'_> {
     fn send(self, env: &TestEnv) -> Result<()> {
+        let admin = RingRoleKeys::of(&env.payer).admin;
         env.client.rpc().create_and_send_transaction(
             &[custom_ring_sdk::SetDelegate {
                 ring: self.ring,
-                authority: env.payer.pubkey(),
+                authority: admin.pubkey(),
                 delegate: self.delegate.pubkey(),
             }
             .instruction()],
             env.payer.pubkey(),
-            &[&env.payer, self.delegate],
+            &[&env.payer, &admin, self.delegate],
             ComputeBudgetConfig::for_instruction_count(1),
         )?;
         Ok(())
@@ -380,16 +398,35 @@ fn land<'a>(
     .settle(&env.client)
 }
 
-/// The write waits in the record queue until `Queued::apply`.
-fn register_key(env: &TestEnv, ring: CustomRing, member: &ShieldedKeypair) -> Result<()> {
-    let registration = RegisterKey {
-        ring,
-        member: member.shielded_address()?,
-        payer: member.pubkey(),
-        authority: member,
-    };
-    land(env, registration, member, &[])?;
-    Ok(())
+/// Each write takes a fresh member's first record, `count` selects the apply key.
+fn allow_writes(count: usize) -> Result<Vec<custom_ring_interface::RecordWriteData>> {
+    (0..count)
+        .map(|_| {
+            let owner = ShieldedKeypair::new_ed25519()?;
+            Ok(custom_ring_interface::RecordWriteData {
+                member: *owner_member(&owner)?.as_bytes(),
+                lists: custom_ring_interface::WriteRecordsIxData::new(
+                    zolana_ring_policy::ListChange {
+                        set: zolana_ring_policy::ListSet::single(ListId::Allow),
+                        clear: zolana_ring_policy::ListSet::EMPTY,
+                    }
+                    .check()?,
+                ),
+                mint_policy: custom_ring_interface::mint_policy_write(None),
+            })
+        })
+        .collect()
+}
+
+/// A ring proof request, `None` on SPP's proofs and the prover's polls.
+fn ring_prover_request(body: &[u8]) -> Option<serde_json::Value> {
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .filter(|body| {
+            body["circuitType"]
+                .as_str()
+                .is_some_and(|circuit| circuit.starts_with("custom-ring-"))
+        })
 }
 
 fn frame(instruction: &Instruction, rail: RingRail) -> Result<RingTransactData<'_>> {
@@ -398,6 +435,24 @@ fn frame(instruction: &Instruction, rail: RingRail) -> Result<RingTransactData<'
         .split_first()
         .context("a tagged ring instruction")?;
     Ok(RingTransactData::parse(body, rail)?.into_data())
+}
+
+/// SPP's anonymous rail hides `owner`, the frame names it.
+fn assert_anonymous_spp_rail(instruction: &Instruction, owner: &[u8; 32]) -> Result<()> {
+    let data = frame(instruction, RingRail::Confidential)?;
+    ensure!(
+        matches!(
+            data.circuit(),
+            spr_interface::instruction::CircuitId::AnonymousRingEddsa(.., proof)
+                if proof.default_owner_tag.is_none()
+        ),
+        "the in-proof owner proves on SPP's anonymous rail"
+    );
+    ensure!(
+        data.in_proof_owner.map(|published| *published.owner) == Some(*owner),
+        "the frame publishes the in-proof owner"
+    );
+    Ok(())
 }
 
 fn reframed(instruction: &Instruction, frame: &RingTransactData<'_>) -> Result<Instruction> {
@@ -524,7 +579,7 @@ impl<'a> DefaultRingDeposit<'a> {
     fn send(
         self,
         rpc: &SolanaRpc,
-        indexer: &ZolanaIndexer,
+        indexer: &SprIndexer,
         assets: &AssetRegistry,
     ) -> Result<Note<'a>> {
         let address = self.depositor.shielded_address()?;
@@ -564,7 +619,7 @@ impl<'a> DefaultRingDeposit<'a> {
     }
 }
 
-/// `cosigner` must be the co-signer the config demands.
+/// `cosigner` must hold a record covering every class the transfer demands.
 struct OwnerTransfer<'a> {
     ring: CustomRing,
     sender: &'a ShieldedKeypair,
@@ -590,11 +645,15 @@ impl OwnerTransfer<'_> {
             transaction: self.prepared,
         })
         .with_interface_transfer_accounts(self.interface_transfer_accounts);
+        let transfer = match self.cosigner {
+            Some(cosigner) => transfer.with_co_signer(cosigner.pubkey()),
+            None => transfer,
+        };
         let proven = env.run(transfer.prove(env.client.ring_client()))?;
         assert_eq!(
-            proven.co_signer,
+            proven.co_signers.first().copied(),
             self.cosigner.map(|cosigner| cosigner.pubkey()),
-            "the config demands exactly this co-signer"
+            "the proven transfer carries the demanded co-signer"
         );
         let signers: Vec<&(dyn Signer + Sync)> = self
             .cosigner
@@ -649,9 +708,9 @@ impl AsyncHopParity<'_> {
 
         // `local()` on both clients, a parity failure cannot be two different provers.
         let native = RingClient::new(
-            AsyncZolanaClient::new(
+            AsyncSprClient::new(
                 AsyncSolanaRpc::new(env.rpc_url.clone()),
-                AsyncZolanaIndexer::new(env.indexer_url.clone()),
+                AsyncSprIndexer::new(env.indexer_url.clone()),
                 AsyncProverClient::local(),
             ),
             AsyncProverClient::local(),
@@ -713,7 +772,6 @@ impl AsyncHopParity<'_> {
 }
 
 struct AuditLookup<'a> {
-    ring: Address,
     scan: RingScan,
     auditor: &'a X25519Keypair,
     signature: Signature,
@@ -723,30 +781,10 @@ impl AuditLookup<'_> {
     fn run(self, env: &TestEnv) -> Result<AuditedTransaction> {
         custom_ring_cli::wait_for_indexed_transaction(&env.client, self.signature)?;
         let client = env.client.as_async();
-        let created = env.client.block_on(
-            zolana_ring_client::CreatedUtxoScan::new(self.ring, self.auditor)
-                .run(client.indexer(), client.rpc()),
-        )?;
-        ensure!(
-            created.next_cursor.is_none(),
-            "created-note history is incomplete"
-        );
         env.client
             .block_on(
                 self.scan
-                    .with_known_utxos(
-                        created
-                            .utxos
-                            .into_iter()
-                            .map(|note| (note.commitment, note.utxo))
-                            .collect(),
-                    )
-                    .audit(
-                        self.auditor,
-                        client.indexer(),
-                        client.rpc(),
-                        &env.ring_assets()?,
-                    ),
+                    .audit(self.auditor, client.indexer(), client.rpc()),
             )?
             .transactions
             .into_iter()
@@ -755,16 +793,70 @@ impl AuditLookup<'_> {
     }
 }
 
+struct AuditedSpends<'a> {
+    ring: CustomRing,
+    auditor: &'a X25519Keypair,
+    owners: &'a [Address],
+    audited: &'a AuditedTransaction,
+}
+
+impl AuditedSpends<'_> {
+    /// A nullifier of none of `owners` fails, a deposit's note opens as any transfer output.
+    fn notes(self, env: &TestEnv) -> Result<Vec<AuditedUtxo>> {
+        let client = env.client.as_async();
+        let config = env.run(self.ring.require_config(client))?;
+        let history = env.client.block_on(
+            RingScan::new(self.ring.program_id(), self.auditor.pubkey())
+                .with_mode(config.mode)
+                .audit(self.auditor, client.indexer(), client.rpc()),
+        )?;
+        ensure!(
+            history.next_cursor.is_none(),
+            "created-note history is incomplete"
+        );
+        let keys = self
+            .owners
+            .iter()
+            .map(|owner| {
+                let enrolled = owner_enrollment(env, self.ring, *owner)?
+                    .context("the owner holds an enrollment")?;
+                Ok(SealedNullifierKey {
+                    eph_pk: X25519Pubkey::from_u(enrolled.eph_u)?,
+                    ciphertext: enrolled.ciphertext,
+                }
+                .open(self.auditor)?)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut spent = HashMap::new();
+        for output in history.transactions.iter().flat_map(|tx| &tx.outputs) {
+            let Some(utxo) = output.opening.utxo() else {
+                continue;
+            };
+            for key in &keys {
+                spent.insert(key.nullifier(&output.context.hash, &utxo.blinding)?, *utxo);
+            }
+        }
+        self.audited
+            .inputs
+            .iter()
+            .filter(|input| matches!(input.opening, InputOpening::Real))
+            .map(|input| {
+                spent
+                    .get(&input.nullifier)
+                    .copied()
+                    .context("the auditor names every spent input")
+            })
+            .collect()
+    }
+}
+
 /// An anonymous ring payment, the ring payer funds it so no public signer names the owner.
 struct AnonymousPayment<'a> {
     ring: CustomRing,
     sender: &'a ShieldedKeypair,
-    /// The sender's counterparties pick the payment's tag.
-    history: &'a ViewingHistory,
-    payer: &'a Keypair,
+    payer: Address,
     inputs: Vec<WalletUtxo>,
     to: RingAddress,
-    first_contact: FirstContact,
     amount: u64,
 }
 
@@ -773,7 +865,7 @@ impl<'a> AnonymousPayment<'a> {
         let shape = canonical_shape(self.inputs.len(), 2)?;
         let transaction = ConfidentialTransaction::new_with_ring(
             self.inputs,
-            self.payer.pubkey(),
+            self.payer,
             self.ring.program_id(),
         )?;
         Ok(CustomRingTransfer::new(CustomRingTransferInput {
@@ -782,12 +874,13 @@ impl<'a> AnonymousPayment<'a> {
             nullifier_key: Some(&self.sender.nullifier_key),
             transaction,
         })
-        .with_anonymous_signer(&self.sender.signing_key, self.history)
+        .with_anonymous_signer(&self.sender.signing_key)
         .with_payment(custom_ring_sdk::AnonymousPayment {
             to: self.to,
-            first_contact: self.first_contact,
             asset: Mint::SOL,
             amount: self.amount,
+            reply: None,
+            data: custom_ring_sdk::NoteData::default(),
         })?
         .with_shape(shape)?)
     }
@@ -801,13 +894,10 @@ struct PaymentLanding<'a> {
 
 struct LandedPayment {
     indexed: ShieldedTransaction,
-    /// The sender's history past the payment's tags, stored before it was sent.
-    history: ViewingHistory,
 }
 
 impl PaymentLanding<'_> {
     fn land(self, env: &TestEnv) -> Result<LandedPayment> {
-        let history = self.transfer.viewing_history()?;
         let signature = Landing {
             operation: self.transfer.into(),
             payer: self.payer,
@@ -820,17 +910,13 @@ impl PaymentLanding<'_> {
                 self.auditor_tag,
                 signature,
             ),
-            history,
         })
     }
 }
 
 /// The wallet's spec identity on `ring`, its own viewing key the recipient key.
 fn ring_address(owner: &ShieldedKeypair, ring: Address) -> Result<RingAddress> {
-    Ok(RingAddress {
-        recipient: owner.shielded_address()?,
-        ring_program_id: ring,
-    })
+    Ok(RingAddress::enrolled(owner, ring)?)
 }
 
 fn unspent_utxo(wallet: &Wallet, amount: u64) -> Result<Utxo> {

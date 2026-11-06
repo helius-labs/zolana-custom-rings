@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Bytes32 } from "@heliuslabs/zolana";
-import { parseProof } from "@heliuslabs/zolana/client";
-import { ProverClient } from "@heliuslabs/zolana/internal";
+import type { Bytes32 } from "@heliuslabs/spr";
+import { parseProof } from "@heliuslabs/spr/client";
+import { ProverClient } from "@heliuslabs/spr/internal";
 
+import { RING_PROVING_KEY_SHA256S } from "../../src/protocol/proof/proving-keys.js";
 import { CustomRingProver } from "../../src/rpc/prover/client.js";
 import type { RegisterKeyProofRequest } from "../../src/rpc/prover/ring.js";
 import { proofFor } from "../helpers/proofs.js";
@@ -19,8 +20,10 @@ describe("ring prover contracts", () => {
   const registerKey: RegisterKeyProofRequest = {
     kind: "registerKey",
     publicInputHash: bytes(1),
+    ringId: bytes(5),
     member: bytes(2),
     nullifierSecret: new Uint8Array(32) as Bytes32,
+    listSalt: new Uint8Array(32) as Bytes32,
     ephSk: bytes(3),
     auditorPk: bytes(4),
   };
@@ -37,9 +40,26 @@ describe("ring prover contracts", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
+  it("refuses a key catalog that leaves out a pinned ring key", async () => {
+    const keys = Object.entries(RING_PROVING_KEY_SHA256S).map(([name, sha256]) => ({
+      name,
+      artifacts: [{ format: "gnark", sha256, size: 1, url: `https://keys.test/${name}` }],
+    }));
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => Response.json({ keys }));
+    await expect(ringProver(fetch).checkProvingKeys()).resolves.toMatchObject({
+      keys: expect.arrayContaining([expect.objectContaining({ name: keys[0]?.name })]),
+    });
+    const [dropped, ...served] = keys;
+    fetch.mockResolvedValueOnce(Response.json({ keys: served }));
+    await expect(ringProver(fetch).checkProvingKeys()).rejects.toMatchObject({
+      code: "RING_PROVING_KEYS_MISSING",
+      details: { keyNames: dropped?.name },
+    });
+  });
+
   it("refuses a ring proof from another ring key", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>(async () =>
-      Response.json(proofFor({ circuitType: "custom-ring-deposit-8" })),
+      Response.json(proofFor({ circuitType: "custom-ring-merge" })),
     );
     await expect(ringProver(fetch).proveRing(registerKey)).rejects.toMatchObject({
       code: "CLIENT_PROVING_KEY_MISMATCH",

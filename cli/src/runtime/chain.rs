@@ -7,16 +7,16 @@ use solana_signature::Signature;
 use solana_transaction_error::TransactionError;
 use spr_api::{BlockingInsideRuntime, BlockingRuntime};
 use spr_client::{
-    AsyncProverClient, AsyncRpc, AsyncZolanaClient, Blocking, ClientError, IndexerPollConfig,
-    SolanaRpc, ZolanaIndexer,
+    AsyncProverClient, AsyncRpc, AsyncSprClient, Blocking, ClientError, IndexerPollConfig,
+    SolanaRpc, SprIndexer,
 };
 
-pub struct Zolana<R = SolanaRpc, I = ZolanaIndexer> {
+pub struct Zolana<R = SolanaRpc, I = SprIndexer> {
     chain: RingClient<Blocking<R>, Blocking<I>>,
     runtime: BlockingRuntime,
 }
 
-pub type Chain<R = SolanaRpc, I = ZolanaIndexer> = AsyncZolanaClient<Blocking<R>, Blocking<I>>;
+pub type Chain<R = SolanaRpc, I = SprIndexer> = AsyncSprClient<Blocking<R>, Blocking<I>>;
 
 /// `prover` proves the SPP statements and `ring_prover` the ring statements.
 pub struct ZolanaServices<R, I> {
@@ -34,7 +34,7 @@ impl<R, I> ZolanaServices<R, I> {
             prover,
             ring_prover,
         } = self;
-        let zolana = AsyncZolanaClient::new(Blocking::new(rpc), Blocking::new(indexer), prover);
+        let zolana = AsyncSprClient::new(Blocking::new(rpc), Blocking::new(indexer), prover);
         Zolana {
             chain: RingClient::new(zolana, ring_prover),
             runtime: BlockingRuntime::new(),

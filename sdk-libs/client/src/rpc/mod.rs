@@ -5,12 +5,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use custom_ring_interface::{MemberRegistry, RecordQueue, RingAccount, RootEntry};
+use custom_ring_interface::InputClass;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use solana_address::Address;
-use solana_signature::Signature;
 use solana_signer::{Signer, SignerError};
 use spr_client::{AsyncRpc, ClientError};
 use spr_indexer_api::{
@@ -24,29 +23,70 @@ use zolana_secret_file::{
     create_new, read_key32, Access, KeyPairFiles, SecretFileError, Visibility,
 };
 
+mod authority_transfer;
+mod delegate_read;
+mod list_salt_read;
+mod merge_settings;
+mod policy_authority;
+mod reader_grant;
+mod record_update;
+mod relay;
+mod relay_enroll;
+mod relay_proof;
+mod spend_coverage;
+mod wallet_activity;
+mod wallet_snapshot;
+mod wallet_status;
+
+pub use authority_transfer::*;
+pub use delegate_read::*;
+pub use list_salt_read::*;
+pub use merge_settings::*;
+pub use policy_authority::*;
+pub use reader_grant::*;
+pub use record_update::*;
+pub use relay::*;
+pub use relay_enroll::*;
+pub use relay_proof::*;
+pub use spend_coverage::*;
+pub use wallet_activity::*;
+pub use wallet_snapshot::*;
+pub use wallet_status::*;
+
 use crate::{
-    AuditError, AuditedInput, AuditedOutput, AuditedTransaction, AuditedUtxo, InputOpening,
-    InputRing, KnownUtxo, MergeAuditPage, MergeKeys, OutputOpening, OutputPayloadErrorKind,
-    ReaderKey, ReaderKeyError, RingOwnerTag, RingWithdrawal, UtxoOwner,
+    AuditError, AuditedInput, AuditedMergeOutput, AuditedOutput, AuditedTransaction, AuditedUtxo,
+    KnownUtxo, OutputOpening, OutputPayloadErrorKind, ReaderKey, ReaderKeyError, RingOwnerTag,
+    RingWithdrawal, UtxoOwner,
 };
 
 pub const HEALTH: &str = "health";
 pub const CREATE_AUDITOR_KEY: &str = "createAuditorKey";
 pub const RING_STATUS: &str = "ringStatus";
-pub const RING_DEPOSITS: &str = "ringDeposits";
 pub const GET_DECRYPTED_TRANSACTIONS: &str = "getDecryptedTransactions";
+pub const GET_WALLET_ACTIVITY: &str = "getWalletActivity";
 pub const GET_AUDITED_MERGES: &str = "getAuditedMerges";
 pub const GET_AUDITED_UTXOS: &str = "getAuditedUtxos";
+pub const GET_RELAY_QUOTE: &str = "getRelayQuote";
+pub const PREPARE_RELAY: &str = "prepareRelay";
+pub const SUBMIT_RELAY: &str = "submitRelay";
+pub const GET_RELAY_STATUS: &str = "getRelayStatus";
+pub const SUBMIT_RECORD_UPDATE: &str = "submitRecordUpdate";
+pub const GET_RECORD_UPDATE_STATUS: &str = "getRecordUpdateStatus";
+pub const SET_MERGE_SETTINGS: &str = "setMergeSettings";
+pub const SET_READER_GRANT: &str = "setReaderGrant";
+pub const PREPARE_AUTHORITY_TRANSFER: &str = "prepareAuthorityTransfer";
+pub const GET_PENDING_LIST_APPROVALS: &str = "getPendingListApprovals";
+pub const REFUSE_LIST_APPROVAL: &str = "refuseListApproval";
+pub const CREATE_RECORDS_REGISTRY: &str = "createRecordsRegistry";
 /// The most UTXO hashes one `getAuditedUtxos` request names.
 pub const AUDITED_UTXOS_LIMIT: usize = 100;
 pub const AUDIT_CURSOR_LIMIT: usize = 256;
 pub const AUDIT_PAGE_LIMIT: u64 = 100;
-pub const DEPOSITS_PAGE_LIMIT: u32 = 50;
-pub const MAX_DEPOSITS_PAGE_LIMIT: u32 = 200;
-const ATTESTATION_DOMAIN: &[u8] = b"zolana/ring-auditor-key/v2";
-const READ_DOMAIN: &str = "zolana/ring-rpc-read/v2";
-const AUDITOR_KEY_REQUEST_DOMAIN: &str = "zolana/ring-rpc-auditor-key-request/v1";
-const AUDITED_UTXOS_DOMAIN: &str = "zolana/ring-rpc-audited-utxos/v1";
+pub const PENDING_LIST_APPROVALS_PAGE_LIMIT: usize = 100;
+const ATTESTATION_DOMAIN: &[u8] = b"zolana/ring-auditor-key";
+const READ_DOMAIN: &str = "zolana/ring-rpc-read";
+const AUDITOR_KEY_REQUEST_DOMAIN: &str = "zolana/ring-rpc-auditor-key-request";
+const AUDITED_UTXOS_DOMAIN: &str = "zolana/ring-rpc-audited-utxos";
 
 /// One cursor rule for the request builder, the page and the indexer response check.
 pub fn cursor_in_bounds(cursor: &[u8]) -> bool {
@@ -83,7 +123,7 @@ pub struct CreateAuditorKeyRequest {
     pub auth: AuthorityAuth,
 }
 
-/// Signed by the ring's Loader v3 upgrade authority or its config authority.
+/// Signed by the ring's Loader v3 upgrade authority or its policy authority.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AuthorityAuth {
@@ -108,42 +148,6 @@ pub struct CreateAuditorKeyResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RingDepositsRequest {
-    pub ring_program_id: SerializablePubkey,
-    /// Signatures examined, not deposits found.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub limit: Option<u32>,
-    /// Opaque, taken from the previous page.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<Base64String>,
-}
-
-/// A deposit publishes its asset and amount, reading it takes no auditor key.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct DepositRecord {
-    pub signature: SerializableSignature,
-    pub slot: u64,
-    /// The owner tag of the note the deposit created.
-    pub depositor: Hash,
-    pub asset: SerializablePubkey,
-    pub amount: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RingDepositsResponse {
-    pub deposits: Vec<DepositRecord>,
-    /// Absent once the ring has no older history.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<Base64String>,
-    /// Slot of the oldest signature examined, absent when the page examined nothing.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub oldest_slot: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RingStatusRequest {
     pub ring_program_id: SerializablePubkey,
 }
@@ -161,9 +165,6 @@ pub struct RingStatusResponse {
     /// Absent until SPP holds a config for the ring.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activation: Option<RingActivation>,
-    /// Absent until the ring creates its member registry.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub registry: Option<RegistryStatus>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,37 +174,9 @@ pub struct RingActivation {
     pub paused: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RegistryStatus {
-    /// Entry `i` sits at history slot `i`, `null` for a slot never written.
-    pub history: Vec<Option<RegistryRoot>>,
-    /// The history slot of the newest root.
-    pub history_cursor: u8,
-    pub next_index: u32,
-    /// The applied position every own-ring root must reach.
-    pub floor: u64,
-    pub prior_floor: u64,
-    /// The slot of the last floor raise.
-    pub floor_slot: u64,
-    /// Queue positions `head..tail` wait for an application.
-    pub queue_head: u64,
-    pub queue_tail: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RegistryRoot {
-    pub root: Hash,
-    /// The queue head right after the application that pushed the root.
-    pub applied: u64,
-    pub slot: u64,
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RingChainStatus {
     pub activation: Option<RingActivation>,
-    pub registry: Option<RegistryStatus>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -232,6 +205,9 @@ pub struct GetDecryptedTransactionsRequest {
     pub cursor: Option<Base64String>,
     #[serde(default)]
     pub limit: Option<Limit>,
+    /// Narrows the read to one wallet's rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wallet: Option<SerializablePubkey>,
     pub auth: ReadAuth,
 }
 
@@ -250,6 +226,9 @@ pub struct GetAuditedUtxosRequest {
     pub ring_program_id: Option<SerializablePubkey>,
     /// UTXO hashes with their tree id, `1..=AUDITED_UTXOS_LIMIT` of them.
     pub utxo_hashes: Vec<Hash>,
+    /// Narrows the read to one wallet's notes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wallet: Option<SerializablePubkey>,
     pub auth: ReadAuth,
 }
 
@@ -284,90 +263,38 @@ pub struct AuditedUtxoView {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AuditedMergesPage {
     pub opened: Vec<AuditedMergeRecord>,
-    pub unresolved: Vec<UnresolvedMergeRecord>,
     pub cursor: Option<Base64String>,
 }
 
+/// A resolved merge output, an audit record of inherited fields and no wallet opening.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AuditedMergeRecord {
+    pub slot: u64,
     pub tx_signature: SerializableSignature,
     pub event_index: u16,
     pub output_commitment: Hash,
-    /// The authenticated registry member hash, the event names no signing key.
-    pub owner_member: Hash,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub owner_pubkey: Option<SerializablePubkey>,
+    pub owner_key: SerializablePubkey,
+    pub asset: Hash,
     pub mint: SerializablePubkey,
     pub amount: u64,
-    pub blinding: Hash,
-    pub ring_data_hash: Hash,
-    pub input_nullifiers: Vec<Hash>,
-    /// Absent for an anonymous merge, whose nullifier key stays hidden.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub nullifier: Option<Hash>,
-    /// The disclosed spent commitments of an anonymous merge, padding zero.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input_commitments: Option<Vec<Hash>>,
+    /// With padding left out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub real_nullifiers: Vec<Hash>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct UnresolvedMergeRecord {
-    pub tx_signature: SerializableSignature,
-    pub event_index: u16,
-    pub output_commitment: Hash,
-}
-
-impl From<MergeAuditPage> for GetAuditedMergesResponse {
-    fn from(page: MergeAuditPage) -> Self {
+impl From<&AuditedMergeOutput> for AuditedMergeRecord {
+    fn from(output: &AuditedMergeOutput) -> Self {
         Self {
-            context: page.context,
-            value: AuditedMergesPage {
-                opened: page
-                    .result
-                    .opened
-                    .into_iter()
-                    .map(|merge| {
-                        let (nullifier, input_commitments) = match merge.keys {
-                            MergeKeys::Escrowed { nullifier } => (Some(Hash(nullifier)), None),
-                            MergeKeys::Disclosed { input_commitments } => (
-                                None,
-                                Some(input_commitments.into_iter().map(Hash).collect()),
-                            ),
-                        };
-                        AuditedMergeRecord {
-                            tx_signature: merge.tx_signature.into(),
-                            event_index: merge.event_index,
-                            output_commitment: Hash(merge.output_commitment),
-                            owner_member: Hash(merge.owner_member),
-                            owner_pubkey: merge.owner_pubkey.map(Into::into),
-                            mint: merge.mint.into(),
-                            amount: merge.amount,
-                            blinding: Hash(merge.blinding),
-                            ring_data_hash: Hash(merge.ring_data_hash),
-                            input_nullifiers: merge
-                                .input_nullifiers
-                                .into_iter()
-                                .map(Hash)
-                                .collect(),
-                            nullifier,
-                            input_commitments,
-                        }
-                    })
-                    .collect(),
-                unresolved: page
-                    .result
-                    .unresolved
-                    .into_iter()
-                    .map(|merge| UnresolvedMergeRecord {
-                        tx_signature: merge.tx_signature.into(),
-                        event_index: merge.event_index,
-                        output_commitment: Hash(merge.output_commitment),
-                    })
-                    .collect(),
-                cursor: page.next_cursor.map(Into::into),
-            },
+            slot: output.slot,
+            tx_signature: output.tx_signature.into(),
+            event_index: output.event_index,
+            output_commitment: Hash(output.commitment),
+            owner_key: output.owner_key.into(),
+            asset: Hash(output.asset),
+            mint: output.mint.into(),
+            amount: output.amount,
+            real_nullifiers: output.real_nullifiers.iter().copied().map(Hash).collect(),
         }
     }
 }
@@ -455,13 +382,15 @@ pub struct DecryptedTransaction {
     /// Every slot whose rebuilt opening reaches its published commitment, in published order.
     pub outputs: Vec<DecryptedOutput>,
     pub payload_errors: Vec<DecryptedPayloadError>,
-    /// The hidden sender of an anonymous ring.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sender: Option<DecryptedSender>,
-    /// One per published nullifier of an anonymous ring.
+    /// `R`, spent notes among the published inputs.
+    pub real_inputs: u8,
+    /// One per published nullifier.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<DecryptedInput>,
     pub nullifiers: Vec<Hash>,
+    /// Owner signers or in-proof owner of a confidential transfer, a data output owner among them may spend no input.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spenders: Vec<SerializablePubkey>,
     /// Required signers, fee payer first.
     pub signers: Vec<SerializablePubkey>,
     /// Public settlement legs, where value left the ring.
@@ -474,6 +403,7 @@ pub struct ConfirmedAudit {
     pub audited: AuditedTransaction,
     pub event_index: u16,
     pub nullifiers: Vec<[u8; 32]>,
+    pub spenders: Vec<Address>,
     pub signers: Vec<Address>,
     pub withdrawals: Vec<RingWithdrawal>,
 }
@@ -502,10 +432,6 @@ pub struct DecryptedOutput {
     /// Absent for a dummy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub utxo: Option<DecryptedUtxo>,
-    /// The recipient's X25519 u of a ring output.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub recipient_u: Option<Hash>,
-    /// The view tag of an anonymous ring output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<Hash>,
 }
@@ -526,7 +452,6 @@ pub struct DecryptedUtxo {
     pub owner_key: SerializablePubkey,
     pub nullifier_pk: Hash,
     pub asset: Hash,
-    /// Absent while the asset registry does not know the asset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mint: Option<SerializablePubkey>,
     pub amount: u64,
@@ -539,11 +464,7 @@ pub struct DecryptedUtxo {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DecryptedKnownUtxo {
     pub owner_key: SerializablePubkey,
-    /// Exactly one of `nullifier_pk` and `owner_hash`, the latter for a deposited note.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub nullifier_pk: Option<Hash>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub owner_hash: Option<Hash>,
+    pub nullifier_pk: Hash,
     pub asset: Hash,
     /// Absent while the asset registry does not know the asset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -557,44 +478,39 @@ pub struct DecryptedKnownUtxo {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct DecryptedSender {
-    pub owner_key: SerializablePubkey,
-    /// Absent when spent note 0 is a deposit.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub nullifier_pk: Option<Hash>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DecryptedInput {
     pub nullifier: Hash,
-    /// Absent for a dummy input and an input under an ambiguous prefix.
+    pub class: DecryptedInputClass,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub opening: Option<DecryptedInputOpening>,
-    /// The sender's ring notes that carry the input's prefix, more of them than inputs name it.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub candidates: Vec<Hash>,
+    pub default_input: Option<DecryptedDefaultInput>,
+}
+
+/// The proven class of one published input, an address spends no note.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DecryptedInputClass {
+    Note,
+    Address,
+    Dummy,
+}
+
+impl From<InputClass> for DecryptedInputClass {
+    fn from(class: InputClass) -> Self {
+        match class {
+            InputClass::Note => Self::Note,
+            InputClass::Address => Self::Address,
+            InputClass::Dummy => Self::Dummy,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct DecryptedInputOpening {
-    pub asset: Hash,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mint: Option<SerializablePubkey>,
-    pub amount: u64,
-    pub blinding: Hash,
+pub struct DecryptedDefaultInput {
+    pub utxo: DecryptedUtxo,
     /// Absent without the input's tree id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ring: Option<DecryptedInputRing>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
-pub enum DecryptedInputRing {
-    Ring { commitment: Hash },
-    Default { commitment: Hash },
-    Unresolved { ring: Hash, default: Hash },
+    pub commitment: Option<Hash>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -622,8 +538,6 @@ pub struct SkippedTransaction {
 pub enum SkippedReason {
     MissingAuditorMessage,
     InvalidAuditData,
-    /// An anonymous input names a note the service has not opened yet.
-    UnseenInput,
 }
 
 /// What a signed request covers, besides its timestamp and nonce.
@@ -635,6 +549,7 @@ pub trait Attestation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PagedRead {
     DecryptedTransactions,
+    WalletActivity,
     AuditedMerges,
 }
 
@@ -654,6 +569,7 @@ pub struct ReadAttestation {
     pub target: ReadTarget,
     pub cursor: Option<Base64String>,
     pub limit: Option<Limit>,
+    pub wallet: Option<Address>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -667,6 +583,7 @@ pub struct AuditedUtxosAttestation {
     pub target: ReadTarget,
     /// sha256 of the requested hashes, concatenated in request order.
     pub utxo_hashes: [u8; 32],
+    pub wallet: Option<Address>,
 }
 
 /// The service's statement of the auditor key it holds, bound to the request it answers.
@@ -721,32 +638,13 @@ impl AuditorKeyStatement<'_> {
     }
 }
 
-impl RingDepositsRequest {
-    pub fn page_limit(&self) -> usize {
-        self.limit
-            .unwrap_or(DEPOSITS_PAGE_LIMIT)
-            .clamp(1, MAX_DEPOSITS_PAGE_LIMIT) as usize
-    }
-
-    /// The Solana `before` bound the cursor carries.
-    pub fn before(&self) -> Result<Option<Signature>, ReadBuildError> {
-        self.cursor
-            .as_ref()
-            .map(|cursor| {
-                <[u8; 64]>::try_from(cursor.0.as_slice())
-                    .map(Signature::from)
-                    .map_err(|_| ReadBuildError::Cursor)
-            })
-            .transpose()
-    }
-}
-
 impl From<ConfirmedAudit> for DecryptedTransaction {
     fn from(confirmed: ConfirmedAudit) -> Self {
         let ConfirmedAudit {
             audited,
             event_index,
             nullifiers,
+            spenders,
             signers,
             withdrawals,
         } = confirmed;
@@ -764,12 +662,13 @@ impl From<ConfirmedAudit> for DecryptedTransaction {
                     kind: error.kind,
                 })
                 .collect(),
-            sender: audited.sender.map(|sender| DecryptedSender {
-                owner_key: sender.owner_key.into(),
-                nullifier_pk: sender.nullifier_pk.map(Into::into),
-            }),
+            real_inputs: audited.real_inputs,
             inputs: audited.inputs.into_iter().map(Into::into).collect(),
             nullifiers: nullifiers.into_iter().map(Into::into).collect(),
+            spenders: spenders
+                .into_iter()
+                .map(|key| key.to_bytes().into())
+                .collect(),
             signers: signers
                 .into_iter()
                 .map(|key| key.to_bytes().into())
@@ -791,27 +690,13 @@ impl From<ConfirmedAudit> for DecryptedTransaction {
 
 impl From<AuditedOutput> for DecryptedOutput {
     fn from(output: AuditedOutput) -> Self {
-        let (kind, utxo, recipient_u, tag) = match output.opening {
+        let (kind, utxo, tag) = match output.opening {
             OutputOpening::Ring {
                 utxo,
-                owner_tag: RingOwnerTag::Recipient(recipient_u),
-            } => (
-                DecryptedOutputKind::Ring,
-                Some(utxo),
-                Some(recipient_u.into()),
-                None,
-            ),
-            OutputOpening::Ring {
-                utxo,
-                owner_tag: RingOwnerTag::View(tag),
-            } => (
-                DecryptedOutputKind::Ring,
-                Some(utxo),
-                None,
-                Some(tag.into()),
-            ),
-            OutputOpening::Exit(utxo) => (DecryptedOutputKind::Exit, Some(utxo), None, None),
-            OutputOpening::Dummy => (DecryptedOutputKind::Dummy, None, None, None),
+                owner_tag: RingOwnerTag(tag),
+            } => (DecryptedOutputKind::Ring, Some(utxo), Some(tag.into())),
+            OutputOpening::Exit(utxo) => (DecryptedOutputKind::Exit, Some(utxo), None),
+            OutputOpening::Dummy => (DecryptedOutputKind::Dummy, None, None),
         };
         Self {
             slot_index: output.slot_index,
@@ -822,9 +707,15 @@ impl From<AuditedOutput> for DecryptedOutput {
             },
             kind,
             utxo: utxo.map(Into::into),
-            recipient_u,
             tag,
         }
+    }
+}
+
+impl DecryptedOutput {
+    /// `None` for a dummy.
+    pub fn owner_key(&self) -> Option<SerializablePubkey> {
+        self.utxo.as_ref().map(|utxo| utxo.owner_key)
     }
 }
 
@@ -845,14 +736,10 @@ impl From<AuditedUtxo> for DecryptedUtxo {
 
 impl From<KnownUtxo> for DecryptedKnownUtxo {
     fn from(utxo: KnownUtxo) -> Self {
-        let (nullifier_pk, owner_hash) = match utxo.owner {
-            UtxoOwner::Keyed { nullifier_pk } => (Some(nullifier_pk.into()), None),
-            UtxoOwner::Deposited { owner_hash } => (None, Some(owner_hash.into())),
-        };
+        let UtxoOwner::Keyed { nullifier_pk } = utxo.owner;
         Self {
             owner_key: utxo.owner_key.into(),
-            nullifier_pk,
-            owner_hash,
+            nullifier_pk: nullifier_pk.into(),
             asset: utxo.asset.into(),
             mint: utxo.mint.map(Into::into),
             amount: utxo.amount,
@@ -868,18 +755,11 @@ impl TryFrom<&DecryptedKnownUtxo> for KnownUtxo {
     type Error = AuditError;
 
     fn try_from(utxo: &DecryptedKnownUtxo) -> Result<Self, AuditError> {
-        let owner = match (&utxo.nullifier_pk, &utxo.owner_hash) {
-            (Some(nullifier_pk), None) => UtxoOwner::Keyed {
-                nullifier_pk: nullifier_pk.0,
-            },
-            (None, Some(owner_hash)) => UtxoOwner::Deposited {
-                owner_hash: owner_hash.0,
-            },
-            _ => return Err(AuditError::AuditedUtxoOwner),
-        };
         Ok(Self {
             owner_key: utxo.owner_key.0.to_bytes(),
-            owner,
+            owner: UtxoOwner::Keyed {
+                nullifier_pk: utxo.nullifier_pk.0,
+            },
             asset: utxo.asset.0,
             mint: utxo.mint.map(|mint| mint.0),
             amount: utxo.amount,
@@ -928,62 +808,16 @@ impl GetAuditedUtxosResponse {
 
 impl From<AuditedInput> for DecryptedInput {
     fn from(input: AuditedInput) -> Self {
-        let candidates = match &input.opening {
-            InputOpening::Ambiguous { candidates } => {
-                candidates.iter().copied().map(Into::into).collect()
-            }
-            InputOpening::Dummy | InputOpening::Opened(_) => Vec::new(),
-        };
         Self {
             nullifier: input.nullifier.into(),
-            candidates,
-            opening: input.opening.opened().map(|opening| DecryptedInputOpening {
-                asset: opening.asset.into(),
-                mint: opening.mint.map(Into::into),
-                amount: opening.amount,
-                blinding: opening.blinding.into(),
-                ring: opening.ring.map(|ring| match ring {
-                    InputRing::Ring { commitment } => DecryptedInputRing::Ring {
-                        commitment: commitment.into(),
-                    },
-                    InputRing::Default { commitment } => DecryptedInputRing::Default {
-                        commitment: commitment.into(),
-                    },
-                    InputRing::Unresolved { ring, default } => DecryptedInputRing::Unresolved {
-                        ring: ring.into(),
-                        default: default.into(),
-                    },
+            class: input.opening.class().into(),
+            default_input: input
+                .opening
+                .default_input()
+                .map(|input| DecryptedDefaultInput {
+                    utxo: input.utxo.into(),
+                    commitment: input.commitment.map(Into::into),
                 }),
-            }),
-        }
-    }
-}
-
-impl RegistryStatus {
-    pub fn new(registry: &MemberRegistry, queue: &RecordQueue) -> Self {
-        Self {
-            history: registry
-                .history
-                .iter()
-                .map(|entry| (entry.root != [0; 32]).then(|| RegistryRoot::from(entry)))
-                .collect(),
-            history_cursor: registry.history_cursor,
-            next_index: registry.next_index(),
-            floor: registry.floor(),
-            prior_floor: registry.prior_floor(),
-            floor_slot: registry.floor_slot(),
-            queue_head: queue.head(),
-            queue_tail: queue.tail(),
-        }
-    }
-}
-
-impl From<&RootEntry> for RegistryRoot {
-    fn from(entry: &RootEntry) -> Self {
-        Self {
-            root: entry.root.into(),
-            applied: entry.applied(),
-            slot: entry.slot(),
         }
     }
 }
@@ -993,13 +827,7 @@ impl RingChainStatus {
     pub async fn read<R: AsyncRpc + ?Sized>(rpc: &R, ring: Address) -> Result<Self, ClientError> {
         let pool = Address::new_from_array(SHIELDED_POOL_PROGRAM_ID);
         let (config, config_bump) = Address::find_program_address(&[RING_AUTH_PDA_SEED], &ring);
-        let (registry, registry_bump) =
-            Address::find_program_address(&[MemberRegistry::SEED], &ring);
-        let (queue, queue_bump) = Address::find_program_address(&[RecordQueue::SEED], &ring);
-        let accounts = rpc
-            .get_multiple_accounts(vec![config, registry, queue])
-            .await?;
-        let [config, registry, queue] = <[_; 3]>::try_from(accounts)
+        let [config] = <[_; 1]>::try_from(rpc.get_multiple_accounts(vec![config]).await?)
             .map_err(|_| ClientError::Rpc("ring status accounts are missing".to_owned()))?;
         let invalid = |name: &str| ClientError::Rpc(format!("ring {name} account is invalid"));
         let activation = config
@@ -1016,26 +844,7 @@ impl RingChainStatus {
                     .ok_or_else(|| invalid("SPP config"))
             })
             .transpose()?;
-        let registry = match (
-            registry.filter(|account| account.owner == ring),
-            queue.filter(|account| account.owner == ring),
-        ) {
-            (Some(registry), Some(queue)) => {
-                let registry = MemberRegistry::decode(&registry.owner, &ring, &registry.data)
-                    .filter(|registry| registry.bump == registry_bump)
-                    .ok_or_else(|| invalid("member registry"))?;
-                let queue = RecordQueue::decode(&queue.owner, &ring, &queue.data)
-                    .filter(|queue| queue.bump == queue_bump)
-                    .ok_or_else(|| invalid("record queue"))?;
-                Some(RegistryStatus::new(&registry, &queue))
-            }
-            (None, None) => None,
-            _ => return Err(invalid("member registry")),
-        };
-        Ok(Self {
-            activation,
-            registry,
-        })
+        Ok(Self { activation })
     }
 }
 
@@ -1052,6 +861,7 @@ impl PagedRead {
     pub const fn method(self) -> &'static str {
         match self {
             Self::DecryptedTransactions => GET_DECRYPTED_TRANSACTIONS,
+            Self::WalletActivity => GET_WALLET_ACTIVITY,
             Self::AuditedMerges => GET_AUDITED_MERGES,
         }
     }
@@ -1063,6 +873,7 @@ impl PagedRead {
             target,
             cursor: None,
             limit: None,
+            wallet: None,
         })
     }
 }
@@ -1082,12 +893,13 @@ impl Attestation for ReadAttestation {
     fn message(&self, timestamp: u64, nonce: &[u8; 32]) -> Vec<u8> {
         let cursor = self.cursor.as_ref().map_or(&[][..], |cursor| &cursor.0);
         format!(
-            "{READ_DOMAIN}\nmethod: {}\n{}\ntimestamp: {timestamp}\nnonce: {}\nlimit: {}\ncursor: {}",
+            "{READ_DOMAIN}\nmethod: {}\n{}\ntimestamp: {timestamp}\nnonce: {}\nlimit: {}\ncursor: {}{}",
             self.read.method(),
             self.target.lines(),
             base64(nonce),
             self.limit.as_ref().map_or(0, Limit::value),
             base64(cursor),
+            wallet_line(self.wallet),
         )
         .into_bytes()
     }
@@ -1114,6 +926,7 @@ impl AuditedUtxosAttestation {
         Self {
             target,
             utxo_hashes: digest.finalize().into(),
+            wallet: None,
         }
     }
 }
@@ -1121,10 +934,11 @@ impl AuditedUtxosAttestation {
 impl Attestation for AuditedUtxosAttestation {
     fn message(&self, timestamp: u64, nonce: &[u8; 32]) -> Vec<u8> {
         format!(
-            "{AUDITED_UTXOS_DOMAIN}\n{}\ntimestamp: {timestamp}\nnonce: {}\nutxos: {}",
+            "{AUDITED_UTXOS_DOMAIN}\n{}\ntimestamp: {timestamp}\nnonce: {}\nutxos: {}{}",
             self.target.lines(),
             base64(nonce),
             base64(&self.utxo_hashes),
+            wallet_line(self.wallet),
         )
         .into_bytes()
     }
@@ -1188,6 +1002,11 @@ impl ReadRequest {
         Ok(self)
     }
 
+    pub fn with_wallet(mut self, wallet: Address) -> Self {
+        self.attestation.wallet = Some(wallet);
+        self
+    }
+
     pub fn sign<S: ReadSigner + ?Sized>(
         self,
         signer: &S,
@@ -1197,12 +1016,14 @@ impl ReadRequest {
             target,
             cursor,
             limit,
+            wallet,
             ..
         } = self.attestation;
         Ok(GetDecryptedTransactionsRequest {
             ring_program_id: Some(target.ring.to_bytes().into()),
             cursor,
             limit,
+            wallet: wallet.map(Into::into),
             auth,
         })
     }
@@ -1216,12 +1037,18 @@ impl AuditedUtxosRequest {
         }
     }
 
+    pub fn with_wallet(mut self, wallet: Address) -> Self {
+        self.signed.attestation.wallet = Some(wallet);
+        self
+    }
+
     pub fn sign<S: ReadSigner + ?Sized>(
         self,
         signer: &S,
     ) -> Result<GetAuditedUtxosRequest, ReadBuildError> {
         Ok(GetAuditedUtxosRequest {
             ring_program_id: Some(self.signed.attestation.target.ring.to_bytes().into()),
+            wallet: self.signed.attestation.wallet.map(Into::into),
             auth: self.signed.read_auth(signer)?,
             utxo_hashes: self.utxo_hashes,
         })
@@ -1390,6 +1217,11 @@ pub fn public_key_path(secret: &Path) -> Result<PathBuf, KeyFileError> {
 fn base64(bytes: &[u8]) -> String {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+/// Empty for a ring-wide read, its attestation keeps the bytes the TypeScript twin signs.
+fn wallet_line(wallet: Option<Address>) -> String {
+    wallet.map_or_else(String::new, |wallet| format!("\nwallet: {wallet}"))
 }
 
 #[cfg(test)]

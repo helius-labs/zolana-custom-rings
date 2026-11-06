@@ -64,6 +64,24 @@ func TestEveryKeyIsRegisteredAndPinned(t *testing.T) {
 	}
 }
 
+// WRITE_RING_PINS=1 rewrites the measured counts, a count moves only with a circuit change.
+func TestWriteConstraintPins(t *testing.T) {
+	if os.Getenv("WRITE_RING_PINS") == "" {
+		t.Skip("WRITE_RING_PINS=1 rewrites prover/ringtest/ringkey/constraints.json")
+	}
+	counts := map[string]int{}
+	for _, key := range Keys {
+		counts[strings.TrimSuffix(key.KeyFile(), ".key")] = compileRing(t, key.Circuit).GetNbConstraints()
+	}
+	encoded, err := json.MarshalIndent(counts, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("../ringtest/ringkey/constraints.json", append(encoded, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // Every ring key compiles with one public input and the one BSB22 commitment over private wires groth16-solana verifies.
 func TestRingKeysCompileToTheVerifiedShape(t *testing.T) {
 	for _, key := range Keys {

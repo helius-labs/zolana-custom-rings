@@ -6,7 +6,6 @@ import (
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
-	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
 
 const (
@@ -34,29 +33,43 @@ var curatorRegistry = big.NewInt(0xc0ffee)
 
 // World is one transfer with the registries and table it reads, Build derives every hash from it.
 type World struct {
-	// Outputs is the member key's capacity, zero selects the delegate key of Shape.
-	Outputs                                int
-	WithdrawalCapacity                     int
-	OwnOnly                                bool
-	Withdrawals                            []Slot
-	Shape                                  transaction.Shape
-	Anonymous, KeyEscrow, ApprovalRequired bool
-	Sender                                 int64
-	Table                                  Table
-	Own, Curator                           map[int64]Record
-	Slots, Inputs                          []Slot
-	Public                                 []PublicSlot
-	// Records sizes the record pools, a zero capacity takes the key's maximum.
+	Outputs            int
+	WithdrawalCapacity int
+	Withdrawals        []Slot
+	// Anonymous publishes no recipient, Unscreened writes no policy hash, NoOwnRegistry holds no thresholds, Delegate bypasses every policy.
+	Unscreened, NoOwnRegistry, Delegate bool
+	// Approval is the mask the proof must reach.
+	Approval uint64
+	Sender   int64
+	CoOwners []int64
+	// Nil derives one Sender input per asset the balance needs.
+	Inputs       []Slot
+	Table        Table
+	Own, Curator map[int64]Record
+	Slots        []Slot
+	Public       []PublicSlot
+	// Records sizes the record pools, a zero capacity takes the shape's maximum.
 	Records policy.RecordPoolShape
+	// SaltedKeys widens the pools as a key with no wider sibling does.
+	SaltedKeys int
+	// Enrolled owners hold a tracking row with their fixture salt.
+	Enrolled []int64
+	// List bits at each owner's salted key, enrolled or not.
+	Salted, CuratorSalted map[int64]uint64
 }
+
+// OutputCapacities are the output counts of the transfer keys.
+var OutputCapacities = []int{2, 4, 8}
 
 // Table is a policy table of ringregistry list bits, a list reads the curator registry when Curator holds its bit.
 type Table struct {
 	Lists   []uint64
 	Curator map[uint64]bool
-	Rules   []Rule
-	Inline  []InlineLimit
-	Limits  []OutflowLimit
+	// Mask of lists owners read at their salted keys.
+	Salted uint64
+	Rules  []Rule
+	Inline []InlineLimit
+	Limits []OutflowLimit
 }
 
 // Rule mirrors one Row of program-libs/policy/src/rule_table/mod.rs.
@@ -74,10 +87,11 @@ type OutflowLimit struct {
 	Cap, CosignAbove uint64
 }
 
-// Record is one member's registry record, a registered member escrows Poseidon(nullifierPk, ctHash) of its outputs.
+// Record is one member's registry record.
 type Record struct {
-	Lists      uint64
-	Registered bool
+	Lists uint64
+	// WithdrawalThreshold is an asset record's approval bound, zero leaves it unwritten.
+	WithdrawalThreshold uint64
 }
 
 // Slot is one output or input, a zero owner leaves it a dummy unless Unowned holds.
@@ -85,23 +99,28 @@ type Slot struct {
 	Owner, Asset  int64
 	Amount        uint64
 	Exit, Unowned bool
+	// ZeroKey takes the owner's note under ZeroNullifierPk.
+	ZeroKey bool
+	// bigAmount carries a balanced input past u64, the harness reads no range.
+	bigAmount *big.Int
 }
 
+// PublicSlot is one folded public slot, Gross zero takes the withdrawn amount.
 type PublicSlot struct {
 	Asset, Amount int64
+	Gross         uint64
 }
 
 func Confidential() World {
 	return World{
-		Outputs:   2,
-		KeyEscrow: true,
-		Sender:    Sender,
+		Outputs: 2,
+		Sender:  Sender,
 		Table: Table{
 			Lists:  []uint64{ringregistry.AllowBit, ringregistry.BlockBit, ringregistry.FrozenBit},
 			Rules:  []Rule{Require(policy.SubjectOutputOwner, ringregistry.AllowBit), Forbid(policy.SubjectSender, ringregistry.FrozenBit)},
 			Limits: []OutflowLimit{{Asset: AssetA, Cap: 1000, CosignAbove: 500}},
 		},
-		Own:     map[int64]Record{Sender: Escrowed(ringregistry.AllowBit), Alice: Escrowed(ringregistry.AllowBit), Bob: Escrowed(ringregistry.AllowBit)},
+		Own:     map[int64]Record{Sender: Record{Lists: ringregistry.AllowBit}, Alice: Record{Lists: ringregistry.AllowBit}, Bob: Record{Lists: ringregistry.AllowBit}},
 		Curator: map[int64]Record{},
 		Slots:   []Slot{{Owner: Alice, Asset: AssetA, Amount: 300}, {Owner: Sender, Asset: AssetA, Amount: 200}},
 	}
@@ -109,7 +128,7 @@ func Confidential() World {
 
 func Anonymous() World {
 	w := Confidential()
-	w.Anonymous, w.KeyEscrow = true, false
+
 	return w
 }
 
@@ -126,7 +145,7 @@ func Wide8() World {
 	w := Four()
 	w.Outputs = 8
 	for _, m := range []int64{Carol, Dave, Erin, Frank, Grace} {
-		w.Own[m] = Escrowed(ringregistry.AllowBit)
+		w.Own[m] = Record{Lists: ringregistry.AllowBit}
 	}
 	w.Own[AssetC] = Record{Lists: ringregistry.AllowBit}
 	w.Slots = []Slot{
@@ -138,25 +157,14 @@ func Wide8() World {
 	return w
 }
 
-func Wide16() World {
-	w := Wide8()
-	w.Outputs = 16
-	w.Slots = append(w.Slots, Slot{Owner: Frank, Asset: AssetC, Amount: 100}, Slot{Owner: Grace, Asset: AssetB, Amount: 100}, Slot{Owner: Sender, Asset: AssetB, Amount: 50})
-	return w
-}
-
 // MemberWorlds is the honest world of every member key capacity.
-var MemberWorlds = map[int]func() World{2: Confidential, 4: Four, 8: Wide8, 16: Wide16}
+var MemberWorlds = map[int]func() World{2: Confidential, 4: Four, 8: Wide8}
 
-func Delegate(shape transaction.Shape) World {
+// Delegate is a move on the authority rail, no rule or cap binds it.
+func Delegate(outputs int) World {
 	w := Four()
-	w.Outputs, w.Shape = 0, shape
-	w.Inputs = []Slot{{Owner: Sender, Asset: AssetA, Amount: 150}, {Owner: Sender, Asset: AssetB, Amount: 100}}[:min(2, shape.NInputs)]
+	w.Outputs, w.Delegate = outputs, true
 	return w
-}
-
-func Escrowed(lists uint64) Record {
-	return Record{Lists: lists, Registered: true}
 }
 
 // Require admits a subject on any of lists, as Rule::require_any does.
@@ -164,7 +172,7 @@ func Require(subject, lists uint64) Rule {
 	return Rule{Subject: subject, Mode: policy.ModePresent, Mask: lists}
 }
 
-// Forbid refuses only a subject on every one of lists, as Rule::forbid_all does.
+// Forbid refuses only a subject on every one of lists, as Rule::forbid_only_on_all does.
 func Forbid(subject, lists uint64) Rule {
 	return Rule{Subject: subject, Mode: policy.ModeAbsent, Mask: lists}
 }

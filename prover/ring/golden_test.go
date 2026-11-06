@@ -16,12 +16,12 @@ import (
 
 const goldenDigests = "testdata/witness.sha256"
 
-// rustGoldens are written by the Rust SDK, in its own key order.
+// rustGoldens holds the Rust SDK's requests, each named by its circuit type and in its own key order.
 const rustGoldens = "../../sdk-libs/sdk/tests/fixtures"
 
 // UPDATE_RING_GOLDENS=1 rewrites the digests, never the fixtures.
 func TestGoldenRequestsAssignTheRecordedWitness(t *testing.T) {
-	rust, err := filepath.Glob(filepath.Join(rustGoldens, "*.json"))
+	rust, err := filepath.Glob(filepath.Join(rustGoldens, "custom-ring-*.json"))
 	if err != nil || len(rust) == 0 {
 		t.Fatalf("no Rust fixtures: %v", err)
 	}
@@ -87,25 +87,10 @@ func goldenFiles(t testing.TB) []string {
 func goldenPath(name string) string {
 	var family string
 	switch {
-	case strings.HasPrefix(name, "custom-ring-audit-anonymous-entry-"):
-		family = "audit/entry"
-	case strings.HasPrefix(name, "custom-ring-audit-anonymous-v2-"):
-		parts := strings.Split(name, "-")
-		outputs := parts[len(parts)-1]
-		if outputs != "2" && outputs != "4" && outputs != "8" {
-			panic("unknown anonymous audit shape: " + name)
-		}
-		family = "audit/anonymous/outputs_" + outputs
-	case strings.HasPrefix(name, "custom-ring-audit-"):
-		family = "audit"
-	case strings.HasPrefix(name, "custom-ring-policy-member-"):
-		family = "policy/member"
-	case strings.HasPrefix(name, "custom-ring-policy-delegate-"):
-		family = "policy/delegate"
-	case strings.HasPrefix(name, "custom-ring-apply-records-"), name == "custom-ring-register-key", name == "custom-ring-withdrawal-exemption":
+	case strings.HasPrefix(name, "custom-ring-transfer-"):
+		family = "transfer"
+	case strings.HasPrefix(name, "custom-ring-apply-"), name == "custom-ring-register-key":
 		family = "records"
-	case strings.HasPrefix(name, "custom-ring-deposit-"):
-		family = "deposit"
 	case strings.HasPrefix(name, "custom-ring-merge-"):
 		family = "merge"
 	default:
