@@ -201,7 +201,6 @@ impl ScanAt<'_> {
         let anonymous = |assets: &RingAssets, wallet: &mut AnonymousWallet| {
             let scan = zolana.block_on(async {
                 AnonymousSync::new(keys, assets)
-                    .with_asset_rpc(zolana.as_async().rpc())
                     .with_indexer_config(config)
                     .fetch_wallet(zolana.as_async().indexer(), wallet)
                     .await

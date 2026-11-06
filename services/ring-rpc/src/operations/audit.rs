@@ -21,8 +21,8 @@ use zolana_ring_client::{
         SetReaderGrantRequest, SkippedReason, SkippedTransaction, SpendCoverageAttestation,
         WalletSnapshotReleaseAttestation, WalletStatusAttestation, AUDIT_PAGE_LIMIT,
     },
-    AuditError, AuditedInput, AuditedTransaction, ConfirmedEventKind, ConfirmedMerge, InputOpening,
-    ReaderKey, RingOrigin, RowDisposition, TransactionAudit,
+    AuditError, AuditedTransaction, ConfirmedEventKind, ConfirmedMerge, ReaderKey, RingOrigin,
+    RowDisposition, TransactionAudit,
 };
 use zolana_ring_policy::Member;
 
@@ -1061,7 +1061,7 @@ impl<S: TransactionSource> AuditService<S> {
                 .get(usize::from(position))
                 .is_some_and(|nullifier| record.real_nullifiers.contains(nullifier))
             {
-                true => InputRead::Real,
+                true => InputRead::Spend,
                 false => InputRead::Padding,
             }
         });
@@ -1149,7 +1149,7 @@ impl<S: TransactionSource> AuditService<S> {
                         work,
                     }),
                     Ok(None) => {
-                        observe_all(work, &tx, created_in, |_| InputRead::Real);
+                        observe_all(work, &tx, created_in, |_| InputRead::Spend);
                         work.mark_read(created_in);
                     }
                     Err(error) if error.disposition() == RowDisposition::Retry => {
@@ -1193,15 +1193,7 @@ impl<S: TransactionSource> AuditService<S> {
             });
             if let Ok(opened) = &opened {
                 work.open(created_in, opened.utxos());
-                for (position, input) in opened.inputs.iter().enumerate() {
-                    work.observe(Observation {
-                        nullifier: input.nullifier,
-                        frame: created_in,
-                        position: u16::try_from(position).unwrap_or(u16::MAX),
-                        read: audited_input_read(input),
-                        hit: None,
-                    });
-                }
+                observe_all(work, &tx, created_in, |_| InputRead::Spend);
                 work.mark_read(created_in);
             }
             let result = opened.and_then(|opened| Ok((opened, origin.spenders(mode)?)));
@@ -1369,16 +1361,6 @@ fn observe_all(
             read: read(position),
             hit: None,
         });
-    }
-}
-
-/// The proven input map and default bits decide, the index names the note a real input spent.
-fn audited_input_read(input: &AuditedInput) -> InputRead {
-    match &input.opening {
-        InputOpening::Dummy => InputRead::Padding,
-        InputOpening::Address => InputRead::Address,
-        InputOpening::External(_) => InputRead::External,
-        InputOpening::Real => InputRead::Real,
     }
 }
 

@@ -21,7 +21,6 @@ import (
 )
 
 const (
-	payoutKey    common.CircuitType = "custom-ring-transfer-payout-16-in1-w0-s1"
 	transferKey  common.CircuitType = "custom-ring-transfer-2-in24-w4-s4"
 	transfer4Key common.CircuitType = "custom-ring-transfer-4-in24-w4-s4"
 	transfer8Key common.CircuitType = "custom-ring-transfer-8-in16-w4-s4"
@@ -39,7 +38,7 @@ const (
 )
 
 func TestHostRequestsDecodeAndSolve(t *testing.T) {
-	for _, circuit := range []common.CircuitType{payoutKey, transferKey, transfer4Key, transfer8Key, wideKey, wide40Key, entryKey, entry8Key, entryWideKey, applyKey, batchKey, privateKey, enrollKey, registerKey, mergeKey} {
+	for _, circuit := range []common.CircuitType{transferKey, transfer4Key, transfer8Key, wideKey, wide40Key, entryKey, entry8Key, entryWideKey, applyKey, batchKey, privateKey, enrollKey, registerKey, mergeKey} {
 		t.Run(string(circuit), func(t *testing.T) {
 			payload := mustMarshal(t, hostRequest(t, keyOf(t, circuit)))
 			circuitOf := extensionOf(t, circuit).Circuit
@@ -75,9 +74,7 @@ func hostRequest(t testing.TB, k Key) any {
 	switch k.Family {
 	case Transfer:
 		w := ringtransfer.Signed(k.transferShape())
-		if !k.SingleAssetPayout {
-			w.Withdrawals, w.Public = fixtureLeg(t)
-		}
+		w.Withdrawals, w.Public = fixtureLeg(t)
 		w.DefaultInput = k.Entry
 		return requestOf[TransferParams](t, k.Circuit, w.Build(t).Circuit)
 	case ApplyRecords:

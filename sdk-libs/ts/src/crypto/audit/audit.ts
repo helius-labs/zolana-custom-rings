@@ -14,12 +14,11 @@ import {
   ENVELOPE_KEY_LEN,
   STREAM_FIRST_COUNTER,
   TAGGED_KEY_LEN,
+  OUTPUT_RECORD_LEN,
+  RECIPIENT_KEY_LEN,
   auditorMessageLen,
   envelopeRegion,
-  recordsLen,
-  tailsLen,
-  auditRecordLength,
-  DATA_TAIL_LEN,
+  recipientKeysLen,
   type AuditStreamLayout,
 } from "../../protocol/codec/ring-disclosure-layout.js";
 import { packBytesBe } from "../derivation/hasher.js";
@@ -29,10 +28,14 @@ import { RingKeyError } from "../error.js";
 /** Schedule labels, one secret under two labels gives two unrelated keys. */
 export const AUDIT_ENC_INFO = new TextEncoder().encode("CRING/adt");
 export const NF_KEY_ENC_INFO = new TextEncoder().encode("CRING/nfk");
-export const RECIPIENT_BODY_ENC_INFO = new TextEncoder().encode("CRING/rcp");
+/** One slot's record then its payload, the recipient and the auditor open it under `CRDS_i`. */
+export const OUTPUT_RECORD_ENC_INFO = new TextEncoder().encode("CRING/rcp");
 export const REPLY_ENC_INFO = new TextEncoder().encode("CRING/rpl");
 export const SENDER_BUNDLE_ENC_INFO = new TextEncoder().encode("CRING/snd");
+/** The merge envelope to the auditor. */
 export const MERGE_RECORD_ENC_INFO = new TextEncoder().encode("CRING/mrg");
+/** Rust `MERGE_OUTPUT_LABEL`, the merge record to its owner. */
+export const MERGE_OUTPUT_ENC_INFO = new TextEncoder().encode("CRING/mro");
 
 /** `"CR_S"`, Rust `AUDIT_SHARED_SECRET`. */
 const DOM_SEP_CR_SHARED = 0x4352_5f53;
@@ -54,19 +57,18 @@ export interface AuditorEnvelope {
   readonly ephemeralSecret: Bytes32;
   readonly ephemeralPublicKey: X25519PublicKey;
   readonly envelope: Uint8Array;
-  readonly records: readonly Uint8Array[];
-  /** One per published slot under `has_data`. */
-  readonly tails?: readonly Uint8Array[];
+  /** One sealed `V_i` per published slot. */
+  readonly recipientKeys: readonly Uint8Array[];
 }
 
 /** The one message a ring transfer publishes under the auditor's view tag. */
 export interface AuditorMessage {
   readonly ephemeralPublicKey: X25519PublicKey;
   readonly envelope: Uint8Array;
-  /** One per published slot. */
-  readonly records: readonly Uint8Array[];
-  /** One per published slot under `has_data`. */
-  readonly tails?: readonly Uint8Array[];
+  /** One sealed `V_i` per published slot. */
+  readonly recipientKeys: readonly Uint8Array[];
+  /** Each exit's record in slot order, an exit's SPP data holds its owner's scheme 3 body. */
+  readonly exitRecords: readonly Uint8Array[];
 }
 
 /** One label and secret fix one schedule, each region applies it at its own counter. */
@@ -160,8 +162,7 @@ export function sealSaltedAuditorStream(
     salt: Bytes16;
     auditorPublicKey: X25519PublicKey;
     envelope: Uint8Array;
-    records: readonly AuditorRegion[];
-    tails?: readonly AuditorRegion[];
+    recipientKeys: readonly AuditorRegion[];
   }>,
 ): AuditorEnvelope {
   const key = X25519Keypair.fromBytes(input.txViewingSecret);
@@ -177,8 +178,7 @@ function sealRegions(
   input: Readonly<{
     auditorPublicKey: X25519PublicKey;
     envelope: Uint8Array;
-    records: readonly AuditorRegion[];
-    tails?: readonly AuditorRegion[];
+    recipientKeys: readonly AuditorRegion[];
   }>,
   keyed: (shared: Bytes32) => Bytes32,
 ): AuditorEnvelope {
@@ -189,16 +189,14 @@ function sealRegions(
   try {
     const stream = (schedule = AuditSchedule.derive(keyed(secret), AUDIT_ENC_INFO));
     const envelope = stream.apply(STREAM_FIRST_COUNTER, input.envelope);
-    const records = Object.freeze(
-      input.records.map(({ counter, bytes }) => stream.apply(counter, bytes)),
+    const recipientKeys = Object.freeze(
+      input.recipientKeys.map(({ counter, bytes }) => stream.apply(counter, bytes)),
     );
-    const tails = input.tails?.map(({ counter, bytes }) => stream.apply(counter, bytes));
     return Object.freeze({
       ephemeralSecret: key.secretBytes(),
       ephemeralPublicKey: publicKey,
       envelope,
-      records,
-      ...(tails === undefined ? {} : { tails: Object.freeze(tails) }),
+      recipientKeys,
     });
   } finally {
     secret.fill(0);
@@ -272,7 +270,7 @@ export function auditorViewTag(auditorPublicKey: X25519PublicKey): Bytes32 {
   return auditorPublicKey.u();
 }
 
-/** `0x04 ‖ eph_u ‖ envelope_ct ‖ record_ct... ‖ tail_ct...` under the auditor's view tag. */
+/** `0x04 ‖ eph_u ‖ envelope_ct ‖ keys_ct ‖ exit record_ct...` under the auditor's view tag. */
 export function auditorMessageData(
   message: AuditorMessage,
   auditorPublicKey: X25519PublicKey,
@@ -282,17 +280,21 @@ export function auditorMessageData(
     data: concatBytes(
       message.ephemeralPublicKey.toBytes(),
       message.envelope,
-      ...message.records,
-      ...(message.tails ?? []),
+      ...message.recipientKeys,
+      ...message.exitRecords,
     ),
   });
 }
 
-/** The layout fixes every length, a message of any other length is refused. */
-export function parseAuditorMessage(data: Uint8Array, layout: AuditStreamLayout): AuditorMessage {
-  const bytes = checkedBytes(data, auditorMessageLen(layout), "auditor message");
-  const recordsAt = TAGGED_KEY_LEN + envelopeRegion(layout).length;
-  const tailsAt = recordsAt + recordsLen(layout);
+/** The layout and the frame's exit count fix every length, a message of any other length is refused. */
+export function parseAuditorMessage(
+  data: Uint8Array,
+  layout: AuditStreamLayout,
+  exits: number,
+): AuditorMessage {
+  const bytes = checkedBytes(data, auditorMessageLen(layout, exits), "auditor message");
+  const keysAt = TAGGED_KEY_LEN + envelopeRegion(layout).length;
+  const recordsAt = keysAt + recipientKeysLen(layout);
   const cut = (at: number, length: number, count: number): readonly Uint8Array[] =>
     Object.freeze(
       Array.from({ length: count }, (_, slot) =>
@@ -301,9 +303,9 @@ export function parseAuditorMessage(data: Uint8Array, layout: AuditStreamLayout)
     );
   return Object.freeze({
     ephemeralPublicKey: X25519PublicKey.fromBytes(bytes.subarray(0, TAGGED_KEY_LEN)),
-    envelope: bytes.subarray(TAGGED_KEY_LEN, recordsAt),
-    records: cut(recordsAt, auditRecordLength(layout.key), layout.outputs),
-    ...(tailsLen(layout) === 0 ? {} : { tails: cut(tailsAt, DATA_TAIL_LEN, layout.outputs) }),
+    envelope: bytes.subarray(TAGGED_KEY_LEN, keysAt),
+    recipientKeys: cut(keysAt, RECIPIENT_KEY_LEN, layout.outputs),
+    exitRecords: cut(recordsAt, OUTPUT_RECORD_LEN, exits),
   });
 }
 

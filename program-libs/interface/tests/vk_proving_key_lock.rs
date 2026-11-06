@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use custom_ring_interface::{
     key_catalog::{ApplyMode, RecordPools, RingCircuit, TransferSpend, RING_KEYS},
-    verifying_key, DisclosureFormat, RingRail, APPLY_BATCH, PROVING_KEY_SHA256S,
+    verifying_key, RingRail, APPLY_BATCH, PROVING_KEY_SHA256S,
 };
 use spr_interface::{shape::SPP_SUPPORTED_SHAPES, MAX_INTERFACE_TRANSFERS};
 
@@ -64,26 +64,16 @@ fn selectable_circuits() -> BTreeSet<String> {
                     for legs in 0..=MAX_INTERFACE_TRANSFERS {
                         for owners in 0..=n_in {
                             for wide in [false, true] {
-                                circuits.extend(
-                                    [
-                                        DisclosureFormat::Standard,
-                                        DisclosureFormat::SingleAssetPayout,
-                                    ]
-                                    .into_iter()
-                                    .filter_map(|format| {
-                                        RingCircuit::transfer(TransferSpend {
-                                            format,
-                                            rail,
-                                            inputs,
-                                            outputs: n_out,
-                                            spends_default_ring,
-                                            legs,
-                                            owners,
-                                            pools: RecordPools::default(),
-                                            wide,
-                                        })
-                                    }),
-                                );
+                                circuits.extend(RingCircuit::transfer(TransferSpend {
+                                    rail,
+                                    inputs,
+                                    outputs: n_out,
+                                    spends_default_ring,
+                                    legs,
+                                    owners,
+                                    pools: RecordPools::default(),
+                                    wide,
+                                }));
                             }
                         }
                     }

@@ -17,7 +17,10 @@ import {
   decodeRingMergeRequest,
   MergeRingAuthority,
 } from "../../../src/crypto/audit/merge-disclosure.js";
-import { OPENING_RECORD_LEN } from "../../../src/protocol/codec/ring-disclosure-layout.js";
+import {
+  MERGE_ENVELOPE_LEN,
+  MERGE_RECORD_LEN,
+} from "../../../src/protocol/codec/ring-disclosure-layout.js";
 import { CUSTOM_RING_PROOF_LENGTH } from "../../../src/protocol/proof/custom-ring-proof.js";
 import { RingInstructionTag } from "../../../src/protocol/transaction/instruction-tag.js";
 
@@ -56,7 +59,8 @@ const data = () => ({
 const sealed = {
   proof: new Uint8Array(CUSTOM_RING_PROOF_LENGTH),
   ephemeralPublicKey: new Uint8Array(33) as Bytes33,
-  ciphertext: new Uint8Array(OPENING_RECORD_LEN).fill(5),
+  envelope: new Uint8Array(MERGE_ENVELOPE_LEN).fill(4),
+  record: new Uint8Array(MERGE_RECORD_LEN).fill(5),
 };
 
 async function instruction(owner?: typeof OWNER) {

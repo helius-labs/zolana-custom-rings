@@ -976,14 +976,19 @@ mod tests {
                 .expect("list key")
                 .as_bytes()
         };
+        assert_eq!(
+            zolana_ring_policy::Member::salted(&member, &[0; 32]),
+            Err(zolana_ring_policy::MemberError::ZeroSalt)
+        );
 
         let owner = service
             .salted_owner(&list_key(&LIST_SALT))
             .await
             .expect("complete scan")
             .expect("enrolled owner");
+        let public = zolana_ring_policy::Member::public(&member).expect("public key");
         let other = service
-            .salted_owner(&list_key(&[0; 32]))
+            .salted_owner(public.as_bytes())
             .await
             .expect("complete scan");
 

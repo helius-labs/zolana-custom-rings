@@ -37,6 +37,12 @@ fn gates(curated: bool) -> SourceGates {
     )
 }
 
+fn public() -> [u8; 32] {
+    *Member::public(&Member::from_bytes(OWNER).unwrap())
+        .unwrap()
+        .as_bytes()
+}
+
 fn salted_query() -> OwnerQuery {
     OwnerQuery {
         member: OWNER,
@@ -66,22 +72,24 @@ fn a_subject_with_no_row_reads_no_salted_list() {
         .unwrap()
         .is_none());
     let mut plan = RecordPlan::new(gates(false));
-    let entry = plan.owner(OwnerQuery {
-        member: OWNER,
-        tracking: 1,
-        salted: None,
-    });
+    let entry = plan
+        .owner(OwnerQuery {
+            member: OWNER,
+            tracking: 1,
+            salted: None,
+        })
+        .unwrap();
     assert_eq!(entry.list_salt, [0; 32]);
-    assert_eq!(plan.own.len(), 1);
+    assert_eq!(plan.own.opened(), [public()]);
     assert_eq!(plan.lists(&OWNER, |_| 1, |_| 0).salted, 0);
 }
 
 #[test]
 fn an_own_salted_source_opens_a_row_beside_the_public_one() {
     let mut plan = RecordPlan::new(gates(false));
-    let entry = plan.owner(salted_query());
+    let entry = plan.owner(salted_query()).unwrap();
     let key = Member::salted(&Member::from_bytes(OWNER).unwrap(), &SALT).unwrap();
-    assert_eq!(plan.own.opened(), [OWNER, *key.as_bytes()]);
+    assert_eq!(plan.own.opened(), [public(), *key.as_bytes()]);
     assert_eq!(plan.curator.len(), 0);
     assert_eq!((entry.entry.own, entry.own_salted), (0, 1));
     assert_eq!((entry.tracking, entry.list_salt), (2, SALT));
@@ -93,9 +101,9 @@ fn an_own_salted_source_opens_a_row_beside_the_public_one() {
 #[test]
 fn a_curated_salted_source_reads_only_its_key_in_the_curator_pool() {
     let mut plan = RecordPlan::new(gates(true));
-    let entry = plan.owner(salted_query());
+    let entry = plan.owner(salted_query()).unwrap();
     let key = Member::salted(&Member::from_bytes(OWNER).unwrap(), &SALT).unwrap();
-    assert_eq!(plan.own.opened(), [OWNER]);
+    assert_eq!(plan.own.opened(), [public()]);
     assert_eq!(plan.curator.opened(), [*key.as_bytes()]);
     assert_eq!(entry.own_salted, 0);
     assert_eq!(entry.curator_salted, [0]);
@@ -105,10 +113,36 @@ fn a_curated_salted_source_reads_only_its_key_in_the_curator_pool() {
     assert_eq!(plan.lists(&OWNER, |_| block, |_| 0).salted, 0);
 }
 
+/// The public record sits under `Poseidon(CRPL, owner, 0)`, the bare identity reads nothing.
+#[test]
+fn an_owners_public_lists_read_under_its_zero_salt_key_alone() {
+    let mut plan = RecordPlan::new(gates(true));
+    plan.owner(OwnerQuery {
+        member: OWNER,
+        tracking: 1,
+        salted: None,
+    })
+    .unwrap();
+    assert_eq!(plan.own.opened(), [public()]);
+    let block = ListId::Block.record_bit();
+    let at_public = |member: &[u8; 32]| if *member == public() { block } else { 0 };
+    let at_identity = |member: &[u8; 32]| if *member == OWNER { block } else { 0 };
+    assert_eq!(plan.lists(&OWNER, at_public, at_public).own, block);
+    assert_eq!(plan.lists(&OWNER, at_identity, at_identity).own, 0);
+    // An asset keeps its own field.
+    let asset = [0xc0; 32];
+    plan.asset(asset);
+    assert_eq!(
+        plan.lists(&asset, |member| u64::from(*member == asset), |_| 0)
+            .own,
+        1
+    );
+}
+
 #[test]
 fn an_owner_entry_carries_the_go_field_names() {
     let mut plan = RecordPlan::new(gates(true));
-    let entry = serde_json::to_value(plan.owner(salted_query())).unwrap();
+    let entry = serde_json::to_value(plan.owner(salted_query()).unwrap()).unwrap();
     let mut keys: Vec<_> = entry.as_object().unwrap().keys().cloned().collect();
     keys.sort();
     assert_eq!(
@@ -127,7 +161,6 @@ fn an_owner_entry_carries_the_go_field_names() {
 #[test]
 fn a_salted_row_past_a_narrow_pool_takes_the_wide_key() {
     let spend = |own: usize| TransferSpend {
-        format: custom_ring_interface::DisclosureFormat::Standard,
         rail: RingRail::Confidential,
         inputs: 1,
         outputs: 2,
@@ -174,7 +207,8 @@ fn output_and_settlement_subjects_fit_the_wide_record_pools() {
                 list_salt: SALT,
                 key: *key.as_bytes(),
             }),
-        });
+        })
+        .unwrap();
     }
     let asset = |index: usize| [0xc0 + index as u8; 32];
     let withdrawn = |leg: usize| asset(8 + leg % N_PUBLIC_SLOTS);
@@ -189,7 +223,6 @@ fn output_and_settlement_subjects_fit_the_wide_record_pools() {
     }
     plan.asset(asset(0));
     let spend = TransferSpend {
-        format: custom_ring_interface::DisclosureFormat::Standard,
         rail: RingRail::Confidential,
         inputs: 1,
         outputs: 8,

@@ -1,13 +1,15 @@
 //! Ring bodies, sender bundles and reply metadata, each under its own label over a CRDS slot secret.
+//!
+//! A ring body is the slot's proven record and its unproven payload, one stream. The proof binds the
+//! record to the slot's opening and its ciphertext to the statement, the payload stays the sender's word.
 
 use custom_ring_interface::{
     domain::{RECIPIENT_BODY_LABEL, REPLY_LABEL, SENDER_BUNDLE_LABEL},
     stream::SlotSecret,
-    BundleLayout, ChangeCell, CompactRecipientBody, RecipientBody, SenderBundle,
+    BundleLayout, OutputRecord, RecipientPayload, RecordKind, SenderBundle, OUTPUT_RECORD_LEN,
 };
 use solana_address::Address;
 use spr_hasher::primitives::is_canonical_x25519_public_key;
-use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{ShieldedAddress, X25519Keypair, X25519Pubkey};
 use spr_transaction::{
     derive_output_blinding_seed, utxo::derive_transact_output_blinding, Blinding, Data, DataRecord,
@@ -92,62 +94,62 @@ impl ReplyMetadata {
     }
 }
 
-/// One slot secret keys one body, the secret binds the slot and the first nullifier.
+/// A body its reader decrypted, the record still unchecked against the commitment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenedRecipientBody {
+    pub record: OutputRecord,
+    pub payload: PayloadRead,
+}
+
+/// The unproven bytes past the record, a malformed one leaves the proven record whole.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PayloadRead {
+    /// A frame without data.
+    Absent,
+    Opened(RecipientPayload),
+    Malformed,
+}
+
+/// The record then the payload padded to the frame's width, one slot secret keys one body.
 pub fn seal_recipient_body(
-    body: &RecipientBody,
+    record: &OutputRecord,
+    payload: Option<(&RecipientPayload, usize)>,
     slot_secret: &SlotSecret,
 ) -> Result<Vec<u8>, RingRailError> {
-    encrypt_recipient_body(body.encode()?, slot_secret)
-}
-
-pub fn seal_compact_recipient_body(
-    body: &CompactRecipientBody,
-    slot_secret: &SlotSecret,
-) -> Result<Vec<u8>, RingRailError> {
-    encrypt_recipient_body(body.encode().to_vec(), slot_secret)
-}
-
-pub fn open_compact_recipient_body(
-    ciphertext: &[u8],
-    slot_secret: &SlotSecret,
-) -> Result<CompactRecipientBody, RingRailError> {
-    let mut plaintext = Zeroizing::new(ciphertext.to_vec());
-    symmetric_apply_audit(slot_secret.as_bytes(), RECIPIENT_BODY_LABEL, &mut plaintext)?;
-    Ok(CompactRecipientBody::decode(&plaintext)?)
-}
-
-pub(crate) struct PaddedRecipientBody<'a> {
-    pub body: &'a RecipientBody,
-    pub slot_secret: &'a SlotSecret,
-    pub width: usize,
-}
-
-impl PaddedRecipientBody<'_> {
-    pub fn seal(self) -> Result<Vec<u8>, RingRailError> {
-        encrypt_recipient_body(self.body.encode_padded(self.width)?, self.slot_secret)
+    let mut plaintext = Zeroizing::new(record.encode().to_vec());
+    if let Some((payload, width)) = payload {
+        plaintext.extend_from_slice(&payload.encode_padded(width)?);
     }
+    encrypt_recipient_body(plaintext.to_vec(), slot_secret)
 }
 
 /// The cipher is unauthenticated, only the commitment a reader rebuilds proves ownership.
 pub fn open_recipient_body(
     ciphertext: &[u8],
     slot_secret: &SlotSecret,
-) -> Result<RecipientBody, RingRailError> {
+) -> Result<OpenedRecipientBody, RingRailError> {
     let mut plaintext = Zeroizing::new(ciphertext.to_vec());
     symmetric_apply_audit(slot_secret.as_bytes(), RECIPIENT_BODY_LABEL, &mut plaintext)?;
-    Ok(RecipientBody::decode(&plaintext)?)
+    let (record, payload) = plaintext
+        .split_at_checked(OUTPUT_RECORD_LEN)
+        .ok_or(custom_ring_interface::CustomRingError::RingTransactLength)?;
+    Ok(OpenedRecipientBody {
+        record: OutputRecord::decode(record)?,
+        payload: match payload.is_empty() {
+            true => PayloadRead::Absent,
+            false => RecipientPayload::decode(payload)
+                .map_or(PayloadRead::Malformed, PayloadRead::Opened),
+        },
+    })
 }
 
-/// The sender's body for `output`, `data` leads with the hash the commitment reads.
-pub fn recipient_body(output: &SppProofOutputUtxo) -> RecipientBody {
+/// The payload `output` commits beside its record, `data` leads with the hash the commitment reads.
+pub fn recipient_payload(output: &SppProofOutputUtxo) -> RecipientPayload {
     let data = match output.data_hash.filter(|hash| *hash != [0; 32]) {
         Some(hash) => [&hash[..], output.data.utxo_data().unwrap_or_default()].concat(),
         None => Vec::new(),
     };
-    RecipientBody {
-        blinding: output.blinding,
-        amount: output.amount,
-        mint: output.asset.asset.to_bytes(),
+    RecipientPayload {
         ring_data_hash: output.ring_data_hash.filter(|hash| *hash != [0; 32]),
         data,
     }
@@ -214,7 +216,7 @@ pub struct AnonymousOutput<'a> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OpenedNote {
     pub utxo: Utxo,
-    /// The registered key or `ZERO_NULLIFIER_PUBKEY`, whichever rebuilt.
+    /// The key the record names, the owner spends the note once that key is its registered one.
     pub nullifier_pk: [u8; 32],
     pub data_hash: Option<[u8; 32]>,
     pub ring_data_hash: Option<[u8; 32]>,
@@ -235,22 +237,37 @@ pub struct OutputBlindings {
 }
 
 impl AnonymousOutput<'_> {
-    /// Tries the registered key then the zero key, `None` when neither rebuilds the commitment.
-    pub fn open_body(&self, body: &RecipientBody) -> Result<Option<OpenedBody>, RingRailError> {
-        let mint = Address::new_from_array(body.mint);
+    /// `None` unless the record names the reader as a ring output's owner and rebuilds the
+    /// commitment, its key unchecked.
+    pub fn open_body(
+        &self,
+        body: &OpenedRecipientBody,
+    ) -> Result<Option<OpenedBody>, RingRailError> {
+        let record = &body.record;
+        if record.kind != RecordKind::Ring
+            || record.owner_key != self.owner.signing_pubkey.confidential_view_tag()?
+        {
+            return Ok(None);
+        }
+        let payload = match &body.payload {
+            PayloadRead::Absent => RecipientPayload::default(),
+            PayloadRead::Opened(payload) => payload.clone(),
+            PayloadRead::Malformed => return Ok(None),
+        };
+        let mint = Address::new_from_array(record.mint);
         let asset = self.assets.by_mint(&mint);
-        let (data_hash, app_data) = match body.data.split_first_chunk::<32>() {
+        let (data_hash, app_data) = match payload.data.split_first_chunk::<32>() {
             // Data under a zero hash binds to no commitment.
             Some((hash, _)) if *hash == [0; 32] => return Ok(None),
             Some((hash, app_data)) => (Some(*hash), app_data),
-            None if body.data.is_empty() => (None, &[][..]),
+            None if payload.data.is_empty() => (None, &[][..]),
             None => return Ok(None),
         };
         let note = |asset: Mint| Utxo {
             owner: self.owner.signing_pubkey,
             asset,
-            amount: body.amount,
-            blinding: body.blinding,
+            amount: record.amount,
+            blinding: record.blinding,
             ring_program_id: Some(self.ring),
             data: match data_hash {
                 Some(_) => Data::new(vec![DataRecord::UtxoData(app_data.to_vec())]),
@@ -262,43 +279,27 @@ impl AnonymousOutput<'_> {
             asset: mint,
             asset_id: 0,
         }));
-        for nullifier_pk in [self.owner.nullifier_pubkey, ZERO_NULLIFIER_PUBKEY] {
-            let rebuilds = probe
-                .hash(
-                    &nullifier_pk,
-                    &data_hash.unwrap_or_default(),
-                    &body.ring_data_hash.unwrap_or_default(),
-                    self.tree_id,
-                )
-                .is_ok_and(|hash| hash == *self.utxo_hash);
-            if rebuilds {
-                let opened = |utxo| OpenedNote {
-                    utxo,
-                    nullifier_pk,
-                    data_hash,
-                    ring_data_hash: body.ring_data_hash,
-                };
-                return Ok(Some(match asset {
-                    Some(asset) => OpenedBody::Note(opened(note(asset))),
-                    None => OpenedBody::UnknownMint(opened(probe.clone())),
-                }));
-            }
+        let rebuilds = probe
+            .hash(
+                &record.nullifier_pk,
+                &data_hash.unwrap_or_default(),
+                &payload.ring_data_hash.unwrap_or_default(),
+                self.tree_id,
+            )
+            .is_ok_and(|hash| hash == *self.utxo_hash);
+        if !rebuilds {
+            return Ok(None);
         }
-        Ok(None)
-    }
-
-    /// `None` when the cell misses its commitment.
-    pub fn open_change(
-        &self,
-        cell: &ChangeCell,
-        blinding: Blinding,
-    ) -> Result<Option<OpenedBody>, RingRailError> {
-        self.open_body(&RecipientBody {
-            blinding,
-            amount: cell.amount,
-            mint: cell.mint,
-            ..RecipientBody::default()
-        })
+        let opened = |utxo| OpenedNote {
+            utxo,
+            nullifier_pk: record.nullifier_pk,
+            data_hash,
+            ring_data_hash: payload.ring_data_hash,
+        };
+        Ok(Some(match asset {
+            Some(asset) => OpenedBody::Note(opened(note(asset))),
+            None => OpenedBody::UnknownMint(opened(probe.clone())),
+        }))
     }
 }
 

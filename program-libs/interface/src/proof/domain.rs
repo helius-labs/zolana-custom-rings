@@ -51,6 +51,8 @@ pub const REPLY_LABEL: &[u8; 9] = b"CRING/rpl";
 pub const SENDER_BUNDLE_LABEL: &[u8; 9] = b"CRING/snd";
 pub const REGISTER_KEY_LABEL: &[u8; 9] = b"CRING/nfk";
 pub const MERGE_RECORD_LABEL: &[u8; 9] = b"CRING/mrg";
+/// Keeps a merge record's keystream apart from a transfer record's under the same key pair.
+pub const MERGE_OUTPUT_LABEL: &[u8; 9] = b"CRING/mro";
 
 pub fn field(domain: u32) -> [u8; 32] {
     right_align(&domain.to_be_bytes())

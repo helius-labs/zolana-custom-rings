@@ -141,8 +141,8 @@ use spr_user_registry_interface::user_registry_program_id;
 use zolana_ring_client::{
     auditor_view_tag,
     rpc::{write_auditor_key, CreateAuditorKeyRequest},
-    AuditedTransaction, AuditedUtxo, InputOpening, KnownUtxo, OutputOpening, RecoveryStep,
-    RingRecovery, RingScan, SealedNullifierKey, SourceMember, ViewingHistory,
+    AuditedTransaction, AuditedUtxo, KnownUtxo, OutputOpening, RecoveryStep, RingRecovery,
+    RingScan, SealedNullifierKey, SourceMember, ViewingHistory,
 };
 use zolana_ring_keys::{RingAddress, RingPaymentRequest};
 use zolana_ring_policy::{ListId, Member, Rule, RuleTable, Subject};
@@ -836,17 +836,18 @@ impl AuditedSpends<'_> {
                 spent.insert(key.nullifier(&output.context.hash, &utxo.blinding)?, *utxo);
             }
         }
-        self.audited
-            .inputs
+        // The proof names `R` and no position, the auditor's own notes place every ring spend.
+        let named: Vec<_> = self
+            .audited
+            .nullifiers
             .iter()
-            .filter(|input| matches!(input.opening, InputOpening::Real))
-            .map(|input| {
-                spent
-                    .get(&input.nullifier)
-                    .copied()
-                    .context("the auditor names every spent input")
-            })
-            .collect()
+            .filter_map(|nullifier| spent.get(nullifier).copied())
+            .collect();
+        ensure!(
+            named.len() + self.audited.entries.len() == usize::from(self.audited.real_inputs),
+            "the auditor names every spent input"
+        );
+        Ok(named)
     }
 }
 

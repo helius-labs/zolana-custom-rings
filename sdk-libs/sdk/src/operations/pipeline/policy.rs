@@ -439,11 +439,11 @@ impl EntryPlan<'_> {
                 ),
                 None => (0, None),
             };
-            Ok(plan.owner(OwnerQuery {
+            plan.owner(OwnerQuery {
                 member,
                 tracking,
                 salted,
-            }))
+            })
         };
         let senders = self
             .rows

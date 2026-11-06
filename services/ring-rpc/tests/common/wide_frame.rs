@@ -4,7 +4,7 @@ use bytemuck::Zeroable;
 use custom_ring_interface::{
     cosign::ApprovalMask, storage::Revision, stream::slot_tag, AppMessage, CustomRingProof,
     FrameExtensions, InputTrees, InstructionTag, PlainGroth16Proof, RingMode, RingOutput, RingRail,
-    RingTransactData, SlotBody, AUDIT_RECORD_LEN, RECIPIENT_BODY_LEN,
+    RingTransactData, SlotBody, OUTPUT_RECORD_LEN,
 };
 use spr_interface::instruction::TreeContext;
 
@@ -20,15 +20,14 @@ pub fn wide_frame(tag: u8) -> Vec<u8> {
     let field = [7; 32];
     let nullifiers = [[1; 32], [2; 32]];
     let salt = [3; 16];
-    let record = [4; AUDIT_RECORD_LEN];
-    let body = [5; RECIPIENT_BODY_LEN];
+    let record = [4; OUTPUT_RECORD_LEN];
+    let keys = [5; 64];
     let message = vec![6; 6000];
     let output = RingOutput {
         hash: &field,
         owner_tag: slot_tag(field),
-        body: SlotBody::Recipient(&body),
+        body: SlotBody::Recipient(&record),
         record: &record,
-        tail: None,
     };
     let mut data = RingTransactData {
         rail,
@@ -60,6 +59,7 @@ pub fn wide_frame(tag: u8) -> Vec<u8> {
         replies: None,
         sender: None,
         envelope: &[],
+        recipient_keys: &keys,
         private_tx_hash: &field,
         anonymous: None,
         in_proof_owner: None,

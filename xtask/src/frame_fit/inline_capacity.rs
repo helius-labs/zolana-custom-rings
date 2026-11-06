@@ -5,7 +5,7 @@ use std::fmt::Write;
 use anyhow::Result;
 use custom_ring_interface::{
     key_catalog::{FrameKey, RingKey, TransferShape, RING_KEYS},
-    DisclosureFormat, RingRail,
+    RingRail,
 };
 use spr_interface::{shape::SPP_SUPPORTED_SHAPES, MAX_INTERFACE_TRANSFERS};
 
@@ -59,7 +59,6 @@ impl Reach {
 
     fn frame_key(self, wide: bool) -> FrameKey {
         FrameKey {
-            format: DisclosureFormat::Standard,
             rail: self.frame.rail(),
             inputs: self.inputs,
             outputs: self.outputs,
@@ -146,7 +145,6 @@ fn holds(shape: TransferShape, reach: Reach) -> Option<Reach> {
 /// Narrow and small entry keys keep their widths, a spend past them moves to a wide key.
 fn fixed_width(shape: TransferShape) -> bool {
     let wide_entry = FrameKey {
-        format: DisclosureFormat::Standard,
         rail: RingRail::Confidential,
         inputs: 1,
         outputs: 1,
@@ -227,16 +225,7 @@ pub fn run() -> Result<()> {
                 reach.widest.legs,
                 reach.widest.rows
             )?,
-            None => {
-                let profile = TransferShape::of(key.circuit)
-                    .is_some_and(|shape| shape.format == DisclosureFormat::SingleAssetPayout);
-                let status = if profile {
-                    "separate payout profile"
-                } else {
-                    "dropped"
-                };
-                writeln!(table, "| {} | {status} |", key.name)?;
-            }
+            None => writeln!(table, "| {} | dropped |", key.name)?,
         }
     }
     writeln!(table)?;
@@ -265,7 +254,6 @@ pub fn run() -> Result<()> {
                 .into_iter()
                 .find_map(|wide| {
                     FrameKey {
-                        format: DisclosureFormat::Standard,
                         rail: frame.rail(),
                         inputs: shape.n_inputs(),
                         outputs: shape.n_outputs(),
@@ -333,9 +321,6 @@ mod tests {
         let reaches = reaches().unwrap();
         for (key, reach) in key_reaches(&reaches).unwrap() {
             let shape = TransferShape::of(key.circuit).unwrap();
-            if shape.format == DisclosureFormat::SingleAssetPayout {
-                continue;
-            }
             let reach =
                 reach.unwrap_or_else(|| panic!("{} serves no inline transaction", key.name));
             assert_eq!(

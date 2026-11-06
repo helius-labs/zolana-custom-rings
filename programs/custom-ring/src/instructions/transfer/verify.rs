@@ -19,8 +19,8 @@
 //! The frame supplies the rest, and a proof refuses any other value:
 //!
 //! 1. `first_nullifier`, `tx_viewing_u`, `salt`, the outputs and `private_tx_hash` also reach SPP in the forwarded data.
-//! 2. The envelope, records and tails also reach SPP as the auditor message, the ring proof alone ties them to the sealed key.
-//! 3. `approval_mask`, `approval_totals`, `signer_data_counts` and `no_spend` each meet a value the ring proof computes.
+//! 2. The envelope, recipient keys and records also reach SPP in the slots and the auditor message, the ring proof alone ties them to the sealed key.
+//! 3. `approval_mask`, `approval_totals` and `no_spend` each meet a value the ring proof computes.
 //! 4. The counts and the layout size the sections the ring proof opens.
 //!
 //! Read after `instructions/transfer/accounts.rs`, `instructions/verification/public_legs.rs`. Read before `program-libs/interface/src/proof/statement.rs`, `instructions/runtime/instruction_runtime.rs`.

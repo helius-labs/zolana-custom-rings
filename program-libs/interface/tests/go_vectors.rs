@@ -2,9 +2,8 @@
 
 use custom_ring_interface::{
     cosign::ApprovalMask, domain, key_catalog::RING_KEYS, AuditHead, AuditLayout,
-    ConfidentialSender, MergePublicInput, OpeningRecord, RecordKind, RingOutput, SignerDataCounts,
-    SignerSet, SlotBody, TransferFamily, TransferRoots, TransferStatement, ANONYMOUS_PARTIES,
-    DATA_TAIL_LEN,
+    ConfidentialSender, MergePublicInput, MergeRecord, RecordKind, RingOutput, SignerSet, SlotBody,
+    TransferFamily, TransferRoots, TransferStatement, ANONYMOUS_PARTIES, OUTPUT_RECORD_LEN,
 };
 use serde::Deserialize;
 use spr_hasher::{hash_chain::create_hash_chain_4_from_slice, primitives::right_align};
@@ -38,10 +37,7 @@ fn signer_chain(identities: &[[u8; 32]], slots: usize) -> [u8; 32] {
 
 #[derive(Deserialize)]
 struct OutputCase {
-    hash: String,
     record: String,
-    #[serde(default)]
-    tail: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -60,19 +56,18 @@ struct TransferCase {
     delegate: bool,
     approval_mask: u8,
     approval_totals: String,
-    signer_data_counts: u64,
     no_spend: bool,
     first_nullifier: String,
     ring_id: String,
     tx_viewing_u: String,
     auditor_pubkey: String,
     envelope: String,
+    recipient_keys: String,
     salt: String,
     layout: u8,
     output_capacity: usize,
     outputs: Vec<OutputCase>,
     input_count: usize,
-    input_nullifier_chain: String,
     private_tx_hash: String,
     sender: Option<String>,
     party_identities: Option<Vec<String>>,
@@ -123,25 +118,16 @@ fn transfer_statements_reach_the_go_public_inputs() {
     let vector: Vector = vector("audit/transfer_statement.json");
     assert!(!vector.cases.is_empty());
     for case in &vector.cases {
-        let hashes: Vec<[u8; 32]> = case.outputs.iter().map(|o| array(&o.hash)).collect();
-        let records: Vec<Vec<u8>> = case
-            .outputs
+        let records: Vec<[u8; OUTPUT_RECORD_LEN]> =
+            case.outputs.iter().map(|o| array(&o.record)).collect();
+        let (zero_tag, zero_hash) = ([0u8; 32], [0u8; 32]);
+        let outputs: Vec<RingOutput<'_>> = records
             .iter()
-            .map(|o| hex::decode(o.record.trim_start_matches("0x")).unwrap())
-            .collect();
-        let tails: Vec<Option<[u8; DATA_TAIL_LEN]>> = case
-            .outputs
-            .iter()
-            .map(|o| o.tail.as_deref().map(array))
-            .collect();
-        let zero_tag = [0u8; 32];
-        let outputs: Vec<RingOutput<'_>> = (0..case.outputs.len())
-            .map(|slot| RingOutput {
-                hash: &hashes[slot],
+            .map(|record| RingOutput {
+                hash: &zero_hash,
                 owner_tag: zero_tag,
-                body: SlotBody::None,
-                record: &records[slot],
-                tail: tails[slot].as_ref(),
+                body: SlotBody::Recipient(record),
+                record,
             })
             .collect();
         let signers = arrays::<32>(&case.signers);
@@ -176,7 +162,7 @@ fn transfer_statements_reach_the_go_public_inputs() {
                 delegate: case.delegate,
             },
         };
-        let envelope = bytes(&case.envelope);
+        let (envelope, recipient_keys) = (bytes(&case.envelope), bytes(&case.recipient_keys));
         let roots = TransferRoots {
             policy_hash: array(&case.policy_hash),
             own_root: array(&case.own_root),
@@ -190,26 +176,19 @@ fn transfer_statements_reach_the_go_public_inputs() {
                 tx_viewing_u: &array(&case.tx_viewing_u),
                 auditor_pubkey: &array(&case.auditor_pubkey),
                 envelope: &envelope,
+                recipient_keys: &recipient_keys,
                 salt: &array(&case.salt),
                 layout: AuditLayout {
-                    format: if case.layout & 4 != 0 {
-                        custom_ring_interface::DisclosureFormat::SingleAssetPayout
-                    } else {
-                        custom_ring_interface::DisclosureFormat::Standard
-                    },
-                    has_data: case.layout & 1 != 0,
                     entry: case.layout & 2 != 0,
                 },
             },
             family,
             approval_mask: ApprovalMask::new(case.approval_mask).unwrap(),
             approval_totals: &array(&case.approval_totals),
-            signer_data_counts: SignerDataCounts::new(case.signer_data_counts).unwrap(),
             no_spend: case.no_spend,
             outputs: &outputs,
             output_capacity: case.output_capacity,
             input_count: case.input_count,
-            input_nullifier_chain: array(&case.input_nullifier_chain),
             private_tx_hash: &array(&case.private_tx_hash),
             signers: run,
             roots: &roots,
@@ -252,6 +231,7 @@ fn merge_statement_matches_the_go_vector() {
     struct Case {
         name: String,
         record: String,
+        envelope_ciphertext: String,
         ciphertext: String,
         elements: Vec<String>,
         public_input_hash: String,
@@ -266,20 +246,21 @@ fn merge_statement_matches_the_go_vector() {
     let vector: Vector = vector("merge/merge.json");
     for case in &vector.cases {
         let request = &case.request;
-        let record = OpeningRecord::decode(&bytes(&case.record)).unwrap();
+        let record = MergeRecord::decode(&bytes(&case.record)).unwrap();
         assert_eq!(record.record.kind, RecordKind::Ring);
-        // Element 10 is what the program computes from the signer under a zero key.
+        // Element 11 is what the program computes from the signer under a zero key.
         let elements = arrays::<32>(&case.elements);
-        assert_eq!(elements[10] == [0; 32], case.name == "nonzero");
+        assert_eq!(elements[11] == [0; 32], case.name == "nonzero");
         let statement = MergePublicInput {
             output_utxo_hash: &array(&request.output_utxo_hash),
             first_nullifier: &array(&request.first_nullifier),
             ring_id: &array(&request.ring_id),
             auditor_pk: &array(&vector.auditor_pk),
             eph_pk: &array(&vector.eph_pk),
-            ciphertext: &array(&case.ciphertext),
+            envelope: &array(&case.envelope_ciphertext),
+            record: &array(&case.ciphertext),
             payer: &array(&request.payer),
-            published_owner: &elements[10],
+            published_owner: &elements[11],
             tracking_root: &array(&request.tracking_root),
         };
         assert_eq!(elements, statement.elements().unwrap());

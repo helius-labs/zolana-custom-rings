@@ -6,63 +6,30 @@ import (
 	"crypto/ecdh"
 	"encoding/binary"
 	"math/big"
-	"slices"
 	"testing"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
-const (
-	// RecipientBodyLen mirrors RECIPIENT_BODY_LEN, be32(blinding) ‖ u64be(amount) ‖ mint.
-	RecipientBodyLen = 72
-	// ChangeCellLen mirrors CHANGE_CELL_LEN, mint ‖ u64be(amount).
-	ChangeCellLen = 40
-	// recipientBodyEncInfo mirrors RECIPIENT_BODY_LABEL.
-	recipientBodyEncInfo = "CRING/rcp"
-	// senderBundleEncInfo mirrors SENDER_BUNDLE_LABEL.
-	senderBundleEncInfo = "CRING/snd"
-)
+// senderBundleEncInfo mirrors SENDER_BUNDLE_LABEL.
+const senderBundleEncInfo = "CRING/snd"
 
-// RecipientBody is the ring body plaintext.
-type RecipientBody struct {
-	Blinding *big.Int
-	Amount   uint64
-	Mint     [32]byte
-}
-
-func (b RecipientBody) Seal(t testing.TB, slotSecret *big.Int) [RecipientBodyLen]byte {
-	t.Helper()
-	blinding := spptest.MustFieldBytes(t, b.Blinding)
-	key, nonce := AuditStreamKeys(t, slotSecret, recipientBodyEncInfo)
-	return [RecipientBodyLen]byte(CTREncrypt(t, key, nonce, slices.Concat(blinding[:], binary.BigEndian.AppendUint64(nil, b.Amount), b.Mint[:])))
-}
-
-// ChangeCell rebuilds one bodiless slot.
-type ChangeCell struct {
-	Mint   [32]byte
-	Amount uint64
-}
-
-// SenderBundle is the sender bundle plaintext, one cell per bodiless slot and one key per other slot.
+// SenderBundle is the sender bundle plaintext, one key per published slot.
 type SenderBundle struct {
 	OutputSeed    *big.Int
-	Change        []ChangeCell
 	RecipientKeys [][32]byte
 }
 
 // SenderBundleLen mirrors BundleLayout::byte_len.
-func SenderBundleLen(outputs, change int) int {
-	return 32 + ChangeCellLen*change + 32*(outputs-change)
+func SenderBundleLen(outputs int) int {
+	return 32 + 32*outputs
 }
 
 func (b SenderBundle) Seal(t testing.TB, slotSecret *big.Int) []byte {
 	t.Helper()
 	seed := spptest.MustFieldBytes(t, b.OutputSeed)
 	plaintext := seed[:]
-	for _, cell := range b.Change {
-		plaintext = slices.Concat(plaintext, cell.Mint[:], binary.BigEndian.AppendUint64(nil, cell.Amount))
-	}
 	for _, key := range b.RecipientKeys {
 		plaintext = append(plaintext, key[:]...)
 	}

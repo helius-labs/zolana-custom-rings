@@ -170,7 +170,7 @@ async fn a_batch_past_the_frame_is_refused_before_any_read() {
     }
 }
 
-/// A keyed note needs its owner's row, and its viewing key must be the one the row holds.
+/// A keyed note pays an owner with no row, a registered owner's viewing key must be the one its row holds.
 #[tokio::test]
 async fn a_deposit_takes_the_owners_tracking_key_before_any_proof() {
     let (member, payer) = (keypair(2), keypair(9));
@@ -180,10 +180,7 @@ async fn a_deposit_takes_the_owners_tracking_key_before_any_proof() {
         .prepare(&unenrolled)
         .await
         .unwrap();
-    assert!(matches!(
-        assemble(&prepared, &unenrolled).await,
-        Err(RingError::RecipientNotEnrolled { .. })
-    ));
+    assert!(assemble(&prepared, &unenrolled).await.is_ok());
     let rotated = spr_keypair::ShieldedAddress {
         viewing_pubkey: keypair(3).shielded_address().unwrap().viewing_pubkey,
         ..enrolled

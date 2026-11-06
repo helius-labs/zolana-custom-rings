@@ -10,6 +10,7 @@ use custom_ring_sdk::{
 use solana_address::Address;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
+use zolana_ring_client::owner_record_key;
 use zolana_ring_keys::{RingAddress, RingKeyError};
 use zolana_ring_policy::{ListId, ListSet, ListWrite, ListWriteError, Member};
 
@@ -151,7 +152,7 @@ impl MemberArgs {
     fn public_subjects(&self) -> Result<Vec<Subject>> {
         let owners = self.owners.iter().map(|tag| {
             Ok(Subject {
-                member: Member::owner_tag(tag.as_array())?,
+                member: owner_record_key(tag.as_array())?,
                 label: format!("owner {tag}"),
             })
         });
@@ -176,7 +177,7 @@ impl MemberList {
     fn write(self, ctx: &Context, change: ListChange) -> Result<()> {
         let list_id = self.0;
         let sender = ctx.sender()?;
-        let member = Member::owner_tag(sender.pubkey().as_array())?;
+        let member = owner_record_key(sender.pubkey().as_array())?;
         line(
             "member",
             format_args!("{} {}", list_id.name(), sender.pubkey()),
@@ -524,7 +525,7 @@ mod tests {
 
     #[test]
     fn every_member_command_takes_repeated_owners_and_assets() {
-        let tag = Member::owner_tag(Address::from_str_const(TAG).as_array()).expect("member");
+        let tag = owner_record_key(Address::from_str_const(TAG).as_array()).expect("member");
         let mint = Member::asset(&Address::from_str_const(MINT)).expect("mint");
         for verb in ["add", "clear", "show"] {
             assert_eq!(

@@ -19,20 +19,23 @@ type Slot struct {
 	Utxo     Utxo
 	OwnerKey [32]byte
 	Mint     [32]byte
+	// RecipientKey is the u the record is sealed to.
+	RecipientKey [32]byte
 }
 
 func (s Slot) Wires() audit.OutputWires {
 	w := audit.OutputWires{Output: s.Utxo.Wires()}
 	ringtest.SetBytes(w.OwnerKey[:], s.OwnerKey[:])
+	ringtest.SetBytes(w.RecipientKey[:], s.RecipientKey[:])
 	chunks := protocol.MintChunks(s.Mint)
 	w.MintChunks = [2]frontend.Variable{chunks[0], chunks[1]}
 	return w
 }
 
-// Record mirrors audit.RecordOpening.Encode with its padding, all zero on a dummy.
+// Record mirrors audit.RecordOpening.Encode, all zero on a dummy.
 func (s Slot) Record(t testing.TB) []byte {
 	t.Helper()
-	record := make([]byte, audit.RecordStride)
+	record := make([]byte, audit.RecordLen)
 	if !s.Utxo.isUtxo() {
 		return record
 	}
@@ -43,19 +46,10 @@ func (s Slot) Record(t testing.TB) []byte {
 	binary.BigEndian.PutUint64(record[1:9], s.Utxo.Amount)
 	copy(record[9:41], s.OwnerKey[:])
 	copy(record[41:73], s.Mint[:])
-	nullifierPk := spptest.MustFieldBytes(t, s.Utxo.NullifierPk)
-	copy(record[73:audit.RecordLen], nullifierPk[:])
+	nullifierPk, blinding := spptest.MustFieldBytes(t, s.Utxo.NullifierPk), spptest.MustFieldBytes(t, s.Utxo.Blinding)
+	copy(record[73:105], nullifierPk[:])
+	copy(record[105:], blinding[:])
 	return record
-}
-
-// Tail mirrors the audit tail, zero on a dummy.
-func (s Slot) Tail(t testing.TB) []byte {
-	t.Helper()
-	if !s.Utxo.isUtxo() {
-		return make([]byte, audit.TailLen)
-	}
-	dataHash, ringDataHash := spptest.MustFieldBytes(t, s.Utxo.DataHash), spptest.MustFieldBytes(t, s.Utxo.RingDataHash)
-	return slices.Concat(dataHash[:], ringDataHash[:])
 }
 
 // Input is one spent slot with the preimages its entry evidence names, the host twin of audit.EntryWires.
@@ -92,8 +86,6 @@ type Audit struct {
 	InputCount int
 	// Omitted is the slots past m, the frame carries no cell for them.
 	Omitted int
-	// HasData sets the statement bit, tails open every slot's data hashes.
-	HasData bool
 }
 
 // NewAudit pays every slot to a fixture recipient and spends nothing yet, exits name the slots leaving the ring.
@@ -129,7 +121,7 @@ func (a Audit) Omit(t testing.TB, n int) Audit {
 	t.Helper()
 	a.Outputs = slices.Clone(a.Outputs)
 	for i := len(a.Outputs) - n; i < len(a.Outputs); i++ {
-		a.Outputs[i] = Slot{Utxo: unpublished()}
+		a.Outputs[i] = Slot{Utxo: unpublished(), RecipientKey: a.Keys.auditorPk}
 	}
 	a.Omitted = n
 	return a
@@ -140,7 +132,7 @@ func (a Audit) OutputCount() int {
 }
 
 func (a Audit) Layout() int64 {
-	return ringtest.Bit(a.HasData)*audit.LayoutHasData | ringtest.Bit(a.Shape.Entry)*audit.LayoutEntry | ringtest.Bit(a.Shape.SingleAssetPayout)*audit.LayoutSingleAssetPayout
+	return ringtest.Bit(a.Shape.Entry) * audit.LayoutEntry
 }
 
 // RealInputs is R, the spent notes among the slots.
@@ -177,7 +169,7 @@ func (a Audit) Stream(t testing.TB) Stream {
 // Head is what the program holds for the statement's head.
 func (a Audit) Head(t testing.TB, stream Stream) AuditHead {
 	t.Helper()
-	head := a.Keys.AuditHead(t, a.FirstNullifier, a.RingProgramID, a.Salt, stream.Envelope(a.InputCount))
+	head := a.Keys.AuditHead(t, a.FirstNullifier, a.RingProgramID, a.Salt, stream.Envelope(a.InputCount), stream.Keys(a.OutputCount()))
 	head.Layout = a.Layout()
 	return head
 }
@@ -186,11 +178,8 @@ func (a Audit) Head(t testing.TB, stream Stream) AuditHead {
 func (a Audit) StatementOutputs(t testing.TB, stream Stream) []StatementOutput {
 	t.Helper()
 	outputs := make([]StatementOutput, len(a.Outputs))
-	for i, slot := range a.Outputs {
-		outputs[i] = StatementOutput{Hash: slot.Utxo.Hash(t), Omitted: i >= a.OutputCount(), Record: stream.Record(i)}
-		if a.HasData {
-			outputs[i].Tail = stream.Tail(i)
-		}
+	for i := range a.Outputs {
+		outputs[i] = StatementOutput{Omitted: i >= a.OutputCount(), Record: stream.Record(i)}
 	}
 	return outputs
 }

@@ -16,7 +16,7 @@ use custom_ring_interface::stream::slot_tag;
 use custom_ring_interface::{
     encode_ring_body_output, encode_ring_sender_bundle_output,
     stream::{DeliveredSlot, SlotSecret},
-    RecipientBody, SenderBundle, MIN_REPLY_LEN, RECIPIENT_BODY_LEN,
+    OutputRecord, RecipientPayload, RecordKind, SenderBundle, MIN_REPLY_LEN, OUTPUT_RECORD_LEN,
 };
 use solana_address::Address;
 use solana_signature::Signature;
@@ -377,7 +377,8 @@ impl Wallet {
                 .transfer_with_ring(pay.to, asset, pay.amount, Some(RING))
                 .unwrap();
         }
-        let rail = RingOutputRail::new(tx_key, RingDelivery::Anonymous(Box::new(plan)));
+        let rail =
+            RingOutputRail::new(tx_key, audit_key(), RingDelivery::Anonymous(Box::new(plan)));
         let proof = rail.encrypt(transaction, &self.address()).unwrap();
         indexed(indexer, &rail, &proof)
     }
@@ -430,6 +431,36 @@ fn indexed(
         ring_config: None,
         ring_program_id: Some(RING),
     }
+}
+
+/// A ring record naming `owner`, sealed under `secret` with `payload` at its own width.
+fn ring_body(
+    owner: &ShieldedAddress,
+    note: (u64, [u8; 32], [u8; 32]),
+    payload: Option<RecipientPayload>,
+    secret: &SlotSecret,
+) -> Vec<u8> {
+    let (amount, mint, blinding) = note;
+    seal_recipient_body(
+        &OutputRecord {
+            kind: RecordKind::Ring,
+            amount,
+            owner_key: owner.signing_pubkey.confidential_view_tag().unwrap(),
+            mint,
+            nullifier_pk: owner.nullifier_pubkey,
+            blinding,
+        },
+        payload
+            .as_ref()
+            .map(|payload| (payload, payload.encoded_len())),
+        secret,
+    )
+    .unwrap()
+}
+
+/// The ring auditor every rail here seals exits and capacity slots to.
+fn audit_key() -> X25519Pubkey {
+    spr_keypair::X25519Keypair::from_bytes(&[0x33; 32]).pubkey()
 }
 
 fn assets() -> RingAssets {
@@ -603,7 +634,7 @@ async fn a_deposit_payee_finds_its_note_through_the_tag_scan() {
         .get_transaction_viewing_key(transaction.first_nullifier())
         .unwrap();
     let plan = AnonymousPlan::new().with_payment(bob.address().viewing_pubkey);
-    let rail = RingOutputRail::new(tx_key, RingDelivery::Anonymous(Box::new(plan)));
+    let rail = RingOutputRail::new(tx_key, audit_key(), RingDelivery::Anonymous(Box::new(plan)));
     let proof = rail
         .encrypt(transaction, &sender.shielded_address().unwrap())
         .unwrap();
@@ -1049,7 +1080,7 @@ async fn a_relayed_proof_under_another_transaction_key_is_not_missed_by_the_fast
     assert_eq!(scan.sent[0].tx_signature, own.tx_signature);
 }
 
-/// A payment to itself and the change are two SPL change outputs, each rebuilt from its own cell.
+/// A payment to itself and the change are two SPL change outputs, each opened from its own record.
 #[tokio::test]
 async fn a_sender_recovers_two_spl_change_outputs_after_a_wipe() {
     let indexer = Indexer::default();
@@ -1061,7 +1092,7 @@ async fn a_sender_recovers_two_spl_change_outputs_after_a_wipe() {
     let paid = alice.pay(&indexer, &[pay(&alice.address(), 25)]);
     assert!(paid.output_slots[..2]
         .iter()
-        .all(|slot| slot.payload.is_empty()));
+        .all(|slot| custom_ring_interface::ring_body_output(&slot.payload).is_some()));
     let (keys, history) = wiped(1, &[]);
     let restored = restore(&indexer, &keys, &history).await;
     let mut amounts: Vec<(Mint, u64)> = restored
@@ -1255,7 +1286,7 @@ async fn a_sent_body_that_fails_to_open_leaves_no_row() {
     let bob = Wallet::new(2).address();
     let mut paid = alice.seal(&indexer, &[pay(&bob, 30)]);
     // A ring body cut short, behind the encoding tag, the length and the scheme.
-    let short_body = RECIPIENT_BODY_LEN - 1;
+    let short_body = OUTPUT_RECORD_LEN - 1;
     let payload = &mut paid.output_slots[1].payload;
     payload.truncate(6 + short_body);
     payload[1..5].copy_from_slice(&u32::try_from(1 + short_body).unwrap().to_le_bytes());
@@ -1273,7 +1304,7 @@ async fn sender_chosen_garbage_under_a_tag_hint_never_fails_the_sync() {
     let bob = Wallet::new(2);
     let tx_key = ViewingKey::new();
     let salt = random_salt();
-    let noise = [0x5c; RECIPIENT_BODY_LEN];
+    let noise = [0x5c; OUTPUT_RECORD_LEN];
     let first_nullifier = field(9, 9);
     let bundle_nullifier = field(9, 8);
     let bob_view = bob.keys.viewing_pubkey();
@@ -1290,19 +1321,14 @@ async fn sender_chosen_garbage_under_a_tag_hint_never_fails_the_sync() {
         .unwrap()
     };
     // Its blinding outside the field fails the hash rebuild.
-    let named = seal_recipient_body(
-        &RecipientBody {
-            blinding: [0xff; 32],
-            amount: 5,
-            mint: Mint::SOL.asset.to_bytes(),
-            ..RecipientBody::default()
-        },
+    let named = ring_body(
+        &bob.address(),
+        (5, Mint::SOL.asset.to_bytes(), [0xff; 32]),
+        None,
         &secret(&first_nullifier, 1),
-    )
-    .unwrap();
+    );
     let bundle = |recipient_keys: Vec<[u8; 32]>| SenderBundle {
         output_seed: [0x0b; 32],
-        change: Vec::new(),
         recipient_keys,
     };
     // Rebuilds under a mint the registry does not name.
@@ -1311,16 +1337,12 @@ async fn sender_chosen_garbage_under_a_tag_hint_never_fails_the_sync() {
         asset_id: 0,
     };
     let blinding = field(9, 7);
-    let unknown_mint = seal_recipient_body(
-        &RecipientBody {
-            blinding,
-            amount: 5,
-            mint: unregistered.asset.to_bytes(),
-            ..RecipientBody::default()
-        },
+    let unknown_mint = ring_body(
+        &bob.address(),
+        (5, unregistered.asset.to_bytes(), blinding),
+        None,
         &secret(&first_nullifier, 2),
-    )
-    .unwrap();
+    );
     let unknown_mint_hash = Utxo {
         owner: bob.address().signing_pubkey,
         asset: unregistered,
@@ -1444,16 +1466,12 @@ async fn an_unknown_mint_keeps_the_position_moving_and_its_note_unspendable_unti
     }
     .hash(&bob.address().nullifier_pubkey, &[0; 32], &[0; 32], TREE)
     .unwrap();
-    let body = seal_recipient_body(
-        &RecipientBody {
-            blinding,
-            amount: 5,
-            mint: unregistered.asset.to_bytes(),
-            ..RecipientBody::default()
-        },
+    let body = ring_body(
+        &bob.address(),
+        (5, unregistered.asset.to_bytes(), blinding),
+        None,
         &secret,
-    )
-    .unwrap();
+    );
     let mut transaction = ShieldedTransaction {
         slot: 3,
         tx_signature: Signature::from(signature(3)),
@@ -1964,7 +1982,7 @@ async fn a_payment_without_a_reply_names_no_sender() {
     let paid = alice.pay(&indexer, &[pay(&bob.address(), 10)]);
     assert_eq!(
         paid.output_slots[1].payload.len(),
-        8 + RECIPIENT_BODY_LEN,
+        8 + OUTPUT_RECORD_LEN,
         "no reply bytes follow the body"
     );
     let scan = bob.sync(&indexer, &fresh(&bob)).await;
@@ -2063,16 +2081,12 @@ fn unknown_mint_payment(owner: &Wallet, mint: Mint, blinding: [u8; 32]) -> Shiel
     }
     .hash(&address.nullifier_pubkey, &[0; 32], &[0; 32], TREE)
     .unwrap();
-    let body = seal_recipient_body(
-        &RecipientBody {
-            blinding,
-            amount: 5,
-            mint: mint.asset.to_bytes(),
-            ..RecipientBody::default()
-        },
+    let body = ring_body(
+        &address,
+        (5, mint.asset.to_bytes(), blinding),
+        None,
         &secret,
-    )
-    .unwrap();
+    );
     ShieldedTransaction {
         slot: 1,
         tx_signature: Signature::from(signature(1)),
@@ -2339,18 +2353,16 @@ async fn an_extended_recipient_body_rebuilds_its_commitment_with_its_data() {
             TREE,
         )
         .unwrap();
-    let body = seal_recipient_body(
-        &RecipientBody {
-            blinding,
-            amount: 5,
-            mint: Mint::SOL.asset.to_bytes(),
+    let body = ring_body(
+        &bob.address(),
+        (5, Mint::SOL.asset.to_bytes(), blinding),
+        Some(RecipientPayload {
             ring_data_hash: Some(ring_data_hash),
             data: [&data_hash[..], b"memo"].concat(),
-        },
+        }),
         &secret,
-    )
-    .unwrap();
-    assert!(body.len() > RECIPIENT_BODY_LEN);
+    );
+    assert!(body.len() > OUTPUT_RECORD_LEN);
     indexer.publish(ShieldedTransaction {
         slot: 1,
         tx_signature: Signature::from([0x78; 64]),
@@ -2405,7 +2417,7 @@ fn deliver(
     transaction
         .transfer_with_ring(to, Mint::SOL, 30, Some(RING))
         .unwrap();
-    let rail = RingOutputRail::new(ViewingKey::new(), RingDelivery::Delivered);
+    let rail = RingOutputRail::new(ViewingKey::new(), audit_key(), RingDelivery::Delivered);
     let proof = rail.encrypt(transaction, &sender.address()).unwrap();
     let external = &proof.external_data;
     let leaf = indexer.leaves(external.outputs.len());
@@ -2788,97 +2800,4 @@ async fn a_reply_cannot_change_an_active_recovery_scope() {
     wallet.require_complete().unwrap();
     wallet.confirm_claim(sender).unwrap();
     assert!(wallet.pending_claims().is_empty());
-}
-
-#[derive(Clone, Copy)]
-enum AssetSourceFailure {
-    Unsupported,
-    Unavailable,
-}
-
-#[async_trait]
-impl AsyncRpc for AssetSourceFailure {
-    fn should_retry(&self, error: &ClientError) -> bool {
-        matches!(error, ClientError::IndexerUnavailable(_))
-    }
-
-    async fn get_program_accounts_filtered(
-        &self,
-        _program_id: Address,
-        _filter: &spr_client::ProgramAccountsFilter,
-    ) -> Result<Vec<(Address, solana_account::Account)>, ClientError> {
-        Err(match self {
-            Self::Unsupported => ClientError::UnsupportedRpcMethod("get_program_accounts_filtered"),
-            Self::Unavailable => ClientError::IndexerUnavailable("temporarily unavailable".into()),
-        })
-    }
-}
-
-#[tokio::test]
-async fn compact_recovery_pauses_only_for_retryable_source_failures() {
-    let indexer = Indexer::default();
-    let mut alice = Wallet::new(1);
-    let bob = Wallet::new(2);
-    let mut transaction = alice.seal(&indexer, &[pay(&bob.address(), 10)]);
-    let first = transaction.nullifiers[0];
-    let tx_key = alice
-        .keys
-        .viewing_key
-        .get_transaction_viewing_key(&first)
-        .unwrap();
-    let view = bob.keys.viewing_pubkey();
-    let secret = DeliveredSlot {
-        agreement: &tx_key.ecdh(&view).unwrap(),
-        tx_viewing_pk: tx_key.pubkey().as_bytes(),
-        recipient_viewing_pk: view.as_bytes(),
-        salt: &transaction.salt.unwrap(),
-        output_index: 1,
-        first_nullifier: &first,
-    }
-    .secret()
-    .unwrap();
-    let body = zolana_ring_transaction::seal_compact_recipient_body(
-        &custom_ring_interface::CompactRecipientBody {
-            blinding: field(3, 7),
-            amount: 10,
-            asset_id: 2,
-        },
-        &secret,
-    )
-    .unwrap();
-    transaction.output_slots[1].payload = encode_ring_body_output(&body, &[]).unwrap();
-    indexer.publish(transaction);
-    let wallet = AnonymousWallet::new(fresh(&bob));
-    let missing_source = AnonymousSync::new(&bob.keys, &assets())
-        .with_full_scan(RING)
-        .fetch_wallet(&indexer, &wallet)
-        .await;
-    assert!(matches!(
-        missing_source,
-        Err(AnonymousError::CompactAssetSourceRequired)
-    ));
-    for source in [
-        AssetSourceFailure::Unsupported,
-        AssetSourceFailure::Unavailable,
-    ] {
-        let wallet = AnonymousWallet::new(fresh(&bob));
-        let result = AnonymousSync::new(&bob.keys, &assets())
-            .with_asset_rpc(&source)
-            .with_full_scan(RING)
-            .fetch_wallet(&indexer, &wallet)
-            .await;
-        match source {
-            AssetSourceFailure::Unsupported => assert!(matches!(
-                result,
-                Err(AnonymousError::CompactAssets(zolana_ring_client::compact_assets::CompactAssetError::Source(error)))
-                    if matches!(*error, ClientError::UnsupportedRpcMethod(_))
-            )),
-            AssetSourceFailure::Unavailable => {
-                let paused = result.unwrap();
-                assert_eq!(paused.status(), zolana_ring_client::RecoveryStatus::Paused);
-                assert!(paused.pending_notes().is_empty());
-                assert!(paused.decrypted().utxos.is_empty());
-            }
-        }
-    }
 }

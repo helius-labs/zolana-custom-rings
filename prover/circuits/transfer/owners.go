@@ -1,12 +1,12 @@
-// Ties each note's nullifier key to its owner's enrollment, and gives every live input owner a row the
-// policy reads.
+// Ties each spent note's nullifier key to its owner's enrollment, and gives every live input owner a row
+// the policy reads.
 //
 // SPP takes any nullifier key an output names. A ring auditor must link every published nullifier to
-// the note it spends, so a ring cannot let a note carry a key whose secret the auditor never received.
+// the note it spends, so a ring cannot spend a note whose key's secret the auditor never received.
 // Enrollment seals an owner's nullifier secret to the auditor and writes its key to the tracking tree,
-// and only two keys pass here.
-// Only absent owners receive new ring payments under Poseidon(0).
-// The public zero secret permits nullifier derivation from the note opening.
+// and a spend passes under that key or under Poseidon(0), whose public zero secret derives the nullifier
+// from the note opening.
+// A ring output may carry any nonzero key, its note spends only once that key is its owner's enrolled key.
 //
 // Read after transfer/input.go, policy/tracking.go, registry/register_key.go. Read before
 // policy/screen.go, policy/outflow.go.
@@ -14,11 +14,10 @@
 // Properties:
 // 1. Every live input's owner has a live row, the delegate's zero key note alone goes without.
 // 2. A ring input's nonzero key is its row's enrolled key, a key the tracking root does not hold fails.
-// 3. A hidden owner spends no zero key note, its public nullifier would name the owner.
-// 4. A live ring output's nonzero key is its owner's enrolled key, and a literal zero key fails.
-// 5. A zero key output requires owner absence at the accepted tracking root.
+// 3. A zero key output requires owner absence at the accepted tracking root, and a literal zero key fails.
 //
-// A zero key note stays spendable after its owner enrolls, property 2 skips it.
+// A zero key note stays spendable after its owner enrolls, property 2 skips it. Its nullifier names its
+// spender to anyone holding the opening, on the hidden rail too, the wallet decides whether to accept that.
 
 package transfer
 
@@ -39,14 +38,6 @@ type OwnerRows struct {
 	Tracking []policy.TrackingView
 }
 
-// InputRail is what the input predicate reads about the rail.
-type InputRail struct {
-	// Delegate moves a zero-key note with no row, no policy reads the rows there.
-	Delegate frontend.Variable
-	// Hidden is set while HiddenOwner spends privately.
-	Hidden, HiddenOwner frontend.Variable
-}
-
 // OpenOwnerRows reads each live row's enrollment, the policy holds the rows' order off the authority rail.
 func OpenOwnerRows(api frontend.API, members, entries []frontend.Variable, pool policy.TrackingPool) OwnerRows {
 	rows := OwnerRows{Members: members, Live: make([]frontend.Variable, len(members)), Tracking: make([]policy.TrackingView, len(members))}
@@ -58,18 +49,15 @@ func OpenOwnerRows(api frontend.API, members, entries []frontend.Variable, pool 
 }
 
 // AssertInputOwners holds every live input to its row and enrolled key, an input past the rows would skip the sender rules and the auditor's nullifier.
-func (r OwnerRows) AssertInputOwners(api frontend.API, rail InputRail, inputs []shared.Output) {
+func (r OwnerRows) AssertInputOwners(api frontend.API, delegate frontend.Variable, inputs []shared.Output) {
 	for _, slot := range inputs {
 		zeroKey := isZeroKey(api, slot.NullifierPk)
 		found, key := r.find(api, slot.OwnerPkHash)
 		// 1. Every live input has its owner's row, the sender rules and attribution read rows alone. Only the delegate's zero key note goes without. The check needs found to read exactly one, so a repeated row an input needs on the authority rail fails it as well.
-		needsRow := api.Mul(slot.Utxo, api.Sub(1, api.Mul(rail.Delegate, zeroKey)))
+		needsRow := api.Mul(slot.Utxo, api.Sub(1, api.Mul(delegate, zeroKey)))
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: needsRow, V: api.Sub(1, found)})
 		// 2. A ring note's key is the row's enrolled key, the auditor reads the nullifier through it. A default-ring note carries a key the ring never enrolled.
 		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: api.Mul(slot.Ring, api.Sub(1, zeroKey)), A: slot.NullifierPk, B: key})
-		// 3. Anyone holding the opening computes a zero-key nullifier, that spend would name the hidden owner.
-		hidden := api.Mul(rail.Hidden, slot.Utxo, zeroKey)
-		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: hidden, V: policy.IsSame(api, slot.OwnerPkHash, rail.HiddenOwner)})
 	}
 }
 
@@ -87,11 +75,10 @@ func (r OwnerRows) find(api frontend.API, owner frontend.Variable) (found, key f
 // AssertOutputOwners binds zero key recipients to absence at the accepted tracking root.
 func AssertOutputOwners(api frontend.API, pool policy.TrackingPool, outputs []shared.Output, entries []frontend.Variable) {
 	for o, slot := range outputs {
-		// An exit clears Ring and reads no row, the default ring enrolls nobody.
-		row := pool.Row(api, slot.Ring, slot.OwnerPkHash, entries[o])
-		zeroKey := isZeroKey(api, slot.NullifierPk)
-		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: slot.Ring, A: row.NullifierPk, B: api.Mul(api.Sub(1, zeroKey), slot.NullifierPk)})
-		// A literal zero key would read as an absent row, and nobody could spend it.
+		// 1. A zero key output goes only to an owner absent at the tracking root, an unread row reads zeros. An exit clears Ring and reads no row, the default ring enrolls nobody.
+		zeroKey := api.Mul(slot.Ring, isZeroKey(api, slot.NullifierPk))
+		api.AssertIsEqual(pool.Row(api, zeroKey, slot.OwnerPkHash, entries[o]).NullifierPk, 0)
+		// 2. A literal zero key would read as an absent row, and nobody could spend it.
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: slot.Ring, V: api.IsZero(slot.NullifierPk)})
 	}
 }

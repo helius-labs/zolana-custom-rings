@@ -35,7 +35,15 @@ func (w World) BuildRows(t testing.TB, rows Rows) Witness {
 	}
 	b := Witness{Circuit: c}
 	p := &c.Policy
-	own, curator := registry(t, w.Own), registry(t, w.Curator)
+	owners := w.owners()
+	key := func(id int64) *big.Int {
+		if owners[id] {
+			return ringregistry.PublicKey(t, big.NewInt(id))
+		}
+		return big.NewInt(id)
+	}
+	own, curator := registry(t, w.Own, key), registry(t, w.Curator, key)
+	write(t, own, w.Unkeyed, big.NewInt)
 	WriteSalted(t, own, w.Salted)
 	WriteSalted(t, curator, w.CuratorSalted)
 	mintPolicies := map[string]*big.Int{}
@@ -229,10 +237,31 @@ func (w World) balancedInputs() []Slot {
 	return inputs
 }
 
-// registry writes every member's record in ascending member order.
-func registry(t testing.TB, records map[int64]Record) *ringregistry.Registry {
+// owners is every identity the world screens as an owner, its records sit under the public key.
+func (w World) owners() map[int64]bool {
+	owners := map[int64]bool{w.Sender: true}
+	for _, owner := range w.CoOwners {
+		owners[owner] = true
+	}
+	for _, slots := range [][]Slot{w.Slots, w.Inputs, w.Withdrawals} {
+		for _, slot := range slots {
+			owners[slot.Owner] = true
+		}
+	}
+	return owners
+}
+
+// registry opens a registry with every record at key(id).
+func registry(t testing.TB, records map[int64]Record, key func(int64) *big.Int) *ringregistry.Registry {
 	t.Helper()
 	r := ringregistry.New(t)
+	write(t, r, records, key)
+	return r
+}
+
+// write applies the records in ascending id order.
+func write(t testing.TB, r *ringregistry.Registry, records map[int64]Record, key func(int64) *big.Int) {
+	t.Helper()
 	ids := make([]int64, 0, len(records))
 	for id := range records {
 		ids = append(ids, id)
@@ -241,14 +270,13 @@ func registry(t testing.TB, records map[int64]Record) *ringregistry.Registry {
 	for _, id := range ids {
 		record := records[id]
 		lists := new(big.Int).SetUint64(record.Lists)
-		entry := ringregistry.Entry{Member: big.NewInt(id), Mask: lists, Value: lists}
+		entry := ringregistry.Entry{Member: key(id), Mask: lists, Value: lists}
 		if record.WithdrawalThreshold != 0 {
 			// Bit 192 writes the mint policy, the threshold rides on that write.
 			entry.MintPolicy, entry.WithdrawalThreshold = new(big.Int).Lsh(big.NewInt(1), 192), new(big.Int).SetUint64(record.WithdrawalThreshold)
 		}
 		r.Apply(t, entry)
 	}
-	return r
 }
 
 // wires opens the slot under treeID, a dummy keeps the asset and amount no sum counts.

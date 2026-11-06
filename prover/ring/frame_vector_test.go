@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"math/bits"
 	"os"
 	"strings"
 	"testing"
@@ -16,14 +15,13 @@ import (
 
 // Frame byte lengths the circuit does not bind itself, mirrored by program-libs/interface/src/instructions/transact.rs.
 const (
-	frameProofLen      = 192
-	frameSppProofLen   = 128
-	frameTreeLen       = 4
-	frameSlotTagLen    = 8
-	frameExitBodyLen   = 83
-	framePayoutBodyLen = 48
-	frameViewTagLen    = 32
-	frameCacheWrites   = 16
+	frameProofLen    = 192
+	frameSppProofLen = 128
+	frameTreeLen     = 4
+	frameSlotTagLen  = 8
+	frameExitBodyLen = 83
+	frameViewTagLen  = 32
+	frameCacheWrites = 16
 )
 
 type frameRail int
@@ -100,9 +98,8 @@ func walkTransferFrame(t *testing.T, line []byte, rail frameRail) {
 		c.take(8)
 	}
 	c.take(4 + 32 + 16)
-	singleAssetPayout := false
 	if flags&extensionsFlag != 0 {
-		singleAssetPayout = walkExtensions(&c)&(1<<6) != 0
+		walkExtensions(&c)
 	}
 	transfers := int(c.take(1)[0])
 	splWithdrawals := 0
@@ -119,43 +116,34 @@ func walkTransferFrame(t *testing.T, line []byte, rail frameRail) {
 	if flags&ownRoot != 0 {
 		c.take(32 * splWithdrawals)
 	}
-	exits, bodiless := c.bits(m), c.bits(m)
+	exits := c.bits(m)
 	bodies := 0
 	for slot := range m {
-		exit, bears := exits>>slot&1 == 1, bodiless>>slot&1 == 0
-		length := 0
+		exit := exits>>slot&1 == 1
+		// The bytes past the record, a payload or an exit's scheme 3 body.
+		extra := 0
 		switch {
-		case !bears:
 		case inputByte&hasData != 0:
-			length = int(binary.LittleEndian.Uint16(c.take(2)))
+			extra = int(binary.LittleEndian.Uint16(c.take(2)))
 		case exit:
-			length = frameExitBodyLen
-		case singleAssetPayout:
-			length = framePayoutBodyLen
-		default:
-			length = ringprotocol.RecipientBodyLen
+			extra = frameExitBodyLen
 		}
 		tag := frameSlotTagLen
 		if exit {
 			tag = 32
-		}
-		c.take(32 + tag + length)
-		if bears && !exit {
+		} else {
 			bodies++
 		}
+		c.take(32 + tag + audit.RecordLen + extra)
 	}
 	if flags&replyFlag != 0 {
 		c.take(int(binary.LittleEndian.Uint16(c.take(2))) * bodies)
 	}
 	if anonymousFrame {
-		c.take(32 + ringprotocol.SenderBundleLen(m, bits.OnesCount64(bodiless)))
+		c.take(32 + ringprotocol.SenderBundleLen(m))
 	}
-	stream := audit.StreamShape{InputClass: n, Outputs: m, Entry: inputByte&entry != 0, SingleAssetPayout: singleAssetPayout}.Ranges()
-	c.take(stream.EnvelopeLen(n))
-	c.take(m * stream.RecordLen())
-	if inputByte&hasData != 0 {
-		c.take(m * audit.TailLen)
-	}
+	stream := audit.StreamShape{InputClass: n, Outputs: m, Entry: inputByte&entry != 0}.Ranges()
+	c.take(stream.EnvelopeLen(n) + m*audit.KeyLen)
 	c.take(32)
 	if rail == frameAnonymous && shape&publicOwners == 0 {
 		c.take(64)
@@ -178,9 +166,12 @@ func walkTransferFrame(t *testing.T, line []byte, rail frameRail) {
 }
 
 // walkExtensions mirrors FrameExtensions::read.
-func walkExtensions(c *frameCursor) byte {
-	const dataHash, ringDataHash, messages, cache, approvalTotals, signerDataCounts = 1, 2, 4, 8, 16, 32
+func walkExtensions(c *frameCursor) {
+	const dataHash, ringDataHash, messages, cache, approvalTotals = 1, 2, 4, 8, 16
 	flags := c.take(1)[0]
+	if flags&^(dataHash|ringDataHash|messages|cache|approvalTotals) != 0 {
+		c.t.Fatalf("extension flags %b past the known", flags)
+	}
 	if flags&dataHash != 0 {
 		c.take(32)
 	}
@@ -199,16 +190,12 @@ func walkExtensions(c *frameCursor) byte {
 	if flags&approvalTotals != 0 {
 		c.take(32)
 	}
-	if flags&signerDataCounts != 0 {
-		c.take(8)
-	}
-	return flags
 }
 
 func TestMergeFrameVectorWalksTheRecord(t *testing.T) {
 	lines := vectorLines(t, "../../test-vectors/merge/merge_frame.hex")
 	c := frameCursor{t: t, rest: lines[0]}
-	c.take(8 + 32 + 32 + frameProofLen + 33 + circuits.MergeRecordLen)
+	c.take(8 + 32 + 32 + frameProofLen + 33 + circuits.MergeEnvelopeLen + circuits.MergeRecordLen)
 	if len(c.rest) == 0 {
 		t.Fatal("the frame holds no SPP merge body")
 	}

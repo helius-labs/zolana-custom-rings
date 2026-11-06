@@ -1,15 +1,9 @@
 /** The transfer key catalog, Rust `key_catalog.rs` and `Shapes` in `prover/circuits/transfer`. */
-import {
-  DisclosureFormat,
-  SINGLE_ASSET_PAYOUT_INPUTS,
-  SINGLE_ASSET_PAYOUT_OUTPUTS,
-} from "../codec/ring-disclosure-layout.js";
 import type { RingRail } from "../transaction/transact.js";
 import { N_PUBLIC_SLOTS } from "../transaction/spp.js";
 
 /** One transfer key, Rust `TransferShape`. */
 export interface TransferShape {
-  readonly format: DisclosureFormat;
   readonly outputs: number;
   /** The widest published input count the key serves. */
   readonly inputs: number;
@@ -22,7 +16,7 @@ export interface TransferShape {
   readonly wide: boolean;
   /** The most tracking rows one inline transaction on the key opens. */
   readonly tracking: number;
-  /** Standard format excludes input and public slot assets. */
+  /** Excludes input and public slot assets. */
   readonly records: number;
 }
 
@@ -36,7 +30,6 @@ const shape = (
   [tracking, records]: readonly [number, number],
 ): TransferShape =>
   Object.freeze({
-    format: DisclosureFormat.Standard,
     outputs,
     inputs,
     withdrawals,
@@ -69,41 +62,15 @@ const ENTRY_SHAPES: readonly TransferShape[] = Object.freeze([
 ]);
 const WIDE_ENTRY_SHAPE = shape(8, 8, 32, 8, ENTRY, [38, 80]);
 
-const PAYOUT_SHAPE: TransferShape = Object.freeze({
-  format: DisclosureFormat.SingleAssetPayout,
-  outputs: SINGLE_ASSET_PAYOUT_OUTPUTS,
-  inputs: SINGLE_ASSET_PAYOUT_INPUTS,
-  withdrawals: 0,
-  owners: 1,
-  entry: false,
-  wide: false,
-  tracking: 17,
-  records: 35,
-});
-
-/** Rust `RingRail::disclosure_format`. */
-export function railDisclosureFormat(
-  rail: RingRail,
-  shape: Readonly<{ inputs: number; outputs: number }>,
-): DisclosureFormat {
-  return rail === "confidential" &&
-    shape.inputs === PAYOUT_SHAPE.inputs &&
-    shape.outputs === PAYOUT_SHAPE.outputs
-    ? DisclosureFormat.SingleAssetPayout
-    : DisclosureFormat.Standard;
-}
-
 export const TRANSFER_SHAPES: readonly TransferShape[] = Object.freeze([
   ...NARROW_SHAPES,
   ...WIDE_SHAPES,
   ...ENTRY_SHAPES,
   WIDE_ENTRY_SHAPE,
-  PAYOUT_SHAPE,
 ]);
 
 /** What names a frame's key, nothing else moves a record's counter, Rust `FrameKey`. */
 export interface FrameKey {
-  readonly format?: DisclosureFormat;
   readonly rail: RingRail;
   /** `n`, the frame's nullifier count. */
   readonly inputs: number;
@@ -114,16 +81,6 @@ export interface FrameKey {
 
 /** `undefined` when the catalog keys none, Rust `FrameKey::shape`. */
 export function frameKeyShape(key: FrameKey): TransferShape | undefined {
-  if (key.format === DisclosureFormat.SingleAssetPayout) {
-    return key.rail === "confidential" &&
-      key.inputs === PAYOUT_SHAPE.inputs &&
-      key.outputs === PAYOUT_SHAPE.outputs &&
-      !key.spendsDefaultRing &&
-      !key.wide
-      ? PAYOUT_SHAPE
-      : undefined;
-  }
-  if (key.format !== undefined && key.format !== DisclosureFormat.Standard) return undefined;
   const holds = (entry: TransferShape): boolean =>
     key.outputs <= entry.outputs && key.inputs <= entry.inputs;
   // SPP's authority rail holds every input to the ring.
@@ -136,7 +93,6 @@ export function frameKeyShape(key: FrameKey): TransferShape | undefined {
 
 /** A transfer key, Rust `RingCircuit::Transfer`. */
 export interface TransferKeyCircuit {
-  readonly format: DisclosureFormat;
   readonly family: "transfer";
   readonly outputs: number;
   /** The widest published input count. */
@@ -158,7 +114,6 @@ export interface PolicyPoolCapacity {
 
 /** What selects a transfer key, Rust `TransferSpend`. */
 export interface TransferSpend {
-  readonly format?: DisclosureFormat;
   readonly rail: RingRail;
   /** Published inputs, the spent notes. */
   readonly inputs: number;
@@ -194,9 +149,6 @@ export function signerSlots(circuit: TransferKeyCircuit): number {
 export function transferPoolCapacity(circuit: TransferKeyCircuit): PolicyPoolCapacity {
   const row = TRANSFER_SHAPES.find((entry) => sameCircuit(shapeCircuit(entry), circuit));
   if (row === undefined) throw new RangeError(`no catalog key ${transferCircuitType(circuit)}`);
-  if (row.format === DisclosureFormat.SingleAssetPayout) {
-    return Object.freeze({ own: row.records, curator: row.records, tracking: row.tracking });
-  }
   const records = row.records + row.inputs;
   // Withdrawals settle through the public slots, their assets are at most N_PUBLIC_SLOTS.
   const withdrawalAssets = Math.min(row.withdrawals, N_PUBLIC_SLOTS);
@@ -209,7 +161,6 @@ export function transferPoolCapacity(circuit: TransferKeyCircuit): PolicyPoolCap
 
 function sameCircuit(left: TransferKeyCircuit, right: TransferKeyCircuit): boolean {
   return (
-    left.format === right.format &&
     left.outputs === right.outputs &&
     left.class === right.class &&
     left.withdrawals === right.withdrawals &&
@@ -221,14 +172,7 @@ function sameCircuit(left: TransferKeyCircuit, right: TransferKeyCircuit): boole
 
 /** The circuit type the prover serves the key under, Go `Key.circuitType`. */
 export function transferCircuitType(circuit: TransferKeyCircuit): string {
-  const family =
-    circuit.format === DisclosureFormat.SingleAssetPayout
-      ? "transfer-payout"
-      : circuit.entry
-        ? "transfer-entry"
-        : circuit.wide
-          ? "transfer-wide"
-          : "transfer";
+  const family = circuit.entry ? "transfer-entry" : circuit.wide ? "transfer-wide" : "transfer";
   return `custom-ring-${family}-${circuit.outputs}-in${circuit.class}-w${circuit.withdrawals}-s${circuit.owners}`;
 }
 
@@ -262,7 +206,6 @@ export function ownerSignerCapacity(addresses: TransferAddresses): number {
 function shapeCircuit(entry: TransferShape): TransferKeyCircuit {
   return Object.freeze({
     family: "transfer",
-    format: entry.format,
     outputs: entry.outputs,
     class: entry.inputs,
     withdrawals: entry.withdrawals,

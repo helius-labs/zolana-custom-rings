@@ -6,15 +6,9 @@
 //! Read after `program-libs/interface/src/codec/stream.rs`. Read before `program-libs/interface/src/proof/verification.rs`,
 //! `programs/custom-ring/src/instructions/verification/verifier.rs`.
 
-use spr_interface::{
-    shape::{Shape, MAX_TRANSACTION_ADDRESSES},
-    N_PUBLIC_SLOTS,
-};
+use spr_interface::{shape::MAX_TRANSACTION_ADDRESSES, N_PUBLIC_SLOTS};
 
-use crate::{
-    audit_stream::AuditKey, member_registry::APPLY_BATCH, transact::RingRail, DisclosureFormat,
-    SINGLE_ASSET_PAYOUT_INPUTS, SINGLE_ASSET_PAYOUT_OUTPUTS,
-};
+use crate::{audit_stream::AuditKey, member_registry::APPLY_BATCH, transact::RingRail};
 
 pub use crate::ring_keys::RING_KEYS;
 
@@ -22,7 +16,6 @@ pub use crate::ring_keys::RING_KEYS;
 pub enum RingCircuit {
     /// Every rail, the statement's bits name it.
     Transfer {
-        format: DisclosureFormat,
         outputs: u8,
         /// The widest published input count.
         inputs: u8,
@@ -56,7 +49,6 @@ pub enum ApplyMode {
 /// One transfer key, mirror `Shapes` in `prover/circuits/transfer`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TransferShape {
-    pub format: DisclosureFormat,
     pub outputs: u8,
     pub inputs: u8,
     pub withdrawals: u8,
@@ -65,7 +57,7 @@ pub struct TransferShape {
     pub wide: bool,
     /// The most tracking rows one inline transaction on the key opens.
     pub tracking: u8,
-    /// Standard format excludes input and public slot assets.
+    /// Excludes input and public slot assets.
     pub records: u8,
 }
 
@@ -77,7 +69,6 @@ const fn narrow(
     pools: [u8; 2],
 ) -> TransferShape {
     TransferShape {
-        format: DisclosureFormat::Standard,
         outputs,
         inputs,
         withdrawals,
@@ -134,34 +125,7 @@ const ENTRY_SHAPES: [TransferShape; 3] = [
 ];
 const WIDE_ENTRY_SHAPE: TransferShape = entry(8, 8, 32, 8, [38, 80]);
 
-const PAYOUT_SHAPE: TransferShape = TransferShape {
-    format: DisclosureFormat::SingleAssetPayout,
-    outputs: SINGLE_ASSET_PAYOUT_OUTPUTS as u8,
-    inputs: SINGLE_ASSET_PAYOUT_INPUTS as u8,
-    withdrawals: 0,
-    owners: 1,
-    entry: false,
-    wide: false,
-    tracking: 17,
-    records: 35,
-};
-
-impl RingRail {
-    /// A default-ring spend at the payout widths has no key in either format.
-    #[must_use]
-    pub const fn disclosure_format(self, shape: Shape) -> DisclosureFormat {
-        if matches!(self, Self::Confidential)
-            && shape.n_inputs() == PAYOUT_SHAPE.inputs as usize
-            && shape.n_outputs() == PAYOUT_SHAPE.outputs as usize
-        {
-            DisclosureFormat::SingleAssetPayout
-        } else {
-            DisclosureFormat::Standard
-        }
-    }
-}
-
-pub const TRANSFER_SHAPES: [TransferShape; 10] = [
+pub const TRANSFER_SHAPES: [TransferShape; 9] = [
     NARROW_SHAPES[0],
     NARROW_SHAPES[1],
     NARROW_SHAPES[2],
@@ -171,13 +135,11 @@ pub const TRANSFER_SHAPES: [TransferShape; 10] = [
     ENTRY_SHAPES[1],
     ENTRY_SHAPES[2],
     WIDE_ENTRY_SHAPE,
-    PAYOUT_SHAPE,
 ];
 
-/// What names a frame's key, nothing else moves a record's counter.
+/// What names a frame's key, nothing else moves a recipient key's counter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FrameKey {
-    pub format: DisclosureFormat,
     pub rail: RingRail,
     /// `n`, the frame's nullifier count.
     pub inputs: usize,
@@ -188,14 +150,6 @@ pub struct FrameKey {
 
 impl FrameKey {
     pub fn shape(self) -> Option<TransferShape> {
-        if self.format == DisclosureFormat::SingleAssetPayout {
-            return (self.rail == RingRail::Confidential
-                && self.inputs == usize::from(PAYOUT_SHAPE.inputs)
-                && self.outputs == usize::from(PAYOUT_SHAPE.outputs)
-                && !self.spends_default_ring
-                && !self.wide)
-                .then_some(PAYOUT_SHAPE);
-        }
         let holds = |shape: &TransferShape| {
             self.outputs <= usize::from(shape.outputs) && self.inputs <= usize::from(shape.inputs)
         };
@@ -226,19 +180,15 @@ impl TransferShape {
 
     pub const fn audit_key(self) -> AuditKey {
         AuditKey {
-            format: self.format,
             class: self.inputs as usize,
             entry: self.entry,
         }
     }
 
-    /// A stream sealed under one row opens under the other, its records and tails keep their counters.
-    /// The first record counter moves with an entry key's class, the first tail counter with `N`.
+    /// A stream sealed under one row opens under the other, only an entry key's class moves its first key counter.
     #[must_use]
-    pub const fn seals_like(self, other: Self, has_data: bool) -> bool {
-        self.format as u8 == other.format as u8
-            && self.audit_key().first_record_counter() == other.audit_key().first_record_counter()
-            && (!has_data || self.outputs == other.outputs)
+    pub const fn seals_like(self, other: Self) -> bool {
+        self.audit_key().first_key_counter() == other.audit_key().first_key_counter()
     }
 
     /// The catalog row of `circuit`, `None` outside the transfer keys.
@@ -251,7 +201,6 @@ impl TransferShape {
 
     const fn circuit(self) -> RingCircuit {
         RingCircuit::Transfer {
-            format: self.format,
             outputs: self.outputs,
             inputs: self.inputs,
             withdrawals: self.withdrawals,
@@ -317,7 +266,6 @@ impl TransferAddresses {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TransferSpend {
-    pub format: DisclosureFormat,
     pub rail: RingRail,
     /// Published inputs, the spent notes.
     pub inputs: usize,
@@ -350,7 +298,6 @@ impl TransferSpend {
 
     const fn frame_key(self) -> FrameKey {
         FrameKey {
-            format: self.format,
             rail: self.rail,
             inputs: self.inputs,
             outputs: self.outputs,
@@ -433,15 +380,7 @@ impl RingCircuit {
         let shape = TransferShape::of(self)?;
         // Withdrawals settle through the public slots, their assets are at most N_PUBLIC_SLOTS.
         let withdrawal_assets = usize::from(shape.withdrawals).min(N_PUBLIC_SLOTS);
-        let records = usize::from(shape.records);
-        if shape.format == DisclosureFormat::SingleAssetPayout {
-            return Some(RecordPools {
-                own: records,
-                curator: records,
-                tracking: usize::from(shape.tracking),
-            });
-        }
-        let records = records + usize::from(shape.inputs);
+        let records = usize::from(shape.records) + usize::from(shape.inputs);
         Some(RecordPools {
             own: records + withdrawal_assets.max(N_PUBLIC_SLOTS),
             curator: records + withdrawal_assets,
@@ -514,7 +453,6 @@ mod tests {
         wide: bool,
     ) -> TransferSpend {
         TransferSpend {
-            format: DisclosureFormat::Standard,
             rail,
             inputs: 1,
             outputs,
@@ -805,18 +743,14 @@ mod tests {
     }
 
     #[test]
-    fn a_default_ring_spend_at_the_payout_widths_has_no_key() {
-        for format in [
-            DisclosureFormat::Standard,
-            DisclosureFormat::SingleAssetPayout,
-        ] {
+    fn the_payout_widths_have_no_key() {
+        for spends_default_ring in [false, true] {
             for wide in [false, true] {
                 let key = FrameKey {
-                    format,
                     rail: RingRail::Confidential,
-                    inputs: SINGLE_ASSET_PAYOUT_INPUTS,
-                    outputs: SINGLE_ASSET_PAYOUT_OUTPUTS,
-                    spends_default_ring: true,
+                    inputs: 1,
+                    outputs: 16,
+                    spends_default_ring,
                     wide,
                 };
                 assert_eq!(key.shape(), None, "{key:?}");
@@ -825,91 +759,18 @@ mod tests {
     }
 
     #[test]
-    fn payout_key_requires_its_format_and_confidential_shape() {
-        let payout = TransferSpend {
-            format: DisclosureFormat::SingleAssetPayout,
-            pools: RecordPools {
-                own: 35,
-                curator: 35,
-                tracking: 17,
-            },
-            ..spend(RingRail::Confidential, 16, false, false)
-        };
-        let key = PAYOUT_SHAPE.circuit();
-        assert_eq!(RingCircuit::transfer(payout.fitted()), Some(key));
-        assert_eq!(key.record_pools(), Some(payout.pools));
-        for refused in [
-            TransferSpend {
-                format: DisclosureFormat::Standard,
-                ..payout
-            },
-            TransferSpend {
-                rail: RingRail::Anonymous,
-                ..payout
-            },
-            TransferSpend {
-                rail: RingRail::Delegate,
-                ..payout
-            },
-            TransferSpend {
-                inputs: 2,
-                ..payout
-            },
-            TransferSpend {
-                outputs: 15,
-                ..payout
-            },
-            TransferSpend {
-                spends_default_ring: true,
-                ..payout
-            },
-            TransferSpend {
-                wide: true,
-                ..payout
-            },
-            TransferSpend { legs: 1, ..payout },
-            TransferSpend {
-                owners: 2,
-                ..payout
-            },
-            TransferSpend {
-                pools: RecordPools {
-                    own: 36,
-                    ..payout.pools
-                },
-                ..payout
-            },
+    fn ordinary_seals_keep_key_positions_across_input_and_output_capacities() {
+        for (smaller, larger) in [
+            (NARROW_SHAPES[0], WIDE_SHAPES[1]),
+            (NARROW_SHAPES[0], WIDE_SHAPES[0]),
+            (NARROW_SHAPES[2], WIDE_SHAPES[0]),
         ] {
-            assert_eq!(RingCircuit::transfer(refused), None);
+            assert!(smaller.seals_like(larger));
         }
-        assert!(!PAYOUT_SHAPE.seals_like(NARROW_SHAPES[0], false));
-    }
-
-    #[test]
-    fn ordinary_seals_keep_record_positions_across_input_capacities() {
-        let (smaller, larger) = (NARROW_SHAPES[0], WIDE_SHAPES[1]);
-        assert!(smaller.seals_like(larger, false));
-        assert!(smaller.seals_like(larger, true));
-    }
-
-    #[test]
-    fn data_tails_bind_output_capacity() {
-        let (smaller, larger) = (NARROW_SHAPES[0], WIDE_SHAPES[0]);
-        assert!(smaller.seals_like(larger, false));
-        assert!(!smaller.seals_like(larger, true));
     }
 
     #[test]
     fn entry_seals_bind_input_capacity() {
-        let (smaller, larger) = (ENTRY_SHAPES[1], ENTRY_SHAPES[2]);
-        assert!(!smaller.seals_like(larger, false));
-        assert!(!smaller.seals_like(larger, true));
-    }
-
-    #[test]
-    fn record_pool_width_does_not_move_the_stream() {
-        let (smaller, larger) = (NARROW_SHAPES[2], WIDE_SHAPES[0]);
-        assert!(smaller.seals_like(larger, false));
-        assert!(smaller.seals_like(larger, true));
+        assert!(!ENTRY_SHAPES[1].seals_like(ENTRY_SHAPES[2]));
     }
 }

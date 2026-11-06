@@ -60,7 +60,6 @@ function frameOf(rekey: RekeyCase): PlanFrame {
         inputs: rekey.inputs,
         outputs: rekey.outputs,
         entry: rekey.spendsDefaultRing,
-        hasData: rekey.hasData,
         wideOwners,
       }),
   };

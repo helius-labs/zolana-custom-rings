@@ -117,13 +117,17 @@ import {
   walletKeys,
 } from "../../helpers/ring-pipeline.js";
 import { decompressG2 } from "../../../src/protocol/codec/codecs.js";
-import { OPENING_RECORD_LEN } from "../../../src/protocol/codec/ring-disclosure-layout.js";
+import {
+  MERGE_ENVELOPE_LEN,
+  MERGE_RECORD_LEN,
+} from "../../../src/protocol/codec/ring-disclosure-layout.js";
+import { seededMergeOutputBlinding } from "../../../src/crypto/derivation/merge-seed.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 /** Rust `WIDEST_MERGE`, the keyed merge one v1 transaction carries. */
-const WIDEST_MERGE = 45;
+const WIDEST_MERGE = 44;
 /** Rust `WIDEST_ZERO_KEY_MERGE`, the owner signature and account narrow it. */
-const WIDEST_ZERO_KEY_MERGE = 44;
+const WIDEST_ZERO_KEY_MERGE = 43;
 /** Pays every merge, the merge circuit refuses the owner as payer. */
 const RELAYER = address("3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3");
 function field(value: number): Bytes32 {
@@ -711,7 +715,8 @@ describe("ring merge", () => {
         ringId: request.ringProgramId,
         auditorPubkey: mergeAuditor.publicKey().toBytes(),
         ephemeralPublicKey: merged.sealed.ephemeralPublicKey,
-        ciphertext: merged.sealed.ciphertext,
+        envelope: merged.sealed.envelope,
+        record: merged.sealed.record,
         payer: request.payer,
         publishedOwner: OWNER_MEMBER,
         trackingRoot: ZERO_32,
@@ -899,7 +904,8 @@ describe("ring merge", () => {
     const sealed = {
       proof: PROOF,
       ephemeralPublicKey: new Uint8Array(33).fill(1) as Bytes33,
-      ciphertext: new Uint8Array(OPENING_RECORD_LEN).fill(2),
+      envelope: new Uint8Array(MERGE_ENVELOPE_LEN).fill(2),
+      record: new Uint8Array(MERGE_RECORD_LEN).fill(3),
     };
     const payer = owner.shieldedAddress().solanaAddress();
     const instruction = await ringMergeInstruction({
@@ -1012,22 +1018,25 @@ describe("anonymous ring merge", () => {
           ringId: hashBytes(addressBytes(RING)) as Bytes32,
           auditorPubkey: mergeAuditor.publicKey().toBytes(),
           ephemeralPublicKey: merged.sealed.ephemeralPublicKey,
-          ciphertext: merged.sealed.ciphertext,
+          envelope: merged.sealed.envelope,
+          record: merged.sealed.record,
           payer: request.payer,
           publishedOwner: ZERO_32,
           trackingRoot: request.trackingRoot,
         }),
       ).toEqual(request.publicInputHash);
-      const opened = openMergeRecord(mergeAuditor, merged.sealed);
+      const opened = openMergeRecord(mergeAuditor, merged.sealed, spp.nullifiers[0]!);
+      const secret = owner.nullifierKey().secretBytes();
+      const seed = Uint8Array.of(0, ...secret) as Bytes32;
       expect(opened.record).toEqual({
         kind: RecordKind.ring,
         amount: 8n,
         ownerKey: owner.signingPublicKey().ed25519(),
         mint: SOL_MINT,
         nullifierPk: owner.nullifierPublicKey(),
+        blinding: seededMergeOutputBlinding(seed, spp.nullifiers[0]!),
       });
-      const secret = owner.nullifierKey().secretBytes();
-      expect(opened.secret).toEqual(Uint8Array.of(0, ...secret));
+      expect(opened.seed).toEqual(seed);
     } finally {
       local.destroy();
     }
@@ -1092,13 +1101,16 @@ describe("PDA owner merge", () => {
         ringId: request.ringProgramId,
         auditorPubkey: mergeAuditor.publicKey().toBytes(),
         ephemeralPublicKey: merged.sealed.ephemeralPublicKey,
-        ciphertext: merged.sealed.ciphertext,
+        envelope: merged.sealed.envelope,
+        record: merged.sealed.record,
         payer: request.payer,
         publishedOwner: holder.signingPublicKey().ownerProofInputHash(),
         trackingRoot: ZERO_32,
       }),
     );
-    expect(openMergeRecord(mergeAuditor, merged.sealed).record.ownerKey).toEqual(addressBytes(pda));
+    expect(
+      openMergeRecord(mergeAuditor, merged.sealed, request.firstNullifier).record.ownerKey,
+    ).toEqual(addressBytes(pda));
     // The owning program signs the owner account through CPI, Rust `RING_MERGE_OWNER_INDEX` 6.
     expect(ringCall(transaction).accounts?.[2 + 6]).toEqual({
       address: pda,
@@ -1167,7 +1179,9 @@ describe("PDA owner merge", () => {
     expect(asked[0]?.ownerKey).toEqual(pda);
     const merged = decodeRingMergeRequest(ringInstruction(transaction).subarray(1));
     expect(merged.authority).toBe(MergeRingAuthority.ring);
-    expect(openMergeRecord(mergeAuditor, merged.sealed).record.ownerKey).toEqual(pda);
+    expect(
+      openMergeRecord(mergeAuditor, merged.sealed, asked[0]!.firstNullifier).record.ownerKey,
+    ).toEqual(pda);
     expect(ringAccounts(transaction)).not.toContain(owner.solanaAddress());
   });
 

@@ -17,10 +17,12 @@
 //! 2. `ring_auth` sits only in SPP's `ring_config` slot, and the payer signs.
 //! 3. A signed record covers every class the ring configured and the operation demands, and every proven approval bit.
 //! 4. Every funder of a deposit leg signs, and a delegate frame has no deposit leg.
-//! 5. On the anonymous rail each signer in SPP's list is the payer, a co-signer, a funder or in the owner run.
+//! 5. On the anonymous frame the co-signers fill the party cells.
 //!
-//! The ring proof finishes the party check. `hiddenOwner` in `prover/circuits/transfer/transfer.go` holds
-//! the hidden owner apart from each nonzero party cell and from the owner run. SPP validates each settlement account.
+//! The ring proof finishes the co-signer check. `hiddenOwner` in `prover/circuits/transfer/transfer.go` holds
+//! the hidden owner apart from each nonzero party cell and from the owner run, so no hidden owner approves
+//! its own outflow. The payer, a funder or the exit may name the hidden owner, the wallet decides. SPP
+//! validates each settlement account.
 //!
 //! Read after `instructions/transfer/processor.rs`. Read before `instructions/transfer/verify.rs`.
 
@@ -36,7 +38,7 @@ use spr_interface::instruction::instruction_data::settlement_accounts;
 
 use crate::instructions::{
     instruction_runtime::{PlacedRingAuth, RingAuth},
-    loader::{check_funding_signer, load_anonymous_exit, CoSigners, RegistrySlots},
+    loader::{check_funding_signer, CoSigners, RegistrySlots},
     public_legs::public_slots,
 };
 
@@ -48,7 +50,7 @@ pub(super) struct TransactAccounts {
     pub sender: [u8; 32],
     /// SPP's owner signer run, default on the authority rails.
     pub signers: SignerSet,
-    /// Zeros off the anonymous frame.
+    /// The co-signers' identities, zeros off the anonymous frame.
     pub party_identities: [[u8; 32]; ANONYMOUS_PARTIES],
     pub public_slots: PublicSlots,
     /// Empty without own records and on the authority rails, no rule screens them.
@@ -116,7 +118,7 @@ impl TransactCheck<'_> {
         // 5. `ring_auth` signs the forwarded call, its one slot keeps that signature on `ring_config`.
         let ring_auth =
             RingAuth::derive(self.program_id)?.check_slot(spp, RING_TRANSACT_RING_CONFIG_INDEX)?;
-        let payer = check_funding_signer(spp, TRANSACT_PAYER_INDEX)?;
+        check_funding_signer(spp, TRANSACT_PAYER_INDEX)?;
         let slots = self.transfer.audit_stream().key.signer_slots();
         // 6. A deposit leg would bring an unlisted asset in on the delegate rail.
         if matches!(self.signer, RailSigner::Delegate { .. })
@@ -128,8 +130,7 @@ impl TransactCheck<'_> {
             return Err(CustomRingError::DelegatePublicLeg.into());
         }
         // 7. A funder signs for its own deposit leg, and SPP moves only that leg's amount under the
-        // signature. The walk comes first since the anonymous rail classifies every signer by it.
-        let mut funders = Vec::new();
+        // signature.
         let mut groups = window;
         for transfer in &data.interface_transfers {
             let (group, rest) = groups
@@ -137,7 +138,7 @@ impl TransactCheck<'_> {
                 .ok_or(CustomRingError::InvalidSettlementAccounts)?;
             groups = rest;
             if let Some(funder) = funder_account_position(transfer) {
-                funders.push(*check_funding_signer(group, funder)?.address().as_array());
+                check_funding_signer(group, funder)?;
             }
         }
         // 8. Each rail names who authorizes the spend, and the statement binds that identity.
@@ -148,19 +149,6 @@ impl TransactCheck<'_> {
                 // The proof holds each public owner's live input to the run, an empty run spends nothing.
                 if data.public_owners && !data.no_spend && owners.is_empty() {
                     return Err(CustomRingError::OwnerSignerCount.into());
-                }
-                // A signer outside the four classes takes no party cell and sits outside the run. The
-                // proof could not hold it apart from the hidden owner, and its signature could name that owner.
-                if spp.iter().any(|account| {
-                    account.is_signer()
-                        && account.address() != payer.address()
-                        && !co_signers.contains(account.address())
-                        && !funders.contains(account.address().as_array())
-                        && !owners
-                            .iter()
-                            .any(|owner| owner.address() == account.address())
-                }) {
-                    return Err(CustomRingError::InvalidAnonymousSigner.into());
                 }
                 ([0; 32], signer_set(owners, slots)?)
             }
@@ -207,24 +195,12 @@ impl TransactCheck<'_> {
                 data.spl_withdrawal_owners,
             )?,
         };
-        // 10. The payer, the co-signers, the funders and a hidden sender's exit key hold the party cells,
-        // a zero cell reads as absent.
+        // 10. The co-signers hold the party cells, a zero cell reads as absent.
         let party_identities = match data.rail.anonymous_frame() {
-            true => {
-                // SPP settles any exit, only a hidden sender needs a destination that names one key.
-                // The proof holds the hidden owner apart from that key.
-                let exit = match self.signer == RailSigner::Payer && !data.public_owners {
-                    true => load_anonymous_exit(&data.interface_transfers, window)?,
-                    false => None,
-                };
-                AnonymousParties {
-                    payer: payer.address().as_array(),
-                    co_signers: co_signers.as_slice(),
-                    funders: &funders,
-                    exit_destination: exit.as_ref(),
-                }
-                .identities()?
+            true => AnonymousParties {
+                co_signers: co_signers.as_slice(),
             }
+            .identities()?,
             false => [[0; 32]; ANONYMOUS_PARTIES],
         };
 

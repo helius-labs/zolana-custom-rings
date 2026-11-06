@@ -177,6 +177,8 @@ pub(crate) struct RecordPlan {
     gates: SourceGates,
     pub own: PoolSubjects,
     pub curator: PoolSubjects,
+    /// Each owner beside its public record key, an asset reads under its own field.
+    public_keys: Vec<([u8; 32], [u8; 32])>,
     salted_keys: Vec<([u8; 32], [u8; 32])>,
 }
 
@@ -188,22 +190,27 @@ impl RecordPlan {
         }
     }
 
-    pub fn owner(&mut self, query: OwnerQuery) -> OwnerEntry {
+    /// The owner's public lists sit under `Member::public`, its salted lists under its salted key.
+    pub fn owner(&mut self, query: OwnerQuery) -> Result<OwnerEntry, RingError> {
         let OwnerQuery {
             member,
             tracking,
             salted,
         } = query;
         let gates = self.gates;
+        let public = *Member::public(&Member::from_bytes(member)?)?.as_bytes();
+        if !self.public_keys.iter().any(|(owner, _)| *owner == member) {
+            self.public_keys.push((member, public));
+        }
         let entry = PoolEntry {
-            own: self.own.index(Some(member)),
-            curator: [self.curator.index(gates.public_foreign().then_some(member))],
+            own: self.own.index(Some(public)),
+            curator: [self.curator.index(gates.public_foreign().then_some(public))],
         };
         let salted_key = salted.map(|salted| salted.key);
         if let Some(key) = salted_key {
             self.salted_keys.push((member, key));
         }
-        OwnerEntry {
+        Ok(OwnerEntry {
             entry,
             tracking,
             list_salt: salted.map_or([0; 32], |salted| salted.list_salt),
@@ -211,7 +218,7 @@ impl RecordPlan {
             curator_salted: [self
                 .curator
                 .index(salted_key.filter(|_| gates.salted_curated()))],
-        }
+        })
     }
 
     pub fn asset(&mut self, asset: [u8; 32]) -> PoolEntry {
@@ -248,9 +255,14 @@ impl RecordPlan {
             .iter()
             .find(|(owner, _)| owner == member)
             .map_or(0, |(_, key)| self.gates.served(own(key), curator(key)));
+        let record = self
+            .public_keys
+            .iter()
+            .find(|(owner, _)| owner == member)
+            .map_or(member, |(_, key)| key);
         RecordLists {
-            own: own(member),
-            curator: curator(member),
+            own: own(record),
+            curator: curator(record),
             salted,
         }
     }

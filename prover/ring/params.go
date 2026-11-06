@@ -48,11 +48,12 @@ type AuditParams struct {
 	Layout         uint8 `json:"layout"`
 }
 
-// OutputOpening is one output slot and the preimages its record names.
+// OutputOpening is one output slot, the preimages its record names and the key it is sealed to.
 type OutputOpening struct {
-	Output     Opening `json:"output"`
-	OwnerKey   Bytes   `json:"ownerKey"`
-	MintChunks []Field `json:"mintChunks"`
+	Output       Opening `json:"output"`
+	OwnerKey     Bytes   `json:"ownerKey"`
+	MintChunks   []Field `json:"mintChunks"`
+	RecipientKey Bytes   `json:"recipientKey"`
 }
 
 // EntryOpening names a default-ring input's preimages, zero off one.
@@ -90,20 +91,19 @@ type TransferParams struct {
 	PartyIdentities []Field `json:"partyIdentities"`
 	ApprovalMask    uint8   `json:"approvalMask"`
 	// Both absent read zero, a frame that discloses nothing.
-	ApprovalTotals      *Field          `json:"approvalTotals,omitempty"`
-	ApprovalBlinder     *Field          `json:"approvalBlinder,omitempty"`
-	OutputCount         uint8           `json:"outputCount"`
-	Outputs             []OutputOpening `json:"outputs"`
-	InputCount          uint8           `json:"inputCount"`
-	InputNullifierChain Field           `json:"inputNullifierChain"`
-	InputNullifiers     []Field         `json:"inputNullifiers"`
-	Inputs              []Opening       `json:"inputs"`
-	Entries             []EntryOpening  `json:"entries,omitempty"`
-	SignerCount         uint8           `json:"signerCount"`
-	Signers             []Field         `json:"signers"`
-	SignerDataCounts    uint64          `json:"signerDataCounts,omitempty"`
-	Rows                []Field         `json:"rows"`
-	PrivateTxHash       Field           `json:"privateTxHash"`
+	ApprovalTotals  *Field          `json:"approvalTotals,omitempty"`
+	ApprovalBlinder *Field          `json:"approvalBlinder,omitempty"`
+	OutputCount     uint8           `json:"outputCount"`
+	Outputs         []OutputOpening `json:"outputs"`
+	InputCount      uint8           `json:"inputCount"`
+	// Inputs hold the spent notes in SPP's note order, then dummies.
+	Inputs        []Opening      `json:"inputs"`
+	AddressChain  Field          `json:"addressChain"`
+	Entries       []EntryOpening `json:"entries,omitempty"`
+	SignerCount   uint8          `json:"signerCount"`
+	Signers       []Field        `json:"signers"`
+	Rows          []Field        `json:"rows"`
+	PrivateTxHash Field          `json:"privateTxHash"`
 	TrackingParams
 	PolicyParams
 }
@@ -317,6 +317,7 @@ type MergeParams struct {
 	Payer              Field            `json:"payer"`
 	TrackingRoot       Field            `json:"trackingRoot"`
 	EphSk              Bytes            `json:"ephSk"`
+	RecipientKey       Bytes            `json:"recipientKey"`
 	OwnerKey           Bytes            `json:"ownerKey"`
 	OwnerPkHash        Field            `json:"ownerPkHash"`
 	MintChunks         []Field          `json:"mintChunks"`

@@ -14,8 +14,10 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringkey"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringmerge"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 	mergeshared "github.com/helius-labs/zolana/prover/server/circuits/spp_merge/shared"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/protocol"
@@ -73,15 +75,43 @@ func TestMergeRecordOffItsOpening(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s := ringmerge.Build(t)
 			tamper(s)
-			ringtest.RequireRefused(t, solved(t, s), "audit.OpeningRecord.Encode")
+			ringtest.RequireRefused(t, solved(t, s), "audit.MergeRecord.Encode")
 		})
 	}
-	t.Run("a sealed seed off the opening", func(t *testing.T) {
+	for name, offset := range map[string]int{"a sealed seed off the opening": audit.RecordLen, "a sealed blinding off the opening": audit.RecordLen - 1} {
+		t.Run(name, func(t *testing.T) {
+			s := ringmerge.Build(t)
+			s.Record = slices.Clone(s.Record)
+			s.Record[offset] ^= 1
+			s.Rebind(t)
+			ringtest.RequireRefused(t, solved(t, s), "circuits.(*MergeCircuit).Define")
+		})
+	}
+}
+
+// The merge record is sealed to the recipient key its envelope gives the auditor.
+func TestMergeRecordIsSealedToTheEnvelopesKey(t *testing.T) {
+	s := ringmerge.Build(t)
+	if err := solved(t, s); err != nil {
+		t.Fatal(err)
+	}
+	t.Run("the owner opens the record under its viewing key", func(t *testing.T) {
+		record := ringprotocol.SealRecord(t, s.Keys.EphSk(), s.RecipientKey, [16]byte{}, 0, ringmerge.FirstNullifier, shared.MergeOutputInfo, s.Ciphertext(t))
+		if !slices.Equal(record, s.Record) {
+			t.Fatal("the record differs from the merged opening")
+		}
+	})
+	t.Run("an envelope naming another key", func(t *testing.T) {
 		s := ringmerge.Build(t)
-		s.Record = slices.Clone(s.Record)
-		s.Record[audit.RecordStride] ^= 1
-		s.Rebind(t)
+		ringtest.SetBytes(s.Circuit.RecipientKey[:], func() []byte { key := ringaudit.ViewingKey(t, 0x41); return key[:] }())
 		ringtest.RequireRefused(t, solved(t, s), "circuits.(*MergeCircuit).Define")
+	})
+	t.Run("a record under the transfer label", func(t *testing.T) {
+		s := ringmerge.Build(t)
+		transferRecord := ringprotocol.SealRecord(t, s.Keys.EphSk(), s.RecipientKey, [16]byte{}, 0, ringmerge.FirstNullifier, shared.OutputRecordInfo, s.Record)
+		if slices.Equal(transferRecord, s.Ciphertext(t)) {
+			t.Fatal("the merge record shares the transfer keystream")
+		}
 	})
 }
 
@@ -104,7 +134,7 @@ func TestMergeRefusesAnAmountAboveItsBytes(t *testing.T) {
 	}, big.NewInt(ringmerge.OutputTreeID))
 	s.Circuit.OutputUtxoHash = s.OutputHash
 	s.Rebind(t)
-	ringtest.RequireRefused(t, solved(t, s), "[ToBinary]", "audit.OpeningRecord.Encode")
+	ringtest.RequireRefused(t, solved(t, s), "[ToBinary]", "audit.RecordOpening.Encode")
 }
 
 func TestMergeTrackingRow(t *testing.T) {
@@ -207,13 +237,25 @@ func TestMergeZeroKeyIgnoresEveryRow(t *testing.T) {
 }
 
 func TestMergePayer(t *testing.T) {
-	t.Run("a hidden owner pays and refuses", func(t *testing.T) {
+	// Paying names the hidden owner, a privacy choice the wallet makes and no proof refuses.
+	t.Run("a hidden owner pays", func(t *testing.T) {
 		s := ringmerge.Build(t)
 		s.Circuit.Payer = s.OwnerPkHash
 		s.Rebind(t)
-		if solved(t, s) == nil {
-			t.Fatal("a hidden owner paid its own merge")
+		if err := solved(t, s); err != nil {
+			t.Fatal(err)
 		}
+	})
+	// The authorization stays, a paying hidden owner still opens its own row under its own key.
+	t.Run("a paying hidden owner under another key", func(t *testing.T) {
+		s := ringmerge.Build(t)
+		s.Circuit.Payer = s.OwnerPkHash
+		s.Tracking = ringregistry.NewTracking(t)
+		s.Tracking.Apply(t, s.TrackingEntry(s.OwnerPkHash, big.NewInt(5)))
+		s.Circuit.Tracking = s.Tracking.Opening(s.OwnerPkHash).Wires()
+		s.Circuit.TrackingRoot = s.Tracking.Root()
+		s.Rebind(t)
+		ringtest.RequireRefused(t, solved(t, s), "circuits.(*MergeCircuit).Define")
 	})
 	t.Run("a published owner pays", func(t *testing.T) {
 		s := ringmerge.BuildZeroKey(t)

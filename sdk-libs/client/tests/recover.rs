@@ -5,7 +5,7 @@ mod origin_fixture;
 #[path = "common/transfer.rs"]
 pub mod transfer;
 
-use custom_ring_interface::{AuditRecord, OpeningRecord, RecordKind, RingMode};
+use custom_ring_interface::{MergeRecord, OutputRecord, RecordKind, RingMode};
 use std::{cell::Cell, sync::Mutex};
 
 use solana_address::Address;
@@ -303,10 +303,12 @@ impl Fixture {
     ) -> (WalletUtxo, ShieldedTransaction) {
         let (held, mut transaction) = self.merge(inputs, tree_id);
         let sealed = MergeRecordSeal {
-            record: OpeningRecord {
+            record: MergeRecord {
                 record: self.record(&held.utxo),
-                secret: right_align(&self.member.nullifier_key.secret()),
+                seed: right_align(&self.member.nullifier_key.secret()),
             },
+            recipient: self.address.viewing_pubkey,
+            first_nullifier: transaction.nullifiers[0],
         }
         .seal(&self.auditor.pubkey())
         .unwrap();
@@ -314,7 +316,8 @@ impl Fixture {
             transaction.tx_signature,
             ConfirmedMergeDisclosure {
                 eph_pk: *sealed.eph_pk.as_bytes(),
-                ciphertext: sealed.ciphertext,
+                envelope: sealed.envelope,
+                record: sealed.record,
             },
         ));
         *transaction.output_slots[0].payload.last_mut().unwrap() ^= 1;
@@ -342,13 +345,15 @@ impl Fixture {
             .hash(&ZERO_NULLIFIER_PUBKEY, &[0; 32], &ring_data_hash, tree_id)
             .unwrap();
         let sealed = MergeRecordSeal {
-            record: OpeningRecord {
-                record: AuditRecord {
+            record: MergeRecord {
+                record: OutputRecord {
                     nullifier_pk: ZERO_NULLIFIER_PUBKEY,
                     ..self.record(&utxo)
                 },
-                secret: seed,
+                seed,
             },
+            recipient: self.address.viewing_pubkey,
+            first_nullifier: first,
         }
         .seal(&self.auditor.pubkey())
         .unwrap();
@@ -357,7 +362,8 @@ impl Fixture {
             signature,
             ConfirmedMergeDisclosure {
                 eph_pk: *sealed.eph_pk.as_bytes(),
-                ciphertext: sealed.ciphertext,
+                envelope: sealed.envelope,
+                record: sealed.record,
             },
         ));
         let transaction = ShieldedTransaction {
@@ -398,13 +404,14 @@ impl Fixture {
         (merge, transaction)
     }
 
-    fn record(&self, utxo: &Utxo) -> AuditRecord {
-        AuditRecord {
+    fn record(&self, utxo: &Utxo) -> OutputRecord {
+        OutputRecord {
             kind: RecordKind::Ring,
             amount: utxo.amount,
             owner_key: self.owner_key(),
             mint: utxo.asset.asset.to_bytes(),
             nullifier_pk: self.address.nullifier_pubkey,
+            blinding: utxo.blinding,
         }
     }
 
@@ -792,10 +799,8 @@ async fn missing_or_invalid_mandatory_disclosure_never_returns_a_partial_balance
         if missing {
             tx.messages.clear();
         } else {
-            // A flipped record byte rebuilds no commitment.
-            let message = &mut tx.messages.last_mut().expect("auditor message").data;
-            let slot_0 = message.len() - 2 * custom_ring_interface::AUDIT_RECORD_LEN;
-            message[slot_0 + 20] ^= 1;
+            // A record kind outside the enum opens no record, the body follows an 8 byte header.
+            tx.output_slots[0].payload[8] ^= 0x80;
         }
         let history = History {
             transactions: vec![tx],

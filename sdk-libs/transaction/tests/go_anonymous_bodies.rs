@@ -1,22 +1,22 @@
 //! Reads `test-vectors/audit/anonymous_bodies.json`, the ciphertexts of a witness the anonymous key solves.
 
 use custom_ring_interface::{
-    stream::SlotSecret, BundleLayout, ChangeCell, RecipientBody, SenderBundle, RECIPIENT_BODY_LEN,
+    stream::SlotSecret, BundleLayout, OutputRecord, RecordKind, SenderBundle, OUTPUT_RECORD_LEN,
 };
 use serde::Deserialize;
 use spr_keypair::{ViewingKey, X25519Pubkey};
 use zolana_ring_transaction::{
     open_recipient_body, open_sender_bundle, seal_recipient_body, seal_sender_bundle,
-    AnonymousPlan, AnonymousSlot, RingDelivery, RingOutputRail,
+    AnonymousPlan, AnonymousSlot, PayloadRead, RingDelivery, RingOutputRail,
 };
 
 #[derive(Deserialize)]
 struct Vector {
     output_count: usize,
     output_seed: String,
-    change_amount: u64,
-    change_mint: String,
     recipient_keys: Vec<String>,
+    body_owner_key: String,
+    body_nullifier_pk: String,
     body_blinding: String,
     body_amount: u64,
     body_mint: String,
@@ -45,24 +45,26 @@ fn sealers_and_readers_agree_with_the_proven_ciphertexts() {
         "../../../test-vectors/audit/anonymous_bodies.json"
     ))
     .unwrap();
-    let body = RecipientBody {
-        blinding: array(&vector.body_blinding),
+    let record = OutputRecord {
+        kind: RecordKind::Ring,
         amount: vector.body_amount,
+        owner_key: array(&vector.body_owner_key),
         mint: array(&vector.body_mint),
-        ..RecipientBody::default()
+        nullifier_pk: array(&vector.body_nullifier_pk),
+        blinding: array(&vector.body_blinding),
     };
     let secret = SlotSecret::new(array(&vector.body_slot_secret)).unwrap();
-    let sealed = seal_recipient_body(&body, &secret).unwrap();
+    let sealed = seal_recipient_body(&record, None, &secret).unwrap();
     assert_eq!(hex::encode(sealed), vector.body);
-    let ciphertext: [u8; RECIPIENT_BODY_LEN] = array(&vector.body);
-    assert_eq!(open_recipient_body(&ciphertext, &secret).unwrap(), body);
+    let ciphertext: [u8; OUTPUT_RECORD_LEN] = array(&vector.body);
+    let opened = open_recipient_body(&ciphertext, &secret).unwrap();
+    assert_eq!(
+        (opened.record, opened.payload),
+        (record, PayloadRead::Absent)
+    );
 
     let bundle = SenderBundle {
         output_seed: array(&vector.output_seed),
-        change: vec![ChangeCell {
-            mint: array(&vector.change_mint),
-            amount: vector.change_amount,
-        }],
         recipient_keys: vector
             .recipient_keys
             .iter()
@@ -82,7 +84,6 @@ fn sealers_and_readers_agree_with_the_proven_ciphertexts() {
         &secret,
         BundleLayout {
             outputs: vector.output_count,
-            change: 1,
         },
     )
     .unwrap();
@@ -96,17 +97,19 @@ fn the_rail_publishes_the_vector_tags() {
     ))
     .unwrap();
     let tx_key = ViewingKey::from_canonical_bytes(&array(&vector.tx_viewing_sk)).unwrap();
+    let auditor = ViewingKey::new().pubkey();
     let rail = RingOutputRail::sealed(
         tx_key,
         array(&vector.salt),
+        auditor,
         RingDelivery::Anonymous(Box::new(AnonymousPlan::new())),
     );
     let first_nullifier = array(&vector.first_nullifier);
     let tag_of =
         |slot: AnonymousSlot, index| rail.anonymous_tag(&slot, &first_nullifier, index).unwrap();
-    // Slot 0 is the frame's one bodiless slot, the keys name the slots past it.
+    // Key `i` names slot `i`.
     let recipient = X25519Pubkey::from_u(array(
-        &vector.recipient_keys[usize::try_from(vector.body_index).unwrap() - 1],
+        &vector.recipient_keys[usize::try_from(vector.body_index).unwrap()],
     ))
     .unwrap();
     assert_eq!(

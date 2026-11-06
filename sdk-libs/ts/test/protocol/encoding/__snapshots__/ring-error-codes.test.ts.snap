@@ -209,5 +209,6 @@ exports[`ring error codes > pins the public codes and their order 1`] = `
   "RING_RELAY_FEE_PAYER_FUNDS_DEPOSIT",
   "RING_ZERO_KEY_MERGE_UNAVAILABLE",
   "RING_EXIT_PROOF_UNAVAILABLE",
+  "RING_RECIPIENT_LITERAL_ZERO_KEY",
 ]
 `;

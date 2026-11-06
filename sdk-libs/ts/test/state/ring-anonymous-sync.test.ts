@@ -27,12 +27,7 @@ import {
   StreamCounter,
   ViewingHistory,
 } from "../../src/state/viewing-history.js";
-import {
-  RECIPIENT_BODY_LEN,
-  sealRecipientBody,
-  sealSenderBundle,
-  senderBundleLen,
-} from "../../src/protocol/codec/anonymous-delivery.js";
+import { sealSenderBundle, senderBundleLen } from "../../src/protocol/codec/anonymous-delivery.js";
 import {
   deliveredSlotSecret,
   recipientTag,
@@ -55,7 +50,9 @@ import {
   RING,
   ScanIndexer,
   ScanWallet,
+  sealedNote,
 } from "../helpers/ring-scan.js";
+import { OUTPUT_RECORD_LEN } from "../../src/protocol/codec/ring-disclosure-layout.js";
 
 await initializePoseidon();
 
@@ -233,18 +230,18 @@ describe("anonymous sync", () => {
         outputIndex,
         firstNullifier,
       });
-    const noise = new Uint8Array(RECIPIENT_BODY_LEN).fill(0x5c);
+    const noise = new Uint8Array(OUTPUT_RECORD_LEN).fill(0x5c);
     // Opens under bob's key, its blinding outside the field fails the hash rebuild.
-    const named = sealRecipientBody(secret(2), {
+    const named = sealedNote(secret(2), {
+      owner: bob.address,
       blinding: new Uint8Array(32).fill(0xff) as Bytes32,
       amount: 5n,
       mint: SOL_MINT,
     });
-    // Opens under bob's key, its change rebuilds no published hash.
+    // Opens under bob's key, the change key names bob, whose slot rebuilds no published hash.
     const bundle = sealSenderBundle(secret(3), {
       outputSeed: new Uint8Array(32).fill(0x0b) as Bytes32,
-      change: [{ mint: SOL_MINT, amount: 5n }],
-      recipientKeys: [ZERO, keypair(8).shieldedAddress().viewingPublicKey.u()],
+      recipientKeys: [ZERO, bob.viewingKey.u(), keypair(8).shieldedAddress().viewingPublicKey.u()],
     });
     const payloads = [
       new Uint8Array(),
@@ -387,11 +384,11 @@ describe("anonymous sync", () => {
     expect(note.nullifier).toEqual(poseidon([hash, note.utxo.blinding, ZERO_32]));
   });
 
-  it("rebuilds an entry's moved note and its change from the two SOL cells", async () => {
+  it("rebuilds an entry's moved note and its change from their records under the sender's key", async () => {
     const indexer = new ScanIndexer();
     const alice = new ScanWallet(1);
     const entered = await alice.pay(indexer, [{ to: alice.address, amount: 25n }]);
-    expect(entered.outputSlots.slice(0, 2).map((slot) => slot.payload.length)).toEqual([0, 0]);
+    expect(entered.outputSlots.slice(0, 2).map((slot) => slot.viewTag)).toEqual([ZERO, ZERO]);
     const scan = await alice.sync(indexer, alice.fresh());
     expect(found(scan)).toEqual([hex(output(entered, 0)), hex(output(entered, 1))]);
     expect(scan.utxos.map((note) => note.utxo.amount).sort()).toEqual([25n, 75n]);
@@ -403,7 +400,7 @@ describe("anonymous sync", () => {
     const alice = new ScanWallet(1);
     const bob = new ScanWallet(2).address;
     const paid = await alice.pay(indexer, [{ to: bob, amount: 100n }]);
-    expect(paid.outputSlots[0]?.payload).toHaveLength(0);
+    expect(paid.outputSlots[0]?.payload.length).toBeGreaterThan(0);
     expect(paid.outputSlots[0]?.viewTag).toEqual(ZERO);
     const scan = await alice.sync(indexer, alice.fresh());
     expect(found(scan)).toEqual([hex(output(paid, 0))]);
@@ -476,9 +473,7 @@ describe("anonymous sync", () => {
     expect(paid.outputSlots).toHaveLength(2);
     const [message] = paid.messages;
     if (message === undefined) throw new Error("no bundle");
-    expect(senderBundleOutputBody(message.data)).toHaveLength(
-      senderBundleLen({ outputs: 2, change: 1 }),
-    );
+    expect(senderBundleOutputBody(message.data)).toHaveLength(senderBundleLen({ outputs: 2 }));
 
     indexer.publish(paid);
     const opened = await alice.sync(indexer, alice.fresh());

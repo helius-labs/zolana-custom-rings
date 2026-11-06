@@ -1,8 +1,8 @@
 //! The record opens the merged note for its auditor.
 
 use custom_ring_interface::{
-    key_catalog::RingCircuit, AuditRecord, CustomRingMergeIxData, InstructionTag, MergePublicInput,
-    OpeningRecord, RecordKind, RingMode, SealedMergeRecord, OPENING_RECORD_LEN,
+    key_catalog::RingCircuit, CustomRingMergeIxData, InstructionTag, MergePublicInput, MergeRecord,
+    OutputRecord, RecordKind, RingMode, SealedMergeRecord, MERGE_ENVELOPE_LEN, MERGE_RECORD_LEN,
     TAGGED_X25519_KEY_LEN,
 };
 use solana_address::Address;
@@ -389,28 +389,31 @@ impl PreparedCustomRingMerge {
         let mint = output.asset.asset.to_bytes();
         let owner_key = request::owner_key(&inner.signing_pubkey)?;
         let seed = inner.seed(&input.nullifier_key)?;
-        let sealed = MergeRecordSeal {
-            record: OpeningRecord {
-                record: AuditRecord {
-                    kind: RecordKind::Ring,
-                    amount: output.amount,
-                    owner_key,
-                    mint,
-                    nullifier_pk: inner
-                        .output_utxo
-                        .owner_address
-                        .map(|owner| owner.nullifier_pubkey)
-                        .unwrap_or_default(),
-                },
-                secret: *seed.as_bytes(),
-            },
-        }
-        .seal(&config.auditor_pubkey)?;
         let first_nullifier = *data
             .merge
             .nullifiers
             .first()
             .ok_or(TransactionError::NoInputs)?;
+        let merged_owner = output
+            .owner_address
+            .ok_or(TransactionError::OutputWithoutOwner { slot_index: 0 })?;
+        // The record seals to the merged owner's viewing key, the envelope names it to the auditor.
+        let sealed = MergeRecordSeal {
+            record: MergeRecord {
+                record: OutputRecord {
+                    kind: RecordKind::Ring,
+                    amount: output.amount,
+                    owner_key,
+                    mint,
+                    nullifier_pk: merged_owner.nullifier_pubkey,
+                    blinding: seed.output_blinding(&first_nullifier)?,
+                },
+                seed: *seed.as_bytes(),
+            },
+            recipient: merged_owner.viewing_pubkey,
+            first_nullifier,
+        }
+        .seal(&config.auditor_pubkey)?;
         let ring_id = self.ring.ring_id()?;
         let payer_identity = solana_owner_identity(payer.as_array())?;
         let tracking_root = tracking.as_ref().map_or([0; 32], |(root, _)| root.root);
@@ -425,7 +428,8 @@ impl PreparedCustomRingMerge {
             ring_id: &ring_id,
             auditor_pk: auditor.as_bytes(),
             eph_pk: sealed.eph_pk.as_bytes(),
-            ciphertext: &sealed.ciphertext,
+            envelope: &sealed.envelope,
+            record: &sealed.record,
             payer: &payer_identity,
             published_owner: &published_owner,
             tracking_root: &tracking_root,
@@ -440,6 +444,7 @@ impl PreparedCustomRingMerge {
             payer: payer_identity,
             tracking_root,
             eph_sk: sealed.ephemeral_sk,
+            recipient_key: merged_owner.viewing_pubkey.u(),
             owner_key,
             owner_pk_hash,
             mint_chunks: pack_be::<32, 2>(&mint),
@@ -475,7 +480,8 @@ impl PreparedCustomRingMerge {
                 sealed: SealedMergeRecord {
                     proof: to_instruction_proof(proof)?,
                     eph_pk: *sealed.eph_pk.as_bytes(),
-                    ciphertext: sealed.ciphertext,
+                    envelope: sealed.envelope,
+                    record: sealed.record,
                 },
                 merge: data.merge,
             },
@@ -541,7 +547,8 @@ impl MergeSite<'_> {
                 sealed: SealedMergeRecord {
                     proof: bytemuck::Zeroable::zeroed(),
                     eph_pk: [0; TAGGED_X25519_KEY_LEN],
-                    ciphertext: [0; OPENING_RECORD_LEN],
+                    envelope: [0; MERGE_ENVELOPE_LEN],
+                    record: [0; MERGE_RECORD_LEN],
                 },
                 merge: MergeTransactIxData {
                     expiry_unix_ts: layout.expiry_unix_ts,

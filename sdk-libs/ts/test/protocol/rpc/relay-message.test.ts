@@ -1,23 +1,19 @@
 /** Refuses a relay message that moves more than the request, against the Rust check's vectors. */
-import {
-  AccountRole,
-  decompileTransactionMessage,
-  getCompiledTransactionMessageDecoder,
-  type AccountMeta,
-} from "@solana/kit";
+import { decompileTransactionMessage, getCompiledTransactionMessageDecoder } from "@solana/kit";
 import type { Instruction } from "@heliuslabs/spr/interface";
 import { encodeBase58, equalBytes } from "@heliuslabs/spr/internal";
-import { sealedAuditorSchedule } from "../../../src/crypto/audit/audit.js";
 import {
-  decodeAuditRecord,
-  encodeAuditRecord,
-  RecordKind,
-  type AuditRecord,
-} from "../../../src/protocol/codec/audit-stream.js";
+  openOutputSlot,
+  openSealedDisclosure,
+  sealOutputSlot,
+  type RingDisclosure,
+} from "../../../src/crypto/audit/ring-disclosure.js";
+import { txKeySlotSecret } from "../../../src/crypto/derivation/ring-stream.js";
+import { x25519FromU } from "../../../src/crypto/keys/x25519.js";
+import { RecordKind, type OutputRecord } from "../../../src/protocol/codec/audit-stream.js";
 import {
-  DATA_TAIL_LEN,
-  RECIPIENT_BODY_LEN,
-  recordRegion,
+  PAYLOAD_LENGTH_LEN,
+  RECIPIENT_KEY_LEN,
 } from "../../../src/protocol/codec/ring-disclosure-layout.js";
 import {
   RingTransactData,
@@ -30,7 +26,6 @@ import { compileUnsignedTransaction } from "@heliuslabs/spr/internal";
 import { ringComputeUnitLimit } from "../../../src/operations/management/admin.js";
 import { SIZE_PROBE_LIFETIME } from "../../../src/operations/workflow/compile.js";
 import { RingInstructionTag } from "../../../src/protocol/transaction/instruction-tag.js";
-import { ringAuthAddress } from "../../../src/protocol/pda/index.js";
 import { readFileSync } from "node:fs";
 
 import {
@@ -44,7 +39,12 @@ import { describe, expect, it, vi } from "vitest";
 import { initializePoseidon } from "@heliuslabs/spr";
 import type { Bytes32, Bytes33 } from "@heliuslabs/spr/interface";
 import type { indexerTypes } from "@heliuslabs/spr/internal";
-import { ShieldedAddress, ShieldedKeypair, X25519PublicKey } from "@heliuslabs/spr/keypair";
+import {
+  ShieldedAddress,
+  ShieldedKeypair,
+  ViewingKey,
+  X25519PublicKey,
+} from "@heliuslabs/spr/keypair";
 import { Data } from "@heliuslabs/spr/transaction";
 
 import {
@@ -55,6 +55,7 @@ import {
   expectedEnroll,
   expectedPublicOwner,
   openingHash,
+  ZERO_ADDRESS,
   type ExpectedRelayMessage,
   type DelegateRingConfig,
 } from "../../../src/rpc/relay-message.js";
@@ -134,7 +135,7 @@ function auditorOf(request: DelegateRequest): X25519PublicKey {
 
 function delegate(
   request: DelegateRequest,
-  cases: readonly MessageCase[] = delegates.cases,
+  pinned: Vector<DelegateRequest> = delegates,
 ): Promise<ExpectedRelayMessage> {
   const shielded = (text: string) => ShieldedAddress.fromBytes(new Uint8Array(base58.encode(text)));
   const { prepare } = request;
@@ -163,12 +164,12 @@ function delegate(
     } as unknown as PrepareAuthorityTransferRequest,
     quote: { feePayer: request.feePayer, validUntilSlot: 0n },
     config: { mode: "confidential", auditorPublicKey: auditorOf(request) },
-    allowed: pinnedAllowed(cases),
+    allowed: pinnedAllowed(pinned),
   });
 }
 
-/** The vector holds no openings, the honest frame's published nullifiers stand in as in Rust. */
-function pinnedAllowed(cases: readonly MessageCase[]): AllowedNullifiers {
+/** The vector holds no openings, the honest frame's spent notes stand in as in Rust. */
+function pinnedAllowed({ request, cases }: Vector<DelegateRequest>): AllowedNullifiers {
   const compiled = getCompiledTransactionMessageDecoder().decode(message(cases, "honest"));
   const { instructions } = decompileTransactionMessage(
     compiled as Parameters<typeof decompileTransactionMessage>[0] & { version: 1 },
@@ -178,15 +179,36 @@ function pinnedAllowed(cases: readonly MessageCase[]): AllowedNullifiers {
     (instructions as readonly Instruction[])
       .map((instruction) => Uint8Array.from(instruction.data ?? []))
       .filter((data) => data[0] === RingInstructionTag.authorityTransfer)
-      .flatMap((data) =>
-        RingTransactData.parse(data.subarray(1), rail).nullifiers.map(encodeBase58),
-      ),
+      .flatMap((data) => {
+        const frame = RingTransactData.parse(data.subarray(1), rail);
+        // The authority rail publishes its notes ahead of the padding.
+        const spent = openedStream(request, frame).envelope.realInputs;
+        return frame.nullifiers.slice(0, spent).map(encodeBase58);
+      }),
   );
   return {
     checkSources: () => undefined,
-    spendsOnly: (notes: Iterable<Bytes32>) =>
-      [...notes].every((nullifier) => honest.has(encodeBase58(nullifier))),
+    countsSpends: (spent: number, published: Iterable<Bytes32>) =>
+      [...published].filter((nullifier) => honest.has(encodeBase58(nullifier))).length === spent,
   } as unknown as AllowedNullifiers;
+}
+
+function openedStream(request: DelegateRequest, frame: RingTransactData): RingDisclosure {
+  return openSealedDisclosure(txViewingSecretOf(request), auditorOf(request), {
+    layout: RingTransactData.streamLayout(frame),
+    salt: frame.salt,
+    message: {
+      ephemeralPublicKey: x25519FromU(frame.txViewingU),
+      envelope: frame.envelope,
+      recipientKeys: frame.outputs.map((_, slot) =>
+        frame.recipientKeys.subarray(slot * RECIPIENT_KEY_LEN, (slot + 1) * RECIPIENT_KEY_LEN),
+      ),
+    },
+  });
+}
+
+function txViewingSecretOf(request: DelegateRequest): Bytes32 {
+  return Uint8Array.from(Buffer.from(request.prepare.txViewingKey, "base64")) as Bytes32;
 }
 
 function verdict(
@@ -261,7 +283,7 @@ describe("relay message check", () => {
   });
 
   it.each(settlements.cases)("binds every hosted settlement field for $name", async (entry) => {
-    expect(verdict(await delegate(settlements.request, settlements.cases), entry.message)).toBe(
+    expect(verdict(await delegate(settlements.request, settlements), entry.message)).toBe(
       entry.verdict,
     );
   });
@@ -329,27 +351,30 @@ describe("relay message check", () => {
         Buffer.from(new Uint8Array(messageBytes)).toString("base64"),
       );
     };
-    /** Rewrites the payment's record under the frame's own stream. */
-    const rewritten = (change: (record: AuditRecord) => AuditRecord): RingTransactData => {
+    /** Reseals the payment's record to its slot key under the frame's own transaction key. */
+    const rewritten = (change: (record: OutputRecord) => OutputRecord): RingTransactData => {
       const frame = honestFrame();
-      const layout = RingTransactData.streamLayout(frame);
-      const schedule = sealedAuditorSchedule(
-        Uint8Array.from(Buffer.from(delegates.request.prepare.txViewingKey, "base64")) as Bytes32,
-        auditorOf(delegates.request),
-        frame.salt,
-      );
+      const txViewingSecret = txViewingSecretOf(delegates.request);
+      const { recipientKeys } = openedStream(delegates.request, frame);
       const payee = new Uint8Array(
         base58.encode(delegates.request.prepare.transfer.payments[0]!.recipient),
       );
       const paid = ShieldedAddress.fromBytes(payee).signingPublicKey.confidentialViewTag();
+      const txKey = ViewingKey.fromBytes(txViewingSecret);
       const outputs = frame.outputs.map((output, slot) => {
-        const counter = recordRegion(layout, slot).startCounter;
-        const record = decodeAuditRecord(schedule.apply(counter, output.record));
+        const secret = txKeySlotSecret({
+          txViewingKey: txKey,
+          recipientViewingKey: x25519FromU(recipientKeys[slot] as Bytes32),
+          salt: frame.salt,
+          outputIndex: slot,
+          firstNullifier: RingTransactData.firstNullifier(frame),
+        });
+        const { record } = openOutputSlot(secret, output.record);
         return equalBytes(record.ownerKey, paid)
-          ? { ...output, record: schedule.apply(counter, encodeAuditRecord(change(record))) }
+          ? { ...output, record: sealOutputSlot(secret, { record: change(record) }) }
           : output;
       });
-      schedule.destroy();
+      txKey.destroy();
       return { ...frame, outputs };
     };
 
@@ -397,20 +422,20 @@ describe("relay message check", () => {
         await verdictOf({
           ...frame,
           hasData: true,
-          outputs: frame.outputs.map((output) => ({
-            ...output,
-            body:
-              output.body.kind === "recipient"
-                ? { kind: "recipient" as const, body: new Uint8Array(RECIPIENT_BODY_LEN + 2) }
-                : output.body,
-            tail: new Uint8Array(DATA_TAIL_LEN),
-          })),
+          outputs: frame.outputs.map((output) =>
+            output.body.kind === "recipient"
+              ? {
+                  ...output,
+                  body: { kind: "recipient" as const, payload: new Uint8Array(PAYLOAD_LENGTH_LEN) },
+                }
+              : output,
+          ),
         }),
       ).toBe("Data");
     });
   });
 
-  describe("the data-bearing slots a public owner opens", async () => {
+  describe("the slots a public owner opens before it signs", async () => {
     const entry = owners.cases.find((owner) => owner.verdict === "Accepted");
     if (entry === undefined) throw new Error("no accepted owner case");
     const terms = decodeRelayTransferTerms(JSON.stringify(entry.terms));
@@ -427,32 +452,25 @@ describe("relay message check", () => {
       if (found === undefined) throw new Error("no instruction");
       return found as Instruction;
     };
+    /** The frame's commitments rebuilt from `published`, the terms naming `named`. */
     const verdictWith = async (
       named: typeof terms,
-      signerDataCounts: bigint | undefined,
       published: readonly (typeof first)[] = [dataOpening],
-      runHead: readonly AccountMeta[] = [],
       replies?: Replies,
     ): Promise<string> => {
       const frame = RingTransactData.parse(
         Uint8Array.from(instruction().data ?? []).subarray(1),
         "anonymous",
       );
-      const { signerDataCounts: _vectorCount, ...extensions } = frame.extensions;
       const { messageBytes } = compileUnsignedTransaction({
         feePayer: terms.feePayer,
         lifetime: SIZE_PROBE_LIFETIME,
         instructions: [
           {
             ...instruction(),
-            accounts: withRunHead(runHead),
             data: ringInstructionData({
               ...frame,
               ...(replies === undefined ? {} : { replies }),
-              extensions: {
-                ...extensions,
-                ...(signerDataCounts === undefined ? {} : { signerDataCounts }),
-              },
               outputs: frame.outputs.map((output, slot) => {
                 const opening = published.find((open) => open.slot === slot);
                 return opening === undefined
@@ -478,30 +496,12 @@ describe("relay message check", () => {
     };
     const opened = { ...terms, slots: [dataOpening, ...terms.slots.slice(1)] };
     const ordinary = { ...terms, slots: [first, ...terms.slots.slice(1)] };
-    const ringAuth = await ringAuthAddress(terms.ring);
-    const position = (): number => {
-      const accounts = instruction().accounts ?? [];
-      const spp = accounts.findIndex((meta) => meta.address === ringAuth) - 4;
-      const frame = RingTransactData.parse(
-        Uint8Array.from(instruction().data ?? []).subarray(1),
-        "anonymous",
-      );
-      const trees = frame.inputTrees.kind === "one" ? 1 : 2;
-      return (
-        accounts.findIndex((meta) => meta.address === terms.signer) -
-        (spp + 5 + trees + frame.nullifiers.length)
-      );
-    };
-    const count = (value: bigint): bigint => value << BigInt(5 * position());
-    function withRunHead(head: readonly AccountMeta[]): readonly AccountMeta[] {
-      const accounts = instruction().accounts ?? [];
-      const signer = accounts.findIndex((meta) => meta.address === terms.signer);
-      const start = signer - position();
-      return [...accounts.slice(0, start), ...head, ...accounts.slice(start)];
-    }
 
-    it("passes one opening for each proved slot at the signer's place in the run", async () => {
-      expect(await verdictWith(opened, count(1n))).toBe("Accepted");
+    it("passes one opening per published slot in slot order", async () => {
+      expect(terms.slots.map((opening) => opening.slot)).toEqual(
+        terms.slots.map((_, slot) => slot),
+      );
+      expect(await verdictWith(opened)).toBe("Accepted");
     });
 
     it("moves no verdict on a reply that claims another sender", async () => {
@@ -532,55 +532,48 @@ describe("relay message check", () => {
       );
       expect(bodies.length).toBeGreaterThan(0);
       expect(carried.replies?.region).toEqual(replies.region);
-      expect(await verdictWith(opened, count(1n), [dataOpening], [], replies)).toBe("Accepted");
-      expect(await verdictWith(ordinary, count(1n), [dataOpening], [], replies)).toBe("Recipients");
+      expect(await verdictWith(opened, [dataOpening], replies)).toBe("Accepted");
+      expect(await verdictWith(ordinary, [dataOpening], replies)).toBe("Recipients");
     });
 
-    it("refuses an omitted data output", async () => {
-      const payment = { ...first, slot: first.slot - 1, dataHash: new Uint8Array(32) as Bytes32 };
-      expect(
-        await verdictWith({ ...terms, slots: [payment] }, count(1n), [dataOpening, payment]),
-      ).toBe("DataOutputCount");
+    it("refuses terms that leave a published slot unopened", async () => {
+      expect(await verdictWith({ ...opened, slots: opened.slots.slice(1) })).toBe("UnopenedOutput");
+      expect(await verdictWith({ ...opened, slots: opened.slots.slice(0, -1) })).toBe(
+        "UnopenedOutput",
+      );
     });
 
-    describe("under a run that repeats an earlier signer", () => {
-      const repeated: AccountMeta = {
-        address: "11111111111111111111111111111112" as Address,
-        role: AccountRole.READONLY_SIGNER,
-      };
-      const twice = [repeated, repeated];
-      const payment = { ...first, slot: first.slot - 1, dataHash: new Uint8Array(32) as Bytes32 };
-
-      it("reads the count at the signer's entry in the deduplicated run", async () => {
-        expect(await verdictWith(opened, count(1n) << 5n, [dataOpening], twice)).toBe("Accepted");
-      });
-
-      it("refuses a data output the terms omit", async () => {
-        expect(
-          await verdictWith(
-            { ...terms, slots: [payment] },
-            count(1n) << 5n,
-            [dataOpening, payment],
-            twice,
-          ),
-        ).toBe("DataOutputCount");
-      });
-    });
-
-    it("refuses a repeated opening that would pad a count", async () => {
-      expect(
-        await verdictWith({ ...opened, slots: [dataOpening, ...opened.slots] }, count(2n)),
-      ).toBe("DataOutputCount");
+    it("refuses a repeated opening and openings out of slot order", async () => {
+      expect(await verdictWith({ ...opened, slots: [dataOpening, ...opened.slots] })).toBe(
+        "UnopenedOutput",
+      );
+      if (opened.slots.length > 1)
+        expect(await verdictWith({ ...opened, slots: opened.slots.toReversed() })).toBe(
+          "UnopenedOutput",
+        );
     });
 
     it("refuses an ordinary output standing in for a data output", async () => {
-      expect(await verdictWith(ordinary, count(1n))).toBe("Recipients");
+      expect(await verdictWith(ordinary)).toBe("Recipients");
     });
 
-    it("refuses a count at another entry and a false count", async () => {
-      expect(await verdictWith(opened, count(1n) << 5n)).toBe("DataOutputCount");
-      expect(await verdictWith(opened, count(2n))).toBe("DataOutputCount");
-      expect(await verdictWith(opened, undefined)).toBe("DataOutputCount");
+    it("refuses a dummy opening that carries a value", async () => {
+      const dummy = {
+        ...first,
+        owner: ZERO_ADDRESS,
+        mint: ZERO_ADDRESS,
+        nullifierPk: new Uint8Array(32) as Bytes32,
+        dataHash: new Uint8Array(32) as Bytes32,
+        ringDataHash: new Uint8Array(32) as Bytes32,
+        amount: 0n,
+      };
+      expect(
+        await verdictWith({ ...terms, slots: [dummy, ...terms.slots.slice(1)] }, [dummy]),
+      ).toBe("Accepted");
+      const valued = { ...dummy, amount: 1n };
+      expect(
+        await verdictWith({ ...terms, slots: [valued, ...terms.slots.slice(1)] }, [dummy]),
+      ).toBe("Recipients");
     });
   });
 

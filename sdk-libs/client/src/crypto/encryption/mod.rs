@@ -17,7 +17,10 @@ use crate::AuditError;
 type Result<T> = core::result::Result<T, AuditError>;
 
 mod merge_record;
-pub use merge_record::{open_merge_record, MergeRecordSeal, SealedMergeOpening};
+pub use merge_record::{
+    open_merge_record, open_owned_merge_record, MergeRecordSeal, SealedMergeCiphertexts,
+    SealedMergeOpening,
+};
 
 /// The auditor key's u-coordinate, the tag the auditor scans for.
 pub fn auditor_view_tag(pk: &X25519Pubkey) -> [u8; 32] {

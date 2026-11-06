@@ -78,8 +78,11 @@ pub struct WalletNote {
     pub mint: Option<SerializablePubkey>,
     pub amount: u64,
     pub blinding: Hash,
-    pub data_hash: Hash,
-    pub ring_data_hash: Hash,
+    /// Absent with `ring_data_hash` while no payload rebuilt the published commitment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_hash: Option<Hash>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ring_data_hash: Option<Hash>,
     pub tree_id: u16,
     pub leaf_index: u64,
     pub slot: u64,

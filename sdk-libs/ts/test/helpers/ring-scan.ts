@@ -6,7 +6,12 @@ import {
   type GetByTagsRequest,
 } from "@heliuslabs/spr/client";
 import { InstructionTag, type Bytes32 } from "@heliuslabs/spr/interface";
-import { ShieldedKeypair, SigningKey, type ShieldedAddress } from "@heliuslabs/spr/keypair";
+import {
+  ShieldedKeypair,
+  SigningKey,
+  X25519Keypair,
+  type ShieldedAddress,
+} from "@heliuslabs/spr/keypair";
 import {
   AssetRegistry,
   ConfidentialTransfer,
@@ -19,6 +24,8 @@ import {
 } from "@heliuslabs/spr/transaction";
 
 import { AnonymousPlan, RingOutputRail } from "../../src/operations/payments/output-rail.js";
+import { sealOutputSlot } from "../../src/crypto/audit/ring-disclosure.js";
+import { RecordKind } from "../../src/protocol/codec/audit-stream.js";
 import type { ReplyMetadata } from "../../src/protocol/codec/anonymous-delivery.js";
 import {
   AnonymousSync,
@@ -28,6 +35,9 @@ import {
 import { ViewingHistory } from "../../src/state/viewing-history.js";
 import { transactionItems } from "../../../../zolana/sdk-libs/ts/test/helpers/pages.js";
 import { TREE, TREE_ID, randomAddress, walletKeys } from "./ring-pipeline.js";
+
+/** An exit's record seals to it, no scan reads the auditor stream. */
+const SCAN_AUDITOR = X25519Keypair.generate();
 
 export const RING = randomAddress();
 export const PAYER = randomAddress();
@@ -256,6 +266,7 @@ export class ScanWallet {
       prepared,
       sender: this.address,
       assets: ASSETS,
+      auditor: SCAN_AUDITOR.publicKey(),
       instructionDiscriminator: InstructionTag.ringTransact,
     });
     const { outputs, resolvedOwnerTags, messages } = proof.externalData;
@@ -312,4 +323,28 @@ export function output(tx: IndexedShieldedTransaction, position: number): Bytes3
 
 export function found(scan: Pick<AnonymousScan, "found">): readonly string[] {
   return scan.found.map((utxo) => hex(utxo.utxoHash));
+}
+
+/** A ring note's record sealed to `owner` under `slotSecret`, the body a reader opens. */
+export function sealedNote(
+  slotSecret: Bytes32,
+  note: Readonly<{
+    owner: ShieldedAddress;
+    mint: Address;
+    amount: bigint;
+    blinding: Bytes32;
+    /** The owner's own key unless a zero-key note names `ZERO_NULLIFIER_PK`. */
+    nullifierPk?: Bytes32;
+  }>,
+): Uint8Array {
+  return sealOutputSlot(slotSecret, {
+    record: {
+      kind: RecordKind.ring,
+      amount: note.amount,
+      ownerKey: note.owner.signingPublicKey.confidentialViewTag() as Bytes32,
+      mint: note.mint,
+      nullifierPk: note.nullifierPk ?? note.owner.nullifierPublicKey,
+      blinding: note.blinding,
+    },
+  });
 }

@@ -17,27 +17,16 @@ struct Case {
     inputs: usize,
     outputs: usize,
     spends_default_ring: bool,
-    has_data: bool,
     approval: bool,
 }
 
-const CASES: [Case; 5] = [
+const CASES: [Case; 4] = [
     Case {
         name: "one stream at eight outputs",
         rail: RingRail::Confidential,
         inputs: 16,
         outputs: 8,
         spends_default_ring: false,
-        has_data: true,
-        approval: false,
-    },
-    Case {
-        name: "data tails at another capacity",
-        rail: RingRail::Confidential,
-        inputs: 24,
-        outputs: 2,
-        spends_default_ring: false,
-        has_data: true,
         approval: false,
     },
     Case {
@@ -46,7 +35,6 @@ const CASES: [Case; 5] = [
         inputs: 24,
         outputs: 2,
         spends_default_ring: false,
-        has_data: false,
         approval: false,
     },
     Case {
@@ -55,7 +43,6 @@ const CASES: [Case; 5] = [
         inputs: 24,
         outputs: 2,
         spends_default_ring: false,
-        has_data: false,
         approval: true,
     },
     Case {
@@ -64,7 +51,6 @@ const CASES: [Case; 5] = [
         inputs: 2,
         outputs: 2,
         spends_default_ring: true,
-        has_data: false,
         approval: false,
     },
 ];
@@ -72,7 +58,6 @@ const CASES: [Case; 5] = [
 impl Case {
     fn subjects(&self) -> TransferSpend {
         TransferSpend {
-            format: custom_ring_interface::DisclosureFormat::Standard,
             rail: self.rail,
             inputs: self.inputs,
             outputs: self.outputs,
@@ -98,7 +83,6 @@ impl Case {
     /// The layout `stream_under` derives from the frame, built from the catalog row alone.
     fn plan(&self, spend: TransferSpend) -> PlannedTransfer {
         let shape = FrameKey {
-            format: custom_ring_interface::DisclosureFormat::Standard,
             rail: spend.rail,
             inputs: spend.inputs,
             outputs: spend.outputs,
@@ -117,9 +101,8 @@ impl Case {
                 inputs: spend.inputs,
                 outputs: spend.outputs,
                 capacity: usize::from(shape.outputs),
-                has_data: self.has_data,
             },
-            spans_capacity: self.has_data || self.approval,
+            spans_capacity: self.approval,
         }
     }
 }
@@ -183,7 +166,6 @@ fn a_read_keeps_a_seal_of_one_stream_and_refuses_another() {
             "inputs": case.inputs,
             "outputs": case.outputs,
             "spendsDefaultRing": case.spends_default_ring,
-            "hasData": case.has_data,
             "approval": case.approval,
             "readPools": { "own": pools.own, "curator": pools.curator, "tracking": pools.tracking },
             "sealed": circuit_json(unread.key.circuit),
@@ -194,7 +176,7 @@ fn a_read_keeps_a_seal_of_one_stream_and_refuses_another() {
     let outcomes: Vec<_> = pinned.iter().map(|case| case["outcome"].clone()).collect();
     assert_eq!(
         outcomes,
-        ["reuse", "reseal", "reuse", "reseal", "reuse"].map(Value::from)
+        ["reuse", "reuse", "reseal", "reuse"].map(Value::from)
     );
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/transfer-plan-rekey.json");

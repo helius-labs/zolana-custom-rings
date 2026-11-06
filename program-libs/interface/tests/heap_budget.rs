@@ -156,7 +156,6 @@ fn served(rail: RingRail, entry: bool) -> Vec<(TransferShape, usize, usize)> {
         {
             let (inputs, outputs) = (spp.n_inputs(), spp.n_outputs());
             let key = FrameKey {
-                format: custom_ring_interface::DisclosureFormat::Standard,
                 rail,
                 inputs,
                 outputs,
@@ -290,7 +289,6 @@ fn frame<'a>(fixture: &'a Fixture, pool: &'a Pool, case: Widest) -> Option<RingT
     let mut data = fixture.base(case.rail, case.inputs as u8, case.outputs as u8);
     data.entry = case.entry;
     data.wide_owners = TransferSpend {
-        format: custom_ring_interface::DisclosureFormat::Standard,
         rail: case.rail,
         inputs: case.inputs,
         outputs: case.outputs,
@@ -346,7 +344,8 @@ fn frame<'a>(fixture: &'a Fixture, pool: &'a Pool, case: Widest) -> Option<RingT
         });
     }
     if case.replies {
-        let bodies = case.outputs - 2;
+        // Every slot but the exit carries a body.
+        let bodies = case.outputs - 1;
         data.replies = Some(
             Replies::new(
                 MIN_REPLY_LEN as u16,
@@ -364,11 +363,10 @@ fn frame<'a>(fixture: &'a Fixture, pool: &'a Pool, case: Widest) -> Option<RingT
     }
     if case.payload != Payload::Base {
         data.has_data = true;
-        for output in &mut data.outputs {
+        for (slot, output) in data.outputs.iter_mut().enumerate() {
             output.body = match output.body {
-                SlotBody::Recipient(_) => SlotBody::Recipient(&fixture.extended_body),
-                SlotBody::Exit(_) => SlotBody::Exit(&fixture.extended_body),
-                SlotBody::None => SlotBody::None,
+                SlotBody::Recipient(_) => SlotBody::Recipient(&fixture.extended_bodies[slot]),
+                SlotBody::Exit(_) => SlotBody::Exit(&fixture.extended_bodies[slot]),
             };
         }
         data = fixture.with_audit_stream(data);

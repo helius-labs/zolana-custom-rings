@@ -1,4 +1,4 @@
-use custom_ring_interface::{tracking::TrackingAuthorization, InputClass, STORAGE_PROGRAM_ID};
+use custom_ring_interface::{tracking::TrackingAuthorization, STORAGE_PROGRAM_ID};
 use solana_address::Address;
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{random_blinding, NullifierKey, PublicKey, ShieldedAddress, X25519Keypair};
@@ -166,9 +166,9 @@ fn zero_key_note(owner: &ShieldedAddress, leaf: u64) -> WalletUtxo {
     wallet(note, &NullifierKey::from_secret([0; 31]), TREE_ID, leaf)
 }
 
-/// Own and member notes pass around an address, a victim's note fails at its position.
+/// Own and member notes pass around an address and padding, a victim's note leaves `R` unmet.
 #[tokio::test]
-async fn every_note_position_answers_to_the_requested_openings() {
+async fn every_spent_note_answers_to_the_requested_openings() {
     let (owner, member) = (keypair(17), zero_key_source(18));
     let source = owner.shielded_address().unwrap();
     let (chain, auditor) = (
@@ -188,22 +188,16 @@ async fn every_note_position_answers_to_the_requested_openings() {
     let (address, dummy) = ([0x5a; 32], [0x5b; 32]);
 
     allowed
-        .check_inputs([
-            (InputClass::Note, &own.nullifier),
-            (InputClass::Address, &address),
-            (InputClass::Note, &members.nullifier),
-            (InputClass::Dummy, &dummy),
-        ])
+        .check_spends(2, [&own.nullifier, &address, &members.nullifier, &dummy])
         .unwrap();
-    let refused = allowed.check_inputs([
-        (InputClass::Note, &own.nullifier),
-        (InputClass::Address, &address),
-        (InputClass::Note, &victim.nullifier),
-    ]);
+    let refused = allowed.check_spends(2, [&own.nullifier, &address, &victim.nullifier]);
 
     assert!(matches!(
         refused,
-        Err(DelegateSourceError::UnrequestedInput { position: 2 })
+        Err(DelegateSourceError::UnrequestedInput {
+            spent: 2,
+            allowed: 1
+        })
     ));
     assert!(matches!(
         allowed.check_sources([&source]),

@@ -9,11 +9,10 @@ import (
 
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/std/rangecheck"
-	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/ringgadget"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/transfer"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
@@ -43,18 +42,14 @@ func NewSectionCircuit(shape audit.StreamShape) *SectionCircuit {
 
 func (c *SectionCircuit) Define(api frontend.API) error {
 	rc := rangecheck.New(api)
+	c.Shape.AssertLayout(api, c.Layout)
 	envelope := c.OpenEnvelope(api, rc)
-	hasData := c.Shape.DecodeLayout(api, c.Layout)
-	opened := c.Shape.OpenSlots(api, rc, hasData, c.Outputs, c.OutputCount)
-	count := ringgadget.SelectCount(api, c.InputCount, 1, len(c.Inputs))
-	slots := make([]shared.Output, len(c.Inputs))
-	for i, input := range c.Inputs {
-		slots[i] = input.OpenInput(api)
-		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, count.Active[i]), V: api.Add(slots[i].Utxo, slots[i].Address)})
-	}
-	stream := c.SealStream(api, rc, envelope, c.Shape, opened, audit.SpentInputs{Slots: slots, Count: count, Entries: c.Entries})
+	opened := c.Shape.OpenSlots(api, rc, c.Outputs, c.OutputCount)
+	section := transfer.OpenInputs(api, c.Inputs, c.InputCount)
+	records := c.RecordChain(api, envelope, opened)
+	stream := c.SealStream(api, rc, envelope, c.Shape, opened, audit.SpentInputs{Slots: section.Slots, Count: section.Count, Entries: c.Entries})
 	statement := append(envelope.Head(c.AuditWires, stream, shared.TransferStatementDomain),
-		stream.NoSpend, c.OutputCount, opened.OutputChain, stream.RecordChain, stream.TailChain, c.InputCount)
+		stream.NoSpend, c.OutputCount, records, c.InputCount)
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, statement))
 	return nil
 }
@@ -83,16 +78,14 @@ func NewSection(t testing.TB, shape audit.StreamShape) Audit {
 	t.Helper()
 	s := NewAudit(t, shape)
 	s.InputCount = 1
-	if !shape.SingleAssetPayout {
-		s = s.AllDummies(t)
-		s.Outputs[0] = s.RingNote(t, 0, RingOwnerKey, EnrolledNullifierPk(t), 100)
-		switch {
-		case shape.Outputs >= 4:
-			s.Outputs[1] = s.RingNote(t, 1, RingOwnerKey, ZeroKey(t), 30)
-			s.Outputs[2] = s.NewExit(t, 2)
-		case shape.Outputs >= 2:
-			s.Outputs[1] = s.NewExit(t, 1)
-		}
+	s = s.AllDummies(t)
+	s.Outputs[0] = s.RingNote(t, 0, RingOwnerKey, EnrolledNullifierPk(t), 100)
+	switch {
+	case shape.Outputs >= 4:
+		s.Outputs[1] = s.RingNote(t, 1, RingOwnerKey, ZeroKey(t), 30)
+		s.Outputs[2] = s.NewExit(t, 2)
+	case shape.Outputs >= 2:
+		s.Outputs[1] = s.NewExit(t, 1)
 	}
 	s.Inputs[0] = Input{Utxo: SpentUtxo(t, ringtest.MustSolanaPkField(t, PayerKey), spptest.MustNullifierPk(t, big.NewInt(7)), s.RingProgramID, 100, 51), OwnerKey: PayerKey, Mint: FixtureMint}
 	if shape.Entry {
@@ -109,7 +102,7 @@ func (a Audit) RingNote(t testing.TB, i int, owner [32]byte, nullifierPk *big.In
 		Domain: protocol.UtxoDomain, TreeID: OutputTreeID, OwnerPkHash: ringtest.MustSolanaPkField(t, owner), NullifierPk: nullifierPk,
 		Asset: ringtest.AssetField(t, FixtureMint), Amount: amount, Blinding: a.Blinding(t, i),
 		DataHash: big.NewInt(0), RingDataHash: big.NewInt(0), RingProgramID: a.RingProgramID,
-	}}
+	}, RecipientKey: ViewingKey(t, byte(i))}
 }
 
 func (a Audit) Spending(t testing.TB, n int) Audit {
@@ -131,44 +124,44 @@ func (a Audit) DefaultBits() uint64 {
 // Plaintexts are the sealed regions of a transfer, a test edits them to claim what the circuit refuses.
 type Plaintexts struct {
 	Envelope []byte
+	// RecipientKeys hold every slot's key at capacity, the stream seals them for the auditor.
+	RecipientKeys [][32]byte
+	// SealedTo is the key each record is sealed to, RecipientKeys unless a test parts them.
+	SealedTo [][32]byte
 	Records  [][]byte
-	Tails    [][]byte
 }
 
 func (a Audit) Plaintexts(t testing.TB) Plaintexts {
 	t.Helper()
 	envelope := append(slices.Clone(a.Keys.txViewingSk[:]), byte(a.RealInputs()))
-	addresses := a.inputBits(func(input Utxo) bool { return input.Domain == protocol.AddressDomain })
-	envelope = binary.BigEndian.AppendUint64(envelope, addresses)
-	if a.Shape.SingleAssetPayout {
-		envelope = append(envelope, a.Outputs[0].Mint[:]...)
-	}
 	if a.Shape.Entry {
 		envelope = binary.BigEndian.AppendUint64(envelope, a.defaultBits())
-		for _, input := range a.Inputs {
+		// The frame transmits one record per published input, the sealed padding past n reads zero.
+		for _, input := range a.Inputs[:a.InputCount] {
 			envelope = append(envelope, input.entry(t)...)
 		}
 	}
-	p := Plaintexts{Envelope: envelope, Records: make([][]byte, len(a.Outputs))}
+	p := Plaintexts{Envelope: envelope, Records: make([][]byte, len(a.Outputs)), RecipientKeys: make([][32]byte, len(a.Outputs))}
 	for i, output := range a.Outputs {
-		record := output.Record(t)
-		if a.Shape.SingleAssetPayout {
-			record = slices.Concat(record[:41], record[73:audit.RecordLen], make([]byte, audit.PayoutRecordStride-audit.PayoutRecordLen))
-		} else {
-			p.Tails = append(p.Tails, output.Tail(t))
-		}
-		p.Records[i] = record
+		p.Records[i] = output.Record(t)
+		p.RecipientKeys[i] = output.RecipientKey
 	}
+	p.SealedTo = slices.Clone(p.RecipientKeys)
 	return p
 }
 
 func (a Audit) Seal(t testing.TB, p Plaintexts) Stream {
 	t.Helper()
 	ranges := a.Shape.Ranges()
-	plaintext := append(slices.Clone(p.Envelope), make([]byte, ranges.RecordOffset(0)-len(p.Envelope))...)
-	plaintext = append(plaintext, slices.Concat(p.Records...)...)
-	plaintext = append(plaintext, slices.Concat(p.Tails...)...)
-	return Stream{Ranges: ranges, Salt: a.Salt, Ciphertext: a.Keys.TransferCiphertext(t, plaintext, a.Salt)}
+	plaintext := append(slices.Clone(p.Envelope), make([]byte, ranges.KeyOffset(0)-len(p.Envelope))...)
+	for _, key := range p.RecipientKeys {
+		plaintext = append(plaintext, key[:]...)
+	}
+	stream := Stream{Ranges: ranges, Salt: a.Salt, Ciphertext: a.Keys.TransferCiphertext(t, plaintext, a.Salt), Records: make([][]byte, len(p.Records))}
+	for i, record := range p.Records {
+		stream.Records[i] = a.Keys.SealRecord(t, p.SealedTo[i], a.Salt, i, a.FirstNullifier, record)
+	}
+	return stream
 }
 
 // Open decrypts a stream the auditor read, the keystream is the zero plaintext's ciphertext.
@@ -206,10 +199,10 @@ func (a Audit) Claim() Claim {
 func (a Audit) StatementOf(t testing.TB, stream Stream, claim Claim) []*big.Int {
 	t.Helper()
 	outputs := a.StatementOutputs(t, stream)
-	head := a.Keys.AuditHead(t, a.FirstNullifier, a.RingProgramID, a.Salt, stream.Envelope(claim.InputCount))
+	head := a.Keys.AuditHead(t, a.FirstNullifier, a.RingProgramID, a.Salt, stream.Envelope(claim.InputCount), stream.Keys(claim.OutputCount))
 	head.Layout = a.Layout()
 	return append(head.ElementsUnder(t, shared.TransferStatementDomain), big.NewInt(ringtest.Bit(claim.NoSpend)), big.NewInt(int64(claim.OutputCount)),
-		OutputChain(t, outputs), RecordChain(t, outputs), TailChain(t, outputs), big.NewInt(int64(claim.InputCount)))
+		RecordChain(t, outputs), big.NewInt(int64(claim.InputCount)))
 }
 
 func (a Audit) Statement(t testing.TB) []*big.Int {
@@ -250,13 +243,12 @@ type Note struct {
 type AuditReader struct {
 	Transfer
 	Shape      audit.StreamShape
-	HasData    bool
 	InputCount int
 	TreeID     uint16
 }
 
 func (a Audit) Reader() AuditReader {
-	return AuditReader{Transfer: a.Transfer, Shape: a.Shape, HasData: a.HasData, InputCount: a.InputCount, TreeID: OutputTreeID}
+	return AuditReader{Transfer: a.Transfer, Shape: a.Shape, InputCount: a.InputCount, TreeID: OutputTreeID}
 }
 
 func (r AuditReader) Envelope(t testing.TB, stream Stream) (realInputs int, defaultBits uint64) {
@@ -269,12 +261,15 @@ func (r AuditReader) Envelope(t testing.TB, stream Stream) (realInputs int, defa
 	return realInputs, defaultBits
 }
 
-// Read rebuilds slot i and accepts only an exact match, nil on a dummy.
+// Read opens slot i from the sealed key and its sealed recipient key, and accepts only an exact match, nil on a dummy.
 func (r AuditReader) Read(t testing.TB, stream Stream, i int, published *big.Int) (*Note, error) {
 	t.Helper()
 	plaintext := r.Keys.Open(t, stream)
-	offset := stream.Ranges.RecordOffset(i)
-	record := plaintext[offset : offset+stream.Ranges.RecordLen()]
+	txViewingSk := [32]byte(plaintext[:audit.EnvelopeKeyLen])
+	offset := stream.Ranges.KeyOffset(i)
+	u := [32]byte(plaintext[offset : offset+audit.KeyLen])
+	// CTR is its own inverse.
+	record := ringprotocol.SealRecord(t, txViewingSk, u, r.Salt, i, r.FirstNullifier, shared.OutputRecordInfo, stream.Record(i))
 	kind := record[0]
 	if kind == audit.KindDummy {
 		if slices.ContainsFunc(record, func(b byte) bool { return b != 0 }) {
@@ -285,31 +280,16 @@ func (r AuditReader) Read(t testing.TB, stream Stream, i int, published *big.Int
 	if kind != audit.KindRing && kind != audit.KindExit {
 		return nil, fmt.Errorf("slot %d: not a record", i)
 	}
-	dataHash, ringDataHash := big.NewInt(0), big.NewInt(0)
-	if r.HasData {
-		tailOffset := stream.Ranges.TailOffset(i)
-		tail := plaintext[tailOffset : tailOffset+audit.TailLen]
-		dataHash, ringDataHash = new(big.Int).SetBytes(tail[:32]), new(big.Int).SetBytes(tail[32:])
-	}
-	// The sealed key, salt and first nullifier fix the blinding.
-	seedOut, err := protocol.OutputBlindingSeed(r.FirstNullifier, ringprotocol.BlindingSeed(t, [32]byte(plaintext[:audit.EnvelopeKeyLen]), r.Salt))
-	blinding := ringprotocol.OutputBlinding(t, r.FirstNullifier, spptest.MustHash(t, seedOut, err), i)
-	mint := [32]byte(record[41:73])
-	nullifier := record[73:]
-	if r.Shape.SingleAssetPayout {
-		start := audit.EnvelopeKeyLen + audit.RealInputCountLen + audit.AddressInputBitsLen
-		mint = [32]byte(plaintext[start : start+32])
-		nullifier = record[41:73]
-	}
-	note := Note{Kind: kind, OwnerKey: [32]byte(record[9:41]), Mint: mint, Amount: binary.BigEndian.Uint64(record[1:9]), NullifierPk: new(big.Int).SetBytes(nullifier), Blinding: blinding}
+	note := Note{Kind: kind, OwnerKey: [32]byte(record[9:41]), Mint: [32]byte(record[41:73]), Amount: binary.BigEndian.Uint64(record[1:9]), NullifierPk: new(big.Int).SetBytes(record[73:105]), Blinding: new(big.Int).SetBytes(record[105:])}
 	ringID := big.NewInt(0)
 	if kind == audit.KindRing {
 		ringID = r.RingProgramID
 	}
+	// The fixtures carry no data payload, both data hashes read zero.
 	note.Hash = Utxo{
 		Domain: protocol.UtxoDomain, TreeID: r.TreeID, OwnerPkHash: ringtest.MustSolanaPkField(t, note.OwnerKey), NullifierPk: note.NullifierPk,
 		Asset: ringtest.AssetField(t, note.Mint), Amount: note.Amount, Blinding: note.Blinding,
-		DataHash: dataHash, RingDataHash: ringDataHash, RingProgramID: ringID,
+		DataHash: big.NewInt(0), RingDataHash: big.NewInt(0), RingProgramID: ringID,
 	}.Hash(t)
 	if note.Hash.Cmp(published) != 0 {
 		return nil, fmt.Errorf("slot %d: the record rebuilds no published commitment", i)

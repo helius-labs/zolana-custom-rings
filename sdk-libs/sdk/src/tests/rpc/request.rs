@@ -5,7 +5,7 @@ use crate::tests::support::redacts;
 fn an_opening_prints_no_blinding() {
     let opening = Opening {
         blinding: [0xab; 32],
-        ..Opening::default()
+        ..Opening::padding()
     };
     let printed = format!("{opening:?}");
     assert!(redacts(&printed, &["blinding"]));

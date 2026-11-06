@@ -14,7 +14,6 @@ import {
 } from "@heliuslabs/spr/transaction";
 
 import { recipientTag, txKeySlotSecret, slotTag } from "../../src/crypto/derivation/ring-stream.js";
-import { sealRecipientBody } from "../../src/protocol/codec/anonymous-delivery.js";
 
 import { AnonymousSync } from "../../src/state/anonymous-sync.js";
 import { AnonymousWallet } from "../../src/state/anonymous-wallet.js";
@@ -30,6 +29,7 @@ import {
   RING,
   ScanIndexer,
   ScanWallet,
+  sealedNote,
   signature,
 } from "../helpers/ring-scan.js";
 import { randomAddress, TREE, TREE_ID } from "../helpers/ring-pipeline.js";
@@ -69,7 +69,7 @@ function unknownMintPayment(indexer: ScanIndexer, reader: ScanWallet, mint: Addr
         viewTag: slotTag(recipientTag(secret())),
         outputContext: { hash: utxoHash, tree: TREE, treeId: TREE_ID, leafIndex: 0n },
         payload: encodeRingBodyOutput(
-          sealRecipientBody(secret(), { blinding, amount: 7n, mint }),
+          sealedNote(secret(), { owner, blinding, amount: 7n, mint }),
           new Uint8Array(),
         ),
       },

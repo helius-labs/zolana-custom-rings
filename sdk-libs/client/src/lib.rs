@@ -4,8 +4,6 @@
 pub mod anonymous;
 #[path = "state/anonymous_wallet.rs"]
 mod anonymous_wallet;
-#[path = "operations/compact_assets.rs"]
-pub mod compact_assets;
 #[path = "operations/confidential.rs"]
 mod confidential;
 #[path = "crypto/decrypt/mod.rs"]
@@ -76,8 +74,8 @@ pub use crate::{
     decrypt::{FramedRow, TransactionAudit},
     disclosure::{AuditEnvelope, AuditStreamSeal, OpenedAudit, SealedAuditStream},
     encryption::{
-        auditor_view_tag, open_merge_record, MergeRecordSeal, NullifierKeyEnvelope,
-        SealedMergeOpening, SealedNullifierKey,
+        auditor_view_tag, open_merge_record, open_owned_merge_record, MergeRecordSeal,
+        NullifierKeyEnvelope, SealedMergeCiphertexts, SealedMergeOpening, SealedNullifierKey,
     },
     error::{AnonymousError, AuditError, AuditFailureKind, RowDisposition},
     exposed_notes::{
@@ -94,8 +92,8 @@ pub use crate::{
     },
     reader::{Ed25519ReaderKey, P256ReaderKey, ReaderKey, ReaderKeyError},
     records::{
-        member_record, quad_path, storage_apply_proof_inputs, MemberOpeningRead, RecordPoolCheck,
-        RecordPoolRead, StorageTip,
+        member_record, owner_record_key, quad_path, storage_apply_proof_inputs, MemberOpeningRead,
+        RecordPoolCheck, RecordPoolRead, StorageTip,
     },
     recover::{
         MemberRecovery, RecoveredNotes, RecoveryProgress, RecoveryStep, RingRecovery, SourceMember,
@@ -103,9 +101,8 @@ pub use crate::{
     resolver::{AuthorizationCheck, RecipientResolver, ResolveError, ResolvedRecipient},
     scan::{AuditedPage, RingScan, RingScanPage, ScanPage, SkippedRow},
     types::{
-        AuditedEntryInput, AuditedInput, AuditedOutput, AuditedTransaction, AuditedUtxo,
-        CreatedUtxo, InputOpening, KnownUtxo, OutputOpening, OutputPayloadError,
-        OutputPayloadErrorKind, RingOwnerTag, UtxoOwner,
+        AuditedEntryInput, AuditedOutput, AuditedTransaction, AuditedUtxo, CreatedUtxo, KnownUtxo,
+        OutputOpening, OutputPayloadError, OutputPayloadErrorKind, RingOwnerTag, UtxoOwner,
     },
 };
 pub use program_data::{program_data, ProgramData, PROGRAM_DATA_METADATA_LEN};

@@ -1,6 +1,6 @@
-import { DisclosureFormat } from "../../../src/protocol/codec/ring-disclosure-layout.js";
 import { withConfirmedReads } from "../../helpers/clients.js";
 import { EMPTY_MINT_POLICY } from "../../../src/protocol/membership/mint-policy.js";
+import { publicListKey } from "../../../src/protocol/membership/private-list.js";
 import { policyWithdrawalHash } from "../../../src/proof/withdrawals.js";
 import {
   AccountRole,
@@ -60,6 +60,7 @@ import {
   buildRuleTable,
   memberOfAsset,
   memberOfIdentity,
+  publicMember,
   recordBit,
   type RuleTable,
 } from "../../../src/protocol/membership/policy.js";
@@ -158,7 +159,9 @@ async function prove(
 /** An empty record for each owner. */
 function escrowed(owners: readonly ShieldedKeypair[]): FixtureRecord[] {
   return owners.map((owner) => ({
-    member: memberOfIdentity(owner.shieldedAddress().signingPublicKey.ownerProofInputHash()),
+    member: publicMember(
+      memberOfIdentity(owner.shieldedAddress().signingPublicKey.ownerProofInputHash()),
+    ),
     lists: 0n,
   }));
 }
@@ -186,30 +189,18 @@ import type { WalletUtxo } from "@heliuslabs/spr/transaction";
 const ownNullifier = (): Bytes32 => new Uint8Array(32).fill(0x12) as Bytes32;
 
 describe("confidential rail", () => {
-  it("delivers sixteen exact funded recipients under the common mint profile", async () => {
+  it("refuses sixteen recipients before any proof, no general key reaches sixteen outputs", async () => {
     const fixture = await ringFixture();
     const sender = ShieldedKeypair.generate();
     const recipients = Array.from({ length: 16 }, () => ShieldedKeypair.generate());
-    const proven = await prove(
-      fixture,
-      sender,
-      transferTo(fixture, sender, recipients, { amount: 6_400n, each: 400n }),
-    );
-    const { data, call } = await expanded(fixture, proven, "confidential");
-    expect([data.nIn, data.nOut]).toEqual([1, 16]);
-    expect(data.extensions.format).toBe(DisclosureFormat.SingleAssetPayout);
-    expect(data.envelope).toHaveLength(73);
-    expect(
-      data.outputs.every(
-        (output) =>
-          output.record.length === 73 &&
-          output.body.kind === "recipient" &&
-          output.body.body.length === 48,
+    await expect(
+      prove(
+        fixture,
+        sender,
+        transferTo(fixture, sender, recipients, { amount: 6_400n, each: 400n }),
       ),
-    ).toBe(true);
-    checkTransferProof(fixture, data);
-    checkDisclosure(fixture, call, data);
-    checkRingBlindings(call, data);
+    ).rejects.toThrow(ringError("RING_CATALOG_KEY_MISSING"));
+    expect(fixture.ringRequests).toHaveLength(0);
   });
 
   it("delivers two outputs as proven bodies each owner opens to the committed note", async () => {
@@ -456,6 +447,7 @@ describe("confidential rail", () => {
           } as unknown as PreparedTransfer,
           sender: sender.shieldedAddress(),
           assets,
+          auditor: X25519Keypair.generate().publicKey(),
           instructionDiscriminator: 0,
         }),
       ).toThrow(ringError("RING_COMPACT_NOT_SUFFIX", { slotIndex: 1 }));
@@ -516,7 +508,9 @@ describe("policy ring", () => {
       curator: {
         lists: [ListId.allow],
         records: owners.map((owner) => ({
-          member: memberOfIdentity(owner.shieldedAddress().signingPublicKey.ownerProofInputHash()),
+          member: publicMember(
+            memberOfIdentity(owner.shieldedAddress().signingPublicKey.ownerProofInputHash()),
+          ),
           lists: 1n,
         })),
       },
@@ -813,7 +807,7 @@ describe("policy ring", () => {
     expect(fixture.sppCalls).toHaveLength(0);
   });
 
-  it("binds the tracking root on every ring and refuses an output owner with no row", async () => {
+  it("binds the tracking root on every ring and pays an output owner with no row", async () => {
     const sender = ShieldedKeypair.generate();
     const recipient = ShieldedKeypair.generate();
     const fixture = await ringFixture({ table: EMPTY_TABLE });
@@ -830,10 +824,9 @@ describe("policy ring", () => {
       unregistered.authority,
     );
     transfer.send(recipient.shieldedAddress(), SOL_MINT, 400n);
-    await expect(prove(unregistered, sender, transfer)).rejects.toThrow(
-      ringError("RING_RECIPIENT_NOT_ENROLLED"),
-    );
-    expect(unregistered.ringRequests).toHaveLength(0);
+    // Any nonzero key pays its owner, only a matching registration spends the note.
+    await prove(unregistered, sender, transfer);
+    expect(unregistered.ringRequests).toHaveLength(1);
   });
 });
 
@@ -876,7 +869,9 @@ describe("signer set and owner debits", () => {
     const request = checkTransferProof(fixture, data);
     const identities = owners.map(identity);
     expect(bindingSigners(request)).toEqual(identities);
-    expect(new Set(screenedMembers(request, 2).map(hex))).toEqual(new Set(identities.map(hex)));
+    expect(new Set(screenedMembers(request, 2).map(hex))).toEqual(
+      new Set(identities.map(publicListKey).map(hex)),
+    );
     expect(request).toMatchObject({ sender: ZERO });
     checkDisclosure(fixture, call, data);
   });
@@ -1249,7 +1244,9 @@ describe("member records", () => {
     const [absent, present] = await readMemberRecords({
       client: fixture.client,
       ringProgramId: fixture.ringProgramId,
-      members: [identity(stranger), identity(registered)],
+      members: [identity(stranger), identity(registered)].map((owner) =>
+        publicMember(memberOfIdentity(owner)),
+      ),
     });
     expect(absent?.record()).toBeUndefined();
     expect(absent?.listed(ListId.allow)).toBe(false);
@@ -1557,7 +1554,6 @@ describe("audit seal", () => {
     inputs: 1,
     outputs: 2,
     entry: false,
-    hasData: false,
     publicOwners: false,
   });
   const signed = (sender: ShieldedKeypair) =>
@@ -1612,8 +1608,10 @@ describe("audit seal", () => {
             wire: {
               hash: new Uint8Array(32) as Bytes32,
               ownerTag: new Uint8Array(32) as Bytes32,
-              body: { kind: "none" as const },
+              record: new Uint8Array(137),
+              body: { kind: "recipient" as const, payload: new Uint8Array() },
             },
+            recipientKey: auditor.publicKey(),
           })),
           inputs: proofInputs.inputUtxos,
           auditor: auditor.publicKey(),

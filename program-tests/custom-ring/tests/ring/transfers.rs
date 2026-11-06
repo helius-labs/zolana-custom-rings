@@ -1222,12 +1222,12 @@ fn usdc_crosses_the_ring_boundary_and_withdraws_through_a_ring_transact() -> Res
     Ok(())
 }
 
-/// Below the field modulus, the auditor refuses a noncanonical tail.
+/// Below the field modulus.
 const DATA_HASH: [u8; 32] = [7; 32];
 
 /// SPP takes a data hash only under its owner's signature.
 #[test]
-fn the_auditor_rebuilds_a_data_bearing_output_from_its_tail() -> Result<()> {
+fn the_auditor_rebuilds_a_data_bearing_output_from_its_slot() -> Result<()> {
     let env = setup()?;
     let ring_program = custom_ring_program_id()?;
     let ring = CustomRing::new(ring_program);
@@ -1283,7 +1283,7 @@ fn the_auditor_rebuilds_a_data_bearing_output_from_its_tail() -> Result<()> {
     let instruction = proven.instruction()?;
     ensure!(
         frame(&instruction, RingRail::Confidential)?.has_data,
-        "the frame carries no tails"
+        "the frame carries no slot data"
     );
     let signature = land(&env, instruction, sender, &[])?;
 
@@ -1304,12 +1304,12 @@ fn the_auditor_rebuilds_a_data_bearing_output_from_its_tail() -> Result<()> {
         .find(|output| output.slot_index == slot)
         .context("the auditor opens the data-bearing slot")?;
     let utxo = output.opening.utxo().context("a real output")?;
-    assert_eq!(utxo.data_hash, DATA_HASH);
+    assert_eq!(utxo.data_hash, Some(DATA_HASH));
     assert_eq!(utxo.amount, RING_TRANSFER_AMOUNT);
     assert_eq!(
         KnownUtxo::opened(*utxo, output.context.tree_id).commitment(Some(ring_program))?,
-        output.context.hash,
-        "the record and tail rebuild the published commitment"
+        Some(output.context.hash),
+        "the record and payload rebuild the published commitment"
     );
     Ok(())
 }

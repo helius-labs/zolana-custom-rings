@@ -1,8 +1,8 @@
 //! The `Merge` data and its statement.
 //!
 //! A frame carries SPP's merge body with `proof.b` compressed, and the program forwards it decompressed.
-//! SPP publishes no auditor message for a merge, so the sealed record travels in the ring instruction
-//! alone and only the statement binds it.
+//! SPP publishes no auditor message for a merge, so the auditor envelope and the record sealed to the
+//! owner's viewing key travel in the ring instruction alone and only the statement binds them.
 //!
 //! Read after `program-libs/interface/src/proof/statement.rs`. Read before
 //! `programs/custom-ring/src/instructions/settlement/merge.rs`, `prover/circuits/merge.go`.
@@ -19,22 +19,23 @@ use spr_interface::instruction::{
 use wincode::{SchemaRead, SchemaWrite};
 
 use crate::{
-    bytes::Bytes, error::CustomRingError, storage::Revision, CustomRingProof, OPENING_RECORD_LEN,
-    TAGGED_X25519_KEY_LEN,
+    bytes::Bytes, error::CustomRingError, storage::Revision, CustomRingProof, MERGE_ENVELOPE_LEN,
+    MERGE_RECORD_LEN, TAGGED_X25519_KEY_LEN,
 };
 
-pub const MERGE_PUBLIC_INPUT_ELEMENTS: usize = 12;
+pub const MERGE_PUBLIC_INPUT_ELEMENTS: usize = 13;
 /// The owner's slot in an SPP `merge_ring` account list under `OwnerSigned`, past `ring_config`, payer and the two programs.
 pub const RING_MERGE_OWNER_INDEX: usize = 6;
 /// `expiry_unix_ts u64 || proof.a` open the SPP merge body ahead of `proof.b`.
 const MERGE_B_OFFSET: usize = core::mem::size_of::<u64>() + 32;
 
-/// An `OpeningRecord` of kind `Ring` under the merge seed, sealed to the auditor over the SPP merge it precedes.
+/// A `MergeRecord` of kind `Ring` sealed to the owner's viewing key, and the envelope that opens it for the auditor.
 #[derive(Clone, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
 pub struct SealedMergeRecord {
     pub proof: CustomRingProof,
     pub eph_pk: [u8; TAGGED_X25519_KEY_LEN],
-    pub ciphertext: [u8; OPENING_RECORD_LEN],
+    pub envelope: [u8; MERGE_ENVELOPE_LEN],
+    pub record: [u8; MERGE_RECORD_LEN],
 }
 
 /// Tag 57, the SPP merge body with `proof.b` compressed.
@@ -86,7 +87,8 @@ pub struct CustomRingMergeIxDataRef<'a> {
     pub authority: MergeRingAuthority,
     pub proof: &'a CustomRingProof,
     pub eph_pk: &'a [u8; TAGGED_X25519_KEY_LEN],
-    pub ciphertext: &'a [u8; OPENING_RECORD_LEN],
+    pub envelope: &'a [u8; MERGE_ENVELOPE_LEN],
+    pub record: &'a [u8; MERGE_RECORD_LEN],
     body: SppMergeBody<'a>,
 }
 
@@ -103,7 +105,8 @@ impl<'a> CustomRingMergeIxDataRef<'a> {
             },
             proof: bytes.pod()?,
             eph_pk: bytes.array()?,
-            ciphertext: bytes.array()?,
+            envelope: bytes.array()?,
+            record: bytes.array()?,
             body: SppMergeBody::read(bytes)?,
         })
     }
@@ -164,7 +167,8 @@ pub struct MergePublicInput<'a> {
     pub ring_id: &'a [u8; 32],
     pub auditor_pk: &'a [u8; TAGGED_X25519_KEY_LEN],
     pub eph_pk: &'a [u8; TAGGED_X25519_KEY_LEN],
-    pub ciphertext: &'a [u8; OPENING_RECORD_LEN],
+    pub envelope: &'a [u8; MERGE_ENVELOPE_LEN],
+    pub record: &'a [u8; MERGE_RECORD_LEN],
     /// The payer's Solana owner identity.
     pub payer: &'a [u8; 32],
     /// The signing owner's identity under `OwnerSigned`, zero under `Ring`.
@@ -190,7 +194,8 @@ impl MergePublicInput<'_> {
             auditor_hi,
             eph_lo,
             eph_hi,
-            hash_bytes(self.ciphertext)?,
+            hash_bytes(self.envelope)?,
+            hash_bytes(self.record)?,
             *self.payer,
             *self.published_owner,
             *self.tracking_root,

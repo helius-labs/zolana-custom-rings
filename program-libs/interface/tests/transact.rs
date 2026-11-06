@@ -10,13 +10,13 @@ use custom_ring_interface::{
     cosign::ApprovalMask, input_flag, key_catalog::RingCircuit, output_flag, shape_flag,
     stream::slot_tag, transact_flag, AuditKey, AuditStreamLayout, AuditorMessage,
     ConfidentialSender, CustomRingError, FramedSenderBundle, ParsedTransact, PlainGroth16Proof,
-    Replies, RingPolicy, RingRail, RingTransactData, Settlement, SignerDataCounts, SignerSet,
-    SlotBody, TransferBinding, TransferFamily, TransferRoots, ANONYMOUS_PARTIES, APPROVAL_BYTE,
+    Replies, RingPolicy, RingRail, RingTransactData, Settlement, SignerSet, SlotBody,
+    TransferBinding, TransferFamily, TransferRoots, ANONYMOUS_PARTIES, APPROVAL_BYTE,
 };
 use custom_ring_interface::{
     encode_ring_body_output, encode_ring_sender_bundle_output, ring_body_output,
     ring_sender_bundle_output_body, BundleLayout, CONFIDENTIAL_DATA_FREE_BODY_LEN, MIN_REPLY_LEN,
-    OUTPUT_COUNT_BYTE, RECIPIENT_BODY_LEN, RING_BODY_SCHEME_TAG, RING_SENDER_BUNDLE_SCHEME_TAG,
+    OUTPUT_COUNT_BYTE, OUTPUT_RECORD_LEN, RING_BODY_SCHEME_TAG, RING_SENDER_BUNDLE_SCHEME_TAG,
 };
 use serde::{Deserialize, Serialize};
 use spr_event::{
@@ -186,7 +186,6 @@ fn ring_transact_expansion_vector() {
         {
             assert_eq!(output.owner_tag, OwnerTag::Inline(slot.owner_tag));
             match slot.body {
-                SlotBody::None => assert_eq!(output.data, None, "{}", case.name),
                 SlotBody::Recipient(body) => assert_eq!(
                     output.data,
                     Some(encode_ring_body_output(body, reply).unwrap()),
@@ -250,8 +249,8 @@ fn recipient_and_exit_slots_keep_the_borsh_framing_at_exact_capacity() {
         .unwrap()
     };
     let reply = [0x77; MIN_REPLY_LEN];
-    let len = (fixture.recipient_body.len() as u16).to_le_bytes();
-    let body = [&len[..], &fixture.recipient_body].concat();
+    let len = (fixture.records[1].len() as u16).to_le_bytes();
+    let body = [&len[..], &fixture.records[1]].concat();
     let body_and_reply = [&body[..], &reply].concat();
     for (data, scheme, payload) in [
         (
@@ -301,7 +300,7 @@ fn recipient_and_exit_slots_keep_the_borsh_framing_at_exact_capacity() {
         .unwrap();
     assert_eq!(
         ring_body_output(&framed),
-        Some((&fixture.recipient_body[..], &reply[..]))
+        Some((&fixture.records[1][..], &reply[..]))
     );
     let bundle = encode_ring_sender_bundle_output(&fixture.sender_body).unwrap();
     assert_eq!(
@@ -309,7 +308,7 @@ fn recipient_and_exit_slots_keep_the_borsh_framing_at_exact_capacity() {
         Some(&fixture.sender_body[..])
     );
     assert_eq!(ring_body_output(&bundle), None);
-    let short_body = &fixture.recipient_body[..71];
+    let short_body = &fixture.records[1][..OUTPUT_RECORD_LEN - 1];
     assert_eq!(
         encode_ring_body_output(short_body, &[]),
         Err(CustomRingError::OutputBodyLength)
@@ -404,85 +403,51 @@ fn a_compact_frame_omits_the_suffix_and_keeps_the_capacity() {
 }
 
 #[test]
-fn the_frame_bitmaps_are_disjoint_and_stay_inside_the_count() {
+fn the_exit_bitmap_stays_inside_the_count() {
     let fixture = Fixture::new();
     let data = fixture.anonymous();
     let compact = data.encode().unwrap();
     let exit_bits = bits_offset(&data, &compact);
     assert_eq!(compact[exit_bits], 0b0100);
-    assert_eq!(compact[exit_bits + 1], 0b0001);
-    for (exits, bodiless, refusal) in [
-        (0b0100, 0b0100, CustomRingError::BodilessExit),
-        (0b0100, 1 << 4, CustomRingError::InvalidInstructionData),
-        (1 << 4, 0b0001, CustomRingError::InvalidInstructionData),
-    ] {
-        let mut refused = compact.clone();
-        refused[exit_bits] = exits;
-        refused[exit_bits + 1] = bodiless;
-        assert_eq!(
-            RingTransactData::parse(&refused, RingRail::Anonymous),
-            Err(refusal),
-            "{exits:#b} {bodiless:#b}"
-        );
-    }
+    let mut refused = compact.clone();
+    refused[exit_bits] = 0b0100 | 1 << 4;
+    assert_eq!(
+        RingTransactData::parse(&refused, RingRail::Anonymous),
+        Err(CustomRingError::InvalidInstructionData)
+    );
 }
 
-/// The bitmaps follow the interface transfers, past the only field the frame repeats.
+/// The bitmap follows the interface transfers, past the only field the frame repeats.
 fn bits_offset(data: &RingTransactData<'_>, compact: &[u8]) -> usize {
     let first_hash = compact
         .windows(32)
         .position(|window| window == data.outputs[0].hash)
         .unwrap();
-    first_hash - 2 * data.outputs.len().div_ceil(8)
+    first_hash - data.outputs.len().div_ceil(8)
 }
 
-/// A slot's class is framing alone, no statement element reads it.
+/// Every non-exit slot forwards its record as the head of its scheme 10 body, a change slot too.
 #[test]
-fn a_bodiless_slot_forwards_no_data_at_any_index() {
+fn every_non_exit_slot_forwards_its_record() {
     let fixture = Fixture::new();
-    let compact = fixture.anonymous_compact().encode().unwrap();
+    let data = fixture.anonymous();
+    let compact = data.encode().unwrap();
     let parsed = RingTransactData::parse(&compact, RingRail::Anonymous)
         .unwrap()
         .into_data();
-    assert_eq!(parsed.outputs[0].body, SlotBody::None);
-    let mut truncated = compact.clone();
-    let body = compact
-        .windows(fixture.recipient_body.len())
-        .position(|window| window == fixture.recipient_body)
-        .unwrap();
-    truncated.remove(body);
-    assert!(RingTransactData::parse(&truncated, RingRail::Anonymous).is_err());
     let spp = parsed.expand(&config()).unwrap();
-    assert_eq!(spp.outputs[0].data, None);
-    assert_eq!(
-        spp.outputs[1].data,
-        Some(encode_ring_body_output(&fixture.recipient_body, &[]).unwrap())
-    );
+    for slot in [0, 1, 3] {
+        let (body, _) = ring_body_output(spp.outputs[slot].data.as_deref().unwrap()).unwrap();
+        assert_eq!(body, &fixture.records[slot][..], "slot {slot}");
+    }
     assert_eq!(
         parsed.sender.unwrap().body.len(),
-        BundleLayout {
-            outputs: parsed.outputs.len(),
-            change: 1
-        }
-        .byte_len()
+        BundleLayout { outputs: 4 }.byte_len()
     );
-    let mut later = fixture.anonymous();
-    later.outputs[3].body = SlotBody::None;
-    later.sender = Some(FramedSenderBundle {
-        tag: &fixture.tags[0],
-        body: &fixture.sender_body[..BundleLayout {
-            outputs: 4,
-            change: 2,
-        }
-        .byte_len()],
-    });
-    let compact = later.encode().unwrap();
-    assert_eq!(
-        RingTransactData::parse(&compact, RingRail::Anonymous)
-            .unwrap()
-            .into_data(),
-        later
-    );
+    // A body whose head is not the slot's record names a record the statement does not bind.
+    let mut moved = data.clone();
+    moved.outputs[1].record = &fixture.records[0];
+    assert_eq!(moved.encode(), Err(CustomRingError::RingTransactLength));
 }
 
 /// SPP binds an exit's tag to its owner, any other tag is cut to what the frame carries.
@@ -532,22 +497,19 @@ fn reply_metadata_is_one_length_on_the_anonymous_frame_alone() {
     assert_eq!(
         replies,
         [
-            &[][..],
             &fixture.replies[..MIN_REPLY_LEN],
-            &[][..],
             &fixture.replies[MIN_REPLY_LEN..2 * MIN_REPLY_LEN],
+            &[][..],
+            &fixture.replies[2 * MIN_REPLY_LEN..3 * MIN_REPLY_LEN],
         ]
     );
-    // A reply follows the body it shares a secret with, a change and an exit carry none.
-    assert_eq!(spp.outputs[0].data, None);
-    assert_eq!(
-        ring_body_output(spp.outputs[1].data.as_deref().unwrap()),
-        Some((&fixture.recipient_body[..], replies[1]))
-    );
-    assert_eq!(
-        ring_body_output(spp.outputs[3].data.as_deref().unwrap()),
-        Some((&fixture.recipient_body[..], replies[3]))
-    );
+    // A reply follows the body it shares a secret with, an exit carries none.
+    for slot in [0, 1, 3] {
+        assert_eq!(
+            ring_body_output(spp.outputs[slot].data.as_deref().unwrap()),
+            Some((&fixture.records[slot][..], replies[slot]))
+        );
+    }
     assert_eq!(
         Replies::new(
             MIN_REPLY_LEN as u16 - 1,
@@ -683,7 +645,6 @@ fn a_frame_on_the_entry_key_parses_on_the_owner_rails() {
             .audit_stream()
             .key,
         AuditKey {
-            format: custom_ring_interface::DisclosureFormat::Standard,
             class: 8,
             entry: true
         }
@@ -767,12 +728,12 @@ fn a_body_past_its_plain_length_needs_has_data() {
     exit.outputs[3] = fixture.exit(3, &long);
     assert_eq!(exit.encode(), Err(CustomRingError::RingTransactLength));
     let mut body = fixture.confidential_delivered();
-    body.outputs[0].body = SlotBody::Recipient(&fixture.extended_body);
+    body.outputs[0].body = SlotBody::Recipient(&fixture.extended_bodies[0]);
     assert_eq!(body.encode(), Err(CustomRingError::RingTransactLength));
 }
 
 #[test]
-fn a_data_frame_carries_each_length_and_each_tail() {
+fn a_data_frame_carries_each_length_and_one_payload_width() {
     let fixture = Fixture::new();
     let data = fixture.confidential_data();
     let compact = data.encode().unwrap();
@@ -784,24 +745,26 @@ fn a_data_frame_carries_each_length_and_each_tail() {
         .unwrap()
         .into_data();
     assert_eq!(parsed, data);
-    assert_eq!(parsed.outputs[0].tail, Some(&fixture.tails[0]));
     assert_eq!(
         parsed.outputs[0].body,
-        SlotBody::Recipient(&fixture.extended_body)
+        SlotBody::Recipient(&fixture.extended_bodies[0])
     );
+    assert_eq!(parsed.outputs[0].record, &fixture.records[0]);
+    // An exit's record reaches the auditor message, its scheme 3 body stays whole.
     let stream = data.audit_stream().unwrap();
-    assert!(stream.has_data);
     let message = data.auditor_message();
-    assert_eq!(message.len(), stream.message_len());
-    let read = AuditorMessage::parse(&message, stream).unwrap();
-    assert_eq!(read.tail(1), Some(&fixture.tails[1]));
-    assert_eq!(read.record(1), Some(fixture.records[1].as_slice()));
-    let mut tailless = data.clone();
-    tailless.outputs[1].tail = None;
-    assert_eq!(tailless.encode(), Err(CustomRingError::RingTransactLength));
-    let mut unflagged = fixture.confidential_delivered();
-    unflagged.outputs[0].tail = Some(&fixture.tails[0]);
-    assert_eq!(unflagged.encode(), Err(CustomRingError::RingTransactLength));
+    let read = AuditorMessage::parse(&message, stream, 1).unwrap();
+    assert_eq!(read.exit_record(0), Some(&fixture.records[1]));
+    // Two payload widths would mark a slot.
+    let mut uneven = fixture.confidential_data();
+    uneven.outputs.push(custom_ring_interface::RingOutput {
+        body: SlotBody::Recipient(&fixture.extended_bodies[2][..OUTPUT_RECORD_LEN + 2]),
+        record: &fixture.records[2],
+        ..fixture.recipient(2)
+    });
+    uneven.n_out = 4;
+    let uneven = fixture.with_audit_stream(uneven);
+    assert_eq!(uneven.encode(), Err(CustomRingError::OutputBodyLength));
     // The flag alone shifts every later field.
     let mut claimed = fixture.confidential_delivered().encode().unwrap();
     claimed[input_flag::BYTE] |= input_flag::HAS_DATA;
@@ -828,44 +791,22 @@ fn approval_totals_cost_a_digest_and_at_most_the_extension_flags() {
 }
 
 #[test]
-fn signer_data_counts_cost_a_u64_and_at_most_the_extension_flags() {
+fn the_retired_extension_bits_are_refused() {
     let fixture = Fixture::new();
-    let counts = SignerDataCounts::new(1 | 3 << SignerDataCounts::ENTRY_BITS).unwrap();
-    for (mut data, delta) in [
-        (fixture.confidential_thresholds(), 9),
-        (fixture.confidential_extensions(), 8),
-    ] {
-        let before = data.encode().unwrap().len();
-        assert_eq!(data.signer_data_counts(), SignerDataCounts::default());
-        data.extensions.signer_data_counts = Some(counts);
-        let encoded = data.encode().unwrap();
-        assert_eq!(encoded.len() - before, delta);
-        let parsed = RingTransactData::parse(&encoded, RingRail::Confidential).unwrap();
-        assert_eq!(parsed.data().signer_data_counts(), counts);
-    }
-}
-
-#[test]
-fn the_frame_refuses_a_zero_count_and_a_bit_past_the_last_entry() {
-    let fixture = Fixture::new();
-    let mut data = fixture.confidential_extensions();
-    data.extensions.signer_data_counts = Some(SignerDataCounts::default());
-    assert_eq!(data.encode(), Err(CustomRingError::InvalidSignerDataCounts));
-    let counts = SignerDataCounts::new(0x0123_4567_89ab_cdef & ((1 << 60) - 1)).unwrap();
-    data.extensions.signer_data_counts = Some(counts);
+    let data = fixture.confidential_extensions();
     let encoded = data.encode().unwrap();
-    let bytes = counts.packed().to_le_bytes();
     let at = encoded
-        .windows(bytes.len())
-        .position(|window| window == bytes)
-        .unwrap();
-    for (name, packed) in [("zero", 0u64), ("high bit", 1 << 60)] {
+        .windows(32)
+        .position(|window| window == fixture.fields[70])
+        .unwrap()
+        - 1;
+    for bit in [1 << 5, 1 << 6] {
         let mut forged = encoded.clone();
-        forged[at..at + bytes.len()].copy_from_slice(&packed.to_le_bytes());
+        forged[at] |= bit;
         assert_eq!(
             RingTransactData::parse(&forged, RingRail::Confidential).err(),
-            Some(CustomRingError::InvalidSignerDataCounts),
-            "{name}"
+            Some(CustomRingError::FlagNotAllowed),
+            "{bit:#b}"
         );
     }
 }
@@ -936,7 +877,7 @@ fn the_external_data_hash_binds_every_delivery_byte() {
     let fixture = Fixture::new();
     let config = config();
     let hash = |data: &RingTransactData<'_>| data.external_data_hash(&config, &[]).unwrap();
-    let garbage = [0xee; RECIPIENT_BODY_LEN];
+    let garbage = [0xee; OUTPUT_RECORD_LEN];
     let other_payload = [0xee; CONFIDENTIAL_DATA_FREE_BODY_LEN];
     for (name, honest) in [
         ("confidential", fixture.confidential_delivered()),
@@ -952,15 +893,16 @@ fn the_external_data_hash_binds_every_delivery_byte() {
             .position(|output| matches!(output.body, SlotBody::Recipient(_)))
             .unwrap();
         body.outputs[slot].body = SlotBody::Recipient(&garbage);
+        body.outputs[slot].record = &garbage;
         assert_ne!(hash(&body), reference, "{name} body");
         let mut tag = honest.clone();
         tag.outputs[slot].owner_tag = slot_tag(fixture.bytes[40]);
         assert_ne!(hash(&tag), reference, "{name} tag");
-        let mut record = honest.clone();
-        record.outputs[slot].record = &fixture.records[15];
-        assert_ne!(hash(&record), reference, "{name} record");
     }
     let confidential = fixture.confidential_delivered();
+    let mut record = confidential.clone();
+    record.outputs[3].record = &fixture.records[15];
+    assert_ne!(hash(&record), hash(&confidential), "exit record");
     let mut exit = confidential.clone();
     exit.outputs[3].body = SlotBody::Exit(&other_payload);
     assert_ne!(hash(&exit), hash(&confidential), "exit body");
@@ -976,17 +918,13 @@ fn the_external_data_hash_binds_every_delivery_byte() {
     let tag = bundle.sender.unwrap().tag;
     bundle.sender = Some(FramedSenderBundle {
         tag,
-        body: &fixture.envelope[..BundleLayout {
-            outputs: 4,
-            change: 1,
-        }
-        .byte_len()],
+        body: &fixture.envelope[..BundleLayout { outputs: 4 }.byte_len()],
     });
     assert_ne!(hash(&bundle), hash(&honest), "bundle body");
     let replied = fixture.anonymous_replies(MIN_REPLY_LEN as u16);
     let mut reply = replied.clone();
     reply.replies =
-        Some(Replies::new(MIN_REPLY_LEN as u16, &fixture.envelope[..2 * MIN_REPLY_LEN]).unwrap());
+        Some(Replies::new(MIN_REPLY_LEN as u16, &fixture.envelope[..3 * MIN_REPLY_LEN]).unwrap());
     assert_ne!(hash(&reply), hash(&replied), "reply");
 }
 
@@ -1118,16 +1056,18 @@ fn a_mixed_anonymous_output_set_round_trips_and_frames_each_body() {
             .unwrap(),
         )
     };
-    let body = [
-        &(fixture.recipient_body.len() as u16).to_le_bytes()[..],
-        &fixture.recipient_body,
-    ]
-    .concat();
+    let body = |slot: usize| {
+        [
+            &(fixture.records[slot].len() as u16).to_le_bytes()[..],
+            &fixture.records[slot],
+        ]
+        .concat()
+    };
     let expected = [
-        ([0; 32], None),
+        ([0; 32], framed(RING_BODY_SCHEME_TAG, &body(0))),
         (
             slot_tag(fixture.tags[1]),
-            framed(RING_BODY_SCHEME_TAG, &body),
+            framed(RING_BODY_SCHEME_TAG, &body(1)),
         ),
         (
             fixture.bytes[14],
@@ -1135,7 +1075,7 @@ fn a_mixed_anonymous_output_set_round_trips_and_frames_each_body() {
         ),
         (
             slot_tag(fixture.tags[3]),
-            framed(RING_BODY_SCHEME_TAG, &body),
+            framed(RING_BODY_SCHEME_TAG, &body(3)),
         ),
     ];
     for (slot, (output, (owner_tag, data))) in parsed.outputs.iter().zip(expected).enumerate() {
@@ -1147,26 +1087,13 @@ fn a_mixed_anonymous_output_set_round_trips_and_frames_each_body() {
 }
 
 #[test]
-fn the_sender_bundle_length_follows_the_output_and_bodiless_counts() {
+fn the_sender_bundle_length_follows_the_output_count() {
     let fixture = Fixture::new();
     let mut data = fixture.anonymous();
     for len in [
         0,
-        BundleLayout {
-            outputs: 3,
-            change: 1,
-        }
-        .byte_len(),
-        BundleLayout {
-            outputs: 5,
-            change: 1,
-        }
-        .byte_len(),
-        BundleLayout {
-            outputs: 4,
-            change: 2,
-        }
-        .byte_len(),
+        BundleLayout { outputs: 3 }.byte_len(),
+        BundleLayout { outputs: 5 }.byte_len(),
     ] {
         data.sender = Some(FramedSenderBundle {
             tag: &fixture.tags[0],
@@ -1222,39 +1149,22 @@ fn an_spp_point_off_the_curve_is_refused_at_expansion() {
 #[test]
 fn every_rail_reads_its_audit_stream() {
     let fixture = Fixture::new();
-    let key = |class, entry| AuditKey {
-        format: custom_ring_interface::DisclosureFormat::Standard,
-        class,
-        entry,
-    };
-    for (data, key, inputs, outputs, has_data) in [
-        (fixture.confidential_policy(), key(24, false), 2, 2, false),
-        (
-            fixture.confidential_delivered(),
-            key(16, false),
-            1,
-            8,
-            false,
-        ),
-        (
-            fixture.confidential_in_proof_owner(),
-            key(24, false),
-            2,
-            4,
-            false,
-        ),
-        (fixture.confidential_data(), key(24, false), 2, 2, true),
-        (fixture.delegate(), key(24, false), 2, 2, false),
-        (fixture.anonymous_delegate(), key(24, false), 2, 2, false),
-        (fixture.anonymous(), key(24, false), 3, 4, false),
-        (fixture.anonymous_entry(), key(8, true), 2, 2, false),
+    let key = |class, entry| AuditKey { class, entry };
+    for (data, key, inputs, outputs) in [
+        (fixture.confidential_policy(), key(24, false), 2, 2),
+        (fixture.confidential_delivered(), key(16, false), 1, 8),
+        (fixture.confidential_in_proof_owner(), key(24, false), 2, 4),
+        (fixture.confidential_data(), key(24, false), 2, 2),
+        (fixture.delegate(), key(24, false), 2, 2),
+        (fixture.anonymous_delegate(), key(24, false), 2, 2),
+        (fixture.anonymous(), key(24, false), 3, 4),
+        (fixture.anonymous_entry(), key(8, true), 2, 2),
     ] {
         let expected = AuditStreamLayout {
             key,
             inputs,
             outputs,
             capacity: if key.entry { 4 } else { outputs },
-            has_data,
         };
         assert_eq!(data.audit_stream(), Ok(expected), "{key:?}");
         assert_eq!(expected.checked(), Ok(expected), "{key:?}");
@@ -1302,12 +1212,12 @@ fn a_truncated_or_appended_ciphertext_is_refused() {
     for (name, data, compact) in encoded_cases(&fixture) {
         let stream = data.audit_stream().unwrap();
         let envelope = stream.envelope().len;
-        // The envelope and the records sit whole ahead of private_tx_hash.
+        // The envelope and the recipient keys sit whole ahead of private_tx_hash.
         let start = compact
             .windows(envelope)
             .position(|window| window == data.envelope)
             .unwrap();
-        let end = start + envelope + stream.records_len() + stream.tails_len();
+        let end = start + stream.sealed_len();
         assert_eq!(compact[start..start + envelope], *data.envelope, "{name}");
         assert_eq!(&compact[end..end + 32], data.private_tx_hash, "{name}");
         // A byte fewer or more shifts every later section.
@@ -1332,21 +1242,26 @@ fn a_truncated_or_appended_ciphertext_is_refused() {
             );
         }
         let message = data.auditor_message();
-        assert_eq!(message.len(), stream.message_len(), "{name}");
-        let parsed = AuditorMessage::parse(&message, stream).unwrap();
+        let exits: Vec<_> = data
+            .outputs
+            .iter()
+            .filter(|output| output.is_exit())
+            .collect();
+        let parsed = AuditorMessage::parse(&message, stream, exits.len()).unwrap();
         assert_eq!(parsed.envelope, data.envelope, "{name}");
-        for (slot, output) in data.outputs.iter().enumerate() {
-            assert_eq!(parsed.record(slot), Some(output.record), "{name}");
+        assert_eq!(parsed.recipient_keys, data.recipient_keys, "{name}");
+        for (exit, output) in exits.iter().enumerate() {
+            assert_eq!(parsed.exit_record(exit), Some(output.record), "{name}");
         }
         assert_eq!(
-            AuditorMessage::parse(&message[..message.len() - 1], stream),
+            AuditorMessage::parse(&message[..message.len() - 1], stream, exits.len()),
             None
         );
         let longer = [&message[..], &[0]].concat();
-        assert_eq!(AuditorMessage::parse(&longer, stream), None);
+        assert_eq!(AuditorMessage::parse(&longer, stream, exits.len()), None);
         let mut untagged = message.clone();
         untagged[0] = 2;
-        assert_eq!(AuditorMessage::parse(&untagged, stream), None);
+        assert_eq!(AuditorMessage::parse(&untagged, stream, exits.len()), None);
     }
 }
 
@@ -1362,7 +1277,6 @@ fn the_in_proof_owner_proves_on_spp_anonymous_rail_under_the_sender_key() {
     assert_eq!(
         data.transfer_circuit(1),
         Ok(RingCircuit::Transfer {
-            format: custom_ring_interface::DisclosureFormat::Standard,
             outputs: 4,
             inputs: 24,
             withdrawals: 4,
@@ -1394,6 +1308,43 @@ fn binding<'a>(
         public_gross: &[[0; 32]; 3],
         withdrawal_hash: &fixture.fields[62],
     }
+}
+
+/// The statement reads the first nullifier and the published count, SPP's proof alone orders the rest.
+#[test]
+fn the_statement_binds_the_first_nullifier_and_the_count_alone() {
+    let fixture = Fixture::new();
+    let config = config();
+    let roots = TransferRoots::default();
+    let hash = |data: RingTransactData<'_>| {
+        ParsedTransact::new(data)
+            .unwrap()
+            .transfer_statement(binding(&fixture, &config, &roots))
+            .unwrap()
+            .hash()
+            .unwrap()
+    };
+    let honest = fixture.anonymous();
+    let reference = hash(honest.clone());
+    let later = [
+        honest.nullifiers[0],
+        fixture.fields[90],
+        honest.nullifiers[2],
+    ];
+    let mut moved = honest.clone();
+    moved.nullifiers = &later;
+    assert_eq!(hash(moved), reference);
+    let first = [
+        fixture.fields[90],
+        honest.nullifiers[1],
+        honest.nullifiers[2],
+    ];
+    let mut other_first = honest.clone();
+    other_first.nullifiers = &first;
+    assert_ne!(hash(other_first), reference);
+    let mut fewer = honest.clone();
+    fewer.nullifiers = &honest.nullifiers[..2];
+    assert_ne!(hash(fixture.with_audit_stream(fewer)), reference);
 }
 
 #[test]
@@ -1468,7 +1419,7 @@ fn the_transfer_statement_reads_the_frame_and_names_its_family() {
             TransferFamily::Confidential {
                 sender: ConfidentialSender::Signer,
             },
-            1,
+            0,
             false,
         ),
         (
@@ -1535,44 +1486,4 @@ fn withdrawal_owner_metadata_is_required_in_transfer_order() {
     assert_eq!(parsed.data().interface_transfers, data.interface_transfers);
     data.spl_withdrawal_owners = &owners[..1];
     assert!(data.encode().is_err());
-}
-
-#[test]
-fn payout_frame_binds_format_and_rejects_mixed_widths() {
-    use custom_ring_interface::{
-        DisclosureFormat, COMPACT_AUDIT_RECORD_LEN, COMPACT_RECIPIENT_BODY_LEN,
-    };
-    let fixture = Fixture::new();
-    let body = [5; COMPACT_RECIPIENT_BODY_LEN];
-    let record = [6; COMPACT_AUDIT_RECORD_LEN];
-    let mut payout = fixture.base(RingRail::Confidential, 1, 16);
-    payout.extensions.format = DisclosureFormat::SingleAssetPayout;
-    payout.outputs = (0..16)
-        .map(|slot| {
-            let mut output = fixture.recipient(slot);
-            output.body = SlotBody::Recipient(&body);
-            output.record = &record;
-            output
-        })
-        .collect();
-    let payout = fixture.with_audit_stream(payout);
-    let bytes = payout.encode().unwrap();
-    let decoded = RingTransactData::parse(&bytes, RingRail::Confidential)
-        .unwrap()
-        .into_data();
-    assert_eq!(decoded, payout);
-    assert_eq!(decoded.audit_layout().value(), 4);
-    assert_eq!(decoded.outputs.len(), 16);
-    let mut wrong = payout.clone();
-    wrong.extensions.format = DisclosureFormat::Standard;
-    assert!(wrong.encode().is_err());
-    let mut wrong = payout.clone();
-    wrong.outputs[0].record = &fixture.records[0];
-    assert!(wrong.encode().is_err());
-    let mut wrong = payout.clone();
-    wrong.outputs[0].body = SlotBody::Recipient(&fixture.recipient_body);
-    assert!(wrong.encode().is_err());
-    let mut wrong = payout;
-    wrong.outputs[0].body = SlotBody::None;
-    assert!(wrong.encode().is_err());
 }

@@ -20,18 +20,17 @@ impl<'a> RingOutput<'a> {
         Ok(TransactOutput {
             utxo_hash: *self.hash,
             owner_tag: OwnerTag::Inline(self.owner_tag),
-            data: self.payload(reply).map(OutputPayload::encode).transpose()?,
+            data: Some(self.payload(reply).encode()?),
         })
     }
 
-    fn payload<'reply>(&self, reply: &'reply [u8]) -> Option<OutputPayload<'reply>>
+    fn payload<'reply>(&self, reply: &'reply [u8]) -> OutputPayload<'reply>
     where
         'a: 'reply,
     {
         match self.body {
-            SlotBody::None => None,
-            SlotBody::Recipient(body) => Some(OutputPayload::Recipient { body, reply }),
-            SlotBody::Exit(body) => Some(OutputPayload::Confidential(body)),
+            SlotBody::Recipient(body) => OutputPayload::Recipient { body, reply },
+            SlotBody::Exit(body) => OutputPayload::Confidential(body),
         }
     }
 }
@@ -160,13 +159,16 @@ impl RingTransactData<'_> {
             })
     }
 
+    /// The envelope, the recipient keys, then each exit's record in slot order, the records a scheme 3 body cannot carry.
     fn auditor_ciphertexts(&self) -> impl Iterator<Item = &[u8]> + Clone {
-        let records = self.outputs.iter().map(|output| output.record);
-        let tails = self
+        let exits = self
             .outputs
             .iter()
-            .filter_map(|output| output.tail.map(|tail| &tail[..]));
-        core::iter::once(self.envelope).chain(records).chain(tails)
+            .filter(|output| output.is_exit())
+            .map(|output| &output.record[..]);
+        [self.envelope, self.recipient_keys]
+            .into_iter()
+            .chain(exits)
     }
 }
 

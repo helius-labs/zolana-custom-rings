@@ -13,6 +13,7 @@ use solana_address::Address;
 use spr_indexer_api::Hash;
 use thiserror::Error;
 use zolana_ring_client::{
+    owner_record_key,
     rpc::{RecordUpdateEntry, RecordUpdateId, SubmitRecordUpdateRequest, AWAITABLE_LISTS},
     storage_apply_proof_inputs,
 };
@@ -239,7 +240,7 @@ impl RecordUpdateCheck<'_> {
             0 => None,
             bits if signer != context.config.roles.policy => Some(AwaitedLists {
                 lists: awaited_lists(bits, context.policy)?,
-                member: *Member::owner_tag(signer.as_array())
+                member: *owner_record_key(signer.as_array())
                     .map_err(invalid_entry)?
                     .as_bytes(),
             }),
@@ -330,7 +331,10 @@ impl UpdateSigner {
     /// `Unauthorized` for an entry that is neither the signer's wallet write nor an authority write.
     pub fn of(request: &SubmitRecordUpdateRequest) -> Result<Self, RecordUpdateRefusal> {
         let signer = request.signer.0;
-        let wallet = Member::owner_tag(signer.as_array()).map_err(invalid_entry)?;
+        let wallet = WalletKeys {
+            identity: Member::owner_tag(signer.as_array()).map_err(invalid_entry)?,
+            record: owner_record_key(signer.as_array()).map_err(invalid_entry)?,
+        };
         request
             .update
             .entries
@@ -517,16 +521,20 @@ fn lists_within(mask: u64, lists: ListSet) -> bool {
     mask & !lists.record_bits() == 0
 }
 
-/// A wallet writes its member lists and its grants.
-fn wallet_write(entry: &RecordUpdateEntry, wallet: &Member) -> bool {
-    let own = |member: &Hash| member.0 == *wallet.as_bytes();
+struct WalletKeys {
+    identity: Member,
+    record: Member,
+}
+
+/// A wallet writes the lists of its public record and its grants.
+fn wallet_write(entry: &RecordUpdateEntry, wallet: &WalletKeys) -> bool {
     match entry {
         RecordUpdateEntry::Write(write) => {
-            own(&write.member)
+            write.member.0 == *wallet.record.as_bytes()
                 && write.mint_policy.is_none()
                 && lists_within(write.mask, ListSet::MEMBER_WRITES)
         }
-        RecordUpdateEntry::WalletGrant(grant) => own(&grant.wallet),
+        RecordUpdateEntry::WalletGrant(grant) => grant.wallet.0 == *wallet.identity.as_bytes(),
     }
 }
 

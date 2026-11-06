@@ -10,14 +10,14 @@
 // Read after zolana/prover/server/circuits/spp_transaction/shared/transaction.go, the statement
 // the ring extends. Read before, in the order Define calls them, shared/utxo.go, audit/audit.go,
 // transfer/input.go, policy/record_pool.go, policy/tracking.go, transfer/owners.go,
-// audit/signer_data.go, policy/policy.go. Then prover/ring/ring.go, outside Define.
+// policy/policy.go. Then prover/ring/ring.go, outside Define.
 //
 // Both proofs reopen private_tx_hash over the note, output and address chains and the transaction blinding.
-// The ring derives that blinding from the sealed key, and SPP derives it and every output blinding from one
-// seed, so the shared hash holds SPP's output blindings to the key the auditor reads.
-// The program also binds output_chain and input_nullifier_chain from the exact frame it forwards to SPP.
-// The output chain covers published dummies. The nullifier chain fixes absolute address positions through
-// the selected address subsequence, SPP's distinct nullifiers and the dummy suffix enforced by both proofs.
+// The ring derives that blinding from the sealed key and the statement's first nullifier, and SPP derives
+// it and every output blinding from one seed and its own first nullifier, so the shared hash holds SPP's
+// output blindings and n0 to the key the auditor reads. The ring takes the address chain as a private
+// witness, the shared hash alone checks it. Both proofs keep dummies last, so the note and output chains
+// fix each opened note and real output at SPP's index. The program binds each slot's record ciphertext.
 //
 // One circuit serves every rail, and the statement's bits select the rail.
 //   - All bits clear is the signer rail. Every note owner signs as a Solana account in the run.
@@ -33,29 +33,28 @@
 //   - Salted reads and the tracking floor are in policy/subjects.go.
 //   - Input asset subjects are in policy/subjects.go and policy/rules.go.
 //   - Owner rows and the zero key rule are in transfer/owners.go.
-//   - Approval totals are in policy/screen.go, signer data counts in audit/signer_data.go.
+//   - Approval totals are in policy/screen.go.
 //
 // Properties, the statement proves the following on the rail its bits select.
-//  1. Every published output and spent note opens to the commitment SPP publishes or spends, through
-//     the output chain and private_tx_hash, the same wires serve every section below.
-//  2. The auditor stream seals each live output opening, each default-ring note's entry record, the note
-//     count and the address bitmap under the auditor key. A ring note opens through the record that created it.
+//  1. Every real output and spent note opens to the commitment SPP publishes or spends, through
+//     private_tx_hash, the same wires serve every section below.
+//  2. Each published slot's record seals its opening to the slot's recipient key, and the auditor stream
+//     seals every recipient key, each default-ring note's entry record and the note count under the
+//     auditor key. A ring note opens through the record that created it.
 //  3. Every input note belongs to the bound ring, or to the default ring on an entry key. Its owner
 //     is in the published signer run, the hidden owner or the in-proof sender, the delegate rail excepted.
-//  4. A hidden owner owns the note at input zero, stays out of the run and differs from every public party.
-//  5. A ring note's nonzero key is its owner's row key under the tracking root, a zero key on an
-//     output leaves its owner absent.
-//  6. Each entry of the signer run counts its data-bearing outputs, per audit.SignerDataCounts.
-//  7. The policy's rules, limits and approval bits hold under the bound roots, off the delegate rail.
-//  8. InputCount and the exact capacity of ordered nullifiers enter input_nullifier_chain, with a zero tail.
-//     Notes and addresses may interleave before the dummy suffix. SPP alone authorizes address creation.
+//  4. A hidden owner owns the first note, stays out of the run and differs from every co-signer.
+//  5. A spent ring note's nonzero key is its owner's row key under the tracking root, a zero key on an
+//     output requires its owner absent there.
+//  6. The policy's rules, limits and approval bits hold under the bound roots, off the delegate rail.
+//  7. SPP alone authorizes address creation, no ring slot opens an address.
 //
 // The statement relies on the program for what no circuit can see. The program hashes the run from
 // the signed owner accounts, reads each root live at the frame's revision, refuses a tracking root
 // below a salted source's floor, folds the gross from the settled legs and reads the legs from their
 // accounts.
 //
-// It proves nothing about a recipient's body or tag, SPP's external data hash binds those bytes alone.
+// It proves nothing about a data payload, a tag or a reply, SPP's external data hash binds those bytes alone.
 package transfer
 
 import (
@@ -80,7 +79,7 @@ type TransferCircuit struct {
 	// Delegate is the authority rail.
 	InProof, Hidden, Delegate frontend.Variable
 	Sender                    frontend.Variable
-	// PartyIdentities are an anonymous frame's public parties, an absent party is zero.
+	// PartyIdentities are an anonymous frame's co-signers, an absent co-signer is zero.
 	PartyIdentities [shared.AnonymousParties]frontend.Variable
 	Sections
 }
@@ -108,16 +107,14 @@ type Sections struct {
 	OutputCount     frontend.Variable
 	Outputs         []audit.OutputWires
 	InputCount      frontend.Variable
-	Inputs          []shared.UtxoWires
-	InputNullifiers []frontend.Variable
+	// Inputs hold the spent notes in SPP's note order, then dummies.
+	Inputs []shared.UtxoWires
 	// Entries open default-ring inputs to the auditor, none off an entry key.
 	Entries []audit.EntryWires
 	transactionBinding
 	SignerCount frontend.Variable
 	// Signers is the program's owner signer run, zero past SignerCount.
 	Signers []frontend.Variable
-	// SignerDataCounts is the statement's packed count per run entry, zero unless a run entry owns a data-bearing output.
-	SignerDataCounts frontend.Variable
 	// Rows hold every input note owner, a delegate's zero key note aside, ascending with zero rows last off the authority rail. They stay private, the constraints alone hold them. A row with no input holds nothing and only adds its own sender rules.
 	Rows []frontend.Variable
 	policy.Tracking
@@ -130,21 +127,18 @@ type Sections struct {
 	policy.Policy
 }
 
-// transactionBinding binds the audited slots to SPP through the private transaction hash and the published nullifier digest.
+// transactionBinding binds the audited slots to SPP through the private transaction hash.
 type transactionBinding struct {
-	PrivateTxHash       frontend.Variable
-	InputNullifierChain frontend.Variable
+	PrivateTxHash frontend.Variable
+	// SPP's chain of address nullifiers, private_tx_hash alone checks it.
+	AddressChain frontend.Variable
 }
 
 func NewSections(shape Shape) (Sections, error) {
 	if err := shared.ValidateInputCapacity(shape.Inputs); err != nil {
 		return Sections{}, err
 	}
-	pools := policy.RecordPoolShape{}
-	if shape.SingleAssetPayout {
-		pools = policy.RecordPoolShape{Own: shape.Records, Curator: shape.Records}
-	}
-	p, err := policy.NewPolicy(policy.InputsShape{Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Senders: shape.Owners, SaltedKeys: shape.saltedKeys(), Spent: shape.Inputs}.Inputs(), pools, transaction.NPublicSlots)
+	p, err := policy.NewPolicy(policy.InputsShape{Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Senders: shape.Owners, SaltedKeys: shape.saltedKeys(), Spent: shape.Inputs}.Inputs(), policy.RecordPoolShape{}, transaction.NPublicSlots)
 	if err != nil {
 		return Sections{}, err
 	}
@@ -153,14 +147,13 @@ func NewSections(shape Shape) (Sections, error) {
 		return Sections{}, err
 	}
 	return Sections{
-		Outputs:         make([]audit.OutputWires, shape.Outputs),
-		Inputs:          make([]shared.UtxoWires, shape.Inputs),
-		InputNullifiers: make([]frontend.Variable, shape.Inputs),
-		Entries:         make([]audit.EntryWires, shape.entries()),
-		Signers:         make([]frontend.Variable, shape.Inputs),
-		Rows:            make([]frontend.Variable, shape.Owners),
-		Tracking:        tracking,
-		Policy:          p,
+		Outputs:  make([]audit.OutputWires, shape.Outputs),
+		Inputs:   make([]shared.UtxoWires, shape.Inputs),
+		Entries:  make([]audit.EntryWires, shape.entries()),
+		Signers:  make([]frontend.Variable, shape.Inputs),
+		Rows:     make([]frontend.Variable, shape.Owners),
+		Tracking: tracking,
+		Policy:   p,
 	}, nil
 }
 
@@ -172,7 +165,6 @@ func (c *Sections) validate(shape Shape) error {
 		c.Validate(transaction.NPublicSlots),
 		shared.ValidateLength("transfer", "output", len(c.Outputs), shape.Outputs),
 		shared.ValidateLength("transfer", "input", len(c.Inputs), shape.Inputs),
-		shared.ValidateLength("transfer", "input nullifier", len(c.InputNullifiers), shape.Inputs),
 		shared.ValidateLength("transfer", "entry", len(c.Entries), shape.entries()),
 		shared.ValidateLength("transfer", "signer", len(c.Signers), shape.Inputs),
 		shared.ValidateLength("transfer", "owner row", len(c.Rows), shape.Owners),
@@ -189,21 +181,15 @@ func (c *TransferCircuit) Define(api frontend.API) error {
 	// 1. One rail, every later predicate reads its bits.
 	c.assertRail(api)
 	rc := rangecheck.New(api)
-	// 2. The output slots open and the sealed key derives the transaction blinding. Every later section reads these wires, so what it proves is about the notes step 7 ties to SPP.
+	// 2. The output slots open and the sealed key derives the transaction blinding. Every later section reads these wires, so what it proves is about the notes step 6 ties to SPP.
 	w := audit.AuditWires{FirstNullifier: c.FirstNullifier, RingProgramID: c.RingProgramID, TxViewingSk: c.TxViewingSk, AuditorPk: c.AuditorPk, Salt: c.Salt, Layout: c.Layout}
 	stream := c.Shape.Stream()
-	hasData := stream.DecodeLayout(api, c.Layout)
+	stream.AssertLayout(api, c.Layout)
 	envelope := w.OpenEnvelope(api, rc)
-	opened := stream.OpenSlots(api, rc, hasData, c.Outputs, c.OutputCount)
-	// 3. The input classes and private nullifiers bind to the exact published order. FirstNullifier ties
-	// the audit derivation to the same list, and only notes incur the ring membership check.
-	section := OpenInputs(api, c.Inputs, c.InputCount, c.InputNullifiers)
-	api.AssertIsEqual(c.InputNullifierChain, section.NullifierChain)
-	api.AssertIsEqual(c.FirstNullifier, c.InputNullifiers[0])
+	opened := stream.OpenSlots(api, rc, c.Outputs, c.OutputCount)
+	// 3. The spent notes open in SPP's note order, and only notes incur the ring membership check.
+	section := OpenInputs(api, c.Inputs, c.InputCount)
 	section.AssertRingNotes(api, c.RingProgramID, c.Shape.Entry)
-	if c.Shape.SingleAssetPayout {
-		c.assertSingleAssetPayout(api, section, opened)
-	}
 	// 4. The signer run binds the note owners to the selected rail, with the hidden and in-proof owner exceptions.
 	// SPP alone checks address owners, address-only inputs still require its authorization.
 	signers := OpenSigners(api, c.Signers, c.SignerCount)
@@ -215,15 +201,11 @@ func (c *TransferCircuit) Define(api frontend.API) error {
 	// 5. Owner rows read the tracking root. The auditor derives a nullifier from the secret sealed behind an enrolled key or from the public zero secret, so after the step no spent ring note carries a key the auditor cannot read.
 	tracking := c.OpenTracking(api)
 	rows := OpenOwnerRows(api, c.Rows, c.RowEntries, tracking)
-	rows.AssertInputOwners(api, InputRail{Delegate: c.Delegate, Hidden: c.Hidden, HiddenOwner: hiddenOwner}, section.Slots)
-	// 6. Each run entry's data-bearing outputs are counted from the opened slots, a signer's check needs the run from step 4 and the slots from step 2.
-	audit.SignerDataCounts{Packed: c.SignerDataCounts, Members: signers.Members, Active: signers.Count.Active, Slots: opened.Slots}.Assert(api)
-	// 7. PrivateTxHash binds the opened notes and derived address subsequence to SPP. Together with
-	// step 3 and the dummy suffix, the chains fix the input classes at their absolute published positions.
-	// The derived blinding fixes SPP's seed to the sealed key, and SPP's seed fixes every output blinding.
+	rows.AssertInputOwners(api, c.Delegate, section.Slots)
+	// 6. PrivateTxHash binds the opened notes, the real outputs, SPP's address chain and the derived blinding.
 	c.bindTransaction(api, section, opened.Slots, envelope.PrivateTxBlinding)
 	c.assertBypass(api, c.Delegate)
-	// 8. The policy screens the bound slots. The rows hold every input note owner by step 5, so no owner's funds escape the sender rules or the attribution.
+	// 7. The policy screens the bound slots. The rows hold every input note owner by step 5, so no owner's funds escape the sender rules or the attribution.
 	// A ring with an own policy registry reads its root on every rail but the delegate's, no prover bit clears the thresholds.
 	g := policy.Rail{ThresholdsActive: ringgadget.IsNonZero(api, c.OwnRoot), Delegate: c.Delegate}.Gates(api, c.PolicyHash)
 	screening := c.Screen(api, rc, g, policy.Spend{Senders: rows.Members, Inputs: section.Slots, Tracking: tracking}, opened.Slots)
@@ -232,27 +214,11 @@ func (c *TransferCircuit) Define(api frontend.API) error {
 	// The mask is equal and never at least. A short mask would drop a demanded co-signer, the program acts on these bits and derives no threshold.
 	api.AssertIsEqual(c.ApprovalMask, screening.ApprovalMask)
 	screening.AssertApprovalTotals(api, c.ApprovalTotals, c.ApprovalBlinder)
-	// 9. The audit reads the same selectors that formed the transaction chains. Its note count and address
-	// bitmap distinguish spends, address creation and padding. NoSpend is set exactly when no note is spent.
+	// 8. The auditor stream seals the recipient keys the records are sealed to. NoSpend is set exactly when no note is spent.
+	records := w.RecordChain(api, envelope, opened)
 	sealed := w.SealStream(api, rc, envelope, stream, opened, audit.SpentInputs{Slots: section.Slots, Count: section.Count, Entries: c.Entries})
-	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(envelope, w, sealed, opened, signers)))
+	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(envelope, w, sealed, records, signers)))
 	return nil
-}
-
-func (c *TransferCircuit) assertSingleAssetPayout(api frontend.API, inputs InputSection, outputs audit.Opened) {
-	api.AssertIsEqual(c.InputCount, 1)
-	api.AssertIsEqual(c.SignerCount, 1)
-	api.AssertIsEqual(c.InProof, 0)
-	api.AssertIsEqual(c.Hidden, 0)
-	api.AssertIsEqual(c.Delegate, 0)
-	api.AssertIsEqual(inputs.Slots[0].Ring, 1)
-	api.AssertIsEqual(inputs.Slots[0].Asset, outputs.Slots[0].Asset)
-	api.AssertIsEqual(c.WithdrawalCount, 0)
-	for i := range c.PublicAssets {
-		api.AssertIsEqual(c.PublicAssets[i], 0)
-		api.AssertIsEqual(c.PublicAmounts[i], 0)
-		api.AssertIsEqual(c.PublicGross[i], 0)
-	}
 }
 
 // assertRail holds the bits to one rail, only the in-proof rail names a public sender.
@@ -264,7 +230,7 @@ func (c *TransferCircuit) assertRail(api frontend.API) {
 	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, c.InProof), V: c.Sender})
 }
 
-// hiddenOwner reads input 0, zero on every rail with no owner to hide.
+// hiddenOwner reads the first note, zero on every rail with no owner to hide.
 func (c *TransferCircuit) hiddenOwner(api frontend.API, section InputSection, signers SignerSet) frontend.Variable {
 	owner := api.Mul(c.Hidden, section.Slots[0].OwnerPkHash)
 	// SPP's HiddenOwnerSigners needs a live hidden owner, one in the published run would name it.
@@ -275,12 +241,11 @@ func (c *TransferCircuit) hiddenOwner(api frontend.API, section InputSection, si
 }
 
 // bindTransaction follows SPP's Poseidon order of note chain, output chain, address chain and blinding.
-// AddressChain derives from the statement-bound nullifiers. SPP's uniqueness and the shared dummy suffix
-// bind the merged note and address order even though each NonZeroHashChain removes unselected slots.
+// Each NonZeroHashChain drops dummies, the dummy suffix on both sides keeps every index.
 func (b transactionBinding) bindTransaction(api frontend.API, inputs InputSection, outputs []shared.Output, blinding frontend.Variable) {
 	inputChain := gadget.NonZeroHashChain(api, inputs.Hashes)
 	outputChain := gadget.NonZeroHashChain(api, shared.UtxoHashes(api, outputs))
-	api.AssertIsEqual(b.PrivateTxHash, gadget.PoseidonHash(api, []frontend.Variable{inputChain, outputChain, inputs.AddressChain, blinding}))
+	api.AssertIsEqual(b.PrivateTxHash, gadget.PoseidonHash(api, []frontend.Variable{inputChain, outputChain, b.AddressChain, blinding}))
 }
 
 // assertBypass holds the authority rail's statement off every policy registry, a curator's update then cannot fail a delegate's proof.
@@ -292,11 +257,11 @@ func (c *Sections) assertBypass(api frontend.API, delegate frontend.Variable) {
 
 // statement mirrors TransferStatement::elements in program-libs/interface/src/proof/statement.rs.
 // The program rebuilds every element from the frame and live accounts, a wire outside the list stays private and only a constraint fixes it.
-func (c *TransferCircuit) statement(e audit.Envelope, w audit.AuditWires, s audit.Stream, opened audit.Opened, signers SignerSet) []frontend.Variable {
+func (c *TransferCircuit) statement(e audit.Envelope, w audit.AuditWires, s audit.Stream, recordChain frontend.Variable, signers SignerSet) []frontend.Variable {
 	fields := slices.Concat(e.Head(w, s, shared.TransferStatementDomain), []frontend.Variable{
-		c.InProof, c.Hidden, c.Delegate, c.ApprovalMask, c.ApprovalTotals, c.SignerDataCounts, s.NoSpend,
-		c.OutputCount, opened.OutputChain, s.RecordChain, s.TailChain,
-		c.InputCount, c.InputNullifierChain, c.PrivateTxHash, c.Sender,
+		c.InProof, c.Hidden, c.Delegate, c.ApprovalMask, c.ApprovalTotals, s.NoSpend,
+		c.OutputCount, recordChain,
+		c.InputCount, c.PrivateTxHash, c.Sender,
 	}, c.PartyIdentities[:], []frontend.Variable{
 		c.SignerCount, signers.Chain,
 		c.PolicyHash, c.OwnRoot, c.CuratorRoot, c.TrackingRoot,

@@ -7,7 +7,6 @@ import {
   ownerSignerAddresses,
   prepareRingAuthorityTransfer,
   addressBytes,
-  solanaOwnerIdentity,
 } from "@heliuslabs/spr/internal";
 import type { AnonymousRingTransactProver } from "../../rpc/ports.js";
 import type {
@@ -64,6 +63,7 @@ import {
   checkHiddenOwnerSpends,
   checkEntryInputs,
   type AnonymousPayment,
+  type OwnerExposure,
   type AnonymousSpendSigner,
 } from "./anonymous.js";
 import type { RingPolicy } from "../../protocol/codec/ring-codecs.js";
@@ -74,9 +74,9 @@ import {
   ringRail,
   type FrameExtensions,
 } from "../../protocol/transaction/transact.js";
-import { RingError } from "../../protocol/error.js";
+import { RingError, RingProgramError } from "../../protocol/error.js";
 import { chargedOutflowsOf, relayListSalts, type RingListSalt } from "../../proof/policy-proof.js";
-import { ownerDataCounts, transferApprovalOf } from "../../proof/transfer-proof.js";
+import { transferApprovalOf } from "../../proof/transfer-proof.js";
 import { isDefaultRingNote } from "../../proof/audit-proof.js";
 import { anonymousPartyIdentities } from "../../protocol/membership/parties.js";
 import {
@@ -145,7 +145,7 @@ export interface CustomRingTransferInput {
   /** Every enrolled owner a salted list reads, the sender and the recipients alike. */
   readonly listSalts?: readonly RingListSalt[];
   /** SPP's optional fields the frame carries through, the proof's own digests are set per attempt. */
-  readonly extensions?: Omit<FrameExtensions, "approvalTotals" | "signerDataCounts" | "cache">;
+  readonly extensions?: Omit<FrameExtensions, "approvalTotals" | "cache">;
   /** The frame carries a digest of its totals, Rust `with_exact_approval`. */
   readonly exactApproval?: boolean;
   /** The settlement accounts of each deposit leg `transfer` names, in leg order. */
@@ -464,6 +464,7 @@ export class CustomRingTransfer {
         prepared,
         sender,
         assets: this.#input.assets,
+        auditor: config.auditorPublicKey,
         instructionDiscriminator: InstructionTag.ringTransact,
       });
       checkZeroKeyInputs(proofInputs.inputUtxos, sender.signingPublicKey);
@@ -485,7 +486,7 @@ export class CustomRingTransfer {
           ownerSigners,
           ...stagedDeposits(this.#input),
           ...(this.#withdrawal === undefined ? {} : { withdrawal: this.#withdrawal }),
-          extensions: stagedExtensions(this.#input, proofInputs, ownerSigners),
+          ...(this.#input.extensions === undefined ? {} : { extensions: this.#input.extensions }),
         },
       };
     } catch (cause) {
@@ -541,6 +542,7 @@ export class AnonymousTransfer {
   readonly #exitTokenOwner: Address | undefined;
   readonly #coOwners: readonly CoOwner[];
   readonly #readCache: ReadCache | undefined;
+  readonly #exposure: OwnerExposure;
 
   private constructor(fields: AnonymousFields) {
     this.#owner = fields.owner;
@@ -551,6 +553,7 @@ export class AnonymousTransfer {
     this.#exitTokenOwner = fields.exitTokenOwner;
     this.#coOwners = fields.coOwners;
     this.#readCache = fields.readCache;
+    this.#exposure = fields.exposure;
     Object.freeze(this);
   }
 
@@ -572,6 +575,7 @@ export class AnonymousTransfer {
       exitTokenOwner: undefined,
       coOwners: input.coOwners ?? [],
       readCache: undefined,
+      exposure: "refused",
     });
   }
 
@@ -623,6 +627,11 @@ export class AnonymousTransfer {
   /** A missing exit token account must be the owner's associated token account. */
   withExitTokenOwner(owner: Address): AnonymousTransfer {
     return new AnonymousTransfer({ ...this.#fields(), exitTokenOwner: owner });
+  }
+
+  /** Admits the parties and zero-key spends `OwnerExposure` names, a co-signer stays refused, Rust `with_owner_exposure`. */
+  withOwnerExposure(exposure: OwnerExposure): AnonymousTransfer {
+    return new AnonymousTransfer({ ...this.#fields(), exposure });
   }
 
   prove(client: AnonymousTransferClient, context?: RequestContext): Promise<ProvenRingTransfer> {
@@ -808,24 +817,24 @@ export class AnonymousTransfer {
     const sender = keys.address();
     const prepared = this.#owner.transfer.prepare();
     checkWithdrawalAccounts(prepared, this.#withdrawal);
-    const owner = checkAnonymousSigner({
-      signer: this.#signer,
-      sender,
-      payer: prepared.payer,
-    });
+    const owner = checkAnonymousSigner({ signer: this.#signer, sender });
+    // The proof no longer holds the payer, a funder or the exit apart from the hidden owner, each
+    // would name it, so the wallet refuses them unless the caller accepts the exposure.
+    const guarded = this.#exposure === "refused" ? owner : undefined;
+    if (guarded !== undefined)
+      checkHiddenParties(guarded, [
+        prepared.payer,
+        ...(this.#owner.deposits ?? []).map(({ funder }) => signerAddress(funder)),
+      ]);
     const exitTokenOwner = await anonymousExitTokenOwner(
       {
         client,
         transfers: prepared.interfaceTransfers,
-        hiddenOwner: owner,
+        ...(guarded === undefined ? {} : { hiddenOwner: guarded }),
         ...(this.#exitTokenOwner === undefined ? {} : { tokenOwner: this.#exitTokenOwner }),
       },
       context,
     );
-    const solExit = prepared.interfaceTransfers.find((t) => t.kind === "sol" && !t.isDeposit);
-    const destination = solExit?.kind === "sol" ? solExit.userSolAccount : exitTokenOwner;
-    if (destination !== undefined && exitTokenOwner !== undefined && destination !== exitTokenOwner)
-      throw new RingError("RING_ANONYMOUS_EXIT_DESTINATIONS_DIFFER");
     if (this.#payments.some((payment) => isSmallOrder(payment.to.recipient.viewingPublicKey)))
       throw new RingError("RING_RECIPIENT_KEY_NOT_CONTRIBUTORY");
     const rail = new RingOutputRail(
@@ -839,6 +848,7 @@ export class AnonymousTransfer {
         prepared,
         sender,
         assets: this.#owner.assets,
+        auditor: config.auditorPublicKey,
         instructionDiscriminator: InstructionTag.ringTransact,
       });
       const proofInputs =
@@ -849,7 +859,9 @@ export class AnonymousTransfer {
         throw new RingError("RING_TRANSACT_DATA_INVALID", {
           details: { reason: "InvalidAnonymousSlot" },
         });
-      checkZeroKeyInputs(proofInputs.inputUtxos, sender.signingPublicKey);
+      // A zero-key note opens to anyone holding its opening, its spend names the spender.
+      if (guarded !== undefined)
+        checkZeroKeyInputs(proofInputs.inputUtxos, sender.signingPublicKey);
       const coOwners = ownerSignerAddresses(proofInputs.inputUtxos, proofInputs.outputs, owner);
       checkHiddenOwnerSpends(proofInputs, sender);
       checkEntryInputs(proofInputs, sender);
@@ -860,16 +872,16 @@ export class AnonymousTransfer {
         sender,
         ownerSigners: coOwners,
         ...(this.#withdrawal === undefined ? {} : { withdrawal: this.#withdrawal }),
-        extensions: stagedExtensions(this.#owner, proofInputs, coOwners),
+        ...(this.#owner.extensions === undefined ? {} : { extensions: this.#owner.extensions }),
         anonymous: {
           ...(exitTokenOwner === undefined ? {} : { tokenOwner: exitTokenOwner }),
+          // A hidden co-signer approves its own outflow, no exposure waiver admits it.
           partyIdentities: (coSigners: readonly Address[]) => {
-            checkHiddenParties(owner, [prepared.payer, ...coSigners]);
-            return anonymousPartyIdentities({
-              payer: prepared.payer,
-              coSigners,
-              ...(destination === undefined ? {} : { exitDestination: destination }),
-            });
+            if (coSigners.some((coSigner) => equalBytes(addressBytes(coSigner), owner)))
+              throw new RingError("RING_CO_SIGNER_INVALID", {
+                details: { reason: "CoSignerIsOwner", code: RingProgramError.coSignerIsOwner },
+              });
+            return anonymousPartyIdentities(coSigners);
           },
         },
       };
@@ -897,6 +909,7 @@ export class AnonymousTransfer {
       exitTokenOwner: this.#exitTokenOwner,
       coOwners: this.#coOwners,
       readCache: this.#readCache,
+      exposure: this.#exposure,
     };
   }
 }
@@ -910,6 +923,7 @@ interface AnonymousFields {
   readonly exitTokenOwner: Address | undefined;
   readonly coOwners: readonly CoOwner[];
   readonly readCache: ReadCache | undefined;
+  readonly exposure: OwnerExposure;
 }
 
 /** Every live owner signs in public, recipients stay hidden on an anonymous ring, Rust `RingTransfer<PublicOwners>`. */
@@ -1087,6 +1101,7 @@ export class PublicOwnerTransfer {
         prepared,
         sender,
         assets: this.#owner.assets,
+        auditor: config.auditorPublicKey,
         instructionDiscriminator: InstructionTag.ringTransact,
       });
       checkCoOwnerKeys(proofInputs, sender, this.#coOwners);
@@ -1096,12 +1111,7 @@ export class PublicOwnerTransfer {
             rail: "anonymous",
             publicOwners: true,
             anonymous: {
-              partyIdentities: (coSigners) =>
-                anonymousPartyIdentities({
-                  payer: prepared.payer,
-                  coSigners,
-                  funders: (this.#owner.deposits ?? []).map(({ funder }) => signerAddress(funder)),
-                }),
+              partyIdentities: (coSigners) => anonymousPartyIdentities(coSigners),
             },
           }
         : { rail: "confidential" };
@@ -1116,7 +1126,7 @@ export class PublicOwnerTransfer {
           ownerSigners,
           ...stagedDeposits(this.#owner),
           ...(this.#withdrawal === undefined ? {} : { withdrawal: this.#withdrawal }),
-          extensions: stagedExtensions(this.#owner, proofInputs, ownerSigners),
+          ...(this.#owner.extensions === undefined ? {} : { extensions: this.#owner.extensions }),
           ...stagedBlinder(attemptBlinder(this.#owner)),
         },
       };
@@ -1278,6 +1288,7 @@ export class DelegateTransfer {
         prepared,
         sender: input.source,
         assets: input.assets,
+        auditor: config.auditorPublicKey,
         instructionDiscriminator: InstructionTag.ringAuthorityTransact,
       });
       checkCoOwnerKeys(proofInputs, input.source, coSources);
@@ -1299,7 +1310,7 @@ export class DelegateTransfer {
                 ? {
                     anonymous: {
                       partyIdentities: (coSigners: readonly Address[]) =>
-                        anonymousPartyIdentities({ payer: prepared.payer, coSigners }),
+                        anonymousPartyIdentities(coSigners),
                     },
                   }
                 : {}),
@@ -1411,22 +1422,6 @@ function ownedBy(spent: ProofInputUtxo, owner: Address): boolean {
 /** Drawn per attempt, a retry never reuses a blinder a co-signer has seen. */
 function attemptBlinder(input: CustomRingTransferInput): Bytes32 | undefined {
   return input.exactApproval === true ? randomBlinding() : undefined;
-}
-
-/** The caller's extensions and the counts the statement computes, a hidden owner stays out of the run. */
-function stagedExtensions(
-  input: CustomRingTransferInput,
-  proofInputs: SppProofInputs,
-  ownerSigners: readonly Address[],
-): FrameExtensions {
-  const signerDataCounts = ownerDataCounts(
-    ownerSigners.map((signer) => solanaOwnerIdentity(addressBytes(signer)) as Bytes32),
-    proofInputs.outputs,
-  );
-  return Object.freeze({
-    ...input.extensions,
-    ...(signerDataCounts === 0n ? {} : { signerDataCounts }),
-  });
 }
 
 function stagedBlinder(blinder: Bytes32 | undefined): Readonly<{ approvalBlinder?: Bytes32 }> {

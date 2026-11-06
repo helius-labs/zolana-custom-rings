@@ -1,7 +1,7 @@
-//! The anonymous rail's slots, the sender's change leading at output 0, one body per
-//! recipient output and the sender bundle after them.
+//! The anonymous rail's slots, the sender's change leading at output 0, one record body per
+//! non-exit slot and the sender bundle after them.
 
-use custom_ring_interface::{ChangeCell, SenderBundle, MIN_REPLY_LEN};
+use custom_ring_interface::{SenderBundle, MIN_REPLY_LEN};
 use rand::{rngs::OsRng, RngCore};
 use spr_hasher::primitives::is_canonical_bn254_scalar_be;
 use spr_interface::MAX_OUTPUTS;
@@ -11,7 +11,7 @@ use spr_transaction::{
 };
 
 use crate::{
-    recipient_delivery::{recipient_body, seal_reply, seal_sender_bundle, PaddedRecipientBody},
+    recipient_delivery::{seal_reply, seal_sender_bundle},
     OutputBlindings, ReplyMetadata, RingRailError,
 };
 
@@ -28,7 +28,7 @@ pub struct AnonymousPlan {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AnonymousSlot {
-    /// A live output at the sender's exact address, its tag zero.
+    /// A live output at the sender's exact address, its tag zero, its record sealed to the sender.
     Change,
     Payment {
         recipient: X25519Pubkey,
@@ -165,11 +165,12 @@ impl AnonymousSlot {
         matches!(self, Self::Change)
     }
 
-    /// The bundle key of a body-bearing slot, zero on exit and dummy.
-    fn recipient_key(&self) -> [u8; 32] {
+    /// The bundle's key of the slot, the sender's own on change, zero on exit and dummy.
+    fn recipient_key(&self, sender: &ShieldedAddress) -> [u8; 32] {
         match self {
             Self::Payment { recipient } => recipient.u(),
-            Self::Change | Self::Exit | Self::Dummy { .. } => [0; 32],
+            Self::Change => sender.viewing_pubkey.u(),
+            Self::Exit | Self::Dummy { .. } => [0; 32],
         }
     }
 }
@@ -203,83 +204,65 @@ pub(crate) fn lead_change(
 pub(crate) struct AnonymousSeal<'a> {
     pub rail: &'a crate::RingOutputRail,
     pub first_nullifier: [u8; 32],
-    pub sender: &'a ShieldedAddress,
     pub outputs: &'a [SppProofOutputUtxo],
     pub slots: &'a [AnonymousSlot],
     pub plan: &'a AnonymousPlan,
-    pub body_width: usize,
+    /// The frame's payload width, `None` without data.
+    pub width: Option<usize>,
 }
 
-/// One body-bearing slot's bytes, its reply empty without reply metadata.
+/// One non-exit slot's bytes, its reply empty without reply metadata.
 pub(crate) struct SealedBody {
     pub body: Vec<u8>,
     pub reply: Vec<u8>,
 }
 
 impl AnonymousSeal<'_> {
-    /// The body of a tagged slot sealed at its output position, `None` on a change output.
-    pub fn body(&self, slot_index: usize) -> Result<Option<SealedBody>, RingRailError> {
+    /// The record body of a tagged slot sealed at its output position, an exit carries none.
+    pub fn body(&self, slot_index: usize) -> Result<SealedBody, RingRailError> {
         let reply_len = self.plan.reply_len()?;
-        let random_reply = || random_bytes(reply_len.unwrap_or(0));
-        let recipient = match self.slots[slot_index] {
-            AnonymousSlot::Change => return Ok(None),
-            AnonymousSlot::Payment { recipient } => recipient,
-            AnonymousSlot::Dummy { .. } => {
-                return Ok(Some(SealedBody {
-                    body: random_bytes(self.body_width),
-                    reply: random_reply(),
-                }));
-            }
-            AnonymousSlot::Exit => return Err(RingRailError::RingOutputFraming { slot_index }),
-        };
-        let output = &self.outputs[slot_index];
-        let index = u32::try_from(slot_index).map_err(|_| TransactionError::TooManyOutputs)?;
-        let secret = self
-            .rail
-            .slot_secret(&recipient, &self.first_nullifier, index)?;
-        let body = PaddedRecipientBody {
-            body: &recipient_body(output),
-            slot_secret: &secret,
-            width: self.body_width,
+        if self.slots[slot_index] == AnonymousSlot::Exit {
+            return Err(RingRailError::RingOutputFraming { slot_index });
         }
-        .seal()?;
+        let output = &self.outputs[slot_index];
+        let body = self
+            .rail
+            .seal_body(output, &self.first_nullifier, slot_index, self.width)?;
         let replies = self.plan.slot_replies(self.slots);
-        let reply = match (replies[slot_index], reply_len) {
-            (Some(reply), Some(reply_len)) => seal_reply(reply, reply_len, &secret)?,
-            _ => random_reply(),
+        let reply = match (self.slots[slot_index], replies[slot_index], reply_len) {
+            (AnonymousSlot::Payment { recipient }, Some(reply), Some(reply_len)) => {
+                let index =
+                    u32::try_from(slot_index).map_err(|_| TransactionError::TooManyOutputs)?;
+                let secret = self
+                    .rail
+                    .slot_secret(&recipient, &self.first_nullifier, index)?;
+                seal_reply(reply, reply_len, &secret)?
+            }
+            _ => random_bytes(reply_len.unwrap_or(0)),
         };
-        Ok(Some(SealedBody { body, reply }))
+        Ok(SealedBody { body, reply })
     }
 
-    /// The bundle at index `m` opens under a retained or reproducible sender viewing key and published values alone, its cells rebuild the change and name each recipient.
-    pub fn sender_bundle(&self, blindings: &OutputBlindings) -> Result<Vec<u8>, RingRailError> {
-        // A change slot publishes no body, so the frame's bodiless count is the bundle's cell count.
-        let (change, bearing): (Vec<_>, Vec<_>) = self
-            .slots
-            .iter()
-            .zip(self.outputs)
-            .partition(|(slot, _)| slot.is_change());
+    /// The bundle at index `m` opens under a retained or reproducible sender viewing key and
+    /// published values alone, its keys name each slot's recipient.
+    pub fn sender_bundle(
+        &self,
+        blindings: &OutputBlindings,
+        sender: &ShieldedAddress,
+    ) -> Result<Vec<u8>, RingRailError> {
         let bundle = SenderBundle {
             output_seed: *blindings.output_seed(),
-            change: change
-                .into_iter()
-                .map(|(_, output)| ChangeCell {
-                    mint: output.asset.asset.to_bytes(),
-                    amount: output.amount,
-                })
-                .collect(),
-            recipient_keys: bearing
-                .into_iter()
-                .map(|(slot, _)| slot.recipient_key())
+            recipient_keys: self
+                .slots
+                .iter()
+                .map(|slot| slot.recipient_key(sender))
                 .collect(),
         };
         let published =
             u32::try_from(self.slots.len()).map_err(|_| TransactionError::TooManyOutputs)?;
-        let secret = self.rail.slot_secret(
-            &self.sender.viewing_pubkey,
-            &self.first_nullifier,
-            published,
-        )?;
+        let secret =
+            self.rail
+                .slot_secret(&sender.viewing_pubkey, &self.first_nullifier, published)?;
         seal_sender_bundle(&bundle, &secret)
     }
 }

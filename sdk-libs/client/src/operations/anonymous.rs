@@ -26,7 +26,7 @@ use zolana_ring_keys::{
 };
 use zolana_ring_transaction::{
     is_contributory, open_recipient_body, open_reply, open_sender_bundle, AnonymousOutput,
-    OpenedBody, OpenedNote, OutputBlindings, ReplyClaim, RingAssets,
+    OpenedBody, OpenedNote, ReplyClaim, RingAssets,
 };
 
 use crate::history::HistoryPosition;
@@ -189,7 +189,6 @@ pub struct AnonymousSync<'a, K: ?Sized> {
     from: ScanFrom,
     full_ring: Option<Address>,
     page_budget: usize,
-    asset_rpc: Option<&'a dyn AsyncRpc>,
     recipients: &'a [ShieldedAddress],
     sender_fast_path: bool,
 }
@@ -209,15 +208,9 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> AnonymousSync<'a
             from: ScanFrom::Watermark,
             full_ring: None,
             page_budget: 32,
-            asset_rpc: None,
             recipients: &[],
             sender_fast_path: false,
         }
-    }
-
-    pub fn with_asset_rpc(mut self, rpc: &'a dyn AsyncRpc) -> Self {
-        self.asset_rpc = Some(rpc);
-        self
     }
 
     pub fn with_indexer_config(mut self, config: IndexerRpcConfig) -> Self {
@@ -397,7 +390,9 @@ impl<'t> Body<'t> {
             }
             Site::Message(message) => {
                 let bundle = ring_sender_bundle_output_body(&tx.messages[message].data)?;
-                let layout = BundleSlots::of(tx).layout();
+                let layout = BundleLayout {
+                    outputs: tx.output_slots.len(),
+                };
                 (bundle.len() == layout.byte_len()).then_some(layout.outputs)?
             }
         };
@@ -408,27 +403,6 @@ impl<'t> Body<'t> {
             context: RingDeliveryContext::of(tx)?,
             found,
         })
-    }
-}
-
-/// A row's slots in the bundle's order, the k-th bodiless slot takes the k-th change cell.
-struct BundleSlots {
-    bodiless: Vec<usize>,
-    bearing: Vec<usize>,
-}
-
-impl BundleSlots {
-    fn of(tx: &ShieldedTransaction) -> Self {
-        let (bodiless, bearing) = (0..tx.output_slots.len())
-            .partition(|&position| tx.output_slots[position].payload.is_empty());
-        Self { bodiless, bearing }
-    }
-
-    fn layout(&self) -> BundleLayout {
-        BundleLayout {
-            outputs: self.bodiless.len() + self.bearing.len(),
-            change: self.bodiless.len(),
-        }
     }
 }
 
@@ -662,7 +636,7 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
         Ok(())
     }
 
-    /// Each change slot its cells rebuild under the wallet's own address and `TXOB(i)`, from the seed and retained chain history with no auditor read.
+    /// Change publishes a zero tag, its body opens under the viewing key the bundle names.
     fn open_bundle(
         &mut self,
         index: usize,
@@ -675,19 +649,43 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
         else {
             return Ok(());
         };
-        let slots = BundleSlots::of(body.tx);
-        let Ok(bundle) = open_sender_bundle(ciphertext, secret, slots.layout()) else {
+        let layout = BundleLayout {
+            outputs: body.tx.output_slots.len(),
+        };
+        let Ok(bundle) = open_sender_bundle(ciphertext, secret, layout) else {
             return Ok(());
         };
-        let blindings =
-            OutputBlindings::published(&body.context.first_nullifier, &bundle.output_seed);
-        for (cell, &position) in bundle.change.iter().zip(&slots.bodiless) {
-            let opened = u32::try_from(position)
+        let viewing_pubkey = self.history.entries()[index].viewing_pubkey();
+        let change: Vec<u32> = (0u32..)
+            .zip(&bundle.recipient_keys)
+            .filter(|(_, key)| **key == viewing_pubkey.u())
+            .map(|(position, _)| position)
+            .collect();
+        let requests: Vec<RingDeliveryRequest> = change
+            .iter()
+            .map(|&position| RingDeliveryRequest {
+                viewing_pubkey,
+                tx_viewing_pk: body.context.tx_viewing_pk,
+                salt: body.context.salt,
+                output_index: position,
+                first_nullifier: body.context.first_nullifier,
+            })
+            .collect();
+        let secrets = exactly_one_each(
+            self.sync.keys.ring_delivery_secrets(&requests)?,
+            requests.len(),
+        )?;
+        for (position, secret) in change.into_iter().zip(secrets) {
+            let position = position as usize;
+            let Some((ciphertext, _)) = ring_body_output(&body.tx.output_slots[position].payload)
+            else {
+                continue;
+            };
+            let opened = open_recipient_body(ciphertext, &SlotSecret::new(secret)?)
                 .ok()
-                .and_then(|index| blindings.at(index).ok())
-                .and_then(|blinding| {
+                .and_then(|plain| {
                     self.output_at(body, &self.address, position)
-                        .open_change(cell, blinding)
+                        .open_body(&plain)
                         .ok()
                         .flatten()
                 });
@@ -703,11 +701,11 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
         let Some(tx_viewing_key) = own else {
             return Ok(());
         };
-        let listed: Vec<_> = slots
-            .bearing
-            .iter()
-            .copied()
-            .zip(bundle.recipient_keys)
+        let listed: Vec<_> = bundle
+            .recipient_keys
+            .into_iter()
+            .enumerate()
+            .filter(|(_, key)| *key != viewing_pubkey.u())
             .collect();
         self.record_sent(body, &listed, tx_viewing_key);
         Ok(())
@@ -760,7 +758,11 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
             .sync
             .recipients
             .iter()
-            .filter(|address| address.viewing_pubkey == *recipient)
+            // The record names its nullifier key, a held address verifies only its own.
+            .filter(|address| {
+                address.viewing_pubkey == *recipient
+                    && address.nullifier_pubkey == plain.record.nullifier_pk
+            })
             .find_map(|address| {
                 match self
                     .output_at(body, address, position)
@@ -782,7 +784,7 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
             position: slot_index,
             recipient_viewing_pubkey: *recipient,
             owner_pubkey,
-            amount: plain.amount,
+            amount: plain.record.amount,
             check,
         })
     }

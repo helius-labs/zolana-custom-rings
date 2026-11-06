@@ -267,9 +267,9 @@ describe("relay transfer terms", () => {
     await initializePoseidon();
   });
 
-  it("seals only a data recipient's own slot, each opening rebuilding its published hash", async () => {
+  it("seals every published slot for a data recipient, each opening rebuilding its published hash", async () => {
     const { sealedTerms, relay, payeeAddress } = await paid();
-    expect(sealedTerms.slots).toHaveLength(1);
+    expect(sealedTerms.slots.map((opening) => opening.slot)).toEqual([0, 1]);
     expect(sealedTerms.nullifiers).toHaveLength(0);
     const { intent } = relay.request;
     if (intent.operation !== "anonymous") throw new Error("an anonymous relay");
@@ -277,12 +277,11 @@ describe("relay transfer terms", () => {
       new Uint8Array(getBase64Encoder().encode(intent.proofInputs)),
       assets,
     );
-    const [opening] = sealedTerms.slots;
-    if (opening === undefined) throw new Error("one slot");
-    expect(opening.owner).toBe(payeeAddress);
-    expect(openingHash(opening, sealedTerms.ring)).toEqual(
-      decoded.externalData.outputs[opening.slot]?.utxoHash,
-    );
+    expect(sealedTerms.slots.map((opening) => opening.owner)).toContain(payeeAddress);
+    for (const opening of sealedTerms.slots)
+      expect(openingHash(opening, sealedTerms.ring)).toEqual(
+        decoded.externalData.outputs[opening.slot]?.utxoHash,
+      );
   });
 
   it("gives the sealing wallet the terms and no signature", async () => {
@@ -301,9 +300,9 @@ describe("relay transfer terms", () => {
     const { terms, payeeAddress, sender, pending } = await paid();
     const held = decodeRelayTransferTerms(encodeRelayTransferTerms(terms));
     expect(held).toEqual(terms);
-    expect(held.slots).toHaveLength(1);
+    expect(held.slots).toHaveLength(2);
     expect(held.nullifiers).toHaveLength(0);
-    expect(held.slots[0]?.owner).toBe(payeeAddress);
+    expect(held.slots[1]?.owner).toBe(payeeAddress);
 
     const signing = await pending(held);
     expect(signing.verify(payeeAddress).signer).toBe(payeeAddress);
@@ -316,18 +315,20 @@ describe("relay transfer terms", () => {
     );
   });
 
-  it("refuses a false opening, another slot and another owner with Recipients", async () => {
+  it("refuses a false opening and another owner with Recipients, a moved slot unopened", async () => {
     const { terms, payeeAddress, pending } = await paid();
-    const [opening] = terms.slots;
-    if (opening === undefined) throw new Error("one slot");
+    const [change, opening] = terms.slots;
+    if (change === undefined || opening === undefined) throw new Error("two slots");
     const verdict = async (changed: Partial<typeof opening>) => {
-      const held = await pending({ ...terms, slots: [{ ...opening, ...changed }] });
+      const held = await pending({ ...terms, slots: [change, { ...opening, ...changed }] });
       return refusal(() => held.verify(payeeAddress));
     };
     expect(await verdict({ amount: opening.amount + 1n })).toBe("Recipients");
-    expect(await verdict({ slot: opening.slot + 1 })).toBe("Recipients");
-    expect(await verdict({ slot: 99 })).toBe("Recipients");
     expect(await verdict({ owner: randomAddress() })).toBe("Recipients");
+    expect(await verdict({ slot: opening.slot + 1 })).toBe("UnopenedOutput");
+    expect(await verdict({ slot: 99 })).toBe("UnopenedOutput");
+    const omitted = await pending({ ...terms, slots: [opening] });
+    expect(refusal(() => omitted.verify(payeeAddress))).toBe("UnopenedOutput");
   });
 
   it("refuses a thief's slot under the terms of the payee with Recipients", async () => {
@@ -512,6 +513,10 @@ describe("relay transfer terms", () => {
     ).toThrow(unheld);
 
     const instruction = await (await rail.prove(fixture.client)).instruction();
+    // Every published slot opens to the signer, the openings come from the frame's own build.
+    const [framedTerms] = termsOfCall(fixture, owner);
+    if (framedTerms === undefined) throw new Error("the frame names the co-owner");
+    expect(framedTerms.nullifiers).toEqual(terms.nullifiers);
     const approval = (
       framed: Instruction,
       knownNotes: readonly Pick<WalletUtxo, "nullifier">[],
@@ -519,7 +524,7 @@ describe("relay transfer terms", () => {
       new OwnerApproval({
         relayId: RELAY_ID,
         message: messageOf(fixture.authority, [framed]),
-        terms,
+        terms: framedTerms,
         config: { mode: "anonymous", auditorPublicKey: fixture.auditor.publicKey() },
         knownNotes,
       }).pending();

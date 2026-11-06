@@ -2,8 +2,6 @@
  * One transfer pipeline for every rail, Rust `pipeline`. The rail seals the outputs, the ring proof
  * opens them to the auditor and screens the ring's table, the SPP proof spends.
  */
-import { disclosureFormat } from "../../protocol/codec/ring-disclosure-layout.js";
-import { outputDisclosureFormat } from "../payments/output-rail.js";
 import type { AccountMeta, Instruction } from "@solana/kit";
 
 import {
@@ -36,7 +34,11 @@ import type {
 import type { RingTransactInstructionData } from "../../protocol/proof/circuit.js";
 import type { ProvenAnonymousRingTransact } from "../../rpc/ports.js";
 import type { ShieldedAddress, ShieldedPublicKey } from "@heliuslabs/spr/keypair";
-import type { RelayTransferTerms, TokenAccountCreate } from "../../rpc/relay-message.js";
+import {
+  ZERO_ADDRESS,
+  type RelayTransferTerms,
+  type TokenAccountCreate,
+} from "../../rpc/relay-message.js";
 import { SppProofInputs, createExternalData } from "@heliuslabs/spr/transaction";
 import type { ProofInputUtxo, ProofOutputUtxo } from "@heliuslabs/spr/transaction";
 import { CUSTOM_RING_PROOF_LENGTH } from "../../protocol/proof/custom-ring-proof.js";
@@ -45,7 +47,7 @@ import { ringIdField } from "../../crypto/derivation/ring-stream.js";
 
 import { RingInstructionTag, ringComputeUnitLimit } from "../management/admin.js";
 import {
-  inputMapOf,
+  spentNotes,
   isDefaultRingNote,
   ownerRows,
   sealAudit,
@@ -343,32 +345,46 @@ export function sealedTransferTerms(
 ): readonly RelayTransferTerms[] {
   const { sealed, ringProgramId } = input;
   const { proofInputs } = sealed;
+  // Every signer reads every published slot, a dummy opens under the zero owner.
+  const slots = Object.freeze(
+    sealed.published.map(({ output }, slot) => {
+      const owner = output.ownerAddress;
+      return Object.freeze(
+        owner === undefined || output.isDummy()
+          ? {
+              slot,
+              owner: ZERO_ADDRESS,
+              nullifierPk: ZERO_32,
+              mint: ZERO_ADDRESS,
+              amount: 0n,
+              blinding: output.blinding,
+              treeId: proofInputs.outputTreeId,
+              dataHash: ZERO_32,
+              ringDataHash: ZERO_32,
+            }
+          : {
+              slot,
+              owner: encodeBase58(owner.signingPublicKey.confidentialViewTag()) as Address,
+              nullifierPk: owner.nullifierPublicKey,
+              mint: output.asset,
+              amount: output.amount,
+              blinding: output.blinding,
+              treeId: proofInputs.outputTreeId,
+              dataHash: output.dataHash ?? ZERO_32,
+              ringDataHash: output.ringDataHash ?? ZERO_32,
+            },
+      );
+    }),
+  );
   return input.ownerSigners.map((signer) => {
     // A Solana address names a wallet or a PDA alike, a key rebuilt as Ed25519 never equals a PDA owner.
     const ownedBy = (owner: ShieldedPublicKey): boolean =>
       equalBytes(owner.confidentialViewTag(), addressBytes(signer));
-    const slots = sealed.published.flatMap(({ output }, slot) => {
-      const owner = output.ownerAddress;
-      if (owner === undefined || output.isDummy() || !ownedBy(owner.signingPublicKey)) return [];
-      return [
-        Object.freeze({
-          slot,
-          owner: signer,
-          nullifierPk: owner.nullifierPublicKey,
-          mint: output.asset,
-          amount: output.amount,
-          blinding: output.blinding,
-          treeId: proofInputs.outputTreeId,
-          dataHash: output.dataHash ?? ZERO_32,
-          ringDataHash: output.ringDataHash ?? ZERO_32,
-        }),
-      ];
-    });
     return Object.freeze({
       ring: ringProgramId,
       feePayer: input.feePayer,
       signer,
-      slots: Object.freeze(slots),
+      slots,
       nullifiers: Object.freeze(
         proofInputs.inputUtxos
           .filter((spent) => !spent.isDummy() && ownedBy(spent.utxo.owner))
@@ -423,12 +439,9 @@ function stagedPlanFrame(
   const shape = proofInputs.checkShape();
   const published = publishedOutputs(proofInputs.outputs);
   const entry = spendsDefaultRing(proofInputs);
-  const hasData = framesData(published);
-  const format = outputDisclosureFormat(proofInputs);
   return Object.freeze({
     subjects: Object.freeze({
       rail: spend.rail,
-      format,
       inputs: inputs.length,
       outputs: shape.outputs,
       spendsDefaultRing: entry,
@@ -442,13 +455,11 @@ function stagedPlanFrame(
     layoutUnder: (wideOwners: boolean) =>
       ringStreamLayout({
         rail: spend.rail,
-        format,
         nIn: shape.inputs,
         nOut: shape.outputs,
         inputs: inputs.length,
         outputs: published.length,
         entry,
-        hasData,
         publicOwners: spend.publicOwners === true,
         wideOwners,
       }),
@@ -494,7 +505,7 @@ function sealStagedTransfer(
   checkDelegateLegs(spend.rail, staged.proofInputs);
   const shape = staged.proofInputs.checkShape();
   const inputs = publishedNotes(staged.proofInputs);
-  const published = rail.publishedSlots(staged.proofInputs, sender);
+  const published = rail.publishedSlots(staged.proofInputs, sender, config.auditorPublicKey);
   const senderBundle = rail.publishedSender(staged.proofInputs, sender.viewingPublicKey);
   const auditor = config.auditorPublicKey;
   // The auditor message precedes every hash over the external data.
@@ -551,7 +562,7 @@ async function assembleStagedTransfer<T>(
       },
       context,
     );
-    const noSpend = inputMapOf(inputs, plan.layout).noteCount === 0;
+    const noSpend = spentNotes(inputs).length === 0;
     const coSignDemand = delegate
       ? NO_DEMAND
       : operationDemand({
@@ -711,6 +722,7 @@ async function proveAssembled(
     outputCount: assembled.published.length,
     inputs,
     proofInputs,
+    recipientKeys: assembled.published.map((slot) => slot.recipientKey),
     auditor: config.auditorPublicKey,
     policy,
     proving: { ringId, publicSlots: assembled.slots },
@@ -892,7 +904,7 @@ function previewData(
         policy.curator === undefined ? {} : { curatorRevision: policy.curator.revision },
       )
     : undefined;
-  const { entry, hasData } = sealed.audit;
+  const { entry } = sealed.audit;
   return Object.freeze({
     rail: input.rail,
     nIn: input.shape.inputs,
@@ -908,21 +920,12 @@ function previewData(
     expiryUnixTs: Number(U32_MAX),
     txViewingU: input.txViewingU,
     salt: external.salt,
-    extensions: { ...input.extensions, format: disclosureFormat(sealed.audit.format) },
+    extensions: input.extensions,
     interfaceTransfers: external.interfaceTransfers.map(interfaceTransferOf),
-    hasData,
+    hasData: framesData(published.map((slot) => slot.output)),
     entry,
     wideOwners: input.wideOwners,
-    outputs: Object.freeze(
-      published.map((slot, index) => {
-        const tail = sealed.tails?.[index];
-        return Object.freeze({
-          ...slot.wire,
-          record: sealed.records[index] as Uint8Array,
-          ...(tail === undefined ? {} : { tail }),
-        });
-      }),
-    ),
+    outputs: Object.freeze(published.map((slot) => slot.wire)),
     ...(replies[0] === undefined
       ? {}
       : {
@@ -933,6 +936,7 @@ function previewData(
         }),
     ...(input.sender === undefined ? {} : { sender: input.sender }),
     envelope: sealed.envelope,
+    recipientKeys: concatBytes(...sealed.recipientKeys),
     privateTxHash: input.privateTxHash,
     ...(input.rail === "anonymous" && !input.publicOwners
       ? {

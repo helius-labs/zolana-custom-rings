@@ -30,10 +30,9 @@ const (
 // ownersCircuit runs the owner sections alone.
 type ownersCircuit struct {
 	policy.Tracking
-	Members          []frontend.Variable
-	Inputs, Outputs  []shared.UtxoWires
-	Delegate, Hidden frontend.Variable
-	HiddenOwner      frontend.Variable
+	Members         []frontend.Variable
+	Inputs, Outputs []shared.UtxoWires
+	Delegate        frontend.Variable
 }
 
 func newOwnersCircuit(t testing.TB) *ownersCircuit {
@@ -55,7 +54,7 @@ func (c *ownersCircuit) Define(api frontend.API) error {
 	for i, input := range c.Inputs {
 		inputs[i] = input.Open(api)
 	}
-	rows.AssertInputOwners(api, transfer.InputRail{Delegate: c.Delegate, Hidden: c.Hidden, HiddenOwner: c.HiddenOwner}, inputs)
+	rows.AssertInputOwners(api, c.Delegate, inputs)
 	outputs := make([]shared.Output, len(c.Outputs))
 	for o, output := range c.Outputs {
 		outputs[o] = output.Open(api)
@@ -86,10 +85,9 @@ func dummySlot() shared.UtxoWires {
 
 // ownersWorld enrolls alice and bob, carol and stranger hold no row.
 type ownersWorld struct {
-	rows             []*big.Int
-	inputs, outputs  []shared.UtxoWires
-	delegate, hidden bool
-	hiddenOwner      *big.Int
+	rows            []*big.Int
+	inputs, outputs []shared.UtxoWires
+	delegate        bool
 	// entries overrides the fixture's row entries after filling.
 	mutate func(c *ownersCircuit)
 }
@@ -123,10 +121,7 @@ func (w ownersWorld) build(t testing.TB) *ownersCircuit {
 		}
 	}
 	ringpolicy.FillTracking(t, &c.Tracking, tree, c.Members, outputOwners, nil, nil)
-	c.Delegate, c.Hidden, c.HiddenOwner = ringtest.Bit(w.delegate), ringtest.Bit(w.hidden), 0
-	if w.hiddenOwner != nil {
-		c.HiddenOwner = w.hiddenOwner
-	}
+	c.Delegate = ringtest.Bit(w.delegate)
 	if w.mutate != nil {
 		w.mutate(c)
 	}
@@ -175,14 +170,14 @@ func TestOwnerPredicates(t *testing.T) {
 		{name: "a delegate moving a zero-key note with no row", world: func(t testing.TB) ownersWorld {
 			return ownersWorld{delegate: true, inputs: []shared.UtxoWires{note(carol, zero, testRing)}}
 		}},
-		{name: "a delegate moving a zero-key note in slot 0 of a hidden frame", world: func(t testing.TB) ownersWorld {
-			return ownersWorld{delegate: true, hiddenOwner: carol, inputs: []shared.UtxoWires{note(carol, zero, testRing)}}
-		}},
 		{name: "a delegate moving a nonzero note under its registered key", world: func(t testing.TB) ownersWorld {
 			return ownersWorld{delegate: true, rows: []*big.Int{alice}, inputs: []shared.UtxoWires{aliceNote(t)}}
 		}},
-		{name: "a public co-owner's zero-key input beside a hidden sender", world: func(t testing.TB) ownersWorld {
-			return ownersWorld{hidden: true, hiddenOwner: alice, rows: []*big.Int{alice, carol}, inputs: []shared.UtxoWires{aliceNote(t), note(carol, zero, testRing)}}
+		{name: "a nonzero key to an enrolled owner other than its own", world: func(t testing.TB) ownersWorld {
+			return ownersWorld{outputs: []shared.UtxoWires{note(alice, enrolledKey(t, bob), testRing)}}
+		}},
+		{name: "a nonzero key to an unenrolled owner", world: func(t testing.TB) ownersWorld {
+			return ownersWorld{outputs: []shared.UtxoWires{note(carol, enrolledKey(t, carol), testRing)}}
 		}},
 
 		{name: "a ring input under another key", frame: "transfer.OwnerRows.AssertInputOwners", world: func(t testing.TB) ownersWorld {
@@ -205,15 +200,6 @@ func TestOwnerPredicates(t *testing.T) {
 		}},
 		{name: "a delegate moving a note under another key", frame: "transfer.OwnerRows.AssertInputOwners", world: func(t testing.TB) ownersWorld {
 			return ownersWorld{delegate: true, rows: []*big.Int{alice}, inputs: []shared.UtxoWires{note(alice, enrolledKey(t, bob), testRing)}}
-		}},
-		{name: "a hidden sender's zero-key input", frame: "transfer.OwnerRows.AssertInputOwners", world: func(t testing.TB) ownersWorld {
-			return ownersWorld{hidden: true, hiddenOwner: alice, rows: []*big.Int{alice}, inputs: []shared.UtxoWires{note(alice, zero, testRing), aliceNote(t)}}
-		}},
-		{name: "a nonzero key to an enrolled owner other than its own", frame: "transfer.AssertOutputOwners", world: func(t testing.TB) ownersWorld {
-			return ownersWorld{outputs: []shared.UtxoWires{note(alice, enrolledKey(t, bob), testRing)}}
-		}},
-		{name: "a nonzero key to an unenrolled owner", frame: "transfer.AssertOutputOwners", world: func(t testing.TB) ownersWorld {
-			return ownersWorld{outputs: []shared.UtxoWires{note(carol, enrolledKey(t, carol), testRing)}}
 		}},
 		{name: "a literal zero key to an unenrolled owner", frame: "transfer.AssertOutputOwners", world: func(t testing.TB) ownersWorld {
 			return ownersWorld{outputs: []shared.UtxoWires{note(carol, big.NewInt(0), testRing)}}

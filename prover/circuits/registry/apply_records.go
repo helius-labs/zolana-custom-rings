@@ -339,9 +339,11 @@ func (c *PrivateApplyRecordsCircuit) privateBits(api frontend.API) []frontend.Va
 
 // Assert opens the owner's row under root while active is set, an unset active forces a zero owner and salt.
 //
-// A private entry sits at ListKey(owner, salt). The row's tag fixes the salt, so the write names the
-// one key every salted read of the owner computes. The program raises tracking_floor to the revision of
-// root, every root from it on holds the row, and no later read proves the owner absent to skip the entry.
+// A private entry sits at ListKey(owner, salt), a public owner record at ListKey(owner, 0). An enrolled
+// tag opens to a nonzero salt, so no private write lands on the public record. The row's tag fixes the
+// salt, so the write names the one key every salted read of the owner computes. The program raises
+// tracking_floor to the revision of root, every root from it on holds the row, and no later read proves
+// the owner absent to skip the entry.
 func (o PrivateOwner) Assert(api frontend.API, active, key, root frontend.Variable) {
 	api.AssertIsBoolean(active)
 	// 1. The write's key is the owner's salted key, and the row's tag opens to the same salt.

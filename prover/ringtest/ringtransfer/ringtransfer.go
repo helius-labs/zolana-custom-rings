@@ -64,6 +64,8 @@ type World struct {
 	DefaultInput bool
 	// HasData writes data hashes on the first ring output.
 	HasData bool
+	// Addresses are SPP's address nullifiers, the address chain private_tx_hash reads.
+	Addresses []*big.Int
 	// Outputs replace slots by index before any hash reads them.
 	Outputs map[int]func(*ringaudit.Slot)
 	// Unenrolled owners hold no tracking row.
@@ -129,19 +131,11 @@ func (w World) spend(t testing.TB, a *ringaudit.Audit) {
 		return
 	}
 	a.InputCount = 2 + len(w.CoOwners)
-	if a.Shape.SingleAssetPayout {
-		a.InputCount = 1
-	}
 	if w.PublicFunded {
 		return
 	}
 	owed := w.owedAsset(t, a)
 	sender, nullifierPk := Sender(t), SenderNullifierPk(t)
-	if a.Shape.SingleAssetPayout {
-		a.InputCount = 1
-		a.Inputs[0] = ringaudit.Input{Utxo: ringaudit.SpentUtxo(t, sender, nullifierPk, a.RingProgramID, owed, 51), OwnerKey: SenderKey(), Mint: ringaudit.FixtureMint}
-		return
-	}
 	secondRing := a.RingProgramID
 	if w.DefaultInput {
 		secondRing = big.NewInt(0)
@@ -180,7 +174,7 @@ func (w World) owedAsset(t testing.TB, a *ringaudit.Audit) uint64 {
 func (w World) newAudit(t testing.TB, shape audit.StreamShape) ringaudit.Audit {
 	t.Helper()
 	exits := w.Exits
-	if exits == nil && shape.Outputs > 2 && !shape.SingleAssetPayout {
+	if exits == nil && shape.Outputs > 2 {
 		exits = []int{shape.Outputs - 2}
 	}
 	a := ringaudit.NewAudit(t, shape, exits...)
@@ -192,7 +186,6 @@ func (w World) newAudit(t testing.TB, shape audit.StreamShape) ringaudit.Audit {
 	}
 	a.Outputs = slices.Clone(a.Outputs)
 	if w.HasData {
-		a.HasData = true
 		for i := range a.Outputs {
 			if a.Outputs[i].Utxo.IsUtxo() && a.Outputs[i].Utxo.RingProgramID.Sign() != 0 {
 				a.Outputs[i].Utxo.DataHash, a.Outputs[i].Utxo.RingDataHash = big.NewInt(0x77), big.NewInt(0x78)
@@ -270,7 +263,7 @@ func (w World) registries(t testing.TB, a ringaudit.Audit, senders []frontend.Va
 		}
 		seen[identity.String()] = true
 		bits := new(big.Int).SetUint64(lists)
-		own.Apply(t, ringregistry.Entry{Member: identity, Mask: bits, Value: bits, MintPolicy: zero, WithdrawalThreshold: zero})
+		own.Apply(t, ringregistry.Entry{Member: ringregistry.PublicKey(t, identity), Mask: bits, Value: bits, MintPolicy: zero, WithdrawalThreshold: zero})
 	}
 	sender := Sender(t)
 	for _, cell := range senders {
@@ -320,10 +313,6 @@ func (w World) fill(t testing.TB, c *transfer.Sections, a ringaudit.Audit, deleg
 	c.InputCount = a.InputCount
 	for i, input := range a.Inputs {
 		c.Inputs[i] = input.Utxo.Wires()
-		c.InputNullifiers[i] = 0
-		if i < a.InputCount {
-			c.InputNullifiers[i] = new(big.Int).Add(a.FirstNullifier, big.NewInt(int64(i)))
-		}
 		if i < len(c.Entries) {
 			c.Entries[i] = input.EntryWires()
 		}
@@ -335,7 +324,6 @@ func (w World) fill(t testing.TB, c *transfer.Sections, a ringaudit.Audit, deleg
 			c.Signers[k] = run[k]
 		}
 	}
-	c.SignerDataCounts = ringaudit.SignerDataCounts(run, a.Utxos())
 	c.Rows = rows(a, delegate, len(c.Rows))
 	c.ApprovalMask, c.ApprovalTotals, c.ApprovalBlinder = w.ApprovalMask, 0, 0
 	assembled := Assembled{Audit: a, Sender: Sender(t), Run: run, Tracking: w.tracking(t, a), delegate: delegate}
@@ -414,22 +402,20 @@ func withdrawalHash(t testing.TB, p *policy.Policy) *big.Int {
 	return spptest.MustHashChain4(t, fields)
 }
 
-// rehash recomputes private_tx_hash from the audit's slots.
-func rehash(t testing.TB, c *transfer.Sections, a ringaudit.Audit) {
+// rehash recomputes private_tx_hash from the audit's slots and the world's address chain.
+func (w World) rehash(t testing.TB, c *transfer.Sections, a ringaudit.Audit) {
 	t.Helper()
 	inputs := spptest.MustNonZeroHashChain(t, ringaudit.SpentHashes(t, a.InputUtxos()))
 	outputs := spptest.MustNonZeroHashChain(t, ringaudit.SpentHashes(t, a.Utxos()))
-	nullifiers := ringtest.ToBigInts(c.InputNullifiers)
-	c.InputNullifierChain = spptest.MustHashChain4(t, append([]*big.Int{ringtest.AsBigInt(c.InputCount)}, nullifiers...))
 	addresses := make([]*big.Int, len(a.Inputs))
-	for i, input := range a.Inputs {
+	for i := range addresses {
 		addresses[i] = new(big.Int)
-		if input.Utxo.Domain == protocol.AddressDomain {
-			addresses[i] = nullifiers[i]
+		if i < len(w.Addresses) {
+			addresses[i] = w.Addresses[i]
 		}
 	}
-	addressChain := spptest.MustNonZeroHashChain(t, addresses)
-	c.PrivateTxHash = spptest.MustPoseidon(t, 5, []*big.Int{inputs, outputs, addressChain, a.PrivateTxBlinding(t)})
+	c.AddressChain = spptest.MustNonZeroHashChain(t, addresses)
+	c.PrivateTxHash = spptest.MustPoseidon(t, 5, []*big.Int{inputs, outputs, ringtest.AsBigInt(c.AddressChain), a.PrivateTxBlinding(t)})
 }
 
 // values is the statement both families share.
@@ -438,10 +424,9 @@ func values(t testing.TB, c *transfer.Sections, a Assembled) Statement {
 	stream := a.Audit.Stream(t)
 	s := Statement{
 		Head: a.Audit.Head(t, stream), Outputs: a.Audit.StatementOutputs(t, stream), InputCount: a.Audit.InputCount,
-		ApprovalMask: ringtest.AsBigInt(c.ApprovalMask), ApprovalTotals: ringtest.AsBigInt(c.ApprovalTotals), SignerDataCounts: ringtest.AsBigInt(c.SignerDataCounts), NoSpend: a.Audit.RealInputs() == 0,
-		InputNullifierChain: ringtest.AsBigInt(c.InputNullifierChain),
-		PrivateTxHash:       ringtest.AsBigInt(c.PrivateTxHash),
-		SignerCount:         len(a.Run), SignerChain: ringaudit.SignerChain(t, a.Run, len(c.Signers)),
+		ApprovalMask: ringtest.AsBigInt(c.ApprovalMask), ApprovalTotals: ringtest.AsBigInt(c.ApprovalTotals), NoSpend: a.Audit.RealInputs() == 0,
+		PrivateTxHash: ringtest.AsBigInt(c.PrivateTxHash),
+		SignerCount:   len(a.Run), SignerChain: ringaudit.SignerChain(t, a.Run, len(c.Signers)),
 		PolicyHash: ringtest.AsBigInt(c.PolicyHash), OwnRoot: ringtest.AsBigInt(c.OwnRoot), CuratorRoot: ringtest.AsBigInt(c.CuratorRoot),
 		TrackingRoot:   ringtest.AsBigInt(c.TrackingRoot),
 		WithdrawalHash: ringtest.AsBigInt(c.WithdrawalHash),

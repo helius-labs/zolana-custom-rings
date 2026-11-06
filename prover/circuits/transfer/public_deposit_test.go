@@ -24,7 +24,7 @@ func signerDeposit(t *testing.T, edit func(*ringtransfer.World)) ringtransfer.Bu
 	w.World = publicDeposit(t, w.World)
 	edit(&w.World)
 	b := w.Build(t)
-	b.Run, b.Circuit.SignerCount, b.Circuit.Signers[0], b.Circuit.SignerDataCounts = nil, 0, 0, 0
+	b.Run, b.Circuit.SignerCount, b.Circuit.Signers[0] = nil, 0, 0
 	b.Rebind(t)
 	if !b.Values(t).NoSpend {
 		t.Fatal("a deposit spent a note")
@@ -51,13 +51,13 @@ func TestPublicDepositIntoTheRing(t *testing.T) {
 		w := onAnonymous(anonymous2, ringtransfer.PublicOwners)
 		w.World = publicDeposit(t, w.World)
 		b := w.Build(t)
-		b.Run, b.Circuit.SignerCount, b.Circuit.Signers[0], b.Circuit.SignerDataCounts = nil, 0, 0, 0
+		b.Run, b.Circuit.SignerCount, b.Circuit.Signers[0] = nil, 0, 0
 		b.Rebind(t)
 		requireSolved(t, b.Circuit)
 	})
 	t.Run("a recipient key with no row", func(t *testing.T) {
 		b := signerDeposit(t, func(w *ringtransfer.World) { w.Unenrolled = []*big.Int{recipient} })
-		refused(t, b.Circuit, "transfer.AssertOutputOwners")
+		requireSolved(t, b.Circuit)
 	})
 	t.Run("a zero key recipient must be absent", func(t *testing.T) {
 		for _, enrolled := range []bool{false, true} {

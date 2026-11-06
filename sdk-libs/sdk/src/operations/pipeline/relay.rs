@@ -6,7 +6,7 @@ use spr_client::AsyncRpc;
 use spr_indexer_api::{Hash, SerializablePubkey, SerializableSignature};
 use spr_keypair::{NullifierKey, PublicKey, SigningKey};
 use spr_program::instruction::CreateAssociatedTokenAccount;
-use spr_transaction::instructions::transact::SettlementTransfer;
+use spr_transaction::instructions::transact::{SettlementTransfer, SppProofOutputUtxo};
 use zolana_ring_client::rpc::{
     PrepareRelayRequest, ProofInputBytes, RelayCoOwner, RelayIntent, RelayProofInputs, RelayQuote,
     RelayRail, TokenAccountSetup,
@@ -299,7 +299,7 @@ impl<P: Planned> Sealed<'_, P> {
         Ok(terms)
     }
 
-    /// One per public owner, its own slots and notes alone.
+    /// One per public owner, every published slot and its own notes.
     fn transfer_terms(
         &self,
         fee_payer: Address,
@@ -309,36 +309,21 @@ impl<P: Planned> Sealed<'_, P> {
         let inputs = &staged.proof_inputs;
         let ring = self.pipeline.ring.program_id();
         let setup = token_account_creates(setup);
+        let slots = published_outputs(&inputs.output_utxos)
+            .iter()
+            .zip(0u32..)
+            .map(|(output, slot)| slot_opening(output, slot, inputs.output_tree_id))
+            .collect::<Result<Vec<_>, RingError>>()?;
         Ok(staged
             .owner_signers
             .iter()
             .map(|signer| {
                 let key = PublicKey::from_ed25519(signer.as_array());
-                let slots = published_outputs(&inputs.output_utxos)
-                    .iter()
-                    .zip(0u32..)
-                    .filter_map(|(output, slot)| {
-                        let owner = output
-                            .owner_address
-                            .filter(|owner| !output.is_dummy() && owner.signing_pubkey == key)?;
-                        Some(SlotOpening {
-                            slot,
-                            owner: SerializablePubkey(*signer),
-                            nullifier_pk: Hash(owner.nullifier_pubkey),
-                            mint: SerializablePubkey(output.asset.asset),
-                            amount: output.amount,
-                            blinding: Hash(output.blinding),
-                            tree_id: inputs.output_tree_id,
-                            data_hash: Hash(output.data_hash.unwrap_or_default()),
-                            ring_data_hash: Hash(output.ring_data_hash.unwrap_or_default()),
-                        })
-                    })
-                    .collect();
                 RelayTransferTerms {
                     ring: SerializablePubkey(ring),
                     fee_payer: SerializablePubkey(fee_payer),
                     signer: SerializablePubkey(*signer),
-                    slots,
+                    slots: slots.clone(),
                     nullifiers: inputs
                         .input_utxos
                         .iter()
@@ -380,6 +365,41 @@ impl<P: Planned> Sealed<'_, P> {
             approval_blinder: self.pipeline.approval_blinder,
         }
     }
+}
+
+/// A dummy opens under the zero owner with its blinding alone.
+fn slot_opening(
+    output: &SppProofOutputUtxo,
+    slot: u32,
+    tree_id: u16,
+) -> Result<SlotOpening, RingError> {
+    let blinding = Hash(output.blinding);
+    let Some(owner) = output.owner_address else {
+        return Ok(SlotOpening {
+            slot,
+            owner: SerializablePubkey(Address::default()),
+            nullifier_pk: Hash([0; 32]),
+            mint: SerializablePubkey(Address::default()),
+            amount: 0,
+            blinding,
+            tree_id,
+            data_hash: Hash([0; 32]),
+            ring_data_hash: Hash([0; 32]),
+        });
+    };
+    Ok(SlotOpening {
+        slot,
+        owner: SerializablePubkey(Address::new_from_array(
+            owner.signing_pubkey.confidential_view_tag()?,
+        )),
+        nullifier_pk: Hash(owner.nullifier_pubkey),
+        mint: SerializablePubkey(output.asset.asset),
+        amount: output.amount,
+        blinding,
+        tree_id,
+        data_hash: Hash(output.data_hash.unwrap_or_default()),
+        ring_data_hash: Hash(output.ring_data_hash.unwrap_or_default()),
+    })
 }
 
 fn token_account_creates(setup: &[CreateAssociatedTokenAccount]) -> Vec<TokenAccountCreate> {

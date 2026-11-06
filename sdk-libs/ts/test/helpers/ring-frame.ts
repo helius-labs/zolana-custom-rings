@@ -3,16 +3,12 @@ import type { Bytes16, Bytes32 } from "@heliuslabs/spr/interface";
 
 import { CUSTOM_RING_PROOF_LENGTH } from "../../src/protocol/proof/custom-ring-proof.js";
 import {
-  auditRecordLength,
-  DisclosureFormat,
-  DATA_TAIL_LEN,
+  OUTPUT_RECORD_LEN,
+  PAYLOAD_LENGTH_LEN,
   envelopeRegion,
+  recipientKeysLen,
 } from "../../src/protocol/codec/ring-disclosure-layout.js";
-import {
-  RECIPIENT_BODY_LEN,
-  COMPACT_RECIPIENT_BODY_LEN,
-  senderBundleLen,
-} from "../../src/protocol/codec/anonymous-delivery.js";
+import { senderBundleLen } from "../../src/protocol/codec/anonymous-delivery.js";
 import { RingInstructionTag } from "../../src/protocol/transaction/instruction-tag.js";
 import { RING_AUTHORITY_SHAPES } from "../../src/protocol/transaction/spp.js";
 import {
@@ -35,7 +31,6 @@ export function field(byte: number): Bytes32 {
 export function ringFrame(
   input: Readonly<{
     rail: RingRail;
-    format?: DisclosureFormat;
     inputs: number;
     outputs: number;
     entry?: boolean;
@@ -53,13 +48,11 @@ export function ringFrame(
   if (shape === undefined) throw new Error("no shape serves the counts");
   const layout = ringStreamLayout({
     rail,
-    format: input.format ?? DisclosureFormat.Standard,
     nIn: shape.inputs,
     nOut: shape.outputs,
     inputs,
     outputs,
     entry,
-    hasData,
     publicOwners,
   });
   const anonymous = isAnonymousFrame(rail);
@@ -68,18 +61,11 @@ export function ringFrame(
     return {
       hash: field(10 + index),
       ownerTag: change ? (new Uint8Array(32) as Bytes32) : field(40 + index),
-      body: change
-        ? { kind: "none" }
-        : {
-            kind: "recipient",
-            body: new Uint8Array(
-              input.format === DisclosureFormat.SingleAssetPayout
-                ? COMPACT_RECIPIENT_BODY_LEN
-                : RECIPIENT_BODY_LEN + (hasData ? 2 : 0),
-            ),
-          },
-      record: new Uint8Array(auditRecordLength(layout.key)).fill(index + 1),
-      ...(hasData ? { tail: new Uint8Array(DATA_TAIL_LEN).fill(index + 101) } : {}),
+      record: new Uint8Array(OUTPUT_RECORD_LEN).fill(index + 1),
+      body: {
+        kind: "recipient",
+        payload: new Uint8Array(hasData ? PAYLOAD_LENGTH_LEN : 0).fill(index + 101),
+      },
     };
   };
   const delegate = isDelegateRail(rail);
@@ -97,16 +83,17 @@ export function ringFrame(
     expiryUnixTs: 0,
     txViewingU: field(1),
     salt: new Uint8Array(16).fill(3) as Bytes16,
-    extensions: input.format === undefined ? {} : { format: input.format },
+    extensions: {},
     interfaceTransfers: [],
     hasData,
     entry,
     wideOwners: input.wideOwners ?? false,
     outputs: Array.from({ length: outputs }, (_, index) => slot(index)),
     ...(anonymous
-      ? { sender: { tag: field(1), body: new Uint8Array(senderBundleLen({ outputs, change: 1 })) } }
+      ? { sender: { tag: field(1), body: new Uint8Array(senderBundleLen({ outputs })) } }
       : {}),
     envelope: new Uint8Array(envelopeRegion(layout).length).fill(3),
+    recipientKeys: new Uint8Array(recipientKeysLen(layout)).fill(9),
     privateTxHash: field(4),
     ...(rail === "anonymous" && !publicOwners
       ? { anonymous: { commitment: field(5), commitmentPok: field(6) } }

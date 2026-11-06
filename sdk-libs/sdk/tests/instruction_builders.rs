@@ -5,7 +5,8 @@ use custom_ring_interface::{
     tracking::TrackingRegistry, CustomRingMergeIxData, CustomRingMergeIxDataRef, InitializeIxData,
     PolicyBindingIxData, PolicySourceIxData, RingPolicy, RingRole, RingRoles, SealedMergeRecord,
     SetCoSignerRecordIxData, SetPausedIxData, SourceSlot, SourceSpec, UpdateAuthorityIxData,
-    UpdatePolicyIxData, OPENING_RECORD_LEN, RING_MERGE_OWNER_INDEX, STORAGE_PROGRAM_ID,
+    UpdatePolicyIxData, MERGE_ENVELOPE_LEN, MERGE_RECORD_LEN, RING_MERGE_OWNER_INDEX,
+    STORAGE_PROGRAM_ID,
 };
 use custom_ring_sdk::{
     tag, ClearCoSigner, CoSignScope, CustomRing, CustomRingMergeInstruction, InitialPolicy,
@@ -642,7 +643,8 @@ fn zero_record() -> SealedMergeRecord {
     SealedMergeRecord {
         proof: bytemuck::Zeroable::zeroed(),
         eph_pk: [0; 33],
-        ciphertext: [0; OPENING_RECORD_LEN],
+        envelope: [0; MERGE_ENVELOPE_LEN],
+        record: [0; MERGE_RECORD_LEN],
     }
 }
 

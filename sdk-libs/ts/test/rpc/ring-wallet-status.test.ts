@@ -1,7 +1,9 @@
 import { address, getBase58Decoder, generateKeyPairSigner, type Address } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
-import type { Bytes32 } from "@heliuslabs/spr/interface";
+import type { Bytes31, Bytes32 } from "@heliuslabs/spr/interface";
+import { ZERO_NULLIFIER_PK } from "@heliuslabs/spr/internal";
+import { NullifierKey } from "@heliuslabs/spr/keypair";
 
 import {
   RingRpc,
@@ -12,6 +14,7 @@ import {
   delegateSnapshotReleaseAttestation,
   type RingReadSigner,
   type RingReadTarget,
+  delegateNoteKey,
 } from "../../src/rpc/ring-rpc.js";
 
 const base58 = getBase58Decoder();
@@ -167,7 +170,7 @@ describe("getSpendCoverage", () => {
   it("accepts a continuation without totals", async () => {
     const { rpc, bodies } = capture({
       historyThrough: 11,
-      unresolvedReal: [],
+      unclassified: [],
       unreadable: [],
       integrityFaults: [],
     });
@@ -187,22 +190,20 @@ describe("getSpendCoverage", () => {
     const { rpc, bodies } = capture({
       positionSlot: 12,
       historyThrough: 11,
-      totals: { observed: 5, padding: 2, address: 3, external: 1, resolved: 1 },
-      unresolvedReal: [{ nullifier: hashOf(0x20), frame }],
+      totals: { observed: 5, padding: 2, resolved: 1 },
+      unclassified: [{ nullifier: hashOf(0x20), frame }],
       unreadable: [frame],
       integrityFaults: [],
       cursor: Buffer.from([1, 2, 3]).toString("base64"),
     });
     const authority = await generateKeyPairSigner();
     const coverage = await rpc.getSpendCoverage({ target: TARGET, authority });
-    expect(coverage.unresolvedReal[0]?.nullifier).toEqual(new Uint8Array(32).fill(0x20));
+    expect(coverage.unclassified[0]?.nullifier).toEqual(new Uint8Array(32).fill(0x20));
     expect(coverage.unreadable).toHaveLength(1);
     expect(coverage.positionSlot).toBe(12n);
     expect(coverage.totals).toEqual({
       observed: 5n,
       padding: 2n,
-      address: 3n,
-      external: 1n,
       resolved: 1n,
     });
     expect(coverage.cursor).toEqual(new Uint8Array([1, 2, 3]));
@@ -376,5 +377,28 @@ describe("delegate snapshots", () => {
       "releaseDelegateSnapshot",
     ]);
     expect(bodies[1]?.["params"]).toEqual(expect.objectContaining({ owner: WALLET }));
+  });
+});
+
+describe("delegate note keys", () => {
+  it("opens each note under the key it commits, the zero key without a secret", () => {
+    const registered = NullifierKey.fromSecret(new Uint8Array(31).fill(7) as Bytes31);
+    const secret = new Uint8Array(32);
+    secret.set(registered.secretBytes(), 1);
+    const page = { nullifierSecret: secret as Bytes32 };
+    const keyed = delegateNoteKey(page, { nullifierPk: registered.publicKey() });
+    expect(keyed?.publicKey()).toEqual(registered.publicKey());
+    expect(
+      delegateNoteKey(page, { nullifierPk: ZERO_NULLIFIER_PK as Bytes32 })?.publicKey(),
+    ).toEqual(ZERO_NULLIFIER_PK);
+    // Any output key pays the owner, a key it never registered opens to no secret here.
+    const foreign = NullifierKey.fromSecret(new Uint8Array(31).fill(8) as Bytes31).publicKey();
+    expect(delegateNoteKey(page, { nullifierPk: foreign })).toBeUndefined();
+    expect(delegateNoteKey({}, { nullifierPk: registered.publicKey() })).toBeUndefined();
+    const padded = secret.slice() as Bytes32;
+    padded[0] = 1;
+    expect(
+      delegateNoteKey({ nullifierSecret: padded }, { nullifierPk: registered.publicKey() }),
+    ).toBeUndefined();
   });
 });

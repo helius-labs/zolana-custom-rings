@@ -73,7 +73,7 @@ func (b Built) Refill(t testing.TB) {
 // Rehash recomputes private_tx_hash from the fixture slots and inputs, then the public input.
 func (b Built) Rehash(t testing.TB) {
 	t.Helper()
-	rehash(t, &b.Circuit.Sections, b.Audit)
+	b.World.World.rehash(t, &b.Circuit.Sections, b.Audit)
 	b.Rebind(t)
 }
 

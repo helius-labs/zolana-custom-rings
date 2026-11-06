@@ -91,9 +91,9 @@ impl HiddenSenders {
 
     fn of(&self, transaction: &AuditedTransaction) -> BTreeSet<Address> {
         transaction
-            .inputs
+            .nullifiers
             .iter()
-            .filter_map(|input| self.0.get(&input.nullifier).copied())
+            .filter_map(|nullifier| self.0.get(nullifier).copied())
             .collect()
     }
 }
@@ -171,7 +171,7 @@ fn print(transaction: &AuditedTransaction, senders: &HiddenSenders) {
     for sender in senders.of(transaction) {
         println!("  hidden sender {sender}");
     }
-    println!("  nullifiers {}", transaction.inputs.len());
+    println!("  nullifiers {}", transaction.nullifiers.len());
     for output in &transaction.outputs {
         let (kind, utxo) = match &output.opening {
             OutputOpening::Ring { utxo, .. } => ("ring", utxo),

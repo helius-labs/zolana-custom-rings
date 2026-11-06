@@ -479,7 +479,7 @@ mod tests {
             outputs: Vec::new(),
             payload_errors: Vec::new(),
             real_inputs: 0,
-            inputs: Vec::new(),
+            default_inputs: Vec::new(),
             nullifiers: Vec::new(),
             spenders: Vec::new(),
             signers: Vec::new(),

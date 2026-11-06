@@ -487,7 +487,7 @@ mod tests {
     use custom_ring_interface::{
         encode_ring_body_output,
         stream::{DeliveredSlot, SlotSecret},
-        RecipientBody,
+        OutputRecord, RecordKind,
     };
     use spr_client::{
         rpc::{Context, GetShieldedTransactionsByNullifiersResponse, HistoryFilters, Page},
@@ -906,12 +906,15 @@ mod tests {
             .hash(&address.nullifier_pubkey, &[0; 32], &[0; 32], TREE)
             .unwrap();
             let body = seal_recipient_body(
-                &RecipientBody {
-                    blinding,
+                &OutputRecord {
+                    kind: RecordKind::Ring,
                     amount: AMOUNT,
+                    owner_key: address.signing_pubkey.confidential_view_tag().unwrap(),
                     mint: self.mint.asset.to_bytes(),
-                    ..RecipientBody::default()
+                    nullifier_pk: address.nullifier_pubkey,
+                    blinding,
                 },
+                None,
                 &secret,
             )
             .unwrap();

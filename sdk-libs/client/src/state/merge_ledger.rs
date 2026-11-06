@@ -123,8 +123,8 @@ impl AuditedMergeOutput {
             mint: Some(self.mint),
             amount: self.amount,
             blinding: MergeSeed::from_bytes(self.seed)?.output_blinding(&self.first_nullifier)?,
-            data_hash: [0; 32],
-            ring_data_hash: self.ring_data_hash,
+            data_hash: Some([0; 32]),
+            ring_data_hash: Some(self.ring_data_hash),
             tree_id: self.tree_id,
         })
     }

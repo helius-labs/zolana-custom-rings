@@ -14,17 +14,19 @@ import {
 import { pack33 } from "@heliuslabs/spr/interface";
 import type { Address, Bytes32, Bytes33, Bytes64, RequestContext } from "@heliuslabs/spr/interface";
 import { X25519Keypair, X25519PublicKey } from "@heliuslabs/spr/keypair";
-import type { NullifierKey } from "@heliuslabs/spr/keypair";
+import type { Bytes16, NullifierKey, ViewingKey } from "@heliuslabs/spr/keypair";
 
 import { CUSTOM_RING_PROOF_LENGTH } from "../../protocol/proof/custom-ring-proof.js";
 import {
-  decodeOpeningRecord,
-  encodeOpeningRecord,
+  decodeMergeRecord,
+  encodeMergeRecord,
   RecordKind,
-  type OpeningRecord,
+  type MergeRecord,
 } from "../../protocol/codec/audit-stream.js";
 import {
-  OPENING_RECORD_LEN,
+  ENVELOPE_KEY_LEN,
+  MERGE_ENVELOPE_LEN,
+  MERGE_RECORD_LEN,
   STREAM_FIRST_COUNTER,
 } from "../../protocol/codec/ring-disclosure-layout.js";
 import { decompressG2 } from "../../protocol/codec/codecs.js";
@@ -34,7 +36,14 @@ import type { RingProver } from "../../rpc/ports.js";
 import type { MergeProofRequest } from "../../rpc/prover/ring.js";
 import { x25519FromU } from "../keys/x25519.js";
 import { domainField, RingDomain } from "../derivation/ring-domain.js";
-import { AuditSchedule, MERGE_RECORD_ENC_INFO, auditSharedSecret } from "./audit.js";
+import { deliveredSlotSecret } from "../derivation/ring-stream.js";
+import { seededMergeOutputBlinding } from "../derivation/merge-seed.js";
+import {
+  AuditSchedule,
+  MERGE_OUTPUT_ENC_INFO,
+  MERGE_RECORD_ENC_INFO,
+  auditSharedSecret,
+} from "./audit.js";
 
 /** Who admits a merge, the wincode tag SPP's `MergeRingIxData` reads. */
 export const MergeRingAuthority = Object.freeze({ ring: 0, ownerSigned: 1 } as const);
@@ -44,8 +53,10 @@ export type MergeRingAuthority = (typeof MergeRingAuthority)[keyof typeof MergeR
 export interface SealedMergeRecord {
   readonly proof: Uint8Array;
   readonly ephemeralPublicKey: Bytes33;
-  /** `OPENING_RECORD_LEN` bytes. */
-  readonly ciphertext: Uint8Array;
+  /** `eph_sk ‖ V` sealed to the auditor, `MERGE_ENVELOPE_LEN` bytes. */
+  readonly envelope: Uint8Array;
+  /** The merge record sealed to `V`, `MERGE_RECORD_LEN` bytes. */
+  readonly record: Uint8Array;
 }
 
 /** Tag 57 past its tag, Rust `CustomRingMergeIxData`. */
@@ -68,7 +79,8 @@ export interface MergePublicInput {
   /** `0x04 ‖ u`. */
   readonly auditorPubkey: Bytes33;
   readonly ephemeralPublicKey: Bytes33;
-  readonly ciphertext: Uint8Array;
+  readonly envelope: Uint8Array;
+  readonly record: Uint8Array;
   /** The payer's Solana owner identity. */
   readonly payer: Bytes32;
   /** The signing owner's identity under `ownerSigned`, zero under the ring. */
@@ -79,8 +91,11 @@ export interface MergePublicInput {
 
 /** `expiry_unix_ts u64 ‖ proof.a` ahead of `proof.b`, Rust `MERGE_B_OFFSET`. */
 const MERGE_B_OFFSET = 8 + 32;
-/** `tracking_revision ‖ output_ring_data_hash ‖ authority ‖ proof ‖ eph_pk ‖ ciphertext`. */
-const REQUEST_HEAD_LEN = 8 + 32 + 1 + CUSTOM_RING_PROOF_LENGTH + 33 + OPENING_RECORD_LEN;
+/** `tracking_revision ‖ output_ring_data_hash ‖ authority ‖ proof ‖ eph_pk ‖ envelope ‖ record`. */
+const REQUEST_HEAD_LEN =
+  8 + 32 + 1 + CUSTOM_RING_PROOF_LENGTH + 33 + MERGE_ENVELOPE_LEN + MERGE_RECORD_LEN;
+/** A merge seals at slot index 0 under a zero salt, its ephemeral is fresh per call. */
+const MERGE_SALT = new Uint8Array(16) as Bytes16;
 const COMPRESSED_G2_LEN = 64;
 const DECOMPRESSED_G2_LEN = 128;
 /** `tag ‖ output_ring_data_hash ‖ authority` ahead of the SPP body. */
@@ -92,6 +107,15 @@ export type RingMergeDisclosureRequest = Omit<
   "publicInputHash" | "ephSk" | "seed"
 > &
   Readonly<{ mint: Address }>;
+
+/** What one merge seals, the record to `V` and `eph_sk ‖ V` to the auditor. */
+export interface MergeSeal {
+  readonly merge: MergeRecord;
+  /** `V`, the merged owner's viewing key. */
+  readonly recipient: X25519PublicKey;
+  readonly auditorPublicKey: X25519PublicKey;
+  readonly firstNullifier: Bytes32;
+}
 
 /** The nullifier secret is the seed off the zero key, so its holder seals and proves. */
 export interface RingMergeSealer {
@@ -106,19 +130,22 @@ export function completeRingMerge(
   input: Readonly<{ request: RingMergeDisclosureRequest; seed: Bytes32 }>,
 ): Readonly<{ request: MergeProofRequest; sealed: Omit<SealedMergeRecord, "proof"> }> {
   const { request, seed } = input;
-  const opening: OpeningRecord = {
+  const merge: MergeRecord = {
     record: {
       kind: RecordKind.ring,
       amount: bytesToBigInt(request.amount),
       ownerKey: request.ownerKey,
       mint: request.mint,
       nullifierPk: request.nullifierPk,
+      blinding: seededMergeOutputBlinding(seed, request.firstNullifier),
     },
-    secret: seed,
+    seed,
   };
   const { sealed, ephemeralSecret } = sealMergeRecord({
-    opening,
+    merge,
+    recipient: x25519FromU(request.recipientKey),
     auditorPublicKey: x25519FromU(request.auditorPk),
+    firstNullifier: request.firstNullifier,
   });
   const { mint: _mint, ...fields } = request;
   return Object.freeze({
@@ -130,7 +157,8 @@ export function completeRingMerge(
         ringId: request.ringProgramId,
         auditorPubkey: taggedX25519(request.auditorPk),
         ephemeralPublicKey: sealed.ephemeralPublicKey,
-        ciphertext: sealed.ciphertext,
+        envelope: sealed.envelope,
+        record: sealed.record,
         payer: request.payer,
         publishedOwner: equalBytes(request.nullifierPk, ZERO_NULLIFIER_PK)
           ? request.ownerPkHash
@@ -170,7 +198,7 @@ export function nullifierKeyMergeSealer(
 
 /** Fresh ephemeral per call, one key and nonce serves one plaintext. */
 export function sealMergeRecord(
-  input: Readonly<{ opening: OpeningRecord; auditorPublicKey: X25519PublicKey }>,
+  input: MergeSeal,
 ): Readonly<{ sealed: Omit<SealedMergeRecord, "proof">; ephemeralSecret: Bytes32 }> {
   const ephemeral = X25519Keypair.generate();
   try {
@@ -182,59 +210,135 @@ export function sealMergeRecord(
 
 /** @internal The vector seals under a chosen ephemeral. */
 export function sealMergeRecordWith(
-  input: Readonly<{
-    opening: OpeningRecord;
-    auditorPublicKey: X25519PublicKey;
-    ephemeral: X25519Keypair;
-  }>,
+  input: MergeSeal & Readonly<{ ephemeral: X25519Keypair }>,
 ): Readonly<{ sealed: Omit<SealedMergeRecord, "proof">; ephemeralSecret: Bytes32 }> {
-  const { auditorPublicKey, ephemeral } = input;
+  const { auditorPublicKey, ephemeral, recipient } = input;
   const ephemeralPublicKey = ephemeral.publicKey();
-  const dh = ephemeral.ecdh(auditorPublicKey);
-  const shared = auditSharedSecret(dh, ephemeralPublicKey, auditorPublicKey);
-  const plaintext = encodeOpeningRecord(input.opening);
+  const ephemeralSecret = ephemeral.secretBytes();
+  const envelopePlaintext = new Uint8Array(MERGE_ENVELOPE_LEN);
+  envelopePlaintext.set(ephemeralSecret, 0);
+  envelopePlaintext.set(recipient.u(), ENVELOPE_KEY_LEN);
+  const recordPlaintext = encodeMergeRecord(input.merge);
+  const auditorAgreement = ephemeral.ecdh(auditorPublicKey);
+  const shared = auditSharedSecret(auditorAgreement, ephemeralPublicKey, auditorPublicKey);
+  const recordSecret = mergeRecordSecret({
+    agreement: ephemeral.ecdh(recipient),
+    ephemeralPublicKey,
+    recipient,
+    firstNullifier: input.firstNullifier,
+  });
   try {
-    const schedule = AuditSchedule.derive(shared, MERGE_RECORD_ENC_INFO);
-    try {
-      return Object.freeze({
-        sealed: Object.freeze({
-          ephemeralPublicKey: ephemeralPublicKey.toBytes(),
-          ciphertext: schedule.apply(STREAM_FIRST_COUNTER, plaintext),
-        }),
-        ephemeralSecret: ephemeral.secretBytes(),
-      });
-    } finally {
-      schedule.destroy();
-    }
+    return Object.freeze({
+      sealed: Object.freeze({
+        ephemeralPublicKey: ephemeralPublicKey.toBytes(),
+        envelope: streamApply(shared, MERGE_RECORD_ENC_INFO, envelopePlaintext),
+        record: streamApply(recordSecret, MERGE_OUTPUT_ENC_INFO, recordPlaintext),
+      }),
+      ephemeralSecret,
+    });
+  } finally {
+    auditorAgreement.fill(0);
+    shared.fill(0);
+    recordSecret.fill(0);
+    envelopePlaintext.fill(0);
+    recordPlaintext.fill(0);
+  }
+}
+
+/** The auditor's side, `eph_sk ‖ V` from the envelope, then the record under the merge's slot secret. */
+export function openMergeRecord(
+  auditor: X25519Keypair,
+  sealed: Pick<SealedMergeRecord, "ephemeralPublicKey" | "envelope" | "record">,
+  firstNullifier: Bytes32,
+): MergeRecord {
+  if (sealed.envelope.length !== MERGE_ENVELOPE_LEN) throw invalid("merge.envelope");
+  const ephemeralPublicKey = X25519PublicKey.fromBytes(sealed.ephemeralPublicKey);
+  const dh = auditor.ecdh(ephemeralPublicKey);
+  const shared = auditSharedSecret(dh, ephemeralPublicKey, auditor.publicKey());
+  const envelope = streamApply(shared, MERGE_RECORD_ENC_INFO, sealed.envelope);
+  let ephemeral: X25519Keypair | undefined;
+  try {
+    ephemeral = X25519Keypair.fromBytes(envelope.slice(0, ENVELOPE_KEY_LEN) as Bytes32);
+    // An envelope sealing another ephemeral would open a record the statement never bound.
+    if (!ephemeral.publicKey().equals(ephemeralPublicKey)) throw invalid("merge.envelope");
+    const recipient = x25519FromU(envelope.slice(ENVELOPE_KEY_LEN) as Bytes32);
+    return openUnder(sealed.record, {
+      agreement: ephemeral.ecdh(recipient),
+      ephemeralPublicKey,
+      recipient,
+      firstNullifier,
+    });
   } finally {
     dh.fill(0);
     shared.fill(0);
+    envelope.fill(0);
+    ephemeral?.destroy();
+  }
+}
+
+/** The merged owner's side under its viewing key, the record alone, no envelope read. */
+export function openOwnMergeRecord(
+  viewingKey: ViewingKey,
+  sealed: Pick<SealedMergeRecord, "ephemeralPublicKey" | "record">,
+  firstNullifier: Bytes32,
+): MergeRecord {
+  const ephemeralPublicKey = X25519PublicKey.fromBytes(sealed.ephemeralPublicKey);
+  return openUnder(sealed.record, {
+    agreement: viewingKey.ecdh(ephemeralPublicKey),
+    ephemeralPublicKey,
+    recipient: viewingKey.publicKey(),
+    firstNullifier,
+  });
+}
+
+/** `DeliveredSlot` at index 0 under a zero salt, `eph_pk` in the transaction key's place. */
+function mergeRecordSecret(
+  input: Readonly<{
+    agreement: Bytes32;
+    ephemeralPublicKey: X25519PublicKey;
+    recipient: X25519PublicKey;
+    firstNullifier: Bytes32;
+  }>,
+): Bytes32 {
+  try {
+    return deliveredSlotSecret({
+      agreement: input.agreement,
+      txViewingKey: input.ephemeralPublicKey,
+      recipientViewingKey: input.recipient,
+      salt: MERGE_SALT,
+      outputIndex: 0,
+      firstNullifier: input.firstNullifier,
+    });
+  } finally {
+    input.agreement.fill(0);
+  }
+}
+
+function openUnder(
+  record: Uint8Array,
+  secretInput: Parameters<typeof mergeRecordSecret>[0],
+): MergeRecord {
+  if (record.length !== MERGE_RECORD_LEN) throw invalid("merge.record");
+  const secret = mergeRecordSecret(secretInput);
+  const plaintext = streamApply(secret, MERGE_OUTPUT_ENC_INFO, record);
+  try {
+    return decodeMergeRecord(plaintext);
+  } finally {
+    secret.fill(0);
     plaintext.fill(0);
   }
 }
 
-/** The auditor's side, the caller rebuilds the output commitment from the record. */
-export function openMergeRecord(
-  auditor: X25519Keypair,
-  sealed: Pick<SealedMergeRecord, "ephemeralPublicKey" | "ciphertext">,
-): OpeningRecord {
-  if (sealed.ciphertext.length !== OPENING_RECORD_LEN) throw invalid("merge.ciphertext");
-  const ephemeral = X25519PublicKey.fromBytes(sealed.ephemeralPublicKey);
-  const dh = auditor.ecdh(ephemeral);
-  const shared = auditSharedSecret(dh, ephemeral, auditor.publicKey());
-  const schedule = AuditSchedule.derive(shared, MERGE_RECORD_ENC_INFO);
-  const plaintext = schedule.apply(STREAM_FIRST_COUNTER, sealed.ciphertext);
+function streamApply(secret: Bytes32, label: Uint8Array, data: Uint8Array): Uint8Array {
+  const schedule = AuditSchedule.derive(secret, label);
   try {
-    return decodeOpeningRecord(plaintext);
+    return schedule.apply(STREAM_FIRST_COUNTER, data);
   } finally {
-    dh.fill(0);
-    shared.fill(0);
-    plaintext.fill(0);
     schedule.destroy();
   }
 }
 
-/** `[CRMG, output, n0, ring_id, aud0, aud1, eph0, eph1, hash_bytes(ct), payer, published_owner, tracking_root]`. */
+/** `[CRMG, output, n0, ring_id, aud0, aud1, eph0, eph1, hash_bytes(envelope_ct), hash_bytes(record_ct), payer, published_owner, tracking_root]`. */
 export function mergePublicInputElements(input: MergePublicInput): readonly Bytes32[] {
   return [
     domainField(RingDomain.mergeStatement),
@@ -243,7 +347,8 @@ export function mergePublicInputElements(input: MergePublicInput): readonly Byte
     checkedBytes<Bytes32>(input.ringId, 32, "ring id"),
     ...pack33(checkedBytes<Bytes33>(input.auditorPubkey, 33, "auditor pubkey")),
     ...pack33(checkedBytes<Bytes33>(input.ephemeralPublicKey, 33, "ephemeral pubkey")),
-    hashBytes(checkedBytes(input.ciphertext, OPENING_RECORD_LEN, "ciphertext")) as Bytes32,
+    hashBytes(checkedBytes(input.envelope, MERGE_ENVELOPE_LEN, "envelope")) as Bytes32,
+    hashBytes(checkedBytes(input.record, MERGE_RECORD_LEN, "record")) as Bytes32,
     checkedBytes<Bytes32>(input.payer, 32, "payer"),
     checkedBytes<Bytes32>(input.publishedOwner, 32, "published owner"),
     checkedBytes<Bytes32>(input.trackingRoot, 32, "tracking root"),
@@ -263,7 +368,8 @@ export function encodeRingMergeRequest(request: RingMergeRequest): Uint8Array {
     .u8(request.authority, "merge.authority")
     .bytes(sealed.proof, CUSTOM_RING_PROOF_LENGTH, "merge.proof")
     .bytes(sealed.ephemeralPublicKey, 33, "merge.ephemeralPublicKey")
-    .bytes(sealed.ciphertext, OPENING_RECORD_LEN, "merge.ciphertext")
+    .bytes(sealed.envelope, MERGE_ENVELOPE_LEN, "merge.envelope")
+    .bytes(sealed.record, MERGE_RECORD_LEN, "merge.record")
     .bytes(request.compactBody)
     .finish();
 }
@@ -278,13 +384,14 @@ export function decodeRingMergeRequest(data: Uint8Array): RingMergeRequest {
     throw invalid("merge.authority");
   const proof = reader.bytes(CUSTOM_RING_PROOF_LENGTH, "merge.proof");
   const ephemeralPublicKey = reader.bytes(33, "merge.ephemeralPublicKey") as Bytes33;
-  const ciphertext = reader.bytes(OPENING_RECORD_LEN, "merge.ciphertext");
+  const envelope = reader.bytes(MERGE_ENVELOPE_LEN, "merge.envelope");
+  const record = reader.bytes(MERGE_RECORD_LEN, "merge.record");
   const compactBody = data.subarray(REQUEST_HEAD_LEN);
   return Object.freeze({
     trackingRevision,
     outputRingDataHash,
     authority,
-    sealed: Object.freeze({ proof, ephemeralPublicKey, ciphertext }),
+    sealed: Object.freeze({ proof, ephemeralPublicKey, envelope, record }),
     compactBody,
   });
 }

@@ -7,7 +7,6 @@ import {
   DEFAULT_INDEXER_POLL_CONFIG,
   type IndexerReader,
   type IndexerRpcConfig,
-  type KitRpcAccess,
 } from "@heliuslabs/spr/client";
 import {
   bytesKey,
@@ -25,9 +24,6 @@ import {
   type ViewingKey,
 } from "@heliuslabs/spr/keypair";
 import {
-  transactOutputBlinding,
-  SOL_ASSET_ID,
-  SOL_MINT,
   type AssetRegistry,
   type IndexedShieldedTransaction,
   type OutputSlot,
@@ -39,18 +35,12 @@ import {
 import { txKeySlotSecret } from "../crypto/derivation/ring-stream.js";
 import { isSmallOrder, x25519FromU } from "../crypto/keys/x25519.js";
 import {
-  openRecipientBody,
-  openCompactRecipientBody,
   openReply,
   openSenderBundle,
   senderBundleLen,
-  type BundleLayout,
-  type ChangeCell,
-  type RecipientBody,
   type ReplyClaim,
 } from "../protocol/codec/anonymous-delivery.js";
-import { CompactAssetResolver } from "../rpc/compact-assets.js";
-import { DisclosureFormat } from "../protocol/codec/ring-disclosure-layout.js";
+import { openOutputSlot, type OpenedOutput } from "../crypto/audit/ring-disclosure.js";
 import { ringBodyOutput, senderBundleOutputBody } from "../protocol/transaction/output.js";
 import { openRecipientNote } from "../crypto/derivation/blinding.js";
 import { HalvingPageLimit, readRingPages, scanLimits, type ScanLimits } from "../rpc/history.js";
@@ -196,7 +186,6 @@ interface BodyReads {
   readonly keys: SyncKeys;
   readonly assets: AssetRegistry;
   readonly recipients: readonly ShieldedAddress[];
-  readonly resolveCompactAsset?: (assetId: bigint) => Promise<Address | undefined>;
 }
 
 interface SyncFields extends BodyReads {
@@ -207,7 +196,6 @@ interface SyncFields extends BodyReads {
   readonly limits: ScanLimits;
   readonly senderFastPath: boolean;
   readonly tagMatcher: Pick<RingKeys, "ringTagMatches">;
-  readonly compactAssetClient?: Pick<KitRpcAccess, "solanaRpc">;
 }
 
 /** Scans each ring of the history. */
@@ -231,10 +219,6 @@ export class AnonymousSync {
       senderFastPath: false,
       tagMatcher: keys,
     });
-  }
-
-  withCompactAssetClient(client: Pick<KitRpcAccess, "solanaRpc">): AnonymousSync {
-    return new AnonymousSync({ ...this.#fields, compactAssetClient: client });
   }
 
   withIndexerConfig(config: IndexerRpcConfig): AnonymousSync {
@@ -447,7 +431,6 @@ interface Body {
   readonly reply: Uint8Array;
   readonly context: SlotContext;
   readonly found: AnonymousStream;
-  readonly format: DisclosureFormat;
 }
 
 /** A note whose rebuilt hash matched, before its nullifier. */
@@ -509,7 +492,6 @@ class Scan {
   #unopenedCount = 0n;
   #queueHead = 0;
   #queued = new Set<string>();
-  #compactResolver: CompactAssetResolver | undefined;
 
   constructor(
     sync: SyncFields,
@@ -1045,50 +1027,13 @@ class Scan {
     viewingPublicKey: X25519PublicKey,
     opened: readonly (readonly [Body, Bytes32])[],
   ): Promise<void> {
-    const reads: BodyReads = {
-      ...this.#sync,
-      resolveCompactAsset: (id) => this.#resolveCompact(id),
-    };
+    const reads: BodyReads = this.#sync;
     await readBodies(reads, viewingPublicKey, opened, this.#context, async (open) => {
       const step = this.#workOffset++;
       if (this.#page !== undefined && step < this.#page.workOffset) return;
       this.#ledger.absorb(viewingPublicKey, await open());
       if (this.#page !== undefined) this.#page.workOffset = step + 1;
     });
-  }
-
-  async #resolveCompact(assetId: bigint): Promise<Address | undefined> {
-    if (assetId === 0n) return undefined;
-    if (assetId === SOL_ASSET_ID) return SOL_MINT;
-    const source = this.#sync.compactAssetClient;
-    const targetSlot = this.#session?.targetSlot;
-    if (targetSlot === undefined || targetSlot === null)
-      throw new RingError("RING_SYNC_INCOMPLETE", {
-        details: { reason: "compact asset recovery requires fetchWallet or fullScanWallet" },
-      });
-    if (source === undefined)
-      throw new RingError("RING_SYNC_INCOMPLETE", {
-        details: { reason: "compact asset recovery requires withCompactAssetClient" },
-      });
-    try {
-      this.#compactResolver ??= await CompactAssetResolver.open(
-        { client: source, targetSlot },
-        this.#context,
-      );
-      const resolved = await this.#compactResolver.resolve(assetId, this.#context);
-      if (resolved.kind === "paused") throw new RecoveryPaused();
-      return resolved.kind === "foreign" ? undefined : resolved.mint.asset;
-    } catch (error) {
-      if (
-        error instanceof ClientError &&
-        ["CLIENT_REQUEST", "CLIENT_RPC", "CLIENT_TIMEOUT", "CLIENT_INDEXER_TIMEOUT"].includes(
-          error.code,
-        ) &&
-        (error.details as { retryable?: boolean } | undefined)?.retryable !== false
-      )
-        throw new RecoveryPaused();
-      throw error;
-    }
   }
 
   /** Every page of every chunk, a null token ends a chunk's read. */
@@ -1396,64 +1341,61 @@ class BodyRead {
     this.#owner = reads.keys.address();
   }
 
-  async recipientBody(body: Body, position: number, secret: Bytes32): Promise<void> {
-    const opening = await this.#opening(body.format, secret, body.ciphertext);
+  recipientBody(body: Body, position: number, secret: Bytes32): void {
+    const opening = decoded(() => openOutputSlot(secret, body.ciphertext));
     if (opening === undefined) return;
     this.#note(body, position, opening, claimOf(body.reply, secret));
   }
 
-  /** Each change slot the bundle rebuilds from the seed and retained chain history with no auditor read, then the payments only the sender's own key proves. */
+  /**
+   * Each change slot sealed to the sender's own key, opened under the secret `changeSecrets` derives
+   * at its position with no auditor read, then the payments only the sender's own key proves.
+   */
   async senderBundle(
     body: Body,
     secret: Bytes32,
     txViewingKey: ViewingKey | undefined,
+    changeSecrets: (positions: readonly number[]) => Promise<readonly Bytes32[]>,
   ): Promise<void> {
-    const slots = bundleSlots(body.tx);
-    const bundle = decoded(() => openSenderBundle(secret, body.ciphertext, slots.layout));
+    const bundle = decoded(() =>
+      openSenderBundle(secret, body.ciphertext, { outputs: body.tx.outputSlots.length }),
+    );
     if (bundle === undefined) return;
+    bundle.outputSeed.fill(0);
+    const own = this.#owner.viewingPublicKey.u();
+    // A change key is the sender's own, its slot's tag is zero and no tag scan reaches it.
+    const change = bundle.recipientKeys.flatMap((key, position) =>
+      equalBytes(key, own) ? [position] : [],
+    );
+    const secrets = change.length === 0 ? [] : await changeSecrets(change);
     try {
-      for (const [index, position] of slots.bodiless.entries()) {
-        const cell = bundle.change[index];
-        const opening =
-          cell === undefined
-            ? undefined
-            : decoded(() =>
-                changeOpening(
-                  cell,
-                  transactOutputBlinding(body.context.firstNullifier, bundle.outputSeed, position),
-                ),
-              );
-        this.#note(body, position, opening, undefined);
-      }
+      change.forEach((position, index) => {
+        const slot = body.tx.outputSlots[position];
+        const parts = slot === undefined ? undefined : ringBodyOutput(slot.payload);
+        const changeSecret = secrets[index];
+        if (parts === undefined || changeSecret === undefined) return;
+        this.#note(
+          body,
+          position,
+          decoded(() => openOutputSlot(changeSecret, parts.body)),
+          undefined,
+        );
+      });
     } finally {
-      bundle.outputSeed.fill(0);
+      secrets.forEach((changeSecret) => changeSecret.fill(0));
     }
     if (txViewingKey === undefined) return;
-    for (const [position, recipient] of listedRecipients(bundle.recipientKeys, slots.bearing)) {
-      const sent = await this.#sentPayment(body, position, recipient, txViewingKey);
+    for (const [position, recipient] of listedRecipients(bundle.recipientKeys, own)) {
+      const sent = this.#sentPayment(body, position, recipient, txViewingKey);
       if (sent !== undefined) this.sent.push(sent);
     }
-  }
-
-  async #opening(
-    format: DisclosureFormat,
-    secret: Bytes32,
-    ciphertext: Uint8Array,
-  ): Promise<RecipientBody | undefined> {
-    if (format === DisclosureFormat.Standard)
-      return decoded(() => openRecipientBody(secret, ciphertext));
-    const compact = decoded(() => openCompactRecipientBody(secret, ciphertext));
-    if (compact === undefined) return undefined;
-    const mint = await this.#reads.resolveCompactAsset?.(compact.assetId);
-    if (mint === undefined) return undefined;
-    return { blinding: compact.blinding, amount: compact.amount, mint };
   }
 
   /** Only a rebuilt commitment counts, the cipher authenticates nothing. */
   #note(
     body: Body,
     position: number,
-    opening: RecipientBody | undefined,
+    opening: OpenedOutput | undefined,
     claim: ReplyClaim | undefined,
   ): void {
     const slot = body.tx.outputSlots[position];
@@ -1473,12 +1415,12 @@ class BodyRead {
   }
 
   /** `undefined` when the body at `position` fails to open under the recipient's key. */
-  async #sentPayment(
+  #sentPayment(
     body: Body,
     position: number,
     recipient: X25519PublicKey,
     txViewingKey: ViewingKey,
-  ): Promise<SentPayment | undefined> {
+  ): SentPayment | undefined {
     const slot = body.tx.outputSlots[position];
     const parts = slot === undefined ? undefined : ringBodyOutput(slot.payload);
     if (slot === undefined || parts === undefined) return undefined;
@@ -1489,13 +1431,14 @@ class BodyRead {
       outputIndex: position,
       firstNullifier: body.context.firstNullifier,
     });
-    let opening: RecipientBody | undefined;
+    let opening: OpenedOutput | undefined;
     try {
-      opening = await this.#opening(parts.format, secret, parts.body);
+      opening = decoded(() => openOutputSlot(secret, parts.body));
     } finally {
       secret.fill(0);
     }
     if (opening === undefined) return undefined;
+    const { record } = opening;
     const verified = this.#reads.recipients.find(
       (address) =>
         address.viewingPublicKey.equals(recipient) &&
@@ -1507,11 +1450,11 @@ class BodyRead {
       position,
       recipientViewingPublicKey: recipient,
       ownerPublicKey: verified?.signingPublicKey,
-      amount: opening.amount,
+      amount: record.amount,
       check: Object.freeze(
         verified === undefined
           ? { kind: "unverified" as const }
-          : { kind: "verified" as const, mint: opening.mint },
+          : { kind: "verified" as const, mint: record.mint },
       ),
     });
   }
@@ -1559,8 +1502,27 @@ async function readBodies(
     for (const [body, secret] of opened)
       await visit(async () => {
         const read = new BodyRead(reads);
-        if (body.site.kind === "output") await read.recipientBody(body, body.site.position, secret);
-        else await read.senderBundle(body, secret, own.get(bytesKey(body.context.firstNullifier)));
+        if (body.site.kind === "output") read.recipientBody(body, body.site.position, secret);
+        else
+          await read.senderBundle(
+            body,
+            secret,
+            own.get(bytesKey(body.context.firstNullifier)),
+            async (positions) =>
+              answered(
+                positions,
+                await reads.keys.ringDeliverySecrets(
+                  positions.map((outputIndex) => ({
+                    viewingPublicKey,
+                    txViewingPublicKey: body.context.txViewingPublicKey,
+                    salt: body.context.salt,
+                    outputIndex,
+                    firstNullifier: body.context.firstNullifier,
+                  })),
+                  context,
+                ),
+              ).map(([, changeSecret]) => changeSecret),
+          );
         return read;
       });
   } finally {
@@ -1610,7 +1572,7 @@ function rebuild(
   owner: ShieldedAddress,
   slot: OutputSlot,
   ring: Address,
-  opening: RecipientBody,
+  opening: OpenedOutput,
 ): Rebuilt | undefined {
   const { hash, treeId } = slot.outputContext;
   if (treeId === undefined) return undefined;
@@ -1619,31 +1581,13 @@ function rebuild(
   );
 }
 
-function changeOpening(cell: ChangeCell, blinding: Bytes32): RecipientBody {
-  return Object.freeze({ mint: cell.mint, amount: cell.amount, blinding });
-}
-
-/** A row's slots in the bundle's order, the k-th bodiless slot takes the k-th change cell. */
-function bundleSlots(tx: IndexedShieldedTransaction): {
-  readonly bodiless: readonly number[];
-  readonly bearing: readonly number[];
-  readonly layout: BundleLayout;
-} {
-  const bodiless: number[] = [];
-  const bearing: number[] = [];
-  for (const [position, slot] of tx.outputSlots.entries())
-    (slot.payload.length === 0 ? bodiless : bearing).push(position);
-  return { bodiless, bearing, layout: { outputs: tx.outputSlots.length, change: bodiless.length } };
-}
-
-/** Zero keys and keys no ECDH accepts left out, each key beside its slot. */
+/** Key `k` names slot `k`, zero keys, the sender's own change keys and keys no ECDH accepts left out. */
 function listedRecipients(
   keys: readonly Bytes32[],
-  bearing: readonly number[],
+  own: Bytes32,
 ): readonly (readonly [number, X25519PublicKey])[] {
-  return keys.flatMap((key, index) => {
-    const position = bearing[index];
-    if (position === undefined || isZero(key)) return [];
+  return keys.flatMap((key, position) => {
+    if (isZero(key) || equalBytes(key, own)) return [];
     const recipient = decoded(() => x25519FromU(key));
     return recipient === undefined || isSmallOrder(recipient)
       ? []
@@ -1678,22 +1622,13 @@ function bodyAt(
           reply: parts.reply,
           context,
           found,
-          format: parts.format,
         };
   }
   const message = tx.messages[site.message];
   const bundle = message === undefined ? undefined : senderBundleOutputBody(message.data);
   // Compact slots never reach the event, a bundle of any other `m` opens under another secret.
-  return bundle?.length === senderBundleLen(bundleSlots(tx).layout)
-    ? {
-        tx,
-        site,
-        ciphertext: bundle,
-        reply: new Uint8Array(),
-        context,
-        found,
-        format: DisclosureFormat.Standard,
-      }
+  return bundle?.length === senderBundleLen({ outputs: tx.outputSlots.length })
+    ? { tx, site, ciphertext: bundle, reply: new Uint8Array(), context, found }
     : undefined;
 }
 

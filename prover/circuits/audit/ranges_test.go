@@ -9,18 +9,14 @@ import (
 )
 
 type rangesVector struct {
-	Class              int   `json:"class"`
-	Outputs            int   `json:"outputs"`
-	Entry              bool  `json:"entry"`
-	SingleAssetPayout  bool  `json:"single_asset_payout"`
-	HasData            bool  `json:"has_data"`
-	EnvelopeBlocks     int   `json:"envelope_blocks"`
-	FirstRecordCounter int   `json:"first_record_counter"`
-	FirstTailCounter   int   `json:"first_tail_counter"`
-	CapacityBlocks     int   `json:"capacity_blocks"`
-	RecordCounters     []int `json:"record_start_counters"`
-	TailCounters       []int `json:"tail_start_counters"`
-	EnvelopeLens       []int `json:"envelope_len_by_input_count"`
+	Class           int   `json:"class"`
+	Outputs         int   `json:"outputs"`
+	Entry           bool  `json:"entry"`
+	EnvelopeBlocks  int   `json:"envelope_blocks"`
+	FirstKeyCounter int   `json:"first_key_counter"`
+	CapacityBlocks  int   `json:"capacity_blocks"`
+	KeyCounters     []int `json:"key_start_counters"`
+	EnvelopeLens    []int `json:"envelope_len_by_input_count"`
 }
 
 func TestStreamRangesAreTheSharedVector(t *testing.T) {
@@ -32,21 +28,16 @@ func TestStreamRangesAreTheSharedVector(t *testing.T) {
 		t.Fatal("the vector holds no key")
 	}
 	for _, v := range vectors.Keys {
-		r := audit.StreamShape{InputClass: v.Class, Outputs: v.Outputs, Entry: v.Entry, SingleAssetPayout: v.SingleAssetPayout}.Ranges()
-		// A key seals every tail, a reader of a clear has_data decrypts none.
-		capacity := v.CapacityBlocks
-		if !v.HasData && !v.SingleAssetPayout {
-			capacity += v.Outputs * audit.TailBlocks
+		r := audit.StreamShape{InputClass: v.Class, Outputs: v.Outputs, Entry: v.Entry}.Ranges()
+		if r.EnvelopeBlocks() != v.EnvelopeBlocks || r.KeyCounter(0) != v.FirstKeyCounter || r.CapacityBlocks() != v.CapacityBlocks {
+			t.Errorf("%+v: E %d K0 %d capacity %d", v, r.EnvelopeBlocks(), r.KeyCounter(0), r.CapacityBlocks())
 		}
-		if r.EnvelopeBlocks() != v.EnvelopeBlocks || r.RecordCounter(0) != v.FirstRecordCounter || r.TailCounter(0) != v.FirstTailCounter || r.CapacityBlocks() != capacity {
-			t.Errorf("%+v: E %d R0 %d T0 %d capacity %d", v, r.EnvelopeBlocks(), r.RecordCounter(0), r.TailCounter(0), r.CapacityBlocks())
+		keys := make([]int, v.Outputs)
+		for i := range keys {
+			keys[i] = r.KeyCounter(i)
 		}
-		records, tails := make([]int, v.Outputs), make([]int, v.Outputs)
-		for i := range records {
-			records[i], tails[i] = r.RecordCounter(i), r.TailCounter(i)
-		}
-		if !slices.Equal(records, v.RecordCounters) || !slices.Equal(tails, v.TailCounters) {
-			t.Errorf("%+v: record counters %v, tail counters %v", v, records, tails)
+		if !slices.Equal(keys, v.KeyCounters) {
+			t.Errorf("%+v: key counters %v", v, keys)
 		}
 		lengths := make([]int, v.Class)
 		for n := range lengths {
@@ -61,18 +52,15 @@ func TestStreamRangesAreTheSharedVector(t *testing.T) {
 // No two regions share a counter on these shapes.
 func TestStreamRegionsHoldTheirPlaintext(t *testing.T) {
 	const blockLen = 16
-	if audit.RecordBlocks*blockLen != audit.RecordStride || audit.RecordLen > audit.RecordStride || audit.TailBlocks*blockLen != audit.TailLen {
+	if audit.KeyBlocks*blockLen != audit.KeyLen {
 		t.Fatal("a region differs from its plaintext")
 	}
-	for _, shape := range []audit.StreamShape{{InputClass: 24, Outputs: 2}, {InputClass: 8, Outputs: 2, Entry: true}, {InputClass: 16, Outputs: 8}, {InputClass: 1, Outputs: 16, SingleAssetPayout: true}} {
+	for _, shape := range []audit.StreamShape{{InputClass: 24, Outputs: 2}, {InputClass: 8, Outputs: 2, Entry: true}, {InputClass: 16, Outputs: 8}} {
 		r := shape.Ranges()
-		if r.RecordLen() > r.RecordStride() || r.RecordStride() != r.RecordBlocks()*blockLen {
-			t.Fatalf("%+v record length differs", r)
-		}
 		if r.EnvelopeLen(r.InputClass) > r.EnvelopeBlocks()*blockLen {
 			t.Fatalf("%+v: the envelope overruns its region", r)
 		}
-		if r.RecordCounter(0) != audit.StreamFirstCounter+r.EnvelopeBlocks() || r.RecordCounter(1)-r.RecordCounter(0) != r.RecordBlocks() || r.TailCounter(0) != r.RecordCounter(r.Outputs) {
+		if r.KeyCounter(0) != audit.StreamFirstCounter+r.EnvelopeBlocks() || r.KeyCounter(1)-r.KeyCounter(0) != audit.KeyBlocks {
 			t.Fatalf("%+v: regions overlap", r)
 		}
 	}

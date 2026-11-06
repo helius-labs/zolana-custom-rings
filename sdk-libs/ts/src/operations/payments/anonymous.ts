@@ -83,23 +83,25 @@ export function messageSignerSpendSigner(signer: MessagePartialSigner): Anonymou
   });
 }
 
+/**
+ * What a public party or a zero-key spend may reveal about the hidden owner, Rust `OwnerExposure`.
+ * The proof refuses only a hidden owner among the co-signers and the published owner run. A payer,
+ * funder or exit destination equal to it settles and names it, and a zero-key note opens to anyone
+ * holding its opening, so its spend names the spender. `refused` is the default.
+ */
+export type OwnerExposure = "refused" | "accepted";
+
 /** The hidden owner's key, the signature stays inside the proof. */
 export function checkAnonymousSigner(
-  input: Readonly<{
-    signer: AnonymousSpendSigner;
-    sender: ShieldedAddress;
-    payer: Address;
-  }>,
+  input: Readonly<{ signer: AnonymousSpendSigner; sender: ShieldedAddress }>,
 ): Bytes32 {
   const signing = input.signer.publicKey();
   if (!(signing instanceof ShieldedPublicKey) || !signing.equals(input.sender.signingPublicKey))
     throw new RingError("RING_ANONYMOUS_SIGNER_MISMATCH");
-  const owner = signing.ed25519();
-  checkHiddenParties(owner, [input.payer]);
-  return owner;
+  return signing.ed25519();
 }
 
-/** The proof holds the hidden owner off every named party. */
+/** A public signature equal to the hidden owner names it. */
 export function checkHiddenParties(
   owner: Bytes32,
   parties: readonly (Address | undefined)[],
@@ -121,24 +123,24 @@ export function checkHiddenOwnerSpends(proofInputs: SppProofInputs, sender: Shie
     throw new RingError("RING_NO_HIDDEN_OWNER", { details: { index: firstForeign } });
 }
 
-/** Rust `AnonymousExits::token_owner`, the owner SPP binds for the SPL withdrawal, `undefined` without one. */
+/** Rust `AnonymousExits::owners`, each exit checked apart, the named owner a missing token account takes. */
 export async function anonymousExitTokenOwner(
   input: Readonly<{
     client: Pick<ChainReader, "getAccount">;
     transfers: readonly SettlementTransfer[];
-    hiddenOwner: Bytes32;
+    /** Absent once the owner accepts exposure, no exit is then checked against it. */
+    hiddenOwner?: Bytes32;
     /** A missing exit token account must be the owner's associated token account. */
     tokenOwner?: Address;
   }>,
   context?: RequestContext,
 ): Promise<Address | undefined> {
-  const hidden = encodeBase58(input.hiddenOwner);
+  const hidden = input.hiddenOwner === undefined ? undefined : encodeBase58(input.hiddenOwner);
   const named =
     input.tokenOwner === undefined ? undefined : checkedAddress(input.tokenOwner, "exitTokenOwner");
   const withdrawals = input.transfers.filter((transfer) => !transfer.isDeposit);
   if (named !== undefined && !withdrawals.some((transfer) => transfer.kind === "spl"))
     throw new RingError("RING_ANONYMOUS_EXIT_TOKEN_OWNER_MISMATCH");
-  let tokenOwner: Address | undefined;
   for (const transfer of withdrawals) {
     if (transfer.kind === "sol") {
       await checkSolExit(
@@ -152,11 +154,8 @@ export async function anonymousExitTokenOwner(
       throw new RingError("RING_ANONYMOUS_EXIT_NAMED_OWNER_MISMATCH", {
         details: { destination: transfer.tokenAccount, named, owner },
       });
-    if (tokenOwner !== undefined && tokenOwner !== owner)
-      throw new RingError("RING_ANONYMOUS_EXIT_DESTINATIONS_DIFFER");
-    tokenOwner = owner;
   }
-  return tokenOwner;
+  return named;
 }
 
 export function checkEntryInputs(proofInputs: SppProofInputs, sender: ShieldedAddress): void {
@@ -182,7 +181,7 @@ async function checkSolExit(
   input: Readonly<{
     client: Pick<ChainReader, "getAccount">;
     recipient: Address;
-    hidden: Address;
+    hidden: Address | undefined;
   }>,
   context: RequestContext | undefined,
 ): Promise<void> {
@@ -198,7 +197,7 @@ async function splExitOwner(
   input: Readonly<{
     client: Pick<ChainReader, "getAccount">;
     transfer: Extract<SettlementTransfer, { kind: "spl" }>;
-    hidden: Address;
+    hidden: Address | undefined;
     named: Address | undefined;
   }>,
   context: RequestContext | undefined,
@@ -209,10 +208,12 @@ async function splExitOwner(
   const read = await splDestination(input, context);
   if (read === undefined) throw refused("RING_ANONYMOUS_EXIT_TOKEN_ACCOUNT_INVALID");
   const { control, tokenProgram } = read;
-  // An associated token account stays derivable from its first owner.
-  const associated = await associatedTokenAddress(hidden, transfer.mint, tokenProgram);
-  if ([destination, control.owner].includes(hidden) || associated === destination)
-    throw refused("RING_ANONYMOUS_EXIT_LINKS_OWNER");
+  if (hidden !== undefined) {
+    // An associated token account stays derivable from its first owner.
+    const associated = await associatedTokenAddress(hidden, transfer.mint, tokenProgram);
+    if ([destination, control.owner].includes(hidden) || associated === destination)
+      throw refused("RING_ANONYMOUS_EXIT_LINKS_OWNER");
+  }
   // An off-curve address has no keypair, so it is never the hidden owner's key.
   if (!isOffCurveAddress(destination)) throw refused("RING_ANONYMOUS_EXIT_TOKEN_ACCOUNT_ON_CURVE");
   if (control.kind === "shared") throw refused("RING_ANONYMOUS_EXIT_TOKEN_ACCOUNT_SHARED");

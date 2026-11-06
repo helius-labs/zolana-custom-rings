@@ -37,13 +37,13 @@ import {
   encodeRingOutput,
   RingScheme,
 } from "../../src/protocol/transaction/output.js";
-import { sealRecipientBody } from "../../src/protocol/codec/anonymous-delivery.js";
 import { deliveredSlotSecret, slotTag } from "../../src/crypto/derivation/ring-stream.js";
 import { noteState } from "../../src/state/exposed-notes.js";
 import { LocalRingKeys } from "../../src/state/ring-keys.js";
 import { openRingNotes, syncRingWallet, type RingSyncClient } from "../../src/state/ring-sync.js";
 import { AnonymousWallet } from "../../src/state/anonymous-wallet.js";
 import { ViewingHistory } from "../../src/state/viewing-history.js";
+import { sealedNote } from "../helpers/ring-scan.js";
 
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
 const TREE = address("3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3");
@@ -188,6 +188,7 @@ function ringBody(
   hash: Bytes32 = note(recipient).hash,
   mint: Address = SOL_MINT,
   fill?: number,
+  nullifierPk?: Bytes32,
 ): IndexedShieldedTransaction {
   const txKey = ViewingKey.generate();
   const viewing = recipient.shieldedAddress().viewingPublicKey;
@@ -199,7 +200,9 @@ function ringBody(
     outputIndex: 0,
     firstNullifier: FIRST_NULLIFIER,
   });
-  const body = sealRecipientBody(slotSecret, {
+  const body = sealedNote(slotSecret, {
+    owner: recipient.shieldedAddress(),
+    ...(nullifierPk === undefined ? {} : { nullifierPk }),
     blinding: blinding(fill),
     amount: AMOUNT,
     mint,
@@ -229,7 +232,8 @@ describe("ring bodies", () => {
   it("opens a note under the zero key as exposed", async () => {
     const recipient = ShieldedKeypair.generate();
     const hash = note(recipient).utxo.hash(ZERO_NULLIFIER_PK as Bytes32, DEFAULT_TREE_ID);
-    const notes = await opened(LocalRingKeys.fromKeypair(recipient), [ringBody(recipient, hash)]);
+    const body = ringBody(recipient, hash, SOL_MINT, undefined, ZERO_NULLIFIER_PK as Bytes32);
+    const notes = await opened(LocalRingKeys.fromKeypair(recipient), [body]);
     const [held] = notes.utxos;
     if (held === undefined) throw new Error("no note");
     expect(noteState(held)).toBe("exposedIfSpent");

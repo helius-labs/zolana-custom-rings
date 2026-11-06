@@ -1,9 +1,9 @@
-//! The slots a sealed ring transfer publishes, in the compact form the ring program expands, their
-//! records stay in the auditor message.
+//! The slots a sealed ring transfer publishes, in the compact form the ring program expands. A
+//! non-exit slot's record leads its body, an exit's record goes to the auditor message.
 
 use custom_ring_interface::{
     ring_body_output, ring_sender_bundle_output_body, FramedSenderBundle, RingOutput, SlotBody,
-    DATA_TAIL_LEN,
+    OUTPUT_RECORD_LEN,
 };
 use spr_event::confidential_encrypted_output_body;
 use spr_interface::instruction::instruction_data::transact::{OwnerTag, TransactOutput};
@@ -13,8 +13,8 @@ use spr_transaction::{
 };
 
 use crate::{
-    anonymous_rail::published as published_outputs, AnonymousSlot, RingDelivery, RingOutputRail,
-    RingRailError, Slot, UNSEALED_RECORD,
+    anonymous_rail::published as published_outputs, record_of, AnonymousSlot, RingDelivery,
+    RingOutputRail, RingRailError, Slot,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -23,6 +23,8 @@ pub struct PublishedSlot<'a> {
     pub hash: &'a [u8; 32],
     pub owner_tag: &'a [u8; 32],
     pub body: SlotBody<'a>,
+    /// The record ciphertext the statement binds.
+    pub record: [u8; OUTPUT_RECORD_LEN],
     /// Set on the anonymous rail.
     pub anonymous: Option<AnonymousSlot>,
     /// The sealed reply beside a recipient body, empty without reply metadata.
@@ -30,21 +32,12 @@ pub struct PublishedSlot<'a> {
 }
 
 impl<'a> PublishedSlot<'a> {
-    /// The frame's slot once its record and tail sealed.
-    pub fn wire<'r>(
-        &self,
-        record: &'r [u8],
-        tail: Option<&'r [u8; DATA_TAIL_LEN]>,
-    ) -> RingOutput<'r>
-    where
-        'a: 'r,
-    {
+    pub fn wire(&self) -> RingOutput<'_> {
         RingOutput {
             hash: self.hash,
             owner_tag: *self.owner_tag,
             body: self.body,
-            record,
-            tail,
+            record: &self.record,
         }
     }
 }
@@ -67,6 +60,7 @@ impl RingOutputRail {
             RingDelivery::Anonymous(plan) => Some(plan.slots(outputs, sender)?),
             RingDelivery::Delivered => None,
         };
+        let first_nullifier = inputs.first_nullifier()?;
         outputs
             .iter()
             .zip(published)
@@ -78,15 +72,20 @@ impl RingOutputRail {
                     None => (self.delivered_body(output, published, index)?, &[][..]),
                 };
                 let (hash, owner_tag) = inline(published, index)?;
+                let record = match body {
+                    SlotBody::Recipient(body) => *record_of(body, index)?,
+                    SlotBody::Exit(_) => self.exit_record(output, &first_nullifier, index)?,
+                };
                 let slot = PublishedSlot {
                     output,
                     hash,
                     owner_tag,
                     body,
+                    record,
                     anonymous,
                     reply,
                 };
-                if slot.wire(&UNSEALED_RECORD, None).transact_output(reply)? != *published {
+                if slot.wire().transact_output(reply)? != *published {
                     return Err(RingRailError::RingOutputFraming { slot_index: index });
                 }
                 Ok(slot)
@@ -145,16 +144,8 @@ impl RingOutputRail {
         if tag != *owner_tag {
             return Err(framing());
         }
-        match slot {
-            AnonymousSlot::Change => match data {
-                None => Ok((SlotBody::None, &[])),
-                Some(_) => Err(framing()),
-            },
-            _ => {
-                let (body, reply) = data.and_then(ring_body_output).ok_or_else(framing)?;
-                Ok((SlotBody::Recipient(body), reply))
-            }
-        }
+        let (body, reply) = data.and_then(ring_body_output).ok_or_else(framing)?;
+        Ok((SlotBody::Recipient(body), reply))
     }
 
     fn delivered_body<'a>(

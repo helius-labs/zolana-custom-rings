@@ -8,6 +8,7 @@ import { mintPolicyField, type MintPolicy } from "../../protocol/membership/mint
 import { checkMember } from "../../protocol/membership/member-opening.js";
 import {
   memberOfTag,
+  publicMember,
   recordBit,
   walletGrantMember,
   type ListId,
@@ -52,7 +53,7 @@ export class WalletRecordUpdate {
     return this.#with({
       kind: "write",
       mintPolicy: null,
-      member: indexerScalars.hash(this.#member),
+      member: indexerScalars.hash(publicMember(this.#member)),
       mask: listMask(lists),
       value: listBits(lists.set),
     });
@@ -111,7 +112,7 @@ export class AuthorityRecordUpdate {
     this.#authority = input.authority;
   }
 
-  /** `member` is any record key, an owner identity or an asset. */
+  /** `member` is any record key, an owner's `publicMember` or an asset. */
   withWrite(member: Member, write: ListWrite): AuthorityRecordUpdate {
     const lists = listWrite(write);
     checkWriter(lists, "authority");

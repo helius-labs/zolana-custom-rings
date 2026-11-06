@@ -30,7 +30,7 @@ use crate::{
     key_catalog::{ApplyMode, RingCircuit},
     tagged_x25519,
     transact::RingOutput,
-    AUDIT_RECORD_LEN, COMPACT_AUDIT_RECORD_LEN, REGISTER_KEY_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
+    REGISTER_KEY_CIPHERTEXT_LEN, TAGGED_X25519_KEY_LEN,
 };
 
 const ZERO_FIELD: [u8; 32] = [0; 32];
@@ -46,6 +46,7 @@ pub struct AuditHead<'a> {
     pub tx_viewing_u: &'a [u8; 32],
     pub auditor_pubkey: &'a [u8; TAGGED_X25519_KEY_LEN],
     pub envelope: &'a [u8],
+    pub recipient_keys: &'a [u8],
     pub salt: &'a [u8; 16],
     pub layout: AuditLayout,
 }
@@ -66,7 +67,10 @@ impl AuditHead<'_> {
             tx1,
             aud0,
             aud1,
-            ciphertext_digest(self.envelope)?,
+            Poseidon::hashv(&[
+                &ciphertext_digest(self.envelope)?,
+                &ciphertext_digest(self.recipient_keys)?,
+            ])?,
             right_align(self.salt),
             right_align(&[self.layout.value()]),
         ])
@@ -81,8 +85,6 @@ pub struct TransferStatement<'a> {
     pub approval_mask: ApprovalMask,
     /// Zero unless the frame discloses totals to a co-signer.
     pub approval_totals: &'a [u8; 32],
-    /// Zero unless a public signer owns a data-bearing output.
-    pub signer_data_counts: SignerDataCounts,
     /// `R` is zero, no note is spent but address inputs still require SPP authorization.
     pub no_spend: bool,
     /// The `m` published slots.
@@ -91,7 +93,6 @@ pub struct TransferStatement<'a> {
     pub output_capacity: usize,
     /// `n`, the frame's nullifier count.
     pub input_count: usize,
-    pub input_nullifier_chain: [u8; 32],
     pub private_tx_hash: &'a [u8; 32],
     /// Default on the authority rails and on an empty run.
     pub signers: SignerSet,
@@ -114,7 +115,7 @@ pub struct TransferRoots {
 }
 
 /// Everything but the party cells, the public slots and the close.
-const TRANSFER_FIXED_ELEMENTS: usize = AUDIT_HEAD_ELEMENTS + 3 + 4 + 4 + 3 + 1 + 2 + 4 + 1;
+const TRANSFER_FIXED_ELEMENTS: usize = AUDIT_HEAD_ELEMENTS + 3 + 3 + 2 + 2 + 1 + 2 + 4 + 1;
 
 impl TransferStatement<'_> {
     pub const fn element_count(&self) -> usize {
@@ -129,22 +130,16 @@ impl TransferStatement<'_> {
         // 2. One key serves every rail. The circuit holds at most one bit set, and only the program's `delegate` bit parts the signer and delegate rails.
         elements.extend(self.family.rail_bits().map(bit));
         elements.extend([
-            // 3. The proof holds these four to what it opened, the program acts on the mask and on the spend bit.
+            // 3. The proof holds these three to what it opened, the program acts on the mask and on the spend bit.
             right_align(&[self.approval_mask.bits()]),
             *self.approval_totals,
-            right_align(&self.signer_data_counts.packed().to_be_bytes()),
             bit(self.no_spend),
-            // 4. SPP's output hashes and the auditor's ciphertexts per slot. The output and record chains are zero filled to `N`, the tail chain too or plain zero with no data, so the count alone carries `m`.
+            // 4. One record ciphertext per published slot, zero filled to `N`, so the count alone carries `m`.
             count(self.outputs.len()),
-            output_chain(self.outputs, capacity)?,
             record_chain(self.outputs, capacity)?,
-            tail_chain(self.outputs, capacity)?,
-            // 5. Count, nullifier digest, private transaction hash and sender keep the circuit's statement order.
-            // The program derives the digest from the exact published nullifiers and zeros through the key capacity.
-            // The circuit binds its private nullifiers to that digest and derives the address chain from their domain selectors.
-            // PrivateTxHash then binds the note, output and address chains with the private blinding.
+            // 5. The circuit holds every note below `n`. PrivateTxHash binds the note, output and address
+            // chains SPP proved, and its blinding binds the head's first nullifier.
             count(self.input_count),
-            self.input_nullifier_chain,
             *self.private_tx_hash,
             *self.family.sender(),
         ]);
@@ -181,7 +176,7 @@ pub enum TransferFamily<'a> {
     Confidential { sender: ConfidentialSender<'a> },
     /// The anonymous rail, the head's layout picks the entry disclosure.
     Anonymous {
-        /// `solana_owner_identity` of the payer, each co-signer, each funder and the withdrawal destination, zero when absent.
+        /// `solana_owner_identity` of each co-signer in account order, zero past the last.
         party_identities: &'a [[u8; 32]; ANONYMOUS_PARTIES],
         /// No hidden sender exists, every live owner is a published signer.
         public_owners: bool,
@@ -278,78 +273,12 @@ impl SignerSet {
     }
 }
 
-/// Per entry of the owner signer run, in the order [`SignerSet::chain`] binds, the live output slots
-/// that signer owns with a nonzero `data_hash`. SPP accepts one signature for any number of such
-/// slots, the proved count lets a signer's check notice a slot the sender left out of its terms.
-/// Entry `k` holds bits `5k..5k + 5`, zero past the run, and no bit above the last entry is set.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct SignerDataCounts(u64);
-
-/// One live output slot as the count reads it, its owner identity is `solana_owner_identity`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LiveSlot<'a> {
-    pub owner_identity: &'a [u8; 32],
-    pub data_hash: &'a [u8; 32],
-}
-
-impl SignerDataCounts {
-    /// `solana_message::v1::MAX_SIGNATURES`. A CPI caller's PDAs can sign past it, a member past the
-    /// last entry must own no data-bearing slot, the circuit holds the same.
-    pub const ENTRIES: usize = 12;
-    pub const ENTRY_BITS: usize = 5;
-    const ENTRY_MASK: u64 = (1 << Self::ENTRY_BITS) - 1;
-    const USED_BITS: u64 = (1 << (Self::ENTRIES * Self::ENTRY_BITS)) - 1;
-
-    pub const fn new(packed: u64) -> Result<Self, CustomRingError> {
-        match packed & !Self::USED_BITS {
-            0 => Ok(Self(packed)),
-            _ => Err(CustomRingError::InvalidSignerDataCounts),
-        }
-    }
-
-    /// `run` holds the signers' identities in run order, a slot with a zero `data_hash` never counts.
-    pub fn of_run<'a>(
-        run: &[[u8; 32]],
-        live_slots: impl Iterator<Item = LiveSlot<'a>> + Clone,
-    ) -> Result<Self, CustomRingError> {
-        let mut packed = 0;
-        for (entry, signer) in run.iter().enumerate() {
-            let count = live_slots
-                .clone()
-                .filter(|slot| slot.owner_identity == signer && *slot.data_hash != ZERO_FIELD)
-                .count() as u64;
-            match (entry < Self::ENTRIES, count) {
-                (_, 0) => {}
-                (true, 1..=Self::ENTRY_MASK) => packed |= count << (entry * Self::ENTRY_BITS),
-                _ => return Err(CustomRingError::InvalidSignerDataCounts),
-            }
-        }
-        Ok(Self(packed))
-    }
-
-    pub const fn packed(self) -> u64 {
-        self.0
-    }
-
-    /// Zero past the run.
-    pub const fn count(self, entry: usize) -> u8 {
-        match entry < Self::ENTRIES {
-            true => ((self.0 >> (entry * Self::ENTRY_BITS)) & Self::ENTRY_MASK) as u8,
-            false => 0,
-        }
-    }
-}
-
 /// Zero past the last cell, the chain width stays the key's.
 fn zero_filled_chain<'a>(
     cells: impl Iterator<Item = &'a [u8; 32]>,
     width: usize,
 ) -> Result<[u8; 32], HasherError> {
     create_hash_chain_4(cells.chain(core::iter::repeat(&ZERO_FIELD)).take(width))
-}
-
-fn output_chain(outputs: &[RingOutput<'_>], capacity: usize) -> Result<[u8; 32], HasherError> {
-    zero_filled_chain(outputs.iter().map(|output| output.hash), capacity)
 }
 
 /// `Poseidon(u32 len(ct), HashChain4(pack_left31(ct)))`, without the tag trailing zeros collide.
@@ -365,34 +294,9 @@ pub fn ciphertext_digest(ciphertext: &[u8]) -> Result<[u8; 32], HasherError> {
 pub fn record_chain(outputs: &[RingOutput<'_>], capacity: usize) -> Result<[u8; 32], HasherError> {
     let mut hashes = Vec::with_capacity(outputs.len());
     for output in outputs {
-        let hash = match output.record.len() {
-            AUDIT_RECORD_LEN => record_hash::<AUDIT_RECORD_LEN>(output.record),
-            COMPACT_AUDIT_RECORD_LEN => record_hash::<COMPACT_AUDIT_RECORD_LEN>(output.record),
-            length => Err(HasherError::InvalidInputLength(length, AUDIT_RECORD_LEN)),
-        }?;
-        hashes.push(hash);
+        hashes.push(hash_bytes(output.record)?);
     }
     zero_filled_chain(hashes.iter(), capacity)
-}
-
-fn record_hash<const N: usize>(record: &[u8]) -> Result<[u8; 32], HasherError> {
-    hash_bytes::<N>(
-        record
-            .try_into()
-            .map_err(|_| HasherError::InvalidInputLength(record.len(), N))?,
-    )
-}
-
-/// `HashChain4(hash_bytes(tail_i))`, zero while no slot carries a tail.
-pub fn tail_chain(outputs: &[RingOutput<'_>], capacity: usize) -> Result<[u8; 32], HasherError> {
-    let mut hashes = Vec::with_capacity(outputs.len());
-    for tail in outputs.iter().filter_map(|output| output.tail) {
-        hashes.push(hash_bytes(tail)?);
-    }
-    match hashes.is_empty() {
-        true => Ok(ZERO_FIELD),
-        false => zero_filled_chain(hashes.iter(), capacity),
-    }
 }
 
 /// An application of `count` writes, mirror `prover/circuits/registry`.
@@ -541,96 +445,4 @@ fn bit(value: bool) -> [u8; 32] {
 
 fn count(value: usize) -> [u8; 32] {
     right_align(&(value as u64).to_be_bytes())
-}
-
-#[cfg(test)]
-mod tests {
-    use spr_interface::shape::SPP_SUPPORTED_SHAPES;
-
-    use super::*;
-    use crate::key_catalog::TRANSFER_SHAPES;
-
-    /// A later signature or output limit past the encoding fails here, not in a proof.
-    #[test]
-    fn every_supported_limit_fits_the_encoding() {
-        assert!(usize::from(solana_message::v1::MAX_SIGNATURES) <= SignerDataCounts::ENTRIES);
-        assert!(SignerDataCounts::ENTRIES * SignerDataCounts::ENTRY_BITS <= u64::BITS as usize);
-        let widest = 1 << SignerDataCounts::ENTRY_BITS;
-        for shape in SPP_SUPPORTED_SHAPES {
-            assert!(shape.n_outputs() < widest, "{shape:?}");
-        }
-        for shape in TRANSFER_SHAPES {
-            assert!(usize::from(shape.outputs) < widest, "{shape:?}");
-        }
-    }
-
-    const ALICE: [u8; 32] = [1; 32];
-    const BOB: [u8; 32] = [2; 32];
-    const DATA: [u8; 32] = [7; 32];
-
-    fn slot<'a>(owner_identity: &'a [u8; 32], data_hash: &'a [u8; 32]) -> LiveSlot<'a> {
-        LiveSlot {
-            owner_identity,
-            data_hash,
-        }
-    }
-
-    #[test]
-    fn each_run_entry_counts_its_own_data_bearing_slots() {
-        let slots = [
-            slot(&BOB, &DATA),
-            slot(&ALICE, &ZERO_FIELD),
-            slot(&BOB, &DATA),
-            slot(&ALICE, &DATA),
-            slot(&[3; 32], &DATA),
-        ];
-        let counts = SignerDataCounts::of_run(&[ALICE, BOB], slots.iter().copied()).unwrap();
-        assert_eq!(counts.packed(), 1 | 2 << SignerDataCounts::ENTRY_BITS);
-        assert_eq!(counts.count(0), 1);
-        assert_eq!(counts.count(1), 2);
-        assert_eq!(counts.count(2), 0);
-        assert_eq!(counts.count(SignerDataCounts::ENTRIES), 0);
-    }
-
-    #[test]
-    fn an_empty_run_counts_nothing() {
-        let slots = [slot(&ALICE, &DATA)];
-        assert_eq!(
-            SignerDataCounts::of_run(&[], slots.iter().copied()),
-            Ok(SignerDataCounts::default())
-        );
-    }
-
-    #[test]
-    fn bits_past_the_last_entry_are_refused() {
-        let used = (1u64 << 60) - 1;
-        assert_eq!(
-            SignerDataCounts::new(used).map(SignerDataCounts::packed),
-            Ok(used)
-        );
-        assert_eq!(
-            SignerDataCounts::new(1 << 60),
-            Err(CustomRingError::InvalidSignerDataCounts)
-        );
-    }
-
-    #[test]
-    fn a_data_slot_past_the_entries_and_a_count_past_its_bits_are_refused() {
-        let mut wide = [ALICE; SignerDataCounts::ENTRIES + 1];
-        wide[SignerDataCounts::ENTRIES] = BOB;
-        let bob_data = [slot(&BOB, &DATA)];
-        assert_eq!(
-            SignerDataCounts::of_run(&wide, core::iter::empty()),
-            Ok(SignerDataCounts::default())
-        );
-        assert_eq!(
-            SignerDataCounts::of_run(&wide, bob_data.iter().copied()),
-            Err(CustomRingError::InvalidSignerDataCounts)
-        );
-        let slots = [slot(&ALICE, &DATA); 32];
-        assert_eq!(
-            SignerDataCounts::of_run(&[ALICE], slots.iter().copied()),
-            Err(CustomRingError::InvalidSignerDataCounts)
-        );
-    }
 }

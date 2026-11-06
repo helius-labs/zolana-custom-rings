@@ -21,11 +21,10 @@ mod tests;
 use custom_ring_interface::{
     cosign::{ApprovalMask, CoSignDemand, CoSignOperation},
     key_catalog::{RecordPools, RingCircuit, RowAuthorization, TransferAddresses, TransferSpend},
-    AnonymousParties, CheckedAuthorization, CustomRingError, CustomRingProof, DisclosureFormat,
-    FramedSenderBundle, InputTrees, InstructionTag, LiveSlot, ParsedTransact, PlainGroth16Proof,
-    PolicyProof, PublicLeg, PublicSlots, RingPolicy, RingRail, RootRead, Settlement,
-    SignerDataCounts, SignerSet, TransferBinding, ANONYMOUS_PARTIES, AUDIT_RECORD_LEN,
-    TRANSFER_OUTPUT_CAPACITIES,
+    AnonymousParties, CheckedAuthorization, CustomRingError, CustomRingProof, FramedSenderBundle,
+    InputTrees, InstructionTag, ParsedTransact, PlainGroth16Proof, PolicyProof, PublicLeg,
+    PublicSlots, RingPolicy, RingRail, RootRead, Settlement, SignerSet, TransferBinding,
+    ANONYMOUS_PARTIES, TRANSFER_OUTPUT_CAPACITIES,
 };
 use solana_address::Address;
 use solana_instruction::Instruction;
@@ -46,13 +45,15 @@ use spr_transaction::{
 use zolana_ring_client::{rpc::SubjectListSalt, AsyncRingIndexer};
 use zolana_ring_keys::RingKeys;
 use zolana_ring_policy::{ApprovalTotals, Member, OwnerDebit};
-use zolana_ring_transaction::{published_outputs, PublishedSlot, RingDelivery, RingOutputRail};
+use zolana_ring_transaction::{
+    payload_width, published_outputs, PublishedSlot, RingDelivery, RingOutputRail,
+};
 use zolana_ring_transaction::{random_field_element, ClassifiedInput};
 
 pub use self::{
     anonymous::{
         Anonymous, AnonymousMove, AnonymousPayment, AnonymousTransfer, ApplicationData, CachedNote,
-        CoOwner, EntrySpend, NoteData, ReadCache, RingPayment,
+        CoOwner, EntrySpend, NoteData, OwnerExposure, ReadCache, RingPayment,
     },
     delegate::{
         DelegateCandidates, DelegateFunding, DelegateMove, DelegateOutput, DelegatePayment,
@@ -499,7 +500,6 @@ struct Preview {
     /// Past the sender bundle and ahead of the auditor's message.
     app_messages: Vec<OwnedAppMessage>,
     discloses_approval: bool,
-    signer_data_counts: Option<SignerDataCounts>,
 }
 
 impl Preview {
@@ -518,7 +518,6 @@ impl Preview {
             published: &rail.published_slots(inputs, sender)?,
             sender_bundle: rail.published_sender(inputs, &sender.viewing_pubkey)?,
             tx_viewing_u: rail.tx_viewing_key().pubkey().u(),
-            format: rail.format(),
         }))
     }
 }
@@ -553,10 +552,6 @@ impl<'a> Pipeline<'a> {
         } = self.staged;
         let program = self.ring.program_id();
         let ring_rail = spend.rail();
-        if rail.format() == DisclosureFormat::SingleAssetPayout && !matches!(spend, Spend::Owner) {
-            return Err(RingError::ShapeUnkeyed { rail: ring_rail });
-        }
-        rail.check_format(&proof_inputs)?;
         // The compact data carries a u32 expiry, an unbounded one keeps its farthest value.
         let expiry_unix_ts =
             u32::try_from(proof_inputs.external_data.expiry_unix_ts).unwrap_or(u32::MAX);
@@ -614,7 +609,6 @@ impl<'a> Pipeline<'a> {
                 })
                 .collect(),
             discloses_approval: self.approval_blinder.is_some(),
-            signer_data_counts: signer_data_counts(&owner_signers, &proof_inputs.output_utxos)?,
         };
 
         Ok(Prepared {
@@ -692,7 +686,6 @@ impl<'a> Prepared<'a> {
         };
         Ok(TransferPlanner {
             subjects: TransferSpend {
-                format: staged.rail.format(),
                 rail,
                 inputs: self.published_inputs,
                 outputs: usize::from(self.preview.n_out),
@@ -706,10 +699,9 @@ impl<'a> Prepared<'a> {
             inputs: proof_inputs,
             rail: &staged.rail,
             sender: &staged.sender,
-            // A disclosed opening spans every slot of the key like a data tail, a key of another
-            // output count would leave the opening's rows short of the digest it proves.
-            spans_capacity: proof_inputs.output_utxos.iter().any(carries_data)
-                || self.pipeline.approval_blinder.is_some(),
+            // A disclosed opening spans every slot of the key, a key of another output count would
+            // leave the opening's rows short of the digest it proves.
+            spans_capacity: self.pipeline.approval_blinder.is_some(),
         })
     }
 
@@ -752,7 +744,13 @@ impl<'a> Prepared<'a> {
             .audit_layout();
         let sealed = match presealed {
             Some(presealed) => {
-                let opened = presealed.open(layout, flags, &auditor)?;
+                let exits = published_outputs(&proof_inputs.output_utxos)
+                    .iter()
+                    .filter(|output| {
+                        output.owner_address.is_some() && output.ring_program_id.is_none()
+                    })
+                    .count();
+                let opened = presealed.open(layout, flags, &auditor, exits)?;
                 // The program expands the frame's viewing key, another costs a proof and fails the hash.
                 if opened.eph_u != rail.tx_viewing_key().pubkey().u() {
                     return Err(RingError::RelayAuditorMessage);
@@ -883,9 +881,12 @@ impl<'a> Sealed<'a> {
             | Spend::PublicOwners
             | Spend::Delegate { .. } => None,
         };
+        // A hidden owner co-signing approves its own outflow, no exposure waiver admits it.
         if let Some(anonymous) = anonymous {
-            HiddenOwner::of(&anonymous.signer.public_key())?
-                .check_signers(co_signers.iter().copied())?;
+            let hidden = HiddenOwner::of(&anonymous.signer.public_key())?;
+            if co_signers.contains(&hidden.0) {
+                return Err(CustomRingError::CoSignerIsOwner.into());
+            }
         }
         let authorization = spend.row_authorization();
         check_owner_capacity(&OwnerCapacity {
@@ -906,7 +907,11 @@ impl<'a> Sealed<'a> {
             delegate,
         };
         let mut parts = preview.parts(&proof_inputs, &rail, &sender, policy.plan.key)?;
-        parts.seal_audit(sealed.envelope.clone(), &sealed.records, &sealed.tails);
+        parts.seal_audit(
+            sealed.envelope.clone(),
+            sealed.keys.clone(),
+            &sealed.exit_records,
+        );
         parts.approval = policy.approval;
         let approval_opening = match approval_blinder {
             Some(blinder) => {
@@ -1027,19 +1032,9 @@ impl Unwitnessed<'_> {
             ..
         } = self;
         let ring = frame.ring;
-        let exit_destination = match &spend {
-            Spend::Anonymous(anonymous) => anonymous.exit_destination,
-            Spend::Owner
-            | Spend::InProofOwner(_)
-            | Spend::PublicOwners
-            | Spend::Delegate { .. } => None,
-        };
         let party_identities = match frame.parts.rail.anonymous_frame() {
             true => AnonymousParties {
-                payer: frame.proof_inputs.payer.as_array(),
                 co_signers: &frame.accounts.co_signers,
-                funders: &frame.accounts.deposit_funders(&frame.parts),
-                exit_destination: exit_destination.as_ref().map(Address::as_array),
             }
             .identities()?,
             false => [[0; 32]; ANONYMOUS_PARTIES],
@@ -1256,7 +1251,6 @@ pub fn entry_shape_keyed(shape: Shape) -> bool {
 fn keyed(rail: RingRail, shape: Shape, spends_default_ring: bool) -> bool {
     rail.supports(shape)
         && transfer_key(TransferSpend {
-            format: rail.disclosure_format(shape),
             rail,
             inputs: shape.n_inputs(),
             outputs: shape.n_outputs(),
@@ -1277,10 +1271,7 @@ struct PreviewParts<'a> {
     published: &'a [PublishedSlot<'a>],
     sender_bundle: Option<FramedSenderBundle<'a>>,
     tx_viewing_u: [u8; 32],
-    format: DisclosureFormat,
 }
-
-const UNSEALED_RECORD: [u8; AUDIT_RECORD_LEN] = [0; AUDIT_RECORD_LEN];
 
 fn preview_parts(parts: PreviewParts<'_>) -> TransactParts {
     let preview = parts.preview;
@@ -1317,33 +1308,30 @@ fn preview_parts(parts: PreviewParts<'_>) -> TransactParts {
         tx_viewing_u: parts.tx_viewing_u,
         salt: external.salt,
         extensions: OwnedExtensions {
-            format: parts.format,
             data_hash: external.data_hash,
             ring_data_hash: external.ring_data_hash,
             messages: preview.app_messages.clone(),
             cache: cache_access(parts.inputs),
             // Sized here, `frame` writes the digest of the totals.
             approval_totals: preview.discloses_approval.then_some([0; 32]),
-            signer_data_counts: preview.signer_data_counts,
         },
         interface_transfers: external
             .interface_transfers
             .iter()
             .map(|transfer| transfer.interface_transfer())
             .collect(),
-        has_data: parts.inputs.output_utxos.iter().any(carries_data),
+        has_data: payload_width(&parts.inputs.output_utxos).is_some(),
         entry: spends_default_ring(&parts.inputs.input_utxos),
         wide_owners: parts.wide_owners,
         outputs: parts
             .published
             .iter()
-            .map(|slot| {
-                OwnedOutput::of(slot.wire(&UNSEALED_RECORD[..parts.format.record_len()], None))
-            })
+            .map(|slot| OwnedOutput::of(slot.wire()))
             .collect(),
         replies: owned_replies(parts.published),
         sender: parts.sender_bundle.map(OwnedSenderBundle::of),
         envelope: Vec::new(),
+        recipient_keys: Vec::new(),
         private_tx_hash: [0; 32],
         anonymous: None,
         in_proof_owner: preview.in_proof_owner.map(|owner| OwnedInProofOwner {
@@ -1379,42 +1367,6 @@ fn cache_access(inputs: &SppProofInputs) -> Option<CacheAccess> {
         read_bitmap,
         write_slots: CacheAccess::NO_WRITES,
     })
-}
-
-/// A key without data capacity holds every slot's data hashes to zero.
-fn carries_data(output: &SppProofOutputUtxo) -> bool {
-    !output.is_dummy()
-        && [output.data_hash, output.ring_data_hash]
-            .iter()
-            .flatten()
-            .any(|hash| *hash != [0; 32])
-}
-
-/// The frame's counts over the owner signer run, absent at zero since one statement value keeps one encoding.
-/// SPP takes one owner signature for all its data-bearing slots, the circuit proves these counts so a
-/// signer's check can notice a slot the sender left out of its terms. A wrong value fails the proof.
-fn signer_data_counts(
-    owner_signers: &[Address],
-    outputs: &[SppProofOutputUtxo],
-) -> Result<Option<SignerDataCounts>, RingError> {
-    let run = owner_signers
-        .iter()
-        .map(|signer| Ok(solana_owner_identity(signer.as_array())?))
-        .collect::<Result<Vec<_>, RingError>>()?;
-    let slots = published_outputs(outputs)
-        .iter()
-        .filter(|output| !output.is_dummy())
-        .filter_map(|output| Some((output.owner_address?, output.data_hash.unwrap_or_default())))
-        .map(|(owner, data_hash)| Ok((owner.signing_pubkey.owner_proof_input_hash()?, data_hash)))
-        .collect::<Result<Vec<_>, RingError>>()?;
-    let counts = SignerDataCounts::of_run(
-        &run,
-        slots.iter().map(|(owner_identity, data_hash)| LiveSlot {
-            owner_identity,
-            data_hash,
-        }),
-    )?;
-    Ok((counts != SignerDataCounts::default()).then_some(counts))
 }
 
 /// One length per frame, `None` without reply metadata.

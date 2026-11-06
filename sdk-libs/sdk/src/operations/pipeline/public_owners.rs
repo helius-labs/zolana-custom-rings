@@ -114,7 +114,7 @@ impl PublicOwners<'_> {
             return Err(RingError::PublicSpendInProofOwner);
         }
         if config.mode != RingMode::Anonymous {
-            return self.owner.stage_signers(sender);
+            return self.owner.stage_signers(sender, config);
         }
         self.owner.check_settlement_accounts()?;
         let transaction = SenderChange {
@@ -130,6 +130,7 @@ impl PublicOwners<'_> {
         let first_nullifier = *transaction.first_nullifier();
         let rail = RingOutputRail::new(
             transaction_key(keys, first_nullifier)?,
+            config.auditor_pubkey,
             RingDelivery::Anonymous(Box::new(anonymous_plan(&self.payments))),
         );
         let transaction = pad_under_rail(transaction, &rail, shape, &sender)?;

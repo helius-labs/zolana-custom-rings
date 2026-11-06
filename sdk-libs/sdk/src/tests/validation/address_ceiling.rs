@@ -1,8 +1,7 @@
 use custom_ring_interface::{
     cosign::ApprovalMask, storage::Revision, stream::slot_tag, AnonymousProofData, AppMessage,
     BundleLayout, CustomRingProof, FrameExtensions, FramedSenderBundle, InputTrees,
-    PlainGroth16Proof, Replies, RingOutput, SlotBody, AUDIT_RECORD_LEN, MIN_REPLY_LEN,
-    RECIPIENT_BODY_LEN,
+    PlainGroth16Proof, Replies, RingOutput, SlotBody, MIN_REPLY_LEN, OUTPUT_RECORD_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -302,7 +301,7 @@ async fn a_zero_key_group_splits_at_the_zero_key_capacity() {
 }
 
 /// Inputs a zero-key merge carries in one v1 transaction, measured here.
-const WIDEST_ZERO_KEY_MERGE: usize = 44;
+const WIDEST_ZERO_KEY_MERGE: usize = 43;
 
 /// An anonymous transfer of `inputs` x `outputs`, slot 0 change, each other slot a body and a reply.
 fn anonymous_transfer(inputs: usize, outputs: usize, reply_len: Option<usize>) -> Instruction {
@@ -319,11 +318,11 @@ fn anonymous_transfer_with(
     let spp_proof = PlainGroth16Proof::zeroed();
     let field = [1; 32];
     let salt = [2; 16];
-    let record = [3; AUDIT_RECORD_LEN];
-    let body = [4; RECIPIENT_BODY_LEN];
-    let bundle = vec![5; BundleLayout { outputs, change: 1 }.byte_len()];
+    let body = [4; OUTPUT_RECORD_LEN];
+    let bundle = vec![5; BundleLayout { outputs }.byte_len()];
     let nullifiers = vec![field; inputs];
-    let region = vec![6; reply_len.unwrap_or(0) * (outputs - 1)];
+    let region = vec![6; reply_len.unwrap_or(0) * outputs];
+    let keys = vec![8; 32 * outputs];
     let envelope_room = vec![7; 8192];
     let mut data = RingTransactData {
         rail: RingRail::Anonymous,
@@ -352,12 +351,8 @@ fn anonymous_transfer_with(
                     0 => [0; 32],
                     _ => slot_tag(field),
                 },
-                body: match slot {
-                    0 => SlotBody::None,
-                    _ => SlotBody::Recipient(&body),
-                },
-                record: &record,
-                tail: None,
+                body: SlotBody::Recipient(&body),
+                record: &body,
             })
             .collect(),
         replies: reply_len.map(|len| Replies::new(len as u16, &region).unwrap()),
@@ -366,6 +361,7 @@ fn anonymous_transfer_with(
             body: &bundle,
         }),
         envelope: &[],
+        recipient_keys: &keys,
         private_tx_hash: &field,
         anonymous: Some(AnonymousProofData {
             commitment: &field,

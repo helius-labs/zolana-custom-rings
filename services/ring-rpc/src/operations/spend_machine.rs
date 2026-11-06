@@ -1,22 +1,25 @@
 //! One state per published nullifier, driven only by finalized frames and note openings.
+//!
+//! A transfer's proof names `R` and no note position, so a nullifier reads as a spend until the
+//! index resolves it. `R` checks a frame's flows, never a row.
 
 use zolana_ring_client::rpc::WalletNoteStatus;
 
 use crate::utxos::CreatedIn;
 
-/// `Padding`, `Address`, `External` and `Resolved` are terminal, an unresolved row never reads as padding.
+/// `Padding` and `Resolved` are terminal, an unclassified row never reads as padding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SpendState {
     /// The frame's stream is unreadable, the frame retries.
     Observed,
+    /// A merge's padding slot, its record names every real nullifier.
     Padding,
-    /// SPP's address slot spends no note and names no owner.
-    Address,
-    External,
     Resolved {
         note: [u8; 32],
     },
-    UnresolvedReal,
+    /// No opened note owns it yet, an unopened note, address, default-ring note or transfer
+    /// padding.
+    Unclassified,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,9 +35,8 @@ pub(crate) struct SpendRow {
 pub(crate) enum InputRead {
     Unreadable,
     Padding,
-    Address,
-    External,
-    Real,
+    /// Any slot the index may resolve to a note.
+    Spend,
 }
 
 /// One nullifier as a frame publishes it, `hit` is the note index's answer.
@@ -61,14 +63,12 @@ impl Observation {
         match (self.read, self.hit) {
             (InputRead::Unreadable, _) => SpendState::Observed,
             (InputRead::Padding, _) => SpendState::Padding,
-            (InputRead::Address, _) => SpendState::Address,
-            (InputRead::External, _) => SpendState::External,
-            (InputRead::Real, Some(note)) => SpendState::Resolved { note },
-            (InputRead::Real, None) => SpendState::UnresolvedReal,
+            (InputRead::Spend, Some(note)) => SpendState::Resolved { note },
+            (InputRead::Spend, None) => SpendState::Unclassified,
         }
     }
 
-    /// A replay of one frame is idempotent, a read moves only `Observed` or `UnresolvedReal`.
+    /// A replay of one frame is idempotent, a read moves only `Observed` or `Unclassified`.
     pub(crate) fn apply(self, existing: Option<&SpendRow>) -> Transition {
         let row = SpendRow {
             nullifier: self.nullifier,
@@ -84,11 +84,8 @@ impl Observation {
         }
         let moves = match existing.state {
             SpendState::Observed => row.state != SpendState::Observed,
-            SpendState::UnresolvedReal => matches!(row.state, SpendState::Resolved { .. }),
-            SpendState::Padding
-            | SpendState::Address
-            | SpendState::External
-            | SpendState::Resolved { .. } => false,
+            SpendState::Unclassified => matches!(row.state, SpendState::Resolved { .. }),
+            SpendState::Padding | SpendState::Resolved { .. } => false,
         };
         match moves {
             true => Transition::Write(row),
@@ -98,23 +95,20 @@ impl Observation {
 }
 
 impl SpendRow {
-    /// A newly opened note or a late secret moves an unresolved row only.
+    /// A newly opened note or a late secret moves an unclassified row only.
     pub(crate) fn opened(self, note: [u8; 32]) -> Transition {
         match self.state {
-            SpendState::UnresolvedReal => Transition::Write(Self {
+            SpendState::Unclassified => Transition::Write(Self {
                 state: SpendState::Resolved { note },
                 ..self
             }),
             SpendState::Resolved { note: held } if held != note => Transition::Integrity(self),
-            SpendState::Resolved { .. }
-            | SpendState::Observed
-            | SpendState::Padding
-            | SpendState::Address
-            | SpendState::External => Transition::Unchanged,
+            SpendState::Resolved { .. } | SpendState::Observed | SpendState::Padding => {
+                Transition::Unchanged
+            }
         }
     }
 }
-
 /// The inputs of one note's status, each read from its own nullifier and no other row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct NoteRead {
@@ -173,13 +167,11 @@ mod tests {
 
     #[test]
     fn each_read_enters_its_state() {
-        let real = InputRead::Real;
+        let spend = InputRead::Spend;
         for (read, hit, state) in [
             (InputRead::Padding, None, SpendState::Padding),
-            (InputRead::Address, None, SpendState::Address),
-            (InputRead::External, None, SpendState::External),
-            (real, None, SpendState::UnresolvedReal),
-            (real, Some([2; 32]), SpendState::Resolved { note: [2; 32] }),
+            (spend, None, SpendState::Unclassified),
+            (spend, Some([2; 32]), SpendState::Resolved { note: [2; 32] }),
             (InputRead::Unreadable, None, SpendState::Observed),
             (InputRead::Unreadable, Some([2; 32]), SpendState::Observed),
         ] {
@@ -188,13 +180,11 @@ mod tests {
     }
 
     #[test]
-    fn padding_addresses_and_external_ignore_a_hit() {
-        for read in [InputRead::Padding, InputRead::Address, InputRead::External] {
-            assert!(!matches!(
-                observed(read, Some([2; 32])).state(),
-                SpendState::Resolved { .. }
-            ));
-        }
+    fn merge_padding_ignores_a_hit() {
+        assert!(!matches!(
+            observed(InputRead::Padding, Some([2; 32])).state(),
+            SpendState::Resolved { .. }
+        ));
     }
 
     #[test]
@@ -217,25 +207,14 @@ mod tests {
 
     #[test]
     fn a_replay_changes_no_terminal_row() {
-        for state in [
-            SpendState::Padding,
-            SpendState::Address,
-            SpendState::External,
-            SpendState::Resolved { note: [2; 32] },
-        ] {
+        for state in [SpendState::Padding, SpendState::Resolved { note: [2; 32] }] {
             let row = SpendRow {
                 nullifier: [1; 32],
                 frame: frame(1),
                 position: 0,
                 state,
             };
-            for read in [
-                InputRead::Padding,
-                InputRead::Address,
-                InputRead::External,
-                InputRead::Unreadable,
-                InputRead::Real,
-            ] {
+            for read in [InputRead::Padding, InputRead::Unreadable, InputRead::Spend] {
                 assert_eq!(
                     observed(read, Some([3; 32])).apply(Some(&row)),
                     Transition::Unchanged
@@ -254,7 +233,7 @@ mod tests {
         };
         let second = Observation {
             frame: frame(2),
-            ..observed(InputRead::Real, Some([3; 32]))
+            ..observed(InputRead::Spend, Some([3; 32]))
         };
         assert!(matches!(
             second.apply(Some(&row)),
@@ -263,7 +242,7 @@ mod tests {
     }
 
     #[test]
-    fn an_opened_note_resolves_an_unresolved_row_and_no_other() {
+    fn an_opened_note_resolves_an_unclassified_row_and_no_other() {
         let row = |state| SpendRow {
             nullifier: [1; 32],
             frame: frame(1),
@@ -271,13 +250,12 @@ mod tests {
             state,
         };
         assert_eq!(
-            written(row(SpendState::UnresolvedReal).opened([2; 32])),
+            written(row(SpendState::Unclassified).opened([2; 32])),
             SpendState::Resolved { note: [2; 32] }
         );
         for state in [
             SpendState::Observed,
             SpendState::Padding,
-            SpendState::External,
             SpendState::Resolved { note: [2; 32] },
         ] {
             assert_eq!(row(state).opened([2; 32]), Transition::Unchanged);

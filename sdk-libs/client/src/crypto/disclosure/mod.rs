@@ -1,8 +1,12 @@
-//! The auditor stream of a ring transfer, mirrored by Go `prover/circuits/audit`, and the pad a merge keeps.
+//! The auditor stream of a ring transfer, mirrored by Go `prover/circuits/audit`.
+//!
+//! The stream seals the transaction viewing secret, `R`, any entry records, and every published
+//! slot's recipient key. Each record sits in its slot's body under the slot's delivered secret, an
+//! auditor holding the viewing secret and the key derives that secret and opens it.
 
 use custom_ring_interface::{
-    domain::AUDIT_STREAM_LABEL, AuditEvidence, AuditRecord, AuditStreamLayout, DataTail,
-    DisclosureFormat, InputMap, RecordKind, StreamRegion, DATA_TAIL_LEN, STREAM_FIRST_COUNTER,
+    decode_recipient_keys, domain::AUDIT_STREAM_LABEL, encode_recipient_keys, AuditEvidence,
+    AuditStreamLayout, StreamRegion, STREAM_FIRST_COUNTER,
 };
 use spr_hasher::primitives::is_canonical_bn254_scalar_be;
 use spr_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
@@ -19,23 +23,19 @@ pub struct AuditStreamSeal<'a> {
     pub layout: AuditStreamLayout,
     pub tx_viewing_key: &'a ViewingKey,
     pub salt: &'a [u8; 16],
-    /// The published inputs under the key's input class.
-    pub inputs: InputMap,
+    /// `R`, the spent notes.
+    pub real_inputs: u8,
     pub evidence: AuditEvidence,
-    /// One per slot.
-    pub records: Vec<AuditRecord>,
-    /// One per slot under `has_data`, else none.
-    pub tails: Vec<DataTail>,
+    /// `V_i` of every published slot.
+    pub recipient_keys: Vec<[u8; 32]>,
 }
 
 pub struct SealedAuditStream {
     /// The transfer's own viewing key.
     pub eph_u: [u8; 32],
     pub envelope: Vec<u8>,
-    /// One per slot.
-    pub records: Vec<Vec<u8>>,
-    /// One per slot under `has_data`, else none.
-    pub tails: Vec<[u8; DATA_TAIL_LEN]>,
+    /// `32 m` bytes, key `i` at its own counter.
+    pub keys: Vec<u8>,
 }
 
 impl AuditStreamSeal<'_> {
@@ -45,89 +45,41 @@ impl AuditStreamSeal<'_> {
             layout,
             tx_viewing_key,
             salt,
-            inputs,
+            real_inputs,
             evidence,
-            records,
-            tails,
+            recipient_keys,
         } = self;
         let layout = layout.checked().map_err(|_| AuditError::DisclosureLayout)?;
-        let tails_expected = if layout.has_data { layout.outputs } else { 0 };
-        if records.len() != layout.outputs
-            || tails.len() != tails_expected
-            || inputs.published_inputs() != layout.inputs
-            || inputs.capacity() != layout.key.class()
-        {
-            return Err(AuditError::DisclosureLayout);
-        }
-        // The opener refuses a default bit off a note, a seal writes none.
-        if let AuditEvidence::Entry {
-            default_input_bits, ..
-        } = &evidence
-        {
-            inputs
-                .validate_default_input_bits(*default_input_bits)
-                .map_err(|_| AuditError::DisclosureLayout)?;
-        }
-        let compact_mint = match (&evidence, layout.key.format) {
-            (AuditEvidence::SingleAssetPayout { mint }, DisclosureFormat::SingleAssetPayout) => {
-                Some(*mint)
-            }
-            (AuditEvidence::SingleAssetPayout { .. }, DisclosureFormat::Standard)
-            | (_, DisclosureFormat::SingleAssetPayout) => return Err(AuditError::DisclosureLayout),
-            _ => None,
-        };
-        if compact_mint.is_some_and(|mint| {
-            records
-                .iter()
-                .any(|record| record.kind != RecordKind::Ring || record.mint != mint)
-        }) {
+        if recipient_keys.len() != layout.outputs {
             return Err(AuditError::DisclosureLayout);
         }
         let key = X25519Keypair::from_bytes(&tx_viewing_key.secret_bytes());
         let stream = sealing_salted_stream(&key, auditor_pk, salt, AUDIT_STREAM_LABEL)?;
         let mut plaintext = custom_ring_interface::AuditEnvelope {
             tx_viewing_secret: *tx_viewing_key.secret_bytes(),
-            real_inputs: inputs.note_count(),
-            address_input_bits: inputs.address_input_bits(),
+            real_inputs,
             evidence,
         };
-        plaintext.input_map(layout).map_err(|_| {
-            plaintext.tx_viewing_secret.zeroize();
-            AuditError::DisclosureLayout
-        })?;
         let mut envelope = plaintext.encode();
         plaintext.tx_viewing_secret.zeroize();
-        if envelope.len() != layout.envelope().len {
+        // The opener's checks hold on the seal, a seal off its layout never leaves the wallet.
+        let checked =
+            custom_ring_interface::AuditEnvelope::decode(&envelope, layout).map(|mut opened| {
+                opened.tx_viewing_secret.zeroize();
+            });
+        if checked.is_err() || envelope.len() != layout.envelope().len {
             envelope.zeroize();
             return Err(AuditError::DisclosureLayout);
         }
         stream.apply_at(STREAM_FIRST_COUNTER, &mut envelope);
-        let records = records
-            .iter()
-            .enumerate()
-            .map(|(slot, record)| {
-                let mut ciphertext = match layout.key.format {
-                    DisclosureFormat::Standard => record.encode().to_vec(),
-                    DisclosureFormat::SingleAssetPayout => record.encode_compact().to_vec(),
-                };
-                stream.apply_at(layout.record(slot).start_counter, &mut ciphertext);
-                ciphertext
-            })
-            .collect();
-        let tails = tails
-            .iter()
-            .enumerate()
-            .map(|(slot, tail)| {
-                let mut ciphertext = tail.encode();
-                stream.apply_at(layout.tail(slot).start_counter, &mut ciphertext);
-                ciphertext
-            })
-            .collect();
+        let mut keys = encode_recipient_keys(&recipient_keys);
+        for (slot, key) in keys.as_chunks_mut::<32>().0.iter_mut().enumerate() {
+            stream.apply_at(layout.recipient_key(slot).start_counter, key);
+        }
         Ok(SealedAuditStream {
             eph_u: tx_viewing_key.pubkey().u(),
             envelope,
-            records,
-            tails,
+            keys,
         })
     }
 }
@@ -142,7 +94,8 @@ pub struct AuditEnvelope<'a> {
 
 pub struct OpenedAudit {
     pub tx_viewing_key: ViewingKey,
-    pub inputs: InputMap,
+    /// `R`, the spent notes.
+    pub real_inputs: u8,
     pub evidence: AuditEvidence,
     layout: AuditStreamLayout,
     stream: RingStream,
@@ -185,16 +138,13 @@ impl AuditEnvelope<'_> {
         stream.apply_at(STREAM_FIRST_COUNTER, &mut plaintext);
         let mut envelope = custom_ring_interface::AuditEnvelope::decode(&plaintext, layout)
             .map_err(|_| AuditError::DisclosureField)?;
-        let inputs = envelope
-            .input_map(layout)
-            .map_err(|_| AuditError::DisclosureField);
         let tx_viewing_key = ViewingKey::from_canonical_bytes(&envelope.tx_viewing_secret)
             .map_err(|_| AuditError::NonCanonicalViewingKey);
         envelope.tx_viewing_secret.zeroize();
         check_evidence(&envelope.evidence)?;
         Ok(OpenedAudit {
             tx_viewing_key: tx_viewing_key?,
-            inputs: inputs?,
+            real_inputs: envelope.real_inputs,
             evidence: envelope.evidence,
             layout,
             stream,
@@ -203,41 +153,35 @@ impl AuditEnvelope<'_> {
 }
 
 impl OpenedAudit {
-    /// `ciphertext` is the slot's bytes in the auditor message.
-    pub fn record(&self, slot: usize, ciphertext: &[u8]) -> Result<AuditRecord, AuditError> {
-        let plaintext = self.open_region(self.layout.record(slot), ciphertext)?;
-        match &self.evidence {
-            AuditEvidence::SingleAssetPayout { mint } => {
-                AuditRecord::decode_compact(&plaintext, mint)
-            }
-            _ => AuditRecord::decode(&plaintext),
-        }
-        .map_err(|_| AuditError::DisclosureField)
-    }
-
-    pub fn tail(&self, slot: usize, ciphertext: &[u8]) -> Result<DataTail, AuditError> {
-        let plaintext = self.open_region(self.layout.tail(slot), ciphertext)?;
-        DataTail::decode(&plaintext).map_err(|_| AuditError::DisclosureField)
-    }
-
-    fn open_region(
-        &self,
-        region: StreamRegion,
-        ciphertext: &[u8],
-    ) -> Result<Zeroizing<Vec<u8>>, AuditError> {
-        if ciphertext.len() != region.len {
+    /// `ciphertext` is the message's key region, key `i` names slot `i`'s recipient.
+    pub fn recipient_keys(&self, ciphertext: &[u8]) -> Result<Vec<X25519Pubkey>, AuditError> {
+        if ciphertext.len() != self.layout.keys_len() {
             return Err(AuditError::DisclosureLayout);
         }
         let mut plaintext = Zeroizing::new(ciphertext.to_vec());
-        self.stream.apply_at(region.start_counter, &mut plaintext);
-        Ok(plaintext)
+        for (slot, key) in plaintext.as_chunks_mut::<32>().0.iter_mut().enumerate() {
+            self.open_region(self.layout.recipient_key(slot), key)?;
+        }
+        decode_recipient_keys(&plaintext, self.layout)
+            .map_err(|_| AuditError::DisclosureField)?
+            .into_iter()
+            .map(|key| X25519Pubkey::from_u(key).map_err(|_| AuditError::DisclosureField))
+            .collect()
+    }
+
+    fn open_region(&self, region: StreamRegion, bytes: &mut [u8]) -> Result<(), AuditError> {
+        if bytes.len() != region.len {
+            return Err(AuditError::DisclosureLayout);
+        }
+        self.stream.apply_at(region.start_counter, bytes);
+        Ok(())
     }
 }
 
 /// Refuses an opening the proof cannot have bound.
 fn check_evidence(evidence: &AuditEvidence) -> Result<(), AuditError> {
     match evidence {
-        AuditEvidence::None | AuditEvidence::SingleAssetPayout { .. } => Ok(()),
+        AuditEvidence::None => Ok(()),
         AuditEvidence::Entry { inputs, .. } => inputs.iter().try_for_each(|input| {
             canonical(input.nullifier_pk)?;
             canonical(input.input_commitment).map(drop)

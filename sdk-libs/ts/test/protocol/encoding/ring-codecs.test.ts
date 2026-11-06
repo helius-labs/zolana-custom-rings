@@ -64,6 +64,13 @@ import {
   type SignedRingRead,
 } from "../../../src/rpc/ring-rpc.js";
 
+/** The commitment of a test opening, every fixture carries its data hashes. */
+function rebuiltHash(utxo: Parameters<typeof knownUtxoHash>[0], ringId: Bytes32): Bytes32 {
+  const hash = knownUtxoHash(utxo, ringId);
+  if (hash === undefined) throw new Error("no data hashes");
+  return hash;
+}
+
 function hex(value: string): Uint8Array {
   return Uint8Array.from(Buffer.from(value, "hex"));
 }
@@ -163,9 +170,20 @@ function rustItem(name: string): Record<string, unknown> {
   return structuredClone(value.items[0]!);
 }
 
-/** Rust `DecryptedInput` of a fixture row, named by commitment and the last row unseen. */
+/**
+ * The anonymous fixture row with its default-ring notes in note order, the wire Ring RPC serves once
+ * no stream classifies an input. A fixture still carrying the retired `inputs` list maps to it here.
+ */
 function anonymousItem(): Record<string, unknown> {
-  return rustItem("decrypted_anonymous_page.json");
+  const item = rustItem("decrypted_anonymous_page.json");
+  const retired = item["inputs"] as Record<string, unknown>[] | undefined;
+  if (retired !== undefined) {
+    item["defaultInputs"] = retired.flatMap((input) =>
+      input["defaultInput"] === undefined ? [] : [input["defaultInput"]],
+    );
+    delete item["inputs"];
+  }
+  return item;
 }
 
 describe("ring status", () => {
@@ -992,8 +1010,8 @@ describe("audited UTXO read", () => {
       asset: getAddressDecoder().decode(utxo.asset),
       amount: Number(utxo.amount),
       blinding: getAddressDecoder().decode(utxo.blinding),
-      dataHash: getAddressDecoder().decode(utxo.dataHash),
-      ringDataHash: getAddressDecoder().decode(utxo.ringDataHash),
+      dataHash: getAddressDecoder().decode(utxo.dataHash ?? ZERO_32),
+      ringDataHash: getAddressDecoder().decode(utxo.ringDataHash ?? ZERO_32),
       treeId: utxo.treeId,
       ...(utxo.mint === undefined ? {} : { mint: utxo.mint }),
     };
@@ -1031,9 +1049,9 @@ describe("audited UTXO read", () => {
   it("signs the hashes it sends and opens an answer that rebuilds its hash under the ring or the default ring", async () => {
     await initializePoseidon();
     const ringId = ringIdField(addressOf(7));
-    const keyedHash = knownUtxoHash(keyed, ringId);
-    const depositHash = knownUtxoHash(deposited, ringId);
-    const defaultHash = knownUtxoHash(keyed, ZERO_32);
+    const keyedHash = rebuiltHash(keyed, ringId);
+    const depositHash = rebuiltHash(deposited, ringId);
+    const defaultHash = rebuiltHash(keyed, ZERO_32);
     const requested = [keyedHash, depositHash, defaultHash, filled(2, 32) as Bytes32];
     const { page, bodies, signer } = await readUtxos(requested, [
       view(keyedHash, wireUtxo(keyed)),
@@ -1086,7 +1104,7 @@ describe("audited UTXO read", () => {
     ["a mint its asset field does not derive", (utxo) => (utxo["mint"] = addressOf(9))],
   ])("refuses an opening with %s", async (_name, edit) => {
     await initializePoseidon();
-    const utxoHash = knownUtxoHash(keyed, ringIdField(addressOf(7)));
+    const utxoHash = rebuiltHash(keyed, ringIdField(addressOf(7)));
     const utxo = wireUtxo(keyed);
     edit(utxo);
     await expect(readUtxos([utxoHash], [view(utxoHash, utxo)])).rejects.toMatchObject({
@@ -1097,7 +1115,7 @@ describe("audited UTXO read", () => {
   it("keeps the mint an opening's asset field derives from", async () => {
     await initializePoseidon();
     const minted: KnownUtxo = { ...keyed, asset: assetField(addressOf(9)), mint: addressOf(9) };
-    const utxoHash = knownUtxoHash(minted, ringIdField(addressOf(7)));
+    const utxoHash = rebuiltHash(minted, ringIdField(addressOf(7)));
     const { page } = await readUtxos([utxoHash], [view(utxoHash, wireUtxo(minted))]);
     expect(page.utxos[0]?.utxo).toEqual(minted);
   });
@@ -1105,8 +1123,8 @@ describe("audited UTXO read", () => {
   it("refuses an answer at another position than its hash", async () => {
     await initializePoseidon();
     const ringId = ringIdField(addressOf(7));
-    const first = knownUtxoHash(keyed, ringId);
-    const second = knownUtxoHash(deposited, ringId);
+    const first = rebuiltHash(keyed, ringId);
+    const second = rebuiltHash(deposited, ringId);
     const answers = [view(first, wireUtxo(keyed)), view(second, wireUtxo(deposited))];
     for (const utxos of [[answers[0]], [null, answers[0]], [answers[1], answers[0]]])
       await expect(readUtxos([first, second], utxos)).rejects.toMatchObject({ code: "RING_RPC" });
@@ -1234,7 +1252,7 @@ describe("ring read request", () => {
     expect(exit.kind === "exit" && exit.utxo.mint).toBeUndefined();
     expect(item.payloadErrors).toEqual([{ slotIndex: 3, kind: "commitment" }]);
     expect(item.realInputs).toBe(0);
-    expect(item.inputs).toEqual([]);
+    expect(item.defaultInputs).toEqual([]);
     expect(item.nullifiers).toEqual([filled(12, 32)]);
     expect(item.spenders).toEqual([addressOf(13)]);
     expect(item.signers).toEqual([addressOf(13)]);
@@ -1259,67 +1277,55 @@ describe("ring read request", () => {
     expect(params["wallet"]).toBe(addressOf(0x50));
     const [sent, received] = page.items;
     if (sent?.view.role !== "sender") throw new Error("a sender view");
-    expect(sent.view.inputs).toHaveLength(4);
-    expect(
-      sent.view.inputs.every((input) => input.class === "note" || input.defaultInput === undefined),
-    ).toBe(true);
-    expect(sent.view.outputs.map((output) => output.slotIndex)).toEqual([0, 1, 2]);
-    expect(received?.view).toEqual({
-      role: "recipient",
-      outputs: [sent.view.outputs[0]],
-      withdrawals: [],
-    });
+    // The wallet spent one of three notes, a part owner keeps only the outputs it owns.
+    expect(sent.view.spent).toHaveLength(1);
+    expect(sent.view.defaultInputs).toEqual([]);
+    expect(sent.view.outputs).toEqual([]);
+    if (received?.view.role !== "recipient") throw new Error("a recipient view");
+    expect(received.view.outputs.map((output) => output.slotIndex)).toEqual([0]);
+    expect(received.view.withdrawals).toEqual([]);
   });
 
-  it("reads each published input of the anonymous page with its real count", async () => {
+  it("reads a record whose payload rebuilt no commitment without its data hashes", async () => {
+    const wire = rustItem("decrypted_page.json");
+    const [output] = wire["outputs"] as { utxo: Record<string, unknown> }[];
+    delete output!.utxo["dataHash"];
+    delete output!.utxo["ringDataHash"];
+    const opening = (await readItem(wire)).outputs[0]!.opening;
+    if (opening.kind !== "ring") throw new Error("a ring output");
+    expect(opening.utxo).not.toHaveProperty("dataHash");
+    expect(opening.utxo).not.toHaveProperty("ringDataHash");
+  });
+
+  it("reads the default-ring notes of the anonymous page in note order with its real count", async () => {
     const item = await readItem(anonymousItem());
     expect(item.realInputs).toBe(3);
-    expect(item.inputs.map((input) => input.nullifier)).toEqual(item.nullifiers);
-    expect(item.inputs.filter((input) => input.defaultInput !== undefined)).toHaveLength(2);
+    expect(item.nullifiers).toHaveLength(4);
+    expect(item.defaultInputs.map((input) => input.amount)).toEqual([96n, 112n]);
   });
 
-  it("reads an address input apart from the notes it precedes", async () => {
+  it("reads a page with no default-ring note as none", async () => {
     const wire = anonymousItem();
-    (wire["inputs"] as Record<string, unknown>[])[0]!["class"] = "address";
-    wire["realInputs"] = 2;
-    const item = await readItem(wire);
-    expect(item.inputs.map((input) => input.class)).toEqual(["address", "note", "note", "dummy"]);
+    delete wire["defaultInputs"];
+    expect((await readItem(wire)).defaultInputs).toEqual([]);
   });
 
   it.each<readonly [string, (item: Record<string, unknown>) => void, string]>([
     ["a real count past the nullifiers", (item) => (item["realInputs"] = 9), "realInputs"],
-    ["an input missing", (item) => (item["inputs"] as unknown[]).pop(), "inputs"],
     [
-      "an input under another nullifier",
-      (item) => ((item["nullifiers"] as unknown[])[0] = addressOf(9)),
-      "inputs",
+      "more default-ring notes than the real count",
+      (item) => (item["realInputs"] = 1),
+      "realInputs",
     ],
     [
-      "padding that opens a default note",
-      (item) => {
-        const [padding, opened] = (item["inputs"] as Record<string, unknown>[])
-          .slice(-1)
-          .concat((item["inputs"] as Record<string, unknown>[]).slice(1, 2));
-        if (padding === undefined || opened === undefined) throw new Error("no inputs");
-        padding["class"] = "dummy";
-        padding["defaultInput"] = opened["defaultInput"];
-      },
-      "inputs[3].defaultInput",
+      "a default-ring note with an extra field",
+      (item) => ((item["defaultInputs"] as Record<string, unknown>[])[0]!["class"] = "note"),
+      "defaultInputs[0].shape",
     ],
     [
-      "an address that opens a default note",
-      (item) => ((item["inputs"] as Record<string, unknown>[])[1]!["class"] = "address"),
-      "inputs[1].defaultInput",
-    ],
-    [
-      "an address counted in the real count",
-      (item) => ((item["inputs"] as Record<string, unknown>[])[0]!["class"] = "address"),
-      "inputs",
-    ],
-    [
-      "a note past a dummy",
-      (item) => ((item["inputs"] as Record<string, unknown>[])[0]!["class"] = "dummy"),
-      "inputs",
+      "a default-ring note missing its commitment",
+      (item) => delete (item["defaultInputs"] as Record<string, unknown>[])[1]!["commitment"],
+      "defaultInputs[1].commitment",
     ],
     ["a ring output with no tag", (item) => delete outputAt(item, 0)["tag"], "outputs[0].kind"],
     ["an exit with a tag", (item) => (outputAt(item, 1)["tag"] = addressOf(9)), "outputs[1].kind"],

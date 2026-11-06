@@ -7,7 +7,7 @@ export {
   registerKeyStatementHash,
   ringRail,
   ringRailOf,
-  openRecipientBody,
+  openRecipientNote,
   OutputBlindings,
 } from "@heliuslabs/zolana-custom-rings/advanced";
 export type {

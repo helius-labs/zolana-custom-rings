@@ -19,7 +19,6 @@ import (
 type Shape struct {
 	Inputs, Outputs, Withdrawals, Owners int
 	Entry                                bool
-	SingleAssetPayout                    bool
 	// Wide fits a salted and a public record per owner.
 	Wide bool
 	// Standard format excludes input and public slot assets.
@@ -37,7 +36,6 @@ var Shapes = [...]Shape{
 	{Inputs: 2, Outputs: 8, Withdrawals: 4, Owners: 2, Entry: true, Wide: true, Tracking: 14, Records: 36},
 	{Inputs: 5, Outputs: 8, Withdrawals: 4, Owners: 4, Entry: true, Wide: true, Tracking: 15, Records: 38},
 	{Inputs: 8, Outputs: 8, Withdrawals: 32, Owners: 8, Entry: true, Wide: true, Tracking: 38, Records: 80},
-	{Inputs: 1, Outputs: 16, Owners: 1, SingleAssetPayout: true, Tracking: 17, Records: 35},
 }
 
 // Keyed returns the catalog row with the widths of shape.
@@ -58,8 +56,6 @@ func (s Shape) widths() Shape {
 func (s Shape) String() string {
 	family := "transfer"
 	switch {
-	case s.SingleAssetPayout:
-		family = "transfer_payout"
 	case s.Entry:
 		family = "transfer_entry"
 	case s.Wide:
@@ -68,9 +64,8 @@ func (s Shape) String() string {
 	return fmt.Sprintf("custom_ring_%s_%d_in%d_w%d_s%d", family, s.Outputs, s.Inputs, s.Withdrawals, s.Owners)
 }
 
-// Stream compiles the tails into every key, a clear has_data transmits none.
 func (s Shape) Stream() audit.StreamShape {
-	return audit.StreamShape{InputClass: s.Inputs, Outputs: s.Outputs, Entry: s.Entry, SingleAssetPayout: s.SingleAssetPayout}
+	return audit.StreamShape{InputClass: s.Inputs, Outputs: s.Outputs, Entry: s.Entry}
 }
 
 func (s Shape) entries() int {
@@ -86,8 +81,5 @@ func (s Shape) trackedWithdrawals() int {
 
 // saltedKeys widens the pools past their public records to Records.
 func (s Shape) saltedKeys() int {
-	if s.SingleAssetPayout {
-		return s.Owners + s.Outputs
-	}
 	return s.Records - s.Owners - 2*s.Outputs - s.Withdrawals
 }

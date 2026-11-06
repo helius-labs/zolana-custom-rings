@@ -1,11 +1,10 @@
 //! The compact transact data a proven transfer owns, and its instruction.
 
 use custom_ring_interface::{
-    cosign::ApprovalMask, statement::SignerDataCounts, storage::Revision, tag, AnonymousProofData,
-    AppMessage, CustomRingError, CustomRingProof, DisclosureFormat, FrameExtensions,
-    FramedSenderBundle, InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof, Replies,
-    RingOutput, RingPolicy, RingRail, RingTransactData, RootRead, SlotBody, DATA_TAIL_LEN,
-    MAX_SPP_CPI_ACCOUNTS,
+    cosign::ApprovalMask, storage::Revision, tag, AnonymousProofData, AppMessage, CustomRingError,
+    CustomRingProof, FrameExtensions, FramedSenderBundle, InProofOwner, InputTrees,
+    PlainGroth16Proof, PolicyProof, Replies, RingOutput, RingPolicy, RingRail, RingTransactData,
+    RootRead, SlotBody, MAX_SPP_CPI_ACCOUNTS, OUTPUT_RECORD_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -21,7 +20,6 @@ use crate::{CustomRing, RingError};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum OwnedBody {
-    None,
     Recipient(Vec<u8>),
     Exit(Vec<u8>),
 }
@@ -29,7 +27,6 @@ pub(crate) enum OwnedBody {
 impl OwnedBody {
     fn of(body: SlotBody<'_>) -> Self {
         match body {
-            SlotBody::None => Self::None,
             SlotBody::Recipient(body) => Self::Recipient(body.to_vec()),
             SlotBody::Exit(body) => Self::Exit(body.to_vec()),
         }
@@ -37,7 +34,6 @@ impl OwnedBody {
 
     fn view(&self) -> SlotBody<'_> {
         match self {
-            Self::None => SlotBody::None,
             Self::Recipient(body) => SlotBody::Recipient(body),
             Self::Exit(body) => SlotBody::Exit(body),
         }
@@ -49,8 +45,8 @@ pub(crate) struct OwnedOutput {
     pub hash: [u8; 32],
     pub owner_tag: [u8; 32],
     pub body: OwnedBody,
-    pub record: Vec<u8>,
-    pub tail: Option<[u8; DATA_TAIL_LEN]>,
+    /// A recipient body's leading bytes, an exit's sealed record.
+    pub record: [u8; OUTPUT_RECORD_LEN],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -81,8 +77,7 @@ impl OwnedOutput {
             hash: *output.hash,
             owner_tag: output.owner_tag,
             body: OwnedBody::of(output.body),
-            record: output.record.to_vec(),
-            tail: output.tail.copied(),
+            record: *output.record,
         }
     }
 
@@ -96,7 +91,6 @@ impl OwnedOutput {
             owner_tag: self.owner_tag,
             body: self.body.view(),
             record: &self.record,
-            tail: self.tail.as_ref(),
         }
     }
 }
@@ -109,19 +103,16 @@ pub(crate) struct OwnedAppMessage {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct OwnedExtensions {
-    pub format: DisclosureFormat,
     pub data_hash: Option<[u8; 32]>,
     pub ring_data_hash: Option<[u8; 32]>,
     pub messages: Vec<OwnedAppMessage>,
     pub cache: Option<CacheAccess>,
     pub approval_totals: Option<[u8; 32]>,
-    pub signer_data_counts: Option<SignerDataCounts>,
 }
 
 impl OwnedExtensions {
     fn view(&self) -> FrameExtensions<'_> {
         FrameExtensions {
-            format: self.format,
             data_hash: self.data_hash.as_ref(),
             ring_data_hash: self.ring_data_hash.as_ref(),
             messages: self
@@ -134,7 +125,6 @@ impl OwnedExtensions {
                 .collect(),
             cache: self.cache,
             approval_totals: self.approval_totals.as_ref(),
-            signer_data_counts: self.signer_data_counts,
         }
     }
 }
@@ -180,6 +170,8 @@ pub(crate) struct TransactParts {
     pub replies: Option<(u16, Vec<u8>)>,
     pub sender: Option<OwnedSenderBundle>,
     pub envelope: Vec<u8>,
+    /// One sealed recipient key per published slot.
+    pub recipient_keys: Vec<u8>,
     pub private_tx_hash: [u8; 32],
     pub anonymous: Option<OwnedAnonymousProofData>,
     pub in_proof_owner: Option<OwnedInProofOwner>,
@@ -189,19 +181,18 @@ pub(crate) struct TransactParts {
 }
 
 impl TransactParts {
-    /// Each record and tail sits beside its slot.
+    /// The stream's envelope and keys, each exit's record beside its slot in slot order.
     pub fn seal_audit(
         &mut self,
         envelope: Vec<u8>,
-        records: &[Vec<u8>],
-        tails: &[[u8; DATA_TAIL_LEN]],
+        recipient_keys: Vec<u8>,
+        exit_records: &[[u8; OUTPUT_RECORD_LEN]],
     ) {
         self.envelope = envelope;
-        for (slot, output) in self.outputs.iter_mut().enumerate() {
-            if let Some(record) = records.get(slot) {
-                output.record = record.clone();
-            }
-            output.tail = tails.get(slot).copied();
+        self.recipient_keys = recipient_keys;
+        let exits = self.outputs.iter_mut().filter(|output| output.is_exit());
+        for (output, record) in exits.zip(exit_records) {
+            output.record = *record;
         }
     }
 
@@ -235,6 +226,7 @@ impl TransactParts {
                 .transpose()?,
             sender: self.sender.as_ref().map(OwnedSenderBundle::view),
             envelope: &self.envelope,
+            recipient_keys: &self.recipient_keys,
             private_tx_hash: &self.private_tx_hash,
             anonymous: self.anonymous.as_ref().map(|anonymous| AnonymousProofData {
                 commitment: &anonymous.commitment,

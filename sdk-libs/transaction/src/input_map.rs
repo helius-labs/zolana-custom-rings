@@ -1,9 +1,18 @@
-//! The one SDK reading of SPP's input order, the interface `InputMap` validates the order.
+//! The one SDK reading of SPP's input order. The ring's input wires hold SPP's notes in order, then
+//! dummies, and an address reaches the ring proof only through `private_tx_hash`.
 
-use custom_ring_interface::{CustomRingError, InputClass, InputMap};
+use spr_hasher::hash_chain::create_nonzero_hash_chain_from_slice;
 use spr_transaction::utxo::SppProofInputUtxo;
 
-/// SPP interleaves notes and addresses ahead of its dummy suffix.
+use crate::RingRailError;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputClass {
+    Note,
+    Address,
+    Dummy,
+}
+
 pub trait ClassifiedInput {
     fn input_class(&self) -> InputClass;
 
@@ -26,86 +35,25 @@ impl ClassifiedInput for SppProofInputUtxo {
     }
 }
 
-/// The published inputs of `inputs` under a key of input class `capacity`, compact padding publishes no nullifier.
-pub fn published_input_map(
-    inputs: &[SppProofInputUtxo],
-    capacity: usize,
-) -> Result<InputMap, CustomRingError> {
-    let published: Vec<InputClass> = inputs
-        .iter()
-        .filter(|input| !input.is_compact())
-        .map(ClassifiedInput::input_class)
-        .collect();
-    let padding = capacity
-        .checked_sub(published.len())
-        .ok_or(CustomRingError::RingTransactLength)?;
-    let classes: Vec<InputClass> = published
-        .iter()
-        .copied()
-        .chain(core::iter::repeat_n(InputClass::Dummy, padding))
-        .collect();
-    InputMap::from_classes(&classes, published.len())
+/// `R`, the envelope's count of spent notes.
+pub fn note_count(inputs: &[SppProofInputUtxo]) -> Result<u8, RingRailError> {
+    let notes = inputs.iter().filter(|input| input.is_note()).count();
+    u8::try_from(notes).map_err(|_| {
+        spr_transaction::TransactionError::TooManyInputs {
+            got: notes,
+            max: usize::from(u8::MAX),
+        }
+        .into()
+    })
 }
 
-#[cfg(test)]
-mod tests {
-    use spr_keypair::PublicKey;
-
-    use super::*;
-
-    fn note() -> SppProofInputUtxo {
-        let mut note = SppProofInputUtxo::dummy(0).unwrap();
-        note.utxo.owner = PublicKey::from_ed25519(&[3; 32]);
-        note
-    }
-
-    fn address() -> SppProofInputUtxo {
-        SppProofInputUtxo::new_address(PublicKey::from_ed25519(&[4; 32]), [5; 32], 0).unwrap()
-    }
-
-    fn dummy() -> SppProofInputUtxo {
-        SppProofInputUtxo::dummy(0).unwrap()
-    }
-
-    fn compact() -> SppProofInputUtxo {
-        SppProofInputUtxo::compact(0).unwrap()
-    }
-
-    #[test]
-    fn an_address_between_notes_keeps_its_absolute_position() {
-        use InputClass::{Address, Dummy, Note};
-        let inputs = [note(), address(), note(), dummy(), compact()];
-        let map = published_input_map(&inputs, 8).unwrap();
-        assert_eq!(map.published_inputs(), 4);
-        assert_eq!(map.note_count(), 2);
-        assert_eq!(map.address_input_bits(), 0b010);
-        assert_eq!(
-            map.classes().take(5).collect::<Vec<_>>(),
-            [Note, Address, Note, Dummy, Dummy]
-        );
-        assert!(address().input_class() == Address && !address().is_note());
-    }
-
-    /// An address alone spends no note, `R` is zero while SPP still authorizes it.
-    #[test]
-    fn an_address_only_spend_counts_no_note() {
-        let map = published_input_map(&[address(), compact()], 2).unwrap();
-        assert_eq!(map.note_count(), 0);
-        assert_eq!(map.address_input_bits(), 0b1);
-        assert_eq!(map.published_inputs(), 1);
-    }
-
-    #[test]
-    fn a_dummy_ahead_of_a_note_or_inputs_past_the_class_are_refused() {
-        for (inputs, capacity) in [
-            (vec![dummy(), note()], 2),
-            (vec![note(), dummy(), address()], 4),
-            (vec![note(), note(), note()], 2),
-        ] {
-            assert_eq!(
-                published_input_map(&inputs, capacity),
-                Err(CustomRingError::RingTransactLength)
-            );
-        }
-    }
+/// SPP's address chain over the address nullifiers in slot order, the ring proof reopens it inside
+/// `private_tx_hash` alone.
+pub fn address_chain(inputs: &[SppProofInputUtxo]) -> Result<[u8; 32], RingRailError> {
+    let addresses: Vec<[u8; 32]> = inputs
+        .iter()
+        .filter(|input| input.is_address())
+        .map(SppProofInputUtxo::nullifier)
+        .collect();
+    Ok(create_nonzero_hash_chain_from_slice(&addresses)?)
 }

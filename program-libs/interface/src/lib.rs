@@ -13,7 +13,7 @@
 //! 3. `accounts/member_registry.rs`, `accounts/storage.rs`, `accounts/tracking.rs`, `proof/auditor_key.rs`. The policy and tracking trees, the root history, zero grace, the floor and the auditor key check.
 //! 4. `instructions/transact.rs`. The frame, each section named against SPP's `TransactIxData`.
 //! 5. `proof/statement.rs`, `proof/domain.rs`. The statement in element order, with its Go twins.
-//! 6. `proof/audit_stream.rs`, `proof/disclosure.rs`, `codec/output.rs`, `codec/stream.rs`. What the auditor and a recipient read of each slot.
+//! 6. `proof/audit_stream.rs`, `proof/disclosure.rs`, `codec/output.rs`, `codec/stream.rs`. What the auditor and a recipient read of each slot, one proven record per slot.
 //! 7. `proof/key_catalog.rs`, `proof/ring_keys.rs`, `proof/verification.rs`. The key serving each frame.
 //! 8. `instructions/merge.rs`, `instructions/withdrawals.rs`, `instructions/anonymous_exit.rs`, `instructions/cosign.rs`. The other paths.
 //!
@@ -118,45 +118,40 @@ pub fn tagged_x25519(u: &[u8; 32]) -> [u8; TAGGED_X25519_KEY_LEN] {
     key
 }
 
-/// `0x04 || eph_u || envelope_ct || record_ct... || tail_ct...`, published under the auditor's view tag.
+/// `0x04 || tx_u || envelope_ct || keys_ct || exit_record_ct...`, published under the auditor's view tag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AuditorMessage<'a> {
-    format: DisclosureFormat,
     pub eph_pk: &'a [u8; TAGGED_X25519_KEY_LEN],
     pub envelope: &'a [u8],
-    /// One record per published slot.
-    pub records: &'a [u8],
-    /// One tail per published slot, empty while `has_data` is clear.
-    pub tails: &'a [u8],
+    /// One sealed key per published slot.
+    pub recipient_keys: &'a [u8],
+    /// One record per exit in slot order, every other record opens its slot's body.
+    pub exit_records: &'a [u8],
 }
 
 impl<'a> AuditorMessage<'a> {
-    /// `None` unless the key is tagged and every length is `layout`'s.
-    pub fn parse(data: &'a [u8], layout: AuditStreamLayout) -> Option<Self> {
+    /// `None` unless the key is tagged and every length is that of `layout` and `exits`.
+    pub fn parse(data: &'a [u8], layout: AuditStreamLayout, exits: usize) -> Option<Self> {
         layout.checked().ok()?;
         let (eph_pk, rest) = data.split_first_chunk::<TAGGED_X25519_KEY_LEN>()?;
         let (envelope, rest) = rest.split_at_checked(layout.envelope().len)?;
-        let (records, tails) = rest.split_at_checked(layout.records_len())?;
-        (eph_pk[0] == VIEWING_PUBKEY_TAG && tails.len() == layout.tails_len()).then_some(Self {
-            format: layout.key.format,
+        let (recipient_keys, exit_records) = rest.split_at_checked(layout.keys_len())?;
+        (eph_pk[0] == VIEWING_PUBKEY_TAG
+            && exit_records.len() == exits.checked_mul(OUTPUT_RECORD_LEN)?)
+        .then_some(Self {
             eph_pk,
             envelope,
-            records,
-            tails,
+            recipient_keys,
+            exit_records,
         })
     }
 
-    pub fn record(&self, slot: usize) -> Option<&'a [u8]> {
-        let length = self.format.record_len();
-        let start = slot.checked_mul(length)?;
-        self.records.get(start..start.checked_add(length)?)
+    /// Indexed among the exits, not the slots.
+    pub fn exit_record(&self, exit: usize) -> Option<&'a [u8; OUTPUT_RECORD_LEN]> {
+        self.exit_records.as_chunks().0.get(exit)
     }
 
-    pub fn tail(&self, slot: usize) -> Option<&'a [u8; DATA_TAIL_LEN]> {
-        self.tails.as_chunks().0.get(slot)
-    }
-
-    /// `ciphertexts` is the envelope, the records and the tails in slot order.
+    /// `ciphertexts` is the envelope, the keys and the exit records in slot order.
     pub fn data<'c>(
         eph_u: &[u8; 32],
         ciphertexts: impl Iterator<Item = &'c [u8]> + Clone,

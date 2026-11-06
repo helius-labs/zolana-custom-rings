@@ -48,8 +48,6 @@ pub mod transfer_entry_8_in2_w4_s2_verifying_key;
 pub mod transfer_entry_8_in5_w4_s4_verifying_key;
 #[path = "transfer/transfer_entry_8_in8_w32_s8_verifying_key.rs"]
 pub mod transfer_entry_8_in8_w32_s8_verifying_key;
-#[path = "transfer/transfer_payout_16_in1_w0_s1_verifying_key.rs"]
-pub mod transfer_payout_16_in1_w0_s1_verifying_key;
 #[path = "transfer/transfer_wide_2_in40_w4_s8_verifying_key.rs"]
 pub mod transfer_wide_2_in40_w4_s8_verifying_key;
 #[path = "transfer/transfer_wide_8_in24_w32_s13_verifying_key.rs"]
@@ -90,10 +88,6 @@ pub const PROVING_KEY_SHA256S: &[(&str, [u8; 32])] = &[
     (
         "custom_ring_transfer_entry_8_in8_w32_s8.key",
         transfer_entry_8_in8_w32_s8_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
-    ),
-    (
-        "custom_ring_transfer_payout_16_in1_w0_s1.key",
-        transfer_payout_16_in1_w0_s1_verifying_key::VERIFYINGKEY_PROVING_KEY_SHA256,
     ),
     (
         "custom_ring_apply_records_1.key",
@@ -175,7 +169,6 @@ pub fn verifying_key(
             owners: 4,
             entry: false,
             wide: false,
-            format: crate::DisclosureFormat::Standard,
         } => Some(&transfer_2_in24_w4_s4_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::Transfer {
             outputs: 4,
@@ -184,7 +177,6 @@ pub fn verifying_key(
             owners: 4,
             entry: false,
             wide: false,
-            format: crate::DisclosureFormat::Standard,
         } => Some(&transfer_4_in24_w4_s4_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::Transfer {
             outputs: 8,
@@ -193,7 +185,6 @@ pub fn verifying_key(
             owners: 4,
             entry: false,
             wide: false,
-            format: crate::DisclosureFormat::Standard,
         } => Some(&transfer_8_in16_w4_s4_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::Transfer {
             outputs: 8,
@@ -202,7 +193,6 @@ pub fn verifying_key(
             owners: 13,
             entry: false,
             wide: true,
-            format: crate::DisclosureFormat::Standard,
         } => Some(&transfer_wide_8_in24_w32_s13_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::Transfer {
             outputs: 2,
@@ -211,7 +201,6 @@ pub fn verifying_key(
             owners: 8,
             entry: false,
             wide: true,
-            format: crate::DisclosureFormat::Standard,
         } => Some(&transfer_wide_2_in40_w4_s8_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::Transfer {
             outputs: 4,
@@ -220,7 +209,6 @@ pub fn verifying_key(
             owners: 8,
             entry: true,
             wide: true,
-            format: crate::DisclosureFormat::Standard,
         } => Some(&transfer_entry_4_in8_w4_s8_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::Transfer {
             outputs: 8,
@@ -229,7 +217,6 @@ pub fn verifying_key(
             owners: 2,
             entry: true,
             wide: true,
-            format: crate::DisclosureFormat::Standard,
         } => Some(&transfer_entry_8_in2_w4_s2_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::Transfer {
             outputs: 8,
@@ -238,7 +225,6 @@ pub fn verifying_key(
             owners: 4,
             entry: true,
             wide: true,
-            format: crate::DisclosureFormat::Standard,
         } => Some(&transfer_entry_8_in5_w4_s4_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::Transfer {
             outputs: 8,
@@ -247,17 +233,7 @@ pub fn verifying_key(
             owners: 8,
             entry: true,
             wide: true,
-            format: crate::DisclosureFormat::Standard,
         } => Some(&transfer_entry_8_in8_w32_s8_verifying_key::VERIFYINGKEY),
-        key_catalog::RingCircuit::Transfer {
-            outputs: 16,
-            inputs: 1,
-            withdrawals: 0,
-            owners: 1,
-            entry: false,
-            wide: false,
-            format: crate::DisclosureFormat::SingleAssetPayout,
-        } => Some(&transfer_payout_16_in1_w0_s1_verifying_key::VERIFYINGKEY),
         key_catalog::RingCircuit::ApplyRecords {
             writes: 1,
             mode: key_catalog::ApplyMode::Public,

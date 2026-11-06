@@ -1,4 +1,7 @@
-use custom_ring_interface::{AuditKey, AuditStreamLayout, AuditorMessage};
+use custom_ring_interface::{
+    encode_confidential_output, encode_ring_body_output, AuditKey, AuditStreamLayout,
+    AuditorMessage, CONFIDENTIAL_DATA_FREE_BODY_LEN,
+};
 use serde_json::Value;
 use solana_address::Address;
 use solana_signature::Signature;
@@ -6,7 +9,9 @@ use spr_event::MessageData;
 use spr_hasher::primitives::hash_bytes;
 use spr_keypair::{ViewingKey, X25519Keypair};
 use spr_transaction::{OutputContext, OutputSlot, ShieldedTransaction};
-use zolana_ring_client::{OutputOpening, TransactionAudit};
+use zolana_ring_client::{
+    OutputOpening, OutputPayloadError, OutputPayloadErrorKind, TransactionAudit,
+};
 
 const STREAM: &str = include_str!("../../../test-vectors/audit/audit-stream.json");
 const RING: Address = Address::new_from_array([0x90; 32]);
@@ -47,20 +52,18 @@ fn every_stream_rebuilds_its_published_hashes_with_no_mint_registry() {
         let bits = case["layout"].as_u64().unwrap();
         let layout = AuditStreamLayout {
             key: AuditKey {
-                format: if bits & 4 != 0 {
-                    custom_ring_interface::DisclosureFormat::SingleAssetPayout
-                } else {
-                    custom_ring_interface::DisclosureFormat::Standard
-                },
                 class: case["input_class"].as_u64().unwrap() as usize,
                 entry: bits & 2 != 0,
             },
             inputs: case["input_count"].as_u64().unwrap() as usize,
             outputs: case["output_count"].as_u64().unwrap() as usize,
             capacity: case["outputs"].as_u64().unwrap() as usize,
-            has_data: bits & 1 != 0,
         };
         let hashes = list(&case["output_hashes"]);
+        let plain_records = list(&case["records"]);
+        let records = list(&case["record_ciphertexts"]);
+        // A non-exit record leads its body, an exit's record goes to the auditor message.
+        let is_exit = |index: usize| plain_records[index][0] == 2;
         let output_slots: Vec<OutputSlot> = hashes
             .iter()
             .enumerate()
@@ -71,17 +74,19 @@ fn every_stream_rebuilds_its_published_hashes_with_no_mint_registry() {
                     tree_id,
                     leaf_index: leaf as u64,
                 },
-                payload: Vec::new(),
+                payload: match is_exit(leaf) {
+                    true => encode_confidential_output(&[0xe0; CONFIDENTIAL_DATA_FREE_BODY_LEN])
+                        .unwrap(),
+                    false => encode_ring_body_output(&records[leaf], &[]).unwrap(),
+                },
             })
             .collect();
-        let (records, tails) = (
-            list(&case["record_ciphertexts"]),
-            list(&case["tail_ciphertexts"]),
-        );
         let envelope = bytes(&case["envelope_ciphertext"]);
-        let parts = core::iter::once(envelope.as_slice())
-            .chain(records.iter().map(Vec::as_slice))
-            .chain(tails.iter().map(Vec::as_slice));
+        let keys = bytes(&case["recipient_keys_ciphertext"]);
+        let exits = (0..hashes.len()).filter(|index| is_exit(*index));
+        let parts = [envelope.as_slice(), keys.as_slice()]
+            .into_iter()
+            .chain(exits.map(|index| records[index].as_slice()));
         let tx = ShieldedTransaction {
             slot: 1,
             tx_signature: Signature::default(),
@@ -104,16 +109,19 @@ fn every_stream_rebuilds_its_published_hashes_with_no_mint_registry() {
             ring_program_id: Some(RING),
         };
         let audited = TransactionAudit::new(&tx, layout).run(&auditor()).unwrap();
-        assert!(
-            audited.payload_errors.is_empty(),
-            "{name}: {:?}",
-            audited.payload_errors
-        );
+        // The data case's payload holds its data hashes, the vector omits it.
+        let lost: &[OutputPayloadError] = match name {
+            "data" => &[OutputPayloadError {
+                slot_index: 0,
+                kind: OutputPayloadErrorKind::Payload,
+            }],
+            _ => &[],
+        };
+        assert_eq!(audited.payload_errors, lost, "{name}");
         assert_eq!(audited.outputs.len(), hashes.len(), "{name}");
         let plaintext = bytes(&case["envelope_plaintext"]);
         assert_eq!(audited.real_inputs, plaintext[32], "{name}");
         let blindings = list(&case["blindings"]);
-        let plain_records = list(&case["records"]);
         for (index, output) in audited.outputs.iter().enumerate() {
             match plain_records[index][0] {
                 0 => assert_eq!(output.opening, OutputOpening::Dummy, "{name} slot {index}"),

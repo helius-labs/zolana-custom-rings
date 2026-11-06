@@ -8,8 +8,6 @@ import {
 } from "../../protocol/membership/mint-policy.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 
-import { rawJson } from "../../protocol/codec/raw-json.js";
-
 import { InterfaceError } from "@heliuslabs/spr/interface";
 import { bigIntBytes, bytesField, type ExpectedProvingKey } from "@heliuslabs/spr/internal";
 import type { Bytes16, Bytes32 } from "@heliuslabs/spr/interface";
@@ -47,11 +45,7 @@ import {
   type PolicyPoolCapacity,
   type TransferKeyCircuit,
 } from "../../protocol/proof/transfer-shapes.js";
-import {
-  auditLayoutValue,
-  disclosureFormat,
-  type AuditLayout,
-} from "../../protocol/codec/ring-disclosure-layout.js";
+import { auditLayoutValue, type AuditLayout } from "../../protocol/codec/ring-disclosure-layout.js";
 import { ANONYMOUS_PARTIES } from "../../protocol/transaction/transact.js";
 import { RING_RULE_SLOTS, RING_SOURCE_SLOTS } from "./types.js";
 import { N_PUBLIC_SLOTS } from "../../protocol/transaction/spp.js";
@@ -82,11 +76,13 @@ export interface AuditEnvelopeProofInputs {
   readonly layout: AuditLayout;
 }
 
-/** Go `OutputOpening`, one output slot and the preimages its record names. */
+/** Go `OutputOpening`, one output slot, the preimages its record names and the key it seals to. */
 export interface OutputOpeningProofInput {
   readonly output: RingSlotOpening;
   readonly ownerKey: Bytes32;
   readonly mintChunks: readonly Bytes32[];
+  /** `V_i`, the raw X25519 `u` the slot's record seals to. */
+  readonly recipientKey: Bytes32;
 }
 
 /** Go `EntryOpening`, zero off a default-ring input. */
@@ -178,19 +174,15 @@ export interface TransferProofInputs
   /** `m`, the slots past it leave the frame. */
   readonly outputCount: number;
   readonly outputs: readonly OutputOpeningProofInput[];
-  /** The published nullifier count, the input slots past it carry no UTXO. */
+  /** `n`, the published nullifier count. */
   readonly inputCount: number;
-  /** `HashChain4([inputCount, ...inputNullifiers])`, the statement element past `inputCount`. */
-  readonly inputNullifierChain: Bytes32;
-  /** The published nullifiers zero filled to the key's input class. */
-  readonly inputNullifiers: readonly Bytes32[];
-  /** At the key's input class. */
+  /** SPP's address chain, zero with no address input, checked through `privateTxHash` alone. */
+  readonly addressChain: Bytes32;
+  /** The spent notes in SPP's note order, then padding to the key's input class. */
   readonly inputs: readonly RingSlotOpening[];
-  /** One per input class slot on an entry key, empty otherwise. */
+  /** One per input class slot by note order on an entry key, empty otherwise. */
   readonly entries: readonly EntryOpeningProofInput[];
   readonly signerCount: number;
-  /** Absent reads zero, Go `SignerDataCounts`. */
-  readonly signerDataCounts?: bigint;
   /** SPP's owner signer run, zero filled to the input class. */
   readonly signers: readonly Bytes32[];
   /** The distinct live input owners ascending, zero rows last, at the key's owner rows. */
@@ -283,6 +275,8 @@ export interface MergeProofRequest {
   readonly payer: Bytes32;
   readonly trackingRoot: Bytes32;
   readonly ephSk: Bytes32;
+  /** `V`, the merged owner's viewing `u` the record seals to. */
+  readonly recipientKey: Bytes32;
   readonly ownerKey: Bytes32;
   readonly ownerPkHash: Bytes32;
   readonly mintChunks: readonly Bytes32[];
@@ -329,7 +323,6 @@ export function ringProofCircuit(request: RingProofRequest): RingKeyCircuit {
 function transferCircuit(request: TransferProofRequest): TransferKeyCircuit {
   const narrow: TransferKeyCircuit = {
     family: "transfer",
-    format: disclosureFormat(request.layout.format),
     outputs: listLength(request.outputs),
     class: listLength(request.inputs),
     withdrawals: listLength(request.withdrawals),
@@ -342,7 +335,6 @@ function transferCircuit(request: TransferProofRequest): TransferKeyCircuit {
   return (
     transferKeys().find(
       (key) =>
-        key.format === narrow.format &&
         key.outputs === narrow.outputs &&
         key.class === narrow.class &&
         key.withdrawals === narrow.withdrawals &&
@@ -411,6 +403,7 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
         payer: field(request.payer, "payer"),
         trackingRoot: field(request.trackingRoot, "trackingRoot"),
         ephSk: hexBytes(request.ephSk, 32, "ephSk"),
+        recipientKey: hexBytes(request.recipientKey, 32, "recipientKey"),
         ownerKey: hexBytes(request.ownerKey, 32, "ownerKey"),
         ownerPkHash: field(request.ownerPkHash, "ownerPkHash"),
         mintChunks: fields(request.mintChunks, MINT_CHUNKS, "mintChunks"),
@@ -492,9 +485,8 @@ function transferJson(request: TransferProofRequest): Json {
     outputCount: integer(request.outputCount, "outputCount", 1, request.outputs.length),
     outputs: request.outputs.map((output, i) => outputJson(output, `outputs[${i}]`)),
     inputCount: integer(request.inputCount, "inputCount", 1, slots),
-    inputNullifierChain: field(request.inputNullifierChain, "inputNullifierChain"),
-    inputNullifiers: fields(request.inputNullifiers, slots, "inputNullifiers"),
     inputs: request.inputs.map((input, i) => openingJson(input, `inputs[${i}]`)),
+    addressChain: field(request.addressChain, "addressChain"),
     ...(flag(request.layout.entry)
       ? {
           entries: sized(request.entries, slots, "entries").map((entry, i) =>
@@ -504,10 +496,6 @@ function transferJson(request: TransferProofRequest): Json {
       : {}),
     signerCount: integer(request.signerCount, "signerCount", 0, slots),
     signers: fields(request.signers, slots, "signers"),
-    // Go reads a `uint64` number, 60 bits pass no double exact.
-    ...(request.signerDataCounts === undefined || request.signerDataCounts === 0n
-      ? {}
-      : { signerDataCounts: rawJson(request.signerDataCounts.toString()) }),
     rows: fields(request.rows, circuit.owners, "rows"),
     privateTxHash: field(request.privateTxHash, "privateTxHash"),
     ...trackingJson(request, shape),
@@ -546,6 +534,7 @@ function outputJson(slot: OutputOpeningProofInput, name: string): Json {
   return {
     output: openingJson(slot.output, `${name}.output`),
     ...entryOpeningJson(slot, name),
+    recipientKey: hexBytes(slot.recipientKey, 32, `${name}.recipientKey`),
   };
 }
 

@@ -1,8 +1,8 @@
 //! A child of `pipeline`, every rail stages and assembles through its private items.
 
 use custom_ring_interface::{
-    ring_body_output, ring_sender_bundle_output_body, BundleLayout, ChangeCell, CustomRingError,
-    RecipientBody, RingMode, RingRail, RingTransactData, SenderBundle,
+    ring_body_output, ring_sender_bundle_output_body, BundleLayout, CustomRingError, RingMode,
+    RingRail, RingTransactData, SenderBundle,
 };
 use solana_address::Address;
 use spl_token_2022_interface::pod::{PodAccount, PodCOption};
@@ -220,6 +220,48 @@ async fn an_anonymous_spl_exit_names_neither_the_hidden_owner_nor_a_second_key()
     ));
 }
 
+/// Exits pay several destinations, the hidden owner at any of them is refused unless waived.
+#[tokio::test]
+async fn anonymous_exits_pay_several_destinations_and_each_answers_to_the_safeguard() {
+    let sender = &crate::tests::support::keypair(1);
+    let hidden = Address::new_from_array(sender.signing_pubkey().as_ed25519().unwrap());
+    let mint = Address::new_from_array([0x31; 32]);
+    let stranger = Address::new_from_array([0x32; 32]);
+    let wallet = Address::new_from_array([0x34; 32]);
+    let token_program = Address::new_from_array(SPL_TOKEN_PROGRAM_ID);
+    let destination = pda::associated_token_address_with_program(&stranger, &mint, &token_program);
+    let exits = |sol: Address| {
+        let mut transaction = ring_transaction(vec![
+            ring_utxo(sender, Mint::new(mint, 2), 10, 0),
+            ring_utxo(sender, Mint::SOL, 10, 1),
+        ]);
+        transaction.withdraw(mint, 4, destination).unwrap();
+        transaction.withdraw_sol(4, sol).unwrap();
+        owner_transfer(sender, transaction)
+            .with_interface_transfer_accounts(vec![
+                TransactInterfaceTransferAccounts::SplWithdrawal(TransactSplWithdrawalAccounts {
+                    mint,
+                    spl_interface: pda::spl_interface(&mint),
+                    user_token_account: destination,
+                    token_program,
+                }),
+                TransactInterfaceTransferAccounts::Sol(TransactSolTransferAccounts {
+                    recipient: sol,
+                }),
+            ])
+            .with_anonymous_signer(&sender.signing_key)
+    };
+    let chain =
+        Chain::ring(anonymous()).with(destination, token_account(token_state(mint, stranger)));
+    stage_anonymous(&exits(wallet), &chain).await.unwrap();
+    assert!(matches!(
+        stage_anonymous(&exits(hidden), &chain).await,
+        Err(RingError::AnonymousExitLinksOwner(exit)) if exit == hidden
+    ));
+    let accepted = exits(hidden).with_owner_exposure(OwnerExposure::Accepted);
+    stage_anonymous(&accepted, &chain).await.unwrap();
+}
+
 /// SPP binds a SOL exit's recipient alone, a program owner, data or the hidden owner there is
 /// refused before proving.
 #[tokio::test]
@@ -278,7 +320,7 @@ fn a_payment_to_another_rings_address_is_refused() {
     ));
 }
 
-/// The published owner tag and recipient body of every slot, `None` on a change output.
+/// The published owner tag and recipient body of every slot, `None` on an exit.
 fn published<'s>(staged: &'s Staged<'_>) -> Vec<([u8; 32], Option<&'s [u8]>)> {
     staged
         .proof_inputs
@@ -292,7 +334,7 @@ fn published<'s>(staged: &'s Staged<'_>) -> Vec<([u8; 32], Option<&'s [u8]>)> {
             let body = output
                 .data
                 .as_deref()
-                .map(|data| ring_body_output(data).expect("a ring body").0);
+                .and_then(|data| ring_body_output(data).map(|(body, _)| body));
             (tag, body)
         })
         .collect()
@@ -317,7 +359,11 @@ fn slot_secret(
     .unwrap()
 }
 
-fn payment_at(staged: &Staged<'_>, reader: &ShieldedKeypair, position: usize) -> RecipientBody {
+fn payment_at(
+    staged: &Staged<'_>,
+    reader: &ShieldedKeypair,
+    position: usize,
+) -> zolana_ring_transaction::OpenedRecipientBody {
     let body = published(staged)[position].1.expect("a recipient body");
     open_recipient_body(body, &slot_secret(staged, reader, position)).unwrap()
 }
@@ -329,16 +375,11 @@ fn bundle(staged: &Staged<'_>, sender: &ShieldedKeypair) -> SenderBundle {
     let body = ring_sender_bundle_output_body(&message.data).expect("a sender bundle");
     let layout = BundleLayout {
         outputs: external.outputs.len(),
-        change: external
-            .outputs
-            .iter()
-            .filter(|output| output.data.is_none())
-            .count(),
     };
     open_sender_bundle(body, &slot_secret(staged, sender, layout.outputs), layout).unwrap()
 }
 
-/// Change leads with no body, one bundle cell per change output.
+/// Change leads under a zero tag, the bundle names the sender's key at each change output.
 #[tokio::test]
 async fn an_anonymous_transfer_publishes_each_payment_and_the_sender_bundle() {
     use crate::tests::support::keypair;
@@ -384,30 +425,26 @@ async fn an_anonymous_transfer_publishes_each_payment_and_the_sender_bundle() {
     assert_ne!(slots[2].0, bootstrap.viewing_pubkey().u());
     assert_ne!(slots[3].0, requester.viewing_pubkey().u());
     assert_ne!(slots[2].0, slots[3].0);
-    assert!(slots[..2].iter().all(|(_, body)| body.is_none()));
-    assert!(slots[2..].iter().all(|(_, body)| body.is_some()));
+    assert!(slots.iter().all(|(_, body)| body.is_some()));
     for (tag, _) in &slots[2..] {
         assert!(is_canonical_bn254_scalar_be(tag), "a tag is a field value");
     }
     let sent = bundle(&staged, sender);
+    assert_eq!(sent.recipient_keys.len(), slots.len());
+    assert_eq!(sent.recipient_keys[0], sender.viewing_pubkey().u());
+    assert_eq!(sent.recipient_keys[1], sender.viewing_pubkey().u());
+    assert_eq!(sent.recipient_keys[2], bootstrap.viewing_pubkey().u());
+    assert_eq!(sent.recipient_keys[3], requester.viewing_pubkey().u());
+    let change = payment_at(&staged, sender, 0);
     assert_eq!(
-        sent.change,
-        [
-            ChangeCell {
-                mint: usdc.asset.to_bytes(),
-                amount: 7
-            },
-            ChangeCell {
-                mint: Mint::SOL.asset.to_bytes(),
-                amount: 8
-            }
-        ]
+        (change.record.mint, change.record.amount),
+        (usdc.asset.to_bytes(), 7)
     );
-    assert_eq!(sent.recipient_keys.len(), slots.len() - 2);
-    assert_eq!(sent.recipient_keys[0], bootstrap.viewing_pubkey().u());
-    assert_eq!(sent.recipient_keys[1], requester.viewing_pubkey().u());
     let paid = payment_at(&staged, &bootstrap, 2);
-    assert_eq!((paid.mint, paid.amount), (usdc.asset.to_bytes(), 3));
+    assert_eq!(
+        (paid.record.mint, paid.record.amount),
+        (usdc.asset.to_bytes(), 3)
+    );
 }
 
 #[tokio::test]
@@ -431,19 +468,14 @@ async fn a_transfer_returning_nothing_leads_with_a_zero_sol_change() {
         (Some(sender.shielded_address().unwrap()), Mint::SOL, 0)
     );
     let sent = bundle(&staged, sender);
-    assert_eq!(
-        sent.change,
-        [ChangeCell {
-            mint: Mint::SOL.asset.to_bytes(),
-            amount: 0
-        }]
-    );
+    assert_eq!(sent.recipient_keys[0], sender.viewing_pubkey().u());
+    assert_eq!(payment_at(&staged, sender, 0).record.amount, 0);
     assert_eq!(
         sent.recipient_keys
             .iter()
             .filter(|key| **key != [0; 32])
             .count(),
-        1
+        2
     );
 }
 
@@ -816,9 +848,9 @@ async fn an_anonymous_spend_of_ring_and_default_ring_utxos_is_refused_before_pro
     ));
 }
 
-/// SPP's builder leads with the address, the hidden owner's proof needs its note at slot zero.
+/// SPP's builder leads with the address, the hidden rail reads the first note.
 #[tokio::test]
-async fn an_anonymous_transfer_led_by_an_address_is_refused_reads_a_cache_and_writes_none() {
+async fn an_anonymous_transfer_led_by_an_address_stages_reads_a_cache_and_writes_none() {
     let sender = &crate::tests::support::keypair(1);
     let paid = ring_address(&crate::tests::support::keypair(2));
     let chain = Chain::ring(anonymous());
@@ -838,10 +870,7 @@ async fn an_anonymous_transfer_led_by_an_address_is_refused_reads_a_cache_and_wr
             .with_anonymous_signer(&sender.signing_key)
             .with_payment(payment(&paid, 10))
             .unwrap();
-        assert!(matches!(
-            stage_anonymous(&transfer, &chain).await,
-            Err(RingError::HiddenOwnerMissing)
-        ));
+        assert!(stage_anonymous(&transfer, &chain).await.is_ok());
     }
 
     let note = ring_utxo(sender, Mint::SOL, 10, 0);
@@ -872,7 +901,11 @@ async fn an_anonymous_transfer_led_by_an_address_is_refused_reads_a_cache_and_wr
     let mut writing = staged.proof_inputs.clone();
     writing.output_utxos[0] = writing.output_utxos[0].clone().with_cache_slot(0).unwrap();
     assert!(matches!(
-        anonymous::check_anonymous_inputs(&writing, &sender.shielded_address().unwrap()),
+        anonymous::check_anonymous_inputs(
+            &writing,
+            &sender.shielded_address().unwrap(),
+            OwnerExposure::Refused
+        ),
         Err(RingError::InvalidAnonymousSlot)
     ));
 }
@@ -1406,7 +1439,6 @@ async fn the_anonymous_audit_request_of_an_exit_a_payment_and_change_keeps_its_p
     assert_eq!(
         request.circuit,
         custom_ring_interface::key_catalog::RingCircuit::Transfer {
-            format: custom_ring_interface::DisclosureFormat::Standard,
             outputs: 4,
             inputs: 24,
             withdrawals: 4,
@@ -1463,7 +1495,6 @@ async fn the_in_proof_owner_request_publishes_the_sender_of_every_spent_note() {
     assert_eq!(
         request.circuit,
         custom_ring_interface::key_catalog::RingCircuit::Transfer {
-            format: custom_ring_interface::DisclosureFormat::Standard,
             outputs: 2,
             inputs: 24,
             withdrawals: 4,
@@ -1996,11 +2027,13 @@ async fn the_member_policy_request_opens_each_subject_once_in_padded_pools() {
     assert_eq!(request_layout(&built), request_layout(&pinned));
 }
 
-/// `frame` runs before any witness read or prover call, the ceiling keeps no margin.
 #[tokio::test]
 async fn the_ceiling_frame_passes_and_a_longer_reply_is_refused_before_proving() {
     let at_ceiling = ceiling_entry(CEILING_REPLY_LEN).fit().await;
-    assert_eq!(at_ceiling.bytes, solana_message::v1::MAX_TRANSACTION_SIZE);
+    assert_eq!(
+        at_ceiling.bytes,
+        solana_message::v1::MAX_TRANSACTION_SIZE - 1
+    );
     assert!(at_ceiling.addresses.is_some());
     let past = ceiling_entry(CEILING_REPLY_LEN + 1).fit().await;
     assert_eq!(past.bytes, solana_message::v1::MAX_TRANSACTION_SIZE + 1);
@@ -2011,7 +2044,7 @@ async fn the_ceiling_frame_passes_and_a_longer_reply_is_refused_before_proving()
     }
     .fit()
     .await;
-    assert_eq!(paid.bytes, solana_message::v1::MAX_TRANSACTION_SIZE + 8);
+    assert_eq!(paid.bytes, solana_message::v1::MAX_TRANSACTION_SIZE + 7);
     assert!(
         paid.addresses.is_none(),
         "the fee moves the frame past the ceiling"
@@ -2048,7 +2081,7 @@ async fn a_payment_names_the_viewing_key_of_its_owners_authorization() {
     ));
 }
 
-/// One body takes the reply, each byte of it is one byte of the frame.
+/// Each reply byte lands in both bodies of the 1x2 entry.
 fn ceiling_entry(reply_len: usize) -> Measure {
     Measure {
         reply_len: Some(reply_len),
@@ -2056,8 +2089,8 @@ fn ceiling_entry(reply_len: usize) -> Measure {
     }
 }
 
-/// Sets [`ceiling_entry`] at the transaction ceiling exactly.
-const CEILING_REPLY_LEN: usize = 2402;
+/// The widest reply [`ceiling_entry`] carries under the transaction ceiling.
+const CEILING_REPLY_LEN: usize = 1181;
 
 include!("size_pins.rs");
 
@@ -2101,14 +2134,6 @@ impl Measured {
     }
 
     fn keyed(self, shape: spr_client::Shape) -> bool {
-        if shape.n_outputs() == custom_ring_interface::SINGLE_ASSET_PAYOUT_OUTPUTS
-            && !matches!(
-                self,
-                Self::Confidential | Self::ConfidentialPolicy | Self::ConfidentialEscrow
-            )
-        {
-            return false;
-        }
         match self.entry() {
             true => super::anonymous::AnonymousKey::Entry.serves(shape),
             false => shape_keyed(self.ring_rail(), shape),
@@ -2621,7 +2646,6 @@ async fn ring_fit_report_measures_every_keyed_shape_with_withdrawal_legs() {
                         }
                         let served = super::transfer_key(
                             custom_ring_interface::key_catalog::TransferSpend {
-                                format: custom_ring_interface::DisclosureFormat::Standard,
                                 rail: rail.ring_rail(),
                                 inputs: shape.n_inputs(),
                                 outputs: shape.n_outputs(),
@@ -2695,7 +2719,7 @@ async fn every_transfer_shape_takes_its_pinned_transaction_size() {
 async fn every_confidential_class_fits_the_signer_and_in_proof_rails_owner_paid_or_relayed() {
     let narrow = custom_ring_interface::key_catalog::TRANSFER_SHAPES
         .into_iter()
-        .filter(|shape| !shape.entry && !shape.wide && shape.format == DisclosureFormat::Standard);
+        .filter(|shape| !shape.entry && !shape.wide);
     for family in narrow {
         let shape = spr_client::Shape::new(usize::from(family.inputs), usize::from(family.outputs));
         for rail in [Measured::Confidential, Measured::InProofOwner] {
@@ -2722,7 +2746,6 @@ fn a_shape_past_a_confidential_class_is_unkeyed() {
     assert!(shape_keyed(RingRail::Confidential, Shape::IN16_OUT8));
     for (inputs, outputs) in [(41, 2), (25, 4), (25, 8), (1, 16)] {
         let spend = TransferSpend {
-            format: custom_ring_interface::DisclosureFormat::Standard,
             rail: RingRail::Confidential,
             inputs,
             outputs,
@@ -2743,8 +2766,8 @@ async fn every_frame_limit_of_the_byte_model_holds() {
     let ceiling = solana_message::v1::MAX_TRANSACTION_SIZE;
     let pin = |measure: Measure| async move { measure.bytes().await };
 
-    // An entry whose reply reaches the ceiling exactly.
-    assert_eq!(pin(ceiling_entry(CEILING_REPLY_LEN)).await, ceiling);
+    // An entry at its widest reply.
+    assert_eq!(pin(ceiling_entry(CEILING_REPLY_LEN)).await, ceiling - 1);
 
     // Plain policy at 24x4 with an outsider payer.
     let signer_policy = Measure {
@@ -2755,8 +2778,8 @@ async fn every_frame_limit_of_the_byte_model_holds() {
         payer: Payer::Outsider,
         ..Measure::pinned(Measured::InProofOwnerPolicy, Shape::new(24, 4))
     };
-    assert_eq!(pin(signer_policy).await, 3414);
-    assert_eq!(pin(in_proof_policy).await, 3413);
+    assert_eq!(pin(signer_policy).await, 3373);
+    assert_eq!(pin(in_proof_policy).await, 3372);
 
     // An outsider payer adds its signature and key.
     let owner_paid = Measure::pinned(Measured::Confidential, Shape::IN16_OUT8);
@@ -2828,19 +2851,19 @@ async fn every_frame_boundary_takes_its_modelled_bytes() {
         ..relayed(Measured::ConfidentialPolicy, Shape::new(16, 8))
     };
     for (measure, bytes) in [
-        (with_reply(Measured::AnonymousEntry, 3), 4269),
-        (with_reply(Measured::Anonymous, 5), 3951),
+        (with_reply(Measured::AnonymousEntry, 3), 4357),
+        (with_reply(Measured::Anonymous, 5), 4039),
         (
             relayed(Measured::ConfidentialPolicy, Shape::new(16, 8)),
-            3762,
+            3689,
         ),
         (
             relayed(Measured::InProofOwnerPolicy, Shape::new(16, 8)),
-            3761,
+            3688,
         ),
-        (compact_fifteen, 3697),
-        (key_escrow_co_signed, 3544),
-        (loaded_commitment, 3249),
+        (compact_fifteen, 3624),
+        (key_escrow_co_signed, 3503),
+        (loaded_commitment, 3288),
     ] {
         assert_eq!(
             measure.bytes().await,
@@ -2915,23 +2938,23 @@ async fn a_second_input_tree_takes_its_account_context_and_bitmap() {
     for (measure, bytes) in [
         (
             Measure::pinned(Measured::Confidential, Shape::new(2, 2)),
-            1454 + 38,
+            1429 + 38,
         ),
         (
             Measure::pinned(Measured::Anonymous, Shape::new(2, 2)),
-            1581 + 38,
+            1620 + 38,
         ),
         (
             Measure::pinned(Measured::ConfidentialPolicy, Shape::new(16, 8)),
-            3666 + 39,
+            3593 + 39,
         ),
         (
             Measure::relayed(Measured::ConfidentialPolicy, Shape::new(24, 4)),
-            3414 + 40,
+            3373 + 40,
         ),
         (
             Measure::relayed(Measured::InProofOwnerPolicy, Shape::new(24, 4)),
-            3413 + 40,
+            3372 + 40,
         ),
     ] {
         let second_tree = Measure {
@@ -2953,9 +2976,9 @@ async fn a_second_input_tree_takes_its_account_context_and_bitmap() {
 async fn omitted_slots_save_their_bytes_on_each_family() {
     use spr_client::Shape;
     for (rail, saved) in [
-        (Measured::Confidential, 217),
-        (Measured::ConfidentialPolicy, 217),
-        (Measured::Anonymous, 249),
+        (Measured::Confidential, 209),
+        (Measured::ConfidentialPolicy, 209),
+        (Measured::Anonymous, 241),
     ] {
         let at = |published| Measure {
             published: Some(published),
@@ -2965,24 +2988,23 @@ async fn omitted_slots_save_their_bytes_on_each_family() {
     }
 }
 
-/// A slot without a body costs its body and a change cell, a reply its length per body.
+/// A change slot carries a body like any slot, a reply costs its length per body.
 #[tokio::test]
-async fn change_slots_and_replies_move_the_anonymous_frame_by_their_bytes() {
+async fn change_slots_cost_nothing_and_replies_move_each_body() {
     use spr_client::Shape;
     let base = Measure::pinned(Measured::Anonymous, Shape::new(2, 4));
     let at = |change_slots| Measure {
         change_slots,
         ..base
     };
-    assert_eq!(at(0).bytes().await - at(1).bytes().await, 64);
-    assert_eq!(at(1).bytes().await - at(2).bytes().await, 64);
+    assert_eq!(at(0).bytes().await, at(2).bytes().await);
     let replied = Measure {
         reply_len: Some(custom_ring_interface::MIN_REPLY_LEN),
         ..base
     };
     assert_eq!(
         replied.bytes().await - base.bytes().await,
-        2 + 3 * custom_ring_interface::MIN_REPLY_LEN,
+        2 + 4 * custom_ring_interface::MIN_REPLY_LEN,
         "the length and one reply per body"
     );
     let co_owned = Measure {
@@ -3080,6 +3102,104 @@ async fn an_anonymous_deposit_leg_takes_a_separate_funder_but_never_the_hidden_o
     assert!(matches!(
         stage_anonymous(&stage(hidden), &chain).await,
         Err(RingError::AnonymousPublicSignerLinksOwner)
+    ));
+}
+
+/// The waiver admits each unproven hidden owner party the default refuses, a hidden co-signer stays
+/// refused.
+#[tokio::test]
+async fn an_accepted_exposure_admits_each_party_the_default_refuses_but_no_hidden_co_signer() {
+    use crate::tests::support::keypair;
+    let sender = &keypair(1);
+    let paid = ring_address(&keypair(2));
+    let hidden = sender.shielded_address().unwrap().solana_address().unwrap();
+    let chain = enrolled(&[sender, &keypair(2)]);
+    async fn exposed(
+        transfer: AnonymousTransfer<'_>,
+        exposure: OwnerExposure,
+        chain: &Chain,
+    ) -> Result<(), RingError> {
+        let transfer = transfer.with_owner_exposure(exposure);
+        stage_anonymous(&transfer, chain).await.map(|_| ())
+    }
+    let zero_key_spend = || {
+        owner_transfer(
+            sender,
+            ring_transaction(vec![zero_key(ring_utxo(sender, Mint::SOL, 10, 0))]),
+        )
+        .with_anonymous_signer(&sender.signing_key)
+    };
+    let hidden_payer = || {
+        owner_transfer(
+            sender,
+            paid_ring_transaction(vec![ring_utxo(sender, Mint::SOL, 10, 0)], hidden),
+        )
+        .with_anonymous_signer(&sender.signing_key)
+    };
+    let hidden_funder = || {
+        let mut transaction = ring_transaction(vec![ring_utxo(sender, Mint::SOL, 10, 0)]);
+        transaction.deposit_sol(5, hidden).unwrap();
+        owner_transfer(sender, transaction)
+            .with_interface_transfer_accounts(vec![TransactInterfaceTransferAccounts::Sol(
+                TransactSolTransferAccounts { recipient: hidden },
+            )])
+            .with_anonymous_signer(&sender.signing_key)
+            .with_payment(payment(&paid, 4))
+            .unwrap()
+    };
+    let hidden_exit = || {
+        let mut transaction = ring_transaction(vec![ring_utxo(sender, Mint::SOL, 10, 0)]);
+        transaction.withdraw_sol(4, hidden).unwrap();
+        owner_transfer(sender, transaction)
+            .with_interface_transfer_accounts(vec![TransactInterfaceTransferAccounts::Sol(
+                TransactSolTransferAccounts { recipient: hidden },
+            )])
+            .with_anonymous_signer(&sender.signing_key)
+    };
+    assert!(matches!(
+        exposed(zero_key_spend(), OwnerExposure::Refused, &chain).await,
+        Err(RingError::ZeroKeyInputUnnamed { index: 0 })
+    ));
+    assert!(matches!(
+        exposed(hidden_payer(), OwnerExposure::Refused, &chain).await,
+        Err(RingError::AnonymousPublicSignerLinksOwner)
+    ));
+    assert!(matches!(
+        exposed(hidden_funder(), OwnerExposure::Refused, &chain).await,
+        Err(RingError::AnonymousPublicSignerLinksOwner)
+    ));
+    assert!(matches!(
+        exposed(hidden_exit(), OwnerExposure::Refused, &chain).await,
+        Err(RingError::AnonymousExitLinksOwner(exit)) if exit == hidden
+    ));
+    for transfer in [
+        zero_key_spend(),
+        hidden_payer(),
+        hidden_funder(),
+        hidden_exit(),
+    ] {
+        exposed(transfer, OwnerExposure::Accepted, &chain)
+            .await
+            .unwrap();
+    }
+
+    let client = Chain::ring(RingSettings {
+        co_signer: Some((hidden, custom_ring_interface::CoSignScope::TRANSFERS)),
+        ..anonymous()
+    })
+    .client();
+    let co_signed = owner_transfer(
+        sender,
+        ring_transaction(vec![ring_utxo(sender, Mint::SOL, 10, 0)]),
+    )
+    .with_co_signer(hidden)
+    .with_anonymous_signer(&sender.signing_key)
+    .with_payment(payment(&paid, 4))
+    .unwrap()
+    .with_owner_exposure(OwnerExposure::Accepted);
+    assert!(matches!(
+        co_signed.assemble(&client).await,
+        Err(RingError::Program(CustomRingError::CoSignerIsOwner))
     ));
 }
 
@@ -3299,8 +3419,9 @@ async fn a_keyed_input_spends_under_its_owners_enrolled_key_and_a_zero_key_waive
     ));
 }
 
+/// Any nonzero key pays, the zero key pays an unregistered owner alone, the literal zero pays no one.
 #[tokio::test]
-async fn an_output_takes_the_registered_key_or_zero_for_an_absent_owner() {
+async fn an_output_takes_any_nonzero_key_and_the_zero_key_only_for_an_absent_owner() {
     use crate::tests::support::keypair;
     let (sender, payee) = (keypair(1), keypair(2));
     let (from, to) = (
@@ -3324,24 +3445,28 @@ async fn an_output_takes_the_registered_key_or_zero_for_an_absent_owner() {
         ..to
     };
     let enrolled = client(&[from, to]);
-    assert!(paying(&to).frame(&enrolled).await.is_ok());
-    assert!(paying(&zero).frame(&client(&[from])).await.is_ok());
-    assert!(matches!(
-        paying(&to).frame(&client(&[from])).await.err(),
-        Some(RingError::RecipientNotEnrolled { .. })
-    ));
-    assert!(matches!(
-        paying(&zero).frame(&enrolled).await.err(),
-        Some(RingError::EnrolledRecipientAtZeroKey { .. })
-    ));
     let rekeyed = spr_keypair::ShieldedAddress {
         nullifier_pubkey: from.nullifier_pubkey,
         ..to
     };
+    assert!(paying(&to).frame(&enrolled).await.is_ok());
+    assert!(paying(&zero).frame(&client(&[from])).await.is_ok());
+    assert!(paying(&to).frame(&client(&[from])).await.is_ok());
+    assert!(paying(&rekeyed).frame(&enrolled).await.is_ok());
     assert!(matches!(
-        paying(&rekeyed).frame(&enrolled).await.err(),
-        Some(RingError::RecipientKeyMismatch { .. })
+        paying(&zero).frame(&enrolled).await.err(),
+        Some(RingError::EnrolledRecipientAtZeroKey { .. })
     ));
+    let literal = spr_keypair::ShieldedAddress {
+        nullifier_pubkey: [0; 32],
+        ..to
+    };
+    for chain in [client(&[from]), enrolled] {
+        assert!(matches!(
+            paying(&literal).frame(&chain).await.err(),
+            Some(RingError::RecipientLiteralZeroKey { .. })
+        ));
+    }
 }
 
 #[tokio::test]
@@ -3631,10 +3756,7 @@ async fn a_public_spend_on_an_anonymous_ring_publishes_its_owners_alone() {
     let unenrolled = Chain::ring(anonymous())
         .with_tracking(&[keypair(2).shielded_address().unwrap()])
         .client();
-    assert!(matches!(
-        transfer().frame(&unenrolled).await.err(),
-        Some(RingError::RecipientNotEnrolled { slot_index: 0 })
-    ));
+    assert!(transfer().frame(&unenrolled).await.is_ok());
     assert!(transfer()
         .with_zero_key_change()
         .frame(&unenrolled)
@@ -3646,24 +3768,28 @@ async fn a_public_spend_on_an_anonymous_ring_publishes_its_owners_alone() {
 #[test]
 fn a_record_names_its_kind_owner_and_raw_mint() {
     use crate::tests::support::{keypair, program};
-    use custom_ring_interface::{AuditRecord, RecordKind};
+    use custom_ring_interface::{OutputRecord, RecordKind};
+    use zolana_ring_transaction::RingOutputRail;
     let owner = keypair(1).shielded_address().unwrap();
     let exit = SppProofOutputUtxo::new(Mint::SOL, 3, owner).unwrap();
-    let record = audit::audit_record(&exit).unwrap();
+    let record = RingOutputRail::output_record(&exit).unwrap();
     assert_eq!(record.kind, RecordKind::Exit);
     assert_eq!(record.amount, 3);
     assert_eq!(record.mint, Mint::SOL.asset.to_bytes());
     assert_eq!(record.nullifier_pk, owner.nullifier_pubkey);
     let ring_slot = exit.clone().with_ring_program_id(program());
     assert_eq!(
-        audit::audit_record(&ring_slot).unwrap().kind,
+        RingOutputRail::output_record(&ring_slot).unwrap().kind,
         RecordKind::Ring
     );
     let dummy = SppProofOutputUtxo {
         owner_address: None,
         ..exit
     };
-    assert_eq!(audit::audit_record(&dummy).unwrap(), AuditRecord::default());
+    assert_eq!(
+        RingOutputRail::output_record(&dummy).unwrap(),
+        OutputRecord::default()
+    );
 }
 
 #[tokio::test]
@@ -3790,7 +3916,10 @@ async fn a_hidden_sender_pays_a_note_carrying_data() {
         .position(|output| output.owner_address == Some(recipient.recipient))
         .unwrap();
     assert_eq!(
-        payment_at(&staged, &reader, position).data,
+        match payment_at(&staged, &reader, position).payload {
+            zolana_ring_transaction::PayloadRead::Opened(payload) => payload.data,
+            other => panic!("an opened payload, got {other:?}"),
+        },
         [&[4; 32][..], b"app"].concat()
     );
     let assembled = signed
@@ -4500,93 +4629,6 @@ async fn an_anonymous_move_counts_the_sender_change_before_selection() {
     assert_eq!(trees.len(), 21);
     assert_eq!(trees.first(), Some(&1));
     assert_eq!(trees.last(), Some(&2));
-}
-
-#[tokio::test]
-async fn confidential_payout_keeps_the_complete_transaction_within_inline_limits() {
-    use crate::tests::support::{keypair, Registry};
-    use custom_ring_interface::{DisclosureFormat, SINGLE_ASSET_PAYOUT_OUTPUTS};
-    use zolana_ring_policy::{ListId, Rule, RuleTable, Subject};
-
-    let sender = keypair(1);
-    let recipients: Vec<_> = (0..SINGLE_ASSET_PAYOUT_OUTPUTS)
-        .map(|index| keypair(index as u8 + 10))
-        .collect();
-    let owners: Vec<_> = core::iter::once(&sender)
-        .chain(&recipients)
-        .map(|owner| (owner, 1))
-        .collect();
-    let rules = RuleTable::builder()
-        .rule(Rule::require(Subject::Sender, ListId::Allow))
-        .rule(Rule::require(Subject::OutputOwner, ListId::Allow))
-        .rule(Rule::forbid(Subject::OutputOwner, ListId::Block))
-        .build();
-    let client = Chain::ring(RingSettings {
-        has_policy: true,
-        co_signer: Some(MEASURED_CO_SIGNER),
-        ..RingSettings::new(RingMode::Confidential)
-    })
-    .with_registry(Registry::new(&owners), &rules)
-    .with_curator(MEASURED_CURATOR, &rules)
-    .client();
-    let payer = crate::tests::support::payer();
-    assert_ne!(
-        payer,
-        sender.shielded_address().unwrap().solana_address().unwrap()
-    );
-    let mut transaction = paid_ring_transaction(
-        vec![ring_utxo(
-            &sender,
-            Mint::SOL,
-            SINGLE_ASSET_PAYOUT_OUTPUTS as u64,
-            0,
-        )],
-        payer,
-    );
-    for recipient in &recipients {
-        transaction
-            .transfer_with_ring(
-                &recipient.shielded_address().unwrap(),
-                Mint::SOL,
-                1,
-                Some(ring().program_id()),
-            )
-            .unwrap();
-    }
-    let transfer = owner_transfer(&sender, transaction)
-        .with_co_signer(MEASURED_CO_SIGNER.0)
-        .with_priority_fee(1);
-    let prepared = transfer.frame(&client).await.unwrap();
-    let data = prepared.frame.parts.data().unwrap();
-    assert_eq!(data.extensions.format, DisclosureFormat::SingleAssetPayout);
-    assert_eq!(data.outputs.len(), SINGLE_ASSET_PAYOUT_OUTPUTS);
-    assert!(data.outputs.iter().all(|output| matches!(output.body,
-        custom_ring_interface::SlotBody::Recipient(body)
-        if body.len() == custom_ring_interface::COMPACT_RECIPIENT_BODY_LEN)));
-    let instruction = prepared.instruction().unwrap();
-    assert!(instruction
-        .accounts
-        .iter()
-        .any(|account| account.pubkey == MEASURED_CURATOR));
-    assert!(instruction
-        .accounts
-        .iter()
-        .any(|account| account.pubkey == MEASURED_CO_SIGNER.0 && account.is_signer));
-    let size = spr_client::transaction_size(
-        &payer,
-        core::slice::from_ref(&instruction),
-        spr_client::ComputeBudgetConfig::new(0).with_priority_fee(1),
-    )
-    .unwrap();
-    assert!(size.bytes <= solana_message::v1::MAX_TRANSACTION_SIZE);
-    assert!(size.addresses <= usize::from(solana_message::v1::MAX_ADDRESSES));
-    let cpi = data
-        .spp_instruction_data_under(
-            prepared.config.account(),
-            spr_interface::instruction::TransactProof::zeroed(),
-        )
-        .unwrap();
-    assert!(cpi.len() <= custom_ring_interface::MAX_CPI_DATA_LEN);
 }
 
 #[tokio::test]

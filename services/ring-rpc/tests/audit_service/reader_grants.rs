@@ -102,7 +102,10 @@ async fn a_wallet_scoped_reader_sees_only_its_wallet_rows() {
     let reader = stranger();
     let grant = Member::wallet_grant(
         &Member::owner_tag(wallet.as_array()).expect("wallet member"),
-        &reader_member(ReaderKey::ed25519(reader.pubkey()).expect("reader")),
+        &ReaderKey::ed25519(reader.pubkey())
+            .expect("reader")
+            .member()
+            .expect("reader identity"),
     )
     .expect("grant member");
     source.records.list_reader(grant, true);
@@ -219,7 +222,10 @@ fn wallet_reader(source: &StaticSource, wallet: Address) -> Keypair {
     let reader = stranger();
     let grant = Member::wallet_grant(
         &Member::owner_tag(wallet.as_array()).expect("wallet member"),
-        &reader_member(ReaderKey::ed25519(reader.pubkey()).expect("reader")),
+        &ReaderKey::ed25519(reader.pubkey())
+            .expect("reader")
+            .member()
+            .expect("reader identity"),
     )
     .expect("grant member");
     source.records.list_reader(grant, true);
@@ -363,14 +369,11 @@ async fn wallet_activity(
 /// A spender of unnamed inputs reads no input opening and only its own notes.
 fn assert_reads_own_notes_alone(items: Vec<WalletActivity>) {
     let [item] = items.try_into().expect("the spender's transfer");
-    let WalletView::Sender {
-        inputs, outputs, ..
-    } = item.view
-    else {
+    let WalletView::Sender { spent, outputs, .. } = item.view else {
         panic!("a sender view")
     };
     assert!(outputs.is_empty());
-    assert!(inputs.is_empty());
+    assert!(spent.is_empty());
 }
 
 #[tokio::test]
@@ -420,15 +423,13 @@ fn enrolled_spend(fixture: &Fixture, co_spent: &[[u8; 32]]) -> StaticSource {
 /// The output amounts of the wallet's spend, one input of its own, after the note it received.
 fn sender_amounts(items: Vec<WalletActivity>) -> Vec<u64> {
     let Some(WalletActivity {
-        view: WalletView::Sender {
-            inputs, outputs, ..
-        },
+        view: WalletView::Sender { spent, outputs, .. },
         ..
     }) = items.into_iter().last()
     else {
         panic!("a sender view")
     };
-    assert_eq!(inputs.len(), 1);
+    assert_eq!(spent.len(), 1);
     outputs
         .iter()
         .flat_map(|output| &output.utxo)
@@ -461,14 +462,11 @@ async fn a_confidential_in_proof_owner_with_an_unopened_input_reads_its_own_note
         .await
         .try_into()
         .expect("the spender's transfer");
-    let WalletView::Sender {
-        inputs, outputs, ..
-    } = item.view
-    else {
+    let WalletView::Sender { spent, outputs, .. } = item.view else {
         panic!("a sender view")
     };
     assert!(
-        outputs.is_empty() && inputs.is_empty(),
+        outputs.is_empty() && spent.is_empty(),
         "an input the service never opened names no sole owner"
     );
 }
@@ -525,13 +523,10 @@ async fn a_data_output_signer_of_dummy_inputs_reads_only_its_own_output() {
         .await
         .try_into()
         .expect("the signer's transfer");
-    let WalletView::Sender {
-        inputs, outputs, ..
-    } = item.view
-    else {
+    let WalletView::Sender { spent, outputs, .. } = item.view else {
         panic!("a sender view")
     };
-    assert!(inputs.is_empty());
+    assert!(spent.is_empty());
     let amounts: Vec<u64> = outputs
         .iter()
         .flat_map(|output| &output.utxo)
@@ -698,8 +693,80 @@ fn anonymous_spend(fixture: &Fixture, others: &[([u8; 32], bool)]) -> StaticSour
     source
 }
 
+/// A payload that rebuilds no commitment leaves the note's spend resolved.
 #[tokio::test]
-async fn an_anonymous_spend_reads_a_resolved_input_an_unresolved_one_and_padding_apart() {
+async fn a_malformed_payload_on_a_data_bearing_output_still_resolves_its_spend() {
+    let fixture = Fixture::new();
+    let key = NullifierKey::from_secret([7; 31]);
+    let note = UtxoFields {
+        nullifier_pk: key.pubkey().expect("key"),
+        data_hash: field(0x74),
+        ..owned_note(900)
+    };
+    let outputs = [
+        Output::Ring {
+            utxo: note,
+            recipient_u: fixture.recipient_u,
+            tag: Some(field(0x62)),
+        },
+        Output::Dummy,
+    ];
+    let paying = ring_transfer(0x62);
+    let mut disclosure =
+        Transfer::with_data(paying.disclosure(Rail::Anonymous, &outputs), &outputs);
+    disclosure.real_inputs = 1;
+    disclosure.payloads.as_mut().expect("payloads")[0] = Default::default();
+    let auditor = fixture.auditor.pubkey();
+    let row = Indexed {
+        transfer: &paying,
+        outputs: &outputs,
+        auditor: &auditor,
+        signature: 0x62,
+        frames: &fixture.frames,
+    }
+    .publish(Rail::Anonymous, &outputs, &disclosure);
+    let nullifier = key
+        .nullifier(
+            &row.output_slots[0].output_context.hash,
+            &paying.blinding(0),
+        )
+        .expect("nullifier");
+    let spend = Indexed {
+        transfer: &spending(0x63, &[nullifier]),
+        outputs: &[
+            Output::Ring {
+                utxo: sol(0xb0, 900),
+                recipient_u: x25519_u(0x50),
+                tag: Some(field(0x51)),
+            },
+            Output::Dummy,
+        ],
+        auditor: &auditor,
+        signature: 0x63,
+        frames: &fixture.frames,
+    }
+    .anonymous(&[true]);
+    let mut source = fixture.source().with_transactions(vec![row, spend]);
+    source.configs.get_mut(&RING).expect("config").mode = RingMode::Anonymous;
+    source.next_cursor = None;
+    source
+        .tracking
+        .enroll(OWNER.as_array(), &key, &fixture.auditor.pubkey());
+    let service = fixture.hub(source).service(None).expect("service");
+    service.backfill_utxos().await.expect("backfill");
+    let coverage = service
+        .spend_coverage(&coverage_failures::coverage_request(&authority()))
+        .await
+        .expect("coverage");
+    assert_eq!(coverage.totals.expect("first page totals").resolved, 1);
+    assert!(coverage
+        .unclassified
+        .iter()
+        .all(|row| row.nullifier.0 != nullifier));
+}
+
+#[tokio::test]
+async fn an_anonymous_spend_resolves_its_own_input_and_leaves_the_rest_unclassified() {
     let fixture = Fixture::new();
     let source = anonymous_spend(&fixture, &[(field(0x71), true), (field(0x72), false)]);
     let reader = wallet_reader(&source, OWNER);
@@ -711,15 +778,15 @@ async fn an_anonymous_spend_reads_a_resolved_input_an_unresolved_one_and_padding
         .await
         .expect("coverage");
     assert_eq!(coverage.totals.expect("first page totals").resolved, 1);
-    assert_eq!(coverage.totals.expect("first page totals").padding, 1);
-    // The paying transfer's own input stays unresolved beside the spend's.
+    // The proof names no position, the padding beside the unresolved note reads unclassified too.
+    assert_eq!(coverage.totals.expect("first page totals").padding, 0);
     assert_eq!(
         coverage
-            .unresolved_real
+            .unclassified
             .iter()
             .map(|row| row.nullifier.0)
             .collect::<Vec<_>>(),
-        [field(0x62), field(0x71)]
+        [field(0x62), field(0x71), field(0x72)]
     );
     assert!(coverage.unreadable.is_empty());
     assert!(coverage.integrity_faults.is_empty());

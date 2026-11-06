@@ -19,7 +19,6 @@ import {
 } from "@heliuslabs/spr/transaction";
 
 import { deliveredSlotSecret, slotTag } from "../../src/crypto/derivation/ring-stream.js";
-import { sealRecipientBody } from "../../src/protocol/codec/anonymous-delivery.js";
 import { AnonymousSync, TAGS_PER_REQUEST, ringFullScan } from "../../src/state/anonymous-sync.js";
 import { openRingNotes } from "../../src/state/ring-sync.js";
 import { LocalRingKeys } from "../../src/state/ring-keys.js";
@@ -35,6 +34,7 @@ import {
   SCAN_USDC,
   ScanIndexer,
   ScanWallet,
+  sealedNote,
 } from "../helpers/ring-scan.js";
 
 await initializePoseidon();
@@ -196,12 +196,15 @@ describe("full scan recovery", () => {
     expect(recovered.sent.map((row) => row.amount)).toEqual([100n, 40n]);
   });
 
-  it("recovers two SPL change outputs, each from its own bundle cell", async () => {
+  it("recovers two SPL change outputs, each from its own record", async () => {
     const indexer = new ScanIndexer();
     const alice = new ScanWallet(1);
     alice.fundFirst(SCAN_USDC, 40n);
     const paid = await alice.pay(indexer, [{ to: alice.address, amount: 25n }]);
-    expect(paid.outputSlots.slice(0, 2).map((slot) => slot.payload.length)).toEqual([0, 0]);
+    expect(paid.outputSlots.slice(0, 2).map((slot) => slot.viewTag)).toEqual([
+      new Uint8Array(32),
+      new Uint8Array(32),
+    ]);
     const recovered = await recover(alice, indexer);
     expect(recovered.utxos.map((note) => [note.utxo.asset, note.utxo.amount]).toSorted()).toEqual([
       [SCAN_USDC, 15n],
@@ -306,7 +309,7 @@ describe("full scan recovery", () => {
     const blinding = new Uint8Array(32).fill(0x12) as Bytes32;
     const { address } = bob;
     const agreement = txKey.ecdh(address.viewingPublicKey);
-    const body = sealRecipientBody(
+    const body = sealedNote(
       deliveredSlotSecret({
         agreement,
         txViewingKey: txKey.publicKey(),
@@ -315,7 +318,7 @@ describe("full scan recovery", () => {
         outputIndex: 0,
         firstNullifier,
       }),
-      { blinding, amount: 7n, mint },
+      { owner: address, blinding, amount: 7n, mint },
     );
     const hash = new Utxo({
       owner: address.signingPublicKey,
@@ -360,7 +363,7 @@ describe("full scan recovery", () => {
       const firstNullifier = new Uint8Array(32).fill(0x2f) as Bytes32;
       const blinding = new Uint8Array(32).fill(0x12) as Bytes32;
       const { address } = to;
-      const body = sealRecipientBody(
+      const body = sealedNote(
         deliveredSlotSecret({
           agreement: txKey.ecdh(address.viewingPublicKey),
           txViewingKey: txKey.publicKey(),
@@ -369,7 +372,7 @@ describe("full scan recovery", () => {
           outputIndex: 0,
           firstNullifier,
         }),
-        { blinding, amount: 30n, mint: SOL_MINT },
+        { owner: address, blinding, amount: 30n, mint: SOL_MINT },
       );
       const hash = new Utxo({
         owner: address.signingPublicKey,

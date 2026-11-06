@@ -40,7 +40,7 @@ export function ringRegistrySlots(
   ]);
 }
 
-/** Each output key under `root`, a nonzero key at its own row and the zero key at any row, Rust `check_output_key`. */
+/** The merge output key under `root`, the merge circuit still holds a nonzero key to its own row, Rust `check_output_key`. */
 export async function readOutputKeys(
   input: Readonly<{
     client: Pick<TrackingReader, "getTrackingOpenings">;

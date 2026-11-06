@@ -41,6 +41,13 @@ func DeliveredSlotSecret(t testing.TB, txViewingSk [32]byte, u [32]byte, salt [1
 		new(big.Int).SetBytes(salt[:]), big.NewInt(int64(i)), firstNullifier)
 }
 
+// SealRecord mirrors shared.SlotSeal, the record of slot i under its delivered slot secret and label.
+func SealRecord(t testing.TB, txViewingSk, u [32]byte, salt [16]byte, i int, firstNullifier *big.Int, label string, plaintext []byte) []byte {
+	t.Helper()
+	key, nonce := AuditStreamKeys(t, DeliveredSlotSecret(t, txViewingSk, u, salt, i, firstNullifier), label)
+	return CTREncrypt(t, key, nonce, plaintext)
+}
+
 // BlindingSeed mirrors shared.BlindingSeed.
 func BlindingSeed(t testing.TB, txViewingSk [32]byte, salt [16]byte) *big.Int {
 	t.Helper()

@@ -16,19 +16,18 @@ import {
   resolveRingCoSigners,
 } from "../../src/proof/cosign.js";
 import {
-  defaultInputBits,
+  auditDisclosure,
+  defaultNoteBits,
   entryRecord,
   inputClassOf,
-  inputMapOf,
+  inputOpenings,
   isDefaultRingNote,
   ownerRows,
+  spentNotes,
 } from "../../src/proof/audit-proof.js";
 import { checkHiddenOwnerSpends } from "../../src/operations/payments/anonymous.js";
 import { EMPTY_ENTRY_RECORD, InputClass } from "../../src/protocol/codec/audit-stream.js";
-import {
-  DisclosureFormat,
-  type AuditStreamLayout,
-} from "../../src/protocol/codec/ring-disclosure-layout.js";
+import type { AuditStreamLayout } from "../../src/protocol/codec/ring-disclosure-layout.js";
 import { checkInputKeys, checkOutputKeys } from "../../src/proof/policy-proof.js";
 import { enrolledSalt } from "../../src/proof/policy-proof.js";
 import { anonymousPartyIdentities } from "../../src/protocol/membership/parties.js";
@@ -159,7 +158,7 @@ describe("selectTransferKey", () => {
     expect(refusal(() => entered(1, 2, 33, 1)).code).toBe("RING_CATALOG_KEY_MISSING");
   });
 
-  it("seals a tail past the capacity of the key the spend selects", () => {
+  it("seals a recipient key past the capacity of the key the spend selects", () => {
     const layout = (wideOwners: boolean) =>
       ringStreamLayout({
         rail: "confidential",
@@ -168,7 +167,6 @@ describe("selectTransferKey", () => {
         inputs: 2,
         outputs: 2,
         entry: false,
-        hasData: true,
         wideOwners,
       });
     expect(layout(false).capacity).toBe(2);
@@ -294,15 +292,15 @@ describe("co-sign", () => {
     });
   });
 
-  it("binds each co-signer in its party slot, the destination last", () => {
-    const parties = anonymousPartyIdentities({
-      payer: ONE,
-      coSigners: [ONE, ONE],
-      exitDestination: ONE,
-    });
+  it("binds each co-signer in its party cell, zero past the last, and refuses a sixth", () => {
+    const parties = anonymousPartyIdentities([ONE, ONE]);
     expect(parties).toHaveLength(ANONYMOUS_PARTIES);
-    expect(parties[3]?.every((byte) => byte === 0)).toBe(true);
-    expect(parties.at(-1)?.every((byte) => byte === 0)).toBe(false);
+    expect(ANONYMOUS_PARTIES).toBe(5);
+    expect(parties[1]?.every((byte) => byte === 0)).toBe(false);
+    expect(parties[2]?.every((byte) => byte === 0)).toBe(true);
+    expect(() => anonymousPartyIdentities(Array<Address>(6).fill(ONE))).toThrow(
+      expect.objectContaining({ code: "RING_INVALID_LENGTH" }),
+    );
   });
 
   it("refuses an owner signer as co-signer and a missing approver signature", async () => {
@@ -368,6 +366,7 @@ describe("merge.json", () => {
         payer: text("payer"),
         trackingRoot: text("trackingRoot"),
         ephSk: text("ephSk"),
+        recipientKey: text("recipientKey"),
         ownerKey: text("ownerKey"),
         ownerPkHash: text("ownerPkHash"),
         mintChunks: (request["mintChunks"] as readonly string[]).map(field),
@@ -418,43 +417,32 @@ describe("input evidence", () => {
     inputs,
     outputs: 1,
     capacity: 2,
-    hasData: false,
   });
   const address = note({ address: true });
 
-  it("counts notes alone with addresses interleaved before the dummy suffix", () => {
-    const inputs = [note({ ring: RING }), address, note({}), note({ dummy: true })];
+  it("opens the notes alone in note order, addresses and dummies left out", () => {
+    const ring = note({ ring: RING });
+    const deposit = note({});
+    const inputs = [ring, address, deposit, note({ dummy: true })];
     expect(inputs.map(inputClassOf)).toEqual([
       InputClass.note,
       InputClass.address,
       InputClass.note,
       InputClass.dummy,
     ]);
-    const map = inputMapOf(inputs, layout(4));
-    expect([map.noteCount, map.addressInputBits, map.nonDummyCount]).toEqual([2, 2n, 3]);
-    const addresses = inputMapOf([address, address], layout(2));
-    expect([addresses.noteCount, addresses.addressInputBits]).toEqual([0, 3n]);
+    expect(spentNotes(inputs)).toEqual([ring, deposit]);
+    // An address takes no ring input slot, the proof opens padding in its place.
+    expect(inputOpenings([address, address, note({ dummy: true })], 4)).toEqual(
+      inputOpenings([], 4),
+    );
   });
 
-  it("refuses a note or an address past a dummy and a count off the layout", () => {
-    for (const inputs of [
-      [note({ dummy: true }), note({ ring: RING })],
-      [note({ ring: RING }), note({ dummy: true }), address],
-    ])
-      expect(refusal(() => inputMapOf(inputs, layout(inputs.length))).details).toMatchObject({
-        reason: "RingTransactLength",
-      });
-    expect(refusal(() => inputMapOf([note({})], layout(2))).details).toMatchObject({
-      reason: "RingTransactLength",
-    });
-  });
-
-  it("sets a default bit and an entry on a default-ring note alone, never on an address", () => {
-    const inputs = [note({ ring: RING }), note({}), address, note({ dummy: true })];
-    expect(defaultInputBits(inputs)).toBe(2n);
-    expect(inputs.map(isDefaultRingNote)).toEqual([false, true, false, false]);
+  it("names default-ring notes by note order, never an address position", () => {
+    const inputs = [note({ ring: RING }), address, note({}), note({ dummy: true })];
+    expect(defaultNoteBits(spentNotes(inputs))).toBe(2n);
+    expect(inputs.map(isDefaultRingNote)).toEqual([false, false, true, false]);
     expect(entryRecord(inputs[0] as ProofInputUtxo)).toBe(EMPTY_ENTRY_RECORD);
-    expect(entryRecord(inputs[1] as ProofInputUtxo)).toEqual({
+    expect(entryRecord(inputs[2] as ProofInputUtxo)).toEqual({
       ownerKey: fill(7),
       nullifierPk: fill(9),
       amount: 5n,
@@ -462,9 +450,29 @@ describe("input evidence", () => {
       inputCommitment: fill(0x0c),
     });
     expect(entryRecord(address)).toBe(EMPTY_ENTRY_RECORD);
-    expect(inputMapOf(inputs, layout(4)).validateDefaultInputBits(defaultInputBits(inputs))).toBe(
-      undefined,
-    );
+    const { envelope } = auditDisclosure({
+      txViewingSecret: fill(0x40),
+      layout: layout(4),
+      recipientKeys: [],
+      inputs,
+    });
+    expect(envelope.realInputs).toBe(2);
+    if (envelope.evidence.kind !== "entry") throw new Error("entry evidence");
+    expect(envelope.evidence.defaultNoteBits).toBe(2n);
+    expect(envelope.evidence.inputs.slice(2)).toEqual([EMPTY_ENTRY_RECORD, EMPTY_ENTRY_RECORD]);
+  });
+
+  it("refuses an envelope over another published count", () => {
+    expect(
+      refusal(() =>
+        auditDisclosure({
+          txViewingSecret: fill(0x40),
+          layout: layout(2),
+          recipientKeys: [],
+          inputs: [note({})],
+        }),
+      ).details,
+    ).toMatchObject({ reason: "RingTransactLength" });
   });
 
   it("refuses a hidden owner whose input 0 is an address", () => {
@@ -524,13 +532,8 @@ describe("tracking predicates", () => {
     listTag: fill(5),
   });
   const zero = ZERO_NULLIFIER_PK as Bytes32;
-  const check = (input: ProofInputUtxo, rowOf: TrackingRecord | undefined, rail = "confidential") =>
-    checkInputKeys({
-      inputs: [input],
-      rail: rail as "confidential",
-      publicOwners: false,
-      rowOf: () => rowOf,
-    });
+  const check = (input: ProofInputUtxo, rowOf: TrackingRecord | undefined) =>
+    checkInputKeys({ inputs: [input], rowOf: () => rowOf });
 
   it("holds a nonzero input key to its row and waives only the equality on a zero key", () => {
     check(note({ ring: RING, key: fill(9) }), row(fill(9)));
@@ -544,10 +547,8 @@ describe("tracking predicates", () => {
     );
   });
 
-  it("refuses a hidden owner's zero key", () => {
-    expect(refusal(() => check(note({ ring: RING, key: zero }), undefined, "anonymous")).code).toBe(
-      "RING_ZERO_KEY_INPUT_UNNAMED",
-    );
+  it("admits a zero key on every rail, the hidden owner's refusal is the wallet's waivable safeguard", () => {
+    expect(() => check(note({ ring: RING, key: zero }), undefined)).not.toThrow();
   });
 
   it("holds an output to the rule of its key", () => {
@@ -571,11 +572,14 @@ describe("tracking predicates", () => {
       });
     checked([output(fill(9)), undefined], row(fill(9)));
     checked([output(zero)], undefined);
+    // Any nonzero key pays its owner, registered or not, only a matching registration spends it.
+    checked([output(fill(9))], undefined);
+    checked([output(fill(9))], row(fill(8)));
     expect(refusal(() => checked([output(zero)], row(fill(9)))).code).toBe(
       "RING_RECIPIENT_ENROLLED",
     );
-    expect(refusal(() => checked([output(fill(9))], undefined)).code).toBe(
-      "RING_RECIPIENT_NOT_ENROLLED",
+    expect(refusal(() => checked([output(fill(0))], undefined)).code).toBe(
+      "RING_RECIPIENT_LITERAL_ZERO_KEY",
     );
   });
 
@@ -636,7 +640,6 @@ describe("prover/ring/params.go", () => {
   it("takes every required key and adds only the wire the circuit's Table reads", () => {
     const circuit = {
       family: "transfer",
-      format: DisclosureFormat.Standard,
       outputs: 2,
       class: 24,
       withdrawals: 4,
@@ -671,13 +674,17 @@ describe("prover/ring/params.go", () => {
       txViewingSk: zero,
       auditorPk: zero,
       salt: new Uint8Array(16) as TransferProofRequest["salt"],
-      layout: { hasData: false, entry: false },
+      layout: { entry: false },
       approvalMask: 0,
       outputCount: 2,
-      outputs: repeat(2, { output: opening, ownerKey: zero, mintChunks: [zero, zero] }),
+      outputs: repeat(2, {
+        output: opening,
+        ownerKey: zero,
+        mintChunks: [zero, zero],
+        recipientKey: zero,
+      }),
       inputCount: 1,
-      inputNullifierChain: zero,
-      inputNullifiers: repeat(24, zero),
+      addressChain: zero,
       inputs: repeat(24, opening),
       entries: [],
       signerCount: 0,
@@ -723,7 +730,7 @@ describe("prover/ring/params.go", () => {
       hidden: false,
       delegate: false,
       sender: zero,
-      partyIdentities: repeat(7, zero),
+      partyIdentities: repeat(ANONYMOUS_PARTIES, zero),
     };
     const keys = Object.keys(ringProofRequestBody(request));
     const go = tags("TransferParams");

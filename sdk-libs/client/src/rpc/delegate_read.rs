@@ -4,10 +4,12 @@ use serde::{Deserialize, Serialize};
 use solana_address::Address;
 use solana_signer::Signer;
 use spr_indexer_api::{Base64String, Hash, SerializablePubkey, SerializableSignature};
+use spr_interface::ZERO_NULLIFIER_PUBKEY;
+use spr_keypair::{constants::BLINDING_LEN, NullifierKey};
 
 use super::{
     base64, Attestation, GetWalletStatusResponse, ReadBuildError, ReadTarget, RequestBuildError,
-    SignedRequest,
+    SignedRequest, WalletNote,
 };
 
 pub const GET_DELEGATE_NOTES: &str = "getDelegateNotes";
@@ -32,10 +34,24 @@ pub struct GetDelegateNotesRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct GetDelegateNotesResponse {
-    /// Absent while the owner holds only zero key notes or its seal is unread, right aligned.
+    /// Right aligned, absent while the owner holds no registration or its seal is unread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nullifier_secret: Option<Hash>,
     pub status: GetWalletStatusResponse,
+}
+
+impl GetDelegateNotesResponse {
+    /// The key whose public half `note` commits, `None` under a key the owner never registered.
+    pub fn nullifier_key(&self, note: &WalletNote) -> Option<NullifierKey> {
+        let committed = note.nullifier_pk.as_ref()?.0;
+        if committed == ZERO_NULLIFIER_PUBKEY {
+            return Some(NullifierKey::from_secret([0; BLINDING_LEN]));
+        }
+        let secret = self.nullifier_secret.as_ref()?.0;
+        let (pad, secret) = secret.split_first()?;
+        let key = NullifierKey::from_secret(secret.try_into().ok()?);
+        (*pad == 0 && key.pubkey().ok()? == committed).then_some(key)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -193,5 +209,69 @@ impl DelegateRequestSigning {
             nonce: self.nonce.to_vec().into(),
             signature: signature.into(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use solana_signature::Signature;
+    use spr_hasher::primitives::right_align;
+
+    use super::*;
+    use crate::rpc::{WalletEnrollment, WalletNoteStatus};
+
+    fn note(nullifier_pk: [u8; 32]) -> WalletNote {
+        WalletNote {
+            utxo_hash: Hash([1; 32]),
+            status: WalletNoteStatus::Unspent,
+            nullifier_pk: Some(Hash(nullifier_pk)),
+            asset: Hash([2; 32]),
+            mint: None,
+            amount: 5,
+            blinding: Hash([3; 32]),
+            data_hash: Some(Hash([0; 32])),
+            ring_data_hash: Some(Hash([0; 32])),
+            tree_id: 0,
+            leaf_index: 0,
+            slot: 1,
+            tx_signature: Signature::default().into(),
+            event_index: 0,
+            slot_index: 0,
+        }
+    }
+
+    #[test]
+    fn each_note_opens_only_under_the_key_it_commits() {
+        let registered = NullifierKey::from_secret([7; BLINDING_LEN]);
+        let read = GetDelegateNotesResponse {
+            nullifier_secret: Some(Hash(right_align(&registered.secret()))),
+            status: GetWalletStatusResponse {
+                history_through: 1,
+                enrollment: WalletEnrollment::Applied,
+                snapshot_expires_at: None,
+                balances: Vec::new(),
+                notes: Vec::new(),
+                cursor: None,
+            },
+        };
+        let keyed = read
+            .nullifier_key(&note(registered.pubkey().unwrap()))
+            .expect("the registered key opens its note");
+        assert_eq!(keyed.secret(), registered.secret());
+        let zero = read
+            .nullifier_key(&note(ZERO_NULLIFIER_PUBKEY))
+            .expect("the zero key opens a zero-key note");
+        assert_eq!(zero.pubkey().unwrap(), ZERO_NULLIFIER_PUBKEY);
+        let foreign = NullifierKey::from_secret([8; BLINDING_LEN])
+            .pubkey()
+            .unwrap();
+        assert!(read.nullifier_key(&note(foreign)).is_none());
+        let unread = GetDelegateNotesResponse {
+            nullifier_secret: None,
+            ..read
+        };
+        assert!(unread
+            .nullifier_key(&note(registered.pubkey().unwrap()))
+            .is_none());
     }
 }

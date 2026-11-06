@@ -1,24 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { initializePoseidon } from "@heliuslabs/spr";
-import {
-  ClientError,
-  type GetByTagsRequest,
-  type GetByNullifiersRequest,
-} from "@heliuslabs/spr/client";
+import { type GetByTagsRequest, type GetByNullifiersRequest } from "@heliuslabs/spr/client";
 import type { Bytes32, PageOptions } from "@heliuslabs/spr/interface";
-import {
-  AssetRegistry,
-  Mint,
-  SOL_MINT,
-  Wallet,
-  type IndexedShieldedTransaction,
-} from "@heliuslabs/spr/transaction";
-import { ViewingKey, randomSalt } from "@heliuslabs/spr/keypair";
-import { txKeySlotSecret, recipientTag, slotTag } from "../../src/crypto/derivation/ring-stream.js";
-import { sealCompactRecipientBody } from "../../src/protocol/codec/anonymous-delivery.js";
-import { encodeRingBodyOutput } from "../../src/protocol/transaction/output.js";
-import { CompactAssetResolver, type CompactAssetResolution } from "../../src/rpc/compact-assets.js";
-import { TREE, TREE_ID, randomAddress } from "../helpers/ring-pipeline.js";
+import { SOL_MINT, Wallet, type IndexedShieldedTransaction } from "@heliuslabs/spr/transaction";
 import { AnonymousSync, type AnonymousSyncClient } from "../../src/state/anonymous-sync.js";
 import { AnonymousWallet } from "../../src/state/anonymous-wallet.js";
 import { RECOVERY_DIAGNOSTIC_SAMPLES } from "../../src/state/recovery-session.js";
@@ -129,49 +113,6 @@ async function complete(
     if (scan.status === "Complete") return held;
   }
   throw new Error("recovery did not complete");
-}
-
-function compactCandidate(
-  owner: ScanWallet,
-  assetId: bigint,
-  at: number,
-): IndexedShieldedTransaction {
-  const key = ViewingKey.generate();
-  const salt = randomSalt();
-  const firstNullifier = field(at, 1);
-  const secret = txKeySlotSecret({
-    txViewingKey: key,
-    recipientViewingKey: owner.viewingKey,
-    salt,
-    outputIndex: 0,
-    firstNullifier,
-  });
-  try {
-    return {
-      slot: 1n,
-      txSignature: signature(BigInt(at)),
-      eventIndex: 0,
-      txViewingPublicKey: key.publicKey(),
-      salt,
-      ringProgramId: RING,
-      proofless: false,
-      messages: [],
-      nullifiers: [firstNullifier],
-      outputSlots: [
-        {
-          viewTag: slotTag(recipientTag(secret)),
-          outputContext: { hash: field(at, 2), tree: TREE, treeId: TREE_ID, leafIndex: BigInt(at) },
-          payload: encodeRingBodyOutput(
-            sealCompactRecipientBody(secret, { blinding: field(at, 3), amount: 1n, assetId }),
-            new Uint8Array(),
-          ),
-        },
-      ],
-    };
-  } finally {
-    key.destroy();
-    secret.fill(0);
-  }
 }
 
 describe("durable recovery", () => {
@@ -337,110 +278,10 @@ describe("durable recovery", () => {
       held = AnonymousWallet.fromJson(held.toJson());
       if (scan.status === "Complete") break;
     }
-    expect(count).toBe(40n);
+    // Each transaction's change and payment both carry a record, neither opens under bob's key.
+    expect(count).toBe(80n);
     expect(source.spendQueries).toEqual([]);
   });
-  it("resumes inside a compact page when its lookup budget is smaller than the page", async () => {
-    const source = new RecoverySource();
-    const bob = new ScanWallet(2);
-    const mints = new Map(
-      Array.from({ length: 40 }, (_, at) => [BigInt(at + 2), randomAddress()] as const),
-    );
-    for (const [at, id] of [...mints.keys()].entries())
-      source.indexer.publish(compactCandidate(bob, id, at));
-    const reads: bigint[] = [];
-    const open = vi.spyOn(CompactAssetResolver, "open").mockImplementation(async () => {
-      let remaining = 32;
-      return {
-        resolve: async (id: bigint): Promise<CompactAssetResolution> => {
-          if (remaining === 0) return { kind: "paused" };
-          remaining--;
-          reads.push(id);
-          return {
-            kind: "resolved",
-            mint: Mint.fromRegistry(new AssetRegistry([[id, mints.get(id)!]]), mints.get(id)!),
-          };
-        },
-      } as unknown as CompactAssetResolver;
-    });
-    try {
-      const sync = AnonymousSync.create(bob.keys, ASSETS).withCompactAssetClient({
-        solanaRpc: {},
-      } as never);
-      const held = wallet(bob);
-      const first = await sync.fullScanWallet(source.client(), held, RING);
-      expect(first.status).toBe("Paused");
-      expect(first.pauseReason).toBe("assetLookup");
-      expect(first.pendingOpenings).toEqual([]);
-      await held.absorb(first);
-      const progress = held._recoveryState().session!;
-      expect(progress.tasks[progress.task]?.workOffset).toBe(32);
-      const restored = AnonymousWallet.fromJson(held.toJson());
-      const second = await sync.fullScanWallet(source.client(), restored, RING);
-      expect(second.status).toBe("Complete");
-      expect(second.pendingOpenings).toEqual([]);
-      expect(second.utxos).toEqual([]);
-      expect(reads).toHaveLength(40);
-      expect(new Set(reads).size).toBe(40);
-      expect(source.ringQueries[1]).toEqual(source.ringQueries[0]);
-      expect(second.auditorRecovery.unopenedCount).toBe(40n);
-    } finally {
-      open.mockRestore();
-    }
-  });
-
-  it("keeps the exact compact candidate through a transient source failure", async () => {
-    const source = new RecoverySource();
-    const bob = new ScanWallet(2);
-    source.indexer.publish(compactCandidate(bob, 2n, 1));
-    const open = vi
-      .spyOn(CompactAssetResolver, "open")
-      .mockRejectedValueOnce(
-        new ClientError("CLIENT_REQUEST", {
-          details: { method: "getAccountInfo", retryable: true },
-        }),
-      )
-      .mockResolvedValueOnce({
-        resolve: async () => ({ kind: "foreign" }),
-      } as unknown as CompactAssetResolver);
-    try {
-      const sync = AnonymousSync.create(bob.keys, ASSETS).withCompactAssetClient({
-        solanaRpc: {},
-      } as never);
-      const held = wallet(bob);
-      const first = await sync.fullScanWallet(source.client(), held, RING);
-      expect(first.status).toBe("Paused");
-      await held.absorb(first);
-      const restored = AnonymousWallet.fromJson(held.toJson());
-      const second = await sync.fullScanWallet(source.client(), restored, RING);
-      expect(second.status).toBe("Complete");
-      expect(source.ringQueries[1]).toEqual(source.ringQueries[0]);
-      expect(second.pendingOpenings).toEqual([]);
-    } finally {
-      open.mockRestore();
-    }
-  });
-
-  it.each(["fetch", "fullScan"] as const)(
-    "%s refuses compact SPL recovery without a durable wallet",
-    async (method) => {
-      const source = new RecoverySource();
-      const bob = new ScanWallet(2);
-      source.indexer.publish(compactCandidate(bob, 2n, 1));
-      const sync = AnonymousSync.create(bob.keys, ASSETS).withCompactAssetClient({
-        solanaRpc: {},
-      } as never);
-      const read =
-        method === "fetch"
-          ? sync.fetch(source.client(), bob.fresh())
-          : sync.fullScan(source.client(), bob.fresh(), RING);
-      await expect(read).rejects.toMatchObject({
-        code: "RING_SYNC_INCOMPLETE",
-        details: { reason: "compact asset recovery requires fetchWallet or fullScanWallet" },
-      });
-    },
-  );
-
   it("wipes opened recipient secrets when transaction key derivation fails", async () => {
     const source = new RecoverySource();
     const alice = new ScanWallet(1);
@@ -512,32 +353,5 @@ describe("durable recovery", () => {
     ).rejects.toThrow("RING_HISTORY_PAGE_INVALID");
     expect(source.tagQueries.at(-1)?.minContextSlot).toBe(300n);
     expect(source.ringQueries).toEqual([]);
-  });
-
-  it("requires a compact source explicitly and resumes after configuration", async () => {
-    const source = new RecoverySource();
-    const bob = new ScanWallet(2);
-    source.indexer.publish(compactCandidate(bob, 2n, 1));
-    const held = wallet(bob);
-    const document = held.toJson();
-    const sync = AnonymousSync.create(bob.keys, ASSETS);
-    await expect(sync.fullScanWallet(source.client(), held, RING)).rejects.toMatchObject({
-      code: "RING_SYNC_INCOMPLETE",
-      details: { reason: "compact asset recovery requires withCompactAssetClient" },
-    });
-    expect(held.toJson()).toBe(document);
-    const open = vi.spyOn(CompactAssetResolver, "open").mockResolvedValue({
-      resolve: async () => ({ kind: "foreign" }),
-    } as unknown as CompactAssetResolver);
-    try {
-      const scan = await sync
-        .withCompactAssetClient({ solanaRpc: {} } as never)
-        .fullScanWallet(source.client(), held, RING);
-      expect(scan.status).toBe("Complete");
-      await held.absorb(scan);
-      expect(held.notes()).toEqual([]);
-    } finally {
-      open.mockRestore();
-    }
   });
 });

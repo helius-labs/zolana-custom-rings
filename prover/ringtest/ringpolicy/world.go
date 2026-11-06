@@ -56,6 +56,8 @@ type World struct {
 	Enrolled []int64
 	// List bits at each owner's salted key, enrolled or not.
 	Salted, CuratorSalted map[int64]uint64
+	// Unkeyed own records sit under the bare id, an owner record a writer left off its public key.
+	Unkeyed map[int64]Record
 }
 
 // OutputCapacities are the output counts of the transfer keys.

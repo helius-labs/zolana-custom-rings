@@ -243,12 +243,10 @@ function applyRows(
   refuseSkipped(rows.skipped);
   // 2. Outputs before spends, the batch's merges and inputs need the notes they consume.
   for (const transaction of audited) {
-    for (const { nullifier, opening } of transaction.inputs)
-      // Rust `InputOpening::Real`, a batch opening never hides a spend, the result stays the same at any page size.
-      if (opening.kind === "unresolvedReal" || opening.kind === "opened")
-        found.realInputs.push(nullifier);
-    // An unopened slot could hide a source UTXO.
-    const [unopened] = transaction.payloadErrors;
+    // No stream classifies a nullifier, an address or padding one marks no note it never matches.
+    for (const { nullifier } of transaction.inputs) found.realInputs.push(nullifier);
+    // An unopened record could hide a source UTXO, a payload error keeps its record.
+    const [unopened] = transaction.payloadErrors.filter((error) => error.kind !== "payload");
     if (unopened !== undefined)
       throw new RingError("RING_AUDIT_OUTPUT_MISMATCH", {
         details: { reason: "unopened", slotIndex: unopened.slotIndex },
@@ -366,6 +364,12 @@ function keepSourceNote(
     found.unresolve(outputContext.hash, nullifier);
     return;
   }
+  const { dataHash, ringDataHash } = opening;
+  // Without its data hashes a note stays traced by its nullifier and unspendable.
+  if (dataHash === undefined || ringDataHash === undefined) {
+    found.unresolve(outputContext.hash, nullifier);
+    return;
+  }
   const opened = sourceWalletUtxo(input, {
     utxo: new Utxo({
       owner: input.source.signingPublicKey,
@@ -376,7 +380,7 @@ function keepSourceNote(
     }),
     nullifierPk,
     outputContext,
-    hashes: { dataHash: opening.dataHash, ringDataHash: opening.ringDataHash },
+    hashes: { dataHash, ringDataHash },
   });
   if (opened.opens) found.candidates.push(opened.utxo);
   else found.unresolve(outputContext.hash, opened.utxo.nullifier);

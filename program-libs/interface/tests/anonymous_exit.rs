@@ -1,6 +1,6 @@
 use custom_ring_interface::{
-    anonymous_exit_destination, AnonymousExitDestination, AnonymousParties, CustomRingError,
-    SettlementAccount, TokenAccountControl, TokenAccountState, SYSTEM_PROGRAM_ID,
+    AnonymousExitDestination, AnonymousParties, CustomRingError, SettlementAccount,
+    TokenAccountControl, TokenAccountState, SYSTEM_PROGRAM_ID,
 };
 use solana_address::Address;
 use spl_token_2022_interface::pod::{PodAccount, PodCOption};
@@ -39,10 +39,6 @@ impl SettlementAccount for Account {
 
     fn owner(&self) -> &Address {
         &self.owner
-    }
-
-    fn data_len(&self) -> usize {
-        self.data.len()
     }
 
     fn token_account(&self) -> Result<TokenAccountState, CustomRingError> {
@@ -165,73 +161,24 @@ fn an_anonymous_exit_names_one_key_or_its_refusal() {
     }
 }
 
+/// The payer, the funders and the exit take no cell.
 #[test]
-fn every_withdrawal_of_a_spend_names_the_same_destination() {
-    let sol_out = InterfaceTransfer::SolWithdrawal { amount: 1 };
-    let sol_in = InterfaceTransfer::SolDeposit { amount: 1 };
-    let spl_out = InterfaceTransfer::SplWithdrawal {
-        amount: 1,
-        spl_interface_bump: 0,
-    };
-    let wallet = Address::new_from_array(OWNER);
-    let window = |groups: Vec<Vec<Account>>| groups.into_iter().flatten().collect::<Vec<_>>();
-
-    assert_eq!(
-        anonymous_exit_destination(&[sol_in], &window(vec![sol_group(wallet, vec![])])),
-        Ok(None)
-    );
-    assert_eq!(
-        anonymous_exit_destination(
-            &[sol_out, spl_out],
-            &window(vec![
-                sol_group(wallet, vec![]),
-                spl_group(OFF_CURVE, token_account(|_| {})),
-            ])
-        ),
-        Ok(Some(OWNER))
-    );
-    assert_eq!(
-        anonymous_exit_destination(
-            &[sol_out, sol_out],
-            &window(vec![
-                sol_group(wallet, vec![]),
-                sol_group(Address::new_from_array([6; 32]), vec![]),
-            ])
-        ),
-        Err(CustomRingError::AnonymousExitDestinationsDiffer)
-    );
-    let mut foreign = spl_group(OFF_CURVE, token_account(|_| {}));
-    foreign[3].owner = SYSTEM_PROGRAM_ID;
-    assert_eq!(
-        anonymous_exit_destination(&[spl_out], &foreign),
-        Err(CustomRingError::AnonymousExitTokenAccountInvalid)
-    );
-    assert_eq!(
-        anonymous_exit_destination(&[spl_out], &sol_group(wallet, vec![])),
-        Err(CustomRingError::InvalidSettlementAccounts)
-    );
-}
-
-#[test]
-fn an_absent_party_is_a_zero_identity() {
-    let payer = [7; 32];
-    let co_signer = Address::new_from_array([8; 32]);
+fn the_co_signers_fill_the_cells_in_order() {
+    let co_signers = [
+        Address::new_from_array([8; 32]),
+        Address::new_from_array([9; 32]),
+    ];
     let parties = AnonymousParties {
-        payer: &payer,
-        co_signers: &[co_signer],
-        funders: &[],
-        exit_destination: Some(&OWNER),
+        co_signers: &co_signers,
     };
     assert_eq!(
         parties.identities(),
         Ok([
-            solana_owner_identity(&payer).unwrap(),
-            solana_owner_identity(co_signer.as_array()).unwrap(),
+            solana_owner_identity(co_signers[0].as_array()).unwrap(),
+            solana_owner_identity(co_signers[1].as_array()).unwrap(),
             [0; 32],
             [0; 32],
             [0; 32],
-            [0; 32],
-            solana_owner_identity(&OWNER).unwrap(),
         ])
     );
 }
@@ -239,13 +186,18 @@ fn an_absent_party_is_a_zero_identity() {
 #[test]
 fn a_co_signer_past_the_fifth_is_refused() {
     let co_signers = [Address::new_from_array([8; 32]); 6];
-    let parties = AnonymousParties {
-        payer: &[7; 32],
-        co_signers: &co_signers,
-        funders: &[],
-        exit_destination: None,
-    };
-    assert!(parties.identities().is_err());
+    assert!(AnonymousParties {
+        co_signers: &co_signers[..5],
+    }
+    .identities()
+    .is_ok());
+    assert_eq!(
+        AnonymousParties {
+            co_signers: &co_signers,
+        }
+        .identities(),
+        Err(CustomRingError::TooManyAnonymousParties)
+    );
 }
 
 #[test]

@@ -233,10 +233,6 @@
       4
     ],
     [
-      1,
-      16
-    ],
-    [
       2,
       8
     ],
@@ -424,14 +420,6 @@
       "owners": 8,
       "wide": true,
       "withdrawals": 32
-    },
-    {
-      "entry": false,
-      "inputs": 1,
-      "outputs": 16,
-      "owners": 1,
-      "wide": false,
-      "withdrawals": 0
     }
   ]
 }

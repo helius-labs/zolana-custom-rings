@@ -215,6 +215,7 @@ export const RING_ERROR_CODES = [
   // Reserved, nothing raises it and the snapshot keeps later codes in place.
   "RING_ZERO_KEY_MERGE_UNAVAILABLE",
   "RING_EXIT_PROOF_UNAVAILABLE",
+  "RING_RECIPIENT_LITERAL_ZERO_KEY",
 ] as const;
 import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/spr/internal";
 import type { ErrorEnvelope } from "@heliuslabs/spr";
@@ -249,7 +250,6 @@ export const RingProgramError = Object.freeze({
   delegateAlreadySet: 8153,
   missingFundingSigner: 8173,
   invalidRingMode: 8174,
-  invalidAnonymousSigner: 8178,
   invalidMergeDisclosure: 8179,
   missingOwnerSigner: 8192,
   ringTransactLength: 8200,
@@ -276,14 +276,12 @@ export const RingProgramError = Object.freeze({
   unexpectedApproval: 8241,
   invalidSettlementAccounts: 8242,
   tooManyPublicLegs: 8243,
-  anonymousExitDestinationsDiffer: 8246,
   anonymousExitTokenAccountShared: 8247,
   anonymousExitAccountHasData: 8248,
   anonymousExitTokenAccountOnCurve: 8249,
   anonymousExitTokenAccountInvalid: 8250,
   outputBodyLength: 8253,
   outputCountOutOfRange: 8257,
-  bodilessExit: 8258,
   tooManyApplicationMessages: 8269,
   replyLength: 8259,
   recordsRegistryOtherRing: 8266,
@@ -307,7 +305,6 @@ export const RingProgramError = Object.freeze({
   invalidTrackingRegistry: 8502,
   trackingRootBelowFloor: 8503,
   saltedSourceOtherTracking: 8504,
-  invalidSignerDataCounts: 8527,
   tooManyAnonymousParties: 8528,
 } as const);
 

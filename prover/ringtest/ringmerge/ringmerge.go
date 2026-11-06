@@ -4,6 +4,7 @@ package ringmerge
 import (
 	"encoding/binary"
 	"math/big"
+	"slices"
 	"testing"
 
 	"github.com/consensys/gnark/frontend"
@@ -14,6 +15,7 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringaudit"
+	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringprotocol"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 	mergeshared "github.com/helius-labs/zolana/prover/server/circuits/spp_merge/shared"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/protocol"
@@ -53,6 +55,8 @@ type Statement struct {
 	// Tracking holds the owner's row, nil under a zero key.
 	Tracking *ringregistry.Tracking
 	Record   []byte
+	// RecipientKey is the merged owner's viewing u the record is sealed to.
+	RecipientKey [32]byte
 	// PublishedOwner is what the program reads from the SPP body.
 	PublishedOwner *big.Int
 }
@@ -110,6 +114,8 @@ func build(t testing.TB, seed, nullifierPk *big.Int) *Statement {
 	ringtest.SetBytes(c.EphSk[:], eph[:])
 	ringtest.SetBytes(c.AuditorPk[:], auditor[:])
 	ringtest.SetBytes(c.OwnerKey[:], s.OwnerKey[:])
+	s.RecipientKey = ringaudit.ViewingKey(t, 0x40)
+	ringtest.SetBytes(c.RecipientKey[:], s.RecipientKey[:])
 	c.OwnerPkHash, c.Asset = s.OwnerPkHash, ringtest.AssetField(t, s.Mint)
 	c.MintChunks = [2]frontend.Variable{new(big.Int).SetBytes(s.Mint[:31]), new(big.Int).SetBytes(s.Mint[31:])}
 	c.Amount, c.NullifierPk, c.Seed = s.Amount, nullifierPk, seed
@@ -128,31 +134,42 @@ func (s *Statement) outputHash(t testing.TB, blinding *big.Int) *big.Int {
 	}, big.NewInt(OutputTreeID))
 }
 
-// PlainRecord mirrors OpeningRecord::encode.
+// PlainRecord mirrors MergeRecord::encode.
 func (s *Statement) PlainRecord(t testing.TB) []byte {
 	t.Helper()
 	record := make([]byte, 9, circuits.MergeRecordLen)
 	record[0] = 1
 	binary.BigEndian.PutUint64(record[1:], s.Amount.Uint64())
 	record = append(append(record, s.OwnerKey[:]...), s.Mint[:]...)
-	nullifierPk, seed := spptest.MustFieldBytes(t, s.NullifierPk), spptest.MustFieldBytes(t, s.Seed)
-	record = append(append(record, nullifierPk[:]...), make([]byte, audit.RecordStride-audit.RecordLen)...)
-	return append(record, seed[:]...)
+	nullifierPk, blinding, seed := spptest.MustFieldBytes(t, s.NullifierPk), spptest.MustFieldBytes(t, s.OutputBlinding), spptest.MustFieldBytes(t, s.Seed)
+	return slices.Concat(record, nullifierPk[:], blinding[:], seed[:])
 }
 
-// Ciphertext is the record under the one-time envelope, the auditor reverses it.
+// PlainEnvelope is eph_sk and the recipient key, what the auditor reads first.
+func (s *Statement) PlainEnvelope() []byte {
+	eph := s.Keys.EphSk()
+	return slices.Concat(eph[:], s.RecipientKey[:])
+}
+
+// EnvelopeCiphertext seals the envelope to the auditor under the merge label.
+func (s *Statement) EnvelopeCiphertext(t testing.TB) []byte {
+	t.Helper()
+	return s.Keys.StreamCiphertext(t, s.PlainEnvelope(), shared.MergeEncInfo)
+}
+
+// Ciphertext is the record sealed to the recipient key, the owner and the auditor reverse it.
 func (s *Statement) Ciphertext(t testing.TB) []byte {
 	t.Helper()
-	return s.Keys.StreamCiphertext(t, s.Record, shared.MergeEncInfo)
+	return ringprotocol.SealRecord(t, s.Keys.EphSk(), s.RecipientKey, [16]byte{}, 0, FirstNullifier, shared.MergeOutputInfo, s.Record)
 }
 
 // Elements mirrors MergePublicInput::elements.
 func (s *Statement) Elements(t testing.TB) []*big.Int {
 	t.Helper()
-	sealed := s.Keys.Sealed(t, s.Ciphertext(t))
+	sealed := s.Keys.Sealed(t, s.EnvelopeCiphertext(t))
 	return []*big.Int{
 		big.NewInt(shared.MergeStatementDomain), ringtest.AsBigInt(s.Circuit.OutputUtxoHash), ringtest.AsBigInt(s.Circuit.FirstNullifier), ringtest.AsBigInt(s.Circuit.RingProgramID),
-		sealed.AuditorLo, sealed.AuditorHi, sealed.EphLo, sealed.EphHi, sealed.CiphertextHash,
+		sealed.AuditorLo, sealed.AuditorHi, sealed.EphLo, sealed.EphHi, sealed.CiphertextHash, ringtest.HashBytes(t, s.Ciphertext(t)),
 		ringtest.AsBigInt(s.Circuit.Payer), s.PublishedOwner, ringtest.AsBigInt(s.Circuit.TrackingRoot),
 	}
 }
@@ -170,20 +187,23 @@ type Opened struct {
 	Mint        [32]byte
 	Amount      uint64
 	NullifierPk *big.Int
+	Blinding    *big.Int
 	Seed        *big.Int
 }
 
-// Open reverses the envelope's stream, CTR is its own inverse.
+// Open reads eph_sk and the recipient key from the envelope, then reverses the record's stream, CTR is its own inverse.
 func Open(t testing.TB, s *Statement) Opened {
 	t.Helper()
-	plain := s.Keys.StreamCiphertext(t, s.Ciphertext(t), shared.MergeEncInfo)
+	envelope := s.Keys.StreamCiphertext(t, s.EnvelopeCiphertext(t), shared.MergeEncInfo)
+	plain := ringprotocol.SealRecord(t, [32]byte(envelope[:32]), [32]byte(envelope[32:]), [16]byte{}, 0, FirstNullifier, shared.MergeOutputInfo, s.Ciphertext(t))
 	return Opened{
 		Plain:       plain,
 		Amount:      binary.BigEndian.Uint64(plain[1:9]),
 		OwnerKey:    [32]byte(plain[9:41]),
 		Mint:        [32]byte(plain[41:73]),
-		NullifierPk: new(big.Int).SetBytes(plain[73:audit.RecordLen]),
-		Seed:        new(big.Int).SetBytes(plain[audit.RecordStride:circuits.MergeRecordLen]),
+		NullifierPk: new(big.Int).SetBytes(plain[73:105]),
+		Blinding:    new(big.Int).SetBytes(plain[105:audit.RecordLen]),
+		Seed:        new(big.Int).SetBytes(plain[audit.RecordLen:circuits.MergeRecordLen]),
 	}
 }
 

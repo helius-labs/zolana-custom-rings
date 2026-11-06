@@ -9,8 +9,8 @@ use std::collections::HashSet;
 
 use custom_ring_interface::{
     key_catalog::{FrameKey, TransferShape, TRANSFER_SHAPES},
-    tag, CustomRingError, DisclosureFormat, RecipientBody, Replies, RingPolicy, RingRail,
-    RingTransactData, RootRead, SlotBody, DATA_TAIL_LEN, MAX_CPI_DATA_LEN, MIN_REPLY_LEN,
+    tag, CustomRingError, RecipientPayload, Replies, RingPolicy, RingRail, RingTransactData,
+    RootRead, SlotBody, MAX_CPI_DATA_LEN, MIN_REPLY_LEN, OUTPUT_RECORD_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{error::InstructionError, AccountMeta, Instruction};
@@ -53,7 +53,6 @@ impl Legs {
 
 #[derive(Clone, Copy)]
 struct Wide {
-    format: DisclosureFormat,
     setup: Setup,
     rail: RingRail,
     inputs: u8,
@@ -94,11 +93,10 @@ impl Wide {
 
 fn keyed_on(rail: RingRail) -> impl Iterator<Item = &'static TransferShape> {
     TRANSFER_SHAPES.iter().filter(move |shape| {
-        (shape.format == DisclosureFormat::Standard || rail == RingRail::Confidential)
-            && rail.supports(Shape::new(
-                usize::from(shape.inputs),
-                usize::from(shape.outputs),
-            ))
+        rail.supports(Shape::new(
+            usize::from(shape.inputs),
+            usize::from(shape.outputs),
+        ))
     })
 }
 
@@ -106,10 +104,6 @@ fn keyed_on(rail: RingRail) -> impl Iterator<Item = &'static TransferShape> {
 fn cases() -> Vec<Wide> {
     let mut cases = Vec::new();
     let mut push = |base: Wide, shape: &TransferShape| {
-        if shape.format == DisclosureFormat::SingleAssetPayout {
-            cases.push(base);
-            return;
-        }
         let legs = usize::from(shape.withdrawals);
         let fewest = usize::from(base.exempt);
         for (inputs, count) in [(1, legs), (shape.inputs, legs), (shape.inputs, fewest)] {
@@ -122,7 +116,6 @@ fn cases() -> Vec<Wide> {
     };
     for shape in keyed_on(RingRail::Confidential).filter(|shape| !shape.entry) {
         let policy = Wide {
-            format: shape.format,
             setup: Setup::Policy,
             rail: RingRail::Confidential,
             inputs: 1,
@@ -135,18 +128,6 @@ fn cases() -> Vec<Wide> {
             wide: shape.wide,
             payload: Payload::Base,
         };
-        if shape.format == DisclosureFormat::SingleAssetPayout {
-            push(policy, shape);
-            push(
-                Wide {
-                    setup: Setup::AuditOnly,
-                    policy: false,
-                    ..policy
-                },
-                shape,
-            );
-            continue;
-        }
         push(policy, shape);
         push(
             Wide {
@@ -175,7 +156,6 @@ fn cases() -> Vec<Wide> {
     for shape in keyed_on(RingRail::Anonymous) {
         push(
             Wide {
-                format: shape.format,
                 setup: Setup::AnonymousPolicy,
                 rail: RingRail::Anonymous,
                 inputs: 1,
@@ -187,7 +167,6 @@ fn cases() -> Vec<Wide> {
                 in_proof: false,
                 payload: Payload::Base,
                 wide: FrameKey {
-                    format: custom_ring_interface::DisclosureFormat::Standard,
                     rail: RingRail::Anonymous,
                     inputs: usize::from(shape.inputs),
                     outputs: usize::from(shape.outputs),
@@ -202,7 +181,6 @@ fn cases() -> Vec<Wide> {
     }
     let maximum_payloads: Vec<_> = cases
         .iter()
-        .filter(|case| case.format == DisclosureFormat::Standard)
         .flat_map(|case| {
             [Payload::MaximumBytes, Payload::MaximumMessages]
                 .map(|payload| Wide { payload, ..*case })
@@ -287,29 +265,41 @@ fn settlements(
 }
 
 fn instruction(ring: &mut Ring, case: Wide) -> Option<Instruction> {
-    let fixture = Fixture::new()
-        .with_identity_proof()
-        .with_format(case.format);
+    let fixture = Fixture::new().with_identity_proof();
     let owners: Vec<[u8; 32]> = (0..MAX_INTERFACE_TRANSFERS)
         .map(|leg| [0x70 + leg as u8; 32])
         .collect();
+    // One record and one payload width per slot, the record leads its body.
+    let payload = RecipientPayload {
+        ring_data_hash: Some([0x5a; 32]),
+        data: Vec::new(),
+    };
+    let records: Vec<[u8; OUTPUT_RECORD_LEN]> = (0..16u8)
+        .map(|slot| [0xc0 + slot; OUTPUT_RECORD_LEN])
+        .collect();
+    let bodies: Vec<Vec<u8>> = records
+        .iter()
+        .map(|record| {
+            [
+                &record[..],
+                &payload.encode_padded(payload.encoded_len()).unwrap(),
+            ]
+            .concat()
+        })
+        .collect();
     let mut data = frame(&fixture, &owners, case);
     let policy: RingPolicy = ring.read(&policy_pda());
-    let body = RecipientBody {
-        ring_data_hash: Some([0x5a; 32]),
-        ..RecipientBody::default()
-    }
-    .encode()
-    .unwrap();
-    let tail = [0x7b; DATA_TAIL_LEN];
     let replies = vec![0x72; data.outputs.len() * MIN_REPLY_LEN];
     let message = vec![0x73; MAX_CPI_DATA_LEN];
     let message_tag = [0x74; 32];
     if case.payload != Payload::Base {
         data.has_data = true;
-        for output in &mut data.outputs {
-            output.tail = Some(&tail);
-            output.body = SlotBody::Recipient(&body);
+        for (slot, output) in data.outputs.iter_mut().enumerate() {
+            output.record = &records[slot];
+            output.body = match output.body {
+                SlotBody::Recipient(_) => SlotBody::Recipient(&bodies[slot]),
+                exit @ SlotBody::Exit(_) => exit,
+            };
         }
         if case.rail == RingRail::Anonymous {
             data.replies = Some(Replies::new(MIN_REPLY_LEN as u16, &replies).unwrap());

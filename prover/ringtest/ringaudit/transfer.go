@@ -83,7 +83,7 @@ func (tr Transfer) NewRingOutput(t testing.TB, slot DeliverySlot) Slot {
 			NullifierPk: slot.NullifierPk, Asset: ringtest.AssetField(t, slot.AssetAddress), Amount: slot.Amount,
 			Blinding: tr.Blinding(t, slot.Index), DataHash: big.NewInt(0), RingDataHash: big.NewInt(0), RingProgramID: tr.RingProgramID,
 		},
-		OwnerKey: slot.OwnerKey, Mint: slot.AssetAddress,
+		OwnerKey: slot.OwnerKey, Mint: slot.AssetAddress, RecipientKey: slot.ViewingKey,
 	}
 }
 
@@ -99,14 +99,20 @@ func (tr Transfer) NewExit(t testing.TB, i int) Slot {
 			NullifierPk: spptest.MustNullifierPk(t, big.NewInt(23)), Asset: ringtest.AssetField(t, [32]byte{}), Amount: 40,
 			Blinding: tr.Blinding(t, i), DataHash: big.NewInt(0), RingDataHash: big.NewInt(0), RingProgramID: big.NewInt(0),
 		},
-		OwnerKey: ExitOwnerKey,
+		OwnerKey: ExitOwnerKey, RecipientKey: tr.Keys.auditorPk,
 	}
 }
 
-// NewDummy pads a slot, every record byte reads zero.
+// NewDummy pads a slot under a fresh key as a recipient's would be, every record byte reads zero.
 func (tr Transfer) NewDummy(t testing.TB, i int) Slot {
 	t.Helper()
-	return Slot{Utxo: Dummy(OutputTreeID, tr.Blinding(t, i))}
+	return Slot{Utxo: Dummy(OutputTreeID, tr.Blinding(t, i)), RecipientKey: ViewingKey(t, byte(0x80+i))}
+}
+
+// ViewingKey is fixture viewing key n's u.
+func ViewingKey(t testing.TB, n byte) [32]byte {
+	t.Helper()
+	return ringprotocol.XPublicKey(t, ringprotocol.Clamped(ringtest.Scalar(0x60+n)))
 }
 
 // DeliverySlot names the recipient and the opening of one ring output.
@@ -116,6 +122,7 @@ type DeliverySlot struct {
 	NullifierPk  *big.Int
 	AssetAddress [32]byte
 	Amount       uint64
+	ViewingKey   [32]byte
 }
 
 // Recipient is fixture recipient n, every key derived from n.
@@ -127,6 +134,7 @@ func Recipient(t testing.TB, n byte, index int, amount uint64) DeliverySlot {
 		NullifierPk:  spptest.MustNullifierPk(t, big.NewInt(20+int64(n))),
 		AssetAddress: ringtest.Repeat(0x0a),
 		Amount:       amount,
+		ViewingKey:   ViewingKey(t, n),
 	}
 }
 

@@ -15,21 +15,24 @@ import (
 const mergeVectorPath = "../../test-vectors/merge/merge.json"
 
 const mergeVectorDescription = "Known-answer vector for the ring merge record and statement, one case per key mode. " +
-	"record = kind 1, u64be(amount), owner_key, mint, be32(nullifier_pk), 7 zero bytes, be32(seed), 144 bytes. " +
-	"ciphertext seals the record from eph to auditor under the audit stream schedule of label CRING/mrg at counter 2. " +
+	"record = kind 1, u64be(amount), owner_key, mint, be32(nullifier_pk), be32(output_blinding), be32(seed), 169 bytes. " +
+	"envelope = eph_sk || recipient_u, sealed from eph to auditor under the audit stream schedule of label CRING/mrg at counter 2. " +
+	"ciphertext seals the record from eph to recipient_u under the CRDS delivered slot secret with a zero salt, index 0 and first_nullifier, label CRING/mro at counter 2. " +
 	"output_blinding = Poseidon(TMOB, seed, first_nullifier). " +
-	"elements = CRMG, output_utxo_hash, first_nullifier, ring_program_id, auditor lo, hi, eph lo, hi, hash_bytes(ciphertext), payer, published_owner, tracking_root, " +
+	"elements = CRMG, output_utxo_hash, first_nullifier, ring_program_id, auditor lo, hi, eph lo, hi, hash_bytes(envelope_ciphertext), hash_bytes(ciphertext), payer, published_owner, tracking_root, " +
 	"public_input_hash = hash_chain(elements). published_owner is zero off ZERO_NULLIFIER_PUBKEY and the owner identity under it. " +
 	"request is the prover body. Produced by prover/ring/merge_test.go with WRITE_AUDIT_VECTORS=1."
 
 type mergeVectorCase struct {
-	Name            string       `json:"name"`
-	Record          Bytes        `json:"record"`
-	Ciphertext      Bytes        `json:"ciphertext"`
-	OutputBlinding  Field        `json:"output_blinding"`
-	Elements        []Field      `json:"elements"`
-	PublicInputHash Field        `json:"public_input_hash"`
-	Request         *MergeParams `json:"request"`
+	Name               string       `json:"name"`
+	Record             Bytes        `json:"record"`
+	Envelope           Bytes        `json:"envelope"`
+	EnvelopeCiphertext Bytes        `json:"envelope_ciphertext"`
+	Ciphertext         Bytes        `json:"ciphertext"`
+	OutputBlinding     Field        `json:"output_blinding"`
+	Elements           []Field      `json:"elements"`
+	PublicInputHash    Field        `json:"public_input_hash"`
+	Request            *MergeParams `json:"request"`
 }
 
 type mergeVector struct {
@@ -43,13 +46,15 @@ type mergeVector struct {
 func mergeCase(t *testing.T, name string, s *ringmerge.Statement) mergeVectorCase {
 	t.Helper()
 	return mergeVectorCase{
-		Name:            name,
-		Record:          s.Record,
-		Ciphertext:      s.Ciphertext(t),
-		OutputBlinding:  Field{s.OutputBlinding},
-		Elements:        fieldsOf(s.Elements(t)),
-		PublicInputHash: Field{ringtest.AsBigInt(s.Circuit.PublicInputHash)},
-		Request:         requestOf[MergeParams](t, mergeKey, s.Circuit),
+		Name:               name,
+		Record:             s.Record,
+		Envelope:           s.PlainEnvelope(),
+		EnvelopeCiphertext: s.EnvelopeCiphertext(t),
+		Ciphertext:         s.Ciphertext(t),
+		OutputBlinding:     Field{s.OutputBlinding},
+		Elements:           fieldsOf(s.Elements(t)),
+		PublicInputHash:    Field{ringtest.AsBigInt(s.Circuit.PublicInputHash)},
+		Request:            requestOf[MergeParams](t, mergeKey, s.Circuit),
 	}
 }
 

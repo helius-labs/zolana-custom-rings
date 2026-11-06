@@ -37,18 +37,18 @@ An entry key is not a rail. It adds a default-ring input to the signer, hidden o
 
 A zero-key note has `nullifier_secret = 0`. Anyone who knows its opening computes its nullifier, its sender included. Encryption cannot remove the exposure, and a chain observer without the opening cannot compute the nullifier.
 
-- A ring output under a nonzero key must match its owner's tracking row.
+- A ring output may carry any nonzero key. Its note spends only once that key is its owner's enrolled key.
 - A zero-key output requires owner absence at the accepted tracking root. A retained root can prove absence during the enrollment grace period.
 - The SDKs refuse a zero-key recipient with a tracking row under the selected root.
 - The circuit cannot tell a PDA from a wallet.
-- A hidden owner cannot spend a zero-key note, since that spend would name it. A public signer spends it on the public-owner rail or as a public co-owner.
+- A hidden owner may spend a zero-key note, and that spend names it to anyone who holds the opening. The SDKs refuse it by default, and a caller can waive that. A public signer spends it on the public-owner rail or as a public co-owner.
 - The delegate moves a zero-key note with its owner unpublished.
 - A wallet reports such a note as exposed if spent and never selects it automatically. `spend_public` names the wallet that becomes public.
 - A program-owned note uses the zero key, and its program signs through CPI.
 
 ## Merge authority
 
-- A merge under a nonzero key runs on the ring PDA's authority, so the holder of the owner's secret and openings can merge. A hidden owner cannot be the payer.
+- A merge under a nonzero key runs on the ring PDA's authority, so the holder of the owner's secret and openings can merge. The merge proof admits the owner as the payer, and the SDKs refuse it, since that payer names the owner.
 - A merge under the zero key needs the owner's signature in SPP. SPP's signer check stops a holder of an opening. A private seed from the owner's viewing key keeps the output blinding from that holder.
 - A program-run merge with a seed its owner cannot derive leaves the wallet path unable to open the note. Its program recovers through `OwnerGrant` and the auditor record.
 - A merge runs no list, guard, cap or approval rule, and it needs one owner, asset and nullifier key.
@@ -57,7 +57,7 @@ A zero-key note has `nullifier_secret = 0`. Anyone who knows its opening compute
 
 - The delegate is permanent and set once. It may move any eligible note of the ring, its own and several members' included.
 - The rail clears the rules, caps and approval bits, and its statement reads no policy root. A curator's restrictive update therefore cannot fail a delegate's proof in flight.
-- The tracking root, the input predicate, the output predicate, the auditor record and the sealed input map all stay.
+- The tracking root, the input predicate, the output predicate, the output records and the sealed note count all stay.
 - A delegate may withdraw and exit, and SPP's exit selector settles an exit. A deposit leg is refused, since it would bring an unlisted asset in.
 - `getDelegateNotes` serves the owner's openings and secret to the delegate on a signed request. Recovery therefore depends on Ring RPC.
 
@@ -65,16 +65,15 @@ A zero-key note has `nullifier_secret = 0`. Anyone who knows its opening compute
 
 - The signer rail publishes the owner run, each slot's short tag and each exit owner.
 - The in-proof rail publishes the owner key in place of the signer, then the outputs as the signer rail does.
-- The hidden rail publishes each exit owner and the slots with no body. It also publishes a short tag on each body-bearing slot and the sender bundle with its tag. A public co-owner signs in the open, and a default-ring spend also publishes the hidden owner's key.
+- The hidden rail publishes each exit owner, the change slots by their zero tag, a short tag on each other non-exit slot and the sender bundle with its tag. A public co-owner signs in the open, and a default-ring spend also publishes the hidden owner's key.
 - The public-owner rail publishes the owner run, then the outputs as the hidden rail does.
 - The delegate rail publishes the delegate, then the outputs as the ring's frame does.
 
-Each entry of the published run also shows how many data-bearing outputs that signer receives. With one data-bearing output, the count identifies its recipient and slot.
-
 ## Separation from the hidden owner
 
-- The ring's transfer proof shows the payer, each co-signer, each funder and a withdrawal destination differ from the hidden owner. It also shows that owner is outside the run.
-- The program supplies those identities, so the prover picks none of them.
+- The ring's transfer proof shows the hidden owner is outside the run and differs from every co-signer, so it approves none of its own outflow.
+- The program supplies the co-signer identities, so the prover picks none of them.
+- The payer, a funder, another signer and an exit destination may name the hidden owner, and each then exposes it. The SDKs refuse each by default, and a caller can waive that.
 - No layer checks a key that is only linked to the owner.
 
 ## A wallet with only its owner key

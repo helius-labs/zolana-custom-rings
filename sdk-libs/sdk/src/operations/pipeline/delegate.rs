@@ -601,7 +601,8 @@ impl Delegated<'_> {
             }
             .delivery()?,
         };
-        let rail = RingOutputRail::new(self.tx_viewing_key.clone(), delivery);
+        let rail =
+            RingOutputRail::new(self.tx_viewing_key.clone(), config.auditor_pubkey, delivery);
         let transaction = pad_under_rail(transaction, &rail, shape, &self.source)?;
         let proof_inputs = rail.encrypt(transaction, &self.source)?;
         let shape = Shape::new(

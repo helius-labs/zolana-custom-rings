@@ -34,6 +34,7 @@ use zolana_ring_client::rpc::{
 use zolana_ring_transaction::ClassifiedInput;
 
 use crate::{
+    authority_transfer::AuthorityTransferError,
     cosign::{
         CoSignDecision, CoSignFlows, CoSignPolicy, CoSignRefusal, CoSignRequest, CoSignSettlement,
         RefusingCoSigner,
@@ -584,14 +585,12 @@ impl Relay {
                     .try_acquire()
                     .map_err(|_| RingRpcError::RelayProverBusy)?;
                 let sealed = self.prover.seal_delegate(seal, parties.clone()).await?;
-                // Sealed inputs answer to the resolved openings before proving, compact padding
-                // publishes no position.
-                allowed.check_inputs(
-                    sealed
-                        .inputs
-                        .iter()
-                        .filter(|input| !input.is_compact())
-                        .map(|input| (input.input_class(), &input.nullifier)),
+                // Sealed notes answer to the resolved openings before proving.
+                let notes = sealed.inputs.iter().filter(|input| input.is_note());
+                allowed.check_spends(
+                    u8::try_from(notes.clone().count())
+                        .map_err(|_| AuthorityTransferError::UnrequestedInput)?,
+                    notes.map(|input| &input.nullifier),
                 )?;
                 let payload = RelayPayload::Transfer(sealed);
                 let proven = self

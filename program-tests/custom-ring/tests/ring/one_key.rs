@@ -14,7 +14,7 @@ use custom_ring_interface::{
     policy_withdrawal_hash,
     storage::{Revision, Root, StorageRegistry},
     tracking::{TrackingAuthorization, TrackingRegistry},
-    verifying_key, DisclosureFormat, RingProof, SignerSet, TransferBinding, TransferRoots,
+    verifying_key, RingProof, SignerSet, SlotBody, TransferBinding, TransferRoots,
     ANONYMOUS_PARTIES, MAX_CPI_DATA_LEN, PROVING_KEY_SHA256S, REGISTER_KEY_CIPHERTEXT_LEN,
     STORAGE_PROGRAM_ID, TAGGED_X25519_KEY_LEN,
 };
@@ -51,7 +51,6 @@ use zolana_ring_member_registry::{
 };
 
 const KEY: RingCircuit = RingCircuit::Transfer {
-    format: DisclosureFormat::Standard,
     outputs: 2,
     inputs: 24,
     withdrawals: 4,
@@ -642,9 +641,17 @@ pub(super) fn with_altered_record(
 ) -> Result<Instruction> {
     let mut data = frame(instruction, rail)?;
     let output = data.outputs.first_mut().context("a published output")?;
-    let mut record = output.record.to_vec();
+    // A recipient body leads with its record, both change together.
+    let mut record = *output.record;
     record[0] ^= 1;
+    let body = match output.body {
+        SlotBody::Recipient(body) => [&record[..], &body[record.len()..]].concat(),
+        SlotBody::Exit(_) => Vec::new(),
+    };
     output.record = &record;
+    if let SlotBody::Recipient(_) = output.body {
+        output.body = SlotBody::Recipient(&body);
+    }
     reframed(instruction, &data)
 }
 
@@ -1009,12 +1016,6 @@ fn one_key_settles_a_real_transfer_and_refuses_three_forgeries() -> Result<()> {
     replay.refuses("wrong auditor record", wrong_record)?;
 
     write_tracking(wrong_root)?;
-    let unmatched = payment(recipient_address).prove(&wrong_chain)?;
-    ensure!(
-        matches!(unmatched, Err(RingError::RecipientKeyMismatch { .. })),
-        "the client took a recipient key its row does not name"
-    );
-    println!("wrong tracking key: refused by the client, RecipientKeyMismatch");
     let forged = payment(wrong_address).prove(&wrong_chain)??;
     let wrong_body = body.take()?;
     write_tracking(honest_root)?;

@@ -11,6 +11,7 @@ use custom_ring_sdk::{CustomRing, PrivateStorageWrite, ProvenPrivateWrite};
 use jsonrpsee::MethodsError;
 use solana_account::Account;
 use solana_transaction::versioned::VersionedTransaction;
+use zolana_ring_client::owner_record_key;
 use zolana_ring_client::rpc::{
     GetPendingListApprovalsRequest, GetPendingListApprovalsResponse, GetRecordUpdateStatusRequest,
     ListApprovalScope, ReadTarget, ReaderAccess, RecordUpdate, RecordUpdateEntry,
@@ -480,7 +481,7 @@ fn signed_update(signer: &Keypair, update: RecordUpdate) -> SubmitRecordUpdateRe
 
 /// An update pending list approval that sets ring-viewing on the wallet's own record.
 fn viewing_update_pending_approval(wallet: &Keypair, awaited: ListId) -> SubmitRecordUpdateRequest {
-    let member = Member::owner_tag(wallet.pubkey().as_array()).expect("member");
+    let member = owner_record_key(wallet.pubkey().as_array()).expect("member");
     let viewing = ListId::RingViewing.record_bit();
     signed_update(
         wallet,
@@ -727,7 +728,7 @@ async fn an_authority_grant_goes_out_without_waiting_for_the_wallet_batch_window
 async fn an_authority_update_waits_behind_an_earlier_wallet_update_on_the_same_record() {
     let records = Records::new().await;
     let wallet = wallet();
-    let member = *Member::owner_tag(wallet.pubkey().as_array())
+    let member = *owner_record_key(wallet.pubkey().as_array())
         .expect("member")
         .as_bytes();
     let earlier = records
@@ -774,7 +775,7 @@ async fn an_authority_write_queued_before_a_policy_rotation_is_refused_and_a_wal
     let records = Records::new().await;
     records.serves_own(ListId::Allow);
     let applicant = Keypair::new();
-    let applicant_member = *Member::owner_tag(applicant.pubkey().as_array())
+    let applicant_member = *owner_record_key(applicant.pubkey().as_array())
         .expect("member")
         .as_bytes();
     let pending = records
@@ -789,7 +790,7 @@ async fn an_authority_write_queued_before_a_policy_rotation_is_refused_and_a_wal
         .await
         .expect("queued");
     let wallet = Keypair::new();
-    let member = *Member::owner_tag(wallet.pubkey().as_array())
+    let member = *owner_record_key(wallet.pubkey().as_array())
         .expect("member")
         .as_bytes();
     records
@@ -860,7 +861,7 @@ async fn a_policy_rotation_during_proving_refuses_the_approval_and_preserves_wal
     let records = Records::new().await;
     records.serves_own(ListId::Allow);
     let applicant = Keypair::new();
-    let applicant_member = *Member::owner_tag(applicant.pubkey().as_array())
+    let applicant_member = *owner_record_key(applicant.pubkey().as_array())
         .expect("member")
         .as_bytes();
     let pending = records
@@ -875,7 +876,7 @@ async fn a_policy_rotation_during_proving_refuses_the_approval_and_preserves_wal
         .await
         .expect("queued");
     let wallet = Keypair::new();
-    let wallet_member = *Member::owner_tag(wallet.pubkey().as_array())
+    let wallet_member = *owner_record_key(wallet.pubkey().as_array())
         .expect("member")
         .as_bytes();
     let live = records
@@ -1076,7 +1077,7 @@ async fn an_unread_ring_account_holds_its_updates_until_a_later_pass() {
 async fn an_unexpired_full_history_holds_no_graced_batch_past_its_window() {
     let records = Records::new().await;
     let wallet = wallet();
-    let member = *Member::owner_tag(wallet.pubkey().as_array())
+    let member = *owner_record_key(wallet.pubkey().as_array())
         .expect("member")
         .as_bytes();
     records
@@ -1168,7 +1169,7 @@ async fn a_wallet_update_pending_list_approval_lands_with_its_allow_entry() {
     records.serves_own(ListId::Allow);
     let wallet = wallet();
     let member = Hash(
-        *Member::owner_tag(wallet.pubkey().as_array())
+        *owner_record_key(wallet.pubkey().as_array())
             .expect("member")
             .as_bytes(),
     );

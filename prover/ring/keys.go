@@ -24,14 +24,13 @@ type Key struct {
 	Circuit common.CircuitType
 	Family  Family
 	// Inputs counts the input slots or writes the key sizes.
-	Inputs            int
-	Outputs           int
-	Withdrawals       int
-	Owners            int
-	Entry             bool
-	Wide              bool
-	Private           bool
-	SingleAssetPayout bool
+	Inputs      int
+	Outputs     int
+	Withdrawals int
+	Owners      int
+	Entry       bool
+	Wide        bool
+	Private     bool
 }
 
 // Keys takes each shape from the package that sizes it.
@@ -48,7 +47,7 @@ func keys() []Key {
 		keys = append(keys, key)
 	}
 	for _, shape := range transfer.Shapes {
-		add(Key{Family: Transfer, Inputs: shape.Inputs, Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Owners: shape.Owners, Entry: shape.Entry, Wide: shape.Wide, SingleAssetPayout: shape.SingleAssetPayout})
+		add(Key{Family: Transfer, Inputs: shape.Inputs, Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Owners: shape.Owners, Entry: shape.Entry, Wide: shape.Wide})
 	}
 	for _, private := range []bool{false, true} {
 		for _, writes := range registry.ApplyWidths {
@@ -64,7 +63,7 @@ func keys() []Key {
 }
 
 func (k Key) transferShape() transfer.Shape {
-	return transfer.Shape{Inputs: k.Inputs, Outputs: k.Outputs, Withdrawals: k.Withdrawals, Owners: k.Owners, Entry: k.Entry, Wide: k.Wide, SingleAssetPayout: k.SingleAssetPayout}
+	return transfer.Shape{Inputs: k.Inputs, Outputs: k.Outputs, Withdrawals: k.Withdrawals, Owners: k.Owners, Entry: k.Entry, Wide: k.Wide}
 }
 
 func (k Key) circuitType() common.CircuitType {
@@ -75,8 +74,6 @@ func (k Key) circuitType() common.CircuitType {
 	case Transfer:
 		family := "transfer"
 		switch {
-		case k.SingleAssetPayout:
-			family = "transfer-payout"
 		case k.Entry:
 			family = "transfer-entry"
 		case k.Wide:

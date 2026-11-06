@@ -6,10 +6,10 @@
 //  1. Hash is SPP's commitment of the wires, a dummy's included.
 //  2. Utxo is set on SPP's note domain alone, its owner field is Poseidon(OwnerPkHash, NullifierPk).
 //  3. Ring and Exit split a note by its ring id, and SPP holds a nonzero ring id to the signing ring.
-//  4. A spent slot is one of a note, a dummy or an address, and a spent dummy carries nothing but its blinding.
+//  4. A slot OpenSlot reads is a note or a dummy, and a dummy carries nothing but its blinding.
 //
-// SPP holds a published output to a note or to a dummy with zero fields, so the file repeats no output
-// check. A proof that opens a slot SPP does not publish fails where its statement chains the hash.
+// No ring slot opens an address. SPP chains its addresses apart from its notes, and the ring takes that
+// chain as a private witness of private_tx_hash.
 //
 // Read after transfer/transfer.go. Read before audit/audit.go, audit/record.go, transfer/input.go.
 
@@ -48,7 +48,6 @@ type Output struct {
 	Hash frontend.Variable
 	// Utxo is set on a note, Ring on a note of a ring and Exit on a note of the default ring, a dummy clears all three.
 	Utxo, Ring, Exit frontend.Variable
-	Address          frontend.Variable
 }
 
 // Open hashes the slot as SPP does and classifies it, so a ring proof binds the commitment SPP publishes or spends.
@@ -67,14 +66,14 @@ func (w UtxoWires) Open(api frontend.API) Output {
 	}, w.TreeID)
 	// SPP holds every UTXO's ring id to 0 or the ring's on the same output hashes, AssertRingMemberOrFree in spp_transaction/shared/ring.go.
 	ring := api.Mul(utxo, ringgadget.IsNonZero(api, w.RingProgramID))
-	return Output{UtxoWires: w, Hash: hash, Utxo: utxo, Ring: ring, Exit: api.Sub(utxo, ring), Address: api.IsZero(api.Sub(w.Domain, transaction.AddressDomain))}
+	return Output{UtxoWires: w, Hash: hash, Utxo: utxo, Ring: ring, Exit: api.Sub(utxo, ring)}
 }
 
-// OpenInput opens a spent slot, an address spends nothing and reaches the proof through the address chain alone, a dummy carries nothing but its blinding.
-func (w UtxoWires) OpenInput(api frontend.API) Output {
+// OpenSlot opens a note or a dummy, a dummy carries nothing but its blinding, as SPP's CheckDummy reads it.
+func (w UtxoWires) OpenSlot(api frontend.API) Output {
 	opened := w.Open(api)
 	dummy := api.IsZero(api.Sub(w.Domain, transaction.DummyDomain))
-	api.AssertIsEqual(api.Add(opened.Utxo, dummy, opened.Address), 1)
+	api.AssertIsEqual(api.Add(opened.Utxo, dummy), 1)
 	// Open zeroes a dummy's owner hash before the hash reads it.
 	transaction.AssertWhen(api, dummy, transaction.UtxoCircuitFields{
 		Domain: w.Domain, Owner: 0, Asset: w.Asset, Amount: w.Amount, Blinding: w.Blinding,
@@ -94,7 +93,7 @@ func UtxoHashes(api frontend.API, outputs []Output) []frontend.Variable {
 
 func ValidateInputCapacity(capacity int) error {
 	if capacity < 1 || capacity > InputBitmapBits {
-		return errors.New("input capacity must fit the address bitmap")
+		return errors.New("input capacity must fit the entry bitmap")
 	}
 	return nil
 }

@@ -36,6 +36,8 @@ export interface AuditHead {
   readonly auditorPubkey: Bytes33;
   /** `envelope_ct`, the transmitted length is the stream layout's. */
   readonly envelope: Uint8Array;
+  /** `keys_ct`, 32 bytes per published slot. */
+  readonly recipientKeys: Uint8Array;
   readonly salt: Bytes16;
   readonly layout: AuditLayout;
 }
@@ -81,18 +83,14 @@ export interface TransferStatement {
   readonly approvalMask: number;
   /** Zero unless the frame discloses totals to a co-signer. */
   readonly approvalTotals: Bytes32;
-  /** 5 bits per signer of the run, low bits first, zero past it. */
-  readonly signerDataCounts: bigint;
   /** `R` is zero, the frame takes public funds alone. */
   readonly noSpend: boolean;
   /** The `m` published slots. */
   readonly outputs: readonly StatementOutput[];
-  /** `N`, every per-slot chain is zero-filled to it. */
+  /** `N`, the record chain is zero-filled to it. */
   readonly capacity: number;
-  /** `n`, the frame's nullifier count. */
+  /** `n`, the frame's nullifier count, it fixes the transmitted entry records. */
   readonly inputCount: number;
-  /** The digest of the nullifiers the program forwards to SPP, `inputNullifierChain`. */
-  readonly inputNullifierChain: Bytes32;
   readonly privateTxHash: Bytes32;
   /** Default on the in-proof and authority rails and on an empty run. */
   readonly signers: SignerBinding;
@@ -106,8 +104,8 @@ export interface TransferStatement {
   readonly withdrawalHash: Bytes32;
 }
 
-/** The slot fields the statement chains. */
-export type StatementOutput = Pick<RingOutput, "hash" | "record" | "tail">;
+/** The slot field the statement chains. */
+export type StatementOutput = Pick<RingOutput, "record">;
 
 /** An application of `count` writes, Rust `ApplyRecordsStatement`. */
 export interface ApplyRecordsStatement {
@@ -193,17 +191,10 @@ export function transferStatementElements(statement: TransferStatement): readonl
     ...railBits,
     rightAlign(Uint8Array.of(statement.approvalMask)),
     statement.approvalTotals,
-    bigIntBytes(statement.signerDataCounts) as Bytes32,
     bit(statement.noSpend),
     u32Field(outputs.length, "output count"),
-    filledChain(
-      outputs.map((output) => output.hash),
-      capacity,
-    ),
     recordChain(outputs, capacity),
-    tailChain(outputs, capacity),
     u32Field(statement.inputCount, "input count"),
-    checkedBytes<Bytes32>(statement.inputNullifierChain, 32, "input nullifier chain"),
     checkedBytes<Bytes32>(statement.privateTxHash, 32, "private tx hash"),
     sender,
     ...parties,
@@ -272,18 +263,17 @@ export function ringTransferStatement(
       txViewingU: data.txViewingU,
       auditorPubkey: binding.auditorPubkey,
       envelope: data.envelope,
+      recipientKeys: data.recipientKeys,
       salt: data.salt,
       layout: RingTransactData.auditLayout(data),
     }),
     family,
     approvalMask: data.approval,
     approvalTotals: data.extensions.approvalTotals ?? ZERO_FIELD,
-    signerDataCounts: data.extensions.signerDataCounts ?? 0n,
     noSpend: data.noSpend,
     outputs: data.outputs,
     capacity: stream.capacity,
     inputCount: data.nullifiers.length,
-    inputNullifierChain: inputNullifierChain(data.nullifiers, stream.key.class),
     privateTxHash: data.privateTxHash,
     signers: binding.signers,
     roots: binding.roots,
@@ -292,29 +282,6 @@ export function ringTransferStatement(
     publicGross: binding.publicGross,
     withdrawalHash: binding.withdrawalHash,
   });
-}
-
-/** The `n` published nullifiers zero filled to the key's input class `C`, refused past it. */
-export function inputNullifierSlots(
-  nullifiers: readonly Bytes32[],
-  capacity: number,
-): readonly Bytes32[] {
-  if (nullifiers.length > capacity)
-    throw new RingError("RING_INVALID_LENGTH", {
-      details: { name: "inputNullifiers", expected: capacity, actual: nullifiers.length },
-    });
-  return filled(
-    nullifiers.map((nullifier) => checkedBytes<Bytes32>(nullifier, 32, "nullifier")),
-    capacity,
-  );
-}
-
-/** `HashChain4([n, nullifier_0, .., nullifier_(C-1)])`, Rust `ParsedTransact::input_nullifier_chain`. */
-export function inputNullifierChain(nullifiers: readonly Bytes32[], capacity: number): Bytes32 {
-  return chain([
-    u32Field(nullifiers.length, "input count"),
-    ...inputNullifierSlots(nullifiers, capacity),
-  ]);
 }
 
 /** SPP's owner signer run by owner identity deduplicated by first occurrence, wider than `slots` refused, Rust `SignerSet::new`. */
@@ -411,7 +378,7 @@ const U16_MAX = 0xffffn;
 const U32_MAX = 0xffff_ffffn;
 const U64_MAX = 0xffff_ffff_ffff_ffffn;
 
-/** `[CRTX, n0, ring_id, txpk0, txpk1, aud0, aud1, digest(envelope_ct), salt, layout]`. */
+/** `[CRTX, n0, ring_id, txpk0, txpk1, aud0, aud1, envelope_digest, salt, layout]`. */
 function auditHeadElements(head: AuditHead): readonly Bytes32[] {
   return [
     domainField(RingDomain.transferStatement),
@@ -419,7 +386,7 @@ function auditHeadElements(head: AuditHead): readonly Bytes32[] {
     checkedBytes<Bytes32>(head.ringId, 32, "ring id"),
     ...packedKey(taggedX25519(head.txViewingU)),
     ...packedKey(checkedBytes<Bytes33>(head.auditorPubkey, 33, "auditor pubkey")),
-    ciphertextDigest(head.envelope),
+    envelopeDigest(head.envelope, head.recipientKeys),
     rightAlign(checkedBytes<Bytes16>(head.salt, 16, "salt")),
     rightAlign(Uint8Array.of(auditLayoutValue(head.layout))),
   ];
@@ -433,23 +400,18 @@ export function ciphertextDigest(ciphertext: Uint8Array): Bytes32 {
   ]) as Bytes32;
 }
 
-/** `HashChain4(hash_bytes(record_i))`, untagged since every record is one length. */
+/** `Poseidon(ciphertext_digest(envelope_ct), ciphertext_digest(keys_ct))`. */
+export function envelopeDigest(envelope: Uint8Array, recipientKeys: Uint8Array): Bytes32 {
+  return poseidon([ciphertextDigest(envelope), ciphertextDigest(recipientKeys)]) as Bytes32;
+}
+
+/** `HashChain4(hash_bytes(record_ct_i))`, untagged since every record is one length. */
 export function recordChain(
   outputs: readonly Pick<RingOutput, "record">[],
   capacity: number,
 ): Bytes32 {
   return filledChain(
     outputs.map((output) => hashBytes(output.record) as Bytes32),
-    capacity,
-  );
-}
-
-/** `HashChain4(hash_bytes(tail_i))`, zero while no slot carries a tail. */
-export function tailChain(outputs: readonly Pick<RingOutput, "tail">[], capacity: number): Bytes32 {
-  const tails = outputs.flatMap((output) => (output.tail === undefined ? [] : [output.tail]));
-  if (tails.length === 0) return ZERO_FIELD;
-  return filledChain(
-    tails.map((tail) => hashBytes(tail) as Bytes32),
     capacity,
   );
 }

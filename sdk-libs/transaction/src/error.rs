@@ -7,8 +7,6 @@ use zolana_ring_keys::RingKeyError;
 
 #[derive(Debug, Error)]
 pub enum RingRailError {
-    #[error("transaction does not meet the single asset payout profile")]
-    PayoutProfile,
     #[error(transparent)]
     Transaction(#[from] TransactionError),
     #[error(transparent)]
@@ -35,9 +33,7 @@ pub enum RingRailError {
     RingSenderExit { slot_index: usize },
     #[error("the anonymous sender bundle is not the transfer's first message")]
     SenderBundleFraming,
-    #[error(
-        "a sender bundle of {len} bytes does not match the frame's output and bodiless counts"
-    )]
+    #[error("a sender bundle of {len} bytes does not match the frame's output count")]
     SenderBundleLength { len: usize },
     #[error("reply length {reply_len} is below the reply's encoding or the minimum")]
     ReplyMetadataLength { reply_len: usize },

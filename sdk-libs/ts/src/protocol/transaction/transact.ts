@@ -36,24 +36,15 @@ import type {
 } from "@heliuslabs/spr/interface";
 import { CUSTOM_RING_PROOF_LENGTH } from "../proof/custom-ring-proof.js";
 import {
-  auditRecordLength,
-  DisclosureFormat,
-  SINGLE_ASSET_PAYOUT_INPUTS,
-  SINGLE_ASSET_PAYOUT_OUTPUTS,
-  disclosureFormat,
-  DATA_TAIL_LEN,
+  OUTPUT_RECORD_LEN,
+  PAYLOAD_LENGTH_LEN,
   checkedStreamLayout,
   envelopeRegion,
+  recipientKeysLen,
   type AuditLayout,
   type AuditStreamLayout,
 } from "../codec/ring-disclosure-layout.js";
-import {
-  type BundleLayout,
-  MIN_REPLY_LEN,
-  RECIPIENT_BODY_LEN,
-  COMPACT_RECIPIENT_BODY_LEN,
-  senderBundleLen,
-} from "../codec/anonymous-delivery.js";
+import { MIN_REPLY_LEN, senderBundleLen } from "../codec/anonymous-delivery.js";
 import {
   SLOT_TAG_LEN,
   framedSlotTag,
@@ -61,7 +52,6 @@ import {
   unframedSlotTag,
 } from "../../crypto/derivation/ring-stream.js";
 import { fittedSpend, frameKeyShape } from "../proof/transfer-shapes.js";
-import { validSignerDataCounts } from "../membership/signer-data-counts.js";
 
 import { RingInstructionTag } from "./instruction-tag.js";
 import type { RingMode } from "../codec/ring-codecs.js";
@@ -97,7 +87,6 @@ export interface AppMessage {
 
 /** SPP's optional fields a frame carries through, each absent by default, Rust `FrameExtensions`. */
 export interface FrameExtensions {
-  readonly format?: DisclosureFormat;
   /** The transaction's application digest, distinct from a note's `data_hash`. */
   readonly dataHash?: Bytes32;
   /** The transaction's ring digest, distinct from a note's `ring_data_hash`. */
@@ -107,16 +96,14 @@ export interface FrameExtensions {
   readonly cache?: CacheAccess;
   /** Present only for a co-signer that reads exact totals, the opening stays off chain. */
   readonly approvalTotals?: Bytes32;
-  /** Present exactly while a count is nonzero, an absent one reads zero in the statement. */
-  readonly signerDataCounts?: bigint;
 }
 
 /** Rust `ApprovalMask`. */
 export const ApprovalMask = Object.freeze({ outflow: 1, withdrawal: 2 } as const);
 /** Each record covers a new class. */
 export const MAX_CO_SIGNERS = 5;
-/** Rust `ANONYMOUS_PARTIES`. */
-export const ANONYMOUS_PARTIES = 2 + MAX_CO_SIGNERS;
+/** Rust `ANONYMOUS_PARTIES`, one cell per co-signer. */
+export const ANONYMOUS_PARTIES = MAX_CO_SIGNERS;
 
 /** The owner SPP's anonymous rail verifies and hides, the transfer statement publishes it. */
 export interface InProofOwner {
@@ -142,24 +129,20 @@ export type InputTrees =
       secondInputs: bigint;
     }>;
 
-/** The bytes a slot hands SPP outside the proof, the external data hash binds them, Rust `SlotBody`. */
+/** The bytes past a slot's record, the external data hash binds them, Rust `SlotBody`. */
 export type SlotBody =
-  /** A slot another message covers, such as change the sender bundle holds. */
-  | Readonly<{ kind: "none" }>
-  /** Ring body under the slot's view tag or recipient key. */
-  | Readonly<{ kind: "recipient"; body: Uint8Array }>
+  /** The sealed payload continuing the record's stream, empty off a data frame. */
+  | Readonly<{ kind: "recipient"; payload: Uint8Array }>
   /** Scheme 3 under its own owner tag, a default-ring wallet reads it. */
   | Readonly<{ kind: "exit"; payload: Uint8Array }>;
 
-/** A published output slot without its SPP framing, its record in the auditor message, Rust `RingOutput`. */
+/** A published output slot without its SPP framing, Rust `RingOutput`. */
 export interface RingOutput {
   readonly hash: Bytes32;
   readonly ownerTag: Bytes32;
-  readonly body: SlotBody;
-  /** `AUDIT_RECORD_LEN` sealed bytes. */
+  /** `OUTPUT_RECORD_LEN` sealed bytes, in the slot's SPP data or, on an exit, the auditor message. */
   readonly record: Uint8Array;
-  /** `DATA_TAIL_LEN` sealed bytes, present exactly under `hasData`. */
-  readonly tail?: Uint8Array;
+  readonly body: SlotBody;
 }
 
 /** Sender bundle, forwarded under its tag as the first SPP message, its length fixed by `m`. */
@@ -172,7 +155,7 @@ export interface PublishedSenderBundle {
 export interface Replies {
   /** `reply_len`, at least `MIN_REPLY_LEN`. */
   readonly length: number;
-  /** `length` bytes per body-bearing slot, in slot order. */
+  /** `length` bytes per non-exit slot, in slot order. */
   readonly region: Uint8Array;
 }
 
@@ -204,7 +187,7 @@ export interface RingTransactData {
   readonly salt: Bytes16;
   readonly extensions: FrameExtensions;
   readonly interfaceTransfers: readonly InterfaceTransfer[];
-  /** One tail per published slot, every data hash is zero while clear. */
+  /** Every non-exit slot carries a payload of one length. */
   readonly hasData: boolean;
   /** The key with entry capacity. */
   readonly entry: boolean;
@@ -218,6 +201,8 @@ export interface RingTransactData {
   readonly sender?: PublishedSenderBundle;
   /** `envelope_ct`, the transmitted length is the stream layout's. */
   readonly envelope: Uint8Array;
+  /** `keys_ct`, one sealed `V_i` of 32 bytes per published slot. */
+  readonly recipientKeys: Uint8Array;
   readonly privateTxHash: Bytes32;
   /** Present exactly on the anonymous rail with a hidden sender. */
   readonly anonymous?: AnonymousProofData;
@@ -328,14 +313,12 @@ export function ringSppInputs(
 export function ringStreamLayout(
   shape: Readonly<{
     rail: RingRail;
-    format?: DisclosureFormat;
     nIn: number;
     nOut: number;
     inputs: number;
     /** `m`. */
     outputs: number;
     entry: boolean;
-    hasData: boolean;
     publicOwners?: boolean;
     /** The selected key's flag, unset fits the published counts alone. */
     wideOwners?: boolean;
@@ -343,7 +326,6 @@ export function ringStreamLayout(
 ): AuditStreamLayout {
   const fitted = fittedSpend({
     rail: shape.rail,
-    format: disclosureFormat(shape.format),
     inputs: shape.inputs,
     outputs: shape.nOut,
     spendsDefaultRing: shape.entry,
@@ -356,7 +338,7 @@ export function ringStreamLayout(
   const flags: FrameFlags = {
     defaultOwnerTag: false,
     publicOwners: shape.publicOwners ?? false,
-    hasData: shape.hasData,
+    hasData: false,
     entry: shape.entry,
     wideOwners: spend.wide,
   };
@@ -365,17 +347,13 @@ export function ringStreamLayout(
       details: { rail: shape.rail, inputs: shape.inputs, outputs: shape.nOut },
     });
   checkFrameFlags(flags, shape.rail);
-  return streamOf(
-    shape.rail,
-    {
-      nIn: shape.nIn,
-      nOut: shape.nOut,
-      inputCount: shape.inputs,
-      outputCount: shape.outputs,
-      flags,
-    },
-    disclosureFormat(shape.format),
-  );
+  return streamOf(shape.rail, {
+    nIn: shape.nIn,
+    nOut: shape.nOut,
+    inputCount: shape.inputs,
+    outputCount: shape.outputs,
+    flags,
+  });
 }
 
 /** `0x04 ‖ u`, the tagged key the statements pack and SPP carries. */
@@ -405,16 +383,12 @@ export const RingTransactData = Object.freeze({
     }
   },
 
-  auditLayout(data: Pick<RingTransactData, "hasData" | "entry" | "extensions">): AuditLayout {
-    return Object.freeze({
-      hasData: data.hasData,
-      entry: data.entry,
-      format: disclosureFormat(data.extensions.format),
-    });
+  auditLayout(data: Pick<RingTransactData, "entry">): AuditLayout {
+    return Object.freeze({ entry: data.entry });
   },
 
   streamLayout(data: RingTransactData): AuditStreamLayout {
-    return streamOf(data.rail, headerOf(data), disclosureFormat(data.extensions.format));
+    return streamOf(data.rail, headerOf(data));
   },
 
   /** The SPP selector of the data's shape and rail. */
@@ -428,7 +402,7 @@ export const RingTransactData = Object.freeze({
     return first;
   },
 
-  /** The reply of each slot in order, empty off a recipient body. */
+  /** The reply of each slot in order, empty on an exit. */
   slotReplies(data: Pick<RingTransactData, "outputs" | "replies">): readonly Uint8Array[] {
     const { replies } = data;
     let next = 0;
@@ -440,13 +414,15 @@ export const RingTransactData = Object.freeze({
     });
   },
 
-  /** `0x04 ‖ tx_viewing_u ‖ envelope_ct ‖ record_ct... ‖ tail_ct...`. */
-  auditorMessage(data: Pick<RingTransactData, "txViewingU" | "envelope" | "outputs">): Uint8Array {
+  /** `0x04 ‖ tx_viewing_u ‖ envelope_ct ‖ keys_ct ‖ record_ct of each exit in slot order`. */
+  auditorMessage(
+    data: Pick<RingTransactData, "txViewingU" | "envelope" | "recipientKeys" | "outputs">,
+  ): Uint8Array {
     return concatBytes(
       taggedX25519(data.txViewingU),
       data.envelope,
-      ...data.outputs.map((output) => output.record),
-      ...data.outputs.flatMap((output) => (output.tail === undefined ? [] : [output.tail])),
+      data.recipientKeys,
+      ...data.outputs.flatMap((output) => (output.body.kind === "exit" ? [output.record] : [])),
     );
   },
 
@@ -538,10 +514,9 @@ const ExtensionFlag = Object.freeze({
   messages: 1 << 2,
   cache: 1 << 3,
   approvalTotals: 1 << 4,
-  signerDataCounts: 1 << 5,
-  singleAssetPayout: 1 << 6,
 });
-const KNOWN_EXTENSIONS = 0b111_1111;
+/** Bits 5 and 6 carried the retired signer data counts and payout format, both refused. */
+const KNOWN_EXTENSIONS = 0b1_1111;
 
 /** The flags of the frame header, Rust `FrameFlags`. */
 interface FrameFlags {
@@ -590,18 +565,13 @@ function sppRail(rail: RingRail, publicOwners: boolean): RingRail {
 }
 
 /** The stream layout of the key the header names, before the outputs are read, Rust `RingRail::key_shape`. */
-function streamOf(
-  rail: RingRail,
-  header: FrameHeader,
-  format: DisclosureFormat = DisclosureFormat.Standard,
-): AuditStreamLayout {
+function streamOf(rail: RingRail, header: FrameHeader): AuditStreamLayout {
   const { nIn, nOut, inputCount: inputs, outputCount: outputs, flags } = header;
   const supported = railShapes(sppRail(rail, flags.publicOwners)).some(
     (shape) => shape.inputs === nIn && shape.outputs === nOut,
   );
   const shape = frameKeyShape({
     rail,
-    format,
     inputs,
     outputs: nOut,
     spendsDefaultRing: flags.entry,
@@ -612,11 +582,10 @@ function streamOf(
   if (outputs < 1 || outputs > nOut) throw invalid("OutputCountOutOfRange");
   return Object.freeze(
     checkedStreamLayout({
-      key: Object.freeze({ class: shape.inputs, entry: flags.entry, format }),
+      key: Object.freeze({ class: shape.inputs, entry: flags.entry }),
       inputs,
       outputs,
       capacity: shape.outputs,
-      hasData: flags.hasData,
     }),
   );
 }
@@ -640,7 +609,7 @@ function readCompact(bytes: Reader, rail: RingRail): RingTransactData {
   const salt = bytes.bytes(16, "salt") as Bytes16;
   const extensions = has(flags, Flag.extensions) ? readExtensions(bytes, rail) : NO_EXTENSIONS;
   checkExtensions(extensions, rail);
-  const stream = streamOf(rail, header, disclosureFormat(extensions.format));
+  const stream = streamOf(rail, header);
   const interfaceTransfers = within("InvalidInstructionData", () =>
     Array.from({ length: bytes.u8("interfaceTransfers.length") }, () =>
       readInterfaceTransfer(bytes),
@@ -652,34 +621,18 @@ function readCompact(bytes: Reader, rail: RingRail): RingTransactData {
         .map(() => field32(bytes, "splWithdrawalOwner"))
     : [];
   const exits = readBitmap(bytes, outputCount);
-  const bodiless = readBitmap(bytes, outputCount);
-  if ((exits & bodiless) !== 0n) throw invalid("BodilessExit");
-  const slots = Array.from({ length: outputCount }, (_, slot) =>
-    readSlot(
-      bytes,
-      stream.hasData,
-      bitAt(exits, slot),
-      bitAt(bodiless, slot),
-      disclosureFormat(stream.key.format),
-    ),
+  const outputs: readonly RingOutput[] = Array.from({ length: outputCount }, (_, slot) =>
+    readSlot(bytes, header.flags.hasData, bitAt(exits, slot)),
   );
-  const replies = has(flags, Flag.replyMetadata) ? readReplies(bytes, slots) : undefined;
+  const replies = has(flags, Flag.replyMetadata) ? readReplies(bytes, outputs) : undefined;
   const sender: PublishedSenderBundle | undefined = isAnonymousFrame(rail)
     ? Object.freeze({
         tag: field32(bytes, "sender.tag"),
-        body: bytes.bytes(senderBundleLen(bundleLayout(slots)), "sender.body"),
+        body: bytes.bytes(senderBundleLen({ outputs: outputCount }), "sender.body"),
       })
     : undefined;
   const envelope = bytes.bytes(envelopeRegion(stream).length, "envelope");
-  const records = slots.map(() => bytes.bytes(auditRecordLength(stream.key), "record"));
-  const tails = stream.hasData ? slots.map(() => bytes.bytes(DATA_TAIL_LEN, "tail")) : undefined;
-  const outputs: readonly RingOutput[] = slots.map((slot, index) =>
-    Object.freeze({
-      ...slot,
-      record: records[index] as Uint8Array,
-      ...(tails === undefined ? {} : { tail: tails[index] as Uint8Array }),
-    }),
-  );
+  const recipientKeys = bytes.bytes(recipientKeysLen(stream), "recipientKeys");
   const privateTxHash = field32(bytes, "privateTxHash");
   const anonymous =
     rail === "anonymous" && !header.flags.publicOwners
@@ -730,6 +683,7 @@ function readCompact(bytes: Reader, rail: RingRail): RingTransactData {
     ...(replies === undefined ? {} : { replies }),
     ...(sender === undefined ? {} : { sender }),
     envelope,
+    recipientKeys,
     privateTxHash,
     ...(anonymous === undefined ? {} : { anonymous }),
     ...(inProofOwner === undefined ? {} : { inProofOwner }),
@@ -737,53 +691,30 @@ function readCompact(bytes: Reader, rail: RingRail): RingTransactData {
     nullifiers: Object.freeze(nullifiers),
     inputTrees,
   });
-  checkFormat(data);
+  checkPayloads(data);
   return data;
 }
 
-type FramedSlot = Omit<RingOutput, "record" | "tail">;
-
-/** Rust `RingTransactData::bundle_layout`, one change cell per bodiless slot. */
-export function bundleLayout(slots: readonly { readonly body: SlotBody }[]): BundleLayout {
-  return Object.freeze({
-    outputs: slots.length,
-    change: slots.filter((slot) => slot.body.kind === "none").length,
-  });
-}
-
-/** A plain frame fixes each body's length, a data frame prefixes it. */
-function readSlot(
-  bytes: Reader,
-  hasData: boolean,
-  exit: boolean,
-  bodiless: boolean,
-  format: DisclosureFormat,
-): FramedSlot {
-  const length = bodiless
-    ? 0
-    : hasData
-      ? bytes.u16("output.bodyLen")
-      : exit
-        ? CONFIDENTIAL_DATA_FREE_BODY_LEN
-        : format === DisclosureFormat.SingleAssetPayout
-          ? COMPACT_RECIPIENT_BODY_LEN
-          : RECIPIENT_BODY_LEN;
+/** `[u16le(extra_len)] ‖ hash ‖ tag ‖ record_ct ‖ extra`, a plain frame fixes the extra's length. */
+function readSlot(bytes: Reader, hasData: boolean, exit: boolean): RingOutput {
+  const length = hasData
+    ? bytes.u16("output.extraLen")
+    : exit
+      ? CONFIDENTIAL_DATA_FREE_BODY_LEN
+      : 0;
   const hash = field32(bytes, "output.hash");
   // SPP binds an exit's tag to its owner, any other is a slot tag.
   const ownerTag = exit
     ? field32(bytes, "output.ownerTag")
     : unframedSlotTag(bytes.bytes(SLOT_TAG_LEN, "output.ownerTag"));
-  const raw = bytes.bytes(length, "output.body");
-  const body: SlotBody = bodiless
-    ? Object.freeze({ kind: "none" })
-    : exit
-      ? Object.freeze({ kind: "exit", payload: raw })
-      : Object.freeze({ kind: "recipient", body: raw });
-  return { hash, ownerTag, body };
+  const record = bytes.bytes(OUTPUT_RECORD_LEN, "output.record");
+  const payload = bytes.bytes(length, "output.extra");
+  const body: SlotBody = Object.freeze({ kind: exit ? "exit" : "recipient", payload });
+  return Object.freeze({ hash, ownerTag, record, body });
 }
 
-/** `reply_len`, then one reply per body-bearing slot. */
-function readReplies(bytes: Reader, slots: readonly FramedSlot[]): Replies {
+/** `reply_len`, then one reply per non-exit slot. */
+function readReplies(bytes: Reader, slots: readonly RingOutput[]): Replies {
   const length = bytes.u16("replyLen");
   if (length < MIN_REPLY_LEN) throw invalid("ReplyLength");
   const bodies = slots.filter((slot) => slot.body.kind === "recipient").length;
@@ -836,22 +767,12 @@ function readExtensions(bytes: Reader, rail: RingRail): FrameExtensions {
   const approvalTotals = has(flags, ExtensionFlag.approvalTotals)
     ? field32(bytes, "approvalTotals")
     : undefined;
-  const signerDataCounts = has(flags, ExtensionFlag.signerDataCounts)
-    ? bytes.u64("signerDataCounts")
-    : undefined;
-  // Zero travels as the clear bit, one encoding per statement value.
-  if (signerDataCounts !== undefined && !validSignerDataCounts(signerDataCounts))
-    throw invalid("InvalidSignerDataCounts");
   return Object.freeze({
-    ...(has(flags, ExtensionFlag.singleAssetPayout)
-      ? { format: DisclosureFormat.SingleAssetPayout }
-      : {}),
     ...(dataHash === undefined ? {} : { dataHash }),
     ...(ringDataHash === undefined ? {} : { ringDataHash }),
     ...(messages === undefined ? {} : { messages: Object.freeze(messages) }),
     ...(cache === undefined ? {} : { cache }),
     ...(approvalTotals === undefined ? {} : { approvalTotals }),
-    ...(signerDataCounts === undefined ? {} : { signerDataCounts }),
   });
 }
 
@@ -871,9 +792,7 @@ function extensionsEmpty(extensions: FrameExtensions): boolean {
     extensions.ringDataHash === undefined &&
     (extensions.messages === undefined || extensions.messages.length === 0) &&
     extensions.cache === undefined &&
-    extensions.approvalTotals === undefined &&
-    extensions.signerDataCounts === undefined &&
-    disclosureFormat(extensions.format) === DisclosureFormat.Standard
+    extensions.approvalTotals === undefined
   );
 }
 
@@ -881,16 +800,11 @@ function writeExtensions(out: Writer, extensions: FrameExtensions, rail: RingRai
   const messages = extensions.messages ?? [];
   checkMessageCount(messages.length, rail);
   const bits: readonly (readonly [boolean, number])[] = [
-    [
-      disclosureFormat(extensions.format) === DisclosureFormat.SingleAssetPayout,
-      ExtensionFlag.singleAssetPayout,
-    ],
     [extensions.dataHash !== undefined, ExtensionFlag.dataHash],
     [extensions.ringDataHash !== undefined, ExtensionFlag.ringDataHash],
     [messages.length > 0, ExtensionFlag.messages],
     [extensions.cache !== undefined, ExtensionFlag.cache],
     [extensions.approvalTotals !== undefined, ExtensionFlag.approvalTotals],
-    [extensions.signerDataCounts !== undefined, ExtensionFlag.signerDataCounts],
   ];
   out.u8(
     bits.reduce((flags, [set, bit]) => (set ? flags | bit : flags), 0),
@@ -911,11 +825,6 @@ function writeExtensions(out: Writer, extensions: FrameExtensions, rail: RingRai
   if (extensions.cache !== undefined) writeCacheAccess(out, extensions.cache);
   if (extensions.approvalTotals !== undefined)
     out.bytes(extensions.approvalTotals, 32, "approvalTotals");
-  if (extensions.signerDataCounts !== undefined) {
-    if (!validSignerDataCounts(extensions.signerDataCounts))
-      throw invalid("InvalidSignerDataCounts");
-    out.u64(extensions.signerDataCounts, "signerDataCounts");
-  }
 }
 
 function writeCacheAccess(out: Writer, cache: CacheAccess): void {
@@ -947,8 +856,8 @@ function writeCompact(data: RingTransactData): Uint8Array {
   checkFlags(flags, data.rail);
   const header = headerOf(data);
   checkExtensions(data.extensions, data.rail);
-  const stream = streamOf(data.rail, header, disclosureFormat(data.extensions.format));
-  checkFormat(data);
+  const stream = streamOf(data.rail, header);
+  checkPayloads(data);
   const anonymousFrame = isAnonymousFrame(data.rail);
   const hiddenOwnerProof = data.rail === "anonymous" && !data.publicOwners;
   const ownersExpected = has(flags, Flag.ownRoot)
@@ -959,9 +868,10 @@ function writeCompact(data: RingTransactData): Uint8Array {
     (data.anonymous !== undefined) !== hiddenOwnerProof ||
     (data.sender !== undefined) !== anonymousFrame ||
     (data.sender !== undefined &&
-      data.sender.body.length !== senderBundleLen(bundleLayout(data.outputs))) ||
+      data.sender.body.length !== senderBundleLen({ outputs: data.outputs.length })) ||
     data.envelope.length !== envelopeRegion(stream).length ||
-    !data.outputs.every((output) => slotFits(output, data.hasData, stream.key))
+    data.recipientKeys.length !== recipientKeysLen(stream) ||
+    !data.outputs.every((output) => slotFits(output, data.hasData))
   )
     throw invalid("RingTransactLength");
   checkReplies(data);
@@ -989,20 +899,12 @@ function writeCompact(data: RingTransactData): Uint8Array {
     out,
     data.outputs.map((output) => output.body.kind === "exit"),
   );
-  writeBitmap(
-    out,
-    data.outputs.map((output) => output.body.kind === "none"),
-  );
   for (const output of data.outputs) writeSlot(out, output, data.hasData);
   if (data.replies !== undefined)
     out.u16(data.replies.length, "replyLen").bytes(data.replies.region);
   if (data.sender !== undefined)
     out.bytes(data.sender.tag, 32, "sender.tag").bytes(data.sender.body);
-  out.bytes(data.envelope);
-  for (const output of data.outputs)
-    out.bytes(output.record, auditRecordLength(stream.key), "record");
-  for (const output of data.outputs)
-    if (output.tail !== undefined) out.bytes(output.tail, DATA_TAIL_LEN, "tail");
+  out.bytes(data.envelope).bytes(data.recipientKeys);
   out.bytes(data.privateTxHash, 32, "privateTxHash");
   if (data.anonymous !== undefined) {
     out
@@ -1038,85 +940,38 @@ function writeCompact(data: RingTransactData): Uint8Array {
   return out.finish();
 }
 
-function slotBytes(body: SlotBody): Uint8Array {
-  switch (body.kind) {
-    case "none":
-      return EMPTY;
-    case "recipient":
-      return body.body;
-    case "exit":
-      return body.payload;
-  }
-}
-
 function writeSlot(out: Writer, output: RingOutput, hasData: boolean): void {
-  const raw = slotBytes(output.body);
-  if (hasData && output.body.kind !== "none") {
-    if (raw.length > 0xffff) throw invalid("OutputBodyLength");
-    out.u16(raw.length, "output.bodyLen");
+  const extra = output.body.payload;
+  if (hasData) {
+    if (extra.length > 0xffff) throw invalid("OutputBodyLength");
+    out.u16(extra.length, "output.extraLen");
   }
   out.bytes(output.hash, 32, "output.hash");
   if (output.body.kind === "exit") out.bytes(output.ownerTag, 32, "output.ownerTag");
   else out.bytes(framedSlotTag(output.ownerTag), SLOT_TAG_LEN, "output.ownerTag");
-  out.bytes(raw);
+  out.bytes(output.record, OUTPUT_RECORD_LEN, "output.record").bytes(extra);
 }
 
-/** A frame with no data carries each body at its plain length. */
-function slotFits(output: RingOutput, hasData: boolean, key: AuditStreamLayout["key"]): boolean {
-  if (output.record.length !== auditRecordLength(key)) return false;
-  if ((output.tail !== undefined) !== hasData) return false;
+/** A frame with no data carries no payload and each exit body at its plain length. */
+function slotFits(output: RingOutput, hasData: boolean): boolean {
+  if (output.record.length !== OUTPUT_RECORD_LEN) return false;
   if (output.body.kind !== "exit" && !equalBytes(slotTag(output.ownerTag), output.ownerTag))
     return false;
   if (hasData) return true;
-  switch (output.body.kind) {
-    case "none":
-      return true;
-    case "recipient":
-      return (
-        output.body.body.length ===
-        (disclosureFormat(key.format) === DisclosureFormat.SingleAssetPayout
-          ? COMPACT_RECIPIENT_BODY_LEN
-          : RECIPIENT_BODY_LEN)
-      );
-    case "exit":
-      return output.body.payload.length === CONFIDENTIAL_DATA_FREE_BODY_LEN;
-  }
+  return (
+    output.body.payload.length ===
+    (output.body.kind === "exit" ? CONFIDENTIAL_DATA_FREE_BODY_LEN : 0)
+  );
 }
 
-function checkFormat(data: RingTransactData): void {
-  const format = disclosureFormat(data.extensions.format);
-  if (
-    format === DisclosureFormat.SingleAssetPayout &&
-    (data.rail !== "confidential" ||
-      data.nIn !== SINGLE_ASSET_PAYOUT_INPUTS ||
-      data.nOut !== SINGLE_ASSET_PAYOUT_OUTPUTS ||
-      data.outputs.length !== SINGLE_ASSET_PAYOUT_OUTPUTS ||
-      data.nullifiers.length !== SINGLE_ASSET_PAYOUT_INPUTS ||
-      data.hasData ||
-      data.entry ||
-      data.wideOwners ||
-      data.inProofOwner !== undefined ||
-      data.replies !== undefined ||
-      data.interfaceTransfers.length !== 0 ||
-      data.noSpend ||
-      data.extensions.dataHash !== undefined ||
-      data.extensions.ringDataHash !== undefined ||
-      (data.extensions.messages?.length ?? 0) !== 0 ||
-      data.extensions.signerDataCounts !== undefined ||
-      data.outputs.some(
-        (output) =>
-          output.body.kind !== "recipient" ||
-          output.body.body.length !== COMPACT_RECIPIENT_BODY_LEN,
-      ))
-  )
-    throw invalid("FlagNotAllowed");
-  if (data.hasData) {
-    const lengths = data.outputs.flatMap((output) =>
-      output.body.kind === "recipient" ? [output.body.body.length] : [],
-    );
-    if (lengths.some((length) => length < RECIPIENT_BODY_LEN + 2 || length !== lengths[0]))
-      throw invalid("OutputBodyLength");
-  }
+/** Under `hasData` every non-exit payload shares one length, its `u16be` prefix included. */
+function checkPayloads(data: RingTransactData): void {
+  if (!data.hasData) return;
+  const lengths = data.outputs.flatMap((output) =>
+    output.body.kind === "recipient" ? [output.body.payload.length] : [],
+  );
+  if (lengths.some((length) => length < PAYLOAD_LENGTH_LEN || length !== lengths[0]))
+    throw invalid("OutputBodyLength");
 }
 
 function writeBitmap(out: Writer, bits: readonly boolean[]): void {
@@ -1127,7 +982,7 @@ function writeBitmap(out: Writer, bits: readonly boolean[]): void {
   out.bytes(bytes);
 }
 
-/** Rust `Replies::checked`, `length` bytes per body-bearing slot. */
+/** Rust `Replies::checked`, `length` bytes per non-exit slot. */
 function checkReplies(data: RingTransactData): void {
   const { replies } = data;
   if (replies === undefined) return;
@@ -1337,20 +1192,18 @@ function transactIxData(
 
 /** The SPP output, the scheme framing rebuilt from the slot, Rust `RingOutput::transact_output`. */
 export function ringTransactOutput(
-  output: Pick<RingOutput, "hash" | "ownerTag" | "body">,
+  output: Pick<RingOutput, "hash" | "ownerTag" | "record" | "body">,
   reply: Uint8Array = EMPTY,
 ): TransactOutput {
   const { body } = output;
   const data =
-    body.kind === "none"
-      ? undefined
-      : body.kind === "recipient"
-        ? encodeRingBodyOutput(body.body, reply)
-        : encodeRingOutput(RingScheme.confidential, body.payload);
+    body.kind === "recipient"
+      ? encodeRingBodyOutput(concatBytes(output.record, body.payload), reply)
+      : encodeRingOutput(RingScheme.confidential, body.payload);
   return Object.freeze({
     utxoHash: output.hash,
     ownerTag: Object.freeze({ kind: "inline", value: checkedField(output.ownerTag, "ownerTag") }),
-    ...(data === undefined ? {} : { data }),
+    data,
   });
 }
 

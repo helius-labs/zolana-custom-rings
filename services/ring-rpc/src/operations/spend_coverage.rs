@@ -177,7 +177,7 @@ impl CoverageDetails {
             frame: frame(row.frame),
         };
         response.cursor = self.cursor.token();
-        response.unresolved_real = self.unresolved.into_iter().map(row).collect();
+        response.unclassified = self.unresolved.into_iter().map(row).collect();
         response.unreadable = self.unread.into_iter().map(frame).collect();
         response.integrity_faults = self.faults.into_iter().map(row).collect();
     }
@@ -259,8 +259,6 @@ impl ProjectionReads<'_> {
                 match row.try_get::<String>("", "state")?.as_str() {
                     "observed" => totals.observed = count,
                     "padding" => totals.padding = count,
-                    "address" => totals.address = count,
-                    "external" => totals.external = count,
                     "resolved" => totals.resolved = count,
                     _ => {}
                 }
@@ -291,7 +289,7 @@ impl ProjectionReads<'_> {
         let mut details = CoverageDetails::new(cursor);
         let limit = Value::from(AUDIT_PAGE_LIMIT as i64 + 1);
         if !matches!(cursor.unresolved_position(), DetailPosition::Done) {
-            let mut values = vec![state_name(SpendState::UnresolvedReal).into()];
+            let mut values = vec![state_name(SpendState::Unclassified).into()];
             let filter = if let DetailPosition::After(key) = cursor.unresolved_position() {
                 values.push(key.to_vec().into());
                 " AND nullifier>$3"

@@ -1,4 +1,3 @@
-import { DisclosureFormat } from "../../../src/protocol/codec/ring-disclosure-layout.js";
 import { EMPTY_MINT_POLICY } from "../../../src/protocol/membership/mint-policy.js";
 import {
   TRACKING_EMPTY_ROOT,
@@ -43,14 +42,16 @@ import {
   applyEnrollmentsStatementElements,
   applyEnrollmentsStatementHash,
   ciphertextDigest,
+  envelopeDigest,
   recordChain,
-  tailChain,
   transferStatementElements,
   transferStatementHash,
   type TransferFamily,
   type TransferStatement,
 } from "../../../src/protocol/proof/statement.js";
 import { RingInstructionTag } from "../../../src/operations/management/admin.js";
+import { privateListKey, publicListKey } from "../../../src/protocol/membership/private-list.js";
+import { publicMember, type Member } from "../../../src/protocol/membership/policy.js";
 import { ringRail, ringRailOf } from "../../../src/protocol/transaction/transact.js";
 
 function bytes<T extends Uint8Array>(value: string, length?: number): T {
@@ -242,28 +243,18 @@ describe("ring-statements.json", () => {
       txViewingU: field(vector.tx_viewing_u),
       auditorPubkey: bytes<Bytes33>(vector.auditor_pubkey, 33),
       envelope: bytes(vector.envelope),
+      recipientKeys: bytes(vector.recipient_keys),
       salt: bytes<Bytes16>(vector.salt, 16),
-      layout: {
-        hasData: (vector.layout & 1) !== 0,
-        entry: (vector.layout & 2) !== 0,
-        format:
-          (vector.layout & 4) !== 0
-            ? DisclosureFormat.SingleAssetPayout
-            : DisclosureFormat.Standard,
-      },
+      layout: { entry: (vector.layout & 2) !== 0 },
     },
     family: family(vector),
     approvalMask: vector.approval_mask,
     approvalTotals: ZERO_32,
-    signerDataCounts: BigInt((vector as { signer_data_counts?: number }).signer_data_counts ?? 0),
     noSpend: vector.no_spend,
     capacity: vector.output_capacity,
     outputs,
     signers: { count: vector.signer_count, chain: field(vector.signer_chain) },
     inputCount: vector.input_count,
-    inputNullifierChain: field(
-      (vector as unknown as { input_nullifier_chain: string }).input_nullifier_chain,
-    ),
     privateTxHash: field(vector.private_tx_hash),
     roots: {
       policyHash: field(vector.policy_hash),
@@ -279,18 +270,15 @@ describe("ring-statements.json", () => {
 
   it("rebuilds every transfer statement, its element count and its public input", () => {
     for (const vector of statements.transfer) {
-      const outputs = vector.outputs.map((slot) => ({
-        hash: field(slot.hash),
-        record: bytes(slot.record),
-        ...(slot.tail === null ? {} : { tail: bytes(slot.tail) }),
-      }));
-      expect(hex(ciphertextDigest(bytes(vector.envelope))), vector.rail).toBe(
-        vector.envelope_digest,
-      );
+      const outputs = vector.outputs.map((slot) => ({ record: bytes(slot.record) }));
+      const statement0 = statementOf(vector, outputs);
+      expect(
+        hex(envelopeDigest(statement0.head.envelope, statement0.head.recipientKeys)),
+        vector.rail,
+      ).toBe(vector.envelope_digest);
       expect(hex(recordChain(outputs, vector.output_capacity)), vector.rail).toBe(
         vector.record_chain,
       );
-      expect(hex(tailChain(outputs, vector.output_capacity)), vector.rail).toBe(vector.tail_chain);
       const statement = statementOf(vector, outputs);
       const elements = transferStatementElements(statement);
       expect(elements, vector.rail).toHaveLength(vector.elements.length);
@@ -302,13 +290,51 @@ describe("ring-statements.json", () => {
   it("refuses a transfer statement past its output capacity", () => {
     const vector = statements.transfer.find((entry) => entry.output_capacity === 2);
     if (vector === undefined) throw new Error("vector has no two slot case");
-    const outputs = vector.outputs.map((slot) => ({
-      hash: field(slot.hash),
-      record: bytes(slot.record),
-    }));
+    const outputs = vector.outputs.map((slot) => ({ record: bytes(slot.record) }));
     expect(() =>
       transferStatementElements({ ...statementOf(vector, outputs), capacity: 1 }),
     ).toThrow(expect.objectContaining({ code: "RING_INVALID_LENGTH" }));
+  });
+
+  it("closes 43 elements and binds the recipient keys through the envelope digest", () => {
+    const zero = (): Bytes32 => new Uint8Array(32) as Bytes32;
+    const keys = new Uint8Array(64).fill(7);
+    const statement: TransferStatement = {
+      head: {
+        firstNullifier: field("01".padStart(64, "0")),
+        ringId: field("02".padStart(64, "0")),
+        txViewingU: field("09".repeat(32)),
+        auditorPubkey: bytes<Bytes33>(`04${"0a".repeat(32)}`, 33),
+        envelope: new Uint8Array(33).fill(3),
+        recipientKeys: keys,
+        salt: new Uint8Array(16).fill(5) as Bytes16,
+        layout: { entry: false },
+      },
+      family: { kind: "confidential", inProof: false, delegate: false, sender: zero() },
+      approvalMask: 0,
+      approvalTotals: zero(),
+      noSpend: false,
+      outputs: [{ record: new Uint8Array(137).fill(1) }, { record: new Uint8Array(137).fill(2) }],
+      capacity: 2,
+      inputCount: 1,
+      privateTxHash: zero(),
+      signers: { count: 0, chain: zero() },
+      roots: { policyHash: zero(), ownRoot: zero(), curatorRoot: zero(), trackingRoot: zero() },
+      publicAssets: [zero(), zero(), zero()],
+      publicAmounts: [zero(), zero(), zero()],
+      publicGross: [zero(), zero(), zero()],
+      withdrawalHash: zero(),
+    };
+    const elements = transferStatementElements(statement);
+    expect(elements).toHaveLength(43);
+    expect(elements[42]).toEqual(field("2b".padStart(64, "0")));
+    expect(elements[7]).toEqual(envelopeDigest(statement.head.envelope, keys));
+    expect(elements[7]).not.toEqual(ciphertextDigest(statement.head.envelope));
+    const changed = keys.slice();
+    changed[63] = (changed[63] ?? 0) ^ 1;
+    expect(
+      transferStatementHash({ ...statement, head: { ...statement.head, recipientKeys: changed } }),
+    ).not.toEqual(transferStatementHash(statement));
   });
 
   it("rebuilds the apply records and register key statements", () => {
@@ -387,7 +413,6 @@ describe("ring-statements.json", () => {
 
 describe("transfer key selection", () => {
   const spend = {
-    format: DisclosureFormat.Standard,
     rail: "confidential",
     inputs: 2,
     outputs: 2,
@@ -434,34 +459,17 @@ describe("transfer key selection", () => {
     ).toBeUndefined();
   });
 
-  it("routes payout format only through its confidential profile", () => {
+  it("keys no sixteen output payout once the general keys serve every rail", () => {
     const payout = {
       ...spend,
-      format: DisclosureFormat.SingleAssetPayout,
       inputs: 1,
       outputs: 16,
       pools: { own: 35, curator: 35, tracking: 17 },
     };
-    const key = ringTransferCircuit(fittedSpend(payout));
-    expect(key).toMatchObject({
-      format: DisclosureFormat.SingleAssetPayout,
-      class: 1,
-      outputs: 16,
-    });
-    if (key === undefined) throw new Error("missing payout key");
-    expect(transferPoolCapacity(key)).toEqual(payout.pools);
-    for (const candidate of [
-      { ...payout, format: DisclosureFormat.Standard },
-      { ...payout, rail: "anonymous" as const },
-      { ...payout, inputs: 2 },
-      { ...payout, outputs: 15 },
-      { ...payout, spendsDefaultRing: true },
-      { ...payout, wide: true },
-      { ...payout, legs: 1 },
-      { ...payout, owners: 2 },
-      { ...payout, pools: { ...payout.pools, own: 36 } },
-    ])
-      expect(ringTransferCircuit(candidate)).toBeUndefined();
+    expect(ringTransferCircuit(fittedSpend(payout))).toBeUndefined();
+    expect(transferKeys().some((circuit) => transferCircuitType(circuit).includes("payout"))).toBe(
+      false,
+    );
   });
 
   it("holds the pools of pool_capacity.json", () => {
@@ -508,5 +516,24 @@ describe("disclosure packing", () => {
     expect(unpackDisclosure(fields, 40)).toEqual(plaintext);
     const padded = fields.map((entry, index) => (index === 1 ? flipped(entry) : entry));
     expect(() => unpackDisclosure(padded, 40)).toThrow("KEYPAIR_DISCLOSURE_PADDING");
+  });
+});
+
+describe("the list lookup key", () => {
+  const seven = field("07".padStart(64, "0"));
+
+  it("keys an owner's public lists on the zero salt as Rust `Member::public` does", () => {
+    expect(hex(publicListKey(seven))).toBe(
+      "18eb3f0cf43fb318e0ab77c3d2fc13af04d5ef7fa7afd1f47909f087ff748fe3",
+    );
+    expect(publicMember(seven as Member)).toEqual(publicListKey(seven));
+    expect(publicListKey(seven)).not.toEqual(seven);
+    expect(privateListKey(seven, field("09".padStart(64, "0")))).not.toEqual(publicListKey(seven));
+  });
+
+  it("refuses a zero salt for a private key", () => {
+    expect(() => privateListKey(seven, ZERO_32 as Bytes32)).toThrow(
+      expect.objectContaining({ code: "RING_ENTRY_INVALID", details: { reason: "zeroSalt" } }),
+    );
   });
 });

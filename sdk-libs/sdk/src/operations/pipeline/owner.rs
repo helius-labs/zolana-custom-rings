@@ -1,6 +1,6 @@
 //! The confidential rail.
 
-use custom_ring_interface::{DisclosureFormat, RingMode, RingRail};
+use custom_ring_interface::{RingMode, RingRail};
 use spr_client::{AsyncRpc, OwnerAuthorization, SettlementAccountValidation};
 use spr_interface::shape::Shape;
 use spr_keypair::{NullifierKey, ShieldedAddress, SigningKey};
@@ -167,11 +167,15 @@ impl Owner<'_> {
             self.transaction.inputs(),
             &self.sender.address()?.signing_pubkey,
         )?;
-        self.stage_signers(self.sender.address()?)
+        self.stage_signers(self.sender.address()?, config)
     }
 
     /// The signer rail, zero-key notes admitted by the caller.
-    pub(super) fn stage_signers(&self, sender: ShieldedAddress) -> Result<Staged<'_>, RingError> {
+    pub(super) fn stage_signers(
+        &self,
+        sender: ShieldedAddress,
+        config: &CustomRingConfig,
+    ) -> Result<Staged<'_>, RingError> {
         self.check_settlement_accounts()?;
         let shape = self.shape(&sender)?;
         let transaction = self.transaction.clone();
@@ -181,14 +185,11 @@ impl Owner<'_> {
         }
         .delivery()?;
         let first_nullifier = *transaction.first_nullifier();
-        let format = RingRail::Confidential.disclosure_format(shape);
-        if format == DisclosureFormat::SingleAssetPayout && self.in_proof_owner.is_some() {
-            return Err(RingError::ShapeUnkeyed {
-                rail: RingRail::Confidential,
-            });
-        }
-        let rail = RingOutputRail::new(transaction_key(self.sender, first_nullifier)?, delivery)
-            .with_format(format);
+        let rail = RingOutputRail::new(
+            transaction_key(self.sender, first_nullifier)?,
+            config.auditor_pubkey,
+            delivery,
+        );
         let transaction = pad_under_rail(transaction, &rail, shape, &sender)?;
         let proof_inputs = rail.encrypt(transaction, &sender)?;
         let (owner_signers, spend) = match self.in_proof_owner {

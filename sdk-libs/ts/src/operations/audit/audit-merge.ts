@@ -131,7 +131,7 @@ export async function auditRingMerges(
   });
 }
 
-/** Rebuilds the output from the record under `Poseidon(TMOB, seed, n0)`, the seed is wiped once read. */
+/** Rebuilds the output from the record, its blinding held to `Poseidon(TMOB, seed, n0)`, the seed is wiped once read. */
 export function openRingMerge(
   input: Readonly<{
     confirmed: Extract<ConfirmedRingTransaction, { kind: "merge" }>;
@@ -162,12 +162,14 @@ export function openRingMerge(
     throw new RingError("RING_ORIGIN_DECODE", {
       details: { reason: "ring merge output" },
     });
-  const { record, secret: seed } = openMergeRecord(input.auditor, confirmed.sealedRecord);
+  const { record, seed } = openMergeRecord(input.auditor, confirmed.sealedRecord, firstNullifier);
   try {
+    // The proof holds the blinding to the seed, a record off it would rebuild a note no seed spends.
     if (
       record.kind !== RecordKind.ring ||
       !isCanonicalField(record.nullifierPk) ||
-      !isCanonicalField(seed)
+      !isCanonicalField(seed) ||
+      !equalBytes(record.blinding, seededMergeOutputBlinding(seed, firstNullifier))
     )
       throw new RingError("RING_AUDIT_MESSAGE", { details: { reason: "merge record" } });
     const utxo: AuditedUtxo = Object.freeze({
@@ -176,7 +178,7 @@ export function openRingMerge(
       asset: hashBytes(addressBytes(record.mint, "mint")) as Bytes32,
       mint: record.mint,
       amount: record.amount,
-      blinding: seededMergeOutputBlinding(seed, firstNullifier),
+      blinding: record.blinding,
       dataHash: ZERO_32,
       ringDataHash,
     });
@@ -184,7 +186,7 @@ export function openRingMerge(
       openedUtxo(utxo, outputTreeId(slot.outputContext)),
       ringIdField(ring),
     );
-    if (!equalBytes(rebuilt, slot.outputContext.hash))
+    if (rebuilt === undefined || !equalBytes(rebuilt, slot.outputContext.hash))
       throw new RingError("RING_AUDIT_OUTPUT_MISMATCH", { details: { reason: "merge record" } });
     return Object.freeze({
       slot: transaction.slot,

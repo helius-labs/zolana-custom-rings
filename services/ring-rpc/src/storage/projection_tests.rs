@@ -52,7 +52,7 @@ async fn page(slot: u64, nullifier: Option<[u8; 32]>) -> PageDelta {
                 event_index: 0,
             },
             position: 0,
-            read: InputRead::Real,
+            read: InputRead::Spend,
             hit: None,
         });
     }

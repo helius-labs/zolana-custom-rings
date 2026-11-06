@@ -1061,7 +1061,8 @@ fn record_merge_group() -> (
         sealed: SealedMergeRecord {
             proof: merge_proof(),
             eph_pk: [4; 33],
-            ciphertext: [5; custom_ring_interface::OPENING_RECORD_LEN],
+            envelope: [5; custom_ring_interface::MERGE_ENVELOPE_LEN],
+            record: [6; custom_ring_interface::MERGE_RECORD_LEN],
         },
         merge: spp.merge,
     };
@@ -1078,7 +1079,8 @@ fn a_record_merge_binds_the_record_its_ring_forwarded() {
         origin.merge_disclosure,
         Some(ConfirmedMergeDisclosure {
             eph_pk: request.sealed.eph_pk,
-            ciphertext: request.sealed.ciphertext,
+            envelope: request.sealed.envelope,
+            record: request.sealed.record,
         })
     );
     let mut other = request;
@@ -1197,16 +1199,15 @@ fn origin_of_frame(
         commitment_pok: zero,
     };
     let (hash, u) = ([1u8; 32], [2u8; 32]);
-    let body = [3u8; custom_ring_interface::RECIPIENT_BODY_LEN];
-    let record = [4u8; custom_ring_interface::AUDIT_RECORD_LEN];
+    let record = [4u8; custom_ring_interface::OUTPUT_RECORD_LEN];
     let nullifiers = [[7u8; 32]];
     let envelope = [0u8; 2048];
+    let keys = [0u8; 64];
     let output = RingOutput {
         hash: &hash,
         owner_tag: custom_ring_interface::stream::slot_tag(u),
-        body: SlotBody::Recipient(&body),
+        body: SlotBody::Recipient(&record),
         record: &record,
-        tail: None,
     };
     let context = TreeContext {
         utxo_tree_root_index: 0,
@@ -1236,6 +1237,7 @@ fn origin_of_frame(
         replies: None,
         sender: None,
         envelope: &[],
+        recipient_keys: &keys,
         private_tx_hash: &zero,
         anonymous: None,
         in_proof_owner: in_proof.then_some(InProofOwner {

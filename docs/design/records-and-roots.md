@@ -11,7 +11,7 @@ A ring reads two kinds of tree, each in a Storage program account with its own r
 ## Records
 
 - A policy record contains one member's list bits and, for an asset, its mint settings.
-- A member is an owner identity, an owner's salted key, a reader key or an asset. It can also be the grant key of one wallet and one reader.
+- A member is an owner's public key `ListKey(owner, 0)`, an owner's salted key, a reader key or an asset. It can also be the grant key of one wallet and one reader.
 - Each record points to the next member in sort order. The records are the leaves of a 4-ary tree in insert order.
 - A proof opens a present member by its leaf and an absent member by the record that brackets it. A prover cannot leave out the record that convicts its subject.
 - A tree has a fixed number of leaves, each member keeps its leaf permanently, and a full tree takes no new member.
@@ -49,7 +49,7 @@ A ring reads two kinds of tree, each in a Storage program account with its own r
 - The program verifies that proof in the same instruction, and refuses the zero nullifier key.
 - `Enroll` only reads the registry, so enrollment traffic takes no write lock on it.
 - `ApplyEnrollments` is permissionless. An applier names the authorization accounts in any order, and the program computes each entry from the account, so no applier can alter one. An applied account refuses a second apply.
-- An enrollment is complete only when its leaf sits under an accepted tracking root. A pending account grants nothing, because every check reads the root. A recipient is usable from that root on.
+- An enrollment is complete only when its leaf sits under an accepted tracking root. A pending account grants nothing, because every check reads the root. The owner's notes under its key spend from that root on.
 - Ring RPC applies the pending enrollments of the rings its operator names. Any other party can apply the same accounts.
 - A full tree leaves a first enrollment pending.
 - A ring creates its tracking registry at `Initialize` and pins its address. A forged registry with a matching ring id fails that address check.

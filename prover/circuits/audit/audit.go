@@ -1,52 +1,49 @@
-// Package audit proves what a ring auditor reads from a ring transfer.
+// Package audit proves what a ring auditor and each recipient read from a ring transfer.
 //
-// SPP gives an auditor nothing to read. Its transfer proof hides every opening behind the output
+// SPP gives a reader nothing to read. Its transfer proof hides every opening behind the output
 // hashes, and its external data hash binds the ciphertext bytes a sender submits with no claim about
-// what they contain. A ring must let its auditor open every note it settles, so the ring proof adds
-// one AES stream sealed to the auditor and ties its plaintext to SPP's published hashes. Without
-// these constraints a sender could settle a note no auditor can read.
+// what they contain. A ring must let its auditor open every note it settles, so the ring proof seals
+// one record per output slot and ties its plaintext to SPP's published hashes. The same record is the
+// recipient's delivery. Without these constraints a sender could settle a note no auditor can read.
 //
-// Sealing. The stream needs no key of its own. SPP publishes a tx_viewing_pk per transaction, and the
-// program feeds its coordinate tx_u to SPP's external data hash and to the ring statement from the same
-// frame bytes. tx_viewing_sk is the ephemeral key of the auditor's agreement, and the plaintext opens
-// with tx_viewing_sk itself.
+// Sealing. No ciphertext needs a key of its own. SPP publishes a tx_viewing_pk per transaction, and
+// the program feeds its coordinate tx_u to SPP's external data hash and to the ring statement from the
+// same frame bytes. tx_viewing_sk is the ephemeral key of every agreement. Record i is sealed by
+// X25519(tx_viewing_sk, V_i) to the recipient key V_i the sender supplies. The auditor stream is sealed
+// by X25519(tx_viewing_sk, auditor_u) and carries tx_viewing_sk and every V_i.
 //
 // One sealed key opens every blinding. SPP holds each output blinding to
 // TXOB(n0, TXOS(n0, BlindingSeed), i) and its private_tx_blinding to TXPB(n0, BlindingSeed), with
 // BlindingSeed a free private input. The ring derives private_tx_blinding as TXPB(n0, CRBS(tx_viewing_sk,
 // salt)) and both proofs open the one public private_tx_hash, so a Poseidon collision aside SPP's seed is
-// the ring's. Each ring slot opens the output hash SPP publishes at its index, so SPP's derivation fixes
-// every published blinding, a dummy's included, and a record carries no blinding.
+// the ring's and n0 is SPP's first nullifier. Real output slots open the output chain of private_tx_hash
+// in order, and both proofs place dummies last, so ring slot i is SPP slot i and its blinding is SPP's.
 //
 // The auditor reads a transfer in three steps.
 //  1. X25519(auditor_sk, tx_u) and the salt give the stream's key and nonce.
-//  2. The envelope gives tx_viewing_sk, note count R, absolute address bitmap A and any entry evidence.
-//  3. Each record, its tail, the derived blinding and the frame's tree id rebuild that slot's
-//     published hash. A dummy's record is zero and its hash rebuilds from the blinding and the
-//     frame's tree id.
+//  2. The envelope gives tx_viewing_sk, note count R and any entry evidence, the key region each V_i.
+//  3. X25519(tx_viewing_sk, V_i) opens record i, and the record, the frame's tree id and the payload's
+//     data hashes rebuild that slot's published hash. A dummy's record is zero and its hash rebuilds from
+//     the derived blinding and the frame's tree id.
 //
 // A statement built on the package proves the following.
-//  1. The stream is AES-256-CTR under a key schedule bound to the auditor key, tx_u and the salt,
-//     over the sealed tx_viewing_sk, R, A, the entry evidence, one record per slot and one tail per slot.
-//  2. Each live slot's record and tail hold the opening its published commitment hashes, and the
-//     transaction blinding derives from the sealed key. With SPP's proof, the auditor rebuilds every
-//     output commitment from the stream and the frame.
-//  3. R counts spent notes and A selects address positions among the published inputs. An entry record
-//     names each default ring note's owner, nullifier key, amount, mint and spent commitment at its absolute
-//     input position, with zero records elsewhere.
-//  4. A slot's kind derives from the domain and ring id its hash commits, no prover bit passes a note
+//  1. The auditor stream is AES-256-CTR under a key schedule bound to the auditor key, tx_u and the salt,
+//     over the sealed tx_viewing_sk, R, the entry evidence and one recipient key per slot.
+//  2. Each record is AES-256-CTR under the slot secret of tx_viewing_sk and that slot's sealed key.
+//  3. Each live slot's record holds the opening its published commitment hashes, but for the data hashes.
+//  4. Slots are notes or dummies, dummies last, and a dummy carries nothing but its blinding.
+//  5. R counts spent notes. An entry record names each default ring note's owner, nullifier key, amount,
+//     mint and spent commitment at its note position, with zero records elsewhere.
+//  6. A slot's kind derives from the domain and ring id its hash commits, no prover bit passes a note
 //     as a dummy.
-//  5. Every transmitted ciphertext byte is bound, the envelope through its counted digest and each
-//     record and tail through its chain.
+//  7. Every transmitted ciphertext byte is bound, the envelope and keys through their counted digests and
+//     each record through the record chain.
 //
-// It proves nothing about a recipient's body or tag, delivery stays outside the circuit. Those bytes
-// reach the proof only under SPP's external data hash, as on SPP, and no constraint reads them. A
-// transfer with a correct proof can therefore carry a body its recipient cannot open. The sender wants
-// its payment received, and delivery stays its own incentive. A bad body credits nobody, since a
-// reader accepts a note only when the commitment rebuilds under its own keys, and a full scan repairs
-// a bad tag. The auditor's copy is the proven one and holds the opening whatever the body says, and
-// Ring RPC can return it to the authorized owner. Nothing here promises delivery to an owner who has
-// no Ring RPC.
+// It proves nothing about the key a sender supplies for a recipient, as SPP proved nothing about a
+// body. A record sealed to another key credits nobody, since a reader accepts a note only when the
+// commitment rebuilds under its own keys. The auditor's reading needs no correct V_i choice, it reads
+// each V_i from the stream. It proves nothing about a data payload, a tag or a reply, SPP's external
+// data hash binds those bytes alone.
 //
 // It proves nothing about the freshness of tx_viewing_sk or the salt, see shared.Envelope.
 //
@@ -95,7 +92,7 @@ func (w AuditWires) OpenEnvelope(api frontend.API, rc frontend.Rangechecker) Env
 	// 3. tx_u is the key of tx_viewing_sk, the generator bounds every secret byte the packings read.
 	txPk := shared.PackedKey(api, x25519.ScalarMulGenerator(api, w.TxViewingSk))
 	packedTxViewingSk := [2]frontend.Variable(shared.PackBounded(api, w.TxViewingSk[:]))
-	// 4. Through private_tx_hash the blinding fixes SPP's seed to the sealed key's, and SPP derives every output blinding from it.
+	// 4. Through private_tx_hash the blinding fixes SPP's seed to the sealed key's and SPP's n0 to FirstNullifier, and SPP derives every output blinding from both.
 	return Envelope{
 		txPk:              [2]frontend.Variable(txPk),
 		salt:              salt,
@@ -118,116 +115,87 @@ func AssertClamped(api frontend.API, secret [32]frontend.Variable) {
 
 // Opened holds every output slot once, every section reads these wires.
 type Opened struct {
-	Slots []shared.Output
-	Count ringgadget.Count
-	// OutputChain covers every published slot hash, a dummy's included, zero past m as SPP's padded chain reads.
-	OutputChain frontend.Variable
-	hasData     frontend.Variable
-	records     [][]frontend.Variable
-	tails       [][]frontend.Variable
-	commonMint  []frontend.Variable
+	Slots   []shared.Output
+	Count   ringgadget.Count
+	records [][]frontend.Variable
+	keys    [][32]frontend.Variable
 }
 
-// OpenSlots holds each output wire to the hash SPP publishes, so a later section reads the note that settles.
-func (s StreamShape) OpenSlots(api frontend.API, rc frontend.Rangechecker, hasData frontend.Variable, outputs []OutputWires, outputCount frontend.Variable) Opened {
+// OpenSlots opens each output wire and holds the slots to SPP's output form, so a later section reads the note that settles.
+func (s StreamShape) OpenSlots(api frontend.API, rc frontend.Rangechecker, outputs []OutputWires, outputCount frontend.Variable) Opened {
 	// 1. m selects the published slots, a key's capacity may exceed it and a slot past it publishes nothing.
-	if s.SingleAssetPayout {
-		api.AssertIsEqual(outputCount, s.Outputs)
-		api.AssertIsEqual(hasData, 0)
-	}
 	count := ringgadget.SelectCount(api, outputCount, 1, len(outputs))
-	opened := Opened{Slots: make([]shared.Output, len(outputs)), Count: count, hasData: hasData, records: make([][]frontend.Variable, len(outputs))}
-	hashes := make([]frontend.Variable, len(outputs))
+	opened := Opened{Slots: make([]shared.Output, len(outputs)), Count: count, records: make([][]frontend.Variable, len(outputs)), keys: make([][32]frontend.Variable, len(outputs))}
+	ordered := make([]transaction.UtxoCircuitFields, len(outputs))
 	for i, output := range outputs {
-		slot := output.Output.Open(api)
-		active := count.Active[i]
-		// 2. An omitted slot holds no note, SPP's padded chain would miss it.
-		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, active), V: slot.Utxo})
-		// 3. A clear has_data transmits no tail, a nonzero data hash would leave the commitment unrebuilt.
-		assertNoData(api, hasData, slot)
-		// 4. The plaintext reads the opened wires, SealStream seals them with no second opening to disagree.
-		record := output.record(api, rc, slot)
-		if s.SingleAssetPayout {
-			api.AssertIsEqual(slot.Ring, 1)
-			api.AssertIsEqual(slot.Asset, outputs[0].Output.Asset)
-			if i == 0 {
-				opened.commonMint = record[recordMintStart:recordMintEnd]
-			}
-			record = slices.Concat(record[:recordMintStart], record[recordMintEnd:RecordLen], shared.Zeros(PayoutRecordStride-PayoutRecordLen))
-		} else {
-			opened.tails = append(opened.tails, dataTail(api, rc, slot))
-		}
-		opened.records[i] = record
-		opened.Slots[i], hashes[i] = slot, api.Mul(active, slot.Hash)
+		// 2. Dummies stay off the output chain, the slot form alone keeps them empty.
+		slot := output.Output.OpenSlot(api)
+		ordered[i] = transaction.UtxoCircuitFields{Domain: slot.Domain}
+		// 3. An omitted slot holds no note, SPP's compact slots publish none.
+		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, count.Active[i]), V: slot.Utxo})
+		// 4. The plaintext reads the opened wires, RecordChain seals them with no second opening to disagree.
+		opened.records[i] = output.record(api, rc, slot)
+		opened.keys[i] = output.RecipientKey
+		opened.Slots[i] = slot
 	}
-	// 5. The program rebuilds the chain from the hashes it forwards to SPP, one opening off them fails the statement.
-	opened.OutputChain = gadget.HashChain4(api, hashes)
+	// 5. SPP holds its own outputs dummies last, so equal output chains place every real slot at one index on both sides.
+	transaction.AssertDummiesLast(api, ordered)
 	return opened
+}
+
+// RecordChain seals each slot's record to its recipient key and returns the chain the program rebuilds from the transmitted records.
+func (w AuditWires) RecordChain(api frontend.API, e Envelope, opened Opened) frontend.Variable {
+	hashes := make([]frontend.Variable, len(opened.records))
+	for i, record := range opened.records {
+		// The index and n0 enter the slot secret, two slots to one key never share a keystream.
+		ciphertext := shared.SlotSeal{
+			Plaintext: record, EphSk: w.TxViewingSk, Eph: e.txPk[:], RecipientPk: opened.keys[i],
+			Salt: e.salt, Index: i, FirstNullifier: w.FirstNullifier, Info: shared.OutputRecordInfo,
+		}.Seal(api)
+		// A slot past m publishes nothing.
+		hashes[i] = api.Mul(opened.Count.Active[i], gadget.HashBoundedBytes(api, ciphertext))
+	}
+	return gadget.HashChain4(api, hashes)
 }
 
 type Stream struct {
 	sealed shared.Sealed
 	digest frontend.Variable
-	// RecordChain hashes every published record's ciphertext, zero past m.
-	RecordChain frontend.Variable
-	// TailChain hashes every published tail's ciphertext, zero while has_data is clear.
-	TailChain frontend.Variable
 	// NoSpend is set at a zero R, address authorization remains with SPP.
 	NoSpend frontend.Variable
 }
 
-// SealStream mirrors AuditEnvelope::encode and the record layout in program-libs/interface/src/proof/audit_stream.rs.
+// SealStream mirrors AuditEnvelope::encode and AuditStreamLayout in program-libs/interface/src/proof/audit_stream.rs.
 func (w AuditWires) SealStream(api frontend.API, rc frontend.Rangechecker, e Envelope, shape StreamShape, opened Opened, spent SpentInputs) Stream {
 	ranges := shape.Ranges()
-	// 1. The envelope binds tx_viewing_sk, the note count and absolute address positions before any entry records.
+	// 1. The envelope binds tx_viewing_sk and the note count before any entry records.
 	evidence := spent.evidence(api, rc, ranges)
-	head := slices.Concat(evidence.head, opened.commonMint)
-	plaintext := slices.Concat(w.TxViewingSk[:], head, slices.Concat(evidence.entries...))
-	// The envelope's padding ends on the block before R0, the longest evidence never reaches a record's counter.
+	plaintext := slices.Concat(w.TxViewingSk[:], evidence.head, slices.Concat(evidence.entries...))
+	// The envelope's padding ends on the block before the first key, the longest evidence never reaches a key's counter.
 	plaintext = append(plaintext, shared.Zeros(ranges.EnvelopeBlocks()*streamBlockLen-len(plaintext))...)
-	// A record holds its blocks alone, a counter serving two regions reveals the XOR of their plaintexts.
-	plaintext = slices.Concat(plaintext, slices.Concat(opened.records...), slices.Concat(opened.tails...))
-	// A plaintext off its ranges moves every record off the counters the readers use.
+	// 2. One key per slot on its own blocks, the auditor reads V_i with no directory.
+	for _, key := range opened.keys {
+		plaintext = append(plaintext, key[:]...)
+	}
+	// A plaintext off its ranges moves every key off the counters the readers use.
 	if len(plaintext) != ranges.CapacityBlocks()*streamBlockLen {
 		panic("audit: the stream plaintext differs from its ranges")
 	}
-	// 2. One key expansion and nonce cover every block, the cipher's tables bound every plaintext and ciphertext byte.
+	// 3. One key expansion and nonce cover every block, the cipher's tables bound every plaintext and ciphertext byte.
 	// tx_viewing_sk is the ephemeral key and txPk its public key, a resend under one first nullifier repeats
 	// both, and the salt in the schedule keeps its keystream apart.
 	sealed := shared.Envelope{Plaintext: plaintext, EphSk: w.TxViewingSk, AuditorPk: w.AuditorPk, Info: shared.AuditEncInfo}.SealSalted(api, e.txPk[:], e.salt)
-	// 3. Padding and unpublished slots never leave the prover, the statement binds only what the frame transmits.
-	// The program hashes those bytes in one form per region, the envelope's length moves with n and each
-	// record and tail has one length.
+	// 4. Padding and unpublished slots never leave the prover, the program digests the envelope over n and the keys over m.
+	head := EnvelopeKeyLen + len(evidence.head)
+	keys := sealed.Ciphertext[ranges.KeyOffset(0):]
 	return Stream{
-		sealed:      sealed,
-		digest:      countedDigest(api, sealed.Ciphertext, EnvelopeKeyLen+len(head), ranges.entryLen(), spent.Count),
-		RecordChain: gadget.HashChain4(api, SlotRegions{Start: ranges.RecordOffset(0), Stride: ranges.RecordStride(), Length: ranges.RecordLen()}.Hashes(api, sealed.Ciphertext, opened.Count.Active)),
-		TailChain:   tailChain(api, sealed.Ciphertext, ranges, opened),
-		NoSpend:     api.IsZero(evidence.realInputs),
+		sealed: sealed,
+		digest: gadget.PoseidonHash(api, []frontend.Variable{
+			countedDigest(api, sealed.Ciphertext, head, ranges.entryLen(), spent.Count),
+			countedDigest(api, keys, 0, KeyLen, opened.Count),
+		}),
+		NoSpend: api.IsZero(evidence.realInputs),
 	}
-}
-
-// SlotRegions locates one ciphertext region per slot inside a sealed stream.
-type SlotRegions struct {
-	Start, Stride, Length int
-}
-
-// Hashes is hash_bytes(region_i) per slot, zero while the slot's flag is clear, the one form every statement binds a slot's ciphertext in.
-func (r SlotRegions) Hashes(api frontend.API, ciphertext, active []frontend.Variable) []frontend.Variable {
-	hashes := make([]frontend.Variable, len(active))
-	for i, flag := range active {
-		offset := r.Start + i*r.Stride
-		hashes[i] = api.Mul(flag, gadget.HashBoundedBytes(api, ciphertext[offset:offset+r.Length]))
-	}
-	return hashes
-}
-
-func tailChain(api frontend.API, ciphertext []frontend.Variable, ranges StreamRanges, opened Opened) frontend.Variable {
-	if ranges.SingleAssetPayout {
-		return 0
-	}
-	// A clear has_data transmits no tail, the program binds zero.
-	return api.Mul(opened.hasData, gadget.HashChain4(api, SlotRegions{Start: ranges.TailOffset(0), Stride: TailLen, Length: TailLen}.Hashes(api, ciphertext, opened.Count.Active)))
 }
 
 // countedDigest mirrors ciphertext_digest in program-libs/interface/src/proof/statement.rs over the head and the count's entries.

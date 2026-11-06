@@ -74,7 +74,10 @@ import { PreparedRelay } from "../../rpc/relay.js";
 import type { RingMergeClient, TrackingReader } from "../../rpc/ports.js";
 import { ringAuthAddress, ringPolicyAddress } from "../../protocol/pda/index.js";
 import { CUSTOM_RING_PROOF_LENGTH } from "../../protocol/proof/custom-ring-proof.js";
-import { OPENING_RECORD_LEN } from "../../protocol/codec/ring-disclosure-layout.js";
+import {
+  MERGE_ENVELOPE_LEN,
+  MERGE_RECORD_LEN,
+} from "../../protocol/codec/ring-disclosure-layout.js";
 import { ringIdField } from "../../crypto/derivation/ring-stream.js";
 import type { RingKeys } from "../../state/ring-keys.js";
 import {
@@ -170,8 +173,8 @@ export async function prepareRingMergeRelay(params: RingMergeRelayParams): Promi
     await initializePoseidon();
     const sender = params.wallet.identity;
     const { feePayer } = params.quote;
-    // The merge circuit keeps a hidden owner off the payer.
-    checkAnonymousSigner({ signer: params.signer, sender, payer: feePayer });
+    // The merge circuit admits a hidden owner as payer, the wallet keeps one off it.
+    checkHiddenParties(checkAnonymousSigner({ signer: params.signer, sender }), [feePayer]);
     const asset = params.asset ?? SOL_MINT;
     const notes = selectMergeNotes({
       wallet: params.wallet,
@@ -479,6 +482,7 @@ async function buildRingMerge(
         spp: data,
         ringProgramId: params.ringProgramId,
         auditorU: config.auditorPublicKey.u(),
+        recipientU: owner.viewingPublicKey.u(),
         payer: params.feePayer,
         ownerPkHash,
         outputTreeId: bigIntBytes(BigInt(proofInputs.inputs.payload.outputTreeId)) as Bytes32,
@@ -550,7 +554,8 @@ export async function longestFitting<T>(
 const EMPTY_SEALED_RECORD: SealedMergeRecord = Object.freeze({
   proof: new Uint8Array(CUSTOM_RING_PROOF_LENGTH),
   ephemeralPublicKey: new Uint8Array(33) as Bytes33,
-  ciphertext: new Uint8Array(OPENING_RECORD_LEN),
+  envelope: new Uint8Array(MERGE_ENVELOPE_LEN),
+  record: new Uint8Array(MERGE_RECORD_LEN),
 });
 
 /** SPP requires the account's signature and publishes its identity. */
@@ -637,6 +642,8 @@ function mergeDisclosureRequest(
     spp: MergeTransactInstructionData;
     ringProgramId: Address;
     auditorU: Bytes32;
+    /** `V`, the merged owner's viewing key the record seals to. */
+    recipientU: Bytes32;
     payer: Address;
     ownerPkHash: Bytes32;
     outputTreeId: Bytes32;
@@ -654,6 +661,7 @@ function mergeDisclosureRequest(
     firstNullifier,
     ringProgramId: ringIdField(input.ringProgramId),
     auditorPk: input.auditorU,
+    recipientKey: input.recipientU,
     payer: solanaOwnerIdentity(addressBytes(input.payer)) as Bytes32,
     trackingRoot: input.trackingRoot,
     // The merge proves no owner signature, a PDA owner key is valid.

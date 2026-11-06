@@ -46,6 +46,12 @@ func ListKey(t testing.TB, owner, listSalt *big.Int) *big.Int {
 	return ringtest.MustPoseidonHash(t, big.NewInt(shared.ListKeyDomain), owner, listSalt)
 }
 
+// PublicKey is the zero salt ListKey every public owner record sits under.
+func PublicKey(t testing.TB, owner *big.Int) *big.Int {
+	t.Helper()
+	return ListKey(t, owner, big.NewInt(0))
+}
+
 type TrackingPath struct {
 	Index    uint64
 	Siblings [registry.TrackingHeight][registry.Arity - 1]*big.Int

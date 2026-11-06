@@ -13,7 +13,7 @@ use spr_keypair::ShieldedKeypair;
 
 use super::*;
 use crate::tests::support::{
-    keypair, owner_identity, ring, Chain, Registry, RingSettings, SLOT, TRACKING,
+    keypair, owner_record, ring, Chain, Registry, RingSettings, SLOT, TRACKING,
 };
 use crate::MemberRecords;
 
@@ -65,7 +65,7 @@ async fn member_records_come_back_in_member_order() {
     .client();
     let reads = MemberRecords {
         ring: ring(),
-        members: &[owner_identity(&stranger), owner_identity(&registered)],
+        members: &[owner_record(&stranger), owner_record(&registered)],
     }
     .read(client.zolana())
     .await

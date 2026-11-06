@@ -211,6 +211,7 @@ export type {
   AnonymousSpendSigner,
   ApplicationData,
   NoteData,
+  OwnerExposure,
 } from "../operations/payments/anonymous.js";
 export {
   AnonymousTransfer,
@@ -496,6 +497,7 @@ export {
   ringReadAttestation,
   walletStatusAttestation,
   walletSnapshotReleaseAttestation,
+  delegateNoteKey,
   delegateNotesAttestation,
   delegateSnapshotReleaseAttestation,
   signCreateRecordsRegistryRequest,
@@ -510,7 +512,6 @@ export type {
 export type {
   AuditedMergesPage,
   AuditedRingMerge,
-  DecryptedRingInput,
   DecryptedRingDefaultInput,
   DecryptedOutputContext,
   DecryptedRingOutput,
@@ -561,6 +562,7 @@ export {
   readerKeyEquals,
   readerKeyFromBytes,
   readerKeyMember,
+  readerKeyRecordKey,
   readerKeyToString,
 } from "../operations/management/reader-access.js";
 export type { ReaderKey } from "../operations/management/reader-access.js";
@@ -609,7 +611,7 @@ export {
   type TrackingRecord,
   type TrackingRegistry,
 } from "../protocol/membership/tracking.js";
-export { privateListKey } from "../protocol/membership/private-list.js";
+export { privateListKey, publicListKey } from "../protocol/membership/private-list.js";
 export { listSaltOf, listTagOf } from "../crypto/keys/list-salt.js";
 export {
   encodeRelayEnrollInputs,
@@ -667,11 +669,5 @@ export {
   type CoOwner,
 } from "../operations/payments/ring-spend.js";
 export { noteNullifierPublicKey, ringProofInput } from "../operations/workflow/selection.js";
-export {
-  COMPACT_ASSET_LOOKUP_BUDGET,
-  CompactAssetResolver,
-  type CompactAssetRead,
-  type CompactAssetResolution,
-} from "../rpc/compact-assets.js";
 export { RECOVERY_DIAGNOSTIC_SAMPLES } from "../state/recovery-session.js";
 export type { RecoveryCoverage, RecoveryWallet } from "../state/recovery-session.js";

@@ -33,7 +33,7 @@ use crate::{
 const NOTE_SEAL_INFO: &[u8] = b"zolana/ring-rpc-note-seal";
 const NONCE_LEN: usize = 12;
 const NOTE_BODY_LEN: usize =
-    32 + 1 + 32 + 32 + 1 + 32 + 8 + 32 + 32 + 32 + 2 + 1 + 8 + 64 + 2 + 4 + 8 + 1 + 32;
+    32 + 1 + 32 + 32 + 1 + 32 + 8 + 32 + 1 + 32 + 32 + 2 + 1 + 8 + 64 + 2 + 4 + 8 + 1 + 32;
 
 /// Keys the note rows of one ring, a stolen database opens no note.
 pub(crate) struct NoteSeal {
@@ -154,6 +154,8 @@ pub(crate) fn note_body(note: &StoredUtxo) -> Vec<u8> {
     let UtxoOwner::Keyed { nullifier_pk } = utxo.owner;
     let mint = utxo.mint.map_or([0; 32], |mint| mint.to_bytes());
     let nullifier = note.nullifier.unwrap_or_default();
+    let data = utxo.data_hash.zip(utxo.ring_data_hash);
+    let (data_hash, ring_data_hash) = data.unwrap_or_default();
     [
         utxo.owner_key.as_slice(),
         &[0],
@@ -163,8 +165,9 @@ pub(crate) fn note_body(note: &StoredUtxo) -> Vec<u8> {
         &mint,
         &utxo.amount.to_be_bytes(),
         &utxo.blinding,
-        &utxo.data_hash,
-        &utxo.ring_data_hash,
+        &[u8::from(data.is_some())],
+        &data_hash,
+        &ring_data_hash,
         &utxo.tree_id.to_be_bytes(),
         &[u8::from(note.ring_note)],
         &note.created_in.slot.to_be_bytes(),
@@ -208,8 +211,9 @@ pub(crate) fn note_from_body(body: &[u8]) -> Result<StoredUtxo, DbErr> {
     let mint_bytes: [u8; 32] = array(take(32));
     let amount = u64::from_be_bytes(array(take(8)));
     let blinding = array(take(32));
-    let data_hash = array(take(32));
-    let ring_data_hash = array(take(32));
+    let has_data = take(1)[0] == 1;
+    let data_hash: [u8; 32] = array(take(32));
+    let ring_data_hash: [u8; 32] = array(take(32));
     let tree_id = u16::from_be_bytes(array(take(2)));
     let ring_note = take(1)[0] == 1;
     let slot = u64::from_be_bytes(array(take(8)));
@@ -227,8 +231,8 @@ pub(crate) fn note_from_body(body: &[u8]) -> Result<StoredUtxo, DbErr> {
             mint: has_mint.then(|| Address::new_from_array(mint_bytes)),
             amount,
             blinding,
-            data_hash,
-            ring_data_hash,
+            data_hash: has_data.then_some(data_hash),
+            ring_data_hash: has_data.then_some(ring_data_hash),
             tree_id,
         },
         created_in: CreatedIn {
@@ -247,10 +251,8 @@ pub(crate) fn state_name(state: SpendState) -> &'static str {
     match state {
         SpendState::Observed => "observed",
         SpendState::Padding => "padding",
-        SpendState::Address => "address",
-        SpendState::External => "external",
         SpendState::Resolved { .. } => "resolved",
-        SpendState::UnresolvedReal => "unresolved",
+        SpendState::Unclassified => "unclassified",
     }
 }
 
@@ -258,10 +260,8 @@ fn state_of(name: &str, link: Option<[u8; 32]>) -> Result<SpendState, DbErr> {
     match (name, link) {
         ("observed", None) => Ok(SpendState::Observed),
         ("padding", None) => Ok(SpendState::Padding),
-        ("address", None) => Ok(SpendState::Address),
-        ("external", None) => Ok(SpendState::External),
         ("resolved", Some(note)) => Ok(SpendState::Resolved { note }),
-        ("unresolved", None) => Ok(SpendState::UnresolvedReal),
+        ("unclassified", None) => Ok(SpendState::Unclassified),
         _ => Err(DbErr::Custom(format!("unknown spend state {name}"))),
     }
 }
@@ -269,11 +269,7 @@ fn state_of(name: &str, link: Option<[u8; 32]>) -> Result<SpendState, DbErr> {
 fn state_link(state: SpendState) -> Option<[u8; 32]> {
     match state {
         SpendState::Resolved { note } => Some(note),
-        SpendState::UnresolvedReal
-        | SpendState::Observed
-        | SpendState::Padding
-        | SpendState::Address
-        | SpendState::External => None,
+        SpendState::Unclassified | SpendState::Observed | SpendState::Padding => None,
     }
 }
 

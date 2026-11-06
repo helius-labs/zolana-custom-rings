@@ -185,7 +185,7 @@ pub fn reader(ctx: &Context, command: ReaderCommand) -> Result<()> {
         ReaderCommand::Revoke { reader } => (ListChange::Clear, reader),
     };
     let subject = Subject {
-        member: reader.member()?,
+        member: reader.record_key()?,
         label: format!("reader {reader}"),
     };
     let outcomes = ListUpdate {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"math/big"
+	"slices"
 	"testing"
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
@@ -130,46 +131,17 @@ func TestEntryRecordsServeMixedOwners(t *testing.T) {
 	}
 }
 
-func TestDataTails(t *testing.T) {
-	c := compileSection(t, dataShape)
-	withData := func(t *testing.T) ringaudit.Audit {
-		t.Helper()
-		s := ringaudit.NewSection(t, dataShape)
-		s.HasData = true
-		s.Outputs[0].Utxo.DataHash = big.NewInt(0xda7a)
-		s.Outputs[0].Utxo.RingDataHash = big.NewInt(0x5ca1e)
-		return s
-	}
-	t.Run("a data output reads back", func(t *testing.T) {
-		s := withData(t)
-		c.RequireSolved(t, s.Circuit(t))
-		note, err := s.Reader().Read(t, s.Stream(t), 0, s.Outputs[0].Utxo.Hash(t))
-		if err != nil || note == nil {
-			t.Fatalf("the reader refused a data output: %v", err)
-		}
-	})
-	for name, edit := range map[string]func(*ringaudit.Plaintexts){
-		"another data hash":      func(p *ringaudit.Plaintexts) { p.Tails[0][31] ^= 1 },
-		"another ring data hash": func(p *ringaudit.Plaintexts) { p.Tails[0][63] ^= 1 },
-		"a dummy's tail":         func(p *ringaudit.Plaintexts) { p.Tails[1][0] = 1 },
-	} {
-		t.Run(name, func(t *testing.T) { refuseSealed(t, withData(t), edit) })
-	}
-	for name, mutate := range map[string]func(*ringaudit.Audit){
-		"data hash with has_data clear":      func(s *ringaudit.Audit) { s.Outputs[0].Utxo.DataHash = big.NewInt(5) },
-		"ring data hash with has_data clear": func(s *ringaudit.Audit) { s.Outputs[0].Utxo.RingDataHash = big.NewInt(5) },
-	} {
-		t.Run(name, func(t *testing.T) {
-			s := ringaudit.NewSection(t, dataShape)
-			mutate(&s)
-			c.Refuse(t, s.Circuit(t))
-		})
-	}
-	t.Run("a clear has_data keeps tails off the frame", func(t *testing.T) {
-		s := ringaudit.NewSection(t, dataShape)
-		if outputs := s.StatementOutputs(t, s.Stream(t)); outputs[0].Tail != nil {
-			t.Fatal("a frame with has_data clear transmits a tail")
-		}
+// Data hashes stay private, bound by the commitment alone, and no layout bit opens them.
+func TestDataHashesNeedNoLayoutBit(t *testing.T) {
+	c := compileSection(t, plainShape)
+	s := ringaudit.NewSection(t, plainShape)
+	s.Outputs[0].Utxo.DataHash = big.NewInt(0xda7a)
+	s.Outputs[0].Utxo.RingDataHash = big.NewInt(0x5ca1e)
+	c.RequireSolved(t, s.Circuit(t))
+	t.Run("bit 0", func(t *testing.T) {
+		circuit := s.Circuit(t)
+		circuit.Layout = 1
+		c.Refuse(t, circuit)
 	})
 }
 
@@ -184,6 +156,7 @@ func TestLayoutIsTheKeys(t *testing.T) {
 	t.Run("entry on a key with no entry capacity", func(t *testing.T) { refuse(t, plainShape, audit.LayoutEntry) })
 	t.Run("no entry on an entry key", func(t *testing.T) { refuse(t, entryShape, 0) })
 	t.Run("a bit past the flags", func(t *testing.T) { refuse(t, plainShape, 1<<2) })
+	t.Run("bit 0 on an entry key", func(t *testing.T) { refuse(t, entryShape, audit.LayoutEntry|1) })
 }
 
 // The reader rebuilds every slot with no mint registry.
@@ -248,71 +221,53 @@ func TestZeroAndEnrolledKeysReadApart(t *testing.T) {
 	}
 }
 
-// Counters fix a record to its index, its bytes at another slot decrypt to noise or rebuild no commitment.
+// The slot index enters the slot secret, a record moved to another slot decrypts to noise.
 func TestRecordAtAnotherSlotFailsTheReader(t *testing.T) {
 	s := ringaudit.NewSection(t, plainShape)
 	stream := s.Stream(t)
-	moved := ringaudit.Stream{Ranges: stream.Ranges, Ciphertext: bytes.Clone(stream.Ciphertext)}
-	copy(moved.Ciphertext[stream.Ranges.RecordOffset(1):], stream.Record(0))
-	if note, err := s.Reader().Read(t, moved, 1, s.Outputs[1].Utxo.Hash(t)); err == nil {
+	moved := stream
+	moved.Records = slices.Clone(stream.Records)
+	moved.Records[1] = stream.Record(0)
+	if note, err := s.Reader().Read(t, moved, 1, s.Outputs[0].Utxo.Hash(t)); err == nil {
 		t.Fatalf("a moved record read as %+v", note)
 	}
-	// The same plaintext sealed at the wrong counter names the right fields under the wrong blinding.
-	p := s.Plaintexts(t)
-	p.Records[1] = s.Outputs[0].Record(t)
-	if note, err := s.Reader().Read(t, s.Seal(t, p), 1, s.Outputs[0].Utxo.Hash(t)); err == nil {
-		t.Fatalf("a record read at another index as %+v", note)
-	}
-	compileSection(t, plainShape).RefuseStatement(t, s.Circuit(t), s.StatementOf(t, s.Seal(t, p), s.Claim()))
+	compileSection(t, plainShape).RefuseStatement(t, s.Circuit(t), s.StatementOf(t, moved, s.Claim()))
 }
 
 func TestStreamVector(t *testing.T) {
 	type vectorCase struct {
-		Name         string   `json:"name"`
-		Layout       int64    `json:"layout"`
-		InputClass   int      `json:"input_class"`
-		Outputs      int      `json:"outputs"`
-		OutputCount  int      `json:"output_count"`
-		InputCount   int      `json:"input_count"`
-		Envelope     string   `json:"envelope_plaintext"`
-		EnvelopeCt   string   `json:"envelope_ciphertext"`
-		Records      []string `json:"records"`
-		RecordCts    []string `json:"record_ciphertexts"`
-		Tails        []string `json:"tails"`
-		TailCts      []string `json:"tail_ciphertexts"`
-		OutputHashes []string `json:"output_hashes"`
-		Blindings    []string `json:"blindings"`
-		EnvelopeHash string   `json:"envelope_digest"`
-		RecordChain  string   `json:"record_chain"`
-		TailChain    string   `json:"tail_chain"`
+		Name          string   `json:"name"`
+		Layout        int64    `json:"layout"`
+		InputClass    int      `json:"input_class"`
+		Outputs       int      `json:"outputs"`
+		OutputCount   int      `json:"output_count"`
+		InputCount    int      `json:"input_count"`
+		Envelope      string   `json:"envelope_plaintext"`
+		EnvelopeCt    string   `json:"envelope_ciphertext"`
+		RecipientKeys []string `json:"recipient_keys"`
+		KeysCt        string   `json:"recipient_keys_ciphertext"`
+		Records       []string `json:"records"`
+		RecordCts     []string `json:"record_ciphertexts"`
+		OutputHashes  []string `json:"output_hashes"`
+		Blindings     []string `json:"blindings"`
+		EnvelopeHash  string   `json:"envelope_digest"`
+		RecordChain   string   `json:"record_chain"`
 	}
-	data := ringaudit.NewSection(t, dataShape)
-	data.HasData = true
+	data := ringaudit.NewSection(t, plainShape)
 	data.Outputs[0].Utxo.DataHash = big.NewInt(0xda7a)
 	data.Outputs[0].Utxo.RingDataHash = big.NewInt(0x5ca1e)
-	addressOnly := ringaudit.NewSection(t, plainShape).Spending(t, 0)
-	addressOnly.Inputs[0] = addressInput()
-	addressOnly.InputCount = 1
-	interleaved := ringaudit.NewSection(t, audit.StreamShape{InputClass: 4, Outputs: 2}).Spending(t, 2)
-	interleaved.Inputs[2] = interleaved.Inputs[1]
-	interleaved.Inputs[1] = addressInput()
-	interleaved.InputCount = 4
-	interleavedEntry := ringaudit.NewSection(t, audit.StreamShape{InputClass: 4, Outputs: 2, Entry: true})
-	interleavedEntry.Inputs[2] = interleavedEntry.Inputs[1]
-	interleavedEntry.Inputs[1] = addressInput()
-	interleavedEntry.InputCount = 4
+	defaultFirst := ringaudit.NewSection(t, audit.StreamShape{InputClass: 4, Outputs: 2, Entry: true})
+	defaultFirst.Inputs[0], defaultFirst.Inputs[1] = defaultFirst.Inputs[1], defaultFirst.Inputs[0]
 	sections := []struct {
 		name    string
 		section ringaudit.Audit
 	}{
 		{"plain_with_exit_and_dummy", ringaudit.NewSection(t, plainShape)},
-		{"single_asset_payout", ringaudit.NewSection(t, audit.StreamShape{InputClass: 1, Outputs: 16, SingleAssetPayout: true})},
 		{"compact", ringaudit.NewSection(t, plainShape).Omit(t, 1)},
 		{"data", data},
 		{"entry", ringaudit.NewSection(t, entryShape)},
-		{"address_only", addressOnly},
-		{"interleaved", interleaved},
-		{"interleaved_entry", interleavedEntry},
+		{"no_spend", ringaudit.NewSection(t, plainShape).Spending(t, 0)},
+		{"entry_default_first", defaultFirst},
 	}
 	cases := make([]vectorCase, len(sections))
 	for k, tc := range sections {
@@ -322,25 +277,22 @@ func TestStreamVector(t *testing.T) {
 		v := vectorCase{
 			Name: tc.name, Layout: s.Layout(), InputClass: s.Shape.InputClass, Outputs: s.Shape.Outputs, OutputCount: s.OutputCount(), InputCount: s.InputCount,
 			Envelope: hex.EncodeToString(p.Envelope), EnvelopeCt: hex.EncodeToString(stream.Envelope(s.InputCount)),
+			KeysCt:       hex.EncodeToString(stream.Keys(s.OutputCount())),
 			EnvelopeHash: ringtest.FieldHex(s.StatementOf(t, stream, s.Claim())[7]),
 			RecordChain:  ringtest.FieldHex(ringaudit.RecordChain(t, s.StatementOutputs(t, stream))),
-			TailChain:    ringtest.FieldHex(ringaudit.TailChain(t, s.StatementOutputs(t, stream))),
 		}
 		for i := range s.OutputCount() {
-			v.Records = append(v.Records, hex.EncodeToString(p.Records[i][:stream.Ranges.RecordLen()]))
+			v.RecipientKeys = append(v.RecipientKeys, hex.EncodeToString(p.RecipientKeys[i][:]))
+			v.Records = append(v.Records, hex.EncodeToString(p.Records[i]))
 			v.RecordCts = append(v.RecordCts, hex.EncodeToString(stream.Record(i)))
 			v.OutputHashes = append(v.OutputHashes, ringtest.FieldHex(s.Outputs[i].Utxo.Hash(t)))
 			v.Blindings = append(v.Blindings, ringtest.FieldHex(s.Blinding(t, i)))
-			if s.HasData {
-				v.Tails = append(v.Tails, hex.EncodeToString(p.Tails[i]))
-				v.TailCts = append(v.TailCts, hex.EncodeToString(stream.Tail(i)))
-			}
 		}
 		cases[k] = v
 	}
 	txViewingSk, auditorSk := sections[0].section.Keys.TxViewingSk(), ringaudit.AuditorSk()
 	ringtest.PinVector(t, "audit/audit-stream.json", map[string]any{
-		"description":     "Auditor streams from solved witnesses under CRING/adt, with the layout selecting each encrypted record and envelope format.",
+		"description":     "Auditor streams under CRING/adt and output records under CRING/rcp and each slot's delivered secret, from solved witnesses.",
 		"tx_viewing_sk":   hex.EncodeToString(txViewingSk[:]),
 		"auditor_sk":      hex.EncodeToString(auditorSk[:]),
 		"salt":            hex.EncodeToString(sections[0].section.Salt[:]),

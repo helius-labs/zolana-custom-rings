@@ -5,7 +5,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use custom_ring_interface::InputClass;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -54,9 +53,9 @@ pub use wallet_snapshot::*;
 pub use wallet_status::*;
 
 use crate::{
-    AuditError, AuditedInput, AuditedMergeOutput, AuditedOutput, AuditedTransaction, AuditedUtxo,
-    KnownUtxo, OutputOpening, OutputPayloadErrorKind, ReaderKey, ReaderKeyError, RingOwnerTag,
-    RingWithdrawal, UtxoOwner,
+    AuditError, AuditedEntryInput, AuditedMergeOutput, AuditedOutput, AuditedTransaction,
+    AuditedUtxo, KnownUtxo, OutputOpening, OutputPayloadErrorKind, ReaderKey, ReaderKeyError,
+    RingOwnerTag, RingWithdrawal, UtxoOwner,
 };
 
 pub const HEALTH: &str = "health";
@@ -382,11 +381,11 @@ pub struct DecryptedTransaction {
     /// Every slot whose rebuilt opening reaches its published commitment, in published order.
     pub outputs: Vec<DecryptedOutput>,
     pub payload_errors: Vec<DecryptedPayloadError>,
-    /// `R`, spent notes among the published inputs.
+    /// `R`, the notes the proof spent, their nullifiers sit among `nullifiers` at unnamed positions.
     pub real_inputs: u8,
-    /// One per published nullifier.
+    /// The default-ring notes among the `R`, in note order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub inputs: Vec<DecryptedInput>,
+    pub default_inputs: Vec<DecryptedDefaultInput>,
     pub nullifiers: Vec<Hash>,
     /// Owner signers or in-proof owner of a confidential transfer, a data output owner among them may spend no input.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -456,8 +455,11 @@ pub struct DecryptedUtxo {
     pub mint: Option<SerializablePubkey>,
     pub amount: u64,
     pub blinding: Hash,
-    pub data_hash: Hash,
-    pub ring_data_hash: Hash,
+    /// Absent with `ring_data_hash` while no payload rebuilt the published commitment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_hash: Option<Hash>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ring_data_hash: Option<Hash>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -471,37 +473,12 @@ pub struct DecryptedKnownUtxo {
     pub mint: Option<SerializablePubkey>,
     pub amount: u64,
     pub blinding: Hash,
-    pub data_hash: Hash,
-    pub ring_data_hash: Hash,
-    pub tree_id: u16,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct DecryptedInput {
-    pub nullifier: Hash,
-    pub class: DecryptedInputClass,
+    /// Absent with `ring_data_hash` while no payload rebuilt the published commitment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_input: Option<DecryptedDefaultInput>,
-}
-
-/// The proven class of one published input, an address spends no note.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum DecryptedInputClass {
-    Note,
-    Address,
-    Dummy,
-}
-
-impl From<InputClass> for DecryptedInputClass {
-    fn from(class: InputClass) -> Self {
-        match class {
-            InputClass::Note => Self::Note,
-            InputClass::Address => Self::Address,
-            InputClass::Dummy => Self::Dummy,
-        }
-    }
+    pub data_hash: Option<Hash>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ring_data_hash: Option<Hash>,
+    pub tree_id: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -665,7 +642,7 @@ impl From<ConfirmedAudit> for DecryptedTransaction {
                 })
                 .collect(),
             real_inputs: audited.real_inputs,
-            inputs: audited.inputs.into_iter().map(Into::into).collect(),
+            default_inputs: audited.entries.into_iter().map(Into::into).collect(),
             nullifiers: nullifiers.into_iter().map(Into::into).collect(),
             spenders: spenders
                 .into_iter()
@@ -730,8 +707,8 @@ impl From<AuditedUtxo> for DecryptedUtxo {
             mint: utxo.mint.map(Into::into),
             amount: utxo.amount,
             blinding: utxo.blinding.into(),
-            data_hash: utxo.data_hash.into(),
-            ring_data_hash: utxo.ring_data_hash.into(),
+            data_hash: utxo.data_hash.map(Into::into),
+            ring_data_hash: utxo.ring_data_hash.map(Into::into),
         }
     }
 }
@@ -746,8 +723,8 @@ impl From<KnownUtxo> for DecryptedKnownUtxo {
             mint: utxo.mint.map(Into::into),
             amount: utxo.amount,
             blinding: utxo.blinding.into(),
-            data_hash: utxo.data_hash.into(),
-            ring_data_hash: utxo.ring_data_hash.into(),
+            data_hash: utxo.data_hash.map(Into::into),
+            ring_data_hash: utxo.ring_data_hash.map(Into::into),
             tree_id: utxo.tree_id,
         }
     }
@@ -766,8 +743,8 @@ impl TryFrom<&DecryptedKnownUtxo> for KnownUtxo {
             mint: utxo.mint.map(|mint| mint.0),
             amount: utxo.amount,
             blinding: utxo.blinding.0,
-            data_hash: utxo.data_hash.0,
-            ring_data_hash: utxo.ring_data_hash.0,
+            data_hash: utxo.data_hash.as_ref().map(|hash| hash.0),
+            ring_data_hash: utxo.ring_data_hash.as_ref().map(|hash| hash.0),
             tree_id: utxo.tree_id,
         })
     }
@@ -797,7 +774,7 @@ impl GetAuditedUtxosResponse {
                 .into_iter()
                 .map(|ring| utxo.commitment(ring))
                 .collect::<Result<Vec<_>, _>>()?;
-            if view.utxo_hash != *requested || !rebuilt.contains(&requested.0) {
+            if view.utxo_hash != *requested || !rebuilt.contains(&Some(requested.0)) {
                 return Err(AuditError::AuditedUtxoMismatch {
                     utxo_hash: requested.0,
                 });
@@ -808,22 +785,15 @@ impl GetAuditedUtxosResponse {
     }
 }
 
-impl From<AuditedInput> for DecryptedInput {
-    fn from(input: AuditedInput) -> Self {
+impl From<AuditedEntryInput> for DecryptedDefaultInput {
+    fn from(input: AuditedEntryInput) -> Self {
         Self {
-            nullifier: input.nullifier.into(),
-            class: input.opening.class().into(),
-            default_input: input
-                .opening
-                .default_input()
-                .map(|input| DecryptedDefaultInput {
-                    owner_key: input.owner_key.into(),
-                    nullifier_pk: input.nullifier_pk.into(),
-                    asset: input.asset.into(),
-                    mint: input.mint.into(),
-                    amount: input.amount,
-                    commitment: input.commitment.into(),
-                }),
+            owner_key: input.owner_key.into(),
+            nullifier_pk: input.nullifier_pk.into(),
+            asset: input.asset.into(),
+            mint: input.mint.into(),
+            amount: input.amount,
+            commitment: input.commitment.into(),
         }
     }
 }

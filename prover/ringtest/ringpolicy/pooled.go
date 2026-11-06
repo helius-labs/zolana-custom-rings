@@ -46,8 +46,8 @@ func FillPools(t testing.TB, policyWitness *policy.Policy, outputs, inputs []sha
 		return policy.PoolEntry{Own: own.add(member, active), Curator: [1]frontend.Variable{curator.add(member, active && foreign)}}
 	}
 	owner := func(member frontend.Variable, active bool) policy.OwnerEntry {
-		ownerEntry := policy.OwnerEntry{PoolEntry: entry(member, active), Tracking: 0, ListSalt: 0, OwnSalted: 0, CuratorSalted: [1]frontend.Variable{0}}
 		identity := ringtest.AsBigInt(member)
+		ownerEntry := policy.OwnerEntry{PoolEntry: entry(ringregistry.PublicKey(t, identity), active), Tracking: 0, ListSalt: 0, OwnSalted: 0, CuratorSalted: [1]frontend.Variable{0}}
 		if !active || !(saltedOwn || saltedCurated) || !tracking.Opening(identity).Present {
 			return ownerEntry
 		}

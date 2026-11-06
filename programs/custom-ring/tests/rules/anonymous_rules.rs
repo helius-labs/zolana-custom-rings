@@ -1,9 +1,6 @@
 //! The pre-proof refusals an anonymous policy ring adds to the confidential rail.
 
-use custom_ring_interface::{
-    tag, CustomRingError, FramedSenderBundle, RingRail, RingTransactData, SlotBody,
-    RECIPIENT_BODY_LEN,
-};
+use custom_ring_interface::{tag, CustomRingError, FramedSenderBundle, RingRail, RingTransactData};
 use solana_instruction::AccountMeta;
 use solana_keypair::{Keypair, Signer};
 
@@ -62,16 +59,11 @@ fn an_anonymous_policy_transfer_takes_public_co_owners_in_the_run() {
 fn an_anonymous_transfer_reaches_its_keys_under_any_canonical_tags() {
     let fixture = Fixture::new();
     let tags = [[0; 32], [0x2f; 32]];
-    let body = [0x3c; RECIPIENT_BODY_LEN];
     for (setup, policy) in [(Setup::AnonymousPolicy, true), (Setup::Anonymous, false)] {
         let mut ring = Ring::new(setup);
         let mut data = fixture.transfer(RingRail::Anonymous, 2, 2, policy);
-        for (output, (tag, body)) in data.outputs.iter_mut().zip([
-            (&tags[0], SlotBody::None),
-            (&tags[1], SlotBody::Recipient(&body)),
-        ]) {
+        for (output, tag) in data.outputs.iter_mut().zip(&tags) {
             output.owner_tag = custom_ring_interface::stream::slot_tag(*tag);
-            output.body = body;
         }
         data.sender = data.sender.map(|sender| FramedSenderBundle {
             tag: &tags[1],

@@ -26,8 +26,6 @@ import {
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { withConfirmedReads } from "../../helpers/clients.js";
-import { openSealedDisclosure } from "../../../src/crypto/audit/ring-disclosure.js";
-import { x25519FromU } from "../../../src/crypto/keys/x25519.js";
 import { RecordKind } from "../../../src/protocol/codec/audit-stream.js";
 import { ringComputeUnitLimit } from "../../../src/operations/management/admin.js";
 import { buildRingDelegateRecoveredTransaction } from "../../../src/operations/management/delegate.js";
@@ -47,6 +45,7 @@ import {
   AllowedNullifiers,
   checkRelayMessage,
   expectedDelegate,
+  frameOutputRecords,
 } from "../../../src/rpc/relay-message.js";
 import { BLOCKHASH, kitReads } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import {
@@ -182,16 +181,9 @@ const requestFor = (
 
 function liveRecords(fixture: Fixture, instruction: Instruction, rail: RingRail) {
   const frame = RingTransactData.parse(Uint8Array.from(instruction.data ?? []).subarray(1), rail);
-  const { records } = openSealedDisclosure(TX_VIEWING_KEY, fixture.auditor.publicKey(), {
-    layout: RingTransactData.streamLayout(frame),
-    salt: frame.salt,
-    message: {
-      ephemeralPublicKey: x25519FromU(frame.txViewingU),
-      envelope: frame.envelope,
-      records: frame.outputs.map((output) => output.record),
-    },
-  });
-  return records.filter((record) => record.kind !== RecordKind.dummy);
+  return frameOutputRecords(TX_VIEWING_KEY, fixture.auditor.publicKey(), frame).filter(
+    (record) => record.kind !== RecordKind.dummy,
+  );
 }
 
 describe("delegate sources", () => {
@@ -291,7 +283,7 @@ describe("delegate sources", () => {
 
       const unchecked = {
         checkSources: () => undefined,
-        spendsOnly: () => true,
+        countsSpends: () => true,
       } as unknown as AllowedNullifiers;
       const outputsOnly = await expectedDelegate({ ...asked, allowed: unchecked });
       expect(checkRelayMessage(outputsOnly, message, delegate as never).signer).toBe(delegate);

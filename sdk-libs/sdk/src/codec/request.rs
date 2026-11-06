@@ -23,7 +23,7 @@ use crate::{prover::fe, RingError, REDACTED};
 mod tests;
 
 /// One transaction slot as SPP hashes it, its owner split into the identity and the nullifier key.
-#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Opening {
     #[serde(with = "fe")]
@@ -107,13 +107,21 @@ impl Opening {
         ))
     }
 
-    /// A slot past the spent notes, a zero domain opens neither a note nor a dummy.
-    pub fn input_padding() -> Self {
+    /// A slot past the published count, the circuit admits a dummy domain alone.
+    pub fn padding() -> Self {
         let mut domain = [0; 32];
         domain[30..].copy_from_slice(&spr_interface::DUMMY_DOMAIN.to_be_bytes());
         Self {
             domain,
-            ..Self::default()
+            tree_id: [0; 32],
+            owner_pk_hash: [0; 32],
+            nullifier_pk: [0; 32],
+            asset: [0; 32],
+            amount: [0; 32],
+            blinding: [0; 32],
+            data_hash: [0; 32],
+            ring_data_hash: [0; 32],
+            ring_program_id: [0; 32],
         }
     }
 
@@ -149,7 +157,7 @@ pub(crate) struct AuditParams {
     pub layout: u8,
 }
 
-#[derive(Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OutputOpening {
     pub output: Opening,
@@ -157,6 +165,9 @@ pub(crate) struct OutputOpening {
     pub owner_key: [u8; 32],
     #[serde(serialize_with = "fe::seq")]
     pub mint_chunks: [[u8; 32]; 2],
+    /// `V_i`, the key the slot's record seals to.
+    #[serde(with = "fe")]
+    pub recipient_key: [u8; 32],
 }
 
 /// Zero off a default-ring input.
@@ -482,21 +493,16 @@ pub(crate) struct TransferParams<'a> {
     pub approval_totals: Option<[u8; 32]>,
     #[serde(skip_serializing_if = "Option::is_none", with = "fe::option")]
     pub approval_blinder: Option<[u8; 32]>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub signer_data_counts: Option<u64>,
     /// `m`, the published slots.
     pub output_count: u8,
     pub outputs: Vec<OutputOpening>,
     /// `n`, the frame's nullifier count.
     pub input_count: u8,
-    /// The input class, the slots past the spent notes carry no UTXO.
+    /// The input class, the spent notes in note order then dummies.
     pub inputs: Vec<Opening>,
-    /// The published nullifiers in SPP order, zero to the input class.
-    #[serde(serialize_with = "fe::seq")]
-    pub input_nullifiers: Vec<[u8; 32]>,
-    /// The program's chain over `n` and `input_nullifiers`.
+    /// SPP's chain over the address nullifiers, zero with no address input.
     #[serde(with = "fe")]
-    pub input_nullifier_chain: [u8; 32],
+    pub address_chain: [u8; 32],
     /// An entry key's default-ring preimages, none off one.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub entries: Vec<EntryOpening>,
@@ -764,6 +770,9 @@ pub(crate) struct MergeRequest {
     pub tracking_root: [u8; 32],
     #[serde(serialize_with = "fe::zeroizing")]
     pub eph_sk: Zeroizing<[u8; 32]>,
+    /// `V`, the merged owner's viewing key the record seals to.
+    #[serde(with = "fe")]
+    pub recipient_key: [u8; 32],
     #[serde(with = "fe")]
     pub owner_key: [u8; 32],
     #[serde(with = "fe")]

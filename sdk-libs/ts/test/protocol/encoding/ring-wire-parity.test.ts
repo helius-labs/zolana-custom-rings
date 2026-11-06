@@ -1,4 +1,3 @@
-import { DisclosureFormat } from "../../../src/protocol/codec/ring-disclosure-layout.js";
 import { readFileSync } from "node:fs";
 
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
@@ -24,7 +23,6 @@ import {
 import {
   TRANSFER_SHAPES,
   fittedSpend,
-  railDisclosureFormat,
   ringTransferCircuit,
 } from "../../../src/protocol/proof/transfer-shapes.js";
 import {
@@ -159,15 +157,9 @@ describe("transfer_statement.json", () => {
         txViewingU: field(vector.tx_viewing_u),
         auditorPubkey: hexToBytes(vector.auditor_pubkey) as Bytes33,
         envelope: hexToBytes(vector.envelope),
+        recipientKeys: hexToBytes(vector.recipient_keys),
         salt: hexToBytes(vector.salt) as Bytes16,
-        layout: {
-          hasData: (vector.layout & 1) !== 0,
-          entry: (vector.layout & 2) !== 0,
-          format:
-            (vector.layout & 4) !== 0
-              ? DisclosureFormat.SingleAssetPayout
-              : DisclosureFormat.Standard,
-        },
+        layout: { entry: (vector.layout & 2) !== 0 },
       },
       family:
         vector.family === "confidential"
@@ -185,20 +177,10 @@ describe("transfer_statement.json", () => {
             },
       approvalMask: vector.approval_mask,
       approvalTotals: field(vector.approval_totals),
-      signerDataCounts: BigInt((vector as { signer_data_counts?: number }).signer_data_counts ?? 0),
       noSpend: vector.no_spend,
-      outputs: vector.outputs.map((output) => ({
-        hash: field(output.hash),
-        record: hexToBytes(output.record),
-        ...("tail" in output && typeof output.tail === "string"
-          ? { tail: hexToBytes(output.tail) }
-          : {}),
-      })),
+      outputs: vector.outputs.map((output) => ({ record: hexToBytes(output.record) })),
       capacity: vector.output_capacity,
       inputCount: vector.input_count,
-      inputNullifierChain: field(
-        (vector as unknown as { input_nullifier_chain: string }).input_nullifier_chain,
-      ),
       privateTxHash: field(vector.private_tx_hash),
       signers: signerBinding(vector.signers.map(field), vector.signer_slots),
       roots: {
@@ -227,7 +209,6 @@ describe("ring_keyed_shapes.json", () => {
         ) &&
         ringTransferCircuit(
           fittedSpend({
-            format: railDisclosureFormat(rail, shape),
             rail,
             inputs: shape.inputs,
             outputs: shape.outputs,

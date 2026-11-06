@@ -1,8 +1,8 @@
 /** The one ring proof of a transfer, one request over the audit and policy sections. */
-import { ZERO_32 } from "@heliuslabs/spr/internal";
+import { privateTxAddressChain, sppPrivateTxHashInput, ZERO_32 } from "@heliuslabs/spr/internal";
 import { NO_CACHE_WRITES, type Bytes32, type CacheAccess } from "@heliuslabs/spr/interface";
 import type { X25519PublicKey } from "@heliuslabs/spr/keypair";
-import type { ProofInputUtxo, ProofOutputUtxo, SppProofInputs } from "@heliuslabs/spr/transaction";
+import type { ProofInputUtxo, SppProofInputs } from "@heliuslabs/spr/transaction";
 
 import type { TransferProofRequest } from "../rpc/prover/ring.js";
 import type { RingOutputRail } from "../operations/payments/output-rail.js";
@@ -17,7 +17,6 @@ import {
   type TransferSpend,
 } from "../protocol/proof/transfer-shapes.js";
 import { ANONYMOUS_PARTIES, type RingRail } from "../protocol/transaction/transact.js";
-import { inputNullifierChain, inputNullifierSlots } from "../protocol/proof/statement.js";
 import { RingError } from "../protocol/error.js";
 import {
   auditEnvelope,
@@ -33,7 +32,6 @@ import {
   type PolicyProving,
 } from "./policy-proof.js";
 import { approvalOpeningOf, type ApprovalOpening } from "../protocol/membership/approval-totals.js";
-import { signerDataCountsOf } from "../protocol/membership/signer-data-counts.js";
 
 /** The key a transfer proves under, `wideOwners` the frame flag naming its rows. */
 export interface TransferKeySelection {
@@ -113,31 +111,6 @@ export function transferApprovalOf(
   });
 }
 
-/** The statement's element over the run `signers` binds and the slots SPP publishes, refused where the circuit has no solution. */
-export function ownerDataCounts(
-  run: readonly Bytes32[],
-  outputs: readonly ProofOutputUtxo[],
-): bigint {
-  const counts = signerDataCountsOf(
-    run,
-    outputs.flatMap((output) =>
-      output.isDummy() || output.ownerAddress === undefined || output.dataHash === undefined
-        ? []
-        : [
-            {
-              ownerIdentity: output.ownerAddress.signingPublicKey.ownerProofInputHash(),
-              dataHash: output.dataHash,
-            },
-          ],
-    ),
-  );
-  if (counts === undefined)
-    throw new RingError("RING_TRANSACT_DATA_INVALID", {
-      details: { reason: "InvalidSignerDataCounts" },
-    });
-  return counts;
-}
-
 /** Reads alone, a cached write refuses at staging. */
 export function cacheAccessOf(proofInputs: SppProofInputs): CacheAccess | undefined {
   const readBitmap = proofInputs.inputUtxos.reduce(
@@ -159,6 +132,8 @@ export function transferProofRequest(
     /** The published inputs in SPP order, compact padding left out. */
     inputs: readonly ProofInputUtxo[];
     proofInputs: SppProofInputs;
+    /** `V_i` of each published slot. */
+    recipientKeys: readonly X25519PublicKey[];
     auditor: X25519PublicKey;
     policy: PolicyInputs;
     proving: PolicyProving;
@@ -181,8 +156,6 @@ export function transferProofRequest(
   const inputClass = circuit.class;
   const entry = input.sealed.audit.entry;
   const anonymousFrame = input.ringRail === "anonymous" || input.ringRail === "anonymousDelegate";
-  // The proof derives its address chain from these nullifiers and the chain binds them to the frame.
-  const nullifiers = inputs.map((spent) => spent.nullifier());
   return Object.freeze({
     kind: "transfer",
     publicInputHash: input.publicInputHash,
@@ -197,14 +170,19 @@ export function transferProofRequest(
     approvalBlinder: input.approval?.opening.blinder ?? ZERO_32,
     outputCount: input.outputCount,
     // Every slot of the key's capacity, an omitted suffix runs its gadgets over its own proof output.
-    outputs: outputOpenings(proofInputs.outputs, proofInputs.outputTreeId, circuit.outputs),
+    outputs: outputOpenings({
+      outputs: proofInputs.outputs,
+      tree: proofInputs.outputTreeId,
+      capacity: circuit.outputs,
+      recipientKeys: input.recipientKeys,
+      auditor: input.auditor,
+    }),
     inputCount: inputs.length,
-    inputNullifierChain: inputNullifierChain(nullifiers, inputClass),
-    inputNullifiers: inputNullifierSlots(nullifiers, inputClass),
+    // `private_tx_hash` alone checks it, no address enters a ring input slot.
+    addressChain: privateTxAddressChain(sppPrivateTxHashInput(proofInputs)),
     inputs: inputOpenings(inputs, inputClass),
     entries: entry ? entryOpenings(inputs, inputClass) : [],
     signerCount: signers.length,
-    signerDataCounts: ownerDataCounts(signers, proofInputs.outputs),
     signers: [
       ...signers,
       ...Array.from({ length: Math.max(0, signerSlots(circuit) - signers.length) }, () => ZERO_32),

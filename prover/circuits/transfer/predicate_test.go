@@ -87,7 +87,7 @@ func TestWrongAuditorRecordFailsAtTheStatement(t *testing.T) {
 	}
 }
 
-// The row, its root, the commitment and the statement follow the one moved key.
+// A spent note follows its row's key, an output carries any key.
 func TestWrongTrackingKeyFailsAtItsPredicate(t *testing.T) {
 	recipient := ringtest.MustSolanaPkField(t, ringaudit.Recipient(t, 1, 1, 1).OwnerKey)
 	other := ringtransfer.CoOwnerKey(t, big.NewInt(0x0e0e))
@@ -103,9 +103,9 @@ func TestWrongTrackingKeyFailsAtItsPredicate(t *testing.T) {
 				})
 				requireSolved(t, circuit)
 			})
-			t.Run("the output under another key", func(t *testing.T) {
+			t.Run("the output under another key solves", func(t *testing.T) {
 				circuit, _ := f.world(func(w *ringtransfer.World) { enrolled(recipient, w) })
-				refused(t, circuit, "transfer.AssertOutputOwners")
+				requireSolved(t, circuit)
 			})
 			t.Run("the spent note under another key", func(t *testing.T) {
 				sender := ringtransfer.Sender(t)

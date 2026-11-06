@@ -71,7 +71,15 @@ impl ReaderKey {
         }
     }
 
-    /// The member whose storage tree record holds the reader's ring-wide grant.
+    /// The record key of the reader's ring-wide grant, an Ed25519 reader's public record.
+    pub fn record_key(self) -> Result<Member, MemberError> {
+        match self {
+            Self::Ed25519(key) => crate::owner_record_key(key.address().as_array()),
+            Self::P256(_) => self.member(),
+        }
+    }
+
+    /// The reader's identity, the `reader` input of a wallet grant key.
     pub fn member(self) -> Result<Member, MemberError> {
         match self {
             Self::Ed25519(key) => Member::owner_tag(key.address().as_array()),

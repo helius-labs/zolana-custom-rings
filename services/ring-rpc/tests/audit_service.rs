@@ -1276,7 +1276,7 @@ fn utxos_request(hashes: Vec<Hash>) -> GetAuditedUtxosRequest {
 }
 
 fn reader_member(reader: ReaderKey) -> Member {
-    reader.member().expect("reader member")
+    reader.record_key().expect("reader member")
 }
 
 /// The ring's own storage tree, shared by every clone of the source.

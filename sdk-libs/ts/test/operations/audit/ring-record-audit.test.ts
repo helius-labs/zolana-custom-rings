@@ -1,4 +1,3 @@
-import { DisclosureFormat } from "../../../src/protocol/codec/ring-disclosure-layout.js";
 import { getBase58Decoder, type Signature } from "@solana/kit";
 import { hexToBytes } from "@noble/hashes/utils.js";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -11,6 +10,7 @@ import {
   ZERO_32,
   ZERO_NULLIFIER_PK,
   addressBytes,
+  concatBytes,
   encodeBase58,
   encodeMergeOutputData,
   equalBytes,
@@ -38,7 +38,9 @@ import {
   sealMergeRecord,
   sppMergeBody,
 } from "../../../src/crypto/audit/merge-disclosure.js";
-import { ringIdField } from "../../../src/crypto/derivation/ring-stream.js";
+import { sealOutputSlot } from "../../../src/crypto/audit/ring-disclosure.js";
+import { ringIdField, txKeySlotSecret } from "../../../src/crypto/derivation/ring-stream.js";
+import { x25519FromU } from "../../../src/crypto/keys/x25519.js";
 import {
   classifyMergeNullifier,
   openRingMerge,
@@ -52,22 +54,35 @@ import {
 } from "../../../src/operations/audit/audit.js";
 import {
   decodeAuditEnvelope,
-  decodeAuditRecord,
-  decodeCompactAuditRecord,
+  decodeOutputRecord,
   EMPTY_ENTRY_RECORD,
   encodeAuditEnvelope,
   RecordKind,
 } from "../../../src/protocol/codec/audit-stream.js";
 import {
-  recordRegion,
+  OUTPUT_RECORD_LEN,
+  recipientKeyRegion,
   type AuditStreamLayout,
 } from "../../../src/protocol/codec/ring-disclosure-layout.js";
+import {
+  CONFIDENTIAL_DATA_FREE_BODY_LEN,
+  encodeRingBodyOutput,
+  encodeRingOutput,
+  RingScheme,
+} from "../../../src/protocol/transaction/output.js";
 import {
   RpcTransactionOrigin,
   ringWithdrawalsOf,
 } from "../../../src/protocol/transaction/origin.js";
 import { encodeRingTransactInstructionData } from "../../../src/protocol/proof/circuit.js";
 import { RingInstructionTag } from "../../../src/protocol/transaction/instruction-tag.js";
+
+/** The commitment of a test opening, every fixture carries its data hashes. */
+function rebuiltHash(utxo: Parameters<typeof knownUtxoHash>[0], ringId: Bytes32): Bytes32 {
+  const hash = knownUtxoHash(utxo, ringId);
+  if (hash === undefined) throw new Error("no data hashes");
+  return hash;
+}
 
 const hex = (value: string): Uint8Array => hexToBytes(value.replace(/^0x/u, ""));
 const field = (value: string): Bytes32 => hex(value) as Bytes32;
@@ -78,55 +93,78 @@ const SALT = hex(auditVector.salt) as Bytes16;
 const TREE_ID = auditVector.output_tree_id;
 const SECOND_NULLIFIER = field(`${"00".repeat(31)}77`);
 
-type Case = (typeof auditVector.cases)[number];
+/** The fields the regenerated stream vector carries, read loosely until the coordinator regenerates it. */
+type Case = (typeof auditVector.cases)[number] & {
+  readonly recipient_keys?: readonly string[];
+  readonly recipient_keys_ciphertext?: string;
+};
+const cases = auditVector.cases as readonly Case[];
 const caseNamed = (name: string): Case => {
-  const found = auditVector.cases.find((entry) => entry.name === name);
+  const found = cases.find((entry) => entry.name === name);
   if (found === undefined) throw new Error(name);
   return found;
 };
 
 function layoutOf(entry: Case): AuditStreamLayout {
   return {
-    key: {
-      class: entry.input_class,
-      entry: (entry.layout & 2) !== 0,
-      format:
-        (entry.layout & 4) !== 0 ? DisclosureFormat.SingleAssetPayout : DisclosureFormat.Standard,
-    },
+    key: { class: entry.input_class, entry: (entry.layout & 2) !== 0 },
     inputs: entry.input_count,
     outputs: entry.output_count,
     capacity: entry.outputs,
-    hasData: (entry.layout & 1) !== 0,
   };
 }
 
 interface StreamEdits {
   readonly envelope?: Uint8Array;
-  /** Plaintext by slot, resealed at the slot's own counter. */
+  /** Record plaintext by slot, resealed under the slot's own secret. */
   readonly records?: ReadonlyMap<number, Uint8Array>;
+  /** A recipient key by slot the stream names in place of the true one. */
+  readonly keys?: ReadonlyMap<number, Bytes32>;
 }
 
+/** The vector's frame, each record in its slot data and each exit's in the auditor message. */
 function audited(entry: Case, edits: StreamEdits = {}, rest: Partial<TransactionAuditInput> = {}) {
   const layout = layoutOf(entry);
-  const txViewingKey = ViewingKey.fromBytes(field(auditVector.tx_viewing_sk)).publicKey();
+  const txKey = ViewingKey.fromBytes(field(auditVector.tx_viewing_sk));
+  const txViewingKey = txKey.publicKey();
   const schedule = saltedAuditorSchedule(auditor(), txViewingKey, SALT);
+  const firstNullifier = field(auditVector.first_nullifier);
   const envelope =
     edits.envelope === undefined
       ? hex(entry.envelope_ciphertext)
       : schedule.apply(2, edits.envelope);
+  const recipientKeys = (entry.recipient_keys ?? []).map((key) => field(key));
+  const keysCt = hex(entry.recipient_keys_ciphertext ?? "");
+  const keys = concatBytes(
+    ...recipientKeys.map((key, slot) => {
+      const named = edits.keys?.get(slot);
+      return named === undefined
+        ? keysCt.subarray(slot * 32, (slot + 1) * 32)
+        : schedule.apply(recipientKeyRegion(layout, slot).startCounter, named);
+    }),
+  );
   const records = entry.record_ciphertexts.map((record, slot) => {
     const edited = edits.records?.get(slot);
-    return edited === undefined
-      ? hex(record)
-      : schedule.apply(recordRegion(layout, slot).startCounter, edited);
+    const key = recipientKeys[slot];
+    if (edited === undefined || key === undefined) return hex(record);
+    return sealOutputSlot(
+      txKeySlotSecret({
+        txViewingKey: txKey,
+        recipientViewingKey: x25519FromU(key),
+        salt: SALT,
+        outputIndex: slot,
+        firstNullifier,
+      }),
+      { record: decodeOutputRecord(edited) },
+    );
   });
-  const tails = (entry.tail_ciphertexts ?? []).map(hex);
-  const message = Uint8Array.from([
-    ...txViewingKey.toBytes(),
-    ...envelope,
-    ...records.flatMap((record) => [...record]),
-    ...tails.flatMap((tail) => [...tail]),
-  ]);
+  const exit = entry.records.map((record) => hex(record)[0] === RecordKind.exit);
+  const message = concatBytes(
+    txViewingKey.toBytes(),
+    envelope,
+    keys,
+    ...records.filter((_, slot) => exit[slot]),
+  );
   const transaction: IndexedShieldedTransaction = {
     slot: 7n,
     txSignature: SIGNATURE,
@@ -137,7 +175,7 @@ function audited(entry: Case, edits: StreamEdits = {}, rest: Partial<Transaction
     salt: SALT,
     // Only the first nullifier seeds the stream, the rest fill the published count.
     nullifiers: [
-      field(auditVector.first_nullifier),
+      firstNullifier,
       ...Array.from({ length: entry.input_count - 1 }, (_, slot) =>
         slot === 0 ? SECOND_NULLIFIER : field(`${"00".repeat(31)}${(0x78 + slot).toString(16)}`),
       ),
@@ -145,7 +183,9 @@ function audited(entry: Case, edits: StreamEdits = {}, rest: Partial<Transaction
     messages: [{ viewTag: auditor().publicKey().u(), data: message }],
     outputSlots: entry.output_hashes.map((hash, index) => ({
       viewTag: new Uint8Array(32).fill(index + 1) as Bytes32,
-      payload: new Uint8Array(),
+      payload: exit[index]
+        ? encodeRingOutput(RingScheme.confidential, new Uint8Array(CONFIDENTIAL_DATA_FREE_BODY_LEN))
+        : encodeRingBodyOutput(records[index]!, new Uint8Array()),
       outputContext: {
         hash: field(hash),
         tree: treeAddress(TREE_ID),
@@ -154,12 +194,12 @@ function audited(entry: Case, edits: StreamEdits = {}, rest: Partial<Transaction
       },
     })),
   };
+  txKey.destroy();
   return openRingTransfer({
     auditor: auditor(),
     transaction,
     layout,
     rail: "confidential",
-    // The statement's `no_spend` bit, an address input alone sends no note.
     noSpend:
       rest.noSpend ?? decodeAuditEnvelope(hex(entry.envelope_plaintext), layout).realInputs === 0,
     ...rest,
@@ -172,86 +212,109 @@ function envelopeOf(entry: Case, edit: (bytes: Uint8Array) => void): Uint8Array 
   return bytes;
 }
 
+/** `R` sits past the 32-byte key, the default note bits close at byte 40 on an entry key. */
+const REAL_INPUTS_AT = 32;
+const DEFAULT_BITS_LOW_BYTE = 40;
+const ENTRIES_AT = 41;
+
 beforeAll(async () => {
   await initializePoseidon();
 });
 
 describe("the transfer reader", () => {
-  it("rebuilds every slot of every vector from the stream with no registry", () => {
+  it("rebuilds every slot of every vector from its record with no registry", () => {
     expect(equalBytes(ringIdField(ring), field(auditVector.ring_id))).toBe(true);
-    for (const entry of auditVector.cases) {
-      const { evidence } = decodeAuditEnvelope(hex(entry.envelope_plaintext), layoutOf(entry));
+    // The data case holds its data hashes in a payload the vector omits.
+    for (const entry of cases.filter(({ name }) => name !== "data")) {
       const { audited: row } = audited(entry);
       expect(row.payloadErrors).toEqual([]);
       expect(row.outputs).toHaveLength(entry.output_count);
       row.outputs.forEach((output, slot) => {
-        const plaintext = hex(entry.records[slot] as string);
-        const record =
-          evidence.kind === "singleAssetPayout"
-            ? decodeCompactAuditRecord(plaintext, evidence.mint)
-            : decodeAuditRecord(plaintext);
-        const expected = ["dummy", "ring", "exit"][record.kind];
-        expect(output.opening.kind).toBe(expected);
-        if (output.opening.kind === "ring" || output.opening.kind === "exit")
+        const record = decodeOutputRecord(hex(entry.records[slot] as string));
+        expect(output.opening.kind).toBe(["dummy", "ring", "exit"][record.kind]);
+        if (output.opening.kind === "ring" || output.opening.kind === "exit") {
           expect(output.opening.utxo.mint).toBe(record.mint);
+          expect(output.opening.utxo.blinding).toEqual(record.blinding);
+        }
       });
     }
   });
 
-  it("reads a record at another slot as a commitment error", () => {
+  it("keeps a record at another slot without its data hashes as Rust does", () => {
     const entry = caseNamed("plain_with_exit_and_dummy");
     const { audited: row } = audited(entry, {
       records: new Map([[0, hex(entry.records[1] as string)]]),
     });
-    expect(row.payloadErrors).toEqual([{ slotIndex: 0, kind: "commitment" }]);
+    // The ring proof binds the record to its commitment, a mismatch lands on the payload.
+    expect(row.payloadErrors).toEqual([{ slotIndex: 0, kind: "payload" }]);
+    const [kept] = row.outputs;
+    expect(kept?.slotIndex).toBe(0);
+    if (kept?.opening.kind !== "ring" && kept?.opening.kind !== "exit") throw new Error("a record");
+    expect(kept.opening.utxo).not.toHaveProperty("dataHash");
+    expect(kept.opening.utxo).not.toHaveProperty("ringDataHash");
   });
 
-  it("reads a kind off the three and a noncanonical key as a disclosure error", () => {
+  it("reads a record under a substituted recipient key as a disclosure or commitment error", () => {
     const entry = caseNamed("plain_with_exit_and_dummy");
-    const badKind = hex(entry.records[0] as string);
-    badKind[0] = 3;
-    const noncanonical = hex(entry.records[1] as string);
-    noncanonical.fill(0xff, 73, 105);
-    const { audited: row } = audited(entry, {
-      records: new Map([
-        [0, badKind],
-        [1, noncanonical],
-      ]),
-    });
-    expect(row.payloadErrors).toEqual([
-      { slotIndex: 0, kind: "disclosure" },
-      { slotIndex: 1, kind: "disclosure" },
-    ]);
+    const substitute = ViewingKey.generate().publicKey().u();
+    const { audited: row } = audited(entry, { keys: new Map([[0, substitute]]) });
+    expect(row.payloadErrors.map(({ slotIndex }) => slotIndex)).toEqual([0]);
+    expect(row.outputs.map(({ slotIndex }) => slotIndex)).not.toContain(0);
+  });
+
+  it("refuses a noncanonical nullifier key or blinding in any record", () => {
+    const entry = caseNamed("plain_with_exit_and_dummy");
+    const nullifierPk = hex(entry.records[0] as string);
+    nullifierPk.fill(0xff, 73, 105);
+    const blinding = hex(entry.records[1] as string);
+    blinding.fill(0xff, 105, OUTPUT_RECORD_LEN);
+    for (const [slot, record] of [
+      [0, nullifierPk],
+      [1, blinding],
+    ] as const)
+      expect(() => audited(entry, { records: new Map([[slot, record]]) })).toThrow(
+        expect.objectContaining({
+          code: "RING_AUDIT_MESSAGE",
+          details: { reason: "record field" },
+        }),
+      );
   });
 
   it("refuses a dummy record on a live slot by its commitment", () => {
     const entry = caseNamed("plain_with_exit_and_dummy");
-    const { audited: row } = audited(entry, { records: new Map([[0, new Uint8Array(105)]]) });
+    const { audited: row } = audited(entry, {
+      records: new Map([[0, new Uint8Array(OUTPUT_RECORD_LEN)]]),
+    });
     expect(row.payloadErrors).toEqual([{ slotIndex: 0, kind: "commitment" }]);
   });
 
-  it("refuses R past the frame, a default bit past the notes and a clear noSpend under R zero", () => {
+  it("refuses R past the frame, a default bit or record past the notes and a clear noSpend under R zero", () => {
     const entry = caseNamed("entry");
     const refusal = (reason: string) =>
       expect.objectContaining({ code: "RING_AUDIT_MESSAGE", details: { reason } });
     const pastFrame = envelopeOf(entry, (bytes) => {
-      bytes[32] = 3;
+      bytes[REAL_INPUTS_AT] = entry.input_count + 1;
     });
     expect(() => audited(entry, { envelope: pastFrame })).toThrow(refusal("envelope"));
     const bitPastNotes = envelopeOf(entry, (bytes) => {
-      bytes[32] = 1;
+      bytes[REAL_INPUTS_AT] = 0;
+      bytes.fill(0, REAL_INPUTS_AT + 1);
+      bytes[DEFAULT_BITS_LOW_BYTE] = 1;
     });
     expect(() => audited(entry, { envelope: bitPastNotes })).toThrow(refusal("envelope"));
-    const onAddress = envelopeOf(entry, (bytes) => {
-      bytes[32] = 1;
-      bytes[40] = 2;
+    const recordPastBits = envelopeOf(entry, (bytes) => {
+      bytes[REAL_INPUTS_AT] = 1;
+      bytes.fill(0, REAL_INPUTS_AT + 1);
+      bytes[ENTRIES_AT + 136] = 1;
     });
-    expect(() => audited(entry, { envelope: onAddress })).toThrow(refusal("envelope"));
+    expect(() => audited(entry, { envelope: recordPastBits })).toThrow(refusal("envelope"));
     const noReal = envelopeOf(entry, (bytes) => {
-      bytes[32] = 0;
-      bytes.fill(0, 33);
+      bytes[REAL_INPUTS_AT] = 0;
+      bytes.fill(0, REAL_INPUTS_AT + 1);
     });
-    expect(() => audited(entry, { envelope: noReal })).toThrow(refusal("no spend"));
+    expect(() => audited(entry, { envelope: noReal }, { noSpend: false })).toThrow(
+      refusal("no spend"),
+    );
   });
 
   it("names the key a forged envelope seals", () => {
@@ -267,30 +330,15 @@ describe("the transfer reader", () => {
     );
   });
 
-  it("reads padding past the notes, an address apart, a default bit from its evidence and an unknown note as unresolved", () => {
+  it("names no published input's class, the stream counts the notes and lists default notes by note order", () => {
     const entry = caseNamed("entry");
     const { audited: row, realInputs } = audited(entry);
-    expect(realInputs).toBe(2);
-    expect(row.inputs[0]?.opening).toEqual({ kind: "unresolvedReal" });
-    const external = row.inputs[1];
-    expect(external?.opening.kind).toBe("external");
-    if (external?.opening.kind !== "external") throw new Error("external");
-    expect(external.hash).toEqual(external.opening.commitment);
-    const padded = envelopeOf(entry, (bytes) => {
-      bytes[32] = 1;
-      bytes.fill(0, 33);
-    });
-    expect(
-      audited(entry, { envelope: padded }).audited.inputs.map((input) => input.opening.kind),
-    ).toEqual(["unresolvedReal", "dummy"]);
-    // Input 0 an address, the default note at input 1 still opens from its evidence.
-    const address = envelopeOf(entry, (bytes) => {
-      bytes[32] = 1;
-      bytes[40] = 1;
-    });
-    expect(
-      audited(entry, { envelope: address }).audited.inputs.map((input) => input.opening.kind),
-    ).toEqual(["address", "external"]);
+    expect(realInputs).toBe(
+      decodeAuditEnvelope(hex(entry.envelope_plaintext), layoutOf(entry)).realInputs,
+    );
+    expect(row.inputs.map((input) => input.opening)).toEqual(
+      Array.from({ length: entry.input_count }, () => ({ kind: "unresolved" })),
+    );
   });
 
   describe("an entry record", () => {
@@ -307,21 +355,24 @@ describe("the transfer reader", () => {
       encodeAuditEnvelope({
         txViewingSecret: field(auditVector.tx_viewing_sk),
         realInputs: 2,
-        addressInputBits: 0n,
-        evidence: { kind: "entry", defaultInputBits: 1n, inputs: [first, EMPTY_ENTRY_RECORD] },
+        evidence: {
+          kind: "entry",
+          defaultNoteBits: 1n,
+          inputs: [
+            first,
+            ...Array.from({ length: entry.input_count - 1 }, () => EMPTY_ENTRY_RECORD),
+          ],
+        },
       });
     const refusal = (reason: string) =>
       expect.objectContaining({ code: "RING_AUDIT_MESSAGE", details: { reason } });
     const SPENDS = { noSpend: false };
 
-    it("names the sender and the proven commitment", () => {
+    it("names the sender and the proven commitment of note 0", () => {
       const { audited: row } = audited(entry, { envelope: envelope(record) }, SPENDS);
       expect(row.sender).toEqual({ ownerKey: record.ownerKey, nullifierPk: record.nullifierPk });
-      expect(row.inputs[0]).toEqual({
-        nullifier: field(auditVector.first_nullifier),
-        hash: record.inputCommitment,
-        opening: {
-          kind: "external",
+      expect(row.entries).toEqual([
+        {
           ownerKey: record.ownerKey,
           nullifierPk: record.nullifierPk,
           asset: hashBytes(addressBytes(mint, "mint")),
@@ -329,26 +380,15 @@ describe("the transfer reader", () => {
           amount: 9n,
           commitment: record.inputCommitment,
         },
-      });
-      expect(row.inputs[1]?.opening).toEqual({ kind: "unresolvedReal" });
+      ]);
+      expect(row.inputs[0]?.opening).toEqual({ kind: "unresolved" });
     });
 
-    it("refuses a noncanonical commitment and one a known note under the nullifier contradicts", () => {
+    it("refuses a noncanonical commitment", () => {
       const noncanonical = { ...record, inputCommitment: new Uint8Array(32).fill(0xff) as Bytes32 };
       expect(() => audited(entry, { envelope: envelope(noncanonical) }, SPENDS)).toThrow(
         refusal("entry evidence"),
       );
-      const other = field(`${"00".repeat(31)}22`);
-      const knownUtxos = {
-        utxo: () => undefined,
-        byNullifier: (nullifier: Bytes32) =>
-          equalBytes(nullifier, field(auditVector.first_nullifier))
-            ? { commitment: other, utxo: {} as KnownUtxo }
-            : undefined,
-      };
-      expect(() =>
-        audited(entry, { envelope: envelope(record) }, { ...SPENDS, knownUtxos }),
-      ).toThrow(refusal("entry commitment"));
     });
   });
 });
@@ -391,15 +431,21 @@ describe("the note index", () => {
 describe("the merge reader", () => {
   for (const entry of mergeVector.cases) {
     it(`opens the ${entry.name} record and rebuilds its commitment`, () => {
-      const record = openMergeRecord(X25519Keypair.fromBytes(field(mergeVector.auditor_sk)), {
-        ephemeralPublicKey: hex(mergeVector.eph_pk) as Bytes33,
-        ciphertext: hex(entry.ciphertext),
-      });
       const { request } = entry;
-      expect(record.secret).toEqual(field(request.seed));
-      const blinding = seededMergeOutputBlinding(record.secret, field(request.firstNullifier));
+      const record = openMergeRecord(
+        X25519Keypair.fromBytes(field(mergeVector.auditor_sk)),
+        {
+          ephemeralPublicKey: hex(mergeVector.eph_pk) as Bytes33,
+          envelope: hex(entry.envelope_ciphertext),
+          record: hex(entry.ciphertext),
+        },
+        field(request.firstNullifier),
+      );
+      expect(record.seed).toEqual(field(request.seed));
+      const blinding = seededMergeOutputBlinding(record.seed, field(request.firstNullifier));
       expect(blinding).toEqual(field(entry.output_blinding));
-      const rebuilt = knownUtxoHash(
+      expect(record.record.blinding).toEqual(blinding);
+      const rebuilt = rebuiltHash(
         {
           ownerKey: record.record.ownerKey,
           owner: { kind: "keyed", nullifierPk: record.record.nullifierPk },
@@ -424,17 +470,20 @@ describe("the merge reader", () => {
 
   function mergeRow(hash: Bytes32) {
     const { sealed } = sealMergeRecord({
-      auditorPublicKey: auditor().publicKey(),
-      opening: {
+      merge: {
         record: {
           kind: RecordKind.ring,
           amount: 12n,
           ownerKey,
           mint,
           nullifierPk: ZERO_NULLIFIER_PK as Bytes32,
+          blinding: seededMergeOutputBlinding(seed, firstNullifier),
         },
-        secret: seed,
+        seed,
       },
+      recipient: ViewingKey.generate().publicKey(),
+      auditorPublicKey: auditor().publicKey(),
+      firstNullifier,
     });
     const transaction: IndexedShieldedTransaction = {
       slot: 7n,
@@ -477,7 +526,7 @@ describe("the merge reader", () => {
   }
 
   const commitment = (): Bytes32 =>
-    knownUtxoHash(
+    rebuiltHash(
       {
         ownerKey,
         owner: { kind: "keyed", nullifierPk: ZERO_NULLIFIER_PK as Bytes32 },
@@ -641,7 +690,8 @@ describe("the origin", () => {
     const bound = await originOver(wrapper).confirmedTransaction(indexed, ring);
     if (bound?.kind !== "merge") throw new Error(bound?.kind);
     expect(bound.authority).toBe(request.authority);
-    expect(bound.sealedRecord.ciphertext).toEqual(request.sealed.ciphertext);
+    expect(bound.sealedRecord.record).toEqual(request.sealed.record);
+    expect(bound.sealedRecord.envelope).toEqual(request.sealed.envelope);
     const forged = wrapper.slice();
     forged[8 + 1] = (forged[8 + 1] ?? 0) ^ 1;
     await expect(originOver(forged).confirmedTransaction(indexed, ring)).rejects.toMatchObject({

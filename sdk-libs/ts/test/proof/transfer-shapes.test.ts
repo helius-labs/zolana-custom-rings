@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { DisclosureFormat } from "../../src/protocol/codec/ring-disclosure-layout.js";
 import { RING_KEYS, type RingKeyCircuit } from "../../src/protocol/proof/proving-keys.js";
 
 import {
@@ -19,7 +18,6 @@ const NO_POOLS = { own: 0, curator: 0, tracking: 0 };
 
 function loaded(entry: TransferShape, pools = NO_POOLS): TransferSpend {
   return {
-    format: entry.format,
     rail: "confidential",
     inputs: entry.inputs,
     outputs: entry.outputs,
@@ -61,7 +59,8 @@ describe("the entry keys", () => {
       wide: true,
     });
     expect(transferPoolCapacity(wide!)).toEqual({ own: 91, curator: 91, tracking: 38 });
-    expect(transferKeys()).toHaveLength(10);
+    // No single-asset payout key, a general key covers the payout.
+    expect(transferKeys()).toHaveLength(9);
   });
 
   it("refuses an entry past the wide entry key", () => {
@@ -81,16 +80,6 @@ function rustRingKeys(): readonly Readonly<{ circuit: RingKeyCircuit; name: stri
   ].map(([, variant = "", body = "", name = ""]) => {
     const fields = [...body.matchAll(/(\w+): ([\w:]+)/gu)].map(([, field = "", value = ""]) => {
       if (field === "mode") return ["private", value.endsWith("::Private")];
-      if (field === "format") {
-        switch (value) {
-          case "crate::DisclosureFormat::Standard":
-            return [field, DisclosureFormat.Standard];
-          case "crate::DisclosureFormat::SingleAssetPayout":
-            return [field, DisclosureFormat.SingleAssetPayout];
-          default:
-            throw new Error(`unknown disclosure format ${value}`);
-        }
-      }
       return [
         field === "inputs" ? "class" : field,
         value === "true" || value === "false" ? value === "true" : Number(value),

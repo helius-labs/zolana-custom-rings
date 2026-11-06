@@ -28,6 +28,7 @@ import {
   type RingSourceSlot,
 } from "../codec/ring-codecs.js";
 import { RingError } from "../error.js";
+import { publicListKey } from "./private-list.js";
 import { GuardScope, type DebitInput } from "./owner-debits.js";
 
 /** Mirrors Rust `ListId`, the on-chain discriminant of a list, never `0`. */
@@ -688,6 +689,16 @@ export function memberOfTag(tag: Uint8Array): Member {
 /** Mirrors Rust `Member::owner_identity`, an owner of any curve by `ownerProofInputHash`. */
 export function memberOfIdentity(identity: Bytes32): Member {
   return checkedMember(identity);
+}
+
+/** Mirrors Rust `Member::public`, the key of every public list of `owner` in the own and curator registries. */
+export function publicMember(owner: Member): Member {
+  return checkedMember(publicListKey(checkedMember(owner)));
+}
+
+/** Mirrors Rust `owner_record_key`, the one record every writer and reader of an owner's lists names. */
+export function ownerRecordKey(owner: Uint8Array): Member {
+  return publicMember(memberOfTag(owner));
 }
 
 /** Mirrors Rust `Member::asset`, the mint as the UTXO asset field. */

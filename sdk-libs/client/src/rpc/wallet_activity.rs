@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
-use spr_indexer_api::{Base64String, Context, SerializablePubkey, SerializableSignature};
+use spr_indexer_api::{Base64String, Context, Hash, SerializablePubkey, SerializableSignature};
 
 use super::{
-    DecryptedInput, DecryptedOutput, DecryptedTransaction, DecryptedWithdrawal, PagedRead,
+    DecryptedDefaultInput, DecryptedOutput, DecryptedTransaction, DecryptedWithdrawal, PagedRead,
     ReadRequest, ReadTarget,
 };
 
@@ -40,7 +40,11 @@ pub struct WalletActivity {
 pub enum WalletView {
     /// The anonymous sender or a named spender, a co-owner reads its own notes alone.
     Sender {
-        inputs: Vec<DecryptedInput>,
+        /// Nullifiers of the wallet's own spent notes the service resolved.
+        spent: Vec<Hash>,
+        /// The wallet's own default-ring notes.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        default_inputs: Vec<DecryptedDefaultInput>,
         outputs: Vec<DecryptedOutput>,
         withdrawals: Vec<DecryptedWithdrawal>,
     },
@@ -50,14 +54,6 @@ pub enum WalletView {
     },
 }
 
-/// Who holds one published input, an input the service cannot name reads as `Other`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InputParty {
-    Own,
-    Other,
-    Padding,
-}
-
 impl WalletActivity {
     pub fn read(target: ReadTarget, wallet: Address) -> ReadRequest {
         PagedRead::WalletActivity
@@ -65,36 +61,43 @@ impl WalletActivity {
             .with_wallet(wallet)
     }
 
-    /// A wallet that owns a real input and no other party's input keeps all outputs as its own payments.
+    /// A wallet owning all `R` spent notes keeps every output as its own payment, else only its own
+    /// outputs.
     pub fn of(
         wallet: Address,
         transaction: DecryptedTransaction,
-        party: impl Fn(&DecryptedInput) -> InputParty,
+        owns: impl Fn(&Hash) -> bool,
     ) -> Option<Self> {
         let DecryptedTransaction {
             slot,
             tx_signature,
             event_index,
             outputs,
-            inputs,
+            real_inputs,
+            default_inputs,
+            nullifiers,
             spenders,
             withdrawals,
             ..
         } = transaction;
         let names = |key: SerializablePubkey| key.0 == wallet;
-        let parties: Vec<_> = inputs.iter().map(&party).collect();
-        let spent_own = parties.contains(&InputParty::Own);
+        let spent: Vec<Hash> = nullifiers
+            .into_iter()
+            .filter(|nullifier| owns(nullifier))
+            .collect();
+        let default_inputs: Vec<DecryptedDefaultInput> = default_inputs
+            .into_iter()
+            .filter(|input| names(input.owner_key))
+            .collect();
+        let own_notes = spent.len() + default_inputs.len();
+        let spent_own = own_notes > 0;
         let view = match spent_own || spenders.into_iter().any(names) {
             true => {
-                // Dummy inputs prove no ownership, a named spender of no input signed only its own outputs.
-                let sole_owner = spent_own && !parties.contains(&InputParty::Other);
+                // A named spender of no input signed only its own outputs.
+                let sole_owner = spent_own && own_notes == usize::from(real_inputs);
                 WalletView::Sender {
-                    inputs: inputs
-                        .into_iter()
-                        .zip(parties)
-                        .filter(|(_, party)| *party == InputParty::Own)
-                        .map(|(input, _)| input)
-                        .collect(),
+                    spent,
+                    default_inputs,
                     outputs: outputs
                         .into_iter()
                         .filter(|output| sole_owner || output.owner_key().is_some_and(names))

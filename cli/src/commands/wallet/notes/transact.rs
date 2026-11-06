@@ -25,7 +25,7 @@ use spr_transaction::{
     },
     Data, ShieldedKeys, SpendableDecryptionResult, WalletUtxo, SOL_MINT,
 };
-use zolana_ring_client::{mint_balances, rpc::DecryptedOutputKind, ReaderKey};
+use zolana_ring_client::{mint_balances, owner_record_key, rpc::DecryptedOutputKind, ReaderKey};
 use zolana_ring_keys::{
     ring_address::RING_PAYMENT_SCHEME, ListSaltHolder, RingAddress, RingPaymentRequest,
     RotatingRingKeys,
@@ -973,7 +973,7 @@ impl AllowListWrite<'_> {
             .iter()
             .map(|(party, keys)| {
                 Ok(Subject {
-                    member: Member::owner_tag(keys.pubkey().as_array())?,
+                    member: owner_record_key(keys.pubkey().as_array())?,
                     label: (*party).to_owned(),
                 })
             })
@@ -1374,7 +1374,7 @@ fn granted(ctx: &Context, reader: &ReaderKey) -> Result<bool> {
         &ctx.zolana,
         custom_ring_sdk::MemberRecords {
             ring: ctx.ring,
-            members: &[reader.member()?],
+            members: &[reader.record_key()?],
         },
     )?;
     Ok(read.listed(ListId::Reader))
@@ -1988,7 +1988,6 @@ mod tests {
         let within = |spendable: Spendable, outputs: usize, spends_default_ring: bool| {
             let widest = spendable.widest_anonymous(outputs).unwrap();
             let key = custom_ring_sdk::transfer_key(TransferSpend {
-                format: custom_ring_interface::DisclosureFormat::Standard,
                 rail: RingRail::Anonymous,
                 inputs: widest,
                 outputs,

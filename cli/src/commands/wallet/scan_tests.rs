@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use crate::ZolanaServices;
 use custom_ring_interface::{
     blinding::ring_blinding_seed, encode_ring_body_output, encode_ring_sender_bundle_output,
-    stream::DeliveredSlot, ChangeCell, RecipientBody, SenderBundle,
+    stream::DeliveredSlot, OutputRecord, RecordKind, SenderBundle,
 };
 use solana_address::Address;
 use solana_signature::Signature;
@@ -75,6 +75,25 @@ fn slot_secret(
     }
     .secret()
     .unwrap()
+}
+
+/// The ring body of `sealed` at slot 0, its record alone.
+fn ring_body(
+    sealed: &Sealed<'_>,
+    owner: &ShieldedAddress,
+    blinding: [u8; 32],
+    secret: &custom_ring_interface::stream::SlotSecret,
+) -> Vec<u8> {
+    let record = OutputRecord {
+        kind: RecordKind::Ring,
+        amount: sealed.amount,
+        owner_key: owner.signing_pubkey.confidential_view_tag().unwrap(),
+        mint: sealed.asset.asset.to_bytes(),
+        nullifier_pk: owner.nullifier_pubkey,
+        blinding,
+    };
+    let ciphertext = seal_recipient_body(&record, None, secret).unwrap();
+    encode_ring_body_output(&ciphertext, &[]).unwrap()
 }
 
 /// One ring output, sealed at slot 0 as the anonymous rail seals it.
@@ -152,22 +171,12 @@ impl Ledger {
             .unwrap();
         let blinding = derive_transact_output_blinding(&sealed.first_nullifier, &SEED, 0).unwrap();
         let secret = slot_secret(&tx, &owner, &sealed.first_nullifier, 0);
-        let ciphertext = seal_recipient_body(
-            &RecipientBody {
-                blinding,
-                amount: sealed.amount,
-                mint: sealed.asset.asset.to_bytes(),
-                ..RecipientBody::default()
-            },
-            &secret,
-        )
-        .unwrap();
-        let payload = encode_ring_body_output(&ciphertext, &[]).unwrap();
+        let payload = ring_body(&sealed, &owner, blinding, &secret);
         let tag = custom_ring_interface::stream::slot_tag(secret.recipient_tag().unwrap());
         self.publish(&sealed, &owner, blinding, payload, tag, Vec::new())
     }
 
-    /// The sender's change at output 0 with no body, its bundle the first message.
+    /// The sender's change at output 0 under a zero tag, its bundle the first message names it.
     fn change(&mut self, sealed: Sealed<'_>) -> [u8; 32] {
         let owner = sealed.owner.shielded_address().unwrap();
         let tx = sealed
@@ -178,15 +187,17 @@ impl Ledger {
         let seed = ring_blinding_seed(&tx.secret_bytes(), &SALT).unwrap();
         let blindings = OutputBlindings::new(&sealed.first_nullifier, &seed).unwrap();
         let blinding = blindings.at(0).unwrap();
+        let payload = ring_body(
+            &sealed,
+            &owner,
+            blinding,
+            &slot_secret(&tx, &owner, &sealed.first_nullifier, 0),
+        );
         let secret = slot_secret(&tx, &owner, &sealed.first_nullifier, 1);
         let ciphertext = seal_sender_bundle(
             &SenderBundle {
                 output_seed: *blindings.output_seed(),
-                change: vec![ChangeCell {
-                    mint: sealed.asset.asset.to_bytes(),
-                    amount: sealed.amount,
-                }],
-                recipient_keys: Vec::new(),
+                recipient_keys: vec![owner.viewing_pubkey.u()],
             },
             &secret,
         )
@@ -195,7 +206,7 @@ impl Ledger {
             view_tag: secret.sender_tag().unwrap(),
             data: encode_ring_sender_bundle_output(&ciphertext).unwrap(),
         };
-        self.publish(&sealed, &owner, blinding, Vec::new(), [0; 32], vec![bundle])
+        self.publish(&sealed, &owner, blinding, payload, [0; 32], vec![bundle])
     }
 
     fn publish(

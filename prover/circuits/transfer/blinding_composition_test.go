@@ -81,13 +81,11 @@ func (c composed) spp(t testing.TB, seed *big.Int) *sppBlindings {
 	return s
 }
 
+// addressNullifiers is SPP's address list of these fixtures, all zero with no address created.
 func (c composed) addressNullifiers() []frontend.Variable {
 	nullifiers := make([]frontend.Variable, len(c.audit.Inputs))
-	for i, input := range c.audit.Inputs {
+	for i := range nullifiers {
 		nullifiers[i] = 0
-		if input.Utxo.Domain == protocol.AddressDomain {
-			nullifiers[i] = c.circuit.InputNullifiers[i]
-		}
 	}
 	return nullifiers
 }
@@ -117,8 +115,6 @@ func sppSolves(t *testing.T, s *sppBlindings) error {
 
 func compositionCases(t *testing.T) map[string]func(*testing.T) composed {
 	withExit := transfer.Shape{Inputs: 24, Outputs: 4, Withdrawals: 4, Owners: 4}
-	payout := ringtransfer.Signed(payoutShape)
-	payout.SaltedBlock = []*big.Int{}
 	allDummies := ringtransfer.Signed(confidential2)
 	allDummies.AllDummies = true
 	compact := ringtransfer.Signed(withExit)
@@ -145,7 +141,6 @@ func compositionCases(t *testing.T) map[string]func(*testing.T) composed {
 		},
 		"entry":                  func(t *testing.T) composed { return confidentialComposed(t, entry) },
 		"data-bearing output":    func(t *testing.T) composed { return confidentialComposed(t, data) },
-		"payout":                 func(t *testing.T) composed { return confidentialComposed(t, payout) },
 		"published dummies only": func(t *testing.T) composed { return confidentialComposed(t, allDummies) },
 		"deposit": func(t *testing.T) composed {
 			b := signerDeposit(t, func(*ringtransfer.World) {})

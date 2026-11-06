@@ -5,7 +5,6 @@
     "inputs": 16,
     "outputs": 8,
     "spendsDefaultRing": false,
-    "hasData": true,
     "approval": false,
     "readPools": {
       "own": 0,
@@ -31,43 +30,11 @@
     "outcome": "reuse"
   },
   {
-    "name": "data tails at another capacity",
-    "rail": "confidential",
-    "inputs": 24,
-    "outputs": 2,
-    "spendsDefaultRing": false,
-    "hasData": true,
-    "approval": false,
-    "readPools": {
-      "own": 0,
-      "curator": 0,
-      "tracking": 7
-    },
-    "sealed": {
-      "outputs": 2,
-      "inputs": 24,
-      "withdrawals": 4,
-      "owners": 4,
-      "entry": false,
-      "wide": false
-    },
-    "read": {
-      "outputs": 8,
-      "inputs": 24,
-      "withdrawals": 32,
-      "owners": 13,
-      "entry": false,
-      "wide": true
-    },
-    "outcome": "reseal"
-  },
-  {
     "name": "records alone at another capacity",
     "rail": "confidential",
     "inputs": 24,
     "outputs": 2,
     "spendsDefaultRing": false,
-    "hasData": false,
     "approval": false,
     "readPools": {
       "own": 0,
@@ -98,7 +65,6 @@
     "inputs": 24,
     "outputs": 2,
     "spendsDefaultRing": false,
-    "hasData": false,
     "approval": true,
     "readPools": {
       "own": 0,
@@ -129,7 +95,6 @@
     "inputs": 2,
     "outputs": 2,
     "spendsDefaultRing": true,
-    "hasData": false,
     "approval": false,
     "readPools": {
       "own": 0,

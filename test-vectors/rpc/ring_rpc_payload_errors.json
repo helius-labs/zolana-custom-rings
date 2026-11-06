@@ -1,8 +1,9 @@
 {
-  "description": "Payload errors of a DecryptedTransaction as the ring rpc serializes them. kinds names every OutputPayloadErrorKind. commitment_and_disclosure holds the errors of one transfer whose slot 2 record opens to another commitment and whose slot 5 record holds a value outside the field. Written by the sdk-libs/client rpc tests and decoded by the TypeScript RingRpc tests.",
+  "description": "Payload errors of a DecryptedTransaction as the ring rpc serializes them. kinds names every OutputPayloadErrorKind, payload keeps the record in outputs. commitment_and_disclosure holds the errors of one transfer whose slot 2 record opens to another commitment and whose slot 5 record holds a value outside the field. Written by the sdk-libs/client rpc tests and decoded by the TypeScript RingRpc tests.",
   "kinds": [
     "disclosure",
-    "commitment"
+    "commitment",
+    "payload"
   ],
   "commitment_and_disclosure": [
     {

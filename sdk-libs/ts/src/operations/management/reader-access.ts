@@ -13,7 +13,12 @@ import {
 } from "@heliuslabs/spr/internal";
 import { type Bytes32, type Bytes33, ShieldedPublicKey } from "@heliuslabs/spr";
 
-import { memberOfIdentity, memberOfTag, type Member } from "../../protocol/membership/policy.js";
+import {
+  memberOfIdentity,
+  memberOfTag,
+  ownerRecordKey,
+  type Member,
+} from "../../protocol/membership/policy.js";
 import { RingError } from "../../protocol/error.js";
 
 /** Passkey public key for ring-rpc audit access. */
@@ -90,7 +95,14 @@ export function readerKeyBytes(reader: ReaderKey): Uint8Array {
   return bytes;
 }
 
-/** Mirrors Rust `ReaderKey::member`, the member whose record holds the reader's ring-wide grant. */
+/** Mirrors Rust `ReaderKey::record_key`, the record of the reader's ring-wide grant, an Ed25519 reader's public record. */
+export function readerKeyRecordKey(reader: ReaderKey): Member {
+  return typeof reader === "string"
+    ? ownerRecordKey(addressBytes(reader, "reader"))
+    : readerKeyMember(reader);
+}
+
+/** Mirrors Rust `ReaderKey::member`, the reader's identity, the `reader` input of a wallet grant key. */
 export function readerKeyMember(reader: ReaderKey): Member {
   return typeof reader === "string"
     ? memberOfTag(addressBytes(reader, "reader"))

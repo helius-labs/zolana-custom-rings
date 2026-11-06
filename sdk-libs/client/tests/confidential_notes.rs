@@ -2,7 +2,7 @@ use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::{OutputContext, OutputSlot, ShieldedTransaction};
 use spr_interface::instruction::instruction_data::transact::OwnerTag;
-use spr_keypair::{ShieldedAddress, ShieldedKeypair, SigningKey};
+use spr_keypair::{ShieldedAddress, ShieldedKeypair, SigningKey, X25519Keypair};
 use spr_transaction::{
     instructions::transact::ConfidentialTransaction, Data, Mint, Utxo, WalletUtxo,
 };
@@ -72,7 +72,7 @@ fn transfer(
         .viewing_key
         .get_transaction_viewing_key(&nullifier)
         .unwrap();
-    let rail = RingOutputRail::new(tx_key, delivery);
+    let rail = RingOutputRail::new(tx_key, X25519Keypair::new().pubkey(), delivery);
     let proof = rail.encrypt(tx, &address(sender)).unwrap();
     let published = rail.published_slots(&proof, &address(sender)).unwrap();
     let output_slots = published
@@ -85,9 +85,7 @@ fn transfer(
                 ref other => panic!("inline owner tag expected, got {other:?}"),
             },
             output_context: OutputContext {
-                hash: *slot
-                    .wire(&[0; custom_ring_interface::AUDIT_RECORD_LEN], None)
-                    .hash,
+                hash: *slot.wire().hash,
                 tree_id: TREE,
                 leaf_index: leaf as u64,
             },

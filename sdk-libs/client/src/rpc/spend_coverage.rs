@@ -1,4 +1,4 @@
-//! `getSpendCoverage`, the one surface that names an unresolved spend, for the ring authority alone.
+//! `getSpendCoverage`, the one surface that names an unclassified spend, for the ring authority alone.
 
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
@@ -35,7 +35,9 @@ pub struct GetSpendCoverageResponse {
     pub history_through: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub totals: Option<SpendCoverageTotals>,
-    pub unresolved_real: Vec<SpendCoverageRow>,
+    /// Transfer nullifiers no opened note owns, unresolved notes among addresses, default-ring
+    /// notes and padding.
+    pub unclassified: Vec<SpendCoverageRow>,
     /// Frames whose stream is unreadable, the only rows that hold `history_through` back.
     pub unreadable: Vec<SpendCoverageFrame>,
     /// A second event on one nullifier, its first state stays.
@@ -48,9 +50,8 @@ pub struct GetSpendCoverageResponse {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SpendCoverageTotals {
     pub observed: u64,
+    /// Merge padding alone.
     pub padding: u64,
-    pub address: u64,
-    pub external: u64,
     pub resolved: u64,
 }
 

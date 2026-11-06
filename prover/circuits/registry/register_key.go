@@ -54,7 +54,7 @@ func (c *RegisterKeyCircuit) Define(api frontend.API) error {
 	// A tag cannot move for that reason. A new salt would name a key with no entry, and a privately blocked owner would read as unlisted. `Enroll` verifies the proof only at the first enrollment, a later `Enroll` carries no proof and TrackingAuthorization::rotate refuses a changed key, tag, ephemeral key or ciphertext, and ApplyEnrollmentsCircuit holds the leaf's key, tag and ciphertext hash. No instruction closes the account and no write removes the leaf, a present row stays present under every later root.
 	api.AssertIsEqual(c.ListSalt[0], 0)
 	salt := shared.PackBounded(api, c.ListSalt[1:])[0]
-	// A zero salt would let anyone who knows the owner compute ListKey(owner, 0). The circuit refuses only zero, the wallet's derivation supplies the entropy.
+	// ListKey(owner, 0) is the owner's public key, a zero salt would put the private entries on the public record. The circuit refuses only zero, the wallet's derivation supplies the entropy.
 	api.AssertIsDifferent(salt, 0)
 	listTag := shared.ListTag(api, salt)
 	// The cipher under CRING/nfk bounds every ciphertext byte.

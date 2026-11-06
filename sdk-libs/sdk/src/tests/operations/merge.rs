@@ -82,7 +82,7 @@ async fn an_anonymous_merge_its_owner_would_sign_in_public_is_refused_before_pro
         .is_ok());
 }
 
-/// The merge circuit keeps the owner off the payer and co-signer on every ring.
+/// The merge circuit admits its owner as payer, only the wallet refuses one.
 #[tokio::test]
 async fn a_confidential_merge_its_owner_pays_is_refused_before_proving() {
     let owner = keypair(1);
@@ -151,7 +151,7 @@ async fn a_merge_takes_every_input_one_transaction_carries() {
 }
 
 /// Inputs a keyed merge carries in one v1 transaction, measured here.
-const WIDEST_MERGE: usize = 45;
+const WIDEST_MERGE: usize = 44;
 
 /// The relay's keyed build refuses the zero secret, every derivation under it is public.
 #[test]

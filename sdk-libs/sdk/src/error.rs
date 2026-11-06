@@ -198,12 +198,10 @@ pub enum RingError {
     TokenAccountSetup(#[from] zolana_ring_client::rpc::TokenAccountSetupError),
     #[error("input {index} spends under a key its owner's tracking row does not hold")]
     InputKeyNotEnrolled { index: usize },
-    #[error("the owner at output {slot_index} holds no tracking row, only the zero key pays it")]
-    RecipientNotEnrolled { slot_index: usize },
+    #[error("output {slot_index} names the literal zero key, a zero-key note commits Poseidon(0)")]
+    RecipientLiteralZeroKey { slot_index: usize },
     #[error("the owner at output {slot_index} is enrolled, the zero key does not pay it")]
     EnrolledRecipientAtZeroKey { slot_index: usize },
-    #[error("output {slot_index} names another key than its owner's tracking row")]
-    RecipientKeyMismatch { slot_index: usize },
     #[error("output {slot_index} names a viewing key other than its owner's authorization holds, ask for a new address")]
     RecipientViewingKeyStale { slot_index: usize },
     #[error("the transfer has {owners} owner signers, its accounts leave room for {limit}")]

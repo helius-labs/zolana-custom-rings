@@ -57,7 +57,6 @@ import {
 } from "../protocol/membership/approval-totals.js";
 import type { OwnerDebit } from "../protocol/membership/owner-debits.js";
 import { memberOfAsset } from "../protocol/membership/policy.js";
-import { signerDataCountAt } from "../protocol/membership/signer-data-counts.js";
 import { ringAuthAddress, ringPolicyAddress, STORAGE_PROGRAM_ID } from "../protocol/pda/index.js";
 import {
   ENROLL_COMPUTE_UNITS,
@@ -79,12 +78,16 @@ import {
   type RingRail,
 } from "../protocol/transaction/transact.js";
 import type { RingPolicy } from "../protocol/codec/ring-codecs.js";
-import { RecordKind, type AuditRecord } from "../protocol/codec/audit-stream.js";
+import { RecordKind, type OutputRecord } from "../protocol/codec/audit-stream.js";
+import { RECIPIENT_KEY_LEN } from "../protocol/codec/ring-disclosure-layout.js";
 import {
   canonicalViewingKey,
+  openOutputSlot,
   openSealedDisclosure,
   type RingDisclosure,
 } from "../crypto/audit/ring-disclosure.js";
+import { txKeySlotSecret } from "../crypto/derivation/ring-stream.js";
+import { dummyUtxoHash } from "../protocol/membership/utxo-hash.js";
 import { x25519FromU } from "../crypto/keys/x25519.js";
 import { rawJson } from "../protocol/codec/raw-json.js";
 import { N_PUBLIC_SLOTS } from "../protocol/transaction/spp.js";
@@ -115,7 +118,7 @@ export type RelayMessageMismatch =
   | "ZeroApprovalBlinder"
   | "ReusedApprovalBlinder"
   | "ApprovalOverLimit"
-  | "DataOutputCount"
+  | "UnopenedOutput"
   | "FunderLegs"
   | "SpendsUnnamedNote"
   | "SpendsUnrequestedNote"
@@ -168,10 +171,14 @@ export class AllowedNullifiers {
     if (!same) throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "sources" } });
   }
 
-  /** The published nullifiers at note positions, an address or a dummy spends no note. */
-  spendsOnly(notes: Iterable<Bytes32>): boolean {
-    for (const nullifier of notes) if (!this.#nullifiers.has(encodeBase58(nullifier))) return false;
-    return true;
+  /**
+   * The proof names `spent` notes and no note position. An admitted nullifier is a real note's and
+   * SPP publishes it at most once, so the published ones the set holds must count every spent note.
+   */
+  countsSpends(spent: number, published: Iterable<Bytes32>): boolean {
+    let allowed = 0;
+    for (const nullifier of published) if (this.#nullifiers.has(encodeBase58(nullifier))) allowed++;
+    return allowed === spent;
   }
 }
 
@@ -216,11 +223,12 @@ export interface ExpectedDelegate {
   readonly allowed: AllowedNullifiers;
 }
 
-/** Holds no transaction key, no other slot opens to the signer. */
+/** Holds no transaction key, the signer reads every published slot before it signs. */
 export interface RelayTransferTerms {
   readonly ring: Address;
   readonly feePayer: Address;
   readonly signer: Address;
+  /** One per published slot in slot order, each rebuilds its slot's commitment. */
   readonly slots: readonly SlotOpening[];
   /** The signer's notes the transfer spends. */
   readonly nullifiers: readonly Bytes32[];
@@ -244,6 +252,7 @@ export interface FundedLeg {
   readonly amount: bigint;
 }
 
+/** A zero owner opens a dummy under its blinding alone. */
 export interface SlotOpening {
   readonly slot: number;
   readonly owner: Address;
@@ -835,7 +844,7 @@ function checkFrame(
   }
   if (expected.kind === "delegate") checkMoved(expected, frame, accounts);
   else if (expected.kind === "coSigner") checkCoSignerRule(expected.rule, frame);
-  else checkOpenings(expected, frame, accounts);
+  else checkOpenings(expected, frame);
   const envelope = frameEnvelope(expected, signer, tag);
   const named = accounts.filter((meta) => meta.address === envelope.signer);
   const signsOnce =
@@ -861,28 +870,34 @@ function checkMoved(
   checkTransactionKey(expected.txViewingKey, frame);
   if (frame.hasData) throw mismatch("Data");
   checkWithdrawals(expected, frame, accounts);
-  const { records, envelope } = openStream(expected.txViewingKey, expected.auditor, frame);
-  // 2. Matching outputs bind no input, each proven note position answers to the requested openings.
-  if (!expected.allowed.spendsOnly(frame.nullifiers.slice(0, envelope.realInputs)))
+  const { envelope, recipientKeys } = openStream(expected.txViewingKey, expected.auditor, frame);
+  const records = frameRecords(expected.txViewingKey, frame, recipientKeys);
+  // 2. Matching outputs bind no input, every proven spend answers to the requested openings.
+  if (!expected.allowed.countsSpends(envelope.realInputs, frame.nullifiers))
     throw mismatch("SpendsUnrequestedNote");
-  // 3. Each live record pays one requested payment or returns change to a requested source.
-  const owns = (owner: ExpectedOwner, record: AuditRecord): boolean =>
+  // 3. Each live record pays one requested payment or returns change to a requested source,
+  // sealed to that owner's viewing key so the owner can open it.
+  const owns = (owner: ExpectedOwner, record: OutputRecord): boolean =>
     equalBytes(record.ownerKey, owner.ownerKey) &&
     equalBytes(record.nullifierPk, owner.nullifierPk);
   const unpaid = [...expected.payments];
   records.forEach((record, slot) => {
     if (record.kind === RecordKind.dummy) return;
+    const sealedTo = (owner: ExpectedOwner): boolean =>
+      record.kind === RecordKind.exit ||
+      (recipientKeys[slot] !== undefined && equalBytes(recipientKeys[slot], owner.viewingU));
     const paid = unpaid.findIndex(
       (payment) =>
         record.kind === payment.kind &&
         record.mint === payment.mint &&
         record.amount === payment.amount &&
-        owns(payment.owner, record),
+        owns(payment.owner, record) &&
+        sealedTo(payment.owner),
     );
     if (paid < 0) {
       if (
         record.kind !== RecordKind.ring ||
-        !expected.sources.some((source) => owns(source, record))
+        !expected.sources.some((source) => owns(source, record) && sealedTo(source))
       )
         throw mismatch("Recipients");
       return;
@@ -954,7 +969,9 @@ function openStream(
       message: {
         ephemeralPublicKey: x25519FromU(frame.txViewingU),
         envelope: frame.envelope,
-        records: frame.outputs.map((output) => output.record),
+        recipientKeys: frame.outputs.map((_, slot) =>
+          frame.recipientKeys.subarray(slot * RECIPIENT_KEY_LEN, (slot + 1) * RECIPIENT_KEY_LEN),
+        ),
       },
     });
     const { envelope } = opened;
@@ -971,24 +988,70 @@ function openStream(
   });
 }
 
-/** The signer's openings stay selective, the proof supplies only how many data outputs exist. */
-function checkOpenings(
-  expected: ExpectedPublicOwner,
+/** @internal Every slot's record of `frame` under the transaction key that sealed it. */
+export function frameOutputRecords(
+  txViewingKey: Bytes32,
+  auditor: X25519PublicKey,
   frame: RingTransactData,
-  accounts: readonly AccountMeta[],
-): void {
+): readonly OutputRecord[] {
+  const { recipientKeys } = openStream(txViewingKey, auditor, frame);
+  return frameRecords(txViewingKey, frame, recipientKeys);
+}
+
+/** Each slot's record under `CRDS_i`, the proof binds it to `V_i` and the slot's commitment. */
+function frameRecords(
+  txViewingKey: Bytes32,
+  frame: RingTransactData,
+  recipientKeys: readonly Bytes32[],
+): readonly OutputRecord[] {
+  return withMismatch("Data", () => {
+    const key = canonicalViewingKey(txViewingKey.slice() as Bytes32);
+    try {
+      return frame.outputs.map((output, slot) => {
+        const recipient = recipientKeys[slot];
+        if (recipient === undefined) throw mismatch("Data");
+        const secret = txKeySlotSecret({
+          txViewingKey: key,
+          recipientViewingKey: x25519FromU(recipient),
+          salt: frame.salt,
+          outputIndex: slot,
+          firstNullifier: RingTransactData.firstNullifier(frame),
+        });
+        try {
+          return openOutputSlot(secret, output.record).record;
+        } finally {
+          secret.fill(0);
+        }
+      });
+    } finally {
+      key.destroy();
+    }
+  });
+}
+
+/**
+ * SPP reads one signature as approval of every data-bearing output its signer owns, and each
+ * published owner tag of a ring output is zero, so no frame field names those outputs. The signer
+ * reads every published output before it signs, no data output stays out of its view.
+ */
+function checkOpenings(expected: ExpectedPublicOwner, frame: RingTransactData): void {
   const { terms, knownNullifiers } = expected;
   if (terms.slots.length === 0 && terms.nullifiers.length === 0) throw mismatch("Unrequested");
-  // 1. Each opening rebuilds the commitment published at its slot and names the signer. Past the
-  // loop a slot index stands for one real output of the signer, so the count below cannot read
-  // another owner's slot or a preimage the sender made up.
-  for (const opening of terms.slots) {
-    const published = frame.outputs[opening.slot];
+  // 1. One opening per published slot in slot order, a missing or repeated slot could hide an
+  // output the signature approves.
+  if (
+    terms.slots.length !== frame.outputs.length ||
+    terms.slots.some((opening, slot) => opening.slot !== slot)
+  )
+    throw mismatch("UnopenedOutput");
+  // 2. Each opening rebuilds the commitment published at its slot, so the signer reads each owner,
+  // amount and data hash the proof commits.
+  terms.slots.forEach((opening, slot) => {
+    const published = frame.outputs[slot];
     if (
       published === undefined ||
-      opening.owner !== terms.signer ||
       !equalBytes(
-        // An exit commits no ring, a ring id here would refuse every exit the owner holds.
+        // An exit commits no ring, a ring id here would refuse every exit.
         withMismatch("Recipients", () =>
           openingHash(opening, published.body.kind === "exit" ? undefined : terms.ring),
         ),
@@ -996,21 +1059,7 @@ function checkOpenings(
       )
     )
       throw mismatch("Recipients");
-  }
-  // 2. The circuit counts the live slots the signer owns with a nonzero `data_hash`, per entry of
-  // the run `signers.Chain` binds. Equality with the distinct opened slots closes the omission step
-  // 1 leaves open, a second data output the sender keeps out of the terms. Slots dedupe a repeated
-  // opening, the filter keeps an ordinary payment from standing in for a data output, and
-  // `ringDataHash` stays outside since SPP asks no owner signature for it. A member past the last
-  // packed entry reads zero and the circuit holds it to no data output.
-  const opened = new Set(
-    terms.slots.filter((opening) => !isZero(opening.dataHash)).map((opening) => opening.slot),
-  ).size;
-  const proved = signerDataCountAt(
-    frame.extensions.signerDataCounts ?? 0n,
-    signerRunEntry(expected, frame, accounts),
-  );
-  if (opened !== proved) throw mismatch("DataOutputCount");
+  });
   const among = (list: readonly Uint8Array[], nullifier: Uint8Array): boolean =>
     list.some((held) => equalBytes(held, nullifier));
   // 3. A named note the wallet cannot place means no list stood behind the check.
@@ -1090,31 +1139,6 @@ function checkExactApproval(exact: ExactApproval, frame: RingTransactData): void
   }
 }
 
-/**
- * The signer's entry in the run the program hashes into `signers.Chain`. The ring auth PDA finds
- * SPP's list with no read of the registries or co-signers ahead of it, since the program refuses a
- * second copy anywhere in that list and neither a registry slot nor a signer slot can hold the PDA.
- * A misplaced run would read another signer's count, the same window the program takes closes that.
- * The counts index the run `SignerSet` keeps, first occurrences only, a raw position past a repeat
- * reads another entry and lets a signer pass over its own omitted output.
- */
-function signerRunEntry(
-  expected: ExpectedPublicOwner,
-  frame: RingTransactData,
-  accounts: readonly AccountMeta[],
-): number {
-  const ringAuth = ringAuthSlot(expected.ringAuth, accounts);
-  const trees = frame.inputTrees.kind === "one" ? 1 : 2;
-  const start = ringAuth + 1 + trees + frame.nullifiers.length;
-  const window = accounts.slice(start, settlementWindow(frame, accounts).start);
-  const first = window.findIndex((meta) => meta.address === expected.terms.signer);
-  if (first < 0) throw mismatch("Accounts");
-  // SPP and `SignerSet::new` deduplicate the window by first occurrence and the counts index that
-  // run. Under `[X, X, V]` a raw position reads V past its entry, finds zero, and V signs for a data
-  // output its terms leave out. The program accepts a repeat, so none is refused.
-  return new Set(window.slice(0, first).map((meta) => meta.address)).size;
-}
-
 /** The one ring auth PDA the program admits in SPP's list. */
 function ringAuthSlot(ringAuth: Address, accounts: readonly AccountMeta[]): number {
   const copies = accounts.flatMap((meta, at) => (meta.address === ringAuth ? [at] : []));
@@ -1177,6 +1201,7 @@ function checkFundedLegs(
 }
 
 export function openingHash(opening: SlotOpening, ring: Address | undefined): Bytes32 {
+  if (opening.owner === ZERO_ADDRESS) return dummyOpeningHash(opening);
   return new Utxo({
     owner: ShieldedPublicKey.fromEd25519(addressBytes(opening.owner) as Bytes32),
     asset: opening.mint,
@@ -1187,6 +1212,20 @@ export function openingHash(opening: SlotOpening, ring: Address | undefined): By
     .proofInput(opening.nullifierPk, opening.treeId, opening.dataHash, opening.ringDataHash)
     .hash();
 }
+
+/** SPP pays no zero owner and holds a dummy's other fields to zero. */
+function dummyOpeningHash(opening: SlotOpening): Bytes32 {
+  if (
+    opening.mint !== ZERO_ADDRESS ||
+    opening.amount !== 0n ||
+    [opening.nullifierPk, opening.dataHash, opening.ringDataHash].some((field) => !isZero(field))
+  )
+    throw mismatch("Recipients");
+  return dummyUtxoHash(opening.treeId, opening.blinding);
+}
+
+/** The owner and mint of a dummy slot opening. */
+export const ZERO_ADDRESS = encodeBase58(new Uint8Array(32)) as Address;
 
 export function mismatch(reason: RelayMessageMismatch): RingError {
   return new RingError("RING_RELAY_MESSAGE_INVALID", { details: { mismatch: reason } });

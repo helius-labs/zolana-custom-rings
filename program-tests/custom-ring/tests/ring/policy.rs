@@ -339,7 +339,7 @@ fn the_key_enrollment_lifecycle_ends_in_a_delegate_move() -> Result<()> {
         Ok(transfer)
     };
 
-    // A keyed output needs its owner's row and key, refused before any prover round.
+    // Any nonzero key passes the key checks and stops at the prover, the literal zero key is refused before it.
     let unreachable = env.client_with(|| {
         AsyncProverClient::new("http://127.0.0.1:1".to_owned())
             .with_proof_data_source(ProofDataSource::Client)
@@ -359,8 +359,17 @@ fn the_key_enrollment_lifecycle_ends_in_a_delegate_move() -> Result<()> {
     let recipient_slot = usize::try_from(RECIPIENT_SLOT)?;
     let unregistered = env.recipient.keypair.shielded_address()?;
     match refused(&unregistered)? {
-        RingError::RecipientNotEnrolled { slot_index } => assert_eq!(slot_index, recipient_slot),
-        other => bail!("expected RecipientNotEnrolled, got {other}"),
+        RingError::Client(_) => {}
+        other => bail!("expected the unreachable prover, got {other}"),
+    }
+    match refused(&ShieldedAddress {
+        nullifier_pubkey: [0; 32],
+        ..unregistered
+    })? {
+        RingError::RecipientLiteralZeroKey { slot_index } => {
+            assert_eq!(slot_index, recipient_slot)
+        }
+        other => bail!("expected RecipientLiteralZeroKey, got {other}"),
     }
     // No rule reads a salted list on the payee, the zero key passes every key check and stops at the prover.
     match refused(&ShieldedAddress {
@@ -377,15 +386,8 @@ fn the_key_enrollment_lifecycle_ends_in_a_delegate_move() -> Result<()> {
     assert_ne!(mismatched.nullifier_pubkey, ZERO_NULLIFIER_PUBKEY);
     assert_ne!(mismatched.nullifier_pubkey, member_address.nullifier_pubkey);
     match refused(&mismatched)? {
-        RingError::RecipientKeyMismatch { slot_index } => assert_eq!(slot_index, recipient_slot),
-        other => bail!("expected RecipientKeyMismatch, got {other}"),
-    }
-
-    // A deposit to an owner without a row is refused before proving.
-    match env.run(deposit(unregistered).send(env.client.ring_client())) {
-        Err(RingError::RecipientNotEnrolled { slot_index: 0 }) => {}
-        Err(other) => return Err(anyhow!("expected RecipientNotEnrolled, got {other}")),
-        Ok(_) => return Err(anyhow!("a deposit to an unregistered owner landed")),
+        RingError::Client(_) => {}
+        other => bail!("expected the unreachable prover, got {other}"),
     }
     let RingDepositReceipt { signature, .. } =
         env.run(deposit(member_address).send(env.client.ring_client()))?;

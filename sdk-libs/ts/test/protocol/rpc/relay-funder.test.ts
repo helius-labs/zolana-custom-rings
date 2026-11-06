@@ -4,7 +4,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { initializePoseidon } from "@heliuslabs/spr";
 import type { Bytes32 } from "@heliuslabs/spr/interface";
-import { addressBytes, compileUnsignedTransaction, encodeBase58 } from "@heliuslabs/spr/internal";
+import { compileUnsignedTransaction, encodeBase58 } from "@heliuslabs/spr/internal";
 
 import { ringComputeUnitLimit } from "../../../src/operations/management/admin.js";
 import { SIZE_PROBE_LIFETIME } from "../../../src/operations/workflow/compile.js";
@@ -145,22 +145,19 @@ describe("a public funder's check", () => {
 });
 
 describe("party cells", () => {
-  const identities = (funders: readonly Address[], coSigners: readonly Address[] = []) =>
-    anonymousPartyIdentities({ payer: PAYER, coSigners, funders });
   const zero = new Uint8Array(32) as Bytes32;
 
-  it("seats a funder in a free cell and a named key in none", () => {
+  it("seats each co-signer in account order and no payer or funder", () => {
     const co = key(5);
-    const seated = identities([PAYER, FUNDER, co, FUNDER], [co]);
-    expect(seated[1]).toEqual(identities([], [co])[1]);
-    expect(seated[2]).toEqual(identities([], [FUNDER])[1]);
-    expect(seated[3]).toEqual(zero);
-    expect(addressBytes(FUNDER)).not.toEqual(zero);
+    const cells = anonymousPartyIdentities([co]);
+    expect(cells).toHaveLength(5);
+    expect(cells[0]).not.toEqual(zero);
+    expect(cells.slice(1)).toEqual(Array(4).fill(zero));
+    expect(anonymousPartyIdentities([])).toEqual(Array(5).fill(zero));
   });
 
-  it("refuses parties past the shared cells", () => {
-    const coSigners = [40, 41, 42, 43, 44].map(key);
-    expect(() => identities([PAYER], coSigners)).not.toThrow();
-    expect(() => identities([FUNDER], coSigners)).toThrow();
+  it("refuses co-signers past the cells", () => {
+    expect(() => anonymousPartyIdentities([40, 41, 42, 43, 44].map(key))).not.toThrow();
+    expect(() => anonymousPartyIdentities([40, 41, 42, 43, 44, 45].map(key))).toThrow();
   });
 });

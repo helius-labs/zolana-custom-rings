@@ -100,6 +100,10 @@ pub(crate) fn owner_identity(owner: &ShieldedKeypair) -> Member {
     Member::from_bytes(identity).unwrap()
 }
 
+pub(crate) fn owner_record(owner: &ShieldedKeypair) -> Member {
+    Member::public(&owner_identity(owner)).unwrap()
+}
+
 pub(crate) fn wallet(utxo: Utxo, key: &NullifierKey, tree_id: u16, leaf_index: u64) -> WalletUtxo {
     let nullifier_pubkey = key.pubkey().unwrap();
     let utxo_hash = utxo
@@ -813,17 +817,11 @@ pub(crate) struct Registry {
 }
 
 impl Registry {
-    /// Each owner with `lists` set, ordered as the linked records require.
+    /// Each owner's public record with `lists` set, ordered as the linked records require.
     pub(crate) fn new(owners: &[(&ShieldedKeypair, u64)]) -> Self {
         let mut members: Vec<([u8; 32], u64)> = owners
             .iter()
-            .map(|(owner, lists)| {
-                let address = owner.shielded_address().unwrap();
-                (
-                    address.signing_pubkey.owner_proof_input_hash().unwrap(),
-                    *lists,
-                )
-            })
+            .map(|(owner, lists)| (*owner_record(owner).as_bytes(), *lists))
             .collect();
         members.sort_by_key(|(member, _)| *member);
         let mut records = vec![MemberRecord {

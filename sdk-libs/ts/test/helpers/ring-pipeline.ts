@@ -29,6 +29,7 @@ import {
   nullifierPdaAddress,
   treeAddress,
   checkedBytes,
+  concatBytes,
   ZERO_32,
 } from "@heliuslabs/spr/internal";
 import { LocalKeys } from "@heliuslabs/spr/client";
@@ -54,10 +55,14 @@ import {
 } from "@heliuslabs/spr/transaction";
 import type { RingProofRequest } from "../../src/rpc/prover/ring.js";
 import { ringAuthAddress, ringPolicyAddress, ringPolicyPda } from "../../src/protocol/pda/index.js";
-import { openRingDisclosure, type RingDisclosure } from "../../src/crypto/audit/ring-disclosure.js";
+import {
+  openOutputSlot,
+  openRingDisclosure,
+  type RingDisclosure,
+} from "../../src/crypto/audit/ring-disclosure.js";
 import { DUMMY_RECORD, RecordKind } from "../../src/protocol/codec/audit-stream.js";
-import { openRecipientBody } from "../../src/protocol/codec/anonymous-delivery.js";
-import { ringIdField } from "../../src/crypto/derivation/ring-stream.js";
+import { RECIPIENT_KEY_LEN } from "../../src/protocol/codec/ring-disclosure-layout.js";
+import { ringIdField, txKeySlotSecret } from "../../src/crypto/derivation/ring-stream.js";
 import { RingInstructionTag, ringComputeUnitLimit } from "../../src/operations/management/admin.js";
 import type {
   RingCoSigner,
@@ -669,6 +674,7 @@ export function bindingSigners(request: TransferProofRequest): readonly Bytes32[
   return request.signers.slice(0, request.signerCount);
 }
 
+/** The own pool subjects of the first `count` sender rows, each owner's public lookup key. */
 export function screenedMembers(request: TransferProofRequest, count: number): readonly Bytes32[] {
   return request.senderEntries
     .slice(0, count)
@@ -705,7 +711,7 @@ export function checkTransferProof(fixture: Fixture, data: RingTransactData): Tr
   return request;
 }
 
-/** The auditor recovers the transaction key from the envelope and reads each published slot's note from its record. */
+/** The auditor recovers the transaction key and each slot's key from the stream, then reads each published slot's note from its record. */
 export function checkDisclosure(
   fixture: Fixture,
   call: SppCall,
@@ -716,19 +722,28 @@ export function checkDisclosure(
     message: {
       ephemeralPublicKey: x25519FromU(data.txViewingU),
       envelope: data.envelope,
-      records: data.outputs.map((output) => output.record),
+      recipientKeys: data.outputs.map((_, slot) =>
+        data.recipientKeys.subarray(slot * RECIPIENT_KEY_LEN, (slot + 1) * RECIPIENT_KEY_LEN),
+      ),
     },
     salt: data.salt,
   });
-  const txKey = ViewingKey.fromBytes(disclosure.envelope.txViewingSecret);
+  const txKey = ViewingKey.fromBytes(disclosure.envelope.txViewingSecret.slice() as Bytes32);
   expect(txKey.publicKey().u()).toEqual(data.txViewingU);
-  txKey.destroy();
   const published = call.proofInputs.outputs.filter((output) => !output.isCompact());
-  expect(disclosure.records).toHaveLength(published.length);
-  disclosure.records.forEach((record, index) => {
+  expect(disclosure.recipientKeys).toHaveLength(published.length);
+  data.outputs.forEach((wire, index) => {
+    const secret = txKeySlotSecret({
+      txViewingKey: txKey,
+      recipientViewingKey: x25519FromU(itemAt(disclosure.recipientKeys, index)),
+      salt: data.salt,
+      outputIndex: index,
+      firstNullifier: RingTransactData.firstNullifier(data),
+    });
+    const { record } = openOutputSlot(secret, wire.record);
     const output = itemAt(published, index);
     const owner = output.ownerAddress;
-    if (owner === undefined) {
+    if (owner === undefined || output.isDummy()) {
       expect(record).toEqual(DUMMY_RECORD);
       return;
     }
@@ -738,8 +753,10 @@ export function checkDisclosure(
       ownerKey: owner.signingPublicKey.confidentialViewTag(),
       mint: output.asset,
       nullifierPk: owner.nullifierPublicKey,
+      blinding: output.blinding,
     });
   });
+  txKey.destroy();
   return disclosure;
 }
 
@@ -768,6 +785,13 @@ export async function openDelivered(
   if (slotSecret === undefined || wire?.body.kind !== "recipient")
     throw new Error("no recipient slot");
   const owner = input.keys.address();
+  // Another key's secret decrypts noise the record codec refuses, as a reader skips the slot.
+  let opened: ReturnType<typeof openOutputSlot>;
+  try {
+    opened = openOutputSlot(slotSecret, concatBytes(wire.record, wire.body.payload));
+  } catch {
+    return undefined;
+  }
   return openRecipientNote(
     {
       owner: {
@@ -779,7 +803,7 @@ export async function openDelivered(
       commitment: wire.hash,
       assets: new AssetRegistry(),
     },
-    openRecipientBody(slotSecret, wire.body.body),
+    opened,
   );
 }
 

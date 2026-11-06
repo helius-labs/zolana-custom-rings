@@ -265,11 +265,8 @@ impl Replay<'_> {
 
     fn observe(&mut self, observation: Observation) {
         let hit = match observation.read {
-            InputRead::Real => self.note_of_nullifier(&observation.nullifier),
-            InputRead::Unreadable
-            | InputRead::Padding
-            | InputRead::Address
-            | InputRead::External => None,
+            InputRead::Spend => self.note_of_nullifier(&observation.nullifier),
+            InputRead::Unreadable | InputRead::Padding => None,
         };
         let existing = self.row(&observation.nullifier);
         self.apply(Observation { hit, ..observation }.apply(existing.as_ref()));

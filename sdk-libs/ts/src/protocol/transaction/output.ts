@@ -1,28 +1,23 @@
 /** Ring output bodies in SPP's output framing, Rust `custom_ring_interface::output`. */
-import {
-  COMPACT_RECIPIENT_BODY_LEN,
-  DisclosureFormat,
-  RECIPIENT_BODY_LEN,
-} from "../codec/ring-disclosure-layout.js";
+import { OUTPUT_RECORD_LEN } from "../codec/ring-disclosure-layout.js";
 import { TransactionError } from "@heliuslabs/spr/transaction";
 
 /** The schemes a ring output publishes, SPP stores the ring-owned ones unparsed. */
 export const RingScheme = Object.freeze({
   confidential: 3,
   ringSenderBundle: 9,
-  /** `u16le(body_len) ‖ body ‖ reply`, one form on every rail. */
+  /** `u16le(body_len) ‖ record_ct ‖ payload_ct ‖ reply`, one form on every rail. */
   ringBody: 10,
-  compactRingBody: 11,
 } as const);
 export type RingScheme = (typeof RingScheme)[keyof typeof RingScheme];
 
 /** `0x04 ‖ u`, the recipient key a scheme 3 body leads with. */
-export const RECIPIENT_KEY_LEN = 33;
+const TAGGED_RECIPIENT_KEY_LEN = 33;
 /** Asset id, amount and blinding open every confidential plaintext. */
 const CONFIDENTIAL_PLAINTEXT_HEAD_LEN = 8 + 8 + 32;
 /** Scheme 3 body of an output with no data and no ring id, each one zero byte. */
 export const CONFIDENTIAL_DATA_FREE_BODY_LEN =
-  RECIPIENT_KEY_LEN + CONFIDENTIAL_PLAINTEXT_HEAD_LEN + 2;
+  TAGGED_RECIPIENT_KEY_LEN + CONFIDENTIAL_PLAINTEXT_HEAD_LEN + 2;
 
 const ENCODING_TAGS = ["plaintext", "encrypted", "verifiable"] as const;
 export type RingOutputEncoding = (typeof ENCODING_TAGS)[number];
@@ -55,10 +50,7 @@ export function encodeRingBodyOutput(body: Uint8Array, reply: Uint8Array): Uint8
   new DataView(payload.buffer).setUint16(0, body.length, true);
   payload.set(body, 2);
   payload.set(reply, 2 + body.length);
-  return encodeRingOutput(
-    body.length === COMPACT_RECIPIENT_BODY_LEN ? RingScheme.compactRingBody : RingScheme.ringBody,
-    payload,
-  );
+  return encodeRingOutput(RingScheme.ringBody, payload);
 }
 
 /** Any scheme byte, the caller checks the scheme and the encoding it expects. */
@@ -78,35 +70,23 @@ export function readRingOutput(bytes: Uint8Array): RingOutputFrame {
   return Object.freeze({ encoding, scheme: bytes[5] ?? 0, body: bytes.slice(6) });
 }
 
-/** The body and reply of a ring body output, `undefined` below the plain body's length, Rust `ring_body_output`. */
+/** The body and reply of a ring body output, `undefined` below a record's length, Rust `ring_body_output`. */
 export function ringBodyOutput(
   data: Uint8Array,
-): Readonly<{ body: Uint8Array; reply: Uint8Array; format: DisclosureFormat }> | undefined {
+): Readonly<{ body: Uint8Array; reply: Uint8Array }> | undefined {
   let frame: RingOutputFrame;
   try {
     frame = readRingOutput(data);
   } catch {
     return undefined;
   }
-  if (frame.encoding !== "encrypted") return undefined;
-  const format =
-    frame.scheme === RingScheme.ringBody
-      ? DisclosureFormat.Standard
-      : frame.scheme === RingScheme.compactRingBody
-        ? DisclosureFormat.SingleAssetPayout
-        : undefined;
-  if (format === undefined || frame.body.length < 2) return undefined;
+  if (frame.encoding !== "encrypted" || frame.scheme !== RingScheme.ringBody) return undefined;
+  if (frame.body.length < 2) return undefined;
   const payload = frame.body;
   const length = new DataView(payload.buffer, payload.byteOffset, 2).getUint16(0, true);
   const rest = payload.subarray(2);
-  if (
-    length > rest.length ||
-    (format === DisclosureFormat.SingleAssetPayout
-      ? length !== COMPACT_RECIPIENT_BODY_LEN || rest.length !== length
-      : length < RECIPIENT_BODY_LEN)
-  )
-    return undefined;
-  return Object.freeze({ body: rest.subarray(0, length), reply: rest.subarray(length), format });
+  if (length > rest.length || length < OUTPUT_RECORD_LEN) return undefined;
+  return Object.freeze({ body: rest.subarray(0, length), reply: rest.subarray(length) });
 }
 
 export function senderBundleOutputBody(data: Uint8Array): Uint8Array | undefined {

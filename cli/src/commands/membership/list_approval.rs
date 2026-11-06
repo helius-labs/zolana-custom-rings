@@ -5,8 +5,11 @@ use anyhow::{ensure, Context as _, Result};
 use custom_ring_sdk::AuthorityRecordUpdate;
 use solana_address::Address;
 use solana_signer::Signer;
-use zolana_ring_client::rpc::{ListApprovalScope, PendingListApproval};
-use zolana_ring_policy::{ListChange, ListSet, Member};
+use zolana_ring_client::{
+    owner_record_key,
+    rpc::{ListApprovalScope, PendingListApproval},
+};
+use zolana_ring_policy::{ListChange, ListSet};
 
 use crate::{line, Context, ListApprovalCommand};
 
@@ -56,7 +59,7 @@ fn approve(ctx: &Context, wallet: Address) -> Result<()> {
     }
     .check()?;
     let update = AuthorityRecordUpdate::new(target, authority.pubkey())
-        .with_write(Member::owner_tag(wallet.as_array())?, write)?;
+        .with_write(owner_record_key(wallet.as_array())?, write)?;
     let revision = ctx
         .ring_rpc()
         .apply_record_update(update.sign(authority)?)?;

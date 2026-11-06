@@ -102,6 +102,33 @@ func (e Envelope) seal(api frontend.API, sealed Sealed, secret frontend.Variable
 	return sealed
 }
 
+// SlotSeal keys its stream with DeliveredSlot::secret in program-libs/interface/src/codec/stream.rs, no constraint ties recipient_u to the intended recipient.
+//
+//	dh     = X25519(eph_sk, recipient_u)
+//	secret = Poseidon(CRDS, pack_be(dh), Eph, pack_be(0x04 ‖ recipient_u), salt, index, n0)
+type SlotSeal struct {
+	Plaintext []frontend.Variable
+	EphSk     [32]frontend.Variable
+	// Eph is pack_be(0x04 ‖ eph_u), the caller holds it to EphSk.
+	Eph         []frontend.Variable
+	RecipientPk [32]frontend.Variable
+	// Index and FirstNullifier part two slots of one key pair, a shared keystream would reveal the XOR of their records.
+	Salt, Index, FirstNullifier frontend.Variable
+	Info                        string
+}
+
+// Seal returns the ciphertext from counter 2, every byte below 2^8.
+func (s SlotSeal) Seal(api frontend.API) []frontend.Variable {
+	// A low order recipient_u yields a zero agreement, refused here, else anyone opens the record.
+	agreement := AgreeCanonical(api, s.EphSk, s.RecipientPk)
+	secret := gadget.PoseidonHash(api, slices.Concat(
+		[]frontend.Variable{uint64(DeliveredSlotDomain)}, PackBounded(api, agreement[:]), s.Eph, PackedKey(api, s.RecipientPk),
+		[]frontend.Variable{s.Salt, s.Index, s.FirstNullifier},
+	))
+	key, nonce := AuditStreamKeySchedule(api, secret, s.Info)
+	return aes.NewCipher(api, key).CTREncrypt(nonce, s.Plaintext)
+}
+
 // AuditStreamKeySchedule mirrors RingStream::new in sdk-libs/keys/src/stream_cipher.rs, the label separates every ring line over one secret.
 func AuditStreamKeySchedule(api frontend.API, secret frontend.Variable, label string) (key [32]frontend.Variable, nonce [12]frontend.Variable) {
 	rc := rangecheck.New(api)

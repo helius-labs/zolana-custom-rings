@@ -22,7 +22,7 @@ type Anonymous struct {
 	World
 	Shape transfer.Shape
 	Rail  AnonymousRail
-	// Parties are the frame's public identities, the payer and a co-signer by default.
+	// Parties are the co-signer cells, two co-signers by default.
 	Parties []*big.Int
 }
 
@@ -67,7 +67,7 @@ func (w Anonymous) Build(t testing.TB) BuiltAnonymous {
 // Rehash recomputes private_tx_hash from the fixture slots and inputs, then the public input.
 func (b BuiltAnonymous) Rehash(t testing.TB) {
 	t.Helper()
-	rehash(t, &b.Circuit.Sections, b.Audit)
+	b.World.World.rehash(t, &b.Circuit.Sections, b.Audit)
 	b.Rebind(t)
 }
 

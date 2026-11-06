@@ -21,6 +21,8 @@ export const RingDomain = Object.freeze({
   applyEnrollments: 0x4352_5441,
   listTag: 0x4352_5054,
   listPosition: 0x4352_504c,
+  /** Rust `zolana_ring_keys::DUMMY_KEY_DOMAIN`. */
+  dummyKey: 0x4352_444b, // "CRDK"
 } as const);
 export type RingDomain = (typeof RingDomain)[keyof typeof RingDomain];
 

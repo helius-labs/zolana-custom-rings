@@ -2,12 +2,11 @@
 
 use custom_ring_interface::tracking::{TrackingEntry, TRACKING_EMPTY_ROOT};
 use custom_ring_interface::{
-    ciphertext_digest, cosign::ApprovalMask, domain, record_chain, tail_chain,
-    ApplyEnrollmentsStatement, ApplyRecordsStatement, AuditHead, AuditKey, AuditLayout,
-    AuditStreamLayout, ConfidentialSender, CustomRingError, PrivateWrites, RegisterKeyStatement,
-    RingOutput, SignerDataCounts, SignerSet, SlotBody, TransferFamily, TransferRoots,
-    TransferStatement, ANONYMOUS_PARTIES, AUDIT_HEAD_ELEMENTS, AUDIT_RECORD_LEN, DATA_TAIL_LEN,
-    RECIPIENT_BODY_LEN,
+    ciphertext_digest, cosign::ApprovalMask, domain, record_chain, ApplyEnrollmentsStatement,
+    ApplyRecordsStatement, AuditHead, AuditKey, AuditLayout, AuditStreamLayout, ConfidentialSender,
+    CustomRingError, PrivateWrites, RegisterKeyStatement, RingOutput, SignerSet, SlotBody,
+    TransferFamily, TransferRoots, TransferStatement, ANONYMOUS_PARTIES, AUDIT_HEAD_ELEMENTS,
+    OUTPUT_RECORD_LEN,
 };
 use custom_ring_interface::{PublicLeg, PublicSlotError, PublicSlots, SOL_ASSET_ADDRESS};
 use serde::{Deserialize, Serialize};
@@ -66,10 +65,7 @@ struct TrackingCase {
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 struct OutputCase {
-    hash: String,
     record: String,
-    /// Null while `has_data` is clear.
-    tail: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
@@ -82,22 +78,20 @@ struct TransferCase {
     public_owners: Option<bool>,
     delegate: bool,
     approval_mask: u8,
-    signer_data_counts: u64,
     no_spend: bool,
     first_nullifier: String,
     ring_id: String,
     tx_viewing_u: String,
     auditor_pubkey: String,
     envelope: String,
+    recipient_keys: String,
     envelope_digest: String,
     salt: String,
     layout: u8,
     outputs: Vec<OutputCase>,
     output_capacity: usize,
     record_chain: String,
-    tail_chain: String,
     input_count: usize,
-    input_nullifier_chain: String,
     private_tx_hash: String,
     sender: Option<String>,
     party_identities: Option<Vec<String>>,
@@ -177,9 +171,9 @@ fn hexes(values: &[[u8; 32]]) -> Vec<String> {
 struct Values {
     fields: Vec<[u8; 32]>,
     keys: Vec<[u8; 32]>,
-    records: [[u8; AUDIT_RECORD_LEN]; 8],
-    tails: [[u8; DATA_TAIL_LEN]; 8],
+    records: [[u8; OUTPUT_RECORD_LEN]; 8],
     envelope: Vec<u8>,
+    recipient_keys: Vec<u8>,
     auditor_pubkey: [u8; 33],
     ring_id: [u8; 32],
     salt: [u8; 16],
@@ -190,9 +184,9 @@ impl Values {
         Self {
             fields: (0..80).map(field).collect(),
             keys: (0..16).map(|seed| [0x60 + seed; 32]).collect(),
-            records: core::array::from_fn(|slot| [0x90 + slot as u8; AUDIT_RECORD_LEN]),
-            tails: core::array::from_fn(|slot| [0xc0 + slot as u8; DATA_TAIL_LEN]),
+            records: core::array::from_fn(|slot| [0x90 + slot as u8; OUTPUT_RECORD_LEN]),
             envelope: (0..1024u32).map(|byte| byte as u8 ^ 0x93).collect(),
+            recipient_keys: (0..512u32).map(|byte| byte as u8 ^ 0x71).collect(),
             auditor_pubkey: tagged(0xa1),
             ring_id: hash_bytes(&[0x77; 32]).unwrap(),
             salt: [0x5c; 16],
@@ -206,19 +200,19 @@ impl Values {
             tx_viewing_u: &self.keys[0],
             auditor_pubkey: &self.auditor_pubkey,
             envelope: &self.envelope[..envelope.envelope().len],
+            recipient_keys: &self.recipient_keys[..envelope.keys_len()],
             salt: &self.salt,
             layout,
         }
     }
 
-    fn outputs(&self, count: usize, tails: bool) -> Vec<RingOutput<'_>> {
+    fn outputs(&self, count: usize) -> Vec<RingOutput<'_>> {
         (0..count)
             .map(|slot| RingOutput {
                 hash: &self.fields[20 + slot],
                 owner_tag: custom_ring_interface::stream::slot_tag(self.keys[4 + slot % 4]),
-                body: SlotBody::None,
+                body: SlotBody::Recipient(&self.records[slot]),
                 record: &self.records[slot],
-                tail: tails.then_some(&self.tails[slot]),
             })
             .collect()
     }
@@ -231,15 +225,12 @@ fn stream(key: AuditKey, inputs: usize, outputs: &[RingOutput<'_>]) -> AuditStre
         inputs,
         outputs: outputs.len(),
         capacity: outputs.len(),
-        has_data: outputs.iter().any(|output| output.tail.is_some()),
     }
 }
 
 fn output_case(output: &RingOutput<'_>) -> OutputCase {
     OutputCase {
-        hash: hex::encode(output.hash),
         record: hex::encode(output.record),
-        tail: output.tail.map(hex::encode),
     }
 }
 
@@ -286,14 +277,20 @@ fn transfer_case(statement: &TransferStatement<'_>) -> TransferCase {
         public_owners,
         delegate,
         approval_mask: statement.approval_mask.bits(),
-        signer_data_counts: statement.signer_data_counts.packed(),
         no_spend: statement.no_spend,
         first_nullifier: hex::encode(head.first_nullifier),
         ring_id: hex::encode(head.ring_id),
         tx_viewing_u: hex::encode(head.tx_viewing_u),
         auditor_pubkey: hex::encode(head.auditor_pubkey),
         envelope: hex::encode(head.envelope),
-        envelope_digest: hex::encode(ciphertext_digest(head.envelope).unwrap()),
+        recipient_keys: hex::encode(head.recipient_keys),
+        envelope_digest: hex::encode(
+            Poseidon::hashv(&[
+                &ciphertext_digest(head.envelope).unwrap(),
+                &ciphertext_digest(head.recipient_keys).unwrap(),
+            ])
+            .unwrap(),
+        ),
         salt: hex::encode(head.salt),
         layout: head.layout.value(),
         outputs: statement.outputs.iter().map(output_case).collect(),
@@ -301,9 +298,7 @@ fn transfer_case(statement: &TransferStatement<'_>) -> TransferCase {
         record_chain: hex::encode(
             record_chain(statement.outputs, statement.output_capacity).unwrap(),
         ),
-        tail_chain: hex::encode(tail_chain(statement.outputs, statement.output_capacity).unwrap()),
         input_count: statement.input_count,
-        input_nullifier_chain: hex::encode(statement.input_nullifier_chain),
         private_tx_hash: hex::encode(statement.private_tx_hash),
         sender,
         party_identities: parties,
@@ -324,19 +319,12 @@ fn transfer_case(statement: &TransferStatement<'_>) -> TransferCase {
 
 fn compute_vectors() -> StatementVectors {
     let values = Values::new();
-    let (two, eight, four) = (
-        values.outputs(2, false),
-        values.outputs(8, false),
-        values.outputs(4, false),
-    );
-    let with_tails = values.outputs(2, true);
+    let (two, eight, four) = (values.outputs(2), values.outputs(8), values.outputs(4));
     let wide_key = AuditKey {
-        format: custom_ring_interface::DisclosureFormat::Standard,
         class: 16,
         entry: false,
     };
     let entry_key = AuditKey {
-        format: custom_ring_interface::DisclosureFormat::Standard,
         class: 8,
         entry: true,
     };
@@ -371,12 +359,10 @@ fn compute_vectors() -> StatementVectors {
         },
         approval_mask: ApprovalMask::OUTFLOW,
         approval_totals: &[0; 32],
-        signer_data_counts: SignerDataCounts::default(),
         no_spend: false,
         outputs: &eight,
         output_capacity: 8,
         input_count: 2,
-        input_nullifier_chain: values.fields[4],
         private_tx_hash: &values.fields[3],
         signers: SignerSet::new([[0x42; 32], [0x43; 32], [0x42; 32]].iter(), 16).unwrap(),
         roots: &policy_roots,
@@ -395,20 +381,6 @@ fn compute_vectors() -> StatementVectors {
         no_spend: true,
         roots: &tracking_roots,
         signers: SignerSet::default(),
-        ..signer_policy
-    };
-    let signer_data = TransferStatement {
-        head: values.head(
-            AuditLayout {
-                format: custom_ring_interface::DisclosureFormat::Standard,
-                has_data: true,
-                entry: false,
-            },
-            stream(wide_key, 2, &with_tails),
-        ),
-        outputs: &with_tails,
-        output_capacity: 2,
-        signer_data_counts: SignerDataCounts::new(1 | 1 << SignerDataCounts::ENTRY_BITS).unwrap(),
         ..signer_policy
     };
     let in_proof_policy = TransferStatement {
@@ -449,7 +421,6 @@ fn compute_vectors() -> StatementVectors {
         outputs: &four,
         output_capacity: 4,
         input_count: 3,
-        input_nullifier_chain: values.fields[5],
         signers: SignerSet::new([[0x44; 32]].iter(), 16).unwrap(),
         ..signer_policy
     };
@@ -479,13 +450,7 @@ fn compute_vectors() -> StatementVectors {
         ..anonymous_policy_transfer
     };
     let entry = TransferStatement {
-        head: values.head(
-            AuditLayout {
-                entry: true,
-                ..no_flags
-            },
-            stream(entry_key, 3, &four),
-        ),
+        head: values.head(AuditLayout { entry: true }, stream(entry_key, 3, &four)),
         roots: &tracking_roots,
         signers: SignerSet::default(),
         ..anonymous_policy_transfer
@@ -498,7 +463,6 @@ fn compute_vectors() -> StatementVectors {
         signer_policy,
         signer_thresholds,
         signer_no_spend,
-        signer_data,
         in_proof_policy,
         delegate_move,
         anonymous_policy_transfer,
@@ -560,14 +524,13 @@ fn compute_vectors() -> StatementVectors {
     StatementVectors {
         description: "Every ring statement and its public input HashChain4(elements). The transfer \
                       head is [CRTX, n0, ring_id, pack_be(0x04 || tx_u), pack_be(auditor_pubkey), \
-                      digest(envelope), salt, layout] with the frame's \
-                      random salt and layout = has_data | entry << 1. \
+                      Poseidon(digest(envelope), digest(recipient_keys)), salt, layout] with the frame's \
+                      random salt and layout = entry << 1. \
                       digest(ct) = Poseidon(u32 len(ct), HashChain4(pack_left31(ct))). Each \
-                      envelope has the length of its stream layout. The transfer statements are HashChain4 over the \
+                      envelope and key region has the length of its stream layout. The transfer statements are HashChain4 over the \
                       audit head under CRTX, in_proof, hidden, delegate, \
-                      approval_mask, no_spend, output_count, output_chain, record_chain \
-                      HashChain4(hash_bytes(record_i)), tail_chain HashChain4(hash_bytes(tail_i)) or \
-                      zero while has_data is clear, input_count, input_nullifier_chain, private_tx_hash, the sender, the \
+                      approval_mask, approval_totals, no_spend, output_count, record_chain \
+                      HashChain4(hash_bytes(record_i)), input_count, private_tx_hash, the sender, the \
                       party identities, signer_count, signer_chain, policy_hash, own_root, \
                       curator_root, tracking_root, asset, net and gross per public \
                       slot, withdrawal_hash and the element count. No body, tag, \
@@ -656,7 +619,7 @@ fn ring_statements_vector() {
         .iter()
         .map(|case| case.elements.len())
         .collect();
-    assert!(transfer.iter().all(|len| *len == 42 + ANONYMOUS_PARTIES));
+    assert!(transfer.iter().all(|len| *len == 43));
 }
 
 #[test]
@@ -687,22 +650,15 @@ fn the_ciphertext_digest_tags_the_length_over_the_left_packed_chain() {
 }
 
 #[test]
-fn the_region_chains_hash_each_published_slot() {
+fn the_record_chain_hashes_each_published_slot() {
     let values = Values::new();
-    let outputs = values.outputs(4, true);
+    let outputs = values.outputs(4);
     let records: Vec<[u8; 32]> = (0..4)
         .map(|slot| hash_bytes(&values.records[slot]).unwrap())
-        .collect();
-    let tails: Vec<[u8; 32]> = (0..4)
-        .map(|slot| hash_bytes(&values.tails[slot]).unwrap())
         .collect();
     assert_eq!(
         record_chain(&outputs, 4).unwrap(),
         create_hash_chain_4_from_slice(&records).unwrap()
-    );
-    assert_eq!(
-        tail_chain(&outputs, 4).unwrap(),
-        create_hash_chain_4_from_slice(&tails).unwrap()
     );
     // An omitted slot reads zero at the key's width.
     let mut filled = records.clone();
@@ -711,8 +667,6 @@ fn the_region_chains_hash_each_published_slot() {
         record_chain(&outputs[..3], 4).unwrap(),
         create_hash_chain_4_from_slice(&filled).unwrap()
     );
-    // A clear has_data binds zero, no chain of zeros.
-    assert_eq!(tail_chain(&values.outputs(4, false), 4).unwrap(), [0; 32]);
 }
 
 /// Repeats collapse in run order, only the run's owners count, a reorder moves the chain.
@@ -757,14 +711,13 @@ fn the_element_count_follows_the_family_alone() {
     let slots = [zero; 3];
     let parties = [zero; ANONYMOUS_PARTIES];
     let roots = TransferRoots::default();
-    let outputs = values.outputs(8, false);
+    let outputs = values.outputs(8);
     let key = AuditKey {
-        format: custom_ring_interface::DisclosureFormat::Standard,
         class: 16,
         entry: false,
     };
-    // Head, rail bits, mask, totals digest, signer data counts, no_spend, m, three chains, n, nullifier chain, private_tx_hash, sender, parties, signer count and chain, four roots, nine public cells, withdrawals and length.
-    let cells = AUDIT_HEAD_ELEMENTS + 3 + 4 + 4 + 3 + 1 + ANONYMOUS_PARTIES + 2 + 4 + 9 + 1 + 1;
+    // Head, rail bits, mask, totals digest, no_spend, m, record chain, n, private_tx_hash, sender, parties, signer count and chain, four roots, nine public cells, withdrawals and length.
+    let cells = AUDIT_HEAD_ELEMENTS + 3 + 3 + 2 + 2 + 1 + ANONYMOUS_PARTIES + 2 + 4 + 9 + 1 + 1;
     for capacity in [2usize, 4, 8] {
         for published in [1, capacity] {
             let statement = TransferStatement {
@@ -777,12 +730,10 @@ fn the_element_count_follows_the_family_alone() {
                 },
                 approval_mask: ApprovalMask::default(),
                 approval_totals: &[0; 32],
-                signer_data_counts: SignerDataCounts::default(),
                 no_spend: false,
                 outputs: &outputs[..published],
                 output_capacity: capacity,
                 input_count: 1,
-                input_nullifier_chain: values.fields[4],
                 private_tx_hash: &zero,
                 signers: SignerSet::default(),
                 roots: &roots,
@@ -796,7 +747,7 @@ fn the_element_count_follows_the_family_alone() {
             let elements = statement.elements().unwrap();
             assert_eq!(elements.len(), expected);
             assert_eq!(
-                elements[AUDIT_HEAD_ELEMENTS + 7],
+                elements[AUDIT_HEAD_ELEMENTS + 6],
                 right_aligned(published as u64)
             );
             assert_eq!(elements[elements.len() - 1], right_aligned(expected as u64));
@@ -819,13 +770,12 @@ fn the_element_count_follows_the_family_alone() {
 #[test]
 fn the_anonymous_transfer_statement_follows_the_contract_order() {
     let values = Values::new();
-    let outputs = values.outputs(4, false);
+    let outputs = values.outputs(4);
     let mut parties = [[0u8; 32]; ANONYMOUS_PARTIES];
     for (slot, party) in parties.iter_mut().enumerate() {
         *party = field(70 + slot as u8);
     }
     let key = AuditKey {
-        format: custom_ring_interface::DisclosureFormat::Standard,
         class: 16,
         entry: false,
     };
@@ -847,12 +797,10 @@ fn the_anonymous_transfer_statement_follows_the_contract_order() {
         },
         approval_mask: ApprovalMask::WITHDRAWAL,
         approval_totals: &[0; 32],
-        signer_data_counts: SignerDataCounts::default(),
         no_spend: true,
         outputs: &outputs,
         output_capacity: 4,
         input_count: 3,
-        input_nullifier_chain: values.fields[5],
         private_tx_hash: &values.fields[3],
         signers,
         roots: &roots,
@@ -864,23 +812,22 @@ fn the_anonymous_transfer_statement_follows_the_contract_order() {
     let elements = statement.elements().unwrap();
     assert_eq!(
         elements[7],
-        ciphertext_digest(statement.head.envelope).unwrap()
+        Poseidon::hashv(&[
+            &ciphertext_digest(statement.head.envelope).unwrap(),
+            &ciphertext_digest(statement.head.recipient_keys).unwrap(),
+        ])
+        .unwrap()
     );
-    let hashes: Vec<[u8; 32]> = outputs.iter().map(|output| *output.hash).collect();
     let mut tail = vec![
         right_aligned(0),
         right_aligned(0),
         right_aligned(0),
         right_aligned(2),
         zero,
-        zero,
         right_aligned(1),
         right_aligned(4),
-        create_hash_chain_4_from_slice(&hashes).unwrap(),
         record_chain(&outputs, 4).unwrap(),
-        zero,
         right_aligned(3),
-        values.fields[5],
         values.fields[3],
         zero,
     ];
@@ -906,7 +853,7 @@ fn the_anonymous_transfer_statement_follows_the_contract_order() {
 #[test]
 fn delivery_bytes_stay_outside_the_statement() {
     let values = Values::new();
-    let outputs = values.outputs(4, false);
+    let outputs = values.outputs(4);
     let parties = [[0u8; 32]; ANONYMOUS_PARTIES];
     let zero = [0u8; 32];
     let slots = [zero; 3];
@@ -916,7 +863,6 @@ fn delivery_bytes_stay_outside_the_statement() {
             AuditLayout::default(),
             stream(
                 AuditKey {
-                    format: custom_ring_interface::DisclosureFormat::Standard,
                     class: 16,
                     entry: false,
                 },
@@ -931,12 +877,10 @@ fn delivery_bytes_stay_outside_the_statement() {
         },
         approval_mask: ApprovalMask::default(),
         approval_totals: &[0; 32],
-        signer_data_counts: SignerDataCounts::default(),
         no_spend: false,
         outputs: &outputs,
         output_capacity: 4,
         input_count: 3,
-        input_nullifier_chain: values.fields[5],
         private_tx_hash: &zero,
         signers: SignerSet::default(),
         roots: &roots,
@@ -945,7 +889,8 @@ fn delivery_bytes_stay_outside_the_statement() {
         public_gross: &slots,
         withdrawal_hash: &zero,
     };
-    let body = [7u8; RECIPIENT_BODY_LEN];
+    // A payload past the record, a tag and an exit's scheme 3 body stay outside.
+    let body = [&values.records[1][..], &[7u8; 5]].concat();
     let mut rewritten = outputs.clone();
     rewritten[1].owner_tag = custom_ring_interface::stream::slot_tag(values.keys[9]);
     rewritten[1].body = SlotBody::Recipient(&body);

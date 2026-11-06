@@ -4,7 +4,7 @@ use custom_ring_interface::{
     cosign::ApprovalMask, storage::Revision, stream::slot_tag, AnonymousProofData, AppMessage,
     BundleLayout, CustomRingProof, FrameExtensions, FramedSenderBundle, InProofOwner, InputTrees,
     PlainGroth16Proof, PolicyProof, Replies, RingOutput, RingRail, RingTransactData, SlotBody,
-    AUDIT_RECORD_LEN, CONFIDENTIAL_DATA_FREE_BODY_LEN, DATA_TAIL_LEN, RECIPIENT_BODY_LEN,
+    CONFIDENTIAL_DATA_FREE_BODY_LEN, OUTPUT_RECORD_LEN,
 };
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
 use spr_interface::instruction::{InterfaceTransfer, TreeContext};
@@ -21,14 +21,15 @@ pub struct Fixture {
     pub spp_proof: PlainGroth16Proof,
     pub fields: Vec<[u8; 32]>,
     pub bytes: [[u8; 32]; 64],
-    pub records: [[u8; AUDIT_RECORD_LEN]; 16],
-    pub tails: [[u8; DATA_TAIL_LEN]; 16],
+    /// Slot `i`'s record, a recipient body with no payload.
+    pub records: [[u8; OUTPUT_RECORD_LEN]; 16],
     /// Cut to the stream layout's envelope length.
     pub envelope: Vec<u8>,
+    /// Cut to one sealed key per published slot.
+    pub keys: Vec<u8>,
     pub tags: [[u8; 32]; 16],
-    pub recipient_body: [u8; RECIPIENT_BODY_LEN],
-    /// A body past the plain head, a data-bearing frame's.
-    pub extended_body: [u8; RECIPIENT_BODY_LEN + 33],
+    /// A record and a payload, a data-bearing frame's.
+    pub extended_bodies: [[u8; OUTPUT_RECORD_LEN + 35]; 16],
     /// Cut to the frame's `m`.
     pub sender_body: Vec<u8>,
     /// Cut to one length per body-bearing slot.
@@ -57,17 +58,17 @@ impl Fixture {
             },
             fields: (0..=u8::MAX).map(field).collect(),
             bytes: core::array::from_fn(|i| [0x40 + i as u8; 32]),
-            records: core::array::from_fn(|i| [0x80 + i as u8; AUDIT_RECORD_LEN]),
-            tails: core::array::from_fn(|i| [0xc0 + i as u8; DATA_TAIL_LEN]),
+            records: core::array::from_fn(|i| [0x80 + i as u8; OUTPUT_RECORD_LEN]),
             envelope: (0..8192u32).map(|byte| byte as u8 ^ 0x93).collect(),
+            keys: (0..512u32).map(|byte| byte as u8 ^ 0x71).collect(),
             tags: core::array::from_fn(|i| field(0xa0 + i as u8)),
-            recipient_body: core::array::from_fn(|byte| byte as u8 ^ 0x5a),
-            extended_body: core::array::from_fn(|byte| byte as u8 ^ 0x3c),
-            sender_body: (0..BundleLayout {
-                outputs: 16,
-                change: 16,
-            }
-            .byte_len() as u16)
+            extended_bodies: core::array::from_fn(|i| {
+                core::array::from_fn(|byte| match byte < OUTPUT_RECORD_LEN {
+                    true => 0x80 + i as u8,
+                    false => byte as u8 ^ 0x3c,
+                })
+            }),
+            sender_body: (0..BundleLayout { outputs: 16 }.byte_len() as u16)
                 .map(|byte| byte as u8 ^ 0x2d)
                 .collect(),
             replies: (0..2048u32).map(|byte| byte as u8 ^ 0x17).collect(),
@@ -103,6 +104,7 @@ impl Fixture {
             replies: None,
             sender: None,
             envelope: &[],
+            recipient_keys: &[],
             private_tx_hash: &self.fields[0],
             anonymous: None,
             in_proof_owner: None,
@@ -121,17 +123,14 @@ impl Fixture {
             owner_tag: self.bytes[12 + slot],
             body: SlotBody::Exit(payload),
             record: &self.records[slot],
-            tail: None,
         }
     }
 
-    /// Cuts the envelope to the frame's stream layout and hands each slot a tail under `has_data`.
+    /// Cuts the envelope and the recipient keys to the frame's stream layout.
     pub fn with_audit_stream<'a>(&'a self, mut data: RingTransactData<'a>) -> RingTransactData<'a> {
         let stream = data.audit_stream().unwrap();
         data.envelope = &self.envelope[..stream.envelope().len];
-        for (slot, output) in data.outputs.iter_mut().enumerate() {
-            output.tail = data.has_data.then_some(&self.tails[slot]);
-        }
+        data.recipient_keys = &self.keys[..stream.keys_len()];
         data
     }
 
@@ -206,16 +205,16 @@ impl Fixture {
         data
     }
 
-    /// Bodies past the plain head and one tail per published slot.
+    /// A payload past every record.
     pub fn confidential_data(&self) -> RingTransactData<'_> {
         let mut data = self.base(RingRail::Confidential, 2, 2);
         data.has_data = true;
         data.outputs = vec![
             RingOutput {
-                body: SlotBody::Recipient(&self.extended_body),
+                body: SlotBody::Recipient(&self.extended_bodies[0]),
                 ..self.recipient(0)
             },
-            self.exit(1, &self.extended_body),
+            self.exit(1, &self.extended_bodies[1]),
         ];
         self.with_audit_stream(data)
     }
@@ -224,7 +223,6 @@ impl Fixture {
     pub fn confidential_extensions(&self) -> RingTransactData<'_> {
         let mut data = self.base(RingRail::Confidential, 2, 2);
         data.extensions = FrameExtensions {
-            format: custom_ring_interface::DisclosureFormat::Standard,
             data_hash: Some(&self.fields[70]),
             ring_data_hash: Some(&self.fields[71]),
             messages: vec![AppMessage {
@@ -233,7 +231,6 @@ impl Fixture {
             }],
             cache: None,
             approval_totals: None,
-            signer_data_counts: None,
         };
         data.outputs = vec![self.recipient(0), self.recipient(1)];
         self.with_audit_stream(data)
@@ -310,13 +307,12 @@ impl Fixture {
         RingOutput {
             hash: &self.fields[10 + slot],
             owner_tag: slot_tag(self.bytes[3 + slot]),
-            body: SlotBody::Recipient(&self.recipient_body),
+            body: SlotBody::Recipient(&self.records[slot]),
             record: &self.records[slot],
-            tail: None,
         }
     }
 
-    /// Slot 0 a change output, any other slot a recipient body.
+    /// Slot 0 a change output under a zero tag, any other slot a recipient's.
     pub fn tagged(&self, slot: usize) -> RingOutput<'_> {
         RingOutput {
             hash: &self.fields[10 + slot],
@@ -325,27 +321,23 @@ impl Fixture {
             } else {
                 slot_tag(self.tags[slot])
             },
-            body: match slot {
-                0 => SlotBody::None,
-                _ => SlotBody::Recipient(&self.recipient_body),
-            },
+            body: SlotBody::Recipient(&self.records[slot]),
             record: &self.records[slot],
-            tail: None,
         }
     }
 
-    /// `outputs` is the frame's `m`, slot 0 its one bodiless slot as [`Self::tagged`] builds it.
+    /// `outputs` is the frame's `m`.
     pub fn sender(&self, outputs: usize) -> Option<FramedSenderBundle<'_>> {
         Some(FramedSenderBundle {
             tag: &self.tags[0],
-            body: &self.sender_body[..BundleLayout { outputs, change: 1 }.byte_len()],
+            body: &self.sender_body[..BundleLayout { outputs }.byte_len()],
         })
     }
 
-    /// The anonymous frame's replies, one of `len` bytes per body-bearing slot.
+    /// The anonymous frame's replies, one of `len` bytes per non-exit slot.
     pub fn anonymous_replies(&self, len: u16) -> RingTransactData<'_> {
         let mut data = self.anonymous();
-        data.replies = Some(Replies::new(len, &self.replies[..2 * usize::from(len)]).unwrap());
+        data.replies = Some(Replies::new(len, &self.replies[..3 * usize::from(len)]).unwrap());
         data
     }
 

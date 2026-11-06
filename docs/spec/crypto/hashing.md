@@ -33,7 +33,7 @@ Every commitment and statement of a custom ring is a Poseidon hash over BN254. T
 | Ring id | `hash_bytes(ring program id)` |
 | Asset | `hash_bytes(mint)`, and `SOL_ASSET_FIELD = Poseidon(0, 0) = 0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864` for SOL |
 | Zero nullifier key | `ZERO_NULLIFIER_PUBKEY = Poseidon(0) = 0x2a09a9fd93c590c26b91effbb2499f07e8f7aa12e2b4940a3aed2411cb65e11c`. No secret stands behind it, so no owner enrolls it. A ring output under it needs no tracking row for its key |
-| Owner member | `solana_owner_identity(key)` |
+| Owner public record key | `Poseidon(CRPL, solana_owner_identity(key), 0)`, the key of every public list record of an owner |
 | Asset member | `hash_bytes(mint)`. The CLI names SOL by the zero address. |
 | UTXO hash | `Poseidon(domain, tree_id, asset, amount, data_hash, Poseidon(ring_data_hash, ring_id), Poseidon(owner_hash, blinding))`, domains dummy `1`, address `2`, UTXO `3`, as zolana defines it |
 
@@ -47,7 +47,7 @@ Every commitment and statement of a custom ring is a Poseidon hash over BN254. T
 | Private transaction blinding | `TXPB(n0, seed) = Poseidon(TXPB, n0, seed)` |
 | Merge output blinding | `TMOB(seed, n0)`, as zolana defines it. `seed` is the owner's nullifier secret, and under the zero nullifier key the private merge seed |
 
-`n0` is the transfer's first nullifier. The transfer proof derives `private_tx_blinding = TXPB(n0, CRBS(tx_viewing_sk, salt))` and reopens `private_tx_hash` over it. SPP derives every output blinding and `private_tx_blinding` from one seed, so the shared hash fixes that seed to `CRBS(tx_viewing_sk, salt)` and SPP holds every published output's blinding to it, a dummy's included. The auditor derives each output blinding from the sealed key. No frame field carries the output seed.
+`n0` is the transfer's first nullifier. The transfer proof derives `private_tx_blinding = TXPB(n0, CRBS(tx_viewing_sk, salt))` and reopens `private_tx_hash` over it. SPP derives every output blinding and `private_tx_blinding` from one seed, so the shared hash fixes that seed to `CRBS(tx_viewing_sk, salt)` and SPP holds every published output's blinding to it, a dummy's included. Each output record carries its slot's blinding, and the auditor also derives it from the sealed key. Only the sender bundle carries the output seed.
 
 ## Slot secret
 
@@ -55,7 +55,13 @@ Every commitment and statement of a custom ring is a Poseidon hash over BN254. T
 |---|---|
 | Slot secret | `Poseidon(CRDS, pack_be(dh), pack_be(tx_viewing_pk), pack_be(0x04 \|\| u), right_align(salt), i, n0)`, `dh = X25519(tx_viewing_sk, u)`, 10 inputs |
 
-The recipient rebuilds the slot secret from `X25519(u_sk, tx_viewing_u)`, the auditor from the sealed transaction viewing secret. A recipient body takes `i` as the slot. A reply takes the secret of its slot. The sender bundle takes `i = m`, past every body's index.
+The sender seals slot `i` to its recipient key `u = V_i`. The recipient rebuilds the slot secret from `X25519(u_sk, tx_viewing_u)`, the auditor from the sealed transaction viewing secret and the sealed `V_i`. An output record and its payload take `i` as the slot. A reply takes the secret of its slot. The sender bundle takes `i = m`, past every slot's index. A merge record takes `eph_sk` in place of `tx_viewing_sk`, the owner's viewing key as `u`, a zero salt and `i = 0`.
+
+| Value | Encoding |
+|---|---|
+| Dummy recipient key | `V_i = X25519(clamp(Poseidon(CRDK, sk_0, sk_1, i)), 9)`, with `(sk_0, sk_1) = PackBytesBE(tx_viewing_sk)` and RFC 7748 clamping |
+
+A dummy slot seals its all-zero record to `V_i`. A relay that holds `tx_viewing_sk` rederives every dummy key, and no wire carries them. No proof checks the derivation, the auditor reads `V_i` from its stream.
 
 | Value | Encoding |
 |---|---|
@@ -103,13 +109,13 @@ A tracking registry holds one leaf per enrolled owner.
 
 An unwritten leaf is `0`. The sentinel carries a zero `nullifier_pk`, and a query for an absent owner reads a zero key. The program computes every entry from the owner's tracking authorization, never from instruction data. No leaf holds a viewing key. The apply proof inserts each entry once, at the next index. Its member, nullifier key, ciphertext hash and list tag stay fixed. An insertion changes its predecessor's `next` and leaf hash. `test-vectors/registry/tracking-records.json` pins both hashes, the entry chain and the apply statement. A present owner opens by its leaf, and an absent one proves `member < owner < next` for a leaf under the frame's tracking root.
 
-## Private list key
+## List key
 
 | Value | Encoding |
 |---|---|
-| Salted member | `Poseidon(CRPL, owner_identity, list_salt)` |
+| Owner lookup key | `Poseidon(CRPL, owner_identity, salt)`, salt `0` for the public record and the owner's nonzero `list_salt` for the private one |
 
-A private list entry is an ordinary record under the salted member. While the owner's tracking row is present, the transfer proof holds `list_salt` to open the row's `list_tag`, so the prover cannot choose the key. A private write's proof holds the written member to `Poseidon(CRPL, row.member, list_salt)`. It holds `Poseidon(CRPT, list_salt)` to the `list_tag` of a row under the tracking root, and that row's `nullifier_pk` to nonzero. The write must carry a private list bit in its mask.
+An owner keeps one public record, and a rule reads every public list of the owner there, in the own and the curator registry alike. Registration refuses a zero `list_salt`, so no private record sits on the public key. A private list entry is an ordinary record under the salted key. While the owner's tracking row is present, the transfer proof holds `list_salt` to open the row's `list_tag`, so the prover cannot choose the key. A private write's proof holds the written member to `Poseidon(CRPL, row.member, list_salt)`. It holds `Poseidon(CRPT, list_salt)` to the `list_tag` of a row under the tracking root, and that row's `nullifier_pk` to nonzero. The write must carry a private list bit in its mask.
 
 ## Policy table hash
 
@@ -151,12 +157,13 @@ Each amount is a u128 under `right_align`. An output slot reads the largest char
 | `CRTQ` | `0x43525451` | tracking entry |
 | `CRTA` | `0x43525441` | apply enrollments statement and entry chain start |
 | `CRPT` | `0x43525054` | list tag |
-| `CRPL` | `0x4352504c` | salted member |
+| `CRPL` | `0x4352504c` | owner lookup key |
 | `CRAO` | `0x4352414f` | approval totals digest |
 | `CRMG` | `0x43524d47` | merge statement |
 | `CRRU` | `0x43525255` | record update statement |
 | `CRWG` | `0x43525747` | wallet grant record key |
 | `CR_S` | `0x43525f53` | envelope shared secret |
+| `CRDK` | `0x4352444b` | dummy recipient key |
 | `TMOB` | `0x544d4f42` | zolana merge output blinding |
 | `TXOS`, `TXOB`, `TXPB` | `0x54584f53`, `0x54584f42`, `0x54585042` | zolana output seed, output blinding, private transaction blinding |
 

@@ -16,7 +16,7 @@ use std::{
     },
 };
 
-use custom_ring_interface::{AuditRecord, AuditStreamLayout, OpeningRecord, RecordKind, RingMode};
+use custom_ring_interface::{AuditStreamLayout, MergeRecord, OutputRecord, RecordKind, RingMode};
 use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::{
@@ -33,8 +33,8 @@ use zolana_ring_client::{
     auditor_view_tag, confirmed_merge,
     history::{HistoryCursor, HistoryQuery, HistoryStream},
     AuditError, AuditStreamSeal, AuditedEntryInput, AuditedTransaction, ConfirmedMerge,
-    ConfirmedMergeDisclosure, InputOpening, MergeAudit, MergeLedger, MergeRecordSeal,
-    OutputOpening, OutputPayloadError, OutputPayloadErrorKind, RingOrigin, RingOwnerTag, RingScan,
+    ConfirmedMergeDisclosure, MergeAudit, MergeLedger, MergeRecordSeal, OutputOpening,
+    OutputPayloadError, OutputPayloadErrorKind, RingOrigin, RingOwnerTag, RingScan,
     TransactionAudit, TransactionOrigin,
 };
 
@@ -193,7 +193,7 @@ fn zero_key_and_enrolled_outputs_in_one_frame_are_each_identified() {
 }
 
 #[test]
-fn a_data_bearing_note_rebuilds_from_its_tail() {
+fn a_data_bearing_note_rebuilds_from_its_payload() {
     let note = UtxoFields {
         data_hash: field(0x71),
         ring_data_hash: field(0x72),
@@ -222,32 +222,37 @@ fn a_data_bearing_note_rebuilds_from_its_tail() {
         })
         .collect();
     assert_eq!(body_lengths[0], body_lengths[1]);
-    assert!(body_lengths[0] > custom_ring_interface::RECIPIENT_BODY_LEN);
+    assert!(body_lengths[0] > custom_ring_interface::OUTPUT_RECORD_LEN);
     let audited = audit(&built.transaction, built.layout).unwrap();
     expect_every_slot(&built, &audited);
     let opened = audited.outputs[0].opening.utxo().unwrap();
-    assert_eq!(opened.data_hash, field(0x71));
-    assert_eq!(opened.ring_data_hash, field(0x72));
+    assert_eq!(opened.data_hash, Some(field(0x71)));
+    assert_eq!(opened.ring_data_hash, Some(field(0x72)));
     // The commitment holds both hashes.
     let mut cleared = built.disclosure.clone();
-    cleared.tails[0] = Default::default();
+    cleared.payloads.as_mut().unwrap()[0] = Default::default();
     let forged = transfer.publish(Publish {
         slots: built.transaction.output_slots.clone(),
         disclosure: &cleared,
         auditor: &auditor().pubkey(),
         rail: built.rail,
     });
+    let audited = audit(&forged, built.layout).unwrap();
     assert_eq!(
-        audit(&forged, built.layout).unwrap().payload_errors,
-        [slot_error(0, OutputPayloadErrorKind::Commitment)]
+        audited.payload_errors,
+        [slot_error(0, OutputPayloadErrorKind::Payload)]
     );
+    // The proven record stands under the published commitment, its data hashes stay unknown.
+    let kept = audited.outputs[0].opening.utxo().unwrap();
+    assert_eq!((kept.amount, kept.owner_key), (note.amount, note.owner_key));
+    assert_eq!((kept.data_hash, kept.ring_data_hash), (None, None));
 }
 
 #[test]
 fn each_record_field_changed_fails_the_rebuild() {
     let transfer = Transfer::fixture();
     let built = build(&transfer, Rail::Delivered, delivered_outputs());
-    type Spoil = fn(&mut AuditRecord);
+    type Spoil = fn(&mut OutputRecord);
     let spoils: [(&str, Spoil); 4] = [
         ("amount", |record| record.amount += 1),
         ("owner_key", |record| record.owner_key[0] ^= 1),
@@ -267,16 +272,45 @@ fn each_record_field_changed_fails_the_rebuild() {
             let audited = audit(&forged, built.layout).unwrap();
             assert_eq!(
                 audited.payload_errors,
-                [slot_error(slot as u32, OutputPayloadErrorKind::Commitment)],
+                [slot_error(slot as u32, OutputPayloadErrorKind::Payload)],
                 "{name} of slot {slot}"
             );
-            assert_eq!(audited.outputs.len(), built.outputs.len() - 1);
+            // The reader keeps the record, only the ring proof refuses a forged one.
+            assert_eq!(audited.outputs.len(), built.outputs.len());
         }
     }
 }
 
 #[test]
-fn a_record_of_one_slot_at_another_is_rejected_on_the_commitment() {
+fn a_noncanonical_nullifier_key_or_blinding_refuses_the_transaction() {
+    let transfer = Transfer::fixture();
+    let built = build(&transfer, Rail::Delivered, delivered_outputs());
+    type Spoil = fn(&mut OutputRecord);
+    let spoils: [(&str, Spoil); 2] = [
+        ("nullifier_pk", |record| record.nullifier_pk = [0xff; 32]),
+        ("blinding", |record| record.blinding = [0xff; 32]),
+    ];
+    for (name, spoil) in spoils {
+        let mut spoiled = built.disclosure.clone();
+        spoil(&mut spoiled.records[0]);
+        let forged = transfer.publish(Publish {
+            slots: built.transaction.output_slots.clone(),
+            disclosure: &spoiled,
+            auditor: &auditor().pubkey(),
+            rail: built.rail,
+        });
+        assert!(
+            matches!(
+                audit(&forged, built.layout),
+                Err(AuditError::DisclosureField)
+            ),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn a_record_of_one_slot_at_another_drops_its_data_hashes() {
     let transfer = Transfer::fixture();
     let built = build(&transfer, Rail::Delivered, delivered_outputs());
     let mut swapped = built.disclosure.clone();
@@ -291,11 +325,11 @@ fn a_record_of_one_slot_at_another_is_rejected_on_the_commitment() {
     assert_eq!(
         audited.payload_errors,
         [
-            slot_error(0, OutputPayloadErrorKind::Commitment),
-            slot_error(1, OutputPayloadErrorKind::Commitment),
+            slot_error(0, OutputPayloadErrorKind::Payload),
+            slot_error(1, OutputPayloadErrorKind::Payload),
         ]
     );
-    assert_eq!(opened_slots(&audited), [2, 3, 4, 5, 6, 7]);
+    assert_eq!(opened_slots(&audited), [0, 1, 2, 3, 4, 5, 6, 7]);
 }
 
 #[test]
@@ -303,7 +337,7 @@ fn a_live_slot_under_a_dummy_record_is_rejected_on_the_commitment() {
     let transfer = Transfer::fixture();
     let built = build(&transfer, Rail::Delivered, delivered_outputs());
     let mut hidden = built.disclosure.clone();
-    hidden.records[0] = AuditRecord::default();
+    hidden.records[0] = OutputRecord::default();
     let forged = transfer.publish(Publish {
         slots: built.transaction.output_slots.clone(),
         disclosure: &hidden,
@@ -316,8 +350,9 @@ fn a_live_slot_under_a_dummy_record_is_rejected_on_the_commitment() {
     );
 }
 
+/// The proof names `R` and no note position, the reader keeps every published nullifier for the index.
 #[test]
-fn inputs_read_real_up_to_the_proven_count_and_padding_past_it() {
+fn the_reader_keeps_the_proven_count_and_every_published_nullifier() {
     let mut transfer = Transfer::fixture();
     transfer.nullifiers = vec![transfer.first_nullifier, field(0x61), field(0x62)];
     let outputs = delivered_outputs()[..2].to_vec();
@@ -326,52 +361,8 @@ fn inputs_read_real_up_to_the_proven_count_and_padding_past_it() {
     let built = publish(&transfer, Rail::Delivered, outputs, disclosure);
     let audited = audit(&built.transaction, built.layout).unwrap();
     assert_eq!(audited.real_inputs, 2);
-    let read: Vec<_> = audited
-        .inputs
-        .iter()
-        .map(|input| (input.nullifier, input.opening.clone()))
-        .collect();
-    assert_eq!(
-        read,
-        [
-            (transfer.first_nullifier, InputOpening::Real),
-            (field(0x61), InputOpening::Real),
-            (field(0x62), InputOpening::Dummy),
-        ]
-    );
-}
-
-/// SPP order `address, note, note, dummy`, the address neither spends a note nor names an owner.
-#[test]
-fn an_address_ahead_of_the_notes_reads_apart_from_them() {
-    let mut transfer = Transfer::fixture();
-    transfer.nullifiers = vec![
-        transfer.first_nullifier,
-        field(0x61),
-        field(0x62),
-        field(0x63),
-    ];
-    let outputs = delivered_outputs()[..2].to_vec();
-    let mut disclosure = transfer.disclosure(Rail::Delivered, &outputs);
-    disclosure.real_inputs = 2;
-    disclosure.address_input_bits = 0b001;
-    let built = publish(&transfer, Rail::Delivered, outputs, disclosure);
-    let audited = audit(&built.transaction, built.layout).unwrap();
-    assert_eq!(audited.real_inputs, 2);
-    let read: Vec<_> = audited
-        .inputs
-        .iter()
-        .map(|input| input.opening.clone())
-        .collect();
-    assert_eq!(
-        read,
-        [
-            InputOpening::Address,
-            InputOpening::Real,
-            InputOpening::Real,
-            InputOpening::Dummy,
-        ]
-    );
+    assert_eq!(audited.nullifiers, transfer.nullifiers);
+    assert!(audited.entries.is_empty());
 }
 
 /// The entry bit names absolute note position 1.
@@ -393,17 +384,16 @@ fn an_entry_input_opens_under_its_default_bit_with_its_proven_commitment() {
     );
     let built = publish(&transfer, Rail::Anonymous, outputs, disclosure);
     let audited = audit(&built.transaction, built.layout).unwrap();
-    assert_eq!(audited.inputs[0].opening, InputOpening::Real);
     assert_eq!(
-        audited.inputs[1].opening,
-        InputOpening::External(Box::new(AuditedEntryInput {
+        audited.entries,
+        [AuditedEntryInput {
             owner_key: spent.owner_key,
             nullifier_pk: spent.nullifier_pk,
             asset: spent.asset(),
             mint: MINT,
             amount: 70,
             commitment,
-        }))
+        }]
     );
 }
 
@@ -432,7 +422,33 @@ fn an_exit_opens_with_its_published_owner_tag() {
     });
     assert_eq!(
         audit(&forged, built.layout).unwrap().payload_errors,
-        [slot_error(0, OutputPayloadErrorKind::Commitment)]
+        [slot_error(0, OutputPayloadErrorKind::Payload)]
+    );
+}
+
+/// An exit's data sits in its scheme 3 body, the auditor opens its record without the data hashes.
+#[test]
+fn an_honest_data_bearing_exit_opens() {
+    let exit = UtxoFields {
+        data_hash: field(0x75),
+        ..utxo(0xe5, SOL, 40)
+    };
+    let built = build(
+        &Transfer::fixture(),
+        Rail::Delivered,
+        vec![Output::Exit(exit), Output::Dummy],
+    );
+    let audited = audit(&built.transaction, built.layout).unwrap();
+    let OutputOpening::Exit(opened) = audited.outputs[0].opening else {
+        panic!("an exit")
+    };
+    assert_eq!(
+        (opened.owner_key, opened.amount, opened.nullifier_pk),
+        (exit.owner_key, exit.amount, exit.nullifier_pk)
+    );
+    assert_eq!(
+        audited.payload_errors,
+        [slot_error(0, OutputPayloadErrorKind::Payload)]
     );
 }
 
@@ -522,16 +538,19 @@ fn merged(transfer: &Transfer, spend: &Spend) -> Confirmed {
         tree_id: transfer.tree_id,
     });
     let sealed = MergeRecordSeal {
-        record: OpeningRecord {
-            record: AuditRecord {
+        record: MergeRecord {
+            record: OutputRecord {
                 kind: RecordKind::Ring,
                 amount: spend.utxo.amount,
                 owner_key: spend.utxo.owner_key,
                 mint: spend.utxo.asset_address.to_bytes(),
                 nullifier_pk: spend.utxo.nullifier_pk,
+                blinding,
             },
-            secret: MERGE_SEED,
+            seed: MERGE_SEED,
         },
+        recipient: X25519Pubkey::from_u(x25519_u(0x4e)).unwrap(),
+        first_nullifier,
     }
     .seal(&auditor().pubkey())
     .unwrap();
@@ -545,7 +564,8 @@ fn merged(transfer: &Transfer, spend: &Spend) -> Confirmed {
         origin: RingOrigin {
             merge_disclosure: Some(ConfirmedMergeDisclosure {
                 eph_pk: *sealed.eph_pk.as_bytes(),
-                ciphertext: sealed.ciphertext,
+                envelope: sealed.envelope,
+                record: sealed.record,
             }),
             ..confirmed(&transaction)
         },
@@ -631,7 +651,7 @@ fn a_merge_record_resolves_alone_in_the_ledger() {
         opened.asset,
         hash_bytes(spent[1].utxo.asset_address.as_array()).unwrap()
     );
-    assert_eq!(opened.commitment(Some(transfer.ring)).unwrap(), hash);
+    assert_eq!(opened.commitment(Some(transfer.ring)).unwrap(), Some(hash));
     assert_eq!(opened.amount, spent[1].utxo.amount);
 }
 
@@ -728,10 +748,9 @@ fn the_envelope_must_seal_the_published_transaction_key() {
         layout: built.layout,
         tx_viewing_key: &other_key,
         salt: &built.transaction.salt.unwrap(),
-        inputs: built.disclosure.inputs(),
+        real_inputs: built.disclosure.real_inputs,
         evidence: built.disclosure.evidence.clone(),
-        records: built.disclosure.records.clone(),
-        tails: Vec::new(),
+        recipient_keys: built.disclosure.recipient_keys.clone(),
     }
     .seal(&auditor().pubkey())
     .unwrap();
@@ -809,14 +828,6 @@ fn the_layout_comes_from_the_ring_frame() {
     assert!(matches!(
         origin(Some(built.frame.clone())).audit_frame(RingMode::Anonymous),
         Err(AuditError::InvalidTransactData(_))
-    ));
-    let tailed = AuditStreamLayout {
-        has_data: true,
-        ..built.layout
-    };
-    assert!(matches!(
-        audit(&built.transaction, tailed),
-        Err(AuditError::AuditorMessageLength(_))
     ));
 }
 
@@ -1345,11 +1356,11 @@ async fn the_merge_audit_refuses_a_disclosure_it_cannot_open() {
     let (transfer, _, spent) = anonymous_spend();
     let mut merge = merged(&transfer, &spent[1]);
     merge.transaction.tx_signature = Signature::from([0xd1; 64]);
-    let Some(ConfirmedMergeDisclosure { ciphertext, .. }) = merge.origin.merge_disclosure.as_mut()
+    let Some(ConfirmedMergeDisclosure { record, .. }) = merge.origin.merge_disclosure.as_mut()
     else {
         panic!("the record")
     };
-    ciphertext[16] ^= 1;
+    record[16] ^= 1;
     let origins: HashMap<Signature, RingOrigin> =
         [(merge.transaction.tx_signature, merge.origin.clone())]
             .into_iter()

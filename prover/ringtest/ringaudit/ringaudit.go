@@ -106,7 +106,7 @@ func (k Keys) TransferCiphertext(t testing.TB, plaintext []byte, salt [16]byte) 
 	return ringprotocol.CTREncrypt(t, key, nonce, plaintext)
 }
 
-func (k Keys) AuditHead(t testing.TB, firstNullifier, ringID *big.Int, salt [16]byte, envelope []byte) AuditHead {
+func (k Keys) AuditHead(t testing.TB, firstNullifier, ringID *big.Int, salt [16]byte, envelope, keys []byte) AuditHead {
 	t.Helper()
 	return AuditHead{
 		FirstNullifier: firstNullifier,
@@ -114,6 +114,7 @@ func (k Keys) AuditHead(t testing.TB, firstNullifier, ringID *big.Int, salt [16]
 		TxViewingU:     [32]byte(k.txPk[1:]),
 		AuditorPubkey:  ringprotocol.Tagged(k.auditorPk[:]),
 		Envelope:       envelope,
+		Keys:           keys,
 		Salt:           salt,
 	}
 }
@@ -140,22 +141,30 @@ func (k Keys) Sealed(t testing.TB, ciphertext []byte) Sealed {
 	}
 }
 
+// Stream is the auditor stream and the sealed record of every slot.
 type Stream struct {
 	Ranges     audit.StreamRanges
 	Salt       [16]byte
 	Ciphertext []byte
+	Records    [][]byte
 }
 
 func (s Stream) Envelope(count int) []byte {
 	return s.Ciphertext[:s.Ranges.EnvelopeLen(count)]
 }
 
-func (s Stream) Record(i int) []byte {
-	offset := s.Ranges.RecordOffset(i)
-	return s.Ciphertext[offset : offset+s.Ranges.RecordLen()]
+// Keys is the transmitted recipient key region of m slots.
+func (s Stream) Keys(m int) []byte {
+	offset := s.Ranges.KeyOffset(0)
+	return s.Ciphertext[offset : offset+m*audit.KeyLen]
 }
 
-func (s Stream) Tail(i int) []byte {
-	offset := s.Ranges.TailOffset(i)
-	return s.Ciphertext[offset : offset+audit.TailLen]
+func (s Stream) Record(i int) []byte {
+	return s.Records[i]
+}
+
+// SealRecord seals slot i's record to u, as shared.SlotSeal does.
+func (k Keys) SealRecord(t testing.TB, u [32]byte, salt [16]byte, i int, firstNullifier *big.Int, plaintext []byte) []byte {
+	t.Helper()
+	return ringprotocol.SealRecord(t, k.txViewingSk, u, salt, i, firstNullifier, shared.OutputRecordInfo, plaintext)
 }

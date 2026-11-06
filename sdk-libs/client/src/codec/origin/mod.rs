@@ -41,7 +41,8 @@ pub struct RingOrigin {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConfirmedMergeDisclosure {
     pub eph_pk: [u8; custom_ring_interface::TAGGED_X25519_KEY_LEN],
-    pub ciphertext: [u8; custom_ring_interface::OPENING_RECORD_LEN],
+    pub envelope: [u8; custom_ring_interface::MERGE_ENVELOPE_LEN],
+    pub record: [u8; custom_ring_interface::MERGE_RECORD_LEN],
 }
 
 /// The confirmed instruction selects the recovery path, never indexer metadata.
@@ -336,7 +337,8 @@ fn confirmed_merge_disclosure(
     let forwarded = request.forwarded(&request.spp_merge_body().ok()?);
     (forwarded == source.data).then_some(ConfirmedMergeDisclosure {
         eph_pk: *request.eph_pk,
-        ciphertext: *request.ciphertext,
+        envelope: *request.envelope,
+        record: *request.record,
     })
 }
 

@@ -5,9 +5,11 @@ mod common;
 use std::ops::Range;
 
 use custom_ring_interface::{
-    domain::MERGE_RECORD_LABEL, storage::Revision, AuditRecord, CustomRingError,
-    CustomRingMergeIxData, CustomRingMergeIxDataRef, CustomRingProof, MergePublicInput,
-    OpeningRecord, PlainGroth16Proof, RecordKind, SealedMergeRecord, OPENING_RECORD_LEN,
+    domain::{MERGE_OUTPUT_LABEL, MERGE_RECORD_LABEL},
+    storage::Revision,
+    CustomRingError, CustomRingMergeIxData, CustomRingMergeIxDataRef, CustomRingProof,
+    MergeEnvelope, MergePublicInput, MergeRecord, OutputRecord, PlainGroth16Proof, RecordKind,
+    SealedMergeRecord, MERGE_ENVELOPE_LEN, MERGE_RECORD_LEN,
 };
 use serde::Deserialize;
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
@@ -65,7 +67,8 @@ fn request(authority: MergeRingAuthority) -> CustomRingMergeIxData {
                 commitment_pok: [13; 32],
             },
             eph_pk: [4; 33],
-            ciphertext: [14; OPENING_RECORD_LEN],
+            envelope: [15; MERGE_ENVELOPE_LEN],
+            record: [14; MERGE_RECORD_LEN],
         },
         merge: merge_body(),
     }
@@ -100,11 +103,18 @@ fn the_view_rebuilds_the_exact_spp_body_from_the_compressed_point() {
         assert_eq!(view.spp_merge_body().unwrap(), spp_body);
         assert_eq!(
             bytes.len() + 64,
-            8 + 32 + 1 + CustomRingProof::SIZE + 33 + OPENING_RECORD_LEN + spp_body.len()
+            8 + 32
+                + 1
+                + CustomRingProof::SIZE
+                + 33
+                + MERGE_ENVELOPE_LEN
+                + MERGE_RECORD_LEN
+                + spp_body.len()
         );
         assert_eq!(view.proof, &request.sealed.proof);
         assert_eq!(view.eph_pk, &request.sealed.eph_pk);
-        assert_eq!(view.ciphertext, &request.sealed.ciphertext);
+        assert_eq!(view.envelope, &request.sealed.envelope);
+        assert_eq!(view.record, &request.sealed.record);
     }
 }
 
@@ -129,23 +139,32 @@ fn the_forward_parses_as_merge_ring() {
     }
 }
 
-/// The merge record is a transfer's record followed by the seed, one encoding for both.
+/// The merge record is a transfer's record followed by the seed, under its own label.
 #[test]
-fn the_merge_record_is_an_opening_record_of_a_ring_note() {
-    let opening = OpeningRecord {
-        record: AuditRecord {
+fn the_merge_record_is_a_transfer_record_and_its_seed() {
+    let merged = MergeRecord {
+        record: OutputRecord {
             kind: RecordKind::Ring,
             amount: 12,
             owner_key: [0xa1; 32],
             mint: [0xa2; 32],
             nullifier_pk: [0xa3; 32],
+            blinding: [0xa5; 32],
         },
-        secret: [0xa4; 32],
+        seed: [0xa4; 32],
     };
-    let encoded = opening.encode();
-    assert_eq!(encoded.len(), 144);
-    assert_eq!(OpeningRecord::decode(&encoded).unwrap(), opening);
+    let encoded = merged.encode();
+    assert_eq!(encoded[..137], merged.record.encode());
+    assert_eq!(encoded[137..], [0xa4; 32]);
+    assert_eq!(MergeRecord::decode(&encoded).unwrap(), merged);
+    assert!(MergeRecord::decode(&encoded[..168]).is_err());
+    let envelope = MergeEnvelope {
+        eph_sk: [1; 32],
+        recipient_u: [2; 32],
+    };
+    assert_eq!(MergeEnvelope::decode(&envelope.encode()).unwrap(), envelope);
     assert_eq!(MERGE_RECORD_LABEL, b"CRING/mrg");
+    assert_eq!(MERGE_OUTPUT_LABEL, b"CRING/mro");
 }
 
 fn compressed_b(bytes: &[u8]) -> Range<usize> {
@@ -207,6 +226,7 @@ fn merge_statement_matches_the_go_vector() {
     struct Case {
         name: String,
         record: String,
+        envelope_ciphertext: String,
         ciphertext: String,
         elements: Vec<String>,
         public_input_hash: String,
@@ -222,24 +242,25 @@ fn merge_statement_matches_the_go_vector() {
         serde_json::from_str(&std::fs::read_to_string(MERGE_VECTOR).unwrap()).unwrap();
     for case in &vector.cases {
         let request = &case.request;
-        let record = OpeningRecord::decode(&hex_bytes(&case.record)).unwrap();
+        let record = MergeRecord::decode(&hex_bytes(&case.record)).unwrap();
         assert_eq!(record.record.kind, RecordKind::Ring);
-        // Element 10 is what the program computes from the signer under a zero key.
+        // Element 11 is what the program computes from the signer under a zero key.
         let elements = case
             .elements
             .iter()
             .map(|element| field::<32>(element))
             .collect::<Vec<_>>();
-        assert_eq!(elements[10] == [0; 32], case.name == "nonzero");
+        assert_eq!(elements[11] == [0; 32], case.name == "nonzero");
         let statement = MergePublicInput {
             output_utxo_hash: &field(&request.output_utxo_hash),
             first_nullifier: &field(&request.first_nullifier),
             ring_id: &field(&request.ring_id),
             auditor_pk: &field(&vector.auditor_pk),
             eph_pk: &field(&vector.eph_pk),
-            ciphertext: &field(&case.ciphertext),
+            envelope: &field(&case.envelope_ciphertext),
+            record: &field(&case.ciphertext),
             payer: &field(&request.payer),
-            published_owner: &elements[10],
+            published_owner: &elements[11],
             tracking_root: &field(&request.tracking_root),
         };
         assert_eq!(elements, statement.elements().unwrap());

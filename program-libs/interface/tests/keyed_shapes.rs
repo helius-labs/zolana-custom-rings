@@ -29,7 +29,6 @@ fn served(rail: RingRail, spends_default_ring: bool) -> Value {
             rail.supports(*shape)
                 && RingCircuit::transfer(
                     TransferSpend {
-                        format: rail.disclosure_format(*shape),
                         rail,
                         inputs: shape.n_inputs(),
                         outputs: shape.n_outputs(),

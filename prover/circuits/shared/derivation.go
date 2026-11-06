@@ -48,6 +48,8 @@ const (
 	ListTagDomain = 0x43525054
 	// ListKeyDomain = "CRPL"
 	ListKeyDomain = 0x4352504c
+	// DeliveredSlotDomain = "CRDS"
+	DeliveredSlotDomain = 0x43524453
 )
 
 // The root of every auditor stream, mirrored by AUDIT_SHARED_SECRET in program-libs/interface/src/proof/domain.rs and DOM_SEP_CR_SHARED in sdk-libs/ts/src/crypto/audit/audit.ts.
@@ -64,6 +66,10 @@ const (
 	NfKeyEncInfo = "CRING/nfk"
 	// MergeEncInfo mirrors MERGE_RECORD_LABEL.
 	MergeEncInfo = "CRING/mrg"
+	// OutputRecordInfo mirrors RECIPIENT_BODY_LABEL, the record is the slot's recipient body.
+	OutputRecordInfo = "CRING/rcp"
+	// MergeOutputInfo mirrors MERGE_OUTPUT_LABEL.
+	MergeOutputInfo = "CRING/mro"
 )
 
 // ZeroNullifierPk permits nullifier derivation from the opening without a secret.
@@ -87,12 +93,10 @@ func ListKey(api frontend.API, owner, listSalt frontend.Variable) frontend.Varia
 	return gadget.PoseidonHash(api, []frontend.Variable{ListKeyDomain, owner, listSalt})
 }
 
-// AnonymousParties is mirrored by ANONYMOUS_PARTIES.
-const AnonymousParties = 7
+// AnonymousParties is one cell per co-signer, mirrored by ANONYMOUS_PARTIES.
+const AnonymousParties = 5
 
-// AssertAnonymousParties separates the hidden owner from the public identities
-// reconstructed by the verifier. Zero denotes an absent optional party. An equal party
-// would name the owner the rail hides, SPP asserts the same against its signers.
+// AssertAnonymousParties holds the hidden owner apart from every nonzero co-signer cell, an equal cell would approve its own outflow.
 func AssertAnonymousParties(api frontend.API, owner frontend.Variable, parties []frontend.Variable) {
 	for _, party := range parties {
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: party, V: api.IsZero(api.Sub(owner, party))})

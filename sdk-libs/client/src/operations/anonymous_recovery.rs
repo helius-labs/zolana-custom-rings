@@ -4,14 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::*;
-use crate::compact_assets::{
-    transient_read, CompactAssetError, CompactAssetRead, CompactAssetResolution,
-    CompactAssetResolver,
-};
 use crate::history::RecoveryWindow;
 use crate::tags::TAGS_PER_REQUEST;
-use custom_ring_interface::{ring_body_format, DisclosureFormat, RecipientBody};
-use zolana_ring_transaction::open_compact_recipient_body;
 
 const SESSION_VERSION: u8 = 1;
 const DIAGNOSTIC_SAMPLES: usize = 64;
@@ -90,17 +84,15 @@ enum PageProgress {
     Paused,
 }
 
-struct DiscoveryStep<'s, 'a> {
+struct DiscoveryStep<'s> {
     task: &'s mut DiscoveryTask,
     session: &'s mut RecoverySession,
-    compact: &'s mut Option<CompactAssetResolver<'a, dyn AsyncRpc + 'a>>,
 }
 
 struct BodyWork<'a, 't> {
     entry: usize,
     body: &'a Body<'t>,
     secret: &'a SlotSecret,
-    target_slot: u64,
 }
 
 impl RecoverySession {
@@ -318,7 +310,6 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> AnonymousSync<'a
             session.enqueue(nullifier);
         }
         let mut pages = 0;
-        let mut compact = None;
         if session.target_slot.is_none() && !session.complete() {
             let target = scan.probe_target(&session).await?;
             session.set_target(target);
@@ -332,7 +323,6 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> AnonymousSync<'a
                     .recovery_discovery(DiscoveryStep {
                         task: &mut task,
                         session: &mut session,
-                        compact: &mut compact,
                     })
                     .await?;
                 if progress != PageProgress::Done {
@@ -496,13 +486,9 @@ impl<'s, 'a, 'r, I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHol
 
     async fn recovery_discovery(
         &mut self,
-        step: DiscoveryStep<'_, 'a>,
+        step: DiscoveryStep<'_>,
     ) -> Result<PageProgress, AnonymousError> {
-        let DiscoveryStep {
-            task,
-            session,
-            compact,
-        } = step;
+        let DiscoveryStep { task, session } = step;
         match task {
             DiscoveryTask::Ring {
                 ring,
@@ -559,11 +545,8 @@ impl<'s, 'a, 'r, I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHol
                                 entry,
                                 body,
                                 secret,
-                                target_slot: session
-                                    .target_slot
-                                    .ok_or(AnonymousError::RecoveryScopeChanged)?,
                             };
-                            if self.recovery_body(work, compact).await? == PageProgress::Paused {
+                            if self.recovery_body(work)? == PageProgress::Paused {
                                 return Ok(PageProgress::Paused);
                             }
                             offset.site = site + 1;
@@ -611,16 +594,11 @@ impl<'s, 'a, 'r, I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHol
         }
     }
 
-    async fn recovery_body(
-        &mut self,
-        work: BodyWork<'_, '_>,
-        resolver: &mut Option<CompactAssetResolver<'a, dyn AsyncRpc + 'a>>,
-    ) -> Result<PageProgress, AnonymousError> {
+    fn recovery_body(&mut self, work: BodyWork<'_, '_>) -> Result<PageProgress, AnonymousError> {
         let BodyWork {
             entry,
             body,
             secret,
-            target_slot,
         } = work;
         let position = match body.site {
             Site::Message(message) => {
@@ -637,78 +615,7 @@ impl<'s, 'a, 'r, I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHol
             }
             Site::Output(position) => position,
         };
-        let payload = &body.tx.output_slots[position].payload;
-        if ring_body_format(payload) != Some(DisclosureFormat::SingleAssetPayout) {
-            self.open_recipient(entry, body, position, secret)?;
-            return Ok(PageProgress::Done);
-        }
-        let Some((ciphertext, _)) = ring_body_output(payload) else {
-            return Ok(PageProgress::Done);
-        };
-        let Ok(candidate) = open_compact_recipient_body(ciphertext, secret) else {
-            return Ok(PageProgress::Done);
-        };
-        let local = self
-            .resolved_assets
-            .get(&candidate.asset_id)
-            .copied()
-            .map(Ok)
-            .unwrap_or_else(|| self.sync.assets.registry().resolve(candidate.asset_id));
-        let asset = match local {
-            Ok(asset) => asset,
-            Err(TransactionError::UnknownAsset(_)) => {
-                let source = self
-                    .sync
-                    .asset_rpc
-                    .ok_or(AnonymousError::CompactAssetSourceRequired)?;
-                if resolver.is_none() {
-                    match (CompactAssetRead {
-                        client: source,
-                        target_slot,
-                    })
-                    .open()
-                    .await
-                    {
-                        Ok(opened) => *resolver = Some(opened),
-                        Err(CompactAssetError::Source(ref error))
-                            if transient_read(source, error) =>
-                        {
-                            return Ok(PageProgress::Paused);
-                        }
-                        Err(error) => return Err(error.into()),
-                    }
-                }
-                let resolved = resolver
-                    .as_mut()
-                    .ok_or(AnonymousError::RecoveryScopeChanged)?
-                    .resolve(candidate.asset_id)
-                    .await;
-                match resolved {
-                    Ok(CompactAssetResolution::Resolved(asset)) => asset,
-                    Ok(CompactAssetResolution::Foreign) => return Ok(PageProgress::Done),
-                    Ok(CompactAssetResolution::Paused) => return Ok(PageProgress::Paused),
-                    Err(CompactAssetError::Source(ref error)) if transient_read(source, error) => {
-                        return Ok(PageProgress::Paused);
-                    }
-                    Err(error) => return Err(error.into()),
-                }
-            }
-            Err(error) => return Err(error.into()),
-        };
-        let plain = RecipientBody {
-            blinding: candidate.blinding,
-            amount: candidate.amount,
-            mint: asset.asset.to_bytes(),
-            ..RecipientBody::default()
-        };
-        let opened = self
-            .output_at(body, &self.address, position)
-            .open_body(&plain)?;
-        if let Some(OpenedBody::Note(mut note) | OpenedBody::UnknownMint(mut note)) = opened {
-            note.utxo.asset = asset;
-            self.resolved_assets.insert(asset.asset_id, asset);
-            self.accept(entry, body.tx, body.found, position, note)?;
-        }
+        self.open_recipient(entry, body, position, secret)?;
         Ok(PageProgress::Done)
     }
 }

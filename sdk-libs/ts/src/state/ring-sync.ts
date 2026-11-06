@@ -29,7 +29,7 @@ import {
 
 import { ringBodyOutput, readRingOutput, RingScheme } from "../protocol/transaction/output.js";
 import { openRecipientNote } from "../crypto/derivation/blinding.js";
-import { openRecipientBody } from "../protocol/codec/anonymous-delivery.js";
+import { openOutputSlot } from "../crypto/audit/ring-disclosure.js";
 import { spendingTransactions } from "../operations/workflow/recover.js";
 import { outputTreeId } from "../protocol/membership/trees.js";
 import { isRingKeys, type RingKeys, type RingTagFrame } from "./ring-keys.js";
@@ -306,7 +306,7 @@ async function openSlot(
   return frame.scheme === RingScheme.ringBody ? recipientNote(reads, site, context) : undefined;
 }
 
-/** The body names its mint, a commitment under the wallet's key or zero proves the note. */
+/** The record names its mint, a commitment under the wallet's key or zero proves the note. */
 async function recipientNote(
   input: Readonly<{ keys: RingKeys; assets: AssetRegistry }>,
   site: Site,
@@ -327,7 +327,7 @@ async function recipientNote(
           commitment: site.slot.outputContext.hash,
           assets: input.assets,
         },
-        openRecipientBody(slotSecret, parts.body),
+        openOutputSlot(slotSecret, parts.body),
       ),
     );
     if (note === undefined) return undefined;

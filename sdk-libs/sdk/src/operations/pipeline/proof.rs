@@ -39,7 +39,6 @@ impl Assembled {
         let parsed = ParsedTransact::new(parts.data()?)?;
         let stream = parsed.audit_stream();
         let class = stream.key.class();
-        let input_nullifiers = parsed.padded_nullifiers().copied().collect();
         let entries = match parts.entry {
             true => audit.entry_openings(class)?,
             false => Vec::new(),
@@ -49,10 +48,6 @@ impl Assembled {
             audit: audit.params()?,
             approval_mask: frame.policy.approval.bits(),
             approval_totals: parts.extensions.approval_totals,
-            signer_data_counts: parts
-                .extensions
-                .signer_data_counts
-                .map(|counts| counts.packed()),
             approval_blinder: frame
                 .approval_opening
                 .as_ref()
@@ -61,8 +56,7 @@ impl Assembled {
             outputs: audit.output_openings(stream.capacity)?,
             input_count: byte(frame.published_inputs)?,
             inputs: audit.input_openings(class)?,
-            input_nullifiers,
-            input_nullifier_chain: parsed.input_nullifier_chain()?,
+            address_chain: audit.address_chain()?,
             entries,
             signer_count: byte(owner_run.len())?,
             signers: signer_identities(owner_run, class)?,

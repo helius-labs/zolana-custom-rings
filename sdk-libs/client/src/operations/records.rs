@@ -13,9 +13,15 @@ use zolana_ring_member_registry::{
     ApplyProofInputs, Canopy, MemberRecord, OpeningCheck, PoolSubject, QuadPath, QuadPathOf,
     RecordOpening, RecordPool, RecordWriteProofInput, SharedPath, SharedProof,
 };
-use zolana_ring_policy::ListId;
+use zolana_ring_policy::{ListId, Member, MemberError};
 
 use crate::AuditError;
+
+/// `Poseidon(CRPL, owner identity, 0)`, the one record every writer and reader of the owner's lists
+/// names.
+pub fn owner_record_key(owner: &[u8; 32]) -> Result<Member, MemberError> {
+    Member::public(&Member::owner_tag(owner)?)
+}
 
 /// A member's record, or the low record bracketing its absence, read under one root.
 #[derive(Clone, PartialEq, Eq)]

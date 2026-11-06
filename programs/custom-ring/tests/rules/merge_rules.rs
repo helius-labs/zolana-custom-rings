@@ -3,7 +3,7 @@
 use bytemuck::Zeroable;
 use custom_ring_interface::{
     tag, CoSignScope, CustomRingError, CustomRingMergeIxData, RootRead, SealedMergeRecord,
-    OPENING_RECORD_LEN, RING_MERGE_OWNER_INDEX, RING_MERGE_PAYER_INDEX,
+    MERGE_ENVELOPE_LEN, MERGE_RECORD_LEN, RING_MERGE_OWNER_INDEX, RING_MERGE_PAYER_INDEX,
     RING_MERGE_RING_CONFIG_INDEX,
 };
 use solana_address::Address;
@@ -35,7 +35,8 @@ pub(crate) fn merge_data(authority: MergeRingAuthority) -> CustomRingMergeIxData
         sealed: SealedMergeRecord {
             proof: Zeroable::zeroed(),
             eph_pk: auditor_pubkey(),
-            ciphertext: [3; OPENING_RECORD_LEN],
+            envelope: [4; MERGE_ENVELOPE_LEN],
+            record: [3; MERGE_RECORD_LEN],
         },
         merge: MergeTransactIxData {
             expiry_unix_ts: 1_800_000_000,

@@ -70,7 +70,7 @@ export type ConfirmedRingTransaction =
       kind: "merge";
       transaction: IndexedShieldedTransaction;
       /** The record whose proof the direct ring caller verified. */
-      sealedRecord: Pick<SealedMergeRecord, "ephemeralPublicKey" | "ciphertext">;
+      sealedRecord: Pick<SealedMergeRecord, "ephemeralPublicKey" | "envelope" | "record">;
       authority: MergeRingAuthority;
     }>;
 
@@ -101,9 +101,9 @@ function confirmedMergeRecordOf(
     InstructionTag.ringMergeTransact,
   );
   if (!equalBytes(forwarded, found.source.data)) throw invalid("merge.sealedRecord");
-  const { ephemeralPublicKey, ciphertext } = request.sealed;
+  const { ephemeralPublicKey, envelope, record } = request.sealed;
   return {
-    sealedRecord: Object.freeze({ ephemeralPublicKey, ciphertext }),
+    sealedRecord: Object.freeze({ ephemeralPublicKey, envelope, record }),
     authority: request.authority,
   };
 }

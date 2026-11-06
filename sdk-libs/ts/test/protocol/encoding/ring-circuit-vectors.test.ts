@@ -4,13 +4,7 @@ import bodies from "../../../../../test-vectors/audit/anonymous_bodies.json" wit
 import signerSet from "../../../../../test-vectors/audit/signer_set.json" with { type: "json" };
 import debits from "../../../../../test-vectors/policy/debit.json" with { type: "json" };
 import zeroNullifier from "../../../../../test-vectors/registry/zero_nullifier.json" with { type: "json" };
-import {
-  ZERO_32,
-  ZERO_NULLIFIER_PK,
-  bigIntBytes,
-  bytesToBigInt,
-  encodeBase58,
-} from "@heliuslabs/spr/internal";
+import { ZERO_32, ZERO_NULLIFIER_PK, bigIntBytes, bytesToBigInt } from "@heliuslabs/spr/internal";
 import type { Bytes16, Bytes31, Bytes32 } from "@heliuslabs/spr/interface";
 import {
   ViewingKey,
@@ -33,11 +27,9 @@ import { anonymousTag } from "../../../src/operations/payments/output-rail.js";
 import { x25519FromU } from "../../../src/crypto/keys/x25519.js";
 import {
   MIN_REPLY_LEN,
-  openRecipientBody,
   openReply,
   openSenderBundle,
   senderBundleLen,
-  sealRecipientBody,
   sealReply,
   sealSenderBundle,
 } from "../../../src/protocol/codec/anonymous-delivery.js";
@@ -126,19 +118,11 @@ describe("anonymous_bodies.json", () => {
     ]);
   });
 
-  const body = {
-    blinding: field(bodies.body_blinding),
-    amount: BigInt(bodies.body_amount),
-    mint: encodeBase58(field(bodies.body_mint)),
-  };
-  // Slot 0 is the frame's one bodiless slot, the keys name the slots past it.
-  const layout = { outputs: bodies.output_count, change: 1 };
-  const recipientKey = bodies.recipient_keys[bodies.body_index - layout.change] ?? "";
+  // Key `k` names slot `k`, the change slot carries the sender's own key.
+  const layout = { outputs: bodies.output_count };
+  const recipientKey = bodies.recipient_keys[bodies.body_index] ?? "";
   const bundle = {
     outputSeed: field(bodies.output_seed),
-    change: [
-      { mint: encodeBase58(field(bodies.change_mint)), amount: BigInt(bodies.change_amount) },
-    ],
     recipientKeys: bodies.recipient_keys.map((key) => (key === "" ? ZERO_32 : field(key))),
   };
 
@@ -195,12 +179,6 @@ describe("anonymous_bodies.json", () => {
     txViewingKey.destroy();
   });
 
-  it("seals and opens the ring body", () => {
-    const secret = field(bodies.body_slot_secret);
-    expect(hex(sealRecipientBody(secret, body))).toBe(bodies.body);
-    expect(openRecipientBody(secret, bytes(bodies.body, 72))).toEqual(body);
-  });
-
   it("seals and opens the sender bundle and hashes its digest", () => {
     const secret = field(bodies.bundle_slot_secret);
     const sealed = bytes(bodies.bundle, senderBundleLen(layout));
@@ -209,7 +187,7 @@ describe("anonymous_bodies.json", () => {
     expect(hex(ciphertextDigest(sealed))).toBe(bodies.bundle_digest);
   });
 
-  it("opens a reply under the body's secret on a stream apart from the body's", () => {
+  it("opens a reply under the slot's secret", () => {
     const secret = field(bodies.body_slot_secret);
     const viewingKey = x25519FromU(field(bodies.sender_viewing_key));
     const reply = {
@@ -219,7 +197,6 @@ describe("anonymous_bodies.json", () => {
       data: new Data(),
     };
     const sealed = sealReply(secret, reply, MIN_REPLY_LEN);
-    expect(hex(sealed.subarray(0, 72))).not.toBe(bodies.body);
     const opened = openReply(secret, sealed);
     expect(opened?.claimed.viewingKey.u()).toEqual(viewingKey.u());
     expect(opened?.claimed.ownerKey).toEqual(reply.ownerKey);

@@ -9,7 +9,7 @@
 use std::collections::BTreeSet;
 
 use async_trait::async_trait;
-use custom_ring_interface::{tracking::TrackingAuthorization, InputClass};
+use custom_ring_interface::tracking::TrackingAuthorization;
 use solana_address::Address;
 use spr_client::{AsyncRpc, ClientError};
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
@@ -36,8 +36,10 @@ pub enum DelegateSourceError {
     UnboundOpening { index: usize },
     #[error("the allowed notes cover other sources than the request names")]
     SourcesMismatch,
-    #[error("input {position} spends a note no requested source opening derives")]
-    UnrequestedInput { position: usize },
+    #[error(
+        "the move spends {spent} notes, {allowed} of them derive from a requested source opening"
+    )]
+    UnrequestedInput { spent: u8, allowed: usize },
     #[error(transparent)]
     Keypair(#[from] KeypairError),
     #[error(transparent)]
@@ -213,17 +215,20 @@ impl AllowedNullifiers {
         }
     }
 
-    /// `inputs` in published order, only note positions answer to the set.
-    pub fn check_inputs<'n>(
+    /// The proof names `spent` notes and no position, the distinct admitted nullifiers must count
+    /// them all.
+    pub fn check_spends<'n>(
         &self,
-        inputs: impl IntoIterator<Item = (InputClass, &'n [u8; 32])>,
+        spent: u8,
+        published: impl IntoIterator<Item = &'n [u8; 32]>,
     ) -> Result<(), DelegateSourceError> {
-        let unrequested = inputs.into_iter().position(|(class, nullifier)| {
-            class == InputClass::Note && !self.nullifiers.contains(nullifier)
-        });
-        match unrequested {
-            Some(position) => Err(DelegateSourceError::UnrequestedInput { position }),
-            None => Ok(()),
+        let allowed = published
+            .into_iter()
+            .filter(|nullifier| self.nullifiers.contains(*nullifier))
+            .count();
+        match allowed == usize::from(spent) {
+            true => Ok(()),
+            false => Err(DelegateSourceError::UnrequestedInput { spent, allowed }),
         }
     }
 }

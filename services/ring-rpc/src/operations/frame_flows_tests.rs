@@ -1,11 +1,10 @@
-use custom_ring_interface::InputClass;
 use solana_signature::Signature;
+use spr_indexer_api::Hash;
 use spr_keypair::{NullifierKey, PublicKey, X25519Keypair};
 use spr_transaction::{Mint, OutputContext};
 use zolana_ring_client::{
-    rpc::{DecryptedInput, InputParty},
-    AuditedEntryInput, AuditedInput, AuditedOutput, AuditedUtxo, CreatedUtxo, KnownUtxo,
-    OutputPayloadError, OutputPayloadErrorKind, RingOwnerTag, UtxoOwner,
+    AuditedEntryInput, AuditedOutput, AuditedUtxo, CreatedUtxo, KnownUtxo, OutputPayloadError,
+    OutputPayloadErrorKind, RingOwnerTag, UtxoOwner,
 };
 
 use super::*;
@@ -57,8 +56,8 @@ fn note(owner_key: [u8; 32], commitment: u8, amount: u64) -> CreatedUtxo {
             mint: None,
             amount,
             blinding: [5; 32],
-            data_hash: [0; 32],
-            ring_data_hash: [0; 32],
+            data_hash: Some([0; 32]),
+            ring_data_hash: Some([0; 32]),
             tree_id: 1,
         },
         ring_note: true,
@@ -88,13 +87,29 @@ fn store_with(notes: &[CreatedUtxo]) -> AuditStore {
     store
 }
 
-fn spend(created: &CreatedUtxo) -> AuditedInput {
-    AuditedInput {
-        nullifier: key_of(&created.utxo.owner_key)
+/// One published input as the proof leaves it, a nullifier and, for an entry, its note-order record.
+enum Input {
+    Note([u8; 32]),
+    Entry([u8; 32], AuditedEntryInput),
+    Padding([u8; 32]),
+}
+
+impl Input {
+    fn nullifier(&self) -> [u8; 32] {
+        match self {
+            Self::Note(nullifier) | Self::Entry(nullifier, _) | Self::Padding(nullifier) => {
+                *nullifier
+            }
+        }
+    }
+}
+
+fn spend(created: &CreatedUtxo) -> Input {
+    Input::Note(
+        key_of(&created.utxo.owner_key)
             .nullifier(&created.commitment, &created.utxo.blinding)
             .expect("nullifier"),
-        opening: InputOpening::Real,
-    }
+    )
 }
 
 fn utxo(owner_key: [u8; 32], amount: u64) -> AuditedUtxo {
@@ -105,23 +120,23 @@ fn utxo(owner_key: [u8; 32], amount: u64) -> AuditedUtxo {
         mint: None,
         amount,
         blinding: [6; 32],
-        data_hash: [0; 32],
-        ring_data_hash: [0; 32],
+        data_hash: Some([0; 32]),
+        ring_data_hash: Some([0; 32]),
     }
 }
 
-fn entry(owner_key: [u8; 32], nullifier: u8, amount: u64) -> AuditedInput {
-    AuditedInput {
-        nullifier: [nullifier; 32],
-        opening: InputOpening::External(Box::new(AuditedEntryInput {
+fn entry(owner_key: [u8; 32], nullifier: u8, amount: u64) -> Input {
+    Input::Entry(
+        [nullifier; 32],
+        AuditedEntryInput {
             owner_key,
             nullifier_pk: [3; 32],
             asset: asset_field(),
             mint: mint_of_asset(),
             amount,
             commitment: [nullifier ^ 0x0f; 32],
-        })),
-    }
+        },
+    )
 }
 
 fn slot(slot_index: u32, opening: OutputOpening) -> AuditedOutput {
@@ -146,7 +161,7 @@ fn ring_slot(index: u32, owner_key: [u8; 32], amount: u64) -> AuditedOutput {
     )
 }
 
-fn audited(inputs: Vec<AuditedInput>, outputs: Vec<AuditedOutput>) -> AuditedTransaction {
+fn audited(inputs: Vec<Input>, outputs: Vec<AuditedOutput>) -> AuditedTransaction {
     AuditedTransaction {
         tx_signature: Signature::from([9; 64]),
         slot: 2,
@@ -155,9 +170,16 @@ fn audited(inputs: Vec<AuditedInput>, outputs: Vec<AuditedOutput>) -> AuditedTra
         payload_errors: Vec::new(),
         real_inputs: inputs
             .iter()
-            .filter(|input| input.opening.class() == InputClass::Note)
+            .filter(|input| !matches!(input, Input::Padding(_)))
             .count() as u8,
-        inputs,
+        nullifiers: inputs.iter().map(Input::nullifier).collect(),
+        entries: inputs
+            .into_iter()
+            .filter_map(|input| match input {
+                Input::Entry(_, entry) => Some(entry),
+                Input::Note(_) | Input::Padding(_) => None,
+            })
+            .collect(),
     }
 }
 
@@ -268,10 +290,7 @@ fn a_dummy_input_and_a_dummy_slot_answer_for_nothing() {
     let read = read(
         &store,
         &audited(
-            vec![AuditedInput {
-                nullifier: [0x11; 32],
-                opening: InputOpening::Dummy,
-            }],
+            vec![Input::Padding([0x11; 32])],
             vec![slot(0, OutputOpening::Dummy)],
         ),
         Vec::new(),
@@ -304,36 +323,36 @@ fn an_external_input_answers_under_its_own_evidence() {
     assert!(read.spends_note);
 }
 
+/// One frame's `R` exceeds the notes the index and the entries name, the read refuses.
 #[test]
-fn an_entry_input_names_its_party_and_an_unresolved_spend_stays_another_party() {
+fn a_spend_neither_the_index_nor_an_entry_names_refuses_the_read() {
+    let alice = note(ALICE, 0x12, 40);
+    let mut transaction = audited(
+        vec![spend(&alice), entry(BOB, 0x22, 10)],
+        vec![ring_slot(0, BOB, 50)],
+    );
+    let store = store_with(&[alice]);
+    assert!(read(&store, &transaction, Vec::new()).is_ok());
+    transaction.real_inputs += 1;
+    assert!(refused(read(&store, &transaction, Vec::new())));
+}
+
+/// A resolved spend names its owner, an unindexed spend stays another party's.
+#[test]
+fn a_resolved_spend_names_its_party_and_an_unresolved_spend_stays_another_party() {
     let resolved = note(ALICE, 0x12, 40);
     let unindexed = note(ALICE, 0x13, 25);
     let store = store_with(&[resolved]);
-    block_on(store.spend([spend(&resolved).nullifier, spend(&unindexed).nullifier]));
-    let inputs: Vec<DecryptedInput> = [
-        entry(ALICE, 0x21, 30),
-        entry(BOB, 0x22, 10),
-        spend(&resolved),
-        spend(&unindexed),
-    ]
-    .into_iter()
-    .map(DecryptedInput::from)
-    .collect();
+    let nullifiers = [spend(&resolved).nullifier(), spend(&unindexed).nullifier()];
+    block_on(store.spend(nullifiers));
+    let published: Vec<Hash> = nullifiers.into_iter().map(Hash).collect();
     let wallet = Address::new_from_array(ALICE);
-    let parties = block_on(store.input_parties(&wallet, &inputs)).expect("parties");
-    let named: Vec<InputParty> = inputs
+    let parties = block_on(store.input_parties(&wallet, &published)).expect("parties");
+    let owned: Vec<bool> = published
         .iter()
-        .map(|input| parties.party(&wallet, input))
+        .map(|nullifier| parties.owns(nullifier))
         .collect();
-    assert_eq!(
-        named,
-        [
-            InputParty::Own,
-            InputParty::Other,
-            InputParty::Own,
-            InputParty::Other,
-        ]
-    );
+    assert_eq!(owned, [true, false]);
 }
 
 #[test]

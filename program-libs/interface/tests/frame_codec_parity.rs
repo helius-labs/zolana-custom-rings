@@ -2,11 +2,9 @@ mod frames;
 mod ring_policy;
 
 use custom_ring_interface::{
-    encode_confidential_output, AppMessage, ParsedTransact, RingPolicy, RingTransactData,
-    Settlement, SlotBody,
+    encode_confidential_output, AppMessage, RingPolicy, RingTransactData, Settlement, SlotBody,
 };
 use frames::Fixture;
-use spr_hasher::{hash_chain::create_hash_chain_4_from_slice, primitives::right_align};
 use spr_interface::instruction::{
     instruction_data::transact::CacheAccess, ExternalDataPreimage, TransactIxDataRef, TransactProof,
 };
@@ -30,41 +28,6 @@ fn cached_expansion_preserves_the_owned_selector_and_hash_boundary() {
         write_slots: CacheAccess::NO_WRITES,
     });
     assert_owned_parity(&data, &ring);
-}
-
-#[test]
-fn nullifier_digest_binds_published_count_order_and_capacity_padding() {
-    let fixture = Fixture::new();
-    let data = fixture.confidential_extensions();
-    let parsed = ParsedTransact::new(data.clone()).unwrap();
-    let capacity = parsed.audit_stream().key.class();
-    let mut expected = vec![right_align(&2u64.to_be_bytes())];
-    expected.extend_from_slice(data.nullifiers);
-    expected.resize(1 + capacity, [0; 32]);
-    let digest = parsed.input_nullifier_chain().unwrap();
-    assert_eq!(digest, create_hash_chain_4_from_slice(&expected).unwrap());
-
-    let reordered = [data.nullifiers[1], data.nullifiers[0]];
-    let mut changed = data.clone();
-    changed.nullifiers = &reordered;
-    assert_ne!(
-        ParsedTransact::new(changed)
-            .unwrap()
-            .input_nullifier_chain()
-            .unwrap(),
-        digest
-    );
-
-    let mut shortened = data;
-    shortened.nullifiers = &shortened.nullifiers[..1];
-    let shortened = ParsedTransact::new(shortened).unwrap();
-    expected[0] = right_align(&1u64.to_be_bytes());
-    expected[2] = [0; 32];
-    assert_eq!(
-        shortened.input_nullifier_chain().unwrap(),
-        create_hash_chain_4_from_slice(&expected).unwrap()
-    );
-    assert_ne!(shortened.input_nullifier_chain().unwrap(), digest);
 }
 
 #[test]

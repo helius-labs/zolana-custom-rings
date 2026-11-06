@@ -160,6 +160,9 @@ describe("public package surface", () => {
     expect(client.ringInputOpening).toBeTypeOf("function");
     expect(keypair.RingAddress).toBeTypeOf("function");
     expect(advanced.sealRingDisclosure).toBeTypeOf("function");
-    expect(advanced.sealRecipientBody).toBeTypeOf("function");
+    expect(advanced.sealOutputSlot).toBeTypeOf("function");
+    expect(advanced.publicMember).toBeTypeOf("function");
+    expect(root.publicListKey).toBeTypeOf("function");
+    expect(root.delegateNoteKey).toBeTypeOf("function");
   });
 });

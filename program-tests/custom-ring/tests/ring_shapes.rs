@@ -8,8 +8,7 @@ use custom_ring_interface::{
     key_catalog::{
         ApplyMode, FrameKey, RingCircuit, RingKey, TransferShape, RING_KEYS, TRANSFER_SHAPES,
     },
-    ParsedTransact, SINGLE_ASSET_PAYOUT_INPUTS, SINGLE_ASSET_PAYOUT_OUTPUTS,
-    TRANSFER_OUTPUT_CAPACITIES,
+    ParsedTransact, TRANSFER_OUTPUT_CAPACITIES,
 };
 use custom_ring_test_validator::{
     policy::{EnrollOwners, PrivateBlockWrites, RingNotes},
@@ -144,7 +143,6 @@ impl Column {
 
 const fn narrow(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> RingCircuit {
     RingCircuit::Transfer {
-        format: custom_ring_interface::DisclosureFormat::Standard,
         outputs,
         inputs,
         withdrawals,
@@ -156,7 +154,6 @@ const fn narrow(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> RingCir
 
 const fn wide(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> RingCircuit {
     RingCircuit::Transfer {
-        format: custom_ring_interface::DisclosureFormat::Standard,
         outputs,
         inputs,
         withdrawals,
@@ -168,7 +165,6 @@ const fn wide(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> RingCircu
 
 const fn entry(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> RingCircuit {
     RingCircuit::Transfer {
-        format: custom_ring_interface::DisclosureFormat::Standard,
         outputs,
         inputs,
         withdrawals,
@@ -177,17 +173,6 @@ const fn entry(outputs: u8, inputs: u8, withdrawals: u8, owners: u8) -> RingCirc
         wide: true,
     }
 }
-
-/// Only the owner's confidential rail reaches sixteen outputs, one note paying one asset.
-const PAYOUT: RingCircuit = RingCircuit::Transfer {
-    format: custom_ring_interface::DisclosureFormat::SingleAssetPayout,
-    outputs: SINGLE_ASSET_PAYOUT_OUTPUTS as u8,
-    inputs: SINGLE_ASSET_PAYOUT_INPUTS as u8,
-    withdrawals: 0,
-    owners: 1,
-    entry: false,
-    wide: false,
-};
 
 /// `key` is what production selection must name for the spend, the gate refuses another.
 #[derive(Clone, Copy, Debug)]
@@ -219,7 +204,6 @@ const CONFIDENTIAL_KEY_CASES: &[KeyCase] = &[
     KeyCase::of(narrow(4, 24, 4, 4), Shape::IN1_OUT4, 1, 0),
     KeyCase::of(narrow(8, 16, 4, 4), Shape::IN1_OUT8, 1, 0),
     KeyCase::of(wide(2, 40, 4, 8), Shape::IN32_OUT2, 1, 0),
-    KeyCase::of(PAYOUT, Shape::IN1_OUT16, 1, 0),
 ];
 const WIDE_LEG_KEY_CASES: &[KeyCase] = &[KeyCase::of(wide(8, 24, 32, 13), Shape::IN1_OUT8, 1, 5)];
 const ENTRY_KEY_CASES: &[KeyCase] = &[
@@ -369,7 +353,6 @@ fn widens_legs(shape: TransferShape) -> bool {
 
 fn narrow_key(outputs: u8) -> Option<TransferShape> {
     FrameKey {
-        format: custom_ring_interface::DisclosureFormat::Standard,
         rail: RingRail::Confidential,
         inputs: 1,
         outputs: outputs.into(),
@@ -784,7 +767,7 @@ impl ShapeRing<'_> {
         Ok(())
     }
 
-    /// Sixteen outputs key only the confidential payout, the authority rail keys none.
+    /// No key holds sixteen outputs.
     fn sixteen_outputs_refused(&self) -> Result<()> {
         let transfer = ShapeTransfer {
             shape: Shape::IN1_OUT16,
@@ -937,11 +920,7 @@ impl ShapeRing<'_> {
 
     /// Each delivered capacity holds the in-proof owner's spent note once.
     fn in_proof_owners(&self, coverage: &mut Coverage) -> Result<()> {
-        // Only the payout key holds this width and it refuses an in-proof owner.
-        for outputs in TRANSFER_OUTPUT_CAPACITIES
-            .into_iter()
-            .filter(|outputs| *outputs != SINGLE_ASSET_PAYOUT_OUTPUTS)
-        {
+        for outputs in TRANSFER_OUTPUT_CAPACITIES {
             restart_prover()?;
             let transfer = ShapeTransfer {
                 shape: Shape::new(1, outputs),
@@ -982,7 +961,7 @@ impl ShapeRing<'_> {
             let view = custom_ring_interface::CustomRingMergeIxDataRef::from_bytes(
                 &instruction.data[1..],
             )?;
-            let offset = view.ciphertext.as_ptr() as usize - instruction.data.as_ptr() as usize;
+            let offset = view.record.as_ptr() as usize - instruction.data.as_ptr() as usize;
             let mut altered = instruction.clone();
             altered.data[offset] ^= 1;
             let before = fetch_account(env.client.rpc(), &env.tree)?;

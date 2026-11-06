@@ -52,8 +52,8 @@ fn note(owner: Address, key: &NullifierKey, commitment: u8, amount: u64) -> Crea
             mint: None,
             amount,
             blinding: [commitment.wrapping_add(1); 32],
-            data_hash: [0; 32],
-            ring_data_hash: [0; 32],
+            data_hash: Some([0; 32]),
+            ring_data_hash: Some([0; 32]),
             tree_id: 1,
         },
         ring_note: true,
@@ -128,7 +128,7 @@ fn real(nullifier: [u8; 32], at: CreatedIn, position: u16) -> Observation {
         nullifier,
         frame: at,
         position,
-        read: InputRead::Real,
+        read: InputRead::Spend,
         hit: None,
     }
 }
@@ -215,7 +215,7 @@ fn a_late_key_recomputes_the_owners_notes_and_resolves_their_rows() {
     });
     assert!(matches!(
         store.row_state(&nullifier),
-        Some(SpendState::UnresolvedReal)
+        Some(SpendState::Unclassified)
     ));
     keys.grant(owner, 7);
     store.queue_late_owners([owner.to_bytes()]);
@@ -242,7 +242,7 @@ fn a_spend_of_an_unknown_note_stays_unresolved_then_resolves_when_it_opens() {
         work.observe(real(nullifier, frame(6), 0));
     });
     let coverage = block_on(store.spend_coverage(CoverageCursor::new(RING))).expect("coverage");
-    assert_eq!(coverage.unresolved_real.len(), 1);
+    assert_eq!(coverage.unclassified.len(), 1);
     assert_eq!(coverage.totals.expect("first page totals").padding, 0);
     apply(&store, &keys, |work| work.open(frame(5), [created]));
     assert_eq!(
@@ -252,7 +252,7 @@ fn a_spend_of_an_unknown_note_stays_unresolved_then_resolves_when_it_opens() {
         })
     );
     let coverage = block_on(store.spend_coverage(CoverageCursor::new(RING))).expect("coverage");
-    assert!(coverage.unresolved_real.is_empty());
+    assert!(coverage.unclassified.is_empty());
     assert_eq!(coverage.totals.expect("first page totals").resolved, 1);
 }
 
@@ -370,7 +370,7 @@ fn a_note_past_the_history_slot_stays_out_so_input_and_change_never_both_count()
 }
 
 #[test]
-fn padding_and_external_add_no_unresolved_state() {
+fn merge_padding_adds_no_unclassified_state() {
     let store = AuditStore::default();
     let keys = Keys::none();
     apply(&store, &keys, |work| {
@@ -378,20 +378,10 @@ fn padding_and_external_add_no_unresolved_state() {
             read: InputRead::Padding,
             ..real([1; 32], frame(5), 1)
         });
-        work.observe(Observation {
-            read: InputRead::External,
-            ..real([2; 32], frame(5), 0)
-        });
     });
     let coverage = block_on(store.spend_coverage(CoverageCursor::new(RING))).expect("coverage");
-    assert!(coverage.unresolved_real.is_empty());
-    assert_eq!(
-        (
-            coverage.totals.expect("first page totals").padding,
-            coverage.totals.expect("first page totals").external
-        ),
-        (1, 1)
-    );
+    assert!(coverage.unclassified.is_empty());
+    assert_eq!(coverage.totals.expect("first page totals").padding, 1);
 }
 
 #[test]
@@ -1853,7 +1843,7 @@ async fn coverage_pages_visit_all_faults_without_retaining_database_history() {
             assert_eq!(wire.get("totals").is_some(), pages == 0);
             assert_eq!(response.history_through, 0);
             let sizes = [
-                response.unresolved_real.len(),
+                response.unclassified.len(),
                 response.unreadable.len(),
                 response.integrity_faults.len(),
             ];
@@ -1861,7 +1851,7 @@ async fn coverage_pages_visit_all_faults_without_retaining_database_history() {
                 assert!(size <= zolana_ring_client::rpc::AUDIT_PAGE_LIMIT as usize);
                 *total += size;
             }
-            seen[0].extend(response.unresolved_real.iter().map(|row| row.nullifier.0));
+            seen[0].extend(response.unclassified.iter().map(|row| row.nullifier.0));
             seen[1].extend(response.unreadable.iter().map(|row| [row.slot as u8; 32]));
             seen[2].extend(response.integrity_faults.iter().map(|row| row.nullifier.0));
             pages += 1;

@@ -3,8 +3,9 @@
 // SPP reads no list. A rule needs to know whether a private owner or asset sits on a list, and the answer
 // must come from a registry root the program read live, never from the prover. Each subject
 // turns into list bits by way of the record pools, so the rule sections trust a view and read no proof.
-// It also resolves the private lists. A public record names its member on chain, a private list holds an
-// owner under a salted key the chain cannot tie to the owner.
+// An owner reads every list at the lookup key Poseidon(CRPL, owner, salt). A public list reads at salt zero,
+// a key anyone derives from the owner. A private list reads at the owner's enrolled salt, a key the chain
+// cannot tie to the owner. An asset reads at its own field.
 //
 // Read after policy/table.go, policy/record_pool.go, policy/tracking.go. Read before policy/rules.go,
 // policy/outflow.go.
@@ -12,7 +13,7 @@
 // Properties:
 // 1. The gates follow from statement values alone, no prover bit clears a section. Screened is a nonzero policy_hash off the authority rail. Outflow is a nonzero own root.
 // 2. Each read goes through a pool under the bound root of its source, own or curator per list, present or proven absent.
-// 3. An enrolled owner reads each private list at the one key its tracking row fixes.
+// 3. An owner reads each public list at its zero salt key, an enrolled owner each private list at the one key its tracking row fixes.
 // 4. An owner proven absent under the tracking root reads off every private list.
 // 5. A padded row, a dummy, an unused payment and an unused public slot close their gates and read zeros.
 // 6. A live input's asset reads its lists under Screened alone and decodes no mint policy.
@@ -87,8 +88,9 @@ func (p *Policy) resolveSubjects(api frontend.API, table tableView, g Gates, spe
 		foreign := curator.resolve(api, recordQuery{active: api.Mul(active, curatedRead), member: member, index: entry.Curator[0]})
 		return subjectView{onList: table.sources.lists(api, record.onList, [NSources]frontend.Variable(foreign))}, record
 	}
-	// 2. An owner also reads its salted key, the tracking row forces the salt once the owner has enrolled.
+	// 2. An owner reads each list at the zero salt key or at its salted key as the table's salted mask sets, the tracking row forces the salt once the owner has enrolled.
 	//
+	// registry/register_key.go refuses a zero salt, so an enrolled salt never names the public key.
 	// A private list holds an owner at ListKey(owner, salt). A free salt would pick an empty key, and a blocked owner would prove itself off its list. The row's ListTag commits to the one salt enrollment fixed, registry/register_key.go seals that salt to the auditor, a list writer needs it to name the key, and a rotation keeps the tag.
 	//
 	// The tracking floor closes the skip for an owner a private write names. An owner absent under the tracking root has no salt to read under, so it reads off every private list, an allow list refuses it and a block list admits it. An old root could prove a blocked owner unenrolled, and no constraint here can see the root's age.
@@ -96,7 +98,7 @@ func (p *Policy) resolveSubjects(api frontend.API, table tableView, g Gates, spe
 	anySalted := api.Or(table.sources.saltedOwn, table.sources.saltedCurated)
 	ownerCurated := api.Mul(curated, table.sources.publicForeign)
 	resolveOwner := func(entry OwnerEntry, active, member frontend.Variable) subjectView {
-		view, _ := resolve(entry.PoolEntry, active, ownerCurated, member)
+		view, _ := resolve(entry.PoolEntry, active, ownerCurated, shared.ListKey(api, member, 0))
 		// A proven absent tracking row is the one skip, a present row forces its salt and so its key.
 		row := spend.Tracking.Row(api, api.Mul(active, anySalted), member, entry.Tracking)
 		enrolled := ringgadget.IsNonZero(api, row.NullifierPk)

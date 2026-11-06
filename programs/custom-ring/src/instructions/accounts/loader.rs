@@ -19,7 +19,6 @@
 //! Read after `instructions/runtime/instruction_runtime.rs`. Read before `program-libs/interface/src/accounts/state.rs`.
 
 use custom_ring_interface::{
-    anonymous_exit_destination,
     cosign::{CoSignCover, CoSignRequirement, MAX_CO_SIGNERS},
     storage::{Revision, StorageRegistry},
     tracking::TrackingRegistry,
@@ -32,9 +31,7 @@ use pinocchio::{
     AccountView, Address, ProgramResult,
 };
 use solana_loader_v3_interface::state::UpgradeableLoaderState;
-use spr_interface::{
-    instruction::InterfaceTransfer, BPF_LOADER_UPGRADEABLE_ID, SHIELDED_POOL_PROGRAM_ID,
-};
+use spr_interface::{BPF_LOADER_UPGRADEABLE_ID, SHIELDED_POOL_PROGRAM_ID};
 use zolana_ring_policy::ring_id_field;
 
 /// Owner and discriminator suffice, accounts are created only at their canonical PDA.
@@ -304,15 +301,6 @@ impl CoSigners {
     }
 }
 
-/// The destination every anonymous withdrawal names, read from the settlement window SPP settles.
-pub fn load_anonymous_exit(
-    transfers: &[InterfaceTransfer],
-    window: &[AccountView],
-) -> Result<Option<[u8; 32]>, CustomRingError> {
-    let accounts: Vec<LoadedSettlement<'_>> = window.iter().map(LoadedSettlement).collect();
-    anonymous_exit_destination(transfers, &accounts)
-}
-
 pub(crate) struct LoadedSettlement<'a>(pub &'a AccountView);
 
 impl SettlementAccount for LoadedSettlement<'_> {
@@ -322,10 +310,6 @@ impl SettlementAccount for LoadedSettlement<'_> {
 
     fn owner(&self) -> &Address {
         self.0.owner()
-    }
-
-    fn data_len(&self) -> usize {
-        self.0.data_len()
     }
 
     fn token_account(&self) -> Result<TokenAccountState, CustomRingError> {

@@ -17,8 +17,8 @@ import {
   seededMergeOutputBlinding,
 } from "../../../src/crypto/derivation/merge-seed.js";
 import { initializePoseidon } from "@heliuslabs/spr";
-import type { Bytes16, Bytes32, Bytes33, Signature } from "@heliuslabs/spr/interface";
-import { X25519Keypair } from "@heliuslabs/spr/keypair";
+import type { Bytes16, Bytes32, Signature } from "@heliuslabs/spr/interface";
+import { ViewingKey, X25519Keypair } from "@heliuslabs/spr/keypair";
 import type { IndexedShieldedTransaction } from "@heliuslabs/spr/transaction";
 import {
   auditRingMerges,
@@ -32,13 +32,20 @@ import {
   type SealedMergeRecord,
 } from "../../../src/crypto/audit/merge-disclosure.js";
 import { ringIdField } from "../../../src/crypto/derivation/ring-stream.js";
-import { RecordKind, type AuditRecord } from "../../../src/protocol/codec/audit-stream.js";
+import { RecordKind, type OutputRecord } from "../../../src/protocol/codec/audit-stream.js";
 import {
   kitReads,
   solanaRpcReads,
   transactionsPage,
 } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { transactionItems } from "../../../../../zolana/sdk-libs/ts/test/helpers/pages.js";
+
+/** The commitment of a test opening, every fixture carries its data hashes. */
+function rebuiltHash(utxo: Parameters<typeof knownUtxoHash>[0], ringId: Bytes32): Bytes32 {
+  const hash = knownUtxoHash(utxo, ringId);
+  if (hash === undefined) throw new Error("no data hashes");
+  return hash;
+}
 
 await initializePoseidon();
 
@@ -88,7 +95,7 @@ describe("the tag 57 reader", () => {
     const mint = encodeBase58(record.subarray(41, 73));
     const hash =
       overrides.hash ??
-      knownUtxoHash(
+      rebuiltHash(
         {
           ownerKey: record.slice(9, 41) as Bytes32,
           owner: { kind: "keyed", nullifierPk: hex(request.nullifierPk) as Bytes32 },
@@ -131,34 +138,47 @@ describe("the tag 57 reader", () => {
     return {
       kind: "merge" as const,
       transaction,
-      sealedRecord: overrides.sealed ?? {
-        ephemeralPublicKey: hex(mergeVector.eph_pk) as Bytes33,
-        ciphertext: hex(entry.ciphertext),
-      },
+      sealedRecord: overrides.sealed ?? sealedFor(entry),
       authority: MergeRingAuthority.ownerSigned,
     };
   }
 
-  type SealedRecord = Pick<SealedMergeRecord, "ephemeralPublicKey" | "ciphertext">;
+  type SealedRecord = Pick<SealedMergeRecord, "ephemeralPublicKey" | "envelope" | "record">;
 
-  /** The first vector's opening with `edit` applied, sealed to the vector's auditor. */
-  function resealed(edit: Partial<AuditRecord>, seed = hex(mergeVector.cases[0]!.request.seed)) {
-    const record = hex(mergeVector.cases[0]!.record);
-    return sealMergeRecord({
-      auditorPublicKey: vectorAuditor().publicKey(),
-      opening: {
-        record: {
-          kind: RecordKind.ring,
-          amount: 12n,
-          ownerKey: record.slice(9, 41) as Bytes32,
-          mint: encodeBase58(record.subarray(41, 73)),
-          nullifierPk: record.slice(73, 105) as Bytes32,
-          ...edit,
+  /** The case's opening with `edit` applied, its blinding off `seed` unless edited, sealed to the vector's auditor. */
+  function sealedFor(
+    entry: Case,
+    edit: Partial<OutputRecord> = {},
+    seed = hex(entry.request.seed) as Bytes32,
+  ): SealedRecord {
+    const record = hex(entry.record);
+    const firstNullifier = hex(entry.request.firstNullifier) as Bytes32;
+    const owner = ViewingKey.generate();
+    try {
+      return sealMergeRecord({
+        merge: {
+          record: {
+            kind: RecordKind.ring,
+            amount: 12n,
+            ownerKey: record.slice(9, 41) as Bytes32,
+            mint: encodeBase58(record.subarray(41, 73)),
+            nullifierPk: hex(entry.request.nullifierPk) as Bytes32,
+            ...edit,
+            blinding: edit.blinding ?? seededMergeOutputBlinding(seed, firstNullifier),
+          },
+          seed,
         },
-        secret: seed as Bytes32,
-      },
-    }).sealed;
+        recipient: owner.publicKey(),
+        auditorPublicKey: vectorAuditor().publicKey(),
+        firstNullifier,
+      }).sealed;
+    } finally {
+      owner.destroy();
+    }
   }
+
+  const resealed = (edit: Partial<OutputRecord>, seed?: Bytes32): SealedRecord =>
+    sealedFor(mergeVector.cases[0]!, edit, seed);
 
   it.each(mergeVector.cases)("rebuilds the $name output from its record alone", (entry) => {
     const opened = openRingMerge({
@@ -243,7 +263,7 @@ describe("the tag 57 reader", () => {
     },
   );
 
-  it("refuses a record off the commitment, a dummy kind and a noncanonical key or seed", () => {
+  it("refuses a record off the commitment, a blinding off the seed, a dummy kind and a noncanonical key or seed", () => {
     const entry = mergeVector.cases[0]!;
     const open = (confirmed: ReturnType<typeof row>) => () =>
       openRingMerge({ confirmed, eventIndex: 0, auditor: vectorAuditor() });
@@ -253,6 +273,11 @@ describe("the tag 57 reader", () => {
     expect(open(row(entry, { sealed: resealed({ amount: 13n }) }))).toThrow(
       expect.objectContaining({ code: "RING_AUDIT_OUTPUT_MISMATCH" }),
     );
+    // The proof holds the blinding to the seed, a record off it rebuilds no note the seed spends.
+    expect(open(row(entry, { sealed: resealed({ blinding: memberOf(0x44) }) }))).toThrow(
+      expect.objectContaining({ code: "RING_AUDIT_MESSAGE", details: { reason: "merge record" } }),
+    );
+    // The merge reader admits a ring note alone.
     expect(open(row(entry, { sealed: resealed({ kind: RecordKind.exit }) }))).toThrow(
       expect.objectContaining({ code: "RING_AUDIT_MESSAGE", details: { reason: "merge record" } }),
     );
@@ -260,7 +285,9 @@ describe("the tag 57 reader", () => {
     expect(open(row(entry, { sealed: resealed({ nullifierPk: noncanonical }) }))).toThrow(
       expect.objectContaining({ code: "RING_AUDIT_MESSAGE", details: { reason: "merge record" } }),
     );
-    expect(open(row(entry, { sealed: resealed({}, noncanonical) }))).toThrow(
+    expect(
+      open(row(entry, { sealed: resealed({ blinding: memberOf(0x45) }, noncanonical) })),
+    ).toThrow(
       expect.objectContaining({ code: "RING_AUDIT_MESSAGE", details: { reason: "merge record" } }),
     );
   });
@@ -290,7 +317,7 @@ describe("the tag 57 reader", () => {
       ...row(entry),
       transaction: { ...good.transaction, txSignature: "6".repeat(87) as Signature },
     };
-    const tampered = bad.sealedRecord.ciphertext.slice();
+    const tampered = bad.sealedRecord.record.slice();
     tampered[8] = (tampered[8] ?? 0) ^ 1;
     const { client } = scanClient({ transactions: [[good.transaction, bad.transaction]] });
     const page = await auditRingMerges({
@@ -304,7 +331,7 @@ describe("the tag 57 reader", () => {
             : {
                 ...bad,
                 transaction,
-                sealedRecord: { ...bad.sealedRecord, ciphertext: tampered },
+                sealedRecord: { ...bad.sealedRecord, record: tampered },
               },
       },
     });

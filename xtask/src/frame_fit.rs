@@ -9,14 +9,13 @@ use custom_ring_interface::{
     cosign::ApprovalMask,
     key_catalog::{RecordPools, TransferSpend},
     spl_withdrawal_count,
-    statement::SignerDataCounts,
     storage::Revision,
     stream::slot_tag,
     tag, AnonymousProofData, AppMessage, BundleLayout, CustomRingError, CustomRingMergeIxData,
     CustomRingProof, FrameExtensions, FramedSenderBundle, InProofOwner, InputTrees,
-    PlainGroth16Proof, PolicyProof, RecipientBody, Replies, RingOutput, RingPolicy, RingRail,
-    RingTransactData, RootRead, SealedMergeRecord, SlotBody, AUDIT_RECORD_LEN, DATA_TAIL_LEN,
-    MAX_CPI_DATA_LEN, MIN_REPLY_LEN, OPENING_RECORD_LEN, RECIPIENT_KEY_LEN, TAGGED_X25519_KEY_LEN,
+    PlainGroth16Proof, PolicyProof, RecipientPayload, Replies, RingOutput, RingPolicy, RingRail,
+    RingTransactData, RootRead, SealedMergeRecord, SlotBody, MAX_CPI_DATA_LEN, MERGE_ENVELOPE_LEN,
+    MERGE_RECORD_LEN, MIN_REPLY_LEN, OUTPUT_RECORD_LEN, RECIPIENT_KEY_LEN, TAGGED_X25519_KEY_LEN,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -152,7 +151,7 @@ struct Load {
     co_signer: bool,
     legs: Legs,
     priority_fee: bool,
-    /// Every slot carries a body and the last slot exits.
+    /// The last slot exits.
     every_body: bool,
     has_data: bool,
     replies: bool,
@@ -352,15 +351,18 @@ impl Transfer {
         };
         let spp_proof = proof.groth16;
         let field = [6u8; 32];
-        let record = [7u8; AUDIT_RECORD_LEN];
-        let tail = [8u8; DATA_TAIL_LEN];
+        let record = [7u8; OUTPUT_RECORD_LEN];
         let salt = [9u8; 16];
         let ring_data = load.has_data.then_some([10u8; 32]);
-        let recipient_body = RecipientBody {
-            ring_data_hash: ring_data,
-            ..RecipientBody::default()
+        // A recipient body is the record, then under `has_data` one padded payload.
+        let mut recipient_body = record.to_vec();
+        if load.has_data {
+            let payload = RecipientPayload {
+                ring_data_hash: ring_data,
+                data: Vec::new(),
+            };
+            recipient_body.extend(payload.encode_padded(payload.encoded_len())?);
         }
-        .encode()?;
         let exit_body = vec![
             11u8;
             RECIPIENT_KEY_LEN
@@ -380,8 +382,7 @@ impl Transfer {
         let nullifiers: Vec<[u8; 32]> = (0..inputs)
             .map(|input| indexed(0xb0, input).to_bytes())
             .collect();
-        let change = usize::from(anonymous_frame && !load.every_body);
-        let bundle = vec![12u8; BundleLayout { outputs, change }.byte_len()];
+        let bundle = vec![12u8; BundleLayout { outputs }.byte_len()];
         let revision = Revision::from(1);
 
         let legs = self.legs(frame);
@@ -396,13 +397,11 @@ impl Transfer {
             .map(|slot| RingOutput {
                 hash: &field,
                 owner_tag: slot_tag(field),
-                body: match (load.every_body, anonymous_frame, slot) {
-                    (true, _, slot) if slot + 1 == outputs => SlotBody::Exit(&exit_body),
-                    (false, true, 0) => SlotBody::None,
-                    _ => SlotBody::Recipient(&recipient_body),
+                body: match load.every_body && slot + 1 == outputs {
+                    true => SlotBody::Exit(&exit_body),
+                    false => SlotBody::Recipient(&recipient_body),
                 },
                 record: &record,
-                tail: load.has_data.then_some(&tail),
             })
             .collect();
         let reply_bodies = slots
@@ -414,7 +413,6 @@ impl Transfer {
         let message_bytes = vec![15u8; load.message_len];
         let extensions = match load.extensions {
             true => FrameExtensions {
-                format: custom_ring_interface::DisclosureFormat::Standard,
                 data_hash: Some(&field),
                 ring_data_hash: Some(&field),
                 messages: vec![
@@ -426,7 +424,6 @@ impl Transfer {
                 ],
                 cache: None,
                 approval_totals: co_signer.then_some(&field),
-                signer_data_counts: (!delegate).then(|| SignerDataCounts::new(1)).transpose()?,
             },
             false => FrameExtensions::default(),
         };
@@ -460,7 +457,6 @@ impl Transfer {
             has_data: load.has_data,
             entry: frame.entry(),
             wide_owners: TransferSpend {
-                format: custom_ring_interface::DisclosureFormat::Standard,
                 rail,
                 inputs,
                 outputs,
@@ -481,6 +477,7 @@ impl Transfer {
                 body: &bundle,
             }),
             envelope: &[],
+            recipient_keys: &[],
             private_tx_hash: &field,
             anonymous: frame.hidden_sender().then_some(AnonymousProofData {
                 commitment: &field,
@@ -520,6 +517,8 @@ impl Transfer {
         }
         let envelope = vec![14u8; stream.envelope().len];
         data.envelope = &envelope;
+        let recipient_keys = vec![16u8; stream.keys_len()];
+        data.recipient_keys = &recipient_keys;
         let encoded = data
             .encode()
             .with_context(|| format!("{} {:?}", frame.name(), self.shape))?;
@@ -729,7 +728,8 @@ fn merge_fit(width: usize, authority: MergeRingAuthority) -> Result<Fit> {
         sealed: SealedMergeRecord {
             proof: bytemuck::Zeroable::zeroed(),
             eph_pk: [9; TAGGED_X25519_KEY_LEN],
-            ciphertext: [10; OPENING_RECORD_LEN],
+            envelope: [10; MERGE_ENVELOPE_LEN],
+            record: [10; MERGE_RECORD_LEN],
         },
         merge: merge.clone(),
     }
@@ -1040,7 +1040,7 @@ impl Transfer {
 
 fn maxima(table: &mut String) -> Result<()> {
     writeln!(table)?;
-    writeln!(table, "Maxima. Load max is full with data tails, every extension but the cache, two SPP input trees, replies on anonymous frames. Each row widens one axis from that load to the largest value one transaction clears. reply: the reply length. messages: empty application messages. message bytes: one application message. over: what refuses one more step. Heap is not measured here.")?;
+    writeln!(table, "Maxima. Load max is full with recipient payloads, every extension but the cache, two SPP input trees, replies on anonymous frames. Each row widens one axis from that load to the largest value one transaction clears. reply: the reply length. messages: empty application messages. message bytes: one application message. over: what refuses one more step. Heap is not measured here.")?;
     writeln!(
         table,
         "| shape | rail | axis | widest | frame | SPP CPI | bytes | accounts | signatures | over |"
